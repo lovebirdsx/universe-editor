@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-react'
+import { ArrowUpCircle, CheckCircle2, CircleAlert, Download, Undo2 } from 'lucide-react'
 import {
   ConfigurationTarget,
   IConfigurationService,
@@ -27,6 +27,7 @@ import {
   type ICodexBinaryVersionInfo,
 } from '../../../../shared/ipc/codexBinaryService.js'
 import { useService } from '../../useService.js'
+import { computeBinaryVersionActions } from '../binaryVersionActions.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -105,7 +106,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             severity: Severity.Info,
             message: localize(
               'codexBinaryPanel.upgrade.success',
-              'codex binary upgraded to {version}.',
+              'codex binary switched to {version}.',
               { version: targetVersion },
             ),
           })
@@ -268,12 +269,7 @@ function VersionInfo({
 
   const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion
-  // Offer the pinned version when nothing is installed yet.
-  const canDownloadBundled = installedVersion === null
-  // Offer the latest version whenever it differs from what's installed and from
-  // the pinned one (when pinned === latest a single button is enough).
-  const canGetLatest =
-    latestVersion !== null && latestVersion !== bundledVersion && installedVersion !== latestVersion
+  const { showDownloadBundled, showRevertToBundled, showLatest } = computeBinaryVersionActions(info)
 
   return (
     <div className={styles['field']}>
@@ -343,7 +339,7 @@ function VersionInfo({
       {/* Actions */}
       {!downloading && (
         <>
-          {canDownloadBundled && canGetLatest && (
+          {showDownloadBundled && showLatest && (
             <div className={styles['desc']} style={{ marginTop: 4 }}>
               {localize(
                 'codexBinaryPanel.version.chooseHint',
@@ -352,8 +348,16 @@ function VersionInfo({
               )}
             </div>
           )}
+          {showRevertToBundled && (
+            <div className={styles['desc']} style={{ marginTop: 4 }}>
+              {localize(
+                'codexBinaryPanel.version.revertHint',
+                'The installed version differs from the pinned version this build follows. Revert if the agent fails to start or behaves unexpectedly.',
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-            {canDownloadBundled && (
+            {showDownloadBundled && (
               <Button onClick={() => onUpgrade(bundledVersion)}>
                 <Download size={14} strokeWidth={2} />
                 {prefetchedVersion === bundledVersion
@@ -369,7 +373,23 @@ function VersionInfo({
                     })}
               </Button>
             )}
-            {canGetLatest && latestVersion !== null && (
+            {showRevertToBundled && (
+              <Button onClick={() => onUpgrade(bundledVersion)}>
+                <Undo2 size={14} strokeWidth={2} />
+                {prefetchedVersion === bundledVersion
+                  ? localize(
+                      'codexBinaryPanel.version.revertReady',
+                      'Revert to {version} (ready)',
+                      {
+                        version: bundledVersion,
+                      },
+                    )
+                  : localize('codexBinaryPanel.version.revert', 'Revert to {version}', {
+                      version: bundledVersion,
+                    })}
+              </Button>
+            )}
+            {showLatest && latestVersion !== null && (
               <Button onClick={() => onUpgrade(latestVersion)}>
                 <ArrowUpCircle size={14} strokeWidth={2} />
                 {prefetchedVersion === latestVersion

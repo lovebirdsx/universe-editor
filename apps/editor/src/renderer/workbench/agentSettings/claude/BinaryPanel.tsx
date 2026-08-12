@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, CircleAlert, Download } from 'lucide-react'
+import { CheckCircle2, CircleAlert, Download, Undo2 } from 'lucide-react'
 import {
   ConfigurationTarget,
   IConfigurationService,
@@ -25,6 +25,7 @@ import {
   type IClaudeBinaryVersionInfo,
 } from '../../../../shared/ipc/claudeBinaryService.js'
 import { useService } from '../../useService.js'
+import { computeBinaryVersionActions } from '../binaryVersionActions.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -103,7 +104,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
             severity: Severity.Info,
             message: localize(
               'binaryPanel.upgrade.success',
-              'Claude binary upgraded to {version}.',
+              'Claude binary switched to {version}.',
               { version: targetVersion },
             ),
           })
@@ -266,12 +267,7 @@ function VersionInfo({
 
   const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion
-  // Offer the bundled version when nothing is installed yet.
-  const canDownloadBundled = installedVersion === null
-  // Offer the latest version whenever it differs from what's installed and from
-  // the bundled one (when bundled === latest a single button is enough).
-  const canGetLatest =
-    latestVersion !== null && latestVersion !== bundledVersion && installedVersion !== latestVersion
+  const { showDownloadBundled, showRevertToBundled, showLatest } = computeBinaryVersionActions(info)
 
   return (
     <div className={styles['field']}>
@@ -341,7 +337,7 @@ function VersionInfo({
       {/* Actions */}
       {!downloading && (
         <>
-          {canDownloadBundled && canGetLatest && (
+          {showDownloadBundled && showLatest && (
             <div className={styles['desc']} style={{ marginTop: 4 }}>
               {localize(
                 'binaryPanel.version.chooseHint',
@@ -350,8 +346,16 @@ function VersionInfo({
               )}
             </div>
           )}
+          {showRevertToBundled && (
+            <div className={styles['desc']} style={{ marginTop: 4 }}>
+              {localize(
+                'binaryPanel.version.revertHint',
+                'The installed version differs from the one verified against this build’s ACP SDK. Revert if the agent fails to start or behaves unexpectedly.',
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-            {canDownloadBundled && (
+            {showDownloadBundled && (
               <Button onClick={() => onUpgrade(bundledVersion)}>
                 <Download size={14} strokeWidth={2} />
                 {prefetchedVersion === bundledVersion
@@ -363,7 +367,19 @@ function VersionInfo({
                     })}
               </Button>
             )}
-            {canGetLatest && latestVersion !== null && (
+            {showRevertToBundled && (
+              <Button onClick={() => onUpgrade(bundledVersion)}>
+                <Undo2 size={14} strokeWidth={2} />
+                {prefetchedVersion === bundledVersion
+                  ? localize('binaryPanel.version.revertReady', 'Revert to {version} (ready)', {
+                      version: bundledVersion,
+                    })
+                  : localize('binaryPanel.version.revert', 'Revert to {version}', {
+                      version: bundledVersion,
+                    })}
+              </Button>
+            )}
+            {showLatest && latestVersion !== null && (
               <Button onClick={() => onUpgrade(latestVersion)}>
                 <Download size={14} strokeWidth={2} />
                 {prefetchedVersion === latestVersion

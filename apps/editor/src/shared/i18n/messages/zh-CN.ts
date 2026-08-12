@@ -1826,7 +1826,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'binaryPanel.source.system.desc': '使用 PATH 中找到的 `claude` 可执行文件（需自行管理更新）。',
   'binaryPanel.source.title': '二进制文件来源',
   'binaryPanel.upgrade.error': '升级 Claude 二进制文件失败：{message}',
-  'binaryPanel.upgrade.success': 'Claude 二进制文件已升级到 {version}。',
+  'binaryPanel.upgrade.success': 'Claude 二进制文件已切换到 {version}。',
   'binaryPanel.version.chooseHint':
     '内置版本（{bundled}）已验证与此构建的 ACP SDK 匹配，最稳妥。最新版本（{latest}）包含新功能，但可能尚未随此构建充分测试。',
   'binaryPanel.version.download': '下载 {version}',
@@ -1839,6 +1839,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'binaryPanel.version.latestUnavailable': '最新版本：不可用（网络错误）',
   'binaryPanel.version.loading': '正在加载版本信息…',
   'binaryPanel.version.notDownloaded': '尚未下载',
+  'binaryPanel.version.revert': '回退到 {version}',
+  'binaryPanel.version.revertHint':
+    '已安装版本与本构建 ACP SDK 验证过的版本不一致，若 agent 无法启动或行为异常，可回退到验证过的版本。',
+  'binaryPanel.version.revertReady': '回退到 {version}（已就绪）',
   'binaryPanel.version.sdk': 'ACP SDK：{version}',
   'binaryPanel.version.title': '版本',
   'binaryPanel.version.upgrade': '升级到 {version}',
@@ -1875,7 +1879,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '使用 PATH 中找到的 `codex-acp` 可执行文件（需自行管理更新）。',
   'codexBinaryPanel.source.title': '二进制文件来源',
   'codexBinaryPanel.upgrade.error': '升级 codex-acp 二进制文件失败：{message}',
-  'codexBinaryPanel.upgrade.success': 'codex-acp 二进制文件已升级到 {version}。',
+  'codexBinaryPanel.upgrade.success': 'codex-acp 二进制文件已切换到 {version}。',
   'codexBinaryPanel.version.chooseHint':
     '锁定版本（{bundled}）是此构建跟随且已知可用的版本，最稳妥。最新版本（{latest}）包含新功能，但可能尚未随此构建充分测试。',
   'codexBinaryPanel.version.download': '下载 {version}',
@@ -1889,6 +1893,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinaryPanel.version.loading': '正在加载版本信息…',
   'codexBinaryPanel.version.notDownloaded': '尚未下载',
   'codexBinaryPanel.version.pinned': '锁定的 codex-acp：{version}',
+  'codexBinaryPanel.version.revert': '回退到 {version}',
+  'codexBinaryPanel.version.revertHint':
+    '已安装版本与本构建锁定跟随的版本不一致，若 agent 无法启动或行为异常，可回退到锁定版本。',
+  'codexBinaryPanel.version.revertReady': '回退到 {version}（已就绪）',
   'codexBinaryPanel.version.title': '版本',
   'codexBinaryPanel.version.upgrade': '升级到 {version}',
   'codexBinaryPanel.version.upgradeReady': '升级到 {version}（已就绪）',
