@@ -11,7 +11,7 @@
  *  fixture so specs can assert the right calls were made.
  *--------------------------------------------------------------------------------------------*/
 
-import { test as base, type ElectronApplication, type Page } from '@playwright/test'
+import { test as base, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -327,11 +327,20 @@ export const test = base.extend<SwarmFixtures>({
         ...swarmExtraEnv,
       },
     })
-    // After closeApp so the log tail is flushed before the failure copy.
-    const finalizeForensics = installFailureForensics(
-      await app.firstWindow(),
-      swarmBackend.userDataDir,
-    )
+    // After closeApp so the log tail is flushed before the failure copy. A
+    // firstWindow failure before use() skips this fixture's teardown — reap
+    // the half-dead app here or it orphans (secondary symptom: "Worker
+    // teardown timeout").
+    let finalizeForensics: (testInfo: TestInfo) => Promise<void>
+    try {
+      finalizeForensics = installFailureForensics(
+        await app.firstWindow(),
+        swarmBackend.userDataDir,
+      )
+    } catch (err) {
+      await closeApp(app)
+      throw err
+    }
     await use(app)
     await closeApp(app)
     await finalizeForensics(testInfo)

@@ -14,10 +14,10 @@
  *    - graceful-close-with-force-kill teardown (Windows orphan handling).
  *--------------------------------------------------------------------------------------------*/
 
-import { _electron as electron, type ElectronApplication } from '@playwright/test'
-import { dirname, join } from 'node:path'
+import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 
 // Env var the app's extension-host bootstrap reads as an allowlist (P2). When
@@ -423,4 +423,79 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
       ...extraEnv,
     },
   })
+}
+
+export async function waitForProbe(page: Page): Promise<void> {
+  await page.waitForFunction(() =>
+    Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+  )
+}
+
+// The guards in launchElectron only cover `electron.launch` THROWING. A
+// distinct runner-level failure mode is launch succeeding but the first window
+// never appearing: on CI Windows the phase between process spawn and
+// `new BrowserWindow` can be dragged past 30s by the same Defender/file-lock
+// windows (cases 72/72b/72c cover the launch-throw variant). When that phase
+// stalls, failure forensics can't be installed (they need a live Page), so the
+// ONLY evidence of where the main process stopped is the app's own logs under
+// <userData>/logs/<sessionId>/ (main.log, window-N/*.log, …). Print the tail
+// of each so the CI console output carries the post-mortem.
+function dumpUserDataLogsTail(userDataDir: string): void {
+  try {
+    const logsRoot = join(userDataDir, 'logs')
+    const files: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.endsWith('.log')) files.push(full)
+      }
+    }
+    walk(logsRoot)
+    for (const file of files) {
+      const lines = readFileSync(file, 'utf8').split(/\r?\n/)
+      console.warn(`[e2e] log tail ${relative(logsRoot, file)}:\n${lines.slice(-30).join('\n')}`)
+    }
+  } catch {
+    // Best-effort diagnostics — never mask the original readiness failure.
+  }
+}
+
+const FIRST_WINDOW_TIMEOUT_MS = 30_000
+const READY_ATTEMPTS = 2
+
+/**
+ * `launchApp` + the full readiness chain (first window → domcontentloaded →
+ * e2e probe), retried once as a unit. Use this in fixtures instead of the bare
+ * `launchApp` + `app.firstWindow()` pair: a launch that succeeds but never
+ * shows a window would otherwise burn the whole fixture/test timeout with zero
+ * diagnostics, and — for a fixture that throws before `use()` — skip teardown
+ * entirely, orphaning the half-dead Electron (secondary symptom: "Worker
+ * teardown timeout"). On failure this dumps the userData log tails, reaps the
+ * process via closeApp, and retries once before rethrowing.
+ */
+export async function launchAppReady(
+  options: LaunchAppOptions,
+): Promise<{ app: ElectronApplication; page: Page }> {
+  for (let attempt = 1; ; attempt++) {
+    const app = await launchApp(options)
+    try {
+      const page = await app.firstWindow({ timeout: FIRST_WINDOW_TIMEOUT_MS })
+      await page.waitForLoadState('domcontentloaded')
+      await waitForProbe(page)
+      return { app, page }
+    } catch (err) {
+      console.warn(
+        `[e2e] app launched but window/probe not ready (attempt ${attempt}/${READY_ATTEMPTS}): ${String(err).split('\n', 1)[0]}`,
+      )
+      dumpUserDataLogsTail(options.userDataDir)
+      // Swallow close errors — the readiness failure is the one to report.
+      try {
+        await closeApp(app)
+      } catch {
+        // best-effort
+      }
+      if (attempt >= READY_ATTEMPTS) throw err
+    }
+  }
 }

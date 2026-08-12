@@ -15,17 +15,17 @@ export {
 export {
   closeApp,
   launchApp,
+  launchAppReady,
   launchElectron,
   resolveEditorBuild,
   seedBaselineUserData,
+  waitForProbe,
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   type EditorBuild,
   type LaunchAppOptions,
 } from './launch.js'
-
-export { waitForProbe } from './fixtures.js'
 
 export { installFailureForensics } from './forensics.js'
 

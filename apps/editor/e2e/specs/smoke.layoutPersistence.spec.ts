@@ -61,17 +61,24 @@ async function launchWithState(userDataDir: string) {
       [ENABLED_EXTENSIONS_ENV]: '',
     },
   })
-  const page = await app.firstWindow()
-  // 等首次导航 commit，避免 evaluate 撞上 "Execution context was destroyed"。
-  await page.waitForLoadState('domcontentloaded')
-  await page.waitForFunction(() =>
-    Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-  )
-  // whenReady() resolves as soon as LifecyclePhase.Ready is reached,
-  // which happens BEFORE createRoot().render(). Any measurement taken
-  // immediately after this call reflects the state at first React render.
-  await page.evaluate(() => window.__E2E__!.whenReady())
-  return { app, page }
+  // A failing readiness step must not leak the half-dead app (the test body's
+  // own closeApp runs only after this helper returns).
+  try {
+    const page = await app.firstWindow()
+    // 等首次导航 commit，避免 evaluate 撞上 "Execution context was destroyed"。
+    await page.waitForLoadState('domcontentloaded')
+    await page.waitForFunction(() =>
+      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+    )
+    // whenReady() resolves as soon as LifecyclePhase.Ready is reached,
+    // which happens BEFORE createRoot().render(). Any measurement taken
+    // immediately after this call reflects the state at first React render.
+    await page.evaluate(() => window.__E2E__!.whenReady())
+    return { app, page }
+  } catch (err) {
+    await closeApp(app)
+    throw err
+  }
 }
 
 test.describe('@p1 layout persistence', () => {

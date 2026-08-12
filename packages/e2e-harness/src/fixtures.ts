@@ -30,8 +30,12 @@ import { join } from 'node:path'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks } from './pages/WorkbenchPO.js'
-import { closeApp, launchApp, seedBaselineUserData } from './launch.js'
+import { closeApp, launchAppReady, seedBaselineUserData, waitForProbe } from './launch.js'
 import { installFailureForensics } from './forensics.js'
+
+// Lives in launch.ts (launchAppReady needs it); re-exported so existing deep
+// imports from this module keep working.
+export { waitForProbe } from './launch.js'
 
 export interface AppFixtureConfig {
   readonly appRoot: string
@@ -91,12 +95,6 @@ export type E2ETest = TestType<
   PlaywrightWorkerArgs & PlaywrightWorkerOptions
 >
 
-export async function waitForProbe(page: Page): Promise<void> {
-  await page.waitForFunction(() =>
-    Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-  )
-}
-
 /**
  * Cold-launch fixture: a fresh Electron process per test. See module header for
  * when to prefer this over the shared instance.
@@ -120,7 +118,12 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       async ({ launchWorkspace }, use, testInfo) => {
         const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
         seedBaselineUserData(userDataDir)
-        const app = await launchApp({
+        // launchAppReady covers the launch-succeeded-but-no-window failure mode:
+        // it retries the whole chain once, and on failure reaps the half-dead
+        // process itself — a fixture throwing here before use() would skip this
+        // teardown's closeApp and orphan the Electron (secondary symptom:
+        // "Worker teardown timeout").
+        const { app, page } = await launchAppReady({
           appRoot: config.appRoot,
           mainEntry: config.mainEntry,
           userDataDir,
@@ -134,15 +137,18 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
           ],
         })
         // After closeApp so the log tail is flushed before the failure copy.
-        const finalizeForensics = installFailureForensics(await app.firstWindow(), userDataDir)
+        const finalizeForensics = installFailureForensics(page, userDataDir)
         await use(app)
         await closeApp(app)
         await finalizeForensics(testInfo)
       },
-      // Own budget: a closeApp that needs the force-kill path (10s graceful wait
-      // + tree enumeration + orphan sweep) legitimately takes ~20s; sharing the
-      // 30s test budget with the body risks flagging a successful teardown.
-      { timeout: 60_000 },
+      // Own budget: the worst-case launchAppReady path is launch-layer retries
+      // (~40s) + 2×30s firstWindow waits + a force-kill closeApp on the failed
+      // attempt (~20s), and teardown's own closeApp can legitimately take ~20s
+      // on the force-kill path (10s graceful wait + tree enumeration + orphan
+      // sweep); sharing the 30s test budget with the body risks flagging a
+      // successful teardown.
+      { timeout: 120_000 },
     ],
     page: async ({ electronApp }, use) => {
       const page = await electronApp.firstWindow()
@@ -290,7 +296,10 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-shared-'))
         seedBaselineUserData(userDataDir)
         await wipeWorkspacesDir(userDataDir)
-        const app = await launchApp({
+        // Same launch-succeeded-but-no-window guard as the cold fixture — on
+        // failure launchAppReady reaps the half-dead process itself (a worker
+        // fixture throwing before use() skips teardown entirely).
+        const { app, page } = await launchAppReady({
           appRoot: config.appRoot,
           mainEntry: config.mainEntry,
           userDataDir,
@@ -298,9 +307,6 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
           ...(config.env !== undefined ? { env: config.env } : {}),
           ...(config.extraArgs !== undefined ? { extraArgs: config.extraArgs } : {}),
         })
-        const page = await app.firstWindow()
-        await page.waitForLoadState('domcontentloaded')
-        await waitForProbe(page)
         await use({ app, page, userDataDir, firstTest: { value: true } })
         // A still-running ACP session / node-pty child can wedge a graceful
         // app.close() past the worker-teardown budget (the SessionShutdownParticipant
@@ -313,8 +319,10 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
       // each closeApp may legitimately take ~20s on the force-kill path — two of
       // those in sequence already blow a shared 30s budget even though every
       // process dies. Seen live as "Worker teardown timeout of 30000ms exceeded"
-      // with all tests passing.
-      { scope: 'worker', timeout: 60_000 },
+      // with all tests passing. 120s also covers the launchAppReady worst case
+      // (launch-layer retries ~40s + 2×30s firstWindow waits + a force-kill
+      // closeApp on the failed attempt ~20s) before the first test even runs.
+      { scope: 'worker', timeout: 120_000 },
     ],
     electronApp: async ({ sharedApp }, use) => {
       await use(sharedApp.app)

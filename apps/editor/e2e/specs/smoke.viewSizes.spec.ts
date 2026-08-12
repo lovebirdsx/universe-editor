@@ -77,10 +77,17 @@ async function launchWithState(userDataDir: string) {
       [ENABLED_EXTENSIONS_ENV]: '',
     },
   })
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
-  await waitForRestored(page)
-  return { app, page }
+  // A failing readiness step must not leak the half-dead app (the test body's
+  // own closeApp runs only after this helper returns).
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    await waitForRestored(page)
+    return { app, page }
+  } catch (err) {
+    await closeApp(app)
+    throw err
+  }
 }
 
 async function paneHeight(page: import('@playwright/test').Page, viewId: string): Promise<number> {
