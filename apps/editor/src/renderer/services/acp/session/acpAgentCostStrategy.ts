@@ -13,7 +13,7 @@ import {
   extractCodexModelUsage,
   extractCodexTurnUsage,
 } from '../../../../shared/ai/codexPricing.js'
-import { estimateCodexCost, type CodexCostEstimate } from './acpSessionCost.js'
+import { estimateCodexCost, type SessionCostEstimate } from './acpSessionCost.js'
 
 /**
  * Locally estimates a session's cost when the agent reports none. Both hooks
@@ -22,9 +22,9 @@ import { estimateCodexCost, type CodexCostEstimate } from './acpSessionCost.js'
  */
 export interface AcpAgentCostStrategy {
   /** Estimate from a `usage_update`'s `_meta` (session-cumulative per-model tokens). */
-  fromUsageUpdate(meta: unknown): CodexCostEstimate | undefined
+  fromUsageUpdate(meta: unknown): SessionCostEstimate | undefined
   /** Estimate from a turn-final `PromptResponse` (confirms the final total). */
-  fromPromptResponse(response: PromptResponse): CodexCostEstimate | undefined
+  fromPromptResponse(response: PromptResponse): SessionCostEstimate | undefined
 }
 
 const CODEX_COST_STRATEGY: AcpAgentCostStrategy = {

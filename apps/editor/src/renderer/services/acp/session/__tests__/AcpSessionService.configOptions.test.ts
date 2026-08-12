@@ -741,6 +741,78 @@ describe('AcpSessionService — session/update fan-out', () => {
     expect(u?.models).toHaveLength(1)
   })
 
+  it('re-prices the reported cost when a breakdown row is a non-claude gateway model', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    // The Claude CLI prices unknown gateway models at its flagship tier — the
+    // reported cost (9.99) is inflated and must not survive.
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 1800,
+        size: 200000,
+        cost: { amount: 9.99, currency: 'USD' },
+        _meta: {
+          '_universe/modelBreakdown': [
+            {
+              model: 'deepseek-v4-flash[1m]',
+              inputTokens: 1_000_000,
+              outputTokens: 100_000,
+              cacheReadTokens: 500_000,
+              cacheCreateTokens: 0,
+              costUSD: 9.99,
+            },
+          ],
+        },
+      },
+    } as never)
+    const expected = 1.3 / 7.2 // (1e6·¥1 + 5e5·¥0.2 + 1e5·¥2) / 7.2 / 1e6
+    const u = s.usage.get()
+    expect(u?.costEstimated).toBe(true)
+    expect(u?.cost?.amount).toBeCloseTo(expected, 10)
+    expect(u?.models?.[0]?.costUSD).toBeCloseTo(expected, 10)
+    // A mid-stream update without cost carries the estimate forward.
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'usage_update', used: 2100, size: 200000 },
+    })
+    const carried = s.usage.get()
+    expect(carried?.used).toBe(2100)
+    expect(carried?.cost?.amount).toBeCloseTo(expected, 10)
+    expect(carried?.costEstimated).toBe(true)
+  })
+
+  it('keeps the authoritative cost for a pure-claude breakdown', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 1800,
+        size: 200000,
+        cost: { amount: 0.45, currency: 'USD' },
+        _meta: {
+          '_universe/modelBreakdown': [
+            {
+              model: 'claude-opus-4-20250514',
+              inputTokens: 1000,
+              outputTokens: 500,
+              cacheReadTokens: 200,
+              cacheCreateTokens: 100,
+              costUSD: 0.42,
+            },
+          ],
+        },
+      },
+    } as never)
+    const u = s.usage.get()
+    expect(u?.costEstimated).toBeUndefined()
+    expect(u?.cost).toEqual({ amount: 0.45, currency: 'USD' })
+    expect(u?.models?.[0]?.costUSD).toBe(0.42)
+  })
+
   it('applies config_option_update verbatim and replaces prior values', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

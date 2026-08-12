@@ -55,6 +55,7 @@ import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
+import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import {
   MESSAGE_TEXT_REBUILD_AT,
   REPLAY_INGESTION_BUDGET,
@@ -2392,6 +2393,26 @@ export class AcpSession extends Disposable implements IAcpSession {
           break
         }
         const models = extractModelBreakdown(update)
+        // The Claude CLI prices cost against its Anthropic-only model catalog —
+        // sessions running gateway models (kimi/deepseek/…) get silently billed
+        // at the default flagship rate. Distrust the reported total when any
+        // breakdown row is non-claude and re-price it locally (marked estimated).
+        const repriced =
+          update.cost != null && models.length > 0
+            ? repriceForeignModelBreakdown(models)
+            : undefined
+        if (repriced != null) {
+          const next: AcpUsage = {
+            used: update.used,
+            size: update.size,
+            cost: repriced.cost,
+            models: repriced.models,
+            costEstimated: true,
+          }
+          this.usage.set(next, tx)
+          if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
+          break
+        }
         // `cost` / `models` only ride on the turn-final usage_update (derived
         // from the SDK `result` message). Mid-stream updates emitted while a
         // turn runs carry only used/size, so carry the last known cost forward
