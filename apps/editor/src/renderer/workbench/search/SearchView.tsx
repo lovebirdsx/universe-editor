@@ -178,6 +178,21 @@ export function SearchView() {
     consumeSeed()
   }, [seedSignal, consumeSeed])
 
+  // Prefilled "files to include" from FindInFolderAction. Same consume pattern as
+  // the query seed; the filters section is forced open so the entry is visible.
+  const seedIncludesSignal = useObservable(searchViewState.seedIncludesSignal)
+  const consumeSeedIncludes = useCallback(() => {
+    const seed = searchSession.seedIncludes
+    if (seed === undefined) return
+    delete searchSession.seedIncludes
+    setIncludesText(seed)
+    setFiltersVisible(true)
+    inputRef.current?.focus()
+  }, [])
+  useEffect(() => {
+    consumeSeedIncludes()
+  }, [seedIncludesSignal, consumeSeedIncludes])
+
   const rerunSearch = useCallback(() => {
     rerun()
   }, [rerun])

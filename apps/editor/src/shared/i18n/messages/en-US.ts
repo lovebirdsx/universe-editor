@@ -109,6 +109,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.deleteFile.title': 'Delete',
   'action.find.title': 'Find',
   'action.findInFiles.title': 'Find in Files',
+  'action.findInFolder.title': 'Find in Folder...',
   'action.findNext.title': 'Find Next',
   'action.findPrevious.title': 'Find Previous',
   'action.firstEditorInGroup.title': 'Open First Editor in Group',

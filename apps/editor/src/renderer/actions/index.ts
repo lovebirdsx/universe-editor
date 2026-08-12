@@ -177,6 +177,7 @@ import {
 import {
   FindInFileAction,
   FindInFilesAction,
+  FindInFolderAction,
   FindNextAction,
   FindPreviousAction,
   FindReplaceInFileAction,
@@ -568,6 +569,7 @@ registerAction2(ToggleOutputAutoScrollAction)
 
 // Search
 registerAction2(FindInFilesAction)
+registerAction2(FindInFolderAction)
 registerAction2(QuickTextSearchAction)
 registerAction2(FindInFileAction)
 registerAction2(FindReplaceInFileAction)

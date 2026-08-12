@@ -33,6 +33,7 @@ const _hasResults = observableValue<boolean>('search.hasResults', false)
 const _useExcludeSettings = observableValue<boolean>('search.useExcludeSettings', true)
 const _history = observableValue<readonly string[]>('search.history', [])
 const _seed = observableValue<number>('search.seed', 0)
+const _seedIncludes = observableValue<number>('search.seedIncludes', 0)
 
 let _storage: IStorageService | null = null
 
@@ -56,6 +57,8 @@ export const searchViewState = {
   history: _history as IObservable<readonly string[]>,
   /** Monotonic counter; each increment asks a mounted SearchView to consume searchSession.seedPattern. */
   seedSignal: _seed as IObservable<number>,
+  /** Monotonic counter; each increment asks a mounted SearchView to consume searchSession.seedIncludes. */
+  seedIncludesSignal: _seedIncludes as IObservable<number>,
 
   /** Bind the persistent store and hydrate the persisted observables from it. */
   async attachStorage(storage: IStorageService): Promise<void> {
@@ -101,5 +104,9 @@ export const searchViewState = {
   /** Ask a mounted SearchView to apply searchSession.seedPattern (set by FindInFilesAction). */
   requestSeed(): void {
     _seed.set(_seed.get() + 1, undefined)
+  },
+  /** Ask a mounted SearchView to apply searchSession.seedIncludes (set by FindInFolderAction). */
+  requestSeedIncludes(): void {
+    _seedIncludes.set(_seedIncludes.get() + 1, undefined)
   },
 }

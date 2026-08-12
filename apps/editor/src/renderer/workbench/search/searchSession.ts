@@ -31,6 +31,12 @@ export interface SearchSessionState {
    * and clears it on mount so opening the panel seeds the query with selected text.
    */
   seedPattern?: string
+  /**
+   * Set by FindInFolderAction: the `files to include` text to apply. SearchView
+   * reads and clears it on mount and on every seed-includes signal, so a mounted
+   * view picks it up too. '' is meaningful (folder = workspace root).
+   */
+  seedIncludes?: string
 }
 
 function emptyState(): SearchSessionState {
@@ -58,4 +64,5 @@ export function resetSearchSession(): void {
   delete searchSession.lastActivatedResource
   delete searchSession.lastActivatedFocusId
   delete searchSession.seedPattern
+  delete searchSession.seedIncludes
 }

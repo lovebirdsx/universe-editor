@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, cpus } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
@@ -157,6 +157,127 @@ describe('TextSearchMainService', () => {
     expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
       path.normalize(visible),
     )
+  })
+
+  async function makeIncludeFixture(root: string, token: string): Promise<string> {
+    const dir = path.join(root, 'd.地图', '110')
+    await mkdir(dir, { recursive: true })
+    const inside = path.join(dir, 'map.json')
+    await writeFile(inside, `${token}\n`)
+    await writeFile(path.join(root, 'outside.txt'), `${token}\n`)
+    return inside
+  }
+
+  it('finds matches under a directory include pattern (VSCode include semantics)', async () => {
+    const root = await makeTempRoot()
+    const inside = await makeIncludeFixture(root, 'include-dir-token')
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'include-dir-token'),
+        includes: ['d.地图/110'],
+      })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(inside),
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('matches a bare directory name include at any depth', async () => {
+    const root = await makeTempRoot()
+    const inside = await makeIncludeFixture(root, 'include-bare-token')
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'include-bare-token'),
+        includes: ['110'],
+      })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(inside),
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('anchors ./-prefixed includes at the workspace root', async () => {
+    const root = await makeTempRoot()
+    const inside = await makeIncludeFixture(root, 'include-rooted-token')
+
+    const svc = new TextSearchMainService()
+    try {
+      const hit = await svc.search({
+        ...baseQuery(root, 'include-rooted-token'),
+        includes: ['./d.地图/110'],
+      })
+      expect(hit.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(hit.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(inside),
+      )
+
+      // 同名目录在非根路径时不应被 ./ 形式命中。
+      const nested = path.join(root, 'nested', 'd.地图', '110')
+      await mkdir(nested, { recursive: true })
+      await writeFile(path.join(nested, 'map.json'), 'include-rooted-token\n')
+      const stillRooted = await svc.search({
+        ...baseQuery(root, 'include-rooted-token'),
+        includes: ['./d.地图/110'],
+      })
+      expect(stillRooted.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(stillRooted.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(inside),
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('accepts backslash-separated include paths on Windows', async () => {
+    const root = await makeTempRoot()
+    const inside = await makeIncludeFixture(root, 'include-backslash-token')
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'include-backslash-token'),
+        includes: ['d.地图\\110'],
+      })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(inside),
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('keeps extension glob includes working', async () => {
+    const root = await makeTempRoot()
+    const dir = path.join(root, 'src')
+    await mkdir(dir, { recursive: true })
+    const tsFile = path.join(dir, 'a.ts')
+    await writeFile(tsFile, 'include-glob-token\n')
+    await writeFile(path.join(dir, 'a.txt'), 'include-glob-token\n')
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'include-glob-token'),
+        includes: ['*.ts'],
+      })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(tsFile),
+      )
+    } finally {
+      svc.dispose()
+    }
   })
 
   it('emits progress for the matching session', async () => {

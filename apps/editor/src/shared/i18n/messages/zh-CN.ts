@@ -259,6 +259,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.exit.title': '退出',
   'action.find.title': '查找',
   'action.findInFiles.title': '在文件中查找',
+  'action.findInFolder.title': '在文件夹中查找...',
   'action.findNext.title': '查找下一个',
   'action.findPrevious.title': '查找上一个',
   'action.firstEditorInGroup.title': '打开组内第一个编辑器',

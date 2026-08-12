@@ -26,7 +26,7 @@ import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import {
   escapeForRegex,
   expandExcludeGlob,
-  normalizeGlob,
+  expandIncludeGlob,
   resolveSearchThreads,
   rgDiskPath,
 } from '../ripgrep/ripgrepUtil.js'
@@ -102,9 +102,8 @@ function buildRgArgs(query: ITextSearchMainQuery): string[] {
   args.push('--threads', String(resolveSearchThreads(query.threads)))
   args.push('--max-filesize', String(query.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES))
 
-  for (const include of query.includes) {
-    const normalized = normalizeGlob(include)
-    if (normalized) args.push('-g', normalized)
+  for (const include of query.includes.flatMap(expandIncludeGlob)) {
+    args.push('-g', include)
   }
 
   const excludes = [...query.configurationExcludes, ...query.excludes]

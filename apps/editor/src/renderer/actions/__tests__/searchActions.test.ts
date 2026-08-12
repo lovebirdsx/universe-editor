@@ -10,6 +10,7 @@ import {
   ILayoutService,
   IInstantiationService,
   IViewsService,
+  IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
   MenuId,
@@ -23,15 +24,18 @@ import {
 import {
   FindInFileAction,
   FindInFilesAction,
+  FindInFolderAction,
   FindNextAction,
   FindReplaceInFileAction,
   QuickTextSearchAction,
 } from '../searchActions.js'
+import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { IQuickTextSearchService } from '../../services/search/QuickTextSearchService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { resetSearchSession, searchSession } from '../../workbench/search/searchSession.js'
 
 describe('FindInFilesAction', () => {
   const disposables: IDisposable[] = []
@@ -168,6 +172,107 @@ describe('FindInFilesAction', () => {
       source: 'command',
     })
     expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+})
+
+describe('FindInFolderAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) {
+      disposables.pop()?.dispose()
+    }
+    resetSearchSession()
+  })
+
+  const root = URI.file('/ws')
+
+  function setup(operations: { resource: URI; isDirectory: boolean }[]) {
+    const focusView = vi.fn().mockResolvedValue(true)
+    const getContextResourceOperations = vi.fn().mockReturnValue(operations)
+    const services = new ServiceCollection()
+    services.set(ILayoutService, { _serviceBrand: undefined, focusView } as never)
+    services.set(IExplorerTreeService, {
+      _serviceBrand: undefined,
+      getContextResourceOperations,
+    } as never)
+    services.set(IWorkspaceService, {
+      _serviceBrand: undefined,
+      current: { folder: root, name: 'ws' },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(FindInFolderAction))
+    return { inst, focusView, getContextResourceOperations }
+  }
+
+  async function run(inst: InstantiationService, ...args: unknown[]) {
+    await inst.invokeFunction((accessor) =>
+      CommandsRegistry.getCommand(FindInFolderAction.ID)!.handler(accessor, ...args),
+    )
+  }
+
+  it('registers the filesExplorer.findInFolder command and shift+alt+f keybinding', () => {
+    disposables.push(registerAction2(FindInFolderAction))
+    expect(CommandsRegistry.getCommand(FindInFolderAction.ID)).toBeDefined()
+    expect(FindInFolderAction.ID).toBe('filesExplorer.findInFolder')
+    expect(KeybindingsRegistry.resolveKeybinding('shift+alt+f')).toBe(FindInFolderAction.ID)
+  })
+
+  it('prefills a ./-anchored include for the right-clicked folder and opens the search view', async () => {
+    const folder = URI.file('/ws/d.地图/110')
+    const { inst, focusView, getContextResourceOperations } = setup([
+      { resource: folder, isDirectory: true },
+    ])
+
+    await run(inst, { target: folder, resource: folder, isDirectory: true })
+
+    expect(getContextResourceOperations).toHaveBeenCalledWith(folder)
+    expect(searchSession.includesText).toBe('./d.地图/110')
+    expect(searchSession.filtersVisible).toBe(true)
+    expect(searchSession.seedIncludes).toBe('./d.地图/110')
+    expect(focusView).toHaveBeenCalledWith('workbench.view.search.results', { source: 'command' })
+  })
+
+  it('merges every selected folder into the include text', async () => {
+    const { inst } = setup([
+      { resource: URI.file('/ws/a'), isDirectory: true },
+      { resource: URI.file('/ws/b/c'), isDirectory: true },
+    ])
+
+    await run(inst, { target: URI.file('/ws/a'), isDirectory: true })
+
+    expect(searchSession.includesText).toBe('./a, ./b/c')
+  })
+
+  it('leaves the include empty when the folder is the workspace root', async () => {
+    const { inst, focusView } = setup([{ resource: root, isDirectory: true }])
+
+    await run(inst, { target: root, resource: root, isDirectory: true })
+
+    expect(searchSession.includesText).toBe('')
+    expect(searchSession.seedIncludes).toBe('')
+    expect(focusView).toHaveBeenCalled()
+  })
+
+  it('ignores files: a non-directory target does not open the search view', async () => {
+    const file = URI.file('/ws/a.ts')
+    const { inst, focusView } = setup([{ resource: file, isDirectory: false }])
+
+    await run(inst, { target: file, resource: file, isDirectory: false })
+
+    expect(searchSession.includesText).toBe('')
+    expect(searchSession.seedIncludes).toBeUndefined()
+    expect(focusView).not.toHaveBeenCalled()
+  })
+
+  it('filters files out of a mixed multi-selection', async () => {
+    const { inst } = setup([
+      { resource: URI.file('/ws/a'), isDirectory: true },
+      { resource: URI.file('/ws/note.txt'), isDirectory: false },
+    ])
+
+    await run(inst, { target: URI.file('/ws/a'), isDirectory: true })
+
+    expect(searchSession.includesText).toBe('./a')
   })
 })
 

@@ -118,6 +118,15 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'filesExplorer.findInFolder',
+        when: 'explorerResourceIsFolder',
+        group: '4_search',
+        order: 10,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.copyName',
         group: '4_copy',
         order: 1,
