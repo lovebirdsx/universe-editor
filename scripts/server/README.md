@@ -183,15 +183,17 @@ schtasks /Query /TN UniverseUpdateServer /V /FO LIST   # 状态
 ### 一键部署（Ubuntu，推荐）
 
 ```bash
-pnpm server:deploy -- --env prod
+pnpm server:deploy -- --env prod    # 生产机
+pnpm server:deploy -- --env test    # 测试机（预验证）
 ```
 
 一条指令走完：检查远端版本 → 交互确认 → `pnpm server:bundle` 打包 → scp 上传 `dist/server.js`
 到 `~/server.js.v<N>` → ssh 免密 sudo 拷到安装目录并 `systemctl restart universe-update-server` →
-轮询健康检查断言新版本号。必须显式 `--env prod`（或 `UE_ENV=prod`），否则拒绝执行（防误发护栏）。
+轮询健康检查断言新版本号。必须显式指定目标环境（`--env prod` / `--env test`，或 `UE_ENV`），
+否则拒绝执行（防误发护栏）；连接参数从对应 `.env.<mode>` 读取。
 
 连接参数与 `release:upload` 同一套（`--host/--user/--port/--key` ← `UE_RELEASE_HOST/USER/PORT/KEY`），
-推荐写进仓库根 `.env.prod`：
+推荐按环境分别写进仓库根 `.env.prod`（生产机）与 `.env.test`（测试机）：
 
 ```bash
 # .env.prod

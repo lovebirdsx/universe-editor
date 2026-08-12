@@ -2,12 +2,13 @@
 /*---------------------------------------------------------------------------------------------
  *  一条指令发布更新服务器：bundle → 上传 → 远端安装 → 重启 → 健康验证。
  *
- *  用法（在仓库根目录，生产必须显式指定 --env prod）:
- *    pnpm server:deploy -- --env prod
+ *  用法（在仓库根目录，必须显式指定目标环境——防误发护栏）:
+ *    pnpm server:deploy -- --env prod    # 生产机
+ *    pnpm server:deploy -- --env test    # 测试机（预验证）
  *  或:
  *    UE_ENV=prod pnpm server:deploy
  *
- *  连接参数与 release:upload 同一套（.env / 环境变量 / 旗标三选一，见 .env.example）:
+ *  连接参数与 release:upload 同一套（.env.<mode> / 环境变量 / 旗标三选一，见 .env.example）:
  *    --host / --user / --port / --key      ← UE_RELEASE_HOST / USER / PORT / KEY
  *    --app-dir                             ← UE_SERVER_APP_DIR（默认 /opt/universe-update-server）
  *    --health-url                          ← UE_SERVER_HEALTH_URL（默认 http://<host>/）
@@ -139,19 +140,19 @@ async function fetchVersion(url) {
 }
 
 async function main() {
-  const { mode } = loadEnv()
-  if (mode !== 'prod') {
+  const { mode, explicit } = loadEnv()
+  if (!explicit) {
     die(
-      '服务器部署必须显式指定生产环境：pnpm server:deploy -- --env prod（或 UE_ENV=prod）\n' +
-        '  本地联调请用 pnpm server:serve，无需部署',
+      '服务器部署必须显式指定目标环境：pnpm server:deploy -- --env prod（生产）或 --env test（测试机），或设 UE_ENV\n' +
+        '  连接参数从对应 .env.<mode> 读取，见 .env.example；本地联调请用 pnpm server:serve',
     )
   }
 
   const args = parseArgs(process.argv.slice(2))
   const config = buildConfig(args, process.env)
 
-  if (!config.host) die('缺少 --host（或 UE_RELEASE_HOST，可放 .env.prod）')
-  if (!config.user) die('缺少 --user（或 UE_RELEASE_USER，可放 .env.prod）')
+  if (!config.host) die(`缺少 --host（或 UE_RELEASE_HOST，可放 .env.${mode}）`)
+  if (!config.user) die(`缺少 --user（或 UE_RELEASE_USER，可放 .env.${mode}）`)
 
   const isWindowsTarget = /^[A-Za-z]:[\\/]/.test(config.appDir) || config.appDir.includes('\\')
   if (isWindowsTarget) {
@@ -191,7 +192,7 @@ async function main() {
     if (res.status !== 0) die(`命令返回非零退出码 (${res.status}): ${printable}${opts.hint ?? ''}`)
   }
 
-  console.log(`\n🚀 部署 ${SERVICE_NAME} v${localVersion} → ${remote}:${config.appDir}`)
+  console.log(`\n🚀 [${mode}] 部署 ${SERVICE_NAME} v${localVersion} → ${remote}:${config.appDir}`)
   if (config.dryRun) console.log('   (dry-run，不实际执行)\n')
 
   if (!config.dryRun && !config.yes) {

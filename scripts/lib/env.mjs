@@ -3,7 +3,8 @@
  *
  *  用法（在任意仓库脚本顶部）:
  *    import { loadEnv } from '../lib/env.mjs'
- *    const { mode } = loadEnv()   // mode 由 --env <mode> 旗标或 UE_ENV 决定，默认 dev
+ *    const { mode, explicit } = loadEnv()   // mode 由 --env <mode> 旗标或 UE_ENV 决定，默认 dev
+ *                                           // explicit = 是否显式指定过 mode（护栏用）
  *
  *  分层优先级（高 → 低）:
  *    shell 环境变量 > .env.<mode>.local > .env.<mode> > .env.local > .env
@@ -52,11 +53,20 @@ export function resolveMode(argv, env) {
   return mode
 }
 
+export function hasExplicitMode(argv, env) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--env' && i + 1 < argv.length) return true
+    if (argv[i].startsWith('--env=')) return true
+  }
+  return env.UE_ENV != null
+}
+
 export function loadEnv({ cwd, argv, env, quiet } = {}) {
   cwd ??= resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
   argv ??= process.argv.slice(2)
   env ??= process.env
   const mode = resolveMode(argv, env)
+  const explicit = hasExplicitMode(argv, env)
   const merged = {}
   const files = []
   for (const name of ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]) {
@@ -75,5 +85,5 @@ export function loadEnv({ cwd, argv, env, quiet } = {}) {
         : '（未找到 .env 文件）'
     console.log(`\x1b[2m[env] mode=${mode} ${detail}\x1b[0m`)
   }
-  return { mode, files }
+  return { mode, files, explicit }
 }

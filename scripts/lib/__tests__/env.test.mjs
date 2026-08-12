@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadEnv, parseEnvText, resolveMode } from '../env.mjs'
+import { hasExplicitMode, loadEnv, parseEnvText, resolveMode } from '../env.mjs'
 
 test('parseEnvText: 空行与注释行被跳过', () => {
   assert.deepEqual(parseEnvText('\n  \n# comment\n   # indented comment\nA=1\n'), { A: '1' })
@@ -81,6 +81,27 @@ test('resolveMode: 非法 mode 抛错并带上非法值', () => {
   assert.throws(() => resolveMode([], { UE_ENV: 'a/b' }), /"a\/b"/)
 })
 
+test('hasExplicitMode: --env <mode> 空格写法算显式', () => {
+  assert.equal(hasExplicitMode(['--env', 'prod'], {}), true)
+})
+
+test('hasExplicitMode: --env=prod 等号写法算显式', () => {
+  assert.equal(hasExplicitMode(['--env=prod'], {}), true)
+})
+
+test('hasExplicitMode: UE_ENV 设置算显式', () => {
+  assert.equal(hasExplicitMode([], { UE_ENV: 'prod' }), true)
+})
+
+test('hasExplicitMode: 都没有不算显式', () => {
+  assert.equal(hasExplicitMode([], {}), false)
+  assert.equal(hasExplicitMode(['--dry-run'], {}), false)
+})
+
+test('hasExplicitMode: --env 无后继值不算显式（与 resolveMode 识别一致）', () => {
+  assert.equal(hasExplicitMode(['--env'], {}), false)
+})
+
 function makeTmpEnvDir(t) {
   const dir = mkdtempSync(join(tmpdir(), 'ue-env-loader-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -127,7 +148,14 @@ test('loadEnv: --env prod 读 .env.prod 而非 .env.dev', (t) => {
 test('loadEnv: quiet: true 不打日志且正常返回', (t) => {
   const dir = makeTmpEnvDir(t)
   const result = loadEnv({ cwd: dir, argv: [], env: {}, quiet: true })
-  assert.deepEqual(result, { mode: 'dev', files: [] })
+  assert.deepEqual(result, { mode: 'dev', files: [], explicit: false })
+})
+
+test('loadEnv: 显式 --env 时 explicit 为 true', (t) => {
+  const dir = makeTmpEnvDir(t)
+  const result = loadEnv({ cwd: dir, argv: ['--env', 'test'], env: {}, quiet: true })
+  assert.equal(result.mode, 'test')
+  assert.equal(result.explicit, true)
 })
 
 test('loadEnv: 无文件命中时也不报错', (t) => {

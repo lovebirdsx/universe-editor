@@ -115,10 +115,10 @@ function runDeploy(args, env = {}) {
   })
 }
 
-test('未显式指定 prod 时直接拒绝', () => {
+test('未显式指定环境时直接拒绝', () => {
   const res = runDeploy([])
   assert.equal(res.status, 1)
-  assert.match(res.stderr, /必须显式指定生产环境/)
+  assert.match(res.stderr, /必须显式指定目标环境/)
 })
 
 test('dry-run 全链路只打印命令，零副作用且不触发确认', () => {
@@ -133,6 +133,27 @@ test('dry-run 全链路只打印命令，零副作用且不触发确认', () => 
     'http://127.0.0.1:9/',
   ])
   assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /\[prod\] 部署/)
+  assert.match(res.stdout, /\[dry-run\] pnpm server:bundle/)
+  assert.match(res.stdout, /\[dry-run\] scp .*server\.js\.v\d+/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp/)
+  assert.doesNotMatch(res.stdout, /继续部署\?/)
+})
+
+test('--env test 也可部署，摘要与命令带上测试环境标识', () => {
+  const res = runDeploy([
+    '--env',
+    'test',
+    '--dry-run',
+    '--host',
+    'example.invalid',
+    '--user',
+    'deploy',
+    '--health-url',
+    'http://127.0.0.1:9/',
+  ])
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /\[test\] 部署/)
   assert.match(res.stdout, /\[dry-run\] pnpm server:bundle/)
   assert.match(res.stdout, /\[dry-run\] scp .*server\.js\.v\d+/)
   assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp/)
