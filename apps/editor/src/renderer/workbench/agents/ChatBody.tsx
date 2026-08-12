@@ -47,6 +47,7 @@ import {
 import {
   hasVisibleMessageContent,
   timelineItemToText,
+  type AcpChildItem,
 } from '../../services/acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
@@ -465,7 +466,17 @@ function ChatScroll({
   // frame. Unlike restoringRef this does NOT gate handleScroll: a real outside
   // scroll during the window must still flip `stuck` to false so the pin aborts.
   const pinningRef = useRef(false)
-  const [focusedKey, setFocusedKey] = useState<string | null>(saved?.focusedKey ?? null)
+  const [focusedKey, setFocusedKey] = useState<string | null>(() => {
+    const restored = saved?.focusedKey ?? null
+    // A restored composite (sub-agent) key is only reachable while every ancestor
+    // card is expanded — converge to the nearest visible ancestor otherwise.
+    if (restored === null || !restored.includes('/')) return restored
+    const restoreCollapse: CollapseState = {
+      mode: session.collapseMode.get(),
+      overrides: new Map(saved?.collapse?.overrides ?? []),
+    }
+    return visibleFocusKey(timeline, restored, restoreCollapse)
+  })
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
   const [menu, setMenu] = useState<AgentChatContextMenuState | null>(null)
@@ -739,8 +750,7 @@ function ChatScroll({
   }
 
   const handleClick = (e: ReactMouseEvent) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
-    const key = el?.getAttribute('data-timeline-key')
+    const key = focusedKeyFromEvent(e)
     if (!key) return
     focusSlot(key)
   }
@@ -758,8 +768,7 @@ function ChatScroll({
   }
 
   const handleContextMenu = (e: ReactMouseEvent) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
-    const key = el?.getAttribute('data-timeline-key')
+    const key = focusedKeyFromEvent(e)
     if (key) focusSlot(key)
     e.preventDefault()
     widgetService.setHasSelection(!!window.getSelection()?.toString())
@@ -1152,14 +1161,29 @@ function ChatScroll({
     collapseBridge.emitter.fire()
   }, [collapse, collapseBridge])
 
+  // Fold convergence: when a card folds (per-item override or a Ctrl+Alt+F mode
+  // cycle) while the keyboard focus sits inside it, pull the focus back to the
+  // nearest still-visible ancestor key instead of leaving it on unmounted DOM.
+  useEffect(() => {
+    const key = focusedKeyRef.current
+    if (key === null || !key.includes('/')) return
+    const visible = visibleFocusKey(timelineRef.current, key, collapse)
+    if (visible !== key) {
+      setFocusedKey(visible)
+      focusedKeyRef.current = visible
+      persist()
+    }
+  }, [collapse, persist])
+
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
       // Navigate over the FULL timeline, not displayTimeline: the first user
       // message is sliced out of displayTimeline because the sticky bar above the
       // scroll container renders it — but it must stay keyboard-reachable.
+      // Expanded sub-agent children join the sequence right after their parent.
       const list = timelineRef.current
-      const keys = list.map(slotKey)
+      const keys = collectNavigableKeys(list, collapseRef.current)
       // The pinned plan bar likewise renders outside the scroll container; it
       // joins the sequence right after the first user message, matching the
       // visual stacking order of the bars above the scroll container.
@@ -1194,7 +1218,10 @@ function ChatScroll({
       setFocusedKey(nextKey)
       focusedKeyRef.current = nextKey
       const container = containerRef.current
-      const displayIndex = displayTimelineRef.current.findIndex((it) => slotKey(it) === nextKey)
+      // A composite (sub-agent) key resolves to its top-level row for the
+      // virtualizer; the DOM query below still targets the full nested key.
+      const topSegment = nextKey.split('/')[0] ?? nextKey
+      const displayIndex = displayTimelineRef.current.findIndex((it) => slotKey(it) === topSegment)
       // The first user message lives in the always-visible sticky bar above the
       // container (displayIndex === -1); revealing it just means scrolling to top.
       if (displayIndex === -1 || direction === 'first') {
@@ -1208,7 +1235,7 @@ function ChatScroll({
         return
       }
       const el = container?.querySelector<HTMLElement>(
-        `[data-timeline-key="${cssEscape(nextKey)}"]`,
+        `[data-timeline-key="${cssEscape(nextKey)}"], [data-sticky-key="${cssEscape(nextKey)}"]`,
       )
       // In virtual mode the target row may be unmounted (outside the overscan
       // window), so scrollIntoView finds nothing — fall back to the virtualizer,
@@ -1262,7 +1289,7 @@ function ChatScroll({
         const entries = session.plan.get()
         return entries.length > 0 ? entries.map((e) => e.content).join('\n') : undefined
       }
-      const item = timelineRef.current.find((it) => slotKey(it) === key)
+      const item = findByStickyKey(timelineRef.current, key)
       return item ? timelineItemToText(item) : undefined
     }
     handle.setFocusedKey = (key) => {
@@ -1432,6 +1459,7 @@ function ChatScroll({
                     session={session}
                     sessionRunning={slotRunning}
                     isFocused={key === focusedKey}
+                    focusedKey={focusedKey}
                     {...bookmarkProp(bookmarkedSlots, key)}
                     collapsed={resolveCollapsed(key, item, collapse)}
                     collapse={collapse}
@@ -1457,6 +1485,7 @@ function ChatScroll({
                   session={session}
                   sessionRunning={slotRunning}
                   isFocused={key === focusedKey}
+                  focusedKey={focusedKey}
                   {...bookmarkProp(bookmarkedSlots, key)}
                   collapsed={resolveCollapsed(key, item, collapse)}
                   collapse={collapse}
@@ -1591,6 +1620,7 @@ const TimelineSlot = memo(function TimelineSlot({
   collapsed,
   collapse,
   onToggleCollapse,
+  focusedKey,
 }: {
   slotKey: string
   item: TimelineItem
@@ -1601,6 +1631,9 @@ const TimelineSlot = memo(function TimelineSlot({
   collapsed: boolean
   collapse: CollapseState
   onToggleCollapse: (key: string) => void
+  /** Live keyboard-focused key — a tool call forwards it into its sub-agent
+   *  subtree so the focused child renders the focus ring. */
+  focusedKey: string | null
 }) {
   const focusedClass = isFocused ? ` ${styles['timelineSlotFocused']}` : ''
   const badge =
@@ -1669,7 +1702,13 @@ const TimelineSlot = memo(function TimelineSlot({
           dataStickyDepth={0}
           collapsed={collapsed}
           onToggleCollapse={() => onToggleCollapse(key)}
-          subtreeCollapse={{ stickyKey: key, depth: 0, collapse, toggle: onToggleCollapse }}
+          subtreeCollapse={{
+            stickyKey: key,
+            depth: 0,
+            collapse,
+            toggle: onToggleCollapse,
+            focusedKey,
+          }}
           {...(badge !== undefined ? { badge } : {})}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
@@ -1828,6 +1867,64 @@ function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolea
     const message = item.message
     return message.streaming || message.role === 'user' || hasVisibleMessageContent(message.blocks)
   })
+}
+
+// The keyboard navigation sequence: top-level slot keys in timeline order, with
+// an expanded tool call's sub-agent children (composite sticky keys) spliced in
+// right after their parent — VSCode tree-navigation semantics, so a folded card
+// keeps its children out of the sequence. Recursive to match findByStickyKey's
+// drilling, though the data nests only one level today.
+function collectNavigableKeys(
+  timeline: readonly TimelineItem[],
+  collapse: CollapseState,
+): string[] {
+  const keys: string[] = []
+  const append = (items: readonly (TimelineItem | AcpChildItem)[], parentKey?: string): void => {
+    for (const item of items) {
+      const key = parentKey === undefined ? itemSlotKey(item) : `${parentKey}/${itemSlotKey(item)}`
+      keys.push(key)
+      if (
+        item.kind === 'toolCall' &&
+        item.call.children !== undefined &&
+        item.call.children.length > 0 &&
+        !resolveCollapsed(key, item, collapse)
+      ) {
+        append(item.call.children, key)
+      }
+    }
+  }
+  append(timeline)
+  return keys
+}
+
+// Walk a composite key's ancestor chain and return the nearest still-visible
+// key: the first collapsed ancestor (its header stays rendered) — or the key
+// itself when every ancestor is expanded. Unresolvable segments (stale keys) are
+// left untouched; the move handler's stale fallback deals with those.
+function visibleFocusKey(
+  timeline: readonly TimelineItem[],
+  key: string,
+  collapse: CollapseState,
+): string {
+  const segments = key.split('/')
+  let prefix = segments[0] ?? key
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (i > 0) prefix = `${prefix}/${segments[i]}`
+    const item = findByStickyKey(timeline, prefix)
+    if (!item) return key
+    if (resolveCollapsed(prefix, item, collapse)) return prefix
+  }
+  return key
+}
+
+// Deepest slot key under the pointer: sub-agent children carry only
+// data-sticky-key; top-level slots carry both attributes with the same value.
+function focusedKeyFromEvent(e: ReactMouseEvent): string | undefined {
+  const el = (e.target as HTMLElement).closest<HTMLElement>(
+    '[data-sticky-key], [data-timeline-key]',
+  )
+  if (!el) return undefined
+  return el.getAttribute('data-sticky-key') ?? el.getAttribute('data-timeline-key') ?? undefined
 }
 
 // Escape a string for use inside a CSS attribute selector. Timeline keys are

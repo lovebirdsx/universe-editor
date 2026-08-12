@@ -1750,3 +1750,225 @@ describe('ChatBody — side task affordances', () => {
     })
   })
 })
+
+describe('ChatBody — sub-agent keyboard navigation', () => {
+  const userItem = (id: string, text: string): TimelineItem => ({
+    kind: 'message',
+    id,
+    message: { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false },
+  })
+  const makeTaskCall = (id: string, children: AcpToolCall['children']): AcpToolCall => ({
+    id,
+    title: 'Task',
+    // 'other' defaults to collapsed under the default mode — the tests drive the
+    // chevron to expand, exercising the same fold state the renderer consults.
+    kind: 'other',
+    status: 'completed',
+    text: '',
+    blocks: [],
+    diffs: [],
+    ...(children !== undefined ? { children } : {}),
+  })
+  const childMessage = (id: string, text: string) =>
+    ({ kind: 'message', id, message: makeMessage(id, text) }) as const
+  const childToolCall = (id: string, title: string) =>
+    ({
+      kind: 'toolCall',
+      id,
+      call: { id, title, kind: 'read', status: 'completed', text: '', blocks: [], diffs: [] },
+    }) as const
+
+  const navItems = (children: NonNullable<AcpToolCall['children']>): readonly TimelineItem[] => [
+    userItem('u', 'top question'),
+    { kind: 'toolCall', id: 'task', call: makeTaskCall('task', children) },
+    { kind: 'message', id: 'a', message: makeMessage('a', 'after task') },
+  ]
+
+  const stickyEl = (container: HTMLElement, key: string): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(`[data-sticky-key="${key}"]`)
+    if (!el) throw new Error(`no element for sticky key ${key}`)
+    return el
+  }
+  const toggleCard = (container: HTMLElement, key: string): void => {
+    act(() => {
+      fireEvent.click(
+        slotEl(container, key).querySelector('[data-testid="acp-collapsible-toggle"]')!,
+      )
+    })
+  }
+
+  it('walks parent card → children → next top-level item with Alt+J/K when expanded', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession(
+        's-sub-nav',
+        navItems([childMessage('sm1', 'sub one'), childMessage('sm2', 'sub two')]),
+      ),
+    )
+    toggleCard(container, 't:task')
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).not.toBeNull()
+
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(slotEl(container, 't:task').className).not.toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    expect(stickyEl(container, 't:task/m:sm2').className).not.toContain(focusedClass)
+
+    // And back up in the exact reverse order.
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+
+  it('skips the children of a collapsed task card', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-collapsed', navItems([childMessage('sm1', 'sub one')])),
+    )
+    // kind 'other' starts collapsed under the default mode — no sub timeline mounted.
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    act(() => {
+      widgetRef.current!.moveTimeline('prev')
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+
+  it('Alt+E lands on the last child when the trailing task card is expanded', () => {
+    const items: readonly TimelineItem[] = [
+      userItem('u', 'top question'),
+      { kind: 'message', id: 'a', message: makeMessage('a', 'answer one') },
+      {
+        kind: 'toolCall',
+        id: 'task',
+        call: makeTaskCall('task', [
+          childMessage('sm1', 'sub one'),
+          childMessage('sm2', 'sub two'),
+        ]),
+      },
+    ]
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s-sub-last', items))
+    toggleCard(container, 't:task')
+
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    expect(stickyEl(container, 't:task/m:sm2').className).toContain(focusedClass)
+  })
+
+  it('copies the focused sub-agent message text', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession(
+        's-sub-copy',
+        navItems([childMessage('sm1', 'sub one'), childToolCall('sc1', 'Read')]),
+      ),
+    )
+    toggleCard(container, 't:task')
+    act(() => {
+      fireEvent.click(slotEl(container, 't:task'))
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(widgetRef.current!.getFocusedText()).toBe('sub one')
+  })
+
+  it('marks a clicked sub-agent message as focused', () => {
+    const { container } = renderChat(
+      makeSession('s-sub-click', navItems([childMessage('sm1', 'sub one')])),
+    )
+    toggleCard(container, 't:task')
+    const child = stickyEl(container, 't:task/m:sm1')
+    expect(child.className).not.toContain(focusedClass)
+    act(() => {
+      fireEvent.click(child)
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+    expect(slotEl(container, 't:task').className).not.toContain(focusedClass)
+  })
+
+  it('pulls focus back to the parent key when the focused child folds away', () => {
+    const { container, widgetRef } = renderChatWithWidget(
+      makeSession('s-sub-fold', navItems([childMessage('sm1', 'sub one')])),
+    )
+    toggleCard(container, 't:task')
+    act(() => {
+      fireEvent.click(stickyEl(container, 't:task/m:sm1'))
+    })
+    expect(stickyEl(container, 't:task/m:sm1').className).toContain(focusedClass)
+
+    // Chevron fold: the child unmounts, focus converges to the parent card.
+    toggleCard(container, 't:task')
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+
+    // Re-expand, focus the child again, then fold everything via Ctrl+Alt+F.
+    toggleCard(container, 't:task')
+    act(() => {
+      fireEvent.click(stickyEl(container, 't:task/m:sm1'))
+    })
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+
+  it('persists a composite focusedKey and restores it while the parent stays expanded', () => {
+    const items = navItems([childMessage('sm1', 'sub one')])
+    const first = renderChatWithWidget(makeSession('s-sub-restore', items))
+    toggleCard(first.container, 't:task')
+    act(() => {
+      fireEvent.click(stickyEl(first.container, 't:task/m:sm1'))
+    })
+    first.unmount()
+
+    expect(AcpChatViewStateCache.load('s-sub-restore')?.focusedKey).toBe('t:task/m:sm1')
+
+    const second = renderChat(makeSession('s-sub-restore', items))
+    expect(stickyEl(second.container, 't:task/m:sm1').className).toContain(focusedClass)
+  })
+
+  it('falls back to the parent key on restore when the parent is collapsed', () => {
+    const items = navItems([childMessage('sm1', 'sub one')])
+    AcpChatViewStateCache.save('s-sub-restore-folded', {
+      scrollTop: 0,
+      stuck: true,
+      focusedKey: 't:task/m:sm1',
+      // No overrides: kind 'other' resolves collapsed under the default mode.
+      collapse: { mode: 'default', overrides: [] },
+    })
+    const { container } = renderChat(makeSession('s-sub-restore-folded', items))
+    expect(container.querySelector('[data-testid="acp-subagent-timeline"]')).toBeNull()
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+})

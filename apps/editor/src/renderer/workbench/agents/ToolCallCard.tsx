@@ -77,6 +77,9 @@ export interface SubtreeCollapse {
   readonly depth: number
   readonly collapse: CollapseState
   readonly toggle: (key: string) => void
+  /** Live keyboard-focused slot key — matched against each child's composite key
+   *  to render the focus ring on the focused sub-agent item. */
+  readonly focusedKey?: string | null
 }
 
 export function ToolCallList({ session }: { session: IAcpSession }) {
@@ -270,9 +273,24 @@ export const ToolCallCard = memo(function ToolCallCard({
   const childTimeline = children.length > 0 && (
     <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">
       {children.map((c) => {
-        if (c.kind === 'message') return <SubMessage key={c.id} message={c.message} />
-        if (!subtreeCollapse) return <ToolCallCard key={c.id} call={c.call} />
+        // Standalone (ToolCallList) usage has no shared collapse/focus store —
+        // children render bare, without sticky keys or focus rings.
+        if (!subtreeCollapse) {
+          if (c.kind === 'message') return <SubMessage key={c.id} message={c.message} />
+          return <ToolCallCard key={c.id} call={c.call} />
+        }
         const childKey = buildStickyKey(subtreeCollapse.stickyKey, c)
+        const childFocused = subtreeCollapse.focusedKey === childKey
+        if (c.kind === 'message') {
+          return (
+            <SubMessage
+              key={c.id}
+              message={c.message}
+              stickyKey={childKey}
+              focused={childFocused}
+            />
+          )
+        }
         const childDepth = subtreeCollapse.depth + 1
         return (
           <ToolCallCard
@@ -285,9 +303,13 @@ export const ToolCallCard = memo(function ToolCallCard({
               depth: childDepth,
               collapse: subtreeCollapse.collapse,
               toggle: subtreeCollapse.toggle,
+              ...(subtreeCollapse.focusedKey !== undefined
+                ? { focusedKey: subtreeCollapse.focusedKey }
+                : {}),
             }}
             dataStickyKey={childKey}
             dataStickyDepth={childDepth}
+            {...(childFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
           />
         )
       })}
@@ -338,12 +360,26 @@ export const ToolCallCard = memo(function ToolCallCard({
 })
 
 /** A single sub-agent message rendered inside a parent tool call's child timeline. */
-function SubMessage({ message }: { message: AcpMessage }) {
+function SubMessage({
+  message,
+  stickyKey,
+  focused,
+}: {
+  message: AcpMessage
+  /** Composite sticky key — set when the card tree runs under the timeline's
+   *  shared collapse/focus store (ChatBody), absent for ToolCallList. */
+  stickyKey?: string
+  focused?: boolean
+}) {
+  const className = focused
+    ? `${styles['subMessage']} ${styles['timelineSlotFocused'] ?? ''}`
+    : styles['subMessage']
   return (
     <li
-      className={styles['subMessage']}
+      className={className}
       data-role={message.role}
       data-testid="acp-subagent-message"
+      {...(stickyKey !== undefined ? { 'data-sticky-key': stickyKey } : {})}
     >
       <MessageContent blocks={message.blocks} />
     </li>

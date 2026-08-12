@@ -152,6 +152,48 @@ describe('ToolCallCard', () => {
     expect(screen.getAllByTestId('acp-collapsible-toggle').length).toBeGreaterThanOrEqual(2)
   })
 
+  it('tags sub-agent children with composite data-sticky-key when collapse is controlled', () => {
+    const services = new ServiceCollection()
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      openEditor: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IEditorServiceType)
+    services.set(IConfigurationService, {
+      _serviceBrand: undefined,
+      get: () => undefined,
+    } as unknown as IConfigurationServiceType)
+    const inst = new InstantiationService(services)
+    const { container } = render(
+      <ServicesContext.Provider value={inst}>
+        <ul>
+          <ToolCallCard
+            call={makeCall({
+              kind: 'other',
+              children: [
+                { kind: 'message', id: 'sm1', message: makeChildMessage('sub thinking') },
+                {
+                  kind: 'toolCall',
+                  id: 'sc1',
+                  call: makeCall({ id: 'sc1', kind: 'read', title: 'Read' }),
+                },
+              ],
+            })}
+            collapsed={false}
+            onToggleCollapse={() => {}}
+            subtreeCollapse={{
+              stickyKey: 't:t1',
+              depth: 0,
+              collapse: { mode: 'default', overrides: new Map() },
+              toggle: () => {},
+            }}
+          />
+        </ul>
+      </ServicesContext.Provider>,
+    )
+    expect(container.querySelector('[data-sticky-key="t:t1/m:sm1"]')).not.toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:t1/t:sc1"]')).not.toBeNull()
+  })
+
   it('hides the sub-agent timeline while the parent card is collapsed', () => {
     renderCard(
       makeCall({
