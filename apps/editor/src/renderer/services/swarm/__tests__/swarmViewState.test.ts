@@ -66,4 +66,21 @@ describe('swarm refresh request acknowledgement', () => {
       consumer.dispose()
     }
   })
+
+  it('carries the force flag (default true, soft refresh false)', async () => {
+    const consumer = trackSwarmRefreshConsumer()
+    try {
+      const seen: boolean[] = []
+      const sub = swarmReviewEvents.onDidRequestRefresh((e) => {
+        seen.push(e.force)
+        resolveSwarmReviewsRefresh()
+      })
+      await requestSwarmReviewsRefresh()
+      await requestSwarmReviewsRefresh(false)
+      expect(seen).toEqual([true, false])
+      sub.dispose()
+    } finally {
+      consumer.dispose()
+    }
+  })
 })

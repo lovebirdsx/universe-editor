@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ICommandService,
@@ -24,7 +24,10 @@ import {
   IScmService,
   type IScmSourceControlModel,
 } from '../../../services/extensions/ScmService.js'
-import { swarmReviewsViewState } from '../../../services/swarm/swarmViewState.js'
+import {
+  requestSwarmReviewsRefresh,
+  swarmReviewsViewState,
+} from '../../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
 import { canApproveReview, swarmReviewName, SwarmReviewsView } from '../SwarmReviewsView.js'
@@ -162,6 +165,39 @@ describe('SwarmReviewsView', () => {
         state: 'approved',
       }),
     )
+  })
+
+  it('honors the force flag of refresh requests (soft poll-driven vs manual)', async () => {
+    // The notification poll's rising edge requests a SOFT refresh (force:false —
+    // its own force fetch just repopulated the host TTL cache), while the
+    // title-bar manual refresh keeps forcing.
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) return dashboard
+      if (command === SwarmCommands.getTransitions) return []
+      return undefined
+    })
+
+    render(
+      <ServicesContext.Provider value={createServices(executeCommand)}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    await screen.findByTestId('swarm-review-row')
+
+    const dashboardArgs = () =>
+      (executeCommand.mock.calls as unknown as Array<[string, { force: boolean }]>)
+        .filter((c) => c[0] === SwarmCommands.dashboard)
+        .map((c) => c[1])
+
+    await act(async () => {
+      await requestSwarmReviewsRefresh(false)
+    })
+    expect(dashboardArgs().at(-1)).toMatchObject({ force: false })
+
+    await act(async () => {
+      await requestSwarmReviewsRefresh()
+    })
+    expect(dashboardArgs().at(-1)).toMatchObject({ force: true })
   })
 
   it('heals a stale ignore-snapshot (blank description) via a one-shot detail fetch', async () => {

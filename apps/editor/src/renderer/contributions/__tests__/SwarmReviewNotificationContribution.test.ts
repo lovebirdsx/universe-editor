@@ -562,6 +562,80 @@ describe('SwarmReviewNotificationContribution', () => {
     t.dispose()
   })
 
+  // The poll has just force-fetched the dashboard when a rising edge fires, so a
+  // mounted reviews view is pulled forward with a soft (non-force) refresh —
+  // the user switching to the window (notification click or not) never sees the
+  // pre-notification snapshot.
+  describe('auto-refresh of the mounted reviews view', () => {
+    const watchRefreshRequests = (
+      viewState: Awaited<ReturnType<typeof freshModules>>['viewState'],
+    ) => {
+      const consumer = viewState.trackSwarmRefreshConsumer()
+      const seen: boolean[] = []
+      const sub = viewState.swarmReviewEvents.onDidRequestRefresh((e) => {
+        seen.push(e.force)
+        viewState.resolveSwarmReviewsRefresh()
+      })
+      return { seen, dispose: () => (sub.dispose(), consumer.dispose()) }
+    }
+
+    it('requests a soft refresh on the new-review rising edge', async () => {
+      const t = await setup()
+      const w = watchRefreshRequests(t.viewState)
+      try {
+        t.setDashboard([review('1')])
+        await t.refresh()
+        expect(w.seen).toEqual([false])
+      } finally {
+        w.dispose()
+        t.dispose()
+      }
+    })
+
+    it('does not request a refresh when no new review enters the list', async () => {
+      const t = await setup({ initialNeedsAction: [review('1')] })
+      const w = watchRefreshRequests(t.viewState)
+      try {
+        await t.refresh()
+        await t.refresh()
+        expect(w.seen).toEqual([])
+      } finally {
+        w.dispose()
+        t.dispose()
+      }
+    })
+
+    it('still refreshes the view when notifications are disabled', async () => {
+      const t = await setup({ enabled: false })
+      const w = watchRefreshRequests(t.viewState)
+      try {
+        t.setDashboard([review('1')])
+        await t.refresh()
+        expect(t.notify).not.toHaveBeenCalled()
+        expect(w.seen).toEqual([false])
+      } finally {
+        w.dispose()
+        t.dispose()
+      }
+    })
+
+    it('requests a soft refresh again when the notification click opens the target', async () => {
+      const t = await setup({ clicked: true })
+      const w = watchRefreshRequests(t.viewState)
+      try {
+        t.setDashboard([review('42')])
+        await t.refresh()
+        await flush()
+        expect(t.executeCommand).toHaveBeenCalledWith('swarm.openReview', '42')
+        // Rising edge + the click's open-target path each request one.
+        expect(w.seen).toEqual([false, false])
+      } finally {
+        w.dispose()
+        t.dispose()
+      }
+    })
+  })
+
   it('excludes ignored reviews from the notification', async () => {
     const t = await setup({ ignoredIds: ['2'] })
     t.setDashboard([review('1'), review('2')])

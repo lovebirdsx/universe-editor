@@ -333,15 +333,15 @@ export function SwarmReviewsView() {
     const d1 = swarmReviewEvents.onDidMutateReview(() => {
       void reload()
     })
-    const d2 = swarmReviewEvents.onDidRequestRefresh(() => {
-      void reload().finally(() => resolveSwarmReviewsRefresh())
+    const d2 = swarmReviewEvents.onDidRequestRefresh((e) => {
+      void load(0, e.force).finally(() => resolveSwarmReviewsRefresh())
     })
     return () => {
       consumer.dispose()
       d1.dispose()
       d2.dispose()
     }
-  }, [reload])
+  }, [reload, load])
 
   // Bind the ignore store to storage (idempotent) and re-render on any change,
   // whether it originated here or in a review detail tab.

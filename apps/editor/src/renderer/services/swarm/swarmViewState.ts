@@ -116,14 +116,24 @@ export function clearSwarmReviewEditorStates(): void {
  * component, so the list can react to an action taken in a detail tab.
  */
 const _onDidMutateReview = new Emitter<string>()
-const _onDidRequestRefresh = new Emitter<void>()
+
+/** A refresh request for the mounted Swarm Reviews view. `force` mirrors the
+ *  dashboard command's flag: true bypasses the host-side TTL cache (manual
+ *  title-bar refresh); false just re-pulls — cheap when the notification poll
+ *  has just force-fetched and repopulated that cache. */
+export interface ISwarmReviewsRefreshRequest {
+  readonly force: boolean
+}
+
+const _onDidRequestRefresh = new Emitter<ISwarmReviewsRefreshRequest>()
 
 export const swarmReviewEvents = {
   /** Fired after a review's state changed in a detail tab (vote / transition /
    *  update / obliterate). Carries the review id. */
   onDidMutateReview: _onDidMutateReview.event as Event<string>,
-  /** Fired by the title-bar manual-refresh command. */
-  onDidRequestRefresh: _onDidRequestRefresh.event as Event<void>,
+  /** Fired by the title-bar manual-refresh command (force) and by the
+   *  notification poll's rising edge / notification click (soft). */
+  onDidRequestRefresh: _onDidRequestRefresh.event as Event<ISwarmReviewsRefreshRequest>,
 }
 
 /** Signal that a review mutated so the list can re-fetch its dashboard. */
@@ -155,13 +165,14 @@ export function trackSwarmRefreshConsumer(): IDisposable {
   }
 }
 
-/** Signal a manual refresh request (from the view title bar). Resolves when the
- *  view's triggered reload has settled. */
-export function requestSwarmReviewsRefresh(): Promise<void> {
+/** Signal a refresh request (manual title-bar refresh, or the notification
+ *  poll's rising edge / notification click). Resolves when the view's
+ *  triggered reload has settled. */
+export function requestSwarmReviewsRefresh(force = true): Promise<void> {
   if (_refreshConsumers === 0) return Promise.resolve()
   return new Promise((resolve) => {
     _pendingRefreshAcks.push(resolve)
-    _onDidRequestRefresh.fire()
+    _onDidRequestRefresh.fire({ force })
   })
 }
 

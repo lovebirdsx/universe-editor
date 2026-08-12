@@ -41,7 +41,11 @@ import {
   type SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
 import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreStore.js'
-import { swarmNeedsActionCount, swarmReviewsViewState } from '../services/swarm/swarmViewState.js'
+import {
+  requestSwarmReviewsRefresh,
+  swarmNeedsActionCount,
+  swarmReviewsViewState,
+} from '../services/swarm/swarmViewState.js'
 import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swarmReviewFilter.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { setSwarmNotificationTickHandler } from '../services/swarm/swarmNotificationTick.js'
@@ -507,6 +511,13 @@ export class SwarmReviewNotificationContribution
     const fresh = reviews.filter((r) => !this._known.has(r.id))
     this._known = current
     if (fresh.length === 0) return
+    // The poll just force-fetched the dashboard, so the host-side list cache is
+    // fresh — pull a mounted reviews view forward with a soft (non-force)
+    // refresh now, and the list is already current whenever the user switches
+    // to the window (notification click or not). Independent of the
+    // notifications-enabled switch: data freshness is not a notification.
+    this._logger.debug(`${fresh.length} new review(s) → requesting reviews view refresh (soft)`)
+    void requestSwarmReviewsRefresh(false)
     if (!this._enabled()) {
       this._logger.info(
         `${fresh.length} new review(s) but notifications disabled: ${fresh.map((r) => `#${r.id}`).join(', ')}`,
@@ -548,6 +559,10 @@ export class SwarmReviewNotificationContribution
   }
 
   private _openTarget(fresh: readonly SwarmReviewDto[]): void {
+    // The click may come long after the notification fired (past the host's
+    // list-cache TTL) — soft-refresh the mounted list so it never shows the
+    // pre-notification snapshot.
+    void requestSwarmReviewsRefresh(false)
     if (fresh.length === 1) {
       void this._commands.executeCommand(OpenSwarmReviewAction.ID, fresh[0]!.id)
     } else {
