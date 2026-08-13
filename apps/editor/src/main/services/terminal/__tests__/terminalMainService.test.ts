@@ -1,264 +1,196 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for TerminalMainService — uses a fake PtySpawner so no native module loads.
+ *  Routing tests for the terminal thin shell: local vs remote dispatch, id
+ *  mapping, event merging, and permanent-close exit synthesis. Uses a fake local
+ *  PtySpawner and a fake remote terminal service (no native module, no channel).
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { IDisposable } from '@universe-editor/platform'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import {
+  Emitter,
+  URI,
+  type IDisposable,
+  type ITerminalCreatedInfo,
+  type ITerminalDataEvent,
+  type ITerminalExitEvent,
+  type ITerminalProfile,
+  type ITerminalProfilesRequest,
+  type ITerminalService,
+  type ITerminalSpawnSpec,
+  type ITerminalTitleEvent,
+} from '@universe-editor/platform'
 import type { IPty } from '@lydell/node-pty'
-import { TerminalMainService, type PtySpawner } from '../terminalMainService.js'
+import type { PtySpawner } from '@universe-editor/node-services'
+import { TerminalMainService, type IRemoteTerminalEndpoint } from '../terminalMainService.js'
 
 class FakePty implements IPty {
   cols = 80
   rows = 24
   process = 'fake'
   handleFlowControl = false
-  readonly written: string[] = []
-  readonly resizeCalls: Array<{ cols: number; rows: number }> = []
-  killed = false
-
-  private _data: ((d: string) => void) | undefined
-  private _exit: ((e: { exitCode: number; signal?: number }) => void) | undefined
-
   constructor(readonly pid: number) {}
-
-  readonly onData = (listener: (d: string) => void): IDisposable => {
-    this._data = listener
-    return { dispose: () => (this._data = undefined) }
-  }
-  readonly onExit = (listener: (e: { exitCode: number; signal?: number }) => void): IDisposable => {
-    this._exit = listener
-    return { dispose: () => (this._exit = undefined) }
-  }
-
-  resize(cols: number, rows: number): void {
-    this.resizeCalls.push({ cols, rows })
-  }
+  readonly onData = (): IDisposable => ({ dispose: () => {} })
+  readonly onExit = (): IDisposable => ({ dispose: () => {} })
+  resize(): void {}
   clear(): void {}
-  write(data: string | Buffer): void {
-    this.written.push(typeof data === 'string' ? data : data.toString())
-  }
-  kill(): void {
-    this.killed = true
-  }
+  write(): void {}
+  kill(): void {}
   pause(): void {}
   resume(): void {}
-
-  fireData(d: string): void {
-    this._data?.(d)
-  }
-  fireExit(exitCode: number, signal?: number): void {
-    this._exit?.(signal === undefined ? { exitCode } : { exitCode, signal })
-  }
 }
 
-function makeService(): { service: TerminalMainService; ptys: FakePty[] } {
-  const ptys: FakePty[] = []
-  const spawner: PtySpawner = () => {
-    const p = new FakePty(1000 + ptys.length)
-    ptys.push(p)
-    return p
-  }
-  return { service: new TerminalMainService(spawner), ptys }
+interface RemoteHarness {
+  service: ITerminalService
+  onData: Emitter<ITerminalDataEvent>
+  onExit: Emitter<ITerminalExitEvent>
+  onClose: Emitter<void>
+  created: ITerminalSpawnSpec[]
+  inputs: Array<{ id: string; data: string }>
+  resizes: Array<{ id: string; cols: number; rows: number }>
+  killed: string[]
+  released: string[]
 }
 
-describe('TerminalMainService', () => {
-  it('create returns info with pid/shell/name', async () => {
-    const { service, ptys } = makeService()
-    const info = await service.create({ shell: 'bash', name: 'T1' })
-    expect(info.pid).toBe(1000)
-    expect(info.shell).toBe('bash')
-    expect(info.name).toBe('T1')
-    expect(ptys).toHaveLength(1)
+function makeRemoteHarness(): RemoteHarness {
+  const onData = new Emitter<ITerminalDataEvent>()
+  const onExit = new Emitter<ITerminalExitEvent>()
+  const onTitleChange = new Emitter<ITerminalTitleEvent>()
+  const onClose = new Emitter<void>()
+  const created: ITerminalSpawnSpec[] = []
+  const inputs: RemoteHarness['inputs'] = []
+  const resizes: RemoteHarness['resizes'] = []
+  const killed: string[] = []
+  const released: string[] = []
+
+  const service: ITerminalService = {
+    _serviceBrand: undefined,
+    onData: onData.event,
+    onExit: onExit.event,
+    onTitleChange: onTitleChange.event,
+    create: async (spec) => {
+      created.push(spec)
+      return { id: 'remote-uuid-1', pid: 500, shell: spec.shell ?? '/bin/sh', name: 'remote' }
+    },
+    getProfiles: async (): Promise<readonly ITerminalProfile[]> => [],
+    input: (id, data) => {
+      inputs.push({ id, data })
+      return Promise.resolve()
+    },
+    resize: (id, cols, rows) => {
+      resizes.push({ id, cols, rows })
+      return Promise.resolve()
+    },
+    kill: (id) => {
+      killed.push(id)
+      return Promise.resolve()
+    },
+    list: async (): Promise<readonly ITerminalCreatedInfo[]> => [
+      { id: 'remote-uuid-1', pid: 500, shell: '/bin/sh', name: 'remote' },
+    ],
+    release: (id) => {
+      released.push(id)
+      return Promise.resolve()
+    },
+  }
+  return { service, onData, onExit, onClose, created, inputs, resizes, killed, released }
+}
+
+interface LocalHarness {
+  remote: RemoteHarness
+  localSpawns: Array<{ file: string; opts: { cwd: string | undefined } }>
+  svc: TerminalMainService
+}
+
+function makeLocalHarness(): LocalHarness {
+  const remote = makeRemoteHarness()
+  const localSpawns: LocalHarness['localSpawns'] = []
+  const localSpawner: PtySpawner = (file, _args, opts) => {
+    localSpawns.push({ file, opts: { cwd: opts.cwd } })
+    return new FakePty(777)
+  }
+  const remoteFactory = async (authority: string): Promise<IRemoteTerminalEndpoint> => {
+    void authority
+    return { service: remote.service, onDidClose: remote.onClose.event }
+  }
+  const svc = new TerminalMainService(localSpawner, undefined, undefined, remoteFactory)
+  return { remote, localSpawns, svc }
+}
+
+const remoteCwd = () =>
+  URI.from({ scheme: 'remote-ssh', authority: 'e2e-local', path: '/ws' }).toJSON()
+
+describe('TerminalMainService routing', () => {
+  it('routes a file cwd to the local pty host', async () => {
+    const { svc, localSpawns } = makeLocalHarness()
+    const cwd = tmpdir()
+    const info = await svc.create({ cwd: URI.file(cwd).toJSON(), shell: 'bash' })
+    expect(info.id).not.toContain('remote:')
+    expect(localSpawns).toHaveLength(1)
+    expect(path.normalize(localSpawns[0]!.opts.cwd!)).toBe(path.normalize(cwd))
   })
 
-  it('defaults the name to the shell basename', async () => {
-    const { service } = makeService()
-    const info = await service.create({ shell: '/usr/bin/zsh' })
-    expect(info.name).toBe('zsh')
+  it('routes a remote-ssh cwd to the remote terminal service with the cwd URI intact', async () => {
+    const { svc, remote } = makeLocalHarness()
+    const info = await svc.create({ cwd: remoteCwd(), shell: 'bash' })
+    expect(info.id).toBe('remote:e2e-local:remote-uuid-1')
+    expect(remote.created).toHaveLength(1)
+    expect(URI.revive(remote.created[0]!.cwd)?.scheme).toBe('remote-ssh')
   })
 
-  it('routes input to the owning pty', async () => {
-    const { service, ptys } = makeService()
-    const info = await service.create({})
-    await service.input(info.id, 'ls\n')
-    expect(ptys[0]!.written).toEqual(['ls\n'])
+  it('maps input/resize/kill/release by the mapped id back to the remote id', async () => {
+    const { svc, remote } = makeLocalHarness()
+    const info = await svc.create({ cwd: remoteCwd() })
+    await svc.input(info.id, 'ls\n')
+    await svc.resize(info.id, 100, 30)
+    await svc.kill(info.id)
+    await svc.release(info.id)
+    expect(remote.inputs).toEqual([{ id: 'remote-uuid-1', data: 'ls\n' }])
+    expect(remote.resizes).toEqual([{ id: 'remote-uuid-1', cols: 100, rows: 30 }])
+    expect(remote.killed).toEqual(['remote-uuid-1'])
+    expect(remote.released).toEqual(['remote-uuid-1'])
   })
 
-  it('forwards resize', async () => {
-    const { service, ptys } = makeService()
-    const info = await service.create({})
-    await service.resize(info.id, 100, 30)
-    expect(ptys[0]!.resizeCalls).toEqual([{ cols: 100, rows: 30 }])
+  it('merges remote onData/onExit events back under the mapped id', async () => {
+    const { svc, remote } = makeLocalHarness()
+    const info = await svc.create({ cwd: remoteCwd() })
+    const data: ITerminalDataEvent[] = []
+    const exits: ITerminalExitEvent[] = []
+    svc.onData((e) => data.push(e))
+    svc.onExit((e) => exits.push(e))
+
+    remote.onData.fire({ id: 'remote-uuid-1', data: 'hi' })
+    expect(data).toEqual([{ id: info.id, data: 'hi' }])
+
+    remote.onExit.fire({ id: 'remote-uuid-1', exitCode: 7 })
+    expect(exits).toEqual([{ id: info.id, exitCode: 7 }])
   })
 
-  it('emits onData tagged with the terminal id', async () => {
-    const { service, ptys } = makeService()
-    const events: Array<{ id: string; data: string }> = []
-    service.onData((e) => events.push(e))
-    const info = await service.create({})
-    ptys[0]!.fireData('hello')
-    expect(events).toEqual([{ id: info.id, data: 'hello' }])
-  })
+  it('fires onExit for live terminals when the connection closes permanently', async () => {
+    const { svc, remote } = makeLocalHarness()
+    const info = await svc.create({ cwd: remoteCwd() })
+    const exits: ITerminalExitEvent[] = []
+    svc.onExit((e) => exits.push(e))
 
-  it('isolates data between terminals', async () => {
-    const { service, ptys } = makeService()
-    await service.create({})
-    const b = await service.create({})
-    const got: Array<{ id: string; data: string }> = []
-    service.onData((e) => got.push(e))
-    ptys[1]!.fireData('fromB')
-    expect(got).toEqual([{ id: b.id, data: 'fromB' }])
-  })
+    remote.onClose.fire()
 
-  it('onExit fires and removes the terminal from the list', async () => {
-    const { service, ptys } = makeService()
-    const exits: Array<{ id: string; exitCode: number }> = []
-    service.onExit((e) => exits.push(e))
-    const info = await service.create({})
-    ptys[0]!.fireExit(0)
     expect(exits).toEqual([{ id: info.id, exitCode: 0 }])
-    expect(await service.list()).toHaveLength(0)
   })
 
-  it('kill signals the pty', async () => {
-    const { service, ptys } = makeService()
-    const info = await service.create({})
-    await service.kill(info.id)
-    expect(ptys[0]!.killed).toBe(true)
-  })
-
-  it('release kills and drops the terminal', async () => {
-    const { service, ptys } = makeService()
-    const info = await service.create({})
-    await service.release(info.id)
-    expect(ptys[0]!.killed).toBe(true)
-    expect(await service.list()).toHaveLength(0)
-  })
-
-  it('list returns created terminals in order', async () => {
-    const { service } = makeService()
-    await service.create({ name: 'A' })
-    await service.create({ name: 'B' })
-    const list = await service.list()
-    expect(list.map((t) => t.name)).toEqual(['A', 'B'])
-  })
-
-  it('strips denylisted env vars before spawning', async () => {
-    let captured: Record<string, string> | undefined
-    const spawner: PtySpawner = (_file, _args, opts) => {
-      captured = opts.env
-      return new FakePty(1)
+  it('routes getProfiles to the remote host when the folder is remote', async () => {
+    const { svc, remote } = makeLocalHarness()
+    let remoteProfileCalls = 0
+    const original = remote.service.getProfiles
+    remote.service.getProfiles = async (request: ITerminalProfilesRequest) => {
+      remoteProfileCalls++
+      void request
+      return []
     }
-    const service = new TerminalMainService(spawner)
-    await service.create({ env: { FOO: 'bar', ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--x' } })
-    expect(captured?.['FOO']).toBe('bar')
-    expect(captured?.['ELECTRON_RUN_AS_NODE']).toBeUndefined()
-    expect(captured?.['NODE_OPTIONS']).toBeUndefined()
-  })
-
-  it('passes a valid cwd to the spawner', async () => {
-    let captured: Parameters<PtySpawner>[2] | undefined
-    const spawner: PtySpawner = (_file, _args, opts) => {
-      captured = opts
-      return new FakePty(1)
-    }
-    const service = new TerminalMainService(spawner, undefined, () => ({
-      isDirectory: () => true,
-    }))
-
-    await service.create({ cwd: 'G:/aki_3.6/Source/Client/TypeScript' })
-
-    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
-  })
-
-  it('normalizes a Windows drive cwd that arrived as a URI path', async () => {
-    let captured: Parameters<PtySpawner>[2] | undefined
-    const spawner: PtySpawner = (_file, _args, opts) => {
-      captured = opts
-      return new FakePty(1)
-    }
-    const service = new TerminalMainService(
-      spawner,
-      undefined,
-      () => ({ isDirectory: () => true }),
-      'win32',
-    )
-
-    await service.create({ cwd: '/G:/aki_3.6/Source/Client/TypeScript' })
-
-    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
-  })
-
-  it('omits an unavailable cwd before calling node-pty', async () => {
-    let captured: Parameters<PtySpawner>[2] | undefined
-    const spawner: PtySpawner = (_file, _args, opts) => {
-      captured = opts
-      return new FakePty(1)
-    }
-    const err = Object.assign(new Error('missing'), { code: 'ENOENT' })
-    const service = new TerminalMainService(spawner, undefined, () => {
-      throw err
-    })
-
-    await service.create({ cwd: '${workspaceFolder}/Src/UniverseEditor' })
-
-    expect(captured?.cwd).toBeUndefined()
-  })
-
-  it('strips wrapping quotes and uppercases the drive letter (sanitizeCwd)', async () => {
-    let captured: Parameters<PtySpawner>[2] | undefined
-    const spawner: PtySpawner = (_file, _args, opts) => {
-      captured = opts
-      return new FakePty(1)
-    }
-    const service = new TerminalMainService(
-      spawner,
-      undefined,
-      () => ({ isDirectory: () => true }),
-      'win32',
-    )
-
-    await service.create({ cwd: '"c:/Users/x/proj"' })
-
-    expect(captured?.cwd).toBe('C:/Users/x/proj')
-  })
-
-  it('dispose kills every live terminal', async () => {
-    const { service, ptys } = makeService()
-    await service.create({})
-    await service.create({})
-    service.dispose()
-    expect(ptys.every((p) => p.killed)).toBe(true)
-  })
-
-  it('rejects operations on unknown ids', async () => {
-    const { service } = makeService()
-    await expect(service.input('nope', 'x')).rejects.toThrow(/unknown terminal/)
-    await expect(service.resize('nope', 1, 1)).rejects.toThrow(/unknown terminal/)
-  })
-
-  it('getProfiles delegates to detection with the injected deps', async () => {
-    const spawner: PtySpawner = () => new FakePty(1)
-    const service = new TerminalMainService(spawner, undefined, statSyncLike, 'linux', {
-      fs: {
-        existsFile: async (p) => p === '/etc/shells' || p === '/bin/bash',
-        readFile: async () => Buffer.from('/bin/bash\n'),
-        existsDirectory: async () => false,
-        readdir: async () => [],
-      },
-      execFile: () => Promise.reject(new Error('no execFile')),
-      env: {},
-      platform: 'linux',
-      windowsBuildNumber: 0,
-      processArch: 'x64',
-    })
-
-    const profiles = await service.getProfiles({})
-
-    expect(profiles).toEqual([
-      { profileName: 'bash', path: '/bin/bash', isDefault: false, isAutoDetected: true },
-    ])
+    await svc.getProfiles({ folder: remoteCwd() })
+    expect(remoteProfileCalls).toBe(1)
+    // Local getProfiles still goes to the local host (fake spawner path).
+    await svc.getProfiles({})
+    expect(remoteProfileCalls).toBe(1)
+    remote.service.getProfiles = original
   })
 })
-
-const statSyncLike = () => ({ isDirectory: () => true })

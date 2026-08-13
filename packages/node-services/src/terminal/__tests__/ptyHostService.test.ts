@@ -1,0 +1,287 @@
+/*---------------------------------------------------------------------------------------------
+ *  Tests for PtyHostService — uses a fake PtySpawner so no native module loads.
+ *--------------------------------------------------------------------------------------------*/
+
+import { describe, expect, it } from 'vitest'
+import type { IDisposable } from '@universe-editor/platform'
+import type { IPty } from '@lydell/node-pty'
+import { PtyHostService, type PtySpawner } from '../ptyHostService.js'
+
+class FakePty implements IPty {
+  cols = 80
+  rows = 24
+  process = 'fake'
+  handleFlowControl = false
+  readonly written: string[] = []
+  readonly resizeCalls: Array<{ cols: number; rows: number }> = []
+  killed = false
+
+  private _data: ((d: string) => void) | undefined
+  private _exit: ((e: { exitCode: number; signal?: number }) => void) | undefined
+
+  constructor(readonly pid: number) {}
+
+  readonly onData = (listener: (d: string) => void): IDisposable => {
+    this._data = listener
+    return { dispose: () => (this._data = undefined) }
+  }
+  readonly onExit = (listener: (e: { exitCode: number; signal?: number }) => void): IDisposable => {
+    this._exit = listener
+    return { dispose: () => (this._exit = undefined) }
+  }
+
+  resize(cols: number, rows: number): void {
+    this.resizeCalls.push({ cols, rows })
+  }
+  clear(): void {}
+  write(data: string | Buffer): void {
+    this.written.push(typeof data === 'string' ? data : data.toString())
+  }
+  kill(): void {
+    this.killed = true
+  }
+  pause(): void {}
+  resume(): void {}
+
+  fireData(d: string): void {
+    this._data?.(d)
+  }
+  fireExit(exitCode: number, signal?: number): void {
+    this._exit?.(signal === undefined ? { exitCode } : { exitCode, signal })
+  }
+}
+
+function makeService(): { service: PtyHostService; ptys: FakePty[] } {
+  const ptys: FakePty[] = []
+  const spawner: PtySpawner = () => {
+    const p = new FakePty(1000 + ptys.length)
+    ptys.push(p)
+    return p
+  }
+  return { service: new PtyHostService({ spawn: spawner }), ptys }
+}
+
+describe('PtyHostService', () => {
+  it('create returns info with pid/shell/name', async () => {
+    const { service, ptys } = makeService()
+    const info = await service.create({ shell: 'bash', name: 'T1' })
+    expect(info.pid).toBe(1000)
+    expect(info.shell).toBe('bash')
+    expect(info.name).toBe('T1')
+    expect(ptys).toHaveLength(1)
+  })
+
+  it('defaults the name to the shell basename', async () => {
+    const { service } = makeService()
+    const info = await service.create({ shell: '/usr/bin/zsh' })
+    expect(info.name).toBe('zsh')
+  })
+
+  it('routes input to the owning pty', async () => {
+    const { service, ptys } = makeService()
+    const info = await service.create({})
+    await service.input(info.id, 'ls\n')
+    expect(ptys[0]!.written).toEqual(['ls\n'])
+  })
+
+  it('forwards resize', async () => {
+    const { service, ptys } = makeService()
+    const info = await service.create({})
+    await service.resize(info.id, 100, 30)
+    expect(ptys[0]!.resizeCalls).toEqual([{ cols: 100, rows: 30 }])
+  })
+
+  it('emits onData tagged with the terminal id', async () => {
+    const { service, ptys } = makeService()
+    const events: Array<{ id: string; data: string }> = []
+    service.onData((e) => events.push(e))
+    const info = await service.create({})
+    ptys[0]!.fireData('hello')
+    expect(events).toEqual([{ id: info.id, data: 'hello' }])
+  })
+
+  it('isolates data between terminals', async () => {
+    const { service, ptys } = makeService()
+    await service.create({})
+    const b = await service.create({})
+    const got: Array<{ id: string; data: string }> = []
+    service.onData((e) => got.push(e))
+    ptys[1]!.fireData('fromB')
+    expect(got).toEqual([{ id: b.id, data: 'fromB' }])
+  })
+
+  it('onExit fires and removes the terminal from the list', async () => {
+    const { service, ptys } = makeService()
+    const exits: Array<{ id: string; exitCode: number }> = []
+    service.onExit((e) => exits.push(e))
+    const info = await service.create({})
+    ptys[0]!.fireExit(0)
+    expect(exits).toEqual([{ id: info.id, exitCode: 0 }])
+    expect(await service.list()).toHaveLength(0)
+  })
+
+  it('kill signals the pty', async () => {
+    const { service, ptys } = makeService()
+    const info = await service.create({})
+    await service.kill(info.id)
+    expect(ptys[0]!.killed).toBe(true)
+  })
+
+  it('release kills and drops the terminal', async () => {
+    const { service, ptys } = makeService()
+    const info = await service.create({})
+    await service.release(info.id)
+    expect(ptys[0]!.killed).toBe(true)
+    expect(await service.list()).toHaveLength(0)
+  })
+
+  it('list returns created terminals in order', async () => {
+    const { service } = makeService()
+    await service.create({ name: 'A' })
+    await service.create({ name: 'B' })
+    const list = await service.list()
+    expect(list.map((t) => t.name)).toEqual(['A', 'B'])
+  })
+
+  it('strips denylisted env vars before spawning', async () => {
+    let captured: Record<string, string> | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts.env
+      return new FakePty(1)
+    }
+    const service = new PtyHostService({ spawn: spawner })
+    await service.create({ env: { FOO: 'bar', ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--x' } })
+    expect(captured?.['FOO']).toBe('bar')
+    expect(captured?.['ELECTRON_RUN_AS_NODE']).toBeUndefined()
+    expect(captured?.['NODE_OPTIONS']).toBeUndefined()
+  })
+
+  it('passes a valid cwd to the spawner', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new PtyHostService({
+      spawn: spawner,
+      cwdStat: () => ({ isDirectory: () => true }),
+    })
+
+    await service.create({ cwd: 'G:/aki_3.6/Source/Client/TypeScript' })
+
+    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+  })
+
+  it('normalizes a Windows drive cwd that arrived as a URI path', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new PtyHostService({
+      spawn: spawner,
+      cwdStat: () => ({ isDirectory: () => true }),
+      platform: 'win32',
+    })
+
+    await service.create({ cwd: '/G:/aki_3.6/Source/Client/TypeScript' })
+
+    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+  })
+
+  it('omits an unavailable cwd before calling node-pty', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const err = Object.assign(new Error('missing'), { code: 'ENOENT' })
+    const service = new PtyHostService({
+      spawn: spawner,
+      cwdStat: () => {
+        throw err
+      },
+    })
+
+    await service.create({ cwd: '${workspaceFolder}/Src/UniverseEditor' })
+
+    expect(captured?.cwd).toBeUndefined()
+  })
+
+  it('strips wrapping quotes and uppercases the drive letter (sanitizeCwd)', async () => {
+    let captured: Parameters<PtySpawner>[2] | undefined
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      captured = opts
+      return new FakePty(1)
+    }
+    const service = new PtyHostService({
+      spawn: spawner,
+      cwdStat: () => ({ isDirectory: () => true }),
+      platform: 'win32',
+    })
+
+    await service.create({ cwd: '"c:/Users/x/proj"' })
+
+    expect(captured?.cwd).toBe('C:/Users/x/proj')
+  })
+
+  it('dispose kills every live terminal', async () => {
+    const { service, ptys } = makeService()
+    await service.create({})
+    await service.create({})
+    service.dispose()
+    expect(ptys.every((p) => p.killed)).toBe(true)
+  })
+
+  it('rejects operations on unknown ids', async () => {
+    const { service } = makeService()
+    await expect(service.input('nope', 'x')).rejects.toThrow(/unknown terminal/)
+    await expect(service.resize('nope', 1, 1)).rejects.toThrow(/unknown terminal/)
+  })
+
+  it('getProfiles delegates to detection with the injected deps', async () => {
+    const spawner: PtySpawner = () => new FakePty(1)
+    const service = new PtyHostService({
+      spawn: spawner,
+      platform: 'linux',
+      profileDeps: {
+        fs: {
+          existsFile: async (p) => p === '/etc/shells' || p === '/bin/bash',
+          readFile: async () => Buffer.from('/bin/bash\n'),
+          existsDirectory: async () => false,
+          readdir: async () => [],
+        },
+        execFile: () => Promise.reject(new Error('no execFile')),
+        env: {},
+        platform: 'linux',
+        windowsBuildNumber: 0,
+        processArch: 'x64',
+      },
+    })
+
+    const profiles = await service.getProfiles({})
+
+    expect(profiles).toEqual([
+      { profileName: 'bash', path: '/bin/bash', isDefault: false, isAutoDetected: true },
+    ])
+  })
+
+  it('invokes the onPtySpawned hook and releases it on release', async () => {
+    const spawned: Array<{ pid: number; label: string }> = []
+    const released: string[] = []
+    const spawner: PtySpawner = () => new FakePty(42)
+    const service = new PtyHostService({
+      spawn: spawner,
+      onPtySpawned: (pid, label) => {
+        spawned.push({ pid, label })
+        return { dispose: () => released.push(label) }
+      },
+    })
+    const info = await service.create({ name: 'hooked' })
+    expect(spawned).toEqual([{ pid: 42, label: 'hooked' }])
+    expect(released).toEqual([])
+
+    await service.release(info.id)
+    expect(released).toEqual(['hooked'])
+  })
+})

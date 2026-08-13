@@ -10,6 +10,7 @@ import {
   IInstantiationService,
   InstantiationService,
   ServiceCollection,
+  URI,
   observableValue,
   type ISettableObservable,
   type ServicesAccessor,
@@ -99,10 +100,10 @@ describe('TerminalEditorInput', () => {
     const { inst } = makeAccessor(h)
     const input = inst.createInstance(TerminalEditorInput, 't-live', 'pwsh', {
       shell: 'pwsh',
-      cwd: '/work',
+      cwd: URI.file('/work').toJSON(),
     })
     const data = JSON.parse(input.serialize()) as Record<string, unknown>
-    expect(data).toEqual({ label: 'pwsh', shell: 'pwsh', cwd: '/work' })
+    expect(data).toEqual({ label: 'pwsh', shell: 'pwsh', cwd: URI.file('/work').toJSON() })
     expect(data['terminalId']).toBeUndefined()
   })
 
@@ -118,7 +119,7 @@ describe('TerminalEditorInput', () => {
     const h = makeManager()
     const { accessor } = makeAccessor(h)
     const restored = TerminalEditorInput.deserialize(
-      JSON.stringify({ label: 'pwsh', shell: 'pwsh', cwd: '/work' }),
+      JSON.stringify({ label: 'pwsh', shell: 'pwsh', cwd: URI.file('/work').toJSON() }),
       accessor,
     )
     expect(restored).not.toBeNull()
@@ -127,7 +128,11 @@ describe('TerminalEditorInput', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(h.created).toHaveLength(1)
-    expect(h.created[0]).toMatchObject({ target: 'editor', shell: 'pwsh', cwd: '/work' })
+    expect(h.created[0]).toMatchObject({
+      target: 'editor',
+      shell: 'pwsh',
+      cwd: URI.file('/work').toJSON(),
+    })
     expect(restored!.terminalId.get()).toBe('t0')
   })
 

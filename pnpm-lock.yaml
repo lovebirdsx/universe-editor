@@ -930,6 +930,9 @@ importers:
 
   packages/node-services:
     dependencies:
+      '@lydell/node-pty':
+        specifier: 'catalog:'
+        version: 1.2.0-beta.12
       '@parcel/watcher':
         specifier: 'catalog:'
         version: 2.6.0
@@ -973,6 +976,9 @@ importers:
 
   packages/remote-server:
     dependencies:
+      '@lydell/node-pty':
+        specifier: 'catalog:'
+        version: 1.2.0-beta.12
       '@parcel/watcher':
         specifier: 'catalog:'
         version: 2.6.0

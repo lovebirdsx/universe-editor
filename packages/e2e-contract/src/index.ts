@@ -655,8 +655,17 @@ export interface E2EProbe {
    * signal check that the native PTY actually spawns in the packaged build.
    */
   terminalCreate(): Promise<string>
+  /**
+   * Create a terminal through the renderer's terminal manager (the real user
+   * path: `newTerminal()`), which resolves the cwd from the current workspace.
+   * For a remote-ssh workspace this routes the terminal to the remote host.
+   * Returns the terminal id, or null when creation failed.
+   */
+  terminalCreateInWorkspace(): Promise<string | null>
   /** Write input to a terminal created via `terminalCreate`. */
   terminalInput(id: string, data: string): Promise<void>
+  /** Release (kill + remove) a terminal by id, as a user closing it would. */
+  terminalClose(id: string): Promise<void>
   /** All output observed for a terminal id since creation. */
   terminalReadBuffer(id: string): string
   /**

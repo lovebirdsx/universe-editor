@@ -13,7 +13,7 @@ import type {
   ITerminalProfile,
   ITerminalProfileConfigValue,
   ITerminalProfilesRequest,
-} from '../../../shared/ipc/terminalService.js'
+} from '@universe-editor/platform'
 import { enumeratePowerShellCandidates } from './powerShellInstallations.js'
 
 export interface ITerminalProfilesFsProvider {

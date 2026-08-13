@@ -102,7 +102,9 @@ test.describe('remote workspace ui', () => {
       const recent = await workbench.page.evaluate(() => window.__E2E__!.getRecentWorkspaceUris())
       expect(recent).toContain(rootUri)
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
+      // The remote daemon's watcher may still hold the workspace root on
+      // Windows; ride out the release window (same as the other watch specs).
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
     }
   })
 
@@ -161,7 +163,7 @@ test.describe('remote workspace ui', () => {
         })
         .toBe(true)
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
     }
   })
 })

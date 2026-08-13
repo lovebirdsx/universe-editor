@@ -28,8 +28,10 @@ import {
   observableValue,
   autorun,
   registerSingleton,
+  REMOTE_SCHEME,
   StorageScope,
   toDisposable,
+  URI,
   ILoggerService,
   type Event,
   type HostPlatform,
@@ -39,6 +41,7 @@ import {
   type IObservable,
   type ISettableObservable,
   type IWorkspaceFolderData,
+  type UriComponents,
 } from '@universe-editor/platform'
 import {
   ITerminalService,
@@ -61,7 +64,7 @@ export interface ITerminalNewSpec {
   readonly name?: string
   /** Extra environment variables merged over the sanitized child env. */
   readonly env?: Record<string, string>
-  readonly cwd?: string
+  readonly cwd?: UriComponents
   readonly target?: TerminalTarget
 }
 
@@ -151,7 +154,7 @@ interface TermClient {
 
 interface TermSpec {
   shell: string
-  cwd?: string
+  cwd?: UriComponents
   args?: readonly string[]
   name?: string
   env?: Record<string, string>
@@ -159,14 +162,14 @@ interface TermSpec {
 
 interface IPersistedTerminalEntry {
   shell: string
-  cwd?: string
+  cwd?: UriComponents
   args?: readonly string[]
   name?: string
   env?: Record<string, string>
 }
 
 interface IPersistedTerminalState {
-  schemaVersion: 2
+  schemaVersion: 3
   groups: Array<{ terminals: IPersistedTerminalEntry[] }>
 }
 
@@ -467,21 +470,31 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   /**
-   * Resolve the effective terminal cwd: expand `${...}` variables in the explicit
-   * / configured cwd (VSCode-style), then apply getCwd's absolute-vs-relative and
-   * workspace/home fallback rules. Variable resolution that throws (e.g.
-   * `${workspaceFolder}` with no folder open) degrades to "no custom cwd" so the
-   * fallback still yields a usable directory.
+   * Resolve the effective terminal cwd as a URI. A remote workspace yields the
+   * remote folder URI directly (the terminal runs on the remote host, and the
+   * `${...}`-resolved `terminal.integrated.cwd` string is local-host semantics, so
+   * it is ignored there). A local workspace keeps the old string resolution path
+   * and returns a `file:` URI. An explicit cwd URI (split inherit / restore) rides
+   * through unchanged.
    */
-  private async _resolveCwd(explicitCwd: string | undefined): Promise<string | undefined> {
-    const platform: HostPlatform = this._host.platform
+  private async _resolveCwd(
+    explicitCwd: UriComponents | undefined,
+  ): Promise<UriComponents | undefined> {
     const folder = this._workspace.current
-    const workspaceCwd = folder?.folder?.fsPath
+    const folderUri = folder?.folder
+
+    if (folderUri && folderUri.scheme === REMOTE_SCHEME) {
+      return explicitCwd ?? folderUri.toJSON()
+    }
+    if (explicitCwd) return explicitCwd
+
+    const platform: HostPlatform = this._host.platform
+    const workspaceCwd = folderUri?.fsPath
     const scope: IWorkspaceFolderData | undefined = folder
       ? { uri: folder.folder, name: folder.name }
       : undefined
 
-    const rawCwd = (explicitCwd ?? this._config.get<string>('terminal.integrated.cwd')) || undefined
+    const rawCwd = this._config.get<string>('terminal.integrated.cwd') || undefined
 
     let resolved: string | undefined
     if (rawCwd && rawCwd.length > 0) {
@@ -496,7 +509,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     }
 
     const userHome = await this._getUserHome()
-    return computeTerminalCwd(resolved, workspaceCwd, userHome, platform)
+    const cwdStr = computeTerminalCwd(resolved, workspaceCwd, userHome, platform)
+    return cwdStr ? URI.file(cwdStr).toJSON() : undefined
   }
 
   private _userHome: string | undefined
@@ -612,7 +626,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     } catch {
       return
     }
-    if (!data || data.schemaVersion !== 2) return
+    if (!data || data.schemaVersion !== 3) return
 
     this._suspendPersist = true
     try {
@@ -659,7 +673,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       }))
       .filter((g) => g.terminals.length > 0)
     try {
-      await this._storage.set(STORAGE_KEY, { schemaVersion: 2, groups }, StorageScope.WORKSPACE)
+      await this._storage.set(STORAGE_KEY, { schemaVersion: 3, groups }, StorageScope.WORKSPACE)
     } catch {
       // best-effort
     }

@@ -675,8 +675,17 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!terminalBuffers.has(info.id)) terminalBuffers.set(info.id, '')
       return info.id
     },
+    terminalCreateInWorkspace: async (): Promise<string | null> => {
+      const id = await services.terminalManagerService.newTerminal()
+      if (id !== null) terminalBuffers.set(id, '')
+      return id
+    },
     terminalInput: (id: string, data: string): Promise<void> =>
       services.terminalService.input(id, data),
+    terminalClose: (id: string): Promise<void> => {
+      services.terminalManagerService.closeTerminal(id)
+      return Promise.resolve()
+    },
     terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
     terminalProfiles: async (): Promise<readonly string[]> => {
       await services.terminalManagerService.refreshProfiles()

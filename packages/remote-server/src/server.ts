@@ -38,15 +38,19 @@ import {
   NodeFileSystemProvider,
   TextSearchService,
   WatcherProcessClient,
+  type PtySpawner,
   type WatcherTransportFactory,
 } from '@universe-editor/node-services'
 import { ForkedWatcherTransport } from './watcherForkTransport.js'
 import { RemoteFileStreamService } from './fileStreamService.js'
+import { RemoteTerminalService } from './terminalService.js'
 import { SERVER_VERSION } from './version.js'
 
 export interface CreateRemoteServerOptions {
   readonly serverVersion?: string
   readonly watcherTransportFactory?: WatcherTransportFactory
+  /** Fake pty spawner for daemon integration tests (no native node-pty). */
+  readonly terminalSpawner?: PtySpawner
 }
 
 export function createRemoteServer(
@@ -130,6 +134,12 @@ export function createRemoteServer(
   server.registerChannel(RemoteChannels.FileSearch, ProxyChannel.fromService(fileSearch))
   server.registerChannel(RemoteChannels.TextSearch, ProxyChannel.fromService(textSearch))
   server.registerChannel(RemoteChannels.FileWatcher, ProxyChannel.fromService(watcherTunnel))
+  server.registerChannel(
+    RemoteChannels.Terminal,
+    ProxyChannel.fromService(
+      disposables.add(new RemoteTerminalService(options?.terminalSpawner, loggerService)),
+    ),
+  )
 
   log.info(`[remote-server] channels assembled: ${Object.values(RemoteChannels).join(', ')}`)
 

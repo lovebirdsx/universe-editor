@@ -52,7 +52,7 @@ const seededWorkspaceState = () => ({
     activeContainerByLocation: { [PANEL_LOCATION]: 'workbench.view.terminal' },
   },
   'terminal.panelState': {
-    schemaVersion: 2,
+    schemaVersion: 3,
     groups: [{ terminals: [{ shell: RESTORED_SHELL, name: RESTORED_NAME }] }],
   },
 })

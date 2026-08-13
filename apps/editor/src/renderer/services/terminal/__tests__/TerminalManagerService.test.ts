@@ -80,7 +80,12 @@ function makeHarness(
   cwd: string | null = '/work',
   configOverrides?: Record<string, unknown>,
   store?: Map<string, unknown>,
-  opts?: { platform?: HostPlatform; userHome?: string; activeFile?: string },
+  opts?: {
+    platform?: HostPlatform
+    userHome?: string
+    activeFile?: string
+    remoteAuthority?: string
+  },
 ): Harness {
   const onData = new Emitter<ITerminalDataEvent>()
   const onExit = new Emitter<ITerminalExitEvent>()
@@ -129,7 +134,18 @@ function makeHarness(
   }
 
   const workspace = {
-    current: cwd ? { folder: URI.file(cwd), name: 'work' } : null,
+    current: cwd
+      ? opts?.remoteAuthority
+        ? {
+            folder: URI.from({
+              scheme: 'remote-ssh',
+              authority: opts.remoteAuthority,
+              path: cwd.startsWith('/') ? cwd : `/${cwd}`,
+            }),
+            name: 'work',
+          }
+        : { folder: URI.file(cwd), name: 'work' }
+      : null,
   } as unknown as IWorkspaceService
 
   const loggerService = {
@@ -208,7 +224,7 @@ describe('TerminalManagerService', () => {
   it('newTerminal creates with workspace cwd and activates it', async () => {
     const id = await h.manager.newTerminal()
     expect(id).toBe('t0')
-    expect(h.created[0]!.spec.cwd).toBe('/work')
+    expect(h.created[0]!.spec.cwd).toEqual(URI.file('/work').toJSON())
     expect(h.manager.terminals.get().map((t) => t.id)).toEqual(['t0'])
     expect(h.manager.activeTerminalId.get()).toBe('t0')
   })
@@ -216,7 +232,7 @@ describe('TerminalManagerService', () => {
   it('falls back to the user home when no workspace is open', async () => {
     const noWs = makeHarness(null, undefined, undefined, { userHome: '/home/tester' })
     await noWs.manager.newTerminal()
-    expect(noWs.created[0]!.spec.cwd).toBe('/home/tester')
+    expect(noWs.created[0]!.spec.cwd).toEqual(URI.file('/home/tester').toJSON())
   })
 
   it('omits cwd entirely when there is neither workspace nor home', async () => {
@@ -233,8 +249,8 @@ describe('TerminalManagerService', () => {
       { platform: 'win32' },
     )
     await withConfig.manager.newTerminal()
-    expect(withConfig.created[0]!.spec.cwd).toBe(
-      'G:/aki_3.6/Source/Client/TypeScript/Src/UniverseEditor',
+    expect(withConfig.created[0]!.spec.cwd).toEqual(
+      URI.file('G:/aki_3.6/Source/Client/TypeScript/Src/UniverseEditor').toJSON(),
     )
   })
 
@@ -247,7 +263,22 @@ describe('TerminalManagerService', () => {
     )
     await noWs.manager.newTerminal()
     // Variable resolution throws (no folder); consumer degrades then falls back.
-    expect(noWs.created[0]!.spec.cwd).toBe('/home/tester')
+    expect(noWs.created[0]!.spec.cwd).toEqual(URI.file('/home/tester').toJSON())
+  })
+
+  it('uses the remote workspace URI as cwd and ignores the local cwd config', async () => {
+    const remote = makeHarness(
+      '/remote/ws',
+      { 'terminal.integrated.cwd': '/local/config' },
+      undefined,
+      {
+        remoteAuthority: 'e2e-local',
+      },
+    )
+    await remote.manager.newTerminal()
+    expect(remote.created[0]!.spec.cwd).toEqual(
+      URI.from({ scheme: 'remote-ssh', authority: 'e2e-local', path: '/remote/ws' }).toJSON(),
+    )
   })
 
   it('routes onData to the attached writer', async () => {

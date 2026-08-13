@@ -21,6 +21,7 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
+    "@lydell/node-pty": "catalog:",
     "@parcel/watcher": "catalog:",
     "@vscode/ripgrep": "catalog:",
     "@universe-editor/platform": "workspace:*"

@@ -33,8 +33,14 @@ import {
   type IRemoteHandshakeService,
   type IRemoteWatcherTunnel,
   type WatcherHostResponse,
+  type IDisposable,
+  type ITerminalCreatedInfo,
+  type ITerminalDataEvent,
+  type ITerminalExitEvent,
+  type ITerminalService,
 } from '@universe-editor/platform'
-import { connectNodeSocket } from '@universe-editor/node-services'
+import { connectNodeSocket, type PtySpawner } from '@universe-editor/node-services'
+import type { IPty } from '@lydell/node-pty'
 import { createDaemon, type RunningDaemon } from '../daemon.js'
 
 const daemons: RunningDaemon[] = []
@@ -46,8 +52,11 @@ async function makeTempRoot(): Promise<string> {
   return root
 }
 
-async function startDaemon(): Promise<RunningDaemon> {
-  const daemon = await createDaemon({ token: 'fixed-test-token' })
+async function startDaemon(terminalSpawner?: PtySpawner): Promise<RunningDaemon> {
+  const daemon = await createDaemon({
+    token: 'fixed-test-token',
+    ...(terminalSpawner ? { terminalSpawner } : {}),
+  })
   daemons.push(daemon)
   return daemon
 }
@@ -158,6 +167,12 @@ function remoteUriFor(fsPath: string): URI {
   return URI.from({ scheme: 'remote-ssh', authority: 'test', path: URI.file(fsPath).path })
 }
 
+function nativePathEquals(a: string, b: string): boolean {
+  const na = path.normalize(a)
+  const nb = path.normalize(b)
+  return process.platform === 'win32' ? na.toLowerCase() === nb.toLowerCase() : na === nb
+}
+
 function makeBytes(n: number): Uint8Array {
   const b = new Uint8Array(n)
   for (let i = 0; i < n; i++) b[i] = (i * 31 + 7) & 0xff
@@ -214,6 +229,51 @@ async function readStreamed(svc: IRemoteFileStreamService, resource: URI): Promi
     offset += c.length
   }
   return out
+}
+
+class FakePty implements IPty {
+  cols = 80
+  rows = 24
+  process = 'fake'
+  handleFlowControl = false
+  written = ''
+  resizeCalls: Array<{ cols: number; rows: number }> = []
+  killed = false
+  private _data = new Set<(data: string) => void>()
+  private _exit = new Set<(e: { exitCode: number; signal?: number }) => void>()
+
+  constructor(
+    readonly pid: number,
+    readonly cwd?: string,
+  ) {}
+
+  readonly onData = (cb: (data: string) => void): IDisposable => {
+    this._data.add(cb)
+    return { dispose: () => this._data.delete(cb) }
+  }
+  readonly onExit = (cb: (e: { exitCode: number; signal?: number }) => void): IDisposable => {
+    this._exit.add(cb)
+    return { dispose: () => this._exit.delete(cb) }
+  }
+  resize(cols: number, rows: number): void {
+    this.resizeCalls.push({ cols, rows })
+  }
+  clear(): void {}
+  write(data: string): void {
+    this.written += data
+  }
+  kill(): void {
+    this.killed = true
+  }
+  pause(): void {}
+  resume(): void {}
+
+  fireData(data: string): void {
+    for (const cb of this._data) cb(data)
+  }
+  fireExit(exitCode: number, signal?: number): void {
+    for (const cb of this._exit) cb({ exitCode, ...(signal != null ? { signal } : {}) })
+  }
 }
 
 describe('createDaemon', () => {
@@ -427,6 +487,56 @@ describe('createDaemon', () => {
       })
 
       sub.dispose()
+    } finally {
+      conn.dispose()
+    }
+  }, 20000)
+
+  it('runs a terminal on the server: remote-ssh cwd maps to the native path, with throttled data and lifecycle events', async () => {
+    const ptys: FakePty[] = []
+    const spawner: PtySpawner = (_file, _args, opts) => {
+      const pty = new FakePty(1000 + ptys.length, opts.cwd)
+      ptys.push(pty)
+      return pty
+    }
+    const daemon = await startDaemon(spawner)
+    const root = await makeTempRoot()
+
+    const conn = await connect(daemon)
+    try {
+      const terminal = conn.getService<ITerminalService>(RemoteChannels.Terminal)
+      const created: ITerminalCreatedInfo = await terminal.create({
+        cwd: remoteUriFor(root).toJSON(),
+        shell: '/bin/sh',
+      })
+
+      expect(ptys).toHaveLength(1)
+      expect(nativePathEquals(ptys[0]!.cwd ?? '', root)).toBe(true)
+
+      const data: ITerminalDataEvent[] = []
+      const exits: ITerminalExitEvent[] = []
+      terminal.onData((e) => data.push(e))
+      terminal.onExit((e) => exits.push(e))
+
+      // Two quick writes must merge into a single throttled event.
+      ptys[0]!.fireData('hel')
+      ptys[0]!.fireData('lo')
+      await waitFor(() => data.length === 1)
+      await sleep(30)
+      expect(data).toEqual([{ id: created.id, data: 'hello' }])
+
+      await terminal.input(created.id, 'echo hi\n')
+      expect(ptys[0]!.written).toBe('echo hi\n')
+
+      await terminal.resize(created.id, 120, 40)
+      expect(ptys[0]!.resizeCalls).toEqual([{ cols: 120, rows: 40 }])
+
+      await terminal.kill(created.id)
+      expect(ptys[0]!.killed).toBe(true)
+
+      ptys[0]!.fireExit(7)
+      await waitFor(() => exits.length === 1)
+      expect(exits).toEqual([{ id: created.id, exitCode: 7 }])
     } finally {
       conn.dispose()
     }

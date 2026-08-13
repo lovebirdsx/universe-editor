@@ -8,6 +8,7 @@ import {
   type IObservable,
   type ISettableObservable,
   type ServicesAccessor,
+  type UriComponents,
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../terminal/TerminalManagerService.js'
 
@@ -19,7 +20,7 @@ import { ITerminalManagerService } from '../terminal/TerminalManagerService.js'
  */
 interface ITerminalEditorRestoreSpec {
   shell?: string
-  cwd?: string
+  cwd?: UriComponents
 }
 
 export class TerminalEditorInput extends EditorInput {
@@ -37,7 +38,7 @@ export class TerminalEditorInput extends EditorInput {
 
   // What to persist so a restart can respawn the pty.
   private _shell: string | undefined
-  private _cwd: string | undefined
+  private _cwd: UriComponents | undefined
 
   constructor(
     initialTerminalId: string | undefined,
@@ -110,7 +111,9 @@ export class TerminalEditorInput extends EditorInput {
       const label = typeof parsed.label === 'string' ? parsed.label : 'Terminal'
       const restoreSpec: ITerminalEditorRestoreSpec = {
         ...(typeof parsed.shell === 'string' ? { shell: parsed.shell } : {}),
-        ...(typeof parsed.cwd === 'string' ? { cwd: parsed.cwd } : {}),
+        ...(parsed.cwd !== null && typeof parsed.cwd === 'object'
+          ? { cwd: parsed.cwd as UriComponents }
+          : {}),
       }
       const inst = accessor.get(IInstantiationService)
       return inst.createInstance(TerminalEditorInput, undefined, label, restoreSpec)

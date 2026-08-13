@@ -9,7 +9,7 @@ import {
   type ITerminalProfilesDeps,
   type ITerminalProfilesFsProvider,
 } from '../terminalProfiles.js'
-import type { ITerminalProfilesRequest } from '../../../../shared/ipc/terminalService.js'
+import type { ITerminalProfilesRequest } from '@universe-editor/platform'
 
 // ---------------------------------------------------------------------------
 // In-memory filesystem

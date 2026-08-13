@@ -25,6 +25,7 @@ import {
   type ISocket,
 } from '@universe-editor/platform'
 import { NodeSocket } from '@universe-editor/node-services'
+import type { PtySpawner } from '@universe-editor/node-services'
 import { ManagementConnection } from './connection.js'
 import { SERVER_VERSION } from './version.js'
 
@@ -34,6 +35,8 @@ export interface DaemonOptions {
   readonly token?: string
   readonly logger?: ILogger
   readonly serverVersion?: string
+  /** Fake pty spawner for daemon integration tests (no native node-pty). */
+  readonly terminalSpawner?: PtySpawner
 }
 
 export interface RunningDaemon {
@@ -159,6 +162,9 @@ export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDae
             serverVersion,
             logger: log,
             onSocketClose: (c) => startGraceTimer(c),
+            ...(opts.terminalSpawner !== undefined
+              ? { terminalSpawner: opts.terminalSpawner }
+              : {}),
           })
           entries.set(req.reconnectionToken, {
             conn,

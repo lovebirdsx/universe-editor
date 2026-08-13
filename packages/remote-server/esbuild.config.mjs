@@ -45,7 +45,7 @@ const buildOptions = {
   minify: false,
   sourcemap: true,
   logLevel: 'info',
-  external: ['@vscode/ripgrep', '@parcel/watcher'],
+  external: ['@vscode/ripgrep', '@parcel/watcher', '@lydell/node-pty'],
   banner: {
     js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
   },
@@ -68,6 +68,9 @@ if (deploy) {
   pkg.dependencies = {
     '@parcel/watcher': `^${await nativeDepVersion('@parcel/watcher', '2.6.0')}`,
     '@vscode/ripgrep': `^${await nativeDepVersion('@vscode/ripgrep', '1.18.0')}`,
+    // Pinned exactly: node-pty is a prebuilt beta (semver ranges are unfriendly
+    // to prereleases); the remote side must resolve the same binary as the editor.
+    '@lydell/node-pty': await nativeDepVersion('@lydell/node-pty', '1.2.0-beta.12'),
   }
 }
 await writeFile(resolve(outDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')

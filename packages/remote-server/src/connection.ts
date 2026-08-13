@@ -18,6 +18,7 @@ import {
   type ILogger,
   type ISocket,
 } from '@universe-editor/platform'
+import type { PtySpawner } from '@universe-editor/node-services'
 import { createRemoteServer } from './server.js'
 
 export interface ManagementConnectionOptions {
@@ -28,6 +29,8 @@ export interface ManagementConnectionOptions {
   readonly serverVersion: string
   readonly logger: ILogger
   readonly onSocketClose: (conn: ManagementConnection) => void
+  /** Fake pty spawner for daemon integration tests. */
+  readonly terminalSpawner?: PtySpawner
 }
 
 export class ManagementConnection extends Disposable {
@@ -67,7 +70,10 @@ export class ManagementConnection extends Disposable {
       ),
     )
     this._services = this._register(
-      createRemoteServer(pair.server, opts.logger, { serverVersion: opts.serverVersion }),
+      createRemoteServer(pair.server, opts.logger, {
+        serverVersion: opts.serverVersion,
+        ...(opts.terminalSpawner !== undefined ? { terminalSpawner: opts.terminalSpawner } : {}),
+      }),
     )
 
     const budgetTimer = setInterval(() => this._checkUnacknowledgedBudget(), 5000)
