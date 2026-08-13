@@ -78,7 +78,7 @@ export class RenameFileAction extends Action2 {
     const dialog = accessor.get(IDialogService)
     const fileOps = accessor.get(IExplorerFileOperationService)
 
-    const current = basename(target.fsPath)
+    const current = basename(target.path)
     const next = await dialog.prompt({
       title: localize('dialog.file.prompt.rename', 'Rename'),
       initialValue: current,
@@ -130,7 +130,7 @@ export class DeleteFileAction extends Action2 {
             ? localize(
                 'dialog.file.delete.confirm.message',
                 'Are you sure you want to delete "{name}"?',
-                { name: basename(targets[0]!.resource.fsPath) },
+                { name: basename(targets[0]!.resource.path) },
               )
             : localize(
                 'dialog.file.delete.confirm.message.multiple',

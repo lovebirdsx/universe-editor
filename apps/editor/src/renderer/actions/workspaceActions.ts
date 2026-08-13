@@ -101,6 +101,7 @@ export class OpenWorkspaceInVSCodeAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const workspace = accessor.get(IWorkspaceService)
     const host = accessor.get(IHostService)
+    // 本机路径，不随远端工作区变化：`code` CLI 在本机 spawn，cwd 必须是本机路径。
     const cwd = workspace.current?.folder.fsPath ?? null
     if (!cwd) return
     const error = await host.openInVSCode(cwd)

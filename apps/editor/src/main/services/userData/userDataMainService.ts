@@ -162,32 +162,31 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       this._workspace.onDidChangeWorkspace((ws) => {
         this._teardownSlot(UserDataFile.ProjectSettings)
         this._teardownSlot(UserDataFile.VSCodeSettings)
-        if (ws) {
+        // 项目级 settings 是本机路径，仅对 file: 工作区有意义；远端工作区的项目
+        // 配置在远端，本机不装这两个槽（等同无本地项目配置）。
+        if (ws && ws.folder.scheme === 'file') {
           const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
           this._installSlot(UserDataFile.ProjectSettings, projectPath, {
             createParentDirForWatcher: false,
           })
-          this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
           const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
           this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
-          this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
-        } else {
-          // Workspace closed — let subscribers reset their workspace layers.
-          this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
-          this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
         }
+        // 工作区关闭 / 远端工作区都无本地项目配置 —— 统一通知订阅者重置这两层。
+        this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
+        this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
       }),
     )
     // Initial hydration: subscribe via getCurrent() so first-launch with a
     // restored workspace also installs the project slots.
     void this._workspace.getCurrent().then((ws) => {
-      if (ws && !this._slots.has(UserDataFile.ProjectSettings)) {
+      if (ws && ws.folder.scheme === 'file' && !this._slots.has(UserDataFile.ProjectSettings)) {
         const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
         this._installSlot(UserDataFile.ProjectSettings, projectPath, {
           createParentDirForWatcher: false,
         })
       }
-      if (ws && !this._slots.has(UserDataFile.VSCodeSettings)) {
+      if (ws && ws.folder.scheme === 'file' && !this._slots.has(UserDataFile.VSCodeSettings)) {
         const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
         this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
       }

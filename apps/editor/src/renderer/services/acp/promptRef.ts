@@ -235,7 +235,9 @@ export function refCopyText(ref: PromptRef): string {
   if (block.type === 'text') return block.text
   if (block.type === 'resource_link') {
     try {
-      return URI.parse(block.uri).fsPath
+      const uri = URI.parse(block.uri)
+      // 非 file: 的 resource_link（远端资源）无本机路径，复制其 path 段。
+      return uri.scheme === 'file' ? uri.fsPath : uri.path
     } catch {
       return block.uri
     }

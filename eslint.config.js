@@ -1,5 +1,8 @@
 import reactConfig from '@universe-editor/config-eslint/react'
-import { pathIdentityRestrictedImports } from '@universe-editor/config-eslint'
+import {
+  pathIdentityRestrictedImports,
+  schemeAgnosticRestrictedSyntax,
+} from '@universe-editor/config-eslint'
 
 /** @type {import('eslint').Linter.Config[]} */
 export default [
@@ -68,6 +71,27 @@ export default [
           ],
         },
       ],
+    },
+  },
+  {
+    // The kernel is scheme-agnostic: any resource reaching it may be served by a
+    // non-local filesystem provider, and `.fsPath` silently folds the authority
+    // into the path for those. Banned here so remote-capable code can't regress;
+    // the three exempt files below are the deliberate chokepoints.
+    files: ['packages/platform/src/**/*.{ts,tsx}'],
+    ignores: [
+      // Defines the getter itself.
+      'packages/platform/src/base/uri.ts',
+      // Single private `fsPath()` helper that throws on a non-`file:` scheme;
+      // every `${workspaceFolder}`-style variable resolves through it.
+      'packages/platform/src/configurationResolver/variableResolver.ts',
+      // Guarded ternary: `scheme === 'file' ? fsPath : path`.
+      'packages/platform/src/undoRedo/undoRedoService.ts',
+      'packages/platform/src/**/__tests__/**',
+      'packages/platform/src/**/*.test.{ts,tsx}',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error', ...schemeAgnosticRestrictedSyntax],
     },
   },
 ]

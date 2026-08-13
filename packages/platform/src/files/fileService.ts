@@ -45,7 +45,9 @@ export interface IDirectoryEntry {
 /**
  * Cross-process filesystem gateway. Implementations live on the main side and
  * are reached from the renderer through `ProxyChannel.toService<IFileService>`.
- * URIs must use the `file:` scheme; non-file schemes throw `FileSystemError`.
+ * Calls are routed to the `IFileSystemProvider` registered for the resource's
+ * URI scheme (see `fileSystemProvider.ts`); a scheme without a provider throws
+ * `FileSystemError`.
  */
 export interface IFileService {
   readonly _serviceBrand: undefined
@@ -108,12 +110,13 @@ export interface IFileService {
 
   /**
    * Recursively lists all files under `root`, skipping directories named in
-   * `ignore`. Returns absolute fsPath strings to avoid URI serialization over IPC.
+   * `ignore`. Returns URIs (revived across IPC), never raw fsPath strings —
+   * results keep the scheme/authority of `root`.
    */
   listRecursive(
     root: URI,
     options?: { ignore?: readonly string[]; maxFiles?: number; maxDepth?: number },
-  ): Promise<string[]>
+  ): Promise<URI[]>
 }
 
 export const IFileService = createDecorator<IFileService>('fileService')

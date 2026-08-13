@@ -100,6 +100,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
 
   private async _showNativeOpen(opts: IFileDialogOptions): Promise<URI[] | undefined> {
     this._logger.debug(`native open dialog title=${opts.title}`)
+    // 本机路径：原生对话框面向本地文件系统，defaultPath 与返回的 uri 都是 file:。
     const picked = await this._host.showOpenFileDialog({
       title: opts.title,
       ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
@@ -120,6 +121,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
 
   private async _showNativeSave(opts: IFileDialogOptions): Promise<URI | undefined> {
     this._logger.debug(`native save dialog title=${opts.title}`)
+    // 本机路径：原生对话框面向本地文件系统，defaultPath 与返回的 uri 都是 file:。
     const picked = await this._host.showSaveFileDialog({
       title: opts.title,
       ...(opts.defaultUri !== undefined ? { defaultPath: opts.defaultUri.fsPath } : {}),
@@ -609,6 +611,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   }
 
   private _display(uri: URI): string {
+    // 本机路径：文件对话框恒浏览 file: provider，fsPath 即本机路径。
     return this._sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, this._sep)
   }
 

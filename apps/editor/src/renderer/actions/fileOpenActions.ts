@@ -96,7 +96,8 @@ export class OpenWithDefaultAppAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const target = reviveUri((args[0] as ITargetArg | undefined)?.target ?? null)
-    if (!target) return
+    // 本机路径，不随远端工作区变化：shell.openPath 只认本机文件。
+    if (!target || target.scheme !== 'file') return
     const host = accessor.get(IHostService)
     const err = await host.openWithDefaultApp(target.fsPath)
     if (err) {

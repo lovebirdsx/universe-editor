@@ -120,6 +120,7 @@ export class RevealInOSExplorerAction extends Action2 {
     if (!resource) resource = accessor.get(IExplorerTreeService).selectedResource
     if (!resource) resource = accessor.get(IWorkspaceService).current?.folder ?? null
     if (!resource || resource.scheme !== 'file') return
+    // 本机路径，不随远端工作区变化：shell.showItemInFolder 只认本机路径。
     await accessor.get(IHostService).showItemInFolder(resource.fsPath)
   }
 }

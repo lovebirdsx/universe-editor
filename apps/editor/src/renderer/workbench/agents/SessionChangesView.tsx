@@ -97,11 +97,12 @@ export function SessionChangesView() {
   const openFile = useOpenFile()
   const dismiss = useDismissWatched()
 
-  const rootDir = workspace.current?.folder.fsPath ?? ''
+  // `uri.path`（不是 `.fsPath`）与 dirnameOfResource 保持一致，随远端工作区正确。
+  const rootDir = workspace.current?.folder.path ?? ''
   const items = useMemo<readonly ChangesTreeItem<SessionFileChange>[]>(
     () =>
       changes.map((c) => {
-        const dir = dirnameOfResource(c.uri).replace(/\\/g, '/')
+        const dir = dirnameOfResource(c.uri)
         // Platform-aware relativization: an agent-reported path whose drive-letter
         // casing differs from the workspace folder still groups under the root.
         const rel = rootDir.length > 0 ? uriIdentity.relativePathUnder(rootDir, dir) : null

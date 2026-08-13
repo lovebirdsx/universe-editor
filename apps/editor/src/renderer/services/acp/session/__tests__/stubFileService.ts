@@ -47,7 +47,7 @@ export class StubFileService implements IFileService {
   async delete(): Promise<void> {}
   async rename(): Promise<void> {}
   async copy(): Promise<void> {}
-  async listRecursive(): Promise<string[]> {
+  async listRecursive(): Promise<URI[]> {
     return []
   }
 }

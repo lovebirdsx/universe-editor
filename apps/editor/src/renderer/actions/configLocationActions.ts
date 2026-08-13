@@ -60,6 +60,7 @@ export class SetConfigLocationAction extends Action2 {
       })
     )?.[0]
     if (!picked) return
+    // 本机路径，不随远端工作区变化：配置目录由本机文件对话框选择。
     const dir = picked.fsPath
     if (dir === info.dir) return
 

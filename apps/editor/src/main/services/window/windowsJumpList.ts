@@ -65,18 +65,23 @@ export class WindowsJumpList implements IDisposable {
     // Recent Folders — passing the folder fsPath as a positional arg makes
     // `second-instance` open (or focus) that workspace.
     const recent = await this._recentWorkspaces.getRecent()
-    const items: JumpListItem[] = recent.slice(0, MAX_RECENT_ENTRIES).map((entry) => {
-      const fsPath = entry.folder.fsPath
-      return {
-        type: 'task',
-        title: entry.name.slice(0, MAX_LABEL_LEN),
-        description: fsPath.slice(0, MAX_LABEL_LEN),
-        program: process.execPath,
-        args: `"${fsPath}"`,
-        iconPath: 'explorer.exe', // borrow the folder icon
-        iconIndex: 0,
-      }
-    })
+    // 跳转列表会以本机路径重启进程重开工作区，只有 file: 工作区可作目标；远端
+    // 工作区无法通过本机路径重开，跳过。
+    const items: JumpListItem[] = recent
+      .filter((entry) => entry.folder.scheme === 'file')
+      .slice(0, MAX_RECENT_ENTRIES)
+      .map((entry) => {
+        const fsPath = entry.folder.fsPath
+        return {
+          type: 'task',
+          title: entry.name.slice(0, MAX_LABEL_LEN),
+          description: fsPath.slice(0, MAX_LABEL_LEN),
+          program: process.execPath,
+          args: `"${fsPath}"`,
+          iconPath: 'explorer.exe', // borrow the folder icon
+          iconIndex: 0,
+        }
+      })
 
     if (items.length > 0) {
       jumpList.push({

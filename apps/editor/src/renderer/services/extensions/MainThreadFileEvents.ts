@@ -175,6 +175,7 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
       { anchor: string | undefined; matchers: ((rel: string) => boolean)[] }
     >()
     for (const entry of this._interests.values()) {
+      // 本机路径：anchor 来自 `reviveFileUri` 过滤后的 file: URI（或本地 workspaceRoot 字符串）。
       const anchor = entry.base?.fsPath ?? this._workspaceRoot
       const anchorKey = anchor === undefined ? '' : this._uriIdentity.getPathComparisonKey(anchor)
       let group = groups.get(anchorKey)
@@ -187,6 +188,7 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
     const kept: IFileChangeEvent[] = []
     let dropped = 0
     for (const event of events) {
+      // 本机路径：工作区 watch 产出的 file: 资源事件，fsPath 即本机路径。
       const fsPath = event.resource.fsPath
       let include = false
       for (const group of groups.values()) {

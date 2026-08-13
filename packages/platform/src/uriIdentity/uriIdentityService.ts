@@ -7,20 +7,30 @@
  *  never thread `platform` through by hand and never hand-roll `toLowerCase()` /
  *  `fsPath ===` comparisons.
  *
- *  Unlike VSCode we have no multi-provider filesystem — `IFileService` serves the
- *  single `file:` scheme on one host — so case sensitivity is a per-app constant,
- *  not a per-provider `PathCaseSensitive` capability. This service is the tiny
- *  equivalent: platform in, consistent identity out.
+ *  Case sensitivity is a property of the *filesystem*, not of the machine
+ *  running the UI. The host platform is the default, but a filesystem provider
+ *  serving another scheme (e.g. a Linux host behind a remote connection, seen
+ *  from Windows) registers its own policy via
+ *  {@link IUriIdentityService.registerSchemeCaseSensitivity} — otherwise
+ *  `/src/Foo.ts` and `/src/foo.ts` on that host would wrongly collapse to one
+ *  resource.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../di/instantiation.js'
 import type { URI } from '../base/uri.js'
-import { getResourceComparisonKey, isEqualResource, isEqualOrParentResource } from '../base/uri.js'
+import {
+  getResourceComparisonKey,
+  isEqualResource,
+  isEqualOrParentResource,
+  type CaseSensitivityResolver,
+} from '../base/uri.js'
 import {
   arePathsEqual as arePathsEqualFn,
   getPathComparisonKey as getPathComparisonKeyFn,
+  isCaseInsensitive,
   relativePathUnder as relativePathUnderFn,
 } from '../base/path.js'
+import { toDisposable, type IDisposable } from '../base/lifecycle.js'
 import { ResourceMap, ResourceSet } from '../base/resourceMap.js'
 import type { HostPlatform } from '../host/hostService.js'
 
@@ -38,6 +48,18 @@ export interface IUriIdentityService {
 
   /** Stable identity key for a resource; use with {@link createResourceMap}. */
   getComparisonKey(resource: URI): string
+
+  /**
+   * Declares that paths on `scheme`'s filesystem compare case-sensitively (or
+   * not), overriding the host platform for that scheme. A filesystem provider
+   * calls this at registration time with its
+   * `IFileSystemProviderCapabilities.pathCaseSensitive`. Disposing restores the
+   * host-platform default.
+   */
+  registerSchemeCaseSensitivity(scheme: string, caseSensitive: boolean): IDisposable
+
+  /** Whether `resource`'s filesystem compares paths case-sensitively. */
+  isCaseSensitive(resource: URI): boolean
 
   /** Platform-aware equality of two absolute filesystem path strings. */
   arePathsEqual(a: string | undefined, b: string | undefined): boolean
@@ -60,18 +82,37 @@ export const IUriIdentityService = createDecorator<IUriIdentityService>('uriIden
 export class UriIdentityService implements IUriIdentityService {
   declare readonly _serviceBrand: undefined
 
+  private readonly _schemeCaseSensitivity = new Map<string, boolean>()
+
+  /** Bound once so every comparison below sees the same per-scheme registry. */
+  private readonly _caseSensitivity: CaseSensitivityResolver = (resource) =>
+    this._schemeCaseSensitivity.get(resource.scheme)
+
   constructor(readonly platform: HostPlatform) {}
 
+  registerSchemeCaseSensitivity(scheme: string, caseSensitive: boolean): IDisposable {
+    this._schemeCaseSensitivity.set(scheme, caseSensitive)
+    return toDisposable(() => {
+      if (this._schemeCaseSensitivity.get(scheme) === caseSensitive) {
+        this._schemeCaseSensitivity.delete(scheme)
+      }
+    })
+  }
+
+  isCaseSensitive(resource: URI): boolean {
+    return this._schemeCaseSensitivity.get(resource.scheme) ?? !isCaseInsensitive(this.platform)
+  }
+
   isEqual(a: URI | undefined, b: URI | undefined): boolean {
-    return isEqualResource(a, b, this.platform)
+    return isEqualResource(a, b, this.platform, this._caseSensitivity)
   }
 
   isEqualOrParent(resource: URI | undefined, parent: URI | undefined): boolean {
-    return isEqualOrParentResource(resource, parent, this.platform)
+    return isEqualOrParentResource(resource, parent, this.platform, this._caseSensitivity)
   }
 
   getComparisonKey(resource: URI): string {
-    return getResourceComparisonKey(resource, this.platform)
+    return getResourceComparisonKey(resource, this.platform, this._caseSensitivity)
   }
 
   arePathsEqual(a: string | undefined, b: string | undefined): boolean {

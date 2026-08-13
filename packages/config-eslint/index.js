@@ -36,8 +36,24 @@ const pathIdentityRestrictedSyntax = [
   },
 ]
 
-const pathIdentityRestrictedImports = {
-  paths: [
+// `URI.fsPath` folds the authority into the path, so it is only meaningful for
+// `file:` URIs. The platform kernel is scheme-agnostic by construction — every
+// resource reaching it may be served by a non-local filesystem provider — so
+// raw `.fsPath` is banned there and funnelled through the few guarded
+// chokepoints listed in the override below. Exported so the kernel's own config
+// can scope it; app/extension code keeps `.fsPath` for genuinely local paths
+// (userData, bundled binaries, native dialogs, locally spawned process cwds).
+const schemeAgnosticRestrictedSyntax = [
+  {
+    selector: "MemberExpression[property.name='fsPath']",
+    message:
+      'URI.fsPath is only meaningful for `file:` URIs — it folds the authority into the path for any other scheme. In the platform kernel, keep the URI (use base/path.ts helpers for path math, IUriIdentityService for comparison), or guard on `scheme === "file"` at an explicit chokepoint.',
+  },
+]
+
+export { schemeAgnosticRestrictedSyntax }
+
+const pathIdentityRestrictedImports = {  paths: [
     {
       name: '@universe-editor/platform',
       importNames: ['canonicalResourceKey'],

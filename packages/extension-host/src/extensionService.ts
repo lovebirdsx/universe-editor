@@ -177,7 +177,8 @@ function toFileStat(dto: IExtHostFileStatDto): FileStat {
   return { type: toFileType(dto.type), size: dto.size, mtime: dto.mtime }
 }
 
-/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string. */
+/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string (a
+ *  host-local path for the native dialog, not a remote workspace URI). */
 function toOpenDialogDto(options?: OpenDialogOptionsBridge): IOpenDialogOptionsDto {
   return {
     ...(options?.defaultUri !== undefined
@@ -194,7 +195,8 @@ function toOpenDialogDto(options?: OpenDialogOptionsBridge): IOpenDialogOptionsD
   }
 }
 
-/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string. */
+/** Bridge options → wire DTO: `defaultUri` crosses as an fsPath string (a
+ *  host-local path for the native dialog, not a remote workspace URI). */
 function toSaveDialogDto(options?: SaveDialogOptionsBridge): ISaveDialogOptionsDto {
   return {
     ...(options?.defaultUri !== undefined

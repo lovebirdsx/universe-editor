@@ -87,8 +87,11 @@ export function normalizeUriArg(arg: unknown): string | undefined {
   }
   if (typeof arg !== 'object' || arg === null) return undefined
   const uri = arg as { fsPath?: unknown; scheme?: unknown; path?: unknown }
+  // A remote scheme would fold its authority into `fsPath` and poison the git
+  // CLI, which only ever sees this host's filesystem. No local path to resolve.
+  if (uri.scheme !== undefined && uri.scheme !== 'file') return undefined
   if (typeof uri.fsPath === 'string') return uri.fsPath
-  if ((uri.scheme === undefined || uri.scheme === 'file') && typeof uri.path === 'string') {
+  if (typeof uri.path === 'string') {
     try {
       return fileURLToPath(`file://${uri.path}`)
     } catch {

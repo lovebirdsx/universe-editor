@@ -108,6 +108,7 @@ export function MarkdownView({
   // can be served. Mirrors VSCode's localResourceRoots.
   useEffect(() => {
     if (!resourceAccess) return
+    // 本机路径，不随远端工作区变化：universe-app 协议只服务本机文件。
     const roots = [baseUri?.fsPath, workspaceFolder?.fsPath].filter(
       (p): p is string => p !== undefined,
     )

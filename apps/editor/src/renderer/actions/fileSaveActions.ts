@@ -69,13 +69,13 @@ export class SaveFileAsAction extends Action2 {
     const fileService = accessor.get(IFileService)
     const inst = accessor.get(IInstantiationService)
 
-    const defaultPath = resolveDefaultSavePath(active, groups, accessor)
+    const defaultUri = resolveDefaultSaveUri(active, groups, accessor)
     const picked = await fileDialog.showSaveDialog({
       title: localize('fileDialog.saveAs.title', 'Save As'),
       canSelectFiles: true,
       canSelectFolders: false,
       openLabel: localize('fileDialog.save', 'Save'),
-      defaultUri: URI.file(defaultPath),
+      defaultUri,
     })
     if (!picked) return
 
@@ -107,27 +107,27 @@ export class SaveFileAsAction extends Action2 {
   }
 }
 
-function resolveDefaultSavePath(
+function resolveDefaultSaveUri(
   active: FileEditorInput | UntitledEditorInput,
   groups: IEditorGroupsService,
   accessor: ServicesAccessor,
-): string {
-  if (active instanceof FileEditorInput) return active.resource.fsPath
+): URI {
+  if (active instanceof FileEditorInput) return active.resource
   const filename = active.getName() + '.txt'
   // 1. Last active file editor's directory
   for (const group of groups.getGroups(GroupsOrder.MostRecentlyActive)) {
     for (const editor of group.editors) {
       if (editor instanceof FileEditorInput) {
         const dir = parentOf(editor.resource)
-        if (dir) return URI.joinPath(dir, filename).fsPath
+        if (dir) return URI.joinPath(dir, filename)
       }
     }
   }
   // 2. Workspace/project folder
   const folder = accessor.get(IWorkspaceService).current?.folder
-  if (folder) return URI.joinPath(folder, filename).fsPath
+  if (folder) return URI.joinPath(folder, filename)
   // 3. System default
-  return filename
+  return URI.file(filename)
 }
 
 async function readUntitledText(input: UntitledEditorInput): Promise<string> {

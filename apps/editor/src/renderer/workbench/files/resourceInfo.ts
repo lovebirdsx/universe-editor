@@ -1,18 +1,18 @@
-import type { URI } from '@universe-editor/platform'
+import { basename, dirname, type URI } from '@universe-editor/platform'
 
 export function basenameOfPath(path: string): string {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   return slash === -1 ? path : path.slice(slash + 1)
 }
 
+/** Last path segment of a resource, scheme-agnostic (`uri.path`, not `.fsPath`). */
 export function basenameOfResource(resource: URI): string {
-  return basenameOfPath(resource.fsPath)
+  return basename(resource.path)
 }
 
+/** Directory portion of a resource, scheme-agnostic (`uri.path`, not `.fsPath`). */
 export function dirnameOfResource(resource: URI): string {
-  const path = resource.fsPath
-  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  return slash === -1 ? '' : path.slice(0, slash)
+  return dirname(resource.path)
 }
 
 export function extensionOfBasename(name: string): string | null {

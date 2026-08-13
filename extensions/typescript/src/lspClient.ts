@@ -352,6 +352,8 @@ export class LspClient {
     uri: string,
   ): { readonly tsconfig: string; readonly dir: string } | undefined {
     if (this._projects.length === 0) return undefined
+    // Host-local path: tsserver runs on this host, and the uri is already
+    // scheme-gated to `file:` upstream (isServerBackedDocument).
     const filePath = this._matchKey(URI.parse(uri).fsPath)
     return this._projects.find((p) => filePath.startsWith(p.dir))
   }

@@ -147,6 +147,7 @@ export function ExtensionsView() {
       setDropActive(false)
       const resources = readDroppedResources(e)
       if (resources.length === 0) return
+      // 本机路径，不随远端工作区变化：拖入的 .vsix 均来自 OS 本机拖放。
       const nonVsix = resources.filter((uri) => !/\.vsix$/i.test(uri.fsPath))
       if (nonVsix.length > 0) {
         notificationService.notify({

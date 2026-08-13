@@ -59,15 +59,17 @@ export const EMPTY_SNAPSHOT: SearchSnapshot = {
 
 /** Split a resource into its workspace-relative directory segments + basename. */
 function toSegments(rootUri: URI | null, resource: URI): { dirs: string[]; name: string } {
-  const full = resource.fsPath.replace(/\\/g, '/')
+  // `uri.path` is already forward-slashed and scheme-agnostic — unlike `.fsPath`,
+  // it stays correct for a future non-`file` provider.
+  const full = resource.path
   let rel = full
   if (rootUri) {
-    const root = rootUri.fsPath.replace(/\\/g, '/').replace(/\/+$/, '')
+    const root = rootUri.path.replace(/\/+$/, '')
     if (full === root) rel = ''
     else if (full.startsWith(`${root}/`)) rel = full.slice(root.length + 1)
   }
   const parts = rel.split('/').filter((p) => p.length > 0)
-  const name = parts.pop() ?? resource.fsPath
+  const name = parts.pop() ?? resource.path
   return { dirs: parts, name }
 }
 
@@ -100,9 +102,7 @@ export function buildSearchSnapshot(
 
   // Order files purely by their resource path — never by ripgrep's arrival
   // order, which is nondeterministic across runs (see searchCompare.ts).
-  const sorted = [...results].sort((a, b) =>
-    comparePaths(a.resource.fsPath.replace(/\\/g, '/'), b.resource.fsPath.replace(/\\/g, '/')),
-  )
+  const sorted = [...results].sort((a, b) => comparePaths(a.resource.path, b.resource.path))
 
   const childList = (id: string): SearchNode[] => {
     let list = childrenMap.get(id)

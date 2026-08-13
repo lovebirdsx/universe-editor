@@ -237,6 +237,18 @@ export class URI implements UriComponents {
 }
 
 /**
+ * Resolves whether the filesystem backing `uri` compares paths case-sensitively.
+ * Return `undefined` to fall back to the host platform's policy.
+ *
+ * Case sensitivity is a property of the filesystem, not of the machine running
+ * the UI: a `file:` resource follows the local platform, but a resource served
+ * by another provider (e.g. a Linux host reached over a remote connection)
+ * follows *that* filesystem. `IUriIdentityService` builds one of these from its
+ * per-scheme registry.
+ */
+export type CaseSensitivityResolver = (uri: URI) => boolean | undefined
+
+/**
  * A platform-aware comparison key for a resource. Two URIs that address the same
  * resource — accounting for path separators, redundant `.`/`..` segments,
  * Windows drive-letter case, and (on win32/darwin) path case — collapse to the
@@ -248,11 +260,19 @@ export class URI implements UriComponents {
  * equality never disagree. Prefer `IUriIdentityService` (which injects the
  * platform once) over calling this directly.
  *
+ * `caseSensitivity` overrides the platform policy per resource — pass it when
+ * the URI may be served by a provider whose filesystem differs from the local
+ * one. Omitting it keeps the pure host-platform behaviour.
+ *
  * Only `file:` URIs get filesystem normalization; other schemes fall back to
  * `toString()` with the path lower-cased on case-insensitive platforms.
  */
-export function getResourceComparisonKey(uri: URI, platform: HostPlatform): string {
-  const ci = isCaseInsensitive(platform)
+export function getResourceComparisonKey(
+  uri: URI,
+  platform: HostPlatform,
+  caseSensitivity?: CaseSensitivityResolver,
+): string {
+  const ci = resolveCaseInsensitive(uri, platform, caseSensitivity)
   if (uri.scheme === 'file') {
     // Normalize the path (folds separators, drive-letter case and `.`/`..`), and
     // keep the authority separately so `file://a` and `file://b` — or two distinct
@@ -265,6 +285,15 @@ export function getResourceComparisonKey(uri: URI, platform: HostPlatform): stri
   }
   const key = uri.toString()
   return ci ? key.toLowerCase() : key
+}
+
+function resolveCaseInsensitive(
+  uri: URI,
+  platform: HostPlatform,
+  caseSensitivity: CaseSensitivityResolver | undefined,
+): boolean {
+  const sensitive = caseSensitivity?.(uri)
+  return sensitive === undefined ? isCaseInsensitive(platform) : !sensitive
 }
 
 /**
@@ -293,10 +322,14 @@ export function isEqualResource(
   a: URI | undefined,
   b: URI | undefined,
   platform: HostPlatform,
+  caseSensitivity?: CaseSensitivityResolver,
 ): boolean {
   if (a === b) return true
   if (!a || !b) return false
-  return getResourceComparisonKey(a, platform) === getResourceComparisonKey(b, platform)
+  return (
+    getResourceComparisonKey(a, platform, caseSensitivity) ===
+    getResourceComparisonKey(b, platform, caseSensitivity)
+  )
 }
 
 /** Whether `resource` is equal to, or nested under, `parent` (both `file:` URIs)
@@ -305,11 +338,12 @@ export function isEqualOrParentResource(
   resource: URI | undefined,
   parent: URI | undefined,
   platform: HostPlatform,
+  caseSensitivity?: CaseSensitivityResolver,
 ): boolean {
   if (!resource || !parent) return false
   if (resource === parent) return true
-  const rKey = getResourceComparisonKey(resource, platform)
-  const pKey = getResourceComparisonKey(parent, platform)
+  const rKey = getResourceComparisonKey(resource, platform, caseSensitivity)
+  const pKey = getResourceComparisonKey(parent, platform, caseSensitivity)
   if (rKey === pKey) return true
   if (resource.scheme !== parent.scheme || resource.authority !== parent.authority) return false
   // Boundary-aware containment: `/a/b` is a parent of `/a/b/c` but not of `/a/bc`.

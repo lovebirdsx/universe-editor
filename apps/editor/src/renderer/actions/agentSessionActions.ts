@@ -385,6 +385,7 @@ export class ResumeAgentSessionAction extends Action2 {
     // AcpForeignWorktreeError into the empty catch below — which looked like the
     // pick did nothing at all.
     const entry = entries.find((e) => e.id === picked.id)
+    // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 与 entry.cwd 均为本机路径。
     const currentCwd = workspace.current?.folder.fsPath
     if (
       entry &&

@@ -57,6 +57,7 @@ export class TMGrammarFactory extends Disposable {
             return null
           }
           try {
+            // 本机路径：grammar 定义来自随扩展安装的本地 file: 资源，不随远端工作区变化。
             const content = await this._host.readFile(definition.location.fsPath)
             return vscodeTextmate.parseRawGrammar(content, definition.location.path)
           } catch (e) {

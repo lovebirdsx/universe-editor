@@ -62,7 +62,12 @@ class RendererVariableResolveContext implements IVariableResolveContext {
     // activeEditor is typed as the legacy IEditorInput (no `resource`); every real
     // instance is an EditorInput carrying one, so read it structurally.
     const active = this._editor.activeEditor.get() as { resource?: URI } | undefined
-    return active?.resource?.fsPath
+    const resource = active?.resource
+    // `${file}` and friends expand to a local filesystem path. A non-`file:`
+    // resource has none, and `.fsPath` would fold its authority into a bogus
+    // path — report "no file" so the resolver raises instead of substituting it.
+    if (!resource || resource.scheme !== 'file') return undefined
+    return resource.fsPath
   }
 
   getSelectedText(): string | undefined {

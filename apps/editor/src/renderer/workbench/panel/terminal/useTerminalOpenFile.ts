@@ -40,6 +40,7 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
           if (!workspace) return null
 
           const norm = normalizeFsPath(absolutePath)
+          // 本机路径，不随远端工作区变化：终端链接解析针对本机工作区路径。
           const root = normalizeFsPath(workspace.folder.fsPath)
           const pattern = norm.startsWith(root + '/')
             ? norm.slice(root.length + 1)

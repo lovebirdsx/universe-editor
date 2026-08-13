@@ -36,6 +36,7 @@
 - [快捷键编辑器对标 VSCode](keybindings-editor-vscode-parity.md) — model/视图分离+VirtualList 确定行高+行级多键 API；坑=浮层 Escape 须 window capture 自拦
 - [Tree View（contributes.views + TreeDataProvider）](tree-view-feature.md) — 拉取式懒加载+三级稳定身份+子树失效；坑=epoch 归零致 stale 复活/label 派生身份塌陷改名行
 - [extension-api 评审遗留优化 10 项收官](extension-api-review-followup-round.md) — 计划文件留改法/验收；教训=refcount 资源 dispose 须全量直发、cap 须在过滤后扣、引擎收敛前先列语义差异
+- [远程开发 Phase 0 地基](remote-dev-phase0-fs-provider.md) — scheme 分派 FileService+per-scheme 大小写+fsPath 审计；护栏只守内核，main 侧加 scheme 守卫不重写
 
 ## 性能 / 疑难根因
 

@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  dirname,
   IFileWatcherService,
   IWorkspaceService,
   markAsSingleton,
@@ -23,7 +24,6 @@ import {
 } from '@universe-editor/platform'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import { HtmlPreviewInput } from '../../services/editor/HtmlPreviewInput.js'
-import { dirnameOfResource } from '../files/resourceInfo.js'
 import { toResourceUrl } from '../markdown/resourceUri.js'
 import { useOptionalService } from '../useService.js'
 import styles from './HtmlPreviewEditor.module.css'
@@ -45,7 +45,8 @@ export function HtmlPreviewEditor({ input }: { input: IEditorInput }) {
   // page's own relative assets).
   useEffect(() => {
     let cancelled = false
-    const roots = [dirnameOfResource(sourceUri), workspaceFolder?.fsPath].filter(
+    // 本机路径，不随远端工作区变化：universe-app 协议只服务本机文件。
+    const roots = [dirname(sourceUri.fsPath), workspaceFolder?.fsPath].filter(
       (p): p is string => typeof p === 'string' && p.length > 0,
     )
     const grant = async (): Promise<void> => {
@@ -75,6 +76,7 @@ export function HtmlPreviewEditor({ input }: { input: IEditorInput }) {
     return () => d.dispose()
   }, [watcher, sourceUri])
 
+  // 本机路径，不随远端工作区变化：iframe 经 universe-app 协议加载本机文件。
   const src = ready ? withReloadToken(toResourceUrl(sourceUri.fsPath), reloadToken) : undefined
 
   return (

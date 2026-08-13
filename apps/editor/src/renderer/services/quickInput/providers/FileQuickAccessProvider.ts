@@ -82,10 +82,16 @@ interface ScoredRow {
   readonly entry?: MentionFileEntry
 }
 
+/** 绝对路径显示：file: 用 fsPath 折 Windows 盘符，非 file:（远端资源）用其 path 段。 */
+function displayPath(uri: URI): string {
+  return uri.scheme === 'file' ? uri.fsPath : uri.path
+}
+
 function workspaceRelativePath(root: URI, uri: URI): string {
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-  const norm = uri.fsPath.replace(/\\/g, '/')
-  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : uri.fsPath
+  if (root.scheme !== uri.scheme || root.authority !== uri.authority) return displayPath(uri)
+  const rootPath = root.path.replace(/\/$/, '')
+  const norm = uri.path
+  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : displayPath(uri)
 }
 
 function editorPickDescription(root: URI | undefined, resource: URI): string | undefined {
@@ -98,7 +104,7 @@ function editorPickDescription(root: URI | undefined, resource: URI): string | u
 
 function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
   const rel = workspaceRelativePath(root, uri)
-  const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? uri.fsPath
+  const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? displayPath(uri)
   return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
 }
 
@@ -541,11 +547,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       items: IQuickPickItem[],
     ): Promise<void> => {
       if (!hasPathSeparator(pattern)) return
-      const target = URI.file(
-        pattern.replace(/\\/g, '/').startsWith('/') || /^[a-zA-Z]:/.test(pattern)
-          ? pattern
-          : `${root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')}/${pattern}`,
-      )
+      const normalized = pattern.replace(/\\/g, '/')
+      const target =
+        normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)
+          ? URI.file(normalized)
+          : URI.joinPath(root, normalized)
       const exists = await this._fileService.exists(target).catch(() => false)
       if (!exists || mySeq !== seq || token.isCancellationRequested) return
       const pick = createFilePick(root, target)
@@ -683,7 +689,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           .map((f) => ({
             id: f.uri.toString(),
             label: f.name,
-            description: f.uri.fsPath,
+            description: displayPath(f.uri),
             iconId: resourceIconId(f.uri),
           }))
           .filter((it) => !editorIds.has(it.id)),

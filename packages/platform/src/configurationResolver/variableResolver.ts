@@ -138,6 +138,14 @@ export abstract class AbstractVariableResolverService implements IConfigurationR
   }
 
   private fsPath(displayUri: URI): string {
+    // 变量替换产出的是本机文件系统路径；远端 URI 没有本机语义，fail loud 而不是
+    // 静默解析成一个丢掉了 authority 的假路径。
+    if (displayUri.scheme !== 'file') {
+      throw new VariableError(
+        VariableKind.Unknown,
+        `Cannot resolve a local filesystem path for '${displayUri.toString()}': scheme '${displayUri.scheme}' is not 'file'.`,
+      )
+    }
     return displayUri.fsPath
   }
 

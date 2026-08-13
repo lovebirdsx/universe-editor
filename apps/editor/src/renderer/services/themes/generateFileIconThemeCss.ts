@@ -205,6 +205,7 @@ export function processIconThemeDocument(
   id: string,
   themeLocation: URI,
   doc: IIconThemeDocument,
+  // 本机路径：图标/字体资源是随扩展安装的本地 file: 资源（默认解析器供单测断言确定路径）。
   resolveResourceUrl: (resource: URI) => string = (resource) => resource.fsPath,
 ): IProcessedIconTheme {
   // Mutable accumulator; the exported interface stays readonly for consumers.

@@ -380,6 +380,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   }
 
   private _resolveIconResourceUrl(resource: URI): string {
+    // 本机路径：图标主题资源是随扩展安装的本地 file: 资源，不随远端工作区变化。
     return this._iconResourceUrlResolver?.(resource) ?? resource.fsPath
   }
 

@@ -79,6 +79,7 @@ export class GetActiveEditorFileAction extends Action2 {
 
   override run(accessor: ServicesAccessor): string | undefined {
     const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+    // 本机路径，不随远端工作区变化：返回给扩展主机的 `file:` 资源本机路径。
     if (active instanceof FileEditorInput) return active.resource.fsPath
     if (active instanceof DiffEditorInput) return active.originalUri.fsPath
     return undefined

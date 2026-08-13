@@ -52,8 +52,10 @@ const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150
 const MAX_FILTER_LENGTH = 1024
 
 function relativePath(root: URI | undefined, uri: URI, uriIdentity: IUriIdentityService): string {
-  if (!root) return uri.fsPath
-  return uriIdentity.relativePathUnder(root.fsPath, uri.fsPath) ?? uri.fsPath
+  // 资源显示走 path 段；file: 用 fsPath 折 Windows 盘符，非 file:（远端）无本机路径。
+  const abs = uri.scheme === 'file' ? uri.fsPath : uri.path
+  if (!root || root.scheme !== uri.scheme || root.authority !== uri.authority) return abs
+  return uriIdentity.relativePathUnder(root.path, uri.path) ?? abs
 }
 
 /** A workspace symbol from any language server, normalized for the picker. */

@@ -71,6 +71,7 @@ export class InstallExtensionFromVsixAction extends Action2 {
     )?.[0]
     if (!picked) return
 
+    // 本机路径，不随远端工作区变化：VSIX 由本机文件对话框选择。
     const vsixPath = picked.fsPath
     if (!/\.vsix$/i.test(vsixPath)) {
       notification.notify({

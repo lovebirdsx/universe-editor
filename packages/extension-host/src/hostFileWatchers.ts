@@ -140,8 +140,11 @@ export class HostFileWatcherRegistry {
     if (this._entries.size === 0 || events.length === 0) return
     const platform = this._platform
     for (const event of events) {
-      const fsPath = URI.revive(event.uri)?.fsPath
-      if (fsPath === undefined) continue
+      const revived = URI.revive(event.uri)
+      // Watcher matching is host-local fsPath space: a non-`file:` resource has no
+      // host-local path (its `.fsPath` would fold the authority into a bogus path).
+      if (!revived || revived.scheme !== 'file') continue
+      const fsPath = revived.fsPath
       for (const group of this._byAnchor.values()) {
         if (group.anchor === undefined) continue
         const rel = relativePathUnder(group.anchor, fsPath, platform)

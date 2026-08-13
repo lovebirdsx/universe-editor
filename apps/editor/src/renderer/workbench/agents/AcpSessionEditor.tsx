@@ -58,6 +58,7 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   // config side effects) so the user can read the conversation; on failure
   // (e.g. agent without loadSession) fall back to the metadata-only preview.
   const entry = history.get(acpInput.sessionId)
+  // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 与 entry.cwd 均为本机路径。
   const currentCwd = workspace.current?.folder.fsPath
   const isForeign =
     entry?.cwd !== undefined &&

@@ -244,6 +244,10 @@ export class FileSearchMainService extends Disposable implements IFileSearchServ
   async search(query: IFileSearchQuery, token?: CancellationToken): Promise<IFileSearchComplete> {
     const startedAt = Date.now()
     const root = reviveUri(query.root as RawUri)
+    // 本机 ripgrep 只搜 file: 目录；远端工作区由远端 search 服务接管，fail loud。
+    if (root.scheme !== 'file') {
+      throw new Error(`fileSearch: unsupported scheme: ${root.scheme}`)
+    }
     const pattern = query.pattern.trim()
     const matchAll = query.matchAll === true
     const maxResults = Math.max(1, query.maxResults ?? DEFAULT_MAX_RESULTS)

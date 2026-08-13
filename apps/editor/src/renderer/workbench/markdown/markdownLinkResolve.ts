@@ -103,6 +103,7 @@ export function fileUriLinkTarget(href: string): FileUriLinkTarget | undefined {
     return undefined
   }
   if (uri.scheme !== 'file') return undefined
+  // 本机路径：仅处理 file: href，不涉及远端 scheme。
   const fsPath = uri.fsPath
   if (fsPath.length === 0) return undefined
   const { path, line, col, endLine } = splitFilePathLocation(fsPath)

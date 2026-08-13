@@ -200,9 +200,11 @@ export class WorkspaceTrustManagementService
     let resultUri = uri
     for (const trustInfo of this._trustStateInfo.uriTrustInfo) {
       if (this._uriIdentity.isEqualOrParent(uri, trustInfo.uri)) {
-        const fsPath = trustInfo.uri.fsPath
-        if (fsPath.length > maxLength) {
-          maxLength = fsPath.length
+        // Depth ranking only — `uri.path` (not `.fsPath`) so a non-`file:` entry
+        // ranks by its real segment depth instead of an authority-folded path.
+        const depth = trustInfo.uri.path.length
+        if (depth > maxLength) {
+          maxLength = depth
           resultState = trustInfo.trusted
           resultUri = trustInfo.uri
         }

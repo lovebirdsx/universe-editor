@@ -175,9 +175,13 @@ export function ExplorerView() {
   const renderRow = (ctx: ITreeRowRenderContext<IExplorerEntry>) => {
     const entry = ctx.node.element
     const key = ctx.node.id
-    const deco = entry.isDirectory
-      ? decorations.folders.get(scmPathKey(entry.resource.fsPath))
-      : decorations.files.get(scmPathKey(entry.resource.fsPath))
+    // SCM 装饰是本机 git/perforce 概念；非 file: 资源（未来远端 provider）无装饰。
+    const deco =
+      entry.resource.scheme === 'file'
+        ? entry.isDirectory
+          ? decorations.folders.get(scmPathKey(entry.resource.fsPath))
+          : decorations.files.get(scmPathKey(entry.resource.fsPath))
+        : undefined
     return (
       <ExplorerTreeNode
         key={key}

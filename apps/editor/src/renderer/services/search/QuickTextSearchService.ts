@@ -61,9 +61,12 @@ function normalizePath(path: string): string {
 }
 
 function workspaceRelativePath(root: URI, uri: URI): string {
-  const rootPath = normalizePath(root.fsPath).replace(/\/$/, '')
-  const path = normalizePath(uri.fsPath)
-  return path.startsWith(rootPath + '/') ? path.slice(rootPath.length + 1) : uri.fsPath
+  // 资源显示走 path 段；file: 用 fsPath 折 Windows 盘符，非 file:（远端）无本机路径。
+  const abs = uri.scheme === 'file' ? uri.fsPath : uri.path
+  if (root.scheme !== uri.scheme || root.authority !== uri.authority) return abs
+  const rootPath = normalizePath(root.path).replace(/\/$/, '')
+  const path = normalizePath(uri.path)
+  return path.startsWith(rootPath + '/') ? path.slice(rootPath.length + 1) : abs
 }
 
 function basename(path: string): string {

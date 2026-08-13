@@ -53,6 +53,7 @@ export function asPreviewResourceUri(
   if (trimmed.length === 0) return undefined
   if (isHttpOrData(trimmed)) return trimmed
 
+  // 本机路径，不随远端工作区变化：universe-app 协议只服务本机文件（图片）。
   let fsPath: string | undefined
   if (/^file:/i.test(trimmed)) {
     try {

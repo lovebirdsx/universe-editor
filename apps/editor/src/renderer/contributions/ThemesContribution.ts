@@ -72,6 +72,7 @@ export class ThemesContribution extends Disposable implements IWorkbenchContribu
     )
     // Icon theme assets (SVG icons, fonts) are served through the universe-app
     // resource protocol; map absolute URIs to those URLs here.
+    // 本机路径，不随远端工作区变化：主题资源来自本机扩展目录，经 universe-app 服务。
     _themeService.setIconResourceUrlResolver((resource) => toResourceUrl(resource.fsPath))
     this._updateColorThemeSchema()
     this._updateFileIconThemeSchema()
@@ -101,6 +102,7 @@ export class ThemesContribution extends Disposable implements IWorkbenchContribu
 
   private _allowIconThemeRoots(): void {
     const roots = new Set<string>()
+    // 本机路径，不随远端工作区变化：主题扩展目录在本机，allowRoots 只服务本机文件。
     for (const theme of this._themeService.getFileIconThemes()) {
       if (theme.location !== undefined) {
         roots.add(URI.joinPath(theme.location, '..').fsPath)

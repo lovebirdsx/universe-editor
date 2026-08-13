@@ -227,6 +227,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       ...(options.defaultUri !== undefined ? { defaultUri: URI.file(options.defaultUri) } : {}),
       ...(options.openLabel !== undefined ? { openLabel: options.openLabel } : {}),
     })
+    // 本机路径：文件对话框返回本地 file: URI，扩展 API 的路径字符串即其 fsPath。
     return picked?.map((uri) => uri.fsPath)
   }
 
@@ -246,6 +247,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
           }
         : {}),
     })
+    // 本机路径：保存对话框返回本地 file: URI。
     return picked?.fsPath
   }
 

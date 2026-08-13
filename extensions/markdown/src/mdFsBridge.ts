@@ -25,12 +25,15 @@ const MARKDOWN_EXT = /\.(md|markdown)$/i
 
 const decoder = new TextDecoder('utf-8', { fatal: false })
 
-/** `file:` URI string → filesystem path for the gated `workspace.fs`. */
-function fsPath(uri: string): string {
-  return URI.parse(uri).fsPath
+/** `file:` URI string → filesystem path for the gated `workspace.fs`. A
+ *  non-`file:` URI (a future remote scheme) has no host-local path. */
+function fsPath(uri: string): string | undefined {
+  const parsed = URI.parse(uri)
+  return parsed.scheme === 'file' ? parsed.fsPath : undefined
 }
 
 export function createMdFsBridge(root: URI | undefined): IMdClient {
+  // Host-local workspace root (always a `file:` URI built from `workspace.rootPath`).
   const rootPath = root?.fsPath
 
   /** True when `path` escapes the workspace root, so it needs the direct-fs path. */
@@ -41,6 +44,7 @@ export function createMdFsBridge(root: URI | undefined): IMdClient {
   }
 
   const readDir = async (uri: URI): Promise<[string, FileType][]> => {
+    if (uri.scheme !== 'file') return []
     const path = uri.fsPath
     if (isOutsideWorkspace(path)) {
       try {
@@ -71,6 +75,7 @@ export function createMdFsBridge(root: URI | undefined): IMdClient {
   return {
     $readFile: async (uri) => {
       const path = fsPath(uri)
+      if (path === undefined) return undefined
       if (isOutsideWorkspace(path)) {
         try {
           return decoder.decode(await nodeReadFile(path))
@@ -87,6 +92,7 @@ export function createMdFsBridge(root: URI | undefined): IMdClient {
     },
     $stat: async (uri) => {
       const path = fsPath(uri)
+      if (path === undefined) return undefined
       if (isOutsideWorkspace(path)) {
         try {
           const s = await nodeStat(path)

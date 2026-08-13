@@ -201,6 +201,10 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
 
   async search(query: ITextSearchMainQuery): Promise<ITextSearchMainComplete> {
     const root = reviveUri(query.root)
+    // 本机 ripgrep 只搜 file: 目录；远端工作区由远端 search 服务接管，fail loud。
+    if (root.scheme !== 'file') {
+      throw new Error(`textSearch: unsupported scheme: ${root.scheme}`)
+    }
     const pattern = query.pattern.trim()
     if (pattern.length === 0) {
       return {

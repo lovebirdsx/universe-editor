@@ -235,6 +235,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     // bootstrapWorkbench() runs.
     this._takeDefaultSnapshot()
     void this._files.getFileUri(UserDataFile.VSCodeKeybindings).then((uri) => {
+      // 本机路径：keybindings 文件位于 userData 目录，不随远端工作区变化。
       if (uri) this._diagnostics.vscodeFilePath = uri.fsPath
     })
   }

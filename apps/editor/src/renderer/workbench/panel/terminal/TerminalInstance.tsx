@@ -156,6 +156,7 @@ export function TerminalInstance({
     // Prevent the drop from bubbling to the editor group body, which would
     // otherwise open the dropped files as editors in addition to inserting them.
     e.stopPropagation()
+    // 本机路径，不随远端工作区变化：拖入终端的文件均来自 OS 本机拖放。
     const text = resources.map((r) => formatPathForTerminal(r.fsPath)).join(' ')
     manager.input(id, `${text} `)
     holderRef.current?.focus()

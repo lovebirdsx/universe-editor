@@ -55,6 +55,7 @@ function webviewOptionsToDto(value: WebviewOptions | undefined): IWebviewOptions
     ...(value?.enableScripts !== undefined ? { enableScripts: value.enableScripts } : {}),
     ...(value?.localResourceRoots !== undefined
       ? {
+          // Host-local paths: the webview's allowed local filesystem roots.
           localResourceRoots: value.localResourceRoots
             .map((r) => URI.revive(r)?.fsPath)
             // Un-revivable roots must not cross as '' (an empty root would
@@ -96,6 +97,7 @@ class HostWebview implements Webview {
   }
 
   asWebviewUri(resource: UriComponents): string {
+    // Host-local path: the resource is a bundled file served into the webview iframe.
     return fsPathToWebviewUrl(URI.revive(resource)?.fsPath ?? '')
   }
 

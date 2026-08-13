@@ -49,3 +49,74 @@ describe('UriIdentityService', () => {
     expect(set.has(URI.file('d:/x/foo.ts'))).toBe(true)
   })
 })
+
+describe('UriIdentityService per-scheme case sensitivity', () => {
+  const remoteFoo = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/src/Foo.ts' })
+  const remoteFooLower = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/src/foo.ts' })
+
+  it('defaults to the host platform for an unregistered scheme', () => {
+    const svc = new UriIdentityService('win32')
+    expect(svc.isCaseSensitive(remoteFoo)).toBe(false)
+    expect(svc.isEqual(remoteFoo, remoteFooLower)).toBe(true)
+  })
+
+  it('keeps a Linux remote case-sensitive even when the UI runs on Windows', () => {
+    const svc = new UriIdentityService('win32')
+    svc.registerSchemeCaseSensitivity('remote-ssh', true)
+
+    expect(svc.isCaseSensitive(remoteFoo)).toBe(true)
+    expect(svc.isEqual(remoteFoo, remoteFooLower)).toBe(false)
+    expect(svc.getComparisonKey(remoteFoo)).not.toBe(svc.getComparisonKey(remoteFooLower))
+    expect(svc.isEqualOrParent(remoteFoo, URI.from({ ...remoteFoo, path: '/SRC' }))).toBe(false)
+    expect(svc.isEqualOrParent(remoteFoo, URI.from({ ...remoteFoo, path: '/src' }))).toBe(true)
+  })
+
+  it('leaves the local file: scheme on the host-platform policy', () => {
+    const svc = new UriIdentityService('win32')
+    svc.registerSchemeCaseSensitivity('remote-ssh', true)
+
+    expect(svc.isCaseSensitive(URI.file('D:/x/Foo.ts'))).toBe(false)
+    expect(svc.isEqual(URI.file('D:/x/Foo.ts'), URI.file('d:/x/foo.ts'))).toBe(true)
+  })
+
+  it('lets a case-insensitive provider fold case on a case-sensitive host', () => {
+    const svc = new UriIdentityService('linux')
+    svc.registerSchemeCaseSensitivity('remote-ssh', false)
+    expect(svc.isEqual(remoteFoo, remoteFooLower)).toBe(true)
+  })
+
+  it('resource maps and sets follow the registered policy', () => {
+    const svc = new UriIdentityService('win32')
+    svc.registerSchemeCaseSensitivity('remote-ssh', true)
+
+    const map = svc.createResourceMap<number>()
+    map.set(remoteFoo, 1)
+    expect(map.get(remoteFooLower)).toBeUndefined()
+    expect(map.get(remoteFoo)).toBe(1)
+  })
+
+  it('disposing restores the host-platform default', () => {
+    const svc = new UriIdentityService('win32')
+    const handle = svc.registerSchemeCaseSensitivity('remote-ssh', true)
+
+    handle.dispose()
+    expect(svc.isCaseSensitive(remoteFoo)).toBe(false)
+    expect(svc.isEqual(remoteFoo, remoteFooLower)).toBe(true)
+  })
+
+  it('a stale disposable does not clear a re-registered policy', () => {
+    const svc = new UriIdentityService('win32')
+    const stale = svc.registerSchemeCaseSensitivity('remote-ssh', true)
+    stale.dispose()
+
+    svc.registerSchemeCaseSensitivity('remote-ssh', false)
+    stale.dispose()
+    expect(svc.isCaseSensitive(remoteFoo)).toBe(false)
+  })
+
+  it('string-path helpers stay platform-bound — raw paths carry no scheme', () => {
+    const svc = new UriIdentityService('win32')
+    svc.registerSchemeCaseSensitivity('remote-ssh', true)
+    expect(svc.arePathsEqual('/src/Foo.ts', '/src/foo.ts')).toBe(true)
+  })
+})

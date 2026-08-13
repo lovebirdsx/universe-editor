@@ -39,6 +39,9 @@ import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 const FIND_FILES_ENUMERATION_CAP = 100_000
 
 export class MainThreadFs implements IMainThreadFs {
+  // workspace.fs 是本地文件系统桥：`_cwd` 为工作区根路径字符串，所有 `.fsPath`
+  // 都作用于 file: URI（含 `IFileSearchMatch.fsPath` 这一本机路径 DTO 字段），
+  // 不随远端工作区变化。
   /** Lazily resolved, symlink-followed form of `_cwd` (see `_getCanonicalCwd`). */
   private _canonicalCwd: Promise<string | undefined> | undefined
 

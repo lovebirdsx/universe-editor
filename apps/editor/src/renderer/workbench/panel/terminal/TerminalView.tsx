@@ -46,6 +46,7 @@ export function TerminalView() {
   const resolveFile = useResolveTerminalFile()
   const openFile = useOpenTerminalFile()
 
+  // 本机路径，不随远端工作区变化：终端在本机 spawn，cwd 必须是本机路径。
   const cwd = workspaceService.current?.folder.fsPath ?? ''
 
   return (

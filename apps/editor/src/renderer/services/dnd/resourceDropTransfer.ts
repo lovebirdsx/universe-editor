@@ -66,11 +66,16 @@ export function formatPathForTerminal(fsPath: string): string {
  */
 export function toMentionName(uri: URI, workspaceRoot?: URI): { uri: string; name: string } {
   const resource = uri.toString()
-  if (workspaceRoot && uri.scheme === workspaceRoot.scheme) {
+  if (
+    workspaceRoot &&
+    uri.scheme === workspaceRoot.scheme &&
+    uri.authority === workspaceRoot.authority
+  ) {
     const rel = relativeUnder(workspaceRoot, uri)
     if (rel) return { uri: resource, name: rel }
   }
-  return { uri: resource, name: uri.fsPath }
+  // 非 file: 的 URI（未来远端资源）无本机路径，回退到其 path 段而非折进 authority 的 fsPath。
+  return { uri: resource, name: uri.scheme === 'file' ? uri.fsPath : uri.path }
 }
 
 function relativeUnder(root: URI, uri: URI): string | undefined {

@@ -484,6 +484,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
     return () => d.dispose()
   }, [config])
 
+  // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 为本机路径。
   const currentCwd = workspace.current?.folder.fsPath
 
   const scrollRef = useRef<HTMLUListElement | null>(null)

@@ -52,6 +52,7 @@ export class OpenInTerminalAction extends Action2 {
     const host = accessor.get(IHostService)
     const config = accessor.get(IConfigurationService)
 
+    // 本机路径，不随远端工作区变化：外部终端在本机 spawn，cwd 必须是本机路径。
     let cwd: string | null = workspace.current?.folder.fsPath ?? null
     if (!cwd) {
       const groups = accessor.get(IEditorGroupsService)
