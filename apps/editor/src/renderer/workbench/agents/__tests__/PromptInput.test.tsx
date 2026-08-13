@@ -1651,20 +1651,22 @@ describe('PromptInput — focus handoff', () => {
   })
 
   // Regression: the prompt editor (editContext: true, no DOM-editable focus host)
-  // must mirror focus onto `editorTextFocus`, or the global keybinding handler
-  // treats it as a non-text surface and a global `delete` binding (delete-file)
-  // swallows the Delete key — Delete does nothing in the input. See
-  // editor-text-focus-stuck-swallows-keys for the mirror-image bug.
-  it('sets editorTextFocus while the prompt editor holds focus, clears on blur', () => {
+  // must mirror focus onto `acpPromptInputFocused` — NOT `editorTextFocus` — so the
+  // global keybinding handler still treats it as a text surface (Delete/Backspace
+  // reserved) while commands gated on `editorTextFocus` (findWordAtCursor, …) stay
+  // out of the prompt. See editor-text-focus-stuck-swallows-keys for the
+  // mirror-image bug.
+  it('sets acpPromptInputFocused (not editorTextFocus) while the prompt editor holds focus, clears on blur', () => {
     const contextKeyService = new ContextKeyService()
     renderWithServices(<PromptInput session={makeSession()} />, { contextKeyService })
     const ta = getTextarea()
 
-    expect(contextKeyService.get('editorTextFocus')).not.toBe(true)
+    expect(contextKeyService.get('acpPromptInputFocused')).not.toBe(true)
     act(() => ta.focus())
-    expect(contextKeyService.get('editorTextFocus')).toBe(true)
+    expect(contextKeyService.get('acpPromptInputFocused')).toBe(true)
+    expect(contextKeyService.get('editorTextFocus')).not.toBe(true)
     act(() => ta.blur())
-    expect(contextKeyService.get('editorTextFocus')).toBe(false)
+    expect(contextKeyService.get('acpPromptInputFocused')).toBe(false)
   })
 })
 

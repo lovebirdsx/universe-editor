@@ -40,7 +40,7 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-next',
       keybinding: [
-        { primary: 'alt+down', when: ACP_NAV_WHEN },
+        { primary: 'alt+down', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
         { primary: 'alt+j', when: ACP_NAV_WHEN },
       ],
       menu: [
@@ -68,7 +68,7 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-prev',
       keybinding: [
-        { primary: 'alt+up', when: ACP_NAV_WHEN },
+        { primary: 'alt+up', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
         { primary: 'alt+k', when: ACP_NAV_WHEN },
       ],
       menu: [
@@ -97,7 +97,7 @@ export class FocusTopAcpTimelineAction extends Action2 {
       icon: 'timeline-top',
       keybinding: [
         { primary: 'alt+home', when: ACP_NAV_WHEN },
-        { primary: 'alt+a', when: ACP_NAV_WHEN },
+        { primary: 'alt+a', when: ACP_NAV_WHEN, weight: ACP_SCOPED_KEY_WEIGHT },
       ],
       menu: [
         {

@@ -9,6 +9,7 @@
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
+ *   - acpPromptInputFocused                                      (ACP session prompt input focus)
  *   - findWidgetVisible                                          (Monaco find widget revealed)
  *   - editorColumnSelection                                      (Monaco column-selection mode)
  *   - editorLangId / editorReadonly                              (active editor attributes, monaco parity)
@@ -184,6 +185,12 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // editorFocus which covers any monaco widget. Written by FileEditor through
     // onDidFocus/BlurEditorText.
     contextKeyService.createKey<boolean>('editorTextFocus', false)
+
+    // True while the ACP session prompt input (an embedded Monaco editor) holds
+    // text focus. Written by PromptMonacoEditor. Deliberately separate from
+    // editorTextFocus: commands gated on editorTextFocus assume a real file editor
+    // is actionable, so the prompt must not impersonate it.
+    contextKeyService.createKey<boolean>('acpPromptInputFocused', false)
 
     // True when the active Monaco editor has editor.columnSelection enabled.
     // Written by FileEditor from Monaco's live editor option.

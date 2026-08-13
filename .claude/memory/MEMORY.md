@@ -76,6 +76,7 @@
 - [UriComponents path 须带前导斜杠](uri-components-canonical-path-leading-slash.md) — 手写 'C:/...' 致 file://C:/ parse 不稳、URI 身份断裂；e2e 渲染日志在 userData/logs/window-N/console.log
 - [Action2 async accessor 失效](action2-async-accessor-invalidation.md) — await 前同步取完所有 service；持久 accessor 测试假绿
 - [when 不提权，weight 定胜负](keybinding-when-not-priority-weight-wins.md) — scoped 快捷键压全局同键必须显式加 weight
+- [prompt 输入框不冒充全局 editorTextFocus](prompt-input-no-global-editortextfocus.md) — 嵌入式 Monaco 用专用 key；VSCode 导入层 User=1000 压过一切 scoped weight，"输入框失效别处正常"先查导入键位
 - [spawn CLI 挂起 / 选错命令](cli-stdin-hang-on-prompt.md) — 交互 CLI 换只读命令；p4 查 ticket 用 `p4 tickets`/`login -s`
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
 

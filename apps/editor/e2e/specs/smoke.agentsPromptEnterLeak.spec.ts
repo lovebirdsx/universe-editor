@@ -91,7 +91,7 @@ test.describe('@p1 agents prompt enter leak', () => {
         () => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'),
       )
       await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
           timeout: 5000,
         })
         .toBe(true)

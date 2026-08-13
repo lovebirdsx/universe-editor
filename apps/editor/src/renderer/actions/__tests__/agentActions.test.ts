@@ -18,6 +18,7 @@ import {
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
+  KeybindingWeight,
   NullLogger,
   ServiceCollection,
   UriIdentityService,
@@ -34,6 +35,8 @@ import {
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
+  FocusNextAcpTimelineItemAction,
+  FocusPreviousAcpTimelineItemAction,
   JumpToAcpPlanAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
@@ -42,6 +45,7 @@ import {
   NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
 import { AskInSideChatAction } from '../agentSessionActions.js'
+import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from '../findWordActions.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import {
   IAcpChatWidgetService,
@@ -247,6 +251,99 @@ describe('Agent timeline navigation actions', () => {
       CommandsRegistry.getCommand(FocusTopAcpTimelineAction.ID)!.handler(accessor)
     })
     expect(w.moveTimeline).toHaveBeenCalledWith('first')
+  })
+
+  // The prompt input is an embedded Monaco editor, so while it has focus both
+  // `editorTextFocus` and `acpChatFocused` hold. findWordAtCursor binds the same
+  // Alt+Up/Down keys at the default weight (when `editorTextFocus && !findWidgetVisible`),
+  // so the timeline nav binding must outrank it regardless of registration order.
+  it('binds Alt+Up/Down to timeline nav over findWordAtCursor while the prompt input has focus', () => {
+    disposables.push(registerAction2(FocusPreviousAcpTimelineItemAction))
+    disposables.push(registerAction2(FocusNextAcpTimelineItemAction))
+    disposables.push(registerAction2(FindWordAtCursorPreviousAction))
+    disposables.push(registerAction2(FindWordAtCursorNextAction))
+
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('editorTextFocus', true)
+    ctx.createKey<boolean>('acpChatFocused', true)
+    ctx.createKey<boolean>('hasActiveEditor', true)
+
+    expect(KeybindingsRegistry.resolveKeybinding('alt+up', ctx)).toBe(
+      FocusPreviousAcpTimelineItemAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('alt+down', ctx)).toBe(
+      FocusNextAcpTimelineItemAction.ID,
+    )
+  })
+
+  // Reverse case: a normal text editor has focus (editorTextFocus holds, the chat
+  // doesn't). Alt+Up/Down must stay with findWordAtCursor — the scoped weight
+  // must not leak outside ACP_NAV_WHEN.
+  it('keeps Alt+Up/Down with findWordAtCursor in a normal editor (no acpChatFocused)', () => {
+    disposables.push(registerAction2(FocusPreviousAcpTimelineItemAction))
+    disposables.push(registerAction2(FocusNextAcpTimelineItemAction))
+    disposables.push(registerAction2(FindWordAtCursorPreviousAction))
+    disposables.push(registerAction2(FindWordAtCursorNextAction))
+
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('editorTextFocus', true)
+    ctx.createKey<boolean>('hasActiveEditor', true)
+    ctx.createKey<boolean>('editorAreaFocus', true)
+    ctx.createKey<string>('activeEditorTypeId', 'some.other.editor')
+
+    expect(KeybindingsRegistry.resolveKeybinding('alt+up', ctx)).toBe(
+      FindWordAtCursorPreviousAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('alt+down', ctx)).toBe(
+      FindWordAtCursorNextAction.ID,
+    )
+  })
+
+  // The prompt input is an embedded Monaco editor, but it must NOT mirror focus
+  // onto `editorTextFocus` (commands gated on that key assume a real file editor
+  // is actionable — findWordAtCursor, dirtyDiff, inline completion, …). It sets
+  // its own `acpPromptInputFocused` key instead. Here a VSCode-imported
+  // User-weight binding (findWordAtCursor.previous on Alt+Up) would otherwise
+  // outrank the scoped timeline binding (1000 > 250) and swallow Alt+Up in the
+  // prompt. The red baseline is the pre-fix prompt state (`editorTextFocus` set
+  // alongside `acpChatFocused`), where Alt+Up resolved to the User binding.
+  it('prompt focus keeps Alt+Up with timeline nav; a real editor keeps the User binding', () => {
+    disposables.push(registerAction2(FocusPreviousAcpTimelineItemAction))
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+up',
+        command: 'findWordAtCursor.previous',
+        when: 'editorTextFocus && !findWidgetVisible',
+        weight: KeybindingWeight.User,
+      }),
+    )
+
+    // Fixed prompt state: prompt + chat focused, editorTextFocus false → the
+    // User binding's when-clause fails, so the timeline nav binding wins.
+    const prompt = new ContextKeyService()
+    prompt.createKey<boolean>('acpChatFocused', true)
+    prompt.createKey<boolean>('acpPromptInputFocused', true)
+    prompt.createKey<boolean>('editorTextFocus', false)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+up', prompt)).toBe(
+      FocusPreviousAcpTimelineItemAction.ID,
+    )
+
+    // Real file editor: editorTextFocus holds, chat not focused → the user's
+    // imported binding must keep winning.
+    const file = new ContextKeyService()
+    file.createKey<boolean>('editorTextFocus', true)
+    file.createKey<boolean>('acpChatFocused', false)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+up', file)).toBe('findWordAtCursor.previous')
+
+    // Red baseline (pre-fix prompt state): editorTextFocus + acpChatFocused both
+    // hold → the User-weight binding steals Alt+Up, exactly the bug being fixed.
+    // This asserts the test is sensitive enough to catch the regression.
+    const before = new ContextKeyService()
+    before.createKey<boolean>('editorTextFocus', true)
+    before.createKey<boolean>('acpChatFocused', true)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+up', before)).toBe(
+      'findWordAtCursor.previous',
+    )
   })
 })
 

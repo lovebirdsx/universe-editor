@@ -341,10 +341,13 @@ export function useGlobalKeybindingHandler(): void {
       // Reserve printable single-character keys (without ctrl/alt/meta) and the
       // native editing keys (Delete/Backspace) for text input. A focused Monaco
       // editor counts as a text surface even though its EditContext host is not
-      // a DOM-editable element — `editorTextFocus` is the reliable signal — so a
-      // global Delete binding (e.g. delete-file) never steals the editor's key.
+      // a DOM-editable element — `editorTextFocus` (file editors) and
+      // `acpPromptInputFocused` (the ACP prompt input) are the reliable signals —
+      // so a global Delete binding (e.g. delete-file) never steals the editor's key.
       const inTextSurface =
-        isEditableTarget(e.target) || contextKeyService.get('editorTextFocus') === true
+        isEditableTarget(e.target) ||
+        contextKeyService.get('editorTextFocus') === true ||
+        contextKeyService.get('acpPromptInputFocused') === true
       const k = e.key.toLowerCase()
       const isPrintableTyping = e.key.length === 1 && !hasFunctionalModifier(e) && inTextSurface
       const isNativeEditing = inTextSurface && (k === 'delete' || k === 'backspace')

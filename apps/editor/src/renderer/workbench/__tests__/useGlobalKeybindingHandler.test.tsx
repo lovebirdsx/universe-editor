@@ -182,6 +182,32 @@ describe('useGlobalKeybindingHandler', () => {
     expect(stopPropagation).not.toHaveBeenCalled()
   })
 
+  // The ACP prompt input's EditContext host is not a DOM-editable element, so
+  // isEditableTarget() can't see it. `acpPromptInputFocused` (mirrored by
+  // PromptMonacoEditor) is what keeps Delete/Backspace/printable keys in the
+  // prompt instead of a global binding stealing them.
+  it('reserves Delete/Backspace/printable keys for the prompt when acpPromptInputFocused is true', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('delete', 'workbench.files.action.delete')
+    bind('backspace', 'test.backspace')
+    bind('b', 'test.bareB')
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('acpPromptInputFocused', true)
+    mountHost(instantiation)
+
+    const del = dispatch({ key: 'Delete' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(del.preventDefault).not.toHaveBeenCalled()
+
+    const back = dispatch({ key: 'Backspace' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(back.preventDefault).not.toHaveBeenCalled()
+
+    const bare = dispatch({ key: 'b' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(bare.preventDefault).not.toHaveBeenCalled()
+  })
+
   it('still fires when ctrl is pressed inside editable target', () => {
     const { executeCommand, instantiation } = createHarness()
     bind('ctrl+b', 'test.toggle')

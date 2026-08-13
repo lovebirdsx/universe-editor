@@ -369,19 +369,20 @@ export function PromptMonacoEditor({
       )
       disposables.push(ed.onDidChangeCursorPosition(() => emitChange('cursor')))
 
-      // Bridge Monaco text focus → the global `editorTextFocus` contextKey, the
-      // same split FileEditor maintains. With editContext: true the editor's
-      // focus host is not a DOM-editable element, so isEditableTarget() can't see
-      // it; the global keybinding handler relies on `editorTextFocus` to reserve
-      // native editing keys (Delete/Backspace) for the editor. Without this a
-      // global `delete` binding (delete-file) steals the key and Delete does
-      // nothing in the prompt. Clear on blur; also re-sync on unmount so a
-      // lingering true (blur can lag dispose) doesn't leak.
+      // Bridge Monaco text focus → the dedicated `acpPromptInputFocused` contextKey
+      // (NOT `editorTextFocus`): commands gated on editorTextFocus (findWordAtCursor,
+      // dirtyDiff, inline completion, …) all assume a real file editor is actionable,
+      // so the prompt impersonating that key makes those bindings — including
+      // VSCode-imported User-weight keys — steal keystrokes here while doing nothing.
+      // With editContext: true the focus host is not a DOM-editable element, so the
+      // global keybinding handler relies on this key to reserve native editing keys
+      // (Delete/Backspace) for the prompt. Clear on blur; also re-clear on unmount
+      // so a lingering true (blur can lag dispose) doesn't leak.
       disposables.push(
-        ed.onDidFocusEditorText(() => contextKeyService.set('editorTextFocus', true)),
+        ed.onDidFocusEditorText(() => contextKeyService.set('acpPromptInputFocused', true)),
       )
       disposables.push(
-        ed.onDidBlurEditorText(() => contextKeyService.set('editorTextFocus', false)),
+        ed.onDidBlurEditorText(() => contextKeyService.set('acpPromptInputFocused', false)),
       )
 
       // Auto-grow: size the container to the content between a 3-line floor and
@@ -476,9 +477,11 @@ export function PromptMonacoEditor({
       editorRef.current = null
       modelRef.current = null
       monacoRef.current = null
-      // onDidBlurEditorText may not fire before dispose, leaving editorTextFocus
-      // stuck true (see editor-text-focus-stuck-swallows-keys). Reconcile it
-      // against actual DOM focus so it never lingers past unmount.
+      // onDidBlurEditorText may not fire before dispose, leaving
+      // acpPromptInputFocused stuck true (see editor-text-focus-stuck-swallows-keys).
+      // Clear it so the key never lingers past unmount; also reconcile editorFocus
+      // against actual DOM focus now that the prompt's Monaco editor is gone.
+      contextKeyService.set('acpPromptInputFocused', false)
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     }
     // Create once; theme/font live-updates handled by the effect below.

@@ -55,7 +55,7 @@ test.describe('@p0 agents selection attachment', () => {
     )
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')))
       .toBe(true)
     await page.keyboard.type('Explain this selection')
     // EditContext delivers typed text to the Monaco model asynchronously; on a

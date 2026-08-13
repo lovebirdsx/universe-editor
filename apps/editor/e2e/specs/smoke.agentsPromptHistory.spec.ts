@@ -51,7 +51,7 @@ async function seedTwoHistoryEntries(page: Page, workbench: WorkbenchPO): Promis
   const typeAndSend = async (text: string): Promise<void> => {
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')), {
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
         timeout: 5000,
       })
       .toBe(true)
@@ -75,7 +75,7 @@ test.describe('@p1 agents prompt history', () => {
     // Type a fresh draft, then ArrowUp on the first line opens history.
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')))
       .toBe(true)
     await page.keyboard.type('draft in progress')
     await expect
@@ -121,7 +121,7 @@ test.describe('@p1 agents prompt history', () => {
 
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('editorTextFocus')))
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')))
       .toBe(true)
     await page.keyboard.type('draft in progress')
     await expect
