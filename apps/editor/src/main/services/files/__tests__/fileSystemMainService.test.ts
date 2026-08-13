@@ -24,6 +24,13 @@ describe('FileSystemMainService', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
+  it('unregisters the file provider when disposed', () => {
+    const svc = new FileSystemMainService()
+    expect(svc.providers.has('file')).toBe(true)
+    svc.dispose()
+    expect(svc.providers.has('file')).toBe(false)
+  })
+
   it('writes and reads file bytes round-trip', async () => {
     const target = URI.file(join(root, 'hello.bin'))
     const payload = new Uint8Array([1, 2, 3, 4])

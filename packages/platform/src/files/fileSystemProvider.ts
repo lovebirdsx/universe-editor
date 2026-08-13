@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type UriComponents } from '../base/uri.js'
-import { toDisposable, type IDisposable } from '../base/lifecycle.js'
+import { Disposable, toDisposable, type IDisposable } from '../base/lifecycle.js'
 import {
   FileSystemError,
   type IDirectoryEntry,
@@ -100,12 +100,13 @@ function reviveUri(value: RawUri): URI {
  * registered for the resource's scheme. Cross-scheme rename/copy is rejected —
  * moving data between filesystems is a higher-level (read + write) concern.
  */
-export class FileService implements IFileService {
+export class FileService extends Disposable implements IFileService {
   declare readonly _serviceBrand: undefined
 
   readonly providers: FileSystemProviderRegistry
 
   constructor(providers?: FileSystemProviderRegistry) {
+    super()
     this.providers = providers ?? new FileSystemProviderRegistry()
   }
 

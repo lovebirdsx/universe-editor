@@ -12,6 +12,6 @@ import { LocalFileSystemProvider } from './localFileSystemProvider.js'
 export class FileSystemMainService extends FileService {
   constructor(@ILoggerService loggerService?: ILoggerService) {
     super()
-    this.providers.register('file', new LocalFileSystemProvider(loggerService))
+    this._register(this.providers.register('file', new LocalFileSystemProvider(loggerService)))
   }
 }
