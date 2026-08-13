@@ -17,17 +17,19 @@
 
 import { build } from 'esbuild'
 import { writeFileSync, rmSync, existsSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hasExplicitMode, loadEnv } from '../lib/env.mjs'
 import { SERVER_ENV_FILE, isWindowsPath, renderServerEnv } from './serverEnv.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const envOutput = resolve(__dirname, 'dist', SERVER_ENV_FILE)
+// 输出目录默认 scripts/server/dist；测试可经 UE_SERVER_DIST_DIR 覆盖，避免并发跑多份 bundle 互踩同一份产物。
+const distDir = resolve(process.env.UE_SERVER_DIST_DIR ?? join(__dirname, 'dist'))
+const envOutput = join(distDir, SERVER_ENV_FILE)
 
 await build({
   entryPoints: [resolve(__dirname, 'server.mjs')],
-  outfile: resolve(__dirname, 'dist', 'server.js'),
+  outfile: join(distDir, 'server.js'),
   bundle: true,
   platform: 'node',
   format: 'esm',

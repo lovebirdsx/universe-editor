@@ -100,8 +100,8 @@ Universe Editor 的**更新分发 + 扩展市场后端**：单文件 Node 服务
 - 部署前 `pnpm server:bundle`——服务器跑的是打包产物，改源码不重新打包等于没改。
 - 测试：`node --test scripts/server/__tests__/<x>.test.mjs`。注意 `dist/server.env` 参与 setup 的
   查找顺序，本机残留会污染用例（`setup.test.mjs` 用 before/after 全程移开再还原）。
-  多个测试文件会操作**同一份真实** `dist/server.env`，所以 `test:release` 用
-  `--test-concurrency=1` 串行跑文件——别图快去掉，去掉后 bundle-env 与 setup 会互清对方预置的文件。
+  bundle-env / bundle 的冒烟测试经 `UE_SERVER_DIST_DIR` 跑在独立临时 dist 目录，不碰真实
+  `dist/server.env`；`test:release` 仍保留 `--test-concurrency=1` 串行跑文件做兜底。
 
 ## 客户端信任链（改签名相关代码时）
 

@@ -5,7 +5,8 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +15,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const serverDir = join(__dirname, '..')
 const repoRoot = join(serverDir, '..', '..')
 const bundleScript = join(serverDir, 'bundle.mjs')
-const envOutput = join(serverDir, 'dist', 'server.env')
+// 用独立临时 dist 目录跑 bundle，避免与 setup.test.mjs（操作真实 dist/server.env）并发互踩同一份产物。
+const distDir = mkdtempSync(join(tmpdir(), 'ue-bundle-env-'))
+const envOutput = join(distDir, 'server.env')
 
 // 独立 mode 名，避免与开发者本机真实的 .env.prod / .env.test 撞车。
 const MODE = 'bundletest'
@@ -25,6 +28,7 @@ function runBundle(args = []) {
   delete env.UE_ENV
   // 清掉外部注入的 UE_SERVER_*，否则本机 shell 环境会盖过 .env 文件（loadEnv 不覆盖已存在的）。
   for (const key of Object.keys(env)) if (key.startsWith('UE_SERVER_')) delete env[key]
+  env.UE_SERVER_DIST_DIR = distDir
   return spawnSync(process.execPath, [bundleScript, ...args], {
     encoding: 'utf8',
     cwd: repoRoot,
@@ -34,12 +38,10 @@ function runBundle(args = []) {
 
 after(() => {
   rmSync(modeFile, { force: true })
-  rmSync(envOutput, { force: true })
+  rmSync(distDir, { recursive: true, force: true })
 })
 
 test('不带 --env 不生成 server.env——默认 mode 是 dev，静默把开发配置打进产物很危险', () => {
-  // dist/ 在 fresh checkout 上不存在（CI 的 Test scripts 先于 Build 跑），预置陈旧产物前先建目录。
-  mkdirSync(dirname(envOutput), { recursive: true })
   writeFileSync(envOutput, 'UE_SERVER_PORT=1\n')
   const res = runBundle()
   assert.equal(res.status, 0, res.stderr)

@@ -8,6 +8,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,15 +26,21 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const bundleScript = join(__dirname, '..', 'bundle.mjs')
-const bundleOut = join(__dirname, '..', 'dist', 'server.js')
 const PORT = 39224
 const TOKEN = 'uet_bundle_smoke_token_0000000000000'
 
 let root
+let distDir
 let child
 
 before(async () => {
-  const built = spawnSync(process.execPath, [bundleScript], { encoding: 'utf8' })
+  // 独立临时 dist 目录，避免并发下与 bundle-env/setup 互踩真实 dist/server.env（无 --env 会清理它）。
+  distDir = await mkdtemp(join(tmpdir(), 'ue-bundle-dist-'))
+  const bundleOut = join(distDir, 'server.js')
+  const built = spawnSync(process.execPath, [bundleScript], {
+    encoding: 'utf8',
+    env: { ...process.env, UE_SERVER_DIST_DIR: distDir },
+  })
   assert.equal(built.status, 0, `bundle 构建失败: ${built.stderr}`)
 
   root = await mkdtemp(join(tmpdir(), 'ue-bundle-smoke-'))
@@ -54,6 +61,7 @@ before(async () => {
 
 after(() => {
   if (child) child.kill()
+  if (distDir) rmSync(distDir, { recursive: true, force: true })
 })
 
 test('bundle 产物: whoami 401（无 token）/ 200（正确 token）', async () => {
