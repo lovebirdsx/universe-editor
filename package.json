@@ -45,7 +45,7 @@
     "release": "node scripts/release/release.mjs",
     "release:upload": "node scripts/release/upload.mjs",
     "release:notes": "node scripts/release/changelog.mjs",
-    "test:release": "turbo run build --filter=@universe-editor/uex && node --test \"scripts/**/__tests__/**/*.test.mjs\"",
+    "test:release": "turbo run build --filter=@universe-editor/uex && node --test --test-concurrency=1 \"scripts/**/__tests__/**/*.test.mjs\"",
     "test:templates": "node scripts/toolchain/template-smoke.mjs",
     "server:bundle": "pnpm --filter @universe-editor/extension-packaging... build && node scripts/server/bundle.mjs",
     "server:deploy": "node scripts/server/deploy.mjs",

@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,8 @@ after(() => {
 })
 
 test('不带 --env 不生成 server.env——默认 mode 是 dev，静默把开发配置打进产物很危险', () => {
+  // dist/ 在 fresh checkout 上不存在（CI 的 Test scripts 先于 Build 跑），预置陈旧产物前先建目录。
+  mkdirSync(dirname(envOutput), { recursive: true })
   writeFileSync(envOutput, 'UE_SERVER_PORT=1\n')
   const res = runBundle()
   assert.equal(res.status, 0, res.stderr)
