@@ -54,6 +54,11 @@ import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 const POLL_INTERVAL_MS = 60_000
 
+/** Minimum gap between window-focus-triggered soft refreshes. Focus can fire in
+ *  bursts (switching back to the window, alt-tabbing across apps), so throttle
+ *  to at most one soft refresh per this interval. */
+const FOCUS_REFRESH_MIN_INTERVAL_MS = 5_000
+
 /** Ceiling for one dashboard RPC before the poll declares it wedged. The host's
  *  own worst case is ~2 credential probes (15s each) plus one fetch (30s), so
  *  120s only fires when something below the RPC never settles at all — the
@@ -123,6 +128,10 @@ export class SwarmReviewNotificationContribution
   private _lastSuccessfulPollAt = Date.now()
   /** Last time the host-driven tick handler fired. Drives the tick-gap log. */
   private _lastTickAt = Date.now()
+  /** Last time a window focus drove a soft reviews-view refresh. Throttles the
+   *  focus listener so a focus burst (alt-tabbing) refreshes at most once per
+   *  FOCUS_REFRESH_MIN_INTERVAL_MS. */
+  private _lastFocusRefreshAt = 0
   /** Fingerprint of the last poll's counts (actionable + per-filter drops). A
    *  changed fingerprint raises `poll ok` to info, so filter-layer suppression
    *  shows up in the log at the default level — the fifth silent-notification
@@ -212,6 +221,25 @@ export class SwarmReviewNotificationContribution
       this._register({
         dispose: () => document.removeEventListener('visibilitychange', onVisibilityChange),
       })
+    }
+    // The rising-edge soft refresh fired by _notifyNew is a one-shot signal scoped
+    // to this renderer process: requestSwarmReviewsRefresh drops it when the view
+    // isn't mounted (no consumer), and an Emitter cannot reach another
+    // BrowserWindow's renderer. So switching back to the window has no guarantee of
+    // fresh data. This focus listener re-sends a throttled soft refresh, making
+    // "switch to the window and see the latest" an explicit guarantee — and the
+    // soft refresh is cheap: it hits the host-side list cache the background poll
+    // already repopulated (60s TTL).
+    if (typeof window !== 'undefined') {
+      const onFocus = () => {
+        const now = Date.now()
+        if (now - this._lastFocusRefreshAt < FOCUS_REFRESH_MIN_INTERVAL_MS) return
+        this._lastFocusRefreshAt = now
+        this._logger.debug('window focused → soft reviews view refresh')
+        void requestSwarmReviewsRefresh(false)
+      }
+      window.addEventListener('focus', onFocus)
+      this._register({ dispose: () => window.removeEventListener('focus', onFocus) })
     }
     // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
     // for a test, and the window is focused so the OS toast is gated away anyway).

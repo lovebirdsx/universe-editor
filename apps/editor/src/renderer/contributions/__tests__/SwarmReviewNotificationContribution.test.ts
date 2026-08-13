@@ -636,6 +636,91 @@ describe('SwarmReviewNotificationContribution', () => {
     })
   })
 
+  // The rising-edge soft refresh fired by _notifyNew is a one-shot signal scoped
+  // to this renderer process: it only reaches a view that is already mounted and
+  // cannot cross into another window's renderer. The focus listener re-sends a
+  // throttled soft refresh so switching back to the window always shows the
+  // latest list.
+  describe('window focus soft refresh', () => {
+    afterEach(() => vi.useRealTimers())
+
+    const watchRefreshRequests = (
+      viewState: Awaited<ReturnType<typeof freshModules>>['viewState'],
+    ) => {
+      const consumer = viewState.trackSwarmRefreshConsumer()
+      const seen: boolean[] = []
+      const sub = viewState.swarmReviewEvents.onDidRequestRefresh((e) => {
+        seen.push(e.force)
+        viewState.resolveSwarmReviewsRefresh()
+      })
+      return { seen, dispose: () => (sub.dispose(), consumer.dispose()) }
+    }
+
+    it('requests a soft refresh when the window gains focus', async () => {
+      const t = await setup()
+      const w = watchRefreshRequests(t.viewState)
+      try {
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false])
+      } finally {
+        w.dispose()
+        t.dispose()
+      }
+    })
+
+    it('throttles focus refreshes to at most one per interval', async () => {
+      const t = await setup()
+      const w = watchRefreshRequests(t.viewState)
+      vi.useFakeTimers()
+      try {
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false])
+
+        // A burst of focus events inside the throttle window only refreshes once.
+        window.dispatchEvent(new Event('focus'))
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false])
+
+        // Past the interval, another focus refreshes again.
+        await vi.advanceTimersByTimeAsync(5_000)
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false, false])
+      } finally {
+        vi.useRealTimers()
+        w.dispose()
+        t.dispose()
+      }
+    })
+
+    it('is dropped without error when no view is mounted', async () => {
+      const t = await setup()
+      // No consumer registered: requestSwarmReviewsRefresh resolves immediately.
+      expect(() => window.dispatchEvent(new Event('focus'))).not.toThrow()
+      expect(t.logger.debug).toHaveBeenCalledWith(expect.stringContaining('window focused'))
+      t.dispose()
+    })
+
+    it('stops listening after dispose', async () => {
+      const t = await setup()
+      const w = watchRefreshRequests(t.viewState)
+      vi.useFakeTimers()
+      try {
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false])
+
+        t.dispose()
+
+        // Even past the throttle interval, a focus no longer refreshes.
+        await vi.advanceTimersByTimeAsync(5_000)
+        window.dispatchEvent(new Event('focus'))
+        expect(w.seen).toEqual([false])
+      } finally {
+        vi.useRealTimers()
+        w.dispose()
+      }
+    })
+  })
+
   it('excludes ignored reviews from the notification', async () => {
     const t = await setup({ ignoredIds: ['2'] })
     t.setDashboard([review('1'), review('2')])
