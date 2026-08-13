@@ -25,6 +25,8 @@
  *    --root <发布目录> --port <端口> --base <URL前缀> --gallery-root --auth-dir
  *    --signing-key-file <pem> --signing-key-id <id> --admin-token-file <path> --register-rate-limit <n>
  *    --env-file <path>  显式指定 server.env 位置
+ *    --deploy-user <name>  （仅 Linux install）顺带为该用户写 /etc/sudoers.d/<service>
+ *                          的 deploy 免密规则（cp 三路 + systemctl restart；visudo 校验后才落盘）
  *  install 时签名私钥 / 管理令牌文件不存在会自动生成（私钥 0600 + 打印公钥内置指引）。
  *--------------------------------------------------------------------------------------------*/
 
@@ -36,12 +38,20 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  renameSync,
   rmSync,
   existsSync,
 } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
-import { SERVER_ENV_FILE, buildServerEnv, parseEnvText, serializeServerEnv } from './serverEnv.mjs'
+import {
+  SERVER_ENV_FILE,
+  buildDeploySudoers,
+  buildServerEnv,
+  findAuthDirConflict,
+  parseEnvText,
+  serializeServerEnv,
+} from './serverEnv.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const isWin = process.platform === 'win32'
@@ -75,13 +85,43 @@ function ok(msg) {
   console.log(`\x1b[32m✓ ${msg}\x1b[0m`)
 }
 
+function warn(msg) {
+  console.warn(`\x1b[33m⚠ ${msg}\x1b[0m`)
+}
+
 function info(msg) {
   console.log(`  ${msg}`)
 }
 
-// 跑外部命令，stdio 直通。check=true 时非零退出码即 die。
+// 外部命令输出按系统 ANSI 代码页解码：schtasks/cmd 系工具在中文系统输出 GBK，
+// stdio 直通会把 GBK 字节原样送进 UTF-8 终端（经 ssh 更甚）变成乱码。
+// UTF-8 严格解码先过一遍（ASCII 与之兼容），失败才按 GBK 兜底；small-icu 构建
+// 没有 gbk 表时退回原样字节（排障信息宁缺毋滥，自家消息本来就是 UTF-8）。
+let gbkDecoder = null
+try {
+  gbkDecoder = new TextDecoder('gbk')
+} catch {
+  gbkDecoder = null
+}
+
+export function decodeNativeOutput(buf) {
+  if (!buf || buf.length === 0) return ''
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    /* 非 UTF-8（含 GBK 双字节序列） */
+  }
+  return gbkDecoder ? gbkDecoder.decode(buf) : buf.toString('utf8')
+}
+
+// 跑外部命令：输出捕获后按 ANSI 代码页解码再显示（spawnSync 本就等命令结束，无实时性损失）。
+// check=true 时非零退出码即 die，原始输出已先行展示便于排障。
 function run(cmd, cmdArgs, { check = true, ignoreFail = false } = {}) {
-  const res = spawnSync(cmd, cmdArgs, { stdio: 'inherit', shell: false })
+  const res = spawnSync(cmd, cmdArgs, { shell: false })
+  const stdout = decodeNativeOutput(res.stdout)
+  const stderr = decodeNativeOutput(res.stderr)
+  if (stdout) process.stdout.write(stdout)
+  if (stderr) process.stderr.write(stderr)
   if (res.error) {
     if (ignoreFail) return res
     die(`执行失败: ${cmd} ${cmdArgs.join(' ')}\n  ${res.error.message}`)
@@ -92,11 +132,11 @@ function run(cmd, cmdArgs, { check = true, ignoreFail = false } = {}) {
   return res
 }
 
-// 静默捕获输出（用于探测 node 路径）。
+// 静默捕获输出（用于探测 node 路径）——同样按 ANSI 代码页解码，中文目录下的路径不被替换字符损坏。
 function capture(cmd, cmdArgs) {
-  const res = spawnSync(cmd, cmdArgs, { encoding: 'utf8', shell: false })
+  const res = spawnSync(cmd, cmdArgs, { shell: false })
   if (res.status !== 0) return null
-  return (res.stdout ?? '').trim()
+  return decodeNativeOutput(res.stdout).trim()
 }
 
 function resolveNodePath() {
@@ -172,6 +212,7 @@ export function buildConfig(args) {
 
   return {
     appDir: resolve(appDir),
+    deployUser: typeof args['deploy-user'] === 'string' ? args['deploy-user'] : null,
     envFile,
     env,
     root: env.UE_SERVER_ROOT,
@@ -266,6 +307,19 @@ function deployServer(appDir) {
   return dest
 }
 
+// 下载页 index.html 是发布目录数据（不进 bundle）：首装/重装时随 setup 一并落到 <root>/index.html，
+// 之后的版本同步由 server:deploy 负责。源文件缺失（残包部署）不阻断安装——deploy 下次会补上。
+function deployDownloadPage(root) {
+  const src = join(__dirname, 'download-page', 'index.html')
+  if (!existsSync(src)) {
+    warn(`未找到下载页 ${src}，跳过（下次 server:deploy 会同步到发布根）`)
+    return
+  }
+  const dest = join(root, 'index.html')
+  copyFileSync(src, dest)
+  info(`已写入下载页 ${dest}`)
+}
+
 /*--------------------------------- 服务定义文本 ---------------------------------*/
 
 // 配置全走 EnvironmentFile（server.mjs 认 UE_SERVER_*），ExecStart 不带任何配置旗标——
@@ -323,6 +377,37 @@ function unitPath() {
   return `/etc/systemd/system/${SERVICE_NAME}.service`
 }
 
+// --deploy-user 会原样写进 sudoers 行，换行注入能伪造出第二条合法授权（visudo 也放行），
+// 因此按 Linux 用户名规则严格白名单校验。
+export function isValidDeployUser(name) {
+  return typeof name === 'string' && /^[a-z_][a-z0-9_-]*$/.test(name)
+}
+
+// 首装顺带把 deploy 通道的免密 sudo 规则写好，省得部署前再手动 visudo。
+// 先写同目录 .tmp 文件（sudo 忽略文件名含 . 的项，校验期不落效），visudo 过了再
+// 原子改名——写坏 sudoers 会把 sudo 整个锁死。
+function writeDeploySudoers(cfg) {
+  if (!isValidDeployUser(cfg.deployUser)) {
+    die(`非法 --deploy-user "${cfg.deployUser}"：只允许 Linux 用户名字符 [a-z_][a-z0-9_-]*`)
+  }
+  const dest = `/etc/sudoers.d/${SERVICE_NAME}`
+  const tmp = `${dest}.tmp`
+  // 每次 install 都经 tmp+rename 重写这条规则——老部署只缺 cp 通道时，带着 --deploy-user
+  // 重跑 setup（server:setup 默认下传）即幂等补齐 index.html 通道。
+  writeFileSync(tmp, buildDeploySudoers(cfg.deployUser, cfg.appDir, cfg.root) + '\n', {
+    mode: 0o440,
+  })
+  const check = run('visudo', ['-c', '-f', tmp], { check: false, ignoreFail: true })
+  if (check.status !== 0) {
+    rmSync(tmp, { force: true })
+    warn(`visudo 校验未通过，已跳过写入 ${dest}（server:deploy 的免密 sudo 需按 README 手动配置）`)
+    return
+  }
+  renameSync(tmp, dest)
+  chmodSync(dest, 0o440)
+  ok(`已写入 ${dest}：${cfg.deployUser} 免密执行 deploy 所需的 cp / systemctl restart`)
+}
+
 function installLinux(cfg) {
   if (process.getuid && process.getuid() !== 0) die('请用 sudo 运行（写 systemd unit 需 root）')
 
@@ -331,6 +416,7 @@ function installLinux(cfg) {
   mkdirSync(cfg.root, { recursive: true })
   mkdirSync(cfg.galleryRoot, { recursive: true })
   mkdirSync(cfg.authDir, { recursive: true })
+  deployDownloadPage(cfg.root)
 
   const publicKeyX = ensureSigningKey(cfg)
   const adminToken = ensureAdminToken(cfg)
@@ -359,6 +445,9 @@ function installLinux(cfg) {
   run('systemctl', ['enable', '--now', SERVICE_NAME])
   // enable --now 不重启已在跑的服务，重跑 install 改了配置也要生效。
   run('systemctl', ['restart', SERVICE_NAME], { ignoreFail: true })
+
+  // 不给 --deploy-user 时保持原行为（不碰 sudoers）。
+  if (cfg.deployUser) writeDeploySudoers(cfg)
 
   // 防火墙：ufw 存在才放行，否则跳过。
   if (capture('which', ['ufw'])) {
@@ -401,11 +490,22 @@ function restartLinux() {
 /*--------------------------------- Windows: schtasks ---------------------------------*/
 
 function installWin(cfg) {
+  // 先停旧实例再落文件（重装场景）：覆盖 server.mjs / run.cmd 时旧任务还在跑可能撞
+  // 文件占用，且 cmd 按流式读批文件，旧进程会读到半截新 run.cmd。任务不存在（首装）则跳过。
+  const taskExists =
+    spawnSync('schtasks', ['/Query', '/TN', TASK_NAME], { stdio: 'ignore', shell: false })
+      .status === 0
+  if (taskExists) {
+    run('schtasks', ['/End', '/TN', TASK_NAME], { ignoreFail: true })
+    waitForTaskEnd()
+  }
+
   const nodePath = resolveNodePath()
   const serverPath = deployServer(cfg.appDir)
   mkdirSync(cfg.root, { recursive: true })
   mkdirSync(cfg.galleryRoot, { recursive: true })
   mkdirSync(cfg.authDir, { recursive: true })
+  deployDownloadPage(cfg.root)
 
   const publicKeyX = ensureSigningKey(cfg)
   const adminToken = ensureAdminToken(cfg)
@@ -443,10 +543,7 @@ function installWin(cfg) {
     { ignoreFail: true },
   )
 
-  // 立即启动一次（否则要等下次开机）。旧实例可能还在跑（/Create /F 不停进程），
-  // 先 End 等停再 Run，避免新实例撞端口。
-  run('schtasks', ['/End', '/TN', TASK_NAME], { ignoreFail: true })
-  waitForTaskEnd()
+  // 立即启动一次（否则要等下次开机）。旧实例在进入本函数时已停（见函数开头）。
   run('schtasks', ['/Run', '/TN', TASK_NAME], { ignoreFail: true })
 
   ok(`计划任务 ${TASK_NAME} 已创建并启动，开机自动运行`)
@@ -532,9 +629,23 @@ if (invokedDirectly) {
   console.log('')
 
   switch (action) {
-    case 'install':
+    case 'install': {
+      // 与 server.mjs 启动自检同语义的前置拦截：非法配置当场报错，而不是装完服务
+      // 启动即崩、报错又被 run.cmd 的 >nul 2>&1 吞掉（首装假成功的高发根因）。
+      const conflict = findAuthDirConflict({
+        root: cfg.root,
+        galleryRoot: cfg.galleryRoot,
+        authDir: cfg.authDir,
+      })
+      if (conflict) {
+        die(
+          `auth-dir 不能落在静态服务目录（${conflict}）之内: ${cfg.authDir}\n` +
+            '  把 UE_SERVER_AUTH_DIR 指到静态根之外（例如与签名私钥同目录），重跑 install',
+        )
+      }
       isWin ? installWin(cfg) : installLinux(cfg)
       break
+    }
     case 'uninstall':
       isWin ? uninstallWin(cfg) : uninstallLinux(cfg)
       break

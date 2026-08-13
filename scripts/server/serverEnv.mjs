@@ -15,8 +15,6 @@
  *  parseEnvText 因此在此保留一份最小副本（与 scripts/lib/env.mjs 同语义）。
  *--------------------------------------------------------------------------------------------*/
 
-import { join } from 'node:path'
-
 export const SERVER_ENV_FILE = 'server.env'
 
 // server.mjs 认的运行时配置全集（scripts/server/server.mjs 的 config 块）。deploy 只把这些键
@@ -161,8 +159,35 @@ export function isWindowsPath(p) {
   return typeof p === 'string' && (/^[A-Za-z]:[\\/]/.test(p) || p.includes('\\'))
 }
 
+// authDir 绝不能落在静态根（root / galleryRoot）之内——与 server.mjs 启动自检同语义
+// （前缀比较、大小写敏感）。setup install 在写 server.env 前用它预判：非法配置在首装时
+// 当场报错，而不是等服务启动即崩、又碰巧被 run.cmd 的 >nul 2>&1 吞掉报错。
+// 命中时返回冲突的静态根，未命中返回 null。
+export function findAuthDirConflict({ root, galleryRoot, authDir }) {
+  const sep = isWindowsPath(root) || isWindowsPath(authDir) ? '\\' : '/'
+  for (const staticRoot of [root, galleryRoot]) {
+    const base = staticRoot.replace(/[\\/]+$/, '')
+    if (authDir === base || authDir.startsWith(base + sep)) return staticRoot
+  }
+  return null
+}
+
+// deploy 通道的免密 sudo 白名单（server:deploy 的四条远端 root 操作：cp 三路 + restart）。
+// index.html 落 <UE_SERVER_ROOT>（发布根）而非 <appDir>，所以 serverRoot 是第三个入参。
+// 单一事实源：setup 首装自动写 /etc/sudoers.d/ 与 deploy 的手动配置提示都用它——
+// 规则变化（如新增 server.env / index.html 通道）只改这里，两处不再漂移。
+export function buildDeploySudoers(user, appDir, serverRoot) {
+  return (
+    `${user} ALL=(root) NOPASSWD: /usr/bin/cp /home/${user}/server.js.v* ${appDir}/server.mjs, ` +
+    `/usr/bin/cp /home/${user}/${SERVER_ENV_FILE}.v* ${appDir}/${SERVER_ENV_FILE}, ` +
+    `/usr/bin/cp /home/${user}/index.html.v* ${serverRoot}/index.html, ` +
+    `/usr/bin/systemctl restart universe-update-server`
+  )
+}
+
+// 拼 <appDir>/server.env——目标平台语义，不能用 node:path（deploy 跑在开发机，目标可能是另一 OS）。
 export function serverEnvPath(appDir, { windows = false } = {}) {
   return windows
     ? `${appDir.replace(/\//g, '\\').replace(/[\\]+$/, '')}\\${SERVER_ENV_FILE}`
-    : join(appDir, SERVER_ENV_FILE)
+    : joinPath(appDir, SERVER_ENV_FILE)
 }

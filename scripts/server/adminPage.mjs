@@ -2,11 +2,14 @@
  *  审批管理页（GET <base>gallery/admin）：注册审批制的管理员操作界面。
  *  与 registerPage.mjs 同一形态：完整 HTML 以字符串内嵌，CSS/JS 全部内联、零外部资源——
  *  dist/server.js 是单文件部署形态，不能引入静态目录。
+ *  主题与下载页（download-page/index.html）共用一套深色令牌，见 pageStyles.mjs。
  *
  *  安全约定：所有动态数据插入 DOM 一律走 textContent / input.value，绝不拼 innerHTML。
  *  管理令牌仅存 sessionStorage（关标签即清），页面内存使用；令牌正确性由管理 API 的
  *  401/503 回判（页面自身不做任何校验）。
  *--------------------------------------------------------------------------------------------*/
+
+import { PAGE_BASE_CSS } from './pageStyles.mjs'
 
 export function adminPageHtml(base) {
   return `<!doctype html>
@@ -15,75 +18,38 @@ export function adminPageHtml(base) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>审批管理 · Universe 扩展市场</title>
-<style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px;
-    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: #f5f6f8; color: #1f2328;
-    display: flex; justify-content: center;
-  }
-  .card {
-    width: 100%; max-width: 720px; margin-top: 24px;
-    background: #fff; border: 1px solid #e1e4e8; border-radius: 10px;
-    padding: 28px 32px 32px;
-  }
-  h1 { font-size: 20px; margin: 0 0 12px; }
+<style>${PAGE_BASE_CSS}
+  .card { max-width: 720px; margin-top: 24px; padding: 28px 32px 32px; }
   h2 { font-size: 15px; margin: 26px 0 8px; display: flex; align-items: center; gap: 8px; }
-  .intro { font-size: 13px; line-height: 1.7; color: #57606a; margin: 0 0 16px; }
-  input {
-    display: block; width: 100%; margin-top: 6px; padding: 8px 10px;
-    font-size: 14px; font-family: ui-monospace, Consolas, monospace;
-    border: 1px solid #d0d7de; border-radius: 6px; background: #fff; color: inherit;
-  }
-  input:focus { outline: 2px solid #4c8dff; outline-offset: -1px; }
-  button {
-    padding: 6px 14px; font-size: 13px; font-weight: 600;
-    border: 0; border-radius: 6px; background: #1f6feb; color: #fff; cursor: pointer;
-  }
-  button:hover { background: #1a5fd7; }
-  button.ghost { background: #eaeef2; color: #1f2328; }
-  button.ghost:hover { background: #d0d7de; }
-  button.danger { background: #cf222e; }
-  button.danger:hover { background: #a40e26; }
-  button:disabled { opacity: 0.5; cursor: default; }
+  .intro { font-size: 13px; line-height: 1.7; color: var(--muted); margin: 0 0 16px; }
   .badge {
     display: inline-block; min-width: 20px; padding: 1px 7px; border-radius: 10px;
-    background: #cf222e; color: #fff; font-size: 12px; font-weight: 700; text-align: center;
+    background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; text-align: center;
   }
-  .badge.zero { background: #8b949e; }
+  .badge.zero { background: #6e7681; }
   .row {
     display: flex; align-items: center; gap: 12px; padding: 10px 12px;
-    border: 1px solid #e1e4e8; border-radius: 8px; margin-top: 8px;
+    border: 1px solid var(--border); border-radius: 8px; margin-top: 8px;
   }
-  .row.pending { border-color: #bf8700; background: #fff8e6; }
+  .row.pending { border-color: rgba(210, 153, 34, 0.5); background: rgba(210, 153, 34, 0.1); }
   .meta { flex: 1; min-width: 0; }
   .name { font-weight: 700; font-size: 14px; font-family: ui-monospace, Consolas, monospace; }
-  .detail { font-size: 12px; color: #57606a; margin-top: 2px; word-break: break-all; }
-  .empty { font-size: 13px; color: #8b949e; margin-top: 8px; }
-  .error { color: #cf222e; font-size: 13px; margin: 12px 0 0; }
+  .detail { font-size: 12px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .empty { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .error { color: #ff7b72; font-size: 13px; margin: 12px 0 0; }
   .toolbar { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
   #toast {
     position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
-    padding: 8px 18px; border-radius: 6px; font-size: 13px; font-weight: 600;
-    color: #fff; background: #1a7f37; box-shadow: 0 2px 10px rgba(0,0,0,0.25); z-index: 10;
+    padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    color: #fff; background: #238636; box-shadow: 0 2px 10px rgba(0,0,0,0.4); z-index: 10;
   }
-  #toast.err { background: #cf222e; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #0d1117; color: #e6edf3; }
-    .card { background: #161b22; border-color: #30363d; }
-    input { background: #0d1117; border-color: #30363d; }
-    .row { border-color: #30363d; }
-    .row.pending { border-color: #bf8700; background: #2d2408; }
-    .intro, .detail, .empty { color: #8b949e; }
-    button.ghost { background: #30363d; color: #e6edf3; }
-  }
+  #toast.err { background: var(--danger); }
 </style>
 </head>
 <body>
 <div id="toast" hidden></div>
 <main class="card">
+  <a class="back" href="../">&larr; 返回下载页</a>
   <section id="login-view">
     <h1>审批管理</h1>
     <p class="intro">

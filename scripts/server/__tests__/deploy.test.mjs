@@ -7,6 +7,7 @@ import {
   assessVersions,
   buildConfig,
   buildRemoteInstallCommand,
+  buildServerEnvReadCommand,
   extractLocalVersion,
   extractRemoteVersion,
   isWindowsAppDir,
@@ -88,10 +89,15 @@ test('assessVersions 四分支判定', () => {
 })
 
 test('buildRemoteInstallCommand 顺序为 cp 成功才 restart，最后清理临时文件', () => {
-  const cmd = buildRemoteInstallCommand({ appDir: '/opt/universe-update-server', version: '4' })
+  const cmd = buildRemoteInstallCommand({
+    appDir: '/opt/universe-update-server',
+    serverRoot: '/srv/universe-editor',
+    version: '4',
+  })
   assert.equal(
     cmd,
-    'sudo -n cp ~/server.js.v4 /opt/universe-update-server/server.mjs && ' +
+    'sudo -n cp ~/index.html.v4 /srv/universe-editor/index.html && rm ~/index.html.v4 && ' +
+      'sudo -n cp ~/server.js.v4 /opt/universe-update-server/server.mjs && ' +
       'sudo -n systemctl restart universe-update-server && rm ~/server.js.v4',
   )
 })
@@ -99,16 +105,28 @@ test('buildRemoteInstallCommand 顺序为 cp 成功才 restart，最后清理临
 test('buildRemoteInstallCommand withEnv：配置先于程序落地，各自成功才继续', () => {
   const cmd = buildRemoteInstallCommand({
     appDir: '/opt/universe-update-server',
+    serverRoot: '/srv/universe-editor',
     version: '4',
     withEnv: true,
   })
   assert.equal(
     cmd,
     'sudo -n cp ~/server.env.v4 /opt/universe-update-server/server.env && rm ~/server.env.v4 && ' +
+      'sudo -n cp ~/index.html.v4 /srv/universe-editor/index.html && rm ~/index.html.v4 && ' +
       'sudo -n cp ~/server.js.v4 /opt/universe-update-server/server.mjs && ' +
       'sudo -n systemctl restart universe-update-server && rm ~/server.js.v4',
   )
   assert.ok(cmd.indexOf('server.env.v4') < cmd.indexOf('server.js.v4'))
+})
+
+test('buildRemoteInstallCommand 把 index.html 落到 UE_SERVER_ROOT（发布根），不是 appDir', () => {
+  const cmd = buildRemoteInstallCommand({
+    appDir: '/opt/universe-update-server',
+    serverRoot: '/data/releases',
+    version: '4',
+  })
+  assert.match(cmd, /sudo -n cp ~\/index\.html\.v4 \/data\/releases\/index\.html/)
+  assert.doesNotMatch(cmd, /\/opt\/universe-update-server\/index\.html/)
 })
 
 test('isWindowsAppDir 按盘符/反斜杠识别 Windows 路径', () => {
@@ -122,12 +140,14 @@ test('isWindowsAppDir 按盘符/反斜杠识别 Windows 路径', () => {
 test('buildRemoteInstallCommand Windows 分支：copy 成功才 End+等待+Run，Run 成功才清理', () => {
   const cmd = buildRemoteInstallCommand({
     appDir: 'C:\\universe-editor\\app',
+    serverRoot: 'C:\\universe-editor\\data',
     version: '4',
     windows: true,
   })
   assert.equal(
     cmd,
-    'copy /Y server.js.v4 "C:\\universe-editor\\app\\server.mjs" && ' +
+    'copy /Y index.html.v4 "C:\\universe-editor\\data\\index.html" && del index.html.v4 && ' +
+      'copy /Y server.js.v4 "C:\\universe-editor\\app\\server.mjs" && ' +
       '(schtasks /End /TN UniverseUpdateServer 2>nul & ping -n 3 127.0.0.1 >nul & ' +
       'schtasks /Run /TN UniverseUpdateServer) && del server.js.v4',
   )
@@ -136,15 +156,18 @@ test('buildRemoteInstallCommand Windows 分支：copy 成功才 End+等待+Run�
 test('buildRemoteInstallCommand Windows 分支归一正斜杠与尾部斜杠', () => {
   const cmd = buildRemoteInstallCommand({
     appDir: 'C:/universe-editor/server/',
+    serverRoot: 'C:/universe-editor/data/',
     version: '9',
     windows: true,
   })
   assert.match(cmd, /copy \/Y server\.js\.v9 "C:\\universe-editor\\server\\server\.mjs"/)
+  assert.match(cmd, /copy \/Y index\.html\.v9 "C:\\universe-editor\\data\\index\.html"/)
 })
 
 test('buildRemoteInstallCommand Windows withEnv：server.env 先落地且路径归一', () => {
   const cmd = buildRemoteInstallCommand({
     appDir: 'C:\\universe-editor\\app',
+    serverRoot: 'C:\\universe-editor\\data',
     version: '4',
     windows: true,
     withEnv: true,
@@ -153,11 +176,23 @@ test('buildRemoteInstallCommand Windows withEnv：server.env 先落地且路径�
   assert.ok(cmd.indexOf('server.env.v4') < cmd.indexOf('server.js.v4'))
 })
 
-test('sudoersHint 覆盖 server.js 与 server.env 两条 cp 通道', () => {
-  const hint = sudoersHint('deploy', '/opt/universe-update-server')
+test('buildServerEnvReadCommand：Linux cat、Windows type 且路径归一成反斜杠', () => {
+  assert.equal(
+    buildServerEnvReadCommand({ appDir: '/opt/universe-update-server', windows: false }),
+    'cat /opt/universe-update-server/server.env',
+  )
+  assert.equal(
+    buildServerEnvReadCommand({ appDir: 'C:/universe-editor/app/', windows: true }),
+    'type "C:\\universe-editor\\app\\server.env"',
+  )
+})
+
+test('sudoersHint 覆盖 server.js、server.env 与 index.html 三条 cp 通道', () => {
+  const hint = sudoersHint('deploy', '/opt/universe-update-server', '/srv/universe-editor')
   assert.match(hint, /^deploy ALL=\(root\) NOPASSWD: /)
   assert.match(hint, /\/home\/deploy\/server\.js\.v\*/)
   assert.match(hint, /\/home\/deploy\/server\.env\.v\* \/opt\/universe-update-server\/server\.env/)
+  assert.match(hint, /\/home\/deploy\/index\.html\.v\* \/srv\/universe-editor\/index\.html/)
   assert.match(hint, /\/opt\/universe-update-server\/server\.mjs/)
   assert.match(hint, /systemctl restart universe-update-server/)
 })
@@ -198,6 +233,9 @@ test('dry-run 全链路只打印命令，零副作用且不触发确认', () => 
   assert.match(res.stdout, /\[dry-run\] pnpm server:bundle/)
   assert.match(res.stdout, /\[dry-run\] scp .*server\.js\.v\d+/)
   assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp/)
+  // 下载页随 deploy 同步：上传 staged 文件，安装时落默认发布根 /srv/universe-editor
+  assert.match(res.stdout, /\[dry-run\] scp .*index\.html\.v\d+/)
+  assert.match(res.stdout, /sudo -n cp ~\/index\.html\.v\d+ \/srv\/universe-editor\/index\.html/)
   assert.doesNotMatch(res.stdout, /继续部署\?/)
 })
 
@@ -239,9 +277,12 @@ test('Windows 远端（app-dir 为 Windows 路径）走 schtasks 链路，不再
   ])
   assert.equal(res.status, 0, res.stderr)
   assert.match(res.stdout, /检查远端计划任务/)
+  assert.match(res.stdout, /\[dry-run\] ssh .*echo %comspec%.*探测远端默认 shell/)
   assert.match(res.stdout, /\[dry-run\] ssh .*schtasks \/Query \/TN UniverseUpdateServer/)
   assert.match(res.stdout, /\[dry-run\] scp .*example\.invalid:server\.js\.v\d+/)
   assert.match(res.stdout, /\[dry-run\] ssh .*copy \/Y server\.js\.v\d+/)
+  assert.match(res.stdout, /\[dry-run\] scp .*example\.invalid:index\.html\.v\d+/)
+  assert.match(res.stdout, /copy \/Y index\.html\.v\d+ "C:\\universe-editor\\data\\index\.html"/)
   assert.match(res.stdout, /schtasks \/Run \/TN UniverseUpdateServer/)
   assert.doesNotMatch(res.stdout, /sudo -n/)
 })
@@ -317,4 +358,28 @@ test('--skip-env 保留服务器现有配置，不上传也不安装 server.env'
   assert.match(res.stdout, /保留服务器上现有 server\.env/)
   assert.doesNotMatch(res.stdout, /scp .*server\.env\.v/)
   assert.match(res.stdout, /\[dry-run\] ssh .*sudo -n cp ~\/server\.js/)
+})
+
+test('--skip-env 仍部署 index.html，UE_SERVER_ROOT 从远端 server.env 读取', () => {
+  const res = runDeploy([
+    '--env=prod',
+    '--dry-run',
+    '--skip-env',
+    '--host',
+    'example.invalid',
+    '--user',
+    'deploy',
+    '--app-dir',
+    '/opt/universe-update-server',
+    '--health-url',
+    'http://127.0.0.1:9/',
+  ])
+  assert.equal(res.status, 0, res.stderr)
+  // dry-run 下只打印远端读取命令（真实部署时执行 ssh cat 并解析 UE_SERVER_ROOT）
+  assert.match(res.stdout, /ssh .*"cat \/opt\/universe-update-server\/server\.env".*读远端 server\.env 取 UE_SERVER_ROOT/)
+  // index.html 上传与安装步骤不受 --skip-env 影响，安装目标占位为远端读出的 UE_SERVER_ROOT
+  assert.match(res.stdout, /\[dry-run\] scp .*index\.html\.v\d+/)
+  assert.match(res.stdout, /sudo -n cp ~\/index\.html\.v\d+ <远端 server\.env 的 UE_SERVER_ROOT>\/index\.html/)
+  // server.env 通道仍被跳过
+  assert.doesNotMatch(res.stdout, /scp .*server\.env\.v/)
 })

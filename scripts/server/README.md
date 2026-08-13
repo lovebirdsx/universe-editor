@@ -36,7 +36,9 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。加 `-- --env <mode>` 时按开发机 `.env.<mode>` 一并生成 `dist/server.env`，让首装即带配置。 |
 | `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 远端安装重启（Ubuntu=免密 sudo + systemctl，Windows=schtasks）→ 轮询健康检查断言新版本。按 `--app-dir` 是否为 Windows 路径自动识别远端形态，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
-| `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
+| `setupRemote.mjs` | 远程首装/运维脚本（`pnpm server:setup -- --env prod`）：不登服务器，本地一条命令完成首次安装——打包 → tar+scp 上传 → 远端解包 → 提权首装（Linux 走 `ssh -t` 就地输 sudo 密码，Windows 管理员 ssh 会话自带提升令牌）→ 健康检查；`--action status/restart/uninstall` 直发原生命令做日常运维。详见[第一节方式 B](#方式-b本地一条命令远程首装推荐)。 |
+| `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮；卡片右上角以图标入口链接到注册页与审批管理页（悬停/聚焦显示说明，相对路径 `gallery/register` / `gallery/admin`）。它是发布目录的数据文件（不进 bundle）：首装由 `setup` 落地到 `<root>/index.html`，之后由 `server:deploy` 随 `SERVER_VERSION` 一并同步。 |
+| `pageStyles.mjs` | `registerPage.mjs` / `adminPage.mjs` 共享的深色基础样式（与下载页同一套设计令牌；下载页是静态 HTML 无法 import，令牌在两处各存一份，改主题时两边同步）。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 写 `server.env` / 注册服务 / 自动生成缺失的签名私钥与管理令牌 / 防火墙 / 启停 / 卸载。 |
 | `serverEnv.mjs` | 服务端运行时配置（`UE_SERVER_*`）的单一事实源：白名单、默认值派生、`server.env` 读写。`setup.mjs` 与 `deploy.mjs` 共用。 |
 | `setup.sh` | **Ubuntu 入口**：自检 root → 装 Node（缺则装）→ 调 `setup.mjs`。 |
@@ -46,7 +48,54 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 
 ---
 
-## 一、搭建（在服务器上）
+## 一、搭建
+
+两种搭法二选一：**方式 B（推荐）**不登服务器、本地一条命令远程首装；**方式 A** 手动把目录拷到服务器执行。
+
+### 方式 B：本地一条命令远程首装（推荐）
+
+```bash
+pnpm server:setup -- --env prod    # 生产机
+pnpm server:setup -- --env test    # 测试机
+```
+
+一条命令走完：本地打包（`server:bundle -- --env <mode>`）→ tar 打包（setup 脚本 + `dist/server.js` +
+`dist/server.env`）→ scp 上传 → 远端解包 → **提权执行首装** → 轮询健康检查断言版本（成功后打印
+服务地址；超时非零退出并给出排障指引）。
+连接参数与 `server:deploy` 同一套（`--host/--user/--port/--key` ← `UE_RELEASE_*`，`--app-dir` ←
+`UE_SERVER_APP_DIR`，配置示例见[第六节](#六更新服务器程序改了-servermjs-后)的 `.env.prod` / `.env.test`）；
+远端形态同样按 `--app-dir` 是否为 Windows 路径自动识别。
+
+**提权确认发生在本地控制台**，不需要事先登服务器：
+
+- **Ubuntu**：脚本用 `ssh -t` 分配 TTY，sudo 密码提示直接出现在本地终端，就地输入（也可以直接用
+  root 登录）。首装会顺带把 ssh 用户写进 `/etc/sudoers.d/universe-update-server`（deploy 免密规则，
+  `visudo` 校验通过才落盘）——装完即可直接 `server:deploy`，无需第六节的手动 sudoers 配置。
+- **Windows**：Administrators 组成员的 ssh 会话默认发放提升令牌，无需 UAC。脚本先探测远端 `node`：
+  已装 Node LTS 则直接跑 `setup.mjs`；没装则走 `setup.ps1`（winget 装 Node——**ssh 非交互会话下
+  winget 经常不可用**，失败会提示「请先在服务器装一次 Node LTS」，手动装好后重跑本命令即可）。
+
+**前置条件**：
+
+- ssh 可达目标机；**首次连接**的 host-key 确认提示会出现在本地终端，照提示输入 `yes` 即可。
+- Windows 开发机请用 **PowerShell/cmd** 跑本命令（同 `release:upload`）——Git Bash 会把
+  `--app-dir /opt/...` 这类 POSIX 参数改写成 `C:/Program Files/Git/...`，导致远端平台识别错误。
+- Ubuntu：登录用户可用 sudo（交互输密码），或直接用 root。
+- Windows：远端已装 OpenSSH Server 并自启（安装命令见[第六节](#六更新服务器程序改了-servermjs-后)）、
+  登录用户属 **Administrators** 组、默认 shell 为 cmd.exe（Windows 默认即是；脚本执行前会自动
+  探测，非 cmd 立即报错并给出修复命令）；建议已装 Node LTS。
+- 脚本化场景加 `--yes` 跳过确认；**非 TTY 环境的前置**是 host key 已信任（先手动 ssh 一次）、
+  Linux 侧 sudo 免密或直接用 root。
+
+常用旗标：`--dry-run`（打印全部命令零副作用）、`--yes`、`--force`（远端已在运行时仍重跑首装：
+覆盖程序、`server.env` 与启动器并重启服务；已生成的机密——签名私钥 / 管理令牌——不会覆盖）、
+`--skip-bundle`（复用已有 `dist/server.js`）。
+日常运维的 `--action status/restart/uninstall` 见[第五节](#五运维命令)。
+
+首装生成的签名公钥与管理令牌经 ssh 直接回显在本地终端——公钥必须内置进客户端
+（见下方「让客户端信任签名公钥」），脚本收尾会再提示一次。
+
+### 方式 A：手动拷到服务器执行
 
 先在**仓库内**构建部署产物（publish API 需要解 zip/zod，单文件产物已把这些依赖内联）：
 
@@ -64,7 +113,7 @@ setup 只消费生成好的 `server.env`。加了 `--env` 首装就直接带上�
 
 然后把本目录（`scripts/server/`，**含 `dist/`**）整个拷到服务器任意位置，然后：
 
-### Ubuntu
+Ubuntu：
 
 ```bash
 cd scripts/server
@@ -72,7 +121,7 @@ sudo bash setup.sh                 # 装 Node + 部署 + systemd enable --now
 # 自定义：sudo bash setup.sh install --root /data/ue --port 8080 --base /ue/
 ```
 
-### Windows（以管理员身份打开 PowerShell）
+Windows（以管理员身份打开 PowerShell）：
 
 ```powershell
 cd scripts\server
@@ -97,7 +146,8 @@ cd scripts\server
 | 注册限流（每 IP 每小时，0=关） | `UE_SERVER_REGISTER_RATE_LIMIT` | `10` | `10` |
 
 **`--gallery-root` / `--auth-dir` 等都从 `--root` 派生**，只给 `--root` 时整套跟着走。
-**`--auth-dir` 绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载；server 启动自检命中即拒绝启动）。
+**`--auth-dir` 绝不允许落在 `--root` 或 `--gallery-root` 之内**（publish token 哈希表会被静态服务公开下载）：
+`setup install` 落盘前即校验、命中当场报错，server 启动自检也会拒绝启动。
 
 ### 配置怎么来（重要）
 
@@ -189,7 +239,8 @@ pnpm release:upload --host <IP> --user deploy --dir /srv/universe-editor
 
 客户端下次启动检查（或命令面板 **Check for Updates**）即从 `…/latest.yml` 发现新版本。
 
-`release:upload` 会一并同步**下载页 `index.html`** 与**更新日志 `release-notes.json`**到发布目录：
+`release:upload` 会一并同步**更新日志 `release-notes.json`** 到发布目录；**下载页 `index.html`**
+则由 `server:deploy` 同步（随 `SERVER_VERSION` 走，首装时 `setup` 已落地）：
 浏览器访问 `http://<IP>/universe-editor/`（即 `--base` 路径）即可看到下载页，一键下载最新版。
 
 > **历史版本不要删**：保留旧 `.exe` / `.blockmap`，electron-updater 的差分下载需要它们，也方便回滚。
@@ -206,7 +257,7 @@ pnpm server:serve                  # = node scripts/server/server.mjs --root app
 
 配合未打包的 dev 构建，可走完 检查 → 下载 → 重启安装 全链路。
 
-本地预览提示：pnpm server:serve 默认指向 apps/editor/release/（没有 index.html）。想本地看页面效果，把 scripts/server/download-page/index.html 和 apps/editor/resources/release-notes.json 拷进 release/ 目录再起服务即可（生产由 upload 自动同步，无此问题）。
+本地预览提示：pnpm server:serve 默认指向 apps/editor/release/（没有 index.html）。想本地看页面效果，把 scripts/server/download-page/index.html 和 apps/editor/resources/release-notes.json 拷进 release/ 目录再起服务即可（生产上 index.html 由 server:deploy 同步、release-notes.json 由 release:upload 同步，无此问题）。
 ```bash
 cp scripts/server/download-page/index.html apps/editor/release/
 cp apps/editor/resources/release-notes.json apps/editor/release/
@@ -215,6 +266,19 @@ cp apps/editor/resources/release-notes.json apps/editor/release/
 ---
 
 ## 五、运维命令
+
+### 本地一条命令（不登服务器）
+
+`server:setup` 的 `--action` 直连远端已安装的服务做日常运维（连接参数与首装/deploy 同一套）：
+
+```bash
+pnpm server:setup -- --env prod --action status      # 查看状态
+pnpm server:setup -- --env prod --action restart     # 重启
+pnpm server:setup -- --env prod --action uninstall   # 卸载（删除服务与安装目录，发布目录保留）
+```
+
+Ubuntu 走 `systemctl`（restart/uninstall 经 `ssh -t` 在本地终端就地输 sudo 密码），Windows 走
+`schtasks`；uninstall 顺带清掉首装创建的防火墙规则。
 
 ### Ubuntu
 
@@ -252,8 +316,10 @@ pnpm server:deploy -- --env prod    # 生产机
 pnpm server:deploy -- --env test    # 测试机（预验证）
 ```
 
-一条指令走完：检查远端版本 → 交互确认 → `pnpm server:bundle` 打包 → scp 上传 `dist/server.js`
-**与 `server.env`** → 远端安装并重启服务 → 轮询健康检查断言新版本号。必须显式指定目标环境（`--env prod` /
+一条指令走完：检查远端版本 → 交互确认 → `pnpm server:bundle` 打包 → scp 上传 `dist/server.js`、
+**`server.env` 与下载页 `index.html`** → 远端安装并重启服务（`index.html` 落 `<UE_SERVER_ROOT>/index.html`
+发布根；`--skip-env` 只跳过 `server.env`，下载页仍部署，UE_SERVER_ROOT 改从远端 server.env 读）→
+轮询健康检查断言新版本号。必须显式指定目标环境（`--env prod` /
 `--env test`，或 `UE_ENV`），否则拒绝执行（防误发护栏）；连接参数与服务端运行时配置都从对应 `.env.<mode>` 读取。
 
 远端形态按 **`--app-dir` / `UE_SERVER_APP_DIR` 是否为 Windows 路径**（盘符或反斜杠）自动识别：
@@ -294,19 +360,24 @@ UE_SERVER_ROOT=C:\universe-editor\data
 `--yes`（跳过交互确认）、`--force`（远端版本 >= 本地时强制）、`--skip-bundle`（复用已有 `dist/server.js`）、
 `--skip-env`（不上传 `server.env`）。
 
-**Ubuntu 前置条件：部署用户配免密 sudo**（缺失时脚本会打印精确的 sudoers 配置后退出）。在服务器上执行
+**Ubuntu 前置条件：部署用户配免密 sudo**（缺失时脚本会打印精确的 sudoers 配置后退出）。
+用 `pnpm server:setup -- --env <mode>` 完成首装的机器**已自动写好这条规则**，无需手动配置；
+仅方式 A 手动首装（或没有传 `--deploy-user` 的老安装）需要自己动手。在服务器上执行
 `sudo visudo -f /etc/sudoers.d/universe-update-server`，加入（`deploy` 换成实际用户名）：
 
 ```
-deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, /usr/bin/cp /home/deploy/server.env.v* /opt/universe-update-server/server.env, /usr/bin/systemctl restart universe-update-server
+deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, /usr/bin/cp /home/deploy/server.env.v* /opt/universe-update-server/server.env, /usr/bin/cp /home/deploy/index.html.v* /srv/universe-editor/index.html, /usr/bin/systemctl restart universe-update-server
 ```
 
-> ⚠️ **已有部署需要更新这条规则**：中间的 `server.env` cp 通道是随「配置走 server.env」一起新增的，
-> 老规则只覆盖 `server.js`，不更新会在安装步骤失败。急着发版可先用 `--skip-env` 跳过配置上传。
+> ⚠️ **已有部署需要更新这条规则**：`server.env` 与 `index.html` 两条 cp 通道都是后加的
+> （`index.html` 落 `<UE_SERVER_ROOT>/index.html`，示例按默认发布根 `/srv/universe-editor`，路径按实际配置替换），
+> 老规则没有覆盖会在安装步骤失败——deploy 安装失败时会打印适用于你环境的整行替换文本；
+> 带 `--deploy-user` 重跑 `server:setup` 首装也会自动补齐。`server.env` 通道急着发版可先用
+> `--skip-env` 跳过；`index.html` 通道无开关。
 
 **Windows 前置条件**（部署前脚本会远端 `schtasks /Query` 预检，失败时打印下述清单）：
 
-1. 已按[第一节](#一搭建在服务器上)用 `setup.ps1` 完成首次安装（计划任务 `UniverseUpdateServer` 存在）。
+1. 已按[第一节方式 A](#方式-a手动拷到服务器执行)用 `setup.ps1` 完成首次安装（计划任务 `UniverseUpdateServer` 存在）。
 2. 远端装好 **OpenSSH Server** 并自启（管理员 PowerShell）：
 
    ```powershell
@@ -316,7 +387,9 @@ deploy ALL=(root) NOPASSWD: /usr/bin/cp /home/deploy/server.js.v* /opt/universe-
 
 3. ssh 登录用户属于 **Administrators 组**（Win32-OpenSSH 对管理员默认发放提升令牌，schtasks / 写
    `C:\universe-editor\app` 均需要）。
-4. 远端 OpenSSH 默认 shell 为 **cmd.exe**（Windows 默认即是；若改过 PowerShell 默认 shell，安装命令会解析失败）。
+4. 远端 OpenSSH 默认 shell 为 **cmd.exe**（Windows 默认即是；命令执行前会自动探测，若改过
+   PowerShell 默认 shell，会在首个远端命令前报错并给出修复命令：远端管理员 PowerShell 执行
+   `New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\cmd.exe' -PropertyType String -Force`）。
 
 ### 手动 fallback（无法满足上述前置条件时）
 
@@ -342,7 +415,8 @@ Copy-Item scripts\server\dist\server.js C:\universe-editor\app\server.mjs -Force
 > 没动配置时，上面这套「拷文件 + 重启」最干净，不动 unit、防火墙与目录权限。
 >
 > 若改动**新增了发布目录里的静态资源**（如下载页 `index.html`、`release-notes.json`），重启 server 只是让它
-> 能服务这些文件；文件本身要进发布目录——下次 `release:upload` 会自动同步，想立刻生效可手动 `scp` 一次。
+> 能服务这些文件；文件本身要进发布目录——`index.html` 下次 `server:deploy` 随版本同步（须 bump
+> `SERVER_VERSION`），`release-notes.json` 下次 `release:upload` 同步；想立刻生效均可手动 `scp` 一次。
 
 手动方式完成后用下一节的 `curl` 验证（`server:deploy` 已内置健康检查，无需再验）。
 

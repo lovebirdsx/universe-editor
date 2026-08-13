@@ -6,6 +6,7 @@
     <title>Universe Editor — 下载</title>
     <style>
       :root {
+        color-scheme: dark;
         --bg: #0f1115;
         --card: #171a21;
         --fg: #e7e9ee;
@@ -35,6 +36,7 @@
         color: var(--fg);
       }
       .card {
+        position: relative;
         width: 100%;
         max-width: 560px;
         background: var(--card);
@@ -42,6 +44,80 @@
         border-radius: 16px;
         padding: 40px;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      }
+      .dev-nav {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        display: flex;
+        gap: 6px;
+      }
+      .icon-link {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        color: var(--muted);
+        text-decoration: none;
+        transition:
+          color 0.15s ease,
+          border-color 0.15s ease,
+          background 0.15s ease;
+      }
+      .icon-link:hover,
+      .icon-link:focus-visible {
+        color: var(--fg);
+        background: rgba(255, 255, 255, 0.05);
+        border-color: var(--border);
+        outline: none;
+      }
+      .icon-link svg {
+        width: 17px;
+        height: 17px;
+      }
+      .tip {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        z-index: 10;
+        width: 210px;
+        padding: 10px 12px;
+        text-align: left;
+        background: #1e2330;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(-3px);
+        transition:
+          opacity 0.15s ease,
+          transform 0.15s ease,
+          visibility 0.15s;
+        pointer-events: none;
+      }
+      .icon-link:hover .tip,
+      .icon-link:focus-visible .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      .tip-title {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .tip-desc {
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--muted);
       }
       .brand {
         display: flex;
@@ -153,6 +229,44 @@
   </head>
   <body>
     <main class="card">
+      <nav class="dev-nav" aria-label="开发者入口">
+        <a class="icon-link" href="gallery/register" aria-label="开发者注册">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          <span class="tip" role="tooltip">
+            <span class="tip-title">开发者注册</span>
+            <span class="tip-desc">申请发布权限，获取扩展发布 token</span>
+          </span>
+        </a>
+        <a class="icon-link" href="gallery/admin" aria-label="管理员入口">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span class="tip" role="tooltip">
+            <span class="tip-title">管理员入口</span>
+            <span class="tip-desc">注册审批与发布者管理</span>
+          </span>
+        </a>
+      </nav>
+
       <div class="brand">
         <h1>Universe Editor</h1>
       </div>

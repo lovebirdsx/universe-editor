@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   SERVER_ENV_KEYS,
+  buildDeploySudoers,
   buildServerEnv,
+  findAuthDirConflict,
   isWindowsPath,
   parseEnvText,
   pickServerEnv,
@@ -156,4 +158,71 @@ test('renderServerEnv 文本可被 parseEnvText 还原成 values', () => {
     mode: 'test',
   })
   assert.deepEqual(parseEnvText(text), values)
+})
+
+test('buildDeploySudoers 覆盖 deploy 四条远端 root 操作（cp 三路 + restart）', () => {
+  assert.equal(
+    buildDeploySudoers('deploy', '/opt/universe-update-server', '/srv/universe-editor'),
+    'deploy ALL=(root) NOPASSWD: ' +
+      '/usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, ' +
+      '/usr/bin/cp /home/deploy/server.env.v* /opt/universe-update-server/server.env, ' +
+      '/usr/bin/cp /home/deploy/index.html.v* /srv/universe-editor/index.html, ' +
+      '/usr/bin/systemctl restart universe-update-server',
+  )
+})
+
+test('findAuthDirConflict 与 server.mjs 启动自检同语义（前缀比较、返回冲突根）', () => {
+  assert.equal(
+    findAuthDirConflict({
+      root: 'C:\\universe-editor\\data',
+      galleryRoot: 'C:\\universe-editor\\data\\gallery',
+      authDir: 'C:\\universe-editor\\data\\auth',
+    }),
+    'C:\\universe-editor\\data',
+  )
+  // 落在 galleryRoot（root 之外独立静态根）也算命中
+  assert.equal(
+    findAuthDirConflict({
+      root: '/srv/ue',
+      galleryRoot: '/data/gallery',
+      authDir: '/data/gallery/auth',
+    }),
+    '/data/gallery',
+  )
+  // 与静态根完全相等也命中
+  assert.equal(
+    findAuthDirConflict({ root: '/srv/ue', galleryRoot: '/srv/ue/gallery', authDir: '/srv/ue' }),
+    '/srv/ue',
+  )
+  // 兄弟目录 / 静态根之外不命中
+  assert.equal(
+    findAuthDirConflict({
+      root: 'C:\\universe-editor\\data',
+      galleryRoot: 'C:\\universe-editor\\data\\gallery',
+      authDir: 'C:\\universe-editor\\auth',
+    }),
+    null,
+  )
+  assert.equal(
+    findAuthDirConflict({ root: '/srv/ue', galleryRoot: '/srv/ue/gallery', authDir: '/srv/auth' }),
+    null,
+  )
+  // 前缀必须在路径边界上：database 不是 data 的子路径
+  assert.equal(
+    findAuthDirConflict({
+      root: '/srv/data',
+      galleryRoot: '/srv/data/gallery',
+      authDir: '/srv/database',
+    }),
+    null,
+  )
+  // 静态根带尾斜杠也能正确判定
+  assert.equal(
+    findAuthDirConflict({
+      root: 'C:\\universe-editor\\data\\',
+      galleryRoot: 'C:\\universe-editor\\data\\gallery',
+      authDir: 'C:\\universe-editor\\data\\auth',
+    }),
+    'C:\\universe-editor\\data\\',
+  )
 })

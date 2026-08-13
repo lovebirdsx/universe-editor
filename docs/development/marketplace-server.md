@@ -52,7 +52,7 @@
 
 **不想自己写后端？本仓库自带一套零依赖静态市场服务器**，与[自建更新服务器](../../scripts/server/README.md)是**同一个进程**——它在服务自动更新之外，同时按一份 `registry.json` 生成 `/extensionquery` 响应、静态托管 `.vsix`。你只需维护清单、发布 `.vsix`，无需数据库、无需实现协议。下面「服务器要实现的接口」几节是给想**从零写后端**（或对接 open-vsx）的人看的参考规范；用内置服务器可跳过。
 
-**一次部署，既服务更新又服务市场**：按 [`scripts/server/README.md`](../../scripts/server/README.md) 把服务器搭起来（`setup.sh` / `setup.ps1`，systemd / 计划任务），它就已经带市场路由。
+**一次部署，既服务更新又服务市场**：按 [`scripts/server/README.md`](../../scripts/server/README.md) 把服务器搭起来（`setup.sh` / `setup.ps1`，systemd / 计划任务；或在开发机直接 `pnpm server:setup -- --env prod` 远程首装，不必登服务器），它就已经带市场路由。
 
 **更新根与市场根解耦**。URL 上市场固定挂在 `{base}gallery/` 命名空间下，但它在磁盘的位置由 `--gallery-root` 决定，**默认 `<root>/gallery`**——这样两种部署都自然：
 

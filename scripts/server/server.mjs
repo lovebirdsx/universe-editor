@@ -38,8 +38,10 @@ import { registerPageHtml } from './registerPage.mjs'
 import { adminPageHtml } from './adminPage.mjs'
 
 // 服务器自身版本，手动维护：改了 server.mjs / galleryPublish.mjs 的行为就 +1。
+// 改服务器行为或下载页 UI 都需要 bump（deploy 会随 server.js 一起把 download-page/index.html
+// 同步到发布目录，健康断言依赖此版本对齐）。
 // 启动横幅与健康检查响应都会带上，用来确认服务器上跑的到底是哪版代码。
-const SERVER_VERSION = '4'
+const SERVER_VERSION = '6'
 
 function parseArgs(argv) {
   const out = {}

@@ -1,10 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  publisher 自助注册页（GET <base>gallery/register）：完整 HTML 以字符串内嵌，
  *  CSS/JS 全部内联、零外部资源——dist/server.js 是单文件部署形态，不能引入静态目录。
+ *  主题与下载页（download-page/index.html）共用一套深色令牌，见 pageStyles.mjs。
  *
  *  安全约定：publisher/token 的字符集虽已被服务端约束（正则/base64url），页面层不依赖
  *  该假设——所有动态数据插入 DOM 一律走 textContent / input.value，绝不拼 innerHTML。
  *--------------------------------------------------------------------------------------------*/
+
+import { PAGE_BASE_CSS } from './pageStyles.mjs'
 
 export function registerPageHtml(base) {
   return `<!doctype html>
@@ -13,54 +16,25 @@ export function registerPageHtml(base) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>注册发布者 · Universe 扩展市场</title>
-<style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px;
-    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: #f5f6f8; color: #1f2328;
-    display: flex; justify-content: center;
-  }
-  .card {
-    width: 100%; max-width: 560px; margin-top: 32px;
-    background: #fff; border: 1px solid #e1e4e8; border-radius: 10px;
-    padding: 28px 32px 32px;
-  }
-  h1 { font-size: 20px; margin: 0 0 12px; }
-  .intro { font-size: 13px; line-height: 1.7; color: #57606a; margin: 0 0 20px; }
+<style>${PAGE_BASE_CSS}
+  .card { max-width: 560px; margin-top: 32px; padding: 28px 32px 32px; }
+  .intro { font-size: 13px; line-height: 1.7; color: var(--muted); margin: 0 0 20px; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 0; }
-  input {
-    display: block; width: 100%; margin-top: 6px; padding: 8px 10px;
-    font-size: 14px; font-family: ui-monospace, Consolas, monospace;
-    border: 1px solid #d0d7de; border-radius: 6px; background: #fff; color: inherit;
-  }
-  input:focus { outline: 2px solid #4c8dff; outline-offset: -1px; }
-  .hint { font-weight: 400; color: #57606a; font-size: 12px; }
-  button {
-    margin-top: 18px; padding: 9px 18px; font-size: 14px; font-weight: 600;
-    border: 0; border-radius: 6px; background: #1f6feb; color: #fff; cursor: pointer;
-  }
-  button:hover { background: #1a5fd7; }
-  button.ghost { background: #eaeef2; color: #1f2328; margin-left: 8px; }
-  button.ghost:hover { background: #d0d7de; }
-  .error { color: #cf222e; font-size: 13px; margin: 12px 0 0; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  button { margin-top: 18px; padding: 9px 18px; font-size: 14px; }
+  button.ghost { margin-left: 8px; }
+  .error { color: #ff7b72; font-size: 13px; margin: 12px 0 0; }
   .warn {
-    color: #cf222e; font-weight: 700; font-size: 14px; line-height: 1.6;
-    border: 1px solid #cf222e55; border-radius: 6px; padding: 10px 12px; background: #cf222e11;
+    color: #ff7b72; font-weight: 700; font-size: 14px; line-height: 1.6;
+    border: 1px solid rgba(207, 34, 46, 0.4); border-radius: 8px; padding: 10px 12px;
+    background: rgba(207, 34, 46, 0.08);
   }
-  .ok { color: #1a7f37; font-size: 13px; margin: 10px 0 0; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #0d1117; color: #e6edf3; }
-    .card { background: #161b22; border-color: #30363d; }
-    input { background: #0d1117; border-color: #30363d; }
-    .intro, .hint { color: #8b949e; }
-    button.ghost { background: #30363d; color: #e6edf3; }
-  }
+  .ok { color: var(--ok); font-size: 13px; margin: 10px 0 0; }
 </style>
 </head>
 <body>
 <main class="card">
+  <a class="back" href="../">&larr; 返回下载页</a>
   <h1>注册发布者</h1>
   <p class="intro">
     注册即获得发布 token；<strong>token 即身份</strong>，请妥善保管。
@@ -88,7 +62,7 @@ export function registerPageHtml(base) {
 
   <section id="result" hidden>
     <p class="warn">token 只显示这一次，请立即保存；丢失只能联系运维吊销后重发。</p>
-    <p id="approval-tip" class="ok" style="color:#bf8700">
+    <p id="approval-tip" class="ok" style="color:var(--warn)">
       注册已提交，<strong>待管理员审批</strong>。审批通过前发布会提示 pending；
       可用 uex whoami 随时查询审批状态。
     </p>

@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   buildConfig,
   buildSystemdUnit,
   buildWindowsLauncher,
+  decodeNativeOutput,
+  isValidDeployUser,
   resolveEnvOverrides,
 } from '../setup.mjs'
+import { buildDeploySudoers } from '../serverEnv.mjs'
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distEnv = join(serverDir, 'dist', 'server.env')
@@ -123,17 +127,43 @@ test('buildConfig 路径全部 resolve 成绝对路径（服务运行时 cwd 不
   }
 })
 
-test('buildConfig 只给 root 时机密文件与 authDir 跟着派生', () => {
-  const cfg = buildConfig({ root: '/data/ue' })
-  assert.match(cfg.galleryRoot.replace(/\\/g, '/'), /\/data\/ue\/gallery$/)
-  assert.match(cfg.authDir.replace(/\\/g, '/'), /\/data\/auth$/)
-  assert.match(cfg.signingKeyFile.replace(/\\/g, '/'), /\/data\/auth\/market-key\.pem$/)
-  assert.match(cfg.adminTokenFile.replace(/\\/g, '/'), /\/data\/auth\/admin-token\.txt$/)
-})
+test('buildConfig 只给 root 时机密文件与 authDir 跟着派生', () =>
+  withTempDir((dir) => {
+    // 显式空 env-file 跳过查找链——本机真装过服务时安装目录的 server.env 会经 fallback 命中污染用例
+    const empty = join(dir, 'empty.env')
+    writeFileSync(empty, '')
+    const cfg = buildConfig({ root: '/data/ue', 'env-file': empty })
+    assert.match(cfg.galleryRoot.replace(/\\/g, '/'), /\/data\/ue\/gallery$/)
+    assert.match(cfg.authDir.replace(/\\/g, '/'), /\/data\/auth$/)
+    assert.match(cfg.signingKeyFile.replace(/\\/g, '/'), /\/data\/auth\/market-key\.pem$/)
+    assert.match(cfg.adminTokenFile.replace(/\\/g, '/'), /\/data\/auth\/admin-token\.txt$/)
+  }))
 
 test('buildConfig 布尔旗标（--port 后没跟值）不覆盖配置', () => {
   const cfg = buildConfig({ port: true })
   assert.equal(cfg.port, '80')
+})
+
+test('buildConfig --deploy-user：字符串生效，未传或布尔占位为 null（跳过 sudoers 写入）', () => {
+  assert.equal(buildConfig({ 'deploy-user': 'deploy' }).deployUser, 'deploy')
+  assert.equal(buildConfig({}).deployUser, null)
+  assert.equal(buildConfig({ 'deploy-user': true }).deployUser, null)
+})
+
+test('buildDeploySudoers 的 index.html 通道随 UE_SERVER_ROOT 派生（setup --deploy-user 写 sudoers 的契约）', () => {
+  const rule = buildDeploySudoers('deploy', '/opt/app', '/srv/releases')
+  assert.match(rule, /\/home\/deploy\/index\.html\.v\* \/srv\/releases\/index\.html/)
+  const other = buildDeploySudoers('deploy', '/opt/app', '/data/releases')
+  assert.match(other, /\/home\/deploy\/index\.html\.v\* \/data\/releases\/index\.html/)
+})
+
+test('isValidDeployUser 按 Linux 用户名规则严格白名单（防 sudoers 换行注入）', () => {
+  for (const ok of ['deploy', 'root', '_svc', 'svc-01', 'a']) {
+    assert.equal(isValidDeployUser(ok), true, ok)
+  }
+  for (const bad of ['', 'Deploy', '0abc', 'a b', 'bad.name', 'deploy\nroot ALL=(ALL) ALL', null]) {
+    assert.equal(isValidDeployUser(bad), false, String(bad))
+  }
 })
 
 test('buildConfig 机密文件不再是可选项——总有默认路径，供 install 自动生成', () => {
@@ -171,3 +201,29 @@ test('buildWindowsLauncher 先加载 server.env 再起 node，输出重定向保
   assert.match(launcher, />nul 2>&1/)
   assert.equal(launcher.includes('\n\n'), false)
 })
+
+test('decodeNativeOutput：GBK 字节按中文系统 ANSI 代码页解码，UTF-8/ASCII 原样通过', () => {
+  // 「成功」的 GBK 编码——schtasks 在中文系统上的典型输出
+  assert.equal(decodeNativeOutput(Buffer.from([0xb3, 0xc9, 0xb9, 0xa6])), '成功')
+  assert.equal(decodeNativeOutput(Buffer.from('plain ascii\n', 'utf8')), 'plain ascii\n')
+  assert.equal(decodeNativeOutput(Buffer.from('已是UTF-8文本\n', 'utf8')), '已是UTF-8文本\n')
+  assert.equal(decodeNativeOutput(null), '')
+  assert.equal(decodeNativeOutput(Buffer.alloc(0)), '')
+})
+
+const setupScript = resolve(serverDir, 'setup.mjs')
+
+test('install：auth-dir 落在静态根之内时当场拒绝，且拒绝发生在任何副作用之前', () =>
+  withTempDir((dir) => {
+    const envFile = join(dir, 'server.env')
+    writeFileSync(envFile, `UE_SERVER_ROOT=${dir}\nUE_SERVER_AUTH_DIR=${join(dir, 'auth')}\n`)
+    const res = spawnSync(
+      process.execPath,
+      [setupScript, 'install', '--env-file', envFile, '--app-dir', join(dir, 'app')],
+      { encoding: 'utf8' },
+    )
+    assert.equal(res.status, 1, res.stderr)
+    assert.match(res.stderr, /auth-dir 不能落在静态服务目录/)
+    // die 在 installWin/installLinux 之前：安装目录不应被创建
+    assert.equal(existsSync(join(dir, 'app')), false)
+  }))

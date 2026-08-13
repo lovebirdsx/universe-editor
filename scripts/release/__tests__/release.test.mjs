@@ -4,6 +4,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   buildReport,
   bumpVersion,
@@ -13,6 +16,16 @@ import {
   readLatestYmlVersion,
   shouldUseShell,
 } from '../release.mjs'
+
+const releaseDir = dirname(fileURLToPath(import.meta.url))
+
+test('upload.mjs 同步清单不再包含下载页 index.html（已改由 server:deploy 同步）', () => {
+  // upload.mjs 是带顶层副作用的执行脚本（不可 import），用源文本断言同步清单的构成。
+  const src = readFileSync(resolve(releaseDir, '..', 'upload.mjs'), 'utf8')
+  // 正向对照：release-notes.json 仍由 upload 同步，确保读到的是上传清单那段。
+  assert.match(src, /release-notes\.json/)
+  assert.doesNotMatch(src, /download-page/)
+})
 
 test('parseArgs reads release mode and upload options', () => {
   assert.deepEqual(

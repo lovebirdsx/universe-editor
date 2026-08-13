@@ -82,7 +82,8 @@ const isWindowsTarget =
   (config.remoteOs !== 'linux' && (/^[A-Za-z]:[\\/]/.test(config.dir) || config.dir.includes('\\')))
 
 // 收集要上传的文件。autoUpdater 清单 latest.yml 必须等安装包落地后再覆盖，故排最后。
-// 下载页 index.html 与更新日志 release-notes.json 不在 release/ 下，用各自的源路径一并同步。
+// 更新日志 release-notes.json 不在 release/ 下，用源路径一并同步；
+// 下载页 index.html 已改由 server:deploy 随服务器版本同步（首装由 setup 落地），不在此同步。
 const entries = readdirSync(releaseDir)
 const payloads = entries.filter((f) => f.endsWith('.exe') || f.endsWith('.blockmap'))
 const manifests = entries.filter((f) => f === 'latest.yml')
@@ -91,14 +92,10 @@ if (manifests.length === 0)
   die('release/ 下没有 latest.yml；确认 electron-builder.yml 已配 publish 且打包成功')
 if (payloads.length === 0) die('release/ 下没有 .exe / .blockmap 产物')
 
-const downloadPage = join(repoRoot, 'scripts', 'server', 'download-page', 'index.html')
 const releaseNotes = join(repoRoot, 'apps', 'editor', 'resources', 'release-notes.json')
 
-// 上传清单（{ label 仅用于日志, src 本地源路径 }），顺序即上传顺序：
-// 先 payload，再静态下载页，最后清单类（latest.yml + release-notes.json）。
+// 上传清单（{ label 仅用于日志, src 本地源路径 }），顺序即上传顺序：先 payload，最后清单类。
 const uploads = payloads.map((f) => ({ label: f, src: join(releaseDir, f) }))
-if (existsSync(downloadPage)) uploads.push({ label: 'index.html', src: downloadPage })
-else warn(`找不到下载页 ${downloadPage}，跳过同步`)
 uploads.push(...manifests.map((f) => ({ label: f, src: join(releaseDir, f) })))
 if (existsSync(releaseNotes)) uploads.push({ label: 'release-notes.json', src: releaseNotes })
 else warn(`找不到 ${releaseNotes}，跳过同步（下载页将不展示更新日志）`)
