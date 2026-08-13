@@ -238,6 +238,102 @@ describe('ProxyChannel cancellation', () => {
     client.dispose()
     server.dispose()
   })
+})
+
+describe('Trailing optional undefined over the wire', () => {
+  it('strips trailing undefined so the remote sees undefined, never a fabricated null', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    const received: unknown[][] = []
+    const service = {
+      pull: (...args: unknown[]): Promise<void> => {
+        received.push(args)
+        return Promise.resolve()
+      },
+    }
+    server.registerChannel('tree', ProxyChannel.fromService(service))
+    const proxy = ProxyChannel.toService<{
+      pull(viewId: string, handle?: number): Promise<void>
+    }>(client.getChannel('tree'))
+
+    await proxy.pull('view')
+    // An omitted optional trailing parameter stays omitted across the wire.
+    expect(received[0]).toHaveLength(1)
+
+    // An explicit undefined used to serialize into a trailing null
+    // (JSON.stringify turns array-held undefined into null), lying to the
+    // remote's `param === undefined` check. It round-trips as "not provided".
+    await proxy.pull('view', undefined)
+    expect(received[1]).toHaveLength(1)
+
+    await proxy.pull('view', 7)
+    expect(received[2]).toEqual(['view', 7])
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('keeps a semantic null intact and the null convention for non-trailing slots', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    const received: unknown[][] = []
+    const service = {
+      run: (...args: unknown[]): Promise<void> => {
+        received.push(args)
+        return Promise.resolve()
+      },
+    }
+    server.registerChannel('find', ProxyChannel.fromService(service))
+    const proxy = ProxyChannel.toService<{
+      run(a: string, b: number | null, c: boolean): Promise<void>
+    }>(client.getChannel('find'))
+
+    // `$findFiles`-style semantic null (e.g. "no cap") must cross untouched.
+    await proxy.run('pattern', null, true)
+    expect(received[0]).toEqual(['pattern', null, true])
+
+    // An undefined sandwiched between real arguments still follows plain JSON
+    // array semantics and arrives as null — receivers of non-trailing optional
+    // parameters keep judging with `== null`.
+    await proxy.run('pattern', undefined as unknown as number, true)
+    expect(received[1]).toEqual(['pattern', null, true])
+
+    client.dispose()
+    server.dispose()
+  })
+
+  it('strips trailing undefined before the server appends the lifted CancellationToken', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    const received: unknown[][] = []
+    const service = {
+      work: (...args: unknown[]): Promise<void> => {
+        received.push(args)
+        return Promise.resolve()
+      },
+    }
+    server.registerChannel('job', ProxyChannel.fromService(service))
+    const proxy = ProxyChannel.toService<{
+      work(label: string, kind?: number, token?: CancellationToken): Promise<void>
+    }>(client.getChannel('job'))
+
+    const cts = new CancellationTokenSource()
+    await proxy.work('job', undefined, cts.token)
+    cts.dispose()
+    // The remote gets ['job', <token>], not ['job', null, <token>].
+    expect(received[0]).toHaveLength(2)
+    expect(received[0]?.[0]).toBe('job')
+    expect(CancellationToken.isCancellationToken(received[0]?.[1])).toBe(true)
+
+    client.dispose()
+    server.dispose()
+  })
 
   it('methods called without a token keep their exact argument shape', async () => {
     const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()

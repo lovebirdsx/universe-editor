@@ -5,6 +5,7 @@
  * out of extensionService.ts so the service can stay a thin facade.
  */
 import {
+  type Command,
   type DecorationRenderOptions,
   type OutputChannel,
   type Range,
@@ -17,6 +18,7 @@ import {
   type TextEditorEdit,
 } from '@universe-editor/extension-api'
 import {
+  type ICommandDto,
   type IDecorationRangeDto,
   type IDecorationRenderOptionsDto,
   type IMainThreadEditor,
@@ -26,6 +28,33 @@ import {
   type ITextEditDto,
   type OverviewRulerLaneDto,
 } from '@universe-editor/extensions-common'
+
+/** Optional `Command` fields a consumer elects to put on the wire. */
+export type CommandWireField = 'disabled' | 'icon' | 'arguments'
+
+/**
+ * Extension `Command` → wire `ICommandDto`. Only the display surface plus the
+ * `fields` the consumer's renderer actually executes with cross: SCM rows pass
+ * everything (explicit `arguments` win over the resource row itself) and
+ * timeline rows pass `arguments` (the view spreads them into the command
+ * call). Tree rows pass neither `icon` nor `arguments` — a row click re-runs
+ * the command host-side from the registry's commandByHandle table, so live
+ * objects (Uri instances, custom payloads) never ride the wire.
+ */
+export function toCommandDto(cmd: Command, fields: readonly CommandWireField[]): ICommandDto {
+  return {
+    command: cmd.command,
+    title: cmd.title,
+    ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
+    ...(fields.includes('disabled') && cmd.disabled !== undefined
+      ? { disabled: cmd.disabled }
+      : {}),
+    ...(fields.includes('icon') && cmd.icon !== undefined ? { icon: cmd.icon } : {}),
+    ...(fields.includes('arguments') && cmd.arguments !== undefined
+      ? { arguments: cmd.arguments }
+      : {}),
+  }
+}
 
 export function toSelectionDto(sel: Selection): ISelectionDto {
   return { anchor: sel.anchor, active: sel.active }

@@ -11,22 +11,28 @@
  *  extension can simply recreate it on next activation).
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, type URI } from '@universe-editor/platform'
+import { EditorInput, URI } from '@universe-editor/platform'
+
+/** Identity URI for an extension-owned panel (focus registry key + model resource). */
+export function hostPanelResource(panelHandle: number): URI {
+  return URI.from({ scheme: 'webview-panel', path: `/${panelHandle}` })
+}
 
 export class WebviewPanelInput extends EditorInput {
   static readonly TYPE_ID = 'webviewPanel'
 
   private _title: string
+  /** Synthetic identity URI shared with the panel model, for focus routing. */
+  private readonly _focusResource: URI
 
   constructor(
     readonly panelHandle: number,
     private readonly _viewType: string,
     title: string,
-    /** Synthetic identity URI shared with the panel model, for focus routing. */
-    private readonly _focusResource: URI,
   ) {
     super()
     this._title = title
+    this._focusResource = hostPanelResource(panelHandle)
   }
 
   get viewType(): string {

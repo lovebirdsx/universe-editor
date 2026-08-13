@@ -105,14 +105,17 @@ export interface WebviewPanel {
   readonly diffContext?: WebviewDiffContext
   /** The panel's current title (its editor tab label). Assign to rename the tab. */
   title: string
-  /** Whether the panel's editor tab is the active one in its group. */
+  /**
+   * Whether the panel's editor tab is the active (selected) tab of the focused
+   * editor group.
+   */
   readonly active: boolean
-  /** Whether the panel's editor tab is currently visible. */
+  /** Whether the panel's editor tab is the selected tab of its editor group. */
   readonly visible: boolean
   /**
-   * Fires when {@link active} / {@link visible} change (tab revealed, hidden, or
-   * its view unmounted). For custom-editor panels the state stays `true` (the
-   * workbench owns their tab); only `createWebviewPanel` panels get live updates.
+   * Fires when {@link active} / {@link visible} change — the tab is switched
+   * away or back, or its editor group gains/loses focus. Applies to custom
+   * editor panels too, so rendering work can be paused while hidden.
    */
   readonly onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>
   /**

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { URI } from '@universe-editor/platform'
+import { CancellationError, URI } from '@universe-editor/platform'
 import {
   CancellationTokenSource as ApiCancellationTokenSource,
   RelativePattern,
@@ -506,10 +506,11 @@ describe('ExtensionService active editor mirror', () => {
 })
 
 /**
- * Visible-editors mirror: the renderer pushes the whole per-group set; the
- * getter serves the cached snapshots synchronously, and the event waits for any
- * not-yet-mirrored document (first-activation race, same as the active editor),
- * superseded by a newer push.
+ * Visible-editors mirror: the renderer pushes the whole per-group set. The
+ * getter always reflects the mirrored members of the latest push; the event
+ * waits out a short grace for cold (not-yet-mirrored) documents so a layout
+ * change normally reports the complete set, then reports the best-known subset
+ * rather than stalling — a mirror landing later merges in and fires a follow-up.
  */
 describe('ExtensionService visible editors mirror', () => {
   const noopEditor: IMainThreadEditor = {
@@ -601,6 +602,92 @@ describe('ExtensionService visible editors mirror', () => {
     expect(fired).toHaveLength(1)
     expect(fired[0]?.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt'])
     expect(service.visibleTextEditors).toHaveLength(1)
+  })
+
+  it('reports a layout change within a grace window instead of waiting for a cold mirror', () => {
+    vi.useFakeTimers()
+    try {
+      const service = editorService()
+      service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+      const fired: (readonly TextEditor[])[] = []
+      service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+      service.acceptVisibleEditorsChange([snap(uriA)])
+      expect(fired).toHaveLength(1)
+
+      // Tab switch to a cold document whose mirror never lands: the layout
+      // change must reach extensions within a short grace, not a 15s wait.
+      service.acceptVisibleEditorsChange([snap(uriB)])
+      expect(service.visibleTextEditors).toHaveLength(0)
+      expect(fired).toHaveLength(1)
+
+      vi.advanceTimersByTime(1_000)
+      expect(fired).toHaveLength(2)
+      expect(fired[1]).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('merges a late-mirrored document into the latest set after a push race', () => {
+    vi.useFakeTimers()
+    try {
+      const service = editorService()
+      service.acceptDocumentOpen(uriB, 'plaintext', 1, 'bbb')
+      const fired: (readonly TextEditor[])[] = []
+      service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+
+      service.acceptVisibleEditorsChange([snap(uriA)]) // A's mirror is still cold…
+      service.acceptVisibleEditorsChange([snap(uriA), snap(uriB)]) // …and a race push arrives
+      vi.advanceTimersByTime(1_000)
+      // Grace elapsed: the best-known subset is reported; A is not yet a member.
+      expect(fired.map((set) => set.map((e) => e.document.uri.path))).toEqual([['/ws/b.txt']])
+
+      vi.advanceTimersByTime(20_000) // well past the old 15s whole-batch drop window
+      service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+      expect(service.visibleTextEditors.map((e) => e.document.uri.path)).toEqual([
+        '/ws/a.txt',
+        '/ws/b.txt',
+      ])
+      expect(fired).toHaveLength(2)
+      expect(fired[1]?.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt', '/ws/b.txt'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the getter honest inside the cold-mirror window and converges on didOpen', () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    const fired: (readonly TextEditor[])[] = []
+    service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+    service.acceptVisibleEditorsChange([snap(uriA)])
+    service.acceptVisibleEditorsChange([snap(uriB)])
+    // The cold-mirror window: the getter serves only the mirrored members of the
+    // latest push — never the stale set B already left.
+    expect(service.visibleTextEditors).toHaveLength(0)
+    service.acceptDocumentOpen(uriB, 'plaintext', 1, 'bbb')
+    expect(service.visibleTextEditors.map((e) => e.document.uri.path)).toEqual(['/ws/b.txt'])
+    expect(fired.at(-1)?.map((e) => e.document.uri.path)).toEqual(['/ws/b.txt'])
+  })
+
+  it('fires once when every straggler lands inside the grace window', () => {
+    const service = editorService()
+    const fired: (readonly TextEditor[])[] = []
+    service.onDidChangeVisibleTextEditors((editors) => fired.push(editors))
+    service.acceptVisibleEditorsChange([snap(uriA), snap(uriB)])
+    service.acceptDocumentOpen(uriB, 'plaintext', 1, 'bbb') // partial: stays silent
+    expect(fired).toHaveLength(0)
+    expect(service.visibleTextEditors.map((e) => e.document.uri.path)).toEqual(['/ws/b.txt'])
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa') // complete → one event
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.map((e) => e.document.uri.path)).toEqual(['/ws/a.txt', '/ws/b.txt'])
+  })
+
+  it('lists the same document once per group showing it (split on the same file)', () => {
+    const service = editorService()
+    service.acceptDocumentOpen(uriA, 'plaintext', 1, 'aaa')
+    service.acceptVisibleEditorsChange([snap(uriA), snap(uriA)])
+    expect(service.visibleTextEditors).toHaveLength(2)
   })
 })
 
@@ -874,7 +961,7 @@ describe('ExtensionService window additions', () => {
     service.acceptDocumentOpen(docComponents, 'markdown', 1, 'x')
     const fired: TextEditorSelectionChangeEvent[] = []
     service.onDidChangeTextEditorSelection((e) => fired.push(e))
-    // `kind` crosses the JSON wire as null when undefined.
+    // Feed a null `kind` to lock the defensive normalization to undefined.
     service.acceptSelectionChange(
       docComponents,
       [{ anchor: { line: 1, character: 2 }, active: { line: 1, character: 2 } }],
@@ -1072,14 +1159,14 @@ describe('ExtensionService workspace additions', () => {
       $rename: () => Promise.resolve(),
       $copy: () => Promise.resolve(),
       // Mirror the RPC boundary: once the token fires, the channel rejects the
-      // pending call with a cancellation-style error.
+      // pending call with a CancellationError.
       $findFiles: (...args: unknown[]) => {
         tokenSeenByRenderer = args[3] as { isCancellationRequested: boolean }
         return new Promise((_resolve, reject) => {
           const token = args[3] as {
             onCancellationRequested: (listener: () => void) => void
           }
-          token.onCancellationRequested(() => reject(new Error('canceled')))
+          token.onCancellationRequested(() => reject(new CancellationError()))
         })
       },
     }
@@ -1097,6 +1184,108 @@ describe('ExtensionService workspace additions', () => {
     cts.cancel()
     await expect(pending).resolves.toEqual([])
     expect(tokenSeenByRenderer?.isCancellationRequested).toBe(true)
+  })
+
+  it('findFiles warns (but still resolves []) when a real error races the cancellation', async () => {
+    const mt = recordingMainThread()
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fs: IMainThreadFs = {
+        $readFile: () => Promise.resolve(''),
+        $writeFile: () => Promise.resolve(),
+        $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+        $readDirectory: () => Promise.resolve([]),
+        $createDirectory: () => Promise.resolve(),
+        $delete: () => Promise.resolve(),
+        $rename: () => Promise.resolve(),
+        $copy: () => Promise.resolve(),
+        // The renderer's path policy rejected the include root at the very
+        // moment the token fired — it must not be mistaken for the cancel path.
+        $findFiles: () => Promise.reject(new Error('access outside the workspace is denied')),
+      }
+      const service = new ExtensionService(
+        [scanned(['*'])],
+        mt.impl,
+        noopWindow,
+        noopScm,
+        noopTimeline,
+        '/ws',
+        fs,
+      )
+      const cts = new ApiCancellationTokenSource()
+      cts.cancel()
+      await expect(service.findFiles('**/*.ts', undefined, undefined, cts.token)).resolves.toEqual(
+        [],
+      )
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining('access outside the workspace is denied'),
+      )
+    } finally {
+      consoleWarn.mockRestore()
+    }
+  })
+
+  it('findFiles does not warn when the cancelled request rejects with a cancellation', async () => {
+    const mt = recordingMainThread()
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fs: IMainThreadFs = {
+        $readFile: () => Promise.resolve(''),
+        $writeFile: () => Promise.resolve(),
+        $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+        $readDirectory: () => Promise.resolve([]),
+        $createDirectory: () => Promise.resolve(),
+        $delete: () => Promise.resolve(),
+        $rename: () => Promise.resolve(),
+        $copy: () => Promise.resolve(),
+        $findFiles: () => Promise.reject(new CancellationError()),
+      }
+      const service = new ExtensionService(
+        [scanned(['*'])],
+        mt.impl,
+        noopWindow,
+        noopScm,
+        noopTimeline,
+        '/ws',
+        fs,
+      )
+      const cts = new ApiCancellationTokenSource()
+      cts.cancel()
+      await expect(service.findFiles('**/*.ts', undefined, undefined, cts.token)).resolves.toEqual(
+        [],
+      )
+      expect(consoleWarn).not.toHaveBeenCalled()
+    } finally {
+      consoleWarn.mockRestore()
+    }
+  })
+
+  it('findFiles rethrows a real error when the token was not cancelled', async () => {
+    const mt = recordingMainThread()
+    const fs: IMainThreadFs = {
+      $readFile: () => Promise.resolve(''),
+      $writeFile: () => Promise.resolve(),
+      $stat: () => Promise.resolve({ type: 'file', size: 0, mtime: 0 }),
+      $readDirectory: () => Promise.resolve([]),
+      $createDirectory: () => Promise.resolve(),
+      $delete: () => Promise.resolve(),
+      $rename: () => Promise.resolve(),
+      $copy: () => Promise.resolve(),
+      $findFiles: () => Promise.reject(new Error('rg exploded')),
+    }
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      fs,
+    )
+    const cts = new ApiCancellationTokenSource()
+    await expect(service.findFiles('**/*.ts', undefined, undefined, cts.token)).rejects.toThrow(
+      'rg exploded',
+    )
   })
 
   it('fs.rename/fs.copy forward the overwrite flag', async () => {

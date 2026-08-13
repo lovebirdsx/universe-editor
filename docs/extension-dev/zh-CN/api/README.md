@@ -56,7 +56,7 @@ export function activate(context: ExtensionContext) {
 - **`showOpenDialog` / `showSaveDialog`**：工作台的打开/保存对话框，返回 `Uri`（取消时 `undefined`）。`showOpenDialog` 的 `canSelectMany`（多选返回 `Uri[]`）与 `filters`（按扩展名过滤）均生效；`showSaveDialog` 的 `filters` 仍不支持。
 - **`createOutputChannel`**：输出面板里的专属通道，写日志用。
 - **`getActiveTextEditor` / `onDidChangeActiveTextEditor`**：当前聚焦的文本编辑器及其变化事件。拿到的是**快照**（`document` / `selections` 反映取到那一刻的状态），外部变更后应重新获取，不要长期持有；`edit` / `setSelections` / `setDecorations` 驱动的是实时编辑器。
-- **`visibleTextEditors` / `onDidChangeVisibleTextEditors`**：各编辑器组当前可见的文本编辑器（每组一项，快照语义，集合按 URI 身份去重）；集合增删时触发事件——`version` / `selection` 变化与编辑器内部编辑不触发。
+- **`visibleTextEditors` / `onDidChangeVisibleTextEditors`**：各编辑器组当前可见的文本编辑器（每组一项，快照语义，集合按 URI 身份去重）；集合增删时触发事件——`version` / `selection` 变化与编辑器内部编辑不触发。冷文档（触发语言首次激活的文件）的镜像晚于集合推送：事件等约 0.5 秒宽限期尽量上报完整集合，超时先报已镜像成员、镜像落地后并入再报；宽限期内 getter 只含已镜像成员（短暂缺员窗口），镜像落地即收敛。
 - **`showTextDocument`**：把文档在文本编辑器里打开并返回其快照；`TextDocumentShowOptions` 支持 `preserveFocus`（不抢焦点）、`preview`（进预览槽）、`selection`（打开后选中并 reveal 该 range）。
 - **`onDidChangeTextEditorSelection`**：活动编辑器选区变化事件（防抖：一波输入只投递最新选区一次；后台编辑器的变化不触发；程序化 `setSelections` 时 `kind` 为 `undefined`）。
 - **`createTextEditorDecorationType`**：创建可复用的装饰样式（行背景、gutter 图标、概览标尺色条等），配合 `TextEditor.setDecorations` 给一组 range 上色。
@@ -90,7 +90,7 @@ output.appendLine('extension started')
 - **`asRelativePath(pathOrUri, includeWorkspaceFolder?)`**：工作区内的路径转成根相对形式（正斜杠、保留输入大小写）；工作区外的路径原样返回。包含性比较按 OS 大小写策略（Windows 不敏感）。
 - **`isTrusted` / `onDidGrantWorkspaceTrust`**：Workspace Trust 状态。激活时固定；用户在未信任的工作区里授予信任时触发该事件（信任不会原地撤销——撤销时宿主直接重启，故无对应事件）。会执行工作区提供的代码的扩展，应用它做门控。
 - **`fs`**：**受限文件系统**，8 个方法——`readFile` / `writeFile` / `stat` / `readDirectory` / `createDirectory` / `delete` / `rename` / `copy`（后两者在目标已存在且未设 `overwrite` 时 reject）。每次调用先过宿主的路径策略（拒绝敏感位置、禁止逃逸出工作区根）才落盘，这是外部扩展唯一能用的文件系统。
-- **`findFiles(include, exclude?, maxResults?, token?)`**：按 glob 在工作区里找文件，返回 `Uri[]`（glob 匹配工作区相对路径；不含 `/` 的模式匹配任意深度的 basename）。`include` 支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；`exclude` 省略时用配置的排除项、传 `null` 完全不排除。`token` 为真取消——中止底层枚举，取消后以空列表 resolve；结果超过 10 万条时截断并记日志（带命中数量）。
+- **`findFiles(include, exclude?, maxResults?, token?)`**：按 glob 在工作区里找文件，返回 `Uri[]`（glob 匹配工作区相对路径；不含 `/` 的模式匹配任意深度的 basename）。`include` 支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；`exclude` 同样支持 string 与 `RelativePattern`（排除范围限定在自己的 base 之下），省略时用配置的排除项、传 `null` 完全不排除。排除项在枚举期即由搜索引擎按目录剪枝——命中目录的 glob 整棵子树不遍历，被排除的条目不占用枚举额度。`token` 为真取消——中止底层枚举，取消后以空列表 resolve；结果超过 10 万条时截断并记日志（带命中数量）。
 - **`createFileSystemWatcher(globPattern, ignoreCreate/Change/DeleteEvents?)`**：监听文件变化，`onDidCreate` / `onDidChange` / `onDidDelete` 三个事件携带 `Uri`。`globPattern` 支持 string 与 `RelativePattern`；`RelativePattern` 的 base 或绝对 glob 落在**工作区外**时自动 arm 递归监听（同 base 的 watcher 共享，`dispose` 即释放）。工作区外监听有两个限制：Linux 下无效（`fs.watch` recursive 限制）；事件只触发 `onDidChange`（不区分 create/delete）。
 - **`textDocuments`** 与 `onDidOpenTextDocument` / `onDidChangeTextDocument` / `onDidCloseTextDocument`：当前打开的文档（从渲染进程镜像）及其打开/增量变更/关闭事件。变更事件携带 LSP 语义的增量编辑（0-based）。
 - **`openTextDocument(target)`**：按 `Uri` 或路径把文档读进编辑器文档模型（不显示；已打开的复用不重读磁盘）。返回的文档与编辑器共用实时镜像——跟踪后续编辑、到达时触发 `onDidOpenTextDocument`。也支持 `{ language?, content? }` 重载与无参形态创建 untitled 文档（`untitled:` URI 亦可）：untitled 文档进入 `textDocuments` 与 open/change/close 事件流，`TextDocument.isUntitled` 为真；另存为时生命周期为 close(untitled) → open(file) → didSave(file)。限制：untitled URI 的 path 不会 seed 另存对话框；纯 API 创建的 untitled 无法被扩展主动关闭。
@@ -278,7 +278,9 @@ Tree View 表面（0.12.0 起，对等 VSCode 的 `window.registerTreeDataProvid
 
 provider 实现 `getTreeItem(element)`（元素 → 行渲染模型 `TreeItem`）与 `getChildren(element?)`（省略 `element` 时返回根节点）。**懒拉取**：只在用户展开节点时拉其子节点。行点击执行 `TreeItem.command`——与 vscode 对齐：handler 收到扩展在 `command.arguments` 里原样放置的对象（`Uri`、自定义类实例均可存活，不经 wire 扁平化；`command` 未带 `arguments` 时 handler 收到该行的 tree element）。`view/item/context` 菜单命令的 handler 第一个参数同样是该行 tree element。`TreeItem.contextValue` 经 `viewItem` context key 暴露给菜单 `when` 子句（`view` 键 = viewId）。配套激活事件 `onView:<viewId>` 在视图首次显示时触发（须显式声明，宿主不做自动推导）。视图归工作台所有，扩展只提供数据。
 
-首版裁剪（逐条差异见 d.ts JSDoc）：`onDidChangeTreeData` 的 element 参数被忽略——恒整树失效重拉，且 `TreeItem.id` 不参与身份，刷新后展开态不保留；无 `reveal` / 拖拽 / checkbox / badge；`iconPath` 仅 codicon 名。
+刷新语义与 vscode 一致：元素句柄跨刷新稳定（身份依次取 `TreeItem.id`、元素对象本身、父句柄下的 label），因此 **刷新后展开态与选中态保留**；`onDidChangeTreeData(element)` 只失效该元素所在子树（该行就地替换、子节点重拉，兄弟与无关分支的缓存不动），无参 `onDidChangeTreeData()` 为整树失效；一个 50ms 窗口内的连续 fire 合并为一次刷新。想让重建元素对象、且 label 也会变的 provider 保住展开态，给 `TreeItem.id` 赋一个稳定值。
+
+首版裁剪（逐条差异见 d.ts JSDoc）：无 `reveal` / 拖拽 / checkbox / badge；`iconPath` 仅 codicon 名。
 
 ```ts
 import {

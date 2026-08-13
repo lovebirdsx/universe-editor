@@ -188,13 +188,18 @@
   - `languages`：
     - `getDiagnostics()` / `getDiagnostics(resource)`：全源诊断快照（返回
       Promise——VSCode 为同步返回，差异见 JSDoc）。快照非 live 视图；marker 读回
-      不含 `relatedInformation`。
+      不含 `relatedInformation`；读回的 `code` 恒为发布时的字符串形式（与 VSCode
+      同款有损：数字 code 读回为字符串；含前导零的字符串 code 原样保留；
+      `codeDescription.href` 会被恢复，这一点比 VSCode 更完整）。
     - `onDidChangeDiagnostics` + `DiagnosticChangeEvent`（`uris`）：变更推送经
       50ms 防抖，宿主按扩展的兴趣订阅过滤。
   - `window`：
     - `visibleTextEditors` + `onDidChangeVisibleTextEditors`：每个编辑器组的
       active 文本编辑器一项；快照语义，`version`/`selection` 变化不触发事件；
-      集合按 URI 身份去重，编辑器内部编辑不触发。
+      集合按 URI 身份去重，编辑器内部编辑不触发。冷文档（首次触碰触发语言
+      激活的文件）的镜像晚于集合推送到达：事件等待一个短宽限期（约 0.5 秒）
+      尽量上报完整集合，超时先上报已镜像成员、镜像落地后并入再报一次；
+      宽限期内 getter 只含已镜像成员（短暂缺员窗口，VSCode 无此窗口）。
   - `workspace`：
     - `RelativePattern` class + `GlobPattern` 类型：`findFiles` 与
       `createFileSystemWatcher` 均接受。`RelativePattern` 的 base 在 findFiles
@@ -222,7 +227,11 @@
     - `onDidSaveTextDocument`：覆盖 Untitled 另存为（事件携带落盘 file URI）、
       文件另存为、Merge 编辑器保存；didSave 保证排在镜像 open 之后。
     - `findFiles`：`CancellationToken` 真取消（杀底层 rg 枚举），取消 resolve
-      `[]`；100k 截断日志带数量。
+      `[]`；100k 截断日志带数量。exclude 改为枚举期由搜索引擎按目录剪枝
+      （2026-08-13 修复，签名不变）：命中目录的 glob（如无 slash 的
+      `node_modules`）整棵子树不再被遍历，被排除条目不再消耗 100k 枚举
+      额度；此前数组形 exclude 在枚举后才过滤，node_modules 类目录仍被
+      walk，且会先吃光截断额度把真命中静默截掉。
     - `createFileSystemWatcher`：支持工作区外监听（`RelativePattern` base 或绝对
       glob 落在工作区外时自动 arm 递归监听，同 base 共享，dispose 即释放）。
       限制：Linux 下工作区外监听无效（`fs.watch` recursive 限制）；工作区外事件
@@ -239,8 +248,10 @@
     `retainContextWhenHidden` 选项——本实现 iframe 不随 tab 隐藏重建，隐藏期状态
     天然保留；无 `WebviewPanelSerializer`——window reload/重启不恢复 panel。
   - `WebviewPanel` 接口扩充（custom editor 的 panel 同享）：`title` 可写（改 tab
-    名）、`readonly active` / `readonly visible`（tab 挂载粒度近似）、
-    `onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>`、
+    名）、`readonly active` / `readonly visible`（跟踪编辑器组真实状态：visible =
+    所在组选中 tab、active = 且该组为焦点组；preserveFocus 后台创建不误报 active）、
+    `onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>`（状态迁移
+    去重后触发，custom editor 面板同路径）、
     `reveal(preserveFocus?)`；新导出类型
     `WebviewPanelOnDidChangeViewStateEvent`。
   - 用户关 tab 或 `panel.dispose()` 均 fire `onDidDispose`。
@@ -257,8 +268,9 @@
       缺省回退默认字形），文件路径图标为后期阶段。`panel` 位置未支持。
     - `contributes.views`：`{ [containerId]: [{ id, name, when? }] }`——key 可为
       本扩展自声明的容器 id、内置别名（`explorer` / `search` / `scm` / `outline`）
-      或任意内置容器全 id；未知 key 由 renderer 告警跳过。`when` 已透传但首版不
-      消费（不门控可见性）。
+      或任意内置容器全 id；未知 key 由 renderer 告警跳过。`when` 按 ContextKey
+      表达式门控视图可见性：求值为 false 时视图从容器消失（容器无可见视图则
+      活动栏图标一并隐藏），引用键变化时实时重算。
   - `window.registerTreeDataProvider(viewId, provider)`：为已声明的 view 供数据，
     返回 `Disposable`。
   - `window.createTreeView(viewId, { treeDataProvider })`：同一注册，另同步返回
@@ -276,14 +288,17 @@
     `viewItem` = 条目 `contextValue`）。
   - 行为：树为懒拉取渲染（只在用户展开节点时拉其子节点）；行点击执行
     `TreeItem.command`。
+  - 刷新语义（对齐 VSCode）：元素句柄跨刷新稳定——身份依次取 `TreeItem.id`、
+    元素对象本身（provider 复用实例时）、父句柄下的 label，因此刷新后展开态与
+    选中态保留。`onDidChangeTreeData(element)` 只失效该元素所在子树（该行就地
+    替换、其子节点重拉，兄弟与无关分支的缓存不动）；`onDidChangeTreeData()`
+    无参为整树失效。一个事件循环窗口（50ms）内的连续 fire 合并为一次刷新。
   - 与 VSCode 的首版差异（JSDoc 已注明）：
-    - `TreeItem.id` 不参与身份 → 刷新后展开态不保留（整树回折叠）。
     - 无 `TreeView.reveal`（`getParent` 仅为签名对齐而接受，不消费）、无
       drag & drop / checkbox / badge / `TreeView.title`/`description`/`message`。
     - `TreeItem.iconPath` 仅 codicon 名字符串，不支持 Uri/明暗双图标；
       `TreeItemLabel` 只渲染纯文本（无高亮）。
-    - `onDidChangeTreeData(element)` 的 element 参数被忽略——恒整树失效重拉。
-    - `TreeView.visible` 为挂载粒度近似；`views` 的 `when` 暂不生效。
+    - `TreeView.visible` 为挂载粒度近似。
   - 配套：`docs/extension-dev/zh-CN/migration-from-vscode.md` 的 TreeView 行翻
     「部分对齐」；`contribution-points.md` 新增 `viewsContainers` / `views` 两节。
 

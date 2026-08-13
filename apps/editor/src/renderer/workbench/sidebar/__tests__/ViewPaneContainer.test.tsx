@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import {
+  ContextKeyService,
   IViewDescriptorService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  type ILoggerService,
   type IStorageService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -76,10 +79,19 @@ function makeStorage(): IStorageService & { set: ReturnType<typeof vi.fn> } {
 
 const stubWorkspace = { current: {} } as unknown as IWorkspaceService
 
+const stubLoggerService = {
+  createLogger: () => new NullLogger(),
+} as unknown as ILoggerService
+
 const CONTAINER_ID = 'test.container'
 
 function renderSideBar(
-  viewDescriptorService = new ViewDescriptorService(makeStorage(), stubWorkspace),
+  viewDescriptorService = new ViewDescriptorService(
+    makeStorage(),
+    stubWorkspace,
+    new ContextKeyService(),
+    stubLoggerService,
+  ),
 ) {
   const services = new ServiceCollection()
   services.set(IViewDescriptorService, viewDescriptorService)
@@ -164,7 +176,12 @@ describe('ViewPaneContainer', () => {
     vi.useFakeTimers()
     try {
       const storage = makeStorage()
-      const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+      const viewDescriptorService = new ViewDescriptorService(
+        storage,
+        stubWorkspace,
+        new ContextKeyService(),
+        stubLoggerService,
+      )
       renderSideBar(viewDescriptorService)
       act(() => fireLastResizeObserver(800, 600))
 
@@ -214,7 +231,12 @@ describe('ViewPaneContainer', () => {
       onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
     } as unknown as IStorageService
 
-    const viewDescriptorService = new ViewDescriptorService(deferredStorage, stubWorkspace)
+    const viewDescriptorService = new ViewDescriptorService(
+      deferredStorage,
+      stubWorkspace,
+      new ContextKeyService(),
+      stubLoggerService,
+    )
     renderSideBar(viewDescriptorService)
 
     act(() => fireLastResizeObserver(800, 600))
@@ -249,7 +271,12 @@ describe('ViewPaneContainer', () => {
     vi.useFakeTimers()
     try {
       const storage = makeStorage()
-      const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+      const viewDescriptorService = new ViewDescriptorService(
+        storage,
+        stubWorkspace,
+        new ContextKeyService(),
+        stubLoggerService,
+      )
       renderSideBar(viewDescriptorService)
       act(() => fireLastResizeObserver(800, 600))
       expect(viewDescriptorService.getViewState('test.view.a').size).toBe(300)
@@ -280,7 +307,12 @@ describe('ViewPaneContainer', () => {
         'test.view.b': { size: 400 },
       },
     })
-    const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+    const viewDescriptorService = new ViewDescriptorService(
+      storage,
+      stubWorkspace,
+      new ContextKeyService(),
+      stubLoggerService,
+    )
     renderSideBar(viewDescriptorService)
 
     // Fast storage: reconcile lands before the first layout pass.
@@ -338,7 +370,12 @@ describe('ViewPaneContainer', () => {
         'test.view.b': { size: 400 },
       },
     })
-    const viewDescriptorService = new ViewDescriptorService(storage, stubWorkspace)
+    const viewDescriptorService = new ViewDescriptorService(
+      storage,
+      stubWorkspace,
+      new ContextKeyService(),
+      stubLoggerService,
+    )
     renderSideBar(viewDescriptorService)
     await act(async () => {
       await viewDescriptorService.reconcileFromStorage()

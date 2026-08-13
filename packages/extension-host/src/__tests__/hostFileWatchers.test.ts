@@ -1,78 +1,48 @@
 /*---------------------------------------------------------------------------------------------
  *  HostFileWatcherRegistry: renderer file-event batches are matched against each
- *  watcher's compiled glob over the workspace-relative path; interest is declared
- *  to the renderer only while at least one watcher is alive.
+ *  watcher's compiled glob over the anchor-relative path; interests are declared
+ *  to the renderer as (base, pattern) pairs, reference-counted so only the 0↔n
+ *  transitions cross the wire.
  *--------------------------------------------------------------------------------------------*/
 import { describe, expect, it, vi } from 'vitest'
-import { URI } from '@universe-editor/platform'
+import { URI, isCaseInsensitive, normalizePlatform } from '@universe-editor/platform'
 import { RelativePattern } from '@universe-editor/extension-api'
-import type { IMainThreadFileEvents } from '@universe-editor/extensions-common'
-import type { UriComponents } from '@universe-editor/extension-api'
-import { HostFileWatcherRegistry, splitAbsoluteGlob } from '../hostFileWatchers.js'
+import type {
+  IFileWatcherInterestDto,
+  IMainThreadFileEvents,
+} from '@universe-editor/extensions-common'
+import { HostFileWatcherRegistry } from '../hostFileWatchers.js'
 
 function fakeMainThread(): IMainThreadFileEvents & {
-  bases: Array<{ op: 'sub' | 'unsub'; base: UriComponents | undefined }>
+  interests: Array<{ op: 'sub' | 'unsub'; interest: IFileWatcherInterestDto }>
   subscribeCount: number
   unsubscribeCount: number
 } {
   const state = {
-    bases: [] as Array<{ op: 'sub' | 'unsub'; base: UriComponents | undefined }>,
+    interests: [] as Array<{ op: 'sub' | 'unsub'; interest: IFileWatcherInterestDto }>,
     subscribeCount: 0,
     unsubscribeCount: 0,
-    $subscribeFileEvents: (base: UriComponents | undefined) => {
+    $subscribeFileEvents: (interest: IFileWatcherInterestDto) => {
       state.subscribeCount++
-      state.bases.push({ op: 'sub', base })
+      state.interests.push({ op: 'sub', interest })
       return Promise.resolve()
     },
-    $unsubscribeFileEvents: (base: UriComponents | undefined) => {
+    $unsubscribeFileEvents: (interest: IFileWatcherInterestDto) => {
       state.unsubscribeCount++
-      state.bases.push({ op: 'unsub', base })
+      state.interests.push({ op: 'unsub', interest })
       return Promise.resolve()
     },
   }
   return state
 }
 
+// `splitAbsoluteGlob` moved to extensions-common's glob module; its battery
+// lives in packages/extensions-common/src/glob/__tests__/glob.test.ts.
+
 const root = '/ws'
 
-describe('splitAbsoluteGlob', () => {
-  it('returns null for workspace-relative patterns', () => {
-    expect(splitAbsoluteGlob('**/*.ts')).toBeNull()
-    expect(splitAbsoluteGlob('src/*.ts')).toBeNull()
-    expect(splitAbsoluteGlob('*.ts')).toBeNull()
-    expect(splitAbsoluteGlob('./src/a.ts')).toBeNull()
-    expect(splitAbsoluteGlob('../sibling/a.ts')).toBeNull()
-  })
-
-  it('splits a posix absolute glob into literal root + remaining pattern', () => {
-    expect(splitAbsoluteGlob('/abs/logs/**/*.log')).toEqual({
-      base: '/abs/logs',
-      pattern: '**/*.log',
-    })
-  })
-
-  it('splits a windows absolute glob (backslashes tolerated)', () => {
-    expect(splitAbsoluteGlob('D:\\logs\\**\\*.log')).toEqual({
-      base: 'D:/logs',
-      pattern: '**/*.log',
-    })
-  })
-
-  it('a glob-free absolute path targets the entry under its parent folder', () => {
-    expect(splitAbsoluteGlob('/abs/config.json')).toEqual({
-      base: '/abs',
-      pattern: 'config.json',
-    })
-  })
-
-  it('returns null when no literal prefix survives', () => {
-    expect(splitAbsoluteGlob('/*.ts')).toBeNull()
-    expect(splitAbsoluteGlob('D:/**/*.ts')).toBeNull()
-  })
-})
-
 describe('HostFileWatcherRegistry', () => {
-  it('declares interest per watcher, workspace globs with an undefined base', () => {
+  it('declares one interest per unique pattern, workspace globs with an undefined base', () => {
     const mt = fakeMainThread()
     const registry = new HostFileWatcherRegistry(mt, root)
     expect(mt.subscribeCount).toBe(0)
@@ -80,9 +50,9 @@ describe('HostFileWatcherRegistry', () => {
     const a = registry.createWatcher('**/*.ts', false, false, false)
     const b = registry.createWatcher('**/*.md', false, false, false)
     expect(mt.subscribeCount).toBe(2)
-    expect(mt.bases).toEqual([
-      { op: 'sub', base: undefined },
-      { op: 'sub', base: undefined },
+    expect(mt.interests).toEqual([
+      { op: 'sub', interest: { base: undefined, pattern: '**/*.ts' } },
+      { op: 'sub', interest: { base: undefined, pattern: '**/*.md' } },
     ])
 
     a.dispose()
@@ -93,6 +63,63 @@ describe('HostFileWatcherRegistry', () => {
     // Disposing again is a no-op.
     b.dispose()
     expect(mt.unsubscribeCount).toBe(2)
+  })
+
+  it('coalesces identical interests: 50 watchers with the same glob cost one wire pair', () => {
+    const mt = fakeMainThread()
+    const registry = new HostFileWatcherRegistry(mt, root)
+    const watchers = Array.from({ length: 50 }, () =>
+      registry.createWatcher('**/*.ts', false, false, false),
+    )
+    expect(mt.subscribeCount).toBe(1)
+
+    // A distinct pattern joins besides, and removing the 50 leaves it alone.
+    const other = registry.createWatcher('**/*.md', false, false, false)
+    expect(mt.subscribeCount).toBe(2)
+    for (const w of watchers) w.dispose()
+    expect(mt.unsubscribeCount).toBe(1)
+    other.dispose()
+    expect(mt.unsubscribeCount).toBe(2)
+  })
+
+  it('shares a base but not a pattern: two interests over the same base cost two wire pairs', () => {
+    const mt = fakeMainThread()
+    const registry = new HostFileWatcherRegistry(mt, root)
+    const a = registry.createWatcher(new RelativePattern('/outside', '*.log'), false, false, false)
+    const b = registry.createWatcher(new RelativePattern('/outside', '*.txt'), false, false, false)
+    expect(mt.subscribeCount).toBe(2)
+
+    const c = registry.createWatcher(new RelativePattern('/outside', '*.log'), false, false, false)
+    expect(mt.subscribeCount).toBe(2)
+
+    a.dispose()
+    expect(mt.unsubscribeCount).toBe(0) // c still holds the *.log lease
+    c.dispose()
+    b.dispose()
+    expect(mt.unsubscribeCount).toBe(2)
+  })
+
+  it('folds case-insensitive base spellings into one interest (platform-dependent)', () => {
+    const platform = normalizePlatform(process.platform)
+    if (!isCaseInsensitive(platform)) return
+    const mt = fakeMainThread()
+    const registry = new HostFileWatcherRegistry(mt, root)
+    const a = registry.createWatcher(
+      new RelativePattern('D:/Logs/Server', '*.log'),
+      false,
+      false,
+      false,
+    )
+    const b = registry.createWatcher(
+      new RelativePattern('d:/logs/server', '*.log'),
+      false,
+      false,
+      false,
+    )
+    expect(mt.subscribeCount).toBe(1)
+    a.dispose()
+    b.dispose()
+    expect(mt.unsubscribeCount).toBe(1)
   })
 
   it('fans events out to matching watchers by type', () => {
@@ -169,13 +196,15 @@ describe('HostFileWatcherRegistry', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('dispose() releases every watcher and unsubscribes', () => {
+  it('dispose() releases every watcher and unsubscribes each unique interest once', () => {
     const mt = fakeMainThread()
     const registry = new HostFileWatcherRegistry(mt, root)
     registry.createWatcher('**/*.ts', false, false, false)
-    expect(mt.subscribeCount).toBe(1)
+    registry.createWatcher('**/*.ts', false, false, false)
+    registry.createWatcher(new RelativePattern('/outside', '*.log'), false, false, false)
+    expect(mt.subscribeCount).toBe(2)
     registry.dispose()
-    expect(mt.unsubscribeCount).toBe(1)
+    expect(mt.unsubscribeCount).toBe(2)
     // Late events reach no one.
     registry.acceptFileEvents([{ type: 'created', uri: URI.file('/ws/a.ts').toJSON() }])
   })
@@ -214,7 +243,7 @@ describe('HostFileWatcherRegistry', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('reports the RelativePattern base on subscribe so the renderer can arm an out-of-workspace watch', () => {
+  it('reports the (base, pattern) interest on subscribe so the renderer can pre-filter', () => {
     const mt = fakeMainThread()
     const registry = new HostFileWatcherRegistry(mt, root)
     const watcher = registry.createWatcher(
@@ -223,11 +252,13 @@ describe('HostFileWatcherRegistry', () => {
       false,
       false,
     )
-    expect(mt.bases).toEqual([{ op: 'sub', base: URI.file('/outside/logs').toJSON() }])
+    expect(mt.interests).toEqual([
+      { op: 'sub', interest: { base: URI.file('/outside/logs').toJSON(), pattern: '*.log' } },
+    ])
     watcher.dispose()
-    expect(mt.bases).toEqual([
-      { op: 'sub', base: URI.file('/outside/logs').toJSON() },
-      { op: 'unsub', base: URI.file('/outside/logs').toJSON() },
+    expect(mt.interests).toEqual([
+      { op: 'sub', interest: { base: URI.file('/outside/logs').toJSON(), pattern: '*.log' } },
+      { op: 'unsub', interest: { base: URI.file('/outside/logs').toJSON(), pattern: '*.log' } },
     ])
   })
 
@@ -280,7 +311,12 @@ describe('HostFileWatcherRegistry', () => {
     const mt = fakeMainThread()
     const registry = new HostFileWatcherRegistry(mt, root)
     const watcher = registry.createWatcher('/outside/logs/**/*.log', false, false, false)
-    expect(mt.bases).toEqual([{ op: 'sub', base: URI.file('/outside/logs').toJSON() }])
+    expect(mt.interests).toEqual([
+      {
+        op: 'sub',
+        interest: { base: URI.file('/outside/logs').toJSON(), pattern: '**/*.log' },
+      },
+    ])
     const seen: string[] = []
     watcher.onDidCreate((u) => seen.push(u.path ?? ''))
 
@@ -289,5 +325,26 @@ describe('HostFileWatcherRegistry', () => {
       { type: 'created', uri: URI.file('/ws/a.log').toJSON() },
     ])
     expect(seen).toEqual([URI.file('/outside/logs/x/y/a.log').toJSON().path])
+  })
+
+  it('watchers sharing an anchor group all match against one relative-path computation', () => {
+    const mt = fakeMainThread()
+    const registry = new HostFileWatcherRegistry(mt, root)
+    const logs: string[] = []
+    const texts: string[] = []
+    registry
+      .createWatcher(new RelativePattern('/outside/logs', '*.log'), false, false, false)
+      .onDidChange((u) => logs.push(u.path ?? ''))
+    registry
+      .createWatcher(new RelativePattern('/outside/logs', '*.txt'), false, false, false)
+      .onDidChange((u) => texts.push(u.path ?? ''))
+
+    registry.acceptFileEvents([
+      { type: 'changed', uri: URI.file('/outside/logs/a.log').toJSON() },
+      { type: 'changed', uri: URI.file('/outside/logs/b.txt').toJSON() },
+      { type: 'changed', uri: URI.file('/elsewhere/c.log').toJSON() },
+    ])
+    expect(logs).toEqual([URI.file('/outside/logs/a.log').toJSON().path])
+    expect(texts).toEqual([URI.file('/outside/logs/b.txt').toJSON().path])
   })
 })

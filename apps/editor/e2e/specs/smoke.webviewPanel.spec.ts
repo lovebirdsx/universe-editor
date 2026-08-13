@@ -44,8 +44,8 @@ async function makeWebviewPanelVsix(dir: string): Promise<string> {
 
   // Plain CJS module talking to the host bridge global directly (installed
   // extensions have no node_modules — see smoke.webview.spec.ts). The panel is
-  // created on the create command; onDidDispose appends a signal line to an
-  // output channel the spec polls.
+  // created on the create command; onDidDispose and onDidChangeViewState append
+  // signal lines to an output channel the spec polls.
   const source = `
     const bridge = globalThis['__universeExtensionHostBridge__']
     let panel = undefined
@@ -62,6 +62,11 @@ async function makeWebviewPanelVsix(dir: string): Promise<string> {
           panel.webview.html =
             '<!DOCTYPE html><html><body><div id="${MARKER}">ok</div></body></html>'
           panel.onDidDispose(() => channel.appendLine(${JSON.stringify(DISPOSE_SIGNAL)}))
+          panel.onDidChangeViewState((e) =>
+            channel.appendLine(
+              'viewstate:active=' + e.webviewPanel.active + ';visible=' + e.webviewPanel.visible,
+            ),
+          )
         }),
         bridge.registerCommand(${JSON.stringify(REVEAL_COMMAND)}, () => {
           if (panel) panel.reveal()
@@ -136,6 +141,61 @@ test.describe('@p1 webview panel (createWebviewPanel)', () => {
         { timeout: 10000 },
       )
       .toContain(DISPOSE_SIGNAL)
+
+    await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
+
+  test('fires onDidChangeViewState when the panel tab hides and re-shows', async ({
+    workbench,
+  }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webview-panel-vs-'))
+    const vsixPath = await makeWebviewPanelVsix(tmpDir)
+    const otherPath = path.join(tmpDir, 'other.txt')
+    await fs.writeFile(otherPath, 'plain text to switch away to')
+
+    await workbench.waitForRestored()
+
+    const installedId = await workbench.page.evaluate(
+      (p) => window.__E2E__!.installVsixExtension(p),
+      vsixPath,
+    )
+    expect(installedId).toBe('universe.e2e-webview-panel')
+    await expect
+      .poll(() => workbench.page.evaluate((id) => window.__E2E__!.hasCommand(id), CREATE_COMMAND), {
+        timeout: 10000,
+      })
+      .toBe(true)
+
+    const channelContent = () =>
+      workbench.page.evaluate((name) => window.__E2E__!.getOutputChannelContent(name), CHANNEL)
+    const activeTypeId = () =>
+      workbench.page.evaluate(() => window.__E2E__!.getActiveEditorTypeId())
+
+    // Foreground create → the panel starts active + visible.
+    await workbench.runCommand(CREATE_COMMAND)
+    await expect.poll(activeTypeId, { timeout: 10000 }).toBe('webviewPanel')
+    await expect
+      .poll(channelContent, { timeout: 10000 })
+      .toContain('viewstate:active=true;visible=true')
+
+    // Switching to another tab in the same group hides the panel: the host must
+    // learn visible=false via onDidChangeViewState (it used to stay stale).
+    await workbench.page.evaluate((p) => window.__E2E__!.openFileUri(p), otherPath)
+    await expect.poll(activeTypeId, { timeout: 10000 }).toBe('file')
+    await expect
+      .poll(channelContent, { timeout: 10000 })
+      .toContain('viewstate:active=false;visible=false')
+
+    // Revealing brings the tab back → active + visible again.
+    await workbench.runCommand(REVEAL_COMMAND)
+    await expect.poll(activeTypeId, { timeout: 10000 }).toBe('webviewPanel')
+    await expect
+      .poll(
+        async () => (await channelContent()).match(/viewstate:active=true;visible=true/g)?.length,
+        { timeout: 10000 },
+      )
+      .toBe(2)
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })

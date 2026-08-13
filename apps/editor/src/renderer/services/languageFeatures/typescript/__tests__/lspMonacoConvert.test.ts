@@ -314,10 +314,14 @@ describe('markerToLspDiagnostic', () => {
     expect(d.range).toEqual(range(2, 1, 2, 8))
   })
 
-  it('round-trips string codes and numeric string codes', () => {
-    expect(markerToLspDiagnostic(makeMarker(8, { code: '2304' })).code).toBe(2304)
+  it('keeps the stringified code verbatim (VSCode parity), including numeric-looking codes', () => {
+    expect(markerToLspDiagnostic(makeMarker(8, { code: '2304' })).code).toBe('2304')
     expect(markerToLspDiagnostic(makeMarker(8, { code: 'ts-missing' })).code).toBe('ts-missing')
     expect(markerToLspDiagnostic(makeMarker(8)).code).toBeUndefined()
+  })
+
+  it('preserves leading zeros in codes instead of numericising them', () => {
+    expect(markerToLspDiagnostic(makeMarker(8, { code: '0123' })).code).toBe('0123')
   })
 
   it('round-trips a { value, target } code into code + codeDescription.href', () => {
@@ -329,7 +333,7 @@ describe('markerToLspDiagnostic', () => {
         },
       }),
     )
-    expect(d.code).toBe(2304)
+    expect(d.code).toBe('2304')
     expect(d.codeDescription).toEqual({ href: 'https://typescript.tv/errors/#2304' })
   })
 

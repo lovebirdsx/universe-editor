@@ -316,11 +316,17 @@ export interface WindowApi {
    *  appear. Each entry is a snapshot (same semantics as
    *  {@link WindowApi.getActiveTextEditor}): read fresh after
    *  {@link WindowApi.onDidChangeVisibleTextEditors} rather than holding handles
-   *  long-term. */
+   *  long-term. A freshly opened cold document (first touch activating its
+   *  language) enters the set a moment later than the tab itself: until its
+   *  mirror lands, the getter and the event carry only the already-mirrored
+   *  members and converge on {@link WindowApi.onDidChangeVisibleTextEditors}. */
   readonly visibleTextEditors: readonly TextEditor[]
   /** Fires when the set of visible text editors changes (tab switched, group
    *  opened/closed). Content or selection edits inside an already-visible editor
-   *  do not fire this event. The array carries fresh snapshots. */
+   *  do not fire this event. The array carries fresh snapshots. A cold document
+   *  whose mirror has not yet landed is held back for a short grace so the set
+   *  normally arrives complete; a mirror stuck beyond that reports the known
+   *  subset first and a follow-up event once the document merges in. */
   readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
   /**
    * Open the document at `target` in a text editor and resolve its snapshot.
@@ -576,8 +582,10 @@ export interface WorkspaceApi {
    * against base-relative paths. `exclude`: one glob (a RelativePattern scopes
    * the exclusion to its own base), `null` to disable exclusion entirely, or
    * omit to use the configured search excludes (files.exclude ∪
-   * search.exclude). Cancelling `token` stops the underlying enumeration; the
-   * promise then resolves with an empty list.
+   * search.exclude). Excludes prune during the enumeration itself: a glob
+   * matching a directory skips its whole subtree, and excluded entries never
+   * count against the enumeration cap. Cancelling `token` stops the underlying
+   * enumeration; the promise then resolves with an empty list.
    */
   findFiles(
     include: GlobPattern,
@@ -1248,6 +1256,11 @@ export interface LanguagesApi {
    * Unlike VSCode's synchronous version this returns a promise: the markers
    * live in the renderer process, so reading them crosses the extension-host
    * bridge (the same reason {@link getLanguages} is async).
+   *
+   * Read-back round-trips through the stringified marker form: `code` always
+   * comes back in its string form (a numeric code published as `123` reads
+   * back as `'123'` — VSCode has the same loss), `codeDescription.href` is
+   * preserved, `relatedInformation` is dropped.
    */
   getDiagnostics(resource: Uri): Promise<[Uri, Diagnostic[]][]>
   getDiagnostics(): Promise<[Uri, Diagnostic[]][]>

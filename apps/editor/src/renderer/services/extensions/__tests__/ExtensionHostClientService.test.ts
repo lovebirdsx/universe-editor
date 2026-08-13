@@ -45,6 +45,7 @@ import type { IExtensionManagementService } from '../../../../shared/ipc/extensi
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../../exclude/ExcludeService.js'
+import type { IOutOfWorkspaceWatchService } from '../../files/outOfWorkspaceWatchService.js'
 import type { IScmService } from '../ScmService.js'
 import type { ITimelineService } from '../../timeline/TimelineService.js'
 import type { ITreeViewsService } from '../TreeViewsService.js'
@@ -252,6 +253,7 @@ function makeServiceWith(
     {} as IFileSearchService,
     {} as IExcludeService,
     {} as IFileWatcherService,
+    {} as IOutOfWorkspaceWatchService,
   )
 }
 

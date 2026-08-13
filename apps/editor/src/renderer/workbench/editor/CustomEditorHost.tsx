@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
-import { localize, URI, type IEditorInput } from '@universe-editor/platform'
+import { localize, URI, type EditorInput, type IEditorInput } from '@universe-editor/platform'
 import {
   customEditorActivationEvent,
   type IWebviewDiffContextDto,
@@ -82,7 +82,9 @@ export function CustomEditorHost({ input }: { input: IEditorInput }) {
     // retry whenever the provider set changes, giving up only if the extension
     // never registers a provider for this viewType.
     const tryOpen = (): boolean => {
-      opened = webviewService.openPanel(viewType, resource, diff)
+      // Pass the input so the WebviewService can track this panel's view state
+      // (active/visible) against the editor groups.
+      opened = webviewService.openPanel(viewType, resource, diff, input as EditorInput)
       if (opened) {
         setPanel(opened)
         setFailed(false)

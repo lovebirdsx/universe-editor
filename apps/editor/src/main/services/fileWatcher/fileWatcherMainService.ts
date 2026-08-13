@@ -26,6 +26,7 @@ import {
   createNamedLogger,
   DeferredPromise,
   Emitter,
+  getPathComparisonKey,
   mark,
   normalizePlatform,
   relativePathUnder,
@@ -287,14 +288,40 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._onDidChangeFiles.dispose()
   }
 
-  async watchOutOfWorkspaceFolders(folders: readonly URI[]): Promise<void> {
+  // Declared out-of-workspace folder interests (comparison key → fsPath).
+  // Callers reference-count; each add/remove re-syncs the armed watch set.
+  private readonly _declaredExtraFolders = new Map<string, string>()
+
+  async addOutOfWorkspaceFolder(folder: URI): Promise<void> {
+    const uri = reviveUri(folder)
+    if (uri.scheme !== 'file') return
+    const fsPath = uri.fsPath
+    // The recursive workspace watch already covers these.
+    if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) return
+    const key = getPathComparisonKey(fsPath, normalizePlatform(platform))
+    if (this._declaredExtraFolders.has(key)) return
+    this._declaredExtraFolders.set(key, fsPath)
+    this._syncExtraFolderWatchers()
+  }
+
+  async removeOutOfWorkspaceFolder(folder: URI): Promise<void> {
+    const uri = reviveUri(folder)
+    if (uri.scheme !== 'file') return
+    const key = getPathComparisonKey(uri.fsPath, normalizePlatform(platform))
+    if (this._declaredExtraFolders.delete(key)) {
+      this._syncExtraFolderWatchers()
+    }
+  }
+
+  async clearOutOfWorkspaceFolders(): Promise<void> {
+    if (this._declaredExtraFolders.size === 0) return
+    this._declaredExtraFolders.clear()
+    this._syncExtraFolderWatchers()
+  }
+
+  private _syncExtraFolderWatchers(): void {
     const wanted = new Set<string>()
-    for (const f of folders) {
-      const uri = reviveUri(f)
-      if (uri.scheme !== 'file') continue
-      const fsPath = uri.fsPath
-      // The recursive workspace watch already covers these.
-      if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) continue
+    for (const fsPath of this._declaredExtraFolders.values()) {
       // Nested folders collapse into the shallowest watch: a recursive parent
       // already delivers events for its subtree, and win32 would otherwise pin
       // duplicate kernel handles on the same subtree.
@@ -363,7 +390,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   /** fs.watch throws on a missing path, so a not-yet-created folder can't be
    *  watched directly: park a non-recursive watch on the parent and arm the
    *  recursive watch once the folder appears. Gives up when the parent is
-   *  missing too — a later watchOutOfWorkspaceFolders replace re-arms. */
+   *  missing too — a later addOutOfWorkspaceFolder re-arms. */
   private _watchExtraFolderPlaceholder(dir: string): void {
     if (this._extraFolderWatchers.has(dir)) return
     const parent = dirname(dir)
@@ -513,6 +540,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   private _teardownExtraWatchers(): void {
+    this._declaredExtraFolders.clear()
     for (const [, entry] of this._extraDirWatchers) {
       try {
         entry.watcher.close()

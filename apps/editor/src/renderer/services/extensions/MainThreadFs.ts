@@ -26,6 +26,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   compileGlobMatcher,
+  normalizeExtensionGlobPattern,
   type ExtHostFileType,
   type IExtHostFileStatDto,
   type IMainThreadFs,
@@ -156,7 +157,10 @@ export class MainThreadFs implements IMainThreadFs {
    * never the stale listing cache), then apply the include glob to each match's
    * relative path. A RelativePattern include roots the walk at its base folder
    * (resolved through the path policy, symlink check included) and matches
-   * against base-relative paths. The token comes from the RPC cancel path and
+   * against base-relative paths. Excludes are folded into the engine query —
+   * string entries as-is, RelativePattern entries rebased against the
+   * enumeration root — so the engine prunes them during the walk and they never
+   * consume the enumeration cap. The token comes from the RPC cancel path and
    * is handed to the enumeration itself, so a cancelled request kills the
    * underlying `rg` walk instead of discarding a late result.
    */
@@ -181,13 +185,18 @@ export class MainThreadFs implements IMainThreadFs {
         return []
       }
     }
-    const excludeMatchers = exclude?.map((entry) => this._compileExclude(entry, includeBase))
+    const engineExcludes =
+      exclude === null
+        ? [...this._defaultExcludes()]
+        : exclude.flatMap((entry) =>
+            typeof entry === 'string' ? [entry] : this._foldExcludeForEngine(entry, includeBase),
+          )
     const complete = await this._fileSearch.search(
       {
         root: includeBase ?? URI.file(this._cwd),
         pattern: '',
         matchAll: true,
-        excludes: exclude === null ? [...this._defaultExcludes()] : [],
+        excludes: engineExcludes,
         maxResults: FIND_FILES_ENUMERATION_CAP,
       },
       token,
@@ -203,7 +212,6 @@ export class MainThreadFs implements IMainThreadFs {
     const out: string[] = []
     for (const match of complete.results) {
       if (!matches(match.relativePath)) continue
-      if (excludeMatchers?.some((excluded) => excluded(match.relativePath))) continue
       out.push(match.fsPath)
       if (maxResults !== null && out.length >= maxResults) break
     }
@@ -239,23 +247,22 @@ export class MainThreadFs implements IMainThreadFs {
   }
 
   /**
-   * Compile one exclude entry against the enumeration root: a string glob
-   * matches relative paths as-is; a RelativePattern excludes only matches
-   * under its own base, with the pattern applied beneath that prefix.
+   * Fold a RelativePattern exclude into one enumeration-root-relative glob the
+   * engine can prune during its walk: the base's prefix beneath the root is
+   * prepended to the pattern. A base outside the root (or an invalid base URI)
+   * can never match anything in this enumeration and folds to nothing.
    */
-  private _compileExclude(
-    entry: string | IRelativePatternDto,
+  private _foldExcludeForEngine(
+    entry: IRelativePatternDto,
     includeBase: URI | undefined,
-  ): (relativePath: string) => boolean {
-    if (typeof entry === 'string') return compileGlobMatcher(entry)
-    const inner = compileGlobMatcher(entry.pattern)
+  ): string[] {
     const baseUri = URI.revive(entry.base)
-    if (!baseUri) return () => false
+    if (!baseUri) return []
     const root = (includeBase ?? URI.file(this._cwd as string)).fsPath
     const prefix = relativePathUnder(root, baseUri.fsPath, this._platform)
-    if (prefix === null) return () => false
-    if (prefix === '') return inner
-    const dir = `${prefix}/`
-    return (relativePath) => relativePath.startsWith(dir) && inner(relativePath.slice(dir.length))
+    if (prefix === null) return []
+    const pattern = normalizeExtensionGlobPattern(entry.pattern)
+    if (pattern === '') return []
+    return [prefix === '' ? pattern : `${prefix}/${pattern}`]
   }
 }

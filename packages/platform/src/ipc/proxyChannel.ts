@@ -16,6 +16,22 @@ import { IChannel } from './ipc.js'
 
 const EVENT_PROP_RE = /^on[A-Z]/
 
+// A trailing `undefined` serializes to `null` inside the JSON envelope's args
+// array (JSON.stringify turns array-held undefined into null), so the remote's
+// `param === undefined` check lies — every optional trailing parameter of every
+// channel used to need a manual == null workaround at both ends. Strip trailing
+// undefines at the proxy so they round-trip as "not provided". A semantic null
+// (e.g. `$findFiles` maxResults) is untouched; an `undefined` sandwiched
+// between real arguments still crosses as null (plain JSON array semantics) —
+// non-trailing optional parameters keep the `== null` convention.
+function stripTrailingUndefined(args: unknown[]): unknown[] {
+  let end = args.length
+  while (end > 0 && args[end - 1] === undefined) {
+    end--
+  }
+  return end === args.length ? args : args.slice(0, end)
+}
+
 export interface IProxyServiceOptions {
   /**
    * Synchronous properties served locally instead of via the channel.
@@ -67,9 +83,9 @@ export namespace ProxyChannel {
           // of the argument list and travels via the channel's cancel path.
           const last = args.length > 0 ? args[args.length - 1] : undefined
           if (CancellationToken.isCancellationToken(last)) {
-            return channel.call(propKey, args.slice(0, -1), last)
+            return channel.call(propKey, stripTrailingUndefined(args.slice(0, -1)), last)
           }
-          return channel.call(propKey, args)
+          return channel.call(propKey, stripTrailingUndefined(args))
         }
         cache.set(propKey, fn)
         return fn

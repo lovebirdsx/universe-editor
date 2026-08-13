@@ -63,6 +63,7 @@ import type {
 } from '../../../shared/ipc/extensionHostService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../exclude/ExcludeService.js'
+import type { IOutOfWorkspaceWatchService } from '../files/outOfWorkspaceWatchService.js'
 import { slowPhaseInstrument } from '../performance/perfPhases.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadAi } from './MainThreadAi.js'
@@ -94,6 +95,8 @@ export interface HostConnectionDeps {
   readonly exclude: IExcludeService
   /** Backs `workspace.createFileSystemWatcher` (existing recursive workspace watch). */
   readonly fileWatcher: IFileWatcherService
+  /** Aggregated non-recursive watches for single-file watcher targets outside the workspace. */
+  readonly outOfWorkspaceWatch: IOutOfWorkspaceWatchService
   readonly pathPolicy: IAcpPathPolicy
   readonly commandService: ICommandService
   /** Backs `env.openExternal` (external URLs → OS browser, files → editor). */
@@ -289,7 +292,14 @@ export class HostConnection extends Disposable {
       client.getChannel(ExtHostChannels.extHostFileEvents),
     )
     const mainThreadFileEvents = store.add(
-      new MainThreadFileEvents(deps.fileWatcher, extHostFileEvents, deps.logger, deps.uriIdentity),
+      new MainThreadFileEvents(
+        deps.fileWatcher,
+        extHostFileEvents,
+        deps.logger,
+        deps.uriIdentity,
+        deps.outOfWorkspaceWatch,
+        workspaceRoot,
+      ),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadFileEvents,

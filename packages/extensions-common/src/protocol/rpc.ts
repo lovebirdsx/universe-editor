@@ -60,7 +60,7 @@ export const ExtHostChannels = {
   mainThreadFs: 'mainThreadFs',
   /** Renderer → ext host: filesystem event batches feeding `workspace.createFileSystemWatcher`. */
   extHostFileEvents: 'extHostFileEvents',
-  /** Ext host → renderer: declares/drops interest in filesystem events (watcher count). */
+  /** Ext host → renderer: declares/drops file-events interests ((base, pattern) pairs). */
   mainThreadFileEvents: 'mainThreadFileEvents',
   /** Ext host → renderer: output channels shown in the Output panel. */
   mainThreadOutput: 'mainThreadOutput',
@@ -405,28 +405,45 @@ export interface IFileChangeEventDto {
  * Renderer → exposed to the ext host: filesystem event batches pushed only
  * while the host declared interest via {@link IMainThreadFileEvents}. Events
  * cover the recursive workspace watch (plus any out-of-workspace paths the
- * workbench watches); the host filters by each watcher's glob.
+ * workbench watches); the renderer pre-filters by the declared interest
+ * patterns, and the host re-checks against each watcher's glob.
  */
 export interface IExtHostFileEvents {
   $acceptFileEvents(events: readonly IFileChangeEventDto[]): Promise<void>
 }
 
 /**
+ * One declared file-events interest, ext host → renderer. `base` is the
+ * watcher's anchor folder (`file:` UriComponents): a `RelativePattern` base,
+ * or the literal root of an absolute glob; undefined means a workspace-relative
+ * glob covered by the recursive workspace watch. `pattern` is the glob the
+ * watcher matches against paths relative to that anchor — the renderer
+ * pre-filters event batches with it (`compileGlobMatcher`) so events no live
+ * watcher could match never cross the wire; the host still re-checks every
+ * delivered event itself.
+ */
+export interface IFileWatcherInterestDto {
+  readonly base: UriComponents | undefined
+  readonly pattern: string
+}
+
+/**
  * Ext host → exposed to the renderer: the host declares interest in filesystem
- * events per live extension-created FileSystemWatcher. The renderer forwards
- * `IFileWatcherService.onDidChangeFiles` batches only while the subscription
- * count is non-zero, so a host with no watchers costs zero RPC traffic.
+ * events for its live extension-created FileSystemWatchers. Interests are
+ * keyed by `(base, pattern)`: the host reference-counts identical interests
+ * and only the 0↔n transitions cross the wire, so N watchers with the same
+ * glob cost one pair of calls — and a host with no watchers costs zero RPC
+ * traffic.
  *
- * `base` is the watcher's anchor folder (`file:` UriComponents): a
- * `RelativePattern` base, or the literal root of an absolute glob; undefined
- * means a workspace-relative glob covered by the recursive workspace watch. A
- * base outside the workspace makes the renderer arm an out-of-workspace watch
- * for that folder (reference-counted across watchers sharing it) so its events
- * reach the host; a base inside the workspace needs no extra watch.
+ * A base outside the workspace makes the renderer arm an out-of-workspace
+ * watch for that folder (reference-counted across watchers sharing it) so its
+ * events reach the host; a base inside the workspace needs no extra watch. A
+ * pattern anchoring exactly one file (a slash-containing literal) watches just
+ * that file instead of the whole tree.
  */
 export interface IMainThreadFileEvents {
-  $subscribeFileEvents(base: UriComponents | undefined): Promise<void>
-  $unsubscribeFileEvents(base: UriComponents | undefined): Promise<void>
+  $subscribeFileEvents(interest: IFileWatcherInterestDto): Promise<void>
+  $unsubscribeFileEvents(interest: IFileWatcherInterestDto): Promise<void>
 }
 
 /**

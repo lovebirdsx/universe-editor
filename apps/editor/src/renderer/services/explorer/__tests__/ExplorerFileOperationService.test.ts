@@ -218,7 +218,9 @@ class FakeWatcher implements IFileWatcherServiceType {
   async setExcludes() {}
   async unwatch() {}
   async watchOutOfWorkspace() {}
-  async watchOutOfWorkspaceFolders() {}
+  async addOutOfWorkspaceFolder(): Promise<void> {}
+  async removeOutOfWorkspaceFolder(): Promise<void> {}
+  async clearOutOfWorkspaceFolders(): Promise<void> {}
 }
 
 function makeLogger(): ILogger {

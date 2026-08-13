@@ -34,7 +34,8 @@
 - [链接打开机制 + 深链接](opener-service-deeplink-feature.md) — IOpenerService 三档+#L 行列；universe-editor:// 深链；套路见 services/opener/CLAUDE.md
 - [commit changes 视图 + graph 打磨](commit-changes-view-graph-polish.md) — reveal 走 pendingReveal observable 防旧实例闭包；点击延迟=回调身份致全表重渲染；silent 跟随+LRU+latest-wins
 - [快捷键编辑器对标 VSCode](keybindings-editor-vscode-parity.md) — model/视图分离+VirtualList 确定行高+行级多键 API；坑=浮层 Escape 须 window capture 自拦
-- [Tree View（contributes.views + TreeDataProvider）](tree-view-feature.md) — 拉取式懒加载+handle 单代有效；坑=undefined 过线变 null/空菜单泄漏/行点击双触发
+- [Tree View（contributes.views + TreeDataProvider）](tree-view-feature.md) — 拉取式懒加载+三级稳定身份+子树失效；坑=epoch 归零致 stale 复活/label 派生身份塌陷改名行
+- [extension-api 评审遗留优化 10 项收官](extension-api-review-followup-round.md) — 计划文件留改法/验收；教训=refcount 资源 dispose 须全量直发、cap 须在过滤后扣、引擎收敛前先列语义差异
 
 ## 性能 / 疑难根因
 

@@ -196,7 +196,7 @@ export function activate(context: ExtensionContext): void {
 }
 ```
 
-- **返回的 `WebviewPanel` 与自定义编辑器拿到的是同一个类型**：`webview` 表面（`html` / `options` / `cspSource` / `asWebviewUri` / 双向消息）完全通用，上文各节照旧适用；此外 `title` 可读写（改名即改 tab 标题）、`active` / `visible` / `onDidChangeViewState` 反映 tab 的前台状态、`reveal(preserveFocus?)` 重新激活已有 tab、`dispose()` 主动关闭。
+- **返回的 `WebviewPanel` 与自定义编辑器拿到的是同一个类型**：`webview` 表面（`html` / `options` / `cspSource` / `asWebviewUri` / 双向消息）完全通用，上文各节照旧适用；此外 `title` 可读写（改名即改 tab 标题）、`active` / `visible` / `onDidChangeViewState` 跟踪编辑器组真实状态（`visible` = tab 是所在编辑器组的选中 tab；`active` = 且该组是焦点组；切 tab、分屏切焦点、后台 preserveFocus 创建都会如实触发，可按此暂停/恢复渲染）、`reveal(preserveFocus?)` 重新激活已有 tab、`dispose()` 主动关闭。
 - **与 VSCode 的差异**（如实列举）：没有 `ViewColumn` 参数——tab 开在当前活动编辑器组，showOptions 只支持 `{ preserveFocus: true }`（后台打开不抢焦点）；没有 `retainContextWhenHidden`——iframe 在隐藏期间从不重建，状态天然保留；没有 `WebviewPanelSerializer`——窗口 reload / 重启后 tab 不恢复，扩展重新激活后自行重建即可。
 - **句柄即身份**：每个面板一个 tab；扩展侧保存引用、重复调用前先判 `panel` 是否还活着（如上例），不要无脑重复创建。
 

@@ -92,8 +92,10 @@ const BUILTIN_CONTAINER_ID_BY_VIEWS_KEY: Readonly<Record<string, string>> = {
 }
 
 /**
- * Extension containers sort after every built-in one in the activity bar
- * (built-ins use small single-digit orders).
+ * Order spacing for extension containers within the contributed tier. The
+ * registry also sorts by tier (built-in before contributed, see
+ * IViewContainerDescriptor.contributed), so this base no longer carries the
+ * layering invariant — it just spaces out per-extension slots.
  */
 const EXTENSION_CONTAINER_ORDER_BASE = 100
 
@@ -191,47 +193,41 @@ export class ExtensionPointTranslator extends Disposable {
       for (const editor of contributes.customEditors ?? []) {
         this._registerCustomEditorBinding(editor)
       }
-      if (contributes.themes !== undefined && contributes.themes.length > 0) {
-        const handle = this._registerThemes?.(contributes.themes, {
-          extensionId: ext.id,
-          extensionLocation: ext.extensionLocation,
-          extensionIsBuiltin: ext.extensionIsBuiltin,
-        })
-        if (handle !== undefined) {
-          this._register(handle)
-        }
+      const themeContext: IThemeRegistrationContext = {
+        extensionId: ext.id,
+        extensionLocation: ext.extensionLocation,
+        extensionIsBuiltin: ext.extensionIsBuiltin,
       }
-      if (contributes.iconThemes !== undefined && contributes.iconThemes.length > 0) {
-        const handle = this._registerIconThemes?.(contributes.iconThemes, {
-          extensionId: ext.id,
-          extensionLocation: ext.extensionLocation,
-          extensionIsBuiltin: ext.extensionIsBuiltin,
-        })
-        if (handle !== undefined) {
-          this._register(handle)
-        }
-      }
-      if (contributes.productIconThemes !== undefined && contributes.productIconThemes.length > 0) {
-        const handle = this._registerProductIconThemes?.(contributes.productIconThemes, {
-          extensionId: ext.id,
-          extensionLocation: ext.extensionLocation,
-          extensionIsBuiltin: ext.extensionIsBuiltin,
-        })
-        if (handle !== undefined) {
-          this._register(handle)
-        }
-      }
-      if (contributes.grammars !== undefined && contributes.grammars.length > 0) {
-        const handle = this._registerGrammars?.(contributes.grammars, {
-          extensionId: ext.id,
-          extensionLocation: ext.extensionLocation,
-          extensionIsBuiltin: ext.extensionIsBuiltin,
-        })
-        if (handle !== undefined) {
-          this._register(handle)
-        }
-      }
+      this._registerContributionBatch(contributes.themes, this._registerThemes, themeContext)
+      this._registerContributionBatch(
+        contributes.iconThemes,
+        this._registerIconThemes,
+        themeContext,
+      )
+      this._registerContributionBatch(
+        contributes.productIconThemes,
+        this._registerProductIconThemes,
+        themeContext,
+      )
+      this._registerContributionBatch(contributes.grammars, this._registerGrammars, themeContext)
     }
+  }
+
+  /**
+   * Register one batch of theme-family contributions (color / file-icon /
+   * product-icon themes, grammars): an absent/empty batch or an unwired registry
+   * (unit tests) is a no-op; a returned handle is tracked for teardown.
+   */
+  private _registerContributionBatch<T>(
+    batch: readonly T[] | undefined,
+    register:
+      | ((batch: readonly T[], context: IThemeRegistrationContext) => IDisposable | undefined)
+      | undefined,
+    context: IThemeRegistrationContext,
+  ): void {
+    if (batch === undefined || batch.length === 0 || register === undefined) return
+    const handle = register(batch, context)
+    if (handle !== undefined) this._register(handle)
   }
 
   private _registerCustomEditorBinding(editor: ICustomEditorContribution): void {
@@ -266,6 +262,7 @@ export class ExtensionPointTranslator extends Disposable {
             icon: normalizeContainerIcon(container.icon),
             order: EXTENSION_CONTAINER_ORDER_BASE + orderIndex,
             location: ViewContainerLocation.SideBar,
+            contributed: true,
           }),
         )
         orderIndex += 1
@@ -281,8 +278,8 @@ export class ExtensionPointTranslator extends Disposable {
    * reveal. A `views` key resolves to a well-known built-in alias or any
    * registered container id verbatim; anything else is skipped with a warning
    * (mirrors the unknown menu-location policy). The view-level `when` clause is
-   * carried in the DTO but not gated on yet — visibility gating lands with the
-   * tree data phase.
+   * carried onto the descriptor; IViewDescriptorService gates visibility on it,
+   * re-evaluating as the referenced context keys change.
    */
   private _registerViews(
     ext: IExtensionDescriptionDto,
@@ -306,6 +303,7 @@ export class ExtensionPointTranslator extends Disposable {
             containerId,
             componentKey: EXTENSION_TREE_VIEW_COMPONENT_KEY,
             order: index,
+            ...(view.when !== undefined ? { when: view.when } : {}),
           }),
         )
       })

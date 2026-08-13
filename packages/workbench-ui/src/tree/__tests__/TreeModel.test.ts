@@ -100,6 +100,86 @@ describe('TreeModel', () => {
     expect(ids(model)).toEqual(['a', 'a1', 'a2'])
   })
 
+  describe('default-expanded lazy nodes', () => {
+    function lazySource(loadedById: Map<string, N[] | null>) {
+      const roots: N[] = []
+      // Defer the cache write like a real async pull (RPC) — a body that sets
+      // synchronously makes the collect pass observe children immediately.
+      const loadChildren = vi.fn((n: N) =>
+        Promise.resolve().then(() => {
+          loadedById.set(n.id, n.children ?? [])
+        }),
+      )
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: (n) => (loadedById.has(n.id) ? loadedById.get(n.id)! : null),
+        loadChildren,
+        getRoots: () => [...roots],
+      }
+      return { source, loadChildren, roots }
+    }
+
+    it('pulls children when a default-expanded node first becomes visible', async () => {
+      const { source, loadChildren, roots } = lazySource(new Map())
+      roots.push({ id: 'a', children: [{ id: 'a1' }] })
+      const model = new TreeModel({ dataSource: source, defaultExpanded: () => true })
+      const structures = vi.fn()
+      model.onDidChangeStructure(structures)
+
+      // First render: expanded shell, no children yet — but the pull is on its way.
+      expect(ids(model)).toEqual(['a'])
+      expect(loadChildren).toHaveBeenCalledOnce()
+      await vi.waitFor(() => expect(ids(model)).toEqual(['a', 'a1']))
+      expect(structures).toHaveBeenCalledOnce() // one notification, when the pull landed
+    })
+
+    it('cascades through nested default-expanded levels', async () => {
+      const { source, loadChildren, roots } = lazySource(new Map())
+      roots.push({ id: 'a', children: [{ id: 'a1', children: [{ id: 'a1b' }] }] })
+      const model = new TreeModel({ dataSource: source, defaultExpanded: () => true })
+      expect(ids(model)).toEqual(['a'])
+      await vi.waitFor(() => expect(ids(model)).toEqual(['a', 'a1', 'a1b']))
+      expect(loadChildren).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not fire onDidChangeExpansion for the default-expansion pull', async () => {
+      const { source, roots } = lazySource(new Map())
+      roots.push({ id: 'a', children: [{ id: 'a1' }] })
+      const model = new TreeModel({ dataSource: source, defaultExpanded: () => true })
+      const expansions = vi.fn()
+      model.onDidChangeExpansion(expansions)
+      expect(ids(model)).toEqual(['a'])
+      await vi.waitFor(() => expect(ids(model)).toEqual(['a', 'a1']))
+      expect(expansions).not.toHaveBeenCalled()
+    })
+
+    it('surfaces a failed default-expansion pull as the row error and does not retry per render', async () => {
+      const loadedById = new Map<string, N[] | null>()
+      const loadChildren = vi.fn(async () => {
+        throw new Error('fetch exploded')
+      })
+      const roots: N[] = [{ id: 'a', children: [{ id: 'a1' }] }]
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: () => true,
+        getChildren: (n) => (loadedById.has(n.id) ? loadedById.get(n.id)! : null),
+        loadChildren,
+        getRoots: () => roots,
+      }
+      const model = new TreeModel({ dataSource: source, defaultExpanded: () => true })
+      expect(ids(model)).toEqual(['a'])
+      await vi.waitFor(() => expect(model.getVisibleNodes()[0]!.error).toBe('fetch exploded'))
+      model.getVisibleNodes()
+      model.getVisibleNodes()
+      expect(loadChildren).toHaveBeenCalledOnce()
+      // Collapse → re-expand retries through the explicit expand path.
+      model.collapse(roots[0]!)
+      await model.expand(roots[0]!)
+      expect(loadChildren).toHaveBeenCalledTimes(2)
+    })
+  })
+
   it('selectRange selects the inclusive range in visible order', async () => {
     const root: N = { id: 'a', children: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }] }
     const model = new TreeModel({ dataSource: eagerSource([root]) })

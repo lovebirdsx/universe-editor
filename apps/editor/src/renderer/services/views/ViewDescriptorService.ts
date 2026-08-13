@@ -7,17 +7,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  ContextKeyExpr,
   Disposable,
+  IContextKeyService,
+  ILoggerService,
   IStorageService,
   IWorkspaceService,
   StorageScope,
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  createNamedLogger,
   localize,
   observableValue,
 } from '@universe-editor/platform'
 import type {
+  ContextKeyExpression,
+  IContextKeyChangeEvent,
+  ILogger,
   IViewContainerDescriptor,
   IViewDescriptor,
   IViewDescriptorService,
@@ -66,6 +73,18 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   /** Generated containers we own, so we can re-register them on load. */
   private readonly _generated = new Map<string, { location: number; order: number }>()
 
+  /**
+   * when-expression cache keyed by the raw clause string (extension views tend
+   * to repeat a handful of expressions). An undefined entry means the clause
+   * failed to parse — treated as "no constraint" (VSCode parity).
+   */
+  private readonly _whenExprCache = new Map<string, ContextKeyExpression | undefined>()
+  /** Union of context keys referenced by registered gated views; rebuilt lazily. */
+  private _gatedContextKeys: Set<string> | undefined
+  /** viewId → last computed visibility, so context flips only bump on real change. */
+  private readonly _viewVisibility = new Map<string, boolean>()
+  private readonly _logger: ILogger
+
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
   private _initialLoadDone = false
@@ -74,14 +93,30 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   constructor(
     @IStorageService private readonly _storage: IStorageService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IContextKeyService private readonly _contextKeys: IContextKeyService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, { id: 'views', name: 'Views' })
 
     // Re-query on any registry change (built-in/extension views appearing).
-    this._register(ViewRegistry.onDidRegisterView(() => this._bump()))
-    this._register(ViewRegistry.onDidDeregisterView(() => this._bump()))
+    this._register(
+      ViewRegistry.onDidRegisterView(() => {
+        this._gatedContextKeys = undefined
+        this._bump()
+      }),
+    )
+    this._register(
+      ViewRegistry.onDidDeregisterView((v) => {
+        this._gatedContextKeys = undefined
+        this._viewVisibility.delete(v.id)
+        this._bump()
+      }),
+    )
     this._register(ViewContainerRegistry.onDidRegisterViewContainer(() => this._bump()))
     this._register(ViewContainerRegistry.onDidDeregisterViewContainer(() => this._bump()))
+
+    this._register(this._contextKeys.onDidChangeContext((e) => this._onDidChangeContext(e)))
 
     this._register(
       this._storage.onDidChangeWorkspaceScope(() => {
@@ -140,6 +175,16 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   }
 
   getViewsByContainer(containerId: string): readonly IViewDescriptor[] {
+    return this._allViewsByContainer(containerId).filter((v) => this._isViewVisible(v))
+  }
+
+  /**
+   * Container membership with when-gating ignored. Visibility is a query-level
+   * concern; bookkeeping (order assignment, generated-container cleanup) must
+   * see gated views too, or a view hidden away by context would skew orders
+   * or let its generated container be reaped from underneath.
+   */
+  private _allViewsByContainer(containerId: string): readonly IViewDescriptor[] {
     return ViewRegistry.getAllViews()
       .filter((v) => this.getViewContainerByViewId(v.id)?.id === containerId)
       .sort((a, b) => this._viewSortKey(a) - this._viewSortKey(b))
@@ -148,6 +193,53 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   private _viewSortKey(v: IViewDescriptor): number {
     const order = this._viewStates.get(v.id)?.order
     return order !== undefined ? order : v.order
+  }
+
+  // -- when-clause gating -----------------------------------------------------
+
+  private _isViewVisible(view: IViewDescriptor): boolean {
+    if (view.when === undefined) return true
+    return this._contextKeys.contextMatchesRules(this._whenExpression(view.when))
+  }
+
+  private _whenExpression(when: string): ContextKeyExpression | undefined {
+    if (!this._whenExprCache.has(when)) {
+      this._whenExprCache.set(when, ContextKeyExpr.deserialize(when))
+    }
+    return this._whenExprCache.get(when)
+  }
+
+  private _gatedKeys(): ReadonlySet<string> {
+    if (this._gatedContextKeys === undefined) {
+      const keys = new Set<string>()
+      for (const view of ViewRegistry.getAllViews()) {
+        if (view.when === undefined) continue
+        for (const key of this._whenExpression(view.when)?.keys() ?? []) keys.add(key)
+      }
+      this._gatedContextKeys = keys
+    }
+    return this._gatedContextKeys
+  }
+
+  private _onDidChangeContext(e: IContextKeyChangeEvent): void {
+    let affected = false
+    for (const key of this._gatedKeys()) {
+      if (e.affectsContextKey(key)) {
+        affected = true
+        break
+      }
+    }
+    if (!affected) return
+    let changed = false
+    for (const view of ViewRegistry.getAllViews()) {
+      if (view.when === undefined || this._whenExpression(view.when) === undefined) continue
+      const visible = this._isViewVisible(view)
+      if (this._viewVisibility.get(view.id) === visible) continue
+      this._viewVisibility.set(view.id, visible)
+      changed = true
+      this._logger.debug(`view ${view.id} visibility -> ${visible} (when: ${view.when})`)
+    }
+    if (changed) this._bump()
   }
 
   // -- mutations ------------------------------------------------------------
@@ -168,7 +260,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
     )
 
     // Append moved views after the target's current views.
-    let nextOrder = this.getViewsByContainer(targetContainerId).reduce(
+    let nextOrder = this._allViewsByContainer(targetContainerId).reduce(
       (max, v) => Math.max(max, this._viewSortKey(v)),
       -1,
     )
@@ -213,7 +305,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
 
   moveViewInContainer(containerId: string, viewId: string, targetViewId: string): void {
     if (viewId === targetViewId) return
-    const ordered = this.getViewsByContainer(containerId).map((v) => v.id)
+    const ordered = this._allViewsByContainer(containerId).map((v) => v.id)
     const from = ordered.indexOf(viewId)
     const to = ordered.indexOf(targetViewId)
     if (from < 0 || to < 0) return
@@ -331,7 +423,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   private _cleanupGeneratedContainer(containerId: string): void {
     if (!this._generated.has(containerId)) return
     const stillUsed =
-      this.getViewsByContainer(containerId).length > 0 ||
+      this._allViewsByContainer(containerId).length > 0 ||
       [...this._viewLocations.values()].includes(containerId)
     if (stillUsed) return
     this._generated.delete(containerId)

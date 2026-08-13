@@ -214,8 +214,9 @@ export interface IViewContainerContribution {
  * A single view entry under `contributes.views[containerId][]`. The key is either
  * the `id` of a container the same extension declares in `viewsContainers`, or a
  * well-known built-in container key (e.g. `explorer`); unknown keys are skipped
- * with a warning by the renderer. `when` is carried for forward-compat — view
- * visibility gating lands with the tree data phase.
+ * with a warning by the renderer. `when` gates the view's visibility against
+ * workbench context keys (re-evaluated live as they change); while it evaluates
+ * false the view disappears from its container.
  */
 export interface IViewContribution {
   id: string

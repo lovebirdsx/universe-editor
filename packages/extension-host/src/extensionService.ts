@@ -12,7 +12,7 @@
  *
  * Errors are isolated per extension (see ExtensionActivationService).
  */
-import { Emitter, type Event } from '@universe-editor/platform'
+import { Emitter, isCancellationError, URI, type Event } from '@universe-editor/platform'
 import {
   CancellationTokenSource,
   Disposable,
@@ -211,6 +211,13 @@ function toSaveDialogDto(options?: SaveDialogOptionsBridge): ISaveDialogOptionsD
  *  a huge file). Past this, the change is dropped rather than fired docless. */
 const ACTIVE_EDITOR_DOC_WAIT_MS = 15_000
 
+/** How long a visible-set push may hold its event for stragglers' didOpen
+ *  before the layout change is reported with just the mirrored members. A cold
+ *  document (first touch activates its language before the open push) mirrors
+ *  within this window normally; a stuck pipeline must not stall it for 15s.
+ *  Documents arriving later merge into the set and fire a follow-up event. */
+const VISIBLE_EDITORS_DOC_GRACE_MS = 500
+
 /** How long `openTextDocument` waits for the renderer's mirror push after its
  *  `$openTextDocument` RPC returned (language activation runs in between). */
 const OPEN_TEXT_DOCUMENT_WAIT_MS = 15_000
@@ -254,11 +261,15 @@ export class ExtensionService implements IExtensionHostBridge {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
     this._onDidChangeActiveTextEditor.event
 
-  /** Latest pushed visible-editor set, as snapshot handles (one per group). */
+  /** Latest visible set as TextEditor handles: every pushed snapshot whose
+   *  document is mirrored (stragglers join later via `_onVisibleDocumentOpened`). */
   private _visibleTextEditors: readonly TextEditor[] = []
-  /** Bumped per visible-set push; a held-back (doc-pending) push only fires if
-   *  no newer push arrived while it waited. */
-  private _visibleEditorsGeneration = 0
+  /** The renderer's last whole-set push: authority over which editors belong. */
+  private _visibleSnapshots: readonly IActiveTextEditorDto[] = []
+  /** URI join of the last fired set — the event reports real set changes only. */
+  private _lastFiredVisibleKey: string | null = null
+  /** Holds back the event while a push waits for stragglers' mirrors. */
+  private _visibleGraceTimer: ReturnType<typeof setTimeout> | undefined
   private readonly _onDidChangeVisibleTextEditors = new Emitter<readonly TextEditor[]>()
   readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]> =
     this._onDidChangeVisibleTextEditors.event
@@ -340,6 +351,7 @@ export class ExtensionService implements IExtensionHostBridge {
         this._commands.execute(command, args),
       )
     }
+    this._documents.onDidOpen((document) => this._onVisibleDocumentOpened(document))
     installApiBridge(this)
   }
 
@@ -767,7 +779,18 @@ export class ExtensionService implements IExtensionHostBridge {
         token,
       )
     } catch (err) {
-      if (token?.isCancellationRequested) return []
+      if (token?.isCancellationRequested) {
+        // A cancelled request is expected to surface as the channel's
+        // CancellationError — kept silent. Any other rejection here is a real
+        // failure that merely raced the cancel (path-policy reject, RPC drop):
+        // log it before honouring the public contract's [] for cancellation.
+        if (!isCancellationError(err)) {
+          console.warn(
+            `[extHost] findFiles failed alongside its cancellation: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+        return []
+      }
       throw err
     }
   }
@@ -943,43 +966,79 @@ export class ExtensionService implements IExtensionHostBridge {
     })
   }
 
-  /** `window.visibleTextEditors`: the latest pushed set, as snapshot handles.
-   *  Synchronous because the renderer mirrors the set on every change. */
+  /** `window.visibleTextEditors`: the latest pushed set restricted to documents
+   *  already mirrored. A cold document's mirror lands a moment after the push
+   *  (its language activates before the open push): inside that window the
+   *  getter serves the known subset and converges to the full set on didOpen. */
   get visibleTextEditors(): readonly TextEditor[] {
     return this._visibleTextEditors
   }
 
   /** IExtHostEditor.$acceptVisibleEditorsChange — the renderer's whole-set
-   *  mirror of the per-group visible text editors. The cache swaps immediately so
-   *  the getter never serves a stale set; the event additionally waits for every
-   *  pushed document to be in the mirror (same first-activation race as the
-   *  active editor), unless a newer push supersedes this one meanwhile. */
+   *  mirror of the per-group visible text editors. The getter swaps immediately
+   *  (never a stale set); the event waits out a short grace for not-yet-mirrored
+   *  documents (same first-activation race as the active editor) so a layout
+   *  change reports the complete set in the common case, then reports the
+   *  best-known subset rather than sitting behind a stuck mirror for 15s.
+   *  A document mirroring later merges in by editor and fires a follow-up. */
   acceptVisibleEditorsChange(snapshots: readonly IActiveTextEditorDto[]): void {
-    const generation = ++this._visibleEditorsGeneration
+    this._visibleSnapshots = snapshots
+    this._rebuildVisibleTextEditors()
+    if (this._visibleTextEditors.length === snapshots.length) {
+      this._cancelVisibleEditorsGrace()
+    } else {
+      if (this._visibleGraceTimer !== undefined) clearTimeout(this._visibleGraceTimer)
+      this._visibleGraceTimer = setTimeout(() => {
+        this._visibleGraceTimer = undefined
+        this._reportVisibleTextEditors()
+      }, VISIBLE_EDITORS_DOC_GRACE_MS)
+    }
+    this._reportVisibleTextEditors()
+  }
+
+  /** Re-sync the getter with the latest pushed set, in group order. */
+  private _rebuildVisibleTextEditors(): void {
     const editors: TextEditor[] = []
-    const pending: Promise<unknown>[] = []
-    for (const snapshot of snapshots) {
+    for (const snapshot of this._visibleSnapshots) {
       const document = this._documents.get(snapshot.uri)
-      if (document) {
-        editors.push(this._editorFromSnapshot(snapshot, document))
-        continue
-      }
-      pending.push(
-        this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS).then((lateDoc) => {
-          if (lateDoc) editors.push(this._editorFromSnapshot(snapshot, lateDoc))
-        }),
-      )
+      if (document) editors.push(this._editorFromSnapshot(snapshot, document))
     }
     this._visibleTextEditors = editors
-    if (pending.length === 0) {
-      this._onDidChangeVisibleTextEditors.fire(editors)
-      return
+  }
+
+  /** A document just mirrored: when it belongs to the latest pushed set, a held
+   *  member resolved — merge it in and report. Outside the set (the editor moved
+   *  on meanwhile) it is ignored. No wait-time window caps this: a mirror that
+   *  lands ages late still completes the set instead of being dropped by a
+   *  stale generation guard. */
+  private _onVisibleDocumentOpened(document: TextDocument): void {
+    const member = this._visibleSnapshots.some(
+      (snapshot) => this._documents.get(snapshot.uri) === document,
+    )
+    if (!member) return
+    this._rebuildVisibleTextEditors()
+    if (this._visibleTextEditors.length === this._visibleSnapshots.length) {
+      this._cancelVisibleEditorsGrace()
     }
-    void Promise.all(pending).then(() => {
-      if (generation !== this._visibleEditorsGeneration) return
-      this._visibleTextEditors = editors
-      this._onDidChangeVisibleTextEditors.fire(editors)
-    })
+    this._reportVisibleTextEditors()
+  }
+
+  /** Report the getter's set to extensions — silent while a grace timer still
+   *  waits for stragglers, and only when the set actually changed. */
+  private _reportVisibleTextEditors(): void {
+    if (this._visibleGraceTimer !== undefined) return
+    const key = this._visibleTextEditors
+      .map((editor) => URI.revive(editor.document.uri)?.toString() ?? '')
+      .join('|')
+    if (key === this._lastFiredVisibleKey) return
+    this._lastFiredVisibleKey = key
+    this._onDidChangeVisibleTextEditors.fire(this._visibleTextEditors)
+  }
+
+  private _cancelVisibleEditorsGrace(): void {
+    if (this._visibleGraceTimer === undefined) return
+    clearTimeout(this._visibleGraceTimer)
+    this._visibleGraceTimer = undefined
   }
 
   /**
@@ -1000,7 +1059,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._onDidChangeTextEditorSelection.fire({
       textEditor: editor,
       selections: sels,
-      // `undefined` crosses the JSON wire as null; normalize back.
+      // Tolerate an explicitly-cast null: the public event uses undefined.
       kind: (kind ?? undefined) as TextEditorSelectionChangeKind | undefined,
     })
   }

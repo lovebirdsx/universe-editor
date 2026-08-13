@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  ContextKeyService,
   Emitter,
+  NullLogger,
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  type ILoggerService,
   type IStorageService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -32,6 +35,10 @@ function makeStorage(initial?: Record<string, unknown>): {
 
 const hydratedWorkspace = { current: {} } as unknown as IWorkspaceService
 
+const stubLoggerService = {
+  createLogger: () => new NullLogger(),
+} as unknown as ILoggerService
+
 const disposables: Array<{ dispose: () => void }> = []
 
 function registerContainer(id: string, location: ViewContainerLocation, order = 1) {
@@ -40,7 +47,13 @@ function registerContainer(id: string, location: ViewContainerLocation, order = 
   )
 }
 
-function registerView(id: string, containerId: string, order = 1, canMoveView = true) {
+function registerView(
+  id: string,
+  containerId: string,
+  order = 1,
+  canMoveView = true,
+  when?: string,
+) {
   disposables.push(
     ViewRegistry.registerView({
       id,
@@ -49,8 +62,14 @@ function registerView(id: string, containerId: string, order = 1, canMoveView = 
       componentKey: `${id}.component`,
       order,
       ...(canMoveView ? {} : { canMoveView: false }),
+      ...(when !== undefined ? { when } : {}),
     }),
   )
+}
+
+function makeService(storage: IStorageService, contextKeys: ContextKeyService) {
+  disposables.push(contextKeys)
+  return new ViewDescriptorService(storage, hydratedWorkspace, contextKeys, stubLoggerService)
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
@@ -70,7 +89,7 @@ describe('ViewDescriptorService', () => {
 
   it('resolves default container and location from the registry', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     expect(svc.getViewContainerByViewId('test.v1')?.id).toBe('test.cA')
     expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v1', 'test.v2'])
     expect(svc.getViewContainerLocation('test.cA')).toBe(ViewContainerLocation.SideBar)
@@ -79,7 +98,7 @@ describe('ViewDescriptorService', () => {
 
   it('moves a view to another container and reflects it in queries', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewsToContainer(['test.v1'], 'test.cB')
     expect(svc.getViewContainerByViewId('test.v1')?.id).toBe('test.cB')
     expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v2'])
@@ -90,7 +109,7 @@ describe('ViewDescriptorService', () => {
   it('refuses to move a view marked canMoveView: false', () => {
     registerView('test.locked', 'test.cA', 3, false)
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewsToContainer(['test.locked'], 'test.cB')
     expect(svc.getViewContainerByViewId('test.locked')?.id).toBe('test.cA')
     svc.dispose()
@@ -98,7 +117,7 @@ describe('ViewDescriptorService', () => {
 
   it('reorders views within a container', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewInContainer('test.cA', 'test.v2', 'test.v1')
     expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v2', 'test.v1'])
     svc.dispose()
@@ -106,7 +125,7 @@ describe('ViewDescriptorService', () => {
 
   it('generates a container when moving a view to a location, recycled when emptied', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewToLocation('test.v1', ViewContainerLocation.SecondarySideBar)
 
     const generated = svc.getViewContainersByLocation(ViewContainerLocation.SecondarySideBar)
@@ -123,7 +142,7 @@ describe('ViewDescriptorService', () => {
 
   it('moves a whole container to another location', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewContainerToLocation('test.cA', ViewContainerLocation.Panel)
     expect(svc.getViewContainerLocation('test.cA')).toBe(ViewContainerLocation.Panel)
     expect(svc.getViewContainersByLocation(ViewContainerLocation.Panel).map((c) => c.id)).toContain(
@@ -134,14 +153,14 @@ describe('ViewDescriptorService', () => {
 
   it('persists and restores collapse state and view location across a reload', async () => {
     const { service, store } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewsToContainer(['test.v1'], 'test.cB')
     svc.setViewCollapsed('test.v2', true)
     await svc.save()
     svc.dispose()
 
     // A fresh service reading the same storage restores customizations.
-    const svc2 = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc2 = makeService(service, new ContextKeyService())
     await svc2.load()
     expect(svc2.getViewContainerByViewId('test.v1')?.id).toBe('test.cB')
     expect(svc2.getViewState('test.v2').collapsed).toBe(true)
@@ -151,7 +170,7 @@ describe('ViewDescriptorService', () => {
 
   it('setViewSizes persists only when asked (layout bookkeeping stays in memory)', async () => {
     const { service, store } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
 
     // Default: bookkeeping only — no debounced persist even if the value
     // changed (first-layout even split, container resizes, corrections).
@@ -173,7 +192,7 @@ describe('ViewDescriptorService', () => {
 
   it('getPersistedViewSize is immune to layout bookkeeping overwrites', async () => {
     const { service, store } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
 
     // User sash drag-end persists the dragged sizes.
     svc.setViewSizes(
@@ -212,7 +231,7 @@ describe('ViewDescriptorService', () => {
     store.set('workbench.viewCustomizations', {
       viewStates: { 'test.v1': { size: 420 }, 'test.v2': { size: 300, collapsed: true } },
     })
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     await svc.load()
     expect(svc.getPersistedViewSize('test.v1')).toBe(420)
     expect(svc.getPersistedViewSize('test.v2')).toBe(300)
@@ -226,7 +245,7 @@ describe('ViewDescriptorService', () => {
 
   it('re-registers generated containers on load', async () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewToLocation('test.v3', ViewContainerLocation.SideBar)
     const genId = svc
       .getViewContainersByLocation(ViewContainerLocation.SideBar)
@@ -234,7 +253,7 @@ describe('ViewDescriptorService', () => {
     await svc.save()
     svc.dispose()
 
-    const svc2 = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc2 = makeService(service, new ContextKeyService())
     await svc2.load()
     expect(svc2.getViewContainerByViewId('test.v3')?.id).toBe(genId)
     expect(ViewContainerRegistry.getViewContainer(genId)).toBeDefined()
@@ -243,7 +262,7 @@ describe('ViewDescriptorService', () => {
 
   it('bumps version on mutation so observers re-read', () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     const before = svc.version.get()
     svc.moveViewsToContainer(['test.v1'], 'test.cB')
     expect(svc.version.get()).toBeGreaterThan(before)
@@ -252,11 +271,99 @@ describe('ViewDescriptorService', () => {
 
   it('reset clears all customizations', async () => {
     const { service } = makeStorage()
-    const svc = new ViewDescriptorService(service, hydratedWorkspace)
+    const svc = makeService(service, new ContextKeyService())
     svc.moveViewsToContainer(['test.v1'], 'test.cB')
     svc.reset()
     expect(svc.getViewContainerByViewId('test.v1')?.id).toBe('test.cA')
     await tick()
+    svc.dispose()
+  })
+})
+
+describe('ViewDescriptorService when-clause gating', () => {
+  beforeEach(() => {
+    registerContainer('test.cA', ViewContainerLocation.SideBar, 1)
+    registerContainer('test.cB', ViewContainerLocation.Panel, 2)
+    registerView('test.v1', 'test.cA', 1)
+    registerView('test.v2', 'test.cA', 2)
+    registerView('test.v3', 'test.cB', 1)
+  })
+
+  afterEach(() => {
+    while (disposables.length) disposables.pop()?.dispose()
+  })
+
+  it('gates a when=false view out of its container queries', () => {
+    registerView('test.gated', 'test.cA', 3, true, 'testGate')
+    const { service } = makeStorage()
+    const svc = makeService(service, new ContextKeyService())
+    // Nothing ever sets testGate: it resolves false, so the view stays hidden.
+    expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v1', 'test.v2'])
+    // Membership (used by move/reorder bookkeeping) is unaffected by gating.
+    expect(svc.getViewContainerByViewId('test.gated')?.id).toBe('test.cA')
+    svc.dispose()
+  })
+
+  it('reveals and re-hides the view as its context key flips, bumping version only on change', () => {
+    registerView('test.gated', 'test.cA', 3, true, 'testGate')
+    const contextKeys = new ContextKeyService()
+    const { service } = makeStorage()
+    const svc = makeService(service, contextKeys)
+
+    const v0 = svc.version.get()
+    // An unrelated key leaves both visibility and the version observable alone.
+    contextKeys.set('unrelated', true)
+    expect(svc.version.get()).toBe(v0)
+    expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v1', 'test.v2'])
+
+    contextKeys.set('testGate', true)
+    expect(svc.version.get()).toBeGreaterThan(v0)
+    expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual([
+      'test.v1',
+      'test.v2',
+      'test.gated',
+    ])
+
+    const v1 = svc.version.get()
+    contextKeys.set('testGate', false)
+    expect(svc.version.get()).toBeGreaterThan(v1)
+    expect(svc.getViewsByContainer('test.cA').map((v) => v.id)).toEqual(['test.v1', 'test.v2'])
+    svc.dispose()
+  })
+
+  it('evaluates compound expressions key by key', () => {
+    registerView('test.gated', 'test.cA', 3, true, 'testGate && testOther')
+    const contextKeys = new ContextKeyService()
+    const { service } = makeStorage()
+    const svc = makeService(service, contextKeys)
+
+    contextKeys.set('testGate', true)
+    expect(svc.getViewsByContainer('test.cA')).toHaveLength(2)
+    contextKeys.set('testOther', true)
+    expect(svc.getViewsByContainer('test.cA')).toHaveLength(3)
+    contextKeys.remove('testGate')
+    expect(svc.getViewsByContainer('test.cA')).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('drops a container left with no visible views and restores it on flip', () => {
+    registerContainer('test.cC', ViewContainerLocation.SideBar, 9)
+    registerView('test.onlyGated', 'test.cC', 1, true, 'testGate')
+    const contextKeys = new ContextKeyService()
+    const { service } = makeStorage()
+    const svc = makeService(service, contextKeys)
+
+    expect(svc.getViewContainersByLocation(ViewContainerLocation.SideBar).map((c) => c.id)).toEqual(
+      ['test.cA'],
+    )
+    contextKeys.set('testGate', true)
+    expect(svc.getViewContainersByLocation(ViewContainerLocation.SideBar).map((c) => c.id)).toEqual(
+      ['test.cA', 'test.cC'],
+    )
+    contextKeys.set('testGate', false)
+    expect(svc.getViewContainersByLocation(ViewContainerLocation.SideBar).map((c) => c.id)).toEqual(
+      ['test.cA'],
+    )
     svc.dispose()
   })
 })

@@ -370,7 +370,9 @@ describe('MainThreadLanguages — diagnostics', () => {
       message: 'boom',
       severity: 1,
       source: 'ts',
-      code: 2304,
+      // Codes read back in their string form (VSCode parity): the marker only
+      // stores the stringified code.
+      code: '2304',
       codeDescription: { href: 'https://typescript.tv/errors/#2304' },
       tags: [1],
     })

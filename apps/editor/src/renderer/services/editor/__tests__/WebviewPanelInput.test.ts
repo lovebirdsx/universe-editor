@@ -4,15 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { WebviewPanelInput } from '../WebviewPanelInput.js'
+import { hostPanelResource, WebviewPanelInput } from '../WebviewPanelInput.js'
 
 function makeInput(panelHandle: number, title = 'A'): WebviewPanelInput {
-  return new WebviewPanelInput(
-    panelHandle,
-    'cat.view',
-    title,
-    URI.from({ scheme: 'webview-panel', path: `/${panelHandle}` }),
-  )
+  return new WebviewPanelInput(panelHandle, 'cat.view', title)
 }
 
 describe('WebviewPanelInput', () => {
@@ -28,11 +23,13 @@ describe('WebviewPanelInput', () => {
     expect(input.resource).toBeUndefined()
   })
 
-  it('exposes viewType and the shared focus resource', () => {
-    const resource = URI.from({ scheme: 'webview-panel', path: '/-7' })
-    const input = new WebviewPanelInput(-7, 'cat.view', 'A', resource)
+  it('exposes viewType and derives the shared focus resource from the panelHandle', () => {
+    const input = makeInput(-7)
     expect(input.viewType).toBe('cat.view')
-    expect(input.focusResource.toString()).toBe(resource.toString())
+    expect(input.focusResource.toString()).toBe(hostPanelResource(-7).toString())
+    expect(input.focusResource.toString()).toBe(
+      URI.from({ scheme: 'webview-panel', path: '/-7' }).toString(),
+    )
   })
 
   it('is transient — no serialize, so a window restore drops the tab', () => {

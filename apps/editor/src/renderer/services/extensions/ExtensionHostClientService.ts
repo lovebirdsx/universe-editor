@@ -63,6 +63,7 @@ import { IExtensionManagementService } from '../../../shared/ipc/extensionManage
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { IOutOfWorkspaceWatchService } from '../files/outOfWorkspaceWatchService.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { DEEP_LINK_PROTOCOL } from '../../../shared/deepLink.js'
 import { IScmService } from './ScmService.js'
@@ -210,6 +211,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
     @IExcludeService private readonly _exclude: IExcludeService,
     @IFileWatcherService private readonly _fileWatcher: IFileWatcherService,
+    @IOutOfWorkspaceWatchService
+    private readonly _outOfWorkspaceWatch: IOutOfWorkspaceWatchService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -321,6 +324,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       fileSearch: this._fileSearch,
       exclude: this._exclude,
       fileWatcher: this._fileWatcher,
+      outOfWorkspaceWatch: this._outOfWorkspaceWatch,
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
       opener: this._opener,

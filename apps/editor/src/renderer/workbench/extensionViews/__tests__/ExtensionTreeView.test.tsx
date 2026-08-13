@@ -126,7 +126,7 @@ describe('ExtensionTreeView', () => {
     // like Uri), which must never round-trip through the renderer registry.
     fireEvent.click(screen.getByText('root-a'))
     expect(extHost.$executeTreeItemCommand).toHaveBeenCalledTimes(1)
-    expect(extHost.$executeTreeItemCommand).toHaveBeenCalledWith(VIEW_ID, 1)
+    expect(extHost.$executeTreeItemCommand).toHaveBeenCalledWith(VIEW_ID, 1, undefined)
     expect(executeCommand).not.toHaveBeenCalled()
   })
 
@@ -279,8 +279,11 @@ describe('ExtensionTreeView', () => {
     ])
   })
 
-  it('pushes no expansion changes across a $refresh with rebuilt handles', async () => {
-    const backing = { root: [dto(1, 'a', { collapsibleState: 1 })] }
+  it('keeps the expansion across a whole-view $refresh and pushes no expansion change', async () => {
+    const backing: Record<string, ITreeItemDto[]> = {
+      root: [dto(1, 'a', { collapsibleState: 1 })],
+      '1': [dto(2, 'a-child')],
+    }
     const { treeViews, extHost, services } = setup(backing)
     await treeViews.$registerTreeDataProvider(VIEW_ID)
     await renderView(services)
@@ -290,13 +293,45 @@ describe('ExtensionTreeView', () => {
     expect(extHost.$acceptExpansionState.mock.calls).toEqual([[VIEW_ID, 1, true]])
     extHost.$acceptExpansionState.mockClear()
 
-    // The host re-allocates handles on refresh; a diff of rendered rows would
-    // report a collapse for the dead handle 1 and a "new" state for handle 7.
-    backing.root = [dto(7, 'a2', { collapsibleState: 1 })]
+    // Handles are stable across a refresh, so the expanded row stays expanded
+    // and its children page is re-pulled instead of collapsing to nothing.
+    backing['root'] = [dto(1, 'a (renamed)', { collapsibleState: 1 })]
+    backing['1'] = [dto(2, 'a-child (renamed)')]
     await act(async () => {
       await treeViews.$refresh(VIEW_ID)
     })
-    expect(screen.getByText('a2')).toBeTruthy()
+    expect(screen.getByText('a (renamed)')).toBeTruthy()
+    expect(screen.getByText('a-child (renamed)')).toBeTruthy()
+    expect(extHost.$acceptExpansionState).not.toHaveBeenCalled()
+  })
+
+  it('re-pulls only the changed subtree on a per-element $refresh', async () => {
+    const backing: Record<string, ITreeItemDto[]> = {
+      root: [dto(1, 'a', { collapsibleState: 1 }), dto(2, 'b', { collapsibleState: 1 })],
+      '1': [dto(3, 'a-child')],
+      '2': [dto(4, 'b-child')],
+    }
+    const { treeViews, extHost, services } = setup(backing)
+    await treeViews.$registerTreeDataProvider(VIEW_ID)
+    await renderView(services)
+
+    fireEvent.click(screen.getByText('a'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('b'))
+    await act(async () => {})
+    extHost.$getChildren.mockClear()
+    extHost.$acceptExpansionState.mockClear()
+
+    backing['1'] = [dto(3, 'a-child (renamed)')]
+    await act(async () => {
+      await treeViews.$refresh(VIEW_ID, [dto(1, 'a', { collapsibleState: 1 })])
+    })
+
+    // Only the invalidated page is pulled again — the roots and `b`'s children
+    // keep their cache, and both rows stay expanded.
+    expect(extHost.$getChildren.mock.calls).toEqual([[VIEW_ID, 1]])
+    expect(screen.getByText('a-child (renamed)')).toBeTruthy()
+    expect(screen.getByText('b-child')).toBeTruthy()
     expect(extHost.$acceptExpansionState).not.toHaveBeenCalled()
   })
 

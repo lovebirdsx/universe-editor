@@ -93,9 +93,11 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
     useCallback(() => containerRef.current, []),
   )
 
-  // Provider registration / invalidation / landed pulls → re-read the cache. A
-  // $refresh lands here with the cache already cleared, so re-pull the roots
-  // (inflight-deduped) instead of rendering an empty tree forever.
+  // Provider registration / invalidation / landed pulls → re-read the cache.
+  // A $refresh lands here with the invalidated pages already dropped, so
+  // re-pull whatever the user still has open: the roots when the whole view
+  // was invalidated, plus any expanded row whose children page went away
+  // (expand() on an already-expanded row only pulls, it fires no event).
   useEffect(() => {
     const d = treeViews.onDidChangeView((changedViewId) => {
       if (changedViewId !== viewId) return
@@ -109,6 +111,11 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         void treeViews.loadChildren(changedViewId)
       }
       model.refresh()
+      for (const node of model.getVisibleNodes()) {
+        if (!node.expanded) continue
+        if (treeViews.getChildren(changedViewId, node.element.handle) !== null) continue
+        void model.expand(node.element)
+      }
     })
     return () => d.dispose()
   }, [treeViews, viewId, model])

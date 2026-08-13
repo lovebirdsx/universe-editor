@@ -27,6 +27,13 @@ export interface IViewContainerDescriptor {
   readonly rejectAddedViews?: boolean
   /** Internal marker: a runtime-generated container that auto-removes when emptied. */
   readonly generated?: boolean
+  /**
+   * True for extension-contributed containers. They always sort AFTER built-in
+   * containers within the same location, regardless of order — this makes the
+   * old "built-ins always use tiny orders" invariant (EXTENSION_CONTAINER_ORDER_BASE)
+   * structural instead of implicit.
+   */
+  readonly contributed?: boolean
 }
 
 export interface IViewDescriptor {
@@ -41,6 +48,13 @@ export interface IViewDescriptor {
   readonly icon?: string
   /** False ⇒ this view cannot be moved out of its container. Defaults to true. */
   readonly canMoveView?: boolean
+  /**
+   * VSCode `contributes.views[].when` context-key clause. While it evaluates
+   * false the view drops out of its container's visible set (a container left
+   * with no visible views itself disappears); flips are live — visibility is
+   * re-evaluated whenever the referenced context keys change.
+   */
+  readonly when?: string
 }
 
 // -------- ViewContainerRegistry --------
@@ -84,7 +98,11 @@ class ViewContainerRegistryImpl implements IViewContainerRegistry {
   getViewContainers(location: ViewContainerLocation): readonly IViewContainerDescriptor[] {
     return [...this._containers.values()]
       .filter((d) => d.location === location)
-      .sort((a, b) => a.order - b.order)
+      .sort((a, b) => {
+        // Tier first (built-in before contributed), then the declared order.
+        const tier = Number(a.contributed === true) - Number(b.contributed === true)
+        return tier !== 0 ? tier : a.order - b.order
+      })
   }
 
   getAllViewContainers(): readonly IViewContainerDescriptor[] {

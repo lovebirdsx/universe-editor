@@ -6,10 +6,13 @@
  *  component renders the cache through a workbench-ui TreeModel and pulls
  *  lazily back over `extHostTreeViews` via the proxy set on connect.
  *
- *  Handles are host-allocated and only valid within one model generation: a
- *  `$refresh` clears every cached node and bumps the generation, so a pull
- *  that resolves after a refresh is discarded instead of resurrecting stale
- *  handles (mirrors the host side, which answers unknown handles with []).
+ *  Handles are host-allocated and **stable across refreshes**, so the tree
+ *  model's expansion / selection (keyed by handle) survives an invalidation.
+ *  The cache is a set of pages — the roots plus one per expanded parent —
+ *  each carrying an epoch: invalidating a page bumps its epoch so a pull that
+ *  was already in flight is discarded on settle instead of resurrecting rows
+ *  the host has since dropped. `$refresh` with items invalidates only the
+ *  named subtrees; without items it invalidates every page.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator, Disposable, Emitter, type Event } from '@universe-editor/platform'
@@ -19,11 +22,17 @@ import type {
   ITreeItemDto,
 } from '@universe-editor/extensions-common'
 
+/** Page key for the roots. Host handles start at 1, so -1 never collides. */
+const ROOT_PAGE = -1
+
 interface ITreeViewModel {
   roots: readonly ITreeItemDto[] | null
   readonly children: Map<number, readonly ITreeItemDto[]>
-  generation: number
-  readonly inflight: Map<number, { generation: number; promise: Promise<void> }>
+  /** Which page each cached row currently sits in (row handle → page key). */
+  readonly pageByHandle: Map<number, number>
+  /** Invalidation counter per page; only kept while a pull is in flight. */
+  readonly pageEpoch: Map<number, number>
+  readonly inflight: Map<number, { epoch: number; promise: Promise<void> }>
   lastVisible: boolean | undefined
 }
 
@@ -98,26 +107,20 @@ export class TreeViewsService
   async loadChildren(viewId: string, parentHandle?: number): Promise<void> {
     const model = this._views.get(viewId)
     if (!model || !this._extHost) return
-    const key = parentHandle ?? -1
-    // A pull started before a $refresh still sits in inflight but belongs to a
-    // dead generation: it is discarded on settle, so it must not dedupe a
-    // retry — otherwise nothing ever pulls again and the tree stays blank.
-    const pending = model.inflight.get(key)
-    if (pending && pending.generation === model.generation) return pending.promise
-    const generation = model.generation
-    // Omit the optional arg entirely for a roots pull: an explicit `undefined`
-    // crosses the JSON wire as `null`, which the host must not mistake for a
-    // (stale) parent handle.
-    const pull = (
-      parentHandle === undefined
-        ? this._extHost.$getChildren(viewId)
-        : this._extHost.$getChildren(viewId, parentHandle)
-    )
+    const page = parentHandle ?? ROOT_PAGE
+    // A pull started before its page was invalidated still sits in inflight
+    // but belongs to a dead epoch: it is discarded on settle, so it must not
+    // dedupe a retry — otherwise nothing ever pulls again and the page stays
+    // blank.
+    const epoch = model.pageEpoch.get(page) ?? 0
+    const pending = model.inflight.get(page)
+    if (pending && pending.epoch === epoch) return pending.promise
+    const pull = this._extHost
+      .$getChildren(viewId, parentHandle)
       .then((items) => {
         const current = this._views.get(viewId)
-        if (current !== model || model.generation !== generation) return
-        if (parentHandle === undefined) model.roots = items
-        else model.children.set(parentHandle, items)
+        if (current !== model || (model.pageEpoch.get(page) ?? 0) !== epoch) return
+        this._setPage(model, page, items)
         this._onDidChangeView.fire(viewId)
       })
       .catch((err: unknown) => {
@@ -126,9 +129,9 @@ export class TreeViewsService
         )
       })
       .finally(() => {
-        if (model.inflight.get(key)?.promise === pull) model.inflight.delete(key)
+        if (model.inflight.get(page)?.promise === pull) model.inflight.delete(page)
       })
-    model.inflight.set(key, { generation, promise: pull })
+    model.inflight.set(page, { epoch, promise: pull })
     return pull
   }
 
@@ -153,13 +156,7 @@ export class TreeViewsService
 
   executeTreeItemCommand(viewId: string, handle: number, commandId?: string): void {
     if (!this._views.has(viewId) || !this._extHost) return
-    // Omit the commandId entirely for a row click: an explicit `undefined`
-    // crosses the JSON wire as `null` (same pitfall as the $getChildren
-    // parentHandle), which the host reads as "menu pick with a null id".
-    const execution =
-      commandId === undefined
-        ? this._extHost.$executeTreeItemCommand(viewId, handle)
-        : this._extHost.$executeTreeItemCommand(viewId, handle, commandId)
+    const execution = this._extHost.$executeTreeItemCommand(viewId, handle, commandId)
     void execution.catch((err: unknown) => {
       console.warn(
         `[treeViews] $executeTreeItemCommand(${viewId}, ${handle}${
@@ -181,7 +178,8 @@ export class TreeViewsService
     const model: ITreeViewModel = {
       roots: null,
       children: new Map(),
-      generation: 0,
+      pageByHandle: new Map(),
+      pageEpoch: new Map(),
       inflight: new Map(),
       lastVisible: undefined,
     }
@@ -205,19 +203,94 @@ export class TreeViewsService
     return Promise.resolve()
   }
 
-  $refresh(viewId: string, parentHandles?: number[]): Promise<void> {
+  $refresh(viewId: string, items?: ITreeItemDto[]): Promise<void> {
     const model = this._views.get(viewId)
     if (!model) return Promise.resolve()
+
+    if (!items || items.length === 0) {
+      console.debug(`[treeViews] refresh (whole view): ${viewId}`)
+      this._invalidateAll(model)
+      this._onDidChangeView.fire(viewId)
+      return Promise.resolve()
+    }
+
+    // Per-subtree: replace each named row in place (its label / icon / command
+    // may have changed) and drop only its children page, so sibling and
+    // unrelated pages — and the expansion state keyed by handle — survive.
+    let changed = false
+    for (const item of items) {
+      const page = model.pageByHandle.get(item.handle)
+      if (page === undefined) continue
+      const replaced = this._replaceRow(model, page, item)
+      if (!replaced) continue
+      this._invalidatePage(model, item.handle)
+      changed = true
+    }
+    if (!changed) {
+      console.debug(`[treeViews] refresh: no cached rows for ${viewId}, nothing to invalidate`)
+      return Promise.resolve()
+    }
     console.debug(
-      `[treeViews] refresh: ${viewId}${parentHandles ? ` (subtree ${parentHandles.join(',')})` : ''}`,
+      `[treeViews] refresh (subtrees): ${viewId} handles=${items.map((i) => i.handle).join(',')}`,
     )
-    // Narrowed `parentHandles` belong to a dead generation (the host cleared
-    // its handle table), so only whole-view invalidation is sound. The host's
-    // first cut never sends handles — treat any refresh as a full one.
-    model.generation++
-    model.roots = null
-    model.children.clear()
     this._onDidChangeView.fire(viewId)
     return Promise.resolve()
+  }
+
+  // --- cache bookkeeping ---
+
+  private _setPage(model: ITreeViewModel, page: number, items: readonly ITreeItemDto[]): void {
+    const kept = new Set(items.map((item) => item.handle))
+    const previous = page === ROOT_PAGE ? model.roots : model.children.get(page)
+    for (const item of previous ?? []) {
+      if (kept.has(item.handle)) continue
+      model.pageByHandle.delete(item.handle)
+      this._invalidatePage(model, item.handle)
+    }
+    if (page === ROOT_PAGE) model.roots = items
+    else model.children.set(page, items)
+    for (const item of items) model.pageByHandle.set(item.handle, page)
+  }
+
+  /** Drop a page's cached children (recursively), leaving the row itself. */
+  private _invalidatePage(model: ITreeViewModel, page: number): void {
+    const items = page === ROOT_PAGE ? model.roots : model.children.get(page)
+    if (page === ROOT_PAGE) model.roots = null
+    else model.children.delete(page)
+    this._bumpEpoch(model, page)
+    for (const item of items ?? []) {
+      model.pageByHandle.delete(item.handle)
+      this._invalidatePage(model, item.handle)
+    }
+  }
+
+  private _invalidateAll(model: ITreeViewModel): void {
+    model.roots = null
+    model.children.clear()
+    model.pageByHandle.clear()
+    for (const page of model.inflight.keys()) this._bumpEpoch(model, page)
+  }
+
+  /**
+   * Only a page with a pull in flight needs an epoch — a later pull reads the
+   * current value, so an untracked page starts at 0. Entries are monotonic and
+   * never removed: resetting one would make a pull from an older epoch compare
+   * equal again and resurrect the rows this invalidation just dropped.
+   */
+  private _bumpEpoch(model: ITreeViewModel, page: number): void {
+    if (!model.inflight.has(page)) return
+    model.pageEpoch.set(page, (model.pageEpoch.get(page) ?? 0) + 1)
+  }
+
+  private _replaceRow(model: ITreeViewModel, page: number, item: ITreeItemDto): boolean {
+    const items = page === ROOT_PAGE ? model.roots : model.children.get(page)
+    if (!items) return false
+    const index = items.findIndex((cached) => cached.handle === item.handle)
+    if (index < 0) return false
+    const next = [...items]
+    next[index] = item
+    if (page === ROOT_PAGE) model.roots = next
+    else model.children.set(page, next)
+    return true
   }
 }

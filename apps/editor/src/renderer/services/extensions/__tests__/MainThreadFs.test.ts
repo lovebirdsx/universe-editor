@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { bytesToBase64, type IRelativePatternDto } from '@universe-editor/extensions-common'
+import {
+  bytesToBase64,
+  compileGlobMatcher,
+  type IRelativePatternDto,
+} from '@universe-editor/extensions-common'
 import {
   CancellationTokenSource,
   NullLogger,
@@ -227,6 +231,28 @@ describe('MainThreadFs', () => {
   })
 
   describe('$findFiles', () => {
+    /**
+     * Test-local emulation of the engine-side pruning FileSearchMainService
+     * performs with rg `-g !glob`: gitignore semantics — a glob excludes a path
+     * when it matches the path itself, everything beneath a directory it names
+     * (expandExcludeGlob's `<glob>/**` half), or any ancestor directory.
+     */
+    function enginePruned(relativePath: string, excludes: readonly string[]): boolean {
+      const segments = relativePath.split('/')
+      return excludes.some((raw) => {
+        const normalized = raw.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+        if (!normalized) return false
+        const matcher = compileGlobMatcher(normalized)
+        if (matcher(relativePath)) return true
+        if (normalized.endsWith('/**')) return false
+        if (compileGlobMatcher(`${normalized}/**`)(relativePath)) return true
+        for (let i = 1; i < segments.length; i++) {
+          if (matcher(segments.slice(0, i).join('/'))) return true
+        }
+        return false
+      })
+    }
+
     function fakeSearch(
       matches: Array<{ fsPath: string; relativePath: string }>,
     ): IFileSearchService & { lastQueryExcludes: () => readonly string[] | undefined } {
@@ -235,18 +261,27 @@ describe('MainThreadFs', () => {
         _serviceBrand: undefined,
         search: (query) => {
           excludes = query.excludes
+          // The real engine prunes `query.excludes` during the walk, before its
+          // own maxResults cap — excluded entries never consume the cap.
+          const candidates = matches.filter(
+            (m) => !enginePruned(m.relativePath, query.excludes ?? []),
+          )
+          const cap = query.maxResults ?? Number.POSITIVE_INFINITY
+          const limited = candidates.slice(0, cap)
+          const truncated = candidates.length > limited.length
           const complete: IFileSearchComplete = {
-            results: matches.map((m) => ({
+            results: limited.map((m) => ({
               resource: URI.file(m.fsPath),
               fsPath: m.fsPath,
               relativePath: m.relativePath,
               basename: m.relativePath.split('/').pop() ?? '',
               score: 0,
             })),
-            limitHit: false,
-            filesWalked: matches.length,
+            limitHit: truncated,
+            filesWalked: candidates.length,
             directoriesWalked: 0,
             durationMs: 0,
+            ...(truncated ? { stopReason: 'maxResults' as const } : {}),
           }
           return Promise.resolve(complete)
         },
@@ -388,6 +423,108 @@ describe('MainThreadFs', () => {
       }
       const result = await fs.$findFiles('**/*.ts', [exclude], null)
       expect(result).toEqual(['/repo/src/generated/keep.ts', '/repo/src/c.ts'])
+    })
+
+    it('prunes string excludes in the engine (defaults are not mixed in)', async () => {
+      const search = fakeSearch([
+        { fsPath: '/repo/node_modules/pkg/index.ts', relativePath: 'node_modules/pkg/index.ts' },
+        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
+      ])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => ['**/dist/**'])
+      const result = await fs.$findFiles('**/*.ts', ['**/node_modules/**', '*.log'], null)
+      expect(search.lastQueryExcludes()).toEqual(['**/node_modules/**', '*.log'])
+      expect(result).toEqual(['/repo/src/a.ts'])
+    })
+
+    it('prunes directories named by a slashless exclude at any depth', async () => {
+      const search = fakeSearch([
+        { fsPath: '/repo/node_modules/pkg/index.ts', relativePath: 'node_modules/pkg/index.ts' },
+        { fsPath: '/repo/lib/node_modules/x.ts', relativePath: 'lib/node_modules/x.ts' },
+        { fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' },
+      ])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      expect(await fs.$findFiles('**/*.ts', ['node_modules'], null)).toEqual(['/repo/src/a.ts'])
+    })
+
+    it('folds a RelativePattern exclude into an engine glob beneath its base', async () => {
+      const search = fakeSearch([])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await fs.$findFiles(
+        '**/*.ts',
+        [{ base: URI.file('/repo/generated').toJSON(), pattern: '**' }],
+        null,
+      )
+      expect(search.lastQueryExcludes()).toEqual(['generated/**'])
+      // A slashless pattern keeps its "basename at any depth (beneath the base)"
+      // meaning once anchored under the folded prefix.
+      await fs.$findFiles(
+        '**/*.ts',
+        [{ base: URI.file('/repo/gen').toJSON(), pattern: '*.log' }],
+        null,
+      )
+      expect(search.lastQueryExcludes()).toEqual(['gen/**/*.log'])
+    })
+
+    it('folds a RelativePattern exclude against a RelativePattern include base', async () => {
+      const seen: { roots: string[]; excludes: readonly string[] | undefined } = {
+        roots: [],
+        excludes: undefined,
+      }
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: (query) => {
+          seen.roots.push(query.root.fsPath)
+          seen.excludes = query.excludes
+          const complete: IFileSearchComplete = {
+            results: [],
+            limitHit: false,
+            filesWalked: 0,
+            directoriesWalked: 0,
+            durationMs: 0,
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      await fs.$findFiles(
+        { base: URI.file('/repo/src').toJSON(), pattern: '*.ts' },
+        [{ base: URI.file('/repo/src/gen').toJSON(), pattern: '**' }],
+        null,
+      )
+      expect(seen.roots).toEqual(['/repo/src'])
+      expect(seen.excludes).toEqual(['gen/**'])
+    })
+
+    it('drops a RelativePattern exclude whose base lies outside the enumeration root', async () => {
+      const search = fakeSearch([{ fsPath: '/repo/src/a.ts', relativePath: 'src/a.ts' }])
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      const result = await fs.$findFiles(
+        '**/*.ts',
+        [{ base: URI.file('/elsewhere').toJSON(), pattern: '**' }],
+        null,
+      )
+      expect(search.lastQueryExcludes()).toEqual([])
+      expect(result).toEqual(['/repo/src/a.ts'])
+    })
+
+    it('excluded entries never consume the enumeration cap', async () => {
+      // 100k excluded entries ahead of one real hit: when excludes were applied
+      // by renderer-side post-filtering they ate the whole engine-side cap and
+      // the real hit was silently truncated away (plus a misleading warn).
+      const matches = [
+        ...Array.from({ length: 100_000 }, (_, i) => ({
+          fsPath: `/repo/node_modules/${i}.ts`,
+          relativePath: `node_modules/${i}.ts`,
+        })),
+        { fsPath: '/repo/src/keep.ts', relativePath: 'src/keep.ts' },
+      ]
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const search = fakeSearch(matches)
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
+      const result = await fs.$findFiles('**/*.ts', ['**/node_modules/**'], null)
+      expect(result).toEqual(['/repo/src/keep.ts'])
+      expect(warn).not.toHaveBeenCalled()
     })
 
     it('forwards the RPC token to the underlying search (cancel kills the walk)', async () => {

@@ -11,12 +11,12 @@
  */
 import type { Disposable, TimelineProvider } from '@universe-editor/extension-api'
 import type {
-  ICommandDto,
   IMainThreadTimeline,
   ITimelineDto,
   ITimelineItemDto,
   ITimelineOptionsDto,
 } from '@universe-editor/extensions-common'
+import { toCommandDto } from './hostHandles.js'
 
 interface IRegisteredProvider {
   readonly provider: TimelineProvider
@@ -28,20 +28,6 @@ interface IRegisteredProvider {
 const NEVER_CANCELLED = {
   isCancellationRequested: false,
   onCancellationRequested: () => ({ dispose: () => undefined }),
-}
-
-function toCommandDto(cmd: {
-  command: string
-  title: string
-  tooltip?: string
-  arguments?: unknown[]
-}): ICommandDto {
-  return {
-    command: cmd.command,
-    title: cmd.title,
-    ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
-    ...(cmd.arguments !== undefined ? { arguments: cmd.arguments } : {}),
-  }
 }
 
 function toItemDto(
@@ -66,7 +52,7 @@ function toItemDto(
     ...(item.tooltip !== undefined ? { tooltip: item.tooltip } : {}),
     timestamp: item.timestamp,
     ...(item.themeIcon !== undefined ? { themeIcon: item.themeIcon } : {}),
-    ...(item.command !== undefined ? { command: toCommandDto(item.command) } : {}),
+    ...(item.command !== undefined ? { command: toCommandDto(item.command, ['arguments']) } : {}),
     ...(item.contextValue !== undefined ? { contextValue: item.contextValue } : {}),
   }
 }

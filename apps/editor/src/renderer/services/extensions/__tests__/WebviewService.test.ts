@@ -5,10 +5,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { URI, type IEditorGroup, type IEditorGroupsService } from '@universe-editor/platform'
+import {
+  EditorInput,
+  Emitter,
+  GroupDirection,
+  URI,
+  type IEditorGroup,
+  type IEditorGroupsService,
+} from '@universe-editor/platform'
 import type { IExtHostWebviews } from '@universe-editor/extensions-common'
 import { WebviewService } from '../WebviewService.js'
 import { WebviewPanelInput } from '../../editor/WebviewPanelInput.js'
+import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
+import { CustomEditorInput } from '../../editor/CustomEditorInput.js'
 
 function fakeExtHost(): IExtHostWebviews & {
   resolves: Array<{ providerHandle: number; panelHandle: number; viewType: string }>
@@ -60,25 +69,47 @@ function fakeGroup(): IEditorGroup & {
   const opened: WebviewPanelInput[] = []
   const closed: WebviewPanelInput[] = []
   const activated: WebviewPanelInput[] = []
+  const activeEditorChange = new Emitter<void>()
+  let activeEditor: WebviewPanelInput | undefined
   const group = {
     opened,
     closed,
     activated,
     isActive: true,
-    openEditor: (input: WebviewPanelInput) => {
+    onDidActiveEditorChange: activeEditorChange.event,
+    get activeEditor() {
+      return activeEditor
+    },
+    openEditor: (input: WebviewPanelInput, options?: { activate?: boolean }) => {
       opened.push(input)
+      // Mirror EditorGroupModel: open activates unless told not to; the first
+      // editor in an empty group is implicitly active.
+      if (options?.activate !== false || activeEditor === undefined) {
+        activeEditor = input
+        activeEditorChange.fire()
+      }
     },
     closeEditor: (input: WebviewPanelInput) => {
       if (!opened.includes(input)) return false
       closed.push(input)
+      if (activeEditor === input) {
+        activeEditor = undefined
+        activeEditorChange.fire()
+      }
       // The real group disposes the input via its store; mirror that so the
       // input's onWillDispose (which reports $acceptPanelDisposed) fires.
       input.dispose()
       return true
     },
     contains: (input: WebviewPanelInput) => opened.includes(input) && !closed.includes(input),
+    findEditor: (editor: EditorInput) =>
+      opened.find((o) => !closed.includes(o) && o.matches(editor)),
     setActive: (input: WebviewPanelInput) => {
       activated.push(input)
+      if (activeEditor !== input) {
+        activeEditor = input
+        activeEditorChange.fire()
+      }
     },
   }
   return group as unknown as IEditorGroup & {
@@ -93,9 +124,16 @@ function fakeEditorGroups(
   group: ReturnType<typeof fakeGroup>,
 ): IEditorGroupsService & { activateGroupCalls: number } {
   const state = { activateGroupCalls: 0 }
+  const activeGroupChange = new Emitter<IEditorGroup>()
+  const addGroup = new Emitter<IEditorGroup>()
+  const removeGroup = new Emitter<IEditorGroup>()
   return Object.assign(state, {
+    activeGroup: group,
     activeGroupForOpen: group,
     groups: [group],
+    onDidActiveGroupChange: activeGroupChange.event,
+    onDidAddGroup: addGroup.event,
+    onDidRemoveGroup: removeGroup.event,
     activateGroup: () => {
       state.activateGroupCalls++
       return group
@@ -229,26 +267,50 @@ describe('WebviewService', () => {
 
   // ---- Extension-owned panels (window.createWebviewPanel) --------------------
 
-  it('createWebviewPanel before the editor-groups wiring drops the panel with no residue', () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('createWebviewPanel before the editor-groups wiring is queued and replays once wired', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const svc = new WebviewService()
       svc.setExtHost('local', fakeExtHost())
       const mainThread = svc.createMainThread('local')
-      // No setEditorGroupsAccessor — the service can't open a tab yet.
-
+      // No setEditorGroupsAccessor yet — the create must queue (with a warn),
+      // never silently produce a "live" panel whose tab can never exist.
       void mainThread.$createWebviewPanel(-1, 'cat.view', 'A', {}, undefined)
+      void mainThread.$setWebviewHtml(-1, '<html>early</html>')
       expect(svc.getPanel(-1)).toBeUndefined()
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining('before editor groups are ready'),
-      )
-      // A retry after wiring must not trip the duplicate-handle guard.
+      expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining('$createWebviewPanel'))
+
       const group = fakeGroup()
       svc.setEditorGroupsAccessor(() => fakeEditorGroups(group))
-      void mainThread.$createWebviewPanel(-1, 'cat.view', 'A', {}, undefined)
+      // The queued ops replay in order once the wiring lands; flush microtasks.
+      await Promise.resolve()
+      await Promise.resolve()
+
       expect(group.opened).toHaveLength(1)
+      expect(svc.getPanel(-1)?.html.get()).toBe('<html>early</html>')
+      svc.dispose()
     } finally {
-      consoleError.mockRestore()
+      consoleWarn.mockRestore()
+    }
+  })
+
+  it('host panel ops received after dispose during the unwired window become no-ops', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const svc = new WebviewService()
+      svc.setExtHost('local', fakeExtHost())
+      const mainThread = svc.createMainThread('local')
+      void mainThread.$createWebviewPanel(-1, 'cat.view', 'A', {}, undefined)
+      svc.dispose()
+
+      const group = fakeGroup()
+      svc.setEditorGroupsAccessor(() => fakeEditorGroups(group))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(group.opened).toHaveLength(0)
+    } finally {
+      consoleWarn.mockRestore()
     }
   })
 
@@ -368,7 +430,7 @@ describe('WebviewService', () => {
     expect(group.activated).toHaveLength(1)
   })
 
-  it('reportPanelViewState relays mount/unmount to the host', () => {
+  it('reports the initial view state once the panel tab opens', () => {
     const svc = new WebviewService()
     const extHost = fakeExtHost()
     svc.setExtHost('local', extHost)
@@ -376,13 +438,7 @@ describe('WebviewService', () => {
     const group = fakeGroup()
     svc.setEditorGroupsAccessor(() => fakeEditorGroups(group))
     void mainThread.$createWebviewPanel(-1, 'cat.view', 'A', {}, undefined)
-
-    svc.reportPanelViewState(-1, true, true)
-    svc.reportPanelViewState(-1, false, false)
-    expect(extHost.viewStates).toEqual([
-      { panelHandle: -1, active: true, visible: true },
-      { panelHandle: -1, active: false, visible: false },
-    ])
+    expect(extHost.viewStates).toEqual([{ panelHandle: -1, active: true, visible: true }])
   })
 
   it('reset(kind) closes extension-owned panel tabs without notifying the dying host', () => {
@@ -398,5 +454,152 @@ describe('WebviewService', () => {
     expect(group.closed).toHaveLength(1)
     expect(extHost.acceptedDisposed).toEqual([])
     expect(svc.getPanel(-1)).toBeUndefined()
+  })
+})
+
+/** Trivial non-webview competitor tab used to push a webview tab into the background. */
+class TestFileInput extends EditorInput {
+  constructor(private readonly _key: string) {
+    super()
+  }
+  override get typeId(): string {
+    return 'testFile'
+  }
+  override get resource(): URI | undefined {
+    return undefined
+  }
+  override getName(): string {
+    return this._key
+  }
+  override get id(): string {
+    return `testFile:${this._key}`
+  }
+}
+
+// View-state tracking against the real EditorGroupsService: the service derives
+// each panel's active/visible from the editor groups (visible = the panel's tab
+// is its group's active editor; active = and that group is the focused group),
+// reporting only on change.
+describe('WebviewService panel view state tracking', () => {
+  function wired() {
+    const svc = new WebviewService()
+    const extHost = fakeExtHost()
+    svc.setExtHost('local', extHost)
+    const mainThread = svc.createMainThread('local')
+    const groups = new EditorGroupsService()
+    svc.setEditorGroupsAccessor(() => groups)
+    return { svc, extHost, mainThread, groups }
+  }
+
+  function openWebviewPanel(
+    mainThread: ReturnType<WebviewService['createMainThread']>,
+    groups: EditorGroupsService,
+    options?: { preserveFocus?: boolean },
+  ): WebviewPanelInput {
+    void mainThread.$createWebviewPanel(-1, 'cat.view', 'A', {}, options)
+    const input = groups.groups.flatMap((g) => g.editors).find((e) => e.typeId === 'webviewPanel')
+    expect(input).toBeInstanceOf(WebviewPanelInput)
+    return input as WebviewPanelInput
+  }
+
+  it('an activated createWebviewPanel reports (active=true, visible=true)', () => {
+    const { extHost, mainThread, groups } = wired()
+    openWebviewPanel(mainThread, groups)
+    expect(extHost.viewStates).toEqual([{ panelHandle: -1, active: true, visible: true }])
+  })
+
+  it('preserveFocus create never claims active while the tab stays background', () => {
+    const { extHost, mainThread, groups } = wired()
+    groups.activeGroup.openEditor(new TestFileInput('foreground'))
+    const input = openWebviewPanel(mainThread, groups, { preserveFocus: true })
+
+    // The tracker must not report (active=true, visible=true) for a tab that was
+    // never activated (the old mount-driven report did).
+    expect(extHost.viewStates).not.toContainEqual({ panelHandle: -1, active: true, visible: true })
+
+    groups.activeGroup.setActive(input)
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: -1,
+      active: true,
+      visible: true,
+    })
+  })
+
+  it('switching to another tab reports visible=false and back reports visible=true', () => {
+    const { extHost, mainThread, groups } = wired()
+    const input = openWebviewPanel(mainThread, groups)
+    expect(extHost.viewStates).toEqual([{ panelHandle: -1, active: true, visible: true }])
+
+    groups.activeGroup.openEditor(new TestFileInput('other'))
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: -1,
+      active: false,
+      visible: false,
+    })
+
+    groups.activeGroup.setActive(input)
+    expect(extHost.viewStates).toEqual([
+      { panelHandle: -1, active: true, visible: true },
+      { panelHandle: -1, active: false, visible: false },
+      { panelHandle: -1, active: true, visible: true },
+    ])
+
+    // Dedupe: while already hidden, more same-group tab churn must not resend.
+    groups.activeGroup.openEditor(new TestFileInput('third'))
+    expect(extHost.viewStates).toHaveLength(4)
+    groups.activeGroup.openEditor(new TestFileInput('fourth'))
+    expect(extHost.viewStates).toHaveLength(4)
+  })
+
+  it('focusing another (split) group drops active but keeps visible', () => {
+    const { extHost, mainThread, groups } = wired()
+    openWebviewPanel(mainThread, groups)
+    const first = groups.groups[0]!
+    const second = groups.addGroup(first, GroupDirection.Right)
+
+    groups.activateGroup(second)
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: -1,
+      active: false,
+      visible: true,
+    })
+
+    groups.activateGroup(first)
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: -1,
+      active: true,
+      visible: true,
+    })
+  })
+
+  it('custom editor panels track view state via their editor input', () => {
+    const { svc, extHost, mainThread, groups } = wired()
+    void mainThread.$registerCustomEditorProvider(0, 'pdf.view')
+    const uri = URI.file('/docs/a.pdf')
+    const input = new CustomEditorInput('pdf.view', uri)
+    groups.activeGroup.openEditor(input)
+
+    const panel = svc.openPanel('pdf.view', uri, undefined, input)!
+    expect(extHost.viewStates).toEqual([
+      { panelHandle: panel.panelHandle, active: true, visible: true },
+    ])
+
+    // Focus moves to a split group: still the selected tab there → visible, not active.
+    const second = groups.addGroup(groups.groups[0]!, GroupDirection.Right)
+    groups.activateGroup(second)
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: panel.panelHandle,
+      active: false,
+      visible: true,
+    })
+
+    // A competitor tab in the same group hides it entirely.
+    groups.activateGroup(groups.groups[0]!)
+    groups.groups[0]!.openEditor(new TestFileInput('other'))
+    expect(extHost.viewStates[extHost.viewStates.length - 1]).toEqual({
+      panelHandle: panel.panelHandle,
+      active: false,
+      visible: false,
+    })
   })
 })

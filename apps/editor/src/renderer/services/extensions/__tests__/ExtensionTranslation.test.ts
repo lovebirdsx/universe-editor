@@ -358,7 +358,32 @@ describe('ExtensionPointTranslator', () => {
         componentKey: EXTENSION_TREE_VIEW_COMPONENT_KEY,
         order: 0,
       })
-      expect(ViewRegistry.getView('test.view.b')).toMatchObject({ order: 1 })
+      expect(ViewRegistry.getView('test.view.b')).toMatchObject({ order: 1, when: 'false' })
+    })
+
+    it('carries the view-level when clause into the registered descriptor', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'test.when', title: 'When', icon: '$(files)' }],
+            },
+            views: {
+              'test.when': [
+                { id: 'test.view.gated', name: 'Gated', when: 'explorerResourceIsFolder == false' },
+                { id: 'test.view.plain', name: 'Plain' },
+              ],
+            },
+          },
+        }),
+      ])
+
+      expect(ViewRegistry.getView('test.view.gated')?.when).toBe(
+        'explorerResourceIsFolder == false',
+      )
+      expect(ViewRegistry.getView('test.view.plain')?.when).toBeUndefined()
     })
 
     it('binds views under a built-in container alias (explorer)', () => {

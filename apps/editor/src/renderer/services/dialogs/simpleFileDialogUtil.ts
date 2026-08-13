@@ -5,6 +5,8 @@
  *  tested without booting QuickInput / IFileService.
  *--------------------------------------------------------------------------------------------*/
 
+import { extname } from '@universe-editor/platform'
+
 export interface DialogEntry {
   readonly name: string
   readonly isDirectory: boolean
@@ -18,9 +20,7 @@ export interface DialogFileFilter {
 
 /** Lowercased extension of a file name ('' when none; leading-dot files have none). */
 export function fileExtension(name: string): string {
-  const idx = name.lastIndexOf('.')
-  if (idx <= 0) return ''
-  return name.slice(idx + 1).toLowerCase()
+  return extname(name).slice(1).toLowerCase()
 }
 
 /**

@@ -7,7 +7,8 @@
  *  fires the `onView:` activation), assert the pulled roots render, expand a
  *  collapsed node (lazy `extHostTreeViews.$getChildren` pull), click a leaf with
  *  a command (renderer → host command routing), and confirm the provider's
- *  `onDidChangeTreeData` refresh re-pulls and re-renders. The second test opens
+ *  `onDidChangeTreeData` refresh re-pulls and re-renders. The second test fires
+ *  a per-element refresh and checks the expansion survives it; the third opens
  *  the row context menu and checks the `view`/`viewItem`-gated contribution.
  *
  *  The extension talks to the host bridge global directly (same object the api
@@ -57,25 +58,34 @@ async function makeTreeViewVsix(dir: string): Promise<string> {
   // [child(contextValue 'special')]. The ping/rename command handlers flip a
   // flag and fire onDidChangeTreeData, so the re-pulled labels prove the whole
   // round trip (click → host command → $refresh → renderer re-pull).
+  // Element objects are stable so `fireChange(element)` can resolve a handle —
+  // that's the per-subtree refresh path (`e2eTree.touchParent`).
   const source = `
     const bridge = globalThis['__universeExtensionHostBridge__']
     exports.activate = (context) => {
       let pinged = false
       let renamed = false
+      let touched = false
       let fireChange = undefined
+      const parentEl = { name: 'parent' }
+      const leafEl = { name: 'leaf' }
+      const childEl = { name: 'child' }
       const provider = {
         onDidChangeTreeData: (listener) => {
           fireChange = listener
           return { dispose() {} }
         },
         getChildren: (el) => {
-          if (el === undefined) return [{ name: 'parent' }, { name: 'leaf' }]
-          if (el.name === 'parent') return [{ name: 'child' }]
+          if (el === undefined) return [parentEl, leafEl]
+          if (el.name === 'parent') return [childEl]
           return []
         },
         getTreeItem: (el) => {
           if (el.name === 'parent') {
-            return { label: pinged ? 'parent-pinged' : 'parent', collapsibleState: 1 }
+            return {
+              label: (pinged ? 'parent-pinged' : 'parent') + (touched ? '-touched' : ''),
+              collapsibleState: 1,
+            }
           }
           if (el.name === 'leaf') {
             return {
@@ -100,6 +110,11 @@ async function makeTreeViewVsix(dir: string): Promise<string> {
         bridge.registerCommand('e2eTree.rename', () => {
           renamed = true
           fireChange && fireChange()
+        }),
+        bridge.registerCommand('e2eTree.touchParent', () => {
+          touched = true
+          renamed = true
+          fireChange && fireChange(parentEl)
         }),
       )
     }
@@ -150,12 +165,46 @@ test.describe('@p1 extension tree view', () => {
 
     // Clicking the command leaf routes e2eTree.ping to the host; the handler
     // fires onDidChangeTreeData and the refreshed root label comes back.
+    // Handles are stable across a refresh, so 'parent' stays expanded.
     await view.getByText('leaf', { exact: true }).click()
     await expect
-      .poll(async () => (await rows.allTextContents()).includes('parent-pinged'), {
-        timeout: 15000,
-      })
-      .toBe(true)
+      .poll(() => rows.allTextContents(), { timeout: 15000 })
+      .toEqual(['parent-pinged', 'child', 'leaf'])
+
+    await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
+
+  test('keeps the expansion across a per-element refresh @regression', async ({ workbench }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-treeview-refresh-'))
+    const vsixPath = await makeTreeViewVsix(tmpDir)
+
+    await workbench.waitForRestored()
+
+    const installedId = await workbench.page.evaluate(
+      (p) => window.__E2E__!.installVsixExtension(p),
+      vsixPath,
+    )
+
+    const containerItem = workbench.page.locator(`[data-testid="activitybar-item-${CONTAINER_ID}"]`)
+    await expect(containerItem).toHaveCount(1, { timeout: 15000 })
+    await containerItem.click()
+
+    const view = workbench.page.locator(`[data-testid="extension-tree-view-${VIEW_ID}"]`)
+    const rows = view.locator('[data-testid="extension-tree-item"]')
+    await expect.poll(() => rows.allTextContents(), { timeout: 15000 }).toEqual(['parent', 'leaf'])
+    await view.getByText('parent', { exact: true }).click()
+    await expect
+      .poll(() => rows.allTextContents(), { timeout: 15000 })
+      .toEqual(['parent', 'child', 'leaf'])
+
+    // onDidChangeTreeData(element) invalidates only that subtree: the row is
+    // replaced in place, its children are re-pulled, and the user's expansion
+    // (keyed by the now-stable handle) survives — no collapse, no blank frame.
+    await workbench.runCommand('e2eTree.touchParent')
+    await expect
+      .poll(() => rows.allTextContents(), { timeout: 15000 })
+      .toEqual(['parent-touched', 'child-renamed', 'leaf'])
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
@@ -190,14 +239,12 @@ test.describe('@p1 extension tree view', () => {
     await expect(renameItem).toHaveCount(1, { timeout: 10000 })
 
     // Invoking it activates the extension on its onCommand event, flips the
-    // provider state and refreshes; re-expanding shows the renamed child.
+    // provider state and refreshes; 'parent' stays expanded across the refresh
+    // so the renamed child shows up in place.
     await renameItem.click()
-    await view.getByText('parent', { exact: true }).click()
     await expect
-      .poll(async () => (await rows.allTextContents()).includes('child-renamed'), {
-        timeout: 15000,
-      })
-      .toBe(true)
+      .poll(() => rows.allTextContents(), { timeout: 15000 })
+      .toEqual(['parent', 'child-renamed', 'leaf'])
 
     // The un-gated 'leaf' row (no contextValue) must NOT offer the item.
     await view.getByText('leaf', { exact: true }).click({ button: 'right' })

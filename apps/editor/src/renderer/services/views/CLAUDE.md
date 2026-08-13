@@ -54,6 +54,7 @@ UI 层（全部经 useViewDescriptors() 订阅 version 后再 re-query）
 ### 实现要点（ViewDescriptorService.ts）
 
 - **持久化**：`STORAGE_KEY = 'workbench.viewCustomizations'`，**`StorageScope.WORKSPACE`**（view 布局是项目级习惯，对标 VSCode 跟随工作区，不是全局）。写盘走防抖 `_saveTimer`；`save()` 立即清 timer 并同步落盘。
+- **`when` 硬门控**：描述符带 `when`（`contributes.views[].when`），`getViewsByContainer` 按 `IContextKeyService` 过滤（空/解析失败 = 可见，VSCode 语义）；订阅 `onDidChangeContext` 仅在实际可见性翻转时 bump version。容器若没有任何可见视图则随已有的「空容器不显示」规则从活动栏消失。**visible 集合只用于查询渲染**；move/reorder/order 分配/生成容器回收走未过滤的 `_allViewsByContainer`——门控不影响 `_viewLocations`/`_viewStates` 里存的用户定制。
 - **生成容器**：`GENERATED_PREFIX = 'workbench.view.generated.'`，id 形如 `workbench.view.generated.<tag>.<counter>`，`icon: 'window'`、`generated: true`。
   - **生成**：`moveViewToLocation` 把 view 移到某区域空白时，造一个新容器描述符并 `_generated` 登记。
   - **回收**：当一个生成容器里最后一个 view 被移走 → 容器自动注销（`_generated.delete` + 从注册表 deregister）。**非生成容器（内置的）即使空了也不回收**。

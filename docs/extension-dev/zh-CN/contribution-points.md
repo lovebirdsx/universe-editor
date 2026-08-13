@@ -307,7 +307,7 @@
 |---|---|---|---|
 | `id` | string | 是 | 视图 id——激活事件锚点 `onView:<id>` 与 API 注册的 `viewId` 都用它 |
 | `name` | string | 是 | 视图标题栏显示的名称 |
-| `when` | string | 否 | ContextKey 表达式。**已透传但当前版本不消费**——不门控视图可见性 |
+| `when` | string | 否 | ContextKey 表达式。求值为 **false** 时视图从容器中消失（若容器因此无任何可见视图，活动栏图标一并隐藏），引用的 context key 变化时实时重算；未填写恒为可见 |
 
 ```jsonc
 {
@@ -335,7 +335,7 @@
 - 声明只是注册空壳视图；内容在扩展激活后由 `window.registerTreeDataProvider(viewId, provider)` 或 `window.createTreeView(viewId, { treeDataProvider })` 提供，写法见 [API 概览 · treeView](./api/README.md#treeview--树视图)。
 - 配套激活事件 `onView:<viewId>`：视图首次显示时派发（须显式声明在 `activationEvents`，宿主不做自动推导）。
 - 树为懒拉取渲染（只在用户展开节点时拉其子节点）；行点击执行 `TreeItem.command`；条目右键菜单走 `view/item/context` 菜单位置。
-- 首版裁剪（与 VSCode 的逐条差异见 [`packages/extension-api/COMPATIBILITY.md`](../../../packages/extension-api/COMPATIBILITY.md) 的 0.12.0 条目）：`onDidChangeTreeData` 恒整树失效重拉、`TreeItem.id` 不参与身份（刷新后展开态不保留）、无 `reveal`/拖拽/checkbox/badge、`TreeItem.iconPath` 仅 codicon 名。
+- 首版裁剪（与 VSCode 的逐条差异见 [`packages/extension-api/COMPATIBILITY.md`](../../../packages/extension-api/COMPATIBILITY.md) 的 0.12.0 条目）：无 `reveal`/拖拽/checkbox/badge、`TreeItem.iconPath` 仅 codicon 名。刷新语义已对齐 VSCode：句柄跨刷新稳定（展开态保留）、`onDidChangeTreeData(element)` 只失效该子树。
 
 ## themes
 

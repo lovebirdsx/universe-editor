@@ -7,10 +7,14 @@
  * provider over `mainThreadTreeViews`, and the renderer pulls children back
  * over `extHostTreeViews` — lazily, only for nodes the user actually expands.
  *
- * Elements are keyed by host-allocated numeric handles, valid for the lifetime
- * of one renderer-side tree model generation: a `$refresh` (fired on
- * `onDidChangeTreeData`) invalidates the whole generation and the renderer
- * re-pulls from the roots, so handles never need to survive a refresh.
+ * Elements are keyed by host-allocated numeric handles that are **stable
+ * across refreshes**: the host derives them from the provider's `TreeItem.id`
+ * when present, else from the element object's identity, else from its label
+ * under the parent handle. A handle therefore survives an
+ * `onDidChangeTreeData`, which is what keeps the renderer's expansion /
+ * selection state — both keyed by handle — alive through a refresh. Handles
+ * die only when the element stops being returned by its parent's
+ * `getChildren` (recycled with its subtree on the next pull of that page).
  */
 
 import type { UriComponents } from '@universe-editor/platform'
@@ -46,12 +50,20 @@ export interface IMainThreadTreeViews {
   $registerTreeDataProvider(viewId: string): Promise<void>
   $unregisterTreeDataProvider(viewId: string): Promise<void>
   /**
-   * The provider's data changed. `parentHandles` narrows the invalidation to a
-   * subtree; `undefined` invalidates the whole view (the only mode the first
-   * cut produces — the host clears its handle table and the renderer re-pulls
-   * every expanded node from the roots).
+   * The provider's data changed.
+   *
+   * - `items` omitted → whole-view invalidation (`onDidChangeTreeData()` with
+   *   no element): the renderer drops every cached page and re-pulls from the
+   *   roots. Handles stay valid, so expansion survives.
+   * - `items` present → per-subtree invalidation (`onDidChangeTreeData(el)`):
+   *   each DTO is the refreshed item for its handle. The renderer replaces the
+   *   row in place and invalidates that node's children page (and everything
+   *   below it); sibling and unrelated pages keep their cache.
+   *
+   * Bursts are debounced host-side, so N `fire()`s inside one window arrive as
+   * a single call.
    */
-  $refresh(viewId: string, parentHandles?: number[]): Promise<void>
+  $refresh(viewId: string, items?: ITreeItemDto[]): Promise<void>
 }
 
 /**
@@ -75,9 +87,8 @@ export interface IExtHostTreeViews {
    *   instead. Keeps live objects (Uri instances, custom payloads) intact by
    *   never serializing them onto the wire.
    *
-   * The caller omits the optional argument entirely when clicking: the wire
-   * turns `undefined` into `null`, so the host treats `null`/`undefined`
-   * alike. A stale handle (from before a `$refresh`) is a silent no-op.
+   * A stale handle (one recycled because its element left the tree) is a
+   * silent no-op.
    */
   $executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void>
 }

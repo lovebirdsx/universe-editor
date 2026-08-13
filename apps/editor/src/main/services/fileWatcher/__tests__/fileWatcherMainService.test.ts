@@ -244,7 +244,7 @@ describe('FileWatcherMainService', () => {
       await fs.writeFile(file, 'initial')
       try {
         await svc.watch(URI.file(root)) // workspace root ≠ outRoot
-        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
         const c = startCollecting(svc)
         await fs.writeFile(file, 'modified')
         await vi.waitFor(() => {
@@ -260,30 +260,46 @@ describe('FileWatcherMainService', () => {
     WATCHER_TEST_TIMEOUT,
   )
 
-  it('watchOutOfWorkspaceFolders skips folders under the workspace root', async () => {
+  it('addOutOfWorkspaceFolder skips folders under the workspace root', async () => {
     await svc.watch(URI.file(root))
     // In-workspace folder: the parcel watch already covers it, so the call
     // must not arm a redundant fs.watch (asserted by the map staying empty).
-    await svc.watchOutOfWorkspaceFolders([URI.file(join(root, 'sub'))])
+    await svc.addOutOfWorkspaceFolder(URI.file(join(root, 'sub')))
     expect(svc._extraFolderWatcherCount).toBe(0)
   })
 
-  it('watchOutOfWorkspaceFolders drops folders nested under an already-watched folder', async () => {
+  it('a folder nested under an already-watched folder collapses into the parent watch', async () => {
     const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
     try {
-      await svc.watchOutOfWorkspaceFolders([URI.file(outRoot), URI.file(join(outRoot, 'child'))])
+      await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
+      await svc.addOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
       expect(svc._extraFolderWatcherCount).toBe(1)
     } finally {
       await fs.rm(outRoot, { recursive: true, force: true })
     }
   })
 
-  it('watchOutOfWorkspaceFolders([]) clears armed folder watches', async () => {
+  it('removing the parent re-arms a still-declared nested child', async () => {
     const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
     try {
-      await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+      await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
+      await svc.addOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
       expect(svc._extraFolderWatcherCount).toBe(1)
-      await svc.watchOutOfWorkspaceFolders([])
+      await svc.removeOutOfWorkspaceFolder(URI.file(outRoot))
+      expect(svc._extraFolderWatcherCount).toBe(1)
+      await svc.removeOutOfWorkspaceFolder(URI.file(join(outRoot, 'child')))
+      expect(svc._extraFolderWatcherCount).toBe(0)
+    } finally {
+      await fs.rm(outRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clearOutOfWorkspaceFolders clears armed folder watches', async () => {
+    const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+    try {
+      await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
+      expect(svc._extraFolderWatcherCount).toBe(1)
+      await svc.clearOutOfWorkspaceFolders()
       expect(svc._extraFolderWatcherCount).toBe(0)
     } finally {
       await fs.rm(outRoot, { recursive: true, force: true })
@@ -296,7 +312,7 @@ describe('FileWatcherMainService', () => {
       const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
       const missing = join(outRoot, 'not-yet')
       try {
-        await svc.watchOutOfWorkspaceFolders([URI.file(missing)])
+        await svc.addOutOfWorkspaceFolder(URI.file(missing))
         // Placeholder on the parent until the folder appears.
         expect(svc._extraFolderWatcherCount).toBe(1)
         await fs.mkdir(missing, { recursive: true })
@@ -321,7 +337,7 @@ describe('FileWatcherMainService', () => {
     async () => {
       const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
       try {
-        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
         // mkdir emits a bare rename event — no content write follows to
         // coalesce 'added' into 'modified' within the debounce window.
         const created = join(outRoot, 'new-dir')
@@ -347,7 +363,7 @@ describe('FileWatcherMainService', () => {
       const file = join(outRoot, 'doomed.txt')
       await fs.writeFile(file, 'x')
       try {
-        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
         const c = startCollecting(svc)
         await fs.rm(file)
         await vi.waitFor(() => {
@@ -370,7 +386,7 @@ describe('FileWatcherMainService', () => {
       const file = join(outRoot, 'stable.txt')
       await fs.writeFile(file, 'v1')
       try {
-        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        await svc.addOutOfWorkspaceFolder(URI.file(outRoot))
         const c = startCollecting(svc)
         await fs.writeFile(file, 'v2')
         await vi.waitFor(() => {
@@ -469,7 +485,7 @@ describe('FileWatcherMainService', () => {
       const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
       const missing = join(outRoot, 'not-yet')
       try {
-        await svc.watchOutOfWorkspaceFolders([URI.file(missing)])
+        await svc.addOutOfWorkspaceFolder(URI.file(missing))
         expect(svc._extraFolderWatcherCount).toBe(1)
         await fs.writeFile(join(outRoot, 'noise.txt'), 'n')
         // Give the parent watcher a window to deliver the unrelated event: it

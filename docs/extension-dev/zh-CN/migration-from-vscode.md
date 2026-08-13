@@ -65,16 +65,16 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `window.activeTextEditor`（同步属性） | `window.getActiveTextEditor()`（异步方法） | 语义差异：返回快照句柄，外部变化后需重新取，不要长期持有 |
 | `window.onDidChangeActiveTextEditor` | 同名 | 对齐 |
 | `window.showTextDocument` | 同名 | 部分对齐：`TextDocumentShowOptions` 支持 `preserveFocus/preview/selection`；无 `viewColumn`（组布局由工作台管理） |
-| `window.visibleTextEditors` / `onDidChangeVisibleTextEditors` | 同名 | 语义差异：快照语义——每编辑器组 active 文本编辑器一项，集合按 URI 身份去重；`version`/`selection` 变化与编辑器内部编辑不触发事件 |
+| `window.visibleTextEditors` / `onDidChangeVisibleTextEditors` | 同名 | 语义差异：快照语义——每编辑器组 active 文本编辑器一项，集合按 URI 身份去重；`version`/`selection` 变化与编辑器内部编辑不触发事件；冷文档镜像落地前有短暂缺员窗口（getter 只含已镜像成员，事件经约 0.5 秒宽限期后先报已知子集、落地后并入再报），VSCode 无此窗口 |
 | `window.onDidChangeTextEditorSelection` | 同名 | 部分对齐：防抖派发（一波输入只投递最新一次）；仅活动编辑器触发；程序化 `setSelections` 时 `kind` 为 `undefined` |
 | `window.createTextEditorDecorationType` + `TextEditor.setDecorations` | 同名 | 部分对齐：装饰选项是子集（`gutterIconPath` 只收 data-URI；整行/颜色/边框/概览标尺可用） |
 | `window.registerCustomEditorProvider` | 同名 | 部分对齐：仅只读 `CustomReadonlyEditorProvider`（`openCustomDocument` + `resolveCustomEditor`）；可写 custom editor（save/backup/edit）**计划中** |
-| `window.createWebviewPanel`（自由面板） | 同名 | 部分对齐（0.11.0 起）：无 `ViewColumn`（面板开在当前活动组），`showOptions` 仅 `{preserveFocus}`；无 `retainContextWhenHidden`（iframe 不随 tab 隐藏重建，隐藏期状态天然保留）；无 `WebviewPanelSerializer`（reload/重启不恢复）；`active/visible` 为 tab 挂载粒度近似；`title` 可写、`reveal()`、`onDidChangeViewState`、`onDidDispose` 均有。详见 [自定义编辑器与 Webview](./webview-guide.md)「独立 webview 面板」 |
+| `window.createWebviewPanel`（自由面板） | 同名 | 部分对齐（0.11.0 起）：无 `ViewColumn`（面板开在当前活动组），`showOptions` 仅 `{preserveFocus}`；无 `retainContextWhenHidden`（iframe 不随 tab 隐藏重建，隐藏期状态天然保留）；无 `WebviewPanelSerializer`（reload/重启不恢复）；`active/visible` 跟踪编辑器组（visible=所在组选中 tab，active=且该组为焦点组）、变化时触发 `onDidChangeViewState`；`title` 可写、`reveal()`、`onDidDispose` 均有。详见 [自定义编辑器与 Webview](./webview-guide.md)「独立 webview 面板」 |
 | `window.withProgress` | 同名 | 部分对齐：`ProgressLocation` 仅 `Window/Notification/SourceControl`（SourceControl 当前按 Window 渲染）；report 载荷仅 `{message, increment}` |
 | `window.setStatusBarMessage` | 同名 | 对齐（三重载；但各条消息独立共存，不是 VSCode 的后进先出消息栈） |
 | `window.showOpenDialog` / `showSaveDialog` | 同名 | 部分对齐：`showOpenDialog` 的 `canSelectMany` 多选与 `filters` 过滤均生效；`showSaveDialog` 的 `filters` 不支持 |
 | `window.createTerminal` / `Terminal` | — | 缺失（**无计划**。绕行：扩展宿主是普通 Node 进程，可 `node:child_process` 自 spawn，输出进 OutputChannel；但没有用户可见的交互终端） |
-| `window.createTreeView` / `registerTreeDataProvider` | 同名 | 部分对齐：懒拉取真树渲染 + `view/item/context` 菜单（`view`/`viewItem` when 键；菜单与行点击命令 handler 均收到扩展返回的 tree element / 原样 `command.arguments`，活对象保留）+ `visible/selection/onDidChangeVisibility/onDidChangeSelection/onDidExpandElement/onDidCollapseElement`；首版裁剪——`TreeItem.id` 不参与身份（刷新后展开态不保留）、无 `reveal`/拖拽/checkbox/badge、`iconPath` 仅 codicon 名、`onDidChangeTreeData` 恒整树失效 |
+| `window.createTreeView` / `registerTreeDataProvider` | 同名 | 部分对齐：懒拉取真树渲染 + `view/item/context` 菜单（`view`/`viewItem` when 键；菜单与行点击命令 handler 均收到扩展返回的 tree element / 原样 `command.arguments`，活对象保留）+ `visible/selection/onDidChangeVisibility/onDidChangeSelection/onDidExpandElement/onDidCollapseElement` + 增量刷新（句柄跨刷新稳定、展开态保留、`onDidChangeTreeData(element)` 只失效该子树）；首版裁剪——无 `reveal`/拖拽/checkbox/badge、`iconPath` 仅 codicon 名 |
 | `window.registerWebviewViewProvider` | — | 缺失（暂无计划） |
 
 ### workspace
@@ -87,7 +87,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `workspace.isTrusted` / `onDidGrantWorkspaceTrust` | 同名 | 对齐（信任不会在原地撤销——撤销会重启扩展宿主，故无 revoke 事件） |
 | `workspace.fs` | 同名 | 部分对齐：8 方法 `readFile/writeFile/stat/readDirectory/createDirectory/delete/rename/copy`；参数是**字符串路径**不是 `Uri`；`delete` 无 `useTrash`；每次调用过宿主路径策略（拒敏感目录、禁逃逸工作区根） |
 | `workspace.createFileSystemWatcher` | 同名 | 部分对齐：glob 支持 string 与 `RelativePattern`；支持工作区外监听（Linux 下无效——`fs.watch` recursive 限制；工作区外事件只触发 `onDidChange`，不区分 create/delete） |
-| `workspace.findFiles` | 同名 | 部分对齐：`include` 支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；`token` 为真取消（杀底层枚举，取消 resolve `[]`）；结果超过 10 万条截断并记日志 |
+| `workspace.findFiles` | 同名 | 部分对齐：`include` 与 `exclude` 均支持 string 与 `RelativePattern`（base 需为工作区内 `file:` URI）；exclude 在枚举期按目录剪枝（命中子树不遍历、不占截断额度）；`token` 为真取消（杀底层枚举，取消 resolve `[]`）；结果超过 10 万条截断并记日志 |
 | `workspace.textDocuments` / `onDidOpenTextDocument` / `onDidChangeTextDocument` / `onDidCloseTextDocument` | 同名 | 对齐（`TextDocument` 更薄：仅 `uri/languageId/version/isUntitled/getText()`；无 `lineAt/offsetAt/lineCount/fileName/isDirty/save()`；untitled 文档同样进 `textDocuments` 与事件流） |
 | `workspace.openTextDocument` | 同名 | 部分对齐：`Uri`/路径、`{language?, content?}` 内存文档、无参与 `untitled:` URI 形态均支持；打开进文档模型不显示（要显示走 `window.showTextDocument`）；untitled URI 的 path 不 seed 另存对话框，纯 API 创建的 untitled 无法被扩展主动关闭 |
 | `workspace.onWillSaveTextDocument` | 同名 | 对齐（`waitUntil(Promise<TextEdit[]>)`，宿主带超时兜底） |
@@ -119,7 +119,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `languages.registerCodeLensProvider` | 同名 | 对齐（`resolveCodeLens` + `onDidChangeCodeLenses`） |
 | `languages.registerDocumentLinkProvider` | 同名 | 对齐（`resolveDocumentLink`） |
 | `languages.createDiagnosticCollection` | 同名 | 部分对齐：`set/delete/clear/dispose`；无 `get/forEach`；`Diagnostic` 是 LSP 类型 |
-| `languages.getDiagnostics` / `onDidChangeDiagnostics` | 同名 | 语义差异：`getDiagnostics` 返回 **Promise**（全源诊断快照，非 live 视图；读回不含 `relatedInformation`）；变更事件 50ms 防抖、按兴趣订阅 |
+| `languages.getDiagnostics` / `onDidChangeDiagnostics` | 同名 | 语义差异：`getDiagnostics` 返回 **Promise**（全源诊断快照，非 live 视图；读回不含 `relatedInformation`；`code` 读回恒为字符串形式，数字 code 读回为字符串——与 VSCode 同款有损；含前导零的字符串 code 原样保留）；变更事件 50ms 防抖、按兴趣订阅 |
 | —（VSCode 无对应） | `languages.setLanguageServerStatus` | Universe 扩展：上报语言服务 `starting/ready/error`，状态栏显示 spinner、导航命令等待就绪而非静默阻塞 |
 | InlineCompletion / CallHierarchy / TypeHierarchy / LinkedEditing / Color / Declaration / DropEdit 等 provider | — | 缺失（暂无计划） |
 

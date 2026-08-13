@@ -128,6 +128,14 @@ export class TreeModel<T> extends Disposable {
     if (!state && hasChildren && this._defaultExpanded?.(element, depth)) {
       state = this._ensureState(id)
       state.expanded = true
+      // A default-expanded node renders open, so a lazy source must have its
+      // children pulled now — explicit expand() is the only other trigger.
+      // One-shot per materialisation (collapse → re-expand retries through
+      // expand()); on settle the structure event lets the view re-collect,
+      // which cascades into nested default-expanded levels.
+      if (this._dataSource.getChildren(element) === null) {
+        void this._pullChildren(element, state).then(() => this._emitStructure())
+      }
     }
     const expanded = hasChildren ? (state?.expanded ?? false) : false
     acc.push({
@@ -173,18 +181,8 @@ export class TreeModel<T> extends Disposable {
     const wasExpanded = state.expanded
     state.expanded = true
     if (!wasExpanded) this._onDidChangeExpansion.fire({ element, expanded: true })
-    if (this._dataSource.getChildren(element) === null && this._dataSource.loadChildren) {
-      if (!state.loading) {
-        state.loading = true
-        state.error = null
-        try {
-          await this._dataSource.loadChildren(element)
-        } catch (err) {
-          state.error = err instanceof Error ? err.message : String(err)
-        } finally {
-          state.loading = false
-        }
-      }
+    if (this._dataSource.getChildren(element) === null) {
+      await this._pullChildren(element, state)
     }
     if (!wasExpanded || this._dataSource.getChildren(element) !== null) {
       this._emitStructure()
@@ -395,6 +393,21 @@ export class TreeModel<T> extends Disposable {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /** Shared children pull for expand() and default-expansion materialisation. */
+  private async _pullChildren(element: T, state: NodeState): Promise<void> {
+    const loadChildren = this._dataSource.loadChildren
+    if (!loadChildren || state.loading) return
+    state.loading = true
+    state.error = null
+    try {
+      await loadChildren(element)
+    } catch (err) {
+      state.error = err instanceof Error ? err.message : String(err)
+    } finally {
+      state.loading = false
+    }
+  }
 
   private _ensureState(id: string): NodeState {
     let state = this._state.get(id)

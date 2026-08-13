@@ -6,7 +6,9 @@
  * The view itself is owned by the workbench; the extension only supplies data
  * through a {@link TreeDataProvider}. Children are pulled lazily — only when
  * the user expands a node — and a provider's `onDidChangeTreeData` invalidates
- * the whole view (the first cut has no per-subtree refresh).
+ * either the whole view (fired with no element) or just that element's subtree.
+ * Rows keep their identity across a refresh, so the user's expansion and
+ * selection survive one.
  *
  * First-cut differences from VSCode: no drag & drop, no checkboxes, no badges,
  * no `TreeView.reveal` (`getParent` is accepted but not consumed), no
@@ -37,7 +39,12 @@ export class TreeItem {
   /** Row text; a {@link TreeItemLabel} is normalized to its plain text. */
   label: string | TreeItemLabel
   collapsibleState?: TreeItemCollapsibleState
-  /** Provider-local stable id (keeps row identity across refreshes). */
+  /**
+   * Provider-local stable id. Rows keep their identity across a refresh even
+   * without one (the host falls back to the element object, then to the label
+   * under the parent), but a provider that rebuilds its elements *and* changes
+   * their labels needs this to keep the expansion state.
+   */
   id?: string
   /** Secondary text rendered after the label. */
   description?: string
@@ -66,7 +73,14 @@ export class TreeItem {
  * keys them by numeric handles.
  */
 export interface TreeDataProvider<T> {
-  /** Fire when the tree's data changes; the whole view is re-pulled. */
+  /**
+   * Fire when the tree's data changes. With no element (or `undefined` /
+   * `null`) the whole view is re-pulled; with an element (or an array of them)
+   * only that element's row is refreshed and its children re-pulled — sibling
+   * and unrelated branches keep their cache, and expansion state is preserved
+   * either way. A burst of fires inside one short window is merged into a
+   * single refresh.
+   */
   readonly onDidChangeTreeData?: Event<T | T[] | undefined | null | void>
   getTreeItem(element: T): TreeItem | Promise<TreeItem>
   /** Children of `element`, or the roots when omitted. */

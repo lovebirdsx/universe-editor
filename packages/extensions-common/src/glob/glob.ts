@@ -1,98 +1,47 @@
 /**
- * Shared glob → RegExp compiler for the extension surface (`workspace.findFiles`
- * in the renderer, `workspace.createFileSystemWatcher` in the ext host). Kept
- * dependency-free so both processes can import it.
- *
- * Semantics (matched against a workspace-relative, forward-slash path):
- *   - `*`      matches any run of characters except the path separator
- *   - `**`     matches any run of characters including separators; in the
- *              slash-suffixed form it also matches zero segments, so a leading
- *              double-star matches files at the root too
- *   - `?`      matches a single character except the path separator
- *   - `{a,b}`  brace alternation; alternatives compile as glob fragments
- *              (non-nested in practice)
- *   - `[...]`  character class, with `!`/`^` negation and `a-z` ranges
- *   - a pattern without any `/` matches the basename at ANY depth (ripgrep
- *     `-g` style), i.e. `*.ts` behaves like the double-star-prefixed form
- * Matching is case-sensitive on every platform. All other regex metacharacters
- * are escaped.
+ * Extension-surface glob utilities. The glob → RegExp engine itself lives in
+ * platform and is re-exported below so the extension runtime surfaces
+ * (renderer `MainThread*`, ext host) and the `RelativePattern` helpers here
+ * share one compiler. Match semantics (workspace-relative, forward-slash
+ * path): `*` stays within a segment, `**` crosses segments (in the
+ * slash-suffixed form it also matches zero segments), `?` matches one
+ * non-separator character, `{a,b}` alternates
+ * with alternatives compiled as glob fragments, `[...]` is a character class
+ * with `!`/`^` negation, and a slashless pattern matches the basename at ANY
+ * depth (ripgrep `-g` style). Matching is case-sensitive on every platform.
  */
+import { basename, dirname } from '@universe-editor/platform'
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-}
+export { compileGlobMatcher, normalizeExtensionGlobPattern } from '@universe-editor/platform'
 
-function escapeClassChar(s: string): string {
-  return s.replace(/[\\\]]/g, '\\$&')
-}
-
-function compileFragment(pattern: string, start: number, end: number, depth: number): string {
-  let body = ''
-  let i = start
-  while (i < end) {
-    const ch = pattern[i]!
-    if (ch === '*') {
-      if (pattern[i + 1] === '*') {
-        if (pattern[i + 2] === '/') {
-          body += '(?:.*/)?'
-          i += 3
-        } else {
-          body += '.*'
-          i += 2
-        }
-      } else {
-        body += '[^/]*'
-        i += 1
-      }
-    } else if (ch === '?') {
-      body += '[^/]'
-      i += 1
-    } else if (ch === '{') {
-      const close = pattern.indexOf('}', i + 1)
-      if (close === -1 || close > end || depth >= 3) {
-        body += escapeRegex(ch)
-        i += 1
-      } else {
-        const alts = pattern
-          .slice(i + 1, close)
-          .split(',')
-          .map((alt) => compileFragment(alt, 0, alt.length, depth + 1))
-        body += '(?:' + alts.join('|') + ')'
-        i = close + 1
-      }
-    } else if (ch === '[') {
-      const close = pattern.indexOf(']', i + 1)
-      if (close === -1 || close > end) {
-        body += escapeRegex(ch)
-        i += 1
-      } else {
-        let inner = pattern.slice(i + 1, close)
-        let negate = ''
-        if (inner.startsWith('!') || inner.startsWith('^')) {
-          negate = '^'
-          inner = inner.slice(1)
-        }
-        body += '[' + negate + inner.split('').map(escapeClassChar).join('') + ']'
-        i = close + 1
-      }
-    } else {
-      body += escapeRegex(ch)
-      i += 1
-    }
-  }
-  return body
-}
+const HAS_GLOB_CHARS = /[*?{[]/
 
 /**
- * Compile `pattern` into a matcher over workspace-relative paths. The matched
- * value is normalized first: backslashes become forward slashes and leading
- * slashes are stripped, so Windows-style inputs work unchanged.
+ * Split an absolute glob into its literal root folder and the remaining
+ * base-relative pattern (VSCode RelativePattern semantics), or null when the
+ * pattern is workspace-relative. A glob-free absolute path targets a single
+ * entry: base is its parent folder, pattern its basename. A bare filesystem
+ * root (`/x`, `D:/x`) cannot anchor a watch and splits to null.
  */
-export function compileGlobMatcher(pattern: string): (relPath: string) => boolean {
-  let normalized = pattern.replace(/\\/g, '/').replace(/^\/+/, '')
-  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1)
-  // A slashless pattern matches the basename at any depth (ripgrep `-g` style).
-  if (!normalized.includes('/')) normalized = '**/' + normalized
-  const regex = new RegExp('^' + compileFragment(normalized, 0, normalized.length, 0) + '$')
-  return (relPath: string) => regex.test(relPath.replace(/\\/g, '/').replace(/^\/+/, ''))
+export function splitAbsoluteGlob(pattern: string): { base: string; pattern: string } | null {
+  const normalized = pattern.replace(/\\/g, '/')
+  const anchored =
+    normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//')
+  if (!anchored) return null
+  const segments = normalized.split('/')
+  const cut = segments.findIndex((s) => HAS_GLOB_CHARS.test(s))
+  if (cut === -1) {
+    if (normalized.endsWith('/')) return null
+    const base = dirname(normalized)
+    const rest = basename(normalized)
+    if (base === '.' || base === '/' || /^[A-Za-z]:\/?$/.test(base) || rest === '') return null
+    return { base, pattern: rest }
+  }
+  // The glob-bearing tail must have a literal segment above it: everything
+  // before the first glob character anchors the base, verbatim.
+  if (cut <= 0) return null
+  const base = segments.slice(0, cut).join('/')
+  const rest = segments.slice(cut).join('/')
+  if (base === '' || /^[A-Za-z]:$/.test(base) || rest === '') return null
+  return { base, pattern: rest }
 }

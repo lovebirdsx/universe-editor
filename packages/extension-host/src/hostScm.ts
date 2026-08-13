@@ -16,27 +16,25 @@ import type {
   SourceControlResourceState,
 } from '@universe-editor/extension-api'
 import type {
-  ICommandDto,
   IMainThreadScm,
   ISourceControlResourceStateDto,
 } from '@universe-editor/extensions-common'
+import { toCommandDto, type CommandWireField } from './hostHandles.js'
 
-function toCommandDto(cmd: Command): ICommandDto {
-  return {
-    command: cmd.command,
-    title: cmd.title,
-    ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
-    ...(cmd.disabled !== undefined ? { disabled: cmd.disabled } : {}),
-    ...(cmd.icon !== undefined ? { icon: cmd.icon } : {}),
-    ...(cmd.arguments !== undefined ? { arguments: cmd.arguments } : {}),
-  }
-}
+/**
+ * The SCM view executes wire commands directly — explicit `arguments` win over
+ * the resource row itself (p4's shelved rows carry the changelist + depot
+ * path), so the full command shape crosses, unlike tree rows.
+ */
+const SCM_COMMAND_WIRE_FIELDS: readonly CommandWireField[] = ['disabled', 'icon', 'arguments']
 
 function toResourceStateDto(state: SourceControlResourceState): ISourceControlResourceStateDto {
   return {
     resourceUri: state.resourceUri,
     ...(state.contextValue !== undefined ? { contextValue: state.contextValue } : {}),
-    ...(state.command !== undefined ? { command: toCommandDto(state.command) } : {}),
+    ...(state.command !== undefined
+      ? { command: toCommandDto(state.command, SCM_COMMAND_WIRE_FIELDS) }
+      : {}),
     ...(state.decorations !== undefined ? { decorations: { ...state.decorations } } : {}),
   }
 }
@@ -204,13 +202,15 @@ export class HostSourceControl implements SourceControl {
       ...(this._count !== undefined ? { count: this._count } : {}),
       ...(this._commitTemplate !== undefined ? { commitTemplate: this._commitTemplate } : {}),
       ...(this._acceptInputCommand !== undefined
-        ? { acceptInputCommand: toCommandDto(this._acceptInputCommand) }
+        ? { acceptInputCommand: toCommandDto(this._acceptInputCommand, SCM_COMMAND_WIRE_FIELDS) }
         : {}),
       // Always send the actions (empty array when cleared): an omitted key can't
       // clear the renderer's stale split-button set, so a commit that flips this
       // back to "no actions" would otherwise leave the button showing Commit
       // instead of collapsing to the single Push button.
-      acceptInputActions: (this._acceptInputActions ?? []).map(toCommandDto),
+      acceptInputActions: (this._acceptInputActions ?? []).map((cmd) =>
+        toCommandDto(cmd, SCM_COMMAND_WIRE_FIELDS),
+      ),
     })
   }
 }

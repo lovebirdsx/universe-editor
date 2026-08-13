@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import {
+  ContextKeyService,
   IConfigurationService,
   IOutputService,
   IViewDescriptorService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
   observableValue,
+  type ILoggerService,
   type IStorageService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -51,9 +54,18 @@ const mockConfigService: IConfigurationService = {
 
 const stubWorkspace = { current: {} } as unknown as IWorkspaceService
 
+const stubLoggerService = {
+  createLogger: () => new NullLogger(),
+} as unknown as ILoggerService
+
 function renderPanel(activeContainerId: string | undefined) {
   const services = new ServiceCollection()
-  const viewDescriptorService = new ViewDescriptorService(makeStorage(), stubWorkspace)
+  const viewDescriptorService = new ViewDescriptorService(
+    makeStorage(),
+    stubWorkspace,
+    new ContextKeyService(),
+    stubLoggerService,
+  )
   services.set(IViewDescriptorService, viewDescriptorService)
   const viewsService = new ViewsService(makeStorage(), stubWorkspace, viewDescriptorService)
   if (activeContainerId) viewsService.openViewContainer(activeContainerId)

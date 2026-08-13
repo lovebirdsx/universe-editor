@@ -121,6 +121,7 @@ class Foo {
 - **`ProxyChannel.fromService(impl)`**：把 service 实例转成 channel 处理器（main 端）
 - **`ProxyChannel.toService<I>(channel)`**：把 channel 反向生成 service 代理（renderer 端）
 - **事件穿透**：service 上的 `Emitter.event` 属性会被自动桥接为远端可订阅事件
+- **尾部可选参数约定**：`toService` 序列化前剥掉参数数组尾部的 `undefined`（否则 JSON 把它变 `null`，远端 `=== undefined` 判定失效）；显式 `null` 原样穿越。夹在实参中间的 `undefined` 仍按 JSON 数组语义变 `null`——中段可选参数须声明 `| null` 并用 `== null` 判定。
 
 参考：`src/ipc/proxyChannel.ts`、`apps/editor/src/main/ipc/registerMainServices.ts`
 

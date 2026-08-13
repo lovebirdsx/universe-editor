@@ -426,25 +426,32 @@ function codeForMarker(
   return href ? { value, target: monacoNs.Uri.parse(href) } : value
 }
 
+/** Monaco MarkerSeverity (8 Error / 4 Warning / 2 Info / 1 Hint) → LSP DiagnosticSeverity. */
+const LSP_SEVERITY_BY_MARKER: { readonly [severity: number]: 1 | 2 | 3 | 4 } = {
+  8: 1,
+  4: 2,
+  2: 3,
+  1: 4,
+}
+
 /**
  * Monaco IMarker → LSP Diagnostic — the inverse of {@link diagnosticToMarker}
  * (MarkerSeverity 8/4/2/1 → 1/2/3/4, 1-based positions → 0-based). Unknown
  * severities fall back to Error, matching Monaco's own marker→problem mapping. A
  * `{ value, target }` code round-trips into `code` + `codeDescription.href`;
- * tags round-trip into LSP DiagnosticTags. `relatedInformation` is dropped (the
- * forward mapping never carries it).
+ * tags round-trip into LSP DiagnosticTags (numerically identical to MarkerTags,
+ * so a plain type-guard keeps the known ones). `relatedInformation` is dropped
+ * (the forward mapping never carries it).
  */
 export function markerToLspDiagnostic(m: monaco.editor.IMarker): Diagnostic {
-  const severity =
-    m.severity === 8 ? 1 : m.severity === 4 ? 2 : m.severity === 2 ? 3 : m.severity === 1 ? 4 : 1
-  const tags = (m.tags ?? [])
-    .map((t) => (t === 1 ? 1 : t === 2 ? 2 : undefined))
-    .filter((t): t is 1 | 2 => t !== undefined)
-  // `diagnosticToMarker` stringifies a numeric code; undo that so the value
-  // round-trips into the same shape the extension originally published.
-  const rawCode =
-    m.code === undefined ? undefined : typeof m.code === 'string' ? m.code : m.code.value
-  const code = rawCode === undefined ? undefined : /^\d+$/.test(rawCode) ? Number(rawCode) : rawCode
+  const severity = LSP_SEVERITY_BY_MARKER[m.severity] ?? 1
+  const tags = (m.tags ?? []).filter((t): t is 1 | 2 => t === 1 || t === 2)
+  // VSCode parity: the marker holds the stringified code and VSCode's own
+  // reverse converter always returns that string, never re-numericising it.
+  // Keeping the string preserves leading zeros ('0123' must not come back as
+  // 123); a published numeric code reads back in its string form — the same
+  // loss `languages.getDiagnostics` has in VSCode.
+  const code = m.code === undefined ? undefined : typeof m.code === 'string' ? m.code : m.code.value
   return {
     range: {
       start: { line: m.startLineNumber - 1, character: m.startColumn - 1 },
