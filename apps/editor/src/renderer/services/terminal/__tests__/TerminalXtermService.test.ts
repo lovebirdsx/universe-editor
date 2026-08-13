@@ -4,7 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, type IConfigurationService, type IThemeService } from '@universe-editor/platform'
+import {
+  Emitter,
+  type IConfigurationService,
+  type IOpenerService,
+  type IThemeService,
+} from '@universe-editor/platform'
 import { ITerminalManagerService } from '../TerminalManagerService.js'
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
@@ -72,8 +77,16 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }))
 
+const { webLinksHandlers } = vi.hoisted(() => ({
+  webLinksHandlers: [] as Array<(event: MouseEvent, uri: string) => void>,
+}))
+
 vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: class {},
+  WebLinksAddon: class {
+    constructor(handler?: (event: MouseEvent, uri: string) => void) {
+      webLinksHandlers.push(handler ?? (() => {}))
+    }
+  },
 }))
 
 interface Harness {
@@ -117,9 +130,19 @@ function sizeWrapper(wrapper: HTMLElement, w: number, hgt: number): void {
   Object.defineProperty(wrapper, 'clientHeight', { value: hgt, configurable: true })
 }
 
-async function makeService(h: Harness) {
+function makeOpener(): { opener: IOpenerService; open: ReturnType<typeof vi.fn> } {
+  const open = vi.fn().mockResolvedValue(true)
+  const opener = {
+    _serviceBrand: undefined,
+    registerOpener: () => ({ dispose() {} }),
+    open,
+  } as unknown as IOpenerService
+  return { opener, open }
+}
+
+async function makeService(h: Harness, opener: IOpenerService = makeOpener().opener) {
   const { TerminalXtermService } = await import('../TerminalXtermService.js')
-  return new TerminalXtermService(makeManager(h), makeConfig(), makeThemeService())
+  return new TerminalXtermService(makeManager(h), makeConfig(), makeThemeService(), opener)
 }
 
 function makeHarness(): Harness {
@@ -129,6 +152,7 @@ function makeHarness(): Harness {
 describe('TerminalXtermService', () => {
   beforeEach(() => {
     proposed = { cols: 100, rows: 30 }
+    webLinksHandlers.length = 0
   })
 
   afterEach(() => {
@@ -245,5 +269,18 @@ describe('TerminalXtermService', () => {
 
     expect(a.disposed).toBe(true)
     expect(b.disposed).toBe(true)
+  })
+
+  it('routes WebLinksAddon URL clicks through IOpenerService', async () => {
+    const { opener, open } = makeOpener()
+    const svc = await makeService(makeHarness(), opener)
+    svc.acquire('t1')
+
+    expect(webLinksHandlers.length).toBe(1)
+    const handler = webLinksHandlers[0]!
+    const uri = 'https://example.com/path'
+    handler({} as MouseEvent, uri)
+
+    expect(open).toHaveBeenCalledWith(uri, { fromUserGesture: true })
   })
 })

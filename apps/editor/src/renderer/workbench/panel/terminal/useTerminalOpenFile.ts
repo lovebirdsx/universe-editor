@@ -1,15 +1,13 @@
 import { useCallback, useRef } from 'react'
 import {
-  IEditorService,
   IFileSearchService,
   IFileService,
-  IInstantiationService,
+  IOpenerService,
   IWorkspaceService,
   URI,
   normalizeFsPath,
+  withSelection,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import { useService } from '../../useService.js'
 
 const CACHE_TTL = 10_000
@@ -34,27 +32,33 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
       if (cached !== undefined && cached.expiresAt > now) return Promise.resolve(cached.uri)
 
       const promise = (async (): Promise<URI | null> => {
-        const uri = URI.file(absolutePath)
-        if (await fileService.exists(uri)) return uri
+        try {
+          const uri = URI.file(absolutePath)
+          if (await fileService.exists(uri)) return uri
 
-        const workspace = workspaceService.current
-        if (!workspace) return null
+          const workspace = workspaceService.current
+          if (!workspace) return null
 
-        const norm = normalizeFsPath(absolutePath)
-        const root = normalizeFsPath(workspace.folder.fsPath)
-        const pattern = norm.startsWith(root + '/')
-          ? norm.slice(root.length + 1)
-          : (norm.split('/').pop() ?? norm)
+          const norm = normalizeFsPath(absolutePath)
+          const root = normalizeFsPath(workspace.folder.fsPath)
+          const pattern = norm.startsWith(root + '/')
+            ? norm.slice(root.length + 1)
+            : (norm.split('/').pop() ?? norm)
 
-        const result = await fileSearchService.search({
-          root: workspace.folder,
-          pattern,
-          includeExactPathMatches: true,
-          maxResults: 10,
-        })
+          const result = await fileSearchService.search({
+            root: workspace.folder,
+            pattern,
+            includeExactPathMatches: true,
+            maxResults: 10,
+          })
 
-        const first = result.results[0]
-        return first ? (URI.revive(first.resource) as URI) : null
+          const first = result.results[0]
+          return first ? (URI.revive(first.resource) as URI) : null
+        } catch {
+          // Never reject: the link provider's activate() awaits this promise
+          // without a catch, so a rejection would silently swallow the click.
+          return null
+        }
       })()
 
       cache.current.set(absolutePath, promise)
@@ -68,28 +72,22 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
 }
 
 /**
- * Opens an already-resolved URI in the editor with optional cursor positioning.
- * This is intentionally synchronous-looking: no IPC happens here.
+ * Opens an already-resolved URI via IOpenerService. A `:line` location is
+ * encoded into the URI fragment with `withSelection` so the file opener reveals
+ * the position; without a location the target flows through the same routing as
+ * markdown/deep links (directory → new window, image → preview, etc.).
  */
 export function useOpenTerminalFile(): (uri: URI, line?: number, col?: number) => void {
-  const editorService = useService(IEditorService)
-  const instantiation = useService(IInstantiationService)
+  const opener = useService(IOpenerService)
 
   return useCallback(
     (uri: URI, line?: number, col?: number) => {
-      const input = instantiation.createInstance(FileEditorInput, uri)
-      editorService.openEditor(input, { pinned: true })
-      if (line !== undefined) {
-        setTimeout(() => {
-          const editor = FileEditorRegistry.get(input)
-          if (editor) {
-            editor.setPosition({ lineNumber: line, column: col ?? 1 })
-            editor.revealLineInCenter(line)
-            editor.focus()
-          }
-        }, 50)
-      }
+      const target =
+        line !== undefined
+          ? withSelection(uri, { startLineNumber: line, startColumn: col ?? 1 })
+          : uri
+      void opener.open(target, { fromUserGesture: true })
     },
-    [editorService, instantiation],
+    [opener],
   )
 }

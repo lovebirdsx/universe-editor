@@ -21,6 +21,7 @@ import {
   Emitter,
   IConfigurationService,
   InstantiationType,
+  IOpenerService,
   IThemeService,
   registerSingleton,
   type Event,
@@ -163,6 +164,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     manager: ITerminalManagerService,
     private readonly _config: IConfigurationService,
     private readonly _themeService: IThemeService,
+    private readonly _opener: IOpenerService,
   ) {
     super()
     this._id = id
@@ -191,7 +193,14 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     })
     this._fit = new FitAddon()
     this.term.loadAddon(this._fit)
-    this.term.loadAddon(new WebLinksAddon())
+    // Route http(s) links through IOpenerService so they reach the OS browser:
+    // the default WebLinksAddon handler calls `window.open()` with no URL, which
+    // Electron's setWindowOpenHandler denies (empty url) — links never opened.
+    this.term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        void this._opener.open(uri, { fromUserGesture: true })
+      }),
+    )
     this.term.open(this.wrapper)
     this.term.attachCustomKeyEventHandler((event) => handleTerminalClipboardKey(event, this.term))
 
@@ -322,6 +331,7 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
     @ITerminalManagerService private readonly _manager: ITerminalManagerService,
     @IConfigurationService private readonly _config: IConfigurationService,
     @IThemeService private readonly _themeService: IThemeService,
+    @IOpenerService private readonly _opener: IOpenerService,
   ) {
     super()
     this._register(this._manager.onDidRemoveTerminal(({ id }) => this.release(id)))
@@ -331,7 +341,7 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
     let holder = this._holders.get(id)
     if (!holder) {
       holder = this._register(
-        new TerminalXtermHolder(id, this._manager, this._config, this._themeService),
+        new TerminalXtermHolder(id, this._manager, this._config, this._themeService, this._opener),
       )
       this._holders.set(id, holder)
     }
