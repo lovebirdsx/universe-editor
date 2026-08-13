@@ -515,12 +515,16 @@ function pickTheme<
     )
     disposables.add(
       pick.onDidHide(() => {
-        setTimeout(() => {
+        // Defer the rollback decision so an accept that fired in the same turn
+        // wins. A microtask (not a timer) keeps the store's release tied to the
+        // current turn — a setTimeout leaves it alive for an unbounded stretch,
+        // which the e2e leak gate snapshots as a leak.
+        queueMicrotask(() => {
           if (!accepted) {
             options.applyTheme(originalTheme)
           }
           disposables.dispose()
-        }, 0)
+        })
       }),
     )
     pick.show()
@@ -611,14 +615,17 @@ export class SelectColorThemeAction extends Action2 {
       )
       disposables.add(
         pick.onDidHide(() => {
-          // onDidAccept and onDidHide can race; defer the rollback decision a
-          // tick so an accept that fired in the same turn wins.
-          setTimeout(() => {
+          // onDidAccept and onDidHide can race; defer the rollback decision so
+          // an accept that fired in the same turn wins. A microtask (not a
+          // timer) keeps the store's release tied to the current turn — a
+          // setTimeout leaves it alive for an unbounded stretch, which the e2e
+          // leak gate snapshots as a leak.
+          queueMicrotask(() => {
             if (!accepted) {
               void themeService.setColorTheme(originalTheme.settingsId)
             }
             disposables.dispose()
-          }, 0)
+          })
         }),
       )
       pick.show()

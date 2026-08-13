@@ -76,7 +76,8 @@ pnpm --filter @universe-editor/editor lint
 6. 横向对比同类创建路径，漏 `_register` 的那条就是 bug。
 7. 用 tracker 写回归测试时，`computeLeakingDisposables()` 无泄漏返回 **`undefined`（非 `null`）**；contribution 回退 `new NullLogger()` 等桩对象自身会被算泄漏，给个返回 `markAsSingleton` logger 的 loggerService 桩绕开。
 8. **在飞请求的传输订阅（reload 时点）**：像 `AiModelClientService.sendRequest` 这类"每次调用创建一组事件订阅、只在流结束（`acceptEnd`）时 dispose"的代码，reload 时若请求仍在飞，订阅未挂父链必被报。修法：把 combined 挂到 owner 的 `_store`（根到单例即豁免），并让结束回调走 `this._store.delete(combined)`（移除+dispose，避免 store 累积已 dispose 对象）——例如 `reassembler.bindSubscriptions(toDisposable(() => this._store.delete(combined)))`。
-9. **释放时机只绑在异步事件上（主进程退出时点）**：主进程 tracker 在 `process.on('exit')` 报告，而子进程 `'exit'` 事件、流 `'close'` 等异步事件在退出流程中**来不及派发**——只挂这类事件的 disposable（如 `processRoleRegistry.register` 的登记句柄只挂 child `'exit'`）退出时必被报。修法：在同步可达的路径上补摘除（如 transport 的 `kill()` 里同步 dispose，`toDisposable` 幂等，事件回调里的再 dispose 兜底）。案例：`watcherUtilityTransport.ts`。
+9. **延迟释放挂在宏任务上（e2e 泄漏门禁时点）**：`expectNoLeaks` 是**同步快照**，`setTimeout(() => store.dispose(), 0)` 排的宏任务在快照时还没跑，整个 store 连同其成员被判泄漏——本地 dev 手动关窗看不到（人手速 >> 0ms），e2e 里约 50% 概率红。案例：`preferencesActions.ts` 的 `pickTheme` / `SelectColorThemeAction`，`pick.onDidHide` 里用 `setTimeout(…, 0)` 推迟「未 accept 则回滚主题 + dispose」，被 `smoke.iconThemes.spec.ts` 抓成 5 条泄漏。修法：需要「让同回合的 accept 先赢」时用 `queueMicrotask` 而非 `setTimeout`——微任务仍在当前回合内排空，既保住让位语义又不跨越快照点。判据：**任何 disposable 的释放若排在宏任务/定时器上，都必须假设门禁会在它之前快照**。
+10. **释放时机只绑在异步事件上（主进程退出时点）**：主进程 tracker 在 `process.on('exit')` 报告，而子进程 `'exit'` 事件、流 `'close'` 等异步事件在退出流程中**来不及派发**——只挂这类事件的 disposable（如 `processRoleRegistry.register` 的登记句柄只挂 child `'exit'`）退出时必被报。修法：在同步可达的路径上补摘除（如 transport 的 `kill()` 里同步 dispose，`toDisposable` 幂等，事件回调里的再 dispose 兜底）。案例：`watcherUtilityTransport.ts`。
 
 ## 其它
 - 后续用本 skill，发现新经验，需同步更新本文件
