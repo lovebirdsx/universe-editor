@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/ripgrep/ripgrepUtil.ts
+ *  Tests for packages/node-services/src/search/ripgrepUtil.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'

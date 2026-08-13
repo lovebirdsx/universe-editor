@@ -214,6 +214,20 @@ export interface E2ERenderedCodeLens {
   readonly title: string
 }
 
+/** stat result for an arbitrary resource (any scheme, incl. remote-ssh). */
+export interface E2EResourceStat {
+  readonly resource: string
+  readonly isFile: boolean
+  readonly isDirectory: boolean
+  readonly size: number
+}
+
+/** One filesystem change event buffered by the watcher probe. */
+export interface E2EWatchedChangeEvent {
+  readonly type: string
+  readonly resource: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1030,6 +1044,23 @@ export interface E2EProbe {
   /** Diagnostic snapshot of the Swarm notification contribution's most recent poll:
    *  the actionable id set, so a spec can detect when the baseline has primed. */
   getSwarmNotifyDiag(): { lastActionable: readonly string[] }
+  // -- Remote (remote-ssh) filesystem / search / watcher probe --------------
+  /** Read a resource's UTF-8 text via IFileService (any scheme, incl. remote-ssh). */
+  readFileText(uri: string): Promise<string>
+  /** Write UTF-8 text to a resource via IFileService (creates/overwrites). */
+  writeFileText(uri: string, text: string): Promise<void>
+  /** stat a resource via IFileService; null when it does not exist. */
+  statResource(uri: string): Promise<E2EResourceStat | null>
+  /** Names of a directory's direct children via IFileService.list. */
+  listResource(uri: string): Promise<readonly string[]>
+  /** Delete a resource via IFileService. */
+  deleteResource(uri: string): Promise<void>
+  /** Full text search over an explicit root; returns hit resource URI strings. */
+  searchTextInRoot(root: string, pattern: string): Promise<readonly string[]>
+  /** Arm a recursive watch on a folder and reset the buffered change-event set. */
+  watchFolder(uri: string): Promise<void>
+  /** Change events buffered since the last watchFolder call. */
+  getWatchedChangeEvents(): readonly E2EWatchedChangeEvent[]
 }
 
 declare global {

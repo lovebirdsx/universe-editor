@@ -30,6 +30,7 @@ import {
   mark,
   normalizePlatform,
   relativePathUnder,
+  REMOTE_SCHEME,
   type Event,
   type FileChangeType,
   type IDisposable,
@@ -41,8 +42,11 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { PerfMarks } from '../../../shared/perf/marks.js'
-import type { WatcherProcessClient } from './watcherProcessClient.js'
-import type { WatcherRawEventType } from './watcherProtocol.js'
+import { WatcherProcessClient } from '@universe-editor/node-services'
+import type { WatcherRawEventType } from '@universe-editor/platform'
+import { RemoteWatcherTransport } from '../remote/remoteWatcherTransport.js'
+import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
+import { remoteFsPathToUri, toWire } from '../remote/remoteUri.js'
 
 const DEBOUNCE_MS = 50
 
@@ -113,6 +117,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   constructor(
     private readonly _host: WatcherProcessClient,
     @ILoggerService loggerService?: ILoggerService,
+    @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })
     this._watchId = _host.allocateId()
@@ -133,6 +138,16 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event
 
+  // Remote (remote-ssh) watch state: one WatcherProcessClient per authority, its
+  // transport tunnelled over the connection (see RemoteWatcherTransport).
+  private readonly _remoteWatchers = new Map<
+    string,
+    { client: WatcherProcessClient; watchId: number; listening: IDisposable[] }
+  >()
+  private _remoteAuthority: string | null = null
+  private _remoteTarget: string | null = null
+  private _remoteIgnore: string[] = []
+
   /** Relayed from the shared watcher process: it crashed and was re-armed, so
    *  events during the gap are lost — consumers should rescan. */
   get onDidRestart(): Event<void> {
@@ -143,6 +158,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _rootFsPath: string | null = null
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
+  private _remotePending = new Map<string, { resource: URI; type: FileChangeType }>()
   private _flushTimer: NodeJS.Timeout | null = null
   // Coalesced re-subscribe waiting out its quiet window. Waiters resolve when
   // the coalesced _subscribe lands, or when cancelled (teardown / superseded by
@@ -169,6 +185,10 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   async watch(folder: URI, options?: { excludes?: readonly string[] }): Promise<void> {
     const uri = reviveUri(folder)
+    if (uri.scheme === REMOTE_SCHEME) {
+      await this._watchRemote(uri, options)
+      return
+    }
     if (uri.scheme !== 'file') {
       throw new Error(`FileWatcher: unsupported scheme: ${uri.scheme}`)
     }
@@ -187,8 +207,78 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     return this._scheduleSubscribe(target, ignore)
   }
 
+  private async _watchRemote(uri: URI, options?: { excludes?: readonly string[] }): Promise<void> {
+    if (!this._connections) {
+      throw new Error('FileWatcher: remote connection service not available')
+    }
+    const authority = uri.authority
+    if (!authority) {
+      throw new Error('FileWatcher: remote URI has no authority')
+    }
+    let entry = this._remoteWatchers.get(authority)
+    if (!entry) {
+      const client = new WatcherProcessClient(
+        () => new RemoteWatcherTransport(authority, this._connections!, this._logger),
+      )
+      const watchId = client.allocateId()
+      const listening = [
+        client.onFileEvents((msg) => {
+          if (msg.id !== watchId) return
+          for (const ev of msg.events) {
+            this._enqueueRemote(remoteFsPathToUri(ev.path, authority), PARCEL_EVENT_TYPE[ev.type])
+          }
+        }),
+        client.onWatchError((msg) => {
+          if (msg.id !== watchId) return
+          this._logger.warn(`remote watcher error ${authority}`, msg.error)
+        }),
+      ]
+      entry = { client, watchId, listening }
+      this._remoteWatchers.set(authority, entry)
+    }
+    // The server-side absolute path (toWire → file: URI, then fsPath strips the
+    // `/C:` drive prefix for Windows hosts). Never fsPath the remote-ssh URI itself.
+    const target = toWire(uri).fsPath
+    const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
+    this._remoteAuthority = authority
+    this._remoteTarget = target
+    this._remoteIgnore = ignore
+    try {
+      await entry.client.watch(entry.watchId, target, ignore)
+      this._logger.info(`watch remote ${authority} ${target}`)
+    } catch (err) {
+      this._logger.warn(
+        `remote watch failed ${authority} ${target}`,
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
+    }
+  }
+
+  private async _teardownRemote(): Promise<void> {
+    const authority = this._remoteAuthority
+    this._remoteAuthority = null
+    this._remoteTarget = null
+    this._remoteIgnore = []
+    this._remotePending.clear()
+    if (authority === null) return
+    const entry = this._remoteWatchers.get(authority)
+    if (!entry) return
+    try {
+      await entry.client.unwatch(entry.watchId)
+    } catch {
+      // ignore
+    }
+    this._logger.info(`unwatch remote ${authority}`)
+  }
+
   async setExcludes(excludes: readonly string[]): Promise<void> {
     const ignore = toIgnore(excludes)
+    if (this._remoteAuthority !== null && this._remoteTarget !== null) {
+      this._remoteIgnore = ignore
+      const entry = this._remoteWatchers.get(this._remoteAuthority)
+      if (entry) await entry.client.watch(entry.watchId, this._remoteTarget, ignore)
+      return
+    }
     const scheduled = this._scheduledSubscribe
     if (scheduled) {
       if (!sameSet(ignore, scheduled.ignore)) {
@@ -208,6 +298,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   async unwatch(): Promise<void> {
+    await this._teardownRemote()
     await this._teardown()
   }
 
@@ -216,6 +307,10 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     const newDirMap = new Map<string, Set<string>>()
     for (const u of uris) {
       const uri = reviveUri(u)
+      if (uri.scheme === REMOTE_SCHEME) {
+        this._logger.debug(`skip out-of-workspace watch for remote URI ${uri.toString()}`)
+        continue
+      }
       if (uri.scheme !== 'file') continue
       const fsPath = uri.fsPath
       if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) continue
@@ -283,8 +378,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   dispose(): void {
     void this._teardown()
+    void this._teardownRemote()
     this._teardownExtraWatchers()
     for (const d of this._clientListeners) d.dispose()
+    for (const [, entry] of this._remoteWatchers) {
+      for (const d of entry.listening) d.dispose()
+      entry.client.dispose()
+    }
+    this._remoteWatchers.clear()
     this._onDidChangeFiles.dispose()
   }
 
@@ -294,6 +395,10 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   async addOutOfWorkspaceFolder(folder: URI): Promise<void> {
     const uri = reviveUri(folder)
+    if (uri.scheme === REMOTE_SCHEME) {
+      this._logger.debug(`skip out-of-workspace folder watch for remote URI ${uri.toString()}`)
+      return
+    }
     if (uri.scheme !== 'file') return
     const fsPath = uri.fsPath
     // The recursive workspace watch already covers these.
@@ -537,6 +642,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       this._flushTimer = null
     }
     this._pending.clear()
+    this._remotePending.clear()
   }
 
   private _teardownExtraWatchers(): void {
@@ -562,6 +668,15 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _enqueue(absPath: string, type: FileChangeType): void {
     // Latest event wins for a resource within a single debounce batch.
     this._pending.set(absPath, type)
+    this._armFlush()
+  }
+
+  private _enqueueRemote(resource: URI, type: FileChangeType): void {
+    this._remotePending.set(resource.toString(), { resource, type })
+    this._armFlush()
+  }
+
+  private _armFlush(): void {
     if (this._flushTimer) return
     this._flushTimer = setTimeout(() => {
       this._flushTimer = null
@@ -570,13 +685,18 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   }
 
   private _flush(): void {
-    if (this._pending.size === 0) return
-    const entries = Array.from(this._pending.entries())
-    this._pending.clear()
-    const batch: IFileChangeEvent[] = entries.map(([abs, type]) => ({
+    if (this._pending.size === 0 && this._remotePending.size === 0) return
+    const local = Array.from(this._pending.entries()).map(([abs, type]) => ({
       type,
       resource: URI.file(abs),
     }))
+    this._pending.clear()
+    const remote = Array.from(this._remotePending.values()).map(({ resource, type }) => ({
+      type,
+      resource,
+    }))
+    this._remotePending.clear()
+    const batch: IFileChangeEvent[] = [...local, ...remote]
     if (batch.length > 0) {
       this._logger.debug(`file events count=${batch.length}`)
       this._onDidChangeFiles.fire(batch)

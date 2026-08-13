@@ -13,6 +13,7 @@ import {
 } from './src/renderer/workbench/editor/monaco/monacoNlsPatch'
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
+const nodeServicesSrc = resolve(__dirname, '../../packages/node-services/src/index.ts')
 const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index.ts')
 const extensionsCommonSrc = resolve(__dirname, '../../packages/extensions-common/src/index.ts')
 const REPO_ROOT = resolve(__dirname, '../..')
@@ -71,6 +72,7 @@ export default defineConfig({
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
+        '@universe-editor/node-services': nodeServicesSrc,
       },
     },
     build: {
@@ -81,6 +83,7 @@ export default defineConfig({
       externalizeDeps: {
         exclude: [
           '@universe-editor/platform',
+          '@universe-editor/node-services',
           '@universe-editor/extensions-common',
           '@universe-editor/extension-api',
           '@universe-editor/extension-gallery',

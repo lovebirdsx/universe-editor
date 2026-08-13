@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Shared ripgrep helpers for the main-process search services (text search and
+ *  Shared ripgrep helpers for the node search services (text search and
  *  file-name search). Keep this module dependency-light: path/glob/thread policy
  *  only, no spawning.
  *--------------------------------------------------------------------------------------------*/

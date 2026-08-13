@@ -5,8 +5,8 @@
  *  `process.parentPort` to the transport-agnostic WatcherHost.
  *--------------------------------------------------------------------------------------------*/
 
-import { WatcherHost } from './watcherHost.js'
-import type { WatcherHostRequest } from './watcherProtocol.js'
+import { WatcherHost } from '@universe-editor/node-services'
+import type { WatcherHostRequest } from '@universe-editor/platform'
 
 // `process.parentPort` only exists inside an Electron utility process.
 const parentPort = (

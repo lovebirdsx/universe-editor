@@ -10,11 +10,11 @@ import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
 import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
-import { WatcherProcessClient } from '../watcherProcessClient.js'
+import { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
-} from '../testing/inMemoryWatcherTransport.js'
+} from '@universe-editor/node-services'
 
 function reviveFsPath(c: {
   readonly resource: import('@universe-editor/platform').UriComponents

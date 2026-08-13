@@ -28,7 +28,7 @@ import {
 import {
   ITextSearchMainService,
   type ITextSearchMainService as ITextSearchMainServiceType,
-} from '../../../shared/ipc/textSearchService.js'
+} from '@universe-editor/platform'
 import { compileQuery } from './scanText.js'
 import { mergeOpenEditorResults, searchOpenEditorModels } from './openEditorSearch.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'

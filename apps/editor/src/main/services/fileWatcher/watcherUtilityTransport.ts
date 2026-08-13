@@ -8,8 +8,8 @@
 
 import { utilityProcess } from 'electron'
 import { Emitter, type IDisposable, type ILogger } from '@universe-editor/platform'
-import type { IWatcherTransport, WatcherTransportFactory } from './watcherProcessClient.js'
-import type { WatcherHostRequest, WatcherHostResponse } from './watcherProtocol.js'
+import type { IWatcherTransport, WatcherTransportFactory } from '@universe-editor/node-services'
+import type { WatcherHostRequest, WatcherHostResponse } from '@universe-editor/platform'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 
 export function createWatcherUtilityTransportFactory(

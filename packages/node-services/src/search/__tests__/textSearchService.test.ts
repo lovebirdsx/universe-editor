@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/textSearch/textSearchMainService.ts
+ *  Tests for packages/node-services/src/search/textSearchService.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,8 +11,8 @@ import {
   resolveSearchThreads,
   rgErrorMsgForDisplay,
   resolveRipgrepDiskPath,
-  TextSearchMainService,
-} from '../textSearchMainService.js'
+  TextSearchService,
+} from '../textSearchService.js'
 
 const tempRoots: string[] = []
 
@@ -50,7 +50,7 @@ function baseQuery(root: string, pattern: string) {
   }
 }
 
-describe('TextSearchMainService', () => {
+describe('TextSearchService', () => {
   afterEach(async () => {
     await Promise.all(
       tempRoots
@@ -73,7 +73,7 @@ describe('TextSearchMainService', () => {
       )
     }
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search(baseQuery(root, 'needle-from-deep-file'))
 
@@ -93,7 +93,7 @@ describe('TextSearchMainService', () => {
     await writeFile(path.join(external, 'data.txt'), 'symlink-needle\n')
     if (!(await tryDirLink(external, path.join(root, 'linkdir')))) return // 无 symlink 权限 → 跳过
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search(baseQuery(root, 'symlink-needle'))
 
@@ -147,7 +147,7 @@ describe('TextSearchMainService', () => {
     await writeFile(visible, 'shared-token\n')
     await writeFile(ignored, 'shared-token\n')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     const complete = await svc.search({
       ...baseQuery(root, 'shared-token'),
       configurationExcludes: ['ignored.txt'],
@@ -172,7 +172,7 @@ describe('TextSearchMainService', () => {
     const root = await makeTempRoot()
     const inside = await makeIncludeFixture(root, 'include-dir-token')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search({
         ...baseQuery(root, 'include-dir-token'),
@@ -191,7 +191,7 @@ describe('TextSearchMainService', () => {
     const root = await makeTempRoot()
     const inside = await makeIncludeFixture(root, 'include-bare-token')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search({
         ...baseQuery(root, 'include-bare-token'),
@@ -210,7 +210,7 @@ describe('TextSearchMainService', () => {
     const root = await makeTempRoot()
     const inside = await makeIncludeFixture(root, 'include-rooted-token')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const hit = await svc.search({
         ...baseQuery(root, 'include-rooted-token'),
@@ -242,7 +242,7 @@ describe('TextSearchMainService', () => {
     const root = await makeTempRoot()
     const inside = await makeIncludeFixture(root, 'include-backslash-token')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search({
         ...baseQuery(root, 'include-backslash-token'),
@@ -265,7 +265,7 @@ describe('TextSearchMainService', () => {
     await writeFile(tsFile, 'include-glob-token\n')
     await writeFile(path.join(dir, 'a.txt'), 'include-glob-token\n')
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search({
         ...baseQuery(root, 'include-glob-token'),
@@ -283,7 +283,7 @@ describe('TextSearchMainService', () => {
   it('emits progress for the matching session', async () => {
     const root = await makeTempRoot()
     await writeFile(path.join(root, 'a.txt'), 'progress-token\n')
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     const events: string[] = []
     const sub = svc.onDidSearchProgress((event) => events.push(event.sessionId))
 
@@ -300,7 +300,7 @@ describe('TextSearchMainService', () => {
         writeFile(path.join(root, `hit-${i}.txt`), 'incremental-token\n'),
       ),
     )
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     const batchedFiles: string[] = []
     const query = baseQuery(root, 'incremental-token')
     const sub = svc.onDidSearchResults((event) => {
@@ -325,7 +325,7 @@ describe('TextSearchMainService', () => {
   it('disposes child-process event subscriptions after a search completes', async () => {
     const root = await makeTempRoot()
     await writeFile(path.join(root, 'a.txt'), 'leak-check-token\n')
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
 
@@ -376,7 +376,7 @@ describe('TextSearchMainService', () => {
     // dangling-symlink case from the field report.
     if (!(await tryDirLink(path.join(root, 'does-not-exist'), path.join(root, 'dangling')))) return
 
-    const svc = new TextSearchMainService()
+    const svc = new TextSearchService()
     try {
       const complete = await svc.search(baseQuery(root, 'broken-link-token'))
       expect(complete.results).toHaveLength(1)

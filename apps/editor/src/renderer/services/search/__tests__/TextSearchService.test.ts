@@ -27,7 +27,7 @@ import type {
   ITextSearchMainQuery,
   ITextSearchMainResultsEvent,
   ITextSearchMainService,
-} from '../../../../shared/ipc/textSearchService.js'
+} from '@universe-editor/platform'
 
 class FakeWorkspace implements IWorkspaceService {
   declare readonly _serviceBrand: undefined

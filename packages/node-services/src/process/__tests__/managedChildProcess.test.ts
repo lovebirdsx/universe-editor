@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/process/managedChildProcess.ts
+ *  Tests for packages/node-services/src/process/managedChildProcess.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'

@@ -1,0 +1,32 @@
+{
+  "name": "@universe-editor/remote-server",
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@parcel/watcher": "catalog:",
+    "@universe-editor/extensions-common": "workspace:*",
+    "@universe-editor/node-services": "workspace:*",
+    "@universe-editor/platform": "workspace:*",
+    "@vscode/ripgrep": "catalog:"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

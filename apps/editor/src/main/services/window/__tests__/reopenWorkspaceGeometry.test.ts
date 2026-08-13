@@ -134,8 +134,7 @@ vi.mock('electron', () => ({
 
 const { WindowMainService } = await import('../windowMainService.js')
 const { LogMainService } = await import('../../log/logMainService.js')
-const { createStubWatcherProcessClient } =
-  await import('../../fileWatcher/testing/stubWatcherProcessClient.js')
+const { createStubWatcherProcessClient } = await import('@universe-editor/node-services')
 
 function makeOpts() {
   return {

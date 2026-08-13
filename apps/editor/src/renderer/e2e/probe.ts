@@ -28,12 +28,14 @@ import {
   type IEditorResolverService,
   type IEditorService,
   type IFileService,
+  type IFileWatcherService,
   type ILayoutService,
   type ILifecycleService,
   type ILoggerService,
   type IOutputService,
   type IStatusBarService,
   type IStorageService,
+  type ITextSearchMainService,
   type IViewDescriptorService,
   type IViewsService,
   type IWindowsService,
@@ -112,6 +114,8 @@ export interface E2EProbeServices {
   readonly interactionPerfService: IInteractionPerfService
   readonly explorerTreeService: ExplorerTreeService
   readonly fileService: IFileService
+  readonly textSearchMainService: ITextSearchMainService
+  readonly fileWatcherService: IFileWatcherService
   readonly extensionManagementService: IExtensionManagementService
   readonly extensionGalleryService: IExtensionGalleryService
   readonly extensionEnablementService: IExtensionEnablementService
@@ -258,6 +262,21 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       extensionHostGeneration += 1
     }),
   )
+
+  // Buffer filesystem change events (incl. remote-ssh watcher events) so specs
+  // can poll them. Cleared by watchFolder; lives for the probe's lifetime.
+  const watchedChangeEvents: { type: string; resource: string }[] = []
+  ds.add(
+    services.fileWatcherService.onDidChangeFiles((batch) => {
+      for (const ev of batch) {
+        watchedChangeEvents.push({
+          type: ev.type,
+          resource: URI.revive(ev.resource)?.toString() ?? '',
+        })
+      }
+    }),
+  )
+  let remoteSearchSeq = 0
 
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
@@ -1644,6 +1663,41 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getSwarmNotifyDiag: () => ({
       lastActionable: [...swarmNotificationE2E.lastActionable],
     }),
+    readFileText: (uri) => services.fileService.readFileText(URI.parse(uri)),
+    writeFileText: (uri, text) => services.fileService.writeFile(URI.parse(uri), text),
+    statResource: async (uri) => {
+      const resource = URI.parse(uri)
+      if (!(await services.fileService.exists(resource))) return null
+      const stat = await services.fileService.stat(resource)
+      return {
+        resource: URI.revive(stat.resource)?.toString() ?? '',
+        isFile: stat.isFile,
+        isDirectory: stat.isDirectory,
+        size: stat.size,
+      }
+    },
+    listResource: async (uri) =>
+      (await services.fileService.list(URI.parse(uri))).map((e) => e.name),
+    deleteResource: (uri) => services.fileService.delete(URI.parse(uri)),
+    searchTextInRoot: async (root, pattern) => {
+      const complete = await services.textSearchMainService.search({
+        pattern,
+        isRegex: false,
+        matchCase: false,
+        matchWholeWord: false,
+        includes: [],
+        excludes: [],
+        sessionId: `e2e-${Date.now().toString(36)}-${++remoteSearchSeq}`,
+        root: URI.parse(root).toJSON(),
+        configurationExcludes: [],
+      })
+      return complete.results.map((m) => URI.revive(m.resource)?.toString() ?? '')
+    },
+    watchFolder: async (uri) => {
+      watchedChangeEvents.length = 0
+      await services.fileWatcherService.watch(URI.parse(uri))
+    },
+    getWatchedChangeEvents: () => watchedChangeEvents.map((e) => ({ ...e })),
   }
 
   window[E2E_PROBE_KEY] = probe

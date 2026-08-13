@@ -70,7 +70,7 @@
       "outputs": []
     },
     "e2e": {
-      "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
+      "dependsOn": ["^build", "build", "@universe-editor/editor#build", "@universe-editor/remote-server#build"],
       "outputLogs": "new-only",
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
       "env": [
@@ -82,7 +82,7 @@
       ]
     },
     "e2ea": {
-      "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
+      "dependsOn": ["^build", "build", "@universe-editor/editor#build", "@universe-editor/remote-server#build"],
       "outputLogs": "new-only",
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
       "env": [

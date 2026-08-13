@@ -137,6 +137,19 @@ export const INSPECT_BRK_EXTENSIONS: ConfigItem<'number'> = {
   validate: (p) => Number.isInteger(p) && p >= 1 && p <= 65535,
 }
 
+/**
+ * Command used to reach a remote universe-editor-server for `remote-ssh`
+ * workspaces. A value starting with `[` is parsed as a JSON `[command, ...args]`
+ * array (so a Windows path with spaces round-trips); otherwise it is split on
+ * whitespace. The command is self-contained — the authority is NOT appended.
+ * Absent, connections spawn `ssh -T -o BatchMode=yes <authority> universe-editor-server`.
+ */
+export const REMOTE_SERVER_CMD: ConfigItem<'string'> = {
+  id: 'remoteServerCmd',
+  type: 'string',
+  env: 'UNIVERSE_REMOTE_SERVER_CMD',
+}
+
 /** Platform data roots — env-only inputs to productPaths' identity resolution. */
 export const APP_DATA: ConfigItem<'string'> = { id: 'appData', type: 'string', env: 'APPDATA' }
 

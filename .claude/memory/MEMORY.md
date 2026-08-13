@@ -37,6 +37,7 @@
 - [Tree View（contributes.views + TreeDataProvider）](tree-view-feature.md) — 拉取式懒加载+三级稳定身份+子树失效；坑=epoch 归零致 stale 复活/label 派生身份塌陷改名行
 - [extension-api 评审遗留优化 10 项收官](extension-api-review-followup-round.md) — 计划文件留改法/验收；教训=refcount 资源 dispose 须全量直发、cap 须在过滤后扣、引擎收敛前先列语义差异
 - [远程开发 Phase 0 地基](remote-dev-phase0-fs-provider.md) — scheme 分派 FileService+per-scheme 大小写+fsPath 审计；护栏只守内核，main 侧加 scheme 守卫不重写
+- [远程开发 Phase 1 remote-server](remote-dev-phase1-remote-server.md) — 路由在 main 侧/URI 互译收口/server 零 scheme 感知；UNIVERSE_REMOTE_SERVER_CMD 联调；@regression 须 ONLY_TAG
 
 ## 性能 / 疑难根因
 

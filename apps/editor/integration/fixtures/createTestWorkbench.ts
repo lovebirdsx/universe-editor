@@ -9,11 +9,11 @@ import { LogFilesMainService } from '../../src/main/services/log/logFilesMainSer
 import { MainStorageService } from '../../src/main/services/storage/storageMainService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
-import { WatcherProcessClient } from '../../src/main/services/fileWatcher/watcherProcessClient.js'
+import { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
-} from '../../src/main/services/fileWatcher/testing/inMemoryWatcherTransport.js'
+} from '@universe-editor/node-services'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
 import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { UserDataMainService } from '../../src/main/services/userData/userDataMainService.js'

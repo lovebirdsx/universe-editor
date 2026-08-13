@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Message protocol between the main process (WatcherProcessClient) and the
- *  watcher utility process (WatcherHost). Kept dependency-free so both sides —
- *  and the in-memory test transport — share the exact same shapes.
+ *  Message protocol between a watcher client and a WatcherHost. Kept
+ *  dependency-free so every transport (utility process, remote tunnel, in-memory
+ *  test transport) shares the exact same shapes.
  *--------------------------------------------------------------------------------------------*/
 
 export interface WatcherSubscribeRequest {

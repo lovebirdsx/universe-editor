@@ -3,14 +3,10 @@
  *  Wire contract for main-process text search sessions.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator } from '@universe-editor/platform'
-import type {
-  Event,
-  IFileMatch,
-  ITextSearchProgress,
-  ITextSearchQuery,
-  UriComponents,
-} from '@universe-editor/platform'
+import { createDecorator } from '../di/instantiation.js'
+import type { Event } from '../base/event.js'
+import type { IFileMatch, ITextSearchProgress, ITextSearchQuery } from './searchService.js'
+import type { UriComponents } from '../base/uri.js'
 
 export interface ITextSearchMainQuery extends ITextSearchQuery {
   readonly sessionId: string

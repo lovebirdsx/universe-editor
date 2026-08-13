@@ -16,21 +16,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  createDecorator,
   createNamedLogger,
   DeferredPromise,
   Emitter,
+  ILoggerService,
   type Event,
   type IDisposable,
   type ILogger,
-  ILoggerService,
-  createDecorator,
+  type WatcherErrorResponse,
+  type WatcherEventsResponse,
+  type WatcherHostRequest,
+  type WatcherHostResponse,
 } from '@universe-editor/platform'
-import type {
-  WatcherEventsResponse,
-  WatcherErrorResponse,
-  WatcherHostRequest,
-  WatcherHostResponse,
-} from './watcherProtocol.js'
 
 /** Transport to one live watcher host process. Recreated on every (re)start. */
 export interface IWatcherTransport {

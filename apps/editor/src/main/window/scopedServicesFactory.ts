@@ -24,7 +24,7 @@ import type {
   IUsageService,
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
-import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
+import type { ITextSearchMainService } from '@universe-editor/platform'
 import type { UpdateMainService } from '../services/update/updateMainService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IDocsService } from '../../shared/ipc/docsService.js'
@@ -50,7 +50,8 @@ import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from '../services/configLocation/configLocationMainService.js'
-import type { WatcherProcessClient } from '../services/fileWatcher/watcherProcessClient.js'
+import type { WatcherProcessClient } from '@universe-editor/node-services'
+import type { IRemoteConnectionService } from '../services/remote/remoteConnectionMainService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -109,6 +110,11 @@ export interface ApplicationServices {
    * shared utility-process owner.
    */
   readonly watcherProcess: WatcherProcessClient
+  /**
+   * Main-internal remote connection manager (not exposed over IPC): owns the
+   * spawned remote server processes and hands out channels by authority.
+   */
+  readonly remoteConnection: IRemoteConnectionService
 }
 
 /**

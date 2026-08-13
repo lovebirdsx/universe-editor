@@ -34,6 +34,7 @@ import {
   IS_E2E,
   RENDERER_DEBUG,
   RENDERER_URL,
+  REMOTE_SERVER_CMD,
   UPDATE_URL,
   USER_DATA_DIR,
   USER_PROFILE,
@@ -120,6 +121,11 @@ export class EnvironmentMainService {
   /** Extension-host debug port with pre-activation break (--inspect-brk-extensions). */
   get inspectBrkExtensionsPort(): number | undefined {
     return this._resolver.get(INSPECT_BRK_EXTENSIONS)
+  }
+
+  /** Custom remote-server spawn command (env only). Absent ⇒ default ssh. */
+  get remoteServerCmd(): string | undefined {
+    return this._resolver.get(REMOTE_SERVER_CMD)
   }
 
   // ---- CLI commands (--help / --version) -------------------------------------

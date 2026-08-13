@@ -1,0 +1,35 @@
+{
+  "name": "@universe-editor/node-services",
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "test": "vitest run",
+    "dev": "tsgo --build --watch",
+    "clean": "tsgo --build --clean"
+  },
+  "dependencies": {
+    "@parcel/watcher": "catalog:",
+    "@vscode/ripgrep": "catalog:",
+    "@universe-editor/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

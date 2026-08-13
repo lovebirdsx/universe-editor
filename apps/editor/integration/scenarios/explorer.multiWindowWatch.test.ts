@@ -26,11 +26,11 @@ import { IExcludeService } from '../../src/renderer/services/exclude/ExcludeServ
 import { FakeExcludeService } from '../../src/renderer/services/exclude/testing/fakeExcludeService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
-import { WatcherProcessClient } from '../../src/main/services/fileWatcher/watcherProcessClient.js'
+import { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
-} from '../../src/main/services/fileWatcher/testing/inMemoryWatcherTransport.js'
+} from '@universe-editor/node-services'
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
   declare readonly _serviceBrand: undefined

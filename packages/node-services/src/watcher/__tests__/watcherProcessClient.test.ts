@@ -1,12 +1,14 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for WatcherProcessClient — restart/replay orchestration and the crash
- *  fuse, on a scripted fake transport (no parcel, no timers slept).
+ *  Tests for packages/node-services/src/watcher/watcherProcessClient.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter } from '@universe-editor/platform'
+import {
+  Emitter,
+  type WatcherHostRequest,
+  type WatcherHostResponse,
+} from '@universe-editor/platform'
 import { WatcherProcessClient, type IWatcherTransport } from '../watcherProcessClient.js'
-import type { WatcherHostRequest, WatcherHostResponse } from '../watcherProtocol.js'
 
 class FakeTransport implements IWatcherTransport {
   readonly posted: WatcherHostRequest[] = []

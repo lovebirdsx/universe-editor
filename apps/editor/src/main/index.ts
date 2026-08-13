@@ -51,7 +51,8 @@ import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../shared/ipc/processMonitorService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
-import { IWatcherProcessService } from './services/fileWatcher/watcherProcessClient.js'
+import { IWatcherProcessService } from '@universe-editor/node-services'
+import { IRemoteConnectionService } from './services/remote/remoteConnectionMainService.js'
 import {
   IDisposableLeakService,
   IDiagnosticsService,
@@ -75,7 +76,7 @@ import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
 import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
-import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
+import { ITextSearchMainService } from '@universe-editor/platform'
 import { installMainErrorHandlers } from './errors.js'
 import {
   installCrashReporter,
@@ -515,6 +516,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
       watcherProcess: accessor.get(IWatcherProcessService),
+      remoteConnection: accessor.get(IRemoteConnectionService),
     }))
   }
   if (!windowMainService) {

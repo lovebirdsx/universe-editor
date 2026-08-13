@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for main-process workspace file-name search (ripgrep engine).
+ *  Tests for packages/node-services/src/search/fileSearchService.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,10 +8,10 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { CancellationToken, CancellationTokenSource, URI } from '@universe-editor/platform'
-import { FileSearchMainService } from '../fileSearchMainService.js'
+import { FileSearchService } from '../fileSearchService.js'
 
 const roots: string[] = []
-const services: FileSearchMainService[] = []
+const services: FileSearchService[] = []
 
 async function makeRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'universe-file-search-'))
@@ -20,9 +20,9 @@ async function makeRoot(): Promise<string> {
 }
 
 // 缓存目录必须在工作区根之外，否则清单构建会把缓存文件自己也枚举进清单。
-async function makeService(): Promise<FileSearchMainService> {
+async function makeService(): Promise<FileSearchService> {
   const cacheDir = path.join(await makeRoot(), 'listings')
-  const service = new FileSearchMainService(undefined, { cacheDir })
+  const service = new FileSearchService(undefined, { cacheDir })
   services.push(service)
   return service
 }
@@ -57,7 +57,7 @@ afterEach(async () => {
   }
 })
 
-describe('FileSearchMainService', () => {
+describe('FileSearchService', () => {
   it('uses maxResults as a result cap, not a candidate cap', async () => {
     const root = await makeRoot()
     await writeFile(root, 'first.txt')
@@ -96,7 +96,7 @@ describe('FileSearchMainService', () => {
     await writeFile(root, 'beta.ts')
 
     const cacheDir = path.join(await makeRoot(), 'listings')
-    const service = new FileSearchMainService(undefined, { cacheDir })
+    const service = new FileSearchService(undefined, { cacheDir })
     services.push(service)
 
     const first = await service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 10 })

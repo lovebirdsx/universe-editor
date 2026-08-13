@@ -84,6 +84,7 @@
     "@universe-editor/extensions-common": "workspace:*",
     "@universe-editor/git": "workspace:*",
     "@universe-editor/markdown": "workspace:*",
+    "@universe-editor/node-services": "workspace:*",
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/typescript": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",

@@ -14,7 +14,7 @@
 import { platform } from 'node:process'
 import watcher from '@parcel/watcher'
 import type { AsyncSubscription, BackendType } from '@parcel/watcher'
-import type { WatcherHostRequest, WatcherHostResponse } from './watcherProtocol.js'
+import type { WatcherHostRequest, WatcherHostResponse } from '@universe-editor/platform'
 
 // Pin the parcel backend per platform. Parcel's "default" backend on Windows
 // first probes for watchman — shelling out to a `watchman` subprocess on every

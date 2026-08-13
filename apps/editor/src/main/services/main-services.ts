@@ -27,7 +27,7 @@ import { IFileSearchService } from '@universe-editor/platform'
 import { ISecretStorageService } from '@universe-editor/platform'
 import { IMainStorageService } from '../storage.js'
 import { IEnvironmentMainService } from '../environment/environmentMainService.js'
-import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
+import { ITextSearchMainService } from '@universe-editor/platform'
 import {
   IDisposableLeakService,
   IDiagnosticsService,
@@ -96,8 +96,12 @@ import { DiagnosticsMainService } from './diagnostics/diagnosticsMainService.js'
 import { IssueReporterMainService } from './issueReporter/issueReporterMainService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { ProcessMonitorMainService } from './processMonitor/processMonitorMainService.js'
-import { IWatcherProcessService, WatcherProcessClient } from './fileWatcher/watcherProcessClient.js'
+import { IWatcherProcessService, WatcherProcessClient } from '@universe-editor/node-services'
 import { createWatcherUtilityTransportFactory } from './fileWatcher/watcherUtilityTransport.js'
+import {
+  IRemoteConnectionService,
+  RemoteConnectionMainService,
+} from './remote/remoteConnectionMainService.js'
 
 // Services whose constructors mix @-injected services with non-branded static
 // params (spawner stubs, Storage, filePath) are registered via
@@ -299,5 +303,12 @@ registerSingletonFactory(IWatcherProcessService, (acc) => {
   return new WatcherProcessClient(
     createWatcherUtilityTransportFactory(entryPath, logger),
     loggerService,
+  )
+})
+registerSingletonFactory(IRemoteConnectionService, (acc) => {
+  return new RemoteConnectionMainService(
+    undefined,
+    acc.get(IEnvironmentMainService).remoteServerCmd,
+    acc.get(ILoggerService),
   )
 })

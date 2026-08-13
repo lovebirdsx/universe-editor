@@ -15,6 +15,8 @@ import {
   IEditorService,
   IEditorGroupsService,
   IFileService,
+  IFileWatcherService,
+  ITextSearchMainService,
   IFocusableRegistry,
   IFocusStackService,
   IStatusBarService,
@@ -850,6 +852,8 @@ async function bootstrapWorkbench(): Promise<void> {
     interactionPerfService,
     explorerTreeService,
     fileService: services.get(IFileService) as IFileService,
+    textSearchMainService: services.get(ITextSearchMainService) as ITextSearchMainService,
+    fileWatcherService: services.get(IFileWatcherService) as IFileWatcherService,
     extensionManagementService: services.get(
       IExtensionManagementService,
     ) as IExtensionManagementService,

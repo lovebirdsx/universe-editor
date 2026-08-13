@@ -5,10 +5,13 @@
  *  full client → protocol → host → parcel chain in one node process.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter } from '@universe-editor/platform'
+import {
+  Emitter,
+  type WatcherHostRequest,
+  type WatcherHostResponse,
+} from '@universe-editor/platform'
 import { WatcherHost } from '../watcherHost.js'
 import type { IWatcherTransport } from '../watcherProcessClient.js'
-import type { WatcherHostRequest, WatcherHostResponse } from '../watcherProtocol.js'
 
 export interface InMemoryWatcherTransport extends IWatcherTransport {
   readonly host: WatcherHost

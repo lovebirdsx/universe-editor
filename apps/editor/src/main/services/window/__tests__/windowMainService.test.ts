@@ -90,8 +90,7 @@ const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.j
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
 const { UserDataMainService } = await import('../../userData/userDataMainService.js')
-const { createStubWatcherProcessClient } =
-  await import('../../fileWatcher/testing/stubWatcherProcessClient.js')
+const { createStubWatcherProcessClient } = await import('@universe-editor/node-services')
 const { BrowserWindow, dialog } = await import('electron')
 
 function grabLastWindowCloseHandler(): (e: { preventDefault: () => void }) => void {
@@ -179,6 +178,7 @@ function makeOpts() {
       issueReporter: {} as never,
       processMonitor: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
+      remoteConnection: {} as never,
     },
     logService,
     e2eEnabled: false,
