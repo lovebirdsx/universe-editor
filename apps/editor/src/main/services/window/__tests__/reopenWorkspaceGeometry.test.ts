@@ -147,6 +147,7 @@ function makeOpts() {
     } as never,
     logService: new LogMainService(),
     e2eEnabled: false,
+    silentE2E: false,
     extensionDevelopment: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',

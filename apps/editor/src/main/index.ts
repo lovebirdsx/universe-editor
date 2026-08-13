@@ -290,6 +290,8 @@ installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLoc
 const processMetricsLogging = installProcessMetricsLogging(logMainService)
 
 const e2eEnabled = environmentService.isE2E
+// E2E 静默模式：多 worker 并行冷启动不抢前台焦点。UNIVERSE_E2E_SHOW=1 关闭，恢复有头调试。
+const silentE2E = e2eEnabled && !process.env['UNIVERSE_E2E_SHOW']
 // Extension-development mode (--extension-development-path): like E2E, each dev
 // host is an independent process — joining single-instance negotiation would
 // just focus the already-open main instance and drop the dev args on the floor
@@ -363,7 +365,8 @@ if (!hasSingleInstanceLock) {
 
       if (targetWin) {
         if (targetWin.isMinimized()) targetWin.restore()
-        targetWin.focus()
+        if (silentE2E) targetWin.showInactive()
+        else targetWin.focus()
         if (resolvedPath) targetWin.webContents.send('ue:open-file', resolvedPath)
       } else {
         void services.windows.createWindow(resolvedPath ? { fileToOpen: resolvedPath } : {})
@@ -424,7 +427,8 @@ function routeDeepLink(target: DeepLinkTarget): void {
 
   if (targetWin) {
     if (targetWin.isMinimized()) targetWin.restore()
-    targetWin.focus()
+    if (silentE2E) targetWin.showInactive()
+    else targetWin.focus()
     targetWin.webContents.send('ue:open-uri', deepLinkToOpenerTarget(target))
   } else {
     void services.windows.createWindow({ deepLink: deepLinkToOpenerTarget(target) })
@@ -518,6 +522,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       appServices: applicationServices,
       logService: logMainService,
       e2eEnabled,
+      silentE2E,
       extensionDevelopment: extDevEnabled,
       rendererDebug: environmentService.rendererDebug,
       ...(appIconPath ? { appIconPath } : {}),

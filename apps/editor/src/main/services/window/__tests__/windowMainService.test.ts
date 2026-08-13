@@ -51,6 +51,7 @@ vi.mock('electron', () => ({
     once: vi.fn(),
     removeListener: vi.fn(),
     show: vi.fn(),
+    showInactive: vi.fn(),
     focus: vi.fn(),
     restore: vi.fn(),
     reload: vi.fn(),
@@ -119,6 +120,23 @@ function grabRenderProcessGoneHandler(): (e: unknown, details: CrashDetails) => 
   return call[1] as (e: unknown, details: CrashDetails) => void
 }
 
+function grabReadyToShowHandler(): () => void {
+  const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+    once: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+  }
+  const call = win.once.mock.calls.find(([event]) => event === 'ready-to-show')
+  if (!call) throw new Error('no ready-to-show handler registered')
+  return call[1] as () => void
+}
+
+function lastWindow(): {
+  show: ReturnType<typeof vi.fn>
+  showInactive: ReturnType<typeof vi.fn>
+  focus: ReturnType<typeof vi.fn>
+} {
+  return vi.mocked(BrowserWindow).mock.results.at(-1)?.value as never
+}
+
 function makeOpts() {
   const logService = new LogMainService()
   return {
@@ -164,6 +182,7 @@ function makeOpts() {
     },
     logService,
     e2eEnabled: false,
+    silentE2E: false,
     extensionDevelopment: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
@@ -378,6 +397,41 @@ describe('WindowMainService', () => {
   it('getWindowById returns undefined for unknown id', async () => {
     const svc = new WindowMainService(makeOpts())
     expect(svc.getWindowById(99999)).toBeUndefined()
+  })
+
+  describe('e2e silent mode', () => {
+    it('shows inactive instead of grabbing foreground at ready-to-show', async () => {
+      const opts = makeOpts()
+      opts.e2eEnabled = true
+      opts.silentE2E = true
+      const svc = new WindowMainService(opts)
+      await svc.createWindow()
+      grabReadyToShowHandler()()
+      expect(lastWindow().showInactive).toHaveBeenCalled()
+      expect(lastWindow().show).not.toHaveBeenCalled()
+    })
+
+    it('shows (foreground) at ready-to-show when not silent', async () => {
+      const opts = makeOpts()
+      opts.e2eEnabled = true
+      opts.silentE2E = false
+      const svc = new WindowMainService(opts)
+      await svc.createWindow()
+      grabReadyToShowHandler()()
+      expect(lastWindow().show).toHaveBeenCalled()
+      expect(lastWindow().showInactive).not.toHaveBeenCalled()
+    })
+
+    it('focusWindow shows inactive instead of focusing when silent', async () => {
+      const opts = makeOpts()
+      opts.e2eEnabled = true
+      opts.silentE2E = true
+      const svc = new WindowMainService(opts)
+      const id = await svc.createWindow()
+      svc.focusWindow(id)
+      expect(lastWindow().showInactive).toHaveBeenCalled()
+      expect(lastWindow().focus).not.toHaveBeenCalled()
+    })
   })
 
   it('restoreSession([]) opens a single empty window', async () => {

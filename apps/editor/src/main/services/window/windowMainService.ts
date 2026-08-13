@@ -82,6 +82,8 @@ export interface WindowMainServiceOptions {
   readonly appServices: ApplicationServices
   readonly logService: LogMainService
   readonly e2eEnabled: boolean
+  /** E2E 静默模式：窗口 showInactive 而非抢前台焦点（UNIVERSE_E2E_SHOW=1 关闭，恢复有头调试）。 */
+  readonly silentE2E: boolean
   /** Extension-development host instance (--extension-development-path present). */
   readonly extensionDevelopment: boolean
   /** Delay renderer load so VS Code's Chrome debugger can attach (dev only). */
@@ -148,6 +150,11 @@ export class WindowMainService implements IWindowMainService {
     logger.info(
       `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${uiState !== undefined} workspace=${opts?.workspace?.folder.toString() ?? '<none>'}`,
     )
+    if (this._opts.silentE2E) {
+      logger.info(
+        'e2e silent: window shown inactive (UNIVERSE_E2E_SHOW=1 restores foreground focus)',
+      )
+    }
     mark(PerfMarks.mainWillCreateWindow)
 
     const win = new BrowserWindow({
@@ -294,10 +301,11 @@ export class WindowMainService implements IWindowMainService {
 
     win.once('ready-to-show', () => {
       if (uiState) applyWindowState(win, uiState)
-      win.show()
+      if (this._opts.silentE2E) win.showInactive()
+      else win.show()
       if (opts?.devToolsOpen) win.webContents.openDevTools()
       mark(PerfMarks.mainDidShowWindow)
-      logger.info(`readyToShow id=${win.id}`)
+      logger.info(`readyToShow id=${win.id} silent=${this._opts.silentE2E}`)
     })
 
     // Per-window services — each window gets its own workspace stack so opening
@@ -480,7 +488,8 @@ export class WindowMainService implements IWindowMainService {
   focusWindow(id: number): void {
     const entry = this._windows.get(id)
     if (entry && !entry.win.isDestroyed()) {
-      entry.win.focus()
+      if (this._opts.silentE2E) entry.win.showInactive()
+      else entry.win.focus()
       this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)
     }
   }
@@ -549,7 +558,8 @@ export class WindowMainService implements IWindowMainService {
     if (existing) {
       if (!existing.win.isDestroyed()) {
         if (existing.win.isMinimized()) existing.win.restore()
-        existing.win.focus()
+        if (this._opts.silentE2E) existing.win.showInactive()
+        else existing.win.focus()
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
         if (deepLink) existing.win.webContents.send('ue:open-uri', deepLink)
         await this._opts.appServices.recentWorkspaces.add(workspace)
@@ -709,7 +719,8 @@ export class WindowMainService implements IWindowMainService {
     if (!entry) return false
     if (!entry.win.isDestroyed()) {
       if (entry.win.isMinimized()) entry.win.restore()
-      entry.win.focus()
+      if (this._opts.silentE2E) entry.win.showInactive()
+      else entry.win.focus()
     }
     return true
   }
