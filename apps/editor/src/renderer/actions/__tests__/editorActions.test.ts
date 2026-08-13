@@ -524,6 +524,39 @@ describe('Built-in editor Action2s', () => {
     expect(svc.activeGroup).toBe(g1) // wrap
   })
 
+  it('FocusNextGroup calls focus() on a self-focusing input that is not in FileEditorRegistry', () => {
+    const svc = new EditorGroupsService()
+    const g1 = svc.activeGroup
+    const g2 = svc.addGroup(g1, 3 /* Right */)
+    // Mirrors AcpSessionEditorInput: self-handles focus(), never registers Monaco.
+    const session = new TestEditor('session')
+    const focus = vi.fn(() => true)
+    session.focus = focus
+    g2.openEditor(session)
+    svc.activateGroup(g1)
+    exec(FocusNextGroupAction, svc)
+    expect(svc.activeGroup).toBe(g2)
+    expect(focus).toHaveBeenCalledOnce()
+  })
+
+  it('FocusNextGroup focuses the registered file editor of the target group', () => {
+    const svc = new EditorGroupsService()
+    const g1 = svc.activeGroup
+    const g2 = svc.addGroup(g1, 3 /* Right */)
+    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    g2.openEditor(input)
+    svc.activateGroup(g1)
+    const focus = vi.fn()
+    FileEditorRegistry.register(input, { focus } as never, g2.id)
+    try {
+      exec(FocusNextGroupAction, svc)
+      expect(svc.activeGroup).toBe(g2)
+      expect(focus).toHaveBeenCalledOnce()
+    } finally {
+      FileEditorRegistry._resetForTests()
+    }
+  })
+
   it('FocusPreviousGroup activates the previous group with wrap', () => {
     const svc = new EditorGroupsService()
     const g1 = svc.activeGroup

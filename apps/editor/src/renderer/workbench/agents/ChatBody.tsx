@@ -95,6 +95,17 @@ import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
 import styles from './agents.module.css'
 
+// The keyboard-selected slot is session-level state: every mounted chat
+// surface of the same session (sidebar panel + full-screen editor, a split
+// showing the same session, …) mirrors the same selection, so the outline —
+// backed by the *last-registered* instance's controller — surfaces selection
+// moves driven from any surface. Publishers fire after their local state
+// updates; subscribers ignore echoes by comparing against their own value.
+const selectionSyncEmitter = new Emitter<{
+  readonly sessionId: string
+  readonly key: string | null
+}>()
+
 const STICK_THRESHOLD_PX = 32
 
 export interface WidgetHandle {
@@ -155,28 +166,34 @@ export interface PlanBridge {
   toggle: () => void
 }
 
-const NOOP_HANDLE: WidgetHandle = {
-  move: noop,
-  scrollTimeline: noop,
-  focus: () => false,
-  jumpToPlan: noop,
-  toggleCollapse: noop,
-  cycleCollapseMode: noop,
-  getFocusedText: () => undefined,
-  setFocusedKey: noop,
-  getFocusedKey: () => null,
-  onDidChangeFocusedKey: Event.None,
-  isSlotCollapsed: () => false,
-  onDidChangeCollapse: Event.None,
-  toggleSlotCollapse: noop,
-  popoverSelectNext: noop,
-  popoverSelectPrev: noop,
-  popoverAccept: noop,
-  popoverHide: noop,
-  openFind: noop,
-  closeFind: noop,
-  findNext: noop,
-  findPrev: noop,
+// Never a module-level singleton: child effects write real methods onto the
+// ref's value, so two mounted sessions share one object and the last-mutating
+// chat hijacks every routed command (focusInput / timeline nav / find / popover)
+// of the other. Each ChatSessionBody owns its own placeholder instead.
+function createNoopHandle(): WidgetHandle {
+  return {
+    move: noop,
+    scrollTimeline: noop,
+    focus: () => false,
+    jumpToPlan: noop,
+    toggleCollapse: noop,
+    cycleCollapseMode: noop,
+    getFocusedText: () => undefined,
+    setFocusedKey: noop,
+    getFocusedKey: () => null,
+    onDidChangeFocusedKey: Event.None,
+    isSlotCollapsed: () => false,
+    onDidChangeCollapse: Event.None,
+    toggleSlotCollapse: noop,
+    popoverSelectNext: noop,
+    popoverSelectPrev: noop,
+    popoverAccept: noop,
+    popoverHide: noop,
+    openFind: noop,
+    closeFind: noop,
+    findNext: noop,
+    findPrev: noop,
+  }
 }
 
 export function ChatBody({
@@ -221,7 +238,7 @@ function ChatSessionBody({
   const isReplayingHistory = useObservable(session.isReplayingHistory)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
+  const handleRef = useRef<WidgetHandle>(createNoopHandle())
   const widgetRef = useRef<AcpChatWidget | null>(null)
   // One-shot plain lookup, deliberately NOT an entries subscription: a session's
   // sideTaskOf flag is fixed at fork time and the row precedes the resume, so it
@@ -1153,7 +1170,19 @@ function ChatScroll({
     focusBridge.key = focusedKey
     focusBridge.emitter.fire()
     activeSlotRef.current?.fire()
-  }, [focusedKey, focusBridge])
+    selectionSyncEmitter.fire({ sessionId: session.id, key: focusedKey })
+  }, [focusedKey, focusBridge, session.id])
+
+  // Another mounted surface of the same session moved its selection (widget
+  // command routed to it, click, …) — mirror it so this surface's highlight and
+  // its outline controller stay on the same slot.
+  useEffect(() => {
+    const sub = selectionSyncEmitter.event(({ sessionId, key }) => {
+      if (sessionId !== session.id) return
+      setFocusedKey((prev) => (prev === key ? prev : key))
+    })
+    return () => sub.dispose()
+  }, [session.id])
 
   // Notify out-of-list slots (the sticky first-user bar) when any collapse state
   // changes — per-item override (Alt+F / chevron) or a mode cycle (Ctrl+Alt+F).

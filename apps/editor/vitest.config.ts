@@ -33,6 +33,7 @@ const rendererDomTests = [
   'src/renderer/contributions/__tests__/DocumentSyncContribution.modelKey.test.ts',
   'src/renderer/contributions/__tests__/WorkbenchFontContribution.test.ts',
   'src/renderer/services/acp/session/__tests__/acpChatWidgetService.test.ts',
+  'src/renderer/services/editor/__tests__/ClosedEditorsService.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.externalChange.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.test.ts',
   'src/renderer/services/editor/__tests__/openMarkdownPreview.test.ts',

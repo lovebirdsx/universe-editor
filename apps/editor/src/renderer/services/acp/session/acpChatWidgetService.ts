@@ -32,6 +32,7 @@ import {
   Disposable,
   DisposableStore,
   IContextKeyService,
+  IEditorGroupsService,
   toDisposable,
   type IContextKey,
   type IDisposable,
@@ -81,7 +82,8 @@ export interface IAcpChatWidgetService {
   /** The registered widget for a session id, or undefined if none is mounted.
    *  Used to route session-scoped commands (timeline nav / find / copy) to the
    *  widget behind the active session editor even when DOM focus never landed
-   *  inside it (e.g. a read-only foreign session). */
+   *  inside it (e.g. a read-only foreign session). When the same session is
+   *  mounted in several groups (split), the copy in the active group wins. */
   widgetForSession(sessionId: string): AcpChatWidget | undefined
   /** Push a widget's popover open/closed state; the service flips
    *  `acpPromptPopupVisible` on iff the *focused* widget's popover is open. */
@@ -149,7 +151,10 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   // when `beforeunload` fires before React flushes the useEffect cleanup.
   private readonly _registrations = this._register(new DisposableStore())
 
-  constructor(@IContextKeyService contextKeyService: IContextKeyService) {
+  constructor(
+    @IContextKeyService contextKeyService: IContextKeyService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+  ) {
     super()
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
@@ -222,11 +227,21 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   }
 
   widgetForSession(sessionId: string): AcpChatWidget | undefined {
-    let target: AcpChatWidget | undefined
+    const matches: AcpChatWidget[] = []
     for (const entry of this._entries.values()) {
-      if (entry.widget.sessionId === sessionId) target = entry.widget
+      if (entry.widget.sessionId === sessionId) matches.push(entry.widget)
     }
-    return target
+    if (matches.length <= 1) return matches[0]
+    // One session editor can be split across groups: resolve to the copy in
+    // the *active* group — the fallback copy must not hijack routed commands.
+    // focusSessionInput runs right after the target group was activated, so
+    // activeGroup already points at the destination here.
+    const activeGroupId = String(this._editorGroups.activeGroup.id)
+    const inActive = matches.find(
+      (w) =>
+        w.container.closest('[data-group-id]')?.getAttribute('data-group-id') === activeGroupId,
+    )
+    return inActive ?? matches.at(-1)
   }
 
   // The popover gates its commands on the *focused* widget, so a blurred input

@@ -249,6 +249,7 @@ const stubUriIdentity: IUriIdentityServiceType = {
 const stubEditorGroupsService: IEditorGroupsServiceType = {
   _serviceBrand: undefined,
   groups: [],
+  activeGroup: { id: 0 },
 } as unknown as IEditorGroupsServiceType
 
 const stubCommandService: ICommandServiceType = {
@@ -401,7 +402,10 @@ function renderWithServices(
   services.set(IContextKeyService, contextKeyService)
   services.set(ICommandService, opts.commands ?? stubCommandService)
   services.set(IQuickInputService, opts.quickInput ?? stubQuickInputServiceDefault)
-  services.set(IAcpChatWidgetService, opts.widget ?? new AcpChatWidgetService(contextKeyService))
+  services.set(
+    IAcpChatWidgetService,
+    opts.widget ?? new AcpChatWidgetService(contextKeyService, stubEditorGroupsService),
+  )
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -1961,7 +1965,7 @@ describe('PromptInput — context menu', () => {
   ) {
     const command = vi.fn()
     const contextKeyService = new ContextKeyService()
-    const widget = new AcpChatWidgetService(contextKeyService)
+    const widget = new AcpChatWidgetService(contextKeyService, stubEditorGroupsService)
     const setPromptContextTarget = vi.spyOn(widget, 'setPromptContextTarget')
     const result = renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
       ...opts,

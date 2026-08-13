@@ -12,8 +12,30 @@ import {
   ContextKeyService,
   DisposableTracker,
   setDisposableTracker,
+  type IEditorGroupsService,
 } from '@universe-editor/platform'
 import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
+
+/** Minimal IEditorGroupsService stub — only `activeGroup.id` is read (split tie-break). */
+function makeGroupsStub(activeGroupId = 0): {
+  service: IEditorGroupsService
+  setActiveGroup(id: number): void
+} {
+  const state = { id: activeGroupId }
+  const service = {
+    activeGroup: {
+      get id() {
+        return state.id
+      },
+    },
+  } as unknown as IEditorGroupsService
+  return {
+    service,
+    setActiveGroup: (id: number) => {
+      state.id = id
+    },
+  }
+}
 
 function makeWidget(
   label: string,
@@ -70,7 +92,7 @@ describe('AcpChatWidgetService', () => {
 
   beforeEach(() => {
     cks = new ContextKeyService()
-    svc = new AcpChatWidgetService(cks)
+    svc = new AcpChatWidgetService(cks, makeGroupsStub().service)
   })
 
   afterEach(() => {
@@ -180,6 +202,36 @@ describe('AcpChatWidgetService', () => {
     expect(svc.widgetForSession('s1')).toBe(newA.widget)
     expect(svc.widgetForSession('s2')).toBe(b.widget)
     expect(svc.widgetForSession('missing')).toBeUndefined()
+  })
+
+  // One session split across two editor groups: focus routing must land on the
+  // copy inside the *active* group, not whichever copy mounted last.
+  it('widgetForSession prefers the copy inside the active editor group on a split', () => {
+    const groups = makeGroupsStub(1)
+    const splitSvc = new AcpChatWidgetService(cks, groups.service)
+    const wrap0 = document.createElement('div')
+    wrap0.dataset['groupId'] = '0'
+    document.body.appendChild(wrap0)
+    const wrap1 = document.createElement('div')
+    wrap1.dataset['groupId'] = '1'
+    document.body.appendChild(wrap1)
+
+    const a0 = makeWidget('a0', 's1')
+    wrap0.appendChild(a0.container)
+    const a1 = makeWidget('a1', 's1')
+    wrap1.appendChild(a1.container)
+    splitSvc.register(a0.widget)
+    splitSvc.register(a1.widget)
+
+    groups.setActiveGroup(1)
+    expect(splitSvc.widgetForSession('s1')).toBe(a1.widget)
+    expect(splitSvc.focusSessionInput('s1')).toBe(true)
+    expect(a1.focusSpy).toHaveBeenCalledOnce()
+    expect(a0.focusSpy).not.toHaveBeenCalled()
+
+    groups.setActiveGroup(0)
+    expect(splitSvc.widgetForSession('s1')).toBe(a0.widget)
+    splitSvc.dispose()
   })
 
   it('registering a container that already has the active descendant seeds focused=true', () => {
@@ -339,7 +391,7 @@ describe('AcpChatWidgetService', () => {
     setDisposableTracker(tracker)
     try {
       const localCks = new ContextKeyService()
-      const localSvc = new AcpChatWidgetService(localCks)
+      const localSvc = new AcpChatWidgetService(localCks, makeGroupsStub().service)
       const a = makeWidget('leak')
       localSvc.register(a.widget) // caller drops the returned disposable on purpose
       localSvc.dispose()

@@ -1246,6 +1246,30 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     expect(groupsFake.activatedGroupIds).toEqual([1])
   })
 
+  it('restores into the CURRENT active group even when the entry was closed in another group', async () => {
+    const uri = URI.file('/ws/doc.pdf')
+    const { provider, fileSearch, groupsFake } = setup({
+      sideEditors: [new FakeEditorInput('file', URI.file('/ws/other.txt'), 'other.txt')],
+      closedEntries: [closedEntry(uri, 1)],
+    })
+    // The user moved to group 2 since (closed stack entries may be arbitrarily
+    // old — they persist across restarts). Quick open must follow the focus:
+    // the recorded groupId must not teleport the file back to group 1.
+    groupsFake.groups.activateGroup(groupsFake.all[1] as unknown as IEditorGroup)
+    fileSearch.resultPaths = ['/ws/doc.pdf']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('doc')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.groupId).toBe(2)
+    expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
+    expect(groupsFake.activatedGroupIds.at(-1)).toBe(2)
+  })
+
   it('with no workspace, closed entries are listed and restore with pinned: false', async () => {
     const uri = URI.file('/home/doc.pdf')
     const { provider, groupsFake } = setup({

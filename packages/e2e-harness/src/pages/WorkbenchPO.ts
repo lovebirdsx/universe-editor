@@ -222,6 +222,11 @@ export class WorkbenchPO {
     return this.page.evaluate(() => window.__E2E__!.getEditorGroupCount())
   }
 
+  /** Id of the currently active editor group (matches the DOM `data-group-id`). */
+  async getActiveGroupId(): Promise<string | undefined> {
+    return this.page.evaluate(() => window.__E2E__!.getActiveGroupId())
+  }
+
   /** Current auto-update state (status machine + versions). */
   async getUpdateState(): Promise<E2EUpdateState> {
     return this.page.evaluate(() => window.__E2E__!.getUpdateState())

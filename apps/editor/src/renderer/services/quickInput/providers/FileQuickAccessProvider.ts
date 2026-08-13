@@ -284,7 +284,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
    *  wrong type for equal-priority custom editors and cannot handle virtual
    *  resources (markdown-preview:…) at all. Returns false when nothing
    *  restorable matches, or when deserialize fails (the consumed entry is then
-   *  dropped, mirroring ReopenClosedEditorAction). */
+   *  dropped, mirroring ReopenClosedEditorAction).
+   *  The restored editor lands in the CURRENT active group (or openToSide's
+   *  side group): stack entries persist across restarts, so `closed.groupId`
+   *  can point at whichever group hosted the file long ago — quick open opens
+   *  where the user's focus is; replaying the recorded position is Reopen
+   *  Closed Editor's (Ctrl+Shift+T) job, not quick open's. */
   private _restoreClosed(
     uri: URI,
     targetGroup: IEditorGroup | undefined,
@@ -296,7 +301,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       EditorRegistry.deserialize(closed.typeId, closed.serializedData, accessor),
     )
     if (!input) return false
-    const group = targetGroup ?? this._groups.getGroup(closed.groupId) ?? this._groups.activeGroup
+    const group = targetGroup ?? this._groups.activeGroup
     this._groups.activateGroup(group)
     group.openEditor(input, { activate: true, pinned })
     return true

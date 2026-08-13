@@ -6,9 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   EditorInput,
   EditorRegistry,
   Emitter,
+  IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
   InstantiationService,
@@ -792,6 +794,7 @@ describe('ReopenClosedEditorAction', () => {
     services.set(IEditorGroupsService, groups)
     services.set(IClosedEditorsService, closedSvc)
     services.set(IFocusStackService, focusSvc)
+    services.set(IContextKeyService, new ContextKeyService())
     const inst = new InstantiationService(services)
 
     return { groups, closedSvc, inst }

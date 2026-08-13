@@ -339,6 +339,12 @@ export interface E2EProbe {
   getTokenizationSupportInfo(languageId: string): Promise<{ constructorName: string } | null>
   /** Returns the number of editor groups currently open. */
   getEditorGroupCount(): number
+  /**
+   * Id of the currently active editor group (string form of IEditorGroup.id —
+   * matches the DOM `data-group-id` attribute on the group container). Lets
+   * specs assert which group a click/focus actually activated.
+   */
+  getActiveGroupId(): string | undefined
   /** Number of editors in the active group. */
   getActiveGroupEditorCount(): number
   /** URIs of every editor in the active group, in tab order. */

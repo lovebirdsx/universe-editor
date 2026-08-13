@@ -349,6 +349,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return support === null ? null : { constructorName: support.constructor.name }
     },
     getEditorGroupCount: () => services.editorGroupsService.count,
+    getActiveGroupId: () => {
+      const id = services.editorGroupsService.activeGroup?.id
+      return id === undefined ? undefined : String(id)
+    },
     getActiveGroupEditorCount: () => services.editorGroupsService.activeGroup?.editors.length ?? 0,
     getActiveGroupEditorUris: () =>
       (services.editorGroupsService.activeGroup?.editors ?? [])
