@@ -1709,6 +1709,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }))
     },
     dropRemoteSocket: (authority) => services.remoteStatusService.dropSocketForTesting(authority),
+    openWorkspaceUri: (uri) => services.workspaceService.openFolder(URI.parse(uri)),
+    openUri: (uri) => services.editorResolverService.openEditor(URI.parse(uri)),
+    getCurrentWorkspaceUri: () => services.workspaceService.current?.folder.toString(),
+    getRecentWorkspaceUris: () => services.workspaceService.recent.map((r) => r.folder.toString()),
   }
 
   window[E2E_PROBE_KEY] = probe

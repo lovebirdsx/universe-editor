@@ -23,6 +23,7 @@ import {
 } from '@universe-editor/platform'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 import { IRendererDisposableLeakService } from '../services/disposableLeak/DisposableLeakService.js'
+import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 export class NewWindowAction extends Action2 {
   static readonly ID = 'workbench.action.newWindow'
@@ -118,7 +119,7 @@ export class SwitchWindowAction extends Action2 {
       return {
         id: `window.${w.id}`,
         label: w.name ?? localize('window.untitled', 'Untitled (Window {id})', { id: w.id }),
-        ...(folder ? { description: folder.fsPath } : {}),
+        ...(folder ? { description: workspaceFullLabel(folder) } : {}),
         windowId: w.id,
       }
     })

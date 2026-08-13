@@ -34,6 +34,7 @@ import {
   resolveLiveSessionTitle,
   truncateSessionTitle,
 } from '../services/acp/session/acpSessionTitle.js'
+import { workspaceParentLabel } from '../services/workspace/workspaceLabel.js'
 
 const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   running: '●',
@@ -82,8 +83,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       document.title = formatWindowTitle({ appName, devHostBadge })
       return
     }
-    const parentPath = workspace.folder.path.replace(/\/[^/]+\/?$/, '')
-    const parent = workspace.folder.with({ path: parentPath }).fsPath
+    const parent = workspaceParentLabel(workspace.folder)
 
     const session = this._sessions.activeSession.read(r)
     // Subscribe to history entries so renames update the window title too.

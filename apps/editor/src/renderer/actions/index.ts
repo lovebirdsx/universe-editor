@@ -392,6 +392,13 @@ import {
   ManageWorkspaceTrustAction,
   RevokeWorkspaceTrustAction,
 } from './workspaceTrustActions.js'
+import {
+  CloseConnectionAction,
+  ConnectToHostAction,
+  OpenFolderOnHostAction,
+  RetryConnectionAction,
+  StopRemoteServerAction,
+} from './remoteActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -820,3 +827,10 @@ registerAction2(DisableExtensionForWorkspaceAction)
 registerAction2(GrantWorkspaceTrustAction)
 registerAction2(RevokeWorkspaceTrustAction)
 registerAction2(ManageWorkspaceTrustAction)
+
+// Remote-SSH
+registerAction2(ConnectToHostAction)
+registerAction2(OpenFolderOnHostAction)
+registerAction2(CloseConnectionAction)
+registerAction2(RetryConnectionAction)
+registerAction2(StopRemoteServerAction)

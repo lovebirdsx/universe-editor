@@ -25,6 +25,7 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 export class OpenFolderAction extends Action2 {
   static readonly ID = 'workbench.action.files.openFolder'
@@ -102,8 +103,10 @@ export class OpenWorkspaceInVSCodeAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const host = accessor.get(IHostService)
     // 本机路径，不随远端工作区变化：`code` CLI 在本机 spawn，cwd 必须是本机路径。
-    const cwd = workspace.current?.folder.fsPath ?? null
-    if (!cwd) return
+    // 远端工作区没有本机路径可映射 —— 直接跳过（无本机 cwd）。
+    const folder = workspace.current?.folder
+    if (!folder || folder.scheme !== 'file') return
+    const cwd = folder.fsPath
     const error = await host.openInVSCode(cwd)
     if (error) {
       accessor.get(INotificationService).notify({
@@ -159,7 +162,7 @@ export class OpenRecentAction extends Action2 {
       return {
         id: `recent.${index}`,
         label: r.name,
-        description: r.folder.fsPath,
+        description: workspaceFullLabel(r.folder),
         ...(isOpen ? { iconId: 'check' } : {}),
         index,
       }

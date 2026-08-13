@@ -20,6 +20,7 @@ import {
   type IRecentWorkspace,
 } from '@universe-editor/platform'
 import { ClearRecentWorkspacesAction } from '../actions/workspaceActions.js'
+import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 const RECENT_GROUP = '1_recent'
 const TRAILING_GROUP = '9_clear'
@@ -89,8 +90,8 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
         MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
           command: commandId,
           // Full path disambiguates same-named folders in different locations
-          // (VSCode shows the full path here too).
-          title: entry.folder.fsPath,
+          // (VSCode shows the full path here too); remote folders keep their scheme.
+          title: workspaceFullLabel(entry.folder),
           ...(isOpen ? { icon: 'check' } : {}),
           group: RECENT_GROUP,
           order: index,

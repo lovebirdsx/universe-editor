@@ -63,6 +63,16 @@ export class BuiltInViewContainersContribution
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.remote',
+        label: localize('viewContainer.remote', 'Remote Explorer'),
+        icon: 'remote',
+        order: 5,
+        location: ViewContainerLocation.SideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.aiDebug',
         label: localize('viewContainer.aiDebug', 'AI Debug'),
         icon: 'debug-alt',

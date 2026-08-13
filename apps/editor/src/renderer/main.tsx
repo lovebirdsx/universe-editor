@@ -129,6 +129,10 @@ import {
   ExplorerFileOperationService,
   IExplorerFileOperationService,
 } from './services/explorer/ExplorerFileOperationService.js'
+import {
+  IRemoteExplorerService,
+  RemoteExplorerService,
+} from './services/remote/RemoteExplorerService.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import { restoreWorkbenchFocus } from './services/focus/workbenchFocusRestorer.js'
 import {
@@ -667,6 +671,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // the tree + IFileService + IUndoRedoService (all registered above).
   const explorerFileOperationService = instantiation.createInstance(ExplorerFileOperationService)
   services.set(IExplorerFileOperationService, explorerFileOperationService)
+
+  // Remote Explorer data aggregation — folds the remote-status facade +
+  // GLOBAL storage (manually-added SSH hosts) into observables the view renders.
+  // Depends on IRemoteStatusService + IStorageService so it is created via DI.
+  const remoteExplorerService = workbenchStore.add(
+    instantiation.createInstance(RemoteExplorerService),
+  )
+  services.set(IRemoteExplorerService, remoteExplorerService)
 
   // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
   // args; ClientService brings together host + permission + IFileService +

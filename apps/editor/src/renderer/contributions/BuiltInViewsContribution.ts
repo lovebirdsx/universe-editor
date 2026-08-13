@@ -30,6 +30,7 @@ import { OutputViewToolbar } from '../workbench/panel/output/OutputViewToolbar.j
 import { TerminalView } from '../workbench/panel/terminal/TerminalView.js'
 import { TerminalViewToolbar } from '../workbench/panel/terminal/TerminalViewToolbar.js'
 import { AiDebugView } from '../workbench/aiDebug/AiDebugView.js'
+import { RemoteExplorerView } from '../workbench/remote/RemoteExplorerView.js'
 
 export class BuiltInViewsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -116,6 +117,19 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
         },
         SessionChangesView,
         SessionChangesViewToolbar,
+      ),
+    )
+
+    this._register(
+      registerViewWithComponent(
+        {
+          id: 'workbench.view.remote.targets',
+          name: localize('view.remote', 'Remote Explorer'),
+          containerId: 'workbench.view.remote',
+          icon: 'remote',
+          order: 1,
+        },
+        RemoteExplorerView,
       ),
     )
 

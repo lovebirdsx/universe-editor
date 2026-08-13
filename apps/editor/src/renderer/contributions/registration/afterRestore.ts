@@ -74,6 +74,8 @@ import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsCon
 import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
 import { InteractionPerfContribution } from '../InteractionPerfContribution.js'
 import { TextMateContribution } from '../TextMateContribution.js'
+import { RemoteStatusContribution } from '../RemoteStatusContribution.js'
+import { RemoteReconnectionUxContribution } from '../RemoteReconnectionUxContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
 // Schema" action. AfterRestore: the editor service + schema registry are live,
@@ -624,5 +626,24 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.textMate',
   TextMateContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Remote-ssh status bar entry (`SSH: <authority>`) + `remoteAuthority` context
+// key, shown only while the current workspace folder is remote. AfterRestore so
+// the status bar + workspace service are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.remoteStatus',
+  RemoteStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Transparent-reconnection UX: progress toast while reconnecting, brief
+// "Reconnected" on success, error toast with Retry / Close on failure. Only
+// reacts to the current remote-ssh authority. AfterRestore so the notification
+// service is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.remoteReconnectionUx',
+  RemoteReconnectionUxContribution,
   WorkbenchPhase.AfterRestore,
 )

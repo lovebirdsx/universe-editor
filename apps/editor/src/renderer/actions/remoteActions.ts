@@ -1,0 +1,378 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Remote-SSH command family: connect to a host and open a remote folder, open a
+ *  folder on an already-connected host, and lifecycle commands (close / retry /
+ *  stop). Mirrors the VSCode Remote-SSH command surface; all interaction goes
+ *  through IRemoteStatusService (the thin wire facade over the main connection
+ *  manager), IQuickInputService, and IFileDialogService.
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  Action2,
+  IDialogService,
+  IFileDialogService,
+  ILifecycleService,
+  INotificationService,
+  IProgressService,
+  IQuickInputService,
+  IWorkspaceService,
+  ProgressLocation,
+  REMOTE_SCHEME,
+  Severity,
+  ShutdownReason,
+  URI,
+  localize,
+  localize2,
+  type IQuickPickItem,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
+import {
+  IRemoteStatusService,
+  type RemoteEnvironmentDto,
+} from '../../shared/ipc/remoteStatusService.js'
+
+const CATEGORY = localize2('command.category.remoteSsh', 'Remote-SSH')
+
+interface AuthorityPickItem extends IQuickPickItem {
+  readonly authority: string
+}
+
+/** A server-native path string → remote-ssh URI (POSIX separators, leading slash). */
+function remoteHomeUri(authority: string, homeDir: string): URI {
+  let path = homeDir.replace(/\\/g, '/')
+  if (!path.startsWith('/')) path = `/${path}`
+  return URI.from({ scheme: REMOTE_SCHEME, authority, path })
+}
+
+/**
+ * QuickPick over authorities. With `allowFreeInput`, an Enter with no focused
+ * item resolves the raw input value (for `user@host[:port]` typing); otherwise
+ * only a concrete item resolves.
+ */
+function pickAuthority(
+  accessor: ServicesAccessor,
+  items: readonly AuthorityPickItem[],
+  placeholder: string,
+  allowFreeInput: boolean,
+): Promise<string | undefined> {
+  const quickInput = accessor.get(IQuickInputService)
+  return new Promise((resolve) => {
+    const pick = quickInput.createQuickPick<AuthorityPickItem>()
+    pick.items = items
+    pick.placeholder = placeholder
+    if (allowFreeInput) pick.autoFocusFirstItem = false
+    let accepted = false
+    pick.onDidAccept((selected) => {
+      const item = selected[0]
+      if (item) {
+        accepted = true
+        pick.hide()
+        resolve(item.authority)
+        return
+      }
+      if (!allowFreeInput) return
+      const value = pick.value.trim()
+      accepted = true
+      pick.hide()
+      resolve(value === '' ? undefined : value)
+    })
+    pick.onDidHide(() => {
+      if (!accepted) resolve(undefined)
+      pick.dispose()
+    })
+    pick.show()
+  })
+}
+
+/** Select a remote folder (rooted at the host home) and open it as the workspace. */
+async function selectAndOpenRemoteFolder(
+  accessor: ServicesAccessor,
+  authority: string,
+  env: RemoteEnvironmentDto,
+): Promise<void> {
+  const fileDialog = accessor.get(IFileDialogService)
+  const workspace = accessor.get(IWorkspaceService)
+  const lifecycle = accessor.get(ILifecycleService)
+  const progress = accessor.get(IProgressService)
+
+  const folder = (
+    await fileDialog.showOpenDialog({
+      title: localize('remote.openFolder.title', 'Open Folder on {authority}', { authority }),
+      defaultUri: remoteHomeUri(authority, env.homeDir),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      openLabel: localize('fileDialog.openFolderButton', 'Open'),
+    })
+  )?.[0]
+  if (!folder) return
+  if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
+  await progress.withProgress(
+    {
+      location: ProgressLocation.Window,
+      title: localize('progress.openFolder', 'Opening folder…'),
+      source: 'workspace',
+    },
+    () => workspace.openFolder(folder),
+  )
+}
+
+export class ConnectToHostAction extends Action2 {
+  static readonly ID = 'remote.connectToHost'
+  constructor() {
+    super({
+      id: ConnectToHostAction.ID,
+      title: localize2('action.remote.connectToHost.title', 'Connect to Host…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const remoteStatus = accessor.get(IRemoteStatusService)
+    const notification = accessor.get(INotificationService)
+    const progress = accessor.get(IProgressService)
+
+    let authority = authorityArg
+    if (authority === undefined) {
+      const hosts = await remoteStatus.listSshHosts()
+      authority = await pickAuthority(
+        accessor,
+        hosts.map((host) => ({
+          id: host,
+          label: host,
+          description: localize('remote.connectToHost.sshConfig', 'SSH config'),
+          authority: host,
+        })),
+        localize('remote.connectToHost.placeholder', 'user@host[:port] or select a host'),
+        true,
+      )
+      if (!authority) return
+    }
+
+    let env: RemoteEnvironmentDto
+    try {
+      env = await progress.withProgress(
+        {
+          location: ProgressLocation.Window,
+          title: localize('remote.progress.connect', 'Connecting to {authority}…', { authority }),
+          source: 'remote',
+        },
+        () => remoteStatus.connect(authority),
+      )
+    } catch (err) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize('remote.connect.failed', 'Failed to connect to {authority}: {message}', {
+          authority,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      })
+      return
+    }
+    await selectAndOpenRemoteFolder(accessor, authority, env)
+  }
+}
+
+export class OpenFolderOnHostAction extends Action2 {
+  static readonly ID = 'remote.openFolder'
+  constructor() {
+    super({
+      id: OpenFolderOnHostAction.ID,
+      title: localize2('action.remote.openFolder.title', 'Open Folder on Host…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const remoteStatus = accessor.get(IRemoteStatusService)
+    const notification = accessor.get(INotificationService)
+
+    let authority: string | undefined = authorityArg
+    if (authority === undefined) {
+      const connected = (await remoteStatus.getConnections()).filter((c) => c.state === 'connected')
+      if (connected.length === 0) {
+        notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'remote.noConnected',
+            "No connected host. Run 'Remote-SSH: Connect to Host…' first.",
+          ),
+        })
+        return
+      }
+
+      if (connected.length === 1) {
+        authority = connected[0]!.authority
+      } else {
+        const picked = await pickAuthority(
+          accessor,
+          connected.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
+          localize('remote.openFolder.placeholder', 'Select a connected host'),
+          false,
+        )
+        if (!picked) return
+        authority = picked
+      }
+    }
+
+    const env = await remoteStatus.getEnvironment(authority)
+    if (!env) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize('remote.notConnected', "'{authority}' is not connected.", { authority }),
+      })
+      return
+    }
+    await selectAndOpenRemoteFolder(accessor, authority, env)
+  }
+}
+
+export class CloseConnectionAction extends Action2 {
+  static readonly ID = 'remote.closeConnection'
+  constructor() {
+    super({
+      id: CloseConnectionAction.ID,
+      title: localize2('action.remote.closeConnection.title', 'Close Connection'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const remoteStatus = accessor.get(IRemoteStatusService)
+    const workspace = accessor.get(IWorkspaceService)
+    const dialog = accessor.get(IDialogService)
+    const notification = accessor.get(INotificationService)
+
+    let authority: string | undefined = authorityArg
+    if (authority === undefined) {
+      const connections = (await remoteStatus.getConnections()).filter(
+        (c) => c.state === 'connected' || c.state === 'reconnecting',
+      )
+      if (connections.length === 0) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize('remote.noConnected', 'No connected host to close.'),
+        })
+        return
+      }
+      authority = await pickAuthority(
+        accessor,
+        connections.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
+        localize('remote.closeConnection.placeholder', 'Select a connection to close'),
+        false,
+      )
+      if (!authority) return
+    }
+
+    const current = workspace.current
+    if (current?.folder.scheme === REMOTE_SCHEME && current.folder.authority === authority) {
+      const { confirmed } = await dialog.confirm({
+        type: 'warning',
+        message: localize(
+          'remote.closeConnection.confirm',
+          "Close the connection to '{authority}'? This closes the remote workspace.",
+          { authority },
+        ),
+        primaryButton: localize('remote.closeConnection.confirmButton', 'Close'),
+        cancelButton: localize('common.cancel', 'Cancel'),
+      })
+      if (!confirmed) return
+      await workspace.closeFolder()
+    }
+    await remoteStatus.closeConnection(authority)
+  }
+}
+
+export class RetryConnectionAction extends Action2 {
+  static readonly ID = 'remote.retryConnection'
+  constructor() {
+    super({
+      id: RetryConnectionAction.ID,
+      title: localize2('action.remote.retryConnection.title', 'Retry Connection'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const remoteStatus = accessor.get(IRemoteStatusService)
+    const notification = accessor.get(INotificationService)
+
+    let authority: string | undefined = authorityArg
+    if (authority === undefined) {
+      const failed = (await remoteStatus.getConnections()).filter((c) => c.state === 'failed')
+      if (failed.length === 0) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize('remote.noFailed', 'No failed connection to retry.'),
+        })
+        return
+      }
+      authority = await pickAuthority(
+        accessor,
+        failed.map((c) => ({
+          id: c.authority,
+          label: c.authority,
+          ...(c.errorMessage !== undefined ? { description: c.errorMessage } : {}),
+          authority: c.authority,
+        })),
+        localize('remote.retryConnection.placeholder', 'Select a connection to retry'),
+        false,
+      )
+      if (!authority) return
+    }
+    await remoteStatus.retryConnection(authority)
+  }
+}
+
+export class StopRemoteServerAction extends Action2 {
+  static readonly ID = 'remote.stopServer'
+  constructor() {
+    super({
+      id: StopRemoteServerAction.ID,
+      title: localize2('action.remote.stopServer.title', 'Stop Remote Server'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const remoteStatus = accessor.get(IRemoteStatusService)
+    const dialog = accessor.get(IDialogService)
+    const notification = accessor.get(INotificationService)
+
+    let authority: string | undefined = authorityArg
+    if (authority === undefined) {
+      const connected = (await remoteStatus.getConnections()).filter((c) => c.state === 'connected')
+      if (connected.length === 0) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize('remote.noConnected', 'No connected host to stop.'),
+        })
+        return
+      }
+      authority = await pickAuthority(
+        accessor,
+        connected.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
+        localize('remote.stopServer.placeholder', 'Select a host whose server to stop'),
+        false,
+      )
+      if (!authority) return
+    }
+
+    const { confirmed } = await dialog.confirm({
+      type: 'warning',
+      message: localize(
+        'remote.stopServer.confirm',
+        "Stop the remote server on '{authority}'? The connection will be torn down.",
+        { authority },
+      ),
+      primaryButton: localize('remote.stopServer.confirmButton', 'Stop Server'),
+      cancelButton: localize('common.cancel', 'Cancel'),
+    })
+    if (!confirmed) return
+    await remoteStatus.stopServer(authority)
+  }
+}

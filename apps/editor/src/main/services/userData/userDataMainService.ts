@@ -21,9 +21,11 @@ import {
   Disposable,
   Emitter,
   type Event,
+  type IFileService,
   type IUserDataFileChange,
   type IUserDataFilesService,
   localize,
+  REMOTE_SCHEME,
   URI,
   UserDataFile,
 } from '@universe-editor/platform'
@@ -124,6 +126,12 @@ interface InstallSlotOptions {
   readonly createParentDirForWatcher?: boolean
 }
 
+/** Remote-backed user-data file (only ProjectSettings today), read/written via IFileService. */
+interface RemoteSlot {
+  readonly file: URI
+  readonly dir: URI
+}
+
 export class UserDataMainService extends Disposable implements IUserDataFilesService {
   declare readonly _serviceBrand: undefined
 
@@ -131,10 +139,12 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   readonly onDidChangeFile: Event<IUserDataFileChange> = this._onDidChangeFile.event
 
   private readonly _slots = new Map<UserDataFile, WatchSlot>()
+  private readonly _remoteSlots = new Map<UserDataFile, RemoteSlot>()
 
   constructor(
     private readonly _workspace: WorkspaceMainService,
     configDir?: string,
+    private readonly _fileService?: IFileService,
   ) {
     super()
 
@@ -162,8 +172,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       this._workspace.onDidChangeWorkspace((ws) => {
         this._teardownSlot(UserDataFile.ProjectSettings)
         this._teardownSlot(UserDataFile.VSCodeSettings)
-        // 项目级 settings 是本机路径，仅对 file: 工作区有意义；远端工作区的项目
-        // 配置在远端，本机不装这两个槽（等同无本地项目配置）。
+        this._remoteSlots.delete(UserDataFile.ProjectSettings)
         if (ws && ws.folder.scheme === 'file') {
           const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
           this._installSlot(UserDataFile.ProjectSettings, projectPath, {
@@ -171,8 +180,15 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
           })
           const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
           this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
+        } else if (ws && ws.folder.scheme === REMOTE_SCHEME && this._fileService) {
+          // 远端工作区的项目配置落在远端 `.universe-editor/`，经 scheme 分派的
+          // FileService 读写；远端 watcher 是工作区根粒度，这里不逐文件监听。
+          this._remoteSlots.set(UserDataFile.ProjectSettings, {
+            file: URI.joinPath(ws.folder, '.universe-editor', 'settings.json'),
+            dir: URI.joinPath(ws.folder, '.universe-editor'),
+          })
         }
-        // 工作区关闭 / 远端工作区都无本地项目配置 —— 统一通知订阅者重置这两层。
+        // 工作区关闭 / 无项目配置时统一通知订阅者重置这两层。
         this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
         this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
       }),
@@ -180,15 +196,27 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     // Initial hydration: subscribe via getCurrent() so first-launch with a
     // restored workspace also installs the project slots.
     void this._workspace.getCurrent().then((ws) => {
-      if (ws && ws.folder.scheme === 'file' && !this._slots.has(UserDataFile.ProjectSettings)) {
-        const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
-        this._installSlot(UserDataFile.ProjectSettings, projectPath, {
-          createParentDirForWatcher: false,
+      if (ws && ws.folder.scheme === 'file') {
+        if (!this._slots.has(UserDataFile.ProjectSettings)) {
+          const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
+          this._installSlot(UserDataFile.ProjectSettings, projectPath, {
+            createParentDirForWatcher: false,
+          })
+        }
+        if (!this._slots.has(UserDataFile.VSCodeSettings)) {
+          const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
+          this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
+        }
+      } else if (
+        ws &&
+        ws.folder.scheme === REMOTE_SCHEME &&
+        this._fileService &&
+        !this._remoteSlots.has(UserDataFile.ProjectSettings)
+      ) {
+        this._remoteSlots.set(UserDataFile.ProjectSettings, {
+          file: URI.joinPath(ws.folder, '.universe-editor', 'settings.json'),
+          dir: URI.joinPath(ws.folder, '.universe-editor'),
         })
-      }
-      if (ws && ws.folder.scheme === 'file' && !this._slots.has(UserDataFile.VSCodeSettings)) {
-        const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
-        this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
       }
     })
   }
@@ -201,6 +229,8 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   async read(file: UserDataFile): Promise<string> {
+    const remote = this._remoteSlots.get(file)
+    if (remote) return this._readRemote(remote.file)
     const slot = this._slots.get(file)
     if (!slot) return ''
     try {
@@ -221,17 +251,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         localize('userData.error.readOnly', 'UserData: {file} is read-only', { file }),
       )
     }
-    const slot = this._slots.get(file)
-    if (!slot) {
-      throw new Error(
-        localize(
-          'userData.error.noWorkspace',
-          'UserData: no workspace open (cannot write {file})',
-          { file },
-        ),
-      )
-    }
-    await this._atomicWrite(file, slot, content)
+    await this._write(file, content)
   }
 
   async setValue(
@@ -245,8 +265,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       file === UserDataFile.VSCodeKeybindings
     )
       return false
-    const slot = this._slots.get(file)
-    if (!slot) return false
+    if (!this._slots.has(file) && !this._remoteSlots.has(file)) return false
     let current = await this.read(file)
     if (current === '') {
       current = file === UserDataFile.Keybindings ? '[]\n' : '{}\n'
@@ -256,11 +275,13 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     })
     const next = applyEdits(current, edits)
     if (next === current) return true
-    await this._atomicWrite(file, slot, next)
+    await this._write(file, next)
     return true
   }
 
   async getFileUri(file: UserDataFile): Promise<URI | null> {
+    const remote = this._remoteSlots.get(file)
+    if (remote) return remote.file
     const slot = this._slots.get(file)
     if (!slot) return null
     return URI.file(slot.fullPath)
@@ -383,6 +404,40 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     }
     slot.watcherStarting = false
     this._slots.delete(file)
+  }
+
+  private async _write(file: UserDataFile, content: string): Promise<void> {
+    const remote = this._remoteSlots.get(file)
+    if (remote) {
+      const fileService = this._fileService
+      if (!fileService) throw new Error('UserData: remote file service unavailable')
+      await fileService.createDirectory(remote.dir)
+      await fileService.writeFile(remote.file, content)
+      this._onDidChangeFile.fire({ file, source: 'self' })
+      return
+    }
+    const slot = this._slots.get(file)
+    if (!slot) {
+      throw new Error(
+        localize(
+          'userData.error.noWorkspace',
+          'UserData: no workspace open (cannot write {file})',
+          { file },
+        ),
+      )
+    }
+    await this._atomicWrite(file, slot, content)
+  }
+
+  private async _readRemote(uri: URI): Promise<string> {
+    if (!this._fileService) return ''
+    try {
+      return await this._fileService.readFileText(uri)
+    } catch (err) {
+      // 远端错误经 IPC 往返时 code 保留（见 ipc.ts serializeError）；缺失按空处理。
+      if ((err as { code?: string | number }).code === 'ENOENT') return ''
+      throw err
+    }
   }
 
   private async _atomicWrite(file: UserDataFile, slot: WatchSlot, content: string): Promise<void> {

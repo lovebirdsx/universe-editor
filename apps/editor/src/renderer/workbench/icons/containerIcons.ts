@@ -10,6 +10,7 @@
 import {
   AppWindow,
   Bug,
+  Cloud,
   FileDiff,
   FolderTree,
   GitBranch,
@@ -40,4 +41,5 @@ export const CONTAINER_ICON_MAP: Record<string, LucideIcon> = {
   terminal: Terminal,
   sparkle: Sparkles,
   window: AppWindow,
+  remote: Cloud,
 }

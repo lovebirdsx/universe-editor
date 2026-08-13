@@ -10,6 +10,7 @@
 - [搜索与导航](#搜索与导航)
 - [版本控制](#版本控制)
 - [定制](#定制)
+- [远程开发](#远程开发)
 - [参考与排障](#参考与排障)
 
 ---
@@ -90,6 +91,12 @@ Perforce 集成：连接登录、changelist 管理、签出/提交/对比、搁�
 - [主题与语言](./customization/themes-and-language.md)
 - [插件管理](./customization/extensions.md)
 - [AI 供应商配置](./customization/ai-providers.md)
+
+## 远程开发
+
+通过 SSH 把代码与文件系统放在远端 Linux / WSL 主机上，本地专注编辑体验。
+
+- [远程开发概览](./remote/overview.md)
 
 ## 参考与排障
 

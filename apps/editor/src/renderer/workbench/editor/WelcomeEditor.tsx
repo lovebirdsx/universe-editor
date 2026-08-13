@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
+import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
 import styles from './EditorArea.module.css'
 
 const RECENT_LIMIT = 5
@@ -138,10 +139,12 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
                   type="button"
                   className={styles['welcome-recent-item']}
                   onClick={() => void workspace.openFolder(entry.folder)}
-                  data-tooltip={entry.folder.fsPath}
+                  data-tooltip={workspaceFullLabel(entry.folder)}
                 >
                   <span className={styles['welcome-recent-name']}>{entry.name}</span>
-                  <span className={styles['welcome-recent-path']}>{entry.folder.fsPath}</span>
+                  <span className={styles['welcome-recent-path']}>
+                    {workspaceFullLabel(entry.folder)}
+                  </span>
                 </button>
               </li>
             ))}

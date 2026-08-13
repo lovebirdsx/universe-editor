@@ -14,6 +14,7 @@
 - [Git 版本控制](#git-版本控制)
 - [Markdown](#markdown)
 - [定制](#定制)
+- [远程开发](#远程开发)
 - [帮助与诊断](#帮助与诊断)
 
 ## 关于"中 / 英"标注
@@ -144,6 +145,20 @@ Markdown 的格式命令与预览链接导航命令，目前有相当一部分�
 | 打开 AI 与 Agent 设置 | 配置供应商、模型、密钥 | 无 |
 
 > 更多见 [定制 · 设置](../customization/settings.md)、[键盘快捷方式](../customization/keybindings.md)、[主题与语言](../customization/themes-and-language.md)、[AI 供应商配置](../customization/ai-providers.md)。
+
+## 远程开发
+
+远程开发的命令归在 **Remote-SSH** 分类下，当前均显示英文原名：
+
+| 命令面板名称 | 作用 | 快捷键 |
+| --- | --- | --- |
+| Remote-SSH: Connect to Host…（英文） | 连接一台主机（或输入 `user@host[:port]`）并打开远端文件夹 | 无 |
+| Remote-SSH: Open Folder on Host…（英文） | 在已连接的主机上另选文件夹打开 | 无 |
+| Remote-SSH: Close Connection（英文） | 关闭到某主机的连接（若正打开它的工作区，会先关掉该工作区） | 无 |
+| Remote-SSH: Retry Connection（英文） | 重试一条失败的连接 | 无 |
+| Remote-SSH: Stop Remote Server（英文） | 停止远端主机上的 server 并断开连接 | 无 |
+
+> 更多见 [远程开发概览](../remote/overview.md)。
 
 ## 帮助与诊断
 

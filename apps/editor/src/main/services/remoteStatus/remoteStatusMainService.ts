@@ -9,6 +9,7 @@
 
 import { Disposable, Emitter, type Event } from '@universe-editor/platform'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
+import { listSshHosts } from '../remote/sshConfig.js'
 import {
   IEnvironmentMainService,
   type EnvironmentMainService,
@@ -16,7 +17,27 @@ import {
 import {
   type IRemoteStatusService,
   type RemoteConnectionStatusDto,
+  type RemoteEnvironmentDto,
 } from '../../../shared/ipc/remoteStatusService.js'
+
+/** Map the internal handshake environment onto the wire-ready DTO. */
+function toEnvironmentDto(env: {
+  readonly os: string
+  readonly arch: string
+  readonly homeDir: string
+  readonly tmpDir: string
+  readonly pathCaseSensitive: boolean
+  readonly serverVersion: string
+}): RemoteEnvironmentDto {
+  return {
+    os: env.os,
+    arch: env.arch,
+    homeDir: env.homeDir,
+    tmpDir: env.tmpDir,
+    pathCaseSensitive: env.pathCaseSensitive,
+    serverVersion: env.serverVersion,
+  }
+}
 
 export class RemoteStatusMainService extends Disposable implements IRemoteStatusService {
   declare readonly _serviceBrand: undefined
@@ -45,6 +66,26 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
 
   async getConnections(): Promise<readonly RemoteConnectionStatusDto[]> {
     return [...this._states.values()]
+  }
+
+  async connect(authority: string): Promise<RemoteEnvironmentDto> {
+    const connection = await this._remote.getConnection(authority)
+    return toEnvironmentDto(connection.env)
+  }
+
+  async getEnvironment(authority: string): Promise<RemoteEnvironmentDto | null> {
+    if (this._states.get(authority)?.state !== 'connected') return null
+    try {
+      const connection = await this._remote.getConnection(authority)
+      return toEnvironmentDto(connection.env)
+    } catch {
+      // Connection dropped between the state check and the read — treat as not connected.
+      return null
+    }
+  }
+
+  async listSshHosts(): Promise<string[]> {
+    return listSshHosts()
   }
 
   async retryConnection(authority: string): Promise<void> {

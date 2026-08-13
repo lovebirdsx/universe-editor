@@ -1083,6 +1083,22 @@ export interface E2EProbe {
   getRemoteConnections(): Promise<readonly E2ERemoteConnectionStatus[]>
   /** Drop the management socket for an authority to exercise transparent reconnect (E2E only). */
   dropRemoteSocket(authority: string): Promise<void>
+  // -- Remote workspace UI probe --------------------------------------------
+  /**
+   * Open a workspace folder by URI string (any scheme, incl. remote-ssh), going
+   * through IWorkspaceService.openFolder exactly like the command flow — bypasses
+   * the folder dialog. Backs the remote workspace-open chain spec.
+   */
+  openWorkspaceUri(uri: string): Promise<void>
+  /**
+   * Open a file by URI string through the editor resolver (any scheme, incl.
+   * remote-ssh). Backs the remote open/edit/save chain spec.
+   */
+  openUri(uri: string): Promise<void>
+  /** Current workspace folder URI string (scheme-preserving), or undefined. */
+  getCurrentWorkspaceUri(): string | undefined
+  /** Recent-workspaces folder URI strings (scheme-preserving), most-recent first. */
+  getRecentWorkspaceUris(): readonly string[]
 }
 
 declare global {

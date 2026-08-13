@@ -27,10 +27,30 @@ export interface RemoteConnectionStatusDto {
   readonly errorMessage?: string
 }
 
+/**
+ * Serialisable snapshot of a remote host's environment, surfaced to the renderer
+ * once a connection has been established. Server-native paths (homeDir/tmpDir)
+ * stay untransformed here — they are host descriptions, not resources.
+ */
+export interface RemoteEnvironmentDto {
+  readonly os: string
+  readonly arch: string
+  readonly homeDir: string
+  readonly tmpDir: string
+  readonly pathCaseSensitive: boolean
+  readonly serverVersion: string
+}
+
 export interface IRemoteStatusService {
   readonly _serviceBrand: undefined
   /** Latest known per-authority state, keyed by authorities seen so far. */
   getConnections(): Promise<readonly RemoteConnectionStatusDto[]>
+  /** Trigger a full bring-up for `authority` and resolve with its environment. */
+  connect(authority: string): Promise<RemoteEnvironmentDto>
+  /** Environment for an already-connected authority; null when not connected. */
+  getEnvironment(authority: string): Promise<RemoteEnvironmentDto | null>
+  /** Host names from the local `~/.ssh/config` (wildcard patterns excluded). */
+  listSshHosts(): Promise<string[]>
   retryConnection(authority: string): Promise<void>
   closeConnection(authority: string): Promise<void>
   stopServer(authority: string): Promise<void>

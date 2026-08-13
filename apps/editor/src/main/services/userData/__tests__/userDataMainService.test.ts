@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   Emitter,
-  type Event,
-  type IUserDataFileChange,
+  REMOTE_SCHEME,
   URI,
   UserDataFile,
+  type Event,
+  type IUserDataFileChange,
   type IWorkspace,
 } from '@universe-editor/platform'
 
@@ -35,6 +36,30 @@ class FakeWorkspace {
   fire(ws: IWorkspace | null): void {
     this._current = ws
     this._emitter.fire(ws)
+  }
+}
+
+class FakeRemoteFileService {
+  readonly text = new Map<string, string>()
+  private readonly dirs = new Set<string>()
+  async readFileText(uri: URI): Promise<string> {
+    const value = this.text.get(uri.toString())
+    if (value === undefined) {
+      throw Object.assign(new Error(`ENOENT: ${uri.toString()}`), { code: 'ENOENT' })
+    }
+    return value
+  }
+  async writeFile(uri: URI, content: string | Uint8Array): Promise<void> {
+    this.text.set(
+      uri.toString(),
+      typeof content === 'string' ? content : new TextDecoder().decode(content),
+    )
+  }
+  async createDirectory(uri: URI): Promise<void> {
+    this.dirs.add(uri.toString())
+  }
+  async exists(uri: URI): Promise<boolean> {
+    return this.text.has(uri.toString()) || this.dirs.has(uri.toString())
   }
 }
 
@@ -206,6 +231,46 @@ describe('UserDataMainService', () => {
     const settings = events.filter((e) => e.file === UserDataFile.Settings)
     expect(settings.length).toBeGreaterThanOrEqual(1)
     expect(settings.every((e) => e.source === 'external')).toBe(true)
+    svc.dispose()
+  })
+
+  it('routes remote-ssh project settings through the scheme-dispatched file service', async () => {
+    const ws = new FakeWorkspace()
+    const files = new FakeRemoteFileService()
+    const svc = new UserDataMainService(ws as never, undefined, files as never)
+    const folder = URI.from({
+      scheme: REMOTE_SCHEME,
+      authority: 'e2e-local',
+      path: '/home/me/proj',
+    })
+    ws.fire({ folder, name: 'proj' })
+
+    const settingsUri = `${REMOTE_SCHEME}://e2e-local/home/me/proj/.universe-editor/settings.json`
+    expect((await svc.getFileUri(UserDataFile.ProjectSettings))?.toString()).toBe(settingsUri)
+
+    // Missing remote settings read as empty, without materializing anything locally.
+    expect(await svc.read(UserDataFile.ProjectSettings)).toBe('')
+
+    await svc.setValue(UserDataFile.ProjectSettings, ['editor.tabSize'], 2)
+    expect(files.text.get(settingsUri)).toContain('"editor.tabSize": 2')
+    expect(await svc.read(UserDataFile.ProjectSettings)).toContain('"editor.tabSize": 2')
+    svc.dispose()
+  })
+
+  it('keeps remote project settings out of the local filesystem without a file service', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    const folder = URI.from({
+      scheme: REMOTE_SCHEME,
+      authority: 'e2e-local',
+      path: '/home/me/proj',
+    })
+    ws.fire({ folder, name: 'proj' })
+
+    // 无 FileService 时退回 Phase 0 守卫：不装本地槽，也不把远端 fsPath 当本地路径写。
+    expect(await svc.getFileUri(UserDataFile.ProjectSettings)).toBeNull()
+    expect(await svc.read(UserDataFile.ProjectSettings)).toBe('')
+    expect(await svc.setValue(UserDataFile.ProjectSettings, ['editor.tabSize'], 2)).toBe(false)
     svc.dispose()
   })
 })

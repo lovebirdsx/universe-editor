@@ -99,7 +99,9 @@ export async function createWindowScopedServices(opts: {
   if (restoreWorkspace) {
     await workspace.restoreCurrent(restoreWorkspace)
   }
-  const userData = disposables.add(new UserDataMainService(workspace, configDir))
+  const userData = disposables.add(
+    new UserDataMainService(workspace, configDir, appServices.fileSystem),
+  )
   // Hot-reload user settings/keybindings when the config directory changes.
   disposables.add(appServices.configLocation.onDidChangeConfigDir((dir) => userData.relocate(dir)))
   const host = disposables.add(

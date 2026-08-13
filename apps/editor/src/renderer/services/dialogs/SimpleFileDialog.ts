@@ -386,7 +386,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         // [A] When the typed directory part differs from the current folder, sync
         // the listing to it (without clobbering what the user is typing).
         if (dir !== '') {
-          const dirUri = this._uriFromInput(dir)
+          const dirUri = this._uriFromInput(dir, currentFolder)
           if (dirUri.path !== currentFolder.path) {
             try {
               const stat = await this._fileService.stat(dirUri)
@@ -465,7 +465,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       // list filtering in updateItems, which drops such rows).
       const acceptValue = async (value: string): Promise<void> => {
         if (value === '') return
-        const target = this._uriFromInput(value)
+        const target = this._uriFromInput(value, currentFolder)
         if (mode === 'save') {
           if (endsWithSeparator(value)) return
           await confirmAndFinish(target)
@@ -611,11 +611,14 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   }
 
   private _display(uri: URI): string {
+    // 非 file: 资源（remote-ssh）用 path 而非 fsPath：fsPath 会剥掉 Windows
+    // 盘符前导斜杠，round-trip 回 `_uriFromInput` 时就丢了 `/<drive>:` 结构。
+    if (uri.scheme !== 'file') return uri.path
     // 本机路径：文件对话框恒浏览 file: provider，fsPath 即本机路径。
     return this._sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, this._sep)
   }
 
-  private _uriFromInput(value: string): URI {
+  private _uriFromInput(value: string, base?: URI): URI {
     let normalized = value.replace(/\\/g, '/')
     while (normalized.length > 1 && normalized.endsWith('/')) {
       normalized = normalized.slice(0, -1)
@@ -624,6 +627,10 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     // its root; keep the trailing slash so it resolves to the drive root ("D:/").
     if (/^[A-Za-z]:$/.test(normalized)) {
       normalized += '/'
+    }
+    // 远端路径沿用当前目录的 scheme/authority，不再恒为 file:。
+    if (base !== undefined && base.scheme !== 'file') {
+      return URI.from({ scheme: base.scheme, authority: base.authority, path: normalized })
     }
     return URI.file(normalized)
   }
