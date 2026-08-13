@@ -189,7 +189,7 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`
 - SDK 入口：`@agentclientprotocol/sdk` 导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + 全部 schema 类型
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.idleProcessTimeoutMs`
 
 ## 案例：# 结构化上下文引用（prompt-ref-pills）
 

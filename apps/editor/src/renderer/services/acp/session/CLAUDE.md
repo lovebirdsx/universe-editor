@@ -127,6 +127,7 @@
 - **timeline 单一真相 + 三 lane 副本**：UI 只读 timeline 保证顺序正确；lane observable 给需要按类型读的 selector。
 - **16ms 防抖事务**：流式 chunk 高频，逐条 set 会抖到没法看；合批是性能底线。
 - **连接池 refcount**：同 agentId+cwd 的多会话共享一个子进程（如同 cwd 两会话），省 spawn；池在 `acpClientService.ts`。
+- **空闲进程回收**（`acp.idleProcessTimeoutMs`，默认 5min，<=0 禁用）：与 stall watchdog 同 tick 的 `_reclaimIdleConnections` 按 (agentId,cwd) 分组，**组内全部** session 满足 status∈{idle,errored,closed} + 无 recovery/pendingElicitation/pendingPermission/compaction/background（`backgroundTaskCount>0`，它独立于 status）+ 静音超时才 `killConnectionFor` 停进程释放内存；但**全 closed 的组跳过**（无活 lease——用户关的交给池 30s 宽限驱逐，已 seal 的池条目已 evict，跳过同时防止静默 seal 组每 tick 重复打点）；可复活约束：非 readOnly 且非 closed 的 session 须 `hasMessages !== false`（否则 `session/resume` 没有可恢复的 transcript）。杀后不碰任何 session 状态——走坑 #11 的静默 seal + `sendPrompt` 按需重握手复活，集成测试 `AcpSession.recovery.integration.test.ts` 已覆盖该路径。拿不到 cwd 的 session（未 attach/历史行无 cwd）让**整个 agentId** 本轮跳过——池 key 不能猜。
 - **关窗/退出时停 agent 走 willShutdown join，不靠 beforeunload**：agent 子进程 cwd=workspace（app 单例 acpHost spawn），beforeunload 的 fire-and-forget stop 在页面销毁时 IPC 会被丢弃——shell 包装的 agent（cmd.exe→node.exe）残留并把 cwd 钉在 workspace 上，Windows 下文件夹删不掉直到 app 退出。可靠路径：`RendererLifecycleService.confirmShutdown` 跑完整两阶段（veto + onWillShutdown join），`acpClientService` 在 join 里 `Promise.allSettled(liveHandles.map(stop))`，窗口活着时 IPC 通畅；beforeunload 仅作 reload/崩溃兜底。
 - **持久化只存字符串元数据**：无 ContentBlock/SessionUpdate 落盘；恢复时拿 `sessionIdOnAgent` 调 `loadSession` 让 agent 重放。双桶 scope（WORKSPACE + GLOBAL fallback）见 `../CLAUDE.md`「持久化」。
 
@@ -168,7 +169,7 @@ pnpm e2e          # 涉及交互逻辑改动时跑冒烟，仅截取错误
 - `workbench/agents/AgentsView.tsx` + `ChatBody.tsx` + `AcpSessionEditor.tsx` —— 双模式 UI 入口
 - `actions/agentActions.ts` —— 全部会话命令
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.defaultCollapseModes`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.defaultCollapseModes` / `acp.idleProcessTimeoutMs`
 - 相关：`apps/editor/src/renderer/services/ai/CLAUDE.md`（AI 设置页）；`apps/editor/CLAUDE.md` 套路 A/B/C（命令/View/跨进程服务注册）
 
 

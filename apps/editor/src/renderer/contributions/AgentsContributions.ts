@@ -187,6 +187,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'A running turn that produces no output for this long (milliseconds) is declared wedged: the agent process is killed and the session hot-reconnects, resuming the interrupted turn. Set 0 to disable the watchdog. Sessions waiting for you to answer a question or approve a permission are exempt.',
             ),
           },
+          'acp.idleProcessTimeoutMs': {
+            type: 'number',
+            default: 300000,
+            description: localize(
+              'settings.acp.idleProcessTimeoutMs',
+              'When every session sharing one agent process has been idle for this long (milliseconds), the process is stopped to release memory; it re-handshakes and resumes automatically the next time you send a message. Set 0 to disable.',
+            ),
+          },
           'acp.mcpServers': {
             type: 'object',
             default: {},

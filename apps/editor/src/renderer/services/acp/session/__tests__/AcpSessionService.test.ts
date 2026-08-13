@@ -4277,3 +4277,197 @@ describe('AcpSessionService — stall watchdog', () => {
     svc.dispose()
   })
 })
+
+describe('AcpSessionService — idle process reaper', () => {
+  const IDLE_MS = 30_000
+
+  function makeService(
+    idleMs: number = IDLE_MS,
+    client: FakeAcpClientService = new FakeAcpClientService(),
+  ): AcpSessionService {
+    const notifications = new StubNotificationService()
+    const config: IConfigurationService = new ConfigurationService()
+    void config.update('acp.idleProcessTimeoutMs', idleMs, ConfigurationTarget.Memory)
+    // One history instance shared by the service and the factory-held sessions,
+    // like production DI — `setHistoryHasMessages` must land where the reaper
+    // reads it.
+    const history = makeHistory()
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        history,
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      stubWindowsService(),
+    )
+  }
+
+  /** A session that sent one prompt and settled back to idle (hasMessages: true). */
+  async function makeIdleSession(svc: AcpSessionService, cwd = '/w'): Promise<AcpSession> {
+    const session = await svc.createSession('fake', { cwd })
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    void session.sendPrompt('hi')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('idle')
+    return session
+  }
+
+  function pendingPermission(): AcpPendingPermission {
+    return {
+      toolCallId: 'tc-1',
+      title: 'run command',
+      options: [{ optionId: 'allow', name: 'Allow' }],
+      resolve: () => {},
+      cancel: () => {},
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('stops a shared agent process once every session on it has been idle past the timeout — one kill per group', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const first = await makeIdleSession(svc)
+    const second = await makeIdleSession(svc)
+    expect(first.sessionIdOnAgent.get()).not.toBe(second.sessionIdOnAgent.get())
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(IDLE_MS + 60_000)
+    expect(killSpy).toHaveBeenCalledTimes(1)
+    expect(killSpy).toHaveBeenCalledWith('fake', '/w')
+    svc.dispose()
+  })
+
+  it('does not reclaim a group while one of its sessions is running', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { promptControl: true } })
+    const svc = makeService(IDLE_MS, client)
+    const idle = await svc.createSession('fake', { cwd: '/w' })
+    const busy = await svc.createSession('fake', { cwd: '/w' })
+    if (!(idle instanceof AcpSession) || !(busy instanceof AcpSession)) {
+      throw new Error('expected concrete AcpSession instances')
+    }
+    await idle.whenConnected()
+    await busy.whenConnected()
+    void idle.sendPrompt('settles')
+    void busy.sendPrompt('hangs')
+    await vi.advanceTimersByTimeAsync(10)
+    client.connected[0]!.agent.promptDeferreds[0]!.resolve()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(idle.status.get()).toBe('idle')
+    expect(busy.status.get()).toBe('running')
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(3 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not reclaim while a permission decision is pending', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const session = await makeIdleSession(svc)
+    session.presentPermission(pendingPermission())
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(3 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not reclaim while background tasks are still running', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const session = await makeIdleSession(svc)
+    // Background tasks outlive the settled turn, so the session reads as idle —
+    // killing the process would kill real work going on agent-side.
+    session.applyBackgroundActivity({ backgroundTasks: 1, autonomousTurn: false })
+    expect(session.status.get()).toBe('idle')
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(3 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('never reclaims when the timeout is disabled (0)', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(0, client)
+    await makeIdleSession(svc)
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(10 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not reclaim an all-closed group (left to the pool grace eviction)', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const session = await makeIdleSession(svc)
+    await session.close()
+    expect(session.status.get()).toBe('closed')
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(3 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not reclaim a session that never sent a message (nothing to resume against)', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const session = await svc.createSession('fake', { cwd: '/w' })
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    expect(session.status.get()).toBe('idle')
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(3 * IDLE_MS + 60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not reclaim before the timeout elapses', async () => {
+    const idleMs = 90_000 // above the 60s watchdog tick so tick alignment can't flake the assertions
+    const client = new FakeAcpClientService()
+    const svc = makeService(idleMs, client)
+    await makeIdleSession(svc)
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    // One tick while still inside the idle window.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(killSpy).not.toHaveBeenCalled()
+
+    // The first tick past the window reaps the connection.
+    await vi.advanceTimersByTimeAsync(idleMs)
+    expect(killSpy).toHaveBeenCalledTimes(1)
+    svc.dispose()
+  })
+})

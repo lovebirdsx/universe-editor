@@ -555,6 +555,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.fontFamily': '控制 Agent 聊天面板的字体。留空则继承工作台 UI 字体。',
   'settings.acp.fontSize':
     '控制 Agent 聊天面板的基础字体大小（像素）。代码块和其他内容会相对缩放。',
+  'settings.acp.idleProcessTimeoutMs':
+    '所有会话闲置该时长（毫秒）后自动停止对应的 Agent 进程以释放内存，下次发送消息时自动重连恢复。设为 0 表示禁用。',
   'settings.acp.mcpServers':
     '转发给 Agent session/new 的 MCP 服务器，以服务器名为键。stdio：`{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`。http/sse：`{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`。工作区根目录的 `.mcp.json` 会按同名条目覆盖此处的定义。默认启停开关不属于这些条目——在 MCP 设置面板或会话选择器中按用户/工作区两级设置。Agent 不支持的传输（http/sse）会跳过并发出警告；env/header 值会以明文存储 - 请将密钥保存在真实环境变量中。',
   'settings.acp.notifications.enabled':

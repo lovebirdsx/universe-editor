@@ -369,6 +369,9 @@ const STALL_WATCHDOG_TICK_MS = 60_000
 /** Default silence after which a running turn is declared wedged (10 minutes). */
 const DEFAULT_STALL_TIMEOUT_MS = 10 * 60_000
 
+/** Default idle time after which an all-idle agent process is stopped (5 minutes). */
+const DEFAULT_IDLE_PROCESS_TIMEOUT_MS = 5 * 60_000
+
 /** Configuration key controlling which sessions the history list surfaces. */
 const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
 
@@ -1275,7 +1278,10 @@ export class AcpSessionService
    * session/update, so the wire stays quiet for as long as it takes.
    */
   private _startStallWatchdog(): void {
-    const interval = setInterval(() => this._checkStalledSessions(), STALL_WATCHDOG_TICK_MS)
+    const interval = setInterval(() => {
+      this._checkStalledSessions()
+      this._reclaimIdleConnections()
+    }, STALL_WATCHDOG_TICK_MS)
     this._register({ dispose: () => clearInterval(interval) })
   }
 
@@ -1309,6 +1315,89 @@ export class AcpSessionService
       this._telemetry.publicLog('acp.session_stall_detected', { agentId: session.agentId })
       session.handleStall()
     }
+  }
+
+  /**
+   * Idle-process reaper: when EVERY live session sharing one pooled connection
+   * (agentId + cwd) has been idle for `acp.idleProcessTimeoutMs` (default 5min,
+   * <=0 disables), the agent process is stopped to release memory. This is the
+   * same fate as a mid-idle crash — every affected session silently seals and
+   * re-handshakes on the next sendPrompt, so no session state is touched here.
+   * A session whose pool cwd cannot be resolved (not yet attached, or its
+   * history row lacks one) poisons the whole agent for this tick: the pool key
+   * would be a guess and we never kill on a guess.
+   */
+  private _reclaimIdleConnections(): void {
+    const idleMs =
+      this._config.get<number>('acp.idleProcessTimeoutMs') ?? DEFAULT_IDLE_PROCESS_TIMEOUT_MS
+    if (idleMs <= 0) return
+    const now = Date.now()
+    const poisonedAgents = new Set<string>()
+    const groups = new Map<string, { agentId: string; cwd: string; sessions: AcpSession[] }>()
+    for (const session of this._sessionStore.sessions.get()) {
+      if (!(session instanceof AcpSession)) continue
+      const sid = session.sessionIdOnAgent.get()
+      const cwd = sid === undefined ? undefined : this._history.get(sid)?.cwd
+      if (cwd === undefined) {
+        poisonedAgents.add(session.agentId)
+        continue
+      }
+      const key = `${session.agentId} ${cwd}`
+      let group = groups.get(key)
+      if (!group) {
+        group = { agentId: session.agentId, cwd, sessions: [] }
+        groups.set(key, group)
+      }
+      group.sessions.push(session)
+    }
+    for (const group of groups.values()) {
+      if (poisonedAgents.has(group.agentId)) continue
+      // An all-closed group has no live pool entry to kill: user-closed leases
+      // are reaped by the pool's own grace eviction, and silently sealed ones
+      // ride a connection the pool already evicted. Skipping also keeps a
+      // sealed group from re-logging and re-reporting every tick forever.
+      if (group.sessions.every((session) => session.status.get() === 'closed')) continue
+      if (group.sessions.some((session) => !this._isIdleReclaimable(session, now, idleMs))) {
+        continue
+      }
+      const silentSeconds = Math.round(
+        Math.max(...group.sessions.map((session) => now - session.lastActivityAt)) / 1000,
+      )
+      this._logger.info(
+        `all ${group.sessions.length} session(s) of ${group.agentId} (cwd ${group.cwd}) idle for ${silentSeconds}s — stopping the agent process; it re-handshakes on the next prompt`,
+      )
+      this._telemetry.publicLog('acp.idle_process_reclaimed', {
+        agentId: group.agentId,
+        sessions: group.sessions.length,
+      })
+      this._client.killConnectionFor(group.agentId, group.cwd)
+    }
+  }
+
+  /**
+   * One session may see its shared process reclaimed only when it is fully at
+   * rest: no live turn, no recovery in flight, no card awaiting the user, no
+   * compaction or background work — and, unless it is already closed or
+   * read-only (both complete without the agent), it must carry a durable
+   * transcript so `session/resume` can resurrect it after the kill.
+   */
+  private _isIdleReclaimable(session: AcpSession, now: number, idleMs: number): boolean {
+    const status = session.status.get()
+    if (status !== 'idle' && status !== 'errored' && status !== 'closed') return false
+    if (session.recovery.state.get() !== undefined) return false
+    if (session.pendingElicitation.get() !== undefined) return false
+    if (session.pendingPermission.get() !== undefined) return false
+    if (session.compactionInProgress) return false
+    // The status filter already covers autonomous turns (they read as
+    // 'running'); background tasks can outlive the turn while the session
+    // reads 'idle', so they need their own signal.
+    if (session.autonomousTurnActive) return false
+    if (session.backgroundTaskCount.get() > 0) return false
+    if (!session.readOnly && status !== 'closed') {
+      const sid = session.sessionIdOnAgent.get()
+      if (sid !== undefined && this._history.get(sid)?.hasMessages === false) return false
+    }
+    return now - session.lastActivityAt >= idleMs
   }
 
   /**
