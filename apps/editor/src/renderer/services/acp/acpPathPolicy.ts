@@ -30,8 +30,13 @@ export interface IAcpPathPolicy {
    * Decide whether `target` is reachable for the session rooted at `cwd`.
    * Both inputs are expected to be absolute filesystem paths in OS-native
    * form (Windows backslashes or POSIX forward slashes are both accepted).
+   *
+   * `env` overrides the policy's constructed platform/home. Remote sessions
+   * pass the remote host's platform + home so the sensitive-prefix and
+   * case-sensitivity checks apply to the *remote* filesystem, not the local
+   * one. Omitted → the policy's own (local) environment.
    */
-  check(cwd: string, target: string): AcpPathDecision
+  check(cwd: string, target: string, env?: AcpPathPolicyEnv): AcpPathDecision
 }
 
 export const IAcpPathPolicy = createDecorator<IAcpPathPolicy>('acpPathPolicy')
@@ -76,7 +81,8 @@ export class AcpPathPolicy implements IAcpPathPolicy {
 
   constructor(private readonly _env: AcpPathPolicyEnv) {}
 
-  check(cwd: string, target: string): AcpPathDecision {
+  check(cwd: string, target: string, env?: AcpPathPolicyEnv): AcpPathDecision {
+    const platform = env?.platform ?? this._env.platform
     if (!cwd) return { ok: false, reason: 'no workspace root configured' }
     if (!target) return { ok: false, reason: 'empty path' }
     if (target.includes('\0')) return { ok: false, reason: 'path contains NUL byte' }
@@ -89,11 +95,11 @@ export class AcpPathPolicy implements IAcpPathPolicy {
       return { ok: false, reason: 'parent-directory segments escape filesystem root' }
     }
 
-    const rel = relativePathUnder(cwd, absNorm, this._env.platform)
+    const rel = relativePathUnder(cwd, absNorm, platform)
     if (rel === null) {
       return { ok: false, reason: `path escapes workspace root (${cwd})` }
     }
-    const sensitive = this._sensitivePrefix(absNorm)
+    const sensitive = this._sensitivePrefix(absNorm, env?.home)
     if (sensitive) {
       return { ok: false, reason: `path resolves under sensitive prefix (${sensitive})` }
     }
@@ -103,11 +109,12 @@ export class AcpPathPolicy implements IAcpPathPolicy {
     return { ok: true, normalized: absNorm }
   }
 
-  private _sensitivePrefix(absNormPath: string): string | null {
-    const home = this._env.home ? normalizeFsPath(this._env.home) : ''
-    if (home && !home.startsWith('__ESCAPED__')) {
+  private _sensitivePrefix(absNormPath: string, homeOverride?: string): string | null {
+    const home = homeOverride ?? this._env.home
+    const homeNorm = home ? normalizeFsPath(home) : ''
+    if (homeNorm && !homeNorm.startsWith('__ESCAPED__')) {
       for (const suffix of SENSITIVE_SUFFIXES) {
-        const probe = home + suffix
+        const probe = homeNorm + suffix
         if (absNormPath === probe || absNormPath.startsWith(probe + '/')) return probe
       }
     }

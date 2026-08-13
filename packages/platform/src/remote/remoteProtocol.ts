@@ -11,8 +11,13 @@
  *  server services still operate as a headless local file-service stack while
  *  the client never performs manual translation. Consequently every path in a
  *  channel DTO MUST be a URI (UriComponents with $mid) — bare string paths do
- *  not get transformed. Documented exception: watcher event paths are server
- *  fsPath strings by design; the client maps them via `remoteFsPathToUri`.
+ *  not get transformed. Documented exceptions:
+ *   - watcher event paths are server fsPath strings by design; the client maps
+ *     them via `remoteFsPathToUri`.
+ *   - `AcpLaunchSpec.cwd` / `AcpTerminalCreateSpec.cwd` are native-path strings
+ *     (not URIs): for a remote launch the renderer already derives the remote
+ *     POSIX path and pairs it with `authority`, so the server spawns against it
+ *     verbatim — no transform is needed or applied.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
@@ -45,6 +50,7 @@ export const RemoteChannels = {
   FileWatcher: 'fileWatcher',
   Terminal: 'terminal',
   AcpHost: 'acpHost',
+  AcpTerminal: 'acpTerminal',
   AgentConfig: 'agentConfig',
 } as const
 

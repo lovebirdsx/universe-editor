@@ -577,6 +577,13 @@ export interface E2EProbe {
   /** Status of the active ACP session ('connecting' | 'idle' | 'running' | 'closed'), if any. */
   getAcpSessionStatus(): string | undefined
   /**
+   * The `remote-ssh` authority of the active session's durable history row
+   * (undefined for a local session or when no active session / history row
+   * exists yet). Backs the remote-ACP spec's assertion that a session created
+   * in a remote workspace really routed its agent spawn to the remote host.
+   */
+  getActiveAcpSessionAuthority(): string | undefined
+  /**
    * Ring buffer of recent createSession handshake profiles (most recent last).
    * Lets @perf specs assert the will/did step sequence and segment durations
    * without scraping the Output channel.

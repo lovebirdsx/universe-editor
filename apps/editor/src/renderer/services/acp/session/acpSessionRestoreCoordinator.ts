@@ -54,6 +54,8 @@ export interface RestoreCoordinatorCallbacks {
   hasActiveSession(): boolean
   /** Current workspace cwd, used for hydrate scoping. */
   getCurrentCwd(): string | undefined
+  /** Current workspace `remote-ssh` authority (undefined for local). */
+  getCurrentAuthority(): string | undefined
   /**
    * Resolves once the workspace service has finished its initial hydration.
    * `requestHydrate()` awaits this before reading `getCurrentCwd()` so the
@@ -201,7 +203,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       if (cwd === undefined) return
       if (this._uriIdentity.arePathsEqual(this._hydratedForCwd, cwd)) return
       try {
-        await this._hydrateHistoryFromAgents(cwd, replace)
+        await this._hydrateHistoryFromAgents(cwd, this._callbacks.getCurrentAuthority(), replace)
         if (this._uriIdentity.arePathsEqual(this._callbacks.getCurrentCwd(), cwd)) {
           this._hydratedForCwd = cwd
         }
@@ -263,7 +265,9 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     try {
       conn = await this._client.connect(
         entry.agentId,
-        cwd !== undefined ? { cwd, silent: true } : { silent: true },
+        cwd !== undefined
+          ? { cwd, silent: true, ...(entry.authority ? { authority: entry.authority } : {}) }
+          : { silent: true, ...(entry.authority ? { authority: entry.authority } : {}) },
       )
       await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
@@ -305,7 +309,13 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     try {
       conn = await this._client.connect(
         entry.agentId,
-        entry.cwd !== undefined ? { cwd: entry.cwd, silent: true } : { silent: true },
+        entry.cwd !== undefined
+          ? {
+              cwd: entry.cwd,
+              silent: true,
+              ...(entry.authority ? { authority: entry.authority } : {}),
+            }
+          : { silent: true, ...(entry.authority ? { authority: entry.authority } : {}) },
       )
       const init = await withTimeout(
         conn.initializeResult,
@@ -375,6 +385,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    */
   private async _hydrateHistoryFromAgents(
     cwd: string | undefined,
+    authority: string | undefined,
     replace: boolean,
   ): Promise<void> {
     const myGen = ++this._hydrateGen
@@ -386,13 +397,14 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     if (myGen !== this._hydrateGen) return
     const agentIds = this._registry.allAgentIds()
     await Promise.all(
-      agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, myGen, replace)),
+      agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, authority, myGen, replace)),
     )
   }
 
   private async _hydrateOneAgent(
     agentId: string,
     cwd: string | undefined,
+    authority: string | undefined,
     myGen: number,
     replace: boolean,
   ): Promise<void> {
@@ -400,7 +412,9 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     try {
       conn = await this._client.connect(
         agentId,
-        cwd !== undefined ? { cwd, silent: true } : { silent: true },
+        cwd !== undefined
+          ? { cwd, silent: true, ...(authority ? { authority } : {}) }
+          : { silent: true, ...(authority ? { authority } : {}) },
       )
       if (myGen !== this._hydrateGen) return
       const init = await withTimeout(

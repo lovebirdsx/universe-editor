@@ -5,7 +5,20 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { Emitter, Event, ProxyChannel, RemoteChannels } from '@universe-editor/platform'
+import type {
+  AcpTerminalCreateSpec,
+  AcpTerminalCreatedInfo,
+  AcpTerminalOutput,
+  AcpTerminalWaitExit,
+  IAcpTerminalService,
+  IRemoteEnvironment,
+} from '@universe-editor/platform'
 import { AcpTerminalMainService, type AcpTerminalSpawner } from '../acpTerminalMainService.js'
+import type {
+  IRemoteConnection,
+  IRemoteConnectionService,
+} from '../../remote/remoteConnectionMainService.js'
 
 class FakeStdStream extends EventEmitter {
   setEncoding = vi.fn()
@@ -354,5 +367,113 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
     expect(procA.killCalls).toBe(1)
     expect(procB.killCalls).toBe(1)
     await expect(waiter).rejects.toThrow(/disposed/)
+  })
+})
+
+// -- remote routing -------------------------------------------------------
+
+const REMOTE_ENV: IRemoteEnvironment = {
+  protocolVersion: 2,
+  serverVersion: '0.0.0',
+  os: 'linux',
+  arch: 'x64',
+  nodeVersion: '20.0.0',
+  pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
+}
+
+class FakeRemoteTerminal implements IAcpTerminalService {
+  declare readonly _serviceBrand: undefined
+  readonly creates: AcpTerminalCreateSpec[] = []
+  readonly killed: string[] = []
+  readonly released: string[] = []
+  create(spec: AcpTerminalCreateSpec): Promise<AcpTerminalCreatedInfo> {
+    this.creates.push(spec)
+    return Promise.resolve({ terminalId: 'remote-terminal' })
+  }
+  output(terminalId: string): Promise<AcpTerminalOutput> {
+    return Promise.resolve({ output: `out:${terminalId}`, truncated: false })
+  }
+  waitForExit(_terminalId: string): Promise<AcpTerminalWaitExit> {
+    return Promise.resolve({ exitCode: 0, signal: null })
+  }
+  kill(terminalId: string): Promise<void> {
+    this.killed.push(terminalId)
+    return Promise.resolve()
+  }
+  release(terminalId: string): Promise<void> {
+    this.released.push(terminalId)
+    return Promise.resolve()
+  }
+}
+
+describe('AcpTerminalMainService — remote routing', () => {
+  let svc: AcpTerminalMainService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  function makeRemoteService(): { svc: AcpTerminalMainService; remote: FakeRemoteTerminal } {
+    const remote = new FakeRemoteTerminal()
+    const conn: IRemoteConnection = {
+      authority: 'host',
+      env: REMOTE_ENV,
+      getChannel: (name) => {
+        expect(name).toBe(RemoteChannels.AcpTerminal)
+        return ProxyChannel.fromService(remote)
+      },
+      onDidClose: new Emitter<void>().event,
+    }
+    const connService: IRemoteConnectionService = {
+      _serviceBrand: undefined,
+      getConnection: async () => conn,
+      openExtensionHostConnection: async () => {
+        throw new Error('not used')
+      },
+      onDidChangeState: Event.None,
+      retryConnection: () => undefined,
+      stopServer: async () => undefined,
+      closeConnection: async () => undefined,
+      dropSocketForTesting: () => undefined,
+      dropExtensionHostSocketForTesting: () => undefined,
+      dispose: () => undefined,
+    }
+    svc = new AcpTerminalMainService(undefined, undefined, connService)
+    return { svc, remote }
+  }
+
+  it('routes create to the server channel and strips authority from the spec', async () => {
+    const { svc, remote } = makeRemoteService()
+    const { terminalId } = await svc.create({
+      command: 'ls',
+      args: ['-l'],
+      cwd: '/home/u',
+      authority: 'host',
+    })
+    expect(terminalId).toBe('remote-terminal')
+    expect(remote.creates).toEqual([{ command: 'ls', args: ['-l'], cwd: '/home/u' }])
+  })
+
+  it('routes output / kill / release by terminalId to the server channel', async () => {
+    const { svc, remote } = makeRemoteService()
+    const { terminalId } = await svc.create({ command: 'ls', args: [], authority: 'host' })
+
+    await expect(svc.output(terminalId)).resolves.toEqual({
+      output: 'out:remote-terminal',
+      truncated: false,
+    })
+    await svc.kill(terminalId)
+    expect(remote.killed).toEqual(['remote-terminal'])
+    await svc.release(terminalId)
+    expect(remote.released).toEqual(['remote-terminal'])
+  })
+
+  it('rejects a remote create when the connection service is unavailable', async () => {
+    svc = new AcpTerminalMainService(undefined)
+    await expect(svc.create({ command: 'ls', args: [], authority: 'host' })).rejects.toThrow(
+      /remote connection service not available/,
+    )
   })
 })

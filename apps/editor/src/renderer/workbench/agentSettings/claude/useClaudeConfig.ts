@@ -6,8 +6,13 @@
  *  edits stay consistent with the on-disk file the agent + CLI also read.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { IStorageService, StorageScope } from '@universe-editor/platform'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  IStorageService,
+  IWorkspaceService,
+  REMOTE_SCHEME,
+  StorageScope,
+} from '@universe-editor/platform'
 import {
   IClaudeConfigService,
   type ClaudeAuthStatus,
@@ -16,7 +21,7 @@ import {
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
-import { useService } from '../../useService.js'
+import { useService, useOptionalService } from '../../useService.js'
 import { isProfileActive } from './credentialMatch.js'
 
 export interface UseClaudeConfig {
@@ -51,6 +56,13 @@ const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
   const storage = useService(IStorageService)
+  const workspace = useOptionalService(IWorkspaceService)
+  // Remote workspace: configure the remote `~/.claude`; local: leave authority
+  // undefined so main routes to the local store.
+  const authority = useMemo(() => {
+    const folder = workspace?.current?.folder
+    return folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
+  }, [workspace])
   const [settings, setSettings] = useState<ClaudeSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -61,9 +73,9 @@ export function useClaudeConfig(): UseClaudeConfig {
 
   const reload = useCallback(async () => {
     const [next, path, status, library, draft] = await Promise.all([
-      service.read(),
-      service.configPath(),
-      service.readAuthStatus(),
+      service.read(authority),
+      service.configPath(authority),
+      service.readAuthStatus(authority),
       service.readProfiles(),
       storage.get<ClaudeCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
     ])
@@ -73,21 +85,21 @@ export function useClaudeConfig(): UseClaudeConfig {
     setProfiles(library)
     setCredentialDraft(draft)
     setLoaded(true)
-  }, [service, storage])
+  }, [service, storage, authority])
 
   const reloadAuthStatus = useCallback(async () => {
-    const status = await service.readAuthStatus()
+    const status = await service.readAuthStatus(authority)
     setAuthStatus(status)
     return status
-  }, [service])
+  }, [service, authority])
 
   useEffect(() => {
     let active = true
     void (async () => {
       const [next, path, status, library, draft] = await Promise.all([
-        service.read(),
-        service.configPath(),
-        service.readAuthStatus(),
+        service.read(authority),
+        service.configPath(authority),
+        service.readAuthStatus(authority),
         service.readProfiles(),
         storage.get<ClaudeCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
       ])
@@ -102,15 +114,15 @@ export function useClaudeConfig(): UseClaudeConfig {
     return () => {
       active = false
     }
-  }, [service, storage])
+  }, [service, storage, authority])
 
   const patch = useCallback(
     async (p: ClaudeSettingsPatch) => {
-      await service.patch(p)
-      const next = await service.read()
+      await service.patch(p, authority)
+      const next = await service.read(authority)
       setSettings(next)
     },
-    [service],
+    [service, authority],
   )
 
   const applyProfile = useCallback(
@@ -153,7 +165,7 @@ export function useClaudeConfig(): UseClaudeConfig {
       // Editing the in-use credential (e.g. rotating its key) must push the new
       // values into settings.json too, or the agent keeps using the old key
       // until the profile is switched away and back.
-      const currentSettings = await service.read()
+      const currentSettings = await service.read(authority)
       const wasActive =
         previous !== undefined &&
         isProfileActive(previous, currentSettings.env ?? {}, currentSettings.model)
@@ -161,7 +173,7 @@ export function useClaudeConfig(): UseClaudeConfig {
       setProfiles(next)
       if (wasActive) await applyProfile(profile)
     },
-    [service, applyProfile],
+    [service, applyProfile, authority],
   )
 
   const deleteProfile = useCallback(

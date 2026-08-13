@@ -33,17 +33,24 @@ import {
   type WatcherHostResponse,
 } from '@universe-editor/platform'
 import {
+  AcpHostService,
+  AcpTerminalService,
   createInMemoryWatcherTransport,
   FileSearchService,
   NodeFileSystemProvider,
   TextSearchService,
   WatcherProcessClient,
+  type AcpCommandLookup,
+  type AcpSpawner,
+  type AcpTerminalSpawner,
   type PtySpawner,
   type WatcherTransportFactory,
 } from '@universe-editor/node-services'
 import { ForkedWatcherTransport } from './watcherForkTransport.js'
 import { RemoteFileStreamService } from './fileStreamService.js'
 import { RemoteTerminalService } from './terminalService.js'
+import { RemoteAgentConfigService } from './agentConfigService.js'
+import { resolveVendorAgentEntry } from './vendorAgentEntry.js'
 import { SERVER_VERSION } from './version.js'
 
 export interface CreateRemoteServerOptions {
@@ -51,6 +58,13 @@ export interface CreateRemoteServerOptions {
   readonly watcherTransportFactory?: WatcherTransportFactory
   /** Fake pty spawner for daemon integration tests (no native node-pty). */
   readonly terminalSpawner?: PtySpawner
+  /** Fake agent spawners for daemon integration tests (no real child processes). */
+  readonly acpHostSpawner?: AcpSpawner
+  readonly acpHostLookup?: AcpCommandLookup
+  readonly acpTerminalSpawner?: AcpTerminalSpawner
+  /** Override the claude/codex config roots (tests; default = remote home). */
+  readonly claudeConfigPath?: string
+  readonly codexConfigPath?: string
 }
 
 export function createRemoteServer(
@@ -138,6 +152,47 @@ export function createRemoteServer(
     RemoteChannels.Terminal,
     ProxyChannel.fromService(
       disposables.add(new RemoteTerminalService(options?.terminalSpawner, loggerService)),
+    ),
+  )
+  server.registerChannel(
+    RemoteChannels.AcpHost,
+    ProxyChannel.fromService(
+      disposables.add(
+        new AcpHostService({
+          resolveNodeEntry: resolveVendorAgentEntry,
+          ...(options?.acpHostSpawner !== undefined ? { spawn: options.acpHostSpawner } : {}),
+          ...(options?.acpHostLookup !== undefined ? { lookup: options.acpHostLookup } : {}),
+          logger: loggerService,
+        }),
+      ),
+    ),
+  )
+  server.registerChannel(
+    RemoteChannels.AcpTerminal,
+    ProxyChannel.fromService(
+      disposables.add(
+        new AcpTerminalService({
+          ...(options?.acpTerminalSpawner !== undefined
+            ? { spawn: options.acpTerminalSpawner }
+            : {}),
+          logger: loggerService,
+        }),
+      ),
+    ),
+  )
+  server.registerChannel(
+    RemoteChannels.AgentConfig,
+    ProxyChannel.fromService(
+      disposables.add(
+        new RemoteAgentConfigService(loggerService, {
+          ...(options?.claudeConfigPath !== undefined
+            ? { claudeConfigPath: options.claudeConfigPath }
+            : {}),
+          ...(options?.codexConfigPath !== undefined
+            ? { codexConfigPath: options.codexConfigPath }
+            : {}),
+        }),
+      ),
     ),
   )
 

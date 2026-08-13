@@ -40,6 +40,7 @@ import type { IAcpAgentDescriptor, IAcpAgentRegistry } from '../acpAgentRegistry
 import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryService.js'
 import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
+import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -351,6 +352,7 @@ function makeService(
     } as unknown as IProgressService,
     new StubLoggerService(),
     new UriIdentityService('linux'),
+    { getEnvironment: () => Promise.resolve(null) } as unknown as IRemoteStatusService,
     new LifecycleService(),
   )
   svc.setNotificationSink(sink)

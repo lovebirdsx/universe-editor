@@ -158,6 +158,7 @@ import { IOutlineService, OutlineService } from './services/languageFeatures/Out
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from './services/acp/session/acpSessionHistory.js'
 import {
   IMcpServerEnablementService,
   McpServerEnablementService,
@@ -852,6 +853,7 @@ async function bootstrapWorkbench(): Promise<void> {
     configurationService,
     storageService: instantiation.invokeFunction((a) => a.get(IStorageService)),
     acpSessionService,
+    acpSessionHistoryService: instantiation.invokeFunction((a) => a.get(IAcpSessionHistoryService)),
     mcpServerEnablementService,
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,

@@ -58,6 +58,12 @@ export interface AcpSessionHistoryEntry {
   /** Workspace cwd at creation time. Optional because users may run agent-only. */
   readonly cwd?: string
   /**
+   * The `remote-ssh` authority this session ran on. Absent for local sessions.
+   * For a remote session `cwd` is a remote POSIX path; this field routes its
+   * spawn/resume back to the same host.
+   */
+  readonly authority?: string
+  /**
    * Git branch reported by the agent for this session (end-of-session branch).
    * Used to label rows when the history scope spans worktrees. Optional — not
    * all agents report it and non-git sessions have none.
@@ -530,12 +536,16 @@ export class AcpSessionHistoryService
     // AI Fix isolation: set once at creation, carried across re-adds (resume).
     const carriedAiFix =
       entry.aiFix ?? (existingIdx >= 0 ? this._state[existingIdx]!.aiFix : undefined)
+    // Remote authority is set once at creation and carried across re-adds.
+    const carriedAuthority =
+      entry.authority ?? (existingIdx >= 0 ? this._state[existingIdx]!.authority : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
       sessionIdOnAgent: entry.sessionIdOnAgent,
       title,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+      ...(carriedAuthority !== undefined ? { authority: carriedAuthority } : {}),
       ...(entry.branch !== undefined ? { branch: entry.branch } : {}),
       createdAt,
       lastUsedAt: now,
@@ -1069,6 +1079,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['sessionIdOnAgent'] === 'string' &&
     typeof o['title'] === 'string' &&
     (o['cwd'] === undefined || typeof o['cwd'] === 'string') &&
+    (o['authority'] === undefined || typeof o['authority'] === 'string') &&
     (o['branch'] === undefined || typeof o['branch'] === 'string') &&
     typeof o['createdAt'] === 'number' &&
     typeof o['lastUsedAt'] === 'number' &&

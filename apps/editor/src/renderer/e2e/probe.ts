@@ -42,6 +42,7 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import type { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import type { IMcpServerEnablementService } from '../services/acp/mcpServerEnablementService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
@@ -102,6 +103,7 @@ export interface E2EProbeServices {
   readonly configurationService: IConfigurationService
   readonly storageService: IStorageService
   readonly acpSessionService: IAcpSessionService
+  readonly acpSessionHistoryService: IAcpSessionHistoryService
   readonly mcpServerEnablementService: IMcpServerEnablementService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
@@ -593,6 +595,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       await services.mcpServerEnablementService.setEnabled(name, enabled, StorageScope.GLOBAL)
     },
     getAcpSessionStatus: () => services.acpSessionService.activeSession.get()?.status.get(),
+    getActiveAcpSessionAuthority: () => {
+      const s = services.acpSessionService.activeSession.get()
+      const durableId = s?.sessionIdOnAgent.get()
+      if (!durableId) return undefined
+      return services.acpSessionHistoryService.get(durableId)?.authority
+    },
     getAcpSessionCreateProfiles: () => services.acpSessionService.getSessionCreateProfiles(),
     getAcpPendingElicitation: () => {
       const s = services.acpSessionService.activeSession.get()

@@ -942,6 +942,9 @@ importers:
       '@vscode/ripgrep':
         specifier: 'catalog:'
         version: 1.18.0
+      smol-toml:
+        specifier: 'catalog:'
+        version: 1.7.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

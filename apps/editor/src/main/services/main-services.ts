@@ -132,11 +132,23 @@ registerSingleton(
 )
 registerSingletonFactory(
   IAcpHostService,
-  (acc) => new AcpHostMainService(undefined, undefined, undefined, acc.get(ILoggerService)),
+  (acc) =>
+    new AcpHostMainService(
+      undefined,
+      undefined,
+      undefined,
+      acc.get(ILoggerService),
+      acc.get(IRemoteConnectionService),
+    ),
 )
 registerSingletonFactory(
   IAcpTerminalService,
-  (acc) => new AcpTerminalMainService(undefined, acc.get(ILoggerService)),
+  (acc) =>
+    new AcpTerminalMainService(
+      undefined,
+      acc.get(ILoggerService),
+      acc.get(IRemoteConnectionService),
+    ),
 )
 registerSingletonFactory(
   IExtensionHostService,
@@ -194,6 +206,7 @@ registerSingletonFactory(
       undefined,
       acc.get(ILoggerService),
       acc.get(IConfigLocationService),
+      acc.get(IRemoteConnectionService),
     ),
 )
 registerSingleton(
@@ -203,7 +216,12 @@ registerSingleton(
 registerSingletonFactory(
   ICodexConfigService,
   (acc) =>
-    new CodexConfigMainService(undefined, acc.get(ILoggerService), acc.get(IConfigLocationService)),
+    new CodexConfigMainService(
+      undefined,
+      acc.get(ILoggerService),
+      acc.get(IConfigLocationService),
+      acc.get(IRemoteConnectionService),
+    ),
 )
 registerSingleton(
   IDisposableLeakService,

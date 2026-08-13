@@ -34,10 +34,11 @@ import {
   ITelemetryService,
   IUriIdentityService,
   ProgressLocation,
+  REMOTE_SCHEME,
   Severity,
   URI,
 } from '@universe-editor/platform'
-import type { IDisposable, ILogger, IOutputChannel } from '@universe-editor/platform'
+import type { HostPlatform, IDisposable, ILogger, IOutputChannel } from '@universe-editor/platform'
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -81,8 +82,9 @@ import {
   type ICodexBinaryResolveOptions,
 } from '../../../shared/ipc/codexBinaryService.js'
 import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
+import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
-import { IAcpPathPolicy } from './acpPathPolicy.js'
+import { IAcpPathPolicy, type AcpPathPolicyEnv } from './acpPathPolicy.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
 import type { ISessionCreateProfileHandle } from './acpSessionCreateProfiler.js'
@@ -166,6 +168,8 @@ export interface IAcpClientService {
     agentId: string,
     options?: {
       cwd?: string
+      /** `remote-ssh` authority to spawn on; absent → local. */
+      authority?: string
       leaseFor?: string
       silent?: boolean
       profile?: ISessionCreateProfileHandle
@@ -179,7 +183,7 @@ export interface IAcpClientService {
    * process is alive but its turn is wedged, and reusing it via the pool would
    * reconnect to the same wedged state. No live entry → no-op.
    */
-  killConnectionFor(agentId: string, cwd: string | undefined): void
+  killConnectionFor(agentId: string, cwd: string | undefined, authority?: string): void
 }
 
 export const IAcpClientService = createDecorator<IAcpClientService>('acpClientService')
@@ -227,6 +231,10 @@ interface PoolEntry {
   readonly key: string
   readonly agentId: string
   readonly cwd: string
+  /** `remote-ssh` authority; empty string for local. */
+  readonly authority: string
+  /** Resolved remote platform/home for fs/* path checks; undefined for local. */
+  readonly remoteEnv: AcpPathPolicyEnv | undefined
   readonly handle: string
   readonly conn: ClientSideConnection
   readonly initializeResult: Promise<InitializeResponse>
@@ -279,6 +287,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
     @ILifecycleService lifecycleService: ILifecycleService,
   ) {
     super()
@@ -360,6 +369,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     agentId: string,
     options?: {
       cwd?: string
+      authority?: string
       leaseFor?: string
       silent?: boolean
       profile?: ISessionCreateProfileHandle
@@ -369,13 +379,15 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       throw new Error('AcpClientService.connect: notification sink not installed')
     }
     const cwd = options?.cwd ?? ''
-    const key = this._poolKey(agentId, cwd)
+    const authority = options?.authority ?? ''
+    const key = this._poolKey(agentId, cwd, authority)
     let entryPromise = this._pool.get(key)
     if (!entryPromise) {
       entryPromise = this._createEntry(
         agentId,
         key,
         cwd,
+        authority,
         options?.silent ?? false,
         options?.profile,
       )
@@ -427,8 +439,8 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     }
   }
 
-  killConnectionFor(agentId: string, cwd: string | undefined): void {
-    const entryPromise = this._pool.get(this._poolKey(agentId, cwd ?? ''))
+  killConnectionFor(agentId: string, cwd: string | undefined, authority?: string): void {
+    const entryPromise = this._pool.get(this._poolKey(agentId, cwd ?? '', authority ?? ''))
     entryPromise?.then(
       (entry) => this._evictNow(entry),
       () => {
@@ -446,9 +458,11 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     return this._protocolChannel
   }
 
-  private _poolKey(agentId: string, cwd: string): string {
-    if (!cwd) return `${agentId} `
-    return `${agentId} ${this._uriIdentity.getPathComparisonKey(cwd)}`
+  private _poolKey(agentId: string, cwd: string, authority: string): string {
+    if (!authority && !cwd) return `${agentId} `
+    const scope = authority ? `remote:${authority}` : ''
+    if (!cwd) return `${agentId} ${scope}`
+    return `${agentId} ${scope} ${this._uriIdentity.getPathComparisonKey(cwd)}`
   }
 
   /**
@@ -464,6 +478,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
     if (agentId !== 'claude-code') return spec
+    // Remote spawns resolve the binary on the remote host (PATH probe / its own
+    // download) — never pull the local binary or local credentials through.
+    if (spec.authority) return spec
     const source = (this._config.get<string>('acp.claude.source') ??
       'download') as ClaudeBinarySource
     const customPath = this._config.get<string>('acp.claude.executablePath') ?? ''
@@ -537,6 +554,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
     if (agentId !== 'codex') return spec
+    // Remote spawns resolve the binary on the remote host; never leak the local
+    // apiKey config across the tunnel (the remote side uses its own auth).
+    if (spec.authority) return spec
 
     const source = (this._config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource
     const customPath = this._config.get<string>('acp.codex.executablePath') ?? ''
@@ -588,11 +608,14 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     agentId: string,
     key: string,
     cwd: string,
+    authority: string,
     silent: boolean,
     profile?: ISessionCreateProfileHandle,
   ): Promise<PoolEntry> {
     const sink = this._sink!
     let spec = this._registry.resolve(agentId, cwd || undefined)
+    if (authority) spec = { ...spec, authority }
+    const remoteEnv = authority ? await this._resolveRemotePathEnv(authority) : undefined
     let handle: string
     try {
       profile?.step('willResolveBinary')
@@ -662,7 +685,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         sink.onSessionUpdate(params)
       },
       readTextFile: async (params: ReadTextFileRequest): Promise<ReadTextFileResponse> => {
-        const decision = this._pathPolicy.check(cwd, params.path)
+        const decision = this._pathPolicy.check(cwd, params.path, remoteEnv)
         if (!decision.ok) {
           this._reportBlockedPath('read', params.path, decision.reason)
           throw RequestError.invalidParams(
@@ -670,13 +693,15 @@ export class AcpClientService extends Disposable implements IAcpClientService {
             `fs/read_text_file rejected: ${decision.reason}`,
           )
         }
-        const uri = URI.file(decision.normalized)
+        const uri = authority
+          ? URI.from({ scheme: REMOTE_SCHEME, authority, path: decision.normalized })
+          : URI.file(decision.normalized)
         const content = await this._files.readFileText(uri)
         const sliced = sliceLines(content, params.line ?? undefined, params.limit ?? undefined)
         return { content: sliced }
       },
       writeTextFile: async (params: WriteTextFileRequest): Promise<WriteTextFileResponse> => {
-        const decision = this._pathPolicy.check(cwd, params.path)
+        const decision = this._pathPolicy.check(cwd, params.path, remoteEnv)
         if (!decision.ok) {
           this._reportBlockedPath('write', params.path, decision.reason)
           throw RequestError.invalidParams(
@@ -684,14 +709,17 @@ export class AcpClientService extends Disposable implements IAcpClientService {
             `fs/write_text_file rejected: ${decision.reason}`,
           )
         }
-        await this._files.writeFile(URI.file(decision.normalized), params.content)
+        const uri = authority
+          ? URI.from({ scheme: REMOTE_SCHEME, authority, path: decision.normalized })
+          : URI.file(decision.normalized)
+        await this._files.writeFile(uri, params.content)
         return {}
       },
       createTerminal: async (params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
         const { sessionId, ...rest } = params
         let createSpec: Omit<CreateTerminalRequest, 'sessionId'> = rest
         if (params.cwd != null) {
-          const decision = this._pathPolicy.check(cwd, params.cwd)
+          const decision = this._pathPolicy.check(cwd, params.cwd, remoteEnv)
           if (!decision.ok) {
             this._reportBlockedPath('terminal-cwd', params.cwd, decision.reason)
             throw RequestError.invalidParams(
@@ -701,7 +729,10 @@ export class AcpClientService extends Disposable implements IAcpClientService {
           }
           createSpec = { ...rest, cwd: decision.normalized }
         }
-        const created = await this._terminals.create(createSpec)
+        const created = await this._terminals.create({
+          ...createSpec,
+          ...(authority ? { authority } : {}),
+        })
         bucketFor(terminalsBySession, sessionId).add(created.terminalId)
         this._telemetry.publicLog('acp.terminal_created', { command: params.command })
         return created
@@ -746,6 +777,8 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       key,
       agentId,
       cwd,
+      authority,
+      remoteEnv,
       handle,
       conn,
       stderr,
@@ -803,6 +836,20 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       initializeResult
 
     return entry
+  }
+
+  private async _resolveRemotePathEnv(authority: string): Promise<AcpPathPolicyEnv | undefined> {
+    try {
+      const env = await this._remoteStatus.getEnvironment(authority)
+      if (!env) return undefined
+      const platform: HostPlatform =
+        env.os === 'win32' || env.os === 'darwin' || env.os === 'linux' ? env.os : 'linux'
+      return { platform, home: env.homeDir }
+    } catch {
+      // Remote env unavailable — the workspace-root containment check still
+      // applies; only the home-sensitive-prefix guard degrades to the local env.
+      return undefined
+    }
   }
 
   private _createLease(entry: PoolEntry, leaseFor: string | undefined): IAcpClientConnection {

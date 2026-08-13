@@ -139,7 +139,11 @@ export function buildStopCommand(version: string): string {
 
 export function buildDeployRemoteScript(version: string, tmpName: string): string {
   const dir = `${DATA_DIR}/${version}`
-  return `sh -c 'mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && rm /tmp/${tmpName}'`
+  // Vendored ACP agents ship without node_modules (client-platform binaries must
+  // not cross the wire); `npm ci --omit=dev` in each vendor dir resolves the
+  // remote host's own platform packages.
+  const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --no-audit --no-fund); fi; done`
+  return `sh -c 'mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}'`
 }
 
 // ------------------------- daemon info line -------------------------

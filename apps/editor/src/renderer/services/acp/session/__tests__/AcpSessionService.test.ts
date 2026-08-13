@@ -4361,7 +4361,7 @@ describe('AcpSessionService — idle process reaper', () => {
 
     await vi.advanceTimersByTimeAsync(IDLE_MS + 60_000)
     expect(killSpy).toHaveBeenCalledTimes(1)
-    expect(killSpy).toHaveBeenCalledWith('fake', '/w')
+    expect(killSpy).toHaveBeenCalledWith('fake', '/w', undefined)
     svc.dispose()
   })
 

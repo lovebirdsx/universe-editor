@@ -1,5 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/process/cmdSpawn.ts
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Tests for packages/node-services/src/process/cmdSpawn.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'

@@ -11,8 +11,13 @@
  *  ChatGPT).
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { IStorageService, StorageScope } from '@universe-editor/platform'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  IStorageService,
+  IWorkspaceService,
+  REMOTE_SCHEME,
+  StorageScope,
+} from '@universe-editor/platform'
 import {
   ICodexConfigService,
   type CodexAuthStatus,
@@ -21,7 +26,7 @@ import {
   type CodexSettings,
   type CodexSettingsPatch,
 } from '../../../../shared/ipc/codexConfigService.js'
-import { useService } from '../../useService.js'
+import { useService, useOptionalService } from '../../useService.js'
 
 export interface UseCodexConfig {
   readonly settings: CodexSettings
@@ -57,6 +62,13 @@ const CREDENTIAL_DRAFT_KEY = 'agentSettings.codex.credentialDraft'
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
   const storage = useService(IStorageService)
+  const workspace = useOptionalService(IWorkspaceService)
+  // Remote workspace: configure the remote `~/.codex`; local leaves authority
+  // undefined so main routes to the local store.
+  const authority = useMemo(() => {
+    const folder = workspace?.current?.folder
+    return folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
+  }, [workspace])
   const [settings, setSettings] = useState<CodexSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -68,9 +80,9 @@ export function useCodexConfig(): UseCodexConfig {
 
   const loadAll = useCallback(async () => {
     const [next, path, status, library, activeId, draft] = await Promise.all([
-      service.read(),
-      service.configPath(),
-      service.readAuthStatus(),
+      service.read(authority),
+      service.configPath(authority),
+      service.readAuthStatus(authority),
       service.readProfiles(),
       service.matchActiveProfile(),
       storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
@@ -82,23 +94,23 @@ export function useCodexConfig(): UseCodexConfig {
     setActiveProfileId(activeId)
     setCredentialDraft(draft)
     setLoaded(true)
-  }, [service, storage])
+  }, [service, storage, authority])
 
   const reload = useCallback(() => loadAll(), [loadAll])
 
   const reloadAuthStatus = useCallback(async () => {
-    const status = await service.readAuthStatus()
+    const status = await service.readAuthStatus(authority)
     setAuthStatus(status)
     return status
-  }, [service])
+  }, [service, authority])
 
   useEffect(() => {
     let active = true
     void (async () => {
       const [next, path, status, library, activeId, draft] = await Promise.all([
-        service.read(),
-        service.configPath(),
-        service.readAuthStatus(),
+        service.read(authority),
+        service.configPath(authority),
+        service.readAuthStatus(authority),
         service.readProfiles(),
         service.matchActiveProfile(),
         storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
@@ -118,7 +130,7 @@ export function useCodexConfig(): UseCodexConfig {
     const sub = service.onDidChangeAuth(() => {
       void (async () => {
         const [status, activeId] = await Promise.all([
-          service.readAuthStatus(),
+          service.readAuthStatus(authority),
           service.matchActiveProfile(),
         ])
         if (!active) return
@@ -130,14 +142,14 @@ export function useCodexConfig(): UseCodexConfig {
       active = false
       sub.dispose()
     }
-  }, [service, storage])
+  }, [service, storage, authority])
 
   const patch = useCallback(
     async (p: CodexSettingsPatch) => {
-      await service.patch(p)
-      setSettings(await service.read())
+      await service.patch(p, authority)
+      setSettings(await service.read(authority))
     },
-    [service],
+    [service, authority],
   )
 
   const applyProfile = useCallback(
@@ -145,18 +157,24 @@ export function useCodexConfig(): UseCodexConfig {
       // One atomic main-process step keeps auth.json + config.toml consistent.
       const status =
         profile.kind === 'gateway'
-          ? await service.applyCredential({
-              kind: 'gateway',
-              baseUrl: profile.baseUrl ?? '',
-              apiKey: profile.apiKey ?? '',
-              providerName: profile.label,
-            })
-          : await service.applyCredential({ kind: 'apiKey', apiKey: profile.apiKey ?? '' })
-      setSettings(await service.read())
+          ? await service.applyCredential(
+              {
+                kind: 'gateway',
+                baseUrl: profile.baseUrl ?? '',
+                apiKey: profile.apiKey ?? '',
+                providerName: profile.label,
+              },
+              authority,
+            )
+          : await service.applyCredential(
+              { kind: 'apiKey', apiKey: profile.apiKey ?? '' },
+              authority,
+            )
+      setSettings(await service.read(authority))
       setAuthStatus(status)
       setActiveProfileId(await service.matchActiveProfile())
     },
-    [service],
+    [service, authority],
   )
 
   const saveProfile = useCallback(
@@ -211,11 +229,11 @@ export function useCodexConfig(): UseCodexConfig {
 
   const switchToChatgptLogin = useCallback(async () => {
     // Clear the API key + gateway provider so the ChatGPT tokens take over.
-    const status = await service.applyCredential({ kind: 'chatgpt' })
-    setSettings(await service.read())
+    const status = await service.applyCredential({ kind: 'chatgpt' }, authority)
+    setSettings(await service.read(authority))
     setAuthStatus(status)
     setActiveProfileId(await service.matchActiveProfile())
-  }, [service])
+  }, [service, authority])
 
   return {
     settings,

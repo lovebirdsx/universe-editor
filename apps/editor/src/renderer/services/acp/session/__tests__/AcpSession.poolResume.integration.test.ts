@@ -72,6 +72,7 @@ import type { IAcpTerminalService } from '../../../../../shared/ipc/acpTerminalS
 import type { IClaudeBinaryService } from '../../../../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../../../../shared/ipc/codexBinaryService.js'
 import type { IClaudeConfigService } from '../../../../../shared/ipc/claudeConfigService.js'
+import type { IRemoteStatusService } from '../../../../../shared/ipc/remoteStatusService.js'
 import { AcpClientService } from '../../acpClientService.js'
 import { AcpPathPolicy } from '../../acpPathPolicy.js'
 import { AcpSessionService } from '../acpSessionService.js'
@@ -447,6 +448,7 @@ function build(storage: FakeStorage): Built {
     new StubProgressService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    { getEnvironment: () => Promise.resolve(null) } as unknown as IRemoteStatusService,
     new LifecycleService(),
   )
   const history = new AcpSessionHistoryService(

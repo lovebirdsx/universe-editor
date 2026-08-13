@@ -91,6 +91,30 @@ function stageBuiltinExtensions(out) {
   }
 }
 
+/**
+ * Copy each vendored ACP agent's `dist` + manifests into `<out>/vendor/<name>/`.
+ * node_modules are NOT shipped: they weigh hundreds of MB and carry the build
+ * machine's native binaries — the deploy script runs `npm ci --omit=dev` in each
+ * vendor dir so npm resolves platform binaries for the remote host instead.
+ * Dev/e2e (non-deploy) builds skip staging entirely: `vendorAgentEntry.ts` falls
+ * back to the repo's own vendor tree.
+ */
+function stageVendorAgents(out) {
+  for (const name of ['claude-agent-acp', 'codex-acp']) {
+    const source = join(repoRoot, 'vendor', name)
+    const dest = join(out, 'vendor', name)
+    for (const sub of ['dist', 'package.json', 'package-lock.json']) {
+      const src = join(source, sub)
+      if (!existsSync(src)) {
+        throw new Error(`vendored agent ${name} is missing ${sub} (run pnpm agent:build)`)
+      }
+      const target = join(dest, sub)
+      mkdirSync(dirname(target), { recursive: true })
+      cpSync(src, target, { recursive: statSync(src).isDirectory(), force: true })
+    }
+  }
+}
+
 const buildOptions = {
   entryPoints: entries,
   outdir: outDir,
@@ -142,6 +166,9 @@ if (watch) {
   console.log(`[remote-server] watching → ${outDir}`)
 } else {
   await build(buildOptions)
-  if (deploy) stageBuiltinExtensions(outDir)
+  if (deploy) {
+    stageVendorAgents(outDir)
+    stageBuiltinExtensions(outDir)
+  }
   console.log(`remote-server bundled → ${outDir}`)
 }

@@ -31,6 +31,7 @@ import {
   IUriIdentityService,
   IWindowsService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   Severity,
   StorageScope,
   localize,
@@ -166,6 +167,12 @@ export interface IAcpCreateSessionOptions {
    * runs in the directory the link named, not merely the window's workspace.
    */
   readonly cwd?: string
+  /**
+   * The `remote-ssh` authority the session runs on. Defaults to the current
+   * workspace folder's authority (undefined for a local workspace). The agent
+   * deep link passes this alongside its resolved `cwd` for remote links.
+   */
+  readonly authority?: string
   /**
    * Title override (defaults to `agentName HH:MM`). Used by the empty-session
    * MCP reload so the replacement session keeps the old title seamlessly; a
@@ -523,7 +530,8 @@ export class AcpSessionService
         {
           resumeSession: (sessionId) => this.resumeSession(sessionId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
-          getCurrentCwd: () => this._workspace.current?.folder.fsPath,
+          getCurrentCwd: () => this._currentCwd(),
+          getCurrentAuthority: () => this._currentAuthority(),
           whenWorkspaceReady: () => this._workspace.whenReady,
           getLiveSessionIds: () => this._sessionStore.liveIds(),
           getHistoryScope: () => this._historyScope(),
@@ -590,6 +598,16 @@ export class AcpSessionService
     this._register(this._mcpEnablement.onDidChange(() => void this.refreshMcpServerDefinitions()))
   }
 
+  private _currentCwd(): string | undefined {
+    return this._workspace.current?.folder.fsPath
+  }
+
+  private _currentAuthority(): string | undefined {
+    const folder = this._workspace.current?.folder
+    if (!folder || folder.scheme !== REMOTE_SCHEME) return undefined
+    return folder.authority || undefined
+  }
+
   private _historyScope(): SessionHistoryScope {
     const raw = this._config.get<string>(HISTORY_SCOPE_KEY)
     return raw === 'worktree' || raw === 'all' || raw === 'workspace' ? raw : 'worktree'
@@ -648,7 +666,8 @@ export class AcpSessionService
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
       (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
-    const cwd = options?.cwd ?? this._workspace.current?.folder.fsPath
+    const cwd = options?.cwd ?? this._currentCwd()
+    const authority = options?.authority ?? this._currentAuthority()
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
@@ -701,7 +720,7 @@ export class AcpSessionService
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
-    void this._connectSession(session, resolvedAgentId, cwd, profile, options)
+    void this._connectSession(session, resolvedAgentId, cwd, authority, profile, options)
     return session
   }
 
@@ -719,6 +738,7 @@ export class AcpSessionService
     session: AcpSession,
     resolvedAgentId: string,
     cwd: string | undefined,
+    authority: string | undefined,
     profile: ISessionCreateProfileHandle,
     options?: IAcpCreateSessionOptions,
   ): Promise<void> {
@@ -738,6 +758,7 @@ export class AcpSessionService
       profile.step('willConnect')
       conn = await this._client.connect(resolvedAgentId, {
         ...(cwd !== undefined ? { cwd } : {}),
+        ...(authority !== undefined ? { authority } : {}),
         profile,
       })
       profile.step('didConnect')
@@ -780,6 +801,7 @@ export class AcpSessionService
         sessionIdOnAgent: result.sessionId,
         title: session.title,
         ...(cwd !== undefined ? { cwd } : {}),
+        ...(authority !== undefined ? { authority } : {}),
         hasMessages: false,
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
         ...(options?.aiFix === true ? { aiFix: true } : {}),
@@ -933,15 +955,17 @@ export class AcpSessionService
     // undefined (legacy/global) is treated as "belongs here" to stay compatible.
     // Skipped for read-only previews: a `session/load` replay has no side effects
     // on the foreign worktree, so viewing its history across the boundary is safe.
-    const currentCwd = this._workspace.current?.folder.fsPath
+    const currentCwd = this._currentCwd()
+    const currentAuthority = this._currentAuthority()
     if (
       !readOnly &&
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
-      !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+      (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
+        entry.authority !== currentAuthority)
     ) {
       this._logger.info(
-        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} current=${currentCwd}`,
+        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} authority=${entry.authority ?? 'local'} current=${currentCwd} authority=${currentAuthority ?? 'local'}`,
       )
       throw new AcpForeignWorktreeError(sessionId, entry.cwd, currentCwd)
     }
@@ -950,6 +974,7 @@ export class AcpSessionService
     try {
       conn = await this._client.connect(entry.agentId, {
         ...(cwd !== undefined ? { cwd } : {}),
+        ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
         leaseFor: entry.sessionIdOnAgent,
       })
     } catch (err) {
@@ -1137,7 +1162,8 @@ export class AcpSessionService
       // sessions sharing the pooled process crash out and recover on their own
       // `onDidLoseConnection`.
       if (event.reason === 'stalled') {
-        this._client.killConnectionFor(session.agentId, this._history.get(sid)?.cwd)
+        const stalledEntry = this._history.get(sid)
+        this._client.killConnectionFor(session.agentId, stalledEntry?.cwd, stalledEntry?.authority)
       }
       const timeoutMs =
         this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
@@ -1153,9 +1179,11 @@ export class AcpSessionService
         })
         try {
           const entry = this._history.get(sid)
-          const cwd = entry?.cwd ?? this._workspace.current?.folder.fsPath
+          const cwd = entry?.cwd ?? this._currentCwd()
+          const authority = entry?.authority ?? this._currentAuthority()
           const conn = await this._client.connect(session.agentId, {
             ...(cwd !== undefined ? { cwd } : {}),
+            ...(authority !== undefined ? { authority } : {}),
             leaseFor: sid,
             silent: true,
           })
@@ -1333,19 +1361,24 @@ export class AcpSessionService
     if (idleMs <= 0) return
     const now = Date.now()
     const poisonedAgents = new Set<string>()
-    const groups = new Map<string, { agentId: string; cwd: string; sessions: AcpSession[] }>()
+    const groups = new Map<
+      string,
+      { agentId: string; cwd: string; authority: string | undefined; sessions: AcpSession[] }
+    >()
     for (const session of this._sessionStore.sessions.get()) {
       if (!(session instanceof AcpSession)) continue
       const sid = session.sessionIdOnAgent.get()
-      const cwd = sid === undefined ? undefined : this._history.get(sid)?.cwd
+      const entry = sid === undefined ? undefined : this._history.get(sid)
+      const cwd = entry?.cwd
       if (cwd === undefined) {
         poisonedAgents.add(session.agentId)
         continue
       }
-      const key = `${session.agentId} ${cwd}`
+      const authority = entry?.authority
+      const key = `${session.agentId}\0${authority ?? ''}\0${cwd}`
       let group = groups.get(key)
       if (!group) {
-        group = { agentId: session.agentId, cwd, sessions: [] }
+        group = { agentId: session.agentId, cwd, authority, sessions: [] }
         groups.set(key, group)
       }
       group.sessions.push(session)
@@ -1364,13 +1397,13 @@ export class AcpSessionService
         Math.max(...group.sessions.map((session) => now - session.lastActivityAt)) / 1000,
       )
       this._logger.info(
-        `all ${group.sessions.length} session(s) of ${group.agentId} (cwd ${group.cwd}) idle for ${silentSeconds}s — stopping the agent process; it re-handshakes on the next prompt`,
+        `all ${group.sessions.length} session(s) of ${group.agentId} (cwd ${group.cwd}${group.authority ? ` authority ${group.authority}` : ''}) idle for ${silentSeconds}s — stopping the agent process; it re-handshakes on the next prompt`,
       )
       this._telemetry.publicLog('acp.idle_process_reclaimed', {
         agentId: group.agentId,
         sessions: group.sessions.length,
       })
-      this._client.killConnectionFor(group.agentId, group.cwd)
+      this._client.killConnectionFor(group.agentId, group.cwd, group.authority)
     }
   }
 
@@ -1479,11 +1512,13 @@ export class AcpSessionService
     // hydrate cache the owning worktree reconciles back.
     const entry = this._history.get(sessionId)
     if (!entry) return false
-    const currentCwd = this._workspace.current?.folder.fsPath
+    const currentCwd = this._currentCwd()
+    const currentAuthority = this._currentAuthority()
     if (
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
-      !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+      (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
+        entry.authority !== currentAuthority)
     ) {
       return false
     }
@@ -1533,6 +1568,7 @@ export class AcpSessionService
       sessionIdOnAgent: newSessionId,
       title: forkTitle,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
       hasMessages: true,
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
       ...(Object.keys(forkConfig.values).length > 0
@@ -1593,6 +1629,7 @@ export class AcpSessionService
       sessionIdOnAgent: newSessionId,
       title: quote.label,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
       hasMessages: false,
       sideTaskOf: sourceAgentSessionId,
       sideTaskQuote: quote.text,
@@ -1647,11 +1684,12 @@ export class AcpSessionService
     // cross-worktree fork for the same reason resume does — it would run the
     // agent against a directory this window isn't rooted in.
     const cwd = entry.cwd
-    const currentCwd = this._workspace.current?.folder.fsPath
+    const currentCwd = this._currentCwd()
+    const currentAuthority = this._currentAuthority()
     if (
       cwd !== undefined &&
       currentCwd !== undefined &&
-      !this._uriIdentity.arePathsEqual(cwd, currentCwd)
+      (!this._uriIdentity.arePathsEqual(cwd, currentCwd) || entry.authority !== currentAuthority)
     ) {
       throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
     }
@@ -1659,6 +1697,7 @@ export class AcpSessionService
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const conn = await this._client.connect(entry.agentId, {
       ...(cwd !== undefined ? { cwd } : {}),
+      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
     })
     try {
       const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')

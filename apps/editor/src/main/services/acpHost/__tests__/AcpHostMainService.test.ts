@@ -7,8 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import {
   DisposableTracker,
+  Emitter,
+  Event,
   markAsSingleton,
   NullLogger,
+  ProxyChannel,
+  RemoteChannels,
   setDisposableTracker,
 } from '@universe-editor/platform'
 import {
@@ -16,7 +20,17 @@ import {
   type AcpCommandLookup,
   type AcpSpawner,
 } from '../acpHostMainService.js'
-import type { AcpExitEvent, AcpStdioChunk } from '../../../../shared/ipc/acpHostService.js'
+import type {
+  AcpExitEvent,
+  AcpLaunchSpec,
+  AcpStdioChunk,
+  IAcpHostService,
+} from '../../../../shared/ipc/acpHostService.js'
+import type {
+  IRemoteConnection,
+  IRemoteConnectionService,
+} from '../../remote/remoteConnectionMainService.js'
+import type { IRemoteEnvironment } from '@universe-editor/platform'
 
 // The service imports `app` from electron for the default runAsNode entry
 // resolver; stub it so the module loads in the node test env. The runAsNode
@@ -451,5 +465,125 @@ describe('AcpHostMainService — probe', () => {
     }) as AcpCommandLookup
     svc = new AcpHostMainService(undefined, lookup)
     await expect(svc.probe('weird')).resolves.toBe(false)
+  })
+})
+
+// -- remote routing -------------------------------------------------------
+
+const REMOTE_ENV: IRemoteEnvironment = {
+  protocolVersion: 2,
+  serverVersion: '0.0.0',
+  os: 'linux',
+  arch: 'x64',
+  nodeVersion: '20.0.0',
+  pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
+}
+
+class FakeRemoteHost implements IAcpHostService {
+  declare readonly _serviceBrand: undefined
+  private readonly _onStdout = new Emitter<AcpStdioChunk>()
+  private readonly _onStderr = new Emitter<AcpStdioChunk>()
+  private readonly _onExit = new Emitter<AcpExitEvent>()
+  readonly onStdout = this._onStdout.event
+  readonly onStderr = this._onStderr.event
+  readonly onExit = this._onExit.event
+  readonly starts: AcpLaunchSpec[] = []
+  readonly stops: string[] = []
+  readonly written: { handle: string; data: string }[] = []
+  start(spec: AcpLaunchSpec): Promise<{ handle: string }> {
+    this.starts.push(spec)
+    return Promise.resolve({ handle: 'remote-handle' })
+  }
+  writeStdin(handle: string, data: string): Promise<void> {
+    this.written.push({ handle, data })
+    return Promise.resolve()
+  }
+  stop(handle: string): Promise<void> {
+    this.stops.push(handle)
+    return Promise.resolve()
+  }
+  probe(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+  fireStdout(chunk: AcpStdioChunk): void {
+    this._onStdout.fire(chunk)
+  }
+  fireExit(evt: AcpExitEvent): void {
+    this._onExit.fire(evt)
+  }
+}
+
+describe('AcpHostMainService — remote routing', () => {
+  let svc: AcpHostMainService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  function makeRemoteService(): { svc: AcpHostMainService; remote: FakeRemoteHost } {
+    const remote = new FakeRemoteHost()
+    const conn: IRemoteConnection = {
+      authority: 'host',
+      env: REMOTE_ENV,
+      getChannel: (name) => {
+        expect(name).toBe(RemoteChannels.AcpHost)
+        return ProxyChannel.fromService(remote)
+      },
+      onDidClose: new Emitter<void>().event,
+    }
+    const connService: IRemoteConnectionService = {
+      _serviceBrand: undefined,
+      getConnection: async () => conn,
+      openExtensionHostConnection: async () => {
+        throw new Error('not used')
+      },
+      onDidChangeState: Event.None,
+      retryConnection: () => undefined,
+      stopServer: async () => undefined,
+      closeConnection: async () => undefined,
+      dropSocketForTesting: () => undefined,
+      dropExtensionHostSocketForTesting: () => undefined,
+      dispose: () => undefined,
+    }
+    svc = new AcpHostMainService(undefined, undefined, undefined, undefined, connService)
+    return { svc, remote }
+  }
+
+  it('routes start to the server channel and strips authority from the launch spec', async () => {
+    const { svc, remote } = makeRemoteService()
+    const stdoutChunks: AcpStdioChunk[] = []
+    svc.onStdout((c) => stdoutChunks.push(c))
+
+    const { handle } = await svc.start({ command: 'agent', args: ['--flag'], authority: 'host' })
+    expect(handle).toBe('remote-handle')
+    expect(remote.starts).toHaveLength(1)
+    // The server spawns on its own host: authority is consumed by the routing
+    // layer and never crosses the channel.
+    expect(remote.starts[0]).toEqual({ command: 'agent', args: ['--flag'] })
+
+    // stdio bytes flow back from the remote host through the main emitters.
+    remote.fireStdout({ handle, data: 'from-remote\n' })
+    expect(stdoutChunks).toEqual([{ handle, data: 'from-remote\n' }])
+  })
+
+  it('routes writeStdin / stop by handle to the server channel', async () => {
+    const { svc, remote } = makeRemoteService()
+    const { handle } = await svc.start({ command: 'agent', args: [], authority: 'host' })
+
+    await svc.writeStdin(handle, 'hello\n')
+    expect(remote.written).toEqual([{ handle, data: 'hello\n' }])
+
+    await svc.stop(handle)
+    expect(remote.stops).toEqual([handle])
+  })
+
+  it('rejects a remote launch when the connection service is unavailable', async () => {
+    // No connection service injected → the local core only.
+    svc = new AcpHostMainService(undefined)
+    await expect(svc.start({ command: 'agent', args: [], authority: 'host' })).rejects.toThrow(
+      /remote connection service not available/,
+    )
   })
 })
