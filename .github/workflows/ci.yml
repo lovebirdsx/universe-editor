@@ -105,8 +105,8 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-
 
-      - name: Build (platform + workbench-ui dist required for integration imports)
-        run: pnpm build --filter=@universe-editor/platform... --filter=@universe-editor/workbench-ui...
+      - name: Build (platform + workbench-ui + node-services dist required for integration imports)
+        run: pnpm build --filter=@universe-editor/platform... --filter=@universe-editor/workbench-ui... --filter=@universe-editor/node-services...
 
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
@@ -667,8 +667,8 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-
 
-      - name: Build (platform dist required by bench imports)
-        run: pnpm build --filter=@universe-editor/platform...
+      - name: Build (platform + node-services dist required by bench imports)
+        run: pnpm build --filter=@universe-editor/platform... --filter=@universe-editor/node-services...
 
       - name: Run benchmarks
         run: pnpm --filter @universe-editor/editor bench
