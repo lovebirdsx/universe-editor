@@ -23,7 +23,7 @@ interface ITreeViewModel {
   roots: readonly ITreeItemDto[] | null
   readonly children: Map<number, readonly ITreeItemDto[]>
   generation: number
-  readonly inflight: Map<number, Promise<void>>
+  readonly inflight: Map<number, { generation: number; promise: Promise<void> }>
   lastVisible: boolean | undefined
 }
 
@@ -49,6 +49,14 @@ export interface ITreeViewsService {
   setSelection(viewId: string, handles: number[]): void
   /** Push one element's expansion state to the host. */
   setExpansionState(viewId: string, handle: number, expanded: boolean): void
+  /**
+   * Execute a tree command host-side against the element behind `handle`:
+   * a click omits `commandId` (runs the element's `TreeItem.command` with its
+   * original arguments), a `view/item/context` menu pick passes it (runs with
+   * the element as argument). Extension handlers must receive live objects,
+   * never wire-flattened DTOs.
+   */
+  executeTreeItemCommand(viewId: string, handle: number, commandId?: string): void
   /** Drop every view model (extension host torn down). */
   reset(): void
 }
@@ -63,6 +71,10 @@ export class TreeViewsService
 
   private readonly _views = new Map<string, ITreeViewModel>()
   private _extHost: IExtHostTreeViews | undefined
+  // Latest visibility each view reported, kept apart from the model: models
+  // are rebuilt on $registerTreeDataProvider and dropped on reset(), but the
+  // mounted view component never re-pushes on its own — replay from here.
+  private readonly _reportedVisibility = new Map<string, boolean>()
 
   private readonly _onDidChangeView = this._register(new Emitter<string>())
   readonly onDidChangeView: Event<string> = this._onDidChangeView.event
@@ -87,8 +99,11 @@ export class TreeViewsService
     const model = this._views.get(viewId)
     if (!model || !this._extHost) return
     const key = parentHandle ?? -1
+    // A pull started before a $refresh still sits in inflight but belongs to a
+    // dead generation: it is discarded on settle, so it must not dedupe a
+    // retry — otherwise nothing ever pulls again and the tree stays blank.
     const pending = model.inflight.get(key)
-    if (pending) return pending
+    if (pending && pending.generation === model.generation) return pending.promise
     const generation = model.generation
     // Omit the optional arg entirely for a roots pull: an explicit `undefined`
     // crosses the JSON wire as `null`, which the host must not mistake for a
@@ -111,13 +126,14 @@ export class TreeViewsService
         )
       })
       .finally(() => {
-        model.inflight.delete(key)
+        if (model.inflight.get(key)?.promise === pull) model.inflight.delete(key)
       })
-    model.inflight.set(key, pull)
+    model.inflight.set(key, { generation, promise: pull })
     return pull
   }
 
   setViewVisibility(viewId: string, visible: boolean): void {
+    this._reportedVisibility.set(viewId, visible)
     const model = this._views.get(viewId)
     if (!model || !this._extHost) return
     if (model.lastVisible === visible) return
@@ -135,6 +151,24 @@ export class TreeViewsService
     void this._extHost.$acceptExpansionState(viewId, handle, expanded)
   }
 
+  executeTreeItemCommand(viewId: string, handle: number, commandId?: string): void {
+    if (!this._views.has(viewId) || !this._extHost) return
+    // Omit the commandId entirely for a row click: an explicit `undefined`
+    // crosses the JSON wire as `null` (same pitfall as the $getChildren
+    // parentHandle), which the host reads as "menu pick with a null id".
+    const execution =
+      commandId === undefined
+        ? this._extHost.$executeTreeItemCommand(viewId, handle)
+        : this._extHost.$executeTreeItemCommand(viewId, handle, commandId)
+    void execution.catch((err: unknown) => {
+      console.warn(
+        `[treeViews] $executeTreeItemCommand(${viewId}, ${handle}${
+          commandId !== undefined ? `, ${commandId}` : ''
+        }) failed: ${(err as Error).message}`,
+      )
+    })
+  }
+
   reset(): void {
     this._views.clear()
     this._extHost = undefined
@@ -144,13 +178,21 @@ export class TreeViewsService
 
   $registerTreeDataProvider(viewId: string): Promise<void> {
     console.debug(`[treeViews] provider registered: ${viewId}`)
-    this._views.set(viewId, {
+    const model: ITreeViewModel = {
       roots: null,
       children: new Map(),
       generation: 0,
       inflight: new Map(),
       lastVisible: undefined,
-    })
+    }
+    this._views.set(viewId, model)
+    // Host restart / provider re-registration swaps the model behind a mounted
+    // view's back; replay what that view last reported and seed the dedupe.
+    const reported = this._reportedVisibility.get(viewId)
+    if (reported !== undefined && this._extHost) {
+      model.lastVisible = reported
+      void this._extHost.$acceptTreeViewVisibility(viewId, reported)
+    }
     this._onDidChangeView.fire(viewId)
     return Promise.resolve()
   }

@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
-import { platform } from 'node:process'
 import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 import { WatcherProcessClient } from '../watcherProcessClient.js'
@@ -235,9 +234,7 @@ describe('FileWatcherMainService', () => {
     WATCHER_TEST_TIMEOUT,
   )
 
-  // fs.watch recursive exists only on win32/darwin; on linux the folder watch
-  // falls back to the directory entry itself, so nested files stay invisible.
-  it.skipIf(platform === 'linux')(
+  it(
     'emits events for files nested under an out-of-workspace folder watch',
     async () => {
       const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
@@ -303,6 +300,183 @@ describe('FileWatcherMainService', () => {
         // Placeholder on the parent until the folder appears.
         expect(svc._extraFolderWatcherCount).toBe(1)
         await fs.mkdir(missing, { recursive: true })
+        const file = join(missing, 'created-later.log')
+        const c = startCollecting(svc)
+        await vi.waitFor(async () => {
+          await fs.writeFile(file, String(Date.now()))
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched).toBeDefined()
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'classifies a created entry under an out-of-workspace folder watch as added',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      try {
+        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        // mkdir emits a bare rename event — no content write follows to
+        // coalesce 'added' into 'modified' within the debounce window.
+        const created = join(outRoot, 'new-dir')
+        const c = startCollecting(svc)
+        await fs.mkdir(created)
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(created))
+          expect(matched?.type).toBe('added')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'classifies a removed file under an out-of-workspace folder watch as deleted',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const file = join(outRoot, 'doomed.txt')
+      await fs.writeFile(file, 'x')
+      try {
+        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        const c = startCollecting(svc)
+        await fs.rm(file)
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched?.type).toBe('deleted')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'keeps in-place changes under an out-of-workspace folder watch as modified',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const file = join(outRoot, 'stable.txt')
+      await fs.writeFile(file, 'v1')
+      try {
+        await svc.watchOutOfWorkspaceFolders([URI.file(outRoot)])
+        const c = startCollecting(svc)
+        await fs.writeFile(file, 'v2')
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched?.type).toBe('modified')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'emits a deleted event when an out-of-workspace watched file is removed',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const file = join(outRoot, 'external.txt')
+      await fs.writeFile(file, 'initial')
+      try {
+        await svc.watchOutOfWorkspace([URI.file(file)])
+        const c = startCollecting(svc)
+        await fs.rm(file)
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched?.type).toBe('deleted')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'emits an added event when an out-of-workspace watched file appears after arming',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const staging = await fs.mkdtemp(join(tmpdir(), 'universe-editor-stage-'))
+      const file = join(outRoot, 'later.txt')
+      try {
+        // A rename-in delivers a bare rename event — unlike writeFile it is
+        // not followed by a change event that would coalesce 'added' into
+        // 'modified' within the debounce window.
+        await fs.writeFile(join(staging, 'staged.txt'), 'x')
+        await svc.watchOutOfWorkspace([URI.file(file)])
+        const c = startCollecting(svc)
+        await fs.rename(join(staging, 'staged.txt'), file)
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched?.type).toBe('added')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+        await fs.rm(staging, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'keeps an atomic-save (rename over) of an out-of-workspace watched file as modified',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const file = join(outRoot, 'external.txt')
+      const temp = join(outRoot, 'external.txt.tmp')
+      await fs.writeFile(file, 'initial')
+      try {
+        await svc.watchOutOfWorkspace([URI.file(file)])
+        const c = startCollecting(svc)
+        await fs.writeFile(temp, 'saved')
+        await fs.rename(temp, file)
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.filter((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched.length).toBeGreaterThan(0)
+          for (const e of matched) expect(e.type).toBe('modified')
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'keeps the parent placeholder through unrelated churn until the watched folder appears',
+    async () => {
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outdir-'))
+      const missing = join(outRoot, 'not-yet')
+      try {
+        await svc.watchOutOfWorkspaceFolders([URI.file(missing)])
+        expect(svc._extraFolderWatcherCount).toBe(1)
+        await fs.writeFile(join(outRoot, 'noise.txt'), 'n')
+        // Give the parent watcher a window to deliver the unrelated event: it
+        // must not retire the placeholder.
+        await new Promise((r) => setTimeout(r, 300))
+        expect(svc._extraFolderWatcherCount).toBe(1)
+        await fs.mkdir(missing)
         const file = join(missing, 'created-later.log')
         const c = startCollecting(svc)
         await vi.waitFor(async () => {

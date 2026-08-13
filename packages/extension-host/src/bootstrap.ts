@@ -331,6 +331,9 @@ const extHostTreeViews: IExtHostTreeViews = {
   $acceptExpansionState: async (viewId, handle, expanded) => {
     ;(await serviceReady).acceptTreeViewExpansionState(viewId, handle, expanded)
   },
+  $executeTreeItemCommand: async (viewId, handle, commandId) => {
+    ;(await serviceReady).executeTreeItemCommand(viewId, handle, commandId)
+  },
 }
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))

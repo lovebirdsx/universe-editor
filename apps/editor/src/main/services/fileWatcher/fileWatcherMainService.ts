@@ -157,8 +157,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   // (setExcludes / workspace swap) don't pollute the startup timeline.
   private _didMarkFirstWatch = false
 
-  // Extra (out-of-workspace) file watches: dirPath → { watcher, files }
-  private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Set<string> }>()
+  // Extra (out-of-workspace) file watches: dirPath → { watcher, files }.
+  // files maps each watched path to its last observed existence so the
+  // dir-level callback can classify added/deleted rather than flattening
+  // every event to 'modified'.
+  private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Map<string, boolean> }>()
 
   // Extra (out-of-workspace) folder watches, recursive: folderPath → watcher
   private _extraFolderWatchers = new Map<string, FSWatcher>()
@@ -235,17 +238,25 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
 
     // Update file sets and add watchers for new dirs.
-    for (const [dir, files] of newDirMap) {
+    for (const [dir, fileSet] of newDirMap) {
       const existing = this._extraDirWatchers.get(dir)
       if (existing) {
-        existing.files = files
+        const merged = new Map<string, boolean>()
+        for (const f of fileSet) merged.set(f, existing.files.get(f) ?? existsSync(f))
+        existing.files = merged
       } else {
         try {
           const w = fsWatch(dir, { recursive: false, persistent: false }, () => {
             const entry = this._extraDirWatchers.get(dir)
             if (!entry) return
-            for (const filePath of entry.files) {
-              this._enqueue(filePath, 'modified')
+            for (const [filePath, knownExists] of entry.files) {
+              const exists = existsSync(filePath)
+              entry.files.set(filePath, exists)
+              // Existence-transition classification: an atomic save replaces
+              // the file but it still exists when sampled, staying 'modified'.
+              if (exists && knownExists) this._enqueue(filePath, 'modified')
+              else if (exists) this._enqueue(filePath, 'added')
+              else if (knownExists) this._enqueue(filePath, 'deleted')
             }
           })
           w.on('error', (err) => {
@@ -255,7 +266,9 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
             )
             this._extraDirWatchers.delete(dir)
           })
-          this._extraDirWatchers.set(dir, { watcher: w, files })
+          const initial = new Map<string, boolean>()
+          for (const f of fileSet) initial.set(f, existsSync(f))
+          this._extraDirWatchers.set(dir, { watcher: w, files: initial })
           this._logger.info(`watch extra ${dir}`)
         } catch (err) {
           this._logger.warn(
@@ -316,16 +329,17 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   private _watchExtraFolder(dir: string): void {
     if (this._extraFolderWatchers.has(dir)) return
-    // fs.watch recursive is supported on win32/darwin (both recurse with OS
-    // support). Linux inotify has no recursive fs.watch — the fallback watch
-    // sees only the directory entry itself, not its children, so
-    // out-of-workspace folders stay effectively unwatched there (documented
-    // limitation; in-workspace watching is unaffected).
-    const recursive = platform === 'win32' || platform === 'darwin'
+    // Recursive fs.watch works on every platform this app runs: win32/darwin
+    // via native OS support, linux via Node's recursive inotify watches
+    // (Node 19.1+; Electron 43 ships a Node well past that).
     try {
-      const w = fsWatch(dir, { recursive, persistent: false }, (_event, filename) => {
+      const w = fsWatch(dir, { recursive: true, persistent: false }, (event, filename) => {
         if (!filename) return
-        this._enqueue(join(dir, filename), 'modified')
+        const absPath = join(dir, filename)
+        // 'rename' fires for both creation and removal — disambiguate by
+        // whether the path exists now.
+        if (event === 'change') this._enqueue(absPath, 'modified')
+        else this._enqueue(absPath, existsSync(absPath) ? 'added' : 'deleted')
       })
       w.on('error', (err) => {
         this._logger.warn(
@@ -336,7 +350,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
         this._watchExtraFolderPlaceholder(dir)
       })
       this._extraFolderWatchers.set(dir, w)
-      this._logger.info(`watch extra folder ${dir} recursive=${recursive}`)
+      this._logger.info(`watch extra folder ${dir}`)
     } catch (err) {
       this._logger.warn(
         `watch extra folder failed ${dir}`,
@@ -357,13 +371,16 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     try {
       const w = fsWatch(parent, { persistent: false }, () => {
         if (this._extraFolderWatchers.get(dir) !== w) return
+        // Unrelated churn in the parent must not retire the placeholder —
+        // only swap to the real recursive watch once the target appears.
+        if (!existsSync(dir)) return
         this._extraFolderWatchers.delete(dir)
         try {
           w.close()
         } catch {
           // ignore
         }
-        if (existsSync(dir)) this._watchExtraFolder(dir)
+        this._watchExtraFolder(dir)
       })
       w.on('error', () => {
         if (this._extraFolderWatchers.get(dir) === w) this._extraFolderWatchers.delete(dir)

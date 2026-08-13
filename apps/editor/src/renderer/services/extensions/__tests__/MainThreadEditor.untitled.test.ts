@@ -21,6 +21,7 @@ import {
 import { MainThreadEditor } from '../MainThreadEditor.js'
 import { DocumentMirrorTracking } from '../DocumentMirrorTracking.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { allocateUntitledName } from '../../editor/UntitledEditorInput.js'
 
 const logger = { warn: vi.fn(), info: vi.fn() } as unknown as ILogger
 
@@ -88,6 +89,15 @@ describe('MainThreadEditor untitled documents', () => {
     expect(tracked).toEqual(['untitled:/Untitled-7'])
     const model = MonacoModelRegistry.peek(URI.parse('untitled:/Untitled-7'))
     expect(model?.getValue()).toBe('')
+  })
+
+  it('$openTextDocument with an untitled URI registers the name so user allocations skip it', async () => {
+    const mt = makeEditor()
+    const uri: UriComponents = { scheme: 'untitled', path: '/Untitled-99' } as UriComponents
+    await mt.$openTextDocument(uri)
+    // A later "File: New Untitled File" must not hand out the same name — that
+    // would adopt the extension document's model as its own buffer.
+    expect(allocateUntitledName()).toBe('Untitled-100')
   })
 
   it('warns when the mirror pipeline is unavailable', async () => {

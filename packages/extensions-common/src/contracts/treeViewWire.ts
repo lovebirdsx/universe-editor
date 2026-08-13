@@ -29,8 +29,11 @@ export interface ITreeItemDto {
   iconId?: string
   resourceUri?: UriComponents
   /**
-   * Command executed when the row is clicked. `arguments` must be
-   * JSON-cloneable — unlike VSCode they cannot carry live objects.
+   * Command executed when the row is clicked. Only its display surface rides
+   * the wire (id + title + tooltip + disabled) — execution resolves back to
+   * the provider's original `TreeItem.command` on the host through
+   * `$executeTreeItemCommand`, so `arguments` are deliberately NOT serialized
+   * here (live objects like Uri must never flatten to JSON).
    */
   command?: ICommandDto
 }
@@ -61,4 +64,20 @@ export interface IExtHostTreeViews {
   $acceptTreeViewVisibility(viewId: string, visible: boolean): Promise<void>
   $acceptSelection(viewId: string, handles: number[]): Promise<void>
   $acceptExpansionState(viewId: string, handle: number, expanded: boolean): Promise<void>
+  /**
+   * Run a command in the host so the extension handler receives the original
+   * values instead of wire-flattened copies. Two entry points share this call:
+   *
+   * - `commandId` present (a `view/item/context` menu pick): run it with the
+   *   tree element as single argument — the vscode contract.
+   * - `commandId` omitted (row click): run the element's `TreeItem.command`;
+   *   when that command declares no `arguments`, the element is passed
+   *   instead. Keeps live objects (Uri instances, custom payloads) intact by
+   *   never serializing them onto the wire.
+   *
+   * The caller omits the optional argument entirely when clicking: the wire
+   * turns `undefined` into `null`, so the host treats `null`/`undefined`
+   * alike. A stale handle (from before a `$refresh`) is a silent no-op.
+   */
+  $executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void>
 }

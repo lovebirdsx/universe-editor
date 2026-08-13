@@ -237,6 +237,14 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       canSelectFolders: false,
       ...(options.defaultUri !== undefined ? { defaultUri: URI.file(options.defaultUri) } : {}),
       ...(options.saveLabel !== undefined ? { openLabel: options.saveLabel } : {}),
+      ...(options.filters !== undefined
+        ? {
+            filters: Object.entries(options.filters).map(([name, extensions]) => ({
+              name,
+              extensions,
+            })),
+          }
+        : {}),
     })
     return picked?.fsPath
   }

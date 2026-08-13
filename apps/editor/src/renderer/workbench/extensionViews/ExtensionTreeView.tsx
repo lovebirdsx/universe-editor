@@ -28,7 +28,6 @@ import {
   localize,
   MenuId,
   MenuRegistry,
-  URI,
   type IScopedContextKeyService,
 } from '@universe-editor/platform'
 import { viewActivationEvent, type ITreeItemDto } from '@universe-editor/extensions-common'
@@ -47,16 +46,6 @@ import { ITreeViewsService } from '../../services/extensions/TreeViewsService.js
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import type { IViewComponentProps } from '../../services/views/ViewComponentRegistry.js'
 import styles from './ExtensionTreeView.module.css'
-
-/** `arguments` ride the wire as JSON, so resource args arrive as UriComponents. */
-function reviveCommandArgs(args: readonly unknown[] | undefined): unknown[] {
-  return (args ?? []).map((arg) => {
-    if (arg !== null && typeof arg === 'object' && 'scheme' in arg && 'path' in arg) {
-      return URI.revive(arg as Parameters<typeof URI.revive>[0])
-    }
-    return arg
-  })
-}
 
 interface IRowMenuState {
   readonly anchor: { x: number; y: number }
@@ -138,9 +127,10 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
     return () => treeViews.setViewVisibility(viewId, false)
   }, [treeViews, viewId, registered])
 
-  // Selection / expansion → host. Expansion state is diffed against the
-  // rendered rows (default-expanded nodes have no recorded model state).
-  const lastExpansionRef = useRef(new Map<number, boolean>())
+  // Selection / expansion → host. Expansion rides the model's toggle entry
+  // points (onDidChangeExpansion) rather than a diff of rendered rows, so a
+  // $refresh or a parent collapse never synthesizes expand/collapse events —
+  // matching vscode, where the callbacks fire on user interaction only.
   useEffect(() => {
     if (viewId === undefined) return
     const pushSelection = () => {
@@ -149,37 +139,27 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         .filter((handle) => Number.isInteger(handle))
       treeViews.setSelection(viewId, handles)
     }
-    const pushExpansion = () => {
-      const next = new Map<number, boolean>()
-      for (const node of model.getVisibleNodes()) {
-        if (node.hasChildren) next.set(node.element.handle, node.expanded)
-      }
-      const prev = lastExpansionRef.current
-      for (const [handle, expanded] of next) {
-        if (prev.get(handle) !== expanded) {
-          treeViews.setExpansionState(viewId, handle, expanded)
-        }
-      }
-      for (const handle of prev.keys()) {
-        if (!next.has(handle)) treeViews.setExpansionState(viewId, handle, false)
-      }
-      lastExpansionRef.current = next
-    }
     const d1 = model.onDidChangeSelection(pushSelection)
-    const d2 = model.onDidChangeStructure(pushExpansion)
+    const d2 = model.onDidChangeExpansion(({ element, expanded }) =>
+      treeViews.setExpansionState(viewId, element.handle, expanded),
+    )
     return () => {
       d1.dispose()
       d2.dispose()
     }
   }, [model, treeViews, viewId])
 
+  // Command execution is delegated to the host with the element handle: the
+  // extension handler receives the provider's original TreeItem.command
+  // arguments (live Uri instances, custom objects), which a renderer-side
+  // executeCommand would have wire-flattened.
   const runItem = useCallback(
     (item: ITreeItemDto) => {
       const command = item.command
-      if (!command || command.disabled) return
-      void commandService.executeCommand(command.command, ...reviveCommandArgs(command.arguments))
+      if (!command || command.disabled || viewId === undefined) return
+      treeViews.executeTreeItemCommand(viewId, item.handle)
     },
-    [commandService],
+    [treeViews, viewId],
   )
 
   // Focus landing in the tree without a focused row selects the first row.
@@ -310,12 +290,16 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
           if (node) openRowMenu(e, node.element)
         }}
       />
-      {menu && (
+      {menu && viewId !== undefined && (
         <ContextMenu
           menuId={MenuId.ViewItemContext}
           anchor={menu.anchor}
-          args={[menu.item]}
           commandService={commandService}
+          // vscode contract: the menu command handler receives the tree
+          // element, resolved host-side from the handle — not the wire DTO.
+          executeCommand={(commandId) =>
+            treeViews.executeTreeItemCommand(viewId, menu.item.handle, commandId)
+          }
           contextKeyService={menu.scoped}
           onClose={closeMenu}
         />

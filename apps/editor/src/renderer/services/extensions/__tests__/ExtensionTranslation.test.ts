@@ -470,6 +470,79 @@ describe('ExtensionPointTranslator', () => {
       expect(ViewRegistry.getView('test.view.g')?.componentKey).toBe('core.view')
     })
 
+    it('assigns distinct deterministic container orders across extensions (sorted by extension id)', () => {
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          id: 'zzz.ext',
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'zzz.container', title: 'Zzz', icon: 'files' }],
+            },
+          },
+        }),
+        dto({
+          id: 'aaa.ext',
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'aaa.container', title: 'Aaa', icon: 'files' }],
+            },
+          },
+        }),
+        dto({
+          id: 'mmm.ext',
+          contributes: {
+            viewsContainers: {
+              activitybar: [
+                { id: 'mid.container', title: 'Mid', icon: 'files' },
+                { id: 'last.container', title: 'Last', icon: 'files' },
+              ],
+            },
+          },
+        }),
+      ])
+
+      const orders = ['zzz.container', 'aaa.container', 'mid.container', 'last.container'].map(
+        (id) => ViewContainerRegistry.getViewContainer(id)!.order,
+      )
+      // No collisions: each container must get its own slot (the per-extension
+      // index base made every first container collide on 100).
+      expect(new Set(orders).size).toBe(orders.length)
+      // Deterministic regardless of the scan order the host handed us: slots are
+      // allocated after sorting extensions by id, so a restart that scans the
+      // same install set in a different order yields the same activity-bar order.
+      const [zzz, aaa, mid, last] = orders
+      expect(aaa).toBeLessThan(mid!)
+      expect(mid).toBeLessThan(last!)
+      expect(last).toBeLessThan(zzz!)
+    })
+
+    it('binds views to a container declared by another extension later in the same set', () => {
+      // VSCode registers all viewsContainers before any views, so the load order
+      // of extensions is irrelevant; a forward reference must not drop the view.
+      const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+      disposables.push(t)
+      t.translate([
+        dto({
+          id: 'b.ext',
+          contributes: {
+            views: { 'a.container': [{ id: 'b.forward.view', name: 'Forward' }] },
+          },
+        }),
+        dto({
+          id: 'a.ext',
+          contributes: {
+            viewsContainers: {
+              activitybar: [{ id: 'a.container', title: 'A Container', icon: 'files' }],
+            },
+          },
+        }),
+      ])
+
+      expect(ViewRegistry.getView('b.forward.view')?.containerId).toBe('a.container')
+    })
+
     it('unregisters its containers and views on dispose', () => {
       const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
       t.translate([

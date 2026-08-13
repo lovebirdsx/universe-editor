@@ -38,19 +38,23 @@ export class DidSaveNotificationContribution extends Disposable implements IWork
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostDidSave', name: 'Extension Did Save' })
-    this._register(DidSaveNotification.register((uri) => void this._notify(uri)))
+    this._register(
+      DidSaveNotification.register((uri, hint) => void this._notify(uri, hint.expectMirrorOpen)),
+    )
   }
 
-  private async _notify(uri: URI): Promise<void> {
+  private async _notify(uri: URI, expectMirrorOpen: boolean | undefined): Promise<void> {
     const documents = this._client.getDocuments()
     if (!documents) return
     try {
-      const mirrored = await DocumentMirrorTracking.whenOpened(uri)
-      if (!mirrored) {
-        // The host would drop the save of an unmirrored URI anyway; say why.
-        this._logger.warn(
-          `did-save for ${uri.toString()} pushed without a mirrored open (mirror absent or timed out)`,
-        )
+      if (expectMirrorOpen !== false) {
+        const mirrored = await DocumentMirrorTracking.whenOpened(uri)
+        if (!mirrored) {
+          // The host would drop the save of an unmirrored URI anyway; say why.
+          this._logger.warn(
+            `did-save for ${uri.toString()} pushed without a mirrored open (mirror absent or timed out)`,
+          )
+        }
       }
       const model = MonacoModelRegistry.peek(uri)
       if (model) await PendingDocumentSync.flush(model.uri.toString())

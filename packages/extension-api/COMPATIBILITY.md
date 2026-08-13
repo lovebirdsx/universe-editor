@@ -283,7 +283,6 @@
     - `TreeItem.iconPath` 仅 codicon 名字符串，不支持 Uri/明暗双图标；
       `TreeItemLabel` 只渲染纯文本（无高亮）。
     - `onDidChangeTreeData(element)` 的 element 参数被忽略——恒整树失效重拉。
-    - `command.arguments` 仅 JSON 可克隆值（URI 自动 revive）。
     - `TreeView.visible` 为挂载粒度近似；`views` 的 `when` 暂不生效。
   - 配套：`docs/extension-dev/zh-CN/migration-from-vscode.md` 的 TreeView 行翻
     「部分对齐」；`contribution-points.md` 新增 `viewsContainers` / `views` 两节。

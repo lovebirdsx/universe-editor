@@ -105,6 +105,18 @@ function parentResource(resource: URI): URI {
   return resource.with({ path: dirname(resource.path) })
 }
 
+/** LSP semantics for a create landing on an existing path: `overwrite` wins over
+ *  `ignoreIfExists` (the collision becomes a replace); `ignoreIfExists` alone
+ *  makes it a no-op; neither makes it an EEXIST failure. */
+function existingCreateTargetPolicy(options: {
+  readonly overwrite?: boolean
+  readonly ignoreIfExists?: boolean
+}): 'replace' | 'skip' | 'fail' {
+  if (options.overwrite === true) return 'replace'
+  if (options.ignoreIfExists === true) return 'skip'
+  return 'fail'
+}
+
 /** Apply Monaco-range (1-based line/column) text edits to a plain string. Edits
  *  are sorted bottom-up so earlier splices don't shift later offsets. */
 export function applyTextEditsToString(
@@ -309,7 +321,7 @@ export class FileBulkEditService {
       // create
       if (options.folder === true) {
         if (await this._fileService.exists(newResource)) {
-          if (options.overwrite !== true && options.ignoreIfExists !== true) {
+          if (existingCreateTargetPolicy(options) === 'fail') {
             throw new FileSystemError(`create: target already exists: ${newResource}`, 'EEXIST')
           }
           return
@@ -318,10 +330,11 @@ export class FileBulkEditService {
         return
       }
       if (await this._fileService.exists(newResource)) {
-        if (options.overwrite !== true) {
-          if (options.ignoreIfExists === true) return
+        const policy = existingCreateTargetPolicy(options)
+        if (policy === 'fail') {
           throw new FileSystemError(`create: target already exists: ${newResource}`, 'EEXIST')
         }
+        if (policy === 'skip') return
       } else {
         // fs.writeFile does not create parents; VSCode's createFile does.
         await this._fileService.createDirectory(parentResource(newResource))
@@ -337,7 +350,23 @@ export class FileBulkEditService {
         throw new FileSystemError(`rename: source does not exist: ${oldResource}`, 'ENOENT')
       }
       if (options.overwrite === true && (await this._fileService.exists(newResource))) {
-        await this._fileService.delete(newResource, { recursive: true })
+        // Deleting the target first would destroy it irreversibly when the
+        // rename then fails (EXDEV, ACL, file lock). Park it at a same-directory
+        // sibling instead (same volume, so this rename can't fail cross-device),
+        // delete the backup once the real rename lands, and restore it when it
+        // does not.
+        const backup = newResource.with({
+          path: `${newResource.path}.rename-overwrite-${Math.random().toString(36).slice(2, 10)}`,
+        })
+        await this._fileService.rename(newResource, backup, {})
+        try {
+          await this._fileService.rename(oldResource, newResource, { overwrite: true })
+        } catch (err) {
+          await this._fileService.rename(backup, newResource, { overwrite: true }).catch(() => {})
+          throw err
+        }
+        await this._fileService.delete(backup, { recursive: true })
+        return
       }
       await this._fileService.rename(oldResource, newResource, {
         overwrite: options.overwrite === true,

@@ -16,6 +16,7 @@ function fakeExtHost(childrenByParent: Record<string, ITreeItemDto[]>) {
     $acceptTreeViewVisibility: vi.fn(() => Promise.resolve()),
     $acceptSelection: vi.fn(() => Promise.resolve()),
     $acceptExpansionState: vi.fn(() => Promise.resolve()),
+    $executeTreeItemCommand: vi.fn(() => Promise.resolve()),
   } satisfies IExtHostTreeViews
 }
 
@@ -92,6 +93,95 @@ describe('TreeViewsService', () => {
 
     await service.loadChildren(VIEW_ID)
     expect(service.getRoots(VIEW_ID)?.map((d) => d.label)).toEqual(['fresh'])
+  })
+
+  it('re-pulls on retry when a $refresh lands during an in-flight roots pull', async () => {
+    const service = new TreeViewsService()
+    let resolveStale: ((items: ITreeItemDto[]) => void) | undefined
+    const extHost = fakeExtHost({ root: [dto(1, 'fresh')] })
+    extHost.$getChildren.mockImplementationOnce(
+      () => new Promise<ITreeItemDto[]>((resolve) => (resolveStale = resolve)),
+    )
+    service.setExtHost(extHost)
+    await service.$registerTreeDataProvider(VIEW_ID)
+
+    const stalePull = service.loadChildren(VIEW_ID)
+    await service.$refresh(VIEW_ID)
+    // What the view does on onDidChangeView (roots went back to null): retry.
+    // The in-flight stale pull belongs to a dead generation, so it must not
+    // dedupe this retry — otherwise the stale settle is discarded and nothing
+    // ever pulls again (permanently blank tree).
+    const retryPull = service.loadChildren(VIEW_ID)
+    expect(extHost.$getChildren).toHaveBeenCalledTimes(2)
+
+    resolveStale?.([dto(99, 'stale')])
+    await Promise.all([stalePull, retryPull])
+    expect(service.getRoots(VIEW_ID)?.map((d) => d.label)).toEqual(['fresh'])
+  })
+
+  it('replays the last reported visibility when the provider re-registers after a host restart', async () => {
+    const service = new TreeViewsService()
+    const host1 = fakeExtHost({})
+    service.setExtHost(host1)
+    await service.$registerTreeDataProvider(VIEW_ID)
+    service.setViewVisibility(VIEW_ID, true)
+    expect(host1.$acceptTreeViewVisibility).toHaveBeenCalledTimes(1)
+
+    // Host restart: teardown drops every model + the proxy while the view
+    // stays mounted (it never re-pushes on its own).
+    service.reset()
+    const host2 = fakeExtHost({})
+    service.setExtHost(host2)
+    await service.$registerTreeDataProvider(VIEW_ID)
+    expect(host2.$acceptTreeViewVisibility).toHaveBeenCalledTimes(1)
+    expect(host2.$acceptTreeViewVisibility).toHaveBeenCalledWith(VIEW_ID, true)
+
+    // The replay seeds the dedupe: re-pushing the same value is dropped.
+    service.setViewVisibility(VIEW_ID, true)
+    expect(host2.$acceptTreeViewVisibility).toHaveBeenCalledTimes(1)
+  })
+
+  it('replays a false visibility recorded before the restart', async () => {
+    const service = new TreeViewsService()
+    const host1 = fakeExtHost({})
+    service.setExtHost(host1)
+    await service.$registerTreeDataProvider(VIEW_ID)
+    service.setViewVisibility(VIEW_ID, true)
+    service.setViewVisibility(VIEW_ID, false)
+
+    service.reset()
+    const host2 = fakeExtHost({})
+    service.setExtHost(host2)
+    await service.$registerTreeDataProvider(VIEW_ID)
+    expect(host2.$acceptTreeViewVisibility).toHaveBeenCalledTimes(1)
+    expect(host2.$acceptTreeViewVisibility).toHaveBeenCalledWith(VIEW_ID, false)
+  })
+
+  it('routes tree item command execution through the ext host, omitting an absent commandId', async () => {
+    const service = new TreeViewsService()
+    const extHost = fakeExtHost({})
+    service.setExtHost(extHost)
+    await service.$registerTreeDataProvider(VIEW_ID)
+
+    service.executeTreeItemCommand(VIEW_ID, 1)
+    expect(extHost.$executeTreeItemCommand).toHaveBeenCalledTimes(1)
+    // A row click must not send an explicit third argument — undefined would
+    // cross the newline-JSON wire as null. The host tells the entry points
+    // apart by an omitted vs present commandId.
+    expect(extHost.$executeTreeItemCommand.mock.calls[0]).toEqual([VIEW_ID, 1])
+
+    service.executeTreeItemCommand(VIEW_ID, 2, 'test.rowAction')
+    expect(extHost.$executeTreeItemCommand).toHaveBeenNthCalledWith(2, VIEW_ID, 2, 'test.rowAction')
+  })
+
+  it('routes tree item command execution nowhere without a provider or ext host', async () => {
+    const service = new TreeViewsService()
+    const extHost = fakeExtHost({})
+    service.executeTreeItemCommand(VIEW_ID, 1)
+    service.executeTreeItemCommand(VIEW_ID, 1, 'test.rowAction')
+    service.setExtHost(extHost)
+    service.executeTreeItemCommand(VIEW_ID, 1)
+    expect(extHost.$executeTreeItemCommand).not.toHaveBeenCalled()
   })
 
   it('loadChildren is a no-op without a provider or ext host', async () => {

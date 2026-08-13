@@ -169,8 +169,18 @@ export class MainThreadFs implements IMainThreadFs {
     if (this._cwd === undefined) {
       throw new Error('workspace.findFiles requires an open workspace folder')
     }
-    const includeBase =
-      typeof include === 'string' ? undefined : await this._resolveRelativePatternBase(include.base)
+    let includeBase: URI | undefined
+    if (typeof include !== 'string') {
+      try {
+        includeBase = await this._resolveRelativePatternBase(include.base)
+      } catch (err) {
+        // VSCode resolves an unusable RelativePattern to an empty result list
+        // rather than surfacing an RPC error to the extension; the policy guard
+        // still holds — nothing outside the workspace is ever enumerated.
+        this._logger.warn(`findFiles: ${(err as Error).message}; returning no results`)
+        return []
+      }
+    }
     const excludeMatchers = exclude?.map((entry) => this._compileExclude(entry, includeBase))
     const complete = await this._fileSearch.search(
       {

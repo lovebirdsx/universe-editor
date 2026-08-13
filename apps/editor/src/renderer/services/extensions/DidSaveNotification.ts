@@ -20,7 +20,15 @@
 
 import type { URI } from '@universe-editor/platform'
 
-export type DidSaveListenerFn = (uri: URI) => void
+export interface DidSaveHint {
+  /** False when the caller knows the file has no document in the mirror
+   *  pipeline (e.g. a merge editor writing its result): waiting for a mirror
+   *  open would only burn the full timeout before pushing an event the host
+   *  drops anyway. */
+  expectMirrorOpen?: boolean
+}
+
+export type DidSaveListenerFn = (uri: URI, hint: DidSaveHint) => void
 
 class DidSaveNotificationImpl {
   private readonly _listeners = new Set<DidSaveListenerFn>()
@@ -32,11 +40,11 @@ class DidSaveNotificationImpl {
 
   /** Notify every listener. Never throws — a listener failure is logged and
    *  skipped so the save flow is never disturbed after the fact. */
-  notify(uri: URI): void {
+  notify(uri: URI, hint: DidSaveHint = {}): void {
     if (this._listeners.size === 0) return
     for (const listener of this._listeners) {
       try {
-        listener(uri)
+        listener(uri, hint)
       } catch (err) {
         console.error('[did-save-notification] listener failed:', err)
       }

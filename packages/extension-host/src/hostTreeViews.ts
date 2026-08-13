@@ -13,6 +13,7 @@
  */
 import { Emitter, type Event } from '@universe-editor/platform'
 import type {
+  Command,
   Disposable,
   TreeDataProvider,
   TreeItem,
@@ -33,6 +34,13 @@ interface IRegisteredView {
   changeListener: Disposable | undefined
   readonly elementByHandle: Map<number, unknown>
   readonly handleByElement: Map<unknown, number>
+  /**
+   * The `TreeItem.command` the provider returned for each handle, kept
+   * host-side so a row click can execute it against the original arguments —
+   * live objects (Uri instances, custom payloads) must never ride the wire.
+   * Lives + dies with the same generation as `elementByHandle`.
+   */
+  readonly commandByHandle: Map<number, Command>
   nextHandle: number
   /** Facade created by `createTreeView`; absent for a bare `registerTreeDataProvider`. */
   view?: HostTreeView
@@ -42,13 +50,16 @@ function toCommandDto(cmd: {
   command: string
   title: string
   tooltip?: string
-  arguments?: unknown[]
+  disabled?: boolean
 }): ICommandDto {
+  // Only the display surface crosses the wire. `arguments` stay host-side in
+  // the registry's commandByHandle table — serializing them would flatten
+  // live objects (Uri, custom payloads) before the handler ever sees them.
   return {
     command: cmd.command,
     title: cmd.title,
     ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
-    ...(cmd.arguments !== undefined ? { arguments: cmd.arguments } : {}),
+    ...(cmd.disabled !== undefined ? { disabled: cmd.disabled } : {}),
   }
 }
 
@@ -111,7 +122,16 @@ class HostTreeView implements TreeView<unknown> {
 export class HostTreeViewRegistry {
   private readonly _views = new Map<string, IRegisteredView>()
 
-  constructor(private readonly _mainThread: IMainThreadTreeViews) {}
+  constructor(
+    private readonly _mainThread: IMainThreadTreeViews,
+    /**
+     * Extension-host command routing (local extension handler, built-in
+     * fallback forwarded to the renderer). Tree commands run through it so
+     * the extension handler gets the original element / arguments.
+     */
+    private readonly _executeCommand: (command: string, args: unknown[]) => Promise<unknown> = () =>
+      Promise.resolve(),
+  ) {}
 
   registerTreeDataProvider(viewId: string, provider: TreeDataProvider<unknown>): Disposable {
     if (this._views.has(viewId)) {
@@ -122,6 +142,7 @@ export class HostTreeViewRegistry {
       changeListener: undefined,
       elementByHandle: new Map(),
       handleByElement: new Map(),
+      commandByHandle: new Map(),
       nextHandle: 1,
     }
     entry.changeListener = provider.onDidChangeTreeData?.(() => {
@@ -129,6 +150,7 @@ export class HostTreeViewRegistry {
       // table; the renderer re-pulls from the roots.
       entry.elementByHandle.clear()
       entry.handleByElement.clear()
+      entry.commandByHandle.clear()
       void this._mainThread.$refresh(viewId)
     })
     this._views.set(viewId, entry)
@@ -169,9 +191,37 @@ export class HostTreeViewRegistry {
     const dtos: ITreeItemDto[] = []
     for (const child of children) {
       const item = await entry.provider.getTreeItem(child)
-      dtos.push(this._toDto(entry, child, item))
+      const dto = this._toDto(entry, child, item)
+      if (item.command !== undefined) entry.commandByHandle.set(dto.handle, item.command)
+      dtos.push(dto)
     }
     return dtos
+  }
+
+  /** IExtHostTreeViews.$executeTreeItemCommand */
+  async executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void> {
+    const entry = this._views.get(viewId)
+    if (!entry) return
+    const element = entry.elementByHandle.get(handle)
+    if (element === undefined) {
+      // Same stale-handle contract as $getChildren: the renderer is already
+      // re-pulling the dead generation, so dropping the click is correct.
+      console.debug(
+        `[ext-host] $executeTreeItemCommand(${viewId}, ${handle}) ignored: stale handle`,
+      )
+      return
+    }
+    // `!= null`: an omitted commandId crosses the newline-JSON wire as null —
+    // both mean "row click", only a real command id means "menu pick".
+    if (commandId != null) {
+      // view/item/context menu: vscode hands the extension handler the tree
+      // element itself, not the serialized DTO.
+      await this._executeCommand(commandId, [element])
+      return
+    }
+    const command = entry.commandByHandle.get(handle)
+    if (command === undefined || command.disabled === true) return
+    await this._executeCommand(command.command, command.arguments ?? [element])
   }
 
   /** IExtHostTreeViews.$acceptTreeViewVisibility */
@@ -212,6 +262,7 @@ export class HostTreeViewRegistry {
     entry.changeListener?.dispose()
     entry.elementByHandle.clear()
     entry.handleByElement.clear()
+    entry.commandByHandle.clear()
     void this._mainThread.$unregisterTreeDataProvider(viewId)
   }
 

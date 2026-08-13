@@ -100,7 +100,10 @@ export class MergeEditorInput extends EditorInput {
 
   override async save(): Promise<boolean> {
     await this._fileService.writeFile(this.fileUri, this._result)
-    DidSaveNotification.notify(this.fileUri)
+    // The merge editor works on its own staged models; the written file itself
+    // typically has no document in the mirror pipeline, so an open will never
+    // arrive to order this notification behind.
+    DidSaveNotification.notify(this.fileUri, { expectMirrorOpen: false })
     // Staging the resolved file clears its unmerged state in git.
     await this._commandService.executeCommand('git.stage', {
       resourceUri: this._contents.path,

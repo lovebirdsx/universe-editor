@@ -84,6 +84,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     MonacoLoader: {
       ensureInitialized: () => Promise.resolve(monacoStub),
       get: () => monacoStub,
+      peek: () => monacoStub,
       getOverrideServices: () => ({}),
       trackEditorDispose: () => ({ dispose: () => {} }),
     },

@@ -8,17 +8,18 @@
 manifest contributes.viewsContainers/views → ExtensionPointTranslator._registerViews
   （componentKey=EXTENSION_TREE_VIEW_COMPONENT_KEY；MENU_ID_BY_KEY 含 view/item/context）
 ExtensionTreeView.tsx（按 viewId props 分发；mount 发 onView:<viewId> 激活）
-  ⇅ mainThreadTreeViews（注册/$refresh）/ extHostTreeViews（$getChildren/selection/expansion/visibility）
+  ⇅ mainThreadTreeViews（注册/$refresh）/ extHostTreeViews（$getChildren/selection/expansion/visibility/$executeTreeItemCommand）
 renderer services/extensions/TreeViewsService.ts（per-view DTO 缓存 + generation 防 stale）
   ⇅
-host HostTreeViewRegistry（element↔handle 双向表；onDidChangeTreeData → 清表 + $refresh 整树失效）
+host HostTreeViewRegistry（element↔handle 双向表 + commandByHandle；onDidChangeTreeData → 清表 + $refresh 整树失效）
 ```
 
 ## 关键决策
 
 - **拉取式懒加载**：renderer 只拉用户展开的节点；TreeModel 的 `getChildren` 返回 null 触发 `loadChildren` → RPC。workbench-ui Tree/TreeModel 全部复用，未新写树基建。
 - **handle 单代有效**：host 每次 onDidChangeTreeData 清 handle 表；renderer `$refresh` bump generation，in-flight 拉取落地时 generation 不符即丢弃。stale handle 两侧都答 `[]` 不报错。
-- **首版裁剪**：无 reveal/DnD/checkbox/badge/TreeView.title；iconPath 仅 codicon 名；command.arguments 仅 JSON 可克隆；getParent 不消费。JSDoc 均已注明。
+- **首版裁剪**：无 reveal/DnD/checkbox/badge/TreeView.title；iconPath 仅 codicon 名；getParent 不消费。JSDoc 均已注明。
+- **命令参数解析在 host 侧**：行点击与 view/item/context 菜单都走 `$executeTreeItemCommand(viewId, handle, commandId?)`——host 按 handle 反查 element/原始 `TreeItem.command`，经 `ExtensionCommandRegistry.execute` 路由（本地 handler 拿活引用；查不到则既有 `_workbench.*/allowlist` 兜底转发 renderer）。`command.arguments` 不上 wire（DTO 只带命令 id/title/tooltip/disabled），handler 收到的是扩展自己返回的原对象；`command` 不带 `arguments` 时 handler 收到该行 element（vscode 契约）。renderer 侧禁 revive 鸭子类型。
 - **展开态不跨刷新**：TreeItem.id 未参与身份，刷新后新 handle 对不上旧展开态，树回到全折叠（VSCode 靠 id 保展开，属已知差异）。
 
 ## 坑

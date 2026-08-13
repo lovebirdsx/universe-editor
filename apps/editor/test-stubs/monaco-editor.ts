@@ -266,15 +266,192 @@ function makeModel(initial: string, language: string, uri: unknown) {
   return model
 }
 
+/* Uri.parse/toString port of monaco's vs/base/common/uri.ts. Identity-critical:
+ * monaco percent-ENCODES the Windows drive-letter colon on toString
+ * (`file:///c%3A/x.txt`) while a naive stub would echo the input string back
+ * (`file:///c:/x.txt`) — the document-mirror pipeline keys maps by these strings,
+ * so the stub must format them exactly like the real thing. */
+const uriParts = /^(([^:/?#]+?):)?(\/\/([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/
+
+// reserved characters: https://tools.ietf.org/html/rfc3986#section-2.2
+const encodeTable: Record<number, string> = {
+  [58]: '%3A', // : (gen-delims)
+  [47]: '%2F',
+  [63]: '%3F',
+  [35]: '%23',
+  [91]: '%5B',
+  [93]: '%5D',
+  [64]: '%40',
+  [33]: '%21', // ! (sub-delims)
+  [36]: '%24',
+  [38]: '%26',
+  [39]: '%27',
+  [40]: '%28',
+  [41]: '%29',
+  [42]: '%2A',
+  [43]: '%2B',
+  [44]: '%2C',
+  [59]: '%3B',
+  [61]: '%3D',
+  [32]: '%20',
+}
+
+function encodeURIComponentFast(uriComponent: string, isPath: boolean, isAuthority: boolean) {
+  let res: string | undefined = undefined
+  let nativeEncodePos = -1
+  for (let pos = 0; pos < uriComponent.length; pos++) {
+    const code = uriComponent.charCodeAt(pos)
+    // unreserved characters: https://tools.ietf.org/html/rfc3986#section-2.3
+    if (
+      (code >= 97 && code <= 122) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 48 && code <= 57) ||
+      code === 45 ||
+      code === 46 ||
+      code === 95 ||
+      code === 126 ||
+      (isPath && code === 47) ||
+      (isAuthority && code === 91) ||
+      (isAuthority && code === 93) ||
+      (isAuthority && code === 58)
+    ) {
+      if (nativeEncodePos !== -1) {
+        res += encodeURIComponent(uriComponent.substring(nativeEncodePos, pos))
+        nativeEncodePos = -1
+      }
+      if (res !== undefined) res += uriComponent.charAt(pos)
+    } else {
+      if (res === undefined) res = uriComponent.substr(0, pos)
+      const escaped = encodeTable[code]
+      if (escaped !== undefined) {
+        if (nativeEncodePos !== -1) {
+          res += encodeURIComponent(uriComponent.substring(nativeEncodePos, pos))
+          nativeEncodePos = -1
+        }
+        res += escaped
+      } else if (nativeEncodePos === -1) {
+        // batch raw encodeURIComponent so surrogate pairs stay intact
+        nativeEncodePos = pos
+      }
+    }
+  }
+  if (nativeEncodePos !== -1) {
+    res += encodeURIComponent(uriComponent.substring(nativeEncodePos))
+  }
+  return res !== undefined ? res : uriComponent
+}
+
+function decodeURIComponentGraceful(str: string): string {
+  try {
+    return decodeURIComponent(str)
+  } catch {
+    if (str.length > 3) return str.substr(0, 3) + decodeURIComponentGraceful(str.substr(3))
+    return str
+  }
+}
+
+const encodedAsHex = /(%[0-9A-Za-z][0-9A-Za-z])+/g
+
+function percentDecode(str: string): string {
+  if (!str.match(encodedAsHex)) return str
+  return str.replace(encodedAsHex, (match) => decodeURIComponentGraceful(match))
+}
+
+function asFormatted(
+  scheme: string,
+  authority: string,
+  path: string,
+  query: string,
+  fragment: string,
+): string {
+  let res = ''
+  if (scheme) {
+    res += scheme
+    res += ':'
+  }
+  if (authority || scheme === 'file') {
+    res += '/'
+    res += '/'
+  }
+  if (authority) {
+    let idx = authority.indexOf('@')
+    if (idx !== -1) {
+      // <user>@<auth>
+      const userinfo = authority.substr(0, idx)
+      authority = authority.substr(idx + 1)
+      idx = userinfo.lastIndexOf(':')
+      if (idx === -1) {
+        res += encodeURIComponentFast(userinfo, false, false)
+      } else {
+        // <user>:<pass>@<auth>
+        res += encodeURIComponentFast(userinfo.substr(0, idx), false, false)
+        res += ':'
+        res += encodeURIComponentFast(userinfo.substr(idx + 1), false, true)
+      }
+      res += '@'
+    }
+    authority = authority.toLowerCase()
+    idx = authority.lastIndexOf(':')
+    if (idx === -1) {
+      res += encodeURIComponentFast(authority, false, true)
+    } else {
+      // <auth>:<port>
+      res += encodeURIComponentFast(authority.substr(0, idx), false, true)
+      res += authority.substr(idx)
+    }
+  }
+  if (path) {
+    // lower-case windows drive letters in /C:/fff or C:/fff
+    if (path.length >= 3 && path.charCodeAt(0) === 47 && path.charCodeAt(2) === 58) {
+      const code = path.charCodeAt(1)
+      if (code >= 65 && code <= 90) {
+        path = `/${String.fromCharCode(code + 32)}:${path.substr(3)}`
+      }
+    } else if (path.length >= 2 && path.charCodeAt(1) === 58) {
+      const code = path.charCodeAt(0)
+      if (code >= 65 && code <= 90) {
+        path = `${String.fromCharCode(code + 32)}:${path.substr(2)}`
+      }
+    }
+    res += encodeURIComponentFast(path, true, false)
+  }
+  if (query) {
+    res += '?'
+    res += encodeURIComponentFast(query, false, false)
+  }
+  if (fragment) {
+    res += '#'
+    res += encodeURIComponentFast(fragment, false, false)
+  }
+  return res
+}
+
 export const Uri = {
   parse: (s: string) => {
-    const scheme = s.slice(0, s.indexOf(':'))
-    return {
-      scheme,
-      toString: () => s,
-      toJSON: () => ({ scheme, path: s.slice(scheme.length + 1), $mid: 1 }),
+    const match = uriParts.exec(s)
+    if (!match) {
+      return makeUri('', '', '', '', '')
     }
+    return makeUri(
+      match[2] ?? '',
+      percentDecode(match[4] ?? ''),
+      percentDecode(match[5] ?? ''),
+      percentDecode(match[7] ?? ''),
+      percentDecode(match[9] ?? ''),
+    )
   },
+}
+
+function makeUri(scheme: string, authority: string, path: string, query: string, fragment: string) {
+  return {
+    scheme,
+    authority,
+    path,
+    query,
+    fragment,
+    toString: () => asFormatted(scheme, authority, path, query, fragment),
+    toJSON: () => ({ scheme, authority, path, query, fragment, $mid: 1 }),
+  }
 }
 
 export class Range {

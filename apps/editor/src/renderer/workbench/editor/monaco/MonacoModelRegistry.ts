@@ -16,21 +16,32 @@ import { languageForResource } from '../../files/resourceLanguage.js'
 export { languageForResource }
 
 /**
- * Key a resource by its Monaco-normalized URI: lower-case only the leading
- * Windows drive letter, leaving the rest of the path untouched.
+ * Key a resource by its Monaco-normalized URI serialization — the exact string
+ * a model created for this resource produces via `model.uri.toString()`.
  *
- * This deliberately mirrors how Monaco's own `Uri.parse` normalizes a URI (it
- * lower-cases the drive letter) so this registry's entries line up 1:1 with
- * Monaco's internal model table. It is NOT filesystem path identity — a caller
- * asking "are these the same file?" must use `IUriIdentityService.isEqual`,
- * which is platform-aware (folds case on win32/darwin). Here we intentionally
- * stay case-sensitive on the path so a registry entry never claims a model that
- * Monaco considers distinct.
+ * The key MUST come from Monaco's own `Uri.parse().toString()`: its formatter
+ * lower-cases the Windows drive letter AND percent-encodes reserved characters
+ * the platform URI leaves raw — notably the drive-letter colon
+ * (`file:///c%3A/x.txt`, not `file:///c:/x.txt`) plus sub-delims like `()` and
+ * `,`. A platform-side re-implementation would drift and produce keys that
+ * never match a live model (the did-save mirror wait then burned its full
+ * timeout on every Windows Save-As).
+ *
+ * Before Monaco has loaded, fall back to a lighter normalization: no model can
+ * exist yet (models require Monaco), so the registry map is necessarily empty
+ * and any key is a miss — correctness only requires determinism.
+ *
+ * It is NOT filesystem path identity — a caller asking "are these the same
+ * file?" must use `IUriIdentityService.isEqual`, which is platform-aware (folds
+ * case on win32/darwin). Here we intentionally stay case-sensitive on the path
+ * so a registry entry never claims a model that Monaco considers distinct.
  *
  * Exported for the document-mirror pipeline, which keys entries by
  * `model.uri.toString()` and sometimes needs that key before the model exists.
  */
 export function monacoModelKey(uri: URI): string {
+  const m = MonacoLoader.peek()
+  if (m) return m.Uri.parse(uri.toString()).toString()
   const path = uri.path.replace(/^\/([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}:`)
   return uri.with({ path }).toString()
 }

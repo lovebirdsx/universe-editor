@@ -10,16 +10,20 @@ import { join } from 'node:path'
 
 const MACHINE_ID_FILE = 'machineid'
 
-let cached: string | undefined
+let cached: Promise<string> | undefined
 
-export async function getMachineId(userDataDir: string): Promise<string> {
-  if (cached) return cached
+export function getMachineId(userDataDir: string): Promise<string> {
+  // The in-flight promise is cached (not just the resolved value) so two
+  // concurrent first calls converge on one id instead of racing to generate
+  // and persist different UUIDs.
+  cached ??= loadOrCreate(userDataDir)
+  return cached
+}
+
+async function loadOrCreate(userDataDir: string): Promise<string> {
   try {
     const existing = (await readFile(join(userDataDir, MACHINE_ID_FILE), 'utf8')).trim()
-    if (existing) {
-      cached = existing
-      return existing
-    }
+    if (existing) return existing
   } catch {
     // Missing or unreadable file falls through to (re)generation.
   }
@@ -29,7 +33,6 @@ export async function getMachineId(userDataDir: string): Promise<string> {
   } catch {
     // Persistence best-effort: the id still works for this session.
   }
-  cached = id
   return id
 }
 

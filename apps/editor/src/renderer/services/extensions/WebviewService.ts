@@ -370,7 +370,7 @@ export class WebviewService extends Disposable implements IWebviewService {
       activate: showOptions?.preserveFocus !== true,
       preserveFocus: showOptions?.preserveFocus === true,
     })
-    console.error(`[webview] host panel created handle=${panelHandle} viewType=${viewType}`)
+    console.debug(`[webview] host panel created handle=${panelHandle} viewType=${viewType}`)
   }
 
   /** Host `WebviewPanel.dispose()` → close the tab (input dispose finishes the rest). */
@@ -406,7 +406,7 @@ export class WebviewService extends Disposable implements IWebviewService {
         return
       }
     }
-    console.error(`[webview] revealWebviewPanel for handle ${panelHandle}: tab not found`)
+    console.debug(`[webview] revealWebviewPanel for handle ${panelHandle}: tab not found`)
   }
 
   setHostPanelTitle(panelHandle: number, title: string): void {

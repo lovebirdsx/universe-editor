@@ -86,6 +86,8 @@ class InMemoryFiles implements Pick<
 > {
   readonly files = new Map<string, string>()
   readonly dirs = new Set<string>(['/'])
+  /** Fault injection: a rename whose source matches this path rejects. */
+  failRenameFrom?: string
 
   private _norm(path: string): string {
     return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path
@@ -157,6 +159,9 @@ class InMemoryFiles implements Pick<
   rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void> {
     const src = this._norm(source.path)
     const dst = this._norm(target.path)
+    if (src === this.failRenameFrom) {
+      return Promise.reject(new FileSystemError(`simulated rename failure: ${src}`, 'UNKNOWN'))
+    }
     if (!this._has(src)) {
       return Promise.reject(new FileSystemError(`not found: ${src}`, 'ENOENT'))
     }
@@ -289,6 +294,49 @@ describe('FileBulkEditService file operations', () => {
     })
     expect(files.files.has('/t/old.ts')).toBe(false)
     expect(files.files.get('/t/new.ts')).toBe('a')
+  })
+
+  it('rename with overwrite keeps the target intact when the rename itself fails', async () => {
+    files.seedFile('/t/old.ts', 'a')
+    files.seedFile('/t/new.ts', 'b')
+    files.failRenameFrom = '/t/old.ts'
+    await expect(
+      service.apply({
+        edits: [
+          {
+            oldResource: uri('/t/old.ts'),
+            newResource: uri('/t/new.ts'),
+            options: { overwrite: true },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/simulated rename failure/)
+    expect(files.files.get('/t/new.ts')).toBe('b')
+    expect(files.files.get('/t/old.ts')).toBe('a')
+  })
+
+  it('rename with overwrite leaves no backup file behind on success', async () => {
+    files.seedFile('/t/old.ts', 'a')
+    files.seedFile('/t/new.ts', 'b')
+    await service.apply({
+      edits: [
+        {
+          oldResource: uri('/t/old.ts'),
+          newResource: uri('/t/new.ts'),
+          options: { overwrite: true },
+        },
+      ],
+    })
+    expect([...files.files.keys()].filter((k) => k.includes('rename-overwrite'))).toEqual([])
+    expect(files.files.get('/t/new.ts')).toBe('a')
+  })
+
+  it('create with overwrite and ignoreIfExists truncates (overwrite wins)', async () => {
+    files.seedFile('/t/a.ts', 'old')
+    await service.apply({
+      edits: [{ newResource: uri('/t/a.ts'), options: { overwrite: true, ignoreIfExists: true } }],
+    })
+    expect(files.files.get('/t/a.ts')).toBe('')
   })
 
   it('rename fails when the source is missing unless ignoreIfNotExists', async () => {

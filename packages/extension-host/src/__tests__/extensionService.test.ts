@@ -19,6 +19,7 @@ import type {
   IMainThreadCommands,
   IMainThreadFileEvents,
   IMainThreadFs,
+  IMainThreadLanguages,
   IMainThreadScm,
   IMainThreadTimeline,
   IMainThreadWindow,
@@ -1211,5 +1212,36 @@ describe('ExtensionService workspace additions', () => {
     watcher.dispose()
     expect(subscribed).toEqual(['sub', 'unsub'])
     service.dispose()
+  })
+
+  it('dispose() flips diagnostics interest back off for still-attached listeners', () => {
+    const mt = recordingMainThread()
+    const flips: Array<'sub' | 'unsub'> = []
+    const languages = {
+      $subscribeDiagnostics: () => {
+        flips.push('sub')
+        return Promise.resolve()
+      },
+      $unsubscribeDiagnostics: () => {
+        flips.push('unsub')
+        return Promise.resolve()
+      },
+    } as unknown as IMainThreadLanguages
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      '/ws',
+      undefined,
+      undefined,
+      languages,
+    )
+    service.onDidChangeDiagnostics(() => {})
+    expect(flips).toEqual(['sub'])
+
+    service.dispose()
+    expect(flips).toEqual(['sub', 'unsub'])
   })
 })

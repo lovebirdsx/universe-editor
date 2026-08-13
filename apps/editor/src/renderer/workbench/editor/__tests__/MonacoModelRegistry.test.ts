@@ -4,7 +4,11 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { MonacoModelRegistry, languageForResource } from '../monaco/MonacoModelRegistry.js'
+import {
+  MonacoModelRegistry,
+  languageForResource,
+  monacoModelKey,
+} from '../monaco/MonacoModelRegistry.js'
 
 describe('MonacoModelRegistry', () => {
   afterEach(() => {
@@ -61,5 +65,22 @@ describe('MonacoModelRegistry', () => {
     expect(MonacoModelRegistry.peek(lower)).toBeDefined()
     MonacoModelRegistry.release(lower)
     expect(MonacoModelRegistry.peek(upper)).toBeUndefined()
+  })
+
+  it("monacoModelKey predicts the created model's uri string (Windows drive + reserved chars)", () => {
+    // The document-mirror pipeline predicts a model's map key before the model
+    // exists (did-save waits on it); the prediction must equal the key the model
+    // itself produces. Monaco encodes the drive-letter colon (`c%3A`) and other
+    // reserved characters that platform URIs leave raw.
+    for (const input of [
+      'file:///C:/ws/a.txt',
+      'file:///D:/x/Foo (v2).ts',
+      'file:///e:/w s/b,1.ts',
+    ]) {
+      const resource = URI.parse(input)
+      const model = MonacoModelRegistry.acquire(resource, 'x')
+      expect(monacoModelKey(resource)).toBe(model.uri.toString())
+      MonacoModelRegistry.release(resource)
+    }
   })
 })

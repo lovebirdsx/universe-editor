@@ -24,9 +24,10 @@ export function fileExtension(name: string): string {
 }
 
 /**
- * Union the extensions of every filter group, lowercased (a leading dot is
- * tolerated). `*` in any group means "all files" and collapses the result to
- * undefined (= no filtering), as does an empty/absent filter list.
+ * Union the extensions of every filter group, lowercased. The Electron/Win32
+ * filter idioms are normalised: `*` and `*.*` mean "all files" and collapse the
+ * result to undefined (= no filtering), as does an empty/absent filter list;
+ * `*.ext`/`.ext` are reduced to the bare extension `ext`.
  */
 export function collectFilterExtensions(
   filters: readonly DialogFileFilter[] | undefined,
@@ -35,8 +36,9 @@ export function collectFilterExtensions(
   const exts = new Set<string>()
   for (const group of filters) {
     for (const ext of group.extensions) {
-      const normalized = ext.trim().toLowerCase().replace(/^\./, '')
-      if (normalized === '*') return undefined
+      const trimmed = ext.trim().toLowerCase()
+      if (trimmed === '*' || trimmed === '*.*') return undefined
+      const normalized = trimmed.replace(/^\*/, '').replace(/^\./, '')
       if (normalized !== '') exts.add(normalized)
     }
   }

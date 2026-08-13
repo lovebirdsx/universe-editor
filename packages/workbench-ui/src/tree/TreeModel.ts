@@ -70,6 +70,17 @@ export class TreeModel<T> extends Disposable {
   private readonly _onDidChangeSelection = this._register(new Emitter<void>())
   readonly onDidChangeSelection: Event<void> = this._onDidChangeSelection.event
 
+  /**
+   * Fires only from expand()/collapse() — the toggle entry points — never
+   * from refresh(), setExpansion(), collapseAll() or default-expansion
+   * materialisation, so listeners see real state flips, not render diffs.
+   */
+  private readonly _onDidChangeExpansion = this._register(
+    new Emitter<{ element: T; expanded: boolean }>(),
+  )
+  readonly onDidChangeExpansion: Event<{ element: T; expanded: boolean }> =
+    this._onDidChangeExpansion.event
+
   private readonly _onReveal = this._register(new Emitter<{ id: string }>())
   readonly onReveal: Event<{ id: string }> = this._onReveal.event
 
@@ -161,6 +172,7 @@ export class TreeModel<T> extends Disposable {
     const state = this._ensureState(id)
     const wasExpanded = state.expanded
     state.expanded = true
+    if (!wasExpanded) this._onDidChangeExpansion.fire({ element, expanded: true })
     if (this._dataSource.getChildren(element) === null && this._dataSource.loadChildren) {
       if (!state.loading) {
         state.loading = true
@@ -184,6 +196,7 @@ export class TreeModel<T> extends Disposable {
     const state = this._state.get(id)
     if (!state || !state.expanded) return
     state.expanded = false
+    this._onDidChangeExpansion.fire({ element, expanded: false })
     this._emitStructure()
   }
 

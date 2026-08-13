@@ -109,6 +109,22 @@ describe('collectFilterExtensions', () => {
       ]),
     ).toBeUndefined()
   })
+
+  it('treats the Electron `*.*` idiom as "all files"', () => {
+    expect(collectFilterExtensions([{ name: 'All Files', extensions: ['*.*'] }])).toBeUndefined()
+    expect(
+      collectFilterExtensions([
+        { name: 'Images', extensions: ['*.png'] },
+        { name: 'All Files', extensions: ['*.*'] },
+      ]),
+    ).toBeUndefined()
+  })
+
+  it('reduces `*.ext` entries to the bare extension, case-insensitively', () => {
+    expect(collectFilterExtensions([{ name: 'Images', extensions: ['*.PNG', '*.Jpg'] }])).toEqual(
+      new Set(['png', 'jpg']),
+    )
+  })
 })
 
 describe('findCompletion', () => {

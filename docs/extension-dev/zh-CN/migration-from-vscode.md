@@ -74,7 +74,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `window.setStatusBarMessage` | 同名 | 对齐（三重载；但各条消息独立共存，不是 VSCode 的后进先出消息栈） |
 | `window.showOpenDialog` / `showSaveDialog` | 同名 | 部分对齐：`showOpenDialog` 的 `canSelectMany` 多选与 `filters` 过滤均生效；`showSaveDialog` 的 `filters` 不支持 |
 | `window.createTerminal` / `Terminal` | — | 缺失（**无计划**。绕行：扩展宿主是普通 Node 进程，可 `node:child_process` 自 spawn，输出进 OutputChannel；但没有用户可见的交互终端） |
-| `window.createTreeView` / `registerTreeDataProvider` | 同名 | 部分对齐：懒拉取真树渲染 + `view/item/context` 菜单（`view`/`viewItem` when 键）+ `visible/selection/onDidChangeVisibility/onDidChangeSelection/onDidExpandElement/onDidCollapseElement`；首版裁剪——`TreeItem.id` 不参与身份（刷新后展开态不保留）、无 `reveal`/拖拽/checkbox/badge、`iconPath` 仅 codicon 名、`onDidChangeTreeData` 恒整树失效、`command.arguments` 仅 JSON 可克隆值（不能携带活对象） |
+| `window.createTreeView` / `registerTreeDataProvider` | 同名 | 部分对齐：懒拉取真树渲染 + `view/item/context` 菜单（`view`/`viewItem` when 键；菜单与行点击命令 handler 均收到扩展返回的 tree element / 原样 `command.arguments`，活对象保留）+ `visible/selection/onDidChangeVisibility/onDidChangeSelection/onDidExpandElement/onDidCollapseElement`；首版裁剪——`TreeItem.id` 不参与身份（刷新后展开态不保留）、无 `reveal`/拖拽/checkbox/badge、`iconPath` 仅 codicon 名、`onDidChangeTreeData` 恒整树失效 |
 | `window.registerWebviewViewProvider` | — | 缺失（暂无计划） |
 
 ### workspace

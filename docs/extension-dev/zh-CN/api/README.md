@@ -276,9 +276,9 @@ Tree View 表面（0.12.0 起，对等 VSCode 的 `window.registerTreeDataProvid
 - **`registerTreeDataProvider(viewId, provider)`**：最小形态，返回 `Disposable`。
 - **`createTreeView(viewId, { treeDataProvider })`**：同一注册，另同步返回 `TreeView<T>` 句柄——`visible` / `selection` 属性与 `onDidChangeVisibility` / `onDidChangeSelection` / `onDidExpandElement` / `onDidCollapseElement` 事件把视图状态回镜像给扩展。
 
-provider 实现 `getTreeItem(element)`（元素 → 行渲染模型 `TreeItem`）与 `getChildren(element?)`（省略 `element` 时返回根节点）。**懒拉取**：只在用户展开节点时拉其子节点。行点击执行 `TreeItem.command`；`TreeItem.contextValue` 经 `viewItem` context key 暴露给 `view/item/context` 菜单贡献点的 `when` 子句（`view` 键 = viewId）。配套激活事件 `onView:<viewId>` 在视图首次显示时触发（须显式声明，宿主不做自动推导）。视图归工作台所有，扩展只提供数据。
+provider 实现 `getTreeItem(element)`（元素 → 行渲染模型 `TreeItem`）与 `getChildren(element?)`（省略 `element` 时返回根节点）。**懒拉取**：只在用户展开节点时拉其子节点。行点击执行 `TreeItem.command`——与 vscode 对齐：handler 收到扩展在 `command.arguments` 里原样放置的对象（`Uri`、自定义类实例均可存活，不经 wire 扁平化；`command` 未带 `arguments` 时 handler 收到该行的 tree element）。`view/item/context` 菜单命令的 handler 第一个参数同样是该行 tree element。`TreeItem.contextValue` 经 `viewItem` context key 暴露给菜单 `when` 子句（`view` 键 = viewId）。配套激活事件 `onView:<viewId>` 在视图首次显示时触发（须显式声明，宿主不做自动推导）。视图归工作台所有，扩展只提供数据。
 
-首版裁剪（逐条差异见 d.ts JSDoc）：`onDidChangeTreeData` 的 element 参数被忽略——恒整树失效重拉，且 `TreeItem.id` 不参与身份，刷新后展开态不保留；无 `reveal` / 拖拽 / checkbox / badge；`iconPath` 仅 codicon 名；`command.arguments` 仅 JSON 可克隆值（URI 自动 revive）。
+首版裁剪（逐条差异见 d.ts JSDoc）：`onDidChangeTreeData` 的 element 参数被忽略——恒整树失效重拉，且 `TreeItem.id` 不参与身份，刷新后展开态不保留；无 `reveal` / 拖拽 / checkbox / badge；`iconPath` 仅 codicon 名。
 
 ```ts
 import {

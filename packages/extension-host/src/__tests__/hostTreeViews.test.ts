@@ -87,8 +87,11 @@ describe('HostTreeViewRegistry', () => {
       contextValue: 'ctx',
       iconId: 'git-commit',
       resourceUri: resource.toJSON(),
-      command: { command: 'test.open', title: 'Open', arguments: ['x'] },
+      // `arguments` deliberately do NOT ride the wire — they stay host-side
+      // so a live object survives intact through $executeTreeItemCommand.
+      command: { command: 'test.open', title: 'Open' },
     })
+    expect(dtos[0]!.command).not.toHaveProperty('arguments')
     expect(dtos[1]).toMatchObject({ handle: 2, label: 'label:root-b', collapsibleState: 1 })
   })
 
@@ -201,5 +204,139 @@ describe('HostTreeViewRegistry', () => {
     registry.dispose()
     expect(mainThread.$unregisterTreeDataProvider).toHaveBeenCalledWith('a')
     expect(mainThread.$unregisterTreeDataProvider).toHaveBeenCalledWith('b')
+  })
+
+  describe('executeTreeItemCommand', () => {
+    function fakeExecute() {
+      return vi.fn((_command: string, _args: unknown[]) => Promise.resolve(undefined))
+    }
+
+    it('runs the row click command with its original arguments, identical by reference', async () => {
+      const mainThread = fakeMainThread()
+      const execute = fakeExecute()
+      const registry = new HostTreeViewRegistry(mainThread, execute)
+      const resource = Uri.file('/repo/a.ts')
+      const payload = { kind: 'row' }
+      const args: unknown[] = [resource, payload]
+      registry.registerTreeDataProvider(
+        VIEW_ID,
+        fakeProvider([{ name: 'root' }], {
+          getTreeItem: (element) => {
+            const item = new TreeItem(element.name, TreeItemCollapsibleState.None)
+            item.command = { command: 'test.open', title: 'Open', arguments: args }
+            return item
+          },
+        }),
+      )
+
+      const [dto] = await registry.getChildren(VIEW_ID)
+      // vscode contract: the handler receives the arguments object the
+      // extension itself returned — not the wire-flattened copy.
+      await registry.executeTreeItemCommand(VIEW_ID, dto!.handle)
+      expect(execute).toHaveBeenCalledTimes(1)
+      const [id, passedArgs] = execute.mock.calls[0]!
+      expect(id).toBe('test.open')
+      expect(passedArgs).toBe(args)
+      expect(passedArgs![0]).toBe(resource)
+      expect(passedArgs![1]).toBe(payload)
+    })
+
+    it('falls back to the tree element when the row command declares no arguments', async () => {
+      const mainThread = fakeMainThread()
+      const execute = fakeExecute()
+      const registry = new HostTreeViewRegistry(mainThread, execute)
+      const element: TestElement = { name: 'root' }
+      registry.registerTreeDataProvider(
+        VIEW_ID,
+        fakeProvider([element], {
+          getTreeItem: (el) => {
+            const item = new TreeItem(el.name, TreeItemCollapsibleState.None)
+            item.command = { command: 'test.open', title: 'Open' }
+            return item
+          },
+        }),
+      )
+
+      const [dto] = await registry.getChildren(VIEW_ID)
+      await registry.executeTreeItemCommand(VIEW_ID, dto!.handle)
+      expect(execute).toHaveBeenCalledWith('test.open', [element])
+      expect(execute.mock.calls[0]![1]![0]).toBe(element)
+    })
+
+    it('runs a view/item/context menu command with the tree element as argument', async () => {
+      const mainThread = fakeMainThread()
+      const execute = fakeExecute()
+      const registry = new HostTreeViewRegistry(mainThread, execute)
+      const element: TestElement = { name: 'root' }
+      registry.registerTreeDataProvider(VIEW_ID, fakeProvider([element]))
+
+      const [dto] = await registry.getChildren(VIEW_ID)
+      await registry.executeTreeItemCommand(VIEW_ID, dto!.handle, 'test.rowAction')
+      expect(execute).toHaveBeenCalledTimes(1)
+      expect(execute).toHaveBeenCalledWith('test.rowAction', [element])
+      expect(execute.mock.calls[0]![1]![0]).toBe(element)
+    })
+
+    it('treats a null commandId as a row click (JSON wire turns undefined into null)', async () => {
+      const mainThread = fakeMainThread()
+      const execute = fakeExecute()
+      const registry = new HostTreeViewRegistry(mainThread, execute)
+      const element: TestElement = { name: 'root' }
+      registry.registerTreeDataProvider(
+        VIEW_ID,
+        fakeProvider([element], {
+          getTreeItem: (el) => {
+            const item = new TreeItem(el.name, TreeItemCollapsibleState.None)
+            item.command = { command: 'test.open', title: 'Open' }
+            return item
+          },
+        }),
+      )
+
+      const [dto] = await registry.getChildren(VIEW_ID)
+      await registry.executeTreeItemCommand(VIEW_ID, dto!.handle, null as unknown as string)
+      expect(execute).toHaveBeenCalledWith('test.open', [element])
+    })
+
+    it('ignores stale handles, disabled commands and rows without a command', async () => {
+      const mainThread = fakeMainThread()
+      const execute = fakeExecute()
+      const registry = new HostTreeViewRegistry(mainThread, execute)
+      let fireChange: (() => void) | undefined
+      registry.registerTreeDataProvider(
+        VIEW_ID,
+        fakeProvider([{ name: 'with-cmd' }, { name: 'disabled' }, { name: 'no-cmd' }], {
+          onDidChangeTreeData: (listener) => {
+            fireChange = () => listener(undefined)
+            return { dispose: () => {} }
+          },
+          getTreeItem: (element) => {
+            const item = new TreeItem(element.name, TreeItemCollapsibleState.None)
+            if (element.name === 'with-cmd') {
+              item.command = { command: 'test.open', title: 'Open' }
+            } else if (element.name === 'disabled') {
+              item.command = { command: 'test.open', title: 'Open', disabled: true }
+            }
+            return item
+          },
+        }),
+      )
+
+      const dtos = await registry.getChildren(VIEW_ID)
+      // Row without a TreeItem.command: clicking it is a select-only action.
+      await registry.executeTreeItemCommand(VIEW_ID, dtos[2]!.handle)
+      // Disabled row command never runs.
+      await registry.executeTreeItemCommand(VIEW_ID, dtos[1]!.handle)
+      // Unknown view is a no-op.
+      await registry.executeTreeItemCommand('unknown.view', 1, 'test.rowAction')
+      expect(execute).not.toHaveBeenCalled()
+
+      // After a refresh the handle table is rebuilt; an old handle resolves to
+      // nothing and must not execute anything.
+      fireChange?.()
+      await registry.executeTreeItemCommand(VIEW_ID, dtos[0]!.handle)
+      await registry.executeTreeItemCommand(VIEW_ID, dtos[0]!.handle, 'test.rowAction')
+      expect(execute).not.toHaveBeenCalled()
+    })
   })
 })

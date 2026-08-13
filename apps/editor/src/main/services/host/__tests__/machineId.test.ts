@@ -41,4 +41,10 @@ describe('getMachineId', () => {
     expect(id).not.toBe('')
     expect(await readFile(join(dir, 'machineid'), 'utf8')).toBe(id)
   })
+
+  it('concurrent first calls converge on the same id', async () => {
+    const [a, b] = await Promise.all([getMachineId(dir), getMachineId(dir)])
+    expect(a).toBe(b)
+    expect(await readFile(join(dir, 'machineid'), 'utf8')).toBe(a)
+  })
 })

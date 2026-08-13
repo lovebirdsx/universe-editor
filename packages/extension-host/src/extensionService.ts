@@ -335,7 +335,11 @@ export class ExtensionService implements IExtensionHostBridge {
         : undefined,
     )
     if (_mainThreadWebviews) this._webviews = new HostWebviewManager(_mainThreadWebviews)
-    if (_mainThreadTreeViews) this._treeViews = new HostTreeViewRegistry(_mainThreadTreeViews)
+    if (_mainThreadTreeViews) {
+      this._treeViews = new HostTreeViewRegistry(_mainThreadTreeViews, (command, args) =>
+        this._commands.execute(command, args),
+      )
+    }
     installApiBridge(this)
   }
 
@@ -657,6 +661,11 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostTreeViews.$acceptExpansionState */
   acceptTreeViewExpansionState(viewId: string, handle: number, expanded: boolean): void {
     this._treeViews?.acceptExpansionState(viewId, handle, expanded)
+  }
+
+  /** IExtHostTreeViews.$executeTreeItemCommand */
+  executeTreeItemCommand(viewId: string, handle: number, commandId?: string): Promise<void> {
+    return this._treeViews?.executeTreeItemCommand(viewId, handle, commandId) ?? Promise.resolve()
   }
 
   // --- IExtensionHostBridge: workspace ---
@@ -1450,6 +1459,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._timelines.dispose()
     this._treeViews?.dispose()
     this._fileWatchers?.dispose()
+    this._diagnostics?.dispose()
     this._activation.disposeAll()
   }
 }

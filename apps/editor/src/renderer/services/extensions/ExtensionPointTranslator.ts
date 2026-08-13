@@ -48,7 +48,6 @@ import {
   type IResolvedJsonValidation,
   type ISubmenuContribution,
   type IThemeContribution,
-  type IViewContainerContribution,
   type IViewContribution,
 } from '@universe-editor/extensions-common'
 import { registerCommandSource } from './contributedCommandSources.js'
@@ -163,6 +162,10 @@ export class ExtensionPointTranslator extends Disposable {
   }
 
   translate(extensions: readonly IExtensionDescriptionDto[]): void {
+    // Containers land before any views so a view targeting a container declared
+    // by ANOTHER extension resolves regardless of host scan order (VSCode:
+    // viewsContainers and views are separate contribution points).
+    this._registerViewContainers(extensions)
     for (const ext of extensions) {
       const contributes = ext.contributes
       // Commands with an explicit `commandPalette` menu declaration opt out of the
@@ -184,7 +187,7 @@ export class ExtensionPointTranslator extends Disposable {
       }
       this._registerConfiguration(ext.id, contributes.configuration)
       this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
-      this._registerViews(ext, contributes.viewsContainers?.activitybar ?? [], contributes.views)
+      this._registerViews(ext, contributes.views)
       for (const editor of contributes.customEditors ?? []) {
         this._registerCustomEditorBinding(editor)
       }
@@ -240,38 +243,51 @@ export class ExtensionPointTranslator extends Disposable {
   }
 
   /**
-   * Translate `contributes.viewsContainers` / `contributes.views` into the view
-   * registries. Every extension view shares one static componentKey; the bound
+   * Register every extension's `contributes.viewsContainers` in one pass ordered
+   * by extension id, allocating activity-bar order slots from a single counter:
+   * each container gets a distinct slot and the slots are stable across
+   * restarts that scan the same install set in a different order.
+   */
+  private _registerViewContainers(extensions: readonly IExtensionDescriptionDto[]): void {
+    const sorted = [...extensions].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    let orderIndex = 0
+    for (const ext of sorted) {
+      for (const container of ext.contributes.viewsContainers?.activitybar ?? []) {
+        if (ViewContainerRegistry.getViewContainer(container.id) !== undefined) {
+          this._logger.warn(
+            `${ext.id}: ignoring viewsContainer "${container.id}": id already registered`,
+          )
+          continue
+        }
+        this._register(
+          ViewContainerRegistry.registerViewContainer({
+            id: container.id,
+            label: container.title,
+            icon: normalizeContainerIcon(container.icon),
+            order: EXTENSION_CONTAINER_ORDER_BASE + orderIndex,
+            location: ViewContainerLocation.SideBar,
+          }),
+        )
+        orderIndex += 1
+      }
+    }
+  }
+
+  /**
+   * Translate `contributes.views` into the view registry (containers were all
+   * registered up front, so a key may also resolve to one declared by another
+   * extension). Every extension view shares one static componentKey; the bound
    * component receives the view id via props and activates the owner on first
    * reveal. A `views` key resolves to a well-known built-in alias or any
-   * registered container id verbatim (including a container this extension just
-   * declared, or one declared by another extension); anything else is skipped
-   * with a warning (mirrors the unknown menu-location policy). The view-level
-   * `when` clause is carried in the DTO but not gated on yet — visibility
-   * gating lands with the tree data phase.
+   * registered container id verbatim; anything else is skipped with a warning
+   * (mirrors the unknown menu-location policy). The view-level `when` clause is
+   * carried in the DTO but not gated on yet — visibility gating lands with the
+   * tree data phase.
    */
   private _registerViews(
     ext: IExtensionDescriptionDto,
-    containers: readonly IViewContainerContribution[],
     views: Record<string, IViewContribution[]> | undefined,
   ): void {
-    containers.forEach((container, index) => {
-      if (ViewContainerRegistry.getViewContainer(container.id) !== undefined) {
-        this._logger.warn(
-          `${ext.id}: ignoring viewsContainer "${container.id}": id already registered`,
-        )
-        return
-      }
-      this._register(
-        ViewContainerRegistry.registerViewContainer({
-          id: container.id,
-          label: container.title,
-          icon: normalizeContainerIcon(container.icon),
-          order: EXTENSION_CONTAINER_ORDER_BASE + index,
-          location: ViewContainerLocation.SideBar,
-        }),
-      )
-    })
     for (const [key, entries] of Object.entries(views ?? {})) {
       const containerId = this._resolveViewsContainerKey(key)
       if (containerId === undefined) {

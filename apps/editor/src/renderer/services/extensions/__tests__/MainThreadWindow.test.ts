@@ -360,4 +360,21 @@ describe('MainThreadWindow file dialogs', () => {
       expect.objectContaining({ openLabel: 'Save', title: 'Save As' }),
     )
   })
+
+  it('passes save dialog filters through to the dialog service', async () => {
+    const dialogs = fakeFileDialogs(undefined, URI.file('/ws/out.png'))
+    const mt = makeWindow({ fileDialogs: dialogs.service })
+    await mt.$showSaveDialog({
+      title: 'Export',
+      filters: { Images: ['png', 'jpg'], 'All Files': ['*'] },
+    })
+    expect(dialogs.showSaveDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      }),
+    )
+  })
 })

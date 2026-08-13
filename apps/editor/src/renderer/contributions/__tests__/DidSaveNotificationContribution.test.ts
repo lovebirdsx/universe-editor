@@ -94,6 +94,19 @@ describe('DidSaveNotificationContribution', () => {
     expect(warn).toHaveBeenCalled()
   })
 
+  it('pushes without waiting when the caller marks the file as unmirrored (merge editor save)', async () => {
+    // MergeEditorInput saves a file that typically has no document in the mirror
+    // pipeline; waiting for an open would burn the full mirror timeout.
+    const documents = { $acceptDocumentSave: vi.fn().mockResolvedValue(undefined) }
+    const whenOpened = vi.fn(() => new Promise<boolean>(() => {}))
+    const { warn } = setup(documents, whenOpened)
+
+    DidSaveNotification.notify(URI_SAVED, { expectMirrorOpen: false })
+    await vi.waitFor(() => expect(documents.$acceptDocumentSave).toHaveBeenCalledTimes(1))
+    expect(whenOpened).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it('does nothing when the host has no documents channel', async () => {
     const whenOpened = vi.fn().mockResolvedValue(true)
     setup(undefined, whenOpened)

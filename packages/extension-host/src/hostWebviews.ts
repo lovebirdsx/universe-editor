@@ -54,7 +54,13 @@ function webviewOptionsToDto(value: WebviewOptions | undefined): IWebviewOptions
   return {
     ...(value?.enableScripts !== undefined ? { enableScripts: value.enableScripts } : {}),
     ...(value?.localResourceRoots !== undefined
-      ? { localResourceRoots: value.localResourceRoots.map((r) => URI.revive(r)?.fsPath ?? '') }
+      ? {
+          localResourceRoots: value.localResourceRoots
+            .map((r) => URI.revive(r)?.fsPath)
+            // Un-revivable roots must not cross as '' (an empty root would
+            // silently widen the resource allow-list).
+            .filter((p): p is string => p !== undefined && p !== ''),
+        }
       : {}),
   }
 }

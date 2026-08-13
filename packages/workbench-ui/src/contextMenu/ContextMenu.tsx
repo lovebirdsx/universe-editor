@@ -17,6 +17,12 @@ export interface ContextMenuProps {
   /** Passed as the first argument to each executed command. */
   args?: readonly unknown[]
   commandService: ICommandService
+  /**
+   * Overrides how a picked command runs (extension tree views resolve the
+   * command host-side so the extension handler gets live objects instead of
+   * wire DTOs). When set, `args` is unused.
+   */
+  executeCommand?: (commandId: string) => void
   contextKeyService?: IContextKeyService
   /**
    * Optional predicate to keep only certain menu groups. Used by the editor
@@ -46,6 +52,7 @@ export function ContextMenu({
   anchor,
   args = [],
   commandService,
+  executeCommand,
   contextKeyService,
   groupFilter,
   onClose,
@@ -74,13 +81,14 @@ export function ContextMenu({
         label,
         run: () => {
           onClose()
-          void commandService.executeCommand(commandId, ...args)
+          if (executeCommand) executeCommand(commandId)
+          else void commandService.executeCommand(commandId, ...args)
         },
       })
     }
 
     return result
-  }, [menuId, contextKeyService, args, commandService, onClose, groupFilter])
+  }, [menuId, contextKeyService, args, commandService, executeCommand, onClose, groupFilter])
 
   if (rows.length === 0) return null
 

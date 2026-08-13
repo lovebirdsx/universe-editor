@@ -61,6 +61,25 @@ describe('HostWebviewManager.createWebviewPanel', () => {
     expect(panel.visible).toBe(false)
   })
 
+  it('options setter drops un-revivable localResourceRoots instead of sending empty roots', () => {
+    const mainThread = fakeMainThread()
+    const manager = new HostWebviewManager(mainThread)
+    const panel = manager.createWebviewPanel('cat.view', 'A', undefined, undefined)
+
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        { scheme: 'file', path: '/ext/assets' },
+        undefined,
+        {}, // revives to an empty-scheme URI whose fsPath is ''
+      ] as never,
+    }
+    expect(mainThread.$setWebviewOptions).toHaveBeenCalledWith(-1, {
+      enableScripts: true,
+      localResourceRoots: ['/ext/assets'],
+    })
+  })
+
   it('title setter writes through $setWebviewTitle for extension-owned panels', () => {
     const mainThread = fakeMainThread()
     const manager = new HostWebviewManager(mainThread)

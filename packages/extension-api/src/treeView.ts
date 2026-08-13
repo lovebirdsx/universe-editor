@@ -42,7 +42,11 @@ export class TreeItem {
   /** Secondary text rendered after the label. */
   description?: string
   tooltip?: string
-  /** Run when the row is clicked. `command.arguments` must be JSON-cloneable. */
+  /**
+   * Run when the row is clicked. The handler receives `command.arguments`
+   * unchanged — live objects are fine (Uri, custom payloads): they never
+   * leave the extension host process.
+   */
   command?: Command
   /** Surfaced to `view/item/context` menu `when` clauses as `viewItem`. */
   contextValue?: string

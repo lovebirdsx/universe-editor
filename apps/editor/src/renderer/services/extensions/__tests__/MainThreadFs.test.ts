@@ -335,16 +335,24 @@ describe('MainThreadFs', () => {
       expect(result).toEqual(['/repo/src/a.ts', '/repo/src/deep/b.ts'])
     })
 
-    it('rejects a RelativePattern base outside the workspace', async () => {
+    it('returns no results (not an RPC error) for a RelativePattern base outside the workspace', async () => {
       const search = fakeSearch([])
-      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search)
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const fs = makeFs('/repo', allowPolicy, fakeFiles({}), search, () => [], logger)
       await expect(
         fs.$findFiles({ base: URI.file('/elsewhere').toJSON(), pattern: '*.ts' }, null, null),
-      ).rejects.toThrow(/escapes the workspace/)
+      ).resolves.toEqual([])
+      // The containment guard still holds: the enumeration never ran.
+      expect(search.lastQueryExcludes()).toBeUndefined()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/escapes the workspace/)
     })
 
-    it('rejects a RelativePattern base whose real path escapes the workspace', async () => {
+    it('returns no results for a RelativePattern base whose real path escapes the workspace', async () => {
       const search = fakeSearch([])
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
       const fs = makeFs(
         '/repo',
         allowPolicy,
@@ -355,10 +363,15 @@ describe('MainThreadFs', () => {
           },
         }),
         search,
+        () => [],
+        logger,
       )
       await expect(
         fs.$findFiles({ base: URI.file('/repo/link').toJSON(), pattern: '*.ts' }, null, null),
-      ).rejects.toThrow(/escapes the workspace/)
+      ).resolves.toEqual([])
+      expect(search.lastQueryExcludes()).toBeUndefined()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/escapes the workspace/)
     })
 
     it('scopes a RelativePattern exclude to its own base', async () => {
