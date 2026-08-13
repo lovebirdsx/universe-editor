@@ -47,6 +47,7 @@ import { IConfigLocationService } from '../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
+import { IRemoteStatusService } from '../shared/ipc/remoteStatusService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../shared/ipc/processMonitorService.js'
@@ -517,6 +518,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
       watcherProcess: accessor.get(IWatcherProcessService),
       remoteConnection: accessor.get(IRemoteConnectionService),
+      remoteStatus: accessor.get(IRemoteStatusService),
     }))
   }
   if (!windowMainService) {

@@ -94,6 +94,7 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.AiModel, ProxyChannel.fromService(app.aiModel))
   server.registerChannel(ServiceChannels.AiDebug, ProxyChannel.fromService(app.aiDebug))
   server.registerChannel(ServiceChannels.RemoteSchema, ProxyChannel.fromService(app.remoteSchema))
+  server.registerChannel(ServiceChannels.RemoteStatus, ProxyChannel.fromService(app.remoteStatus))
   server.registerChannel(ServiceChannels.ExchangeRate, ProxyChannel.fromService(app.exchangeRate))
   server.registerChannel(
     ServiceChannels.ResourceAccess,

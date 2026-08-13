@@ -41,6 +41,7 @@ import type { ICodexConfigService } from '../../shared/ipc/codexConfigService.js
 import type { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
+import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import type { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import type { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import type { ErrorSinkMainService } from '../services/telemetry/errorSinkMainService.js'
@@ -115,6 +116,8 @@ export interface ApplicationServices {
    * spawned remote server processes and hands out channels by authority.
    */
   readonly remoteConnection: IRemoteConnectionService
+  /** Wire facade over `remoteConnection`, exposing connection state to the renderer. */
+  readonly remoteStatus: IRemoteStatusService
 }
 
 /**

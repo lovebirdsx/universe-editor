@@ -26,7 +26,6 @@ import {
   type ITextSearchMainService,
   type UriComponents,
 } from '@universe-editor/platform'
-import { fromWire, toWire } from '../remote/remoteUri.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 function reviveUri(value: URI | UriComponents): URI {
@@ -58,14 +57,8 @@ export class TextSearchMainService extends TextSearchService {
     const service = await this._remoteService(authority)
     this._authorityBySession.set(query.sessionId, authority)
     try {
-      const complete = await service.search({ ...query, root: toWire(root) })
-      return {
-        ...complete,
-        results: complete.results.map((m) => ({
-          resource: fromWire(m.resource, authority),
-          matches: m.matches,
-        })),
-      }
+      // URIs travel verbatim; the server codec handles remote-ssh <-> file.
+      return await service.search({ ...query, root })
     } finally {
       this._authorityBySession.delete(query.sessionId)
     }
@@ -91,15 +84,7 @@ export class TextSearchMainService extends TextSearchService {
     this._remoteServices.set(authority, service)
     this._remoteSubs.set(authority, [
       service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e)),
-      service.onDidSearchResults((e) =>
-        this._onDidSearchResults.fire({
-          sessionId: e.sessionId,
-          results: e.results.map((m) => ({
-            resource: fromWire(m.resource, authority),
-            matches: m.matches,
-          })),
-        }),
-      ),
+      service.onDidSearchResults((e) => this._onDidSearchResults.fire(e)),
     ])
     conn.onDidClose(() => this._dropRemote(authority))
     return service

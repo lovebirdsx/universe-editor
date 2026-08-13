@@ -1,13 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Remote development Phase 1 roundtrip (@regression).
  *
- *  The remote server is a pure Node process (packages/remote-server/dist/
- *  bootstrap.js) that this spec launches in place of `ssh` via
- *  UNIVERSE_REMOTE_SERVER_CMD=[process.execPath, bootstrap.js]. The authority is
- *  `e2e-local`, so a `remote-ssh://e2e-local/<tmp>` URI tunnels to the SAME
- *  machine's filesystem — the Playwright-managed tmp dir. Each test exercises one
- *  Phase 1 surface: file read/write/stat/list/delete, remote-rooted text search,
- *  and the remote watcher's change-event round trip.
+ *  The remote server is a pure Node TCP daemon (packages/remote-server/dist/
+ *  bootstrap.js) launched in direct mode: UNIVERSE_REMOTE_SERVER_CMD is the
+ *  command prefix `[process.execPath, bootstrap.js]`, and the main process appends
+ *  `serve --data-dir <userData>/remote-direct/e2e-local` before spawning it. The
+ *  authority is `e2e-local`, so a `remote-ssh://e2e-local/<tmp>` URI tunnels to the
+ *  SAME machine's filesystem — the Playwright-managed tmp dir. Each test exercises
+ *  one Phase 1 surface: file read/write/stat/list/delete, remote-rooted text
+ *  search, and the remote watcher's change-event round trip.
  *
  *  Not @p0 — spawning the remote server is a child process per cold launch,
  *  slower and more environment-sensitive than the core workbench smoke path.

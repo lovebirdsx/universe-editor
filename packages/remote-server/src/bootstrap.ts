@@ -1,94 +1,346 @@
-/**
- * Remote server bootstrap — a headless Node process the local editor spawns over
- * ssh (`ssh user@host universe-editor-server`) or, in e2e, directly via
- * `node dist/bootstrap.js`. stdout carries the RPC wire and nothing else; every
- * diagnostic goes to stderr. The server only ever sees `file:` URIs, so this is
- * a headless local file-service stack (filesystem, search, watcher).
- */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Remote server daemon CLI. Four subcommands:
+ *    serve [--data-dir <dir>] [--port <n>] [--token <t>]  run the daemon in the foreground
+ *    start [--data-dir <dir>]                             detached-spawn serve and wait until ready
+ *    check [--data-dir <dir>]                             verify a daemon is alive + version-matched
+ *    stop  [--data-dir <dir>]                             stop the daemon and clean bookkeeping files
+ *
+ *  The data dir (default ~/.universe-editor-server) holds daemon.lock (single-instance
+ *  guard), server.json (IRemoteDaemonInfo, written atomically 0600) and server.log.
+ *  serve prints exactly one line to stdout — `UNIVERSE_REMOTE_DAEMON_INFO=<json>` — and
+ *  nothing else; all diagnostics go to server.log + stderr.
+ *--------------------------------------------------------------------------------------------*/
+
+import { spawn } from 'node:child_process'
+import { createWriteStream, type WriteStream } from 'node:fs'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import path from 'node:path'
 import {
   AbstractLogger,
-  ChannelPair,
-  Emitter,
+  LogLevel,
   REMOTE_PROTOCOL_VERSION,
-  type LogLevel,
+  type ILogger,
+  type IRemoteDaemonInfo,
 } from '@universe-editor/platform'
-import { StdioFramingProtocol, type StdioTransport } from '@universe-editor/extensions-common'
-import { createRemoteServer } from './server.js'
-import { protectStdout } from './stdoutProtection.js'
+import { createDaemon } from './daemon.js'
+import { SERVER_VERSION } from './version.js'
 
-// stdout IS the RPC wire — protect it before any bundled dependency can run a
-// stray console.log that would corrupt a frame. Binds the real stdout writer for
-// framing and routes all console.* to stderr.
-const writeFrame = protectStdout({
-  stdout: process.stdout,
-  stderr: process.stderr,
-  set console(c) {
-    globalThis.console = c
-  },
-  get console() {
-    return globalThis.console
-  },
-})
+const DEFAULT_DATA_DIR = path.join(homedir(), '.universe-editor-server')
+const INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
+const START_TIMEOUT_MS = 10_000
+const STOP_TIMEOUT_MS = 3_000
 
-/** Logger for the server's own diagnostics; writes raw lines to stderr. */
-class StderrLogger extends AbstractLogger {
-  protected override _log(_level: LogLevel, message: string): void {
-    process.stderr.write(`${message}\n`)
+interface CliOptions {
+  dataDir: string
+  port?: number
+  token?: string
+}
+
+class AlreadyRunningError extends Error {
+  constructor(readonly pid: number) {
+    super(`daemon already running (pid ${pid})`)
+    this.name = 'AlreadyRunningError'
   }
 }
 
-process.on('unhandledRejection', (reason: unknown) => {
-  console.error(`[remote-server] unhandled rejection: ${formatUnknownError(reason)}`)
-})
+class CheckError extends Error {
+  constructor(
+    readonly code: 'not-running' | 'version-mismatch',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'CheckError'
+  }
+}
 
-// An uncaught synchronous throw would otherwise exit with a bare stack that can
-// be lost before the ssh client drains the pipe; log it explicitly, then exit(1)
-// to keep Node's default crash semantics.
-process.on('uncaughtException', (err: unknown) => {
+class DaemonLogger extends AbstractLogger {
+  constructor(private readonly _stream: WriteStream) {
+    super(LogLevel.Info)
+  }
+
+  protected override _log(_level: LogLevel, message: string): void {
+    const line = `[${new Date().toISOString()}] ${message}\n`
+    this._stream.write(line)
+    process.stderr.write(line)
+  }
+
+  override dispose(): void {
+    this._stream.end()
+    super.dispose()
+  }
+}
+
+function createDaemonLogger(dataDir: string): ILogger {
+  return new DaemonLogger(createWriteStream(path.join(dataDir, 'server.log'), { flags: 'a' }))
+}
+
+function isAlive(pid: number): boolean {
   try {
-    console.error(`[remote-server] uncaught exception: ${formatUnknownError(err)}`)
-  } finally {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function readServerInfo(dataDir: string): Promise<IRemoteDaemonInfo | undefined> {
+  try {
+    const raw = await readFile(path.join(dataDir, 'server.json'), 'utf8')
+    const parsed = JSON.parse(raw) as IRemoteDaemonInfo
+    if (typeof parsed.port !== 'number' || typeof parsed.token !== 'string') return undefined
+    return parsed
+  } catch {
+    return undefined
+  }
+}
+
+async function writeServerInfo(dataDir: string, info: IRemoteDaemonInfo): Promise<void> {
+  const target = path.join(dataDir, 'server.json')
+  const tmp = `${target}.${process.pid}.tmp`
+  await writeFile(tmp, JSON.stringify(info, null, 2) + '\n', { mode: 0o600 })
+  try {
+    await rename(tmp, target)
+  } catch {
+    await rm(target, { force: true })
+    await rename(tmp, target)
+  }
+}
+
+async function cleanupFiles(dataDir: string): Promise<void> {
+  await rm(path.join(dataDir, 'server.json'), { force: true })
+  await rm(path.join(dataDir, 'daemon.lock'), { force: true })
+}
+
+async function acquireLock(dataDir: string): Promise<void> {
+  const lockPath = path.join(dataDir, 'daemon.lock')
+  try {
+    await writeFile(lockPath, String(process.pid), { flag: 'wx' })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    const raw = await readFile(lockPath, 'utf8').catch(() => '')
+    const pid = Number(raw)
+    if (Number.isFinite(pid) && pid > 0 && isAlive(pid)) {
+      throw new AlreadyRunningError(pid)
+    }
+    // Stale lock from a dead daemon: take it over.
+    await writeFile(lockPath, String(process.pid))
+  }
+}
+
+async function serve(opts: CliOptions): Promise<void> {
+  await mkdir(opts.dataDir, { recursive: true })
+  await acquireLock(opts.dataDir)
+
+  const logger = createDaemonLogger(opts.dataDir)
+  logger.info(`[remote-server] serve starting (data-dir ${opts.dataDir})`)
+
+  const daemon = await createDaemon({
+    ...(opts.port !== undefined ? { port: opts.port } : {}),
+    ...(opts.token !== undefined ? { token: opts.token } : {}),
+    logger,
+  })
+
+  const info: IRemoteDaemonInfo = {
+    serverVersion: SERVER_VERSION,
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    port: daemon.port,
+    token: daemon.token,
+    pid: process.pid,
+  }
+  await writeServerInfo(opts.dataDir, info)
+  process.stdout.write(`${INFO_PREFIX}${JSON.stringify(info)}\n`)
+  logger.info(`[remote-server] ready on 127.0.0.1:${daemon.port}`)
+
+  let shuttingDown = false
+  const shutdown = (reason: string): void => {
+    if (shuttingDown) return
+    shuttingDown = true
+    logger.info(`[remote-server] shutdown (${reason})`)
+    void (async () => {
+      try {
+        await daemon.dispose()
+      } catch (err) {
+        logger.error(`[remote-server] shutdown dispose failed: ${(err as Error).message}`)
+      }
+      await cleanupFiles(opts.dataDir)
+      logger.dispose()
+      process.exit(0)
+    })()
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  process.on('SIGINT', () => shutdown('SIGINT'))
+}
+
+async function startDaemon(dataDir: string): Promise<void> {
+  const script = path.resolve(process.argv[1] ?? '')
+  const child = spawn(process.execPath, [script, 'serve', '--data-dir', dataDir], {
+    // detached: POSIX = setsid (escape the caller's SIGHUP); Windows = independent
+    // process. windowsHide keeps the detached Windows child from opening a console.
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+
+  const deadline = Date.now() + START_TIMEOUT_MS
+  for (;;) {
+    const info = await readServerInfo(dataDir)
+    if (info && isAlive(info.pid)) {
+      printInfo(info)
+      return
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('timed out waiting for server.json')
+    }
+    await sleep(100)
+  }
+}
+
+async function checkDaemon(dataDir: string): Promise<void> {
+  const info = await readServerInfo(dataDir)
+  if (!info) {
+    throw new CheckError('not-running', 'server is not running (no server.json)')
+  }
+  if (!isAlive(info.pid)) {
+    throw new CheckError('not-running', `server pid ${info.pid} is not alive`)
+  }
+  if (info.protocolVersion !== REMOTE_PROTOCOL_VERSION) {
+    throw new CheckError(
+      'version-mismatch',
+      `protocol version ${info.protocolVersion} != ${REMOTE_PROTOCOL_VERSION}`,
+    )
+  }
+  if (info.serverVersion !== SERVER_VERSION) {
+    throw new CheckError(
+      'version-mismatch',
+      `server version ${info.serverVersion} != ${SERVER_VERSION}`,
+    )
+  }
+  printInfo(info)
+}
+
+async function stopDaemon(dataDir: string): Promise<void> {
+  const info = await readServerInfo(dataDir)
+  if (info && isAlive(info.pid)) {
+    try {
+      process.kill(info.pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+    const deadline = Date.now() + STOP_TIMEOUT_MS
+    while (isAlive(info.pid) && Date.now() < deadline) {
+      await sleep(100)
+    }
+    if (isAlive(info.pid)) {
+      try {
+        process.kill(info.pid, 'SIGKILL')
+      } catch {
+        // already gone
+      }
+    }
+  }
+  await cleanupFiles(dataDir)
+}
+
+function printInfo(info: IRemoteDaemonInfo): void {
+  process.stdout.write(`${INFO_PREFIX}${JSON.stringify(info)}\n`)
+}
+
+function parseOptions(args: string[]): CliOptions {
+  const opts: CliOptions = { dataDir: DEFAULT_DATA_DIR }
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i]!
+    if (flag === '--data-dir') {
+      const value = args[i + 1]
+      if (value !== undefined) {
+        opts.dataDir = value
+        i++
+      }
+    } else if (flag === '--port') {
+      const value = args[i + 1]
+      if (value !== undefined) {
+        const port = Number(value)
+        if (Number.isFinite(port)) {
+          opts.port = Math.floor(port)
+        }
+        i++
+      }
+    } else if (flag === '--token') {
+      const value = args[i + 1]
+      if (value !== undefined) {
+        opts.token = value
+        i++
+      }
+    }
+  }
+  return opts
+}
+
+function printUsage(): void {
+  process.stderr.write(
+    [
+      'usage: universe-editor-server <command> [options]',
+      '',
+      'commands:',
+      '  serve  run the daemon in the foreground',
+      '  start  detached-spawn serve and wait until ready',
+      '  check  verify the daemon is alive and version-matched (exit 3 otherwise)',
+      '  stop   stop the daemon and clean bookkeeping files',
+      '',
+      'options:',
+      '  --data-dir <dir>  data directory (default ~/.universe-editor-server)',
+      '  --port <n>        serve: fixed listen port (default: ephemeral)',
+      '  --token <t>       serve: fixed connection token (default: random)',
+      '',
+    ].join('\n'),
+  )
+}
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2)
+  const command = argv[0]
+  if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
+    printUsage()
     process.exit(1)
   }
-})
 
-const onData = new Emitter<string>()
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk: string) => onData.fire(chunk))
-
-const transport: StdioTransport = {
-  write: (frame) => {
-    writeFrame(frame)
-  },
-  onData: onData.event,
-}
-
-const protocol = new StdioFramingProtocol(transport)
-const { server } = new ChannelPair(protocol)
-
-const log = new StderrLogger()
-const serverDisposable = createRemoteServer(server, log)
-log.info(`[remote-server] ready (protocol v${REMOTE_PROTOCOL_VERSION})`)
-
-// Graceful shutdown: the ssh session ends (stdin EOF/close) or we are SIGTERMed.
-// Runs at most once; dispose the services (notably the watcher, which must
-// release native subscriptions) and exit 0.
-let didShutdown = false
-function shutdown(reason: string): void {
-  if (didShutdown) return
-  didShutdown = true
-  log.info(`[remote-server] shutdown (${reason})`)
+  const opts = parseOptions(argv.slice(1))
   try {
-    serverDisposable.dispose()
+    switch (command) {
+      case 'serve':
+        await serve(opts)
+        break
+      case 'start':
+        await startDaemon(opts.dataDir)
+        break
+      case 'check':
+        await checkDaemon(opts.dataDir)
+        break
+      case 'stop':
+        await stopDaemon(opts.dataDir)
+        break
+      default:
+        printUsage()
+        process.exit(1)
+    }
   } catch (err) {
-    log.error(`[remote-server] shutdown dispose failed: ${(err as Error).message}`)
+    if (err instanceof AlreadyRunningError) {
+      process.stderr.write(`already running (pid ${err.pid})\n`)
+      process.exit(2)
+    }
+    if (err instanceof CheckError) {
+      process.stderr.write(`${err.code}: ${err.message}\n`)
+      process.exit(3)
+    }
+    process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
   }
-  process.exit(0)
 }
-process.stdin.on('end', () => shutdown('stdin end'))
-process.stdin.on('close', () => shutdown('stdin close'))
-process.on('SIGTERM', () => shutdown('SIGTERM'))
 
-function formatUnknownError(error: unknown): string {
-  return error instanceof Error ? (error.stack ?? error.message) : String(error)
-}
+void main()

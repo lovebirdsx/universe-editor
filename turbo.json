@@ -20,6 +20,20 @@
       ],
       "outputs": ["dist/**", "out/**", "*.tsbuildinfo"]
     },
+    "bundle": {
+      "dependsOn": ["build", "^build"],
+      "outputLogs": "new-only",
+      "inputs": [
+        "src/**",
+        "!src/**/__tests__/**",
+        "!src/**/*.test.ts",
+        "!src/**/*.test.tsx",
+        "package.json",
+        "tsconfig*.json",
+        "esbuild.config.mjs"
+      ],
+      "outputs": ["dist-bundle/**"]
+    },
     "typecheck": {
       "dependsOn": ["build", "^build"],
       "outputLogs": "new-only",

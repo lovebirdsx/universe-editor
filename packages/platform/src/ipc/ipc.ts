@@ -243,6 +243,21 @@ function decode(data: Uint8Array): IpcMessage {
   return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
 }
 
+/**
+ * Pluggable wire format for the channel layer. `defaultCodec` is the historical
+ * JSON + base64-tagged-Uint8Array envelope (byte-for-byte identical to before
+ * the codec seam existed) and is what Electron IPC / the extension host / tests
+ * keep using implicitly. The remote tunnel injects a binary codec (see
+ * `codec.ts`) that carries Uint8Array payloads as raw attachment segments and
+ * hooks per-connection URI transformation into the same pass.
+ */
+export interface IpcCodec {
+  encode(msg: IpcMessage): Uint8Array
+  decode(data: Uint8Array): IpcMessage
+}
+
+export const defaultCodec: IpcCodec = { encode, decode }
+
 /** Field an `Error` may carry a machine-readable code under (matches Node's `err.code`). */
 interface ErrorWithCode extends Error {
   code?: string | number
@@ -296,13 +311,14 @@ export class ChannelClient extends Disposable implements IChannelClient {
   constructor(
     private readonly _protocol: IMessagePassingProtocol,
     autoDispatch = true,
+    private readonly _codec: IpcCodec = defaultCodec,
   ) {
     super()
     // A ChannelPair shares the protocol with a ChannelServer and dispatches
     // decoded messages itself — decoding every frame twice on multi-MB payloads
     // is exactly the main-thread stall the pair exists to avoid.
     if (autoDispatch) {
-      this._register(_protocol.onMessage((data) => this.handleMessage(decode(data))))
+      this._register(_protocol.onMessage((data) => this.handleMessage(this._codec.decode(data))))
     }
   }
 
@@ -341,7 +357,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
             if (!pending) return
             client._pendingRequests.delete(id)
             if (!client._disposed) {
-              client._protocol.send(encode({ type: 'cancel', id }))
+              client._protocol.send(client._codec.encode({ type: 'cancel', id }))
             }
             pending.reject(new CancellationError())
           })
@@ -359,7 +375,7 @@ export class ChannelClient extends Disposable implements IChannelClient {
             },
           })
           client._protocol.send(
-            encode({
+            client._codec.encode({
               type: 'request',
               id,
               channel: channelName,
@@ -376,13 +392,17 @@ export class ChannelClient extends Disposable implements IChannelClient {
         if (!emitter) {
           emitter = new Emitter<unknown>({
             onDidAddFirstListener: () => {
-              client._protocol.send(encode({ type: 'subscribe', channel: channelName, event, arg }))
+              client._protocol.send(
+                client._codec.encode({ type: 'subscribe', channel: channelName, event, arg }),
+              )
             },
             onDidRemoveLastListener: () => {
               if (client._disposed) {
                 return
               }
-              client._protocol.send(encode({ type: 'unsubscribe', channel: channelName, event }))
+              client._protocol.send(
+                client._codec.encode({ type: 'unsubscribe', channel: channelName, event }),
+              )
             },
           })
           client._eventEmitters.set(key, emitter)
@@ -424,10 +444,11 @@ export class ChannelServer extends Disposable implements IChannelServer {
   constructor(
     private readonly _protocol: IMessagePassingProtocol,
     autoDispatch = true,
+    private readonly _codec: IpcCodec = defaultCodec,
   ) {
     super()
     if (autoDispatch) {
-      this._register(_protocol.onMessage((data) => this.handleMessage(decode(data))))
+      this._register(_protocol.onMessage((data) => this.handleMessage(this._codec.decode(data))))
     }
     // A dead peer (renderer frame gone) cannot receive anything, but every
     // firing emitter would still encode its payload only for the protocol's
@@ -461,7 +482,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
 
     if (!channel) {
       this._protocol.send(
-        encode({
+        this._codec.encode({
           type: 'response',
           id,
           error: { name: 'ChannelNotFoundError', message: `Channel '${channelName}' not found` },
@@ -477,10 +498,12 @@ export class ChannelServer extends Disposable implements IChannelServer {
       channel
         .call(command, arg)
         .then((data) => {
-          this._protocol.send(encode({ type: 'response', id, data }))
+          this._protocol.send(this._codec.encode({ type: 'response', id, data }))
         })
         .catch((err: unknown) => {
-          this._protocol.send(encode({ type: 'response', id, error: serializeError(err) }))
+          this._protocol.send(
+            this._codec.encode({ type: 'response', id, error: serializeError(err) }),
+          )
         })
       return
     }
@@ -496,11 +519,13 @@ export class ChannelServer extends Disposable implements IChannelServer {
       .call(command, arg, cts.token)
       .then((data) => {
         finish()
-        this._protocol.send(encode({ type: 'response', id, data }))
+        this._protocol.send(this._codec.encode({ type: 'response', id, data }))
       })
       .catch((err: unknown) => {
         finish()
-        this._protocol.send(encode({ type: 'response', id, error: serializeError(err) }))
+        this._protocol.send(
+          this._codec.encode({ type: 'response', id, error: serializeError(err) }),
+        )
       })
   }
 
@@ -517,7 +542,7 @@ export class ChannelServer extends Disposable implements IChannelServer {
       event,
       arg,
     )((data) => {
-      this._protocol.send(encode({ type: 'event', channel: channelName, event, data }))
+      this._protocol.send(this._codec.encode({ type: 'event', channel: channelName, event, data }))
     })
     this._eventSubscriptions.set(key, sub)
   }
@@ -566,13 +591,16 @@ export class ChannelPair extends Disposable {
   constructor(
     protocol: IMessagePassingProtocol,
     decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+    codec: IpcCodec = defaultCodec,
   ) {
     super()
-    this.client = this._register(new ChannelClient(protocol, false))
-    this.server = this._register(new ChannelServer(protocol, false))
+    this.client = this._register(new ChannelClient(protocol, false, codec))
+    this.server = this._register(new ChannelServer(protocol, false, codec))
     this._register(
       protocol.onMessage((data) => {
-        const msg = decodeInstrument ? decodeInstrument(() => decode(data)) : decode(data)
+        const msg = decodeInstrument
+          ? decodeInstrument(() => codec.decode(data))
+          : codec.decode(data)
         if (msg.type === 'response' || msg.type === 'event') {
           this.client.handleMessage(msg)
         } else {
@@ -628,9 +656,10 @@ export class IpcService extends Disposable implements IIpcService {
   constructor(
     protocol: IMessagePassingProtocol,
     decodeInstrument?: (run: () => IpcMessage) => IpcMessage,
+    codec: IpcCodec = defaultCodec,
   ) {
     super()
-    const pair = this._register(new ChannelPair(protocol, decodeInstrument))
+    const pair = this._register(new ChannelPair(protocol, decodeInstrument, codec))
     this._client = pair.client
     this._server = pair.server
   }

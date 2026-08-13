@@ -20,7 +20,6 @@ import {
   type ILoggerService as ILoggerServiceType,
   type UriComponents,
 } from '@universe-editor/platform'
-import { fromWire, toWire } from '../remote/remoteUri.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 function reviveUri(value: URI | UriComponents): URI {
@@ -52,11 +51,9 @@ export class FileSearchMainService extends FileSearchService {
     }
     const authority = root.authority
     const service = await this._remoteService(authority)
-    const result = await service.search({ ...query, root: toWire(root) }, token)
-    return {
-      ...result,
-      results: result.results.map((m) => ({ ...m, resource: fromWire(m.resource, authority) })),
-    }
+    // URIs travel verbatim: the server codec translates remote-ssh -> file on the
+    // way in and file -> remote-ssh (revived into real URI instances) on the way out.
+    return service.search({ ...query, root }, token)
   }
 
   private async _remoteService(authority: string): Promise<IFileSearchService> {

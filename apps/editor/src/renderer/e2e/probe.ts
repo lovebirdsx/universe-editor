@@ -45,6 +45,7 @@ import type { IAcpSessionService } from '../services/acp/session/acpSessionServi
 import type { IMcpServerEnablementService } from '../services/acp/mcpServerEnablementService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
+import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
@@ -116,6 +117,7 @@ export interface E2EProbeServices {
   readonly fileService: IFileService
   readonly textSearchMainService: ITextSearchMainService
   readonly fileWatcherService: IFileWatcherService
+  readonly remoteStatusService: IRemoteStatusService
   readonly extensionManagementService: IExtensionManagementService
   readonly extensionGalleryService: IExtensionGalleryService
   readonly extensionEnablementService: IExtensionEnablementService
@@ -1698,6 +1700,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       await services.fileWatcherService.watch(URI.parse(uri))
     },
     getWatchedChangeEvents: () => watchedChangeEvents.map((e) => ({ ...e })),
+    getRemoteConnections: async () => {
+      const list = await services.remoteStatusService.getConnections()
+      return list.map((c) => ({
+        authority: c.authority,
+        state: c.state,
+        ...(c.errorMessage !== undefined ? { errorMessage: c.errorMessage } : {}),
+      }))
+    },
+    dropRemoteSocket: (authority) => services.remoteStatusService.dropSocketForTesting(authority),
   }
 
   window[E2E_PROBE_KEY] = probe

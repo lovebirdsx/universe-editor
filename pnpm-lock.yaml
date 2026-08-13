@@ -976,9 +976,6 @@ importers:
       '@parcel/watcher':
         specifier: 'catalog:'
         version: 2.6.0
-      '@universe-editor/extensions-common':
-        specifier: workspace:*
-        version: link:../extensions-common
       '@universe-editor/node-services':
         specifier: workspace:*
         version: link:../node-services

@@ -54,6 +54,7 @@ import { IConfigLocationService } from '../../shared/ipc/configLocationService.j
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
+import { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { MainPingService } from './ping/pingMainService.js'
@@ -102,6 +103,8 @@ import {
   IRemoteConnectionService,
   RemoteConnectionMainService,
 } from './remote/remoteConnectionMainService.js'
+import { RemoteDeployer } from './remote/remoteDeploy.js'
+import { RemoteStatusMainService } from './remoteStatus/remoteStatusMainService.js'
 
 // Services whose constructors mix @-injected services with non-branded static
 // params (spawner stubs, Storage, filePath) are registered via
@@ -306,9 +309,22 @@ registerSingletonFactory(IWatcherProcessService, (acc) => {
   )
 })
 registerSingletonFactory(IRemoteConnectionService, (acc) => {
+  const loggerService = acc.get(ILoggerService)
+  const logger = createNamedLogger(loggerService, {
+    id: 'remoteConnection',
+    name: 'Remote Connection',
+  })
+  const remoteServerCmd = acc.get(IEnvironmentMainService).remoteServerCmd
   return new RemoteConnectionMainService(
-    undefined,
-    acc.get(IEnvironmentMainService).remoteServerCmd,
-    acc.get(ILoggerService),
+    {
+      ...(remoteServerCmd !== undefined ? { remoteServerCmd } : {}),
+      deployer: new RemoteDeployer({ logger }),
+      getUserDataDir: () => app.getPath('userData'),
+    },
+    loggerService,
   )
 })
+registerSingleton(
+  IRemoteStatusService,
+  new SyncDescriptor<IRemoteStatusService>(RemoteStatusMainService, [], false),
+)

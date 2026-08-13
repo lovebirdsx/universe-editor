@@ -179,6 +179,7 @@ function makeOpts() {
       processMonitor: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
       remoteConnection: {} as never,
+      remoteStatus: {} as never,
     },
     logService,
     e2eEnabled: false,

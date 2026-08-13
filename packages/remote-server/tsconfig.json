@@ -5,5 +5,9 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "esbuild.config.mjs"]
+  "include": ["src", "esbuild.config.mjs"],
+  "references": [
+    { "path": "../platform" },
+    { "path": "../node-services" }
+  ]
 }

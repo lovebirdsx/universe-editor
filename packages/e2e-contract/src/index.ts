@@ -228,6 +228,24 @@ export interface E2EWatchedChangeEvent {
   readonly resource: string
 }
 
+/** Connection-state enum surfaced by the remote-status probe (string union DTO). */
+export type E2ERemoteConnectionState =
+  | 'idle'
+  | 'deploying'
+  | 'forwarding'
+  | 'handshaking'
+  | 'connected'
+  | 'reconnecting'
+  | 'failed'
+  | 'disposed'
+
+/** Per-authority remote-connection status, as reported by the main process. */
+export interface E2ERemoteConnectionStatus {
+  readonly authority: string
+  readonly state: E2ERemoteConnectionState
+  readonly errorMessage?: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1061,6 +1079,10 @@ export interface E2EProbe {
   watchFolder(uri: string): Promise<void>
   /** Change events buffered since the last watchFolder call. */
   getWatchedChangeEvents(): readonly E2EWatchedChangeEvent[]
+  /** Latest known per-authority remote-connection state. */
+  getRemoteConnections(): Promise<readonly E2ERemoteConnectionStatus[]>
+  /** Drop the management socket for an authority to exercise transparent reconnect (E2E only). */
+  dropRemoteSocket(authority: string): Promise<void>
 }
 
 declare global {

@@ -35,6 +35,7 @@ import {
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
+import { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
@@ -98,6 +99,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IUsageService, channel: ServiceChannels.Usage },
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
   { id: IResourceAccessService, channel: ServiceChannels.ResourceAccess },
+  { id: IRemoteStatusService, channel: ServiceChannels.RemoteStatus },
   { id: IEnvironmentSnapshotService, channel: ServiceChannels.EnvironmentSnapshot },
   { id: IDiagnosticsService, channel: ServiceChannels.Diagnostics },
   { id: IIssueReporterService, channel: ServiceChannels.IssueReporter },

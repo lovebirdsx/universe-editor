@@ -43,6 +43,7 @@ export const ServiceChannels = {
   AiModel: 'aiModel',
   AiDebug: 'aiDebug',
   RemoteSchema: 'remoteSchema',
+  RemoteStatus: 'remoteStatus',
   ExchangeRate: 'exchangeRate',
   ResourceAccess: 'resourceAccess',
   EnvironmentSnapshot: 'environmentSnapshot',

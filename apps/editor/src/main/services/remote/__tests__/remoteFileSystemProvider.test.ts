@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for apps/editor/src/main/services/remote/remoteFileSystemProvider.ts and
  *  the remote routing in fileSearchMainService.ts / textSearchMainService.ts.
- *  Uses an in-memory ChannelPair so a real IPC hop (URI revival, event bridging)
- *  is exercised end-to-end against stub server-side services — no process spawned.
+ *  The harness mirrors the real server-side codec: the server channel uses
+ *  binaryCodec + a remote-ssh<->file transformer, the client uses the plain
+ *  binaryCodec — so URI translation happens in the codec, and the provider /
+ *  search services are verified to pass URIs through verbatim.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -10,17 +12,22 @@ import {
   ChannelClient,
   ChannelServer,
   Emitter,
+  Event,
   InMemoryMessagePassingProtocol,
   ProxyChannel,
   RemoteChannels,
   REMOTE_SCHEME,
   URI,
+  binaryCodec,
+  createBinaryCodec,
+  createRemoteURITransformer,
   type IFileSearchComplete,
   type IFileSearchQuery,
   type IFileSearchService,
-  type IFileService,
   type IFileStat,
-  type IRemoteHandshakeInfo,
+  type IRemoteEnvironment,
+  type IRemoteFileStreamEvent,
+  type IRemoteFileStreamService,
   type ITextSearchMainComplete,
   type ITextSearchMainProgressEvent,
   type ITextSearchMainQuery,
@@ -32,11 +39,15 @@ import { RemoteFileSystemProvider } from '../remoteFileSystemProvider.js'
 import { FileSearchMainService } from '../../fileSearch/fileSearchMainService.js'
 import { TextSearchMainService } from '../../textSearch/textSearchMainService.js'
 
-const INFO: IRemoteHandshakeInfo = {
-  protocolVersion: 1,
+const ENV: IRemoteEnvironment = {
+  protocolVersion: 2,
+  serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',
+  nodeVersion: '20.0.0',
   pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
 }
 
 function remote(authority: string, path: string): URI {
@@ -47,9 +58,9 @@ async function flushMicrotasks(n = 20): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve()
 }
 
-/** Wires a client/server channel pair; registers `channels` on the server and
- *  returns a fake connection service whose `getConnection` hands out the client
- *  side. `getConnectionCalls` counts re-resolutions (cache-invalidation probe). */
+/** Wires a client/server channel pair; the server side transforms remote-ssh<->file
+ *  exactly like the real daemon codec. Returns a fake connection service whose
+ *  `getConnection` hands out the client side. */
 function makeHarness(channels: Record<string, unknown>): {
   connService: IRemoteConnectionService
   close: Emitter<void>
@@ -57,8 +68,12 @@ function makeHarness(channels: Record<string, unknown>): {
   cleanup: () => void
 } {
   const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
-  const server = new ChannelServer(serverProto)
-  const client = new ChannelClient(clientProto)
+  const server = new ChannelServer(
+    serverProto,
+    true,
+    createBinaryCodec(createRemoteURITransformer('host')),
+  )
+  const client = new ChannelClient(clientProto, true, binaryCodec)
   for (const [name, service] of Object.entries(channels)) {
     server.registerChannel(name, ProxyChannel.fromService(service as object))
   }
@@ -66,7 +81,7 @@ function makeHarness(channels: Record<string, unknown>): {
   let calls = 0
   const conn: IRemoteConnection = {
     authority: 'host',
-    info: INFO,
+    env: ENV,
     getChannel: (name) => client.getChannel(name),
     onDidClose: close.event,
   }
@@ -76,6 +91,11 @@ function makeHarness(channels: Record<string, unknown>): {
       calls++
       return conn
     },
+    onDidChangeState: Event.None,
+    retryConnection: () => undefined,
+    stopServer: async () => undefined,
+    closeConnection: async () => undefined,
+    dropSocketForTesting: () => undefined,
     dispose: () => undefined,
   }
   return {
@@ -90,41 +110,108 @@ function makeHarness(channels: Record<string, unknown>): {
   }
 }
 
+function makeStreamService(
+  opts: {
+    emit?: (ctx: {
+      streamId: number
+      size: number
+      fire: (e: IRemoteFileStreamEvent) => void
+    }) => void
+    size?: number
+    stat?: (resource: URI) => Promise<IFileStat>
+    listRecursive?: (root: URI) => Promise<URI[]>
+    realpath?: (resource: URI) => Promise<URI>
+  } = {},
+): {
+  service: IRemoteFileStreamService
+  startCalls: URI[]
+  acks: Array<{ streamId: number; seq: number }>
+  cancels: number[]
+} {
+  const emitter = new Emitter<IRemoteFileStreamEvent>()
+  const startCalls: URI[] = []
+  const acks: Array<{ streamId: number; seq: number }> = []
+  const cancels: number[] = []
+  let nextId = 1
+  const fire = (e: IRemoteFileStreamEvent): void => emitter.fire(e)
+
+  const service: IRemoteFileStreamService = {
+    _serviceBrand: undefined,
+    onReadStreamData: emitter.event,
+    async startReadStream(resource: URI) {
+      startCalls.push(resource)
+      const streamId = nextId++
+      const size = opts.size ?? 0
+      opts.emit?.({ streamId, size, fire })
+      return { streamId, size }
+    },
+    async ackReadStream(streamId, seq) {
+      acks.push({ streamId, seq })
+    },
+    async cancelReadStream(streamId) {
+      cancels.push(streamId)
+    },
+    async readFile() {
+      return new Uint8Array()
+    },
+    async readFileText() {
+      return ''
+    },
+    async writeFile() {},
+    async exists() {
+      return true
+    },
+    async stat(resource) {
+      if (opts.stat) return opts.stat(resource)
+      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }
+    },
+    async list() {
+      return []
+    },
+    async realpath(resource) {
+      return opts.realpath?.(resource) ?? resource
+    },
+    async listDrives() {
+      return []
+    },
+    async createDirectory() {},
+    async delete() {},
+    async rename() {},
+    async copy() {},
+    async listRecursive(root) {
+      return opts.listRecursive?.(root) ?? []
+    },
+  }
+  return { service, startCalls, acks, cancels }
+}
+
 describe('RemoteFileSystemProvider', () => {
-  it('forwards file: URIs and translates returned URIs back', async () => {
-    const received: URI[] = []
-    const stub: Partial<IFileService> = {
-      async readFile(resource: URI) {
-        received.push(resource)
-        return new Uint8Array([1, 2, 3])
+  it('passes remote-ssh URIs verbatim and receives codec-translated results', async () => {
+    const { service, startCalls } = makeStreamService({
+      size: 3,
+      emit: ({ streamId, fire }) => {
+        fire({ streamId, seq: 0, data: new Uint8Array([1, 2, 3]) })
+        fire({ streamId, seq: 1, done: true })
       },
-      async stat(resource: URI): Promise<IFileStat> {
-        received.push(resource)
-        return {
-          resource: URI.file('/home/user/file.txt'),
-          isFile: true,
-          isDirectory: false,
-          size: 3,
-          mtime: 0,
-        }
-      },
-      async listRecursive(root: URI) {
-        received.push(root)
-        return [URI.file('/home/user/a.txt'), URI.file('/home/user/b.txt')]
-      },
-      async realpath(resource: URI) {
-        received.push(resource)
-        return URI.file('/home/user/file.txt')
-      },
-    }
-    const h = makeHarness({ [RemoteChannels.FileSystem]: stub })
+      stat: async () => ({
+        resource: URI.file('/home/user/file.txt'),
+        isFile: true,
+        isDirectory: false,
+        size: 3,
+        mtime: 0,
+      }),
+      listRecursive: async () => [URI.file('/home/user/a.txt'), URI.file('/home/user/b.txt')],
+      realpath: async () => URI.file('/home/user/file.txt'),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
     try {
       const provider = new RemoteFileSystemProvider(h.connService, undefined)
 
       const bytes = await provider.readFile(remote('host', '/home/user/file.txt'))
       expect(bytes).toEqual(new Uint8Array([1, 2, 3]))
-      expect(received[0]!.scheme).toBe('file')
-      expect(received[0]!.path).toBe('/home/user/file.txt')
+      // The provider sent remote-ssh; the server codec transformed it to file.
+      expect(startCalls[0]!.scheme).toBe('file')
+      expect(startCalls[0]!.path).toBe('/home/user/file.txt')
 
       const stat = await provider.stat(remote('host', '/home/user/file.txt'))
       expect(stat.resource.scheme).toBe(REMOTE_SCHEME)
@@ -146,12 +233,11 @@ describe('RemoteFileSystemProvider', () => {
   })
 
   it('re-resolves the proxy after the connection closes', async () => {
-    const stub: Partial<IFileService> = {
-      async readFile() {
-        return new Uint8Array()
-      },
-    }
-    const h = makeHarness({ [RemoteChannels.FileSystem]: stub })
+    const { service } = makeStreamService({
+      size: 0,
+      emit: ({ streamId, fire }) => fire({ streamId, seq: 0, done: true }),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
     try {
       const provider = new RemoteFileSystemProvider(h.connService, undefined)
       await provider.readFile(remote('host', '/a'))
@@ -163,10 +249,103 @@ describe('RemoteFileSystemProvider', () => {
       h.cleanup()
     }
   })
+
+  it('sets capabilities from the connection env', async () => {
+    const { service } = makeStreamService({
+      size: 0,
+      emit: ({ streamId, fire }) => fire({ streamId, seq: 0, done: true }),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+      await provider.readFile(remote('host', '/a'))
+      expect(provider.capabilities.pathCaseSensitive).toBe(true)
+    } finally {
+      h.cleanup()
+    }
+  })
+})
+
+describe('RemoteFileSystemProvider streaming readFile', () => {
+  it('reassembles multiple chunks and acks each one', async () => {
+    const { service, acks } = makeStreamService({
+      size: 6,
+      emit: ({ streamId, fire }) => {
+        fire({ streamId, seq: 0, data: new Uint8Array([1, 2, 3]) })
+        fire({ streamId, seq: 1, data: new Uint8Array([4, 5, 6]) })
+        fire({ streamId, seq: 2, done: true })
+      },
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+      const bytes = await provider.readFile(remote('host', '/a'))
+      expect(bytes).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]))
+      expect(acks).toEqual([
+        { streamId: 1, seq: 0 },
+        { streamId: 1, seq: 1 },
+      ])
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('rejects on a stream error and passes the code through', async () => {
+    const { service } = makeStreamService({
+      size: 10,
+      emit: ({ streamId, fire }) =>
+        fire({ streamId, seq: 0, error: { message: 'boom', code: 'EACCES' } }),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+      const err = await provider.readFile(remote('host', '/a')).catch((e) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect((err as Error).message).toBe('boom')
+      expect((err as { code?: string }).code).toBe('EACCES')
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('rejects on an out-of-order seq and cancels the stream', async () => {
+    const { service, cancels } = makeStreamService({
+      size: 9,
+      emit: ({ streamId, fire }) => {
+        fire({ streamId, seq: 0, data: new Uint8Array([1, 2, 3]) })
+        fire({ streamId, seq: 2, data: new Uint8Array([7, 8, 9]) })
+      },
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+      await expect(provider.readFile(remote('host', '/a'))).rejects.toThrow(/out-of-order/)
+      expect(cancels).toEqual([1])
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('rejects pending streams when the connection closes', async () => {
+    const { service } = makeStreamService({
+      size: 10,
+      emit: ({ streamId, fire }) => fire({ streamId, seq: 0, data: new Uint8Array([1, 2, 3]) }),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+      const pending = provider.readFile(remote('host', '/a'))
+      await flushMicrotasks()
+      h.close.fire()
+      await expect(pending).rejects.toThrow(/connection closed/)
+    } finally {
+      h.cleanup()
+    }
+  })
 })
 
 describe('FileSearchMainService remote routing', () => {
-  it('translates root to file: and result resources back to remote-ssh', async () => {
+  it('sends the root verbatim (codec transforms) and returns remote-ssh hits', async () => {
     const received: URI[] = []
     const stub: Partial<IFileSearchService> = {
       async search(query: IFileSearchQuery): Promise<IFileSearchComplete> {
@@ -215,7 +394,7 @@ describe('TextSearchMainService remote routing', () => {
     configurationExcludes: [],
   })
 
-  it('translates root and returned file matches', async () => {
+  it('sends the root verbatim and returns remote-ssh file matches', async () => {
     const received: URI[] = []
     const stub: Partial<ITextSearchMainService> = {
       async search(q: ITextSearchMainQuery): Promise<ITextSearchMainComplete> {
@@ -241,7 +420,7 @@ describe('TextSearchMainService remote routing', () => {
     }
   })
 
-  it('forwards remote progress/results events with translated resources', async () => {
+  it('forwards remote progress/results events with codec-translated resources', async () => {
     const progress = new Emitter<ITextSearchMainProgressEvent>()
     const results = new Emitter<ITextSearchMainResultsEvent>()
     const stub: Partial<ITextSearchMainService> = {
@@ -268,7 +447,6 @@ describe('TextSearchMainService remote routing', () => {
         svc.onDidSearchProgress((e) => seenProgress.push(e)),
       ]
 
-      // Subscribe round-trips through the channel before the server forwards events.
       await flushMicrotasks()
       results.fire({
         sessionId: 's1',

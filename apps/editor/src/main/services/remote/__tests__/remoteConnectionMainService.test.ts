@@ -1,45 +1,140 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/remote/remoteConnectionMainService.ts
- *  Drives the connection state machine with a fake spawner + a hand-rolled
- *  stdio handshake responder (the framing protocol round-trips through the fake
- *  child's stdin/stdout), so no real process is launched.
+ *  Tests for apps/editor/src/main/services/remote/remoteConnectionMainService.ts.
+ *  Drives the TCP/PersistentProtocol connection state machine against a REAL
+ *  in-process fake daemon (platform primitives + a raw net server) and a fake
+ *  spawner (direct mode), so the handshake / getInfo / transparent-reconnect /
+ *  give-up paths run end-to-end without ssh or a real server process.
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createServer, type AddressInfo, type Server, type Socket as NetSocket } from 'node:net'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { REMOTE_PROTOCOL_VERSION, type IRemoteHandshakeInfo } from '@universe-editor/platform'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  ChannelServer,
+  PersistentProtocol,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+  RemoteConnectionErrorCode,
+  binaryCodec,
+  createChannelFromObject,
+  decodeControlJson,
+  encodeControlJson,
+  readFirstControlFrame,
+  writeControlFrame,
+  type IRemoteConnectionRequest,
+  type IRemoteConnectionResponse,
+  type IRemoteEnvironment,
+} from '@universe-editor/platform'
+import { NodeSocket } from '@universe-editor/node-services'
 import {
   RemoteConnectionMainService,
-  resolveRemoteServerCommand,
+  type IRemoteConnectionStateChange,
   type RemoteSpawner,
 } from '../remoteConnectionMainService.js'
 
-vi.mock('electron', () => ({ app: {} }))
-
-const GOOD_INFO: IRemoteHandshakeInfo = {
+const ENV: IRemoteEnvironment = {
   protocolVersion: REMOTE_PROTOCOL_VERSION,
+  serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',
+  nodeVersion: '20.0.0',
   pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
+}
+
+function daemonInfo(port: number, token: string): string {
+  return `UNIVERSE_REMOTE_DAEMON_INFO=${JSON.stringify({
+    serverVersion: '0.0.0',
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    port,
+    token,
+    pid: 1234,
+  })}\n`
+}
+
+class FakeDaemon {
+  private server: Server | null = null
+  private protocol: PersistentProtocol | null = null
+  private channelServer: ChannelServer | null = null
+  private acceptedToken: string | null = null
+  private readonly sockets: NodeSocket[] = []
+
+  port = 0
+  readonly token = 'test-token'
+  readonly env = ENV
+  handshakeResponse: ((req: IRemoteConnectionRequest) => IRemoteConnectionResponse) | null = null
+
+  async start(): Promise<void> {
+    this.server = createServer((socket) => {
+      void this._accept(socket)
+    })
+    await new Promise<void>((resolve) => this.server!.listen(0, '127.0.0.1', resolve))
+    this.port = (this.server!.address() as AddressInfo).port
+  }
+
+  private async _accept(raw: NetSocket): Promise<void> {
+    const socket = new NodeSocket(raw)
+    this.sockets.push(socket)
+    try {
+      const { data, residual } = await readFirstControlFrame(socket, 10_000)
+      const req = decodeControlJson<IRemoteConnectionRequest>(data)
+      const response = this.handshakeResponse?.(req) ?? { type: 'ok' }
+      writeControlFrame(socket, encodeControlJson(response))
+      if (response.type !== 'ok') {
+        return
+      }
+      if (req.isReconnection) {
+        if (this.protocol && req.reconnectionToken === this.acceptedToken) {
+          this.protocol.beginAcceptReconnection(socket, residual)
+          this.protocol.endAcceptReconnection()
+        }
+        return
+      }
+      this.acceptedToken = req.reconnectionToken
+      this.protocol = new PersistentProtocol({ socket, initialChunk: residual })
+      this.channelServer = new ChannelServer(this.protocol, true, binaryCodec)
+      this.channelServer.registerChannel(
+        RemoteChannels.Handshake,
+        ProxyChannel.fromService({ getInfo: async () => this.env }),
+      )
+      this.channelServer.registerChannel(
+        'test',
+        createChannelFromObject({ ping: async () => 'pong' }),
+      )
+    } catch {
+      socket.dispose()
+    }
+  }
+
+  async close(): Promise<void> {
+    this.channelServer?.dispose()
+    this.channelServer = null
+    this.protocol?.dispose()
+    this.protocol = null
+    for (const s of this.sockets) s.dispose()
+    this.sockets.length = 0
+    const server = this.server
+    this.server = null
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
 }
 
 class FakeStream extends EventEmitter {
-  setEncoding = vi.fn()
+  setEncoding = (): void => undefined
 }
 
 class FakeStdin extends EventEmitter {
   destroyed = false
   writable = true
-  ended = false
-  writes: string[] = []
-  write(data: string, _enc: string, cb: (err?: Error | null) => void): boolean {
-    this.writes.push(data)
+  write(_data: string, _enc: string, cb: (err?: Error | null) => void): boolean {
     cb(null)
     return true
   }
   end(): void {
-    this.ended = true
+    // no-op
   }
 }
 
@@ -47,161 +142,141 @@ class FakeProc extends EventEmitter {
   readonly stdout = new FakeStream()
   readonly stderr = new FakeStream()
   readonly stdin = new FakeStdin()
+  pid = 1234
   killCalls = 0
-  kill(_signal?: NodeJS.Signals): boolean {
+  kill(): boolean {
     this.killCalls++
     return true
   }
   emitStdout(data: string): void {
     this.stdout.emit('data', Buffer.from(data, 'utf8'))
   }
-  emitExit(code: number | null, signal: NodeJS.Signals | null): void {
-    this.emit('exit', code, signal)
-  }
 }
 
-/** Answer the pending `handshake.getInfo` request on a proc's stdout. */
-function respondHandshake(proc: FakeProc, info: IRemoteHandshakeInfo): void {
-  let id: number | null = null
-  for (const write of proc.stdin.writes) {
-    for (const frame of write.split('\n')) {
-      if (!frame) continue
-      const msg = JSON.parse(frame) as {
-        type?: string
-        id?: number
-        channel?: string
-        command?: string
-      }
-      if (msg.type === 'request' && msg.channel === 'handshake' && msg.command === 'getInfo') {
-        id = msg.id ?? null
-      }
-    }
-  }
-  if (id === null) throw new Error('no handshake request observed')
-  proc.emitStdout(`${JSON.stringify({ type: 'response', id, data: info })}\n`)
+interface Made {
+  svc: RemoteConnectionMainService
+  procs: FakeProc[]
+  states: IRemoteConnectionStateChange[]
 }
 
-function makeService(): { svc: RemoteConnectionMainService; procs: FakeProc[] } {
+function makeDirectService(daemon: FakeDaemon): Made {
   const procs: FakeProc[] = []
   const spawner: RemoteSpawner = (_command, _args, _options) => {
     const proc = new FakeProc()
     procs.push(proc)
+    queueMicrotask(() => proc.emitStdout(daemonInfo(daemon.port, daemon.token)))
     return proc as unknown as ChildProcessWithoutNullStreams
   }
-  return { svc: new RemoteConnectionMainService(spawner, undefined, undefined), procs }
+  const states: IRemoteConnectionStateChange[] = []
+  const svc = new RemoteConnectionMainService(
+    {
+      spawner,
+      remoteServerCmd: JSON.stringify(['node', '/fake/bootstrap.js']),
+      getUserDataDir: () => '/tmp/ue-test',
+    },
+    undefined,
+  )
+  svc.onDidChangeState((s) => states.push(s))
+  return { svc, procs, states }
 }
 
-describe('resolveRemoteServerCommand', () => {
-  it('defaults to ssh with the authority validated', () => {
-    expect(resolveRemoteServerCommand(undefined, 'host')).toEqual({
-      command: 'ssh',
-      args: ['-T', '-o', 'BatchMode=yes', 'host', 'universe-editor-server'],
-    })
-  })
+const daemons: FakeDaemon[] = []
 
-  it('rejects an empty authority', () => {
-    expect(() => resolveRemoteServerCommand(undefined, '')).toThrow(/non-empty authority/)
-  })
+async function startDaemon(): Promise<FakeDaemon> {
+  const daemon = new FakeDaemon()
+  await daemon.start()
+  daemons.push(daemon)
+  return daemon
+}
 
-  it('rejects an authority that looks like an ssh option', () => {
-    expect(() => resolveRemoteServerCommand(undefined, '-oProxyCommand=evil')).toThrow(
-      /must not start with '-'/,
-    )
-  })
-
-  it('parses a whitespace-split custom command without appending authority', () => {
-    expect(resolveRemoteServerCommand('node /srv/remote.js --port 22', 'host')).toEqual({
-      command: 'node',
-      args: ['/srv/remote.js', '--port', '22'],
-    })
-  })
-
-  it('parses a JSON array form (spaces in a windows path)', () => {
-    expect(
-      resolveRemoteServerCommand('["C:/Program Files/node/node.exe","C:/srv/remote.js"]', 'host'),
-    ).toEqual({
-      command: 'C:/Program Files/node/node.exe',
-      args: ['C:/srv/remote.js'],
-    })
-  })
+afterEach(async () => {
+  for (const d of daemons.splice(0)) {
+    await d.close()
+  }
 })
 
-describe('RemoteConnectionMainService', () => {
-  let svc: RemoteConnectionMainService | undefined
+describe('RemoteConnectionMainService direct mode', () => {
+  let made: Made | undefined
 
   afterEach(() => {
-    svc?.dispose()
-    svc = undefined
+    made?.svc.dispose()
+    made = undefined
   })
 
-  it('handshakes and memoizes the connection per authority', async () => {
-    const made = makeService()
-    svc = made.svc
-    const p = svc.getConnection('host')
-    respondHandshake(made.procs[0]!, GOOD_INFO)
-    const conn = await p
+  it('brings up over TCP, validates getInfo and serves a channel', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const conn = await made.svc.getConnection('host')
     expect(conn.authority).toBe('host')
-    expect(conn.info.os).toBe('linux')
-    await expect(svc.getConnection('host')).resolves.toBe(conn)
+    expect(conn.env.os).toBe('linux')
+    expect(conn.env.pathCaseSensitive).toBe(true)
+    expect(made.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
+
+    const pong = await conn.getChannel('test').call<string>('ping')
+    expect(pong).toBe('pong')
+    await expect(made.svc.getConnection('host')).resolves.toBe(conn)
   })
 
-  it('rejects and kills on a protocol version mismatch', async () => {
-    const made = makeService()
-    svc = made.svc
-    const p = svc.getConnection('host')
-    respondHandshake(made.procs[0]!, { ...GOOD_INFO, protocolVersion: REMOTE_PROTOCOL_VERSION + 1 })
-    await expect(p).rejects.toThrow(/version mismatch/)
-    expect(made.procs[0]!.killCalls).toBeGreaterThan(0)
+  it('fails with a handshake error and can be retried', async () => {
+    const daemon = await startDaemon()
+    daemon.handshakeResponse = () => ({
+      type: 'error',
+      code: RemoteConnectionErrorCode.InvalidToken,
+      message: 'bad token',
+    })
+    made = makeDirectService(daemon)
+
+    await expect(made.svc.getConnection('host')).rejects.toThrow(/bad token/)
+    expect(made.states.at(-1)?.state).toBe('failed')
+    expect(made.states.at(-1)?.error).toContain('bad token')
+
+    daemon.handshakeResponse = null
+    made.svc.retryConnection('host')
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'))
+    expect(made.states.some((s) => s.state === 'idle')).toBe(true)
   })
 
-  it('reconnects with backoff after an unexpected exit and swaps the connection object', async () => {
-    vi.useFakeTimers()
-    try {
-      const made = makeService()
-      svc = made.svc
-      const firstP = svc.getConnection('host')
-      respondHandshake(made.procs[0]!, GOOD_INFO)
-      const first = await firstP
-      let closed = false
-      first.onDidClose(() => {
-        closed = true
-      })
+  it('reconnects transparently and replays a call made during the outage', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
 
-      made.procs[0]!.emitExit(1, null)
-      expect(closed).toBe(true)
-      expect(made.procs.length).toBe(1)
+    const conn = await made.svc.getConnection('host')
+    expect(made.states.at(-1)?.state).toBe('connected')
 
-      await vi.advanceTimersByTimeAsync(1000)
-      expect(made.procs.length).toBe(2)
-      respondHandshake(made.procs[1]!, GOOD_INFO)
-      const second = await svc.getConnection('host')
-      expect(second).not.toBe(first)
-      expect(second.authority).toBe('host')
-    } finally {
-      vi.useRealTimers()
-    }
+    made.svc.dropSocketForTesting('host')
+    expect(made.states.at(-1)?.state).toBe('reconnecting')
+
+    const ping = conn.getChannel('test').call<string>('ping')
+
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'), {
+      timeout: 5000,
+    })
+    await expect(ping).resolves.toBe('pong')
   })
 
-  it('gives up (failed) after too many crashes in the window', async () => {
-    vi.useFakeTimers()
-    try {
-      const made = makeService()
-      svc = made.svc
-      const p0 = svc.getConnection('host')
-      respondHandshake(made.procs[0]!, GOOD_INFO)
-      await p0
-      made.procs[0]!.emitExit(1, null)
+  it('gives up on unknownReconnectionToken, fires onDidClose and moves to failed', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
 
-      for (let i = 0; i < 3; i++) {
-        await vi.advanceTimersByTimeAsync(1000 * 2 ** i)
-        respondHandshake(made.procs[i + 1]!, GOOD_INFO)
-        await svc.getConnection('host')
-        made.procs[i + 1]!.emitExit(1, null)
-      }
+    const conn = await made.svc.getConnection('host')
+    let closed = false
+    conn.onDidClose(() => {
+      closed = true
+    })
 
-      await expect(svc.getConnection('host')).rejects.toThrow(/failed/)
-    } finally {
-      vi.useRealTimers()
-    }
+    daemon.handshakeResponse = (req) =>
+      req.isReconnection
+        ? {
+            type: 'error',
+            code: RemoteConnectionErrorCode.UnknownReconnectionToken,
+            message: 'nope',
+          }
+        : { type: 'ok' }
+
+    made.svc.dropSocketForTesting('host')
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('failed'), { timeout: 5000 })
+    expect(closed).toBe(true)
+    expect(made.states.at(-1)?.error).toContain('nope')
   })
 })

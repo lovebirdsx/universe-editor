@@ -46,7 +46,7 @@ import { WatcherProcessClient } from '@universe-editor/node-services'
 import type { WatcherRawEventType } from '@universe-editor/platform'
 import { RemoteWatcherTransport } from '../remote/remoteWatcherTransport.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
-import { remoteFsPathToUri, toWire } from '../remote/remoteUri.js'
+import { remoteFsPathToUri, remotePathFromUri } from '../remote/remoteUri.js'
 
 const DEBOUNCE_MS = 50
 
@@ -132,11 +132,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
         if (msg.id !== this._watchId) return
         this._logger.warn('watcher error', msg.error)
       }),
+      _host.onDidRestart(() => this._onDidRestart.fire()),
     ]
   }
 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event
+
+  private readonly _onDidRestart = new Emitter<void>()
 
   // Remote (remote-ssh) watch state: one WatcherProcessClient per authority, its
   // transport tunnelled over the connection (see RemoteWatcherTransport).
@@ -148,10 +151,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _remoteTarget: string | null = null
   private _remoteIgnore: string[] = []
 
-  /** Relayed from the shared watcher process: it crashed and was re-armed, so
-   *  events during the gap are lost — consumers should rescan. */
+  /** Relayed from the shared watcher process (local host) AND every per-authority
+   *  remote watcher client: the host crashed / reconnected and replayed its
+   *  subscriptions, so events during the gap are lost — consumers should rescan. */
   get onDidRestart(): Event<void> {
-    return this._host.onDidRestart
+    return this._onDidRestart.event
   }
 
   private _watching = false
@@ -232,13 +236,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
           if (msg.id !== watchId) return
           this._logger.warn(`remote watcher error ${authority}`, msg.error)
         }),
+        client.onDidRestart(() => this._onDidRestart.fire()),
       ]
       entry = { client, watchId, listening }
       this._remoteWatchers.set(authority, entry)
     }
-    // The server-side absolute path (toWire → file: URI, then fsPath strips the
-    // `/C:` drive prefix for Windows hosts). Never fsPath the remote-ssh URI itself.
-    const target = toWire(uri).fsPath
+    // The server-local absolute path (POSIX on the supported remote targets). Never
+    // fsPath the remote-ssh URI itself — the path belongs to the server host.
+    const target = remotePathFromUri(uri)
     const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
     this._remoteAuthority = authority
     this._remoteTarget = target
@@ -387,6 +392,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     this._remoteWatchers.clear()
     this._onDidChangeFiles.dispose()
+    this._onDidRestart.dispose()
   }
 
   // Declared out-of-workspace folder interests (comparison key → fsPath).

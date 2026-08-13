@@ -37,6 +37,10 @@ const result = spawnSync(
     'build',
     '--filter=@universe-editor/editor...',
     `--filter=${selfPackage}...`,
+    // remote-server's dist/bootstrap.js is spawned by the remote specs via
+    // UNIVERSE_REMOTE_SERVER_CMD; it is not a dependency of the editor, so pull
+    // its build in explicitly (the root turbo `e2e` task already does the same).
+    '--filter=@universe-editor/remote-server...',
   ],
   { stdio: 'inherit', shell: process.platform === 'win32' },
 )

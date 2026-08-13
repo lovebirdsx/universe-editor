@@ -82,6 +82,7 @@ import {
   InteractionPerfService,
 } from './services/performance/InteractionPerfService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
+import { IRemoteStatusService } from '../shared/ipc/remoteStatusService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { IDocsService } from '../shared/ipc/docsService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
@@ -854,6 +855,7 @@ async function bootstrapWorkbench(): Promise<void> {
     fileService: services.get(IFileService) as IFileService,
     textSearchMainService: services.get(ITextSearchMainService) as ITextSearchMainService,
     fileWatcherService: services.get(IFileWatcherService) as IFileWatcherService,
+    remoteStatusService: services.get(IRemoteStatusService) as IRemoteStatusService,
     extensionManagementService: services.get(
       IExtensionManagementService,
     ) as IExtensionManagementService,

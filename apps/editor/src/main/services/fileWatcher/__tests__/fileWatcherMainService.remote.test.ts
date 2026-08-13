@@ -9,12 +9,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   ProxyChannel,
   RemoteChannels,
   REMOTE_SCHEME,
   URI,
   type IFileChangeEvent,
-  type IRemoteHandshakeInfo,
+  type IRemoteEnvironment,
   type IRemoteWatcherTunnel,
   type WatcherHostRequest,
   type WatcherHostResponse,
@@ -27,11 +28,15 @@ import type {
 } from '../../remote/remoteConnectionMainService.js'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 
-const INFO: IRemoteHandshakeInfo = {
-  protocolVersion: 1,
+const INFO: IRemoteEnvironment = {
+  protocolVersion: 2,
+  serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',
+  nodeVersion: '20.0.0',
   pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
 }
 
 function remote(authority: string, path: string): URI {
@@ -60,7 +65,7 @@ function makeWatcherHarness(): {
   const close = new Emitter<void>()
   const conn: IRemoteConnection = {
     authority: 'host',
-    info: INFO,
+    env: INFO,
     getChannel: (name) => {
       expect(name).toBe(RemoteChannels.FileWatcher)
       return ProxyChannel.fromService(stubTunnel)
@@ -70,6 +75,11 @@ function makeWatcherHarness(): {
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
     getConnection: async () => conn,
+    onDidChangeState: Event.None,
+    retryConnection: () => undefined,
+    stopServer: async () => undefined,
+    closeConnection: async () => undefined,
+    dropSocketForTesting: () => undefined,
     dispose: () => undefined,
   }
   const localHost = new WatcherProcessClient(() => {

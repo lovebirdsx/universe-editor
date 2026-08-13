@@ -1,13 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Remote server assembly: registers the five remote channels on an IChannelServer.
- *  The process entry (bootstrap.ts) wires stdio/protocol/lifecycle; this module only
- *  builds services and registers channels so tests can drive a full server over an
- *  in-memory protocol. Everything here is a headless local file-service stack — the
- *  server never sees a non-`file:` URI (the local side translates remote-ssh URIs at
- *  the tunnel boundary).
+ *  Everything here is a headless local file-service stack — the server never sees a
+ *  non-`file:` URI (the per-connection IPC codec translates remote-ssh URIs at the
+ *  tunnel boundary). Services are built fresh for each connection so no state is
+ *  shared across clients.
+ *
+ *  The parcel-native WatcherHost runs in a forked child (watcherChild.js) behind a
+ *  WatcherProcessClient, so a native crash restarts the child instead of taking the
+ *  daemon down. When the child entry is unavailable (tests running from source) the
+ *  watcher falls back to an in-process host.
  *--------------------------------------------------------------------------------------------*/
 
+import { existsSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import {
   DisposableStore,
   Emitter,
@@ -22,16 +29,31 @@ import {
   type ILoggerService,
   type IRemoteHandshakeService,
   type IRemoteWatcherTunnel,
+  type WatcherHostRequest,
   type WatcherHostResponse,
 } from '@universe-editor/platform'
 import {
+  createInMemoryWatcherTransport,
   FileSearchService,
   NodeFileSystemProvider,
   TextSearchService,
-  WatcherHost,
+  WatcherProcessClient,
+  type WatcherTransportFactory,
 } from '@universe-editor/node-services'
+import { ForkedWatcherTransport } from './watcherForkTransport.js'
+import { RemoteFileStreamService } from './fileStreamService.js'
+import { SERVER_VERSION } from './version.js'
 
-export function createRemoteServer(server: IChannelServer, logger?: ILogger): IDisposable {
+export interface CreateRemoteServerOptions {
+  readonly serverVersion?: string
+  readonly watcherTransportFactory?: WatcherTransportFactory
+}
+
+export function createRemoteServer(
+  server: IChannelServer,
+  logger?: ILogger,
+  options?: CreateRemoteServerOptions,
+): IDisposable {
   const log = logger ?? new NullLogger()
   const disposables = new DisposableStore()
 
@@ -44,14 +66,18 @@ export function createRemoteServer(server: IChannelServer, logger?: ILogger): ID
   const handshake: IRemoteHandshakeService = {
     getInfo: async () => ({
       protocolVersion: REMOTE_PROTOCOL_VERSION,
+      serverVersion: options?.serverVersion ?? SERVER_VERSION,
       os: process.platform,
       arch: process.arch,
+      nodeVersion: process.versions.node,
       pathCaseSensitive: fileProvider.capabilities.pathCaseSensitive,
+      homeDir: homedir(),
+      tmpDir: tmpdir(),
     }),
   }
 
   // The search services take an ILoggerService factory; funnel them into the
-  // same logger so their diagnostics also land on stderr.
+  // same logger so their diagnostics also land where the daemon logs.
   const loggerService: ILoggerService = {
     _serviceBrand: undefined,
     createLogger: () => log,
@@ -62,22 +88,45 @@ export function createRemoteServer(server: IChannelServer, logger?: ILogger): ID
   const textSearch = disposables.add(new TextSearchService(loggerService))
 
   // Watcher tunnel: the local side reuses its WatcherProcessClient seq/ack
-  // machinery unchanged, so this is just a WatcherHost behind a message event.
-  const watcherEmitter = new Emitter<WatcherHostResponse>()
-  const watcherHost = new WatcherHost((msg) => watcherEmitter.fire(msg))
+  // machinery unchanged, so this end forwards the raw message protocol and lets
+  // its own WatcherProcessClient own the forked child + crash replay. Subscribes
+  // use the remote client's id verbatim so events route back to the same watcher.
+  const watcherEvents = new Emitter<WatcherHostResponse>()
+  const watcherClient = disposables.add(
+    new WatcherProcessClient(
+      options?.watcherTransportFactory ?? createWatcherTransportFactory(log),
+      loggerService,
+    ),
+  )
+  disposables.add(watcherClient.onFileEvents((msg) => watcherEvents.fire(msg)))
+  disposables.add(watcherClient.onWatchError((msg) => watcherEvents.fire(msg)))
+
   const watcherTunnel: IRemoteWatcherTunnel = {
-    onMessage: watcherEmitter.event,
-    post: (msg) => watcherHost.handle(msg),
-  }
-  disposables.add({
-    dispose: () => {
-      void watcherHost.dispose()
-      watcherEmitter.dispose()
+    onMessage: watcherEvents.event,
+    post: async (msg: WatcherHostRequest) => {
+      try {
+        if (msg.kind === 'subscribe') {
+          await watcherClient.watch(msg.id, msg.dir, msg.ignore)
+        } else {
+          await watcherClient.unwatch(msg.id)
+        }
+        watcherEvents.fire({ kind: 'ack', seq: msg.seq })
+      } catch (err) {
+        watcherEvents.fire({
+          kind: 'ack',
+          seq: msg.seq,
+          error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+        })
+      }
     },
-  })
+  }
+  disposables.add({ dispose: () => watcherEvents.dispose() })
 
   server.registerChannel(RemoteChannels.Handshake, ProxyChannel.fromService(handshake))
-  server.registerChannel(RemoteChannels.FileSystem, ProxyChannel.fromService(fileService))
+  server.registerChannel(
+    RemoteChannels.FileSystem,
+    ProxyChannel.fromService(disposables.add(new RemoteFileStreamService(fileService, log))),
+  )
   server.registerChannel(RemoteChannels.FileSearch, ProxyChannel.fromService(fileSearch))
   server.registerChannel(RemoteChannels.TextSearch, ProxyChannel.fromService(textSearch))
   server.registerChannel(RemoteChannels.FileWatcher, ProxyChannel.fromService(watcherTunnel))
@@ -85,4 +134,21 @@ export function createRemoteServer(server: IChannelServer, logger?: ILogger): ID
   log.info(`[remote-server] channels assembled: ${Object.values(RemoteChannels).join(', ')}`)
 
   return disposables
+}
+
+function createWatcherTransportFactory(log: ILogger): WatcherTransportFactory {
+  return () => {
+    try {
+      const entryPath = fileURLToPath(new URL('./watcherChild.js', import.meta.url))
+      if (!existsSync(entryPath)) {
+        throw new Error(`watcher child entry not found: ${entryPath}`)
+      }
+      return new ForkedWatcherTransport(entryPath, log)
+    } catch (err) {
+      log.warn(
+        `[remote-server] watcher fork unavailable (${err instanceof Error ? err.message : String(err)}); falling back to in-process watcher`,
+      )
+      return createInMemoryWatcherTransport()
+    }
+  }
 }

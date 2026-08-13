@@ -1,57 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
-import { fromWire, remoteFsPathToUri, toWire } from '../remoteUri.js'
+import { remoteFsPathToUri, remotePathFromUri } from '../remoteUri.js'
 
 function remote(authority: string, path: string): URI {
   return URI.from({ scheme: 'remote-ssh', authority, path })
 }
 
-describe('remoteUri.toWire', () => {
-  it('translates a posix remote path to a file URI keeping the path', () => {
-    const wire = toWire(remote('host', '/home/user/file.txt'))
-    expect(wire.scheme).toBe('file')
-    expect(wire.path).toBe('/home/user/file.txt')
-    expect(wire.toString()).toBe('file:///home/user/file.txt')
+describe('remoteUri.remotePathFromUri', () => {
+  it('returns the server-local path (uri.path) for a posix remote path', () => {
+    expect(remotePathFromUri(remote('host', '/home/user/file.txt'))).toBe('/home/user/file.txt')
   })
 
-  it('preserves a windows drive path (`/C:/…`)', () => {
-    const wire = toWire(remote('host', '/C:/foo/bar.txt'))
-    expect(wire.scheme).toBe('file')
-    expect(wire.path).toBe('/C:/foo/bar.txt')
-  })
-
-  it('preserves spaces and special characters in the path', () => {
-    const wire = toWire(remote('host', '/home/user/my dir/file name (1).txt'))
-    expect(wire.path).toBe('/home/user/my dir/file name (1).txt')
+  it('returns the path untouched for spaces and special characters', () => {
+    expect(remotePathFromUri(remote('host', '/home/user/my dir/file name (1).txt'))).toBe(
+      '/home/user/my dir/file name (1).txt',
+    )
   })
 
   it('rejects a non-remote scheme', () => {
-    expect(() => toWire(URI.file('/home/user'))).toThrow(/remote-ssh/)
-  })
-})
-
-describe('remoteUri.fromWire', () => {
-  it('reattaches the authority to a posix file path', () => {
-    const uri = fromWire(URI.file('/home/user/file.txt'), 'host')
-    expect(uri.scheme).toBe('remote-ssh')
-    expect(uri.authority).toBe('host')
-    expect(uri.path).toBe('/home/user/file.txt')
+    expect(() => remotePathFromUri(URI.file('/home/user'))).toThrow(/remote-ssh/)
   })
 
-  it('reattaches the authority to a windows drive path', () => {
-    const uri = fromWire(URI.file('C:/foo/bar.txt'), 'host')
-    expect(uri.scheme).toBe('remote-ssh')
-    expect(uri.authority).toBe('host')
-    expect(uri.path).toBe('/C:/foo/bar.txt')
-  })
-
-  it('round-trips through toWire', () => {
-    const original = remote('host', '/home/user/a b/c d.txt')
-    expect(fromWire(toWire(original), 'host').toString()).toBe(original.toString())
-  })
-
-  it('rejects a non-file wire URI', () => {
-    expect(() => fromWire(remote('other', '/x'), 'host')).toThrow(/file/)
+  it('strips the leading slash from a windows drive-letter path', () => {
+    expect(remotePathFromUri(remote('host', '/C:/Users/me/file.txt'))).toBe('C:/Users/me/file.txt')
   })
 })
 
@@ -71,5 +42,12 @@ describe('remoteUri.remoteFsPathToUri', () => {
   it('normalises a forward-slash windows path', () => {
     const uri = remoteFsPathToUri('C:/home/user/file.txt', 'host')
     expect(uri.path).toBe('/C:/home/user/file.txt')
+  })
+
+  it('round-trips with remotePathFromUri for posix paths', () => {
+    const original = remote('host', '/home/user/a b/c d.txt')
+    expect(remotePathFromUri(remoteFsPathToUri(remotePathFromUri(original), 'host'))).toBe(
+      original.path,
+    )
   })
 })
