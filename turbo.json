@@ -5,6 +5,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "outputLogs": "new-only",
       "inputs": [
         "src/**",
         "!src/**/__tests__/**",
@@ -21,6 +22,7 @@
     },
     "typecheck": {
       "dependsOn": ["build", "^build"],
+      "outputLogs": "new-only",
       "outputs": []
     },
     // editor 的 lint/typecheck 默认 inputs 是整个包的 git 跟踪文件，改 CLAUDE.md/docs 也会
@@ -30,6 +32,7 @@
     // 显式 inputs glob 会匹配未跟踪文件，不排除则 hash 漂移、缓存永不命中（editor#test 同款教训）。
     "@universe-editor/editor#typecheck": {
       "dependsOn": ["^build"],
+      "outputLogs": "new-only",
       "inputs": [
         "src/**",
         "integration/**",
@@ -45,6 +48,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      "outputLogs": "new-only",
       "outputs": []
     },
     // editor 的 test = unit(vitest projects over src) + integration(integration/)。
@@ -53,6 +57,7 @@
     // 显式 inputs glob 会匹配未跟踪文件，不排除则 hash 永远漂移、缓存永不命中。
     "@universe-editor/editor#test": {
       "dependsOn": ["^build"],
+      "outputLogs": "new-only",
       "inputs": [
         "src/**",
         "integration/**",
@@ -66,6 +71,7 @@
     },
     "e2e": {
       "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
+      "outputLogs": "new-only",
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
       "env": [
         "CI",
@@ -77,6 +83,7 @@
     },
     "e2ea": {
       "dependsOn": ["^build", "build", "@universe-editor/editor#build"],
+      "outputLogs": "new-only",
       "outputs": ["e2e/playwright-report/**", "e2e/test-results/**"],
       "env": [
         "CI",
@@ -87,10 +94,12 @@
       ]
     },
     "lint": {
+      "outputLogs": "new-only",
       "outputs": [".eslintcache"]
     },
     // 收窄理由与同步约束见 editor#typecheck 注释；lint 命令 = eslint src bench integration e2e
     "@universe-editor/editor#lint": {
+      "outputLogs": "new-only",
       "inputs": [
         "src/**",
         "bench/**",
