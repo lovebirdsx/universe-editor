@@ -38,7 +38,7 @@ import { createInterface } from 'node:readline/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { loadEnv } from '../lib/env.mjs'
-import { SERVER_ENV_FILE, buildServerEnv, serializeServerEnv } from './serverEnv.mjs'
+import { SERVER_ENV_FILE, isWindowsPath, renderServerEnv } from './serverEnv.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
@@ -121,9 +121,8 @@ export function assessVersions(localVersion, remoteVersion) {
 }
 
 // Windows 远端的识别依据：--app-dir / UE_SERVER_APP_DIR 是 Windows 路径（盘符或反斜杠）。
-export function isWindowsAppDir(appDir) {
-  return /^[A-Za-z]:[\\/]/.test(appDir) || appDir.includes('\\')
-}
+// 与 bundle 共用同一判定（serverEnv.mjs），避免两条路对同一 .env 得出不同目标平台。
+export const isWindowsAppDir = isWindowsPath
 
 // Linux: cp 成功才 restart，最后清理临时文件；sudo -n 保证非交互失败可确定诊断。
 // Windows: copy 成功才 End+Run（copy 失败不动在跑的服务；End 在未运行时失败无害，静默），
@@ -267,7 +266,8 @@ async function main() {
     console.log('⏭️  跳过打包，复用已有 dist/server.js')
   } else {
     console.log('📦 打包 dist/server.js')
-    run('pnpm', ['server:bundle'], {
+    // 透传 --env：bundle 会按同一 mode 生成 dist/server.env，与首装产物完全一致。
+    run('pnpm', ['server:bundle', '--', '--env', mode], {
       spawnOpts: { cwd: repoRoot, shell: process.platform === 'win32' },
     })
   }
@@ -275,19 +275,16 @@ async function main() {
   const stagedName = `server.js.v${localVersion}`
   const stagedRemotePath = isWindowsTarget ? stagedName : `~/${stagedName}`
 
-  // 服务端运行时配置：从 .env.<mode> 提取白名单，生成 server.env 一并上传。
+  // 服务端运行时配置：从 .env.<mode> 提取白名单生成 server.env 一并上传。
+  // 与 bundle 共用 renderServerEnv，保证首装与部署两条路生成的配置一致。
   // 白名单外的键（UE_RELEASE_KEY 等部署侧机密）绝不上服务器。
   let serverEnvText = null
   if (!config.skipEnv) {
-    serverEnvText = serializeServerEnv(
-      buildServerEnv({ windows: isWindowsTarget, overrides: process.env }),
-      { windows: isWindowsTarget },
+    const rendered = renderServerEnv({ env: process.env, windows: isWindowsTarget, mode })
+    serverEnvText = rendered.text
+    console.log(
+      `⚙️  服务端配置 server.env（${rendered.keys.length} 项）: ${rendered.keys.join(', ')}`,
     )
-    const keys = serverEnvText
-      .split(/\r?\n/)
-      .filter((l) => l && !l.startsWith('#'))
-      .map((l) => l.slice(0, l.indexOf('=')))
-    console.log(`⚙️  服务端配置 server.env（${keys.length} 项）: ${keys.join(', ')}`)
     if (!config.dryRun) writeFileSync(stagedEnvOutput, serverEnvText)
   } else {
     console.log('⏭️  --skip-env：保留服务器上现有 server.env')

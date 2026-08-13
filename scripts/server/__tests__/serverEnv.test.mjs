@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import {
   SERVER_ENV_KEYS,
   buildServerEnv,
+  isWindowsPath,
   parseEnvText,
   pickServerEnv,
+  renderServerEnv,
   serializeServerEnv,
   serverEnvPath,
 } from '../serverEnv.mjs'
@@ -121,4 +123,37 @@ test('serverEnvPath 按目标平台拼路径', () => {
     serverEnvPath('C:/universe-editor/app/', { windows: true }),
     'C:\\universe-editor\\app\\server.env',
   )
+})
+
+test('isWindowsPath 按盘符/反斜杠识别', () => {
+  assert.equal(isWindowsPath('C:\\universe-editor\\app'), true)
+  assert.equal(isWindowsPath('C:/universe-editor/app'), true)
+  assert.equal(isWindowsPath('/opt/universe-update-server'), false)
+  assert.equal(isWindowsPath(''), false)
+  assert.equal(isWindowsPath(undefined), false)
+})
+
+test('renderServerEnv 同一 .env 在 bundle（首装）与 deploy 两条路生成完全相同的配置', () => {
+  const env = {
+    UE_SERVER_ROOT: '/srv/ue',
+    UE_SERVER_PORT: '8080',
+    UE_RELEASE_KEY: '/home/me/.ssh/id_ed25519',
+  }
+  const a = renderServerEnv({ env, windows: false, mode: 'prod' })
+  const b = renderServerEnv({ env, windows: false, mode: 'prod' })
+  assert.equal(a.text, b.text)
+  assert.deepEqual(a.keys, b.keys)
+  // 白名单外的部署侧机密不进产物。
+  assert.doesNotMatch(a.text, /UE_RELEASE_KEY|id_ed25519/)
+  // 头注释标明来源 mode，便于在服务器上确认配置出处。
+  assert.match(a.text, /来自 \.env\.prod/)
+})
+
+test('renderServerEnv 文本可被 parseEnvText 还原成 values', () => {
+  const { text, values } = renderServerEnv({
+    env: { UE_SERVER_PORT: '9090' },
+    windows: false,
+    mode: 'test',
+  })
+  assert.deepEqual(parseEnvText(text), values)
 })

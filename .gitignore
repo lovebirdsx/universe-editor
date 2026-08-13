@@ -13,6 +13,8 @@ apps/editor/.runtime-resources/
 .env
 .env.*
 !.env.example
+# 服务端运行时配置的生成物（bundle/deploy 从 .env.<mode> 生成，含主机路径，勿提交）
+server.env
 coverage/
 .next/
 .claude/plans/

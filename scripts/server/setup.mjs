@@ -15,10 +15,11 @@
  *    sudo node scripts/server/setup.mjs restart
  *
  *  配置来源（优先级 高→低）: CLI 旗标 > server.env > 平台默认值。
- *    server.env 优先读同目录（deploy 上传的那份随包），其次读安装目录已有的那份；
- *    install 会把最终配置写回 <appDir>/server.env，由服务定义注入进程环境
- *    （systemd EnvironmentFile / Windows run.cmd 逐行 set），server.mjs 认 UE_SERVER_*。
- *    ⇒ 日常改配置只需改开发机 .env.<mode> 后重新 deploy，不必登服务器重装。
+ *    server.env 查找顺序：--env-file > dist/server.env（bundle --env 从开发机 .env.<mode> 生成，
+ *    随包拷来）> 同目录 > 安装目录已有的那份；install 会把最终配置写回 <appDir>/server.env，
+ *    由服务定义注入进程环境（systemd EnvironmentFile / Windows run.cmd 逐行 set）。
+ *    ⇒ 首装带配置：开发机 `pnpm server:bundle -- --env prod` 后再拷目录过来。
+ *    ⇒ 日常改配置：改开发机 .env.<mode> 后重新 deploy，不必登服务器重装。
  *
  *  可选参数（覆盖 server.env，写回文件；键名见 serverEnv.mjs 的 SERVER_ENV_KEYS）:
  *    --root <发布目录> --port <端口> --base <URL前缀> --gallery-root --auth-dir
@@ -134,6 +135,9 @@ const FLAG_TO_ENV_KEY = {
 export function resolveEnvOverrides(args, appDirGuess) {
   const candidates = []
   if (typeof args['env-file'] === 'string') candidates.push(resolve(args['env-file']))
+  // dist/server.env 是 `pnpm server:bundle -- --env <mode>` 从开发机 .env.<mode> 生成的，
+  // 随 scripts/server/ 一起拷到服务器——首装即带配置，与 deploy 走同一套生成逻辑。
+  candidates.push(join(__dirname, 'dist', SERVER_ENV_FILE))
   candidates.push(join(__dirname, SERVER_ENV_FILE))
   if (appDirGuess) candidates.push(join(appDirGuess, SERVER_ENV_FILE))
   for (const file of candidates) {

@@ -126,10 +126,10 @@ export function buildServerEnv({ windows, overrides = {}, flags = {} }) {
 
 // 序列化成 server.env。systemd EnvironmentFile 与 cmd 的 set 都不支持多行值与转义，
 // 含换行的值直接拒绝（签名私钥等多行内容走文件路径引用，不进这里）。
-export function serializeServerEnv(values, { windows = false } = {}) {
+export function serializeServerEnv(values, { windows = false, mode } = {}) {
   const eol = windows ? '\r\n' : '\n'
   const lines = [
-    '# universe-update-server 运行时配置（由 setup / deploy 生成，勿手工编辑）',
+    `# universe-update-server 运行时配置${mode ? `（来自 .env.${mode}）` : ''}——生成物，勿手工编辑`,
     '# 改配置：改开发机 .env.<mode> 后重新 pnpm server:deploy -- --env <mode>',
   ]
   for (const key of SERVER_ENV_KEYS) {
@@ -142,6 +142,23 @@ export function serializeServerEnv(values, { windows = false } = {}) {
     lines.push(`${key}=${text}`)
   }
   return lines.join(eol) + eol
+}
+
+// 从环境映射生成 server.env 文本 + 携带的键名（供调用方回显）。
+// bundle（首装产物）与 deploy（部署上传）共用，保证两条路生成的配置完全一致。
+export function renderServerEnv({ env, windows, mode }) {
+  const values = buildServerEnv({ windows, overrides: env })
+  return {
+    text: serializeServerEnv(values, { windows, mode }),
+    keys: Object.keys(values).filter((k) => SERVER_ENV_KEYS.includes(k)),
+    values,
+  }
+}
+
+// 目标平台判定：Windows 路径（盘符或反斜杠）即 Windows 远端。deploy 看 --app-dir，
+// bundle 看 .env 里的 UE_SERVER_APP_DIR / UE_SERVER_ROOT。
+export function isWindowsPath(p) {
+  return typeof p === 'string' && (/^[A-Za-z]:[\\/]/.test(p) || p.includes('\\'))
 }
 
 export function serverEnvPath(appDir, { windows = false } = {}) {

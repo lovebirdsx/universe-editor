@@ -34,7 +34,7 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `galleryPublish.mjs` | 自助发布 API 流水线（token 认证、解 VSIX 校验、registry 原子更新）+ 审批管理 API（`gallery/api/admin/*`）。由 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。 |
 | `registerPage.mjs` | 自助注册网页（`GET {base}gallery/register`）的内嵌 HTML（中文一次性表单，零外部资源）。由 `server.mjs` 静态 import。 |
 | `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
-| `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。 |
+| `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。加 `-- --env <mode>` 时按开发机 `.env.<mode>` 一并生成 `dist/server.env`，让首装即带配置。 |
 | `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 远端安装重启（Ubuntu=免密 sudo + systemctl，Windows=schtasks）→ 轮询健康检查断言新版本。按 `--app-dir` 是否为 Windows 路径自动识别远端形态，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮。发布时由 `release:upload` 同步到发布目录。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 写 `server.env` / 注册服务 / 自动生成缺失的签名私钥与管理令牌 / 防火墙 / 启停 / 卸载。 |
@@ -51,8 +51,16 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 先在**仓库内**构建部署产物（publish API 需要解 zip/zod，单文件产物已把这些依赖内联）：
 
 ```bash
-pnpm install && pnpm server:bundle    # 产出 scripts/server/dist/server.js
+pnpm install
+pnpm server:bundle -- --env prod    # 产出 dist/server.js + dist/server.env（按 .env.prod）
+# 不想带配置（用平台默认值）：pnpm server:bundle
 ```
+
+`.env` 只在开发机存在（服务器上没有仓库），所以 **`.env.<mode>` → `server.env` 的转换固定发生在打包时**，
+setup 只消费生成好的 `server.env`。加了 `--env` 首装就直接带上你的配置，与后续 `server:deploy` 走完全
+相同的生成逻辑；不加则只出 `server.js`，服务器侧用平台默认值。
+
+> 不带 `--env` 重跑会顺手删掉上次生成的 `dist/server.env`，避免陈旧配置被误拷到服务器。
 
 然后把本目录（`scripts/server/`，**含 `dist/`**）整个拷到服务器任意位置，然后：
 
@@ -94,18 +102,24 @@ cd scripts\server
 ### 配置怎么来（重要）
 
 服务的运行时配置**不烧在服务定义里**，而是集中放在安装目录下的 `server.env`（`UE_SERVER_*=值`，每行一条）：
-Ubuntu 由 systemd `EnvironmentFile=` 注入，Windows 由 `run.cmd` 逐行 `set` 加载。优先级：
+Ubuntu 由 systemd `EnvironmentFile=` 注入，Windows 由 `run.cmd` 逐行 `set` 加载。
+
+**唯一编辑点是开发机的 `.env.<mode>`**（完整变量清单见仓库根 [`.env.example`](../../.env.example)）。
+`.env` 不会出现在服务器上，所以两条路都在开发机上把它转成 `server.env`，用的是同一套生成逻辑：
+
+| 场景 | 命令（开发机） | 产物 |
+|---|---|---|
+| 首装 | `pnpm server:bundle -- --env prod` → 拷目录到服务器 → `setup.sh` | `dist/server.env` 随包 |
+| 日常改配置 / 换程序 | `pnpm server:deploy -- --env prod` | 上传 `server.env` + 重启 |
+
+setup 侧的完整优先级与查找顺序：
 
 ```
-CLI 旗标  >  server.env（--env-file > 随包同目录 > 安装目录已有的那份）  >  平台默认值
+CLI 旗标  >  server.env（--env-file > dist/server.env > 同目录 > 安装目录已有的那份）  >  平台默认值
 ```
 
-所以有两条改配置的路子，**日常用第一条**：
-
-1. **改开发机的 `.env.<mode>` 后重跑 `pnpm server:deploy -- --env <mode>`**（推荐）。deploy 会从
-   `.env.<mode>` 提取 `UE_SERVER_*` 白名单生成 `server.env` 一并上传，重启即生效——不必登服务器、不必重装。
-   完整变量清单见仓库根 [`.env.example`](../../.env.example)。
-2. 在服务器上重跑 `setup.sh install --port 8080`（CLI 旗标覆盖，会写回 `server.env`）。首装或换机器时用。
+所以改配置日常走 `server:deploy`（不必登服务器、不必重装）；在服务器上临时改用
+`setup.sh install --port 8080`（CLI 旗标覆盖，会写回 `server.env`）。
 
 > 不带任何旗标重跑 `install` 不会丢配置：会沿用安装目录里已有的 `server.env`。
 > 只想换程序、完全不动服务器配置时用 `pnpm server:deploy -- --env prod --skip-env`。

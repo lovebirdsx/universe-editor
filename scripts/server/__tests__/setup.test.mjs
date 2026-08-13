@@ -1,14 +1,42 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { test } from 'node:test'
+import { dirname, join } from 'node:path'
+import { after, before, test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   buildConfig,
   buildSystemdUnit,
   buildWindowsLauncher,
   resolveEnvOverrides,
 } from '../setup.mjs'
+
+const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+const distEnv = join(serverDir, 'dist', 'server.env')
+
+// dist/server.env 参与 setup 的查找顺序，开发者机器上可能残留一份（跑过 bundle --env）。
+// 全程移开，让每个用例自己决定它存不存在——否则本地与 CI 结果会不一致。
+let stashed = null
+before(() => {
+  mkdirSync(join(serverDir, 'dist'), { recursive: true })
+  if (existsSync(distEnv)) {
+    stashed = readFileSync(distEnv)
+    rmSync(distEnv)
+  }
+})
+after(() => {
+  if (stashed) writeFileSync(distEnv, stashed)
+})
+
+// 在 dist/server.env 存在的前提下跑 fn，结束后恢复"不存在"状态。
+function withDistEnv(content, fn) {
+  writeFileSync(distEnv, content)
+  try {
+    return fn(distEnv)
+  } finally {
+    rmSync(distEnv, { force: true })
+  }
+}
 
 function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'ue-setup-'))
@@ -43,6 +71,30 @@ test('resolveEnvOverrides 回落到安装目录已有的 server.env（不带参�
     const { file, values } = resolveEnvOverrides({}, dir)
     assert.equal(file, join(dir, 'server.env'))
     assert.deepEqual(values, { UE_SERVER_PORT: '9090' })
+  })
+})
+
+test('resolveEnvOverrides 优先读 dist/server.env（bundle --env 随包带来的首装配置）', () => {
+  withDistEnv('UE_SERVER_PORT=7777\n', (distFile) => {
+    withTempDir((installed) => {
+      // 安装目录里已有一份旧配置，dist 的那份（这次要装的）应当胜出。
+      writeFileSync(join(installed, 'server.env'), 'UE_SERVER_PORT=9090\n')
+      const { file, values } = resolveEnvOverrides({}, installed)
+      assert.equal(file, distFile)
+      assert.deepEqual(values, { UE_SERVER_PORT: '7777' })
+    })
+  })
+})
+
+test('resolveEnvOverrides 中 --env-file 压过 dist/server.env', () => {
+  withDistEnv('UE_SERVER_PORT=7777\n', () => {
+    withTempDir((dir) => {
+      const explicit = join(dir, 'explicit.env')
+      writeFileSync(explicit, 'UE_SERVER_PORT=6666\n')
+      const { file, values } = resolveEnvOverrides({ 'env-file': explicit }, null)
+      assert.equal(file, explicit)
+      assert.deepEqual(values, { UE_SERVER_PORT: '6666' })
+    })
   })
 })
 

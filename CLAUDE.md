@@ -35,6 +35,7 @@ packages/
 | 写内置扩展（typescript/perforce/markdown） | `extensions/<name>/` | 各扩展目录 CLAUDE.md | 走 skill `create-extension` 脚手架 |
 | 写预览类扩展范例 | `extensions-external/pdf/` | `extensions-external/pdf/CLAUDE.md` | pdf 是最小可照抄范例 |
 | 改 vendor fork（claude-agent-acp / codex-acp） | `vendor/<fork>/` | 根 CLAUDE.md「内置 ACP agent」节 | 红线=diff 最小；改完 `pnpm agent:build` |
+| 改更新服务器 / 扩展市场后端 / 部署脚本 | `scripts/server/` | `scripts/server/CLAUDE.md` | 服务器侧脚本只能用 node 内置模块；改行为要 bump `SERVER_VERSION` |
 
 ## 常用命令
 
