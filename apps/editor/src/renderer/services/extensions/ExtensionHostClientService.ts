@@ -41,6 +41,7 @@ import {
   IViewsService,
   IWorkspaceService,
   IWorkspaceTrustManagementService,
+  REMOTE_SCHEME,
   Severity,
   localize,
   type Event,
@@ -298,7 +299,12 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
   private async _connect(): Promise<void> {
     await this._workspace.whenReady
-    const workspaceRoot = this._workspace.current?.folder.fsPath
+    const folder = this._workspace.current?.folder
+    // A remote workspace hosts the extension host on the remote server: pass the
+    // POSIX `remote-ssh` path (the daemon resolves it to the server's native form)
+    // plus the authority so the main facade routes the start through the tunnel.
+    const isRemote = folder !== undefined && folder.scheme === REMOTE_SCHEME
+    const workspaceRoot = isRemote && folder ? folder.path : folder?.fsPath
     // Single local host: filter the scan by the effective disabled set (global +
     // workspace) across both built-in and external extensions.
     const disabledIds = await this._disabledIds()
@@ -308,6 +314,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     const spec: ExtHostStartSpec = {
       locale: getCurrentLocale(),
       ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+      ...(isRemote && folder ? { authority: folder.authority } : {}),
       ...(includeUser ? {} : { userExtensionsDir: '' }),
       ...(disabledIds.length > 0 ? { disabledIds } : {}),
     }

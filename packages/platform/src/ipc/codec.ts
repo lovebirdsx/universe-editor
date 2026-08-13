@@ -10,11 +10,61 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type UriComponents } from '../base/uri.js'
-import type { IpcCodec, IpcMessage } from './ipc.js'
+import { U8_TAG, base64ToBytes, bytesToBase64, type IpcCodec, type IpcMessage } from './ipc.js'
 import type { IURITransformer } from './uriIpc.js'
 
 const U8_REF = '$u8ref'
 const URI_MID = 1
+
+/**
+ * JSON codec carrying the same wire shape as `defaultCodec` (plain JSON plus
+ * `$u8` base64-tagged Uint8Array and `$mid:1` URI revive) but with an optional
+ * per-connection URI transformer hooked into the same pass. Unlike the binary
+ * codec its output is newline-safe — the extension host speaks a newline-delimited
+ * JSON framing protocol over stdio, so raw binary attachment segments would
+ * corrupt the frame stream.
+ */
+export function createJsonCodec(transformer?: IURITransformer): IpcCodec {
+  function encode(msg: IpcMessage): Uint8Array {
+    const replacer = function (this: unknown, key: string, value: unknown): unknown {
+      // Holder trick (see createBinaryCodec): Buffer.toJSON() runs before the
+      // replacer, so `value` would already be `{type:'Buffer',data:[...]}` and the
+      // real bytes would slip into JSON. `this[key]` still holds the raw array.
+      const raw = (this as Record<string, unknown>)[key]
+      if (raw instanceof Uint8Array) {
+        return { [U8_TAG]: bytesToBase64(raw) }
+      }
+      if (transformer && value !== null && typeof value === 'object') {
+        const obj = value as Record<string, unknown>
+        // `value` here is post-toJSON, so a URI instance is already `{ $mid: 1, ... }`.
+        if (obj['$mid'] === URI_MID && typeof obj['scheme'] === 'string') {
+          return transformer.transformOutgoing(obj as unknown as UriComponents)
+        }
+      }
+      return value
+    }
+    return new TextEncoder().encode(JSON.stringify(msg, replacer))
+  }
+
+  function decode(data: Uint8Array): IpcMessage {
+    const reviver = (_key: string, value: unknown): unknown => {
+      if (value !== null && typeof value === 'object') {
+        const obj = value as Record<string, unknown>
+        if (typeof obj[U8_TAG] === 'string') return base64ToBytes(obj[U8_TAG] as string)
+        if (obj['$mid'] === URI_MID && typeof obj['scheme'] === 'string') {
+          const components = transformer
+            ? transformer.transformIncoming(obj as unknown as UriComponents)
+            : (obj as unknown as UriComponents)
+          return URI.revive(components)
+        }
+      }
+      return value
+    }
+    return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
+  }
+
+  return { encode, decode }
+}
 
 function writeU32(out: Uint8Array, offset: number, value: number): void {
   out[offset] = (value >>> 24) & 0xff

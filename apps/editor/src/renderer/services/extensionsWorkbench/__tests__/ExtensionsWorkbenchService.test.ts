@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Emitter, Severity } from '@universe-editor/platform'
+import { Emitter, REMOTE_SCHEME, Severity, URI } from '@universe-editor/platform'
 import { GallerySortBy } from '@universe-editor/extension-gallery'
 import type {
   IDialogService,
   INotificationService,
   IStorageService,
+  IWorkspaceService,
 } from '@universe-editor/platform'
 import type {
   ILocalExtension,
@@ -101,6 +102,18 @@ function makeMocks() {
     onDidActivationError: onDidActivationError.event,
     onDidChangeContributions: onDidChangeContributions.event,
   } as unknown as IExtensionHostClientService
+  const workspace = {
+    _serviceBrand: undefined,
+    current: null as IWorkspaceService['current'],
+    onDidChangeWorkspace: new Emitter().event,
+    recent: [] as IWorkspaceService['recent'],
+    onDidChangeRecent: new Emitter().event,
+    whenReady: Promise.resolve(),
+    openFolder: vi.fn(async () => undefined),
+    closeFolder: vi.fn(async () => undefined),
+    removeRecent: vi.fn(async () => undefined),
+    clearRecent: vi.fn(async () => undefined),
+  } as IWorkspaceService
   return {
     management,
     gallery,
@@ -109,6 +122,7 @@ function makeMocks() {
     notification,
     enablement,
     hostClient,
+    workspace,
     onDidChangeExtensions,
     onDidChangeEnablement,
     onDidActivationError,
@@ -125,6 +139,7 @@ function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionsWorkbenchSe
     mocks.notification,
     mocks.enablement,
     mocks.hostClient,
+    mocks.workspace,
   )
 }
 
@@ -397,5 +412,33 @@ describe('ExtensionsWorkbenchService', () => {
     expect(
       svc.getInstalled().find((e) => e.id === 'acme.installed')?.activationError,
     ).toBeUndefined()
+  })
+
+  it('marks external extensions unavailable in a remote workspace but leaves built-ins alone', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.listBuiltinExtensions).mockResolvedValue([
+      localExtension({ identifier: 'universe.git', source: 'builtin' }),
+    ])
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const external = svc.getInstalled().find((e) => e.id === 'acme.installed')
+    const builtin = svc.getInstalled().find((e) => e.id === 'universe.git')
+    expect(external?.unavailableInRemote).toBe(true)
+    expect(builtin?.unavailableInRemote).toBeUndefined()
+  })
+
+  it('does not flag external extensions unavailable in a local workspace', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    expect(svc.getInstalled()[0]?.unavailableInRemote).toBeUndefined()
   })
 })

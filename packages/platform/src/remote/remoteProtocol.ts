@@ -53,6 +53,19 @@ export type RemoteChannelName = (typeof RemoteChannels)[keyof typeof RemoteChann
 // -------- Connection handshake (PersistentProtocol Control frames, JSON) --------
 
 /**
+ * Launch parameters for a forked extension host, carried on the ExtensionHost
+ * connection handshake. The daemon whitelists env (no secrets) and appends
+ * execArgv verbatim to the host bootstrap. Path fills (builtin/user extensions,
+ * global storage, TS server) arrive in a later phase; both fields may be empty.
+ */
+export interface IRemoteExtensionHostStartArgs {
+  /** Env vars for the forked host (whitelisted by the server, no secrets). */
+  readonly env?: Record<string, string>
+  /** Raw CLI args appended to the host bootstrap. */
+  readonly execArgv?: readonly string[]
+}
+
+/**
  * First (and only) client → server control frame after the socket opens, for
  * both fresh connects and reconnects. The server validates token + version,
  * then either creates a new protocol owner or re-attaches the socket to the
@@ -69,6 +82,8 @@ export interface IRemoteConnectionRequest {
   /** Client-generated UUID identifying this logical connection across socket swaps. */
   readonly reconnectionToken: string
   readonly isReconnection: boolean
+  /** ExtensionHost connections only; ignored for Management. */
+  readonly args?: IRemoteExtensionHostStartArgs
 }
 
 export enum RemoteConnectionErrorCode {

@@ -998,6 +998,9 @@ importers:
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../config-ts
+      '@universe-editor/extension-packaging':
+        specifier: workspace:*
+        version: link:../extension-packaging
       esbuild:
         specifier: 'catalog:'
         version: 0.25.12

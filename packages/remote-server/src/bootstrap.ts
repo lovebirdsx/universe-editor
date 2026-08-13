@@ -143,6 +143,7 @@ async function serve(opts: CliOptions): Promise<void> {
   const daemon = await createDaemon({
     ...(opts.port !== undefined ? { port: opts.port } : {}),
     ...(opts.token !== undefined ? { token: opts.token } : {}),
+    dataDir: opts.dataDir,
     logger,
   })
 

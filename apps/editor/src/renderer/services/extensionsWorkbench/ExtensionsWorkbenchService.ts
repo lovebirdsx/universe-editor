@@ -13,6 +13,8 @@ import {
   IDialogService,
   INotificationService,
   IStorageService,
+  IWorkspaceService,
+  REMOTE_SCHEME,
   Severity,
   StorageScope,
   localize,
@@ -66,6 +68,8 @@ export interface IExtensionEntry {
   readonly enabled: boolean
   /** The resolved enablement state (drives which enable/disable actions to show). */
   readonly enablementState: EnablementState
+  /** Installed but not active in the current remote workspace (external ext only). */
+  readonly unavailableInRemote?: boolean
   /** Source references for actions (present when known). */
   readonly local?: ILocalExtension
   readonly gallery?: IGalleryExtension
@@ -174,6 +178,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     @INotificationService private readonly _notification: INotificationService,
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
     @IExtensionHostClientService private readonly _hostClient: IExtensionHostClientService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
     this._register(this._management.onDidChangeExtensions(() => void this.refreshInstalled()))
@@ -406,6 +411,11 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     return this._enablementStates.get(id) ?? EnablementState.EnabledGlobally
   }
 
+  private _isRemoteWorkspace(): boolean {
+    const folder = this._workspace.current?.folder
+    return folder !== undefined && folder.scheme === REMOTE_SCHEME
+  }
+
   private _isEnabledState(state: EnablementState): boolean {
     return state === EnablementState.EnabledGlobally || state === EnablementState.EnabledWorkspace
   }
@@ -414,6 +424,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     const m = local.manifest
     const state = this._stateOf(local.identifier)
     const activationError = this._activationErrors.get(local.identifier)
+    const isBuiltin = local.source === 'builtin'
     return {
       id: local.identifier,
       displayName: m.displayName ?? m.name,
@@ -423,11 +434,12 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       installed: true,
       outdated: false,
       installing: this._installing.has(local.identifier),
-      isBuiltin: local.source === 'builtin',
+      isBuiltin,
       isUnderDevelopment: local.source === 'development',
       enabled: this._isEnabledState(state),
       enablementState: state,
       local,
+      ...(!isBuiltin && this._isRemoteWorkspace() ? { unavailableInRemote: true } : {}),
       ...(activationError ? { activationError } : {}),
       ...(local.galleryMetadata?.publisherDisplayName
         ? { publisherDisplayName: local.galleryMetadata.publisherDisplayName }

@@ -45,6 +45,13 @@ export interface ExtHostStartSpec {
    */
   readonly workspaceRoot?: string
   /**
+   * The `remote-ssh` authority when the host runs on a remote server. Presence
+   * routes the start through the remote ExtensionHost tunnel instead of a local
+   * spawn. The renderer populates this in a later phase; it is empty for local
+   * workspaces.
+   */
+  readonly authority?: string
+  /**
    * Override the built-in extensions directory the host scans. Defaults to the
    * bundled built-in dir. Tests inject a fixture dir here.
    */

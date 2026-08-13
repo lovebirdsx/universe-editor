@@ -10,8 +10,8 @@
 import { createReadStream, type ReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import {
+  BufferedEmitter,
   Disposable,
-  Emitter,
   FileService,
   type Event,
   type IDirectoryEntry,
@@ -25,6 +25,8 @@ import {
 const CHUNK_SIZE = 262144
 const MAX_IN_FLIGHT = 16
 
+type ReadStreamFactory = (fsPath: string, options: { highWaterMark: number }) => ReadStream
+
 interface ActiveStream {
   readonly readStream: ReadStream
   readonly size: number
@@ -36,7 +38,8 @@ interface ActiveStream {
 export class RemoteFileStreamService extends Disposable implements IRemoteFileStreamService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _onReadStreamData = this._register(new Emitter<IRemoteFileStreamEvent>())
+  // Buffered so chunks emitted before the client's first subscription are replayed instead of dropped.
+  private readonly _onReadStreamData = this._register(new BufferedEmitter<IRemoteFileStreamEvent>())
   readonly onReadStreamData: Event<IRemoteFileStreamEvent> = this._onReadStreamData.event
 
   private _nextStreamId = 1
@@ -45,6 +48,7 @@ export class RemoteFileStreamService extends Disposable implements IRemoteFileSt
   constructor(
     private readonly _fileService: FileService,
     private readonly _logger: ILogger,
+    private readonly _createReadStream: ReadStreamFactory = createReadStream,
   ) {
     super()
   }
@@ -115,7 +119,7 @@ export class RemoteFileStreamService extends Disposable implements IRemoteFileSt
       throw new Error(`cannot stream non-file resource: ${fsPath}`)
     }
     const streamId = this._nextStreamId++
-    const readStream = createReadStream(fsPath, { highWaterMark: CHUNK_SIZE })
+    const readStream = this._createReadStream(fsPath, { highWaterMark: CHUNK_SIZE })
     const entry: ActiveStream = {
       readStream,
       size: fileStat.size,

@@ -39,6 +39,7 @@ import {
   type IRemoteEnvironment,
   type IRemoteHandshakeService,
   type IRemoteConnectionRequest,
+  type IRemoteExtensionHostStartArgs,
 } from '@universe-editor/platform'
 import {
   ManagedChildProcess,
@@ -55,6 +56,10 @@ import {
   type RemoteSpawner,
 } from './remoteDeploy.js'
 import { performClientHandshake, type RemoteHandshakeError } from './remoteHandshake.js'
+import {
+  RemoteExtensionHostTunnel,
+  type IRemoteExtensionHostTunnel,
+} from './remoteExtensionHostTunnel.js'
 
 export interface IRemoteConnection {
   readonly authority: string
@@ -82,11 +87,16 @@ export interface IRemoteConnectionStateChange {
 export interface IRemoteConnectionService {
   readonly _serviceBrand: undefined
   getConnection(authority: string): Promise<IRemoteConnection>
+  openExtensionHostConnection(
+    authority: string,
+    args?: IRemoteExtensionHostStartArgs,
+  ): Promise<IRemoteExtensionHostTunnel>
   readonly onDidChangeState: Event<IRemoteConnectionStateChange>
   retryConnection(authority: string): void
   stopServer(authority: string): Promise<void>
   closeConnection(authority: string): Promise<void>
   dropSocketForTesting(authority: string): void
+  dropExtensionHostSocketForTesting(authority: string): void
   dispose(): void
 }
 
@@ -188,6 +198,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private readonly _entries = new Map<string, ConnectionEntry>()
   private readonly _onDidChangeState = this._register(new Emitter<IRemoteConnectionStateChange>())
   readonly onDidChangeState: Event<IRemoteConnectionStateChange> = this._onDidChangeState.event
+  private readonly _extensionHostTunnels = new Set<RemoteExtensionHostTunnel>()
   private _disposed = false
 
   constructor(
@@ -238,6 +249,51 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     }
   }
 
+  async openExtensionHostConnection(
+    authority: string,
+    args: IRemoteExtensionHostStartArgs = {},
+  ): Promise<IRemoteExtensionHostTunnel> {
+    validateAuthority(authority)
+    const entry = this._entry(authority)
+    if (entry.state === 'disposed') {
+      throw new Error('remote connection service is disposed')
+    }
+    // Management bring-up populates daemonPort/daemonToken and the ssh forward
+    // the tunnel reuses. getConnection is idempotent, so an already-up tunnel
+    // short-circuits.
+    await this.getConnection(authority)
+
+    const reconnectionToken = randomUUID()
+    const tunnel = new RemoteExtensionHostTunnel({
+      authority,
+      connectSocket: async () => {
+        if (!entry.isDirect) await this._ensureForward(entry)
+        const port = entry.isDirect ? entry.daemonPort : entry.forward!.localPort
+        return connectNodeSocket(port, '127.0.0.1')
+      },
+      buildRequest: (isReconnection) => ({
+        token: entry.daemonToken,
+        connectionType: RemoteConnectionType.ExtensionHost,
+        authority: entry.authority,
+        reconnectionToken,
+        isReconnection,
+        ...(isReconnection ? {} : Object.keys(args).length > 0 ? { args } : {}),
+      }),
+      logger: this._logger,
+      label: `extHost:${authority}`,
+    })
+    this._extensionHostTunnels.add(tunnel)
+    tunnel.onDidClose(() => this._extensionHostTunnels.delete(tunnel))
+    try {
+      await tunnel.open()
+    } catch (err) {
+      this._extensionHostTunnels.delete(tunnel)
+      tunnel.dispose()
+      throw err
+    }
+    return tunnel
+  }
+
   async stopServer(authority: string): Promise<void> {
     const entry = this._entries.get(authority)
     if (!entry) return
@@ -255,6 +311,12 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     if (!entry) return
     entry.protocol?.getSocket().dispose()
     this._onSocketDisconnected(entry)
+  }
+
+  dropExtensionHostSocketForTesting(authority: string): void {
+    for (const tunnel of this._extensionHostTunnels) {
+      if (tunnel.authority === authority) tunnel.dropSocketForTesting()
+    }
   }
 
   // ------------------------- bring-up -------------------------
@@ -697,6 +759,10 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   override dispose(): void {
     this._disposed = true
+    for (const tunnel of this._extensionHostTunnels) {
+      tunnel.dispose()
+    }
+    this._extensionHostTunnels.clear()
     for (const entry of this._entries.values()) {
       entry.closedByUser = true
       entry.state = 'disposed'

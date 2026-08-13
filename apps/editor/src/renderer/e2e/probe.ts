@@ -822,6 +822,36 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const links = Array.isArray(result) ? result : [result]
       return links.map((l) => l.uri.toString())
     },
+    getDefinition: async (uri, lineNumber, column) => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const provider = services.languageFeaturesService.getDefinitionProviders(
+        model.getLanguageId(),
+      )[0]
+      if (!provider) return []
+      const result = await provider.provideDefinition(
+        model,
+        new monacoNs.Position(lineNumber, column),
+        NONE_TOKEN,
+      )
+      if (!result) return []
+      const links = Array.isArray(result) ? result : [result]
+      return links.map((l) => l.uri.toString())
+    },
+    getHover: async (uri, lineNumber, column) => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return ''
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const position = new monacoNs.Position(lineNumber, column)
+      const parts: string[] = []
+      for (const provider of features.hoverProvider.ordered(model)) {
+        const hover = await provider.provideHover(model, position, NONE_TOKEN)
+        for (const c of hover?.contents ?? []) parts.push(c.value)
+      }
+      return parts.join('\n')
+    },
     getMarkdownFoldingRanges: async (
       uri: string,
     ): Promise<ReadonlyArray<readonly [number, number]>> => {
@@ -1718,6 +1748,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }))
     },
     dropRemoteSocket: (authority) => services.remoteStatusService.dropSocketForTesting(authority),
+    dropRemoteExtensionHostSocket: (authority) =>
+      services.remoteStatusService.dropExtensionHostSocketForTesting(authority),
     openWorkspaceUri: (uri) => services.workspaceService.openFolder(URI.parse(uri)),
     openUri: (uri) => services.editorResolverService.openEditor(URI.parse(uri)),
     getCurrentWorkspaceUri: () => services.workspaceService.current?.folder.toString(),

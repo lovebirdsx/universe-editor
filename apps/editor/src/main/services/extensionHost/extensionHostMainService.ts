@@ -141,6 +141,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
   private readonly _procs = new Map<string, ProcEntry>()
 
+  /** Handles owned by the remote implementation (routed by spec authority). */
+  private readonly _remoteHandles = new Set<string>()
+
   private readonly _logger: ILogger
 
   /** Set once the first host process spawns, so the perf mark fires only once. */
@@ -160,12 +163,39 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       brk: undefined,
     }),
     @ILoggerService loggerService?: ILoggerService,
+    /** Remote implementation used when `spec.authority` is set. Local spawn is the default. */
+    private readonly _remoteService?: IExtensionHostService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'extensionHost', name: 'Extension Host' })
+
+    // Forward the remote implementation's stdio/exit events onto this facade's
+    // own emitters so the renderer sees one unified stream regardless of side.
+    if (this._remoteService) {
+      this._register(this._remoteService.onStdout((chunk) => this._onStdout.fire(chunk)))
+      this._register(this._remoteService.onStderr((chunk) => this._onStderr.fire(chunk)))
+      this._register(
+        this._remoteService.onExit((event) => {
+          this._remoteHandles.delete(event.handle)
+          this._onExit.fire(event)
+        }),
+      )
+    }
   }
 
   start(spec?: ExtHostStartSpec): Promise<ExtHostStartResult> {
+    // Remote workspace: delegate to the remote host (forked on the server, bytes
+    // pumped over the ExtensionHost tunnel). Local spawn stays the default.
+    if (spec?.authority !== undefined) {
+      if (!this._remoteService) {
+        return Promise.reject(new Error('remote extension host service is not wired'))
+      }
+      return this._remoteService.start(spec).then(({ handle }) => {
+        this._remoteHandles.add(handle)
+        return { handle }
+      })
+    }
+
     const handle = randomUUID()
     // The host runs as Electron-as-node, so re-add ELECTRON_RUN_AS_NODE.
     const env = buildChildEnv(process.env, { runAsNode: true })
@@ -357,6 +387,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   }
 
   writeStdin(handle: string, data: string): Promise<void> {
+    if (this._remoteHandles.has(handle)) {
+      return this._remoteService!.writeStdin(handle, data)
+    }
     const entry = this._procs.get(handle)
     if (!entry || entry.exited) {
       return Promise.reject(new Error(`ExtensionHost: unknown or exited handle ${handle}`))
@@ -371,6 +404,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   }
 
   stop(handle: string): Promise<void> {
+    if (this._remoteHandles.has(handle)) {
+      this._remoteHandles.delete(handle)
+      return this._remoteService!.stop(handle)
+    }
     const entry = this._procs.get(handle)
     if (!entry || entry.exited) {
       return Promise.resolve()
@@ -426,7 +463,8 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
         }),
       )
     }
-    return Promise.all(waits).then(() => undefined)
+    const remoteStop = this._remoteService?.stopAll() ?? Promise.resolve()
+    return Promise.all([...waits, remoteStop]).then(() => undefined)
   }
 
   hasUserExtensions(): Promise<boolean> {

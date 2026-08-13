@@ -91,11 +91,15 @@ function makeHarness(channels: Record<string, unknown>): {
       calls++
       return conn
     },
+    openExtensionHostConnection: async () => {
+      throw new Error('not used in this test')
+    },
     onDidChangeState: Event.None,
     retryConnection: () => undefined,
     stopServer: async () => undefined,
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
+    dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
   }
   return {

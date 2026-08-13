@@ -18,7 +18,13 @@
  * stdout for framing and then point every stdout-bound `console.*` at stderr.
  */
 import * as path from 'node:path'
-import { ChannelPair, Emitter, ProxyChannel } from '@universe-editor/platform'
+import {
+  ChannelPair,
+  Emitter,
+  ProxyChannel,
+  createJsonCodec,
+  createRemoteURITransformer,
+} from '@universe-editor/platform'
 import {
   ExtHostChannels,
   StdioFramingProtocol,
@@ -98,9 +104,21 @@ const transport: StdioTransport = {
 }
 
 const protocol = new StdioFramingProtocol(transport)
+// In a remote host the renderer addresses resources by `remote-ssh://<authority>/…`
+// while extensions must see `file:` URIs with the remote host's real paths — so the
+// host transforms URIs inside its channel codec (VSCode's --transformURIs). The
+// renderer keeps its plain defaultCodec; the stdio wire stays newline-delimited
+// JSON, so the binary codec (raw attachment segments) is not an option here.
+const remoteAuthority = process.env.UNIVERSE_REMOTE_AUTHORITY
 // One decode per frame, routed by message type (see ChannelPair): a huge
 // didOpen/didChange from the renderer must not be JSON-parsed twice.
-const { client, server } = new ChannelPair(protocol)
+const { client, server } = remoteAuthority
+  ? new ChannelPair(
+      protocol,
+      undefined,
+      createJsonCodec(createRemoteURITransformer(remoteAuthority)),
+    )
+  : new ChannelPair(protocol)
 
 const mainThreadCommands = ProxyChannel.toService<IMainThreadCommands>(
   client.getChannel(ExtHostChannels.mainThreadCommands),

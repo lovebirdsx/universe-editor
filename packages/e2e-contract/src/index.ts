@@ -760,6 +760,20 @@ export interface E2EProbe {
    */
   getMarkdownDefinition(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
   /**
+   * Definition target URIs at a 1-based position for any language, via the
+   * registered definition provider (generic counterpart to getMarkdownDefinition).
+   * Backs the remote extension-host spec: typescript definitions must resolve
+   * against the remote tsserver.
+   */
+  getDefinition(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
+  /**
+   * Concatenated hover markdown at a 1-based position for any language, via the
+   * registered hover provider (generic counterpart to getMarkdownHover). Backs the
+   * remote extension-host spec: typescript hovers must resolve against the remote
+   * tsserver.
+   */
+  getHover(uri: string, lineNumber: number, column: number): Promise<string>
+  /**
    * Folding ranges for an open markdown file as `[startLine, endLine]` pairs
    * (1-based), via the markdown language server's folding provider.
    */
@@ -1092,6 +1106,8 @@ export interface E2EProbe {
   getRemoteConnections(): Promise<readonly E2ERemoteConnectionStatus[]>
   /** Drop the management socket for an authority to exercise transparent reconnect (E2E only). */
   dropRemoteSocket(authority: string): Promise<void>
+  /** Drop the extension-host tunnel socket for an authority (E2E only). */
+  dropRemoteExtensionHostSocket(authority: string): Promise<void>
   // -- Remote workspace UI probe --------------------------------------------
   /**
    * Open a workspace folder by URI string (any scheme, incl. remote-ssh), going

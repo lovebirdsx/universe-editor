@@ -67,6 +67,7 @@ import {
 } from './workspace/recentWorkspacesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
+import { RemoteExtensionHostService } from './extensionHost/remoteExtensionHostService.js'
 import { createTsServerSpecResolver } from './extensionHost/tsServerPaths.js'
 import { normalizeDevExtensionPaths } from './extensionHost/devExtensionsDir.js'
 import { ExtensionManagementMainService } from './extensionManagement/extensionManagementService.js'
@@ -157,6 +158,7 @@ registerSingletonFactory(
         brk: acc.get(IEnvironmentMainService).inspectBrkExtensionsPort,
       }),
       acc.get(ILoggerService),
+      new RemoteExtensionHostService(acc.get(IRemoteConnectionService), acc.get(ILoggerService)),
     ),
 )
 registerSingletonFactory(

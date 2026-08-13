@@ -57,6 +57,8 @@ export interface IRemoteStatusService {
   readonly onDidChangeState: Event<RemoteConnectionStatusDto>
   /** Only available under UNIVERSE_E2E=1; throws otherwise. */
   dropSocketForTesting(authority: string): Promise<void>
+  /** Drop the extension-host tunnel socket for `authority` (E2E only). */
+  dropExtensionHostSocketForTesting(authority: string): Promise<void>
 }
 
 export const IRemoteStatusService = createDecorator<IRemoteStatusService>('remoteStatusService')

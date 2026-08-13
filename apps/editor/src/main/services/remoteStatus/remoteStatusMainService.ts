@@ -106,4 +106,11 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
     }
     this._remote.dropSocketForTesting(authority)
   }
+
+  async dropExtensionHostSocketForTesting(authority: string): Promise<void> {
+    if (!this._environment.isE2E) {
+      throw new Error('dropExtensionHostSocketForTesting is only available under UNIVERSE_E2E=1')
+    }
+    this._remote.dropExtensionHostSocketForTesting(authority)
+  }
 }

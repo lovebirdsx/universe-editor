@@ -331,6 +331,18 @@ function ExtensionRow({
               {localize('extensions.activationFailed', 'Activation Failed')}
             </span>
           )}
+          {entry.unavailableInRemote && (
+            <span
+              className={styles.badge}
+              data-tooltip={localize(
+                'extensions.unavailableInRemote.tooltip',
+                'This extension is installed locally but cannot run in the remote workspace.',
+              )}
+              data-testid="extension-remote-unavailable"
+            >
+              {localize('extensions.unavailableInRemote', 'Unavailable in Remote')}
+            </span>
+          )}
         </div>
         <div className={styles.description}>{entry.description}</div>
         <div className={styles.footer}>

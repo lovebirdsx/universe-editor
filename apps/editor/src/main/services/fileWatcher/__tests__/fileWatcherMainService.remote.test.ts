@@ -75,11 +75,15 @@ function makeWatcherHarness(): {
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
     getConnection: async () => conn,
+    openExtensionHostConnection: async () => {
+      throw new Error('not used in this test')
+    },
     onDidChangeState: Event.None,
     retryConnection: () => undefined,
     stopServer: async () => undefined,
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
+    dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
   }
   const localHost = new WatcherProcessClient(() => {

@@ -9,6 +9,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { createServer, type Server, type Socket as NetSocket } from 'node:net'
+import { fileURLToPath } from 'node:url'
 import {
   NullLogger,
   ProtocolConstants,
@@ -19,6 +20,7 @@ import {
   encodeControlJson,
   readFirstControlFrame,
   writeControlFrame,
+  type IDisposable,
   type ILogger,
   type IRemoteConnectionRequest,
   type IRemoteConnectionResponse,
@@ -27,6 +29,7 @@ import {
 import { NodeSocket } from '@universe-editor/node-services'
 import type { PtySpawner } from '@universe-editor/node-services'
 import { ManagementConnection } from './connection.js'
+import { ExtensionHostConnection } from './extensionHostConnection.js'
 import { SERVER_VERSION } from './version.js'
 
 export interface DaemonOptions {
@@ -37,6 +40,12 @@ export interface DaemonOptions {
   readonly serverVersion?: string
   /** Fake pty spawner for daemon integration tests (no native node-pty). */
   readonly terminalSpawner?: PtySpawner
+  /** Absolute path to the extension-host bootstrap (injectable for tests). */
+  readonly extensionHostEntry?: string
+  /** Daemon data dir (`--data-dir`): threaded to host-scoped state/log paths. */
+  readonly dataDir?: string
+  /** Grace timeout override for tests (default: ReconnectionGraceTime). */
+  readonly graceTimeMs?: number
 }
 
 export interface RunningDaemon {
@@ -45,13 +54,25 @@ export interface RunningDaemon {
   dispose(): Promise<void>
 }
 
+/** Common surface shared by every per-connection daemon entry. */
+interface ServerConnection extends IDisposable {
+  readonly reconnectionToken: string
+  acceptReconnection(socket: ISocket, residual: Uint8Array | null): void
+}
+
 interface ConnectionEntry {
-  readonly conn: ManagementConnection
+  readonly conn: ServerConnection
   readonly authority: string
   graceTimer: ReturnType<typeof setTimeout> | null
 }
 
 const HANDSHAKE_TIMEOUT_MS = 10_000
+
+/** Default host bootstrap: bundled alongside the daemon entry (same resource
+ *  resolution as server.ts's watcher child). */
+function resolveExtensionHostEntry(): string {
+  return fileURLToPath(new URL('./extension-host/bootstrap.js', import.meta.url))
+}
 
 export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDaemon> {
   const log = opts.logger ?? new NullLogger()
@@ -76,25 +97,32 @@ export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDae
     entry.conn.dispose()
   }
 
-  function startGraceTimer(conn: ManagementConnection): void {
+  function startGraceTimer(conn: ServerConnection): void {
     const entry = entries.get(conn.reconnectionToken)
     if (!entry) return
     clearGraceTimer(entry)
-    log.info(
-      `[remote-daemon] holding connection for ${entry.authority} (grace ${ProtocolConstants.ReconnectionGraceTime}ms)`,
-    )
-    entry.graceTimer = setTimeout(() => expireGrace(entry), ProtocolConstants.ReconnectionGraceTime)
+    const graceMs = opts.graceTimeMs ?? ProtocolConstants.ReconnectionGraceTime
+    log.info(`[remote-daemon] holding connection for ${entry.authority} (grace ${graceMs}ms)`)
+    entry.graceTimer = setTimeout(() => expireGrace(entry), graceMs)
+  }
+
+  function removeEntry(conn: ServerConnection): void {
+    const entry = entries.get(conn.reconnectionToken)
+    if (!entry) return
+    clearGraceTimer(entry)
+    entries.delete(conn.reconnectionToken)
   }
 
   function shortenSameAuthorityGrace(authority: string): void {
+    const shortGraceMs =
+      opts.graceTimeMs !== undefined
+        ? opts.graceTimeMs
+        : ProtocolConstants.ReconnectionShortGraceTime
     for (const entry of entries.values()) {
       if (entry.authority !== authority || !entry.graceTimer) continue
       clearTimeout(entry.graceTimer)
       log.info(`[remote-daemon] shortening grace for ${authority} (fresh connect arrived)`)
-      entry.graceTimer = setTimeout(
-        () => expireGrace(entry),
-        ProtocolConstants.ReconnectionShortGraceTime,
-      )
+      entry.graceTimer = setTimeout(() => expireGrace(entry), shortGraceMs)
     }
   }
 
@@ -130,12 +158,17 @@ export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDae
           })
           return
         }
-        if (req.connectionType === RemoteConnectionType.ExtensionHost) {
-          log.warn('[remote-daemon] handshake rejected: extension host connections arrive later')
+        if (
+          req.connectionType !== RemoteConnectionType.Management &&
+          req.connectionType !== RemoteConnectionType.ExtensionHost
+        ) {
+          log.warn(
+            `[remote-daemon] handshake rejected: unknown connection type ${req.connectionType}`,
+          )
           fail({
             type: 'error',
             code: RemoteConnectionErrorCode.Unknown,
-            message: 'extension host connections arrive in a later phase',
+            message: `unknown connection type ${req.connectionType}`,
           })
           return
         }
@@ -154,18 +187,33 @@ export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDae
           // ok must be written before the connection is constructed so the
           // client's own readFirstControlFrame never sees a KeepAlive first.
           writeControlFrame(socket, encodeControlJson({ type: 'ok' }))
-          const conn = new ManagementConnection({
-            reconnectionToken: req.reconnectionToken,
-            authority: req.authority,
-            socket,
-            residual,
-            serverVersion,
-            logger: log,
-            onSocketClose: (c) => startGraceTimer(c),
-            ...(opts.terminalSpawner !== undefined
-              ? { terminalSpawner: opts.terminalSpawner }
-              : {}),
-          })
+          const conn: ServerConnection =
+            req.connectionType === RemoteConnectionType.ExtensionHost
+              ? new ExtensionHostConnection({
+                  reconnectionToken: req.reconnectionToken,
+                  authority: req.authority,
+                  socket,
+                  residual,
+                  logger: log,
+                  hostEntryPath: opts.extensionHostEntry ?? resolveExtensionHostEntry(),
+                  ...(req.args?.env !== undefined ? { env: req.args.env } : {}),
+                  ...(req.args?.execArgv !== undefined ? { execArgv: req.args.execArgv } : {}),
+                  ...(opts.dataDir !== undefined ? { dataDir: opts.dataDir } : {}),
+                  onSocketClose: (c) => startGraceTimer(c),
+                  onConnectionClosed: (c) => removeEntry(c),
+                })
+              : new ManagementConnection({
+                  reconnectionToken: req.reconnectionToken,
+                  authority: req.authority,
+                  socket,
+                  residual,
+                  serverVersion,
+                  logger: log,
+                  onSocketClose: (c) => startGraceTimer(c),
+                  ...(opts.terminalSpawner !== undefined
+                    ? { terminalSpawner: opts.terminalSpawner }
+                    : {}),
+                })
           entries.set(req.reconnectionToken, {
             conn,
             authority: req.authority,

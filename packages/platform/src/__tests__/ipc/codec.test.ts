@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { URI } from '../../base/uri.js'
-import { binaryCodec, createBinaryCodec } from '../../ipc/codec.js'
+import { binaryCodec, createBinaryCodec, createJsonCodec } from '../../ipc/codec.js'
 import { defaultCodec, type IpcMessage } from '../../ipc/ipc.js'
 import { createRemoteURITransformer } from '../../ipc/uriIpc.js'
 
@@ -156,5 +156,82 @@ describe('binaryCodec', () => {
         defaultCodec.decode(defaultCodec.encode(shape)),
       )
     }
+  })
+})
+
+describe('createJsonCodec', () => {
+  it('round-trips Uint8Array as $u8 base64, interoperating with defaultCodec', () => {
+    const msg: IpcMessage = {
+      type: 'request',
+      id: 20,
+      channel: 'c',
+      command: 'x',
+      arg: { a: new Uint8Array([1, 2, 3]), b: 'text' },
+    }
+    const codec = createJsonCodec()
+
+    const viaDefault = requestArg(defaultCodec.decode(codec.encode(msg))) as {
+      a: Uint8Array
+      b: string
+    }
+    expect(bytesOf(viaDefault.a)).toEqual([1, 2, 3])
+    expect(viaDefault.b).toBe('text')
+
+    const viaJson = requestArg(codec.decode(defaultCodec.encode(msg))) as {
+      a: Uint8Array
+      b: string
+    }
+    expect(bytesOf(viaJson.a)).toEqual([1, 2, 3])
+    expect(viaJson.b).toBe('text')
+  })
+
+  it('extracts Buffer values as $u8 base64 (holder trick)', () => {
+    const buf = Buffer.from([0, 1, 2, 0xfe, 0xff])
+    const msg: IpcMessage = { type: 'response', id: 21, data: { content: buf } }
+    const codec = createJsonCodec()
+    const data = responseData(codec.decode(codec.encode(msg))) as { content: Uint8Array }
+    expect(data.content).toBeInstanceOf(Uint8Array)
+    expect(bytesOf(data.content)).toEqual([0, 1, 2, 0xfe, 0xff])
+  })
+
+  it('revives URI instances without a transformer', () => {
+    const uri = URI.from({ scheme: 'https', authority: 'example.com', path: '/a/b', query: 'x=1' })
+    const msg: IpcMessage = { type: 'response', id: 22, data: { uri } }
+    const codec = createJsonCodec()
+    const data = responseData(codec.decode(codec.encode(msg))) as { uri: URI }
+    expect(data.uri).toBeInstanceOf(URI)
+    expect(data.uri.toString()).toBe(uri.toString())
+  })
+
+  it('translates remote-ssh <-> file across a defaultCodec peer', () => {
+    const client = defaultCodec
+    const server = createJsonCodec(createRemoteURITransformer('wsl'))
+
+    const req: IpcMessage = {
+      type: 'request',
+      id: 23,
+      channel: 'fs',
+      command: 'read',
+      arg: { uri: URI.parse('remote-ssh://wsl/home/x') },
+    }
+    const serverArg = requestArg(server.decode(client.encode(req))) as { uri: URI }
+    expect(serverArg.uri).toBeInstanceOf(URI)
+    expect(serverArg.uri.toString()).toBe('file:///home/x')
+
+    const res: IpcMessage = { type: 'response', id: 24, data: { uri: URI.parse('file:///home/y') } }
+    const clientData = responseData(client.decode(server.encode(res))) as { uri: URI }
+    expect(clientData.uri).toBeInstanceOf(URI)
+    expect(clientData.uri.toString()).toBe('remote-ssh://wsl/home/y')
+  })
+
+  it('output is newline-safe (no raw 0x0A byte)', () => {
+    const msg: IpcMessage = {
+      type: 'request',
+      id: 25,
+      channel: 'c',
+      command: 'x',
+      arg: { text: 'line1\nline2', bytes: new Uint8Array([10, 13]) },
+    }
+    expect(Array.from(createJsonCodec().encode(msg))).not.toContain(0x0a)
   })
 })
