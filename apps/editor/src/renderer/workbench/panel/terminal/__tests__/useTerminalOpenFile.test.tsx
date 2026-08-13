@@ -74,4 +74,17 @@ describe('useOpenTerminalFile', () => {
       fromUserGesture: true,
     })
   })
+
+  it('encodes a line range into the selection fragment', () => {
+    const { opener, open } = makeOpener()
+    const { result } = setup(opener)
+    const uri = URI.file('/repo/src/foo.ts')
+
+    result.current(uri, 9, undefined, 17)
+
+    expect(open).toHaveBeenCalledWith(
+      withSelection(uri, { startLineNumber: 9, startColumn: 1, endLineNumber: 17 }),
+      { fromUserGesture: true },
+    )
+  })
 })

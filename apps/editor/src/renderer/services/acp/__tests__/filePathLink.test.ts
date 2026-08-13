@@ -76,6 +76,26 @@ describe('matchFilePathAt', () => {
     expect(m).toEqual({ full: 'src/a.ts(10,5)', path: 'src/a.ts', line: 10, col: 5 })
   })
 
+  it('captures a :line-endLine range', () => {
+    expect(matchFilePathAt('src/a.ts:9-17', 0)).toEqual({
+      full: 'src/a.ts:9-17',
+      path: 'src/a.ts',
+      line: 9,
+      col: undefined,
+      endLine: 17,
+    })
+  })
+
+  it('does NOT treat (line,col) as a range', () => {
+    expect(matchFilePathAt('src/a.ts(9,17)', 0)).toEqual({
+      full: 'src/a.ts(9,17)',
+      path: 'src/a.ts',
+      line: 9,
+      col: 17,
+      endLine: undefined,
+    })
+  })
+
   it('matches a bare Windows directory path without a known extension', () => {
     // A drive prefix is unambiguous filesystem intent and the target may be a
     // directory, so no known extension is required (mirrors looksLikeFilePath).
@@ -272,6 +292,15 @@ describe('splitFilePathLocation', () => {
     expect(splitFilePathLocation('src/a.ts:10:5')).toEqual({ path: 'src/a.ts', line: 10, col: 5 })
   })
 
+  it('splits a :line-endLine range', () => {
+    expect(splitFilePathLocation('src/a.ts:9-17')).toEqual({
+      path: 'src/a.ts',
+      line: 9,
+      col: undefined,
+      endLine: 17,
+    })
+  })
+
   it('returns the path unchanged when no location', () => {
     expect(splitFilePathLocation('../foo.md')).toEqual({
       path: '../foo.md',
@@ -294,6 +323,15 @@ describe('splitFilePathTarget', () => {
       path: 'src/a.ts',
       line: 10,
       col: 5,
+      fragment: 'hello',
+    })
+  })
+
+  it('keeps a line range before the fragment', () => {
+    expect(splitFilePathTarget('src/a.ts:9-17#hello')).toEqual({
+      path: 'src/a.ts',
+      line: 9,
+      endLine: 17,
       fragment: 'hello',
     })
   })

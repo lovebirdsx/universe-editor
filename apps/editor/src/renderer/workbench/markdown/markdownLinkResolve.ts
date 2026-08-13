@@ -84,6 +84,7 @@ export interface FileUriLinkTarget {
   readonly path: string
   readonly line?: number
   readonly col?: number
+  readonly endLine?: number
   readonly fragment?: string
 }
 
@@ -104,11 +105,12 @@ export function fileUriLinkTarget(href: string): FileUriLinkTarget | undefined {
   if (uri.scheme !== 'file') return undefined
   const fsPath = uri.fsPath
   if (fsPath.length === 0) return undefined
-  const { path, line, col } = splitFilePathLocation(fsPath)
+  const { path, line, col, endLine } = splitFilePathLocation(fsPath)
   return {
     path,
     ...(line !== undefined ? { line } : {}),
     ...(col !== undefined ? { col } : {}),
+    ...(endLine !== undefined ? { endLine } : {}),
     ...(uri.fragment.length > 0 ? { fragment: uri.fragment } : {}),
   }
 }

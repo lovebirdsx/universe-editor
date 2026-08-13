@@ -44,7 +44,7 @@ const DEFAULT_SCROLLBACK = 5000
 
 export interface ITerminalLinkHandlers {
   resolveFile: (absolutePath: string) => Promise<URI | null>
-  openFile: (uri: URI, line?: number, col?: number) => void
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void
   getCwd: () => string
 }
 
@@ -247,7 +247,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
         createFileLinkProvider(
           this.term,
           (absPath) => this._handlers.resolveFile(absPath),
-          (uri, line, col) => this._handlers.openFile(uri, line, col),
+          (uri, line, col, endLine) => this._handlers.openFile(uri, line, col, endLine),
           () => this._handlers.getCwd(),
         ),
       ),

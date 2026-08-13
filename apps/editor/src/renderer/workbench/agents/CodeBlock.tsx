@@ -36,6 +36,7 @@ interface CodeBlockProps {
     path: string,
     line?: number,
     col?: number,
+    endLine?: number,
     opts?: { toSide?: boolean },
   ) => void
 }
@@ -99,7 +100,9 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
     const target = resolveCodeBlockLinkClick(e.target)
     if (!target) return
     e.preventDefault()
-    onOpenFilePath(target.path, target.line, target.col, { toSide: e.ctrlKey || e.metaKey })
+    onOpenFilePath(target.path, target.line, target.col, target.endLine, {
+      toSide: e.ctrlKey || e.metaKey,
+    })
   }
 
   // Both branches inject HTML so the linkifier has a stable DOM to walk: plain

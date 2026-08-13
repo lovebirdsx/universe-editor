@@ -77,14 +77,23 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
  * the position; without a location the target flows through the same routing as
  * markdown/deep links (directory → new window, image → preview, etc.).
  */
-export function useOpenTerminalFile(): (uri: URI, line?: number, col?: number) => void {
+export function useOpenTerminalFile(): (
+  uri: URI,
+  line?: number,
+  col?: number,
+  endLine?: number,
+) => void {
   const opener = useService(IOpenerService)
 
   return useCallback(
-    (uri: URI, line?: number, col?: number) => {
+    (uri: URI, line?: number, col?: number, endLine?: number) => {
       const target =
         line !== undefined
-          ? withSelection(uri, { startLineNumber: line, startColumn: col ?? 1 })
+          ? withSelection(uri, {
+              startLineNumber: line,
+              startColumn: col ?? 1,
+              ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
+            })
           : uri
       void opener.open(target, { fromUserGesture: true })
     },

@@ -152,8 +152,10 @@ const REL_NO_EXT = `(?:${CJK_REL_SEG}+[/\\\\])+${CJK_REL_SEG}+`
 const WIN_ABS_DIR = `[A-Za-z]:[/\\\\](?:${CJK_REL_SEG}+[/\\\\])*${CJK_REL_SEG}+`
 const UNIX_ABS_DIR = `\\.{0,2}/(?:${CJK_REL_SEG}+/)*${CJK_REL_SEG}+`
 
-// Optional :line:col  or  (line,col)
-const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
+// Optional :line[:col] | :line-endLine | (line,col). The colon form accepts either
+// a column (`:9:17`) or an end line for a range (`:9-17`); the paren form stays
+// `(line,col)` only — a `(9,17)` range would be ambiguous with column 17.
+const LOC = `(?::(\\d+)(?::(\\d+)|-(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
 
 /**
  * The path-with-optional-location pattern, for reuse (e.g. the terminal link
@@ -185,13 +187,34 @@ export interface FilePathMatch {
   readonly path: string
   readonly line: number | undefined
   readonly col: number | undefined
+  readonly endLine: number | undefined
 }
 
 export interface FilePathTarget {
   readonly path: string
   readonly line?: number
   readonly col?: number
+  readonly endLine?: number
   readonly fragment?: string
+}
+
+/** The line/column/end-line carried by the {@link LOC} location suffix. */
+export interface FilePathLocation {
+  readonly line: number | undefined
+  readonly col: number | undefined
+  readonly endLine: number | undefined
+}
+
+/**
+ * Extract (line, col, endLine) from a match of any regex that embeds {@link LOC}.
+ * The path is always capture group 1; {@link LOC}'s own groups are 2..6 — the
+ * colon form captures line/col/endLine in 2/3/4, the paren form line/col in 5/6.
+ */
+export function parseFilePathLocation(m: RegExpExecArray): FilePathLocation {
+  const line = parseInt(m[2] ?? m[5] ?? '', 10) || undefined
+  const col = parseInt(m[3] ?? m[6] ?? '', 10) || undefined
+  const endLine = parseInt(m[4] ?? '', 10) || undefined
+  return { line, col, endLine }
 }
 
 export function stripFilePathLinkPrefix(href: string): string {
@@ -223,9 +246,8 @@ export function matchFilePathAt(text: string, i: number): FilePathMatch | null {
   if (!m) return null
   const full = m[0]
   const path = m[1] ?? ''
-  const line = parseInt(m[2] ?? m[4] ?? '', 10) || undefined
-  const col = parseInt(m[3] ?? m[5] ?? '', 10) || undefined
-  return { full, path, line, col }
+  const { line, col, endLine } = parseFilePathLocation(m)
+  return { full, path, line, col, endLine }
 }
 
 /**
@@ -267,30 +289,29 @@ export function looksLikeFilePath(href: string): boolean {
   return new RegExp(`^${pathPattern}${LOC}$`, 'u').test(pathWithLocation)
 }
 
-/** Split a `path:line:col` / `path(line,col)` href into its parts. */
+/** Split a `path:line[:col]` / `path:line-endLine` / `path(line,col)` href into its parts. */
 export function splitFilePathLocation(href: string): {
   path: string
   line: number | undefined
   col: number | undefined
+  endLine: number | undefined
 } {
   const m = new RegExp(`^(.*?)${LOC}$`).exec(href)
-  if (!m) return { path: href, line: undefined, col: undefined }
-  return {
-    path: m[1] ?? href,
-    line: parseInt(m[2] ?? m[4] ?? '', 10) || undefined,
-    col: parseInt(m[3] ?? m[5] ?? '', 10) || undefined,
-  }
+  if (!m) return { path: href, line: undefined, col: undefined, endLine: undefined }
+  const { line, col, endLine } = parseFilePathLocation(m)
+  return { path: m[1] ?? href, line, col, endLine }
 }
 
 /** Split an explicit markdown file href into path, optional location, and optional #fragment. */
 export function splitFilePathTarget(href: string): FilePathTarget {
   const target = stripFilePathLinkPrefix(href)
   const { pathWithLocation, fragment } = splitFilePathFragment(target)
-  const { path, line, col } = splitFilePathLocation(pathWithLocation)
+  const { path, line, col, endLine } = splitFilePathLocation(pathWithLocation)
   return {
     path,
     ...(line !== undefined ? { line } : {}),
     ...(col !== undefined ? { col } : {}),
+    ...(endLine !== undefined ? { endLine } : {}),
     ...(fragment !== undefined ? { fragment } : {}),
   }
 }

@@ -96,11 +96,11 @@ export function parseTarget(target: string): URI {
     // Windows drive paths (`D:\…`) read as a scheme but are filesystem paths.
     if (!/^[A-Za-z]:[/\\]/.test(target)) return URI.parse(target)
   }
-  const { path, line, col } = splitFilePathLocation(target)
+  const { path, line, col, endLine } = splitFilePathLocation(target)
   const uri = URI.file(path)
-  return line !== undefined
-    ? uri.with({ fragment: `${line}${col !== undefined ? `,${col}` : ''}` })
-    : uri
+  if (line === undefined) return uri
+  const suffix = col !== undefined ? `,${col}` : endLine !== undefined ? `-${endLine}` : ''
+  return uri.with({ fragment: `${line}${suffix}` })
 }
 
 class ExternalOpener implements IOpener {

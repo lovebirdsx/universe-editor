@@ -127,6 +127,14 @@ describe('fileUriLinkTarget', () => {
     })
   })
 
+  it('splits a :line-endLine range off the URI path', () => {
+    expect(fileUriLinkTarget('file:///D:/repo/src/a.ts:9-17')).toEqual({
+      path: 'D:/repo/src/a.ts',
+      line: 9,
+      endLine: 17,
+    })
+  })
+
   it('splits the fragment off a file: URI link', () => {
     expect(fileUriLinkTarget('file:///D:/repo/docs/foo.md#hello')).toEqual({
       path: 'D:/repo/docs/foo.md',

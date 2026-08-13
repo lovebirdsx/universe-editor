@@ -178,7 +178,13 @@ function useMarkdownNodes(
 }
 
 const FileLinkContext = createContext<
-  (path: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => void
+  (
+    path: string,
+    line?: number,
+    col?: number,
+    endLine?: number,
+    opts?: OpenMarkdownLinkOptions,
+  ) => void
 >(() => {})
 
 const defaultRenderImage = (src: string, alt: string): ReactNode => (
@@ -393,6 +399,7 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
           path={node.path}
           {...(node.line !== undefined ? { line: node.line } : {})}
           {...(node.col !== undefined ? { col: node.col } : {})}
+          {...(node.endLine !== undefined ? { endLine: node.endLine } : {})}
         />
       )
     case 'link':
@@ -431,7 +438,9 @@ function InlineCode({ text }: { text: string }) {
   if (!match || insideLink) return <code className={styles['inlineCode']}>{text}</code>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(match.path, match.line, match.col, { toSide: e.ctrlKey || e.metaKey })
+    openFileLink(match.path, match.line, match.col, match.endLine, {
+      toSide: e.ctrlKey || e.metaKey,
+    })
   }
   return (
     <a
@@ -478,8 +487,8 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       return
     }
     if (isFilePath) {
-      const { path, line, col, fragment } = splitFilePathTarget(href)
-      openFileLink(path, line, col, {
+      const { path, line, col, endLine, fragment } = splitFilePathTarget(href)
+      openFileLink(path, line, col, endLine, {
         toSide: e.ctrlKey || e.metaKey,
         // Ctrl+Alt opens a directory target in the current window (preview only).
         openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
@@ -493,7 +502,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       // open as a preview — not blindly into the editor resolver.
       const target = fileUriLinkTarget(href)
       if (target) {
-        openFileLink(target.path, target.line, target.col, {
+        openFileLink(target.path, target.line, target.col, target.endLine, {
           toSide: e.ctrlKey || e.metaKey,
           openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
           ...(target.fragment !== undefined ? { fragment: target.fragment } : {}),
@@ -518,16 +527,29 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   )
 }
 
-function FilePathLink({ path, line, col }: { path: string; line?: number; col?: number }) {
+function FilePathLink({
+  path,
+  line,
+  col,
+  endLine,
+}: {
+  path: string
+  line?: number
+  col?: number
+  endLine?: number
+}) {
   const openFileLink = useContext(FileLinkContext)
   const insideLink = useContext(InsideLinkContext)
-  const label = line !== undefined ? `${path}:${line}${col !== undefined ? `:${col}` : ''}` : path
+  const label =
+    line !== undefined
+      ? `${path}:${line}${col !== undefined ? `:${col}` : endLine !== undefined ? `-${endLine}` : ''}`
+      : path
   // Inside another anchor the outer link already owns the click; a nested <a>
   // would be invalid HTML, so render as plain text.
   if (insideLink) return <Fragment>{label}</Fragment>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
+    openFileLink(path, line, col, endLine, { toSide: e.ctrlKey || e.metaKey })
   }
   return (
     <a href={label} onClick={onClick} className={styles['mdLink']} data-testid="md-filepath">

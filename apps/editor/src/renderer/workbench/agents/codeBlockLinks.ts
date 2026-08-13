@@ -13,7 +13,7 @@
  *  fences) while never breaking span structure.
  *--------------------------------------------------------------------------------------------*/
 
-import { FILE_PATH_PATTERN } from '../../services/acp/filePathLink.js'
+import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../services/acp/filePathLink.js'
 
 // `u` flag: FILE_PATH_PATTERN embeds Unicode property classes (\p{L}\p{N}) so
 // CJK file names are recognized. `g` so we can scan a text node left-to-right.
@@ -78,10 +78,10 @@ function makeAnchor(full: string, m: RegExpExecArray, linkClass: string): HTMLAn
   a.setAttribute(`data-${LINK_MARKER}`, '1')
   a.setAttribute('data-testid', 'md-codeblock-filepath')
   a.dataset['path'] = m[1] ?? full
-  const line = m[2] ?? m[4]
-  const col = m[3] ?? m[5]
-  if (line !== undefined) a.dataset['line'] = line
-  if (col !== undefined) a.dataset['col'] = col
+  const { line, col, endLine } = parseFilePathLocation(m)
+  if (line !== undefined) a.dataset['line'] = String(line)
+  if (col !== undefined) a.dataset['col'] = String(col)
+  if (endLine !== undefined) a.dataset['endline'] = String(endLine)
   return a
 }
 
@@ -90,6 +90,7 @@ export interface CodeBlockLinkTarget {
   readonly path: string
   readonly line: number | undefined
   readonly col: number | undefined
+  readonly endLine: number | undefined
 }
 
 /**
@@ -103,9 +104,11 @@ export function resolveCodeBlockLinkClick(target: EventTarget | null): CodeBlock
   if (!path) return null
   const line = anchor.dataset['line']
   const col = anchor.dataset['col']
+  const endLine = anchor.dataset['endline']
   return {
     path,
     line: line !== undefined ? Number(line) : undefined,
     col: col !== undefined ? Number(col) : undefined,
+    endLine: endLine !== undefined ? Number(endLine) : undefined,
   }
 }

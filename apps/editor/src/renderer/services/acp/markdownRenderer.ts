@@ -94,6 +94,7 @@ export type MdInline =
       readonly path: string
       readonly line?: number
       readonly col?: number
+      readonly endLine?: number
     }
   | { readonly type: 'image'; readonly src: string; readonly alt: string }
   | { readonly type: 'anchor'; readonly id: string }
@@ -615,6 +616,7 @@ export function parseInline(text: string): readonly MdInline[] {
         path: fp.path,
         ...(fp.line !== undefined ? { line: fp.line } : {}),
         ...(fp.col !== undefined ? { col: fp.col } : {}),
+        ...(fp.endLine !== undefined ? { endLine: fp.endLine } : {}),
       })
       i += fp.full.length
       continue

@@ -1,6 +1,6 @@
 import type { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
 import { type URI, normalizeFsPath } from '@universe-editor/platform'
-import { FILE_PATH_PATTERN } from '../../../services/acp/filePathLink.js'
+import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/filePathLink.js'
 
 // Reuse the same path grammar as rendered markdown so terminal and markdown
 // links recognize exactly the same set of files (extensions, location suffixes).
@@ -16,7 +16,7 @@ function resolvePath(cwd: string, filePath: string): string {
 export function createFileLinkProvider(
   term: Terminal,
   resolveFile: (absolutePath: string) => Promise<URI | null>,
-  openFile: (uri: URI, line?: number, col?: number) => void,
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void,
   getCwd: () => string,
 ): ILinkProvider {
   return {
@@ -35,6 +35,7 @@ export function createFileLinkProvider(
         absPath: string
         lineNum: number | undefined
         colNum: number | undefined
+        endLineNum: number | undefined
         startX: number
         endX: number
       }
@@ -45,13 +46,13 @@ export function createFileLinkProvider(
       while ((m = FILE_LINK_RE.exec(text)) !== null) {
         const full = m[0] ?? ''
         const filePath = m[1] ?? ''
-        const lineNum = parseInt(m[2] ?? m[4] ?? '', 10) || undefined
-        const colNum = parseInt(m[3] ?? m[5] ?? '', 10) || undefined
+        const { line: lineNum, col: colNum, endLine: endLineNum } = parseFilePathLocation(m)
         matches.push({
           full,
           absPath: resolvePath(cwd, filePath),
           lineNum,
           colNum,
+          endLineNum,
           startX: m.index + 1,
           endX: m.index + full.length,
         })
@@ -76,7 +77,7 @@ export function createFileLinkProvider(
           activate(event: MouseEvent) {
             if (event.button !== 0) return
             void resolvePromise.then((uri) => {
-              if (uri) openFile(uri, match.lineNum, match.colNum)
+              if (uri) openFile(uri, match.lineNum, match.colNum, match.endLineNum)
             })
           },
         }

@@ -75,7 +75,7 @@ function isMarkdownResource(uri: URI): boolean {
 }
 
 /**
- * Returns `openFileLink(rawPath, line?, col?, opts?)` for markdown links. The
+ * Returns `openFileLink(rawPath, line?, col?, endLine?, opts?)` for markdown links. The
  * path may be absolute or relative to {@link baseUri}; resolution is cached for
  * 10s and shares one in-flight promise across concurrent clicks on the same
  * path. When {@link previewLinks} is set (the doc preview), a markdown target
@@ -84,7 +84,13 @@ function isMarkdownResource(uri: URI): boolean {
 export function useMarkdownFileLink(
   baseUri: URI | undefined,
   previewLinks = false,
-): (rawPath: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => void {
+): (
+  rawPath: string,
+  line?: number,
+  col?: number,
+  endLine?: number,
+  opts?: OpenMarkdownLinkOptions,
+) => void {
   const fileService = useOptionalService(IFileService)
   const fileSearchService = useOptionalService(IFileSearchService)
   const workspaceService = useOptionalService(IWorkspaceService)
@@ -156,7 +162,13 @@ export function useMarkdownFileLink(
   )
 
   return useCallback(
-    (rawPath: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => {
+    (
+      rawPath: string,
+      line?: number,
+      col?: number,
+      endLine?: number,
+      opts?: OpenMarkdownLinkOptions,
+    ) => {
       if (!editorService || !instantiation) return
       void resolve(rawPath).then(async (resolution) => {
         if (resolution.kind === 'missing') {
@@ -208,7 +220,11 @@ export function useMarkdownFileLink(
         const input = instantiation.createInstance(FileEditorInput, uri)
         editorService.openEditor(input, { pinned: true })
         if (line !== undefined) {
-          void revealSelectionInInput(input, { startLineNumber: line, startColumn: col ?? 1 })
+          void revealSelectionInInput(input, {
+            startLineNumber: line,
+            startColumn: col ?? 1,
+            ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
+          })
         }
       })
     },

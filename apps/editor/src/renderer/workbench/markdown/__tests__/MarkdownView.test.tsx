@@ -208,6 +208,13 @@ describe('MarkdownView', () => {
     expect(screen.getByText('em').tagName).toBe('EM')
   })
 
+  it('renders a bare file path with a line range as one link', () => {
+    renderMarkdown('apps/editor/e2e/playwright.config.ts:9-17')
+    const link = screen.getByTestId('md-filepath')
+    expect(link.textContent).toBe('apps/editor/e2e/playwright.config.ts:9-17')
+    expect(link.getAttribute('href')).toBe('apps/editor/e2e/playwright.config.ts:9-17')
+  })
+
   it('renders ordered and unordered lists', () => {
     const { container } = renderMarkdown('1. a\n\n2. b\n\n3. c\n\n- x\n- y')
     expect(container.querySelector('ol')).toBeTruthy()
