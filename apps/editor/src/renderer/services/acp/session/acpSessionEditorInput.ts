@@ -99,7 +99,12 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   override focus(): boolean {
-    return this._chatWidgetService.focusSessionInput(this.sessionId)
+    // `sessionId` may be the durable agent-issued id — a split clone round-trips
+    // through serialize/deserialize, which stores sessionIdOnAgent for restart
+    // resume — but the widget registry is keyed by the live session's local id.
+    // Resolve to the local id so a split clone still finds its ChatBody widget.
+    const localId = this._sessions.getById(this.sessionId)?.id ?? this.sessionId
+    return this._chatWidgetService.focusSessionInput(localId)
   }
 
   override async confirmClose(dialogService: IDialogService): Promise<boolean> {

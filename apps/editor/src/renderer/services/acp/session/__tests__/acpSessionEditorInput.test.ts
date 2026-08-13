@@ -2,7 +2,7 @@
  *  Tests for apps/editor/src/renderer/services/acp/acpSessionEditorInput.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   IInstantiationService,
   InstantiationService,
@@ -21,8 +21,18 @@ import {
   type AcpSessionHistoryEntry,
   type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
 } from '../acpSessionHistory.js'
+import {
+  IAcpChatWidgetService,
+  type IAcpChatWidgetService as IAcpChatWidgetServiceType,
+} from '../acpChatWidgetService.js'
 
-function makeAccessor(rows: AcpSessionHistoryEntry[] = []): {
+function makeAccessor(
+  rows: AcpSessionHistoryEntry[] = [],
+  opts: {
+    getById?: (id: string) => IAcpSession | undefined
+    focusSessionInput?: (id: string) => boolean
+  } = {},
+): {
   accessor: ServicesAccessor
   inst: IInstantiationService
 } {
@@ -31,7 +41,7 @@ function makeAccessor(rows: AcpSessionHistoryEntry[] = []): {
     sessions: observableValue<readonly IAcpSession[]>('test.sessions', []),
     activeSessionId: observableValue<string | undefined>('test.activeId', undefined),
     activeSession: observableValue<IAcpSession | undefined>('test.active', undefined),
-    getById: () => undefined,
+    getById: opts.getById ?? (() => undefined),
     setActive() {},
     async createSession(): Promise<IAcpSession> {
       throw new Error('unused')
@@ -54,9 +64,14 @@ function makeAccessor(rows: AcpSessionHistoryEntry[] = []): {
     list: () => [],
     async initialize() {},
   } as unknown as IAcpSessionHistoryServiceType
+  const chatWidget = {
+    _serviceBrand: undefined,
+    focusSessionInput: opts.focusSessionInput ?? (() => false),
+  } as unknown as IAcpChatWidgetServiceType
   const services = new ServiceCollection()
   services.set(IAcpSessionService, sessions)
   services.set(IAcpSessionHistoryService, history)
+  services.set(IAcpChatWidgetService, chatWidget)
   const inst = new InstantiationService(services)
   const accessor: ServicesAccessor = { get: (id) => inst.invokeFunction((a) => a.get(id)) }
   return { accessor, inst }
@@ -139,6 +154,31 @@ describe('AcpSessionEditorInput', () => {
   it('resource path encodes the sessionId', () => {
     const input = makeInput('sess-10')
     expect(input.resource.path).toBe('/acp/session/sess-10')
+  })
+
+  it('focus() resolves a durable sessionId (split clone) to the live local id before routing', () => {
+    const focusSessionInput = vi.fn(() => true)
+    const live = {
+      id: 'local-1',
+      sessionIdOnAgent: observableValue<string | undefined>('test.agentId', 'echo-1'),
+    } as unknown as IAcpSession
+    const { inst } = makeAccessor([], {
+      getById: (id) => (id === 'echo-1' ? live : undefined),
+      focusSessionInput,
+    })
+    // A split clone round-trips serialize/deserialize, which stores the durable
+    // sessionIdOnAgent — so its `sessionId` is the agent id, not the local id.
+    const clone = inst.createInstance(AcpSessionEditorInput, 'echo-1', 'claude-code', undefined)
+    expect(clone.focus()).toBe(true)
+    expect(focusSessionInput).toHaveBeenCalledWith('local-1')
+  })
+
+  it('focus() falls back to sessionId when the live session is gone', () => {
+    const focusSessionInput = vi.fn(() => false)
+    const { inst } = makeAccessor([], { focusSessionInput })
+    const input = inst.createInstance(AcpSessionEditorInput, 'gone-1', 'claude-code', undefined)
+    expect(input.focus()).toBe(false)
+    expect(focusSessionInput).toHaveBeenCalledWith('gone-1')
   })
 
   it('isSideTask is true only when the history row carries a sideTaskOf flag', () => {
