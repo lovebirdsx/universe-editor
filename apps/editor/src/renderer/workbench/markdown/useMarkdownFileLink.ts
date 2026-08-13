@@ -16,7 +16,7 @@
  *  source editor as before.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import {
   IEditorGroupsService,
   IEditorResolverService,
@@ -105,6 +105,12 @@ export function useMarkdownFileLink(
   const quickAccess = useOptionalService(IQuickAccessController)
   const cache = useRef(new Map<string, CacheEntry>())
   const inflight = useRef(new Map<string, Promise<Resolution>>())
+  // Home directory for `~` expansion, from the preload bridge (os.homedir()).
+  // Stable for the session; guarded for happy-dom tests where window.ipc is absent.
+  const homeDir = useMemo(() => {
+    const ipc = typeof window !== 'undefined' ? window.ipc : undefined
+    return typeof ipc?.home === 'string' && ipc.home.length > 0 ? ipc.home : undefined
+  }, [])
 
   const resolve = useCallback(
     (rawPath: string): Promise<Resolution> => {
@@ -119,7 +125,12 @@ export function useMarkdownFileLink(
       const promise = (async (): Promise<Resolution> => {
         const workspaceRoot = workspaceService?.current?.folder
         // 1. Concrete candidates — open the first that exists, no search needed.
-        for (const candidate of markdownLinkCandidates(normalizedRawPath, baseUri, workspaceRoot)) {
+        for (const candidate of markdownLinkCandidates(
+          normalizedRawPath,
+          baseUri,
+          workspaceRoot,
+          homeDir,
+        )) {
           if (await fileService.exists(candidate)) return { kind: 'open', uri: candidate }
         }
 
@@ -158,7 +169,7 @@ export function useMarkdownFileLink(
       })
       return promise
     },
-    [fileService, fileSearchService, workspaceService, excludeService, baseUri],
+    [fileService, fileSearchService, workspaceService, excludeService, baseUri, homeDir],
   )
 
   return useCallback(

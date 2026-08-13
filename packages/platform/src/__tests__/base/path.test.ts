@@ -7,6 +7,7 @@ import {
   arePathsEqual,
   basename,
   dirname,
+  expandHomeDir,
   extname,
   getPathComparisonKey,
   isAbsolutePath,
@@ -220,5 +221,38 @@ describe('path helpers for the variable resolver', () => {
   it('relativePath is case-insensitive on win32 and falls back across drives', () => {
     expect(relativePath('D:\\Proj', 'd:/proj/src', 'win32')).toBe('src')
     expect(relativePath('C:/a', 'D:/b', 'win32')).toBe('D:/b')
+  })
+})
+
+describe('expandHomeDir', () => {
+  it('expands a bare ~ and the tilde forms to home', () => {
+    expect(expandHomeDir('~', 'C:/Users/u')).toBe('C:/Users/u')
+    expect(expandHomeDir('~/', 'C:/Users/u')).toBe('C:/Users/u')
+    expect(expandHomeDir('~\\', 'C:/Users/u')).toBe('C:/Users/u')
+  })
+
+  it('expands ~/ and ~\\ prefixes, normalizing separators', () => {
+    expect(expandHomeDir('~/x.md', 'C:/Users/u')).toBe('C:/Users/u/x.md')
+    expect(expandHomeDir('~\\x.md', 'C:/Users/u')).toBe('C:/Users/u/x.md')
+    expect(expandHomeDir('~/.claude/plans/x.md', 'C:/Users/u')).toBe(
+      'C:/Users/u/.claude/plans/x.md',
+    )
+    expect(expandHomeDir('~/x.md', '/home/u')).toBe('/home/u/x.md')
+  })
+
+  it('normalizes a trailing separator on home', () => {
+    expect(expandHomeDir('~/x.md', 'C:\\Users\\u\\')).toBe('C:/Users/u/x.md')
+    expect(expandHomeDir('~/x.md', '/home/u/')).toBe('/home/u/x.md')
+  })
+
+  it('does not expand a named user (~user) or a non-leading tilde', () => {
+    expect(expandHomeDir('~user/x', 'C:/Users/u')).toBeUndefined()
+    expect(expandHomeDir('a~b', 'C:/Users/u')).toBeUndefined()
+    expect(expandHomeDir('foo~/x', 'C:/Users/u')).toBeUndefined()
+  })
+
+  it('does not expand when home is empty', () => {
+    expect(expandHomeDir('~/x', '')).toBeUndefined()
+    expect(expandHomeDir('~', '')).toBeUndefined()
   })
 })

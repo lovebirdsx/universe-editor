@@ -62,6 +62,7 @@ afterEach(() => {
   MarkdownPreviewViewStateCache._resetForTests()
   vi.restoreAllMocks()
   renderMock.mockReset()
+  delete (window as { ipc?: unknown }).ipc
 })
 
 function makeResolver(
@@ -633,6 +634,28 @@ describe('MarkdownView', () => {
     await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
     expect(exists.mock.calls.some(([resource]) => resource.fsPath === decoded)).toBe(true)
     expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe(decoded)
+  })
+
+  it('expands a leading ~ in a file link to the home directory', async () => {
+    ;(window as { ipc?: unknown }).ipc = { home: 'C:/Users/test', platform: 'win32' }
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'C:/Users/test/.claude/plans/x.md')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService())
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text="[plan](~/.claude/plans/x.md)" />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'plan' }).click()
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+    expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe('C:/Users/test/.claude/plans/x.md')
   })
 
   it('opens a file:// directory link as a folder in a new window', async () => {

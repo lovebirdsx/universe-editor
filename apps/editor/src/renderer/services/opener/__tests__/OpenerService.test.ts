@@ -43,6 +43,26 @@ describe('parseTarget', () => {
   it('leaves a bare path without a selection', () => {
     expect(extractSelection(parseTarget('/repo/a.ts')).selection).toBeUndefined()
   })
+
+  it('expands a leading ~ to home when homeDir is provided', () => {
+    const uri = parseTarget('~/foo.md', 'C:/Users/u')
+    expect(uri.scheme).toBe('file')
+    expect(uri.fsPath).toBe('C:/Users/u/foo.md')
+  })
+
+  it('keeps ~ verbatim when homeDir is not provided', () => {
+    const uri = parseTarget('~/foo.md')
+    expect(uri.scheme).toBe('file')
+    // URI.file treats `~` as a relative segment and prefixes `/` — the key is
+    // that `~` is NOT expanded to home.
+    expect(uri.fsPath).toBe('/~/foo.md')
+  })
+
+  it('expands ~ while preserving a :line:col selection', () => {
+    const { selection, uri } = extractSelection(parseTarget('~/foo.md:10:5', 'C:/Users/u'))
+    expect(uri.fsPath).toBe('C:/Users/u/foo.md')
+    expect(selection).toEqual({ startLineNumber: 10, startColumn: 5 })
+  })
 })
 
 describe('CommandOpener trust gate', () => {

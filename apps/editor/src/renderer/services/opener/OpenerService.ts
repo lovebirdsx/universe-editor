@@ -17,6 +17,7 @@
 
 import {
   Disposable,
+  expandHomeDir,
   extractSelection,
   ICommandService,
   IEditorGroupsService,
@@ -48,6 +49,7 @@ export class OpenerService extends Disposable implements IOpenerService {
 
   private readonly _openers: IOpener[] = []
   private readonly _logger: ILogger
+  private readonly _home: string | undefined
 
   constructor(
     @IInstantiationService instantiation: IInstantiationService,
@@ -55,6 +57,8 @@ export class OpenerService extends Disposable implements IOpenerService {
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'opener', name: 'Opener' })
+    const ipc = typeof window !== 'undefined' ? window.ipc : undefined
+    this._home = typeof ipc?.home === 'string' && ipc.home.length > 0 ? ipc.home : undefined
 
     // Built-in openers, registered so the file opener (catch-all) runs last.
     // Parent their unregister-disposables to this service's store so they aren't
@@ -73,7 +77,7 @@ export class OpenerService extends Disposable implements IOpenerService {
   }
 
   async open(target: URI | string, options?: IOpenerOptions): Promise<boolean> {
-    const uri = typeof target === 'string' ? parseTarget(target) : target
+    const uri = typeof target === 'string' ? parseTarget(target, this._home) : target
     for (const opener of this._openers) {
       try {
         if (await opener.open(uri, options)) return true
@@ -91,13 +95,14 @@ export class OpenerService extends Disposable implements IOpenerService {
  * `file:` URI, with any `:line:col` suffix folded into the selection fragment so
  * the file opener reveals that position.
  */
-export function parseTarget(target: string): URI {
+export function parseTarget(target: string, homeDir?: string): URI {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^(?:mailto|command):/i.test(target)) {
     // Windows drive paths (`D:\…`) read as a scheme but are filesystem paths.
     if (!/^[A-Za-z]:[/\\]/.test(target)) return URI.parse(target)
   }
   const { path, line, col, endLine } = splitFilePathLocation(target)
-  const uri = URI.file(path)
+  const resolved = homeDir ? (expandHomeDir(path, homeDir) ?? path) : path
+  const uri = URI.file(resolved)
   if (line === undefined) return uri
   const suffix = col !== undefined ? `,${col}` : endLine !== undefined ? `-${endLine}` : ''
   return uri.with({ fragment: `${line}${suffix}` })

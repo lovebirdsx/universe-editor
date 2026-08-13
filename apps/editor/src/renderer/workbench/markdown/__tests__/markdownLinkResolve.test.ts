@@ -86,6 +86,27 @@ describe('markdownLinkCandidates', () => {
     ])
     expect(markdownLinkCandidates('a.ts', undefined, undefined)).toEqual([])
   })
+
+  it('expands a leading ~ to home when homeDir is provided', () => {
+    const c = markdownLinkCandidates('~/.claude/plans/x.md', baseDir, root, 'C:/Users/u')
+    expect(c.map((u) => u.fsPath)).toEqual(['C:/Users/u/.claude/plans/x.md'])
+  })
+
+  it('keeps ~ as a relative path when homeDir is not provided', () => {
+    const c = markdownLinkCandidates('~/.claude/plans/x.md', baseDir, root)
+    expect(c.map((u) => u.path)).toEqual([
+      '/repo/docs/plan/~/.claude/plans/x.md',
+      '/repo/~/.claude/plans/x.md',
+    ])
+  })
+
+  it('expands ~ before decoding percent-encoded segments', () => {
+    const c = markdownLinkCandidates('~/Universe%20Editor/x.md', baseDir, root, 'C:/Users/u')
+    expect(c.map((u) => u.fsPath)).toEqual([
+      'C:/Users/u/Universe Editor/x.md',
+      'C:/Users/u/Universe%20Editor/x.md',
+    ])
+  })
 })
 
 describe('searchPatternFor', () => {

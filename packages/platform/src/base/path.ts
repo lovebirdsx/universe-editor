@@ -132,6 +132,23 @@ export function isAbsolutePath(p: string, platform: HostPlatform): boolean {
 }
 
 /**
+ * Expand a leading `~` to the user home directory (VSCode link-parity — not a
+ * shell, so `~user` is NOT expanded). `~` → `home`; `~/x` / `~\x` → `home/x`.
+ * Returns undefined when the path is not tilde-prefixed or `home` is empty, so
+ * callers fall back to the original path with `?? path`. Emits forward slashes.
+ */
+export function expandHomeDir(path: string, home: string): string | undefined {
+  if (home.length === 0) return undefined
+  const base = stripTrailingSlash(toForwardSlashes(home))
+  if (path === '~') return base
+  if (path.startsWith('~/') || path.startsWith('~\\')) {
+    const rest = path.slice(2)
+    return rest.length === 0 ? base : base + '/' + rest
+  }
+  return undefined
+}
+
+/**
  * Join path segments with forward slashes. Empty segments are skipped; interior
  * duplicate slashes are collapsed. The result is *not* `.`/`..`-collapsed — run
  * it through {@link normalizeFsPath} if you need that. Mirrors the subset of

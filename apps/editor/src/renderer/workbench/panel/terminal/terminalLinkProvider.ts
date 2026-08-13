@@ -1,5 +1,5 @@
 import type { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
-import { type URI, normalizeFsPath } from '@universe-editor/platform'
+import { expandHomeDir, type URI, normalizeFsPath } from '@universe-editor/platform'
 import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/filePathLink.js'
 
 // Reuse the same path grammar as rendered markdown so terminal and markdown
@@ -9,8 +9,10 @@ import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/
 const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'gu')
 
 function resolvePath(cwd: string, filePath: string): string {
-  if (/^[A-Za-z]:[/\\]/.test(filePath) || filePath.startsWith('/')) return normalizeFsPath(filePath)
-  return normalizeFsPath(cwd + '/' + filePath)
+  const home = typeof window !== 'undefined' ? window.ipc?.home : undefined
+  const expanded = home ? (expandHomeDir(filePath, home) ?? filePath) : filePath
+  if (/^[A-Za-z]:[/\\]/.test(expanded) || expanded.startsWith('/')) return normalizeFsPath(expanded)
+  return normalizeFsPath(cwd + '/' + expanded)
 }
 
 export function createFileLinkProvider(

@@ -14,7 +14,7 @@
  *       picks; zero hits surfaces a "not found" notification.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI } from '@universe-editor/platform'
+import { expandHomeDir, URI } from '@universe-editor/platform'
 import { splitFilePathLocation } from '../../services/acp/filePathLink.js'
 
 /** True for `C:\…`, `C:/…`, or a leading `/` (POSIX absolute). */
@@ -46,6 +46,7 @@ export function markdownLinkCandidates(
   rawPath: string,
   baseDir: URI | undefined,
   workspaceRoot: URI | undefined,
+  homeDir?: string,
 ): URI[] {
   const out: URI[] = []
   const seen = new Set<string>()
@@ -55,7 +56,11 @@ export function markdownLinkCandidates(
     seen.add(key)
     out.push(uri)
   }
-  for (const path of markdownLinkPathVariants(rawPath)) {
+  // Expand a leading `~` before decoding so it applies to the literal path the
+  // user wrote; the expanded absolute path then flows through the same
+  // percent-decode variants as any other absolute path.
+  const expanded = homeDir ? (expandHomeDir(rawPath, homeDir) ?? rawPath) : rawPath
+  for (const path of markdownLinkPathVariants(expanded)) {
     if (isAbsolutePath(path)) {
       push(URI.file(path))
       continue
