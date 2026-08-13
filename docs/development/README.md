@@ -25,4 +25,5 @@ App 本体的发布（版本 bump、打包、上传）见 [`scripts/release/READ
 ## 环境与工具（个人笔记）
 
 - [开发加速方案](lag-detect.md) — Windows 下排除 Defender / 关闭索引服务，减少 `pnpm dev`/`e2e` 的磁盘抖动。
+- [在 WSL2/Ubuntu 下跑 e2e](wsl-e2e.md) — 用 xvfb 离屏跑 Playwright e2e，避免测试窗口抢 Windows 前台焦点。
 - [Claude 使用注意事项](claude.md) — 上下文压缩窗口配置。
