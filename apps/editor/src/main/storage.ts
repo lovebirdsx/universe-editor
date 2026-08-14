@@ -40,12 +40,22 @@ export interface StorageOptions {
    * the set() call rejects and the producer logs it instead of the process dying.
    */
   readonly maxValueBytes?: number
+  /**
+   * Backstop against reading an absurdly large state file whole (e.g. a stray
+   * GB-scale file landing at the storage path). Above this the primary file is
+   * treated as corrupt — moved aside as `.corrupt` — and the last-good `.bak`
+   * (or an empty state) is loaded instead, so a single `readFile` can never OOM
+   * the main process.
+   */
+  readonly maxReadBytes?: number
 }
 
 const DEFAULT_MAX_VALUE_BYTES = 64 * 1024 * 1024
+const DEFAULT_MAX_READ_BYTES = 256 * 1024 * 1024
 
 export function createStorage(filePath: string, options: StorageOptions = {}): Storage {
   const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_VALUE_BYTES
+  const maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES
   const tmpPath = `${filePath}.tmp`
   const syncTmpPath = `${filePath}.synctmp`
   const bakPath = `${filePath}.bak`
@@ -75,8 +85,17 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
     if (loadPromise) return loadPromise
     loadPromise = (async (): Promise<Record<string, unknown>> => {
       let raw: string | null = null
+      let corrupt = false
       try {
-        raw = await fs.readFile(filePath, 'utf8')
+        const s = await fs.stat(filePath)
+        if (s.size > maxReadBytes) {
+          corrupt = true
+          console.error(
+            `storage: refusing to read ${filePath} — ${(s.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(maxReadBytes / 1024 / 1024).toFixed(0)}MB read cap`,
+          )
+        } else {
+          raw = await fs.readFile(filePath, 'utf8')
+        }
       } catch {
         raw = null
       }
@@ -89,6 +108,9 @@ export function createStorage(filePath: string, options: StorageOptions = {}): S
         // File exists but is unparseable: preserve it for diagnostics, then fall
         // back to the last-good backup instead of silently starting empty (which
         // would let the next write erase everything that survived).
+        corrupt = true
+      }
+      if (corrupt) {
         try {
           await fs.rename(filePath, corruptPath)
         } catch {

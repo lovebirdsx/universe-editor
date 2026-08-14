@@ -143,6 +143,12 @@ const MAX_TOTAL_BYTES = 32 * 1024 * 1024
 /** Per-file cap on a pinned baseline; larger files fall back to hunk
  *  reconstruction (or 'none') rather than bloating the store. */
 const MAX_BASELINE_BYTES = 4 * 1024 * 1024
+/** Per-file cap on the current on-disk content we will read to compute a diff.
+ *  A tracked file whose disk size exceeds this (e.g. a multi-GB `.vsidx` full
+ *  text index swept in by the fs-watch fallback) is surfaced as degraded rather
+ *  than read whole — a single oversized `readFileText` allocation OOMs the
+ *  main process serving the read. */
+const MAX_CURRENT_BYTES = 16 * 1024 * 1024
 
 /** Serialized size of a value in bytes (safe on undefined). */
 function jsonSize(value: unknown): number {
@@ -263,6 +269,7 @@ export class SessionChangeTrackerService
   maxSessionBytes = MAX_SESSION_BYTES
   maxTotalBytes = MAX_TOTAL_BYTES
   maxBaselineBytes = MAX_BASELINE_BYTES
+  maxCurrentBytes = MAX_CURRENT_BYTES
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -657,6 +664,13 @@ export class SessionChangeTrackerService
       const uri = rec.path.includes('://') ? URI.parse(rec.path) : URI.file(rec.path)
       let current = ''
       try {
+        const stat = await this._files.stat(uri)
+        if (stat.size > this.maxCurrentBytes) {
+          this._logger.warn(
+            `skipping restore of ${rec.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(this.maxCurrentBytes / 1024 / 1024).toFixed(0)}MB read cap`,
+          )
+          continue
+        }
         current = await this._files.readFileText(uri)
       } catch {
         // File no longer on disk — nothing to revert.
@@ -744,10 +758,34 @@ export class SessionChangeTrackerService
     const uri = record.path.includes('://') ? URI.parse(record.path) : URI.file(record.path)
     let current = ''
     let existed = true
+    let tooLarge = false
     try {
-      current = await this._files.readFileText(uri)
+      const stat = await this._files.stat(uri)
+      if (stat.size > this.maxCurrentBytes) {
+        tooLarge = true
+        this._logger.debug(
+          `skipping diff of ${record.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(this.maxCurrentBytes / 1024 / 1024).toFixed(0)}MB read cap`,
+        )
+      } else {
+        current = await this._files.readFileText(uri)
+      }
     } catch {
       existed = false
+    }
+
+    if (tooLarge) {
+      // Known-changed but too large to diff: surface a safe degraded row without
+      // ever reading the full content into memory.
+      return {
+        uri,
+        path: record.path,
+        baseline: '',
+        current: '',
+        status: 'degraded',
+        origin: record.origin,
+        baselineSource: 'none',
+        batchCount: record.batchCount,
+      }
     }
 
     // A pinned baseline of null means the file was created during the session;

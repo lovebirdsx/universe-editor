@@ -40,6 +40,9 @@ describe('SettingsContribution', () => {
     )
     expect(ConfigurationRegistry.getDefaultValue('files.autoSave')).toBe('off')
     expect(ConfigurationRegistry.getDefaultValue('files.autoSaveDelay')).toBe(1000)
+    expect(ConfigurationRegistry.getDefaultValue('files.watcherExclude')).toMatchObject({
+      '**/.vs/**': true,
+    })
     expect(ConfigurationRegistry.getDefaultValue(STARTUP_WARNING_ENABLED_KEY)).toBe(
       import.meta.env.DEV,
     )

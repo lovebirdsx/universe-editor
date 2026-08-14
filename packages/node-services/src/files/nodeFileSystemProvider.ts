@@ -34,10 +34,22 @@ function mapError(err: unknown, fallbackMessage: string): FileSystemError {
   return new FileSystemError(e?.message ?? fallbackMessage, 'UNKNOWN')
 }
 
+/** Read-side backstops against a single absurdly large allocation: a multi-GB
+ *  `fs.readFile` (the `.vsidx` full-text-index crash was a 2GB `readFileText`)
+ *  aborts the process with an OOM before any caller can react. Text is capped
+ *  lower — no editor scenario legitimately reads >256MB of text whole — while
+ *  binary keeps a higher ceiling because extensions (`workspace.fs.readFile`)
+ *  legitimately load whole PDFs / images / videos. */
+const DEFAULT_MAX_TEXT_BYTES = 256 * 1024 * 1024
+const DEFAULT_MAX_BINARY_BYTES = 1024 * 1024 * 1024
+
 export interface NodeFileSystemProviderOptions {
   /** Moves a native path to the OS trash. Absent → `useTrash` fails loud. */
   readonly trash?: (nativePath: string) => Promise<void>
   readonly logger?: ILogger
+  /** Overridable read caps (tests shrink them to exercise the throw path). */
+  readonly maxTextBytes?: number
+  readonly maxBinaryBytes?: number
 }
 
 export class NodeFileSystemProvider implements IFileSystemProvider {
@@ -47,10 +59,24 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
 
   private readonly _trash: ((nativePath: string) => Promise<void>) | undefined
   private readonly _logger: ILogger
+  private readonly _maxTextBytes: number
+  private readonly _maxBinaryBytes: number
 
   constructor(options: NodeFileSystemProviderOptions = {}) {
     this._trash = options.trash
     this._logger = options.logger ?? new NullLogger()
+    this._maxTextBytes = options.maxTextBytes ?? DEFAULT_MAX_TEXT_BYTES
+    this._maxBinaryBytes = options.maxBinaryBytes ?? DEFAULT_MAX_BINARY_BYTES
+  }
+
+  /** Reject a read that would allocate more than `maxBytes` in one shot. */
+  private async _assertReadableSize(uri: URI, maxBytes: number): Promise<void> {
+    const s = await fs.stat(uri.fsPath)
+    if (s.size <= maxBytes) return
+    throw new FileSystemError(
+      `File too large to read: ${uri.fsPath} is ${(s.size / 1024 / 1024).toFixed(1)}MB (limit ${(maxBytes / 1024 / 1024).toFixed(0)}MB)`,
+      'FileTooLarge',
+    )
   }
 
   /** ENOENT is a normal "not there" answer callers handle (e.g. probing an
@@ -63,11 +89,12 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
 
   async readFile(uri: URI): Promise<Uint8Array> {
     try {
+      await this._assertReadableSize(uri, this._maxBinaryBytes)
       const buf = await fs.readFile(uri.fsPath)
       this._logger.debug(`readFile ${uri.fsPath} bytes=${buf.byteLength}`)
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
     } catch (err) {
-      const mapped = mapError(err, 'readFile failed')
+      const mapped = err instanceof FileSystemError ? err : mapError(err, 'readFile failed')
       this._logReadFailure('readFile', uri, mapped)
       throw mapped
     }
@@ -75,11 +102,12 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
 
   async readFileText(uri: URI, encoding: 'utf8' = 'utf8'): Promise<string> {
     try {
+      await this._assertReadableSize(uri, this._maxTextBytes)
       const text = await fs.readFile(uri.fsPath, encoding)
       this._logger.debug(`readFileText ${uri.fsPath} chars=${text.length}`)
       return text
     } catch (err) {
-      const mapped = mapError(err, 'readFileText failed')
+      const mapped = err instanceof FileSystemError ? err : mapError(err, 'readFileText failed')
       this._logReadFailure('readFileText', uri, mapped)
       throw mapped
     }

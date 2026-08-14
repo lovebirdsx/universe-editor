@@ -371,6 +371,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: {
               '**/node_modules/**': true,
               '**/.git/**': true,
+              '**/.vs/**': true,
               '**/dist/**': true,
               '**/out/**': true,
               '**/.turbo/**': true,

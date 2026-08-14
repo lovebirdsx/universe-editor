@@ -12,6 +12,7 @@ export type FileSystemErrorCode =
   | 'EISDIR'
   | 'EEXIST'
   | 'ENOTEMPTY'
+  | 'FileTooLarge'
   | 'UNKNOWN'
 
 export class FileSystemError extends Error {

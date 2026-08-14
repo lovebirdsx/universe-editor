@@ -127,6 +127,20 @@ describe('FileWatcherMainService', () => {
     expect(insideNodeModules.length).toBe(0)
   })
 
+  it('ignores changes inside .vs', async () => {
+    await fs.mkdir(join(root, '.vs'), { recursive: true })
+    await svc.watch(URI.file(root))
+    const c = startCollecting(svc)
+    await fs.writeFile(join(root, '.vs', 'index.vsidx'), '1')
+    await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
+    svc._flushForTests()
+    c.stop()
+    const insideVs = c.events.filter((e) =>
+      normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}.vs`)),
+    )
+    expect(insideVs.length).toBe(0)
+  })
+
   it('applies excludes passed to watch()', async () => {
     await fs.mkdir(join(root, 'build'), { recursive: true })
     await svc.watch(URI.file(root), { excludes: ['**/build', '**/build/**'] })

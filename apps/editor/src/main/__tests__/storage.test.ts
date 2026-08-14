@@ -150,6 +150,25 @@ describe('createStorage', () => {
     await expect(fs.readFile(`${file}.corrupt`, 'utf8')).resolves.toBe('half-written-{')
   })
 
+  it('treats an oversized primary as corrupt and recovers from .bak without reading it', async () => {
+    const writer = createStorage(file)
+    await writer.set('keep', 'me')
+    await writer.flush()
+    await writer.set('keep', 'me-too')
+    await writer.flush()
+    // A valid-JSON primary whose size alone exceeds the read backstop: the old
+    // code would load it as the live state and lose 'keep'; the backstop must
+    // move it aside and recover 'keep' from .bak.
+    const oversized = JSON.stringify({ intruder: 'x'.repeat(2048) })
+    await fs.writeFile(file, oversized, 'utf8')
+
+    const reader = createStorage(file, { maxReadBytes: 1024 })
+    expect(await reader.get('keep')).toBe('me')
+    expect(await reader.get('intruder')).toBeUndefined()
+    // The oversized primary is preserved for diagnostics rather than discarded.
+    await expect(fs.readFile(`${file}.corrupt`, 'utf8')).resolves.toBe(oversized)
+  })
+
   it('refuses to persist a value exceeding the size backstop', async () => {
     const s = createStorage(file, { maxValueBytes: 1024 })
     await s.set('small', 'ok')

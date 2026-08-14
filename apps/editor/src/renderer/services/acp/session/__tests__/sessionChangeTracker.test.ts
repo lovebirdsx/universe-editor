@@ -73,10 +73,13 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
-/** Minimal IFileService: only readFileText is exercised by the tracker. */
+/** Minimal IFileService: only readFileText/stat are exercised by the tracker. */
 class FakeFileService implements IFileService {
   declare readonly _serviceBrand: undefined
   readonly files = new Map<string, string>()
+  /** Optional per-path size override for stat() — fakes a huge file without
+   *  materializing its content. */
+  readonly sizes = new Map<string, number>()
   /** Total readFileText calls — asserts the tracker doesn't fan out unboundedly. */
   reads = 0
   /** Currently in-flight reads and the peak, to bound open-handle pressure. */
@@ -112,8 +115,15 @@ class FakeFileService implements IFileService {
   async exists(resource: URI): Promise<boolean> {
     return this.files.has(resource.fsPath)
   }
-  async stat(): Promise<IFileStat> {
-    throw new Error('not implemented')
+  async stat(resource: URI): Promise<IFileStat> {
+    const fsPath = resource.fsPath
+    const override = this.sizes.get(fsPath)
+    if (override !== undefined) {
+      return { resource, isFile: true, isDirectory: false, size: override, mtime: 0 }
+    }
+    const content = this.files.get(fsPath)
+    if (content === undefined) throw new Error('ENOENT')
+    return { resource, isFile: true, isDirectory: false, size: content.length, mtime: 0 }
   }
   async list(): Promise<IDirectoryEntry[]> {
     return []
@@ -749,6 +759,61 @@ describe('SessionChangeTrackerService — watched changes (fs-watch fallback)', 
     expect(list[0]?.status).toBe('modified')
     expect(list[0]?.baseline).toBe('真实旧全文')
     expect(list[0]?.baselineSource).toBe('reported')
+  })
+})
+
+describe('SessionChangeTrackerService — current-size cap (OOM guard)', () => {
+  // A workspace once swept a multi-GB `.vsidx` full-text index into tracking via
+  // the fs-watch fallback; recompute then read it whole and OOM'd the renderer.
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    svc.maxCurrentBytes = 1024
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('surfaces a too-large tracked file as degraded without reading it', async () => {
+    files.set('/work/big.ts', 'should never be read')
+    files.sizes.set(URI.file('/work/big.ts').fsPath, 99 * 1024 * 1024)
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/big.ts', 'tc-1', [createHunk(['x'])], { baseline: 'old' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.status).toBe('degraded')
+    expect(list[0]?.baselineSource).toBe('none')
+    expect(list[0]?.current).toBe('')
+    expect(files.reads).toBe(0)
+  })
+
+  it('surfaces a too-large fs-watch (no-baseline) change as degraded without reading it', async () => {
+    files.set('/work/big.vsidx', 'should never be read')
+    files.sizes.set(URI.file('/work/big.vsidx').fsPath, 99 * 1024 * 1024)
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/big.vsidx', { baseline: 'head' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.origin).toBe('watched')
+    expect(list[0]?.status).toBe('degraded')
+    expect(list[0]?.baselineSource).toBe('none')
+    expect(files.reads).toBe(0)
+  })
+
+  it('restore skips a too-large file entirely', async () => {
+    files.set('/work/big.ts', 'should never be read')
+    files.sizes.set(URI.file('/work/big.ts').fsPath, 99 * 1024 * 1024)
+    svc.record(SID, '/work/big.ts', 'tc-2', [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: ['-ONE', '+TWO'] },
+    ])
+    await flush()
+    const impact = await svc.restore(SID, ['tc-2'])
+    expect(impact.filesChanged).toEqual([])
+    expect(files.reads).toBe(0)
   })
 })
 

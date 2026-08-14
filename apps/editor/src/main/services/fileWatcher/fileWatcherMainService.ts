@@ -65,6 +65,7 @@ const RESUBSCRIBE_MAX_WAIT_MS = 2000
 const DEFAULT_IGNORE: readonly string[] = [
   '**/node_modules/**',
   '**/.git/**',
+  '**/.vs/**',
   '**/dist/**',
   '**/out/**',
   '**/.turbo/**',
