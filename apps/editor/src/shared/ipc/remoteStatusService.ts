@@ -41,6 +41,18 @@ export interface RemoteEnvironmentDto {
   readonly serverVersion: string
 }
 
+/**
+ * A locally-detected WSL distro, offered as a `wsl+<name>` connect target.
+ * `isRunning` comes from `wsl --list --running` — a stopped distro is still
+ * connectable (wsl.exe boots it on demand), the flag is display-only.
+ */
+export interface WslDistroDto {
+  readonly name: string
+  readonly isDefault: boolean
+  readonly isRunning: boolean
+  readonly version: number
+}
+
 export interface IRemoteStatusService {
   readonly _serviceBrand: undefined
   /** Latest known per-authority state, keyed by authorities seen so far. */
@@ -51,6 +63,8 @@ export interface IRemoteStatusService {
   getEnvironment(authority: string): Promise<RemoteEnvironmentDto | null>
   /** Host names from the local `~/.ssh/config` (wildcard patterns excluded). */
   listSshHosts(): Promise<string[]>
+  /** Locally-detected WSL distros; [] on non-Windows or when WSL is absent. */
+  listWslDistros(): Promise<readonly WslDistroDto[]>
   retryConnection(authority: string): Promise<void>
   closeConnection(authority: string): Promise<void>
   stopServer(authority: string): Promise<void>

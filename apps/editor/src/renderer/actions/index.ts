@@ -395,6 +395,7 @@ import {
 import {
   CloseConnectionAction,
   ConnectToHostAction,
+  ConnectToWslAction,
   OpenFolderOnHostAction,
   RetryConnectionAction,
   StopRemoteServerAction,
@@ -830,6 +831,7 @@ registerAction2(ManageWorkspaceTrustAction)
 
 // Remote-SSH
 registerAction2(ConnectToHostAction)
+registerAction2(ConnectToWslAction)
 registerAction2(OpenFolderOnHostAction)
 registerAction2(CloseConnectionAction)
 registerAction2(RetryConnectionAction)

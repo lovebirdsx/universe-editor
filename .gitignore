@@ -18,6 +18,8 @@ apps/editor/.runtime-resources/
 server.env
 coverage/
 .next/
+# 测试/工具运行时产生的临时产物（mkdtemp 的 .tmp-bootstrap-<rand> 目录、原子写 JSON 的 .tmp-<uuid> 文件）
+.tmp-*
 .claude/plans/
 .claude/explore-results/
 .claude/handoff/

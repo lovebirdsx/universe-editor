@@ -12,12 +12,14 @@ import {
   IStorageService,
   StorageScope,
   createDecorator,
+  isValidWslDistroName,
   observableValue,
   type IObservable,
 } from '@universe-editor/platform'
 import {
   IRemoteStatusService,
   type RemoteConnectionStatusDto,
+  type WslDistroDto,
 } from '../../../shared/ipc/remoteStatusService.js'
 
 const MANUAL_HOSTS_STORAGE_KEY = 'remote.manualSshHosts'
@@ -31,6 +33,7 @@ export interface RemoteSshTarget {
 export interface IRemoteExplorerService {
   readonly _serviceBrand: undefined
   readonly sshTargets: IObservable<readonly RemoteSshTarget[]>
+  readonly wslDistros: IObservable<readonly WslDistroDto[]>
   readonly connections: IObservable<readonly RemoteConnectionStatusDto[]>
   refresh(): Promise<void>
   addManualHost(host: string): Promise<void>
@@ -45,6 +48,10 @@ export class RemoteExplorerService extends Disposable implements IRemoteExplorer
 
   readonly sshTargets = observableValue<readonly RemoteSshTarget[]>(
     'RemoteExplorerService.sshTargets',
+    [],
+  )
+  readonly wslDistros = observableValue<readonly WslDistroDto[]>(
+    'RemoteExplorerService.wslDistros',
     [],
   )
   readonly connections = observableValue<readonly RemoteConnectionStatusDto[]>(
@@ -70,10 +77,11 @@ export class RemoteExplorerService extends Disposable implements IRemoteExplorer
   }
 
   async refresh(): Promise<void> {
-    const [hosts, connections, manualHosts] = await Promise.all([
+    const [hosts, connections, manualHosts, wslDistros] = await Promise.all([
       this._remoteStatus.listSshHosts(),
       this._remoteStatus.getConnections(),
       this._storage.get<string[]>(MANUAL_HOSTS_STORAGE_KEY, StorageScope.GLOBAL),
+      this._remoteStatus.listWslDistros().catch((): readonly WslDistroDto[] => []),
     ])
     this._configHosts.clear()
     for (const host of hosts) this._configHosts.add(host)
@@ -83,6 +91,10 @@ export class RemoteExplorerService extends Disposable implements IRemoteExplorer
     }
     this._connections.clear()
     for (const c of connections) this._connections.set(c.authority, c)
+    this.wslDistros.set(
+      wslDistros.filter((d) => isValidWslDistroName(d.name)),
+      undefined,
+    )
     this._publishConnections()
     this._publishTargets()
   }

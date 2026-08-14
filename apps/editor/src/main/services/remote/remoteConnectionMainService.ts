@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-side owner of remote server connections. Brings up (and keeps alive) one
- *  logical Management connection per remote-ssh authority: ensure the remote
- *  daemon is deployed/running (ssh orchestration) or spawn it directly (dev/e2e),
- *  open an ssh -L forward to its TCP port, handshake over a PersistentProtocol,
- *  and hand out channels via a ChannelClient.
+ *  logical Management connection per remote authority over one of three
+ *  transports: ssh (deploy → forward → handshake), wsl (wsl.exe orchestration,
+ *  direct 127.0.0.1 connect, no forward) or direct (UNIVERSE_REMOTE_SERVER_CMD
+ *  spawns the daemon in-place, dev/e2e).
  *
  *  Reconnects are transparent to the channel layer: on a socket drop the protocol
  *  re-attaches to a fresh socket and replays the unacknowledged queue, so the fs /
@@ -32,6 +32,8 @@ import {
   RemoteConnectionErrorCode,
   RemoteConnectionType,
   binaryCodec,
+  isWslAuthority,
+  wslDistroFromAuthority,
   type Event,
   type IChannel,
   type IDisposable,
@@ -56,8 +58,11 @@ import {
   defaultRemoteSpawner,
   parseDaemonInfoLine,
   validateAuthority,
+  waitForPort,
+  type IRemoteServerOrchestrator,
   type RemoteSpawner,
 } from './remoteDeploy.js'
+import { WslDeployer } from './wslDeploy.js'
 import { performClientHandshake, type RemoteHandshakeError } from './remoteHandshake.js'
 import {
   RemoteExtensionHostTunnel,
@@ -111,6 +116,7 @@ export type { RemoteSpawner }
 
 const HANDSHAKE_TIMEOUT_MS = 10_000
 const DIRECT_INFO_TIMEOUT_MS = 10_000
+const WSL_RELAY_TIMEOUT_MS = 10_000
 const RECONNECT_BACKOFF_MS = [250, 500, 1000, 2000, 2000] as const
 
 const PERMANENT_RECONNECT_CODES: ReadonlySet<string> = new Set([
@@ -167,6 +173,14 @@ interface ConnectionForward {
   readonly stderrSub: { dispose(): void }
 }
 
+/**
+ * How the daemon is reached. `direct` (UNIVERSE_REMOTE_SERVER_CMD, dev/e2e) is
+ * global and beats everything; a `wsl+<distro>` authority selects wsl; anything
+ * else is ssh. Only ssh needs a port forward — direct and wsl daemons listen on
+ * a locally reachable 127.0.0.1 port.
+ */
+export type RemoteTransport = 'ssh' | 'direct' | 'wsl'
+
 interface ConnectionEntry {
   authority: string
   state: RemoteConnectionState
@@ -186,7 +200,7 @@ interface ConnectionEntry {
   daemonPort: number
   daemonToken: string
   reconnectionToken: string
-  isDirect: boolean
+  transport: RemoteTransport
   reconnectTimer: NodeJS.Timeout | null
   reconnectSocket: ISocket | null
   reconnectAttempt: number
@@ -198,6 +212,7 @@ export interface RemoteConnectionMainServiceOptions {
   readonly spawner?: RemoteSpawner
   readonly remoteServerCmd?: string
   readonly deployer?: RemoteDeployer
+  readonly wslDeployer?: WslDeployer
   readonly getUserDataDir?: () => string
 }
 
@@ -208,6 +223,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private readonly _spawn: RemoteSpawner
   private readonly _remoteServerCmd: string | undefined
   private readonly _deployer: RemoteDeployer
+  private _wslDeployer: WslDeployer | undefined
   private readonly _getUserDataDir: () => string
   private readonly _entries = new Map<string, ConnectionEntry>()
   private readonly _onDidChangeState = this._register(new Emitter<IRemoteConnectionStateChange>())
@@ -228,13 +244,34 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._remoteServerCmd = options.remoteServerCmd
     this._deployer =
       options.deployer ?? new RemoteDeployer({ logger: this._logger, spawner: this._spawn })
+    this._wslDeployer = options.wslDeployer
     this._getUserDataDir = options.getUserDataDir ?? (() => '')
+  }
+
+  /** Lazily built — constructing it is only meaningful on Windows with WSL. */
+  private _getWslDeployer(): WslDeployer {
+    if (!this._wslDeployer) {
+      this._wslDeployer = new WslDeployer({ logger: this._logger, spawner: this._spawn })
+    }
+    return this._wslDeployer
+  }
+
+  private _validateAuthority(authority: string): void {
+    if (isWslAuthority(authority)) {
+      wslDistroFromAuthority(authority)
+    } else {
+      validateAuthority(authority)
+    }
   }
 
   // ------------------------- public surface -------------------------
 
   getConnection(authority: string): Promise<IRemoteConnection> {
-    validateAuthority(authority)
+    try {
+      this._validateAuthority(authority)
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)))
+    }
     const entry = this._entry(authority)
     if (entry.state === 'disposed') {
       return Promise.reject(new Error('remote connection service is disposed'))
@@ -267,7 +304,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     authority: string,
     args: IRemoteExtensionHostStartArgs = {},
   ): Promise<IRemoteExtensionHostTunnel> {
-    validateAuthority(authority)
+    this._validateAuthority(authority)
     const entry = this._entry(authority)
     if (entry.state === 'disposed') {
       throw new Error('remote connection service is disposed')
@@ -281,8 +318,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     const tunnel = new RemoteExtensionHostTunnel({
       authority,
       connectSocket: async () => {
-        if (!entry.isDirect) await this._ensureForward(entry)
-        const port = entry.isDirect ? entry.daemonPort : entry.forward!.localPort
+        if (entry.transport === 'ssh') await this._ensureForward(entry)
+        const port = entry.transport === 'ssh' ? entry.forward!.localPort : entry.daemonPort
         return connectNodeSocket(port, '127.0.0.1')
       },
       buildRequest: (isReconnection) => ({
@@ -352,9 +389,13 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private async _bringUp(entry: ConnectionEntry): Promise<IRemoteConnection> {
     try {
-      const connection = this._isDirect()
-        ? await this._bringUpDirect(entry)
-        : await this._bringUpViaSsh(entry)
+      this._logger.info(`[remote:${entry.authority}] bring-up via ${entry.transport}`)
+      const connection =
+        entry.transport === 'direct'
+          ? await this._bringUpDirect(entry)
+          : entry.transport === 'wsl'
+            ? await this._bringUpViaWsl(entry)
+            : await this._bringUpViaSsh(entry)
       entry.connection = connection
       this._fireState(entry, 'connected')
       return connection
@@ -373,15 +414,43 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     return cmd !== undefined && cmd !== ''
   }
 
+  /** direct (e2e/dev override) is global and wins even for `wsl+` authorities. */
+  private _transportFor(authority: string): RemoteTransport {
+    if (this._isDirect()) return 'direct'
+    return isWslAuthority(authority) ? 'wsl' : 'ssh'
+  }
+
   private async _bringUpViaSsh(entry: ConnectionEntry): Promise<RemoteConnection> {
     this._fireState(entry, 'deploying')
-    const info = await this._ensureDaemon(entry)
+    const info = await this._ensureDaemon(entry, this._deployer, entry.authority)
     entry.daemonPort = info.port
     entry.daemonToken = info.token
     this._fireState(entry, 'forwarding')
     await this._ensureForward(entry)
     this._fireState(entry, 'handshaking')
     return this._connectFresh(entry, entry.forward!.localPort)
+  }
+
+  private async _bringUpViaWsl(entry: ConnectionEntry): Promise<RemoteConnection> {
+    const distro = wslDistroFromAuthority(entry.authority)
+    this._fireState(entry, 'deploying')
+    const info = await this._ensureDaemon(entry, this._getWslDeployer(), distro)
+    entry.daemonPort = info.port
+    entry.daemonToken = info.token
+    // No forward: the WSL daemon's 127.0.0.1 port is directly reachable from
+    // Windows (WSL1 shares the stack, WSL2 forwards localhost). But WSL2 builds
+    // the Windows-side relay asynchronously after the Linux socket starts
+    // listening — an immediate connect races it into ECONNREFUSED, so poll
+    // until the port is reachable before the real handshake connect.
+    this._fireState(entry, 'handshaking')
+    try {
+      await waitForPort(info.port, '127.0.0.1', WSL_RELAY_TIMEOUT_MS)
+    } catch {
+      throw new Error(
+        `WSL daemon port 127.0.0.1:${info.port} not reachable from Windows within ${WSL_RELAY_TIMEOUT_MS}ms (WSL2 localhost forwarding did not come up)`,
+      )
+    }
+    return this._connectFresh(entry, info.port)
   }
 
   private async _bringUpDirect(entry: ConnectionEntry): Promise<RemoteConnection> {
@@ -399,7 +468,6 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       { logger: this._logger, label: `remote-direct:${entry.authority}` },
     )
     entry.directProcess = proc
-    entry.isDirect = true
     const directSubs = new DisposableStore()
     directSubs.add(
       proc.onStderr((chunk) => {
@@ -445,26 +513,30 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     return { command: parts[0]!, args: parts.slice(1) }
   }
 
-  private async _ensureDaemon(entry: ConnectionEntry): Promise<IRemoteDaemonInfo> {
+  private async _ensureDaemon(
+    entry: ConnectionEntry,
+    orchestrator: IRemoteServerOrchestrator,
+    target: string,
+  ): Promise<IRemoteDaemonInfo> {
     const authority = entry.authority
-    const check = await this._deployer.checkRemoteServer(authority)
+    const check = await orchestrator.checkRemoteServer(target)
     switch (check.state) {
       case 'running': {
-        if (check.info.serverVersion !== this._deployer.serverVersion) {
+        if (check.info.serverVersion !== orchestrator.serverVersion) {
           this._logger.warn(
-            `[remote:${authority}] daemon version ${check.info.serverVersion} != local ${this._deployer.serverVersion}; restarting`,
+            `[remote:${authority}] daemon version ${check.info.serverVersion} != local ${orchestrator.serverVersion}; restarting`,
           )
-          await this._deployer.stopRemoteDaemon(authority)
-          return this._deployer.startRemoteDaemon(authority)
+          await orchestrator.stopRemoteDaemon(target)
+          return orchestrator.startRemoteDaemon(target)
         }
         return check.info
       }
       case 'not-running':
-        return this._deployer.startRemoteDaemon(authority)
+        return orchestrator.startRemoteDaemon(target)
       case 'not-deployed': {
         this._logger.info(`[remote:${authority}] not deployed (${check.reason}); deploying`)
-        await this._deployer.deployRemoteServer(authority, this._logger)
-        return this._deployer.startRemoteDaemon(authority)
+        await orchestrator.deployRemoteServer(target, this._logger)
+        return orchestrator.startRemoteDaemon(target)
       }
       case 'error':
         throw new Error(`remote check failed for '${authority}': ${check.message}`)
@@ -618,11 +690,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private async _attemptReconnect(entry: ConnectionEntry): Promise<void> {
     try {
-      if (!entry.isDirect) {
+      if (entry.transport === 'ssh') {
         await this._ensureForward(entry)
       }
       if (entry.closedByUser || this._disposed) return
-      const localPort = entry.isDirect ? entry.daemonPort : entry.forward!.localPort
+      const localPort = entry.transport === 'ssh' ? entry.forward!.localPort : entry.daemonPort
       const socket = await connectNodeSocket(localPort, '127.0.0.1')
       entry.reconnectSocket = socket
       let residual: Uint8Array
@@ -724,9 +796,13 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private async _closeEntry(entry: ConnectionEntry, stopDaemon: boolean): Promise<void> {
     if (entry.state === 'disposed') return
     this._teardownForRetry(entry)
-    if (stopDaemon && !entry.isDirect) {
+    if (stopDaemon && entry.transport !== 'direct') {
       try {
-        await this._deployer.stopRemoteDaemon(entry.authority)
+        if (entry.transport === 'wsl') {
+          await this._getWslDeployer().stopRemoteDaemon(wslDistroFromAuthority(entry.authority))
+        } else {
+          await this._deployer.stopRemoteDaemon(entry.authority)
+        }
       } catch (err) {
         this._logger.warn(
           `[remote:${entry.authority}] stop daemon failed: ${(err as Error).message}`,
@@ -796,7 +872,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         daemonPort: 0,
         daemonToken: '',
         reconnectionToken: '',
-        isDirect: false,
+        transport: this._transportFor(authority),
         reconnectTimer: null,
         reconnectSocket: null,
         reconnectAttempt: 0,

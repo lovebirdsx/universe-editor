@@ -2,9 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Remote-SSH command family: connect to a host and open a remote folder, open a
  *  folder on an already-connected host, and lifecycle commands (close / retry /
- *  stop). Mirrors the VSCode Remote-SSH command surface; all interaction goes
- *  through IRemoteStatusService (the thin wire facade over the main connection
- *  manager), IQuickInputService, and IFileDialogService.
+ *  stop), plus the WSL connect command over the same wire. Mirrors the VSCode
+ *  Remote-SSH / WSL command surface; all interaction goes through
+ *  IRemoteStatusService (the thin wire facade over the main connection manager),
+ *  IQuickInputService, and IFileDialogService. Helpers take services (not the
+ *  accessor): a ServicesAccessor dies at the first await, so every action gathers
+ *  its services synchronously at the top of run().
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -21,20 +24,55 @@ import {
   Severity,
   ShutdownReason,
   URI,
+  isValidWslDistroName,
   localize,
   localize2,
+  wslAuthorityForDistro,
+  type IFileDialogService as IFileDialogServiceType,
+  type ILifecycleService as ILifecycleServiceType,
+  type INotificationService as INotificationServiceType,
+  type IProgressService as IProgressServiceType,
+  type IQuickInputService as IQuickInputServiceType,
   type IQuickPickItem,
+  type IWorkspaceService as IWorkspaceServiceType,
+  type QuickPickInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import {
   IRemoteStatusService,
+  type IRemoteStatusService as IRemoteStatusServiceType,
   type RemoteEnvironmentDto,
+  type WslDistroDto,
 } from '../../shared/ipc/remoteStatusService.js'
 
 const CATEGORY = localize2('command.category.remoteSsh', 'Remote-SSH')
+const WSL_CATEGORY = localize2('command.category.wsl', 'WSL')
 
 interface AuthorityPickItem extends IQuickPickItem {
   readonly authority: string
+}
+
+interface RemoteConnectServices {
+  readonly remoteStatus: IRemoteStatusServiceType
+  readonly notification: INotificationServiceType
+  readonly progress: IProgressServiceType
+  readonly quickInput: IQuickInputServiceType
+  readonly fileDialog: IFileDialogServiceType
+  readonly workspace: IWorkspaceServiceType
+  readonly lifecycle: ILifecycleServiceType
+}
+
+/** Must run before the first await — the accessor is dead afterwards. */
+function gatherConnectServices(accessor: ServicesAccessor): RemoteConnectServices {
+  return {
+    remoteStatus: accessor.get(IRemoteStatusService),
+    notification: accessor.get(INotificationService),
+    progress: accessor.get(IProgressService),
+    quickInput: accessor.get(IQuickInputService),
+    fileDialog: accessor.get(IFileDialogService),
+    workspace: accessor.get(IWorkspaceService),
+    lifecycle: accessor.get(ILifecycleService),
+  }
 }
 
 /** A server-native path string → remote-ssh URI (POSIX separators, leading slash). */
@@ -50,12 +88,11 @@ function remoteHomeUri(authority: string, homeDir: string): URI {
  * only a concrete item resolves.
  */
 function pickAuthority(
-  accessor: ServicesAccessor,
-  items: readonly AuthorityPickItem[],
+  quickInput: IQuickInputServiceType,
+  items: readonly QuickPickInput<AuthorityPickItem>[],
   placeholder: string,
   allowFreeInput: boolean,
 ): Promise<string | undefined> {
-  const quickInput = accessor.get(IQuickInputService)
   return new Promise((resolve) => {
     const pick = quickInput.createQuickPick<AuthorityPickItem>()
     pick.items = items
@@ -86,14 +123,11 @@ function pickAuthority(
 
 /** Select a remote folder (rooted at the host home) and open it as the workspace. */
 async function selectAndOpenRemoteFolder(
-  accessor: ServicesAccessor,
+  services: RemoteConnectServices,
   authority: string,
   env: RemoteEnvironmentDto,
 ): Promise<void> {
-  const fileDialog = accessor.get(IFileDialogService)
-  const workspace = accessor.get(IWorkspaceService)
-  const lifecycle = accessor.get(ILifecycleService)
-  const progress = accessor.get(IProgressService)
+  const { fileDialog, workspace, lifecycle, progress } = services
 
   const folder = (
     await fileDialog.showOpenDialog({
@@ -116,6 +150,52 @@ async function selectAndOpenRemoteFolder(
   )
 }
 
+/** Connect (progress-wrapped, error → notification) then pick and open a remote folder. */
+async function connectAndOpenRemoteFolder(
+  services: RemoteConnectServices,
+  authority: string,
+): Promise<void> {
+  const { remoteStatus, notification, progress } = services
+
+  let env: RemoteEnvironmentDto
+  try {
+    env = await progress.withProgress(
+      {
+        location: ProgressLocation.Window,
+        title: localize('remote.progress.connect', 'Connecting to {authority}…', { authority }),
+        source: 'remote',
+      },
+      () => remoteStatus.connect(authority),
+    )
+  } catch (err) {
+    notification.notify({
+      severity: Severity.Error,
+      message: localize('remote.connect.failed', 'Failed to connect to {authority}: {message}', {
+        authority,
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    })
+    return
+  }
+  await selectAndOpenRemoteFolder(services, authority, env)
+}
+
+async function listWslDistrosSafe(
+  remoteStatus: IRemoteStatusServiceType,
+): Promise<readonly WslDistroDto[]> {
+  const distros = await remoteStatus.listWslDistros().catch((): readonly WslDistroDto[] => [])
+  return distros.filter((d) => isValidWslDistroName(d.name))
+}
+
+function wslPickItems(distros: readonly WslDistroDto[]): AuthorityPickItem[] {
+  return distros.map((d) => ({
+    id: wslAuthorityForDistro(d.name),
+    label: localize('remote.wsl.pickLabel', '{name} (WSL)', { name: d.name }),
+    ...(d.isDefault ? { description: localize('remote.wsl.default', 'default') } : {}),
+    authority: wslAuthorityForDistro(d.name),
+  }))
+}
+
 export class ConnectToHostAction extends Action2 {
   static readonly ID = 'remote.connectToHost'
   constructor() {
@@ -128,48 +208,83 @@ export class ConnectToHostAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
-    const remoteStatus = accessor.get(IRemoteStatusService)
-    const notification = accessor.get(INotificationService)
-    const progress = accessor.get(IProgressService)
+    const services = gatherConnectServices(accessor)
 
     let authority = authorityArg
     if (authority === undefined) {
-      const hosts = await remoteStatus.listSshHosts()
+      const [hosts, wslDistros] = await Promise.all([
+        services.remoteStatus.listSshHosts(),
+        listWslDistrosSafe(services.remoteStatus),
+      ])
+      const items: QuickPickInput<AuthorityPickItem>[] = hosts.map((host) => ({
+        id: host,
+        label: host,
+        description: localize('remote.connectToHost.sshConfig', 'SSH config'),
+        authority: host,
+      }))
+      if (wslDistros.length > 0) {
+        items.push({
+          type: 'separator',
+          id: 'remote.connectToHost.wslSeparator',
+          label: localize('remote.section.wslTargets', 'WSL Targets'),
+        })
+        items.push(...wslPickItems(wslDistros))
+      }
       authority = await pickAuthority(
-        accessor,
-        hosts.map((host) => ({
-          id: host,
-          label: host,
-          description: localize('remote.connectToHost.sshConfig', 'SSH config'),
-          authority: host,
-        })),
+        services.quickInput,
+        items,
         localize('remote.connectToHost.placeholder', 'user@host[:port] or select a host'),
         true,
       )
       if (!authority) return
     }
 
-    let env: RemoteEnvironmentDto
-    try {
-      env = await progress.withProgress(
-        {
-          location: ProgressLocation.Window,
-          title: localize('remote.progress.connect', 'Connecting to {authority}…', { authority }),
-          source: 'remote',
-        },
-        () => remoteStatus.connect(authority),
-      )
-    } catch (err) {
-      notification.notify({
-        severity: Severity.Error,
-        message: localize('remote.connect.failed', 'Failed to connect to {authority}: {message}', {
-          authority,
-          message: err instanceof Error ? err.message : String(err),
-        }),
-      })
-      return
+    await connectAndOpenRemoteFolder(services, authority)
+  }
+}
+
+export class ConnectToWslAction extends Action2 {
+  static readonly ID = 'remote.connectToWsl'
+  constructor() {
+    super({
+      id: ConnectToWslAction.ID,
+      title: localize2('action.remote.connectToWsl.title', 'Connect to WSL…'),
+      category: WSL_CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
+    const services = gatherConnectServices(accessor)
+
+    let authority = authorityArg
+    if (authority === undefined) {
+      const distros = await listWslDistrosSafe(services.remoteStatus)
+      if (distros.length === 0) {
+        services.notification.notify({
+          severity: Severity.Info,
+          message: localize(
+            'remote.wsl.noneDetected',
+            'No WSL distribution detected. Install WSL and a distribution, then try again.',
+          ),
+        })
+        return
+      }
+      if (distros.length === 1) {
+        authority = wslAuthorityForDistro(distros[0]!.name)
+      } else {
+        const ordered = [...distros].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+        authority = await pickAuthority(
+          services.quickInput,
+          wslPickItems(ordered),
+          localize('remote.connectToWsl.placeholder', 'Select a WSL distribution'),
+          false,
+        )
+        if (!authority) return
+      }
     }
-    await selectAndOpenRemoteFolder(accessor, authority, env)
+
+    await connectAndOpenRemoteFolder(services, authority)
   }
 }
 
@@ -185,8 +300,8 @@ export class OpenFolderOnHostAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
-    const remoteStatus = accessor.get(IRemoteStatusService)
-    const notification = accessor.get(INotificationService)
+    const services = gatherConnectServices(accessor)
+    const { remoteStatus, notification } = services
 
     let authority: string | undefined = authorityArg
     if (authority === undefined) {
@@ -206,7 +321,7 @@ export class OpenFolderOnHostAction extends Action2 {
         authority = connected[0]!.authority
       } else {
         const picked = await pickAuthority(
-          accessor,
+          services.quickInput,
           connected.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
           localize('remote.openFolder.placeholder', 'Select a connected host'),
           false,
@@ -224,7 +339,7 @@ export class OpenFolderOnHostAction extends Action2 {
       })
       return
     }
-    await selectAndOpenRemoteFolder(accessor, authority, env)
+    await selectAndOpenRemoteFolder(services, authority, env)
   }
 }
 
@@ -244,6 +359,7 @@ export class CloseConnectionAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const dialog = accessor.get(IDialogService)
     const notification = accessor.get(INotificationService)
+    const quickInput = accessor.get(IQuickInputService)
 
     let authority: string | undefined = authorityArg
     if (authority === undefined) {
@@ -253,12 +369,12 @@ export class CloseConnectionAction extends Action2 {
       if (connections.length === 0) {
         notification.notify({
           severity: Severity.Info,
-          message: localize('remote.noConnected', 'No connected host to close.'),
+          message: localize('remote.closeConnection.none', 'No connected host to close.'),
         })
         return
       }
       authority = await pickAuthority(
-        accessor,
+        quickInput,
         connections.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
         localize('remote.closeConnection.placeholder', 'Select a connection to close'),
         false,
@@ -299,6 +415,7 @@ export class RetryConnectionAction extends Action2 {
   override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
     const remoteStatus = accessor.get(IRemoteStatusService)
     const notification = accessor.get(INotificationService)
+    const quickInput = accessor.get(IQuickInputService)
 
     let authority: string | undefined = authorityArg
     if (authority === undefined) {
@@ -311,7 +428,7 @@ export class RetryConnectionAction extends Action2 {
         return
       }
       authority = await pickAuthority(
-        accessor,
+        quickInput,
         failed.map((c) => ({
           id: c.authority,
           label: c.authority,
@@ -342,6 +459,7 @@ export class StopRemoteServerAction extends Action2 {
     const remoteStatus = accessor.get(IRemoteStatusService)
     const dialog = accessor.get(IDialogService)
     const notification = accessor.get(INotificationService)
+    const quickInput = accessor.get(IQuickInputService)
 
     let authority: string | undefined = authorityArg
     if (authority === undefined) {
@@ -349,12 +467,12 @@ export class StopRemoteServerAction extends Action2 {
       if (connected.length === 0) {
         notification.notify({
           severity: Severity.Info,
-          message: localize('remote.noConnected', 'No connected host to stop.'),
+          message: localize('remote.stopServer.none', 'No connected host to stop.'),
         })
         return
       }
       authority = await pickAuthority(
-        accessor,
+        quickInput,
         connected.map((c) => ({ id: c.authority, label: c.authority, authority: c.authority })),
         localize('remote.stopServer.placeholder', 'Select a host whose server to stop'),
         false,

@@ -142,13 +142,17 @@ export function buildStopCommand(version: string): string {
   return `node ${serverBootstrapPath(version)} stop`
 }
 
-export function buildDeployRemoteScript(version: string, tmpName: string): string {
+export function buildDeployScriptBody(version: string, tmpName: string): string {
   const dir = `${DATA_DIR}/${version}`
   // Vendored ACP agents ship without node_modules (client-platform binaries must
   // not cross the wire); `npm ci --omit=dev` in each vendor dir resolves the
   // remote host's own platform packages.
   const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --no-audit --no-fund); fi; done`
-  return `sh -c 'mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}'`
+  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}`
+}
+
+export function buildDeployRemoteScript(version: string, tmpName: string): string {
+  return `sh -c '${buildDeployScriptBody(version, tmpName)}'`
 }
 
 // ------------------------- daemon info line -------------------------
@@ -322,6 +326,42 @@ export type RemoteCheckResult =
   | { readonly state: 'not-deployed'; readonly reason: string }
   | { readonly state: 'error'; readonly message: string }
 
+/**
+ * Shared classification of a `bootstrap.js check` run — the ssh and wsl
+ * orchestrators only differ in how the command is transported. `transport`
+ * labels the fallback error message ('ssh' / 'wsl').
+ */
+export function classifyCheckResult(result: RemoteRunResult, transport: string): RemoteCheckResult {
+  const info = parseDaemonInfoLine(result.stdout)
+  if (info) return { state: 'running', info }
+  if (result.spawnError) return { state: 'not-deployed', reason: result.spawnError }
+  if (result.code === 3) return { state: 'not-running' }
+  if (
+    result.code === 127 ||
+    /not found|cannot find module|ENOENT|no such file/i.test(result.stderr)
+  ) {
+    return { state: 'not-deployed', reason: result.stderr.trim() || `exit ${result.code}` }
+  }
+  return {
+    state: 'error',
+    message:
+      result.stderr.trim() || `${transport} check failed (exit ${result.code ?? result.signal})`,
+  }
+}
+
+/**
+ * Common daemon-orchestration surface of RemoteDeployer (ssh, target=authority)
+ * and WslDeployer (wsl.exe, target=distro) — what the connection state machine
+ * needs to ensure a daemon is deployed and running.
+ */
+export interface IRemoteServerOrchestrator {
+  readonly serverVersion: string
+  checkRemoteServer(target: string): Promise<RemoteCheckResult>
+  startRemoteDaemon(target: string): Promise<IRemoteDaemonInfo>
+  stopRemoteDaemon(target: string): Promise<void>
+  deployRemoteServer(target: string, logger?: ILogger): Promise<void>
+}
+
 export class RemoteDeployer {
   private readonly _runner: RemoteRunner
   private readonly _spawner: RemoteSpawner
@@ -346,20 +386,7 @@ export class RemoteDeployer {
       'ssh',
       sshCommandArgs(authority, buildCheckCommand(this._serverVersion)),
     )
-    const info = parseDaemonInfoLine(result.stdout)
-    if (info) return { state: 'running', info }
-    if (result.spawnError) return { state: 'not-deployed', reason: result.spawnError }
-    if (result.code === 3) return { state: 'not-running' }
-    if (
-      result.code === 127 ||
-      /not found|cannot find module|ENOENT|no such file/i.test(result.stderr)
-    ) {
-      return { state: 'not-deployed', reason: result.stderr.trim() || `exit ${result.code}` }
-    }
-    return {
-      state: 'error',
-      message: result.stderr.trim() || `ssh check failed (exit ${result.code ?? result.signal})`,
-    }
+    return classifyCheckResult(result, 'ssh')
   }
 
   async startRemoteDaemon(authority: string): Promise<IRemoteDaemonInfo> {

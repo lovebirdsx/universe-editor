@@ -10,6 +10,7 @@
 import { Disposable, Emitter, type Event } from '@universe-editor/platform'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import { listSshHosts } from '../remote/sshConfig.js'
+import { isWslAvailable, listWslDistros as enumerateWslDistros } from '../remote/wslTargets.js'
 import {
   IEnvironmentMainService,
   type EnvironmentMainService,
@@ -18,6 +19,7 @@ import {
   type IRemoteStatusService,
   type RemoteConnectionStatusDto,
   type RemoteEnvironmentDto,
+  type WslDistroDto,
 } from '../../../shared/ipc/remoteStatusService.js'
 
 /** Map the internal handshake environment onto the wire-ready DTO. */
@@ -86,6 +88,11 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
 
   async listSshHosts(): Promise<string[]> {
     return listSshHosts()
+  }
+
+  async listWslDistros(): Promise<readonly WslDistroDto[]> {
+    if (!isWslAvailable()) return []
+    return enumerateWslDistros()
   }
 
   async retryConnection(authority: string): Promise<void> {

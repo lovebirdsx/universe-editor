@@ -18,6 +18,7 @@ import {
   IWorkspaceService,
   REMOTE_SCHEME,
   localize,
+  wslAuthorityForDistro,
   type IRecentWorkspace,
 } from '@universe-editor/platform'
 import { IconButton, cx } from '@universe-editor/workbench-ui'
@@ -26,7 +27,10 @@ import {
   IRemoteExplorerService,
   type RemoteSshTarget,
 } from '../../services/remote/RemoteExplorerService.js'
-import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
+import type {
+  RemoteConnectionStateDto,
+  WslDistroDto,
+} from '../../../shared/ipc/remoteStatusService.js'
 import {
   CloseConnectionAction,
   ConnectToHostAction,
@@ -60,6 +64,7 @@ export function RemoteExplorerView() {
   const workspace = useService(IWorkspaceService)
 
   const sshTargets = useObservable(explorer.sshTargets)
+  const wslDistros = useObservable(explorer.wslDistros)
   const connections = useObservable(explorer.connections)
   const activeConnections = useMemo(
     () => connections.filter((c) => c.state !== 'idle' && c.state !== 'disposed'),
@@ -129,6 +134,27 @@ export function RemoteExplorerView() {
             />
           ))}
         </section>
+
+        {wslDistros.length > 0 && (
+          <section className={styles['section']}>
+            <div className={styles['sectionHeader']}>
+              <span className={styles['sectionTitle']}>
+                {localize('remote.section.wslTargets', 'WSL Targets')}
+              </span>
+            </div>
+            {wslDistros.map((distro) => (
+              <WslTargetRow
+                key={distro.name}
+                distro={distro}
+                state={connectionState(wslAuthorityForDistro(distro.name))}
+                onConnect={() => run(ConnectToHostAction.ID, wslAuthorityForDistro(distro.name))}
+                onOpenFolder={() =>
+                  run(OpenFolderOnHostAction.ID, wslAuthorityForDistro(distro.name))
+                }
+              />
+            ))}
+          </section>
+        )}
 
         <section className={styles['section']}>
           <div className={styles['sectionHeader']}>
@@ -216,6 +242,51 @@ function TargetRow({
         {target.manual && (
           <IconButton label={localize('remote.target.forget', 'Forget')} onClick={onForget}>
             <X size={14} strokeWidth={1.75} />
+          </IconButton>
+        )}
+      </span>
+    </div>
+  )
+}
+
+function WslTargetRow({
+  distro,
+  state,
+  onConnect,
+  onOpenFolder,
+}: {
+  distro: WslDistroDto
+  state: RemoteConnectionStateDto | undefined
+  onConnect: () => void
+  onOpenFolder: () => void
+}) {
+  const connected = state === 'connected'
+  const tooltip = distro.isRunning
+    ? localize('remote.wsl.runningTooltip', '{name} (running)', { name: distro.name })
+    : distro.name
+  return (
+    <div className={styles['row']} data-testid="remote-wsl-target-row">
+      <span className={cx(styles['dot'], dotClass(state))} aria-hidden="true" />
+      <span className={styles['label']} data-tooltip={tooltip}>
+        {distro.name}
+      </span>
+      {distro.isDefault && (
+        <span className={styles['description']}>{localize('remote.wsl.default', 'default')}</span>
+      )}
+      <span className={styles['actions']}>
+        {connected ? (
+          <IconButton
+            label={localize('remote.target.openFolder', 'Open Folder on Host...')}
+            onClick={onOpenFolder}
+          >
+            <FolderOpen size={14} strokeWidth={1.75} />
+          </IconButton>
+        ) : (
+          <IconButton
+            label={localize('remote.wsl.connect', 'Connect to WSL...')}
+            onClick={onConnect}
+          >
+            <Plug size={14} strokeWidth={1.75} />
           </IconButton>
         )}
       </span>

@@ -31,6 +31,46 @@ export const REMOTE_PROTOCOL_VERSION = 2
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'
 
+// -------- WSL authorities --------
+
+/**
+ * A locally-detected WSL distro connects as `wsl+<distro>` (VSCode parity).
+ * Same scheme, wire protocol and daemon — only the client-side transport
+ * differs: commands run through `wsl.exe -d <distro>` and the daemon port is
+ * reached directly on 127.0.0.1 (WSL localhost forwarding), no ssh involved.
+ * Distro names are restricted to safe shell-token characters; distros whose
+ * name falls outside this set are never offered as targets.
+ */
+export const WSL_AUTHORITY_PREFIX = 'wsl+'
+
+const WSL_DISTRO_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
+
+export function isValidWslDistroName(name: string): boolean {
+  return WSL_DISTRO_NAME_PATTERN.test(name)
+}
+
+export function isWslAuthority(authority: string): boolean {
+  return authority.startsWith(WSL_AUTHORITY_PREFIX)
+}
+
+export function wslAuthorityForDistro(distro: string): string {
+  if (!isValidWslDistroName(distro)) {
+    throw new Error(`invalid WSL distro name '${distro}'`)
+  }
+  return `${WSL_AUTHORITY_PREFIX}${distro}`
+}
+
+export function wslDistroFromAuthority(authority: string): string {
+  if (!isWslAuthority(authority)) {
+    throw new Error(`'${authority}' is not a WSL authority`)
+  }
+  const distro = authority.slice(WSL_AUTHORITY_PREFIX.length)
+  if (!isValidWslDistroName(distro)) {
+    throw new Error(`invalid WSL authority '${authority}'`)
+  }
+  return distro
+}
+
 /**
  * One TCP connection per type, both through the same forwarded port. Management
  * carries the channel layer (fs / search / watcher / terminal / acp / config);

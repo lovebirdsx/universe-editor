@@ -28,11 +28,13 @@ import {
   type IRemoteEnvironment,
 } from '@universe-editor/platform'
 import { NodeSocket } from '@universe-editor/node-services'
+import { findFreePort } from '../remoteDeploy.js'
 import {
   RemoteConnectionMainService,
   type IRemoteConnectionStateChange,
   type RemoteSpawner,
 } from '../remoteConnectionMainService.js'
+import type { WslDeployer } from '../wslDeploy.js'
 
 const ENV: IRemoteEnvironment = {
   protocolVersion: REMOTE_PROTOCOL_VERSION,
@@ -71,11 +73,11 @@ class FakeDaemon {
   acceptedCount = 0
   closedCount = 0
 
-  async start(): Promise<void> {
+  async start(port = 0): Promise<void> {
     this.server = createServer((socket) => {
       void this._accept(socket)
     })
-    await new Promise<void>((resolve) => this.server!.listen(0, '127.0.0.1', resolve))
+    await new Promise<void>((resolve) => this.server!.listen(port, '127.0.0.1', resolve))
     this.port = (this.server!.address() as AddressInfo).port
   }
 
@@ -314,5 +316,175 @@ describe('RemoteConnectionMainService direct mode', () => {
     // by the daemon — before the fix, dispose() left the reconnect socket open and
     // its 10s handshake timer kept the process alive (blocking app quit).
     await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
+  })
+})
+
+interface FakeWsl {
+  deployer: WslDeployer
+  calls: string[]
+}
+
+function makeFakeWslDeployer(
+  daemon: FakeDaemon,
+  opts: { firstCheck?: 'not-deployed' | 'not-running' } = {},
+): FakeWsl {
+  const calls: string[] = []
+  let firstCheckDone = false
+  const info = (): unknown => ({
+    serverVersion: '0.0.0',
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    port: daemon.port,
+    token: daemon.token,
+    pid: 1,
+  })
+  const deployer = {
+    serverVersion: '0.0.0',
+    checkRemoteServer: async (distro: string) => {
+      calls.push(`check:${distro}`)
+      if (opts.firstCheck && !firstCheckDone) {
+        firstCheckDone = true
+        return opts.firstCheck === 'not-deployed'
+          ? { state: 'not-deployed', reason: 'missing' }
+          : { state: 'not-running' }
+      }
+      return { state: 'running', info: info() }
+    },
+    startRemoteDaemon: async (distro: string) => {
+      calls.push(`start:${distro}`)
+      return info()
+    },
+    stopRemoteDaemon: async (distro: string) => {
+      calls.push(`stop:${distro}`)
+    },
+    deployRemoteServer: async (distro: string) => {
+      calls.push(`deploy:${distro}`)
+    },
+  } as unknown as WslDeployer
+  return { deployer, calls }
+}
+
+interface MadeWsl {
+  svc: RemoteConnectionMainService
+  calls: string[]
+  states: IRemoteConnectionStateChange[]
+}
+
+function makeWslService(
+  daemon: FakeDaemon,
+  opts: { firstCheck?: 'not-deployed' | 'not-running' } = {},
+): MadeWsl {
+  const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
+  const states: IRemoteConnectionStateChange[] = []
+  const svc = new RemoteConnectionMainService(
+    { wslDeployer: deployer, getUserDataDir: () => '/tmp/ue-test' },
+    undefined,
+  )
+  svc.onDidChangeState((s) => states.push(s))
+  return { svc, calls, states }
+}
+
+describe('RemoteConnectionMainService wsl mode', () => {
+  let made: MadeWsl | Made | undefined
+
+  afterEach(() => {
+    made?.svc.dispose()
+    made = undefined
+  })
+
+  it('brings up via the wsl deployer without a forwarding phase', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    const conn = await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(conn.authority).toBe('wsl+Ubuntu')
+    expect(wsl.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
+    // The orchestrator receives the bare distro, not the authority.
+    expect(wsl.calls).toEqual(['check:Ubuntu'])
+
+    const pong = await conn.getChannel('test').call<string>('ping')
+    expect(pong).toBe('pong')
+  })
+
+  it('waits out the WSL2 localhost relay: bring-up succeeds when the port opens late', async () => {
+    // WSL2 materializes the Windows-side relay asynchronously after the daemon
+    // starts listening in the distro — simulate it by reporting a port that only
+    // begins to listen a beat after bring-up starts.
+    const daemon = new FakeDaemon()
+    daemons.push(daemon)
+    daemon.port = await findFreePort()
+    const wsl = (made = makeWslService(daemon))
+
+    const pending = wsl.svc.getConnection('wsl+Ubuntu')
+    setTimeout(() => void daemon.start(daemon.port), 300)
+    const conn = await pending
+    expect(conn.authority).toBe('wsl+Ubuntu')
+    expect(wsl.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
+  })
+
+  it('deploys then starts when the check reports not-deployed', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, { firstCheck: 'not-deployed' }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(wsl.calls).toEqual(['check:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('stopServer stops the daemon in the distro', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    await wsl.svc.stopServer('wsl+Ubuntu')
+    expect(wsl.calls.at(-1)).toBe('stop:Ubuntu')
+  })
+
+  it('rejects malformed wsl authorities before any orchestration', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await expect(wsl.svc.getConnection('wsl+bad name')).rejects.toThrow(/invalid WSL authority/)
+    expect(wsl.calls).toEqual([])
+  })
+
+  it('remoteServerCmd (direct/e2e override) wins even for wsl+ authorities', async () => {
+    const daemon = await startDaemon()
+    const wsl = makeFakeWslDeployer(daemon)
+    const procs: FakeProc[] = []
+    const spawner: RemoteSpawner = () => {
+      const proc = new FakeProc()
+      procs.push(proc)
+      queueMicrotask(() => proc.emitStdout(daemonInfo(daemon.port, daemon.token)))
+      return proc as unknown as ChildProcessWithoutNullStreams
+    }
+    const states: IRemoteConnectionStateChange[] = []
+    const svc = new RemoteConnectionMainService(
+      {
+        spawner,
+        remoteServerCmd: JSON.stringify(['node', '/fake/bootstrap.js']),
+        wslDeployer: wsl.deployer,
+        getUserDataDir: () => '/tmp/ue-test',
+      },
+      undefined,
+    )
+    svc.onDidChangeState((s) => states.push(s))
+    made = { svc, calls: wsl.calls, states }
+
+    await svc.getConnection('wsl+Ubuntu')
+    expect(states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
+    expect(procs).toHaveLength(1)
+    expect(wsl.calls).toEqual([])
+  })
+
+  it('reconnects transparently by dialing the daemon port directly', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    const conn = await wsl.svc.getConnection('wsl+Ubuntu')
+    wsl.svc.dropSocketForTesting('wsl+Ubuntu')
+    expect(wsl.states.at(-1)?.state).toBe('reconnecting')
+
+    const ping = conn.getChannel('test').call<string>('ping')
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), { timeout: 5000 })
+    await expect(ping).resolves.toBe('pong')
   })
 })

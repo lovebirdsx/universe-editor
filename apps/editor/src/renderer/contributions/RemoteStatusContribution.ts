@@ -33,6 +33,7 @@ import {
 } from '../../shared/ipc/remoteStatusService.js'
 import {
   CloseConnectionAction,
+  ConnectToWslAction,
   OpenFolderOnHostAction,
   RetryConnectionAction,
   StopRemoteServerAction,
@@ -161,12 +162,22 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   private async _showMenu(): Promise<void> {
     const authority = this._currentAuthority()
     if (authority === undefined) return
+    const wslDistros = await this._remoteStatus.listWslDistros().catch(() => [])
     const items: MenuItem[] = [
       {
         id: OpenFolderOnHostAction.ID,
         label: localize('remote.menu.openFolder', 'Open Folder on Host...'),
         commandId: OpenFolderOnHostAction.ID,
       },
+      ...(wslDistros.length > 0
+        ? [
+            {
+              id: ConnectToWslAction.ID,
+              label: localize('remote.menu.connectToWsl', 'Connect to WSL...'),
+              commandId: ConnectToWslAction.ID,
+            },
+          ]
+        : []),
       {
         id: CloseConnectionAction.ID,
         label: localize('remote.menu.close', 'Close Connection'),
@@ -186,6 +197,11 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     const picked = await this._quickInput.pick<MenuItem>(items, {
       placeholder: localize('remote.menu.placeholder', 'Remote ({authority})', { authority }),
     })
-    if (picked !== undefined) void this._commands.executeCommand(picked.commandId, authority)
+    if (picked === undefined) return
+    if (picked.commandId === ConnectToWslAction.ID) {
+      void this._commands.executeCommand(picked.commandId)
+    } else {
+      void this._commands.executeCommand(picked.commandId, authority)
+    }
   }
 }
