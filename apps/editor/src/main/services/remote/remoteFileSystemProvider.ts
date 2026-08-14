@@ -15,6 +15,7 @@
 
 import {
   createNamedLogger,
+  Disposable,
   IUriIdentityService,
   ProxyChannel,
   REMOTE_SCHEME,
@@ -47,6 +48,7 @@ interface AuthorityEntry {
   /** Events that arrived before the streamId was registered (startReadStream RPC resolves after the first chunks are pushed). */
   readonly early: Map<number, IRemoteFileStreamEvent[]>
   readonly dispose: IDisposable
+  readonly onClose: IDisposable
 }
 
 function streamError(e: { message: string; code?: string }): Error {
@@ -65,7 +67,7 @@ function concatBytes(chunks: readonly Uint8Array[], size: number): Uint8Array {
   return out
 }
 
-export class RemoteFileSystemProvider implements IFileSystemProvider {
+export class RemoteFileSystemProvider extends Disposable implements IFileSystemProvider {
   private readonly _logger: ILogger
   private readonly _entries = new Map<string, AuthorityEntry>()
   private readonly _caseSensitiveByAuthority = new Map<string, boolean>()
@@ -86,6 +88,7 @@ export class RemoteFileSystemProvider implements IFileSystemProvider {
     // instance registered today, so this stays optional and no-ops there.
     @IUriIdentityService private readonly _uriIdentity?: IUriIdentityService,
   ) {
+    super()
     this._logger = createNamedLogger(loggerService, {
       id: 'remoteFileSystem',
       name: 'Remote File System',
@@ -105,9 +108,9 @@ export class RemoteFileSystemProvider implements IFileSystemProvider {
       service,
       streams,
       early,
-      dispose: service.onReadStreamData((e) => this._onStreamEvent(entry, e)),
+      dispose: this._register(service.onReadStreamData((e) => this._onStreamEvent(entry, e))),
+      onClose: this._register(conn.onDidClose(() => this._dropAuthority(authority))),
     }
-    conn.onDidClose(() => this._dropAuthority(authority))
     this._entries.set(authority, entry)
     this._applyConnectionEnv(authority, conn)
     this._logger.debug(`remote file system proxy ready authority=${authority}`)
@@ -121,7 +124,8 @@ export class RemoteFileSystemProvider implements IFileSystemProvider {
   private _dropAuthority(authority: string): void {
     const entry = this._entries.get(authority)
     if (!entry) return
-    entry.dispose.dispose()
+    this._store.delete(entry.dispose)
+    this._store.delete(entry.onClose)
     const err = new Error(`remote connection closed while reading '${authority}'`)
     for (const stream of entry.streams.values()) {
       stream.reject(err)

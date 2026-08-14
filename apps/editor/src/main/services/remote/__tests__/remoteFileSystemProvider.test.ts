@@ -21,6 +21,8 @@ import {
   binaryCodec,
   createBinaryCodec,
   createRemoteURITransformer,
+  DisposableTracker,
+  setDisposableTracker,
   type IFileSearchComplete,
   type IFileSearchQuery,
   type IFileSearchService,
@@ -500,6 +502,92 @@ describe('TextSearchMainService remote routing', () => {
         durationMs: 0,
       })
       await pending
+    } finally {
+      h.cleanup()
+    }
+  })
+})
+
+describe('remote service disposable ownership', () => {
+  async function expectNoLeaks(fn: () => void | Promise<void>): Promise<void> {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      await fn()
+    } finally {
+      const report = tracker.computeLeakingDisposables()
+      setDisposableTracker(null)
+      expect(report).toBeUndefined()
+    }
+  }
+
+  it('releases the provider connection subscriptions on dispose', async () => {
+    const { service } = makeStreamService({
+      size: 0,
+      emit: ({ streamId, fire }) => fire({ streamId, seq: 0, done: true }),
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    const provider = new RemoteFileSystemProvider(h.connService, undefined)
+    try {
+      await expectNoLeaks(async () => {
+        await provider.readFile(remote('host', '/a'))
+        provider.dispose()
+      })
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('releases the file search onDidClose subscription on dispose', async () => {
+    const stub: Partial<IFileSearchService> = {
+      async search(): Promise<IFileSearchComplete> {
+        return { results: [], limitHit: false, filesWalked: 0, directoriesWalked: 0, durationMs: 0 }
+      },
+    }
+    const h = makeHarness({ [RemoteChannels.FileSearch]: stub })
+    const svc = new FileSearchMainService(undefined, h.connService)
+    try {
+      await expectNoLeaks(async () => {
+        await svc.search({ root: remote('host', '/x'), pattern: 'a' })
+        svc.dispose()
+      })
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('releases the text search subscriptions on dispose', async () => {
+    const progress = new Emitter<ITextSearchMainProgressEvent>()
+    const results = new Emitter<ITextSearchMainResultsEvent>()
+    const stub: Partial<ITextSearchMainService> = {
+      onDidSearchProgress: progress.event,
+      onDidSearchResults: results.event,
+      async search(): Promise<ITextSearchMainComplete> {
+        return {
+          results: [],
+          progress: { filesScanned: 0, filesMatched: 0, totalMatches: 0 },
+          durationMs: 0,
+        }
+      },
+      async cancel() {},
+    }
+    const h = makeHarness({ [RemoteChannels.TextSearch]: stub })
+    const svc = new TextSearchMainService(undefined, h.connService)
+    try {
+      await expectNoLeaks(async () => {
+        await svc.search({
+          sessionId: 's1',
+          root: remote('host', '/x'),
+          pattern: 'foo',
+          isRegex: false,
+          matchCase: false,
+          matchWholeWord: false,
+          includes: [],
+          excludes: [],
+          configurationExcludes: [],
+        })
+        svc.dispose()
+      })
     } finally {
       h.cleanup()
     }

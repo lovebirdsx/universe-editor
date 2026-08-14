@@ -83,10 +83,10 @@ export class TextSearchMainService extends TextSearchService {
     )
     this._remoteServices.set(authority, service)
     this._remoteSubs.set(authority, [
-      service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e)),
-      service.onDidSearchResults((e) => this._onDidSearchResults.fire(e)),
+      this._register(service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e))),
+      this._register(service.onDidSearchResults((e) => this._onDidSearchResults.fire(e))),
     ])
-    conn.onDidClose(() => this._dropRemote(authority))
+    this._register(conn.onDidClose(() => this._dropRemote(authority)))
     return service
   }
 
@@ -94,7 +94,7 @@ export class TextSearchMainService extends TextSearchService {
     this._remoteServices.delete(authority)
     const subs = this._remoteSubs.get(authority)
     if (subs) {
-      for (const s of subs) s.dispose()
+      for (const s of subs) this._store.delete(s)
       this._remoteSubs.delete(authority)
     }
   }

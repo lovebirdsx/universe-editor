@@ -51,6 +51,7 @@ export class WatcherProcessClient implements IDisposable {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+  private readonly _ownsLogger: boolean
 
   private readonly _onFileEvents = new Emitter<WatcherEventsResponse>()
   readonly onFileEvents: Event<WatcherEventsResponse> = this._onFileEvents.event
@@ -77,6 +78,9 @@ export class WatcherProcessClient implements IDisposable {
     private readonly _createTransport: WatcherTransportFactory,
     @ILoggerService loggerService?: ILoggerService,
   ) {
+    // Only the no-service fallback (NullLogger) is owned by this client; a
+    // logger from ILoggerService is cached/owned by the service.
+    this._ownsLogger = loggerService === undefined
     this._logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })
   }
 
@@ -218,5 +222,6 @@ export class WatcherProcessClient implements IDisposable {
     this._onFileEvents.dispose()
     this._onWatchError.dispose()
     this._onDidRestart.dispose()
+    if (this._ownsLogger) this._logger.dispose()
   }
 }

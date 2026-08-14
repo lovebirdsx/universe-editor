@@ -4,7 +4,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DisposableTracker,
   Emitter,
+  setDisposableTracker,
   type WatcherHostRequest,
   type WatcherHostResponse,
 } from '@universe-editor/platform'
@@ -192,5 +194,20 @@ describe('WatcherProcessClient', () => {
     transports[0]!.emitExit(1)
     await vi.advanceTimersByTimeAsync(1000)
     expect(transports.length).toBe(2)
+  })
+})
+
+describe('WatcherProcessClient logger ownership', () => {
+  it('disposes its fallback logger on dispose (no leak)', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const c = new WatcherProcessClient(() => new FakeTransport())
+      c.dispose()
+    } finally {
+      const report = tracker.computeLeakingDisposables()
+      setDisposableTracker(null)
+      expect(report).toBeUndefined()
+    }
   })
 })

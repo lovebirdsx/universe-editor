@@ -63,7 +63,7 @@ export class FileSearchMainService extends FileSearchService {
     const service = ProxyChannel.toService<IFileSearchService>(
       conn.getChannel(RemoteChannels.FileSearch),
     )
-    conn.onDidClose(() => this._remoteServices.delete(authority))
+    this._register(conn.onDidClose(() => this._remoteServices.delete(authority)))
     this._remoteServices.set(authority, service)
     return service
   }

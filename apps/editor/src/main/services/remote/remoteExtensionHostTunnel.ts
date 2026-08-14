@@ -88,7 +88,7 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
       socket.dispose()
       throw err
     }
-    this._socket = socket
+    this._socket = this._register(socket)
     const protocol = new PersistentProtocol({ socket, initialChunk: residual })
     this._protocol = protocol
     this._register(protocol)
@@ -170,10 +170,10 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
       }
       this._reconnectSocket = null
       const oldSocket = this._socket
-      this._socket = socket
+      this._socket = this._register(socket)
       this._protocol!.beginAcceptReconnection(socket, residual)
       this._protocol!.endAcceptReconnection()
-      oldSocket?.dispose()
+      if (oldSocket) this._store.delete(oldSocket)
       this._reconnectAttempt = 0
       this._opts.logger.info(`${this._opts.label} reconnected`)
     } catch (err) {
@@ -212,26 +212,10 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
     this._reconnectSocket?.dispose()
     this._reconnectSocket = null
     // Explicit Disconnect: tells the server to graceful-stop the forked host
-    // rather than hold it in grace.
+    // rather than hold it in grace. The socket is registered on this tunnel's
+    // store, so super.dispose() releases it synchronously — deferring the release
+    // to the socket's async `close` event would leak it on process exit.
     this._protocol?.sendDisconnect()
-    const socket = this._socket
-    this._socket = null
-    if (socket) {
-      // `end()` half-closes so the Disconnect frame flushes and the server can
-      // graceful-stop the host; NodeSocket itself (a Disposable) must still be
-      // released once the socket finally closes. The onClose subscription is
-      // self-disposing; a socket that is already dead falls through the catch.
-      const closeSub = socket.onClose(() => {
-        closeSub.dispose()
-        socket.dispose()
-      })
-      try {
-        socket.end()
-      } catch {
-        closeSub.dispose()
-        socket.dispose()
-      }
-    }
     super.dispose()
   }
 }
