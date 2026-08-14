@@ -3,9 +3,10 @@
  *  SubagentStatsBadge — a compact metadata line rendered on a sub-agent-spawning
  *  tool call's header (Task/Agent): model · run duration · ↑input ↓output tokens ·
  *  ≈¥cost. Every field is optional — the agent fork reports what it can (Claude:
- *  all four; codex: duration only), and each missing piece is simply omitted.
- *  Cost is a local token-based estimate (the agent reports no per-sub-agent cost),
- *  so it is always prefixed with ≈ and converted to CNY via the daily rate.
+ *  all four; codex: tokens + duration, no model), and each missing piece is
+ *  simply omitted. Cost is a local token-based estimate (the agent reports no
+ *  per-sub-agent cost), so it is always prefixed with ≈ and converted to CNY via
+ *  the daily rate.
  *--------------------------------------------------------------------------------------------*/
 
 import { Bot, Clock, Coins } from 'lucide-react'

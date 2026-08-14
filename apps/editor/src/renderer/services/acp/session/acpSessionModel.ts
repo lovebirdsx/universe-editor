@@ -129,7 +129,7 @@ export interface AcpToolCall {
    * (Task/Agent). Accumulated by the agent fork across the sub-agent's messages
    * and forwarded on the parent card via `_meta._universe/subagentStats`; the
    * renderer surfaces model + tokens + estimated cost on the card header. Absent
-   * for ordinary tools and for agents that report no per-sub-agent data (codex).
+   * for ordinary tools; codex reports tokens but no model (so it is not priced).
    */
   readonly subagentStats?: AcpSubagentStats
   /**

@@ -2525,8 +2525,8 @@ export class AcpSession extends Disposable implements IAcpSession {
   /**
    * Attach a locally-estimated USD cost to a sub-agent tally. The agent never
    * reports a per-sub-agent cost, so we price the tokens against the model's
-   * published rates (Claude only — codex reports no per-sub-agent tokens). Leaves
-   * `costUSD` unset when no model is known, so the UI can hide the cost.
+   * published rates. Codex stats carry no model, so they are not priced here.
+   * Leaves `costUSD` unset when no model is known, so the UI can hide the cost.
    */
   private _priceSubagentStats(stats: AcpSubagentStats): AcpSubagentStats {
     if (stats.model === undefined) return stats

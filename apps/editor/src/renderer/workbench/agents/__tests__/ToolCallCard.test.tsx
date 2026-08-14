@@ -327,6 +327,30 @@ describe('ToolCallCard', () => {
     expect(stats.textContent).toContain('≈¥')
   })
 
+  it('renders tokens without model or cost when the stats carry neither', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        title: 'Explore the codebase',
+        status: 'completed',
+        durationMs: 12_000,
+        // Codex-shaped tally: tokens + duration, no model / no costUSD.
+        subagentStats: {
+          inputTokens: 12_000,
+          outputTokens: 3_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+      }),
+    )
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(stats.textContent).toContain('↑')
+    expect(stats.textContent).toContain('↓')
+    // No model badge and no estimated-cost badge.
+    expect(stats.textContent).not.toContain('sonnet-5')
+    expect(stats.textContent).not.toContain('¥')
+  })
+
   it('omits the stats line entirely when there is nothing to show', () => {
     renderCard(makeCall({ kind: 'other', title: 'plain tool' }))
     expect(screen.queryByTestId('acp-subagent-stats')).toBeNull()

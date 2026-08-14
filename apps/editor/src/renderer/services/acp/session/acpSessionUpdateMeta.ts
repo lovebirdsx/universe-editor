@@ -45,11 +45,11 @@ function numberOr(v: unknown): number {
 }
 
 /**
- * Read the per-sub-agent token/model tally our claude fork stamps onto a Task
- * card's `tool_call_update` via `_meta._universe/subagentStats`. Values are the
- * running total for that one sub-agent (all its assistant messages folded). The
- * fork never reports a per-sub-agent cost, so `costUSD` is estimated downstream.
- * Returns undefined when absent or malformed.
+ * Read the per-sub-agent token/model tally agent forks stamp onto a Task card's
+ * `tool_call_update` via `_meta._universe/subagentStats`. Values are the running
+ * total for that one sub-agent (all its assistant messages folded); `model` is
+ * optional (codex omits it). The fork never reports a per-sub-agent cost, so
+ * `costUSD` is estimated downstream. Returns undefined when absent or malformed.
  */
 export function readSubagentStats(update: {
   _meta?: Record<string, unknown> | null | undefined
