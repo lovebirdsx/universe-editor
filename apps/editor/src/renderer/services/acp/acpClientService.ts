@@ -85,6 +85,7 @@ import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js
 import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy, type AcpPathPolicyEnv } from './acpPathPolicy.js'
+import { SUBAGENT_TRANSCRIPT_CAPABILITY } from './session/acpExtMethods.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
 import type { ISessionCreateProfileHandle } from './acpSessionCreateProfiler.js'
@@ -219,6 +220,9 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
     // UNSTABLE elicitation: form (rendered as a field card) + url (consent
     // card → open-in-browser → elicitation/complete) are both wired.
     elicitation: { form: {}, url: {} },
+    // Sub-agent transcript: lets the claude fork relay sub-agent text/thinking
+    // chunks (parentToolUseId) instead of stripping them.
+    _meta: { [SUBAGENT_TRANSCRIPT_CAPABILITY]: true },
   },
 }
 

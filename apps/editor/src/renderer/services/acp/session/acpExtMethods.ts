@@ -92,6 +92,15 @@ export const ACP_META_KEYS = {
 export const ACP_CAPABILITIES_META_KEY = 'universe-editor/capabilities'
 
 /**
+ * Key under `initialize` → `clientCapabilities._meta` the editor stamps so the
+ * claude fork forwards sub-agent text/thinking chunks (each tagged
+ * `_meta.claudeCode.parentToolUseId`, mounted as children of the parent Task
+ * card). The fork copies this literal verbatim; without it those chunks are
+ * stripped, while tool calls always pass through regardless.
+ */
+export const SUBAGENT_TRANSCRIPT_CAPABILITY = 'subagent-transcript'
+
+/**
  * Shape of `agentCapabilities._meta['universe-editor/capabilities']`. All fields
  * optional — an agent that omits `rewind` simply doesn't support rewind.
  */

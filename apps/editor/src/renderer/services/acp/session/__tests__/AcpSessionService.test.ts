@@ -71,7 +71,7 @@ import {
   SIDE_TASK_ROLE_PROMPT,
 } from '../acpSession.js'
 import type { AcpPendingElicitation, AcpPendingPermission } from '../acpSessionModel.js'
-import { ACP_CAPABILITIES_META_KEY } from '../acpExtMethods.js'
+import { ACP_CAPABILITIES_META_KEY, SUBAGENT_TRANSCRIPT_CAPABILITY } from '../acpExtMethods.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
@@ -88,6 +88,7 @@ import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
 import {
   IAcpClientService,
+  getDefaultInitParamsForTests,
   type IAcpClientConnection,
   type IAcpClientNotificationSink,
 } from '../../acpClientService.js'
@@ -537,6 +538,11 @@ describe('AcpSessionService', () => {
 
   afterEach(() => {
     svc.dispose()
+  })
+
+  it('advertises subagent-transcript in the default init params', () => {
+    const caps = getDefaultInitParamsForTests().clientCapabilities
+    expect(caps?._meta?.[SUBAGENT_TRANSCRIPT_CAPABILITY]).toBe(true)
   })
 
   it('createSession spawns a connection and appends to sessions / sets active', async () => {
