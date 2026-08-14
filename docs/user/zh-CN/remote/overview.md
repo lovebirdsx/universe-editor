@@ -102,6 +102,12 @@
 - **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。
 - **开发期自定义启动命令**：开发模式下可用环境变量 `UNIVERSE_REMOTE_SERVER_CMD` 指定启动远端 server 的命令（用于联调自建 server，仅开发环境生效）。
 
+### 用 WSL 作远端主机的注意事项
+
+- **别用 `localhost` 连**：若 Windows 自带的 OpenSSH Server 服务也在运行，它会占住 22 端口，`ssh localhost` 连到的是 Windows 而不是 WSL。用 `wsl hostname -I` 查出 WSL 的虚拟网卡 IP（如 `user@172.x.x.x`）来连；该 IP 在 WSL 重启后可能变化。
+- **Node 版本要对非交互 SSH 生效**：编辑器通过非交互 SSH 执行远端命令。若你的默认 shell 是 zsh，非交互会话只读 `~/.zshenv`（不读 `.bashrc`/`.zshrc`）——用 nvm 装的 Node 需要把 PATH 导出写进 `~/.zshenv`，否则连接时可能探测到系统旧版 Node 而失败。
+- **WSL 会闲置自动关机**：没有活动交互会话时 WSL 可能自动停止，导致连接中断且无法重连（Connection refused）。从 Windows 侧起一个保活进程（如 `wsl -- sleep 7200`）或在 `.wslconfig` 调整 `vmIdleTimeout` 可避免。
+
 ## 下一步
 
 - [界面导览](../getting-started/interface-tour.md)
