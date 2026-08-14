@@ -208,6 +208,19 @@ describe('ExtensionHostMainService authority routing', () => {
     remote.dispose()
   })
 
+  it('disposes the remote service when the facade is disposed', async () => {
+    const made = makeConnectionService()
+    const remote = new RemoteExtensionHostService(made.connService)
+    const facade = makeFacade(remote)
+
+    await facade.start({ authority: 'host' })
+    const tunnel = made.tunnels[0]!
+    expect(tunnel.disposed).toBe(false)
+
+    facade.dispose()
+    expect(tunnel.disposed).toBe(true)
+  })
+
   it('rejects start with an authority when no remote service is wired', async () => {
     const facade = makeFacade(undefined)
     await expect(facade.start({ authority: 'host' })).rejects.toThrow(/not wired/)

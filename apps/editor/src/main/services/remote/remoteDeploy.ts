@@ -16,7 +16,12 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { ManagedChildProcess } from '@universe-editor/node-services'
-import { NullLogger, type ILogger, type IRemoteDaemonInfo } from '@universe-editor/platform'
+import {
+  NullLogger,
+  type IDisposable,
+  type ILogger,
+  type IRemoteDaemonInfo,
+} from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
 
@@ -441,7 +446,7 @@ export class RemoteDeployer {
     authority: string,
     remotePort: number,
     logger?: ILogger,
-  ): Promise<{ localPort: number; process: ManagedChildProcess }> {
+  ): Promise<{ localPort: number; process: ManagedChildProcess; stderrSub: IDisposable }> {
     const log = logger ?? this._logger
     const localPort = await findFreePort()
     const proc = new ManagedChildProcess(
@@ -450,16 +455,17 @@ export class RemoteDeployer {
       }),
       { logger: log, label: `remote-forward:${authority}` },
     )
-    proc.onStderr((chunk) => {
+    const stderrSub = proc.onStderr((chunk) => {
       log.warn(`[remote:${authority}] ssh forward: ${decodeDiagnostic(chunk).trim()}`)
     })
     try {
       await waitForPort(localPort)
     } catch (err) {
+      stderrSub.dispose()
       proc.dispose()
       throw err
     }
     log.info(`[remote:${authority}] ssh forward ready ${localPort} -> 127.0.0.1:${remotePort}`)
-    return { localPort, process: proc }
+    return { localPort, process: proc, stderrSub }
   }
 }

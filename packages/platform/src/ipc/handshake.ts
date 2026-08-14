@@ -6,6 +6,7 @@
  *  successor protocol can be seeded without losing data.
  *--------------------------------------------------------------------------------------------*/
 
+import { DisposableStore } from '../base/lifecycle.js'
 import { ProtocolMessage, ProtocolMessageType, ProtocolReader, ProtocolWriter } from './frame.js'
 import type { ISocket } from './socket.js'
 
@@ -30,6 +31,9 @@ export function readFirstControlFrame(
 ): Promise<IControlFrameResult> {
   return new Promise<IControlFrameResult>((resolve, reject) => {
     const reader = new ProtocolReader(socket)
+    // The reader/socket subscriptions are independent toDisposables — collect them
+    // so they are released together on every settle path (success or failure).
+    const subs = new DisposableStore()
     let settled = false
 
     const timer = setTimeout(() => {
@@ -45,31 +49,35 @@ export function readFirstControlFrame(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      closeListener.dispose()
+      subs.dispose()
       reader.dispose()
       reject(err)
     }
 
-    const closeListener = socket.onClose(() => {
-      fail(new Error('handshake: socket closed before control frame'))
-    })
+    subs.add(
+      socket.onClose(() => {
+        fail(new Error('handshake: socket closed before control frame'))
+      }),
+    )
 
-    reader.onMessage((msg) => {
-      if (settled) return
-      if (msg.type !== ProtocolMessageType.Control) {
-        fail(new Error(`handshake: expected control frame, got type ${msg.type}`))
-        return
-      }
-      settled = true
-      clearTimeout(timer)
-      closeListener.dispose()
-      // Grab leftovers and detach from the socket synchronously, inside this
-      // data-event handler: the caller's `.then` continuation (a microtask) runs
-      // before the next I/O event can deliver more bytes, so nothing slips by.
-      const residual = reader.readEntireBuffer()
-      reader.dispose()
-      resolve({ data: msg.data, residual })
-    })
+    subs.add(
+      reader.onMessage((msg) => {
+        if (settled) return
+        if (msg.type !== ProtocolMessageType.Control) {
+          fail(new Error(`handshake: expected control frame, got type ${msg.type}`))
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        subs.dispose()
+        // Grab leftovers and detach from the socket synchronously, inside this
+        // data-event handler: the caller's `.then` continuation (a microtask) runs
+        // before the next I/O event can deliver more bytes, so nothing slips by.
+        const residual = reader.readEntireBuffer()
+        reader.dispose()
+        resolve({ data: msg.data, residual })
+      }),
+    )
   })
 }
 

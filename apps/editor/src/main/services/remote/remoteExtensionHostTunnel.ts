@@ -169,9 +169,11 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
         return
       }
       this._reconnectSocket = null
+      const oldSocket = this._socket
       this._socket = socket
       this._protocol!.beginAcceptReconnection(socket, residual)
       this._protocol!.endAcceptReconnection()
+      oldSocket?.dispose()
       this._reconnectAttempt = 0
       this._opts.logger.info(`${this._opts.label} reconnected`)
     } catch (err) {
@@ -212,12 +214,24 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
     // Explicit Disconnect: tells the server to graceful-stop the forked host
     // rather than hold it in grace.
     this._protocol?.sendDisconnect()
-    try {
-      this._socket?.end()
-    } catch {
-      // already closed
-    }
+    const socket = this._socket
     this._socket = null
+    if (socket) {
+      // `end()` half-closes so the Disconnect frame flushes and the server can
+      // graceful-stop the host; NodeSocket itself (a Disposable) must still be
+      // released once the socket finally closes. The onClose subscription is
+      // self-disposing; a socket that is already dead falls through the catch.
+      const closeSub = socket.onClose(() => {
+        closeSub.dispose()
+        socket.dispose()
+      })
+      try {
+        socket.end()
+      } catch {
+        closeSub.dispose()
+        socket.dispose()
+      }
+    }
     super.dispose()
   }
 }

@@ -20,6 +20,7 @@ import {
   DisposableStore,
   Emitter,
   mark,
+  type IDisposable,
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
@@ -164,7 +165,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     }),
     @ILoggerService loggerService?: ILoggerService,
     /** Remote implementation used when `spec.authority` is set. Local spawn is the default. */
-    private readonly _remoteService?: IExtensionHostService,
+    private readonly _remoteService?: IExtensionHostService & IDisposable,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'extensionHost', name: 'Extension Host' })
@@ -172,6 +173,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     // Forward the remote implementation's stdio/exit events onto this facade's
     // own emitters so the renderer sees one unified stream regardless of side.
     if (this._remoteService) {
+      this._register(this._remoteService)
       this._register(this._remoteService.onStdout((chunk) => this._onStdout.fire(chunk)))
       this._register(this._remoteService.onStderr((chunk) => this._onStderr.fire(chunk)))
       this._register(

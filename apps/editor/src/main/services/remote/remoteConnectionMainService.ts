@@ -22,6 +22,7 @@ import {
   createDecorator,
   createNamedLogger,
   Disposable,
+  DisposableStore,
   Emitter,
   PersistentProtocol,
   ProtocolConstants,
@@ -33,6 +34,7 @@ import {
   binaryCodec,
   type Event,
   type IChannel,
+  type IDisposable,
   type ILogger,
   type ISocket,
   ILoggerService,
@@ -162,6 +164,7 @@ interface ConnectionForward {
   readonly localPort: number
   readonly process: ManagedChildProcess
   readonly exitSub: { dispose(): void }
+  readonly stderrSub: { dispose(): void }
 }
 
 interface ConnectionEntry {
@@ -169,10 +172,17 @@ interface ConnectionEntry {
   state: RemoteConnectionState
   connection: RemoteConnection | null
   protocol: PersistentProtocol | null
+  /** Current socket held by `protocol`. PersistentProtocol does NOT own socket
+   *  disposal (server-side ManagementConnection disposes it explicitly) — we do. */
+  socket: ISocket | null
+  /** Subscriptions on `protocol` (socket close/timeout) — disposed with it. */
+  protocolSubs: DisposableStore | null
   env: IRemoteEnvironment | null
   promise: Promise<IRemoteConnection> | null
   forward: ConnectionForward | null
   directProcess: ManagedChildProcess | null
+  /** Subscriptions on `directProcess` (stderr/exit) — disposed with it. */
+  directSubs: DisposableStore | null
   daemonPort: number
   daemonToken: string
   reconnectionToken: string
@@ -202,7 +212,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private readonly _entries = new Map<string, ConnectionEntry>()
   private readonly _onDidChangeState = this._register(new Emitter<IRemoteConnectionStateChange>())
   readonly onDidChangeState: Event<IRemoteConnectionStateChange> = this._onDidChangeState.event
-  private readonly _extensionHostTunnels = new Set<RemoteExtensionHostTunnel>()
+  private readonly _extensionHostTunnels = new Map<RemoteExtensionHostTunnel, IDisposable>()
   private _disposed = false
 
   constructor(
@@ -286,12 +296,16 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       logger: this._logger,
       label: `extHost:${authority}`,
     })
-    this._extensionHostTunnels.add(tunnel)
-    tunnel.onDidClose(() => this._extensionHostTunnels.delete(tunnel))
+    const closeSub = tunnel.onDidClose(() => {
+      this._extensionHostTunnels.delete(tunnel)
+      closeSub.dispose()
+    })
+    this._extensionHostTunnels.set(tunnel, closeSub)
     try {
       await tunnel.open()
     } catch (err) {
       this._extensionHostTunnels.delete(tunnel)
+      closeSub.dispose()
       tunnel.dispose()
       throw err
     }
@@ -318,7 +332,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   }
 
   dropExtensionHostSocketForTesting(authority: string): void {
-    for (const tunnel of this._extensionHostTunnels) {
+    for (const [tunnel] of this._extensionHostTunnels) {
       if (tunnel.authority === authority) tunnel.dropSocketForTesting()
     }
   }
@@ -386,10 +400,14 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     )
     entry.directProcess = proc
     entry.isDirect = true
-    proc.onStderr((chunk) => {
-      this._logger.warn(`[remote:${entry.authority}] ${decodeDiagnostic(chunk).trim()}`)
-    })
-    proc.onDidExit((exit) => this._onDirectExited(entry, proc, exit))
+    const directSubs = new DisposableStore()
+    directSubs.add(
+      proc.onStderr((chunk) => {
+        this._logger.warn(`[remote:${entry.authority}] ${decodeDiagnostic(chunk).trim()}`)
+      }),
+    )
+    directSubs.add(proc.onDidExit((exit) => this._onDirectExited(entry, proc, exit)))
+    entry.directSubs = directSubs
     const info = await this._waitForDirectInfo(entry, proc)
     entry.daemonPort = info.port
     entry.daemonToken = info.token
@@ -455,13 +473,13 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private async _ensureForward(entry: ConnectionEntry): Promise<void> {
     if (entry.forward && !entry.forward.process.exited) return
-    const { localPort, process } = await this._deployer.createForward(
+    const { localPort, process, stderrSub } = await this._deployer.createForward(
       entry.authority,
       entry.daemonPort,
       this._logger,
     )
     const exitSub = process.onDidExit(() => this._onForwardExited(entry, process))
-    entry.forward = { localPort, process, exitSub }
+    entry.forward = { localPort, process, exitSub, stderrSub }
   }
 
   private async _connectFresh(
@@ -496,11 +514,15 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     } catch (err) {
       client.dispose()
       protocol.dispose()
+      socket.dispose()
       throw err
     }
-    protocol.onSocketClose(() => this._onSocketDisconnected(entry))
-    protocol.onSocketTimeout(() => this._onSocketDisconnected(entry))
+    const protocolSubs = new DisposableStore()
+    protocolSubs.add(protocol.onSocketClose(() => this._onSocketDisconnected(entry)))
+    protocolSubs.add(protocol.onSocketTimeout(() => this._onSocketDisconnected(entry)))
+    entry.protocolSubs = protocolSubs
     entry.protocol = protocol
+    entry.socket = socket
     entry.env = info
     this._logger.info(
       `remote '${entry.authority}' connected os=${info.os} arch=${info.arch} node=${info.nodeVersion} serverVersion=${info.serverVersion} caseSensitive=${info.pathCaseSensitive}`,
@@ -618,8 +640,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       }
       entry.reconnectSocket = null
       const protocol = entry.protocol!
+      const oldSocket = entry.socket
+      entry.socket = socket
       protocol.beginAcceptReconnection(socket, residual)
       protocol.endAcceptReconnection()
+      oldSocket?.dispose()
       entry.reconnectAttempt = 0
       this._fireState(entry, 'connected')
       this._logger.info(`remote '${entry.authority}' reconnected`)
@@ -643,8 +668,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private _onForwardExited(entry: ConnectionEntry, process: ManagedChildProcess): void {
     if (entry.forward?.process !== process) return
-    entry.forward.exitSub.dispose()
+    const forward = entry.forward
     entry.forward = null
+    forward.exitSub.dispose()
+    forward.stderrSub.dispose()
+    forward.process.dispose()
     if (entry.closedByUser || this._disposed) return
     if (entry.state === 'connected') {
       this._logger.warn(`[remote:${entry.authority}] ssh forward exited; reconnecting`)
@@ -659,6 +687,9 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   ): void {
     if (entry.directProcess !== proc) return
     entry.directProcess = null
+    entry.directSubs?.dispose()
+    entry.directSubs = null
+    proc.dispose()
     if (entry.closedByUser || this._disposed) return
     // During bring-up the in-flight connect path surfaces the failure itself.
     if (entry.state === 'deploying' || entry.state === 'handshaking') return
@@ -718,7 +749,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     connection?.dispose()
     const protocol = entry.protocol
     entry.protocol = null
+    entry.protocolSubs?.dispose()
+    entry.protocolSubs = null
     protocol?.dispose()
+    entry.socket?.dispose()
+    entry.socket = null
     entry.env = null
     this._teardownForward(entry)
   }
@@ -728,6 +763,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     entry.forward = null
     if (forward) {
       forward.exitSub.dispose()
+      forward.stderrSub.dispose()
       forward.process.dispose()
     }
   }
@@ -735,6 +771,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private _teardownDirect(entry: ConnectionEntry): void {
     const proc = entry.directProcess
     entry.directProcess = null
+    entry.directSubs?.dispose()
+    entry.directSubs = null
     proc?.dispose()
   }
 
@@ -748,10 +786,13 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         state: 'idle',
         connection: null,
         protocol: null,
+        socket: null,
+        protocolSubs: null,
         env: null,
         promise: null,
         forward: null,
         directProcess: null,
+        directSubs: null,
         daemonPort: 0,
         daemonToken: '',
         reconnectionToken: '',
@@ -778,7 +819,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   override dispose(): void {
     this._disposed = true
-    for (const tunnel of this._extensionHostTunnels) {
+    for (const [tunnel, closeSub] of this._extensionHostTunnels) {
+      closeSub.dispose()
       tunnel.dispose()
     }
     this._extensionHostTunnels.clear()

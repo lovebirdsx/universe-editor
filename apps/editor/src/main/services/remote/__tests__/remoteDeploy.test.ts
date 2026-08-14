@@ -1,5 +1,9 @@
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { createServer, type Server } from 'node:net'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { ILogger } from '@universe-editor/platform'
 import {
   buildCheckCommand,
   buildDeployRemoteScript,
@@ -13,6 +17,7 @@ import {
   sshCommandArgs,
   validateAuthority,
   type RemoteRunner,
+  type RemoteSpawner,
 } from '../remoteDeploy.js'
 
 describe('validateAuthority', () => {
@@ -189,5 +194,57 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     await expect(deployer.deployRemoteServer('user@host')).rejects.toThrow(
       'scp failed: lost connection',
     )
+  })
+})
+
+describe('RemoteDeployer.createForward', () => {
+  class FakeProc extends EventEmitter {
+    readonly stdout = new EventEmitter()
+    readonly stderr = new EventEmitter()
+    readonly stdin = new EventEmitter()
+    pid = 1
+    kill(): boolean {
+      return true
+    }
+  }
+
+  const servers: Server[] = []
+  afterEach(() => {
+    for (const server of servers.splice(0)) server.close()
+  })
+
+  it('returns a stderrSub that detaches the forward stderr listener when disposed', async () => {
+    let proc: FakeProc | undefined
+    // Parse the forwarded port out of `-L localPort:127.0.0.1:remotePort` and
+    // listen on it so waitForPort succeeds without a real ssh process.
+    const spawner: RemoteSpawner = (_command, args) => {
+      const lIdx = args.indexOf('-L')
+      const localPort = Number(args[lIdx + 1]!.split(':')[0]!)
+      const server = createServer(() => {})
+      servers.push(server)
+      server.listen(localPort, '127.0.0.1')
+      proc = new FakeProc()
+      return proc as unknown as ChildProcessWithoutNullStreams
+    }
+
+    const warnings: string[] = []
+    const logger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn: (m: string) => warnings.push(m),
+      error: () => {},
+      dispose: () => {},
+    } as unknown as ILogger
+
+    const deployer = new RemoteDeployer({ spawner, serverVersion: '0.0.0' })
+    const { stderrSub } = await deployer.createForward('user@host', 5678, logger)
+
+    proc!.stderr.emit('data', Buffer.from('boom\n'))
+    expect(warnings).toHaveLength(1)
+
+    stderrSub.dispose()
+    proc!.stderr.emit('data', Buffer.from('again\n'))
+    expect(warnings).toHaveLength(1)
   })
 })
