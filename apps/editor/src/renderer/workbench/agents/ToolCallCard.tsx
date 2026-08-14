@@ -25,6 +25,10 @@ import type {
   AcpToolCallLocation,
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
+import {
+  firstLineSummary,
+  hasVisibleMessageContent,
+} from '../../services/acp/session/acpSession.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
@@ -40,7 +44,7 @@ import {
   keepPlanningFeedback,
   tryPrettyJson,
 } from './toolCallDisplay.js'
-import { toolKindIcon } from './timelineIcons.js'
+import { roleIcon, toolKindIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
@@ -281,6 +285,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         }
         const childKey = buildStickyKey(subtreeCollapse.stickyKey, c)
         const childFocused = subtreeCollapse.focusedKey === childKey
+        const childDepth = subtreeCollapse.depth + 1
         if (c.kind === 'message') {
           return (
             <SubMessage
@@ -288,10 +293,12 @@ export const ToolCallCard = memo(function ToolCallCard({
               message={c.message}
               stickyKey={childKey}
               focused={childFocused}
+              collapsed={resolveCollapsed(childKey, c, subtreeCollapse.collapse)}
+              onToggleCollapse={() => subtreeCollapse.toggle(childKey)}
+              depth={childDepth}
             />
           )
         }
-        const childDepth = subtreeCollapse.depth + 1
         return (
           <ToolCallCard
             key={c.id}
@@ -359,29 +366,61 @@ export const ToolCallCard = memo(function ToolCallCard({
   )
 })
 
-/** A single sub-agent message rendered inside a parent tool call's child timeline. */
+/** A single sub-agent message rendered inside a parent tool call's child
+ *  timeline. Card form matches the top-level message card: CollapsibleSlot
+ *  shell + role icon + single-line summary, foldable like any other slot.
+ *  Sub messages are always agent/thought (never user), and never stream. */
 function SubMessage({
   message,
   stickyKey,
   focused,
+  collapsed: collapsedProp,
+  onToggleCollapse,
+  depth,
 }: {
   message: AcpMessage
   /** Composite sticky key — set when the card tree runs under the timeline's
    *  shared collapse/focus store (ChatBody), absent for ToolCallList. */
   stickyKey?: string
   focused?: boolean
+  /** Controlled collapse from the shared store; absent in standalone ToolCallList. */
+  collapsed?: boolean
+  onToggleCollapse?: () => void
+  /** Nesting depth for the sticky-scroll overlay indent (matches nested tool calls). */
+  depth?: number
 }) {
-  const className = focused
-    ? `${styles['subMessage']} ${styles['timelineSlotFocused'] ?? ''}`
-    : styles['subMessage']
+  // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
+  // state when used standalone (ToolCallList). Sub messages start expanded.
+  const controlled = collapsedProp !== undefined
+  const [internalCollapsed, setInternalCollapsed] = useState(false)
+  // Drop settled empty sub messages (no visible content) like the main timeline
+  // does — a card with just an icon and no body would read as a rendering glitch.
+  if (message.role !== 'user' && !hasVisibleMessageContent(message.blocks)) {
+    return null
+  }
+  const collapsed = controlled ? collapsedProp : internalCollapsed
+  const onToggle = controlled
+    ? (onToggleCollapse ?? (() => {}))
+    : () => setInternalCollapsed((v) => !v)
+
+  const className =
+    styles['messageItem'] + (focused ? ` ${styles['timelineSlotFocused'] ?? ''}` : '')
   return (
-    <li
-      className={className}
-      data-role={message.role}
-      data-testid="acp-subagent-message"
-      {...(stickyKey !== undefined ? { 'data-sticky-key': stickyKey } : {})}
+    <CollapsibleSlot
+      icon={roleIcon(message.role)}
+      kindLabel={message.role}
+      summary={firstLineSummary(message.text)}
+      collapsed={collapsed}
+      onToggle={onToggle}
+      rootProps={{
+        className,
+        'data-role': message.role,
+        'data-testid': 'acp-subagent-message',
+        ...(stickyKey !== undefined ? { 'data-sticky-key': stickyKey } : {}),
+        ...(depth !== undefined ? { 'data-sticky-depth': String(depth) } : {}),
+      }}
     >
       <MessageContent blocks={message.blocks} />
-    </li>
+    </CollapsibleSlot>
   )
 }

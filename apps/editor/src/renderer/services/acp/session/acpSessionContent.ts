@@ -26,6 +26,14 @@ export function hasVisibleMessageContent(blocks: readonly ContentBlock[]): boole
   return blocks.some((b) => (b.type === 'text' ? b.text.trim().length > 0 : true))
 }
 
+/** First non-empty line of a message, trimmed and clamped, for the collapsed
+ *  single-line summary. Matches the sticky-scroll overlay's header clamp. */
+export function firstLineSummary(text: string): string {
+  const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
+  const MAX = 120
+  return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
+}
+
 export function blocksToText(blocks: readonly ContentBlock[] | undefined): string {
   if (!blocks) return ''
   return blocks

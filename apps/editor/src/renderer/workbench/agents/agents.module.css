@@ -456,8 +456,7 @@
 
 /* Reasoning `**...**` spans (codex summary titles) inherit the card's italic
    instead of the loud bright-bold emphasis. */
-.messageItem[data-role='thought'] strong,
-.subMessage[data-role='thought'] strong {
+.messageItem[data-role='thought'] strong {
   font-weight: inherit;
   color: inherit;
 }
@@ -836,11 +835,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.subMessage {
-  font-size: calc(var(--agent-font-size, 12px) * 0.917);
-  opacity: 0.92;
 }
 
 .terminalOutput {

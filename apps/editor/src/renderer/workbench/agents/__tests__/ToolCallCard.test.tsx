@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   IConfigurationService,
   IEditorService,
@@ -205,6 +205,92 @@ describe('ToolCallCard', () => {
     expect(screen.queryByTestId('acp-subagent-timeline')).toBeNull()
     fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
     expect(screen.getByTestId('acp-subagent-timeline')).toBeTruthy()
+  })
+
+  it('renders a sub-agent message as a card shell (role + collapsible header)', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        children: [{ kind: 'message', id: 'sm1', message: makeChildMessage('sub thinking') }],
+      }),
+    )
+    const msg = screen.getByTestId('acp-subagent-message')
+    expect(msg.getAttribute('data-role')).toBe('agent')
+    expect(msg.querySelector('[data-testid="acp-collapsible-toggle"]')).not.toBeNull()
+  })
+
+  it('marks a sub-agent thought message with data-role=thought', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        children: [
+          {
+            kind: 'message',
+            id: 'sm1',
+            message: { ...makeChildMessage('reasoning'), role: 'thought' },
+          },
+        ],
+      }),
+    )
+    expect(screen.getByTestId('acp-subagent-message').getAttribute('data-role')).toBe('thought')
+  })
+
+  it('folds a sub-agent message on click in standalone usage', () => {
+    renderCard(
+      makeCall({
+        kind: 'other',
+        children: [{ kind: 'message', id: 'sm1', message: makeChildMessage('sub thinking') }],
+      }),
+    )
+    // kind 'other' renders expanded → the child message body is visible.
+    expect(screen.getByTestId('acp-markdown')).toBeTruthy()
+    const msg = screen.getByTestId('acp-subagent-message')
+    const childToggle = within(msg).getByTestId('acp-collapsible-toggle')
+    fireEvent.click(childToggle)
+    expect(screen.queryByTestId('acp-markdown')).toBeNull()
+    fireEvent.click(childToggle)
+    expect(screen.getByTestId('acp-markdown')).toBeTruthy()
+  })
+
+  it('folds a sub-agent message via the shared collapse store', () => {
+    const services = new ServiceCollection()
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      openEditor: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IEditorServiceType)
+    services.set(IConfigurationService, {
+      _serviceBrand: undefined,
+      get: () => undefined,
+    } as unknown as IConfigurationServiceType)
+    const inst = new InstantiationService(services)
+    const toggle = vi.fn()
+    render(
+      <ServicesContext.Provider value={inst}>
+        <ul>
+          <ToolCallCard
+            call={makeCall({
+              kind: 'other',
+              children: [{ kind: 'message', id: 'sm1', message: makeChildMessage('sub thinking') }],
+            })}
+            collapsed={false}
+            onToggleCollapse={() => {}}
+            subtreeCollapse={{
+              stickyKey: 't:t1',
+              depth: 0,
+              collapse: { mode: 'default', overrides: new Map([['t:t1/m:sm1', true]]) },
+              toggle,
+            }}
+          />
+        </ul>
+      </ServicesContext.Provider>,
+    )
+    // The override pins the child message collapsed → its body is not mounted.
+    expect(screen.queryByTestId('acp-markdown')).toBeNull()
+    // Clicking the child toggle dispatches its composite key through the store.
+    fireEvent.click(
+      within(screen.getByTestId('acp-subagent-message')).getByTestId('acp-collapsible-toggle'),
+    )
+    expect(toggle).toHaveBeenCalledWith('t:t1/m:sm1')
   })
 
   it('humanizes an MCP tool title and shows a server badge', () => {

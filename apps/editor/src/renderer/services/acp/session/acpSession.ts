@@ -152,6 +152,7 @@ export type {
 export type { AcpRecoveryPhase, AcpRecoveryState } from './acpSessionRecovery.js'
 export {
   blocksToText,
+  firstLineSummary,
   hasVisibleMessageContent,
   isBlankContentBlock,
   mergeStreamingBlock,

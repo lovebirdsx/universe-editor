@@ -45,6 +45,7 @@ import {
   type TimelineItem,
 } from '../../services/acp/session/acpSessionService.js'
 import {
+  firstLineSummary,
   hasVisibleMessageContent,
   timelineItemToText,
   type AcpChildItem,
@@ -1795,14 +1796,6 @@ function captureAnchor(el: HTMLElement): AcpChatAnchor | undefined {
     return { key, offset: Math.max(0, -top) }
   }
   return undefined
-}
-
-// First non-empty line of a message, trimmed and clamped, for the collapsed
-// single-line summary.
-function firstLineSummary(text: string): string {
-  const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
-  const MAX = 120
-  return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
 }
 
 // Stable first-paint height estimate, derived from the row's content AND how it
