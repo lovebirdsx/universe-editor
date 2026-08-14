@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
+import { URI } from '@universe-editor/platform'
 import {
   resolveExtensionMcpServerRecord,
   type IExtensionMcpResolveContext,
@@ -18,7 +19,7 @@ function makeExt(overrides: Partial<IExtensionDescriptionDto> = {}): IExtensionD
     activationEvents: [],
     contributes: {},
     hasMain: false,
-    extensionLocation: 'C:\\exts\\bridge',
+    extensionLocation: URI.file('C:\\exts\\bridge'),
     extensionIsBuiltin: false,
     ...overrides,
   }

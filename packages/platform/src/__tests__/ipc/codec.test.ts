@@ -224,6 +224,24 @@ describe('createJsonCodec', () => {
     expect(clientData.uri.toString()).toBe('remote-ssh://wsl/home/y')
   })
 
+  it('translates a DTO extensionLocation file URI to remote-ssh (host → renderer)', () => {
+    const host = createJsonCodec(createRemoteURITransformer('wsl+Ubuntu'))
+    const renderer = defaultCodec
+    const dto = {
+      id: 'theme.ext',
+      extensionLocation: URI.file('/home/x/.universe-editor-server/ext/theme-defaults').toJSON(),
+    }
+    const msg: IpcMessage = { type: 'response', id: 26, data: { contributions: [dto] } }
+    const data = responseData(renderer.decode(host.encode(msg))) as {
+      contributions: { extensionLocation: URI }[]
+    }
+    const location = data.contributions[0]!.extensionLocation
+    expect(location).toBeInstanceOf(URI)
+    expect(location.scheme).toBe('remote-ssh')
+    expect(location.authority).toBe('wsl+Ubuntu')
+    expect(location.path).toBe('/home/x/.universe-editor-server/ext/theme-defaults')
+  })
+
   it('output is newline-safe (no raw 0x0A byte)', () => {
     const msg: IpcMessage = {
       type: 'request',

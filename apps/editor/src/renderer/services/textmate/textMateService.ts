@@ -119,7 +119,7 @@ export class TextMateService extends Disposable implements ITextMateService {
   ): IDisposable {
     const definitions: IGrammarDefinition[] = grammars.map((grammar) => ({
       ...grammar,
-      location: URI.joinPath(URI.file(context.extensionLocation), grammar.path),
+      location: URI.joinPath(context.extensionLocation, grammar.path),
       sourceExtensionId: context.extensionId,
     }))
     return this.grammarRegistry.registerGrammars(definitions)

@@ -73,8 +73,8 @@ interface ICssSnapshot {
 
 export interface IColorThemeRegistrationContext {
   readonly extensionId: string
-  /** Absolute path of the extension root (DTO `extensionLocation`). */
-  readonly extensionLocation: string
+  /** URI of the extension root (revived DTO `extensionLocation`). */
+  readonly extensionLocation: URI
   readonly extensionIsBuiltin: boolean
 }
 
@@ -259,7 +259,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   ): IDisposable {
     const registered: ColorThemeData[] = []
     for (const contribution of contributions) {
-      const location = URI.joinPath(URI.file(context.extensionLocation), contribution.path)
+      const location = URI.joinPath(context.extensionLocation, contribution.path)
       // Map the manifest DTO onto the loader's contribution shape explicitly:
       // its `uiTheme` is a string union while ThemeTypeSelector is an enum
       // (same value space), and exactOptionalPropertyTypes rejects passing
@@ -312,7 +312,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   ): IDisposable {
     const registered: FileIconThemeData[] = []
     for (const contribution of contributions) {
-      const location = URI.joinPath(URI.file(context.extensionLocation), contribution.path)
+      const location = URI.joinPath(context.extensionLocation, contribution.path)
       const theme = FileIconThemeData.fromExtensionTheme(contribution, location, {
         extensionId: context.extensionId,
         extensionIsBuiltin: context.extensionIsBuiltin,
@@ -340,7 +340,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   ): IDisposable {
     const registered: ProductIconThemeData[] = []
     for (const contribution of contributions) {
-      const location = URI.joinPath(URI.file(context.extensionLocation), contribution.path)
+      const location = URI.joinPath(context.extensionLocation, contribution.path)
       const theme = ProductIconThemeData.fromExtensionTheme(contribution, location, {
         extensionId: context.extensionId,
         extensionIsBuiltin: context.extensionIsBuiltin,

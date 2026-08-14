@@ -1494,7 +1494,7 @@ export class ExtensionService implements IExtensionHostBridge {
             : {}),
         },
         hasMain: ext.manifest.main !== undefined,
-        extensionLocation: ext.extensionPath,
+        extensionLocation: URI.file(ext.extensionPath).toJSON(),
         extensionIsBuiltin: ext.builtin,
         ...(ext.isUnderDevelopment === true ? { extensionIsUnderDevelopment: true } : {}),
         ...(ext.manifest.capabilities?.untrustedWorkspaces !== undefined

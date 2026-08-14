@@ -164,6 +164,20 @@ describe('ExtensionService', () => {
     expect(dtos[0]?.contributes.commands?.[0]?.command).toBe('test.cmd')
   })
 
+  it('emits extensionLocation as a file UriComponents, not a bare path string', () => {
+    const mt = recordingMainThread()
+    const service = new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+    )
+    const dto = service.getContributions()[0]!
+    expect(typeof dto.extensionLocation).toBe('object')
+    expect(dto.extensionLocation).toEqual(URI.file(dir).toJSON())
+  })
+
   it('maps isUnderDevelopment onto the DTO only for dev extensions', () => {
     const mt = recordingMainThread()
     const dev = { ...scanned(['*']), id: 'dev.ext', isUnderDevelopment: true }

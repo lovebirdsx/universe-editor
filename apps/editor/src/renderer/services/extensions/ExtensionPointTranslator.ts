@@ -27,6 +27,7 @@ import {
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  URI,
   type ICommandMetadata,
   type IJSONSchema,
   type IKeybindingItem,
@@ -108,7 +109,7 @@ function normalizeContainerIcon(icon: string): string {
 /** Context the translator passes to the theme-registration callback. */
 export interface IThemeRegistrationContext {
   readonly extensionId: string
-  readonly extensionLocation: string
+  readonly extensionLocation: URI
   readonly extensionIsBuiltin: boolean
 }
 
@@ -195,7 +196,7 @@ export class ExtensionPointTranslator extends Disposable {
       }
       const themeContext: IThemeRegistrationContext = {
         extensionId: ext.id,
-        extensionLocation: ext.extensionLocation,
+        extensionLocation: URI.revive(ext.extensionLocation)!,
         extensionIsBuiltin: ext.extensionIsBuiltin,
       }
       this._registerContributionBatch(contributes.themes, this._registerThemes, themeContext)

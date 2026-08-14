@@ -38,6 +38,7 @@ import {
   type IWorkspaceService,
   type IWorkspaceTrustManagementService,
   UriIdentityService,
+  URI,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
@@ -59,7 +60,7 @@ const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
     activationEvents: ['onCommand:ai.generateCommitMessage'],
     contributes: { commands: [{ command: 'ai.generateCommitMessage', title: 'Generate' }] },
     hasMain: true,
-    extensionLocation: '/extensions/ai',
+    extensionLocation: URI.file('/extensions/ai'),
     extensionIsBuiltin: true,
   },
 ]

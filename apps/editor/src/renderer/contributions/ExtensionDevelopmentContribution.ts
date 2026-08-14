@@ -13,6 +13,7 @@ import {
   Disposable,
   IStatusBarService,
   StatusBarAlignment,
+  URI,
   localize,
   type IStatusBarEntryAccessor,
   type IWorkbenchContribution,
@@ -51,7 +52,10 @@ export class ExtensionDevelopmentContribution extends Disposable implements IWor
       tooltip: localize(
         'extDev.statusBar.tooltip',
         'Extension Development Host: {count} extension(s) loaded from source\n{paths}',
-        { count: dev.length, paths: dev.map((d) => d.extensionLocation).join('\n') },
+        {
+          count: dev.length,
+          paths: dev.map((d) => URI.revive(d.extensionLocation)!.fsPath).join('\n'),
+        },
       ),
       command: ShowExtensionsAction.ID,
       alignment: StatusBarAlignment.Left,

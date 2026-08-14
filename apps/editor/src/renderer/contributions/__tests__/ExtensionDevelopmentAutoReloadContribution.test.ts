@@ -39,7 +39,7 @@ function dto(id: string, dev: boolean, hasMain = true): IExtensionDescriptionDto
     activationEvents: [],
     contributes: {},
     hasMain,
-    extensionLocation: `/dev/${id}`,
+    extensionLocation: URI.file(`/dev/${id}`),
     extensionIsBuiltin: false,
     ...(dev ? { extensionIsUnderDevelopment: true } : {}),
   }

@@ -10,7 +10,7 @@
  *  the mapped language id.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IFileService } from '@universe-editor/platform'
+import { URI, type IFileService } from '@universe-editor/platform'
 import { TokenizationRegistry } from 'monaco-editor/esm/vs/editor/common/languages.js'
 import { describe, expect, it, vi } from 'vitest'
 import { TextMateService } from '../textMateService.js'
@@ -68,7 +68,7 @@ describe('TextMateService.initialize', () => {
         },
         { language: 'typescript', scopeName: 'source.ts', path: './syntaxes/ts.tmLanguage.json' },
       ],
-      { extensionId: 'test', extensionLocation: '/ext', extensionIsBuiltin: true },
+      { extensionId: 'test', extensionLocation: URI.file('/ext'), extensionIsBuiltin: true },
     )
     const { stub, registered } = makeMonacoStub(['typescript'])
 
@@ -82,7 +82,7 @@ describe('TextMateService.initialize', () => {
     const service = makeService()
     const handle = service.registerGrammars(
       [{ language: 'toml', scopeName: 'source.toml', path: './syntaxes/toml.tmLanguage.json' }],
-      { extensionId: 'test', extensionLocation: '/ext', extensionIsBuiltin: true },
+      { extensionId: 'test', extensionLocation: URI.file('/ext'), extensionIsBuiltin: true },
     )
     const { stub, registered } = makeMonacoStub([])
 
@@ -99,7 +99,11 @@ const TS_GRAMMAR = {
   scopeName: 'source.ts',
   path: './syntaxes/ts.tmLanguage.json',
 }
-const EXT_CONTEXT = { extensionId: 'test', extensionLocation: '/ext', extensionIsBuiltin: true }
+const EXT_CONTEXT = {
+  extensionId: 'test',
+  extensionLocation: URI.file('/ext'),
+  extensionIsBuiltin: true,
+}
 
 describe('TextMateService live-model recovery', () => {
   // Guards the e2e-visible race: a model created after initialize() may lose

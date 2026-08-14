@@ -331,6 +331,21 @@ export interface IExtensionCapabilities {
 export type UntrustedWorkspaceSupportType = true | false | 'limited'
 
 /**
+ * Wire form of a URI. The RPC codec recognises the `$mid: 1` marker (stamped by
+ * `URI.toJSON()`) and applies the per-connection file ↔ remote-ssh translation.
+ * Kept structurally identical to platform's `UriComponents` so the two remain
+ * assignable in both directions; this protocol package ships standalone, so it
+ * defines its own copy rather than importing platform.
+ */
+export interface UriComponents {
+  scheme: string
+  authority?: string
+  path?: string
+  query?: string
+  fragment?: string
+}
+
+/**
  * What the host sends the renderer per scanned extension. The renderer never
  * sees the filesystem — it translates these into the core registries. `id` is
  * `<publisher>.<name>` when a publisher is present, else `<name>`.
@@ -346,10 +361,11 @@ export interface IExtensionDescriptionDto {
   /** Declared untrusted-workspace support, verbatim from the manifest. */
   readonly untrustedWorkspaces?: ExtensionUntrustedWorkspaceSupport
   /**
-   * Absolute path to the extension's root folder. Contribution `path`s (themes,
-   * icon themes, …) are relative to this; the renderer joins the two.
+   * URI of the extension's root folder. Contribution `path`s (themes, icon
+   * themes, …) are relative to this; the renderer joins the two. In a remote
+   * workspace the per-connection codec translates it file ↔ remote-ssh.
    */
-  readonly extensionLocation: string
+  readonly extensionLocation: UriComponents
   /** True for extensions shipped with the app (built-in dir). */
   readonly extensionIsBuiltin: boolean
   /**

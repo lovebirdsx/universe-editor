@@ -15,6 +15,7 @@ import {
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  URI,
   type ICommandService,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -38,7 +39,7 @@ function dto(overrides: Partial<IExtensionDescriptionDto> = {}): IExtensionDescr
     activationEvents: ['onCommand:test.cmd'],
     contributes: { commands: [{ command: 'test.cmd', title: 'Test Command', category: 'Test' }] },
     hasMain: true,
-    extensionLocation: '/extensions/ext',
+    extensionLocation: URI.file('/extensions/ext'),
     extensionIsBuiltin: false,
     ...overrides,
   }

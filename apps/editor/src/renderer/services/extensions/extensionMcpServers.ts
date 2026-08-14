@@ -17,6 +17,7 @@ import {
   type IExtensionDescriptionDto,
   type IMcpServerContribution,
 } from '@universe-editor/extensions-common'
+import { URI } from '@universe-editor/platform'
 
 type WarnFn = (msg: string) => void
 
@@ -121,7 +122,7 @@ export function resolveExtensionMcpServerRecord(
       continue
     }
 
-    const extensionPath = ext.extensionLocation.replace(/\\/g, '/')
+    const extensionPath = URI.revive(ext.extensionLocation)!.fsPath
     const vars: Record<string, string> = { execPath: ctx.execPath, extensionPath }
 
     for (const [name, entry] of Object.entries(servers)) {

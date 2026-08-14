@@ -75,7 +75,7 @@ function registerBuiltInThemes(service: WorkbenchThemeService): void {
         path: './themes/light.json',
       },
     ],
-    { extensionId: 'test.themes', extensionLocation: '/ext', extensionIsBuiltin: true },
+    { extensionId: 'test.themes', extensionLocation: URI.file('/ext'), extensionIsBuiltin: true },
   )
 }
 
@@ -96,7 +96,7 @@ function registerTestIconThemes(service: WorkbenchThemeService): void {
         path: './icons/test-icon-theme.json',
       },
     ],
-    { extensionId: 'test.themes', extensionLocation: '/ext', extensionIsBuiltin: true },
+    { extensionId: 'test.themes', extensionLocation: URI.file('/ext'), extensionIsBuiltin: true },
   )
 }
 
@@ -143,6 +143,39 @@ describe('WorkbenchThemeService', () => {
     const snapshot = JSON.parse(localStorage.getItem('universe.theme.cssSnapshot')!)
     expect(snapshot.settingsId).toBe('Universe Dark')
     expect(snapshot.css).toBe(css)
+  })
+
+  it('loads a theme contributed from a remote-ssh extension root through the remote scheme', async () => {
+    const requests: URI[] = []
+    const remoteService = new WorkbenchThemeService(
+      config,
+      {
+        _serviceBrand: undefined,
+        async readFileText(uri: URI) {
+          requests.push(uri)
+          const text = uri.path.endsWith('/themes/light.json') ? LIGHT_THEME_JSON : undefined
+          if (text === undefined) throw new Error(`ENOENT: ${uri.path}`)
+          return text
+        },
+      } as unknown as IFileService,
+      undefined as never,
+      makeHostService(),
+    )
+    remoteService.registerColorThemes(
+      [{ id: 'Remote Light', label: 'Remote Light', uiTheme: 'vs', path: './themes/light.json' }],
+      {
+        extensionId: 'test.remote',
+        extensionLocation: URI.parse('remote-ssh://wsl+Ubuntu/home/x/.universe-editor-server/ext'),
+        extensionIsBuiltin: true,
+      },
+    )
+    await remoteService.setColorTheme('Remote Light')
+    expect(requests.length).toBeGreaterThan(0)
+    const themeUri = requests[0]!
+    expect(themeUri.scheme).toBe('remote-ssh')
+    expect(themeUri.authority).toBe('wsl+Ubuntu')
+    expect(themeUri.path).toBe('/home/x/.universe-editor-server/ext/themes/light.json')
+    remoteService.dispose()
   })
 
   it('restoreSnapshot injects the persisted CSS synchronously on a fresh service', async () => {
@@ -239,7 +272,7 @@ describe('WorkbenchThemeService', () => {
   it('falls back to the default theme when the active theme is deregistered', async () => {
     const handle = service.registerColorThemes(
       [{ id: 'Extra Dark', label: 'Extra Dark', uiTheme: 'vs-dark', path: './themes/dark.json' }],
-      { extensionId: 'test.extra', extensionLocation: '/ext', extensionIsBuiltin: false },
+      { extensionId: 'test.extra', extensionLocation: URI.file('/ext'), extensionIsBuiltin: false },
     )
     registerBuiltInThemes(service)
     await service.initialize()

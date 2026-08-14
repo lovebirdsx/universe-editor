@@ -155,7 +155,7 @@ export class ExtensionDevelopmentAutoReloadContribution
 
   private async _resolveEntry(dto: IExtensionDescriptionDto): Promise<WatchedEntry | undefined> {
     try {
-      const root = URI.file(dto.extensionLocation)
+      const root = URI.revive(dto.extensionLocation)!
       const raw = await this._files.readFileText(URI.joinPath(root, 'package.json'))
       const main: unknown = (JSON.parse(raw) as { main?: unknown }).main
       if (typeof main !== 'string' || main.length === 0) {

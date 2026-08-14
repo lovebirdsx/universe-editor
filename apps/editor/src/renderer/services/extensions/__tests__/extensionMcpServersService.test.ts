@@ -14,6 +14,7 @@ import {
   Event,
   LogLevel,
   NullLogger,
+  URI,
   type ILogger,
   type ILoggerService,
   type IWorkspaceTrustManagementService,
@@ -94,7 +95,7 @@ function makeExt(overrides: Partial<IExtensionDescriptionDto> = {}): IExtensionD
       mcpServers: { bridge: { command: '${execPath}', whenConfiguration: 'bridge.enabled' } },
     },
     hasMain: false,
-    extensionLocation: '/exts/bridge',
+    extensionLocation: URI.file('/exts/bridge'),
     extensionIsBuiltin: false,
     ...overrides,
   }

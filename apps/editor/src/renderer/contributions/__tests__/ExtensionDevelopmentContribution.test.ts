@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { Emitter } from '@universe-editor/platform'
+import { Emitter, URI } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import { EXTENSION_DEVELOPMENT_ENABLED_KEY } from '../../../shared/extensionDevelopment.js'
 import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
@@ -19,7 +19,7 @@ function dto(id: string, dev: boolean): IExtensionDescriptionDto {
     activationEvents: [],
     contributes: {},
     hasMain: true,
-    extensionLocation: `/dev/${id}`,
+    extensionLocation: URI.file(`/dev/${id}`),
     extensionIsBuiltin: false,
     ...(dev ? { extensionIsUnderDevelopment: true } : {}),
   }
