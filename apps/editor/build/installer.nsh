@@ -55,18 +55,16 @@
 ; page instead of an anxiety-inducing multi-second blackout (the app has already
 ; quit at that point). The two macros below keep that flow click-free:
 
-; Skip the per-user/per-machine choice page on updates by forcing the mode the
-; existing installation used (initMultiUser has already read both registry hives
-; by the time this runs inside the page's pre callback).
+; Always force per-user install and skip the per-user/per-machine choice page.
+; The app is entirely per-user (PATH -> HKCU, context menu -> HKCU, no admin
+; anywhere), so the choice page only invites UAC prompts. Setting
+; $isForceCurrentInstall inside the page's pre callback makes the multiUser
+; template call setInstallModePerUser and Abort, so the page never renders —
+; matching the VSCode User Setup model (fixed %LocalAppData%\Programs install).
+; Works for the uninstaller too: per-user uninstalls resolve to the same mode,
+; so the page is skipped there as well.
 !macro customInstallMode
-  ${if} ${isUpdated}
-    ${if} $hasPerMachineInstallation == "1"
-    ${andIf} $hasPerUserInstallation == "0"
-      StrCpy $isForceMachineInstall "1"
-    ${else}
-      StrCpy $isForceCurrentInstall "1"
-    ${endif}
-  ${endif}
+  StrCpy $isForceCurrentInstall "1"
 !macroend
 
 ; Replace the default finish page block (same StartApp + run-checkbox behavior

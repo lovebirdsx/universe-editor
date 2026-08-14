@@ -73,7 +73,12 @@ win:
   executableName: Universe Editor
 nsis:
   oneClick: false
-  allowToChangeInstallationDirectory: true
+  # Per-user install into a fixed %LocalAppData%\Programs dir, no directory page,
+  # no per-machine option, no UAC — the VSCode "User Setup" model. The app is
+  # fully per-user (PATH -> HKCU, context menu -> HKCU), so letting users pick a
+  # directory or "install for all users" only introduces admin-rights problems.
+  allowToChangeInstallationDirectory: false
+  allowElevation: false
   installerIcon: public/icon.ico
   uninstallerIcon: public/icon.ico
   installerHeaderIcon: public/icon.ico

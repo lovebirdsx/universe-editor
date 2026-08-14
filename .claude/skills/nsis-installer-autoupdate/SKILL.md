@@ -11,7 +11,7 @@ disable-model-invocation: true
 | 文件 | 职责 |
 |---|---|
 | `apps/editor/build/installer.nsh` | 我们的 NSIS 钩子宏：customInstall / customUnInstall / customInstallMode / customFinishPage（PATH、右键菜单、Defender 询问、更新零点击） |
-| `apps/editor/electron-builder.yml` | `nsis:` 配置（oneClick:false + allowToChangeInstallationDirectory:true + include）、electronLanguages 裁剪、afterPack、extraFiles 带 defender 脚本 |
+| `apps/editor/electron-builder.yml` | `nsis:` 配置（oneClick:false + allowToChangeInstallationDirectory:false + allowElevation:false + include——锁死 per-user 安装）、electronLanguages 裁剪、afterPack、extraFiles 带 defender 脚本 |
 | `apps/editor/build/afterPack.cjs` | 删框架释放的大文件（LICENSES.chromium.html 等，`files:'!'` 管不到） |
 | `apps/editor/resources/defender/add\|remove-defender-exclusion.ps1` | Defender 排除脚本，installer.nsh 经 `ExecShellWait "runas"` 提权调用 |
 | `apps/editor/src/main/services/update/updateMainService.ts` | `quitAndInstall`（running-session veto → `autoUpdater.quitAndInstall(false, true)`） |
@@ -36,8 +36,8 @@ disable-model-invocation: true
 
 | 环节 | 守卫 | 位置 |
 |---|---|---|
-| license / directory 页 | 模板 `skipPageIfUpdated` | 模板自带 |
-| per-user/per-machine 选择页 | `customInstallMode`：isUpdated 时按既有安装模式强制 `$isForceCurrentInstall` / `$isForceMachineInstall` 跳页 | installer.nsh |
+| license 页 | 模板 `skipPageIfUpdated`（directory 页已因 `allowToChangeInstallationDirectory:false` 不再存在） | 模板自带 |
+| per-user/per-machine 选择页 | `customInstallMode` 无条件 `StrCpy $isForceCurrentInstall "1"` 跳页——安装器锁死 per-user，首装与更新都不再提供 per-machine / 目录选择 | installer.nsh |
 | FINISH 页 | `customFinishPage`：isUpdated 时 pre 回调 `Call StartApp` + `Abort`（自动重启并关闭安装器）；全新安装保持默认"运行+完成"页 | installer.nsh |
 | Defender 询问 MessageBox | `IfSilent` **加** `${isUpdated}` 双守卫（更新不再静默，单靠 IfSilent 挡不住） | installer.nsh |
 | 运行中应用 / 旧卸载器 | 模板自动处理（见上） | 模板自带 |
