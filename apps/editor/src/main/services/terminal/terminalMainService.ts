@@ -212,6 +212,9 @@ export class TerminalMainService extends Disposable implements ITerminalService 
   ): Promise<ITerminalCreatedInfo> {
     const service = await this._remoteService(authority)
     const info = await service.create(spec)
+    this._logger.info(
+      `create remote authority=${authority} remoteId=${info.id} shell=${spec.shell ?? ''} cwd=${spec.cwd ? JSON.stringify(spec.cwd) : ''}`,
+    )
     const mappedId = this._mappedId(authority, info.id)
     this._remoteByMappedId.set(mappedId, { authority, remoteId: info.id })
     this._remoteMappedIdByKey.set(keyOf(authority, info.id), mappedId)

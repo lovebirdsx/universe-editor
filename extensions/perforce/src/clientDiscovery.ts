@@ -18,6 +18,18 @@ import type { P4Connection, P4Service } from './p4Service.js'
 import { parseZtag } from './p4Output.js'
 import { norm } from './pathUtil.js'
 
+/**
+ * Upper bound for the discovery probes (`p4 info` / `p4 clients`). They are
+ * connection-less reads that should return in milliseconds; when the resolved
+ * P4PORT points at an unreachable server the TCP connect hangs until the OS
+ * times out (minutes), and because discovery runs inside `activate`, a hang here
+ * wedges the extension host's whole `onStartupFinished` activation batch — every
+ * later activation event (including `onLanguage:typescript`) queues behind it.
+ * A short watchdog kill makes an unreachable server fail fast instead of hanging
+ * the host. Mirrors swarmAuth's `CREDENTIAL_PROBE_TIMEOUT_MS`.
+ */
+export const DISCOVERY_PROBE_TIMEOUT_MS = 15_000
+
 export interface DiscoveredClient {
   readonly clientName: string
   readonly clientRoot: string
@@ -54,8 +66,16 @@ export async function discoverClient(
   fallback: P4Connection,
   log?: (msg: string) => void,
 ): Promise<DiscoveredClient | undefined> {
-  const { result } = await p4.execTagged(['info'], { noConnection: true })
-  if (result.exitCode !== 0) return undefined
+  const { result } = await p4.execTagged(['info'], {
+    noConnection: true,
+    timeoutMs: DISCOVERY_PROBE_TIMEOUT_MS,
+  })
+  if (result.exitCode !== 0) {
+    log?.(
+      `[discover] p4 info failed (exit ${result.exitCode})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}; provider disabled`,
+    )
+    return undefined
+  }
   const record = parseZtag(result.stdout)[0]
 
   const clientName = field(record, 'clientName') ?? fallback.client
@@ -108,9 +128,14 @@ async function findClientForFolder(
   log?: (msg: string) => void,
 ): Promise<{ clientName: string; clientRoot: string } | undefined> {
   const args = owner ? ['clients', '-u', owner] : ['clients']
-  const { result } = await p4.execTagged(args, { noConnection: true })
+  const { result } = await p4.execTagged(args, {
+    noConnection: true,
+    timeoutMs: DISCOVERY_PROBE_TIMEOUT_MS,
+  })
   if (result.exitCode !== 0) {
-    log?.(`[discover] p4 ${args.join(' ')} failed (exit ${result.exitCode}); cannot scan clients`)
+    log?.(
+      `[discover] p4 ${args.join(' ')} failed (exit ${result.exitCode})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}; cannot scan clients`,
+    )
     return undefined
   }
   let best: { clientName: string; clientRoot: string } | undefined

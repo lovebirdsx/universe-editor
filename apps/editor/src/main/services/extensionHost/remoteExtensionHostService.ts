@@ -78,6 +78,12 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
     if (spec?.disabledIds && spec.disabledIds.length > 0) {
       env.UNIVERSE_DISABLED_EXTENSIONS = spec.disabledIds.join(',')
     }
+    // The e2e minimal-extension-set allowlist is an env mechanism, not part of the
+    // spec: the local host inherits it via buildChildEnv(process.env), so the
+    // remote host must forward it explicitly (its env is otherwise built clean).
+    if (process.env.UNIVERSE_ENABLED_EXTENSIONS) {
+      env.UNIVERSE_ENABLED_EXTENSIONS = process.env.UNIVERSE_ENABLED_EXTENSIONS
+    }
     const tunnel = await this._connections.openExtensionHostConnection(authority, { env })
 
     const store = new DisposableStore()

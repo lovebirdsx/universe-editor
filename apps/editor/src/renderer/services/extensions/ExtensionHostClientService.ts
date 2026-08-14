@@ -472,7 +472,9 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
   async activateByEvent(event: string): Promise<void> {
     await this._whenReady()
-    await Promise.all(this._liveConnections().map((c) => c.extensions.$activateByEvent(event)))
+    const live = this._liveConnections()
+    this._logger.info(`activateByEvent ${event} liveConnections=${live.length}`)
+    await Promise.all(live.map((c) => c.extensions.$activateByEvent(event)))
   }
 
   async refreshExtensions(): Promise<void> {

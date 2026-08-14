@@ -35,6 +35,11 @@ export function readFirstControlFrame(
     const timer = setTimeout(() => {
       fail(new Error(`handshake: no control frame within ${timeoutMs}ms`))
     }, timeoutMs)
+    // The timeout is only a backstop for a wedged peer; it must never be the last
+    // ref'd handle holding the process open. On the app-quit path the in-flight
+    // reconnect socket is destroyed synchronously, and without this the 10s
+    // timeout would keep Node's event loop alive for the full window, blocking quit.
+    timer.unref?.()
 
     const fail = (err: Error): void => {
       if (settled) return

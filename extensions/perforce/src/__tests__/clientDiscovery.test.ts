@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { discoverClient, rootContains, connectionFor } from '../clientDiscovery.js'
+import {
+  discoverClient,
+  rootContains,
+  connectionFor,
+  DISCOVERY_PROBE_TIMEOUT_MS,
+} from '../clientDiscovery.js'
 import type { P4Service } from '../p4Service.js'
 
 /**
@@ -127,6 +132,43 @@ describe('discoverClient', () => {
     const p4 = fakeP4({ info: { stdout: '', exitCode: 1 } })
     const client = await discoverClient(p4, 'D:/depot/aki', {})
     expect(client).toBeUndefined()
+  })
+
+  it('bounds the info probe with a short timeout so an unreachable server fails fast', async () => {
+    // Regression: `p4 info` on a P4PORT that never answers (firewall-drop / dead
+    // gateway) hangs until the OS TCP timeout, and discovery runs inside the
+    // extension's `activate` — a hang wedges the host's whole activation batch.
+    // The probe must carry a watchdog timeout so it fails instead of hanging.
+    const seen: number[] = []
+    const p4 = {
+      execTagged: async (_args: readonly string[], options?: { timeoutMs?: number }) => {
+        seen.push(options?.timeoutMs ?? -1)
+        return { result: { stdout: '', stderr: '', exitCode: 1 }, records: [] }
+      },
+    } as unknown as P4Service
+    await discoverClient(p4, 'D:/depot/aki', {})
+    expect(seen).toEqual([DISCOVERY_PROBE_TIMEOUT_MS])
+  })
+
+  it('bounds the client-scan probe with the same short timeout', async () => {
+    const seen: number[] = []
+    const p4 = {
+      execTagged: async (args: readonly string[], options?: { timeoutMs?: number }) => {
+        seen.push(options?.timeoutMs ?? -1)
+        if (args[0] === 'info') {
+          return {
+            result: { stdout: infoZtag('AkiBase', 'D:/depot/aki'), exitCode: 0 },
+            records: [],
+          }
+        }
+        return {
+          result: { stdout: clientsZtag([{ name: 'branch', root: 'G:\\aki_3.6' }]), exitCode: 0 },
+          records: [],
+        }
+      },
+    } as unknown as P4Service
+    await discoverClient(p4, 'G:/aki_3.6/Source', {})
+    expect(seen).toEqual([DISCOVERY_PROBE_TIMEOUT_MS, DISCOVERY_PROBE_TIMEOUT_MS])
   })
 })
 

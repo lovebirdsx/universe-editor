@@ -66,6 +66,10 @@ class FakeDaemon {
   readonly token = 'test-token'
   readonly env = ENV
   handshakeResponse: ((req: IRemoteConnectionRequest) => IRemoteConnectionResponse) | null = null
+  /** Accept a reconnection handshake but never answer it (simulates a wedged peer). */
+  hangReconnection = false
+  acceptedCount = 0
+  closedCount = 0
 
   async start(): Promise<void> {
     this.server = createServer((socket) => {
@@ -78,10 +82,19 @@ class FakeDaemon {
   private async _accept(raw: NetSocket): Promise<void> {
     const socket = new NodeSocket(raw)
     this.sockets.push(socket)
+    this.acceptedCount++
+    socket.onClose(() => {
+      this.closedCount++
+    })
     try {
       const { data, residual } = await readFirstControlFrame(socket, 10_000)
       const req = decodeControlJson<IRemoteConnectionRequest>(data)
       const response = this.handshakeResponse?.(req) ?? { type: 'ok' }
+      if (this.hangReconnection && req.isReconnection) {
+        // Keep the socket open and never write the response — the client's
+        // readFirstControlFrame then blocks until its own timeout.
+        return
+      }
       writeControlFrame(socket, encodeControlJson(response))
       if (response.type !== 'ok') {
         return
@@ -278,5 +291,28 @@ describe('RemoteConnectionMainService direct mode', () => {
     await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('failed'), { timeout: 5000 })
     expect(closed).toBe(true)
     expect(made.states.at(-1)?.error).toContain('nope')
+  })
+
+  it('destroying the service while a reconnect is hung closes the in-flight socket', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    expect(daemon.acceptedCount).toBe(1)
+
+    // A wedged peer accepts the reconnection but never answers the handshake, so
+    // the client's readFirstControlFrame blocks holding a live socket.
+    daemon.hangReconnection = true
+    made.svc.dropSocketForTesting('host')
+    expect(made.states.at(-1)?.state).toBe('reconnecting')
+
+    await vi.waitFor(() => expect(daemon.acceptedCount).toBe(2), { timeout: 5000 })
+
+    made.svc.dispose()
+
+    // Both the initial and the in-flight reconnect socket must be observed closed
+    // by the daemon — before the fix, dispose() left the reconnect socket open and
+    // its 10s handshake timer kept the process alive (blocking app quit).
+    await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
   })
 })

@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import {
   buildCheckCommand,
@@ -7,9 +8,11 @@ import {
   forwardArgs,
   parseAuthority,
   parseDaemonInfoLine,
+  RemoteDeployer,
   scpArgs,
   sshCommandArgs,
   validateAuthority,
+  type RemoteRunner,
 } from '../remoteDeploy.js'
 
 describe('validateAuthority', () => {
@@ -145,5 +148,46 @@ describe('parseDaemonInfoLine', () => {
     expect(parseDaemonInfoLine('no info here')).toBeNull()
     expect(parseDaemonInfoLine('UNIVERSE_REMOTE_DAEMON_INFO={bad json}')).toBeNull()
     expect(parseDaemonInfoLine('UNIVERSE_REMOTE_DAEMON_INFO={"token":"no-port"}')).toBeNull()
+  })
+})
+
+describe('RemoteDeployer.deployRemoteServer', () => {
+  it('runs tar and scp from tmpdir with a bare filename (GNU tar/scp treat C:\ as host:file)', async () => {
+    const calls: { command: string; args: readonly string[]; cwd?: string }[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      calls.push({ command, args, ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}) })
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir: '/bundle' })
+    await deployer.deployRemoteServer('user@host')
+
+    expect(calls.map((c) => c.command)).toEqual(['tar', 'scp', 'ssh'])
+
+    const [tar, scp, install] = calls
+    expect(tar!.args[0]).toBe('-czf')
+    const tgzName = tar!.args[1]!
+    expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
+    expect(tgzName).not.toContain(':')
+    expect(tar!.args.slice(2)).toEqual(['-C', '/bundle', '.'])
+    expect(tar!.cwd).toBe(tmpdir())
+
+    expect(scp!.args).toContain(tgzName)
+    expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
+    expect(scp!.cwd).toBe(tmpdir())
+
+    expect(install!.args[install!.args.length - 1]).toContain(`tar xzf /tmp/${tgzName}`)
+  })
+
+  it('surfaces the failing step in the thrown error', async () => {
+    const runner: RemoteRunner = (command) =>
+      Promise.resolve(
+        command === 'scp'
+          ? { code: 1, stdout: '', stderr: 'lost connection' }
+          : { code: 0, stdout: '', stderr: '' },
+      )
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir: '/bundle' })
+    await expect(deployer.deployRemoteServer('user@host')).rejects.toThrow(
+      'scp failed: lost connection',
+    )
   })
 })

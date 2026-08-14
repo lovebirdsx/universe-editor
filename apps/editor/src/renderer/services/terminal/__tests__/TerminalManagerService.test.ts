@@ -22,6 +22,7 @@ import {
   type ITerminalDataEvent,
   type ITerminalExitEvent,
   type ITerminalProfile,
+  type ITerminalProfilesRequest,
   type ITerminalService,
   type ITerminalSpawnSpec,
   type ITerminalTitleEvent,
@@ -30,6 +31,7 @@ import type {
   IEnvironmentSnapshot,
   IEnvironmentSnapshotService,
 } from '../../../../shared/ipc/environmentSnapshotService.js'
+import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
 import {
   TerminalManagerService,
   computeTerminalCwd,
@@ -47,6 +49,8 @@ interface Harness {
   resizes: Array<{ id: string; cols: number; rows: number }>
   warnings: string[]
   terminalErrors: { input: Error | undefined; resize: Error | undefined }
+  /** Last request passed to the mocked ITerminalService.getProfiles. */
+  profilesRequest: ITerminalProfilesRequest | undefined
   /** Swap the profile list the mocked ITerminalService.getProfiles returns. */
   setProfiles: (profiles: readonly ITerminalProfile[]) => void
 }
@@ -85,6 +89,7 @@ function makeHarness(
     userHome?: string
     activeFile?: string
     remoteAuthority?: string
+    remoteOs?: string
   },
 ): Harness {
   const onData = new Emitter<ITerminalDataEvent>()
@@ -97,6 +102,9 @@ function makeHarness(
   const warnings: string[] = []
   const terminalErrors: Harness['terminalErrors'] = { input: undefined, resize: undefined }
   let nextId = 0
+  const profilesRequestHolder: { current: ITerminalProfilesRequest | undefined } = {
+    current: undefined,
+  }
   const profileHolder: { current: readonly ITerminalProfile[] } = { current: [] }
 
   const terminal: ITerminalService = {
@@ -114,7 +122,10 @@ function makeHarness(
       created.push({ info, spec })
       return Promise.resolve(info)
     },
-    getProfiles: () => Promise.resolve(profileHolder.current),
+    getProfiles: (request) => {
+      profilesRequestHolder.current = request
+      return Promise.resolve(profileHolder.current)
+    },
     input: (id, data) => {
       if (terminalErrors.input) return Promise.reject(terminalErrors.input)
       inputs.push({ id, data })
@@ -186,6 +197,23 @@ function makeHarness(
     getSnapshot: () => Promise.resolve(snapshot),
   }
 
+  const remoteStatus = {
+    _serviceBrand: undefined,
+    getEnvironment: () =>
+      Promise.resolve(
+        opts?.remoteOs
+          ? {
+              os: opts.remoteOs,
+              arch: 'x64',
+              homeDir: '/home/remote',
+              tmpDir: '/tmp',
+              pathCaseSensitive: true,
+              serverVersion: '0.0.0',
+            }
+          : null,
+      ),
+  } as unknown as IRemoteStatusService
+
   const config = makeConfig(configOverrides)
   const resolver = new ConfigurationResolverService(workspace, editor, config, host, envSnapshot)
 
@@ -198,6 +226,7 @@ function makeHarness(
     host,
     resolver,
     envSnapshot,
+    remoteStatus,
   )
   return {
     manager,
@@ -209,6 +238,9 @@ function makeHarness(
     resizes,
     warnings,
     terminalErrors,
+    get profilesRequest() {
+      return profilesRequestHolder.current
+    },
     setProfiles: (p) => {
       profileHolder.current = p
     },
@@ -508,6 +540,64 @@ describe('TerminalManagerService', () => {
       await restored.manager.load()
       expect(restored.created[0]!.spec.name).toBe('Git Bash')
       expect(restored.created[0]!.spec.env).toEqual({ TERM: 'xterm' })
+    })
+
+    it('remote workspace routes profile detection to the remote host via the folder URI', async () => {
+      const remote = makeHarness('/remote/ws', undefined, undefined, {
+        platform: 'win32',
+        remoteAuthority: 'e2e-local',
+        remoteOs: 'linux',
+      })
+      await remote.manager.newTerminal()
+      expect(remote.profilesRequest?.folder).toEqual(
+        URI.from({ scheme: 'remote-ssh', authority: 'e2e-local', path: '/remote/ws' }).toJSON(),
+      )
+    })
+
+    it('remote Linux workspace leaves shell unset for the remote $SHELL fallback', async () => {
+      const remote = makeHarness('/remote/ws', undefined, undefined, {
+        platform: 'win32',
+        remoteAuthority: 'xiao@host',
+        remoteOs: 'linux',
+      })
+      remote.setProfiles([
+        { profileName: 'bash', path: '/bin/bash', isDefault: false, isAutoDetected: true },
+        { profileName: 'zsh', path: '/usr/bin/zsh', isDefault: false, isAutoDetected: true },
+      ])
+      await remote.manager.newTerminal()
+      expect(remote.created[0]!.spec.shell).toBeUndefined()
+      expect(remote.created[0]!.spec.cwd).toEqual(
+        URI.from({ scheme: 'remote-ssh', authority: 'xiao@host', path: '/remote/ws' }).toJSON(),
+      )
+    })
+
+    it('remote Windows workspace still prefers the PowerShell profile (direct mode)', async () => {
+      const remote = makeHarness('/remote/ws', undefined, undefined, {
+        platform: 'linux',
+        remoteAuthority: 'e2e-local',
+        remoteOs: 'win32',
+      })
+      remote.setProfiles([pwsh])
+      await remote.manager.newTerminal()
+      expect(remote.created[0]!.spec.shell).toBe(pwsh.path)
+    })
+
+    it('remote workspace reads the remote OS default-profile config section', async () => {
+      const remote = makeHarness(
+        '/remote/ws',
+        { 'terminal.integrated.defaultProfile.linux': 'zsh' },
+        undefined,
+        { platform: 'win32', remoteAuthority: 'xiao@host', remoteOs: 'linux' },
+      )
+      const zsh: ITerminalProfile = {
+        profileName: 'zsh',
+        path: '/usr/bin/zsh',
+        isDefault: true,
+        isAutoDetected: true,
+      }
+      remote.setProfiles([zsh])
+      await remote.manager.newTerminal()
+      expect(remote.created[0]!.spec.shell).toBe('/usr/bin/zsh')
     })
   })
 

@@ -65,6 +65,7 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
   private _protocol: PersistentProtocol | null = null
   private _socket: ISocket | null = null
   private _reconnectTimer: NodeJS.Timeout | null = null
+  private _reconnectSocket: ISocket | null = null
   private _reconnectAttempt = 0
   private _reconnectionStart = 0
   private _opened = false
@@ -134,6 +135,7 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
 
   private _scheduleReconnect(): void {
     if (this._reconnectTimer) return
+    if (this._closedByUser || this._disposed) return
     const backoff =
       RECONNECT_BACKOFF_MS[Math.min(this._reconnectAttempt, RECONNECT_BACKOFF_MS.length - 1)]!
     this._reconnectTimer = setTimeout(() => {
@@ -152,19 +154,28 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
   private async _attemptReconnect(): Promise<void> {
     try {
       const socket = await this._opts.connectSocket()
+      this._reconnectSocket = socket
       let residual: Uint8Array
       try {
         residual = (await performClientHandshake(socket, this._opts.buildRequest(true))).residual
       } catch (err) {
+        this._reconnectSocket = null
         socket.dispose()
         throw err
       }
+      if (this._closedByUser || this._disposed) {
+        this._reconnectSocket = null
+        socket.dispose()
+        return
+      }
+      this._reconnectSocket = null
       this._socket = socket
       this._protocol!.beginAcceptReconnection(socket, residual)
       this._protocol!.endAcceptReconnection()
       this._reconnectAttempt = 0
       this._opts.logger.info(`${this._opts.label} reconnected`)
     } catch (err) {
+      this._reconnectSocket = null
       if (this._isPermanentHandshakeError(err)) {
         this._fireClose()
         return
@@ -196,6 +207,8 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
       clearTimeout(this._reconnectTimer)
       this._reconnectTimer = null
     }
+    this._reconnectSocket?.dispose()
+    this._reconnectSocket = null
     // Explicit Disconnect: tells the server to graceful-stop the forked host
     // rather than hold it in grace.
     this._protocol?.sendDisconnect()

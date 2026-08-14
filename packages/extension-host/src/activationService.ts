@@ -51,12 +51,19 @@ export class ExtensionActivationService {
   /** Activate every extension whose declared events match `event`. */
   async activateByEvent(event: string): Promise<void> {
     this._firedEvents.add(event)
+    const matched = this._extensions.filter(
+      (ext) =>
+        this._isActivatable(ext) &&
+        matchesActivationEvent(ext.manifest.activationEvents ?? [], event),
+    )
+    if (matched.length > 0) {
+      console.info(
+        `[ext-host] activation event ${event} → [${matched.map((e) => e.id).join(', ')}]`,
+      )
+    }
     const pending: Promise<void>[] = []
-    for (const ext of this._extensions) {
-      if (!this._isActivatable(ext)) continue
-      if (matchesActivationEvent(ext.manifest.activationEvents ?? [], event)) {
-        pending.push(this._activate(ext))
-      }
+    for (const ext of matched) {
+      pending.push(this._activate(ext))
     }
     await Promise.all(pending)
   }

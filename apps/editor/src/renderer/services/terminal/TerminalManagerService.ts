@@ -48,9 +48,11 @@ import {
   type ITerminalCreatedInfo,
   type ITerminalProfile,
   type ITerminalProfileConfigValue,
+  type ITerminalProfilesRequest,
 } from '../../../shared/ipc/terminalService.js'
 import { IConfigurationResolverServiceRenderer } from '../configurationResolver/ConfigurationResolverService.js'
 import { IEnvironmentSnapshotService } from '../../../shared/ipc/environmentSnapshotService.js'
+import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 
 export type TerminalTarget = 'panel' | 'editor'
 
@@ -307,6 +309,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     @IConfigurationResolverServiceRenderer
     private readonly _resolver: IConfigurationResolverService,
     @IEnvironmentSnapshotService private readonly _envSnapshot: IEnvironmentSnapshotService,
+    @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
@@ -339,19 +342,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   refreshProfiles(): Promise<void> {
     if (!this._profilesPromise) {
-      const os = profilesOsOf(this._host.platform)
-      const configProfiles =
-        this._config.get<Record<string, ITerminalProfileConfigValue>>(
-          `terminal.integrated.profiles.${os}`,
-        ) ?? undefined
-      const defaultProfileName =
-        this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
-      const useWslProfiles = this._config.get<boolean>('terminal.integrated.useWslProfiles')
-      this._profilesPromise = this._terminal.getProfiles({
-        ...(configProfiles ? { profiles: configProfiles } : {}),
-        ...(defaultProfileName ? { defaultProfileName } : {}),
-        ...(useWslProfiles !== undefined ? { useWslProfiles } : {}),
-      })
+      this._profilesPromise = this._detectProfiles()
     }
     return this._profilesPromise.then(
       (profiles) => {
@@ -363,6 +354,51 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         this._profilesPromise = null
       },
     )
+  }
+
+  private async _detectProfiles(): Promise<readonly ITerminalProfile[]> {
+    const platform = await this._terminalPlatform()
+    return this._terminal.getProfiles(this._profilesRequest(platform))
+  }
+
+  private _profilesRequest(platform: HostPlatform | undefined): ITerminalProfilesRequest {
+    const os = platform !== undefined ? profilesOsOf(platform) : undefined
+    const configProfiles = os
+      ? (this._config.get<Record<string, ITerminalProfileConfigValue>>(
+          `terminal.integrated.profiles.${os}`,
+        ) ?? undefined)
+      : undefined
+    const defaultProfileName = os
+      ? this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
+      : undefined
+    const useWslProfiles = this._config.get<boolean>('terminal.integrated.useWslProfiles')
+    const folder = this._workspace.current?.folder
+    return {
+      ...(configProfiles ? { profiles: configProfiles } : {}),
+      ...(defaultProfileName ? { defaultProfileName } : {}),
+      ...(useWslProfiles !== undefined ? { useWslProfiles } : {}),
+      ...(folder ? { folder: folder.toJSON() } : {}),
+    }
+  }
+
+  /**
+   * The platform the terminal will actually run on. For a remote workspace this
+   * is the connected remote host's OS (from the handshake env); when that is not
+   * known yet the result is undefined and shell resolution degrades to the host's
+   * own default ($SHELL / COMSPEC) — valid on any host, unlike a locally-resolved
+   * shell path which may not exist remotely.
+   */
+  private async _terminalPlatform(): Promise<HostPlatform | undefined> {
+    const folder = this._workspace.current?.folder
+    if (!folder || folder.scheme !== REMOTE_SCHEME) return this._host.platform
+    try {
+      const env = await this._remoteStatus.getEnvironment(folder.authority)
+      const os = env?.os
+      if (os === 'win32' || os === 'darwin' || os === 'linux') return os
+    } catch {
+      // not connected yet — fall through to the host default
+    }
+    return undefined
   }
 
   async newTerminal(spec?: ITerminalNewSpec): Promise<string | null> {
@@ -420,6 +456,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       // main then falls back to $SHELL.
       await this.refreshProfiles()
       const profiles = this._profiles.get() ?? []
+      const platform = await this._terminalPlatform()
       let profile: ITerminalProfile | undefined
       if (spec?.profile) {
         profile = profiles.find((p) => p.profileName === spec.profile)
@@ -428,10 +465,11 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         }
       }
       if (!profile) {
-        const os = profilesOsOf(this._host.platform)
-        const configured =
-          this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
-        profile = resolveDefaultProfile(profiles, configured, this._host.platform)
+        const os = platform !== undefined ? profilesOsOf(platform) : undefined
+        const configured = os
+          ? this._config.get<string>(`terminal.integrated.defaultProfile.${os}`) || undefined
+          : undefined
+        profile = resolveDefaultProfile(profiles, configured, platform ?? 'linux')
       }
       if (profile) {
         shell = profile.path
@@ -796,6 +834,9 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       this._saveTimer = undefined
     }
     this._initialLoadDone.set(false, undefined)
+    // Profile detection now depends on the workspace (routing + host OS), so the
+    // cached list must not survive a workspace switch.
+    this._profilesPromise = null
     this._suspendPersist = true
     try {
       // Close all panel terminals (editor terminals are managed by WorkspaceRestoreContribution)

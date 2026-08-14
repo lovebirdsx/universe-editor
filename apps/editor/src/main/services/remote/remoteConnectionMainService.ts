@@ -34,6 +34,7 @@ import {
   type Event,
   type IChannel,
   type ILogger,
+  type ISocket,
   ILoggerService,
   type IRemoteDaemonInfo,
   type IRemoteEnvironment,
@@ -121,6 +122,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(message)), ms)
+    // Backstop only: never the last ref'd handle keeping the process alive on quit.
+    timer.unref?.()
   })
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer)
@@ -175,6 +178,7 @@ interface ConnectionEntry {
   reconnectionToken: string
   isDirect: boolean
   reconnectTimer: NodeJS.Timeout | null
+  reconnectSocket: ISocket | null
   reconnectAttempt: number
   reconnectionStart: number
   closedByUser: boolean
@@ -342,6 +346,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       return connection
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      this._logger.error(`[remote:${entry.authority}] bring-up failed: ${message}`)
       this._teardownConnection(entry)
       this._teardownDirect(entry)
       this._fireState(entry, 'failed', message)
@@ -573,6 +578,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private _scheduleReconnect(entry: ConnectionEntry): void {
     if (entry.reconnectTimer) return
+    if (entry.closedByUser || this._disposed) return
     const backoff =
       RECONNECT_BACKOFF_MS[Math.min(entry.reconnectAttempt, RECONNECT_BACKOFF_MS.length - 1)]!
     entry.reconnectTimer = setTimeout(() => {
@@ -593,15 +599,24 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       if (!entry.isDirect) {
         await this._ensureForward(entry)
       }
+      if (entry.closedByUser || this._disposed) return
       const localPort = entry.isDirect ? entry.daemonPort : entry.forward!.localPort
       const socket = await connectNodeSocket(localPort, '127.0.0.1')
+      entry.reconnectSocket = socket
       let residual: Uint8Array
       try {
         residual = (await performClientHandshake(socket, this._request(entry, true))).residual
       } catch (err) {
+        entry.reconnectSocket = null
         socket.dispose()
         throw err
       }
+      if (entry.closedByUser || this._disposed) {
+        entry.reconnectSocket = null
+        socket.dispose()
+        return
+      }
+      entry.reconnectSocket = null
       const protocol = entry.protocol!
       protocol.beginAcceptReconnection(socket, residual)
       protocol.endAcceptReconnection()
@@ -609,6 +624,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._fireState(entry, 'connected')
       this._logger.info(`remote '${entry.authority}' reconnected`)
     } catch (err) {
+      entry.reconnectSocket = null
       if (this._isPermanentHandshakeError(err)) {
         this._giveUp(entry, err instanceof Error ? err.message : String(err))
         return
@@ -695,6 +711,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       clearTimeout(entry.reconnectTimer)
       entry.reconnectTimer = null
     }
+    entry.reconnectSocket?.dispose()
+    entry.reconnectSocket = null
     const connection = entry.connection
     entry.connection = null
     connection?.dispose()
@@ -739,6 +757,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         reconnectionToken: '',
         isDirect: false,
         reconnectTimer: null,
+        reconnectSocket: null,
         reconnectAttempt: 0,
         reconnectionStart: 0,
         closedByUser: false,

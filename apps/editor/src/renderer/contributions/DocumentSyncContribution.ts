@@ -221,6 +221,7 @@ export class DocumentSyncContribution
   }
 
   private _attach(key: string, model: monaco.editor.ITextModel, languageId: string): void {
+    this._logger.info(`attach ${key} language=${languageId}`)
     const store = this._register(new DisposableStore())
     const entry: OpenDoc = {
       store,
@@ -308,6 +309,7 @@ export class DocumentSyncContribution
   private async _activate(languageId: string): Promise<void> {
     if (this._activated.has(languageId)) return
     this._activated.add(languageId)
+    this._logger.info(`activateByEvent ${languageActivationEvent(languageId)}`)
     await this._client.activateByEvent(languageActivationEvent(languageId))
   }
 

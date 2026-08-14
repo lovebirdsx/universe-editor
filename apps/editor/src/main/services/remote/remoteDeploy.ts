@@ -230,14 +230,24 @@ export interface RemoteRunResult {
   readonly spawnError?: string
 }
 
-export type RemoteRunner = (command: string, args: readonly string[]) => Promise<RemoteRunResult>
+export type RemoteRunner = (
+  command: string,
+  args: readonly string[],
+  options?: { cwd?: string; timeoutMs?: number },
+) => Promise<RemoteRunResult>
 
-export const defaultRemoteRunner: RemoteRunner = (command, args) =>
+export const defaultRemoteRunner: RemoteRunner = (command, args, options) =>
   new Promise((resolve) => {
     execFile(
       command,
       [...args],
-      { shell: false, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 600_000 },
+      {
+        shell: false,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: options?.timeoutMs ?? 600_000,
+        ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+      },
       (error, stdout, stderr) => {
         if (!error) {
           resolve({ code: 0, stdout, stderr })
@@ -298,6 +308,7 @@ export interface RemoteDeployerOptions {
   readonly spawner?: RemoteSpawner
   readonly serverVersion?: string
   readonly logger?: ILogger
+  readonly bundleDir?: string
 }
 
 export type RemoteCheckResult =
@@ -311,12 +322,14 @@ export class RemoteDeployer {
   private readonly _spawner: RemoteSpawner
   private readonly _serverVersion: string
   private readonly _logger: ILogger
+  private readonly _bundleDir: string | undefined
 
   constructor(options: RemoteDeployerOptions = {}) {
     this._runner = options.runner ?? defaultRemoteRunner
     this._spawner = options.spawner ?? defaultRemoteSpawner
     this._serverVersion = options.serverVersion ?? resolveRemoteServerVersion()
     this._logger = options.logger ?? new NullLogger()
+    this._bundleDir = options.bundleDir
   }
 
   get serverVersion(): string {
@@ -377,13 +390,18 @@ export class RemoteDeployer {
 
   async deployRemoteServer(authority: string, logger?: ILogger): Promise<void> {
     const log = logger ?? this._logger
-    const bundleDir = resolveRemoteServerBundleDir()
+    const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
     const localTgz = join(tmpdir(), tmpName)
     const remoteTgz = `/tmp/${tmpName}`
     log.info(`[remote:${authority}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
-      const tarResult = await this._runner('tar', ['-czf', localTgz, '-C', bundleDir, '.'])
+      // GNU tar/scp treat a `C:\...` path as host:file (remote shell syntax) and
+      // which binary PATH resolves to varies per machine — run from tmpdir with a
+      // bare filename so the local path never contains a colon.
+      const tarResult = await this._runner('tar', ['-czf', tmpName, '-C', bundleDir, '.'], {
+        cwd: tmpdir(),
+      })
       if (tarResult.code !== 0) {
         throw new Error(
           `tar failed: ${tarResult.stderr.trim() || tarResult.spawnError || `exit ${tarResult.code}`}`,
@@ -391,7 +409,8 @@ export class RemoteDeployer {
       }
       const scpResult = await this._runner(
         'scp',
-        scpArgs(authority, localTgz, `${destination(authority)}:${remoteTgz}`),
+        scpArgs(authority, tmpName, `${destination(authority)}:${remoteTgz}`),
+        { cwd: tmpdir() },
       )
       if (scpResult.code !== 0) {
         throw new Error(
@@ -401,6 +420,7 @@ export class RemoteDeployer {
       const installResult = await this._runner(
         'ssh',
         sshCommandArgs(authority, buildDeployRemoteScript(this._serverVersion, tmpName)),
+        { timeoutMs: 1_800_000 },
       )
       if (installResult.code !== 0) {
         throw new Error(
