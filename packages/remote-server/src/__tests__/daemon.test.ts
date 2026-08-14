@@ -218,7 +218,7 @@ async function readStreamed(svc: IRemoteFileStreamService, resource: URI): Promi
       if (e.data !== undefined) {
         chunks.push(e.data)
         received += e.data.length
-        void svc.ackReadStream(streamId, e.seq)
+        svc.ackReadStream(streamId, e.seq).catch(() => {})
       }
     })
   })
@@ -333,7 +333,7 @@ describe('createDaemon', () => {
       const svc = conn.getService<IRemoteFileStreamService>(RemoteChannels.FileSystem)
       const bytes = await readStreamed(svc, remoteUriFor(filePath))
       expect(bytes.length).toBe(expected.length)
-      expect(bytes).toEqual(expected)
+      expect(Buffer.from(bytes).equals(Buffer.from(expected))).toBe(true)
     } finally {
       conn.dispose()
     }
