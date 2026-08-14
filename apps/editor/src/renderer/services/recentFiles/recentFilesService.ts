@@ -7,6 +7,7 @@ import {
   createDecorator,
   type UriComponents,
 } from '@universe-editor/platform'
+import { isFileSystemUri } from '../files/fileSystemScheme.js'
 
 export interface IRecentFile {
   readonly uri: URI
@@ -59,10 +60,11 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
       name: r.name,
       lastOpened: r.lastOpened,
     }))
-    // Scrub non-file entries that older builds let through: quick open used to
-    // add virtual editor resources (universe:/acp/session/…, universe:/gitGraph)
+    // Scrub virtual-scheme entries that older builds let through: quick open used
+    // to add virtual editor resources (universe:/acp/session/…, universe:/gitGraph)
     // here, which reopened after a restart as empty text tabs labelled by guid.
-    const files = loaded.filter((l) => l.uri.scheme === 'file')
+    // remote-ssh entries are filesystem-backed and must survive the scrub.
+    const files = loaded.filter((l) => isFileSystemUri(l.uri))
     // Keep items already in-memory (added in this session before load completed).
     // Fill in from storage for URIs we don't have yet.
     const known = new Set(this._items.map((i) => i.uri.toString()))
@@ -83,8 +85,9 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
 
   add(uri: URI, name: string): void {
     // Recent *files* only — virtual editor resources are restored through
-    // ClosedEditorsService instead and would be unopenable from here.
-    if (uri.scheme !== 'file') return
+    // ClosedEditorsService instead and would be unopenable from here. Local and
+    // remote (remote-ssh) filesystem resources both count as files.
+    if (!isFileSystemUri(uri)) return
     const entry: IRecentFile = { uri, name, lastOpened: Date.now() }
     const uriStr = uri.toString()
     this._items = [entry, ...this._items.filter((i) => i.uri.toString() !== uriStr)].slice(

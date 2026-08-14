@@ -25,11 +25,14 @@ import {
   IFileSearchService,
   IFileService,
   IInstantiationService,
+  ILoggerService,
   IUriIdentityService,
   IWorkspaceService,
   URI,
+  createNamedLogger,
   localize,
   toDisposable,
+  type ILogger,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
@@ -38,6 +41,7 @@ import {
 } from '@universe-editor/platform'
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { recordPerfPhase, recordPerfPhaseAsync } from '../../performance/perfPhases.js'
+import { isFileSystemUri } from '../../files/fileSystemScheme.js'
 import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
@@ -159,6 +163,8 @@ function entryToPick(entry: MentionFileEntry): IQuickPickItem {
 }
 
 export class FileQuickAccessProvider implements IQuickAccessProvider {
+  private readonly _logger: ILogger
+
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
@@ -171,7 +177,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IRecentEditorsService private readonly _recentEditors: IRecentEditorsService,
     @IClosedEditorsService private readonly _closedEditors: IClosedEditorsService,
     @IInstantiationService private readonly _inst: IInstantiationService,
-  ) {}
+    @ILoggerService loggerService: ILoggerService,
+  ) {
+    this._logger = createNamedLogger(loggerService, { id: 'quickOpen', name: 'Quick Open' })
+  }
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     const root = this._workspace.current?.folder
@@ -262,8 +271,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         }
       }
       if (this._restoreClosed(uri, side, true)) return
-      if (uri.scheme !== 'file') return
-      void this._editorResolver.openEditor(uri, { pinned: true })
+      this._openThroughResolver(uri, true)
       return
     }
     // Closed-first: a just-closed editor (custom/image/preview) is restored with
@@ -280,8 +288,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         }
       }
     }
-    if (uri.scheme !== 'file') return
-    void this._editorResolver.openEditor(uri, { pinned: opts.pinned })
+    this._openThroughResolver(uri, opts.pinned)
+  }
+
+  private _openThroughResolver(uri: URI, pinned: boolean): void {
+    if (!isFileSystemUri(uri)) {
+      this._logger.debug(`file quick open: skipping non-filesystem resource ${uri.toString()}`)
+      return
+    }
+    void this._editorResolver.openEditor(uri, { pinned })
   }
 
   /** Restore a just-closed editor with its exact typeId via the closed-editors

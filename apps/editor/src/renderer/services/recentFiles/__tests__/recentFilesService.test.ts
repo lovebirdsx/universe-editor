@@ -379,6 +379,40 @@ describe('RecentFilesService', () => {
     const persisted = await storage.get<Array<{ name: string }>>('workbench.recentFiles')
     expect(persisted?.map((p) => p.name)).toEqual(['keep.ts'])
   })
+
+  // remote-ssh://<authority>/<path> 是真实文件系统资源（IFileService 远端 provider）：
+  // 在 remote (WSL/ssh) 工作区里 Ctrl+P 打开的文件必须进最近文件列表，不能按
+  // scheme !== 'file' 过滤掉。
+  it('add() records remote-ssh resources', async () => {
+    const svc = buildService(new FakeStorage())
+    const remote = URI.parse('remote-ssh://wsl+Ubuntu/home/user/notes.md')
+    svc.add(remote, 'notes.md')
+    const items = await svc.getAll()
+    expect(items).toHaveLength(1)
+    expect(items[0]?.uri.toString()).toBe(remote.toString())
+    expect(items[0]?.name).toBe('notes.md')
+  })
+
+  it('load keeps persisted remote-ssh entries', async () => {
+    const remote = URI.parse('remote-ssh://wsl+Ubuntu/home/user/notes.md')
+    const storage = new FakeStorage()
+    storage.seed('workbench.recentFiles', [
+      { uri: remote.toJSON(), name: 'notes.md', lastOpened: 2 },
+      {
+        uri: URI.parse('universe:/acp/session/3f2a-guid').toJSON(),
+        name: '3f2a-guid',
+        lastOpened: 1,
+      },
+    ])
+    const svc = buildService(storage)
+    const items = await svc.getAll()
+    expect(items.map((i) => i.uri.toString())).toEqual([remote.toString()])
+
+    // 虚拟条目被剔除 → 触发重写，remote 条目必须留在持久化数据里。
+    await Promise.resolve()
+    const persisted = await storage.get<Array<{ name: string }>>('workbench.recentFiles')
+    expect(persisted?.map((p) => p.name)).toEqual(['notes.md'])
+  })
 })
 
 // ---------------------------------------------------------------------------

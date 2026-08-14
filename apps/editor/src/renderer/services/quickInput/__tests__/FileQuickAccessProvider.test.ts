@@ -18,8 +18,10 @@ import {
   IFileSearchService,
   IFileService,
   IInstantiationService,
+  ILoggerService,
   IWorkspaceService,
   InstantiationService,
+  NullLogger,
   ServiceCollection,
   URI,
   UriIdentityService,
@@ -393,6 +395,7 @@ function setup(
   services.set(IClosedEditorsService, closedEditors)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
+  services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   services.set(IFileService, makeFileService(opts.existingFiles))
   const resolver = new FakeEditorResolverService()
   services.set(IEditorResolverService, resolver)
@@ -772,6 +775,45 @@ describe('FileQuickAccessProvider', () => {
     expect(groupsFake.activatedGroupIds).toEqual([2])
     expect(groupsFake.setActiveLog).toEqual([sideEditor])
     expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('accepting a remote-ssh pick opens through the editor resolver', async () => {
+    // Remote (WSL/ssh) workspaces hand out remote-ssh://<authority>/<path>
+    // resources: filesystem-backed, so opening must route through the resolver
+    // exactly like a local file — a `scheme !== 'file'` guard used to swallow
+    // the accept silently (Ctrl+P Enter did nothing).
+    const remoteUri = URI.parse('remote-ssh://wsl+Ubuntu/home/user/notes.md')
+    const recent: IRecentFile[] = [{ uri: remoteUri, name: 'notes.md', lastOpened: 1 }]
+    const { provider, resolver } = setup({ recent })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    const pick = picker.items.find((i) => i.id === remoteUri.toString())
+    expect(pick).toBeDefined()
+    picker.fireAccept([pick as IQuickPickItem])
+
+    expect(resolver.opened).toHaveLength(1)
+    expect(resolver.opened[0]!.uri.toString()).toBe(remoteUri.toString())
+    expect(resolver.opened[0]!.pinned).toBe(true)
+  })
+
+  it('ctrl+accept on a remote-ssh pick opens to the side through the editor resolver', async () => {
+    const remoteUri = URI.parse('remote-ssh://wsl+Ubuntu/home/user/notes.md')
+    const recent: IRecentFile[] = [{ uri: remoteUri, name: 'notes.md', lastOpened: 1 }]
+    const { provider, resolver, groupsFake } = setup({ recent })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    const pick = picker.items.find((i) => i.id === remoteUri.toString())
+    expect(pick).toBeDefined()
+    picker.fireAccept([pick as IQuickPickItem])
+
+    expect(groupsFake.all).toHaveLength(2)
+    expect(resolver.opened).toHaveLength(1)
+    expect(resolver.opened[0]!.uri.toString()).toBe(remoteUri.toString())
   })
 })
 
