@@ -46,6 +46,7 @@
 - [大文件十连修](largefile-reveal-dirtydiff-vscode-parity.md) — reveal 事件化/行级 diff/增量同步/tsserver OOM 化/IPC 分片/DTO 去 text/切tab看门狗
 - [allotment 重挂载空窗口期](allotment-remount-empty-splitview-window.md) — 重挂载 viewItems 空至 RO tick；sizes 守卫只用当前实例报告值
 - [sessionChanges 无界增长 OOM](sessionchanges-unbounded-growth-main-oom-abort.md) — tracker 预算+有界日志+64MB 写入兜底
+- [子 agent 回放绕过预算 renderer OOM](subagent-replay-bypasses-budget-renderer-oom.md) — 预算窗口以 session/load 响应为界;fire-and-forget 回放=红线;修=await+sidecar 源头预算
 - [swarm 通知焦点门控吞 toast](swarm-notify-focus-gate-user-away.md) — Windows 锁屏/人离开 isFocused 恒 true；门控须叠 powerMonitor idle/locked；e2e 冻结 present
 - [openFolder 切工作区主进程闪退](parcel-watcher-win32-unsubscribe-uaf-crash.md) — parcel win32 unsubscribe UAF；已修=升2.6.0+watcher入UtilityProcess自愈重启；含 minidump 解析法
 - [虚拟列表滚动锚点恢复](virtual-list-scroll-anchor-restore.md) — 动态测量下纯 scrollTop 恢复必漂移，用内容锚点+收敛循环；三坑=尺寸锚定对抗/registry 重排/末尾组无法置顶
