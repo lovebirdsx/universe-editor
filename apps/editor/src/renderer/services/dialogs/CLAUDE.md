@@ -60,6 +60,7 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 - **[D] 结尾分隔符回车直接确认目录**：`acceptValue` 中 `endsWithSeparator` + 目录 + `canSelectFolders` → 直接 finish。
 - **`~` 展开主目录**：`expandTilde` 在 onValueChange 最前面处理（`~`/`~/`/`~\` → home+sep）。
 - **Windows 盘符**（见下节）。
+- **浏览上下文 `_ctx()` 按目标解析**：`_show` 开头 `_resolveBrowseContext(start.folder)`——`file:` 用客户端 sep/home；`remote-ssh:` 查 `getEnvironment(authority)`，远程 `os`/`homeDir` 驱动分隔符与 `~` 展开，未知时退化 POSIX `/`（远程 Windows 盘符列表不支持，`driveList=false`）。
 
 ### 多选（`canSelectMany`）与过滤（`filters`）
 
@@ -68,7 +69,7 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 - **`filters` 只在 open 且 allowFiles 时生效**：`collectFilterExtensions` 把 `{name, extensions[]}[]` 压成小写扩展名并集（容忍前导点、大小写不敏感），含 `*` 则返回 `undefined`（不过滤）。两处守卫：列表渲染（`prepareEntries` 的 `fileExts`）+ typed-path 提交（`acceptValue`/onAccept 残留高亮里扩展名不在集合内的文件被拒）。目录永远显示。
 - **Space toggle 在 panel 侧 gate 于 `!filterExternally`**：文件对话框输入框是路径数据（空格必须可输入），所以文件对话框里 Space 不 toggle，只有非外部过滤的 QuickPick（如命令面板类多选）才用 Space 勾选。
 
-### Windows 盘符处理（win32 专属，`this._sep === '\\'`）
+### Windows 盘符处理（仅本机 win32 file 浏览，`ctx.driveList`）
 
 三个判定/构造 helper：`_driveListRoot()`（= `URI.file('/')`，盘符列表的合成根）、`_isDriveListRoot(uri)`（win32 且 path === '/'）、`_displayWithSep(uri)`（保证单尾分隔符，因盘根 fsPath 自带 `/`）。
 
@@ -109,7 +110,7 @@ packages/workbench-ui/src/feedback/quickInput/QuickInputPanel.tsx
 2. **`resetInput` 用错**：导航（进目录/上行）用 `true`，手动改路径触发的刷新用 `false`，否则会把用户正敲的字 clobber 回旧目录路径（这是历史 bug A 的根因）。
 3. **裸盘符丢斜杠**：`D:`（无斜杠）= D 盘工作目录 ≠ `D:\` 根。`_uriFromInput` 必须给裸盘符补回斜杠。
 4. **盘根 fsPath 自带尾斜杠**：`URI.file('C:/').fsPath === 'C:/'`，普通目录无尾斜杠。拼输入值用 `_displayWithSep`（幂等加单分隔符），别手动 `+sep` 造成 `C:\\`。
-5. **win32 判定统一用 `this._sep === '\\'`**：盘符所有逻辑都 gate 在它后面，非 Windows 维持「裸片段在当前目录内匹配」的旧行为。
+5. **分隔符/home/盘符按浏览目标解析，非客户端平台**：`_ctx()`（`_show` 开头按 `start.folder` 结算 `_browseCtx`）——`file:` 用客户端事实；`remote:` 经 `IRemoteStatusService.getEnvironment(authority)` 取远程 `os`/`homeDir`，未知时退化 POSIX。盘符所有逻辑 gate 到 `ctx.driveList`（仅本机 win32 file 浏览；main 的 `listDrives` 只能列本机盘），远程浏览禁用。
 6. **`autoFocusFirstItem=false` 必须配合 panel 关 hover**：否则导航后鼠标静止悬停新项 → `onMouseMove` 乱触发补全（历史 e2e 失败根因）。
 7. **host 单测设 activeItems 不自动补全**：FakeQuickPick 不 fire onActiveChange，测补全要 `qp.fireActive(item)`。
 8. **`listDrives` 是可选方法**：调用必带 `?.()`；新写 IFileService fake 不需要实现它。

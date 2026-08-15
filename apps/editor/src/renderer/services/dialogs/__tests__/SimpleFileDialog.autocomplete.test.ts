@@ -178,6 +178,7 @@ function createDialog(): { dialog: SimpleFileDialog; quickInput: FakeQuickInputS
     { get: () => undefined } as never,
     { showOpenFileDialog: async () => null, showSaveFileDialog: async () => null } as never,
     { createLogger: () => new NullLogger() } as never,
+    { getEnvironment: async () => null } as never,
   )
   return { dialog, quickInput }
 }

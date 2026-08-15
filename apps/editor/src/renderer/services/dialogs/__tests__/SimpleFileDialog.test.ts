@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { NullLogger, URI } from '@universe-editor/platform'
+import { NullLogger, REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import type {
   IConfigurationService,
   IDialogService,
@@ -21,6 +21,7 @@ import type {
   UriComponents,
 } from '@universe-editor/platform'
 import { SimpleFileDialog } from '../SimpleFileDialog.js'
+import type { RemoteEnvironmentDto } from '../../../../shared/ipc/remoteStatusService.js'
 
 class Emitter<T> {
   private readonly _listeners: Array<(e: T) => void> = []
@@ -110,6 +111,10 @@ const DIRS = new Map<string, string[]>([
   ['/b/foo', []],
   ['/home/u', ['Documents']],
   ['/home/u/Documents', []],
+  // Remote host layout (browsed via a remote: URI — keyed by URI path only).
+  ['/home/xiao', ['.bun', 'proj']],
+  ['/home/xiao/.bun', ['bin']],
+  ['/home/xiao/proj', []],
 ])
 const FILES = new Set<string>(['/a/readme.md', '/a/notes.txt', '/a/pic.png', '/a/src/code.ts'])
 
@@ -270,6 +275,7 @@ function createDialog(
     config as unknown as IConfigurationService,
     host as unknown as IHostService,
     fakeLoggerService,
+    { getEnvironment: async () => null } as never,
   )
   return { dialog, quickInput, storage, fileService, host }
 }
@@ -984,6 +990,7 @@ describe('SimpleFileDialog Windows drives', () => {
       new FakeConfigService() as unknown as IConfigurationService,
       new FakeHostService() as unknown as IHostService,
       fakeLoggerService,
+      { getEnvironment: async () => null } as never,
     )
     return { dialog, quickInput }
   }
@@ -1100,5 +1107,100 @@ describe('SimpleFileDialog Windows drives', () => {
     expect(qp.activeItems.map((it) => it.label)).toEqual(['F:'])
     qp.fireActive(qp.activeItems[0]!)
     expect(qp.value).toBe('F:')
+  })
+})
+
+describe('SimpleFileDialog remote target browsing', () => {
+  const LINUX_ENV: RemoteEnvironmentDto = {
+    os: 'linux',
+    arch: 'x64',
+    homeDir: '/home/xiao',
+    tmpDir: '/tmp',
+    pathCaseSensitive: true,
+    serverVersion: '0.0.0',
+  }
+
+  const remoteUri = (path: string): URI =>
+    URI.from({ scheme: REMOTE_SCHEME, authority: 'wsl+ubuntu2004', path })
+
+  const createRemoteDialog = (
+    env: RemoteEnvironmentDto | null = LINUX_ENV,
+  ): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService } => {
+    const quickInput = new FakeQuickInputService()
+    const dialog = new SimpleFileDialog(
+      quickInput as never,
+      new FakeFileService() as never,
+      fakeWorkspace,
+      fakeDialog,
+      new FakeStorageService() as never,
+      new FakeConfigService() as unknown as IConfigurationService,
+      new FakeHostService() as unknown as IHostService,
+      fakeLoggerService,
+      { getEnvironment: async () => env } as never,
+    )
+    return { dialog, quickInput }
+  }
+
+  const openAt = async (
+    uri: URI,
+    env: RemoteEnvironmentDto | null = LINUX_ENV,
+  ): Promise<FakeQuickPick> => {
+    const { dialog, quickInput } = createRemoteDialog(env)
+    void dialog.showOpenDialog({
+      title: 'Open Folder on wsl+ubuntu2004',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: uri,
+    })
+    await flush()
+    return quickInput.lastPick
+  }
+
+  beforeEach(() => {
+    // Windows client browsing a Linux remote host.
+    ;(globalThis as { window?: unknown }).window = {
+      ipc: { platform: 'win32', home: 'C:\\Users\\xiao' },
+    }
+  })
+
+  it('displays the remote path with the remote separator, not the client one', async () => {
+    const qp = await openAt(remoteUri('/home/xiao'))
+
+    expect(qp.value).toBe('/home/xiao/')
+  })
+
+  it('keeps the remote separator while navigating into a subfolder', async () => {
+    const qp = await openAt(remoteUri('/home/xiao'))
+
+    qp.activeItems = [itemByLabel(qp, 'proj')]
+    qp.accept()
+    await flush()
+
+    expect(qp.value).toBe('/home/xiao/proj/')
+  })
+
+  it('typing a bare segment matches within the remote folder — not the local drive list', async () => {
+    const qp = await openAt(remoteUri('/home/xiao'))
+
+    qp.type('p')
+    await flush()
+
+    expect(labels(qp)).toEqual(['..', 'proj'])
+    expect(qp.value).toBe('/home/xiao/proj')
+  })
+
+  it('expands ~ to the remote home directory', async () => {
+    const qp = await openAt(remoteUri('/home/xiao'))
+
+    qp.type('~')
+    await flush()
+
+    expect(qp.value).toBe('/home/xiao/')
+  })
+
+  it('falls back to POSIX separators when the remote environment is unknown', async () => {
+    const qp = await openAt(remoteUri('/home/xiao'), null)
+
+    expect(qp.value).toBe('/home/xiao/')
   })
 })

@@ -19,6 +19,7 @@ import {
   IWorkspaceService,
   InstantiationType,
   MutableDisposable,
+  REMOTE_SCHEME,
   URI,
   createNamedLogger,
   localize,
@@ -27,6 +28,7 @@ import {
   type ILogger,
   type IQuickPickItem,
 } from '@universe-editor/platform'
+import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
 import {
   endsWithSeparator,
@@ -50,11 +52,31 @@ const PARENT_ID = '..'
 const STORAGE_KEY_SHOW_DOT_FILES = 'fileDialog.showHiddenFiles'
 const NATIVE_DIALOG_SETTING = 'files.nativeDialog.enable'
 
+/**
+ * Host facts governing path rendering and navigation for one browse target:
+ * the client machine for `file:` browsing, or the connected remote host's
+ * environment otherwise. Resolved per dialog session from the start folder,
+ * before which (`_ctx` fallback) the client context keeps everything working
+ * for purely-local flows.
+ */
+interface BrowseContext {
+  /** Path separator of the browsed host. */
+  readonly sep: string
+  /** Home of the browsed host (for `~` expansion). */
+  readonly homeUri: URI
+  /**
+   * Windows drive-list browsing (C:, D: …). Gated to the local `file:`
+   * provider: `listDrives` runs on the main side and can only enumerate local
+   * drives, so it is meaningless while browsing a remote host.
+   */
+  readonly driveList: boolean
+}
+
 export class SimpleFileDialog extends Disposable implements IFileDialogService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _sep: string
-  private readonly _home: string
+  private readonly _clientCtx: BrowseContext
+  private _browseCtx: BrowseContext | undefined
   private readonly _logger: ILogger
 
   // Anchors the current dialog session to this singleton service. Cleanup
@@ -71,12 +93,38 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     @IConfigurationService private readonly _config: IConfigurationService,
     @IHostService private readonly _host: IHostService,
     @ILoggerService loggerService: ILoggerService,
+    @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
   ) {
     super()
     const ipc = typeof window !== 'undefined' ? window.ipc : undefined
-    this._sep = ipc?.platform === 'win32' ? '\\' : '/'
-    this._home = typeof ipc?.home === 'string' ? ipc.home : ''
+    const sep = ipc?.platform === 'win32' ? '\\' : '/'
+    const home = typeof ipc?.home === 'string' ? ipc.home : ''
+    this._clientCtx = { sep, homeUri: URI.file(home || '/'), driveList: sep === '\\' }
     this._logger = createNamedLogger(loggerService, { id: 'fileDialog', name: 'File Dialog' })
+  }
+
+  private _ctx(): BrowseContext {
+    return this._browseCtx ?? this._clientCtx
+  }
+
+  /**
+   * Resolve the context of the host the dialog will browse. `file:` stays on
+   * the client facts; a remote target asks the handshake environment for its
+   * OS/home and degrades to POSIX when that is unknown (supported remote
+   * targets are POSIX).
+   */
+  private async _resolveBrowseContext(folder: URI): Promise<BrowseContext> {
+    if (folder.scheme !== REMOTE_SCHEME) return this._clientCtx
+    const env = await this._remoteStatus.getEnvironment(folder.authority).catch((): null => null)
+    return {
+      sep: env?.os === 'win32' ? '\\' : '/',
+      homeUri: URI.from({
+        scheme: folder.scheme,
+        authority: folder.authority,
+        path: env?.homeDir || '/',
+      }),
+      driveList: false,
+    }
   }
 
   showOpenDialog(opts: IFileDialogOptions): Promise<URI[] | undefined> {
@@ -143,6 +191,9 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     const fileExts =
       mode === 'open' && allowFiles ? collectFilterExtensions(opts.filters) : undefined
     const start = await this._resolveStart(opts, mode)
+    // Pin the browsed host's context for the whole session (navigation inside a
+    // dialog never crosses authorities, so one resolution suffices).
+    this._browseCtx = await this._resolveBrowseContext(start.folder)
     const initialShowDotFiles =
       (await this._storage.get<boolean>(STORAGE_KEY_SHOW_DOT_FILES)) === true
 
@@ -198,6 +249,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       const finish = (uris: URI[] | undefined): void => {
         if (settled) return
         settled = true
+        this._browseCtx = undefined
         qp.hide()
         if (this._session.value === session) this._session.clear()
         else session.dispose()
@@ -354,7 +406,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       }
 
       const onValueChange = async (value: string): Promise<void> => {
-        const expanded = expandTilde(value, this._display(this._homeUri()), this._sep)
+        const expanded = expandTilde(value, this._display(this._homeUri()), this._ctx().sep)
         if (expanded !== undefined) {
           value = expanded
           lastValue = expanded
@@ -370,11 +422,12 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         const { dir, name } = splitTrailingSegment(value)
         userTypedSegment = name
 
-        // On Windows a value with no directory part is a fresh top-level entry:
-        // the user cleared the box and is typing a drive (or nothing). Surface
-        // the drive list and match drives by the typed prefix, instead of
-        // autocompleting the bare segment into the current folder.
-        if (dir === '' && this._sep === '\\') {
+        // Browsing the local drive list: a value with no directory part is a
+        // fresh top-level entry — the user cleared the box and is typing a
+        // drive (or nothing). Surface the drive list and match drives by the
+        // typed prefix, instead of autocompleting the bare segment into the
+        // current folder.
+        if (dir === '' && this._ctx().driveList) {
           if (!this._isDriveListRoot(currentFolder)) {
             await updateItems(this._driveListRoot(), { resetInput: false })
           }
@@ -596,7 +649,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   }
 
   private _homeUri(): URI {
-    return URI.file(this._home || '/')
+    return this._ctx().homeUri
   }
 
   private _parentOf(uri: URI): URI | undefined {
@@ -615,7 +668,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     // 盘符前导斜杠，round-trip 回 `_uriFromInput` 时就丢了 `/<drive>:` 结构。
     if (uri.scheme !== 'file') return uri.path
     // 本机路径：文件对话框恒浏览 file: provider，fsPath 即本机路径。
-    return this._sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, this._sep)
+    const sep = this._ctx().sep
+    return sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, sep)
   }
 
   private _uriFromInput(value: string, base?: URI): URI {
@@ -640,14 +694,15 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     return URI.file('/')
   }
 
-  /** Whether `uri` is the Windows drive-list root (filesystem root on win32). */
+  /** Whether `uri` is the drive-list root (filesystem root of the local win32). */
   private _isDriveListRoot(uri: URI): boolean {
-    return this._sep === '\\' && uri.scheme === 'file' && uri.path === '/'
+    return this._ctx().driveList && uri.scheme === 'file' && uri.path === '/'
   }
 
   private _displayWithSep(uri: URI): string {
+    const sep = this._ctx().sep
     const display = this._display(uri)
-    return display.endsWith(this._sep) ? display : display + this._sep
+    return display.endsWith(sep) ? display : display + sep
   }
 }
 
