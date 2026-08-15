@@ -6,6 +6,7 @@ import {
   useResolveTerminalFile,
   useOpenTerminalFile,
 } from '../panel/terminal/useTerminalOpenFile.js'
+import { useTerminalHome } from '../panel/terminal/useTerminalHome.js'
 import styles from './TerminalEditorView.module.css'
 
 export function TerminalEditorView({ input }: { input: IEditorInput }) {
@@ -19,6 +20,7 @@ function TerminalEditorBody({ input }: { input: TerminalEditorInput }) {
   const workspaceService = useService(IWorkspaceService)
   const resolveFile = useResolveTerminalFile()
   const openFile = useOpenTerminalFile()
+  const home = useTerminalHome()
   const terminalId = useObservable(input.terminalId)
 
   // 本地工作区 fsPath 是本机路径；remote 工作区 folder.fsPath 即远端 POSIX 路径（pty 在远端 spawn），同样正确。
@@ -34,6 +36,7 @@ function TerminalEditorBody({ input }: { input: TerminalEditorInput }) {
         id={terminalId}
         active={true}
         cwd={cwd}
+        home={home}
         resolveFile={resolveFile}
         openFile={openFile}
       />

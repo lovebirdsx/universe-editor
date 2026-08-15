@@ -8,8 +8,7 @@ import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/
 // (\p{L}\p{N}) so CJK file names are recognized.
 const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'gu')
 
-function resolvePath(cwd: string, filePath: string): string {
-  const home = typeof window !== 'undefined' ? window.ipc?.home : undefined
+export function resolvePath(cwd: string, filePath: string, home: string | undefined): string {
   const expanded = home ? (expandHomeDir(filePath, home) ?? filePath) : filePath
   if (/^[A-Za-z]:[/\\]/.test(expanded) || expanded.startsWith('/')) return normalizeFsPath(expanded)
   return normalizeFsPath(cwd + '/' + expanded)
@@ -20,6 +19,7 @@ export function createFileLinkProvider(
   resolveFile: (absolutePath: string) => Promise<URI | null>,
   openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void,
   getCwd: () => string,
+  getHome: () => string | undefined,
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
@@ -31,6 +31,7 @@ export function createFileLinkProvider(
 
       const text = bufLine.translateToString(true)
       const cwd = getCwd()
+      const home = getHome()
 
       type MatchInfo = {
         full: string
@@ -51,7 +52,7 @@ export function createFileLinkProvider(
         const { line: lineNum, col: colNum, endLine: endLineNum } = parseFilePathLocation(m)
         matches.push({
           full,
-          absPath: resolvePath(cwd, filePath),
+          absPath: resolvePath(cwd, filePath, home),
           lineNum,
           colNum,
           endLineNum,

@@ -119,6 +119,7 @@ async function renderInstance(tracked: Tracked) {
           id="t1"
           active
           cwd="/tmp"
+          home={undefined}
           resolveFile={async () => null}
           openFile={() => {}}
         />
@@ -255,6 +256,7 @@ describe('TerminalInstance onFocusRequestById', () => {
             id={id}
             active
             cwd="/tmp"
+            home={undefined}
             resolveFile={async () => null}
             openFile={() => {}}
           />

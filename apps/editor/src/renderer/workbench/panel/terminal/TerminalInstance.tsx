@@ -21,6 +21,7 @@ export interface TerminalInstanceProps {
   /** Whether this instance should grab focus. Defaults to `active`. */
   focused?: boolean
   cwd: string
+  home: string | undefined
   resolveFile: (absolutePath: string) => Promise<URI | null>
   openFile: (uri: URI, line?: number, col?: number) => void
 }
@@ -30,6 +31,7 @@ export function TerminalInstance({
   active,
   focused,
   cwd,
+  home,
   resolveFile,
   openFile,
 }: TerminalInstanceProps) {
@@ -45,6 +47,8 @@ export function TerminalInstance({
   openFileRef.current = openFile
   const cwdRef = useRef(cwd)
   cwdRef.current = cwd
+  const homeRef = useRef(home)
+  homeRef.current = home
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [hasSelection, setHasSelection] = useState(false)
@@ -62,6 +66,7 @@ export function TerminalInstance({
       resolveFile: (p) => resolveFileRef.current(p),
       openFile: (uri, line, col) => openFileRef.current(uri, line, col),
       getCwd: () => cwdRef.current,
+      getHome: () => homeRef.current,
     })
     holder.reattachTo(host)
     setHasSelection(holder.hasSelection())

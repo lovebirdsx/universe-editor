@@ -46,6 +46,7 @@ export interface ITerminalLinkHandlers {
   resolveFile: (absolutePath: string) => Promise<URI | null>
   openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void
   getCwd: () => string
+  getHome: () => string | undefined
 }
 
 export interface ITerminalXtermHolder {
@@ -142,6 +143,7 @@ const noopHandlers: ITerminalLinkHandlers = {
   resolveFile: async () => null,
   openFile: () => {},
   getCwd: () => '',
+  getHome: () => undefined,
 }
 
 class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
@@ -249,6 +251,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
           (absPath) => this._handlers.resolveFile(absPath),
           (uri, line, col, endLine) => this._handlers.openFile(uri, line, col, endLine),
           () => this._handlers.getCwd(),
+          () => this._handlers.getHome(),
         ),
       ),
     )
