@@ -336,11 +336,21 @@ registerSingletonFactory(IRemoteConnectionService, (acc) => {
   })
   const remoteServerCmd = acc.get(IEnvironmentMainService).remoteServerCmd
   const remoteSkipDeployCheck = acc.get(IEnvironmentMainService).remoteSkipDeployCheck
+  // Packaged apps deploy from resources/remote-server (staged by runtime-resources),
+  // not a workspace checkout; the version must match app.getVersion() so the
+  // remote daemon doesn't report a mismatch and force-redeploy every connect.
+  const deployerOptions = app.isPackaged
+    ? {
+        bundleDir: join(process.resourcesPath, 'remote-server'),
+        serverVersion: process.env['UNIVERSE_REMOTE_SERVER_VERSION'] ?? app.getVersion(),
+      }
+    : {}
   return new RemoteConnectionMainService(
     {
       ...(remoteServerCmd !== undefined ? { remoteServerCmd } : {}),
       skipDeployCheck: remoteSkipDeployCheck,
-      deployer: new RemoteDeployer({ logger }),
+      deployer: new RemoteDeployer({ logger, ...deployerOptions }),
+      deployerOptions,
       getUserDataDir: () => app.getPath('userData'),
     },
     loggerService,

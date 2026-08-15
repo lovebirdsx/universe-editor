@@ -7,6 +7,7 @@
  *  extraResources entries across every runtime subsystem.
  *--------------------------------------------------------------------------------------------*/
 
+import { spawnSync } from 'node:child_process'
 import {
   cpSync,
   existsSync,
@@ -16,6 +17,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -168,6 +170,18 @@ function copyPath(source, destination) {
   cpSync(source, destination, { recursive: statSync(source).isDirectory(), force: true })
 }
 
+// Keep packages/remote-server/dist-bundle fresh before staging. Invoked directly
+// via node (not pnpm/turbo) — the same stamp-skip fast path the dev scripts use.
+function ensureRemoteServerBundle() {
+  const result = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts/dev/ensure-remote-server-bundle.mjs')],
+    { cwd: repoRoot, stdio: 'inherit' },
+  )
+  if (result.error) fail(`remote server bundle ensure failed to spawn: ${result.error.message}`)
+  if (result.status !== 0) fail(`remote server bundle ensure failed (exit ${result.status})`)
+}
+
 function assertPackagedFile(root, relativePath, label) {
   assertExists(join(root, ...relativePath.split('/')), label)
 }
@@ -229,6 +243,26 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   // IDocsService pipeline, as a separate doc category.
   copyPath(join(repoRoot, 'docs/extension-dev'), join(stageDir, 'docs/extension-dev'))
 
+  // Remote server deploy bundle (WSL/SSH): keep dist-bundle fresh, then stage the
+  // whole tree so the packaged app can deploy to a remote host with no workspace
+  // checkout. The remote daemon reports its version from the package.json sitting
+  // next to bootstrap.js, so rewrite it to the app version — otherwise every
+  // connect sees a mismatch and force-redeploys.
+  ensureRemoteServerBundle()
+  copyPath(join(repoRoot, 'packages/remote-server/dist-bundle'), join(stageDir, 'remote-server'))
+  const stagedRemoteServerPkg = join(stageDir, 'remote-server', 'package.json')
+  writeFileSync(
+    stagedRemoteServerPkg,
+    JSON.stringify(
+      {
+        ...readJson(stagedRemoteServerPkg),
+        version: readJson(join(editorRoot, 'package.json')).version,
+      },
+      null,
+      2,
+    ) + '\n',
+  )
+
   for (const extension of discoverBuiltinExtensions()) {
     const destinationRoot = join(stageDir, 'extensions', extension.id)
     for (const file of extensionPackageFiles(extension.manifest)) {
@@ -246,6 +280,12 @@ export function verifyPackagedRuntimeResources(resourcesRoot = releaseResourcesR
   for (const required of REQUIRED_SOURCE_FILES) {
     assertPackagedFile(resourcesRoot, required.packaged, required.label)
   }
+
+  // Remote server deploy bundle. Not in REQUIRED_SOURCE_FILES (whose source side
+  // is checked by verify-source in environments that never build the bundle);
+  // it is staged by stageRuntimeResources, so verify-packaged asserts its output.
+  assertPackagedFile(resourcesRoot, 'remote-server/bootstrap.js', 'remote server bootstrap')
+  assertPackagedFile(resourcesRoot, 'remote-server/package.json', 'remote server manifest')
 
   for (const extension of discoverBuiltinExtensions()) {
     assertPackagedFile(resourcesRoot, `extensions/${extension.id}/package.json`, `${extension.id} manifest`)

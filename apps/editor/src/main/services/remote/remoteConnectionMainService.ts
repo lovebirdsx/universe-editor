@@ -213,6 +213,8 @@ export interface RemoteConnectionMainServiceOptions {
   readonly remoteServerCmd?: string
   readonly deployer?: RemoteDeployer
   readonly wslDeployer?: WslDeployer
+  /** Forwarded into the internally-built WslDeployer (packaged app injects bundleDir/serverVersion). */
+  readonly deployerOptions?: { bundleDir?: string; serverVersion?: string }
   readonly getUserDataDir?: () => string
   readonly skipDeployCheck?: boolean
 }
@@ -225,6 +227,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private readonly _remoteServerCmd: string | undefined
   private readonly _deployer: RemoteDeployer
   private _wslDeployer: WslDeployer | undefined
+  private readonly _deployerOptions: { bundleDir?: string; serverVersion?: string } | undefined
   private readonly _getUserDataDir: () => string
   private readonly _skipDeployCheck: boolean
   private readonly _entries = new Map<string, ConnectionEntry>()
@@ -245,8 +248,14 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._spawn = options.spawner ?? defaultRemoteSpawner
     this._remoteServerCmd = options.remoteServerCmd
     this._deployer =
-      options.deployer ?? new RemoteDeployer({ logger: this._logger, spawner: this._spawn })
+      options.deployer ??
+      new RemoteDeployer({
+        logger: this._logger,
+        spawner: this._spawn,
+        ...options.deployerOptions,
+      })
     this._wslDeployer = options.wslDeployer
+    this._deployerOptions = options.deployerOptions
     this._getUserDataDir = options.getUserDataDir ?? (() => '')
     this._skipDeployCheck = options.skipDeployCheck ?? false
   }
@@ -254,9 +263,18 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   /** Lazily built — constructing it is only meaningful on Windows with WSL. */
   private _getWslDeployer(): WslDeployer {
     if (!this._wslDeployer) {
-      this._wslDeployer = new WslDeployer({ logger: this._logger, spawner: this._spawn })
+      this._wslDeployer = new WslDeployer({
+        logger: this._logger,
+        spawner: this._spawn,
+        ...this._deployerOptions,
+      })
     }
     return this._wslDeployer
+  }
+
+  /** Test seam — builds/lazily returns the WSL deployer so tests can assert wiring. */
+  get wslDeployerForTesting(): WslDeployer {
+    return this._getWslDeployer()
   }
 
   private _validateAuthority(authority: string): void {

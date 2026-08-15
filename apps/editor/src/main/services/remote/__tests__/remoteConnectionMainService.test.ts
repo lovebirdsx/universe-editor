@@ -8,6 +8,9 @@
 
 import { EventEmitter } from 'node:events'
 import { createServer, type AddressInfo, type Server, type Socket as NetSocket } from 'node:net'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -550,5 +553,30 @@ describe('RemoteConnectionMainService wsl mode', () => {
     const ping = conn.getChannel('test').call<string>('ping')
     await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), { timeout: 5000 })
     await expect(ping).resolves.toBe('pong')
+  })
+
+  it('forwards deployerOptions to the internally-built WslDeployer', () => {
+    const bundleDir = mkdtempSync(join(tmpdir(), 'ue-deployer-options-'))
+    try {
+      writeFileSync(join(bundleDir, 'bootstrap.js'), '// fake', 'utf8')
+      const svc = new RemoteConnectionMainService(
+        {
+          deployerOptions: { serverVersion: '9.9.9', bundleDir },
+          getUserDataDir: () => '/tmp/ue-test',
+        },
+        undefined,
+      )
+      try {
+        const wsl = svc.wslDeployerForTesting
+        expect(wsl.serverVersion).toBe('9.9.9')
+        // bundleDir has no getter; localBundleHash() resolves against it — a
+        // non-empty dir must yield a hash rather than fail-open undefined.
+        expect(wsl.localBundleHash()).toMatch(/^[0-9a-f]{64}$/)
+      } finally {
+        svc.dispose()
+      }
+    } finally {
+      rmSync(bundleDir, { recursive: true, force: true })
+    }
   })
 })
