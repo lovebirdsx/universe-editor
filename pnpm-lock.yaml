@@ -199,6 +199,8 @@ catalogs:
       specifier: ^3.25.0
       version: 3.25.76
 
+pnpmfileChecksum: sha256-f82UpNmTbduyUZTUqjsXVcD8M46KMgQ0oaUAQGcsEco=
+
 patchedDependencies:
   monaco-editor@0.55.1: b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00
   playwright-core@1.62.1: fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325

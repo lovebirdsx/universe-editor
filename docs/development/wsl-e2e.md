@@ -148,4 +148,4 @@ export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 
 - 两个 Windows-only 用例在 WSL 下 `test.skip`、不执行：`smoke.update.spec.ts`（自动更新）、`smoke.windowCloseFolderLock.spec.ts`（目录删除锁）。涉及这两块改动仍需回 Windows 验证。
 - 视觉基线是 Linux-only（跨平台 fonts/antialiasing 差异），在 WSL 里更新基线天然正确，流程见 [`apps/editor/e2e/baselines/README.md`](../../apps/editor/e2e/baselines/README.md)。
-- 原生模块（`@parcel/watcher`、`@lydell/node-pty`、`@vscode/ripgrep`）均有 Linux prebuild；`@vscode/windows-process-tree` 是 Windows-only 但已懒加载隔离，无需处理。
+- 原生模块（`@parcel/watcher`、`@lydell/node-pty`、`@vscode/ripgrep`）均有 Linux prebuild；`@vscode/windows-process-tree` 无 Linux prebuild 且 install 脚本是 node-gyp rebuild，安装期由根 `.pnpmfile.cjs` 的 updateConfig 钩子在非 win32 平台把该包从构建放行改为跳过构建（因此无需 build-essential），运行时由懒加载 + `process.platform === 'win32'` 守卫隔离。
