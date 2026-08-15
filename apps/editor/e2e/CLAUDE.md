@@ -55,6 +55,8 @@ harness 的启动 fixture 接收 `extensions: string[]`(扩展 id allowlist),拼
 
 **spec 需要 workspace 文件时，用 `workspaceSeeder` 在 launch 时 pin workspace，不要 boot 后 `openWorkspace`**：冷启 fixture 支持 option fixture `test.use({ workspaceSeeder: { seed(dir) { writeFileSync(join(dir, 'a.md'), ...) } } })`，fixture 在 per-test tmp 目录跑完 seed 后把目录作为位置参数随 app 一起启动（`openWindowForFolder`），测试体从 `launchWorkspace.file('a.md')` 取路径。启动即 pin 让 extension host 保持单代——boot 后 `openWorkspace` 会同回合触发 workspace re-pin + trust-flip revoke **两次 host 重启**，2 workers 争抢时慢重启正是 LSP provider poll 超时与 dying-host Disposable 泄漏的竞态窗口（案例见 skill `fix-ci-e2e-flake`）。注意 seeder 必须包成 `{ seed(dir) {...} }` 对象——Playwright 会把 `test.use` 里的裸函数当 fixture override 调用（类型层 `TestFixtureValue` 直接 `Exclude<R, Function>`），与 p4Seeds 的裸数组坑同类。仅冷启 fixture 支持（每 test 一个 app 才能各带各的目录）；shared fixture 传 seeder 会直接抛错。
 
+**临时目录要被运行中的 app / remote daemon 持有句柄时，用冷启 fixture 的 `scratchDir(prefix?)` 工厂**：它返回 per-test 临时目录，清理在 `closeApp` 之后执行（`electronApp` fixture 依赖 `scratchDir`，利用 Playwright fixture 逆序 teardown，进程树已死、句柄已释放后才 rm）。典型场景=作为 workspace 打开的根目录（remote daemon 的 watcher 在 Windows 上 pin 住根句柄）；spec 内**禁止**再在 test body 里 `rmSync` 这类目录（Windows 下 EPERM flaky）。范例见 `remote.*` spec。shared fixture 下 `scratchDir` 直接抛错（app 存活跨越测试，没有 post-close 清理点）。
+
 ## PO 分层
 
 `WorkbenchPO`（`pages/WorkbenchPO.js`）是入口，聚合 `activityBar / sideBar / statusBar / quickInput / editor / panel` 六个子 PO，外加一批**直通探针的快捷方法**：`runCommand` / `getContextKey` / `lifecyclePhase` / `openWorkspace` / `getActiveEditorUri` / `getEditorGroupCount` / `waitForRestored` …。

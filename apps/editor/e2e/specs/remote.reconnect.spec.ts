@@ -12,7 +12,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { createColdAppTest } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
@@ -38,11 +37,6 @@ function remoteUri(fsPath: string): string {
   return `remote-ssh://${AUTHORITY}${pathPart}`
 }
 
-/** Per-test remote workspace root on the local tmp filesystem. */
-function makeTmpDir(): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-remote-')))
-}
-
 test.describe('remote transparent reconnect', () => {
   // Same rationale as remote.fsRoundtrip: pin a local workspace so the explorer's
   // idle-phase watcher orchestration calls `watch(localRoot)` instead of
@@ -57,9 +51,10 @@ test.describe('remote transparent reconnect', () => {
 
   test('reconnects transparently and keeps the watcher alive @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-')
     const fileUri = remoteUri(path.join(tmpDir, 'hello.txt'))
     const content = 'reconnect me'
 
@@ -72,62 +67,58 @@ test.describe('remote transparent reconnect', () => {
         AUTHORITY,
       )
 
-    try {
-      // Establish the connection with a write + read round trip and confirm it is
-      // reported connected (the first remote request drives the bring-up).
-      await workbench.page.evaluate(({ uri, text }) => window.__E2E__!.writeFileText(uri, text), {
-        uri: fileUri,
-        text: content,
-      })
-      await expect
-        .poll(async () =>
-          workbench.page.evaluate((uri) => window.__E2E__!.readFileText(uri), fileUri),
-        )
-        .toBe(content)
-      await expect.poll(remoteState).toBe('connected')
-
-      // Drop the management socket, simulating a transient network failure.
-      await workbench.page.evaluate(
-        (authority) => window.__E2E__!.dropRemoteSocket(authority),
-        AUTHORITY,
+    // Establish the connection with a write + read round trip and confirm it is
+    // reported connected (the first remote request drives the bring-up).
+    await workbench.page.evaluate(({ uri, text }) => window.__E2E__!.writeFileText(uri, text), {
+      uri: fileUri,
+      text: content,
+    })
+    await expect
+      .poll(async () =>
+        workbench.page.evaluate((uri) => window.__E2E__!.readFileText(uri), fileUri),
       )
+      .toBe(content)
+    await expect.poll(remoteState).toBe('connected')
 
-      // Fire a read immediately (unawaited): it must queue in the
-      // PersistentProtocol while the socket is down and replay transparently once
-      // the daemon re-attaches, rather than rejecting.
-      const readWhileReconnecting = workbench.page.evaluate(
-        (uri) => window.__E2E__!.readFileText(uri),
-        fileUri,
+    // Drop the management socket, simulating a transient network failure.
+    await workbench.page.evaluate(
+      (authority) => window.__E2E__!.dropRemoteSocket(authority),
+      AUTHORITY,
+    )
+
+    // Fire a read immediately (unawaited): it must queue in the
+    // PersistentProtocol while the socket is down and replay transparently once
+    // the daemon re-attaches, rather than rejecting.
+    const readWhileReconnecting = workbench.page.evaluate(
+      (uri) => window.__E2E__!.readFileText(uri),
+      fileUri,
+    )
+
+    // The state machine flips reconnecting → connected as the reconnect lands.
+    await expect.poll(remoteState, { timeout: 15_000 }).toBe('connected')
+
+    // The replayed read resolves with the original content.
+    expect(await readWhileReconnecting).toBe(content)
+
+    // The watcher still relays change events over the reconnected socket.
+    await workbench.page.evaluate((uri) => window.__E2E__!.watchFolder(uri), remoteUri(tmpDir))
+
+    const created = path.join(tmpDir, 'newfile.txt')
+    const expectedUri = remoteUri(created)
+    fs.writeFileSync(created, 'created after reconnect')
+
+    await expect
+      .poll(
+        async () => {
+          const seen = await workbench.page.evaluate(
+            (uri) => window.__E2E__!.getWatchedChangeEvents().some((e) => e.resource === uri),
+            expectedUri,
+          )
+          if (!seen) fs.writeFileSync(created, `touch ${Date.now()}`)
+          return seen
+        },
+        { timeout: 20_000, intervals: [500, 1000] },
       )
-
-      // The state machine flips reconnecting → connected as the reconnect lands.
-      await expect.poll(remoteState, { timeout: 15_000 }).toBe('connected')
-
-      // The replayed read resolves with the original content.
-      expect(await readWhileReconnecting).toBe(content)
-
-      // The watcher still relays change events over the reconnected socket.
-      await workbench.page.evaluate((uri) => window.__E2E__!.watchFolder(uri), remoteUri(tmpDir))
-
-      const created = path.join(tmpDir, 'newfile.txt')
-      const expectedUri = remoteUri(created)
-      fs.writeFileSync(created, 'created after reconnect')
-
-      await expect
-        .poll(
-          async () => {
-            const seen = await workbench.page.evaluate(
-              (uri) => window.__E2E__!.getWatchedChangeEvents().some((e) => e.resource === uri),
-              expectedUri,
-            )
-            if (!seen) fs.writeFileSync(created, `touch ${Date.now()}`)
-            return seen
-          },
-          { timeout: 20_000, intervals: [500, 1000] },
-        )
-        .toBe(true)
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
-    }
+      .toBe(true)
   })
 })

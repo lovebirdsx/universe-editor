@@ -16,7 +16,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { createColdAppTest } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
@@ -45,68 +44,60 @@ function remoteUri(fsPath: string): string {
   return `remote-ssh://${AUTHORITY}${pathPart}`
 }
 
-/** Per-test remote workspace root on the local tmp filesystem. */
-function makeTmpDir(): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-remote-exthost-')))
-}
-
 test.describe('remote extension host', () => {
   test('runs the host remotely: typescript hover/definition resolve and survive a tunnel reconnect @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-exthost-')
 
-    try {
-      fs.mkdirSync(path.join(tmpDir, '.git'))
-      fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'const value = 42\nconst copy = value\n')
-      const rootUri = remoteUri(tmpDir)
-      const aUri = remoteUri(path.join(tmpDir, 'a.ts'))
+    fs.mkdirSync(path.join(tmpDir, '.git'))
+    fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'const value = 42\nconst copy = value\n')
+    const rootUri = remoteUri(tmpDir)
+    const aUri = remoteUri(path.join(tmpDir, 'a.ts'))
 
-      // Open the remote folder as the workspace (dialog bypassed).
-      await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
-          timeout: 15_000,
-        })
-        .toBe(rootUri)
+    // Open the remote folder as the workspace (dialog bypassed).
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 15_000,
+      })
+      .toBe(rootUri)
 
-      // Open the .ts file — this triggers the remote host's typescript activation.
-      await workbench.page.evaluate((uri) => window.__E2E__!.openUri(uri), aUri)
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveEditorUri()), {
-          timeout: 15_000,
-        })
-        .toBe(aUri)
+    // Open the .ts file — this triggers the remote host's typescript activation.
+    await workbench.page.evaluate((uri) => window.__E2E__!.openUri(uri), aUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveEditorUri()), {
+        timeout: 15_000,
+      })
+      .toBe(aUri)
 
-      // Hover on `value` (line 2) must resolve against the remote tsserver.
-      const hover = (): Promise<string> =>
-        workbench.page.evaluate((uri) => window.__E2E__!.getHover(uri, 2, 15), aUri)
-      await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
+    // Hover on `value` (line 2) must resolve against the remote tsserver.
+    const hover = (): Promise<string> =>
+      workbench.page.evaluate((uri) => window.__E2E__!.getHover(uri, 2, 15), aUri)
+    await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
 
-      // Definition of `value` (line 2) resolves back into the same remote file —
-      // and the result must carry the remote-ssh scheme: a bare file:/// URI
-      // here means the host-side URI transform silently dropped it.
-      const resolvesToAts = (): Promise<boolean> =>
-        workbench.page.evaluate(
-          (uri) =>
-            window
-              .__E2E__!.getDefinition(uri, 2, 15)
-              .then((d) => d.some((u) => u.startsWith('remote-ssh://') && u.endsWith('/a.ts'))),
-          aUri,
-        )
-      await expect.poll(resolvesToAts, { timeout: 30_000 }).toBe(true)
-
-      // Drop the extension-host tunnel socket: the RPC must survive transparently.
-      await workbench.page.evaluate(
-        (authority) => window.__E2E__!.dropRemoteExtensionHostSocket(authority),
-        AUTHORITY,
+    // Definition of `value` (line 2) resolves back into the same remote file —
+    // and the result must carry the remote-ssh scheme: a bare file:/// URI
+    // here means the host-side URI transform silently dropped it.
+    const resolvesToAts = (): Promise<boolean> =>
+      workbench.page.evaluate(
+        (uri) =>
+          window
+            .__E2E__!.getDefinition(uri, 2, 15)
+            .then((d) => d.some((u) => u.startsWith('remote-ssh://') && u.endsWith('/a.ts'))),
+        aUri,
       )
+    await expect.poll(resolvesToAts, { timeout: 30_000 }).toBe(true)
 
-      // A fresh hover still resolves once the PersistentProtocol re-attaches.
-      await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-    }
+    // Drop the extension-host tunnel socket: the RPC must survive transparently.
+    await workbench.page.evaluate(
+      (authority) => window.__E2E__!.dropRemoteExtensionHostSocket(authority),
+      AUTHORITY,
+    )
+
+    // A fresh hover still resolves once the PersistentProtocol re-attaches.
+    await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
   })
 })

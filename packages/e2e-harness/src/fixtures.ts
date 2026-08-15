@@ -76,6 +76,16 @@ export interface E2EFixtures {
   workspaceSeeder: WorkspaceSeeder | undefined
   /** The launched workspace, or undefined when no workspaceSeeder is set. */
   launchWorkspace: LaunchWorkspace | undefined
+  /**
+   * Per-test scratch-dir factory whose cleanup runs AFTER the app closes.
+   * Use for directories the running app (or its remote daemon / child
+   * processes) may hold open — e.g. a folder opened as the workspace, whose
+   * root the watcher pins on Windows. Deleting such a directory in the test
+   * body races those handles and EPERMs; `electronApp` depends on this
+   * fixture, so its teardown (rm with retries) is ordered after closeApp,
+   * when the whole process tree is dead and every handle is released.
+   */
+  scratchDir: (prefix?: string) => string
 }
 
 export interface WorkspaceSeeder {
@@ -114,8 +124,31 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       const posix = dir.replace(/\\/g, '/')
       await use({ dir: posix, file: (rel) => `${posix}/${rel}` })
     },
+    scratchDir: async ({}, use) => {
+      const dirs: string[] = []
+      await use((prefix = 'universe-editor-e2e-scratch-') => {
+        // realpathSync.native: CI Windows tmpdir can be an 8.3 short path (same
+        // normalization as launchWorkspace).
+        const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)))
+        dirs.push(dir)
+        return dir
+      })
+      // Runs after electronApp's closeApp (electronApp depends on this fixture):
+      // the process tree is dead, so the retries only absorb OS release lag.
+      // Cleanup is hygiene, not an assertion — warn instead of failing the test.
+      for (const dir of dirs) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+        } catch (err) {
+          console.warn(`[e2e] scratchDir cleanup failed for ${dir}: ${String(err)}`)
+        }
+      }
+    },
     electronApp: [
-      async ({ launchWorkspace }, use, testInfo) => {
+      async ({ launchWorkspace, scratchDir }, use, testInfo) => {
+        // Ordering-only dependency: scratchDir must set up before (→ tear down
+        // after) the app, so its cleanup sees a dead process tree.
+        void scratchDir
         const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
         seedBaselineUserData(userDataDir)
         // launchAppReady covers the launch-succeeded-but-no-window failure mode:
@@ -342,6 +375,13 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         throw new Error('workspaceSeeder requires a cold-launch fixture (createColdAppTest)')
       }
       await use(undefined)
+    },
+    scratchDir: async ({}, use) => {
+      await use(() => {
+        // The shared app outlives the test, so a post-close cleanup point does
+        // not exist within a test — same fail-loud stance as workspaceSeeder.
+        throw new Error('scratchDir requires a cold-launch fixture (createColdAppTest)')
+      })
     },
     _leakGate: [
       async ({ sharedApp }, use, testInfo) => {

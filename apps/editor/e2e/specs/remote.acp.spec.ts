@@ -18,8 +18,6 @@
  *  dir with authority `e2e-local`.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,81 +48,57 @@ function remoteUri(fsPath: string): string {
   return `remote-ssh://${AUTHORITY}${pathPart}`
 }
 
-/** Per-test remote workspace root on the local tmp filesystem. */
-function makeTmpDir(): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-remote-acp-')))
-}
-
-/** Delete `dir`, retrying while a live process (the remote agent) releases its cwd. */
-async function rmDirRetry(dir: string, attempts = 40): Promise<void> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true })
-      return
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250))
-    }
-  }
-  fs.rmSync(dir, { recursive: true, force: true })
-}
-
 test.describe('remote acp agent', () => {
   test('spawns the agent on the remote host with the remote workspace cwd @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-acp-')
 
-    try {
-      const rootUri = remoteUri(tmpDir)
+    const rootUri = remoteUri(tmpDir)
 
-      // Open the remote folder as the workspace (dialog bypassed).
-      await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
-          timeout: 15_000,
-        })
-        .toBe(rootUri)
-
-      // Inject the echo agent (a plain `node <script>` launch) and make it the default.
-      await workbench.page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
-        'echo',
-        ECHO_AGENT_PATH,
-      ] as const)
-
-      // New session — fire-and-forget: spawn + initialize run in the background.
-      await workbench.page.evaluate(() => {
-        void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    // Open the remote folder as the workspace (dialog bypassed).
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 15_000,
       })
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getAcpSessionCount()), {
-          timeout: 10_000,
-        })
-        .toBe(1)
+      .toBe(rootUri)
 
-      // The durable history row records the remote authority once `session/new`
-      // lands — proof the agent spawn was routed to the remote host, not the
-      // local AcpHost. A local (authority-untracked) session would report undefined.
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveAcpSessionAuthority()), {
-          timeout: 10_000,
-        })
-        .toBe(AUTHORITY)
+    // Inject the echo agent (a plain `node <script>` launch) and make it the default.
+    await workbench.page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
 
-      // Ask the agent for its `session/new` cwd; it echoes the remote workspace
-      // root back, proving the cwd flowed through the tunnel to the remote spawn.
-      await workbench.page.evaluate(() => window.__E2E__!.sendAcpPrompt('report-cwd'))
-      const agentEchoesCwd = (): Promise<boolean> =>
-        workbench.page.evaluate((base) => {
-          const messages = window.__E2E__!.getAcpMessages()
-          return messages.some((m) => m.role === 'agent' && m.text.includes(base))
-        }, path.basename(tmpDir))
-      await expect.poll(agentEchoesCwd, { timeout: 10_000 }).toBe(true)
-    } finally {
-      // Close the workspace so the renderer's workspace-swap drain stops the
-      // remote agent process (releasing its cwd) before we delete the tmp dir.
-      await workbench.page.evaluate(() => window.__E2E__!.closeWorkspace()).catch(() => {})
-      await rmDirRetry(tmpDir)
-    }
+    // New session — fire-and-forget: spawn + initialize run in the background.
+    await workbench.page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getAcpSessionCount()), {
+        timeout: 10_000,
+      })
+      .toBe(1)
+
+    // The durable history row records the remote authority once `session/new`
+    // lands — proof the agent spawn was routed to the remote host, not the
+    // local AcpHost. A local (authority-untracked) session would report undefined.
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveAcpSessionAuthority()), {
+        timeout: 10_000,
+      })
+      .toBe(AUTHORITY)
+
+    // Ask the agent for its `session/new` cwd; it echoes the remote workspace
+    // root back, proving the cwd flowed through the tunnel to the remote spawn.
+    await workbench.page.evaluate(() => window.__E2E__!.sendAcpPrompt('report-cwd'))
+    const agentEchoesCwd = (): Promise<boolean> =>
+      workbench.page.evaluate((base) => {
+        const messages = window.__E2E__!.getAcpMessages()
+        return messages.some((m) => m.role === 'agent' && m.text.includes(base))
+      }, path.basename(tmpDir))
+    await expect.poll(agentEchoesCwd, { timeout: 10_000 }).toBe(true)
   })
 })

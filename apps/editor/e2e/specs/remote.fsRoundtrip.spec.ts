@@ -15,7 +15,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { createColdAppTest } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
@@ -41,11 +40,6 @@ function remoteUri(fsPath: string): string {
   return `remote-ssh://${AUTHORITY}${pathPart}`
 }
 
-/** Per-test remote workspace root on the local tmp filesystem. */
-function makeTmpDir(): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-remote-')))
-}
-
 test.describe('remote fs roundtrip', () => {
   // Pin a local workspace so the explorer's idle-phase watcher orchestration
   // calls `watch(localRoot)` instead of `unwatch()`. `IFileWatcherService` is a
@@ -62,105 +56,90 @@ test.describe('remote fs roundtrip', () => {
 
   test('writes, reads back, stats, lists, then deletes a remote file @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-')
     const fileUri = remoteUri(path.join(tmpDir, 'hello.txt'))
     const dirUri = remoteUri(tmpDir)
     const content = 'hello remote world'
 
-    try {
-      await workbench.page.evaluate(({ uri, text }) => window.__E2E__!.writeFileText(uri, text), {
-        uri: fileUri,
-        text: content,
+    await workbench.page.evaluate(({ uri, text }) => window.__E2E__!.writeFileText(uri, text), {
+      uri: fileUri,
+      text: content,
+    })
+
+    const readBack = await workbench.page.evaluate(
+      (uri) => window.__E2E__!.readFileText(uri),
+      fileUri,
+    )
+    expect(readBack).toBe(content)
+
+    const stat = await workbench.page.evaluate((uri) => window.__E2E__!.statResource(uri), fileUri)
+    expect(stat).not.toBeNull()
+    expect(stat?.isFile).toBe(true)
+    expect(stat?.isDirectory).toBe(false)
+
+    const names = await workbench.page.evaluate((uri) => window.__E2E__!.listResource(uri), dirUri)
+    expect(names).toContain('hello.txt')
+
+    await workbench.page.evaluate((uri) => window.__E2E__!.deleteResource(uri), fileUri)
+    await expect
+      .poll(() => workbench.page.evaluate((uri) => window.__E2E__!.statResource(uri), fileUri), {
+        timeout: 10_000,
       })
-
-      const readBack = await workbench.page.evaluate(
-        (uri) => window.__E2E__!.readFileText(uri),
-        fileUri,
-      )
-      expect(readBack).toBe(content)
-
-      const stat = await workbench.page.evaluate(
-        (uri) => window.__E2E__!.statResource(uri),
-        fileUri,
-      )
-      expect(stat).not.toBeNull()
-      expect(stat?.isFile).toBe(true)
-      expect(stat?.isDirectory).toBe(false)
-
-      const names = await workbench.page.evaluate(
-        (uri) => window.__E2E__!.listResource(uri),
-        dirUri,
-      )
-      expect(names).toContain('hello.txt')
-
-      await workbench.page.evaluate((uri) => window.__E2E__!.deleteResource(uri), fileUri)
-      await expect
-        .poll(() => workbench.page.evaluate((uri) => window.__E2E__!.statResource(uri), fileUri), {
-          timeout: 10_000,
-        })
-        .toBeNull()
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
-    }
+      .toBeNull()
   })
 
   test('text search over a remote root returns remote-ssh hits @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-')
 
-    try {
-      fs.writeFileSync(path.join(tmpDir, 'alpha.txt'), 'no keyword here')
-      fs.writeFileSync(path.join(tmpDir, 'beta.txt'), 'needle in a haystack')
+    fs.writeFileSync(path.join(tmpDir, 'alpha.txt'), 'no keyword here')
+    fs.writeFileSync(path.join(tmpDir, 'beta.txt'), 'needle in a haystack')
 
-      const hits = await workbench.page.evaluate(
-        ({ root, pattern }) => window.__E2E__!.searchTextInRoot(root, pattern),
-        { root: remoteUri(tmpDir), pattern: 'needle' },
-      )
+    const hits = await workbench.page.evaluate(
+      ({ root, pattern }) => window.__E2E__!.searchTextInRoot(root, pattern),
+      { root: remoteUri(tmpDir), pattern: 'needle' },
+    )
 
-      expect(hits).toContain(remoteUri(path.join(tmpDir, 'beta.txt')))
-      expect(hits).not.toContain(remoteUri(path.join(tmpDir, 'alpha.txt')))
-      for (const hit of hits) {
-        expect(hit.startsWith(`remote-ssh://${AUTHORITY}/`)).toBe(true)
-      }
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
+    expect(hits).toContain(remoteUri(path.join(tmpDir, 'beta.txt')))
+    expect(hits).not.toContain(remoteUri(path.join(tmpDir, 'alpha.txt')))
+    for (const hit of hits) {
+      expect(hit.startsWith(`remote-ssh://${AUTHORITY}/`)).toBe(true)
     }
   })
 
   test('watcher relays a remote change event with a remote-ssh URI @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-')
 
-    try {
-      await workbench.page.evaluate((uri) => window.__E2E__!.watchFolder(uri), remoteUri(tmpDir))
+    await workbench.page.evaluate((uri) => window.__E2E__!.watchFolder(uri), remoteUri(tmpDir))
 
-      const created = path.join(tmpDir, 'newfile.txt')
-      const expectedUri = remoteUri(created)
-      fs.writeFileSync(created, 'created after watch armed')
+    const created = path.join(tmpDir, 'newfile.txt')
+    const expectedUri = remoteUri(created)
+    fs.writeFileSync(created, 'created after watch armed')
 
-      await expect
-        .poll(
-          async () => {
-            const seen = await workbench.page.evaluate(
-              (uri) => window.__E2E__!.getWatchedChangeEvents().some((e) => e.resource === uri),
-              expectedUri,
-            )
-            // parcel's Windows backend can miss a change landing in the
-            // subscribe→ready window; touching the file re-arms a retry.
-            if (!seen) fs.writeFileSync(created, `touch ${Date.now()}`)
-            return seen
-          },
-          { timeout: 20_000, intervals: [500, 1000] },
-        )
-        .toBe(true)
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
-    }
+    await expect
+      .poll(
+        async () => {
+          const seen = await workbench.page.evaluate(
+            (uri) => window.__E2E__!.getWatchedChangeEvents().some((e) => e.resource === uri),
+            expectedUri,
+          )
+          // parcel's Windows backend can miss a change landing in the
+          // subscribe→ready window; touching the file re-arms a retry.
+          if (!seen) fs.writeFileSync(created, `touch ${Date.now()}`)
+          return seen
+        },
+        { timeout: 20_000, intervals: [500, 1000] },
+      )
+      .toBe(true)
   })
 })

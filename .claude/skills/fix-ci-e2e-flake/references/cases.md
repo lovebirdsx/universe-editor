@@ -390,6 +390,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 77 — remote spec 在 test body 的 finally 里 rmSync 工作区根目录：EPERM teardown flaky（app/daemon 还活着、句柄结构性未释放，retry 救不回）；修=harness `scratchDir` fixture 把删除排到 closeApp 之后**
+信号：`Error: EPERM, Permission denied: \\?\C:\...\Temp\ue2-remote-ws-XXX`，栈落在 spec 的 `finally { fs.rmSync(tmpDir, {maxRetries:10, retryDelay:200}) }`（实证 `remote.workspaceUi` "surfaces the remote authority"，本地 `--repeat-each=4` 即 3/4 挂且 **retry 也救不回**=结构性）；**test body 所有断言全过**——失败只在清理段，与被测行为无关。
+根因：Playwright 语义 = test body（含 finally）先跑完，fixture teardown（cold fixture 的 `closeApp`）才执行——rm 时 Electron + remote daemon 全家还活着。把 tmp 目录作为 **remote workspace 打开**后，daemon 侧随之持有根目录句柄（watcher/子进程），app 存活期间永不释放，2s 重试窗口纯碰运气（只有 rm 抢在句柄 arm 之前才通过，机器越忙越必挂）。对照证据：不开 workspace、只 `watchFolder` 探针 arm 远端 watch 的 remote.fsRoundtrip/reconnect 用裸 rmSync 一直稳；remote.acp/terminal 曾用 40×250ms `rmDirRetry` + `closeWorkspace` 硬扛 agent/PTY 的 cwd 锁，属同病异形。
+修（harness 层，不削弱任何断言）：`packages/e2e-harness/src/fixtures.ts` 新增 per-test `scratchDir(prefix?)` 工厂 fixture，cold 的 `electronApp` 显式依赖它（`void scratchDir` ordering-only 依赖）→ fixture **逆序 teardown** 保证其清理在 `closeApp` 之后（进程树已死、句柄必然释放），rm 带重试、失败仅 warn（清理是卫生不是断言）；shared fixture 下调用即抛（无 post-close 清理点，对齐 workspaceSeeder fail-loud 先例）。6 个 remote.* spec 全部迁移，删掉各自 makeTmpDir/rmDirRetry/try-finally；顺手给 workspaceUi 的 `getRemoteConnections` poll 补 `{timeout:15_000}`（连接懒触发+串行 daemon bring-up，本地默认 expect 5s 太紧，对齐 remote.reconnect 先例——「首 poll 漏带大 timeout」同 7/25/31 族）。验证：目标用例 repeat-each=6 全绿（修复前 4 跑 3 挂）+ remote 家族 9/9 + %TEMP% 零残留。
+教训：a) 「teardown EPERM/EBUSY + retry 救不回」先查删除时目标是否仍被 fixture 持有的活进程占着——加大重试/加 closeWorkspace 都是错误方向，把删除挪到进程死后（fixture 依赖排序）才是根治；b) Playwright fixture 逆序 teardown 是排程清理顺序的正规工具：让 app fixture 依赖资源 fixture，即得「资源清理晚于 app 关闭」；c) 新 spec 需要「会被 app 打开/watch/作为子进程 cwd 的临时目录」时直接用 `scratchDir`，禁止在 test body 里 rmSync 这类目录（本地 workspace 的 smoke.* 同形代码历史稳定，未批量迁移——若哪天出现同信号，按本条一行式迁移）。锚：`packages/e2e-harness/src/fixtures.ts`（scratchDir + ordering 注释）；`apps/editor/e2e/specs/remote.workspaceUi.spec.ts`（范例）；`apps/editor/e2e/CLAUDE.md`（scratchDir 段）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

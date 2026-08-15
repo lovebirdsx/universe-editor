@@ -11,8 +11,6 @@
  *  dir with authority `e2e-local`.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { createColdAppTest } from '@universe-editor/e2e-harness'
 import { expect } from '../fixtures/electronApp.js'
@@ -39,75 +37,53 @@ function remoteUri(fsPath: string): string {
   return `remote-ssh://${AUTHORITY}${pathPart}`
 }
 
-/** Per-test remote workspace root on the local tmp filesystem. */
-function makeTmpDir(): string {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ue2-remote-term-')))
-}
-
-/** Delete `dir`, retrying while a live process (the remote shell) releases its cwd. */
-async function rmDirRetry(dir: string, attempts = 40): Promise<void> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true })
-      return
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250))
-    }
-  }
-  fs.rmSync(dir, { recursive: true, force: true })
-}
-
 test.describe('remote terminal', () => {
   test('routes the terminal to the remote host and round-trips output @regression', async ({
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const tmpDir = makeTmpDir()
+    const tmpDir = scratchDir('ue2-remote-term-')
 
-    try {
-      const rootUri = remoteUri(tmpDir)
+    const rootUri = remoteUri(tmpDir)
 
-      await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
-          timeout: 15_000,
-        })
-        .toBe(rootUri)
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 15_000,
+      })
+      .toBe(rootUri)
 
-      const id = await workbench.page.evaluate(() => window.__E2E__!.terminalCreateInWorkspace())
-      expect(id).not.toBeNull()
-      const tid = id!
-      expect(tid).toContain(`remote:${AUTHORITY}:`)
+    const id = await workbench.page.evaluate(() => window.__E2E__!.terminalCreateInWorkspace())
+    expect(id).not.toBeNull()
+    const tid = id!
+    expect(tid).toContain(`remote:${AUTHORITY}:`)
 
-      await workbench.page.evaluate(
-        ({ t, marker }) => window.__E2E__!.terminalInput(t, `echo ${marker}\r`),
-        { t: tid, marker: MARKER },
-      )
-      await expect
-        .poll(() => workbench.page.evaluate((t) => window.__E2E__!.terminalReadBuffer(t), tid), {
-          timeout: 15_000,
-        })
-        .toContain(MARKER)
+    await workbench.page.evaluate(
+      ({ t, marker }) => window.__E2E__!.terminalInput(t, `echo ${marker}\r`),
+      { t: tid, marker: MARKER },
+    )
+    await expect
+      .poll(() => workbench.page.evaluate((t) => window.__E2E__!.terminalReadBuffer(t), tid), {
+        timeout: 15_000,
+      })
+      .toContain(MARKER)
 
-      await workbench.page.evaluate((t) => window.__E2E__!.terminalInput(t, 'pwd\r'), tid)
-      await expect
-        .poll(() => workbench.page.evaluate((t) => window.__E2E__!.terminalReadBuffer(t), tid), {
-          timeout: 15_000,
-        })
-        .toContain(path.basename(tmpDir))
+    await workbench.page.evaluate((t) => window.__E2E__!.terminalInput(t, 'pwd\r'), tid)
+    await expect
+      .poll(() => workbench.page.evaluate((t) => window.__E2E__!.terminalReadBuffer(t), tid), {
+        timeout: 15_000,
+      })
+      .toContain(path.basename(tmpDir))
 
-      // Exit the shell and wait for the terminal to leave the manager via the
-      // natural exit path, so its process releases the tmp dir cwd handle before
-      // cleanup (Windows refuses to delete a live process's cwd directory).
-      await workbench.page.evaluate((t) => window.__E2E__!.terminalInput(t, 'exit\r'), tid)
-      await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getPanelTerminalCount()), {
-          timeout: 15_000,
-        })
-        .toBe(0)
-      await workbench.page.evaluate((t) => window.__E2E__!.terminalClose(t), tid)
-    } finally {
-      await rmDirRetry(tmpDir)
-    }
+    // Exit the shell and wait for the terminal to leave the manager via the
+    // natural exit path.
+    await workbench.page.evaluate((t) => window.__E2E__!.terminalInput(t, 'exit\r'), tid)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getPanelTerminalCount()), {
+        timeout: 15_000,
+      })
+      .toBe(0)
+    await workbench.page.evaluate((t) => window.__E2E__!.terminalClose(t), tid)
   })
 })
