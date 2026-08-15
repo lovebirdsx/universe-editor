@@ -36,7 +36,12 @@ import type {
   RemoteEnvironmentDto,
   WslDistroDto,
 } from '../../../shared/ipc/remoteStatusService.js'
-import { ConnectToHostAction, ConnectToWslAction } from '../remoteActions.js'
+import {
+  ConnectToHostAction,
+  ConnectToWslAction,
+  RemoveManualHostAction,
+} from '../remoteActions.js'
+import { IRemoteExplorerService } from '../../services/remote/RemoteExplorerService.js'
 
 function distro(name: string, over: Partial<WslDistroDto> = {}): WslDistroDto {
   return { name, isDefault: false, isRunning: false, version: 2, ...over }
@@ -325,5 +330,56 @@ describe('remoteActions — WSL command surface', () => {
       'alpha',
     ])
     expect(remoteStatus.connectCalls).toEqual(['alpha'])
+  })
+})
+
+describe('remoteActions — RemoveManualHostAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function makeExplorerStub() {
+    const removed: string[] = []
+    return {
+      removed,
+      async removeManualHost(host: string) {
+        removed.push(host)
+      },
+    }
+  }
+
+  async function invokeHandler(host?: string): Promise<{ removed: string[] }> {
+    const explorer = makeExplorerStub()
+    const services = new ServiceCollection()
+    services.set(IRemoteExplorerService, explorer as unknown as IRemoteExplorerService)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(RemoveManualHostAction.ID)!
+      await cmd.handler(accessor, host)
+    })
+    return explorer
+  }
+
+  it('registers outside the command palette (menu-only command)', () => {
+    disposables.push(registerAction2(RemoveManualHostAction))
+    expect(CommandsRegistry.getCommand(RemoveManualHostAction.ID)).toBeDefined()
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === RemoveManualHostAction.ID,
+      ),
+    ).toBe(false)
+  })
+
+  it('removes the manual host passed as argument', async () => {
+    disposables.push(registerAction2(RemoveManualHostAction))
+    const explorer = await invokeHandler('alice@host')
+    expect(explorer.removed).toEqual(['alice@host'])
+  })
+
+  it('is a no-op without a host argument or with a blank one', async () => {
+    disposables.push(registerAction2(RemoveManualHostAction))
+    expect((await invokeHandler()).removed).toEqual([])
+    expect((await invokeHandler('   ')).removed).toEqual([])
   })
 })

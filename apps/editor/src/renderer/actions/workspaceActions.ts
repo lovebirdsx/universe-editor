@@ -215,3 +215,25 @@ export class ClearRecentWorkspacesAction extends Action2 {
     void accessor.get(IWorkspaceService).clearRecent()
   }
 }
+
+/**
+ * Remove one entry from Open Recent. Driven by the Remote Explorer recent-row
+ * button / context menu (the folder URI is passed as a string arg).
+ */
+export class RemoveRecentWorkspaceAction extends Action2 {
+  static readonly ID = 'workbench.action.removeRecent'
+  constructor() {
+    super({
+      id: RemoveRecentWorkspaceAction.ID,
+      title: localize2('action.removeRecent.title', 'Remove from Recently Opened'),
+      category: localize2('command.category.file', 'File'),
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, folderArg?: string): Promise<void> {
+    if (folderArg === undefined || folderArg.trim() === '') return
+    const workspace = accessor.get(IWorkspaceService)
+    await workspace.removeRecent(URI.parse(folderArg))
+  }
+}

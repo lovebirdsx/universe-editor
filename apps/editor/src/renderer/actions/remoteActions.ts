@@ -44,6 +44,7 @@ import {
   type RemoteEnvironmentDto,
   type WslDistroDto,
 } from '../../shared/ipc/remoteStatusService.js'
+import { IRemoteExplorerService } from '../services/remote/RemoteExplorerService.js'
 
 const CATEGORY = localize2('command.category.remoteSsh', 'Remote-SSH')
 const WSL_CATEGORY = localize2('command.category.wsl', 'WSL')
@@ -441,6 +442,29 @@ export class RetryConnectionAction extends Action2 {
       if (!authority) return
     }
     await remoteStatus.retryConnection(authority)
+  }
+}
+
+/**
+ * Forget a manually-added SSH host from the Remote Explorer targets list.
+ * Driven by the explorer row button and the row context menu — hosts coming
+ * from ~/.ssh/config cannot be forgotten here (they are not `manual`).
+ */
+export class RemoveManualHostAction extends Action2 {
+  static readonly ID = 'remote.removeManualHost'
+  constructor() {
+    super({
+      id: RemoveManualHostAction.ID,
+      title: localize2('action.remote.removeManualHost.title', 'Forget'),
+      category: CATEGORY,
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, host?: string): Promise<void> {
+    if (host === undefined || host.trim() === '') return
+    const explorer = accessor.get(IRemoteExplorerService)
+    await explorer.removeManualHost(host)
   }
 }
 

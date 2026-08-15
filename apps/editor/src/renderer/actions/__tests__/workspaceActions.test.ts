@@ -43,6 +43,7 @@ import {
   CloseFolderAction,
   OpenFolderAction,
   OpenRecentAction,
+  RemoveRecentWorkspaceAction,
 } from '../workspaceActions.js'
 
 interface WorkspaceStub extends IWorkspaceServiceType {
@@ -362,6 +363,35 @@ describe('workspaceActions', () => {
     const ws = makeWorkspaceStub([{ folder: URI.file('/tmp/x'), name: 'x', lastOpened: 1 }])
     await runCommand(ClearRecentWorkspacesAction.ID, ws)
     expect(ws.clearCalls).toBe(1)
+  })
+
+  it('RemoveRecent.run removes the folder parsed from the URI-string argument', async () => {
+    disposables.push(registerAction2(RemoveRecentWorkspaceAction))
+    const folder = URI.parse('remote-ssh://alice@host/home/u/proj')
+    const ws = makeWorkspaceStub([{ folder, name: 'proj', lastOpened: 1 }])
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, ws)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(RemoveRecentWorkspaceAction.ID)!
+      await cmd.handler(accessor, folder.toString())
+    })
+    expect(ws.removeCalls).toHaveLength(1)
+    expect(ws.removeCalls[0]?.toString()).toBe(folder.toString())
+  })
+
+  it('RemoveRecent.run is a no-op without a folder argument or with a blank one', async () => {
+    disposables.push(registerAction2(RemoveRecentWorkspaceAction))
+    const ws = makeWorkspaceStub([{ folder: URI.file('/tmp/x'), name: 'x', lastOpened: 1 }])
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, ws)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(RemoveRecentWorkspaceAction.ID)!
+      await cmd.handler(accessor, undefined)
+      await cmd.handler(accessor, '   ')
+    })
+    expect(ws.removeCalls).toHaveLength(0)
   })
 })
 

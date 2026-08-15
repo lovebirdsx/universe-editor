@@ -23,6 +23,12 @@ export const enum MenuId {
   AcpPromptContext = 'acpPromptContext',
   /** Process Explorer row right-click menu. */
   ProcessExplorerContext = 'processExplorerContext',
+  /**
+   * Remote Explorer row right-click menu; `when` gates on the `remoteRowKind`
+   * ('sshTarget' | 'wslTarget' | 'connection' | 'recent'), `remoteRowState` and
+   * `remoteRowManual` scoped keys seeded by the view's context-menu wrapper.
+   */
+  RemoteExplorerContext = 'remoteExplorerContext',
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',

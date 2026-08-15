@@ -129,6 +129,7 @@ import {
   OpenFolderAction,
   OpenRecentAction,
   OpenWorkspaceInVSCodeAction,
+  RemoveRecentWorkspaceAction,
 } from './workspaceActions.js'
 import { ZoomInAction, ZoomOutAction, ResetZoomAction } from './zoomActions.js'
 import { SaveAllFilesAction, SaveFileAction, SaveFileAsAction } from './fileSaveActions.js'
@@ -399,6 +400,7 @@ import {
   ConnectToHostAction,
   ConnectToWslAction,
   OpenFolderOnHostAction,
+  RemoveManualHostAction,
   RetryConnectionAction,
   StopRemoteServerAction,
 } from './remoteActions.js'
@@ -517,6 +519,7 @@ for (const action of keybindingsEditorActions) registerAction2(action)
 registerAction2(OpenFolderAction)
 registerAction2(OpenRecentAction)
 registerAction2(ClearRecentWorkspacesAction)
+registerAction2(RemoveRecentWorkspaceAction)
 registerAction2(CloseFolderAction)
 registerAction2(OpenWorkspaceInVSCodeAction)
 
@@ -840,3 +843,4 @@ registerAction2(OpenFolderOnHostAction)
 registerAction2(CloseConnectionAction)
 registerAction2(RetryConnectionAction)
 registerAction2(StopRemoteServerAction)
+registerAction2(RemoveManualHostAction)

@@ -35,6 +35,8 @@ import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContex
 import { CompareContextContribution } from '../CompareContextContribution.js'
 import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
+import { RemoteExplorerMenuContribution } from '../RemoteExplorerMenuContribution.js'
+import { RemoteExplorerContextContribution } from '../RemoteExplorerContextContribution.js'
 import { EditMenuContribution } from '../EditMenuContribution.js'
 import { LogLevelContribution } from '../LogLevelContribution.js'
 import {
@@ -284,6 +286,20 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerMenu',
   ExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Remote Explorer row right-click menu items + the hasWslDistros context key
+// gating the WSL Targets view's when-clause. BlockStartup so the menu exists
+// before any RemoteContextMenu renders and the key before the view registers.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.remoteExplorerMenu',
+  RemoteExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.remoteExplorerContext',
+  RemoteExplorerContextContribution,
   WorkbenchPhase.BlockStartup,
 )
 
