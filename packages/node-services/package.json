@@ -25,7 +25,8 @@
     "@parcel/watcher": "catalog:",
     "@vscode/ripgrep": "catalog:",
     "@universe-editor/platform": "workspace:*",
-    "smol-toml": "catalog:"
+    "smol-toml": "catalog:",
+    "tar": "catalog:"
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",

@@ -25,6 +25,11 @@ export interface IClaudeBinaryResolveOptions {
    * a cache miss then fails fast instead of downloading.
    */
   readonly allowDownload?: boolean
+  /**
+   * Remote workspace authority. When set, the binary is resolved/downloaded on
+   * that remote host (download semantics only; source/customPath are ignored).
+   */
+  readonly authority?: string
 }
 
 export interface IClaudeBinaryProgress {
@@ -32,6 +37,8 @@ export interface IClaudeBinaryProgress {
   readonly received: number
   /** Total bytes per Content-Length, or 0 when the server didn't report it. */
   readonly total: number
+  /** Remote workspace authority (remote downloads only; absent for local events). */
+  readonly authority?: string
 }
 
 export interface IClaudeBinaryResult {

@@ -118,7 +118,7 @@ describe('argv assembly', () => {
     expect(script).toContain('tar xzf /tmp/universe-server-abc123.tgz')
     expect(script).toContain('npm install --omit=dev --no-audit --no-fund')
     expect(script).toContain('vendor/claude-agent-acp vendor/codex-acp')
-    expect(script).toContain('npm ci --omit=dev --no-audit --no-fund')
+    expect(script).toContain('npm ci --omit=dev --omit=optional --no-audit --no-fund')
     expect(script).toContain('rm /tmp/universe-server-abc123.tgz')
     expect(script).toContain('printf %s "deadbeef" > ~/.universe-editor-server/0.0.0/bundle.hash')
   })

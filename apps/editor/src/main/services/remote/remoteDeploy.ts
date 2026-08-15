@@ -151,9 +151,12 @@ export function buildDeployScriptBody(
 ): string {
   const dir = `${DATA_DIR}/${version}`
   // Vendored ACP agents ship without node_modules (client-platform binaries must
-  // not cross the wire); `npm ci --omit=dev` in each vendor dir resolves the
-  // remote host's own platform packages.
-  const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --no-audit --no-fund); fi; done`
+  // not cross the wire); `npm ci --omit=dev --omit=optional` in each vendor dir
+  // resolves the remote host's own platform packages. `--omit=optional` skips the
+  // native agent binaries (claude's @anthropic-ai/claude-agent-sdk-* / codex's
+  // @openai/codex platform packages, ~500MB total) — those are now downloaded on
+  // demand by the AgentBinary channel instead of being pulled in by npm.
+  const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --omit=optional --no-audit --no-fund); fi; done`
   return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && printf %s "${bundleHash}" > ${dir}/${BUNDLE_HASH_FILE} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}`
 }
 

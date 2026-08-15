@@ -37,8 +37,14 @@ import type { IAcpClientNotificationSink } from '../acpClientService.js'
 import { AcpSessionCreateProfiler } from '../acpSessionCreateProfiler.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentDescriptor, IAcpAgentRegistry } from '../acpAgentRegistry.js'
-import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
-import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryService.js'
+import type {
+  IClaudeBinaryProgress,
+  IClaudeBinaryService,
+} from '../../../../shared/ipc/claudeBinaryService.js'
+import type {
+  ICodexBinaryProgress,
+  ICodexBinaryService,
+} from '../../../../shared/ipc/codexBinaryService.js'
 import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
 import type {
@@ -129,6 +135,14 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
       args: [],
       runAsNode: true,
       nodeEntry: 'claude',
+    },
+    {
+      id: 'codex',
+      name: 'Codex',
+      command: 'codex-acp',
+      args: [],
+      runAsNode: true,
+      nodeEntry: 'codex',
     },
   ]
   list() {
@@ -298,6 +312,12 @@ interface Harness {
   readonly notifications: StubNotificationService
   readonly transport: IAcpTransportTestHarness
   readonly sink: IAcpClientNotificationSink
+  readonly claudeResolve: ReturnType<typeof vi.fn>
+  readonly codexResolve: ReturnType<typeof vi.fn>
+  readonly claudeConfigRead: ReturnType<typeof vi.fn>
+  readonly claudeProgress: Emitter<IClaudeBinaryProgress>
+  readonly codexProgress: Emitter<ICodexBinaryProgress>
+  readonly progressReports: { message: string; increment?: number }[]
   /** Inject a peer JSON-RPC request and resolve with the next response payload. */
   callPeer(
     method: string,
@@ -311,6 +331,7 @@ function makeService(
     autoInitialize?: boolean
     startupTimeoutMs?: number
     claudeSettingsEnv?: Record<string, string>
+    config?: Record<string, unknown>
   } = {},
 ): Harness {
   const transport = createInMemoryAcpHost()
@@ -323,6 +344,15 @@ function makeService(
     onRequestPermission: vi.fn(),
     onCreateElicitation: vi.fn(),
   }
+  const claudeProgress = new Emitter<IClaudeBinaryProgress>()
+  const codexProgress = new Emitter<ICodexBinaryProgress>()
+  const progressReports: { message: string; increment?: number }[] = []
+  const claudeResolve = vi.fn(async (): Promise<{ path: string }> => ({ path: '/x' }))
+  const codexResolve = vi.fn(async (): Promise<{ path: string }> => ({ path: '/x' }))
+  const claudeConfigRead = vi.fn(
+    async (_authority?: string): Promise<{ env?: Record<string, string> }> =>
+      opts.claudeSettingsEnv ? { env: opts.claudeSettingsEnv } : {},
+  )
   const svc = new AcpClientService(
     transport.host,
     new FakeAgentRegistry(),
@@ -333,22 +363,30 @@ function makeService(
     new NoopTelemetryService(),
     terminals,
     {
-      onDidChangeProgress: new Emitter<never>().event,
-      resolve: () => Promise.resolve({ path: '/x' }),
+      onDidChangeProgress: claudeProgress.event,
+      resolve: claudeResolve,
     } as unknown as IClaudeBinaryService,
     {
-      onDidChangeProgress: new Emitter<never>().event,
-      resolve: () => Promise.resolve({ path: '/x' }),
+      onDidChangeProgress: codexProgress.event,
+      resolve: codexResolve,
     } as unknown as ICodexBinaryService,
     {
-      read: () => Promise.resolve(opts.claudeSettingsEnv ? { env: opts.claudeSettingsEnv } : {}),
+      read: claudeConfigRead,
     } as unknown as IClaudeConfigService,
     {
-      get: (key: string) => (key === 'acp.startupTimeoutMs' ? opts.startupTimeoutMs : undefined),
+      get: (key: string) => {
+        if (key === 'acp.startupTimeoutMs') return opts.startupTimeoutMs
+        if (opts.config && key in opts.config) return opts.config[key]
+        return undefined
+      },
     } as unknown as IConfigurationService,
     {
-      withProgress: (_o: unknown, task: (p: { report: () => void }) => unknown) =>
-        task({ report: () => {} }),
+      withProgress: (_o: unknown, task: (p: { report: (r: unknown) => void }) => unknown) =>
+        task({
+          report: (r) => {
+            progressReports.push(r as { message: string; increment?: number })
+          },
+        }),
     } as unknown as IProgressService,
     new StubLoggerService(),
     new UriIdentityService('linux'),
@@ -392,6 +430,12 @@ function makeService(
     notifications,
     transport,
     sink,
+    claudeResolve,
+    codexResolve,
+    claudeConfigRead,
+    claudeProgress,
+    codexProgress,
+    progressReports,
     async callPeer(method, params, id) {
       const reqId = id ?? nextId++
       const writesBefore = transport.written().length
@@ -781,6 +825,112 @@ describe('AcpClientService — claude settings env injection', () => {
     const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       expect(h.transport.lastSpec()?.env?.['ANTHROPIC_AUTH_TOKEN']).toBeUndefined()
+    } finally {
+      conn.dispose()
+    }
+  })
+})
+
+describe('AcpClientService — remote binary injection', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  const REMOTE = 'ssh-remote+example.com'
+
+  it('resolves the claude binary on the remote host and ignores local source config', async () => {
+    h = makeService({
+      config: {
+        'acp.claude.source': 'custom',
+        'acp.claude.executablePath': '/local/bin/claude',
+      },
+    })
+    h.claudeResolve.mockResolvedValueOnce({ path: '/remote/bin/claude' })
+
+    const conn = await h.svc.connect('claude-code', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+    })
+    try {
+      const spec = h.transport.lastSpec()
+      expect(spec?.authority).toBe(REMOTE)
+      expect(spec?.env?.['CLAUDE_CODE_EXECUTABLE']).toBe('/remote/bin/claude')
+      expect(h.claudeResolve).toHaveBeenCalledTimes(1)
+      expect(h.claudeResolve.mock.calls[0]![0]).toEqual({
+        source: 'download',
+        allowDownload: true,
+        authority: REMOTE,
+      })
+      expect(h.claudeConfigRead).toHaveBeenCalledWith(REMOTE)
+    } finally {
+      conn.dispose()
+    }
+  })
+
+  it('resolves the codex binary remotely and never injects the local apiKey', async () => {
+    h = makeService({ config: { 'acp.codex.apiKey': 'sk-local-secret' } })
+    h.codexResolve.mockResolvedValueOnce({ path: '/remote/bin/codex' })
+
+    const conn = await h.svc.connect('codex', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+    })
+    try {
+      const spec = h.transport.lastSpec()
+      expect(spec?.env?.['CODEX_PATH']).toBe('/remote/bin/codex')
+      expect(spec?.env?.['OPENAI_API_KEY']).toBeUndefined()
+      expect(h.codexResolve).toHaveBeenCalledTimes(1)
+      expect(h.codexResolve.mock.calls[0]![0]).toEqual({
+        source: 'download',
+        allowDownload: true,
+        authority: REMOTE,
+      })
+    } finally {
+      conn.dispose()
+    }
+  })
+
+  it('passes allowDownload=false for a silent remote claude resolve', async () => {
+    h = makeService()
+    const conn = await h.svc.connect('claude-code', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+      silent: true,
+    })
+    try {
+      expect(h.claudeResolve).toHaveBeenCalledTimes(1)
+      expect(h.claudeResolve.mock.calls[0]![0]).toEqual({
+        source: 'download',
+        allowDownload: false,
+        authority: REMOTE,
+      })
+    } finally {
+      conn.dispose()
+    }
+  })
+
+  it('reports only remote progress events carrying the spawn authority', async () => {
+    h = makeService()
+    h.claudeResolve.mockImplementationOnce(async () => {
+      h.claudeProgress.fire({ received: 20, total: 100 })
+      h.claudeProgress.fire({ received: 40, total: 100, authority: 'ssh-remote+other' })
+      h.claudeProgress.fire({ received: 50, total: 100, authority: REMOTE })
+      return { path: '/remote/bin/claude' }
+    })
+
+    const conn = await h.svc.connect('claude-code', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+    })
+    try {
+      const pctReports = h.progressReports.filter((r) => r.increment !== undefined)
+      expect(pctReports).toHaveLength(1)
+      expect(pctReports[0]!.message).toContain('50%')
     } finally {
       conn.dispose()
     }

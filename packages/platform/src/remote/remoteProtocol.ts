@@ -24,6 +24,10 @@
  *     LSP→Monaco conversion layer (lspMonacoConvert / wireUri's `parseWireUri`)
  *     interprets those strings against the extension host's URI space instead,
  *     rebuilding a remote host's `file:` strings as `remote-ssh:` URIs.
+ *   - `AgentBinary.resolve` returns the downloaded binary as a remote-native
+ *     path string (not a URI): the renderer injects it verbatim as an env var
+ *     (CLAUDE_CODE_EXECUTABLE / CODEX_PATH) into a process spawned on that same
+ *     remote host, so no URI transform is needed or applied.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
@@ -32,7 +36,7 @@ import type { IFileService } from '../files/fileService.js'
 import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherProtocol.js'
 
 /** Bumped on any incompatible change to the framing, handshake or DTOs below. */
-export const REMOTE_PROTOCOL_VERSION = 2
+export const REMOTE_PROTOCOL_VERSION = 3
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'
@@ -98,6 +102,7 @@ export const RemoteChannels = {
   AcpHost: 'acpHost',
   AcpTerminal: 'acpTerminal',
   AgentConfig: 'agentConfig',
+  AgentBinary: 'agentBinary',
 } as const
 
 export type RemoteChannelName = (typeof RemoteChannels)[keyof typeof RemoteChannels]

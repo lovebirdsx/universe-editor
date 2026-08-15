@@ -24,6 +24,7 @@ import {
   type WatcherHostResponse,
 } from '@universe-editor/platform'
 import { createRemoteServer } from '../server.js'
+import type { IRemoteAgentBinaryService } from '@universe-editor/node-services'
 
 const tempRoots: string[] = []
 
@@ -41,14 +42,16 @@ afterEach(async () => {
   )
 })
 
-function connect(): {
+function connect(options?: { agentBinaryDir?: string }): {
   getClient: <T extends object>(name: string) => T
   dispose: () => void
 } {
   const [a, b] = InMemoryMessagePassingProtocol.createPair()
   const serverPair = new ChannelPair(a)
   const clientPair = new ChannelPair(b)
-  const serverDisposable = createRemoteServer(serverPair.server)
+  const serverDisposable = createRemoteServer(serverPair.server, undefined, {
+    ...(options?.agentBinaryDir !== undefined ? { agentBinaryDir: options.agentBinaryDir } : {}),
+  })
   return {
     getClient: <T extends object>(name: string) =>
       ProxyChannel.toService<T>(clientPair.client.getChannel(name)),
@@ -85,6 +88,21 @@ describe('createRemoteServer', () => {
       expect(info.os).toBe(process.platform)
       expect(info.arch).toBe(process.arch)
       expect(info.pathCaseSensitive).toBe(process.platform === 'linux')
+    } finally {
+      dispose()
+    }
+  })
+
+  it('registers the agentBinary channel (codex resolve fails fast without download)', async () => {
+    const agentBinaryDir = await makeTempRoot()
+    const { getClient, dispose } = connect({ agentBinaryDir })
+    try {
+      const svc = getClient<IRemoteAgentBinaryService>(RemoteChannels.AgentBinary)
+      // A download-mode cache miss with allowDownload:false must fail fast — this
+      // proves the channel is wired through to a real store without any network.
+      await expect(svc.resolve('codex', { allowDownload: false })).rejects.toThrow(
+        /not downloaded yet/,
+      )
     } finally {
       dispose()
     }

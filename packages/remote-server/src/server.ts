@@ -14,6 +14,7 @@
 
 import { existsSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DisposableStore,
@@ -50,6 +51,7 @@ import { ForkedWatcherTransport } from './watcherForkTransport.js'
 import { RemoteFileStreamService } from './fileStreamService.js'
 import { RemoteTerminalService } from './terminalService.js'
 import { RemoteAgentConfigService } from './agentConfigService.js'
+import { RemoteAgentBinaryService } from './agentBinaryService.js'
 import { resolveVendorAgentEntry } from './vendorAgentEntry.js'
 import { SERVER_VERSION } from './version.js'
 
@@ -65,6 +67,8 @@ export interface CreateRemoteServerOptions {
   /** Override the claude/codex config roots (tests; default = remote home). */
   readonly claudeConfigPath?: string
   readonly codexConfigPath?: string
+  /** Root dir for downloaded native agent binaries; default = <server data dir>/agent-bin. */
+  readonly agentBinaryDir?: string
 }
 
 export function createRemoteServer(
@@ -191,6 +195,18 @@ export function createRemoteServer(
           ...(options?.codexConfigPath !== undefined
             ? { codexConfigPath: options.codexConfigPath }
             : {}),
+        }),
+      ),
+    ),
+  )
+  server.registerChannel(
+    RemoteChannels.AgentBinary,
+    ProxyChannel.fromService(
+      disposables.add(
+        new RemoteAgentBinaryService({
+          agentBinaryDir:
+            options?.agentBinaryDir ?? join(homedir(), '.universe-editor-server', 'agent-bin'),
+          loggerService,
         }),
       ),
     ),

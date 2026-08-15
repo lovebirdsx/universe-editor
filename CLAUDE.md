@@ -35,7 +35,7 @@ packages/
 | 写内置扩展（typescript/perforce/markdown） | `extensions/<name>/` | 各扩展目录 CLAUDE.md | 走 skill `create-extension` 脚手架 |
 | 写预览类扩展范例 | `extensions-external/pdf/` | `extensions-external/pdf/CLAUDE.md` | pdf 是最小可照抄范例 |
 | 改 vendor fork（claude-agent-acp / codex-acp） | `vendor/<fork>/` | 根 CLAUDE.md「内置 ACP agent」节 | 红线=diff 最小；改完 `pnpm agent:build` |
-| 做远程开发（remote server / 连接 / 路由） | `packages/remote-server/` + `apps/editor/src/main/services/remote/` | — | 契约单一真相在 `platform/src/remote/remoteProtocol.ts`（改协议须 bump 版本）；架构=常驻 daemon+TCP+PersistentProtocol 透明重连，URI 互译在 server 侧 per-connection codec（DTO 路径一律 URI，字符串路径例外须在协议文件文档化）；文件/搜索/watcher/pty/agentConfig 核心实现在 `packages/node-services`（main 与 server 共享，勿复制）；e2e 直连模式走 `UNIVERSE_REMOTE_SERVER_CMD` |
+| 做远程开发（remote server / 连接 / 路由） | `packages/remote-server/` + `apps/editor/src/main/services/remote/` | — | 契约单一真相在 `platform/src/remote/remoteProtocol.ts`（改协议须 bump 版本）；架构=常驻 daemon+TCP+PersistentProtocol 透明重连，URI 互译在 server 侧 per-connection codec（DTO 路径一律 URI，字符串路径例外须在协议文件文档化）；文件/搜索/watcher/pty/agentConfig/agentBinary 核心实现在 `packages/node-services`（main 与 server 共享，勿复制）；e2e 直连模式走 `UNIVERSE_REMOTE_SERVER_CMD` |
 | 改更新服务器 / 扩展市场后端 / 部署脚本 | `scripts/server/` | `scripts/server/CLAUDE.md` | 服务器侧脚本只能用 node 内置模块；改行为要 bump `SERVER_VERSION` |
 
 ## 常用命令

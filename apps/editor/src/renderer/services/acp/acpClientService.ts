@@ -38,7 +38,13 @@ import {
   Severity,
   URI,
 } from '@universe-editor/platform'
-import type { HostPlatform, IDisposable, ILogger, IOutputChannel } from '@universe-editor/platform'
+import type {
+  Event,
+  HostPlatform,
+  IDisposable,
+  ILogger,
+  IOutputChannel,
+} from '@universe-editor/platform'
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -78,7 +84,6 @@ import {
 } from '../../../shared/ipc/claudeBinaryService.js'
 import {
   ICodexBinaryService,
-  type CodexBinarySource,
   type ICodexBinaryResolveOptions,
 } from '../../../shared/ipc/codexBinaryService.js'
 import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
@@ -473,7 +478,8 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    * For the built-in Claude agent (runAsNode), the ~226MB native binary is not
    * shipped — resolve it (download on first use / system install / custom path)
    * and inject its absolute path via CLAUDE_CODE_EXECUTABLE. Shows a progress
-   * notification while a download is in flight. Non-runAsNode agents pass
+   * notification while a download is in flight. Remote spawns resolve the binary
+   * on the remote host via a managed download. Non-runAsNode agents pass
    * through untouched.
    */
   private async _ensureClaudeBinary(
@@ -482,59 +488,39 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
     if (agentId !== 'claude-code') return spec
-    // Remote spawns resolve the binary on the remote host (PATH probe / its own
-    // download) — never pull the local binary or local credentials through.
-    if (spec.authority) return spec
-    const source = (this._config.get<string>('acp.claude.source') ??
-      'download') as ClaudeBinarySource
-    const customPath = this._config.get<string>('acp.claude.executablePath') ?? ''
-    const opts: IClaudeBinaryResolveOptions =
-      source === 'custom'
-        ? { source, customPath, allowDownload: !silent }
-        : { source, allowDownload: !silent }
 
-    const result = await this._progress.withProgress(
-      { location: ProgressLocation.Notification, title: 'Preparing Claude…', source: 'acp' },
-      async (progress) => {
-        let lastPct = 0
-        const sub = this._entriesStore.add(
-          this._claudeBinary.onDidChangeProgress(({ received, total }) => {
-            if (total > 0) {
-              const pct = Math.min(100, Math.floor((received / total) * 100))
-              progress.report({
-                message: `Downloading Claude binary… ${pct}%`,
-                increment: pct - lastPct,
-              })
-              lastPct = pct
-            } else {
-              progress.report({
-                message: `Downloading Claude binary… ${Math.floor(received / 1048576)} MB`,
-              })
-            }
-          }),
-        )
-        try {
-          return await this._claudeBinary.resolve(opts)
-        } finally {
-          this._entriesStore.delete(sub)
-        }
-      },
+    // Local binary paths and local credentials never cross the tunnel: a remote
+    // spawn resolves its own binary via a managed download on the remote host.
+    // The local acp.claude.source / executablePath config is local-host
+    // semantics and is deliberately ignored for remote spawns.
+    const authority = spec.authority
+    const opts: IClaudeBinaryResolveOptions = authority
+      ? { source: 'download', allowDownload: !silent, authority }
+      : this._localBinaryResolveOpts(silent, 'acp.claude.source', 'acp.claude.executablePath')
+
+    const result = await this._resolveBinaryWithProgress(
+      'Preparing Claude…',
+      'Claude binary',
+      authority,
+      this._claudeBinary.onDidChangeProgress,
+      () => this._claudeBinary.resolve(opts),
     )
     // The native CLI's first-run onboarding decides whether to auto-start the
     // OAuth browser flow by probing process env only — it never sees the
     // settings.json env block. Inject that block into the agent process env so
     // a configured gateway token suppresses the spurious browser login on a
-    // fresh machine. spec.env wins so explicit overrides are never clobbered.
-    const settingsEnv = await this._readClaudeSettingsEnv()
+    // fresh machine. Remote spawns read the remote host's settings.json.
+    // spec.env wins so explicit overrides are never clobbered.
+    const settingsEnv = await this._readClaudeSettingsEnv(authority)
     return {
       ...spec,
       env: { ...settingsEnv, ...spec.env, CLAUDE_CODE_EXECUTABLE: result.path },
     }
   }
 
-  private async _readClaudeSettingsEnv(): Promise<Record<string, string>> {
+  private async _readClaudeSettingsEnv(authority?: string): Promise<Record<string, string>> {
     try {
-      const settings = await this._claudeConfig.read()
+      const settings = await this._claudeConfig.read(authority)
       return settings.env ?? {}
     } catch (err) {
       this._logger.warn(`reading claude settings env failed: ${(err as Error).message}`)
@@ -549,8 +535,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    * custom path) and inject its absolute path via CODEX_PATH so codex-acp spawns
    * it directly instead of resolving `@openai/codex`'s platform package. Auth is
    * taken from `acp.codex.apiKey` when set, otherwise the child inherits a real
-   * OPENAI_API_KEY / CODEX_API_KEY from the environment. Non-codex agents pass
-   * through untouched.
+   * OPENAI_API_KEY / CODEX_API_KEY from the environment. Remote spawns resolve
+   * the binary on the remote host and never receive the local apiKey.
+   * Non-codex agents pass through untouched.
    */
   private async _ensureCodexBinary(
     spec: AcpLaunchSpec,
@@ -558,46 +545,27 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     silent: boolean,
   ): Promise<AcpLaunchSpec> {
     if (agentId !== 'codex') return spec
+
     // Remote spawns resolve the binary on the remote host; never leak the local
-    // apiKey config across the tunnel (the remote side uses its own auth).
-    if (spec.authority) return spec
+    // apiKey config across the tunnel (the remote side uses its own auth). The
+    // local acp.codex.source / executablePath config is local-host semantics
+    // and is deliberately ignored for remote spawns.
+    const authority = spec.authority
+    const opts: ICodexBinaryResolveOptions = authority
+      ? { source: 'download', allowDownload: !silent, authority }
+      : this._localBinaryResolveOpts(silent, 'acp.codex.source', 'acp.codex.executablePath')
 
-    const source = (this._config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource
-    const customPath = this._config.get<string>('acp.codex.executablePath') ?? ''
-    const opts: ICodexBinaryResolveOptions =
-      source === 'custom'
-        ? { source, customPath, allowDownload: !silent }
-        : { source, allowDownload: !silent }
-
-    const result = await this._progress.withProgress(
-      { location: ProgressLocation.Notification, title: 'Preparing Codex…', source: 'acp' },
-      async (progress) => {
-        let lastPct = 0
-        const sub = this._entriesStore.add(
-          this._codexBinary.onDidChangeProgress(({ received, total }) => {
-            if (total > 0) {
-              const pct = Math.min(100, Math.floor((received / total) * 100))
-              progress.report({
-                message: `Downloading codex… ${pct}%`,
-                increment: pct - lastPct,
-              })
-              lastPct = pct
-            } else {
-              progress.report({
-                message: `Downloading codex… ${Math.floor(received / 1048576)} MB`,
-              })
-            }
-          }),
-        )
-        try {
-          return await this._codexBinary.resolve(opts)
-        } finally {
-          this._entriesStore.delete(sub)
-        }
-      },
+    const result = await this._resolveBinaryWithProgress(
+      'Preparing Codex…',
+      'codex',
+      authority,
+      this._codexBinary.onDidChangeProgress,
+      () => this._codexBinary.resolve(opts),
     )
 
-    const apiKey = (this._config.get<string>('acp.codex.apiKey') ?? '').trim()
+    // acp.codex.apiKey is a local-host credential — it must never cross the
+    // tunnel, so a remote spawn never gets OPENAI_API_KEY injected.
+    const apiKey = authority ? '' : (this._config.get<string>('acp.codex.apiKey') ?? '').trim()
     return {
       ...spec,
       env: {
@@ -606,6 +574,70 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         ...(apiKey ? { OPENAI_API_KEY: apiKey } : {}),
       },
     }
+  }
+
+  private _localBinaryResolveOpts(
+    silent: boolean,
+    sourceKey: string,
+    pathKey: string,
+  ): {
+    readonly source: ClaudeBinarySource
+    readonly customPath?: string
+    readonly allowDownload: boolean
+  } {
+    const source = (this._config.get<string>(sourceKey) ?? 'download') as ClaudeBinarySource
+    const customPath = this._config.get<string>(pathKey) ?? ''
+    return source === 'custom'
+      ? { source, customPath, allowDownload: !silent }
+      : { source, allowDownload: !silent }
+  }
+
+  /**
+   * Runs a binary resolve inside a progress notification, forwarding download
+   * progress from the service's onDidChangeProgress stream. `authority` scopes
+   * the subscription: a local resolve reacts only to authority-less events and a
+   * remote resolve only to events carrying its own authority, so a local and a
+   * remote download racing each other don't drive each other's notifications.
+   */
+  private _resolveBinaryWithProgress(
+    title: string,
+    label: string,
+    authority: string | undefined,
+    onProgress: Event<{
+      readonly received: number
+      readonly total: number
+      readonly authority?: string
+    }>,
+    resolve: () => Promise<{ path: string }>,
+  ): Promise<{ path: string }> {
+    return this._progress.withProgress(
+      { location: ProgressLocation.Notification, title, source: 'acp' },
+      async (progress) => {
+        let lastPct = 0
+        const sub = this._entriesStore.add(
+          onProgress((e) => {
+            if (e.authority !== authority) return
+            if (e.total > 0) {
+              const pct = Math.min(100, Math.floor((e.received / e.total) * 100))
+              progress.report({
+                message: `Downloading ${label}… ${pct}%`,
+                increment: pct - lastPct,
+              })
+              lastPct = pct
+            } else {
+              progress.report({
+                message: `Downloading ${label}… ${Math.floor(e.received / 1048576)} MB`,
+              })
+            }
+          }),
+        )
+        try {
+          return await resolve()
+        } finally {
+          this._entriesStore.delete(sub)
+        }
+      },
+    )
   }
 
   private async _createEntry(

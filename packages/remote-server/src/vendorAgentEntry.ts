@@ -22,14 +22,27 @@ function findRepoRoot(start: string): string | undefined {
   return undefined
 }
 
-export function resolveVendorAgentEntry(entry: 'claude' | 'codex'): string {
-  const dir = entry === 'claude' ? 'claude-agent-acp' : 'codex-acp'
-  const bundled = fileURLToPath(new URL(`./vendor/${dir}/dist/index.js`, import.meta.url))
+/**
+ * Resolves a file inside a vendored ACP agent dir on the remote host: first the
+ * bundled `./vendor/<name>/...` next to this module, then (dev/e2e direct mode,
+ * running from source) the repo's own `vendor/<name>/...`. Falls back to the
+ * bundled path so a missing file surfaces as a clear ENOENT at use time.
+ */
+export function resolveVendorFile(
+  name: 'claude-agent-acp' | 'codex-acp',
+  ...segments: string[]
+): string {
+  const bundled = fileURLToPath(new URL(`./vendor/${name}/${segments.join('/')}`, import.meta.url))
   if (existsSync(bundled)) return bundled
   const repoRoot = findRepoRoot(path.dirname(fileURLToPath(import.meta.url)))
   if (repoRoot) {
-    const local = path.join(repoRoot, 'vendor', dir, 'dist', 'index.js')
+    const local = path.join(repoRoot, 'vendor', name, ...segments)
     if (existsSync(local)) return local
   }
   return bundled
+}
+
+export function resolveVendorAgentEntry(entry: 'claude' | 'codex'): string {
+  const dir = entry === 'claude' ? 'claude-agent-acp' : 'codex-acp'
+  return resolveVendorFile(dir, 'dist', 'index.js')
 }

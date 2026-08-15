@@ -945,6 +945,9 @@ importers:
       smol-toml:
         specifier: 'catalog:'
         version: 1.7.0
+      tar:
+        specifier: 'catalog:'
+        version: 7.5.15
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
