@@ -74,6 +74,7 @@ import type {
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 import type { ExtHostDocuments } from './hostDocuments.js'
+import { reviveWireUri } from './wireUri.js'
 import { CancellationTokenSource } from '@universe-editor/platform'
 
 /** Any of the language providers a plugin can register, keyed by its handle. */
@@ -118,6 +119,9 @@ function toInlayHintDto(hint: InlayHint): IInlayHintDto {
 /**
  * Host-side DiagnosticCollection. `set`/`clear` push markers to the renderer
  * over `mainThreadLanguages`, keyed by the collection name (the marker owner).
+ * The uri is revived at this wire boundary (see wireUri.ts): extensions may
+ * hand in raw components without `$mid` (the TS built-in hand-builds them),
+ * which the remote codec's URI transformer would otherwise miss.
  */
 class HostDiagnosticCollection implements DiagnosticCollection {
   constructor(
@@ -127,14 +131,14 @@ class HostDiagnosticCollection implements DiagnosticCollection {
 
   set(uri: UriComponents, diagnostics: readonly Diagnostic[] | undefined): void {
     if (diagnostics === undefined) {
-      void this._languages.$clearDiagnostics(this.name, uri)
+      void this._languages.$clearDiagnostics(this.name, reviveWireUri(uri))
     } else {
-      void this._languages.$publishDiagnostics(this.name, uri, diagnostics)
+      void this._languages.$publishDiagnostics(this.name, reviveWireUri(uri), diagnostics)
     }
   }
 
   delete(uri: UriComponents): void {
-    void this._languages.$clearDiagnostics(this.name, uri)
+    void this._languages.$clearDiagnostics(this.name, reviveWireUri(uri))
   }
 
   clear(): void {

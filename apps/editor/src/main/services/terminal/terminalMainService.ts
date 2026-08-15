@@ -72,6 +72,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
   private readonly _remoteTerminalFactory: RemoteTerminalFactory
 
   private readonly _remoteServices = new Map<string, ITerminalService>()
+  private readonly _remotePromises = new Map<string, Promise<ITerminalService>>()
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
   /** mapped id → remote identity. */
   private readonly _remoteByMappedId = new Map<string, RemoteEntry>()
@@ -193,11 +194,9 @@ export class TerminalMainService extends Disposable implements ITerminalService 
   }
 
   override dispose(): void {
-    for (const subs of this._remoteSubs.values()) {
-      for (const s of subs) s.dispose()
-    }
     this._remoteSubs.clear()
     this._remoteServices.clear()
+    this._remotePromises.clear()
     this._remoteByMappedId.clear()
     this._remoteMappedIdByKey.clear()
     this._remoteIdsByAuthority.clear()
@@ -227,12 +226,21 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     return { ...info, id: mappedId }
   }
 
-  private async _remoteService(authority: string): Promise<ITerminalService> {
+  private _remoteService(authority: string): Promise<ITerminalService> {
     const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+    if (cached) return Promise.resolve(cached)
+    const inflight = this._remotePromises.get(authority)
+    if (inflight) return inflight
+    const promise = this._connectRemote(authority).finally(() => {
+      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
+    })
+    this._remotePromises.set(authority, promise)
+    return promise
+  }
+
+  private async _connectRemote(authority: string): Promise<ITerminalService> {
     const endpoint = await this._remoteTerminalFactory(authority)
     const service = endpoint.service
-    this._remoteServices.set(authority, service)
     const subs: IDisposable[] = [
       service.onData((e) => {
         const mappedId = this._remoteMappedIdByKey.get(keyOf(authority, e.id))
@@ -254,6 +262,12 @@ export class TerminalMainService extends Disposable implements ITerminalService 
       }),
       endpoint.onDidClose(() => this._onRemoteClosed(authority)),
     ]
+    if (this._store.isDisposed) {
+      for (const s of subs) s.dispose()
+      throw new Error('terminal: service disposed while connecting')
+    }
+    for (const s of subs) this._register(s)
+    this._remoteServices.set(authority, service)
     this._remoteSubs.set(authority, subs)
     return service
   }
@@ -277,11 +291,14 @@ export class TerminalMainService extends Disposable implements ITerminalService 
   private _onRemoteClosed(authority: string): void {
     const subs = this._remoteSubs.get(authority)
     if (subs) {
-      for (const s of subs) s.dispose()
+      for (const s of subs) this._store.delete(s)
       this._remoteSubs.delete(authority)
     }
     this._remoteServices.delete(authority)
     const ids = [...(this._remoteIdsByAuthority.get(authority) ?? [])]
+    this._logger.info(
+      `remote connection closed authority=${authority} synthesizing exit for ${ids.length} terminal(s)`,
+    )
     for (const mappedId of ids) {
       this._dropRemoteId(mappedId)
       this._onExit.fire({ id: mappedId, exitCode: 0 })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { URI } from '@universe-editor/platform'
 import type {
   DocumentSelector,
   HoverProvider,
@@ -136,7 +137,38 @@ describe('LanguageProviderRegistry', () => {
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'x' },
     ])
     collection.clear()
-    expect(mt.diagnostics).toEqual([{ owner: 'my-linter', uri, count: 1 }, { owner: 'my-linter' }])
+    expect(mt.diagnostics).toEqual([
+      { owner: 'my-linter', uri: URI.from(uri), count: 1 },
+      { owner: 'my-linter' },
+    ])
+  })
+
+  it('revives extension-originated diagnostic uris so the wire codec sees $mid', () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const collection = reg.createDiagnosticCollection('my-linter')
+    const diag = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      message: 'x',
+    }
+    // Hand-built components (no $mid, the TS built-in's shape) and an already
+    // revived URI instance must both serialize with $mid for the remote codec.
+    const handBuilt: UriComponents = { scheme: 'file', path: '/x' }
+    collection.set(handBuilt, [diag])
+    collection.delete(handBuilt)
+    collection.set(URI.file('/y'), [diag])
+    expect(mt.diagnostics).toHaveLength(3)
+    for (const entry of mt.diagnostics) {
+      expect(JSON.parse(JSON.stringify(entry.uri))).toMatchObject({ $mid: 1 })
+    }
+    expect(JSON.parse(JSON.stringify(mt.diagnostics[0]!.uri))).toMatchObject({
+      scheme: 'file',
+      path: '/x',
+    })
+    expect(JSON.parse(JSON.stringify(mt.diagnostics[2]!.uri))).toMatchObject({
+      scheme: 'file',
+      path: '/y',
+    })
   })
 
   it('bridges a CodeLens provider onDidChangeCodeLenses to $emitCodeLensDidChange', () => {

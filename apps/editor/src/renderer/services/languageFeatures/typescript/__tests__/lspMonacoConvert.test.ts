@@ -4,7 +4,7 @@
  *  DiagnosticSeverity) and the completion / workspace-edit shaping all live here.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { monaco } from '../../../../workbench/editor/monaco/MonacoLoader.js'
 import type { IInlayHintDto } from '@universe-editor/extensions-common'
 import type {
@@ -46,15 +46,56 @@ import {
   workspaceSymbolsToEntries,
   type MonacoInlayHint,
 } from '../lspMonacoConvert.js'
+import { setWireUriRemoteAuthority } from '../wireUri.js'
 
 const range = (sl: number, sc: number, el: number, ec: number) => ({
   start: { line: sl, character: sc },
   end: { line: el, character: ec },
 })
 
+/** Minimal monaco Uri stand-in: keeps the components so parseWireUri can rebuild
+ *  them, and serializes back with the usual `//`-when-authority rule. */
+const fakeUriFrom = (c: {
+  scheme: string
+  authority?: string
+  path?: string
+  query?: string
+  fragment?: string
+}) => {
+  const parts = {
+    scheme: c.scheme,
+    authority: c.authority ?? '',
+    path: c.path ?? '',
+    query: c.query ?? '',
+    fragment: c.fragment ?? '',
+  }
+  return {
+    ...parts,
+    toString: () =>
+      parts.scheme +
+      ':' +
+      (parts.authority || parts.scheme === 'file' ? '//' : '') +
+      parts.authority +
+      parts.path +
+      (parts.query ? '?' + parts.query : '') +
+      (parts.fragment ? '#' + parts.fragment : ''),
+  }
+}
+
+const fakeUriParse = (raw: string): ReturnType<typeof fakeUriFrom> => {
+  const m = /^(([^:/?#]+):)?(\/\/([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/.exec(raw)
+  return fakeUriFrom({
+    scheme: m?.[2] ?? '',
+    authority: m?.[4] ?? '',
+    path: m?.[5] ?? '',
+    query: m?.[7] ?? '',
+    fragment: m?.[9] ?? '',
+  })
+}
+
 /** Minimal monaco namespace stand-in for converters that need one. */
 const fakeMonaco = {
-  Uri: { parse: (s: string) => ({ toString: () => s }) },
+  Uri: { parse: fakeUriParse, from: fakeUriFrom },
   MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
   MarkerTag: { Unnecessary: 1, Deprecated: 2 },
   languages: {
@@ -71,6 +112,9 @@ const fakeMonaco = {
     CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
   },
 } as unknown as typeof monaco
+
+// The wire URI remote authority is module ambient state; never leak it between tests.
+afterEach(() => setWireUriRemoteAuthority(undefined))
 
 describe('rangeToMonaco', () => {
   it('shifts 0-based LSP coordinates to 1-based Monaco', () => {
@@ -725,5 +769,153 @@ describe('resolvedInlayHintToMonaco', () => {
       label: ': string',
     }
     expect(resolvedInlayHintToMonaco(null, original, fakeMonaco)).toBe(original)
+  })
+})
+
+describe('wire URI translation with a remote authority', () => {
+  beforeEach(() => setWireUriRemoteAuthority('wsl+ubuntu'))
+
+  it('translates Location and LocationLink file URIs to remote-ssh', () => {
+    const loc = definitionToMonaco(
+      { uri: 'file:///home/x/a.ts', range: range(4, 0, 4, 6) },
+      fakeMonaco,
+    ) as monaco.languages.Location[]
+    expect(loc[0]?.uri.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/a.ts')
+
+    const links = definitionToMonaco(
+      [
+        {
+          targetUri: 'file:///home/x/b.ts',
+          targetRange: range(1, 0, 5, 0),
+          targetSelectionRange: range(1, 2, 1, 8),
+        },
+      ],
+      fakeMonaco,
+    ) as monaco.languages.LocationLink[]
+    expect(links[0]?.uri.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/b.ts')
+  })
+
+  it('translates showReferences command uri and locations arguments', () => {
+    const lens: CodeLens = {
+      range: range(2, 0, 2, 5),
+      command: {
+        title: '1 reference',
+        command: 'editor.action.showReferences',
+        arguments: [
+          'file:///home/x/a.ts',
+          { line: 2, character: 0 },
+          [{ uri: 'file:///home/x/b.ts', range: range(9, 1, 9, 4) }],
+        ],
+      },
+    }
+    const out = codeLensesToMonaco([lens], fakeMonaco)
+    const [uri, , locs] = out.lenses[0]?.command?.arguments as [
+      { toString(): string },
+      monaco.IPosition,
+      monaco.languages.Location[],
+    ]
+    expect(uri.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/a.ts')
+    expect(locs[0]?.uri.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/b.ts')
+  })
+
+  it('translates workspace edit changes-map keys and text-document edit URIs', () => {
+    const mapped = workspaceEditToMonaco(
+      { changes: { 'file:///home/x/a.ts': [{ range: range(0, 0, 0, 3), newText: 'X' }] } },
+      fakeMonaco,
+    )
+    expect((mapped.edits[0] as monaco.languages.IWorkspaceTextEdit).resource.toString()).toBe(
+      'remote-ssh://wsl+ubuntu/home/x/a.ts',
+    )
+
+    const docChanges = workspaceEditToMonaco(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri: 'file:///home/x/doc.ts', version: 1 },
+            edits: [{ range: range(0, 0, 0, 1), newText: 'y' }],
+          },
+        ],
+      },
+      fakeMonaco,
+    )
+    expect((docChanges.edits[0] as monaco.languages.IWorkspaceTextEdit).resource.toString()).toBe(
+      'remote-ssh://wsl+ubuntu/home/x/doc.ts',
+    )
+  })
+
+  it('translates create/rename/delete file operation URIs', () => {
+    const out = workspaceEditToMonaco(
+      {
+        documentChanges: [
+          { kind: 'create', uri: 'file:///home/x/created.ts' },
+          {
+            kind: 'rename',
+            oldUri: 'file:///home/x/old.ts',
+            newUri: 'file:///home/x/new.ts',
+          },
+          { kind: 'delete', uri: 'file:///home/x/gone.ts' },
+        ],
+      },
+      fakeMonaco,
+    )
+    const [create, rename, del] = out.edits as monaco.languages.IWorkspaceFileEdit[]
+    expect(create?.newResource?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/created.ts')
+    expect(rename?.oldResource?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/old.ts')
+    expect(rename?.newResource?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/new.ts')
+    expect(del?.oldResource?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/gone.ts')
+  })
+
+  it('translates document link targets, provided and resolved', () => {
+    const out = documentLinksToMonaco(
+      [{ range: range(0, 0, 0, 4), target: 'file:///home/x/a.md' }],
+      fakeMonaco,
+    )
+    expect(out.links[0]?.url?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/a.md')
+
+    const resolved = resolvedDocumentLinkToMonaco(
+      { range: range(0, 0, 0, 4), target: 'file:///home/x/r.md' },
+      { range: rangeToMonaco(range(0, 0, 0, 4)) } as monaco.languages.ILink,
+      fakeMonaco,
+    )
+    expect(resolved.url?.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/r.md')
+  })
+
+  it('translates diagnostic codeDescription hrefs pointing at file URIs', () => {
+    const m = diagnosticToMarker(
+      {
+        range: range(1, 2, 1, 8),
+        message: 'm',
+        severity: 2,
+        code: 'rule',
+        codeDescription: { href: 'file:///home/x/rules/rule.md' },
+      },
+      fakeMonaco,
+    )
+    const code = m.code as { value: string; target: monaco.Uri }
+    expect(code.target.toString()).toBe('remote-ssh://wsl+ubuntu/home/x/rules/rule.md')
+  })
+
+  it('leaves non-file schemes untouched', () => {
+    const untitled = definitionToMonaco(
+      { uri: 'untitled:Untitled-1', range: range(0, 0, 0, 1) },
+      fakeMonaco,
+    ) as monaco.languages.Location[]
+    expect(untitled[0]?.uri.toString()).toBe('untitled:Untitled-1')
+
+    const https = definitionToMonaco(
+      { uri: 'https://example.com/a.ts', range: range(0, 0, 0, 1) },
+      fakeMonaco,
+    ) as monaco.languages.Location[]
+    expect(https[0]?.uri.toString()).toBe('https://example.com/a.ts')
+  })
+})
+
+describe('wire URI translation without a remote authority', () => {
+  it('parses file URIs as local file URIs', () => {
+    const out = definitionToMonaco(
+      { uri: 'file:///home/x/a.ts', range: range(0, 0, 0, 1) },
+      fakeMonaco,
+    ) as monaco.languages.Location[]
+    expect(out[0]?.uri.toString()).toBe('file:///home/x/a.ts')
   })
 })

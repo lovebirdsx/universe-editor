@@ -169,7 +169,10 @@ export class URI implements UriComponents {
       return new URI(_empty, _empty, _empty, _empty, _empty)
     }
     const scheme = match[2] ?? _empty
-    const authority = match[4] ?? _empty
+    // Monaco's Uri.toString() percent-encodes `+` in the authority (`wsl+ubuntu2004`
+    // → `wsl%2Bubuntu2004`); decoding here keeps both string forms resolving to the
+    // same URI (VSCode parity — `vs/base/common/uri.ts` decodes authority in _parse too).
+    const authority = decodeURIComponentSafe(match[4] ?? _empty)
     let path = match[5] ?? _empty
     const query = decodeURIComponentSafe(match[7] ?? _empty)
     const fragment = decodeURIComponentSafe(match[9] ?? _empty)

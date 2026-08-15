@@ -15,6 +15,7 @@ import {
   RemoteChannels,
   setDisposableTracker,
 } from '@universe-editor/platform'
+import type { IDisposable } from '@universe-editor/platform'
 import {
   AcpHostMainService,
   type AcpCommandLookup,
@@ -91,11 +92,14 @@ function makeService(spawner: AcpSpawner): AcpHostMainService {
 // _registers it (it's a shared sink, not owned). Under the leak tracker that
 // unowned Disposable is a false positive, so feed a logger service whose logger
 // is marked as a singleton.
-function makeLeakSafeService(spawner: AcpSpawner): AcpHostMainService {
-  const loggerService = {
+function leakSafeLoggerService(): ConstructorParameters<typeof AcpHostMainService>[3] {
+  return {
     createLogger: () => markAsSingleton(new NullLogger()),
   } as unknown as ConstructorParameters<typeof AcpHostMainService>[3]
-  return new AcpHostMainService(spawner, undefined, undefined, loggerService)
+}
+
+function makeLeakSafeService(spawner: AcpSpawner): AcpHostMainService {
+  return new AcpHostMainService(spawner, undefined, undefined, leakSafeLoggerService())
 }
 
 describe('AcpHostMainService', () => {
@@ -515,6 +519,75 @@ class FakeRemoteHost implements IAcpHostService {
   }
 }
 
+interface RemoteFixture {
+  svc: AcpHostMainService
+  remote: FakeRemoteHost
+  closeEmitter: Emitter<void>
+  connectionCalls: () => number
+  holdConnection(): void
+  releaseConnection(): void
+}
+
+// A remote harness whose getConnection can be gated on demand: holdConnection()
+// makes subsequent getConnection calls park until releaseConnection(), which is
+// what the concurrency regression tests need to overlap two `_remoteService`
+// builds deterministically. closeEmitter drives conn.onDidClose.
+function makeRemoteFixture(opts?: { leakSafe?: boolean }): RemoteFixture {
+  const remote = new FakeRemoteHost()
+  const closeEmitter = new Emitter<void>()
+  let connectionCalls = 0
+  let gate: Promise<void> = Promise.resolve()
+  let release: () => void = () => {}
+  const conn: IRemoteConnection = {
+    authority: 'host',
+    env: REMOTE_ENV,
+    getChannel: (name) => {
+      expect(name).toBe(RemoteChannels.AcpHost)
+      return ProxyChannel.fromService(remote)
+    },
+    onDidClose: closeEmitter.event,
+  }
+  const connService: IRemoteConnectionService = {
+    _serviceBrand: undefined,
+    getConnection: async () => {
+      connectionCalls++
+      await gate
+      return conn
+    },
+    openExtensionHostConnection: async () => {
+      throw new Error('not used')
+    },
+    onDidChangeState: Event.None,
+    retryConnection: () => undefined,
+    stopServer: async () => undefined,
+    closeConnection: async () => undefined,
+    dropSocketForTesting: () => undefined,
+    dropExtensionHostSocketForTesting: () => undefined,
+    dispose: () => undefined,
+  }
+  const svc = new AcpHostMainService(
+    undefined,
+    undefined,
+    undefined,
+    opts?.leakSafe ? leakSafeLoggerService() : undefined,
+    connService,
+  )
+  return {
+    svc,
+    remote,
+    closeEmitter,
+    connectionCalls: () => connectionCalls,
+    holdConnection() {
+      gate = new Promise<void>((r) => {
+        release = r
+      })
+    },
+    releaseConnection() {
+      release()
+    },
+  }
+}
+
 describe('AcpHostMainService — remote routing', () => {
   let svc: AcpHostMainService
 
@@ -523,32 +596,9 @@ describe('AcpHostMainService — remote routing', () => {
   })
 
   function makeRemoteService(): { svc: AcpHostMainService; remote: FakeRemoteHost } {
-    const remote = new FakeRemoteHost()
-    const conn: IRemoteConnection = {
-      authority: 'host',
-      env: REMOTE_ENV,
-      getChannel: (name) => {
-        expect(name).toBe(RemoteChannels.AcpHost)
-        return ProxyChannel.fromService(remote)
-      },
-      onDidClose: new Emitter<void>().event,
-    }
-    const connService: IRemoteConnectionService = {
-      _serviceBrand: undefined,
-      getConnection: async () => conn,
-      openExtensionHostConnection: async () => {
-        throw new Error('not used')
-      },
-      onDidChangeState: Event.None,
-      retryConnection: () => undefined,
-      stopServer: async () => undefined,
-      closeConnection: async () => undefined,
-      dropSocketForTesting: () => undefined,
-      dropExtensionHostSocketForTesting: () => undefined,
-      dispose: () => undefined,
-    }
-    svc = new AcpHostMainService(undefined, undefined, undefined, undefined, connService)
-    return { svc, remote }
+    const fixture = makeRemoteFixture()
+    svc = fixture.svc
+    return { svc: fixture.svc, remote: fixture.remote }
   }
 
   it('routes start to the server channel and strips authority from the launch spec', async () => {
@@ -585,5 +635,98 @@ describe('AcpHostMainService — remote routing', () => {
     await expect(svc.start({ command: 'agent', args: [], authority: 'host' })).rejects.toThrow(
       /remote connection service not available/,
     )
+  })
+})
+
+describe('AcpHostMainService — remote connection lifecycle', () => {
+  it('concurrent remote starts share a single connection build (no duplicate forwarding, no leak)', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    let fixture: RemoteFixture | undefined
+    let stdoutSub: IDisposable | undefined
+    try {
+      fixture = makeRemoteFixture({ leakSafe: true })
+      fixture.holdConnection()
+      const stdoutChunks: AcpStdioChunk[] = []
+      stdoutSub = fixture.svc.onStdout((c) => stdoutChunks.push(c))
+      // Two starts race for the same authority before the connection resolves.
+      const p1 = fixture.svc.start({ command: 'a', args: [], authority: 'host' })
+      const p2 = fixture.svc.start({ command: 'b', args: [], authority: 'host' })
+      fixture.releaseConnection()
+      const [r1] = await Promise.all([p1, p2])
+
+      expect(fixture.connectionCalls()).toBe(1)
+      fixture.remote.fireStdout({ handle: r1.handle, data: 'x\n' })
+      expect(stdoutChunks).toEqual([{ handle: r1.handle, data: 'x\n' }])
+
+      stdoutSub.dispose()
+      stdoutSub = undefined
+      fixture.svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      stdoutSub?.dispose()
+      fixture?.svc.dispose()
+      setDisposableTracker(null)
+    }
+  })
+
+  it('drops the remote wrapper on permanent close, synthesizes exit for live handles, rebuilds on next start', async () => {
+    const fixture = makeRemoteFixture()
+    const exits: AcpExitEvent[] = []
+    const stdoutChunks: AcpStdioChunk[] = []
+    const exitSub = fixture.svc.onExit((e) => exits.push(e))
+    const stdoutSub = fixture.svc.onStdout((c) => stdoutChunks.push(c))
+    try {
+      const first = await fixture.svc.start({ command: 'agent', args: [], authority: 'host' })
+      expect(fixture.connectionCalls()).toBe(1)
+
+      fixture.closeEmitter.fire()
+      // Live remote handles get a synthesized exit (unknown status) so renderer
+      // sessions don't wait on a dead channel.
+      expect(exits).toEqual([{ handle: first.handle, code: null, signal: null }])
+      await expect(fixture.svc.writeStdin(first.handle, 'x')).rejects.toThrow(/unknown or exited/)
+
+      // The stale wrapper must be fully detached: remote output no longer forwarded.
+      fixture.remote.fireStdout({ handle: first.handle, data: 'stale\n' })
+      expect(stdoutChunks).toEqual([])
+
+      const second = await fixture.svc.start({ command: 'agent', args: [], authority: 'host' })
+      expect(fixture.connectionCalls()).toBe(2)
+      expect(fixture.remote.starts).toEqual([
+        { command: 'agent', args: [] },
+        { command: 'agent', args: [] },
+      ])
+      fixture.remote.fireStdout({ handle: second.handle, data: 'fresh\n' })
+      expect(stdoutChunks).toEqual([{ handle: second.handle, data: 'fresh\n' }])
+      expect(exits).toHaveLength(1)
+    } finally {
+      exitSub.dispose()
+      stdoutSub.dispose()
+      fixture.svc.dispose()
+    }
+  })
+
+  it('dispose releases remote forwarding subscriptions (single connection)', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    let fixture: RemoteFixture | undefined
+    let stdoutSub: IDisposable | undefined
+    try {
+      fixture = makeRemoteFixture({ leakSafe: true })
+      const { handle } = await fixture.svc.start({ command: 'agent', args: [], authority: 'host' })
+      const stdoutChunks: AcpStdioChunk[] = []
+      stdoutSub = fixture.svc.onStdout((c) => stdoutChunks.push(c))
+      fixture.remote.fireStdout({ handle, data: 'hello\n' })
+      expect(stdoutChunks).toEqual([{ handle, data: 'hello\n' }])
+
+      stdoutSub.dispose()
+      stdoutSub = undefined
+      fixture.svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      stdoutSub?.dispose()
+      fixture?.svc.dispose()
+      setDisposableTracker(null)
+    }
   })
 })

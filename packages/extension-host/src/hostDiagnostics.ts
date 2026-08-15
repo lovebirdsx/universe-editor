@@ -14,6 +14,7 @@ import type { Diagnostic } from 'vscode-languageserver-types'
 import type { IMainThreadLanguages } from '@universe-editor/extensions-common'
 import type { DiagnosticChangeEventBridge } from './apiFactory.js'
 import { InterestGate } from './interestGate.js'
+import { reviveWireUri } from './wireUri.js'
 
 /** The diagnostics interest carries no payload — a single fixed key suffices. */
 const DIAGNOSTICS_INTEREST = 'diagnostics'
@@ -31,7 +32,7 @@ export class HostDiagnostics {
   }
 
   getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>> {
-    return this._mainThread.$getDiagnostics(uri)
+    return this._mainThread.$getDiagnostics(uri === undefined ? undefined : reviveWireUri(uri))
   }
 
   readonly onDidChangeDiagnostics: Event<DiagnosticChangeEventBridge> = (listener) => {

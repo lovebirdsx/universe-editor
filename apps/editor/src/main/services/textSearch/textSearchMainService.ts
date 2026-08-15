@@ -36,6 +36,7 @@ function reviveUri(value: URI | UriComponents): URI {
 export class TextSearchMainService extends TextSearchService {
   private readonly _authorityBySession = new Map<string, string>()
   private readonly _remoteServices = new Map<string, ITextSearchMainService>()
+  private readonly _remotePromises = new Map<string, Promise<ITextSearchMainService>>()
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
 
   constructor(
@@ -74,19 +75,35 @@ export class TextSearchMainService extends TextSearchService {
     await service.cancel(sessionId)
   }
 
-  private async _remoteService(authority: string): Promise<ITextSearchMainService> {
+  private _remoteService(authority: string): Promise<ITextSearchMainService> {
     const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+    if (cached) return Promise.resolve(cached)
+    const inflight = this._remotePromises.get(authority)
+    if (inflight) return inflight
+    const promise = this._connectRemote(authority).finally(() => {
+      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
+    })
+    this._remotePromises.set(authority, promise)
+    return promise
+  }
+
+  private async _connectRemote(authority: string): Promise<ITextSearchMainService> {
     const conn = await this._connections!.getConnection(authority)
     const service = ProxyChannel.toService<ITextSearchMainService>(
       conn.getChannel(RemoteChannels.TextSearch),
     )
+    const subs: IDisposable[] = [
+      service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e)),
+      service.onDidSearchResults((e) => this._onDidSearchResults.fire(e)),
+      conn.onDidClose(() => this._dropRemote(authority)),
+    ]
+    if (this._store.isDisposed) {
+      for (const s of subs) s.dispose()
+      throw new Error('textSearch: service disposed while connecting')
+    }
+    for (const s of subs) this._register(s)
     this._remoteServices.set(authority, service)
-    this._remoteSubs.set(authority, [
-      this._register(service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e))),
-      this._register(service.onDidSearchResults((e) => this._onDidSearchResults.fire(e))),
-    ])
-    this._register(conn.onDidClose(() => this._dropRemote(authority)))
+    this._remoteSubs.set(authority, subs)
     return service
   }
 

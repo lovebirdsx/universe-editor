@@ -3,10 +3,13 @@
  *  Pure converters between standard-LSP wire types (0-based) and Monaco types
  *  (1-based) for the TS/JS language service. Range/symbol/diagnostic conversions
  *  are Monaco-runtime-free; the ones that build a Uri or read a runtime enum take
- *  the monaco namespace. Tested in isolation (lspMonacoConvert.test.ts).
+ *  the monaco namespace. Wire URI strings are parsed through parseWireUri, which
+ *  reads the window-level wire URI space (see wireUri.ts), so these converters
+ *  depend on that ambient module state. Tested in isolation (lspMonacoConvert.test.ts).
  *--------------------------------------------------------------------------------------------*/
 
 import { type monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import { parseWireUri } from './wireUri.js'
 import type { IInlayHintDto } from '@universe-editor/extensions-common'
 import type {
   CodeAction,
@@ -118,7 +121,7 @@ export function documentSymbolsToMonaco(
 }
 
 export function locationToMonaco(l: Location, monacoNs: typeof monaco): monaco.languages.Location {
-  return { uri: monacoNs.Uri.parse(l.uri), range: rangeToMonaco(l.range) }
+  return { uri: parseWireUri(monacoNs, l.uri), range: rangeToMonaco(l.range) }
 }
 
 function isLocationLink(x: Location | LocationLink): x is LocationLink {
@@ -130,7 +133,7 @@ function locationLinkToMonaco(
   monacoNs: typeof monaco,
 ): monaco.languages.LocationLink {
   return {
-    uri: monacoNs.Uri.parse(l.targetUri),
+    uri: parseWireUri(monacoNs, l.targetUri),
     range: rangeToMonaco(l.targetRange),
     targetSelectionRange: rangeToMonaco(l.targetSelectionRange),
     ...(l.originSelectionRange
@@ -423,7 +426,7 @@ function codeForMarker(
 ): string | { value: string; target: monaco.Uri } {
   const value = String(d.code)
   const href = d.codeDescription?.href
-  return href ? { value, target: monacoNs.Uri.parse(href) } : value
+  return href ? { value, target: parseWireUri(monacoNs, href) } : value
 }
 
 /** Monaco MarkerSeverity (8 Error / 4 Warning / 2 Info / 1 Hint) → LSP DiagnosticSeverity. */
@@ -480,7 +483,7 @@ export function workspaceEditToMonaco(
   if (!edit) return { edits }
 
   const pushEdits = (uri: string, textEdits: TextEdit[], version?: number | null): void => {
-    const resource = monacoNs.Uri.parse(uri)
+    const resource = parseWireUri(monacoNs, uri)
     for (const e of textEdits) {
       edits.push({
         resource,
@@ -521,18 +524,18 @@ function resourceOperationToMonaco(
   switch (op.kind) {
     case 'create':
       return {
-        newResource: monacoNs.Uri.parse(op.uri),
+        newResource: parseWireUri(monacoNs, op.uri),
         options: { ...op.options },
       }
     case 'rename':
       return {
-        oldResource: monacoNs.Uri.parse(op.oldUri),
-        newResource: monacoNs.Uri.parse(op.newUri),
+        oldResource: parseWireUri(monacoNs, op.oldUri),
+        newResource: parseWireUri(monacoNs, op.newUri),
         options: { ...op.options },
       }
     case 'delete':
       return {
-        oldResource: monacoNs.Uri.parse(op.uri),
+        oldResource: parseWireUri(monacoNs, op.uri),
         options: { ...op.options },
       }
     default:
@@ -558,7 +561,7 @@ export function workspaceSymbolsToEntries(
   for (const s of symbols) {
     // WorkspaceSymbol.location may be a {uri} stub (no range) or a full Location.
     const loc = s.location
-    const uri = monacoNs.Uri.parse(loc.uri)
+    const uri = parseWireUri(monacoNs, loc.uri)
     const range =
       'range' in loc
         ? rangeToMonaco(loc.range)
@@ -620,7 +623,7 @@ export interface MonacoDocumentLink extends monaco.languages.ILink {
 function documentLinkToMonaco(link: DocumentLink, monacoNs: typeof monaco): MonacoDocumentLink {
   return {
     range: rangeToMonaco(link.range),
-    ...(link.target ? { url: monacoNs.Uri.parse(link.target) } : {}),
+    ...(link.target ? { url: parseWireUri(monacoNs, link.target) } : {}),
     ...(typeof link.tooltip === 'string' ? { tooltip: link.tooltip } : {}),
     _lspLink: link,
   }
@@ -641,7 +644,7 @@ export function resolvedDocumentLinkToMonaco(
   monacoNs: typeof monaco,
 ): monaco.languages.ILink {
   if (!resolved?.target) return original
-  return { ...original, url: monacoNs.Uri.parse(resolved.target) }
+  return { ...original, url: parseWireUri(monacoNs, resolved.target) }
 }
 
 /** LSP DocumentHighlight[] (kind 1/2/3) → Monaco (kind 0/1/2 — a simple offset). */
@@ -734,7 +737,7 @@ function commandToMonaco(command: Command, monacoNs: typeof monaco): monaco.lang
     return {
       ...base,
       arguments: [
-        monacoNs.Uri.parse(uri),
+        parseWireUri(monacoNs, uri),
         { lineNumber: position.line + 1, column: position.character + 1 },
         locations.map((l) => locationToMonaco(l, monacoNs)),
       ],

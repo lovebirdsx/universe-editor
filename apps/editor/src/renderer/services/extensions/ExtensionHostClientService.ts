@@ -73,6 +73,7 @@ import { ITreeViewsService } from './TreeViewsService.js'
 import { IWebviewService } from './WebviewService.js'
 import { IExtensionEnablementService } from './ExtensionEnablementService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
+import { setWireUriRemoteAuthority } from '../languageFeatures/typescript/wireUri.js'
 
 export interface IExtensionHostClientService {
   readonly _serviceBrand: undefined
@@ -304,6 +305,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // POSIX `remote-ssh` path (the daemon resolves it to the server's native form)
     // plus the authority so the main facade routes the start through the tunnel.
     const isRemote = folder !== undefined && folder.scheme === REMOTE_SCHEME
+    setWireUriRemoteAuthority(isRemote && folder ? folder.authority : undefined)
     const workspaceRoot = isRemote && folder ? folder.path : folder?.fsPath
     // Single local host: filter the scan by the effective disabled set (global +
     // workspace) across both built-in and external extensions.

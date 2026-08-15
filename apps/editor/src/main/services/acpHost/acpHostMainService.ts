@@ -68,6 +68,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   private readonly _local: AcpHostService
 
   private readonly _remoteServices = new Map<string, IAcpHostService>()
+  private readonly _remotePromises = new Map<string, Promise<IAcpHostService>>()
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
   /** handle → authority (remote handles only). */
   private readonly _remoteByHandle = new Map<string, string>()
@@ -138,24 +139,31 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   }
 
   override dispose(): void {
-    for (const subs of this._remoteSubs.values()) {
-      for (const s of subs) s.dispose()
-    }
     this._remoteSubs.clear()
     this._remoteServices.clear()
+    this._remotePromises.clear()
     this._remoteByHandle.clear()
     super.dispose()
   }
 
-  private async _remoteService(authority: string): Promise<IAcpHostService> {
+  private _remoteService(authority: string): Promise<IAcpHostService> {
     const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+    if (cached) return Promise.resolve(cached)
+    const inflight = this._remotePromises.get(authority)
+    if (inflight) return inflight
     if (!this._connections) {
       throw new Error('acpHost: remote connection service not available')
     }
-    const conn = await this._connections.getConnection(authority)
+    const promise = this._connectRemote(authority).finally(() => {
+      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
+    })
+    this._remotePromises.set(authority, promise)
+    return promise
+  }
+
+  private async _connectRemote(authority: string): Promise<IAcpHostService> {
+    const conn = await this._connections!.getConnection(authority)
     const service = ProxyChannel.toService<IAcpHostService>(conn.getChannel(RemoteChannels.AcpHost))
-    this._remoteServices.set(authority, service)
     const subs: IDisposable[] = [
       service.onStdout((e) => this._onStdout.fire(e)),
       service.onStderr((e) => this._onStderr.fire(e)),
@@ -163,8 +171,31 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         this._remoteByHandle.delete(e.handle)
         this._onExit.fire(e)
       }),
+      conn.onDidClose(() => this._dropRemote(authority)),
     ]
+    if (this._store.isDisposed) {
+      for (const s of subs) s.dispose()
+      throw new Error('acpHost: service disposed while connecting')
+    }
+    for (const s of subs) this._register(s)
+    this._remoteServices.set(authority, service)
     this._remoteSubs.set(authority, subs)
     return service
+  }
+
+  private _dropRemote(authority: string): void {
+    const subs = this._remoteSubs.get(authority)
+    if (subs) {
+      for (const s of subs) this._store.delete(s)
+      this._remoteSubs.delete(authority)
+    }
+    this._remoteServices.delete(authority)
+    for (const [handle, a] of [...this._remoteByHandle]) {
+      if (a !== authority) continue
+      this._remoteByHandle.delete(handle)
+      // The agent died with the connection but its exit status is unknowable —
+      // a bare exit lets renderer sessions close instead of waiting forever.
+      this._onExit.fire({ handle, code: null, signal: null })
+    }
   }
 }

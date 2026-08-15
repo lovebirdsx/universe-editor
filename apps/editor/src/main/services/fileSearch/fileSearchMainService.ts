@@ -29,6 +29,7 @@ function reviveUri(value: URI | UriComponents): URI {
 
 export class FileSearchMainService extends FileSearchService {
   private readonly _remoteServices = new Map<string, IFileSearchService>()
+  private readonly _remotePromises = new Map<string, Promise<IFileSearchService>>()
 
   constructor(
     @ILoggerService loggerService?: ILoggerServiceType,
@@ -56,13 +57,26 @@ export class FileSearchMainService extends FileSearchService {
     return service.search({ ...query, root }, token)
   }
 
-  private async _remoteService(authority: string): Promise<IFileSearchService> {
+  private _remoteService(authority: string): Promise<IFileSearchService> {
     const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+    if (cached) return Promise.resolve(cached)
+    const inflight = this._remotePromises.get(authority)
+    if (inflight) return inflight
+    const promise = this._connectRemote(authority).finally(() => {
+      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
+    })
+    this._remotePromises.set(authority, promise)
+    return promise
+  }
+
+  private async _connectRemote(authority: string): Promise<IFileSearchService> {
     const conn = await this._connections!.getConnection(authority)
     const service = ProxyChannel.toService<IFileSearchService>(
       conn.getChannel(RemoteChannels.FileSearch),
     )
+    if (this._store.isDisposed) {
+      throw new Error('fileSearch: service disposed while connecting')
+    }
     this._register(conn.onDidClose(() => this._remoteServices.delete(authority)))
     this._remoteServices.set(authority, service)
     return service

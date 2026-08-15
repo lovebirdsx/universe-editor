@@ -43,6 +43,25 @@ describe('URI — parse', () => {
     const u = URI.parse('file:///foo%20bar/baz')
     expect(u.path).toBe('/foo bar/baz')
   })
+
+  it('decodes percent-encoded authority (monaco-form strings)', () => {
+    // Monaco's Uri.toString() encodes `+` in the authority as `%2B`; parsing such a
+    // string must recover the real authority (VSCode parity), or the remote
+    // connection resolver rejects `wsl%2Bubuntu2004`.
+    const u = URI.parse('remote-ssh://wsl%2Bubuntu2004/home/x/a.ts')
+    expect(u.authority).toBe('wsl+ubuntu2004')
+    expect(u.path).toBe('/home/x/a.ts')
+  })
+
+  it('keeps a bare `+` authority untouched', () => {
+    const u = URI.parse('remote-ssh://wsl+ubuntu2004/home/x')
+    expect(u.authority).toBe('wsl+ubuntu2004')
+  })
+
+  it('keeps a malformed percent-encoded authority untouched instead of throwing', () => {
+    const u = URI.parse('remote-ssh://wsl%2/home/x')
+    expect(u.authority).toBe('wsl%2')
+  })
 })
 
 describe('URI — file()', () => {
@@ -138,6 +157,14 @@ describe('URI — toString() / toJSON() / revive()', () => {
   it('toString encodes special characters in path', () => {
     const u = URI.from({ scheme: 'file', path: '/foo bar/baz' })
     expect(u.toString()).toBe('file:///foo%20bar/baz')
+  })
+
+  it('toString keeps `+` in the authority and roundtrips it', () => {
+    const u = URI.from({ scheme: 'remote-ssh', authority: 'wsl+ubuntu2004', path: '/home/x' })
+    expect(u.toString()).toBe('remote-ssh://wsl+ubuntu2004/home/x')
+    const reparsed = URI.parse(u.toString())
+    expect(reparsed.authority).toBe('wsl+ubuntu2004')
+    expect(reparsed.toString()).toBe(u.toString())
   })
 
   it('toJSON includes only non-empty components', () => {
@@ -257,6 +284,18 @@ describe('URI — isEqualResource', () => {
     expect(getResourceComparisonKey(a, 'linux')).not.toBe(getResourceComparisonKey(b, 'linux'))
     expect(isEqualResource(a, b, 'linux')).toBe(false)
     expect(isEqualResource(a, URI.parse('file://a'), 'win32')).toBe(true)
+  })
+
+  it('monaco-form and platform-form strings of the same remote URI compare equal', () => {
+    // Non-file schemes key by toString(); both string forms must collapse to the
+    // same identity or one file gets two entries (map de-dup / peek references).
+    const monacoForm = URI.parse('remote-ssh://wsl%2Bubuntu2004/home/x/a.ts')
+    const platformForm = URI.parse('remote-ssh://wsl+ubuntu2004/home/x/a.ts')
+    expect(isEqualResource(monacoForm, platformForm, 'linux')).toBe(true)
+    expect(isEqualResource(monacoForm, platformForm, 'win32')).toBe(true)
+    expect(getResourceComparisonKey(monacoForm, 'linux')).toBe(
+      getResourceComparisonKey(platformForm, 'linux'),
+    )
   })
 
   it('keeps distinct UNC hosts distinct', () => {

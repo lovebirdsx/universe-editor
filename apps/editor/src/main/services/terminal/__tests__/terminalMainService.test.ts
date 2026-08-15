@@ -8,7 +8,11 @@ import { describe, expect, it } from 'vitest'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  DisposableTracker,
   Emitter,
+  markAsSingleton,
+  NullLogger,
+  setDisposableTracker,
   URI,
   type IDisposable,
   type ITerminalCreatedInfo,
@@ -192,5 +196,128 @@ describe('TerminalMainService routing', () => {
     await svc.getProfiles({})
     expect(remoteProfileCalls).toBe(1)
     remote.service.getProfiles = original
+  })
+})
+
+describe('TerminalMainService — remote connection lifecycle', () => {
+  interface EndpointFixture {
+    svc: TerminalMainService
+    remote: RemoteHarness
+    factoryCalls: () => number
+    holdFactory(): void
+    releaseFactory(): void
+  }
+
+  // Like makeLocalHarness, but the remote endpoint factory can be gated:
+  // holdFactory() parks concurrent `_remoteService` builds until
+  // releaseFactory(), which the concurrency regression test needs.
+  function makeEndpointFixture(opts?: { leakSafe?: boolean }): EndpointFixture {
+    const remote = makeRemoteHarness()
+    const localSpawner: PtySpawner = (file, _args) => {
+      void file
+      return new FakePty(777)
+    }
+    let factoryCalls = 0
+    let gate: Promise<void> = Promise.resolve()
+    let release: () => void = () => {}
+    const remoteFactory = async (authority: string): Promise<IRemoteTerminalEndpoint> => {
+      void authority
+      factoryCalls++
+      await gate
+      return { service: remote.service, onDidClose: remote.onClose.event }
+    }
+    const loggerService = opts?.leakSafe
+      ? ({
+          createLogger: () => markAsSingleton(new NullLogger()),
+        } as unknown as ConstructorParameters<typeof TerminalMainService>[1])
+      : undefined
+    const svc = new TerminalMainService(localSpawner, loggerService, undefined, remoteFactory)
+    return {
+      svc,
+      remote,
+      factoryCalls: () => factoryCalls,
+      holdFactory() {
+        gate = new Promise<void>((r) => {
+          release = r
+        })
+      },
+      releaseFactory() {
+        release()
+      },
+    }
+  }
+
+  it('concurrent create + getProfiles share one endpoint build (no duplicate forwarding, no leak)', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    let fixture: EndpointFixture | undefined
+    let dataSub: IDisposable | undefined
+    try {
+      fixture = makeEndpointFixture({ leakSafe: true })
+      fixture.holdFactory()
+      const data: ITerminalDataEvent[] = []
+      dataSub = fixture.svc.onData((e) => data.push(e))
+      // create and getProfiles race for the same authority before the factory resolves.
+      const p1 = fixture.svc.create({ cwd: remoteCwd(), shell: 'bash' })
+      const p2 = fixture.svc.getProfiles({ folder: remoteCwd() })
+      fixture.releaseFactory()
+      const [info] = await Promise.all([p1, p2])
+
+      expect(fixture.factoryCalls()).toBe(1)
+      fixture.remote.onData.fire({ id: 'remote-uuid-1', data: 'hi' })
+      expect(data).toEqual([{ id: info.id, data: 'hi' }])
+
+      dataSub.dispose()
+      dataSub = undefined
+      fixture.svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      dataSub?.dispose()
+      fixture?.svc.dispose()
+      setDisposableTracker(null)
+    }
+  })
+
+  it('rebuilds the endpoint after a permanent close and detaches the stale forwarding', async () => {
+    const fixture = makeEndpointFixture()
+    const info = await fixture.svc.create({ cwd: remoteCwd() })
+    expect(fixture.factoryCalls()).toBe(1)
+    const exits: ITerminalExitEvent[] = []
+    const data: ITerminalDataEvent[] = []
+    const exitSub = fixture.svc.onExit((e) => exits.push(e))
+    const dataSub = fixture.svc.onData((e) => data.push(e))
+    try {
+      fixture.remote.onClose.fire()
+      expect(exits).toEqual([{ id: info.id, exitCode: 0 }])
+
+      // Stale endpoint fully detached: no forwarding until a rebuild.
+      fixture.remote.onData.fire({ id: 'remote-uuid-1', data: 'stale' })
+      expect(data).toEqual([])
+
+      const info2 = await fixture.svc.create({ cwd: remoteCwd() })
+      expect(fixture.factoryCalls()).toBe(2)
+      fixture.remote.onData.fire({ id: 'remote-uuid-1', data: 'fresh' })
+      expect(data).toEqual([{ id: info2.id, data: 'fresh' }])
+      expect(exits).toHaveLength(1)
+    } finally {
+      exitSub.dispose()
+      dataSub.dispose()
+      fixture.svc.dispose()
+    }
+  })
+
+  it('dispose releases remote endpoint subscriptions (single endpoint)', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    let fixture: EndpointFixture | undefined
+    try {
+      fixture = makeEndpointFixture({ leakSafe: true })
+      await fixture.svc.create({ cwd: remoteCwd() })
+      fixture.svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      fixture?.svc.dispose()
+      setDisposableTracker(null)
+    }
   })
 })

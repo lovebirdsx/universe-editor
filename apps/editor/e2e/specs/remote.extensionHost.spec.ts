@@ -84,13 +84,15 @@ test.describe('remote extension host', () => {
         workbench.page.evaluate((uri) => window.__E2E__!.getHover(uri, 2, 15), aUri)
       await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
 
-      // Definition of `value` (line 2) resolves back into the same remote file.
+      // Definition of `value` (line 2) resolves back into the same remote file —
+      // and the result must carry the remote-ssh scheme: a bare file:/// URI
+      // here means the host-side URI transform silently dropped it.
       const resolvesToAts = (): Promise<boolean> =>
         workbench.page.evaluate(
           (uri) =>
             window
               .__E2E__!.getDefinition(uri, 2, 15)
-              .then((d) => d.some((u) => u.endsWith('/a.ts'))),
+              .then((d) => d.some((u) => u.startsWith('remote-ssh://') && u.endsWith('/a.ts'))),
           aUri,
         )
       await expect.poll(resolvesToAts, { timeout: 30_000 }).toBe(true)

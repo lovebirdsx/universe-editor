@@ -18,6 +18,12 @@
  *     (not URIs): for a remote launch the renderer already derives the remote
  *     POSIX path and pairs it with `authority`, so the server spawns against it
  *     verbatim — no transform is needed or applied.
+ *   - LSP wire types (vscode-languageserver-types: `Location.uri`,
+ *     `WorkspaceEdit.changes` keys, …) carry URIs as bare strings per the LSP
+ *     standard, so the `$mid` codec transformer never sees them. The renderer's
+ *     LSP→Monaco conversion layer (lspMonacoConvert / wireUri's `parseWireUri`)
+ *     interprets those strings against the extension host's URI space instead,
+ *     rebuilding a remote host's `file:` strings as `remote-ssh:` URIs.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'

@@ -4,6 +4,7 @@
  *  marker pushes, the last dispose unsubscribes.
  *--------------------------------------------------------------------------------------------*/
 import { describe, expect, it } from 'vitest'
+import { URI } from '@universe-editor/platform'
 import type { IMainThreadLanguages } from '@universe-editor/extensions-common'
 import type { UriComponents } from '@universe-editor/extension-api'
 import type { Diagnostic } from 'vscode-languageserver-types'
@@ -51,7 +52,20 @@ describe('HostDiagnostics', () => {
 
     await host.getDiagnostics()
     await host.getDiagnostics(uriA)
-    expect(mt.getDiagnosticsCalls()).toEqual([undefined, uriA])
+    expect(mt.getDiagnosticsCalls()).toEqual([undefined, URI.from(uriA)])
+  })
+
+  it('getDiagnostics revives hand-built components so the wire codec sees $mid', async () => {
+    const mt = fakeMainThread()
+    const host = new HostDiagnostics(mt)
+
+    await host.getDiagnostics(uriA)
+    const sent = mt.getDiagnosticsCalls()[0]
+    expect(JSON.parse(JSON.stringify(sent))).toMatchObject({
+      $mid: 1,
+      scheme: 'file',
+      path: '/test/a.ts',
+    })
   })
 
   it('the first listener subscribes renderer pushes; further listeners do not', () => {
