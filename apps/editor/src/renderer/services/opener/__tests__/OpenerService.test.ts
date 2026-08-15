@@ -7,8 +7,30 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { extractSelection, type ICommandService } from '@universe-editor/platform'
-import { CommandOpener, parseTarget } from '../OpenerService.js'
+import {
+  URI,
+  extractSelection,
+  withSelection,
+  type ICommandService,
+  type IEditorGroupsService,
+  type IEditorResolverService,
+  type IFileService,
+  type IInstantiationService,
+  type IUriIdentityService,
+  type IWindowsService,
+} from '@universe-editor/platform'
+import { CommandOpener, FileOpener, parseTarget } from '../OpenerService.js'
+
+// The selection branch walks the editor stack (groups / FileEditorRegistry / Monaco
+// mount) that renderer-node lacks; stub its two module seams to test the gate alone.
+vi.mock('../../editor/openInLockAwareGroup.js', () => ({
+  openInLockAwareGroup: vi.fn(),
+}))
+
+vi.mock('../../editor/revealEditorPosition.js', () => ({
+  findExistingFileEditor: vi.fn(() => undefined),
+  revealSelectionInInput: vi.fn(),
+}))
 
 describe('parseTarget', () => {
   it('parses an http URL as-is', () => {
@@ -110,5 +132,57 @@ describe('CommandOpener trust gate', () => {
     const query = encodeURIComponent(JSON.stringify({ a: 1 }))
     await opener.open(parseTarget(`command:foo?${query}`), { allowCommands: true })
     expect(execute).toHaveBeenCalledWith('foo', { a: 1 })
+  })
+})
+
+describe('FileOpener scheme gate', () => {
+  function makeFileOpener(): {
+    opener: FileOpener
+    openEditor: ReturnType<typeof vi.fn>
+  } {
+    const openEditor = vi.fn()
+    const groups = { groups: [] }
+    const uriIdentity = { isEqual: vi.fn(() => false) }
+    const instantiation = {
+      createInstance: vi.fn(() => ({ isDisposed: false, onWillDispose: vi.fn() })),
+    }
+    const opener = new FileOpener(
+      groups as unknown as IEditorGroupsService,
+      uriIdentity as unknown as IUriIdentityService,
+      instantiation as unknown as IInstantiationService,
+      { stat: vi.fn().mockResolvedValue({ isDirectory: false }) } as unknown as IFileService,
+      { openWindow: vi.fn() } as unknown as IWindowsService,
+      { openEditor } as unknown as IEditorResolverService,
+    )
+    return { opener, openEditor }
+  }
+
+  it('opens a remote-ssh URI through the resolver', async () => {
+    const { opener, openEditor } = makeFileOpener()
+    const uri = URI.parse('remote-ssh://myhost/home/u/a.ts')
+    expect(await opener.open(uri)).toBe(true)
+    expect(openEditor).toHaveBeenCalledWith(uri, { pinned: true })
+  })
+
+  it('opens a remote-ssh URI with a selection', async () => {
+    const { opener } = makeFileOpener()
+    const uri = withSelection(URI.parse('remote-ssh://myhost/home/u/a.ts'), {
+      startLineNumber: 5,
+      startColumn: 3,
+    })
+    expect(await opener.open(uri)).toBe(true)
+  })
+
+  it('rejects a virtual scheme', async () => {
+    const { opener, openEditor } = makeFileOpener()
+    expect(await opener.open(URI.parse('universe://x/y'))).toBe(false)
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('still opens a local file URI through the resolver', async () => {
+    const { opener, openEditor } = makeFileOpener()
+    const uri = URI.file('/repo/a.ts')
+    expect(await opener.open(uri)).toBe(true)
+    expect(openEditor).toHaveBeenCalledWith(uri, { pinned: true })
   })
 })

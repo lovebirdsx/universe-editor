@@ -1,7 +1,8 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import {
   IFileSearchService,
   IFileService,
+  ILoggerService,
   IOpenerService,
   IWorkspaceService,
   URI,
@@ -14,6 +15,16 @@ const CACHE_TTL = 10_000
 
 type CacheEntry = Promise<URI | null> | { uri: URI | null; expiresAt: number }
 
+export function terminalPathToUri(absolutePath: string, folder: URI | undefined): URI {
+  const isPosixAbsolute = absolutePath.startsWith('/') && !/^[A-Za-z]:[/\\]/.test(absolutePath)
+  // remote 工作区的 pty 在远端 spawn，终端输出的是远端路径，须继承 folder 的
+  // scheme/authority 才能被 IFileService 按 scheme 分派到远端。
+  if (folder && folder.scheme !== 'file' && isPosixAbsolute) {
+    return folder.with({ path: normalizeFsPath(absolutePath), query: '', fragment: '' })
+  }
+  return URI.file(absolutePath)
+}
+
 /**
  * Returns a resolver that pre-warms during provideLinks and caches results for 10s.
  * Multiple callers for the same path share one in-flight promise.
@@ -22,6 +33,11 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
   const fileService = useService(IFileService)
   const fileSearchService = useService(IFileSearchService)
   const workspaceService = useService(IWorkspaceService)
+  const loggerService = useService(ILoggerService)
+  const logger = useMemo(
+    () => loggerService.createLogger({ id: 'terminal-link', name: 'Terminal Link' }),
+    [loggerService],
+  )
   const cache = useRef(new Map<string, CacheEntry>())
 
   return useCallback(
@@ -33,14 +49,16 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
 
       const promise = (async (): Promise<URI | null> => {
         try {
-          const uri = URI.file(absolutePath)
+          const workspace = workspaceService.current
+          const uri = terminalPathToUri(absolutePath, workspace?.folder)
           if (await fileService.exists(uri)) return uri
 
-          const workspace = workspaceService.current
-          if (!workspace) return null
+          if (!workspace) {
+            logger.warn(`cannot resolve terminal link: ${absolutePath}`)
+            return null
+          }
 
           const norm = normalizeFsPath(absolutePath)
-          // 本机路径，不随远端工作区变化：终端链接解析针对本机工作区路径。
           const root = normalizeFsPath(workspace.folder.fsPath)
           const pattern = norm.startsWith(root + '/')
             ? norm.slice(root.length + 1)
@@ -54,10 +72,13 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
           })
 
           const first = result.results[0]
-          return first ? (URI.revive(first.resource) as URI) : null
+          if (first) return URI.revive(first.resource) as URI
+          logger.warn(`cannot resolve terminal link: ${absolutePath}`)
+          return null
         } catch {
           // Never reject: the link provider's activate() awaits this promise
           // without a catch, so a rejection would silently swallow the click.
+          logger.warn(`cannot resolve terminal link: ${absolutePath}`)
           return null
         }
       })()
@@ -68,7 +89,7 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
       })
       return promise
     },
-    [fileService, fileSearchService, workspaceService],
+    [fileService, fileSearchService, workspaceService, logger],
   )
 }
 

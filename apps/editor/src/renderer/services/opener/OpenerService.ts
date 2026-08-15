@@ -11,8 +11,9 @@
  *    - command  : command:<id>?<json-args> → ICommandService, gated by
  *                 options.allowCommands (default: blocked) so untrusted content
  *                 — e.g. AI output — can never run arbitrary commands
- *    - file     : any file URI → reveal in an editor at the encoded selection,
- *                 routing directories to a new window and images to the resolver
+ *    - file     : any filesystem URI (`file:` / `remote-ssh:`) → reveal in an
+ *                 editor at the encoded selection, routing directories to a new
+ *                 window and images to the resolver; virtual schemes are rejected
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -41,6 +42,7 @@ import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { findExistingFileEditor, revealSelectionInInput } from '../editor/revealEditorPosition.js'
 import { splitFilePathLocation } from '../acp/filePathLink.js'
+import { isFileSystemUri } from '../files/fileSystemScheme.js'
 
 const EXTERNAL_SCHEMES = new Set(['http', 'https', 'mailto'])
 
@@ -145,7 +147,7 @@ export class CommandOpener implements IOpener {
   }
 }
 
-class FileOpener implements IOpener {
+export class FileOpener implements IOpener {
   constructor(
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
@@ -156,7 +158,7 @@ class FileOpener implements IOpener {
   ) {}
 
   async open(target: URI): Promise<boolean> {
-    if (target.scheme !== 'file') return false
+    if (!isFileSystemUri(target)) return false
     const { selection, uri } = extractSelection(target)
 
     // A directory can't be shown as an editor — open it in a new window (parity
