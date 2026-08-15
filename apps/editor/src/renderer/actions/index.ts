@@ -329,6 +329,8 @@ import {
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
+  FocusDeeperAcpTimelineItemAction,
+  FocusOuterAcpTimelineItemAction,
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
   ShowAcpSessionChangesAction,
@@ -762,6 +764,8 @@ registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
 registerAction2(FocusTopAcpTimelineAction)
 registerAction2(FocusBottomAcpTimelineAction)
+registerAction2(FocusDeeperAcpTimelineItemAction)
+registerAction2(FocusOuterAcpTimelineItemAction)
 registerAction2(JumpToAcpPlanAction)
 registerAction2(ShowAcpSessionChangesAction)
 registerAction2(FocusSessionChangesAction)

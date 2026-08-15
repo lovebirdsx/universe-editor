@@ -58,6 +58,7 @@ function makeWidget(
     sessionId,
     container,
     moveTimeline: moveSpy,
+    moveTimelineLevel: vi.fn(),
     scrollTimeline: vi.fn(),
     focusInput: focusSpy,
     jumpToPlan: vi.fn(),
@@ -244,6 +245,7 @@ describe('AcpChatWidgetService', () => {
     const widget: AcpChatWidget = {
       container,
       moveTimeline: vi.fn(),
+      moveTimelineLevel: vi.fn(),
       scrollTimeline: vi.fn(),
       focusInput: vi.fn(),
       jumpToPlan: vi.fn(),

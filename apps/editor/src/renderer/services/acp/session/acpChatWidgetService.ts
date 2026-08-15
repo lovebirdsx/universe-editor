@@ -40,12 +40,17 @@ import {
 
 export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
 
+export type AcpTimelineLevelDirection = 'in' | 'out'
+
 export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown' | 'up' | 'down'
 
 export interface AcpChatWidget {
   readonly sessionId?: string
   readonly container: HTMLElement
   moveTimeline(direction: AcpTimelineMoveDirection): void
+  /** Step across nesting levels (Alt+L / Alt+H): into a sub-agent timeline ('in'),
+   *  or back to its parent card ('out'). */
+  moveTimelineLevel(direction: AcpTimelineLevelDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
   focusInput(): boolean
   /** Reveal the latest ExitPlanMode plan card (a `switch_mode` tool call). */

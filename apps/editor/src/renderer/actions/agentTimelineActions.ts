@@ -26,7 +26,9 @@ import { toPngBase64 } from '../services/acp/promptImage.js'
 import { ACP_NAV_WHEN, ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 // ---------------------------------------------------------------------------
-// Timeline keyboard navigation (Alt+J / Alt+K, vim-style)
+// Timeline keyboard navigation (Alt+J / Alt+K, vim-style; Alt+H / Alt+L cross
+// nesting levels). Movement is level-locked: J/K never descend into sub-agent
+// timelines on their own — that takes Alt+L, and Alt+H ascends back out.
 // Targets the focused AcpChatWidget via IAcpChatWidgetService. Gated by
 // `acpChatFocused`, which the widget service toggles based on real DOM focus.
 // ---------------------------------------------------------------------------
@@ -140,6 +142,41 @@ export class FocusBottomAcpTimelineAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     resolveNavWidget(accessor)?.moveTimeline('last')
+  }
+}
+
+// Level-locked navigation: Alt+J/K stay within the current nesting level; these
+// two cross levels explicitly — Alt+L descends into a sub-agent timeline (or
+// expands the folded card first), Alt+H ascends back to the parent card.
+export class FocusDeeperAcpTimelineItemAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusDeeperTimelineItem'
+  constructor() {
+    super({
+      id: FocusDeeperAcpTimelineItemAction.ID,
+      title: localize2('action.agent.focusDeeperTimelineItem', 'Focus Into Sub-Agent Timeline'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+l', when: ACP_NAV_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.moveTimelineLevel('in')
+  }
+}
+
+export class FocusOuterAcpTimelineItemAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusOuterTimelineItem'
+  constructor() {
+    super({
+      id: FocusOuterAcpTimelineItemAction.ID,
+      title: localize2('action.agent.focusOuterTimelineItem', 'Focus Parent Timeline Item'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+h', when: ACP_NAV_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.moveTimelineLevel('out')
   }
 }
 

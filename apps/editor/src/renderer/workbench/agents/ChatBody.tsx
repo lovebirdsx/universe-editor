@@ -48,7 +48,6 @@ import {
   firstLineSummary,
   hasVisibleMessageContent,
   timelineItemToText,
-  type AcpChildItem,
 } from '../../services/acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
@@ -56,6 +55,7 @@ import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.j
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
+  type AcpTimelineLevelDirection,
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
 } from '../../services/acp/session/acpChatWidgetService.js'
@@ -111,6 +111,7 @@ const STICK_THRESHOLD_PX = 32
 
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
+  moveLevel: (direction: AcpTimelineLevelDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
   /** Pull keyboard focus into this widget. Returns whether focus actually landed
    *  so callers (Alt+T → focusEditorInput) can fall back when there's no target. */
@@ -174,6 +175,7 @@ export interface PlanBridge {
 function createNoopHandle(): WidgetHandle {
   return {
     move: noop,
+    moveLevel: noop,
     scrollTimeline: noop,
     focus: () => false,
     jumpToPlan: noop,
@@ -286,6 +288,7 @@ function ChatSessionBody({
       sessionId: session.id,
       container,
       moveTimeline: (d) => handleRef.current.move(d),
+      moveTimelineLevel: (d) => handleRef.current.moveLevel(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
       jumpToPlan: () => handleRef.current.jumpToPlan(),
@@ -1207,24 +1210,54 @@ function ChatScroll({
 
   useEffect(() => {
     const handle = handleRef.current
+    // Shared tail of every focus move: set the key, reveal it, persist. Prefers
+    // the live DOM node (also covers sub-agent items inside their parent's
+    // virtual row); falls back to the virtualizer for unmounted top-level rows
+    // in virtual mode, which indexes displayTimeline by top-level segment.
+    const focusAndReveal = (key: string): void => {
+      setFocusedKey(key)
+      focusedKeyRef.current = key
+      const container = containerRef.current
+      const el = container?.querySelector<HTMLElement>(
+        `[data-timeline-key="${cssEscape(key)}"], [data-sticky-key="${cssEscape(key)}"]`,
+      )
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' })
+      } else {
+        const topSegment = key.split('/')[0] ?? key
+        const displayIndex = displayTimelineRef.current.findIndex(
+          (it) => slotKey(it) === topSegment,
+        )
+        if (displayIndex !== -1) {
+          virtualizerRef.current?.scrollToIndex(displayIndex, { align: 'center' })
+        }
+      }
+      persist()
+    }
     handle.move = (direction) => {
       // Navigate over the FULL timeline, not displayTimeline: the first user
       // message is sliced out of displayTimeline because the sticky bar above the
       // scroll container renders it — but it must stay keyboard-reachable.
-      // Expanded sub-agent children join the sequence right after their parent.
       const list = timelineRef.current
-      const keys = collectNavigableKeys(list, collapseRef.current)
+      const current = focusedKeyRef.current
+      // Level-locked navigation: a composite (sub-agent) focus steps within its
+      // sibling children, top-level focus steps the top-level sequence —
+      // Alt+J/K never descends on its own; crossing levels is moveLevel's job.
+      // A stale composite key (parent gone) falls back to the top-level sequence.
+      const parentKey = current !== null && current.includes('/') ? parentKeyOf(current) : null
+      const siblingKeys = parentKey === null ? [] : collectChildKeys(list, parentKey)
+      const topLevel = siblingKeys.length === 0
+      const keys = topLevel ? collectNavigableKeys(list) : siblingKeys
       // The pinned plan bar likewise renders outside the scroll container; it
-      // joins the sequence right after the first user message, matching the
-      // visual stacking order of the bars above the scroll container.
-      if (planKeyRef.current !== null) {
+      // joins the top-level sequence right after the first user message,
+      // matching the visual stacking order of the bars above the container.
+      if (topLevel && planKeyRef.current !== null) {
         const firstUser = list.findIndex(
           (it) => it.kind === 'message' && it.message.role === 'user',
         )
         keys.splice(firstUser >= 0 ? firstUser + 1 : 0, 0, PLAN_SLOT_KEY)
       }
       if (keys.length === 0) return
-      const current = focusedKeyRef.current
       let nextIndex: number
       if (direction === 'first') {
         nextIndex = 0
@@ -1244,39 +1277,58 @@ function ChatScroll({
       }
       const nextKey = keys[nextIndex]
       if (nextKey === undefined) return
-      stickRef.current = direction === 'last'
-      setFocusedKey(nextKey)
-      focusedKeyRef.current = nextKey
+      // The chat-wide scroll extremes only belong to the top-level sequence:
+      // inside a sub-agent timeline first/last reveal like any sibling move —
+      // scrolling the whole chat to its top/bottom would lose the sub-timeline.
+      stickRef.current = topLevel && direction === 'last'
       const container = containerRef.current
-      // A composite (sub-agent) key resolves to its top-level row for the
-      // virtualizer; the DOM query below still targets the full nested key.
       const topSegment = nextKey.split('/')[0] ?? nextKey
       const displayIndex = displayTimelineRef.current.findIndex((it) => slotKey(it) === topSegment)
       // The first user message lives in the always-visible sticky bar above the
       // container (displayIndex === -1); revealing it just means scrolling to top.
-      if (displayIndex === -1 || direction === 'first') {
+      if (displayIndex === -1 || (topLevel && direction === 'first')) {
+        setFocusedKey(nextKey)
+        focusedKeyRef.current = nextKey
         if (container) container.scrollTop = 0
         persist()
         return
       }
-      if (direction === 'last') {
+      if (topLevel && direction === 'last') {
+        setFocusedKey(nextKey)
+        focusedKeyRef.current = nextKey
         scrollToBottomStable()
         persist()
         return
       }
-      const el = container?.querySelector<HTMLElement>(
-        `[data-timeline-key="${cssEscape(nextKey)}"], [data-sticky-key="${cssEscape(nextKey)}"]`,
-      )
-      // In virtual mode the target row may be unmounted (outside the overscan
-      // window), so scrollIntoView finds nothing — fall back to the virtualizer,
-      // which scrolls and then mounts it. Mirrors ExplorerView's reveal. The
-      // virtualizer indexes displayTimeline, hence displayIndex (not nextIndex).
-      if (el) {
-        el.scrollIntoView({ block: 'nearest' })
-      } else {
-        virtualizerRef.current?.scrollToIndex(displayIndex, { align: 'center' })
+      focusAndReveal(nextKey)
+    }
+    handle.moveLevel = (direction) => {
+      const current = focusedKeyRef.current
+      if (current === null || current === PLAN_SLOT_KEY) return
+      if (direction === 'out') {
+        // Back to the parent card's key. Every ancestor is expanded (folding
+        // one converges the focus to a visible ancestor), so the parent row is
+        // mounted and the reveal lands on live DOM.
+        if (!current.includes('/')) return
+        stickRef.current = false
+        focusAndReveal(parentKeyOf(current))
+        return
       }
-      persist()
+      // Into a sub-agent timeline: only a tool call with children can be
+      // entered. A collapsed card expands in place instead (pressing Alt+L
+      // again then steps in), matching VSCode tree semantics.
+      const item = findByStickyKey(timelineRef.current, current)
+      if (!item || item.kind !== 'toolCall') return
+      const children = item.call.children
+      if (children === undefined || children.length === 0) return
+      if (resolveCollapsed(current, item, collapseRef.current)) {
+        handleToggleCollapse(current)
+        return
+      }
+      const first = children[0]
+      if (first === undefined) return
+      stickRef.current = false
+      focusAndReveal(`${current}/${itemSlotKey(first)}`)
     }
     handle.scrollTimeline = (target) => {
       const el = containerRef.current
@@ -1373,6 +1425,7 @@ function ChatScroll({
     }
     return () => {
       handle.move = noop
+      handle.moveLevel = noop
       handle.scrollTimeline = noop
       handle.jumpToPlan = noop
       handle.toggleCollapse = noop
@@ -1891,32 +1944,31 @@ function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolea
   })
 }
 
-// The keyboard navigation sequence: top-level slot keys in timeline order, with
-// an expanded tool call's sub-agent children (composite sticky keys) spliced in
-// right after their parent — VSCode tree-navigation semantics, so a folded card
-// keeps its children out of the sequence. Recursive to match findByStickyKey's
-// drilling, though the data nests only one level today.
-function collectNavigableKeys(
-  timeline: readonly TimelineItem[],
-  collapse: CollapseState,
-): string[] {
-  const keys: string[] = []
-  const append = (items: readonly (TimelineItem | AcpChildItem)[], parentKey?: string): void => {
-    for (const item of items) {
-      const key = parentKey === undefined ? itemSlotKey(item) : `${parentKey}/${itemSlotKey(item)}`
-      keys.push(key)
-      if (
-        item.kind === 'toolCall' &&
-        item.call.children !== undefined &&
-        item.call.children.length > 0 &&
-        !resolveCollapsed(key, item, collapse)
-      ) {
-        append(item.call.children, key)
-      }
-    }
-  }
-  append(timeline)
-  return keys
+// Level-locked keyboard navigation. Alt+J/K movement stays within one nesting
+// level: the top-level timeline sequence, or — while focus sits on a composite
+// (sub-agent) key — the sibling children of its parent card. Crossing levels is
+// explicit via moveLevel (Alt+L descends, Alt+H ascends); children never join
+// the top-level sequence on their own.
+
+// The top-level navigation sequence: slot keys in timeline order.
+function collectNavigableKeys(timeline: readonly TimelineItem[]): string[] {
+  return timeline.map((item) => itemSlotKey(item))
+}
+
+// The sibling sequence for a composite focus: its parent's children as
+// composite keys, in order. Returns [] when the parent is missing or not a
+// tool call (stale key) — the move handler then falls back to the top-level
+// sequence. When non-empty, every ancestor is expanded (folding would have
+// converged the focus), so the sequence matches the mounted DOM.
+function collectChildKeys(timeline: readonly TimelineItem[], parentKey: string): string[] {
+  const parent = findByStickyKey(timeline, parentKey)
+  if (!parent || parent.kind !== 'toolCall') return []
+  return (parent.call.children ?? []).map((child) => `${parentKey}/${itemSlotKey(child)}`)
+}
+
+// `t:p/m:c` → `t:p`; multi-level composites drop their last segment.
+function parentKeyOf(key: string): string {
+  return key.slice(0, key.lastIndexOf('/'))
 }
 
 // Walk a composite key's ancestor chain and return the nearest still-visible

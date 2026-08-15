@@ -341,6 +341,7 @@ function makeHandleRef(): { current: WidgetHandle } {
   return {
     current: {
       move: () => {},
+      moveLevel: () => {},
       scrollTimeline: () => {},
       focus: () => false,
       jumpToPlan: () => {},

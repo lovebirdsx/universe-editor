@@ -37,6 +37,8 @@ import {
   FocusTopAcpTimelineAction,
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
+  FocusDeeperAcpTimelineItemAction,
+  FocusOuterAcpTimelineItemAction,
   JumpToAcpPlanAction,
   SelectNextAcpPromptSuggestionAction,
   SelectPreviousAcpPromptSuggestionAction,
@@ -82,6 +84,7 @@ describe('Agent timeline navigation actions', () => {
   function makeWidget(): {
     widget: AcpChatWidget
     moveTimeline: ReturnType<typeof vi.fn>
+    moveTimelineLevel: ReturnType<typeof vi.fn>
     scrollTimeline: ReturnType<typeof vi.fn>
     jumpToPlan: ReturnType<typeof vi.fn>
     popoverSelectNext: ReturnType<typeof vi.fn>
@@ -90,6 +93,7 @@ describe('Agent timeline navigation actions', () => {
     popoverHide: ReturnType<typeof vi.fn>
   } {
     const moveTimeline = vi.fn()
+    const moveTimelineLevel = vi.fn()
     const scrollTimeline = vi.fn()
     const jumpToPlan = vi.fn()
     const popoverSelectNext = vi.fn()
@@ -98,6 +102,7 @@ describe('Agent timeline navigation actions', () => {
     const popoverHide = vi.fn()
     return {
       moveTimeline,
+      moveTimelineLevel,
       scrollTimeline,
       jumpToPlan,
       popoverSelectNext,
@@ -107,6 +112,7 @@ describe('Agent timeline navigation actions', () => {
       widget: {
         container: document.createElement('div'),
         moveTimeline,
+        moveTimelineLevel,
         scrollTimeline,
         focusInput: vi.fn(),
         jumpToPlan,
@@ -173,6 +179,28 @@ describe('Agent timeline navigation actions', () => {
     run(JumpToAcpPlanAction.ID, w.widget)
     expect(w.jumpToPlan).toHaveBeenCalledTimes(1)
     expect(w.moveTimeline).not.toHaveBeenCalled()
+  })
+
+  it('binds Alt+L/Alt+H to step into / out of a sub-agent timeline level', () => {
+    disposables.push(registerAction2(FocusDeeperAcpTimelineItemAction))
+    disposables.push(registerAction2(FocusOuterAcpTimelineItemAction))
+    const ctx = focusedContext()
+    expect(KeybindingsRegistry.resolveKeybinding('alt+l', ctx)).toBe(
+      FocusDeeperAcpTimelineItemAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('alt+h', ctx)).toBe(
+      FocusOuterAcpTimelineItemAction.ID,
+    )
+
+    const deeper = makeWidget()
+    run(FocusDeeperAcpTimelineItemAction.ID, deeper.widget)
+    expect(deeper.moveTimelineLevel).toHaveBeenCalledWith('in')
+    expect(deeper.moveTimeline).not.toHaveBeenCalled()
+
+    const outer = makeWidget()
+    run(FocusOuterAcpTimelineItemAction.ID, outer.widget)
+    expect(outer.moveTimelineLevel).toHaveBeenCalledWith('out')
+    expect(outer.moveTimeline).not.toHaveBeenCalled()
   })
 
   it('binds Ctrl+Alt+PageUp/PageDown to page scroll without moving focus', () => {
@@ -379,6 +407,7 @@ describe('Agent prompt suggestion popover actions', () => {
       widget: {
         container: document.createElement('div'),
         moveTimeline: vi.fn(),
+        moveTimelineLevel: vi.fn(),
         scrollTimeline: vi.fn(),
         focusInput: vi.fn(),
         jumpToPlan: vi.fn(),
