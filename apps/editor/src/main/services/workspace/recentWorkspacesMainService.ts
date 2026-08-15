@@ -20,6 +20,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { IMainStorageService, type Storage } from '../../storage.js'
+import { normalizeRemoteUri } from '../remote/remoteUri.js'
 
 export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
 const MAX_RECENT = 20
@@ -59,7 +60,7 @@ export class RecentWorkspacesMainService implements IDisposable {
           .map((r) => {
             const folder = URI.revive(r.folder)
             if (!folder) return null
-            return { folder, name: r.name, lastOpened: r.lastOpened }
+            return { folder: normalizeRemoteUri(folder), name: r.name, lastOpened: r.lastOpened }
           })
           .filter((r): r is IRecentWorkspace => r !== null)
           .sort((a, b) => b.lastOpened - a.lastOpened)
@@ -78,10 +79,11 @@ export class RecentWorkspacesMainService implements IDisposable {
 
   async add(workspace: IWorkspace): Promise<void> {
     await this._hydrate()
-    const folderStr = workspace.folder.toString()
+    const folder = normalizeRemoteUri(workspace.folder)
+    const folderStr = folder.toString()
     const filtered = this._recent.filter((r) => r.folder.toString() !== folderStr)
     const entry: IRecentWorkspace = {
-      folder: workspace.folder,
+      folder,
       name: workspace.name,
       lastOpened: Date.now(),
     }

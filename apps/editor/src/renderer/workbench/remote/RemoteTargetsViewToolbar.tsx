@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SshTargetsViewToolbar — the "SSH Targets" view header action: add a manual
+ *  RemoteTargetsViewToolbar — the "Targets" view header action: add a manual
  *  SSH host via a quick-input prompt.
  *--------------------------------------------------------------------------------------------*/
 
@@ -11,7 +11,7 @@ import { IconButton } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { IRemoteExplorerService } from '../../services/remote/RemoteExplorerService.js'
 
-export function SshTargetsViewToolbar() {
+export function RemoteTargetsViewToolbar() {
   const explorer = useService(IRemoteExplorerService)
   const quickInput = useService(IQuickInputService)
 

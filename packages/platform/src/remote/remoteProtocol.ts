@@ -67,7 +67,21 @@ export function wslAuthorityForDistro(distro: string): string {
   if (!isValidWslDistroName(distro)) {
     throw new Error(`invalid WSL distro name '${distro}'`)
   }
-  return `${WSL_AUTHORITY_PREFIX}${distro}`
+  return `${WSL_AUTHORITY_PREFIX}${distro.toLowerCase()}`
+}
+
+/**
+ * Canonical form of a remote authority. WSL distro names are case-insensitive
+ * to `wsl.exe -d`, so a `wsl+<distro>` authority is canonicalized to a lowercase
+ * distro; every other authority (ssh host aliases are case-sensitive) is
+ * returned verbatim. Invalid/empty WSL authorities are left untouched.
+ */
+export function normalizeRemoteAuthority(authority: string): string {
+  if (!isWslAuthority(authority)) return authority
+  const distro = authority.slice(WSL_AUTHORITY_PREFIX.length)
+  if (!isValidWslDistroName(distro)) return authority
+  const lower = distro.toLowerCase()
+  return lower === distro ? authority : `${WSL_AUTHORITY_PREFIX}${lower}`
 }
 
 export function wslDistroFromAuthority(authority: string): string {

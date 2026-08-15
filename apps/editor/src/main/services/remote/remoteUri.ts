@@ -6,7 +6,19 @@
  *  URIs back — there is no toWire/fromWire on the client anymore.
  *--------------------------------------------------------------------------------------------*/
 
-import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
+import { REMOTE_SCHEME, URI, normalizeRemoteAuthority } from '@universe-editor/platform'
+
+/**
+ * Canonicalize a remote-ssh URI's authority (WSL distro case-insensitivity). A
+ * mixed-case `wsl+<Distro>` recent / deep link collapses onto the same authority
+ * the connection manager keys entries by, so re-opening an old workspace does
+ * not fork a second connection. Non-remote URIs are returned unchanged.
+ */
+export function normalizeRemoteUri(uri: URI): URI {
+  if (uri.scheme !== REMOTE_SCHEME) return uri
+  const authority = normalizeRemoteAuthority(uri.authority)
+  return authority === uri.authority ? uri : uri.with({ authority })
+}
 
 /**
  * A server-side filesystem path string → remote-ssh URI. This is the ONE

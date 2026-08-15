@@ -30,13 +30,8 @@ import { OutputViewToolbar } from '../workbench/panel/output/OutputViewToolbar.j
 import { TerminalView } from '../workbench/panel/terminal/TerminalView.js'
 import { TerminalViewToolbar } from '../workbench/panel/terminal/TerminalViewToolbar.js'
 import { AiDebugView } from '../workbench/aiDebug/AiDebugView.js'
-import { SshTargetsView } from '../workbench/remote/SshTargetsView.js'
-import { SshTargetsViewToolbar } from '../workbench/remote/SshTargetsViewToolbar.js'
-import { WslTargetsView } from '../workbench/remote/WslTargetsView.js'
-import { ConnectionsView } from '../workbench/remote/ConnectionsView.js'
-import { ConnectionsViewToolbar } from '../workbench/remote/ConnectionsViewToolbar.js'
-import { RemoteRecentView } from '../workbench/remote/RemoteRecentView.js'
-import { RecentViewToolbar } from '../workbench/remote/RecentViewToolbar.js'
+import { RemoteTargetsView } from '../workbench/remote/RemoteTargetsView.js'
+import { RemoteTargetsViewToolbar } from '../workbench/remote/RemoteTargetsViewToolbar.js'
 
 export class BuiltInViewsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -130,55 +125,13 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
       registerViewWithComponent(
         {
           id: 'workbench.view.remote.targets',
-          name: localize('remote.section.targets', 'SSH Targets'),
+          name: localize('remote.section.targets', 'Targets'),
           containerId: 'workbench.view.remote',
           icon: 'remote',
           order: 1,
         },
-        SshTargetsView,
-        SshTargetsViewToolbar,
-      ),
-    )
-
-    this._register(
-      registerViewWithComponent(
-        {
-          id: 'workbench.view.remote.wsl',
-          name: localize('remote.section.wslTargets', 'WSL Targets'),
-          containerId: 'workbench.view.remote',
-          icon: 'terminal',
-          order: 2,
-          when: 'hasWslDistros',
-        },
-        WslTargetsView,
-      ),
-    )
-
-    this._register(
-      registerViewWithComponent(
-        {
-          id: 'workbench.view.remote.connections',
-          name: localize('remote.section.connections', 'Connections'),
-          containerId: 'workbench.view.remote',
-          icon: 'remote',
-          order: 3,
-        },
-        ConnectionsView,
-        ConnectionsViewToolbar,
-      ),
-    )
-
-    this._register(
-      registerViewWithComponent(
-        {
-          id: 'workbench.view.remote.recent',
-          name: localize('remote.section.recent', 'Recent'),
-          containerId: 'workbench.view.remote',
-          icon: 'history',
-          order: 4,
-        },
-        RemoteRecentView,
-        RecentViewToolbar,
+        RemoteTargetsView,
+        RemoteTargetsViewToolbar,
       ),
     )
 

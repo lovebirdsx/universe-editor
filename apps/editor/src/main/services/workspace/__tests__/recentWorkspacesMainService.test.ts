@@ -137,4 +137,27 @@ describe('RecentWorkspacesMainService', () => {
     expect(recent.map((r) => r.folder.toString())).toEqual([newer.toString(), older.toString()])
     svc.dispose()
   })
+
+  it('normalizes a mixed-case WSL authority when adding a recent', async () => {
+    const svc = new RecentWorkspacesMainService(makeStorage())
+    const mixed = URI.parse('remote-ssh://wsl+Ubuntu-24.04/home/u/proj')
+    const lower = URI.parse('remote-ssh://wsl+ubuntu-24.04/home/u/proj')
+    await svc.add({ folder: mixed, name: 'proj' })
+    await svc.add({ folder: lower, name: 'proj' })
+    const recent = await svc.getRecent()
+    expect(recent).toHaveLength(1)
+    expect(recent[0]?.folder.toString()).toBe(lower.toString())
+    svc.dispose()
+  })
+
+  it('normalizes mixed-case WSL authorities when hydrating persisted recents', async () => {
+    const mixed = URI.parse('remote-ssh://wsl+Ubuntu-24.04/home/u/proj')
+    const storage = makeStorage({
+      [RECENT_WORKSPACES_STORAGE_KEY]: [{ folder: mixed.toJSON(), name: 'proj', lastOpened: 100 }],
+    })
+    const svc = new RecentWorkspacesMainService(storage)
+    const recent = await svc.getRecent()
+    expect(recent[0]?.folder.authority).toBe('wsl+ubuntu-24.04')
+    svc.dispose()
+  })
 })

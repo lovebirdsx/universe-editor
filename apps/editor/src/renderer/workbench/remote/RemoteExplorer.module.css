@@ -76,6 +76,32 @@
   white-space: nowrap;
 }
 
+.labelEmphasized {
+  font-weight: 600;
+}
+
+.chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-sideBar-foreground, #cccccc);
+  cursor: pointer;
+}
+
+.chevron svg {
+  transition: transform 0.1s ease;
+}
+
+.chevronCollapsed svg {
+  transform: rotate(-90deg);
+}
+
 .description {
   flex-shrink: 0;
   opacity: 0.6;

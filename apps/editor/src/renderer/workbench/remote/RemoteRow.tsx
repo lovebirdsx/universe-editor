@@ -1,14 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  RemoteRow — the shared list-row component for every Remote Explorer view.
+ *  RemoteRow — the shared list-row component for the Remote Explorer tree.
  *  Visuals track the Explorer file row: fixed 22px height, status-dot slot,
  *  ellipsized label, optional muted description, and floating hover actions
  *  overlaid on the right edge. An explicit onActivate makes the whole row the
  *  primary-action target (click / Enter / Space); inner action buttons never
- *  trigger it (stopPropagation on the actions slot).
+ *  trigger it (stopPropagation on the actions slot). Optional `indent` /
+ *  `chevron` turn it into a tree row (group headers + targets with recents).
  *--------------------------------------------------------------------------------------------*/
 
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { cx } from '@universe-editor/workbench-ui'
 import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
 import { dotStateOf } from './remoteRowActions.js'
@@ -20,6 +22,12 @@ const dotStyles = {
   failed: styles['dotFailed'],
   idle: styles['dotIdle'],
 } as const
+
+/** Collapse toggle state for tree rows (group headers and targets with recents). */
+export interface RemoteRowChevronProps {
+  readonly expanded: boolean
+  readonly onToggle: () => void
+}
 
 export interface RemoteRowProps {
   /** Per-row-type test ids kept stable across the split (remote-*-row). */
@@ -35,6 +43,12 @@ export interface RemoteRowProps {
   /** Primary action: whole-row click + Enter/Space keyboard activation. */
   readonly onActivate?: (() => void) | undefined
   readonly onContextMenu?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined
+  /** Left indentation depth in levels (group = 0, target = 1, recent = 2). */
+  readonly indent?: number
+  /** When set, renders a leading chevron that toggles without firing onActivate. */
+  readonly chevron?: RemoteRowChevronProps | undefined
+  /** Bold the label (group header rows). */
+  readonly emphasized?: boolean
 }
 
 export function RemoteRow({
@@ -46,6 +60,9 @@ export function RemoteRow({
   actions,
   onActivate,
   onContextMenu,
+  indent,
+  chevron,
+  emphasized,
 }: RemoteRowProps) {
   const activated = onActivate !== undefined
   const handleKeyDown = activated
@@ -57,19 +74,39 @@ export function RemoteRow({
       }
     : undefined
 
+  const indentPx = 8 + (indent ?? 0) * 14
+
   return (
     <div
       className={cx(styles['row'], activated && styles['clickable'])}
+      style={{ paddingLeft: indentPx }}
       data-testid={testId}
       {...(activated ? { role: 'button', tabIndex: 0 } : {})}
       onClick={onActivate}
       onKeyDown={handleKeyDown}
       onContextMenu={onContextMenu}
     >
+      {chevron && (
+        <button
+          type="button"
+          className={cx(styles['chevron'], !chevron.expanded && styles['chevronCollapsed'])}
+          onClick={(e) => {
+            e.stopPropagation()
+            chevron.onToggle()
+          }}
+          aria-expanded={chevron.expanded}
+          aria-label={chevron.expanded ? 'Collapse' : 'Expand'}
+        >
+          <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+        </button>
+      )}
       {dot !== undefined && (
         <span className={cx(styles['dot'], dotStyles[dotStateOf(dot)])} aria-hidden="true" />
       )}
-      <span className={styles['label']} data-tooltip={tooltip}>
+      <span
+        className={cx(styles['label'], emphasized && styles['labelEmphasized'])}
+        data-tooltip={tooltip}
+      >
         {label}
       </span>
       {description !== undefined && <span className={styles['description']}>{description}</span>}

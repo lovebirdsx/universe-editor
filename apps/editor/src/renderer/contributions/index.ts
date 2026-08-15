@@ -33,7 +33,6 @@ export { ExplorerClipboardContextContribution } from './ExplorerClipboardContext
 export { CompareContextContribution } from './CompareContextContribution.js'
 export { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 export { RemoteExplorerMenuContribution } from './RemoteExplorerMenuContribution.js'
-export { RemoteExplorerContextContribution } from './RemoteExplorerContextContribution.js'
 export { SettingsContribution } from './SettingsContribution.js'
 export { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
 export { ExternalChangeWatcher } from './ExternalChangeWatcher.js'

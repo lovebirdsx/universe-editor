@@ -86,4 +86,51 @@ describe('RemoteRow', () => {
     expect(screen.getByText('Ubuntu')).toBeDefined()
     expect(screen.getByText('default')).toBeDefined()
   })
+
+  it('toggles via chevron without firing the primary action', () => {
+    const onActivate = vi.fn()
+    const onToggle = vi.fn()
+    render(
+      <RemoteRow
+        testId="remote-target-row"
+        label="h"
+        tooltip="h"
+        onActivate={onActivate}
+        chevron={{ expanded: true, onToggle }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
+  it('reflects chevron expanded state', () => {
+    const { rerender } = render(
+      <RemoteRow
+        testId="remote-target-row"
+        label="h"
+        tooltip="h"
+        chevron={{ expanded: true, onToggle: () => {} }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Collapse' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    )
+    rerender(
+      <RemoteRow
+        testId="remote-target-row"
+        label="h"
+        tooltip="h"
+        chevron={{ expanded: false, onToggle: () => {} }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Expand' }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+  })
+
+  it('applies left indentation from the indent prop', () => {
+    render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" indent={2} />)
+    expect(screen.getByTestId('remote-target-row').style.paddingLeft).toBe('36px')
+  })
 })

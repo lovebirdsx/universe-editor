@@ -9,6 +9,7 @@ import {
   WSL_AUTHORITY_PREFIX,
   isValidWslDistroName,
   isWslAuthority,
+  normalizeRemoteAuthority,
   wslAuthorityForDistro,
   wslDistroFromAuthority,
 } from '../../remote/remoteProtocol.js'
@@ -32,9 +33,15 @@ describe('isValidWslDistroName', () => {
 describe('wsl authority helpers', () => {
   it('round-trips distro → authority → distro', () => {
     const authority = wslAuthorityForDistro('Ubuntu-22.04')
-    expect(authority).toBe(`${WSL_AUTHORITY_PREFIX}Ubuntu-22.04`)
+    expect(authority).toBe(`${WSL_AUTHORITY_PREFIX}ubuntu-22.04`)
     expect(isWslAuthority(authority)).toBe(true)
-    expect(wslDistroFromAuthority(authority)).toBe('Ubuntu-22.04')
+    expect(wslDistroFromAuthority(authority)).toBe('ubuntu-22.04')
+  })
+
+  it('wslAuthorityForDistro produces a lowercase canonical distro', () => {
+    expect(wslAuthorityForDistro('Ubuntu-24.04')).toBe('wsl+ubuntu-24.04')
+    expect(wslAuthorityForDistro('Debian')).toBe('wsl+debian')
+    expect(wslAuthorityForDistro('my_Distro.v2')).toBe('wsl+my_distro.v2')
   })
 
   it('isWslAuthority is false for ssh-style authorities', () => {
@@ -50,6 +57,30 @@ describe('wsl authority helpers', () => {
     expect(() => wslDistroFromAuthority('user@host')).toThrow(/not a WSL authority/)
     expect(() => wslDistroFromAuthority('wsl+')).toThrow(/invalid WSL authority/)
     expect(() => wslDistroFromAuthority('wsl+bad name')).toThrow(/invalid WSL authority/)
+  })
+})
+
+describe('normalizeRemoteAuthority', () => {
+  it('folds WSL authority distro case to lowercase', () => {
+    expect(normalizeRemoteAuthority('wsl+Ubuntu-24.04')).toBe('wsl+ubuntu-24.04')
+    expect(normalizeRemoteAuthority('wsl+Debian')).toBe('wsl+debian')
+    expect(normalizeRemoteAuthority('wsl+UBUNTU')).toBe('wsl+ubuntu')
+  })
+
+  it('returns an already-canonical WSL authority unchanged', () => {
+    expect(normalizeRemoteAuthority('wsl+ubuntu')).toBe('wsl+ubuntu')
+  })
+
+  it('returns non-WSL authorities verbatim (ssh host aliases are case-sensitive)', () => {
+    expect(normalizeRemoteAuthority('user@Host:22')).toBe('user@Host:22')
+    expect(normalizeRemoteAuthority('Alice@ProdServer')).toBe('Alice@ProdServer')
+    expect(normalizeRemoteAuthority('host')).toBe('host')
+  })
+
+  it('returns invalid inputs verbatim', () => {
+    expect(normalizeRemoteAuthority('')).toBe('')
+    expect(normalizeRemoteAuthority('wsl+')).toBe('wsl+')
+    expect(normalizeRemoteAuthority('wsl+bad name')).toBe('wsl+bad name')
   })
 })
 

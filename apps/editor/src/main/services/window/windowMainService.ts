@@ -36,6 +36,7 @@ import { applyWindowState, trackWindowState, type IWindowState } from '../../win
 import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
+import { normalizeRemoteUri } from '../remote/remoteUri.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
@@ -549,6 +550,7 @@ export class WindowMainService implements IWindowMainService {
       if (!picked) return
       resolved = URI.file(picked)
     }
+    resolved = normalizeRemoteUri(resolved)
     const workspace: IWorkspace = {
       folder: resolved,
       name: basename(resolved.fsPath) || resolved.fsPath,

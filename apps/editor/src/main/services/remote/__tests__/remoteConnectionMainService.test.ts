@@ -415,14 +415,33 @@ describe('RemoteConnectionMainService wsl mode', () => {
     const daemon = await startDaemon()
     const wsl = (made = makeWslService(daemon))
 
-    const conn = await wsl.svc.getConnection('wsl+Ubuntu')
-    expect(conn.authority).toBe('wsl+Ubuntu')
+    const conn = await wsl.svc.getConnection('wsl+ubuntu')
+    expect(conn.authority).toBe('wsl+ubuntu')
     expect(wsl.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
     // The orchestrator receives the bare distro, not the authority.
-    expect(wsl.calls).toEqual(['check:Ubuntu'])
+    expect(wsl.calls).toEqual(['check:ubuntu'])
 
     const pong = await conn.getChannel('test').call<string>('ping')
     expect(pong).toBe('pong')
+  })
+
+  it('folds wsl distro case so mixed-case and lowercase share one connection entry', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    const mixed = await wsl.svc.getConnection('wsl+Ubuntu-24.04')
+    const lower = await wsl.svc.getConnection('wsl+ubuntu-24.04')
+
+    // Both authorities resolve to the same canonical connection.
+    expect(mixed.authority).toBe('wsl+ubuntu-24.04')
+    expect(lower).toBe(mixed)
+    expect(wsl.calls).toEqual(['check:ubuntu-24.04'])
+    // Every state event carries the canonical authority.
+    expect(wsl.states.map((s) => s.authority)).toEqual([
+      'wsl+ubuntu-24.04',
+      'wsl+ubuntu-24.04',
+      'wsl+ubuntu-24.04',
+    ])
   })
 
   it('waits out the WSL2 localhost relay: bring-up succeeds when the port opens late', async () => {
@@ -434,10 +453,10 @@ describe('RemoteConnectionMainService wsl mode', () => {
     daemon.port = await findFreePort()
     const wsl = (made = makeWslService(daemon))
 
-    const pending = wsl.svc.getConnection('wsl+Ubuntu')
+    const pending = wsl.svc.getConnection('wsl+ubuntu')
     setTimeout(() => void daemon.start(daemon.port), 300)
     const conn = await pending
-    expect(conn.authority).toBe('wsl+Ubuntu')
+    expect(conn.authority).toBe('wsl+ubuntu')
     expect(wsl.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
   })
 
@@ -445,8 +464,8 @@ describe('RemoteConnectionMainService wsl mode', () => {
     const daemon = await startDaemon()
     const wsl = (made = makeWslService(daemon, { firstCheck: 'not-deployed' }))
 
-    await wsl.svc.getConnection('wsl+Ubuntu')
-    expect(wsl.calls).toEqual(['check:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
   })
 
   it('stop → deploy → start when the running daemon reports a stale bundle hash', async () => {
@@ -456,8 +475,8 @@ describe('RemoteConnectionMainService wsl mode', () => {
       deployedBundleHash: 'ffffffffffffffff',
     }))
 
-    await wsl.svc.getConnection('wsl+Ubuntu')
-    expect(wsl.calls).toEqual(['check:Ubuntu', 'stop:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
   })
 
   it('deploy → start (no stop) when not running with a stale bundle hash', async () => {
@@ -468,8 +487,8 @@ describe('RemoteConnectionMainService wsl mode', () => {
       deployedBundleHash: 'ffffffffffffffff',
     }))
 
-    await wsl.svc.getConnection('wsl+Ubuntu')
-    expect(wsl.calls).toEqual(['check:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
   })
 
   it('start (no deploy) when not running and the bundle hash matches', async () => {
@@ -480,8 +499,8 @@ describe('RemoteConnectionMainService wsl mode', () => {
       deployedBundleHash: 'aaaabbbbccccdddd',
     }))
 
-    await wsl.svc.getConnection('wsl+Ubuntu')
-    expect(wsl.calls).toEqual(['check:Ubuntu', 'start:Ubuntu'])
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'start:ubuntu'])
   })
 
   it('fires granular progress between coarse deploying and handshaking when not-deployed', async () => {
@@ -581,17 +600,17 @@ describe('RemoteConnectionMainService wsl mode', () => {
     svc.onDidChangeState((s) => states.push(s))
     made = { svc, calls, states }
 
-    await svc.getConnection('wsl+Ubuntu')
-    expect(calls).toEqual(['check:Ubuntu'])
+    await svc.getConnection('wsl+ubuntu')
+    expect(calls).toEqual(['check:ubuntu'])
   })
 
   it('stopServer stops the daemon in the distro', async () => {
     const daemon = await startDaemon()
     const wsl = (made = makeWslService(daemon))
 
-    await wsl.svc.getConnection('wsl+Ubuntu')
-    await wsl.svc.stopServer('wsl+Ubuntu')
-    expect(wsl.calls.at(-1)).toBe('stop:Ubuntu')
+    await wsl.svc.getConnection('wsl+ubuntu')
+    await wsl.svc.stopServer('wsl+ubuntu')
+    expect(wsl.calls.at(-1)).toBe('stop:ubuntu')
   })
 
   it('rejects malformed wsl authorities before any orchestration', async () => {
@@ -625,7 +644,7 @@ describe('RemoteConnectionMainService wsl mode', () => {
     svc.onDidChangeState((s) => states.push(s))
     made = { svc, calls: wsl.calls, states }
 
-    await svc.getConnection('wsl+Ubuntu')
+    await svc.getConnection('wsl+ubuntu')
     expect(states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
     expect(procs).toHaveLength(1)
     expect(wsl.calls).toEqual([])
@@ -635,8 +654,8 @@ describe('RemoteConnectionMainService wsl mode', () => {
     const daemon = await startDaemon()
     const wsl = (made = makeWslService(daemon))
 
-    const conn = await wsl.svc.getConnection('wsl+Ubuntu')
-    wsl.svc.dropSocketForTesting('wsl+Ubuntu')
+    const conn = await wsl.svc.getConnection('wsl+ubuntu')
+    wsl.svc.dropSocketForTesting('wsl+ubuntu')
     expect(wsl.states.at(-1)?.state).toBe('reconnecting')
 
     const ping = conn.getChannel('test').call<string>('ping')

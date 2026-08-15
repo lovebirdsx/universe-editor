@@ -258,7 +258,7 @@ describe('remoteActions — WSL command surface', () => {
       quickInput,
       fileDialog,
     })
-    expect(remoteStatus.connectCalls).toEqual(['wsl+Ubuntu'])
+    expect(remoteStatus.connectCalls).toEqual(['wsl+ubuntu'])
     expect(quickInput.shownItems).toHaveLength(0)
     expect(fileDialog.openCalls).toBe(1)
   })
@@ -277,7 +277,7 @@ describe('remoteActions — WSL command surface', () => {
     expect(quickInput.shownItems).toHaveLength(1)
     const labels = quickInput.shownItems[0]!.map((i) => (isSeparator(i) ? '—' : i.label))
     expect(labels).toEqual(['Ubuntu (WSL)', 'Debian (WSL)'])
-    expect(remoteStatus.connectCalls).toEqual(['wsl+Ubuntu'])
+    expect(remoteStatus.connectCalls).toEqual(['wsl+ubuntu'])
   })
 
   it('ConnectToWsl.run connects the given authority argument without picking', async () => {
@@ -311,7 +311,7 @@ describe('remoteActions — WSL command surface', () => {
       'separator',
       'Ubuntu (WSL)',
     ])
-    expect(remoteStatus.connectCalls).toEqual(['wsl+Ubuntu'])
+    expect(remoteStatus.connectCalls).toEqual(['wsl+ubuntu'])
   })
 
   it('ConnectToHost.run keeps working when WSL enumeration fails', async () => {

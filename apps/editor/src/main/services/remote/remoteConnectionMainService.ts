@@ -33,6 +33,7 @@ import {
   RemoteConnectionType,
   binaryCodec,
   isWslAuthority,
+  normalizeRemoteAuthority,
   wslDistroFromAuthority,
   type Event,
   type IChannel,
@@ -303,6 +304,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   // ------------------------- public surface -------------------------
 
   getConnection(authority: string): Promise<IRemoteConnection> {
+    authority = normalizeRemoteAuthority(authority)
     try {
       this._validateAuthority(authority)
     } catch (err) {
@@ -322,6 +324,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   }
 
   retryConnection(authority: string): void {
+    authority = normalizeRemoteAuthority(authority)
     try {
       const entry = this._entries.get(authority)
       if (!entry) {
@@ -340,6 +343,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     authority: string,
     args: IRemoteExtensionHostStartArgs = {},
   ): Promise<IRemoteExtensionHostTunnel> {
+    authority = normalizeRemoteAuthority(authority)
     this._validateAuthority(authority)
     const entry = this._entry(authority)
     if (entry.state === 'disposed') {
@@ -386,25 +390,26 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   }
 
   async stopServer(authority: string): Promise<void> {
-    const entry = this._entries.get(authority)
+    const entry = this._entries.get(normalizeRemoteAuthority(authority))
     if (!entry) return
     await this._closeEntry(entry, true)
   }
 
   async closeConnection(authority: string): Promise<void> {
-    const entry = this._entries.get(authority)
+    const entry = this._entries.get(normalizeRemoteAuthority(authority))
     if (!entry) return
     await this._closeEntry(entry, false)
   }
 
   dropSocketForTesting(authority: string): void {
-    const entry = this._entries.get(authority)
+    const entry = this._entries.get(normalizeRemoteAuthority(authority))
     if (!entry) return
     entry.protocol?.getSocket().dispose()
     this._onSocketDisconnected(entry)
   }
 
   dropExtensionHostSocketForTesting(authority: string): void {
+    authority = normalizeRemoteAuthority(authority)
     for (const [tunnel] of this._extensionHostTunnels) {
       if (tunnel.authority === authority) tunnel.dropSocketForTesting()
     }
