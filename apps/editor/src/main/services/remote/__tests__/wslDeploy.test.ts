@@ -272,4 +272,11 @@ describe('WslDeployer', () => {
       'wsl install failed: npm blew up',
     )
   })
+
+  it('reports uploading then installing phases to the onPhase callback', async () => {
+    const { deployer } = makeDeployHarness()
+    const phases: string[] = []
+    await deployer.deployRemoteServer('Ubuntu', undefined, (phase) => phases.push(phase))
+    expect(phases).toEqual(['uploading', 'installing'])
+  })
 })

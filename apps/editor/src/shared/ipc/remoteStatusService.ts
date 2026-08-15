@@ -25,7 +25,24 @@ export interface RemoteConnectionStatusDto {
   readonly authority: string
   readonly state: RemoteConnectionStateDto
   readonly errorMessage?: string
+  readonly progress?: RemoteConnectionProgressDto
 }
+
+export type RemoteConnectionProgressStepDto =
+  | 'stopping-old'
+  | 'uploading'
+  | 'installing'
+  | 'starting-daemon'
+
+export interface RemoteConnectionProgressDto {
+  readonly stepId: RemoteConnectionProgressStepDto
+  readonly stepIndex: number
+  readonly stepTotal: number
+  readonly startedAt: number
+  readonly needsInstall: boolean
+}
+
+export const REMOTE_CONNECTION_LOG_CHANNEL_NAME = 'Remote Connection'
 
 /**
  * Serialisable snapshot of a remote host's environment, surfaced to the renderer

@@ -29,6 +29,7 @@ import {
 } from '@universe-editor/platform'
 import {
   IRemoteStatusService,
+  type RemoteConnectionProgressDto,
   type RemoteConnectionStateDto,
 } from '../../shared/ipc/remoteStatusService.js'
 import {
@@ -41,6 +42,13 @@ import {
 
 const REMOTE_STATUS_MENU_COMMAND_ID = 'workbench.action.remote.showMenu'
 
+const REMOTE_STEP_LABEL: Record<RemoteConnectionProgressDto['stepId'], string> = {
+  'stopping-old': localize('remote.status.step.stoppingOld', 'Stopping old server'),
+  uploading: localize('remote.status.step.uploading', 'Uploading server bundle'),
+  installing: localize('remote.status.step.installing', 'Installing server'),
+  'starting-daemon': localize('remote.status.step.startingDaemon', 'Starting server'),
+}
+
 interface MenuItem extends IQuickPickItem {
   readonly commandId: string
 }
@@ -49,6 +57,8 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   private _accessor: IStatusBarEntryAccessor | undefined
   private readonly _remoteAuthorityKey: IContextKey<string>
   private readonly _states = new Map<string, RemoteConnectionStateDto>()
+  private readonly _progress = new Map<string, RemoteConnectionProgressDto>()
+  private _timer: ReturnType<typeof setInterval> | undefined
 
   constructor(
     @IStatusBarService private readonly _statusBar: IStatusBarService,
@@ -83,11 +93,18 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     this._register(this._workspace.onDidChangeWorkspace(() => this._render()))
     this._register(
       this._remoteStatus.onDidChangeState((status) => {
+        if (status.progress !== undefined) this._progress.set(status.authority, status.progress)
+        else this._progress.delete(status.authority)
         this._states.set(status.authority, status.state)
         this._render()
       }),
     )
     this._register({ dispose: () => this._accessor?.dispose() })
+    this._register({
+      dispose: () => {
+        if (this._timer !== undefined) clearInterval(this._timer)
+      },
+    })
 
     void this._seedStates().then(() => this._render())
     this._render()
@@ -104,17 +121,47 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
   }
 
+  /**
+   * A fresh connect brings the server up before the remote folder opens
+   * (connect → openFolder), so fall back to any in-flight bring-up while the
+   * workspace is still local — otherwise install steps would never surface.
+   */
+  private _displayAuthority(): string | undefined {
+    const current = this._currentAuthority()
+    if (current !== undefined) return current
+    for (const [authority, state] of this._states) {
+      if (state === 'deploying' || state === 'forwarding' || state === 'handshaking') {
+        return authority
+      }
+    }
+    return undefined
+  }
+
   private _render(): void {
-    const authority = this._currentAuthority()
-    this._remoteAuthorityKey.set(authority ?? '')
+    this._remoteAuthorityKey.set(this._currentAuthority() ?? '')
+    const authority = this._displayAuthority()
     if (authority === undefined) {
       this._accessor?.dispose()
       this._accessor = undefined
+      this._stopTimer()
       return
     }
     const entry = this._entryFor(authority)
     if (this._accessor !== undefined) this._accessor.update(entry)
     else this._accessor = this._statusBar.addEntry(entry)
+    if (this._progress.has(authority)) this._startTimer()
+    else this._stopTimer()
+  }
+
+  private _startTimer(): void {
+    if (this._timer !== undefined) return
+    this._timer = setInterval(() => this._render(), 1000)
+  }
+
+  private _stopTimer(): void {
+    if (this._timer === undefined) return
+    clearInterval(this._timer)
+    this._timer = undefined
   }
 
   private _entryFor(authority: string): IStatusBarEntry {
@@ -143,7 +190,25 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
         }
       case 'deploying':
       case 'forwarding':
-      case 'handshaking':
+      case 'handshaking': {
+        const progress = this._progress.get(authority)
+        if (progress !== undefined) {
+          return {
+            ...base,
+            text: localize(
+              'remote.status.step',
+              'SSH: {authority} (Step {index}/{total}: {step} · {elapsed})',
+              {
+                authority,
+                index: progress.stepIndex,
+                total: progress.stepTotal,
+                step: REMOTE_STEP_LABEL[progress.stepId],
+                elapsed: formatElapsedMs(Date.now() - progress.startedAt),
+              },
+            ),
+            showProgress: 'spinning',
+          }
+        }
         return {
           ...base,
           text: localize('remote.status.connecting', 'SSH: {authority} (Connecting...)', {
@@ -151,6 +216,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
           }),
           showProgress: 'spinning',
         }
+      }
       default:
         return {
           ...base,
@@ -160,7 +226,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   }
 
   private async _showMenu(): Promise<void> {
-    const authority = this._currentAuthority()
+    const authority = this._displayAuthority()
     if (authority === undefined) return
     const wslDistros = await this._remoteStatus.listWslDistros().catch(() => [])
     const items: MenuItem[] = [
@@ -204,4 +270,14 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
       void this._commands.executeCommand(picked.commandId, authority)
     }
   }
+}
+
+export function formatElapsedMs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (totalSeconds < 60) return `${seconds}s`
+  if (hours === 0) return `${minutes}m ${seconds}s`
+  return `${hours}h ${minutes}m ${seconds}s`
 }

@@ -426,13 +426,19 @@ export function classifyCheckResult(result: RemoteRunResult, transport: string):
  * and WslDeployer (wsl.exe, target=distro) — what the connection state machine
  * needs to ensure a daemon is deployed and running.
  */
+export type RemoteDeployPhase = 'uploading' | 'installing'
+
 export interface IRemoteServerOrchestrator {
   readonly serverVersion: string
   localBundleHash(): string | undefined
   checkRemoteServer(target: string): Promise<RemoteCheckResult>
   startRemoteDaemon(target: string): Promise<IRemoteDaemonInfo>
   stopRemoteDaemon(target: string): Promise<void>
-  deployRemoteServer(target: string, logger?: ILogger): Promise<void>
+  deployRemoteServer(
+    target: string,
+    logger?: ILogger,
+    onPhase?: (phase: RemoteDeployPhase) => void,
+  ): Promise<void>
 }
 
 export class RemoteDeployer {
@@ -473,6 +479,8 @@ export class RemoteDeployer {
   }
 
   async startRemoteDaemon(authority: string): Promise<IRemoteDaemonInfo> {
+    const startedAt = Date.now()
+    this._logger.info(`[remote:${authority}] starting remote daemon`)
     const result = await this._runner(
       'ssh',
       sshCommandArgs(authority, buildStartCommand(this._serverVersion)),
@@ -486,10 +494,12 @@ export class RemoteDeployer {
     this._logger.info(
       `[remote:${authority}] daemon running port=${info.port} version=${info.serverVersion}`,
     )
+    this._logger.info(`[remote:${authority}] daemon started in ${Date.now() - startedAt}ms`)
     return info
   }
 
   async stopRemoteDaemon(authority: string): Promise<void> {
+    this._logger.info(`[remote:${authority}] stopping remote daemon`)
     const result = await this._runner(
       'ssh',
       sshCommandArgs(authority, buildStopCommand(this._serverVersion)),
@@ -503,8 +513,13 @@ export class RemoteDeployer {
     }
   }
 
-  async deployRemoteServer(authority: string, logger?: ILogger): Promise<void> {
+  async deployRemoteServer(
+    authority: string,
+    logger?: ILogger,
+    onPhase?: (phase: RemoteDeployPhase) => void,
+  ): Promise<void> {
     const log = logger ?? this._logger
+    const startedAt = Date.now()
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
@@ -512,9 +527,11 @@ export class RemoteDeployer {
     const remoteTgz = `/tmp/${tmpName}`
     log.info(`[remote:${authority}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
+      onPhase?.('uploading')
       // GNU tar/scp treat a `C:\...` path as host:file (remote shell syntax) and
       // which binary PATH resolves to varies per machine — run from tmpdir with a
       // bare filename so the local path never contains a colon.
+      const tarStarted = Date.now()
       const tarResult = await this._runner('tar', ['-czf', tmpName, '-C', bundleDir, '.'], {
         cwd: tmpdir(),
       })
@@ -523,6 +540,8 @@ export class RemoteDeployer {
           `tar failed: ${tarResult.stderr.trim() || tarResult.spawnError || `exit ${tarResult.code}`}`,
         )
       }
+      log.info(`[remote:${authority}] bundle packaged in ${Date.now() - tarStarted}ms`)
+      const scpStarted = Date.now()
       const scpResult = await this._runner(
         'scp',
         scpArgs(authority, tmpName, `${destination(authority)}:${remoteTgz}`),
@@ -533,6 +552,9 @@ export class RemoteDeployer {
           `scp failed: ${scpResult.stderr.trim() || scpResult.spawnError || `exit ${scpResult.code}`}`,
         )
       }
+      log.info(`[remote:${authority}] bundle uploaded in ${Date.now() - scpStarted}ms`)
+      onPhase?.('installing')
+      const installStarted = Date.now()
       const installResult = await this._runner(
         'ssh',
         sshCommandArgs(
@@ -546,7 +568,8 @@ export class RemoteDeployer {
           `remote install failed: ${installResult.stderr.trim() || installResult.spawnError || `exit ${installResult.code}`}`,
         )
       }
-      log.info(`[remote:${authority}] remote server deployed`)
+      log.info(`[remote:${authority}] remote install completed in ${Date.now() - installStarted}ms`)
+      log.info(`[remote:${authority}] remote server deployed in ${Date.now() - startedAt}ms`)
     } finally {
       try {
         rmSync(localTgz, { force: true })

@@ -31,7 +31,7 @@ import {
   type IRemoteEnvironment,
 } from '@universe-editor/platform'
 import { NodeSocket } from '@universe-editor/node-services'
-import { findFreePort } from '../remoteDeploy.js'
+import { findFreePort, type RemoteDeployPhase } from '../remoteDeploy.js'
 import {
   RemoteConnectionMainService,
   type IRemoteConnectionStateChange,
@@ -366,8 +366,14 @@ function makeFakeWslDeployer(
     stopRemoteDaemon: async (distro: string) => {
       calls.push(`stop:${distro}`)
     },
-    deployRemoteServer: async (distro: string) => {
+    deployRemoteServer: async (
+      distro: string,
+      _logger?: unknown,
+      onPhase?: (phase: RemoteDeployPhase) => void,
+    ) => {
       calls.push(`deploy:${distro}`)
+      onPhase?.('uploading')
+      onPhase?.('installing')
     },
   } as unknown as WslDeployer
   return { deployer, calls }
@@ -476,6 +482,89 @@ describe('RemoteConnectionMainService wsl mode', () => {
 
     await wsl.svc.getConnection('wsl+Ubuntu')
     expect(wsl.calls).toEqual(['check:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('fires granular progress between coarse deploying and handshaking when not-deployed', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, { firstCheck: 'not-deployed' }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+
+    const states = wsl.states
+    const progress = states.filter((s) => s.progress !== undefined)
+    expect(progress.map((s) => s.progress!.stepId)).toEqual([
+      'uploading',
+      'installing',
+      'starting-daemon',
+    ])
+    expect(
+      progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal, s.progress!.needsInstall]),
+    ).toEqual([
+      [1, 3, true],
+      [2, 3, true],
+      [3, 3, true],
+    ])
+    expect(progress.every((s) => s.state === 'deploying')).toBe(true)
+
+    const firstIdx = states.indexOf(progress[0]!)
+    const lastIdx = states.indexOf(progress[progress.length - 1]!)
+    expect(states[firstIdx - 1]!.state).toBe('deploying')
+    expect(states[firstIdx - 1]!.progress).toBeUndefined()
+    expect(states[lastIdx + 1]!.state).toBe('handshaking')
+  })
+
+  it('fires a single starting-daemon progress when not running with a fresh bundle', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'aaaabbbbccccdddd',
+    }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+
+    const progress = wsl.states.filter((s) => s.progress !== undefined)
+    expect(progress).toHaveLength(1)
+    expect(progress[0]!.progress).toMatchObject({
+      stepId: 'starting-daemon',
+      stepIndex: 1,
+      stepTotal: 1,
+      needsInstall: false,
+    })
+  })
+
+  it('fires no progress events when the running daemon is up-to-date', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(wsl.states.filter((s) => s.progress !== undefined)).toHaveLength(0)
+  })
+
+  it('fires stopping-old → uploading → installing → starting-daemon when running with a stale bundle', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'ffffffffffffffff',
+    }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+
+    const progress = wsl.states.filter((s) => s.progress !== undefined)
+    expect(progress.map((s) => s.progress!.stepId)).toEqual([
+      'stopping-old',
+      'uploading',
+      'installing',
+      'starting-daemon',
+    ])
+    expect(
+      progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal, s.progress!.needsInstall]),
+    ).toEqual([
+      [1, 4, true],
+      [2, 4, true],
+      [3, 4, true],
+      [4, 4, true],
+    ])
   })
 
   it('skipDeployCheck keeps the old behavior (no redeploy on a stale hash)', async () => {

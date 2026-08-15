@@ -31,6 +31,7 @@ import {
   resolveRemoteServerBundleDir,
   resolveRemoteServerVersion,
   type RemoteCheckResult,
+  type RemoteDeployPhase,
   type RemoteRunner,
   type RemoteSpawner,
 } from './remoteDeploy.js'
@@ -107,6 +108,8 @@ export class WslDeployer {
   }
 
   async startRemoteDaemon(distro: string): Promise<IRemoteDaemonInfo> {
+    const startedAt = Date.now()
+    this._logger.info(`[wsl:${distro}] starting daemon`)
     const result = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildStartCommand(this._serverVersion)),
@@ -120,10 +123,12 @@ export class WslDeployer {
     this._logger.info(
       `[wsl:${distro}] daemon running port=${info.port} version=${info.serverVersion}`,
     )
+    this._logger.info(`[wsl:${distro}] daemon started in ${Date.now() - startedAt}ms`)
     return info
   }
 
   async stopRemoteDaemon(distro: string): Promise<void> {
+    this._logger.info(`[wsl:${distro}] stopping daemon`)
     const result = await this._runner(
       this._wslExe(),
       wslCommandArgs(distro, buildStopCommand(this._serverVersion)),
@@ -137,16 +142,23 @@ export class WslDeployer {
     }
   }
 
-  async deployRemoteServer(distro: string, logger?: ILogger): Promise<void> {
+  async deployRemoteServer(
+    distro: string,
+    logger?: ILogger,
+    onPhase?: (phase: RemoteDeployPhase) => void,
+  ): Promise<void> {
     const log = logger ?? this._logger
+    const startedAt = Date.now()
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
     const localTgz = join(tmpdir(), tmpName)
     log.info(`[wsl:${distro}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
+      onPhase?.('uploading')
       // Same colon-in-path dodge as the ssh deployer: run tar from tmpdir with a
       // bare filename so GNU tar never sees `C:\...` as host:file.
+      const tarStarted = Date.now()
       const tarResult = await this._runner('tar', ['-czf', tmpName, '-C', bundleDir, '.'], {
         cwd: tmpdir(),
       })
@@ -155,7 +167,12 @@ export class WslDeployer {
           `tar failed: ${tarResult.stderr.trim() || tarResult.spawnError || `exit ${tarResult.code}`}`,
         )
       }
+      log.info(`[wsl:${distro}] bundle packaged in ${Date.now() - tarStarted}ms`)
+      const uploadStarted = Date.now()
       await this._uploadViaStdin(distro, localTgz, tmpName, log)
+      log.info(`[wsl:${distro}] bundle uploaded in ${Date.now() - uploadStarted}ms`)
+      onPhase?.('installing')
+      const installStarted = Date.now()
       const installResult = await this._runner(
         this._wslExe(),
         wslCommandArgs(distro, buildDeployScriptBody(this._serverVersion, tmpName, bundleHash)),
@@ -166,7 +183,8 @@ export class WslDeployer {
           `wsl install failed: ${stripWslNuls(installResult.stderr).trim() || installResult.spawnError || `exit ${installResult.code}`}`,
         )
       }
-      log.info(`[wsl:${distro}] remote server deployed`)
+      log.info(`[wsl:${distro}] remote install completed in ${Date.now() - installStarted}ms`)
+      log.info(`[wsl:${distro}] remote server deployed in ${Date.now() - startedAt}ms`)
     } finally {
       try {
         rmSync(localTgz, { force: true })

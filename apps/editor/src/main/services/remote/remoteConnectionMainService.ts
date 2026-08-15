@@ -86,10 +86,25 @@ export type RemoteConnectionState =
   | 'failed'
   | 'disposed'
 
+export type RemoteConnectionProgressStep =
+  | 'stopping-old'
+  | 'uploading'
+  | 'installing'
+  | 'starting-daemon'
+
+export interface IRemoteConnectionProgress {
+  readonly stepId: RemoteConnectionProgressStep
+  readonly stepIndex: number
+  readonly stepTotal: number
+  readonly startedAt: number
+  readonly needsInstall: boolean
+}
+
 export interface IRemoteConnectionStateChange {
   readonly authority: string
   readonly state: RemoteConnectionState
   readonly error?: string
+  readonly progress?: IRemoteConnectionProgress
 }
 
 export interface IRemoteConnectionService {
@@ -541,6 +556,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   ): Promise<IRemoteDaemonInfo> {
     const authority = entry.authority
     const localHash = this._skipDeployCheck ? undefined : orchestrator.localBundleHash()
+    this._logger.info(`[remote:${authority}] checking remote server`)
     const check = await orchestrator.checkRemoteServer(target)
     const shortHash = (h: string | undefined): string => (h ?? '').slice(0, 12) || '(none)'
     switch (check.state) {
@@ -552,10 +568,16 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
             ? `version ${check.info.serverVersion} != local ${orchestrator.serverVersion}`
             : `bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}`
           this._logger.warn(`[remote:${authority}] daemon ${reason}; redeploying`)
+          this._fireProgress(entry, 'stopping-old', 1, 4, true)
           await orchestrator.stopRemoteDaemon(target)
-          await orchestrator.deployRemoteServer(target, this._logger)
+          this._fireProgress(entry, 'uploading', 2, 4, true)
+          await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4, true)
+          })
+          this._fireProgress(entry, 'starting-daemon', 4, 4, true)
           return orchestrator.startRemoteDaemon(target)
         }
+        this._logger.info(`[remote:${authority}] remote server up-to-date (running)`)
         return check.info
       }
       case 'not-running': {
@@ -564,13 +586,23 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
           this._logger.info(
             `[remote:${authority}] deployed bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}; redeploying`,
           )
-          await orchestrator.deployRemoteServer(target, this._logger)
+          this._fireProgress(entry, 'uploading', 1, 3, true)
+          await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
+          })
+          this._fireProgress(entry, 'starting-daemon', 3, 3, true)
+          return orchestrator.startRemoteDaemon(target)
         }
+        this._fireProgress(entry, 'starting-daemon', 1, 1, false)
         return orchestrator.startRemoteDaemon(target)
       }
       case 'not-deployed': {
         this._logger.info(`[remote:${authority}] not deployed (${check.reason}); deploying`)
-        await orchestrator.deployRemoteServer(target, this._logger)
+        this._fireProgress(entry, 'uploading', 1, 3, true)
+        await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
+          if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
+        })
+        this._fireProgress(entry, 'starting-daemon', 3, 3, true)
         return orchestrator.startRemoteDaemon(target)
       }
       case 'error':
@@ -925,6 +957,20 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       authority: entry.authority,
       state,
       ...(error !== undefined ? { error } : {}),
+    })
+  }
+
+  private _fireProgress(
+    entry: ConnectionEntry,
+    stepId: RemoteConnectionProgressStep,
+    stepIndex: number,
+    stepTotal: number,
+    needsInstall: boolean,
+  ): void {
+    this._onDidChangeState.fire({
+      authority: entry.authority,
+      state: entry.state,
+      progress: { stepId, stepIndex, stepTotal, startedAt: Date.now(), needsInstall },
     })
   }
 

@@ -298,6 +298,18 @@ describe('RemoteDeployer.deployRemoteServer', () => {
       'scp failed: lost connection',
     )
   })
+
+  it('reports uploading then installing phases to the onPhase callback', async () => {
+    const runner: RemoteRunner = () => Promise.resolve({ code: 0, stdout: '', stderr: '' })
+    const deployer = new RemoteDeployer({
+      runner,
+      serverVersion: '0.0.0',
+      bundleDir: makeBundle(),
+    })
+    const phases: string[] = []
+    await deployer.deployRemoteServer('user@host', undefined, (phase) => phases.push(phase))
+    expect(phases).toEqual(['uploading', 'installing'])
+  })
 })
 
 describe('RemoteDeployer.createForward', () => {

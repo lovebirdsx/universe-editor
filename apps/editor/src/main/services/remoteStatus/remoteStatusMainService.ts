@@ -59,6 +59,7 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
           authority: e.authority,
           state: e.state,
           ...(e.error !== undefined ? { errorMessage: e.error } : {}),
+          ...(e.progress !== undefined ? { progress: e.progress } : {}),
         }
         this._states.set(dto.authority, dto)
         this._onDidChangeState.fire(dto)

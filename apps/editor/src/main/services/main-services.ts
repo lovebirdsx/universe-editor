@@ -54,7 +54,10 @@ import { IConfigLocationService } from '../../shared/ipc/configLocationService.j
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
-import { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
+import {
+  IRemoteStatusService,
+  REMOTE_CONNECTION_LOG_CHANNEL_NAME,
+} from '../../shared/ipc/remoteStatusService.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { MainPingService } from './ping/pingMainService.js'
@@ -332,7 +335,7 @@ registerSingletonFactory(IRemoteConnectionService, (acc) => {
   const loggerService = acc.get(ILoggerService)
   const logger = createNamedLogger(loggerService, {
     id: 'remoteConnection',
-    name: 'Remote Connection',
+    name: REMOTE_CONNECTION_LOG_CHANNEL_NAME,
   })
   const remoteServerCmd = acc.get(IEnvironmentMainService).remoteServerCmd
   const remoteSkipDeployCheck = acc.get(IEnvironmentMainService).remoteSkipDeployCheck
