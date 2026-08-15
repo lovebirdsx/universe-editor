@@ -137,11 +137,11 @@ describe('argv assembly', () => {
 describe('parseDaemonInfoLine', () => {
   it('parses a well-formed info line', () => {
     const info = parseDaemonInfoLine(
-      'UNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":2,"port":1234,"token":"t","pid":99}\n',
+      'UNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":3,"port":1234,"token":"t","pid":99}\n',
     )
     expect(info).toEqual({
       serverVersion: '0.0.0',
-      protocolVersion: 2,
+      protocolVersion: 3,
       port: 1234,
       token: 't',
       pid: 99,
@@ -150,7 +150,7 @@ describe('parseDaemonInfoLine', () => {
 
   it('parses an info line with surrounding noise', () => {
     const info = parseDaemonInfoLine(
-      'some log\nUNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":2,"port":5,"token":"x","pid":1}\nmore',
+      'some log\nUNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":3,"port":5,"token":"x","pid":1}\nmore',
     )
     expect(info?.port).toBe(5)
   })

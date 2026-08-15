@@ -62,6 +62,13 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 
 `isLoginActive` 仅当 env 里既无 token 也无 apiKey（即没有更高优先级凭据覆盖）时为真。
 
+### Remote 工作区路由（2026-08）
+
+远端工作区下面板操作**远端主机**的 `~/.claude`：契约方法带尾部可选 `authority`（`read`/`patch`/`configPath`/`readAuthStatus`/`checkGatewayConnectivity`），main 按 authority 经 `RemoteChannels.AgentConfig` 转发到 remote server（协议在 `packages/node-services/src/agentConfig/agentConfigService.ts`，改协议须 bump `REMOTE_PROTOCOL_VERSION`）。要点：
+- **authority 必须来自 `useRemoteAuthority()`**（`workbench/useRemoteAuthority.ts`，订阅 `onDidChangeWorkspace`）——workspace hydration 是异步的，用 `useMemo` 读 `workspace.current` 会把 authority 冻结成 undefined（启动恢复的 tab 永远读写本地，真实踩坑）。
+- `readProfiles`/`writeProfiles`（档案库）**刻意 editor-local 不路由**；`applyProfile` 注入时经带 authority 的 `patch` 写远端。
+- `ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件；`runClaudeLogin` remote 分支不解析本地 binary，改在远端终端跑 PATH 上的 `claude auth login`。
+
 ### 🔒 安全约束（刻意决策，勿擅改）
 
 1. **凭据明文落盘是用户明确选择**：apiKey/token/baseUrl 明文写进 `settings.json`（与 CLI 共享）和 `aiSettings.json` 的 Claude 认证区，**刻意**不用加密 SecretStorage。项目 CLAUDE.md「AI provider 密钥必须走 ISecretStorageService、绝不进 settings.json」那条**只针对 AI provider 特性，不适用本 Claude 配置共享特性**。

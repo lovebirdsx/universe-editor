@@ -8,8 +8,26 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  Event,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+  type IRemoteEnvironment,
+} from '@universe-editor/platform'
+import type {
+  ClaudeAuthStatus,
+  ClaudeSettings,
+  CodexAuthStatus,
+  CodexSettings,
+  IRemoteAgentConfigService,
+} from '@universe-editor/node-services'
 import { ClaudeConfigMainService } from '../claudeConfigMainService.js'
 import type { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
+import type {
+  IRemoteConnection,
+  IRemoteConnectionService,
+} from '../../remote/remoteConnectionMainService.js'
 
 function configLocation(dir: string): IConfigLocationService {
   return {
@@ -227,5 +245,109 @@ describe('ClaudeConfigMainService', () => {
       await svc.writeProfiles([{ id: 'a', label: 'x', kind: 'apiKey', apiKey: 'sk-1' }])
       expect(await svc.read()).toEqual({})
     })
+  })
+})
+
+describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
+  const dirs: string[] = []
+  const svcs: ClaudeConfigMainService[] = []
+
+  afterEach(async () => {
+    for (const s of svcs) s.dispose()
+    svcs.length = 0
+    await Promise.all(dirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })))
+  })
+
+  const REMOTE_ENV: IRemoteEnvironment = {
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    serverVersion: '0.0.0',
+    os: 'linux',
+    arch: 'x64',
+    nodeVersion: '20.0.0',
+    pathCaseSensitive: true,
+    homeDir: '/home/u',
+    tmpDir: '/tmp',
+  }
+
+  class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
+    declare readonly _serviceBrand: undefined
+    readonly onDidChangeCodexAuth: Event<void> = Event.None
+    probeResult = true
+    probeCalls = 0
+
+    claudeRead(): Promise<ClaudeSettings> {
+      return Promise.resolve({})
+    }
+    claudePatch(): Promise<void> {
+      return Promise.resolve()
+    }
+    claudeConfigPath(): Promise<string> {
+      return Promise.resolve('/home/u/.claude/settings.json')
+    }
+    claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
+      return Promise.resolve({ loggedIn: false, expired: false })
+    }
+    codexRead(): Promise<CodexSettings> {
+      return Promise.resolve({})
+    }
+    codexPatch(): Promise<void> {
+      return Promise.resolve()
+    }
+    codexApplyCredential(): Promise<CodexAuthStatus> {
+      return Promise.resolve({ active: 'none', hasApiKey: false })
+    }
+    codexConfigPath(): Promise<string> {
+      return Promise.resolve('/home/u/.codex/config.toml')
+    }
+    codexReadAuthStatus(): Promise<CodexAuthStatus> {
+      return Promise.resolve({ active: 'none', hasApiKey: false })
+    }
+    checkGatewayConnectivity(): Promise<boolean> {
+      this.probeCalls++
+      return Promise.resolve(this.probeResult)
+    }
+    codexMatchActiveApiKey(): Promise<number> {
+      return Promise.resolve(-1)
+    }
+  }
+
+  it('routes the probe through the remote AgentConfig channel when an authority is given', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.probeResult = false
+    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
+    dirs.push(dir)
+    const conn: IRemoteConnection = {
+      authority: 'host',
+      env: REMOTE_ENV,
+      getChannel: (name) => {
+        expect(name).toBe(RemoteChannels.AgentConfig)
+        return ProxyChannel.fromService(remote)
+      },
+      onDidClose: Event.None,
+    }
+    const connService: IRemoteConnectionService = {
+      _serviceBrand: undefined,
+      getConnection: async () => conn,
+      openExtensionHostConnection: async () => {
+        throw new Error('not used in this test')
+      },
+      onDidChangeState: Event.None,
+      retryConnection: () => undefined,
+      stopServer: async () => undefined,
+      closeConnection: async () => undefined,
+      dropSocketForTesting: () => undefined,
+      dropExtensionHostSocketForTesting: () => undefined,
+      dispose: () => undefined,
+    }
+    const svc = new ClaudeConfigMainService(
+      join(dir, 'settings.json'),
+      undefined,
+      undefined,
+      connService,
+    )
+    svcs.push(svc)
+
+    expect(await svc.checkGatewayConnectivity('http://10.0.0.1:9080', 'host')).toBe(false)
+    expect(remote.probeCalls).toBe(1)
   })
 })

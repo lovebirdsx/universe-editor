@@ -10,6 +10,10 @@
  *  notably PowerShell, which rejects a bare quoted path ("…\claude.exe" auth …)
  *  and requires the `&` call operator — and means a spawn failure surfaces in the
  *  visible terminal instead of being swallowed by the shell.
+ *
+ *  In a remote workspace the local binary path is meaningless: the terminal opens
+ *  on the remote host already, so we run the `claude` CLI from its PATH there
+ *  instead of resolving a local binary.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback } from 'react'
@@ -28,6 +32,7 @@ import {
 } from '../../../../shared/ipc/claudeBinaryService.js'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 
 export type ClaudeLoginKind = 'claudeai' | 'console'
 
@@ -40,9 +45,32 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
   const config = useService(IConfigurationService)
   const layout = useService(ILayoutService)
   const views = useService(IViewsService)
+  const authority = useRemoteAuthority()
 
   return useCallback(
     async (kind: ClaudeLoginKind) => {
+      const flag = kind === 'console' ? '--console' : '--claudeai'
+
+      // Remote workspace: the terminal already opens on the remote host, so run
+      // the claude CLI from its PATH (the local binary path is meaningless there).
+      if (authority !== undefined) {
+        if (!layout.getVisible(PartId.Panel)) layout.setVisible(PartId.Panel, true)
+        views.openViewContainer(TERMINAL_CONTAINER_ID)
+        const id = await terminals.newTerminal({ target: 'panel' })
+        if (!id) {
+          notification.notify({
+            severity: Severity.Error,
+            message: localize('agentSettings.login.noTerminal', 'Could not open a terminal.'),
+          })
+          return
+        }
+        terminals.setActiveTerminal(id)
+        terminals.focus()
+        // Give the remote shell a beat to print its prompt before injecting.
+        setTimeout(() => terminals.input(id, `claude auth login ${flag}\r`), 600)
+        return
+      }
+
       let binPath: string
       try {
         const source = (config.get<string>('acp.claude.source') ?? 'download') as ClaudeBinarySource
@@ -64,7 +92,6 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
         return
       }
 
-      const flag = kind === 'console' ? '--console' : '--claudeai'
       // Reveal the panel and switch to the Terminal container before spawning;
       // newTerminal alone creates the terminal but does not surface the panel.
       if (!layout.getVisible(PartId.Panel)) layout.setVisible(PartId.Panel, true)
@@ -86,6 +113,6 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
       terminals.setActiveTerminal(id)
       terminals.focus()
     },
-    [binary, terminals, notification, config, layout, views],
+    [binary, terminals, notification, config, layout, views, authority],
   )
 }

@@ -6,13 +6,8 @@
  *  edits stay consistent with the on-disk file the agent + CLI also read.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  IStorageService,
-  IWorkspaceService,
-  REMOTE_SCHEME,
-  StorageScope,
-} from '@universe-editor/platform'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { IStorageService, StorageScope } from '@universe-editor/platform'
 import {
   IClaudeConfigService,
   type ClaudeAuthStatus,
@@ -21,13 +16,16 @@ import {
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
-import { useService, useOptionalService } from '../../useService.js'
+import { useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { isProfileActive } from './credentialMatch.js'
 
 export interface UseClaudeConfig {
   readonly settings: ClaudeSettings
   readonly loaded: boolean
   readonly configPath: string
+  /** Remote-ssh authority when the workspace folder is remote; undefined for local. */
+  readonly authority: string | undefined
   readonly authStatus: ClaudeAuthStatus
   readonly profiles: readonly ClaudeCredentialProfile[]
   readonly credentialDraft: ClaudeCredentialDraft | undefined
@@ -56,13 +54,9 @@ const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
   const storage = useService(IStorageService)
-  const workspace = useOptionalService(IWorkspaceService)
   // Remote workspace: configure the remote `~/.claude`; local: leave authority
   // undefined so main routes to the local store.
-  const authority = useMemo(() => {
-    const folder = workspace?.current?.folder
-    return folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
-  }, [workspace])
+  const authority = useRemoteAuthority()
   const [settings, setSettings] = useState<ClaudeSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -205,6 +199,7 @@ export function useClaudeConfig(): UseClaudeConfig {
     settings,
     loaded,
     configPath,
+    authority,
     authStatus,
     profiles,
     credentialDraft,

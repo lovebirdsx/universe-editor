@@ -40,4 +40,20 @@ export interface IRemoteAgentConfigService {
   codexApplyCredential(intent: CodexCredentialIntent): Promise<CodexAuthStatus>
   codexConfigPath(): Promise<string>
   codexReadAuthStatus(): Promise<CodexAuthStatus>
+
+  /**
+   * Probe `baseUrl` over HTTP from the remote host. Same semantics as the local
+   * probe (any HTTP status proves reachability); remote-side probing matters for
+   * gateways only reachable from the remote network.
+   */
+  checkGatewayConnectivity(baseUrl: string): Promise<boolean>
+
+  /**
+   * Match the remote host's active codex API key against `candidates`, returning
+   * the matching index or -1. Narrow by design: the editor sends its saved
+   * candidate keys (same client→server direction as `applyCredential`) and only
+   * an index travels back — the remote auth.json secrets never cross the wire.
+   * -1 when auth.json is absent or resolves to a non-apiKey mode.
+   */
+  codexMatchActiveApiKey(candidates: readonly string[]): Promise<number>
 }

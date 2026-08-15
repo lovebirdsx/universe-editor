@@ -43,7 +43,7 @@ function newId(): string {
 }
 
 export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig }) {
-  const { configPath } = config
+  const { configPath, authority } = config
   const authPath = configPath ? getSiblingConfigPath(configPath, 'auth.json') : undefined
 
   return (
@@ -60,9 +60,13 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
       {configPath && authPath && (
         <div className={styles['pathHint']}>
           {localize('codexSettings.auth.path.settingsPrefix', 'Settings in')}{' '}
-          <ConfigFileLink path={configPath} />
+          <ConfigFileLink path={configPath} {...(authority !== undefined ? { authority } : {})} />
           {localize('codexSettings.auth.path.credentialsPrefix', '; credentials in')}{' '}
-          <ConfigFileLink path={authPath} label="auth.json" />
+          <ConfigFileLink
+            path={authPath}
+            label="auth.json"
+            {...(authority !== undefined ? { authority } : {})}
+          />
         </div>
       )}
     </div>
@@ -75,6 +79,7 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
     profiles,
     activeProfileId,
     credentialDraft,
+    authority,
     applyProfile,
     saveProfile,
     deleteProfile,
@@ -136,6 +141,7 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
             <ProfileRow
               key={profile.id}
               profile={profile}
+              authority={authority}
               active={isActive(profile)}
               onUse={() => void apply(profile)}
               onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
@@ -169,12 +175,14 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
 
 function ProfileRow({
   profile,
+  authority,
   active,
   onUse,
   onEdit,
   onDelete,
 }: {
   profile: CodexCredentialProfile
+  authority: string | undefined
   active: boolean
   onUse: () => void
   onEdit: () => void
@@ -183,8 +191,8 @@ function ProfileRow({
   const Icon = profile.kind === 'apiKey' ? KeyRound : Network
   const configService = useService<ICodexConfigService>(ICodexConfigService)
   const probe = useCallback(
-    (url: string) => configService.checkGatewayConnectivity(url),
-    [configService],
+    (url: string) => configService.checkGatewayConnectivity(url, authority),
+    [configService, authority],
   )
   const detail =
     profile.kind === 'apiKey'

@@ -1777,6 +1777,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.login.hint':
     '打开终端并运行 Claude 登录流程。按提示完成后，再启动 Agent 会话。',
   'agentSettings.auth.login.overridden': '你已登录，但当前优先使用了已保存的凭据。',
+  'agentSettings.auth.login.remoteHint':
+    '在远程主机的终端中运行 `claude auth login`，要求其 PATH 中有 claude CLI。',
   'agentSettings.auth.login.refresh': '刷新',
   'agentSettings.auth.login.refreshing': '正在刷新…',
   'agentSettings.auth.login.setCurrent': '使用此登录',
@@ -1823,6 +1825,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Binary: Claude ---
   'binaryPanel.customPath': '可执行文件路径',
+  'binaryPanel.remoteNotice':
+    '远程工作区：此页面管理本地编辑器的二进制文件，远程主机上的 Agent 会在远端自行解析其二进制文件。',
   'binaryPanel.source.custom': '自定义路径',
   'binaryPanel.source.custom.desc': '指向特定的 Claude 可执行文件，适用于测试或多版本场景。',
   'binaryPanel.source.download': '自动下载（推荐）',
@@ -1873,6 +1877,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Binary: Codex ---
   'codexBinaryPanel.customPath': '可执行文件路径',
+  'codexBinaryPanel.remoteNotice':
+    '远程工作区：此页面管理本地编辑器的 codex-acp 二进制文件，远程主机上的 Agent 会在远端自行解析其二进制文件。',
   'codexBinaryPanel.source.custom': '自定义路径',
   'codexBinaryPanel.source.custom.desc':
     '指向特定的 codex-acp 可执行文件，适用于测试或多版本场景。',

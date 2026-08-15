@@ -5,7 +5,13 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { Emitter, Event, ProxyChannel, RemoteChannels } from '@universe-editor/platform'
+import {
+  Emitter,
+  Event,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+} from '@universe-editor/platform'
 import type {
   AcpTerminalCreateSpec,
   AcpTerminalCreatedInfo,
@@ -373,7 +379,7 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
 // -- remote routing -------------------------------------------------------
 
 const REMOTE_ENV: IRemoteEnvironment = {
-  protocolVersion: 2,
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
   serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',

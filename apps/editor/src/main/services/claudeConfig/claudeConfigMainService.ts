@@ -6,8 +6,9 @@
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local ClaudeConfigStore (zero behavior change). The
- *  credential library (readProfiles/writeProfiles) and the gateway connectivity
- *  probe are always editor-local and never route.
+ *  credential library (readProfiles/writeProfiles) is always editor-local; the
+ *  gateway probe runs from the effective host — the remote network when an
+ *  authority is given, the local host otherwise.
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
@@ -23,6 +24,7 @@ import {
 import {
   ClaudeConfigStore,
   defaultClaudeSettingsPath,
+  probeGatewayConnectivity,
   writeFileAtomic,
   type IRemoteAgentConfigService,
 } from '@universe-editor/node-services'
@@ -35,7 +37,6 @@ import type {
 } from '../../../shared/ipc/claudeConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
-import { probeGatewayConnectivity } from '../agentSettings/gatewayConnectivity.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 interface ClaudeAgentSettingsState {
@@ -90,9 +91,14 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return this._local.readAuthStatus()
   }
 
-  async checkGatewayConnectivity(baseUrl: string): Promise<boolean> {
-    const reachable = await probeGatewayConnectivity(baseUrl)
-    this._logger.info(`gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'}`)
+  async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
+    const reachable = authority
+      ? await (await this._remoteService(authority)).checkGatewayConnectivity(baseUrl)
+      : await probeGatewayConnectivity(baseUrl)
+    const where = authority ? 'remote' : 'local'
+    this._logger.info(
+      `gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'} (${where})`,
+    )
     return reachable
   }
 

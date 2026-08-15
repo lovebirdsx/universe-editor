@@ -16,6 +16,7 @@ import {
   InMemoryMessagePassingProtocol,
   ProxyChannel,
   RemoteChannels,
+  REMOTE_PROTOCOL_VERSION,
   REMOTE_SCHEME,
   URI,
   binaryCodec,
@@ -42,7 +43,7 @@ import { FileSearchMainService } from '../../fileSearch/fileSearchMainService.js
 import { TextSearchMainService } from '../../textSearch/textSearchMainService.js'
 
 const ENV: IRemoteEnvironment = {
-  protocolVersion: 2,
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
   serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',

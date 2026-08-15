@@ -116,8 +116,10 @@ export interface IClaudeConfigService {
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network
    * errors / timeouts / malformed URLs. Powers the status dot in the UI.
+   * `authority` selects a remote host — the probe then runs from the remote
+   * network (for gateways only reachable there); absent → the local host.
    */
-  checkGatewayConnectivity(baseUrl: string): Promise<boolean>
+  checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean>
 }
 
 export const IClaudeConfigService = createDecorator<IClaudeConfigService>('claudeConfigService')

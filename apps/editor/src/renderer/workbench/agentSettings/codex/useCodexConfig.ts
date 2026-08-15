@@ -11,13 +11,8 @@
  *  ChatGPT).
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  IStorageService,
-  IWorkspaceService,
-  REMOTE_SCHEME,
-  StorageScope,
-} from '@universe-editor/platform'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { IStorageService, StorageScope } from '@universe-editor/platform'
 import {
   ICodexConfigService,
   type CodexAuthStatus,
@@ -26,12 +21,15 @@ import {
   type CodexSettings,
   type CodexSettingsPatch,
 } from '../../../../shared/ipc/codexConfigService.js'
-import { useService, useOptionalService } from '../../useService.js'
+import { useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 
 export interface UseCodexConfig {
   readonly settings: CodexSettings
   readonly loaded: boolean
   readonly configPath: string
+  /** Remote-ssh authority when the workspace folder is remote; undefined for local. */
+  readonly authority: string | undefined
   readonly authStatus: CodexAuthStatus
   readonly profiles: readonly CodexCredentialProfile[]
   /** Id of the saved profile matching the credential currently in effect. */
@@ -62,13 +60,9 @@ const CREDENTIAL_DRAFT_KEY = 'agentSettings.codex.credentialDraft'
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
   const storage = useService(IStorageService)
-  const workspace = useOptionalService(IWorkspaceService)
   // Remote workspace: configure the remote `~/.codex`; local leaves authority
   // undefined so main routes to the local store.
-  const authority = useMemo(() => {
-    const folder = workspace?.current?.folder
-    return folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
-  }, [workspace])
+  const authority = useRemoteAuthority()
   const [settings, setSettings] = useState<CodexSettings>({})
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -84,7 +78,7 @@ export function useCodexConfig(): UseCodexConfig {
       service.configPath(authority),
       service.readAuthStatus(authority),
       service.readProfiles(),
-      service.matchActiveProfile(),
+      service.matchActiveProfile(authority),
       storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
     ])
     setSettings(next)
@@ -112,7 +106,7 @@ export function useCodexConfig(): UseCodexConfig {
         service.configPath(authority),
         service.readAuthStatus(authority),
         service.readProfiles(),
-        service.matchActiveProfile(),
+        service.matchActiveProfile(authority),
         storage.get<CodexCredentialDraft>(CREDENTIAL_DRAFT_KEY, StorageScope.GLOBAL),
       ])
       if (!active) return
@@ -131,7 +125,7 @@ export function useCodexConfig(): UseCodexConfig {
       void (async () => {
         const [status, activeId] = await Promise.all([
           service.readAuthStatus(authority),
-          service.matchActiveProfile(),
+          service.matchActiveProfile(authority),
         ])
         if (!active) return
         setAuthStatus(status)
@@ -172,7 +166,7 @@ export function useCodexConfig(): UseCodexConfig {
             )
       setSettings(await service.read(authority))
       setAuthStatus(status)
-      setActiveProfileId(await service.matchActiveProfile())
+      setActiveProfileId(await service.matchActiveProfile(authority))
     },
     [service, authority],
   )
@@ -185,7 +179,7 @@ export function useCodexConfig(): UseCodexConfig {
         idx >= 0 ? current.map((p) => (p.id === profile.id ? profile : p)) : [...current, profile]
       // Read the active match before writing the edit: afterwards the edited
       // profile no longer matches the on-disk credential until it is re-applied.
-      const wasActive = (await service.matchActiveProfile()) === profile.id
+      const wasActive = (await service.matchActiveProfile(authority)) === profile.id
       await service.writeProfiles(next)
       setProfiles(next)
       // Editing the in-use profile (e.g. rotating its key) must push the new
@@ -196,9 +190,9 @@ export function useCodexConfig(): UseCodexConfig {
         return
       }
       // Editing a profile may make another one stop / start matching.
-      setActiveProfileId(await service.matchActiveProfile())
+      setActiveProfileId(await service.matchActiveProfile(authority))
     },
-    [service, applyProfile],
+    [service, applyProfile, authority],
   )
 
   const deleteProfile = useCallback(
@@ -207,9 +201,9 @@ export function useCodexConfig(): UseCodexConfig {
       const next = current.filter((p) => p.id !== id)
       await service.writeProfiles(next)
       setProfiles(next)
-      setActiveProfileId(await service.matchActiveProfile())
+      setActiveProfileId(await service.matchActiveProfile(authority))
     },
-    [service],
+    [service, authority],
   )
 
   const saveCredentialDraft = useCallback(
@@ -232,13 +226,14 @@ export function useCodexConfig(): UseCodexConfig {
     const status = await service.applyCredential({ kind: 'chatgpt' }, authority)
     setSettings(await service.read(authority))
     setAuthStatus(status)
-    setActiveProfileId(await service.matchActiveProfile())
+    setActiveProfileId(await service.matchActiveProfile(authority))
   }, [service, authority])
 
   return {
     settings,
     loaded,
     configPath,
+    authority,
     authStatus,
     profiles,
     activeProfileId,

@@ -77,7 +77,7 @@ export default [
     // The kernel is scheme-agnostic: any resource reaching it may be served by a
     // non-local filesystem provider, and `.fsPath` silently folds the authority
     // into the path for those. Banned here so remote-capable code can't regress;
-    // the three exempt files below are the deliberate chokepoints.
+    // the exempt files below are the deliberate chokepoints.
     files: ['packages/platform/src/**/*.{ts,tsx}'],
     ignores: [
       // Defines the getter itself.
@@ -87,6 +87,9 @@ export default [
       'packages/platform/src/configurationResolver/variableResolver.ts',
       // Guarded ternary: `scheme === 'file' ? fsPath : path`.
       'packages/platform/src/undoRedo/undoRedoService.ts',
+      // Guarded scheme check (`uri.scheme !== REMOTE_SCHEME` throws first): the
+      // one place a remote-ssh URI is translated to its server-local fsPath.
+      'packages/platform/src/remote/remoteUri.ts',
       'packages/platform/src/**/__tests__/**',
       'packages/platform/src/**/*.test.{ts,tsx}',
     ],

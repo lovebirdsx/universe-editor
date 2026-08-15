@@ -116,16 +116,19 @@ export interface ICodexConfigService {
   /**
    * Which saved profile (by id) matches the credential currently in effect, or
    * `undefined` when none does. Computed in the main process so the comparison
-   * can see the secrets that never cross the boundary. Always compares the LOCAL
-   * host's config against the editor-local library.
+   * can see the secrets that never cross the boundary. Compares the *effective*
+   * host's credential — the `authority` remote host, or the local host when
+   * absent — against the editor-local library.
    */
-  matchActiveProfile(): Promise<string | undefined>
+  matchActiveProfile(authority?: string): Promise<string | undefined>
   /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network
    * errors / timeouts / malformed URLs. Powers the status dot in the UI.
+   * `authority` selects a remote host — the probe then runs from the remote
+   * network (for gateways only reachable there); absent → the local host.
    */
-  checkGatewayConnectivity(baseUrl: string): Promise<boolean>
+  checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean>
 }
 
 export const ICodexConfigService = createDecorator<ICodexConfigService>('codexConfigService')

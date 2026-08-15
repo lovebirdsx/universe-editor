@@ -27,6 +27,7 @@ import {
   type ICodexBinaryVersionInfo,
 } from '../../../../shared/ipc/codexBinaryService.js'
 import { useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { computeBinaryVersionActions } from '../binaryVersionActions.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
@@ -36,6 +37,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
   const codexBinary = useService(ICodexBinaryService)
   const notifications = useService(INotificationService)
   const host = useService(IHostService)
+  const authority = useRemoteAuthority()
 
   const [source, setSourceState] = useState<CodexBinarySource>(
     () => (config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource,
@@ -133,6 +135,14 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
 
   return (
     <div className={styles['panel']}>
+      {authority !== undefined && (
+        <div className={styles['desc']}>
+          {localize(
+            'codexBinaryPanel.remoteNotice',
+            "Remote workspace: this page manages the local editor's codex-acp binary. The agent on the remote host resolves its own binary there.",
+          )}
+        </div>
+      )}
       {/* ── Binary Source ─────────────────────────────────────────────── */}
       <section className={styles['section']}>
         <h3 className={styles['sectionTitle']}>

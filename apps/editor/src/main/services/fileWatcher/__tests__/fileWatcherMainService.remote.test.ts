@@ -12,6 +12,7 @@ import {
   Event,
   ProxyChannel,
   RemoteChannels,
+  REMOTE_PROTOCOL_VERSION,
   REMOTE_SCHEME,
   URI,
   type IFileChangeEvent,
@@ -29,7 +30,7 @@ import type {
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 
 const INFO: IRemoteEnvironment = {
-  protocolVersion: 2,
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
   serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',

@@ -9,23 +9,22 @@ import {
 import { ServicesContext } from '../../useService.js'
 import { ConfigFileLink, getSiblingConfigPath } from '../ConfigFileLink.js'
 
-function mount(path: string, label?: string) {
-  const opened: string[] = []
+function mount(path: string, opts?: { label?: string; authority?: string }) {
+  const opened: URI[] = []
   const services = new ServiceCollection()
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose: () => {} }),
     resolveEditors: () => [],
     openEditor: async (uri: URI) => {
-      opened.push(uri.fsPath)
+      opened.push(uri)
     },
   } as never)
 
   const instantiation = new InstantiationService(services)
-  const props = label === undefined ? { path } : { path, label }
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
-      <ConfigFileLink {...props} />
+      <ConfigFileLink path={path} {...opts} />
     </ServicesContext.Provider>,
   )
   return { ...utils, opened }
@@ -37,7 +36,22 @@ describe('ConfigFileLink', () => {
 
     fireEvent.click(getByRole('button', { name: 'Open C:\\Users\\kuro\\.claude\\settings.json' }))
 
-    expect(opened).toEqual(['C:/Users/kuro/.claude/settings.json'])
+    expect(opened).toHaveLength(1)
+    expect(opened[0]!.scheme).toBe('file')
+    expect(opened[0]!.fsPath).toBe('C:/Users/kuro/.claude/settings.json')
+  })
+
+  it('opens a remote-ssh URI when authority is provided', () => {
+    const { getByRole, opened } = mount('/home/user/.claude/settings.json', {
+      authority: 'user@host',
+    })
+
+    fireEvent.click(getByRole('button', { name: 'Open /home/user/.claude/settings.json' }))
+
+    expect(opened).toHaveLength(1)
+    expect(opened[0]!.scheme).toBe('remote-ssh')
+    expect(opened[0]!.authority).toBe('user@host')
+    expect(opened[0]!.path).toBe('/home/user/.claude/settings.json')
   })
 
   it('derives sibling config paths while preserving path separators', () => {

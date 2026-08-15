@@ -13,6 +13,7 @@ import {
   NullLogger,
   ProxyChannel,
   RemoteChannels,
+  REMOTE_PROTOCOL_VERSION,
   setDisposableTracker,
 } from '@universe-editor/platform'
 import type { IDisposable } from '@universe-editor/platform'
@@ -475,7 +476,7 @@ describe('AcpHostMainService — probe', () => {
 // -- remote routing -------------------------------------------------------
 
 const REMOTE_ENV: IRemoteEnvironment = {
-  protocolVersion: 2,
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
   serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',

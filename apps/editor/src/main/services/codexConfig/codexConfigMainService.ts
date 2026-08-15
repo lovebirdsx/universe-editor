@@ -6,9 +6,11 @@
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local CodexConfigStore (zero behavior change). The
- *  credential library (readProfiles/writeProfiles/matchActiveProfile) and the
- *  gateway probe are always editor-local. `onDidChangeAuth` fires on a local auth
- *  change OR a remote authority's auth change.
+ *  credential library (readProfiles/writeProfiles) is always editor-local;
+ *  `matchActiveProfile` compares the *effective* host's credential (the authority's
+ *  remote config, or the local host) against that library, and the gateway probe
+ *  runs from the effective host. `onDidChangeAuth` fires on a local auth change OR
+ *  a remote authority's auth change.
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
@@ -27,6 +29,7 @@ import {
   CodexConfigStore,
   GATEWAY_PROVIDER_ID,
   defaultCodexConfigPath,
+  probeGatewayConnectivity,
   resolveCodexAuthMode,
   writeFileAtomic,
   type IRemoteAgentConfigService,
@@ -41,7 +44,6 @@ import type {
 } from '../../../shared/ipc/codexConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
-import { probeGatewayConnectivity } from '../agentSettings/gatewayConnectivity.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 interface CodexAgentSettingsState {
@@ -110,9 +112,14 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return this._local.readAuthStatus()
   }
 
-  async checkGatewayConnectivity(baseUrl: string): Promise<boolean> {
-    const reachable = await probeGatewayConnectivity(baseUrl)
-    this._logger.info(`gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'}`)
+  async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
+    const reachable = authority
+      ? await (await this._remoteService(authority)).checkGatewayConnectivity(baseUrl)
+      : await probeGatewayConnectivity(baseUrl)
+    const where = authority ? 'remote' : 'local'
+    this._logger.info(
+      `gateway probe ${baseUrl} -> ${reachable ? 'reachable' : 'unreachable'} (${where})`,
+    )
     return reachable
   }
 
@@ -149,13 +156,13 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
   }
 
-  async matchActiveProfile(): Promise<string | undefined> {
+  async matchActiveProfile(authority?: string): Promise<string | undefined> {
     const profiles = await this.readProfiles()
     if (profiles.length === 0) return undefined
 
     // Gateway mode: the provider block carries both the URL and the key, so
     // same-URL profiles are told apart by their bearer token.
-    const settings = await this._local.read()
+    const settings = await this.read(authority)
     if (settings['model_provider'] === GATEWAY_PROVIDER_ID) {
       const providers = settings['model_providers']
       const gw =
@@ -179,7 +186,23 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     }
 
     // Built-in openai provider: an API-key profile matches only when its key is
-    // the one in auth.json; a ChatGPT login matches no profile.
+    // the one in the effective host's auth.json; a ChatGPT login matches no
+    // profile. Remote matching narrows to the editor's saved apiKey candidates and
+    // only an index travels back — the remote auth.json never crosses the wire.
+    if (authority) {
+      const apiKeyProfiles = profiles.filter(
+        (p) => p.kind === 'apiKey' && typeof p.apiKey === 'string' && p.apiKey !== '',
+      )
+      if (apiKeyProfiles.length === 0) return undefined
+      const idx = await (
+        await this._remoteService(authority)
+      ).codexMatchActiveApiKey(apiKeyProfiles.map((p) => p.apiKey as string))
+      this._logger.info(
+        `active profile match: ${idx >= 0 ? apiKeyProfiles[idx]?.id : 'none'} (remote apiKey)`,
+      )
+      return idx >= 0 ? apiKeyProfiles[idx]?.id : undefined
+    }
+
     const auth = await this._local.readAuthRaw()
     if (!auth || resolveCodexAuthMode(auth) !== 'apiKey') return undefined
     const match = profiles.find((p) => p.kind === 'apiKey' && p.apiKey === auth['OPENAI_API_KEY'])

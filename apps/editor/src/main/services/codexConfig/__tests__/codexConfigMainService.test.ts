@@ -10,8 +10,26 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  Event,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+  type IRemoteEnvironment,
+} from '@universe-editor/platform'
+import type {
+  ClaudeAuthStatus,
+  ClaudeSettings,
+  CodexAuthStatus,
+  CodexSettings,
+  IRemoteAgentConfigService,
+} from '@universe-editor/node-services'
 import { CodexConfigMainService } from '../codexConfigMainService.js'
 import type { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
+import type {
+  IRemoteConnection,
+  IRemoteConnectionService,
+} from '../../remote/remoteConnectionMainService.js'
 
 function configLocation(dir: string): IConfigLocationService {
   return {
@@ -531,5 +549,158 @@ describe('CodexConfigMainService', () => {
       await svc.writeProfiles([{ id: 'a', label: 'x', kind: 'apiKey', apiKey: 'sk-1' }])
       expect(await svc.read()).toEqual({})
     })
+  })
+})
+
+describe('CodexConfigMainService — remote matchActiveProfile', () => {
+  const dirs: string[] = []
+  const svcs: CodexConfigMainService[] = []
+
+  afterEach(async () => {
+    for (const s of svcs) s.dispose()
+    svcs.length = 0
+    await Promise.all(dirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })))
+  })
+
+  const REMOTE_ENV: IRemoteEnvironment = {
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    serverVersion: '0.0.0',
+    os: 'linux',
+    arch: 'x64',
+    nodeVersion: '20.0.0',
+    pathCaseSensitive: true,
+    homeDir: '/home/u',
+    tmpDir: '/tmp',
+  }
+
+  class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
+    declare readonly _serviceBrand: undefined
+    readonly onDidChangeCodexAuth: Event<void> = Event.None
+    codexSettings: CodexSettings = {}
+    matchIndex = -1
+
+    claudeRead(): Promise<ClaudeSettings> {
+      return Promise.resolve({})
+    }
+    claudePatch(): Promise<void> {
+      return Promise.resolve()
+    }
+    claudeConfigPath(): Promise<string> {
+      return Promise.resolve('/home/u/.claude/settings.json')
+    }
+    claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
+      return Promise.resolve({ loggedIn: false, expired: false })
+    }
+    codexRead(): Promise<CodexSettings> {
+      return Promise.resolve(this.codexSettings)
+    }
+    codexPatch(): Promise<void> {
+      return Promise.resolve()
+    }
+    codexApplyCredential(): Promise<CodexAuthStatus> {
+      return Promise.resolve({ active: 'none', hasApiKey: false })
+    }
+    codexConfigPath(): Promise<string> {
+      return Promise.resolve('/home/u/.codex/config.toml')
+    }
+    codexReadAuthStatus(): Promise<CodexAuthStatus> {
+      return Promise.resolve({ active: 'none', hasApiKey: false })
+    }
+    checkGatewayConnectivity(): Promise<boolean> {
+      return Promise.resolve(true)
+    }
+    codexMatchActiveApiKey(): Promise<number> {
+      return Promise.resolve(this.matchIndex)
+    }
+  }
+
+  async function makeRemoteService(
+    remote: FakeRemoteAgentConfigService,
+  ): Promise<CodexConfigMainService> {
+    const dir = await fs.mkdtemp(join(tmpdir(), 'codex-config-remote-'))
+    dirs.push(dir)
+    const conn: IRemoteConnection = {
+      authority: 'host',
+      env: REMOTE_ENV,
+      getChannel: (name) => {
+        expect(name).toBe(RemoteChannels.AgentConfig)
+        return ProxyChannel.fromService(remote)
+      },
+      onDidClose: Event.None,
+    }
+    const connService: IRemoteConnectionService = {
+      _serviceBrand: undefined,
+      getConnection: async () => conn,
+      openExtensionHostConnection: async () => {
+        throw new Error('not used in this test')
+      },
+      onDidChangeState: Event.None,
+      retryConnection: () => undefined,
+      stopServer: async () => undefined,
+      closeConnection: async () => undefined,
+      dropSocketForTesting: () => undefined,
+      dropExtensionHostSocketForTesting: () => undefined,
+      dispose: () => undefined,
+    }
+    const svc = new CodexConfigMainService(
+      join(dir, 'config.toml'),
+      undefined,
+      configLocation(join(dir, 'editor-settings')),
+      connService,
+    )
+    svcs.push(svc)
+    return svc
+  }
+
+  it('matches a remote gateway profile by baseUrl + bearer token', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.codexSettings = {
+      model_provider: 'codex-gateway',
+      model_providers: {
+        'codex-gateway': {
+          base_url: 'http://gw:9080/',
+          experimental_bearer_token: 'kuro-5a',
+        },
+      },
+    }
+    const svc = await makeRemoteService(remote)
+    await svc.writeProfiles([
+      {
+        id: 'mine',
+        label: 'mine',
+        kind: 'gateway',
+        apiKey: 'kuro-b2',
+        baseUrl: 'http://gw:9080/',
+      },
+      {
+        id: 'mine-work',
+        label: 'mine-work',
+        kind: 'gateway',
+        apiKey: 'kuro-5a',
+        baseUrl: 'http://gw:9080/',
+      },
+    ])
+    expect(await svc.matchActiveProfile('host')).toBe('mine-work')
+  })
+
+  it('matches a remote apiKey profile via codexMatchActiveApiKey', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.codexSettings = {}
+    remote.matchIndex = 1
+    const svc = await makeRemoteService(remote)
+    await svc.writeProfiles([
+      { id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' },
+      { id: 'b', label: 'b', kind: 'apiKey', apiKey: 'sk-2' },
+    ])
+    expect(await svc.matchActiveProfile('host')).toBe('b')
+  })
+
+  it('returns undefined for a remote chatgpt-mode auth', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.codexSettings = {}
+    remote.matchIndex = -1
+    const svc = await makeRemoteService(remote)
+    await svc.writeProfiles([{ id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' }])
+    expect(await svc.matchActiveProfile('host')).toBeUndefined()
   })
 })

@@ -56,7 +56,7 @@ function newId(): string {
 }
 
 export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
-  const { settings, authStatus, configPath } = config
+  const { settings, authStatus, configPath, authority } = config
   const env = useMemo(() => settings.env ?? {}, [settings.env])
 
   return (
@@ -69,6 +69,7 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
         </h2>
         <LoginForm
           authStatus={authStatus}
+          authority={authority}
           isActive={isLoginActive(env, authStatus)}
           hasEnvCredential={!!env[API_KEY] || !!env[AUTH_TOKEN] || !!env[BASE_URL]}
           patch={config.patch}
@@ -79,7 +80,7 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
       {configPath && (
         <div className={styles['pathHint']}>
           {localize('agentSettings.auth.path.prefix', 'Active credential stored in')}{' '}
-          <ConfigFileLink path={configPath} />
+          <ConfigFileLink path={configPath} {...(authority !== undefined ? { authority } : {})} />
         </div>
       )}
     </div>
@@ -99,6 +100,7 @@ function CredentialLibrary({
   const {
     profiles,
     credentialDraft,
+    authority,
     applyProfile,
     saveProfile,
     deleteProfile,
@@ -151,6 +153,7 @@ function CredentialLibrary({
             <ProfileRow
               key={profile.id}
               profile={profile}
+              authority={authority}
               active={isProfileActive(profile, env, model)}
               onUse={() => void apply(profile)}
               onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
@@ -184,12 +187,14 @@ function CredentialLibrary({
 
 function ProfileRow({
   profile,
+  authority,
   active,
   onUse,
   onEdit,
   onDelete,
 }: {
   profile: ClaudeCredentialProfile
+  authority: string | undefined
   active: boolean
   onUse: () => void
   onEdit: () => void
@@ -198,8 +203,8 @@ function ProfileRow({
   const Icon = profile.kind === 'apiKey' ? KeyRound : Network
   const configService = useService<IClaudeConfigService>(IClaudeConfigService)
   const probe = useCallback(
-    (url: string) => configService.checkGatewayConnectivity(url),
-    [configService],
+    (url: string) => configService.checkGatewayConnectivity(url, authority),
+    [configService, authority],
   )
   const detail =
     profile.kind === 'apiKey'
@@ -410,12 +415,14 @@ function profileToDraft(profile: ClaudeCredentialProfile): ClaudeCredentialDraft
 
 function LoginForm({
   authStatus,
+  authority,
   isActive,
   hasEnvCredential,
   patch,
   reloadAuthStatus,
 }: {
   authStatus: ClaudeAuthStatus
+  authority: string | undefined
   isActive: boolean
   hasEnvCredential: boolean
   patch: UseClaudeConfig['patch']
@@ -521,6 +528,14 @@ function LoginForm({
           'Opens a terminal and runs the Claude login flow. Follow the prompts, then start an agent session.',
         )}
       </div>
+      {authority !== undefined && (
+        <div className={styles['desc']}>
+          {localize(
+            'agentSettings.auth.login.remoteHint',
+            'Runs `claude auth login` in a terminal on the remote host; requires the claude CLI on its PATH.',
+          )}
+        </div>
+      )}
       <div className={styles['toolbar']}>
         <Button onClick={() => void doLogin('claudeai')}>
           {localize('agentSettings.auth.login.subscription', 'Log in with Claude subscription')}

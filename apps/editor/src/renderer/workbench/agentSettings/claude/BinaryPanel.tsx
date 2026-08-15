@@ -25,6 +25,7 @@ import {
   type IClaudeBinaryVersionInfo,
 } from '../../../../shared/ipc/claudeBinaryService.js'
 import { useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { computeBinaryVersionActions } from '../binaryVersionActions.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
@@ -34,6 +35,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
   const claudeBinary = useService(IClaudeBinaryService)
   const notifications = useService(INotificationService)
   const host = useService(IHostService)
+  const authority = useRemoteAuthority()
 
   const [source, setSourceState] = useState<ClaudeBinarySource>(
     () => (config.get<string>('acp.claude.source') ?? 'download') as ClaudeBinarySource,
@@ -131,6 +133,14 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
 
   return (
     <div className={styles['panel']}>
+      {authority !== undefined && (
+        <div className={styles['desc']}>
+          {localize(
+            'binaryPanel.remoteNotice',
+            "Remote workspace: this page manages the local editor's binary. The agent on the remote host resolves its own binary there.",
+          )}
+        </div>
+      )}
       {/* ── Binary Source ─────────────────────────────────────────────── */}
       <section className={styles['section']}>
         <h3 className={styles['sectionTitle']}>

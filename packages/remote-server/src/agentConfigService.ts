@@ -17,6 +17,8 @@ import {
 import {
   ClaudeConfigStore,
   CodexConfigStore,
+  probeGatewayConnectivity,
+  resolveCodexAuthMode,
   type IRemoteAgentConfigService,
 } from '@universe-editor/node-services'
 import type {
@@ -88,5 +90,16 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   }
   codexReadAuthStatus(): Promise<CodexAuthStatus> {
     return this._codex.readAuthStatus()
+  }
+
+  checkGatewayConnectivity(baseUrl: string): Promise<boolean> {
+    return probeGatewayConnectivity(baseUrl)
+  }
+
+  async codexMatchActiveApiKey(candidates: readonly string[]): Promise<number> {
+    const auth = await this._codex.readAuthRaw()
+    if (!auth || resolveCodexAuthMode(auth) !== 'apiKey') return -1
+    const key = auth['OPENAI_API_KEY']
+    return typeof key === 'string' ? candidates.indexOf(key) : -1
   }
 }

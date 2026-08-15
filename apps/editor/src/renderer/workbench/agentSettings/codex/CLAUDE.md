@@ -126,7 +126,14 @@ interface CodexAuthStatus {
 
 ### auth.json 实时刷新(为何登录后无需手动 refresh)
 
-`_startAuthWatch()` 用 `fs.watch` 监听 **auth.json 所在目录**(不是文件本身):codex login 用 temp-file + rename 原子写,**文件级 watch 会丢事件,目录级才稳**。150ms 去抖(合并 rename 的 create/delete 对)后 fire `onDidChangeAuth`。renderer `useCodexConfig` 订阅它 → 浏览器 OAuth 流程完成、auth.json 落盘的瞬间自动刷新登录状态。`dispose()` 里 `clearTimeout` + `watcher.close()`。
+`_startAuthWatch()` 用 `fs.watch` 监听 **auth.json 所在目录**(不是文件本身):codex login 用 temp-file + rename 原子写,**文件级 watch 会丢事件,目录级才稳**。150ms 去抖(合并 rename 的 create/delete 对)后 fire `onDidChangeAuth`。renderer `useCodexConfig` 订阅它 → 浏览器 OAuth 流程完成、auth.json 落盘的瞬间自动刷新登录状态。`dispose()` 里 `clearTimeout` + `watcher.close()`。远端工作区下事件同样生效:remote server 侧 watch 远端 `~/.codex`,经 `onDidChangeCodexAuth` 转发回 main(main 对该事件的订阅在首次带 authority 的调用时懒挂载)。
+
+### Remote 工作区路由(2026-08)
+
+远端工作区下面板操作**远端主机**的 `~/.codex`:契约方法带尾部可选 `authority`(`read`/`patch`/`configPath`/`readAuthStatus`/`applyCredential`/`matchActiveProfile`/`checkGatewayConnectivity`),main 按 authority 经 `RemoteChannels.AgentConfig` 转发(协议在 `packages/node-services/src/agentConfig/agentConfigService.ts`,改协议须 bump `REMOTE_PROTOCOL_VERSION`)。要点:
+- **authority 必须来自 `useRemoteAuthority()`**(`workbench/useRemoteAuthority.ts`,订阅 `onDidChangeWorkspace`)——workspace hydration 是异步的,用 `useMemo` 读 `workspace.current` 会把 authority 冻结成 undefined(启动恢复的 tab 永远读写本地,真实踩坑)。
+- `matchActiveProfile(authority)` 比对**生效端**凭据:gateway 分支读远端 config.toml;apiKey 分支走协议方法 `codexMatchActiveApiKey(candidates)`——把本地档案库候选 key 发去 server 比对、只回 index,**远端 auth.json 的秘密绝不回传**(与 `applyCredential` 同向)。
+- `readProfiles`/`writeProfiles`(档案库)**刻意 editor-local 不路由**;`ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件;`runCodexLogin` 本就开远端终端跑 PATH 上的 `codex login`,无需改动。
 
 ### 🔒 安全约束(刻意决策,勿擅改)
 
