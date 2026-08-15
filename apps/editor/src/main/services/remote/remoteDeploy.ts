@@ -263,7 +263,7 @@ export function resolveRemoteServerBundleDir(): string {
   const dir = locateWorkspacePath('packages', 'remote-server', 'dist-bundle')
   if (!dir) {
     throw new Error(
-      'remote server bundle not found at packages/remote-server/dist-bundle; build it first (pnpm --filter @universe-editor/remote-server build)',
+      'remote server bundle not found at packages/remote-server/dist-bundle; build it first (pnpm --filter @universe-editor/remote-server bundle)',
     )
   }
   return dir
