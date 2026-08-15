@@ -24,6 +24,7 @@ import {
   buildStartCommand,
   buildStopCommand,
   classifyCheckResult,
+  computeBundleHash,
   defaultRemoteRunner,
   defaultRemoteSpawner,
   parseDaemonInfoLine,
@@ -79,6 +80,16 @@ export class WslDeployer {
     return this._serverVersion
   }
 
+  localBundleHash(): string | undefined {
+    try {
+      const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
+      return computeBundleHash(bundleDir)
+    } catch {
+      // Fail-open: an unbuildable/missing bundle skips the staleness comparison.
+      return undefined
+    }
+  }
+
   private _wslExe(): string {
     const wslPath = this._wslExePath ?? getWslExePath()
     if (!wslPath) {
@@ -129,6 +140,7 @@ export class WslDeployer {
   async deployRemoteServer(distro: string, logger?: ILogger): Promise<void> {
     const log = logger ?? this._logger
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
+    const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
     const localTgz = join(tmpdir(), tmpName)
     log.info(`[wsl:${distro}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
@@ -146,7 +158,7 @@ export class WslDeployer {
       await this._uploadViaStdin(distro, localTgz, tmpName, log)
       const installResult = await this._runner(
         this._wslExe(),
-        wslCommandArgs(distro, buildDeployScriptBody(this._serverVersion, tmpName)),
+        wslCommandArgs(distro, buildDeployScriptBody(this._serverVersion, tmpName, bundleHash)),
         { timeoutMs: 1_800_000 },
       )
       if (installResult.code !== 0) {

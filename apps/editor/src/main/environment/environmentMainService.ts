@@ -35,6 +35,7 @@ import {
   RENDERER_DEBUG,
   RENDERER_URL,
   REMOTE_SERVER_CMD,
+  REMOTE_SKIP_DEPLOY_CHECK,
   UPDATE_URL,
   USER_DATA_DIR,
   USER_PROFILE,
@@ -126,6 +127,11 @@ export class EnvironmentMainService {
   /** Custom remote-server spawn command (env only). Absent ⇒ default ssh. */
   get remoteServerCmd(): string | undefined {
     return this._resolver.get(REMOTE_SERVER_CMD)
+  }
+
+  /** Escape hatch: skip remote bundle-hash staleness checks (env only). */
+  get remoteSkipDeployCheck(): boolean {
+    return this._resolver.get(REMOTE_SKIP_DEPLOY_CHECK) ?? false
   }
 
   // ---- CLI commands (--help / --version) -------------------------------------

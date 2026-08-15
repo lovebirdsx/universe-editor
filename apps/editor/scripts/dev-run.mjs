@@ -82,6 +82,16 @@ const upstream = spawnSync(
 )
 if (upstream.status !== 0) process.exit(upstream.status ?? 1)
 
+// Same remote-server bundle freshness gate as `pnpm dev` (see scripts/dev/
+// ensure-remote-server-bundle.mjs). dev:run has no watch semantics, so this precheck
+// is the only freshness guarantee — the deploy hash must not fail-open on a stale bundle.
+const remoteServerBundle = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-remote-server-bundle.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (remoteServerBundle.status !== 0) process.exit(remoteServerBundle.status ?? 1)
+
 // ---------------------------------------------------------------------------
 // 按端输入指纹。GLOBAL_INPUTS 是三端公共输入（config / 插件 / 共享源码 / 依赖清单），
 // 任一变化三端全建；各端 inputs 只列独有目录。清单须跟 electron.vite.config.ts 对齐：

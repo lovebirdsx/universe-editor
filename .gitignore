@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-bundle/
+packages/remote-server/.bundle-stamp.json
 out/
 out-dev/
 release/

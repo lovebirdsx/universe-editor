@@ -335,9 +335,11 @@ registerSingletonFactory(IRemoteConnectionService, (acc) => {
     name: 'Remote Connection',
   })
   const remoteServerCmd = acc.get(IEnvironmentMainService).remoteServerCmd
+  const remoteSkipDeployCheck = acc.get(IEnvironmentMainService).remoteSkipDeployCheck
   return new RemoteConnectionMainService(
     {
       ...(remoteServerCmd !== undefined ? { remoteServerCmd } : {}),
+      skipDeployCheck: remoteSkipDeployCheck,
       deployer: new RemoteDeployer({ logger }),
       getUserDataDir: () => app.getPath('userData'),
     },

@@ -10,11 +10,11 @@
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { connect, createServer } from 'node:net'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { ManagedChildProcess } from '@universe-editor/node-services'
 import {
   NullLogger,
@@ -28,6 +28,8 @@ import { decodeDiagnostic } from '../process/decode.js'
 const DATA_DIR = '~/.universe-editor-server'
 const DEFAULT_SERVER_VERSION = '0.0.0'
 const DAEMON_INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
+const BUNDLE_HASH_PREFIX = 'UNIVERSE_REMOTE_BUNDLE_HASH='
+const BUNDLE_HASH_FILE = 'bundle.hash'
 const SSH_BATCH_MODE = 'BatchMode=yes'
 const SSH_STRICT_HOST_KEY = 'StrictHostKeyChecking=accept-new'
 
@@ -142,17 +144,25 @@ export function buildStopCommand(version: string): string {
   return `node ${serverBootstrapPath(version)} stop`
 }
 
-export function buildDeployScriptBody(version: string, tmpName: string): string {
+export function buildDeployScriptBody(
+  version: string,
+  tmpName: string,
+  bundleHash: string,
+): string {
   const dir = `${DATA_DIR}/${version}`
   // Vendored ACP agents ship without node_modules (client-platform binaries must
   // not cross the wire); `npm ci --omit=dev` in each vendor dir resolves the
   // remote host's own platform packages.
   const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --no-audit --no-fund); fi; done`
-  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}`
+  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && printf %s "${bundleHash}" > ${dir}/${BUNDLE_HASH_FILE} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}`
 }
 
-export function buildDeployRemoteScript(version: string, tmpName: string): string {
-  return `sh -c '${buildDeployScriptBody(version, tmpName)}'`
+export function buildDeployRemoteScript(
+  version: string,
+  tmpName: string,
+  bundleHash: string,
+): string {
+  return `sh -c '${buildDeployScriptBody(version, tmpName, bundleHash)}'`
 }
 
 // ------------------------- daemon info line -------------------------
@@ -174,7 +184,52 @@ export function parseDaemonInfoLine(output: string): IRemoteDaemonInfo | null {
   }
 }
 
+// ------------------------- bundle hash line -------------------------
+
+export function parseBundleHashLine(output: string): string | undefined {
+  const idx = output.indexOf(BUNDLE_HASH_PREFIX)
+  if (idx < 0) return undefined
+  const valueStart = idx + BUNDLE_HASH_PREFIX.length
+  let valueEnd = output.indexOf('\n', valueStart)
+  if (valueEnd < 0) valueEnd = output.length
+  const value = output.slice(valueStart, valueEnd).trim()
+  return value || undefined
+}
+
 // ------------------------- local bundle / version resolution -------------------------
+
+/**
+ * Content hash of the deploy tree: every regular file (dirs/symlinks skipped)
+ * fed into one sha256 in sorted `relPath` order, paths `/`-separated so the hash
+ * is identical on the Windows build host and the Linux remote. The deploy writes
+ * the result to `bundle.hash` next to the remote bootstrap so `check` can report
+ * it — dev's constant 0.0.0 version can't signal staleness on its own.
+ */
+export function computeBundleHash(bundleDir: string): string {
+  const files: { relPath: string; absPath: string }[] = []
+  const visit = (dir: string, rel: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) continue
+      const absPath = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        visit(absPath, relPath)
+      } else if (entry.isFile()) {
+        files.push({ relPath, absPath })
+      }
+    }
+  }
+  visit(bundleDir, '')
+  files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))
+  const hash = createHash('sha256')
+  for (const file of files) {
+    hash.update(file.relPath)
+    hash.update('\0')
+    hash.update(readFileSync(file.absPath))
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
 
 /** Walk up from this module looking for a workspace-relative path. */
 function locateWorkspacePath(...segments: string[]): string | undefined {
@@ -321,8 +376,12 @@ export interface RemoteDeployerOptions {
 }
 
 export type RemoteCheckResult =
-  | { readonly state: 'running'; readonly info: IRemoteDaemonInfo }
-  | { readonly state: 'not-running' }
+  | {
+      readonly state: 'running'
+      readonly info: IRemoteDaemonInfo
+      readonly deployedBundleHash?: string
+    }
+  | { readonly state: 'not-running'; readonly deployedBundleHash?: string }
   | { readonly state: 'not-deployed'; readonly reason: string }
   | { readonly state: 'error'; readonly message: string }
 
@@ -332,10 +391,20 @@ export type RemoteCheckResult =
  * labels the fallback error message ('ssh' / 'wsl').
  */
 export function classifyCheckResult(result: RemoteRunResult, transport: string): RemoteCheckResult {
+  const deployedBundleHash = parseBundleHashLine(result.stdout)
   const info = parseDaemonInfoLine(result.stdout)
-  if (info) return { state: 'running', info }
+  if (info)
+    return {
+      state: 'running',
+      info,
+      ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
+    }
   if (result.spawnError) return { state: 'not-deployed', reason: result.spawnError }
-  if (result.code === 3) return { state: 'not-running' }
+  if (result.code === 3)
+    return {
+      state: 'not-running',
+      ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
+    }
   if (
     result.code === 127 ||
     /not found|cannot find module|ENOENT|no such file/i.test(result.stderr)
@@ -356,6 +425,7 @@ export function classifyCheckResult(result: RemoteRunResult, transport: string):
  */
 export interface IRemoteServerOrchestrator {
   readonly serverVersion: string
+  localBundleHash(): string | undefined
   checkRemoteServer(target: string): Promise<RemoteCheckResult>
   startRemoteDaemon(target: string): Promise<IRemoteDaemonInfo>
   stopRemoteDaemon(target: string): Promise<void>
@@ -379,6 +449,16 @@ export class RemoteDeployer {
 
   get serverVersion(): string {
     return this._serverVersion
+  }
+
+  localBundleHash(): string | undefined {
+    try {
+      const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
+      return computeBundleHash(bundleDir)
+    } catch {
+      // Fail-open: an unbuildable/missing bundle skips the staleness comparison.
+      return undefined
+    }
   }
 
   async checkRemoteServer(authority: string): Promise<RemoteCheckResult> {
@@ -423,6 +503,7 @@ export class RemoteDeployer {
   async deployRemoteServer(authority: string, logger?: ILogger): Promise<void> {
     const log = logger ?? this._logger
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
+    const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
     const localTgz = join(tmpdir(), tmpName)
     const remoteTgz = `/tmp/${tmpName}`
@@ -451,7 +532,10 @@ export class RemoteDeployer {
       }
       const installResult = await this._runner(
         'ssh',
-        sshCommandArgs(authority, buildDeployRemoteScript(this._serverVersion, tmpName)),
+        sshCommandArgs(
+          authority,
+          buildDeployRemoteScript(this._serverVersion, tmpName, bundleHash),
+        ),
         { timeoutMs: 1_800_000 },
       )
       if (installResult.code !== 0) {

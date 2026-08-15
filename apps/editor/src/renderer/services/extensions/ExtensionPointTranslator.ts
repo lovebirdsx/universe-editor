@@ -179,38 +179,86 @@ export class ExtensionPointTranslator extends Disposable {
           .map((item) => item.command)
           .filter((id): id is string => id !== undefined),
       )
-      for (const command of contributes.commands ?? []) {
-        this._registerCommand(ext, command, explicitPaletteCommands.has(command.command))
-      }
-      if (contributes.menus) {
-        this._registerMenus(contributes.menus, contributes.submenus ?? [])
-      }
-      for (const keybinding of contributes.keybindings ?? []) {
-        this._registerKeybinding(ext, keybinding)
-      }
-      this._registerConfiguration(ext.id, contributes.configuration)
-      this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
-      this._registerViews(ext, contributes.views)
-      for (const editor of contributes.customEditors ?? []) {
-        this._registerCustomEditorBinding(editor)
-      }
-      const themeContext: IThemeRegistrationContext = {
-        extensionId: ext.id,
-        extensionLocation: URI.revive(ext.extensionLocation)!,
-        extensionIsBuiltin: ext.extensionIsBuiltin,
-      }
-      this._registerContributionBatch(contributes.themes, this._registerThemes, themeContext)
-      this._registerContributionBatch(
-        contributes.iconThemes,
-        this._registerIconThemes,
-        themeContext,
+      this._guardContribution(ext.id, 'command', () => {
+        for (const command of contributes.commands ?? []) {
+          this._registerCommand(ext, command, explicitPaletteCommands.has(command.command))
+        }
+      })
+      this._guardContribution(ext.id, 'menu', () => {
+        if (contributes.menus) {
+          this._registerMenus(contributes.menus, contributes.submenus ?? [])
+        }
+      })
+      this._guardContribution(ext.id, 'keybinding', () => {
+        for (const keybinding of contributes.keybindings ?? []) {
+          this._registerKeybinding(ext, keybinding)
+        }
+      })
+      this._guardContribution(ext.id, 'configuration', () => {
+        this._registerConfiguration(ext.id, contributes.configuration)
+      })
+      this._guardContribution(ext.id, 'jsonValidation', () => {
+        this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
+      })
+      this._guardContribution(ext.id, 'view', () => {
+        this._registerViews(ext, contributes.views)
+      })
+      this._guardContribution(ext.id, 'customEditor', () => {
+        for (const editor of contributes.customEditors ?? []) {
+          this._registerCustomEditorBinding(editor)
+        }
+      })
+      this._guardContribution(ext.id, 'theme', () => {
+        this._registerContributionBatch(
+          contributes.themes,
+          this._registerThemes,
+          this._themeContext(ext),
+        )
+      })
+      this._guardContribution(ext.id, 'iconTheme', () => {
+        this._registerContributionBatch(
+          contributes.iconThemes,
+          this._registerIconThemes,
+          this._themeContext(ext),
+        )
+      })
+      this._guardContribution(ext.id, 'productIconTheme', () => {
+        this._registerContributionBatch(
+          contributes.productIconThemes,
+          this._registerProductIconThemes,
+          this._themeContext(ext),
+        )
+      })
+      this._guardContribution(ext.id, 'grammar', () => {
+        this._registerContributionBatch(
+          contributes.grammars,
+          this._registerGrammars,
+          this._themeContext(ext),
+        )
+      })
+    }
+  }
+
+  /**
+   * Isolate one extension's registration of a single contribution kind: a failure
+   * (e.g. a bad extensionLocation breaking URI.revive) is logged and swallowed so
+   * it cannot abort the remaining kinds of this extension or any other extension.
+   */
+  private _guardContribution(extId: string, kind: string, fn: () => void): void {
+    try {
+      fn()
+    } catch (err) {
+      this._logger.error(
+        `${extId}: failed to register ${kind} contributions: ${err instanceof Error ? err.message : String(err)}`,
       )
-      this._registerContributionBatch(
-        contributes.productIconThemes,
-        this._registerProductIconThemes,
-        themeContext,
-      )
-      this._registerContributionBatch(contributes.grammars, this._registerGrammars, themeContext)
+    }
+  }
+
+  private _themeContext(ext: IExtensionDescriptionDto): IThemeRegistrationContext {
+    return {
+      extensionId: ext.id,
+      extensionLocation: URI.revive(ext.extensionLocation)!,
+      extensionIsBuiltin: ext.extensionIsBuiltin,
     }
   }
 

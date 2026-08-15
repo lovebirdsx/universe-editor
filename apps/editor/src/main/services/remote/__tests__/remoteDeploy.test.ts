@@ -1,4 +1,6 @@
 import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createServer, type Server } from 'node:net'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -9,8 +11,11 @@ import {
   buildDeployRemoteScript,
   buildStartCommand,
   buildStopCommand,
+  classifyCheckResult,
+  computeBundleHash,
   forwardArgs,
   parseAuthority,
+  parseBundleHashLine,
   parseDaemonInfoLine,
   RemoteDeployer,
   scpArgs,
@@ -108,13 +113,14 @@ describe('argv assembly', () => {
   })
 
   it('builds the remote deploy install script', () => {
-    const script = buildDeployRemoteScript('0.0.0', 'universe-server-abc123.tgz')
+    const script = buildDeployRemoteScript('0.0.0', 'universe-server-abc123.tgz', 'deadbeef')
     expect(script).toContain('mkdir -p ~/.universe-editor-server/0.0.0')
     expect(script).toContain('tar xzf /tmp/universe-server-abc123.tgz')
     expect(script).toContain('npm install --omit=dev --no-audit --no-fund')
     expect(script).toContain('vendor/claude-agent-acp vendor/codex-acp')
     expect(script).toContain('npm ci --omit=dev --no-audit --no-fund')
     expect(script).toContain('rm /tmp/universe-server-abc123.tgz')
+    expect(script).toContain('printf %s "deadbeef" > ~/.universe-editor-server/0.0.0/bundle.hash')
   })
 
   it('builds check/start/stop commands against the versioned bootstrap', () => {
@@ -156,14 +162,104 @@ describe('parseDaemonInfoLine', () => {
   })
 })
 
+describe('computeBundleHash', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  function makeBundle(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
+    mkdirSync(join(dir, 'lib'))
+    writeFileSync(join(dir, 'lib', 'util.js'), 'export const b = 2\n')
+    return dir
+  }
+
+  it('returns a stable 64-char hex hash that changes with content', () => {
+    const dir = makeBundle()
+    const h1 = computeBundleHash(dir)
+    expect(h1).toMatch(/^[0-9a-f]{64}$/)
+    expect(computeBundleHash(dir)).toBe(h1)
+
+    writeFileSync(join(dir, 'lib', 'util.js'), 'export const b = 3\n')
+    expect(computeBundleHash(dir)).not.toBe(h1)
+  })
+
+  it('depends only on relative paths + content, not absolute layout', () => {
+    expect(computeBundleHash(makeBundle())).toBe(computeBundleHash(makeBundle()))
+  })
+})
+
+describe('parseBundleHashLine', () => {
+  it('extracts the hash value from the line', () => {
+    expect(parseBundleHashLine('UNIVERSE_REMOTE_BUNDLE_HASH=deadbeef\n')).toBe('deadbeef')
+    expect(parseBundleHashLine('noise\nUNIVERSE_REMOTE_BUNDLE_HASH=cafe\nmore')).toBe('cafe')
+  })
+
+  it('returns undefined for a missing or empty value', () => {
+    expect(parseBundleHashLine('UNIVERSE_REMOTE_DAEMON_INFO={"x":1}\n')).toBeUndefined()
+    expect(parseBundleHashLine('UNIVERSE_REMOTE_BUNDLE_HASH=\n')).toBeUndefined()
+    expect(parseBundleHashLine('UNIVERSE_REMOTE_BUNDLE_HASH=   \n')).toBeUndefined()
+    expect(parseBundleHashLine('')).toBeUndefined()
+  })
+})
+
+describe('classifyCheckResult bundle hash', () => {
+  const infoLine =
+    'UNIVERSE_REMOTE_DAEMON_INFO={"serverVersion":"0.0.0","protocolVersion":2,"port":9,"token":"t","pid":1}\n'
+
+  it('attaches deployedBundleHash to running and not-running when present', () => {
+    const running = classifyCheckResult(
+      { code: 0, stdout: `UNIVERSE_REMOTE_BUNDLE_HASH=abc\n${infoLine}`, stderr: '' },
+      'wsl',
+    )
+    expect(running).toEqual({
+      state: 'running',
+      info: expect.objectContaining({ port: 9 }),
+      deployedBundleHash: 'abc',
+    })
+
+    const notRunning = classifyCheckResult(
+      { code: 3, stdout: 'UNIVERSE_REMOTE_BUNDLE_HASH=abc\n', stderr: '' },
+      'wsl',
+    )
+    expect(notRunning).toEqual({ state: 'not-running', deployedBundleHash: 'abc' })
+  })
+
+  it('omits deployedBundleHash when the hash line is absent', () => {
+    const running = classifyCheckResult({ code: 0, stdout: infoLine, stderr: '' }, 'wsl')
+    expect(running).toEqual({ state: 'running', info: expect.objectContaining({ port: 9 }) })
+    expect('deployedBundleHash' in running).toBe(false)
+
+    expect(classifyCheckResult({ code: 3, stdout: '', stderr: '' }, 'wsl')).toEqual({
+      state: 'not-running',
+    })
+  })
+})
+
 describe('RemoteDeployer.deployRemoteServer', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  function makeBundle(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
+    return dir
+  }
+
   it('runs tar and scp from tmpdir with a bare filename (GNU tar/scp treat C:\ as host:file)', async () => {
+    const bundleDir = makeBundle()
     const calls: { command: string; args: readonly string[]; cwd?: string }[] = []
     const runner: RemoteRunner = (command, args, options) => {
       calls.push({ command, args, ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}) })
       return Promise.resolve({ code: 0, stdout: '', stderr: '' })
     }
-    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir: '/bundle' })
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir })
     await deployer.deployRemoteServer('user@host')
 
     expect(calls.map((c) => c.command)).toEqual(['tar', 'scp', 'ssh'])
@@ -173,14 +269,17 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     const tgzName = tar!.args[1]!
     expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
     expect(tgzName).not.toContain(':')
-    expect(tar!.args.slice(2)).toEqual(['-C', '/bundle', '.'])
+    expect(tar!.args.slice(2)).toEqual(['-C', bundleDir, '.'])
     expect(tar!.cwd).toBe(tmpdir())
 
     expect(scp!.args).toContain(tgzName)
     expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
     expect(scp!.cwd).toBe(tmpdir())
 
-    expect(install!.args[install!.args.length - 1]).toContain(`tar xzf /tmp/${tgzName}`)
+    const remoteScript = install!.args[install!.args.length - 1]!
+    expect(remoteScript).toContain(`tar xzf /tmp/${tgzName}`)
+    expect(remoteScript).toContain('printf %s "')
+    expect(remoteScript).toContain('~/.universe-editor-server/0.0.0/bundle.hash')
   })
 
   it('surfaces the failing step in the thrown error', async () => {
@@ -190,7 +289,11 @@ describe('RemoteDeployer.deployRemoteServer', () => {
           ? { code: 1, stdout: '', stderr: 'lost connection' }
           : { code: 0, stdout: '', stderr: '' },
       )
-    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir: '/bundle' })
+    const deployer = new RemoteDeployer({
+      runner,
+      serverVersion: '0.0.0',
+      bundleDir: makeBundle(),
+    })
     await expect(deployer.deployRemoteServer('user@host')).rejects.toThrow(
       'scp failed: lost connection',
     )

@@ -12,7 +12,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { INITIAL, type IGrammar, type IOnigLib } from 'vscode-textmate'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { GrammarRegistry, type IGrammarDefinition } from '../grammarRegistry.js'
 import { TMGrammarFactory } from '../tmGrammarFactory.js'
 import { URI } from '@universe-editor/platform'
@@ -48,7 +48,7 @@ function tsDefinition(): IGrammarDefinition {
 
 function makeFactory(grammars: GrammarRegistry): TMGrammarFactory {
   return new TMGrammarFactory(
-    { readFile: (fsPath) => Promise.resolve(readFileSync(fsPath, 'utf8')) },
+    { readFile: (location) => Promise.resolve(readFileSync(location.fsPath, 'utf8')) },
     grammars,
     Promise.resolve(onigLib),
     () => 42, // fake encoded language id — only asserted back out of metadata
@@ -151,6 +151,41 @@ describe('TMGrammarFactory (real textmate + oniguruma + TypeScript grammar)', ()
     ).rejects.toThrow('source.nonexistent')
     // The registry still works afterwards.
     await expect(factory.createGrammar(tsDefinition(), 'typescript')).resolves.toBeDefined()
+    factory.dispose()
+  })
+
+  it('passes the original remote-ssh URI to readFile instead of folding to a local fsPath', async () => {
+    const location = URI.parse(
+      'remote-ssh://wsl+Ubuntu/home/xiao/.universe-editor-server/ext/textmate-grammars/syntaxes/ignore.tmLanguage.json',
+    )
+    const definition: IGrammarDefinition = {
+      language: 'ignore',
+      scopeName: 'source.ignore',
+      path: './syntaxes/ignore.tmLanguage.json',
+      location,
+      sourceExtensionId: 'test',
+    }
+    const readFile = vi.fn((_resource: URI) =>
+      Promise.resolve(
+        JSON.stringify({
+          name: 'Ignore',
+          scopeName: 'source.ignore',
+          patterns: [{ include: '#comment' }],
+          repository: { comment: { name: 'comment.line.number-sign.ignore', match: '#.*$' } },
+        }),
+      ),
+    )
+    const grammars = new GrammarRegistry()
+    grammars.registerGrammars([definition])
+    const factory = new TMGrammarFactory({ readFile }, grammars, Promise.resolve(onigLib), () => 42)
+
+    await factory.createGrammar(definition, 'ignore')
+
+    expect(readFile).toHaveBeenCalledTimes(1)
+    const received = readFile.mock.calls[0]![0]
+    expect(received.scheme).toBe('remote-ssh')
+    expect(received.authority).toBe('wsl+Ubuntu')
+    expect(received.toString()).toBe(location.toString())
     factory.dispose()
   })
 })

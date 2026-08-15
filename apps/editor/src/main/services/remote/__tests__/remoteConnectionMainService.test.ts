@@ -326,7 +326,11 @@ interface FakeWsl {
 
 function makeFakeWslDeployer(
   daemon: FakeDaemon,
-  opts: { firstCheck?: 'not-deployed' | 'not-running' } = {},
+  opts: {
+    firstCheck?: 'not-deployed' | 'not-running'
+    localBundleHash?: string
+    deployedBundleHash?: string
+  } = {},
 ): FakeWsl {
   const calls: string[] = []
   let firstCheckDone = false
@@ -337,17 +341,20 @@ function makeFakeWslDeployer(
     token: daemon.token,
     pid: 1,
   })
+  const hashField = (): { deployedBundleHash?: string } =>
+    opts.deployedBundleHash !== undefined ? { deployedBundleHash: opts.deployedBundleHash } : {}
   const deployer = {
     serverVersion: '0.0.0',
+    localBundleHash: () => opts.localBundleHash,
     checkRemoteServer: async (distro: string) => {
       calls.push(`check:${distro}`)
       if (opts.firstCheck && !firstCheckDone) {
         firstCheckDone = true
         return opts.firstCheck === 'not-deployed'
           ? { state: 'not-deployed', reason: 'missing' }
-          : { state: 'not-running' }
+          : { state: 'not-running', ...hashField() }
       }
-      return { state: 'running', info: info() }
+      return { state: 'running', info: info(), ...hashField() }
     },
     startRemoteDaemon: async (distro: string) => {
       calls.push(`start:${distro}`)
@@ -371,7 +378,11 @@ interface MadeWsl {
 
 function makeWslService(
   daemon: FakeDaemon,
-  opts: { firstCheck?: 'not-deployed' | 'not-running' } = {},
+  opts: {
+    firstCheck?: 'not-deployed' | 'not-running'
+    localBundleHash?: string
+    deployedBundleHash?: string
+  } = {},
 ): MadeWsl {
   const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
   const states: IRemoteConnectionStateChange[] = []
@@ -427,6 +438,59 @@ describe('RemoteConnectionMainService wsl mode', () => {
 
     await wsl.svc.getConnection('wsl+Ubuntu')
     expect(wsl.calls).toEqual(['check:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('stop → deploy → start when the running daemon reports a stale bundle hash', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'ffffffffffffffff',
+    }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(wsl.calls).toEqual(['check:Ubuntu', 'stop:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('deploy → start (no stop) when not running with a stale bundle hash', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'ffffffffffffffff',
+    }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(wsl.calls).toEqual(['check:Ubuntu', 'deploy:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('start (no deploy) when not running and the bundle hash matches', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'aaaabbbbccccdddd',
+    }))
+
+    await wsl.svc.getConnection('wsl+Ubuntu')
+    expect(wsl.calls).toEqual(['check:Ubuntu', 'start:Ubuntu'])
+  })
+
+  it('skipDeployCheck keeps the old behavior (no redeploy on a stale hash)', async () => {
+    const daemon = await startDaemon()
+    const { deployer, calls } = makeFakeWslDeployer(daemon, {
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'ffffffffffffffff',
+    })
+    const states: IRemoteConnectionStateChange[] = []
+    const svc = new RemoteConnectionMainService(
+      { wslDeployer: deployer, skipDeployCheck: true, getUserDataDir: () => '/tmp/ue-test' },
+      undefined,
+    )
+    svc.onDidChangeState((s) => states.push(s))
+    made = { svc, calls, states }
+
+    await svc.getConnection('wsl+Ubuntu')
+    expect(calls).toEqual(['check:Ubuntu'])
   })
 
   it('stopServer stops the daemon in the distro', async () => {

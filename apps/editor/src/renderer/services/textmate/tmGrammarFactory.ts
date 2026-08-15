@@ -3,7 +3,7 @@
  *  Adapted from Microsoft VSCode src/vs/workbench/services/textMate/common/TMGrammarFactory.ts.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, type ILogger, NullLogger } from '@universe-editor/platform'
+import { Disposable, NullLogger, type ILogger, type URI } from '@universe-editor/platform'
 import * as vscodeTextmate from 'vscode-textmate'
 import type { IGrammar, IOnigLib, IRawGrammar, IRawTheme, StateStack } from 'vscode-textmate'
 import type { StandardTokenType } from './encodedTokenAttributes.js'
@@ -14,7 +14,7 @@ import { toMonacoLanguageId } from './languageIdMapping.js'
 /** Host capabilities the factory needs (kept tiny for unit-test stubs). */
 export interface ITMGrammarFactoryHost {
   readonly logger?: ILogger
-  readFile(resource: string): Promise<string>
+  readFile(resource: URI): Promise<string>
 }
 
 export interface ICreateGrammarResult {
@@ -57,13 +57,13 @@ export class TMGrammarFactory extends Disposable {
             return null
           }
           try {
-            // 本机路径：grammar 定义来自随扩展安装的本地 file: 资源，不随远端工作区变化。
-            const content = await this._host.readFile(definition.location.fsPath)
+            // 保留原始 scheme：grammar 可能来自远端扩展宿主（remote-ssh）或本地 file:，由 IFileService 路由。
+            const content = await this._host.readFile(definition.location)
             return vscodeTextmate.parseRawGrammar(content, definition.location.path)
           } catch (e) {
             this._log(
               (l) => l.error,
-              `Failed to load grammar ${scopeName} from ${definition.location.fsPath}: ${String(e)}`,
+              `Failed to load grammar ${scopeName} from ${definition.location.toString()}: ${String(e)}`,
             )
             return null
           }

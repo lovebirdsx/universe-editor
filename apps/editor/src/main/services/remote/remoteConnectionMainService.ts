@@ -214,6 +214,7 @@ export interface RemoteConnectionMainServiceOptions {
   readonly deployer?: RemoteDeployer
   readonly wslDeployer?: WslDeployer
   readonly getUserDataDir?: () => string
+  readonly skipDeployCheck?: boolean
 }
 
 export class RemoteConnectionMainService extends Disposable implements IRemoteConnectionService {
@@ -225,6 +226,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   private readonly _deployer: RemoteDeployer
   private _wslDeployer: WslDeployer | undefined
   private readonly _getUserDataDir: () => string
+  private readonly _skipDeployCheck: boolean
   private readonly _entries = new Map<string, ConnectionEntry>()
   private readonly _onDidChangeState = this._register(new Emitter<IRemoteConnectionStateChange>())
   readonly onDidChangeState: Event<IRemoteConnectionStateChange> = this._onDidChangeState.event
@@ -246,6 +248,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       options.deployer ?? new RemoteDeployer({ logger: this._logger, spawner: this._spawn })
     this._wslDeployer = options.wslDeployer
     this._getUserDataDir = options.getUserDataDir ?? (() => '')
+    this._skipDeployCheck = options.skipDeployCheck ?? false
   }
 
   /** Lazily built — constructing it is only meaningful on Windows with WSL. */
@@ -519,20 +522,34 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     target: string,
   ): Promise<IRemoteDaemonInfo> {
     const authority = entry.authority
+    const localHash = this._skipDeployCheck ? undefined : orchestrator.localBundleHash()
     const check = await orchestrator.checkRemoteServer(target)
+    const shortHash = (h: string | undefined): string => (h ?? '').slice(0, 12) || '(none)'
     switch (check.state) {
       case 'running': {
-        if (check.info.serverVersion !== orchestrator.serverVersion) {
-          this._logger.warn(
-            `[remote:${authority}] daemon version ${check.info.serverVersion} != local ${orchestrator.serverVersion}; restarting`,
-          )
+        const versionMismatch = check.info.serverVersion !== orchestrator.serverVersion
+        const staleHash = localHash !== undefined && check.deployedBundleHash !== localHash
+        if (versionMismatch || staleHash) {
+          const reason = versionMismatch
+            ? `version ${check.info.serverVersion} != local ${orchestrator.serverVersion}`
+            : `bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}`
+          this._logger.warn(`[remote:${authority}] daemon ${reason}; redeploying`)
           await orchestrator.stopRemoteDaemon(target)
+          await orchestrator.deployRemoteServer(target, this._logger)
           return orchestrator.startRemoteDaemon(target)
         }
         return check.info
       }
-      case 'not-running':
+      case 'not-running': {
+        const staleHash = localHash !== undefined && check.deployedBundleHash !== localHash
+        if (staleHash) {
+          this._logger.info(
+            `[remote:${authority}] deployed bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}; redeploying`,
+          )
+          await orchestrator.deployRemoteServer(target, this._logger)
+        }
         return orchestrator.startRemoteDaemon(target)
+      }
       case 'not-deployed': {
         this._logger.info(`[remote:${authority}] not deployed (${check.reason}); deploying`)
         await orchestrator.deployRemoteServer(target, this._logger)

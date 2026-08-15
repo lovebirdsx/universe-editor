@@ -161,6 +161,13 @@ if (deploy) {
 await writeFile(resolve(outDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
 
 if (watch) {
+  // Vendor/extensions staging isn't part of esbuild's module graph (they're copied
+  // wholesale), so the watcher can't detect their changes — stage once at startup and
+  // leave the incremental JS rebuilds to ctx.watch().
+  if (deploy) {
+    stageVendorAgents(outDir)
+    stageBuiltinExtensions(outDir)
+  }
   const ctx = await context(buildOptions)
   await ctx.watch()
   console.log(`[remote-server] watching → ${outDir}`)

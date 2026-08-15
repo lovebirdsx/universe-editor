@@ -50,7 +50,7 @@ async function loadGrammar(): Promise<IGrammar> {
   const grammars = new GrammarRegistry()
   grammars.registerGrammars([tomlDefinition()])
   const factory = new TMGrammarFactory(
-    { readFile: (fsPath) => Promise.resolve(readFileSync(fsPath, 'utf8')) },
+    { readFile: (location) => Promise.resolve(readFileSync(location.fsPath, 'utf8')) },
     grammars,
     Promise.resolve(onigLib),
     () => 42,

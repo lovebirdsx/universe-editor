@@ -150,6 +150,14 @@ export const REMOTE_SERVER_CMD: ConfigItem<'string'> = {
   env: 'UNIVERSE_REMOTE_SERVER_CMD',
 }
 
+/** Escape hatch: skip the remote bundle-hash staleness check (never auto-redeploy). */
+export const REMOTE_SKIP_DEPLOY_CHECK: ConfigItem<'boolean'> = {
+  id: 'remoteSkipDeployCheck',
+  type: 'boolean',
+  env: 'UNIVERSE_REMOTE_SKIP_DEPLOY_CHECK',
+  default: false,
+}
+
 /** Platform data roots — env-only inputs to productPaths' identity resolution. */
 export const APP_DATA: ConfigItem<'string'> = { id: 'appData', type: 'string', env: 'APPDATA' }
 

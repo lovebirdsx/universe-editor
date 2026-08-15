@@ -13,10 +13,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process'
-import { createWriteStream, type WriteStream } from 'node:fs'
+import { createWriteStream, readFileSync, type WriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   AbstractLogger,
   LogLevel,
@@ -29,6 +30,8 @@ import { SERVER_VERSION } from './version.js'
 
 const DEFAULT_DATA_DIR = path.join(homedir(), '.universe-editor-server')
 const INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
+const BUNDLE_HASH_PREFIX = 'UNIVERSE_REMOTE_BUNDLE_HASH='
+const BUNDLE_HASH_FILE = 'bundle.hash'
 const START_TIMEOUT_MS = 10_000
 const STOP_TIMEOUT_MS = 3_000
 
@@ -87,6 +90,17 @@ function isAlive(pid: number): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Content hash of the deployed tree, written next to bootstrap.js by the deployer. */
+function readBundleHash(): string | undefined {
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url))
+    const value = readFileSync(path.join(dir, BUNDLE_HASH_FILE), 'utf8').trim()
+    return value || undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function readServerInfo(dataDir: string): Promise<IRemoteDaemonInfo | undefined> {
@@ -204,6 +218,10 @@ async function startDaemon(dataDir: string): Promise<void> {
 }
 
 async function checkDaemon(dataDir: string): Promise<void> {
+  // Emit the bundle hash before any liveness check so a not-running daemon still
+  // reports it — the client compares it against the local build to detect a
+  // stale deploy under the constant dev version 0.0.0.
+  process.stdout.write(`${BUNDLE_HASH_PREFIX}${readBundleHash() ?? ''}\n`)
   const info = await readServerInfo(dataDir)
   if (!info) {
     throw new CheckError('not-running', 'server is not running (no server.json)')

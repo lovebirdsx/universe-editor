@@ -17,6 +17,7 @@ import {
   ViewRegistry,
   URI,
   type ICommandService,
+  type ILogger,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto, IExtHostCommands } from '@universe-editor/extensions-common'
@@ -110,6 +111,43 @@ describe('ExtensionPointTranslator', () => {
     expect(run('test.cmd')).toBe('from-core')
     expect(activate).not.toHaveBeenCalled()
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('a failing grammar registration does not abort other kinds or other extensions', () => {
+    const logger = { error: vi.fn() } as unknown as ILogger
+    const t = new ExtensionPointTranslator(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => {
+        throw new Error('grammar boom')
+      },
+    )
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'bad.ext',
+        contributes: {
+          commands: [{ command: 'bad.cmd', title: 'Bad Command' }],
+          grammars: [{ scopeName: 'source.bad', path: './bad.tmLanguage.json' }],
+        },
+      }),
+      dto({
+        id: 'good.ext',
+        contributes: { commands: [{ command: 'good.cmd', title: 'Good Command' }] },
+      }),
+    ])
+
+    expect(CommandsRegistry.getCommand('bad.cmd')).toBeDefined()
+    expect(CommandsRegistry.getCommand('good.cmd')).toBeDefined()
+    expect(logger.error).toHaveBeenCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('bad.ext'))
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('grammar'))
   })
 
   it('translates menu contributions into the MenuRegistry, parsing group@order', () => {

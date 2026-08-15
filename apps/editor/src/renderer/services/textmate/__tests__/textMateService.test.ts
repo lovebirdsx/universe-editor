@@ -182,3 +182,29 @@ describe('TextMateService live-model recovery', () => {
     service.dispose()
   })
 })
+
+describe('TextMateService remote grammar read routing', () => {
+  it('passes the remote-ssh grammar URI through IFileService untouched', async () => {
+    const readFileText = vi.fn((_resource: URI) => Promise.resolve('{}'))
+    const service = new TextMateService(
+      { readFileText } as unknown as IFileService,
+      undefined as never,
+    )
+    service.registerGrammars(
+      [{ language: 'toml', scopeName: 'source.toml', path: './syntaxes/toml.tmLanguage.json' }],
+      {
+        extensionId: 'test',
+        extensionLocation: URI.parse('remote-ssh://wsl+Ubuntu/home/xiao/ext'),
+        extensionIsBuiltin: true,
+      },
+    )
+    const { stub } = makeMonacoStub(['typescript'], ['toml'])
+    await service.initialize(stub)
+
+    await vi.waitFor(() => expect(readFileText).toHaveBeenCalled())
+    const received = readFileText.mock.calls[0]![0]
+    expect(received.scheme).toBe('remote-ssh')
+    expect(received.path).toBe('/home/xiao/ext/syntaxes/toml.tmLanguage.json')
+    service.dispose()
+  })
+})

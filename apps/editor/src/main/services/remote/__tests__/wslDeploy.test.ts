@@ -6,11 +6,11 @@
 
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildCheckCommand,
   buildDeployRemoteScript,
@@ -18,6 +18,7 @@ import {
   buildStartCommand,
   buildStopCommand,
   classifyCheckResult,
+  computeBundleHash,
   type RemoteRunner,
   type RemoteSpawner,
 } from '../remoteDeploy.js'
@@ -50,10 +51,16 @@ describe('wslCommandArgs', () => {
 
 describe('buildDeployScriptBody', () => {
   it('is the unwrapped body of the ssh deploy script', () => {
-    const body = buildDeployScriptBody('0.0.0', 'u.tgz')
+    const body = buildDeployScriptBody('0.0.0', 'u.tgz', 'deadbeef')
     expect(body.startsWith('mkdir -p ~/.universe-editor-server/0.0.0')).toBe(true)
     expect(body).not.toContain('sh -c')
-    expect(buildDeployRemoteScript('0.0.0', 'u.tgz')).toBe(`sh -c '${body}'`)
+    expect(buildDeployRemoteScript('0.0.0', 'u.tgz', 'deadbeef')).toBe(`sh -c '${body}'`)
+  })
+
+  it('writes the bundle hash after extraction without breaking the outer single quotes', () => {
+    const body = buildDeployScriptBody('0.0.0', 'u.tgz', 'deadbeef')
+    expect(body).toContain('printf %s "deadbeef" > ~/.universe-editor-server/0.0.0/bundle.hash')
+    expect(body).not.toContain("'")
   })
 })
 
@@ -125,11 +132,25 @@ class FakeUploadProc extends EventEmitter {
 
 interface DeployHarness {
   deployer: WslDeployer
+  bundleDir: string
   runnerCalls: { command: string; args: readonly string[]; cwd?: string; timeoutMs?: number }[]
   spawns: { command: string; args: readonly string[]; proc: FakeUploadProc }[]
 }
 
+const bundleDirs: string[] = []
+afterEach(() => {
+  for (const d of bundleDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+function makeBundle(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'ue-bundle-'))
+  bundleDirs.push(dir)
+  writeFileSync(join(dir, 'index.js'), 'export const a = 1\n')
+  return dir
+}
+
 function makeDeployHarness(uploadExitCode = 0, installStderr = ''): DeployHarness {
+  const bundleDir = makeBundle()
   const runnerCalls: DeployHarness['runnerCalls'] = []
   const runner: RemoteRunner = (command, args, options) => {
     runnerCalls.push({
@@ -156,10 +177,10 @@ function makeDeployHarness(uploadExitCode = 0, installStderr = ''): DeployHarnes
     runner,
     spawner,
     serverVersion: '0.0.0',
-    bundleDir: '/bundle',
+    bundleDir,
     wslExePath: WSL_EXE,
   })
-  return { deployer, runnerCalls, spawns }
+  return { deployer, bundleDir, runnerCalls, spawns }
 }
 
 describe('WslDeployer', () => {
@@ -209,7 +230,7 @@ describe('WslDeployer', () => {
   })
 
   it('deploys via local tar → stdin upload → bash install, then cleans the local tgz', async () => {
-    const { deployer, runnerCalls, spawns } = makeDeployHarness()
+    const { deployer, bundleDir, runnerCalls, spawns } = makeDeployHarness()
     await deployer.deployRemoteServer('Ubuntu')
 
     expect(runnerCalls.map((c) => c.command)).toEqual(['tar', WSL_EXE])
@@ -217,7 +238,7 @@ describe('WslDeployer', () => {
     const tgzName = tar.args[1]!
     expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
     expect(tar.cwd).toBe(tmpdir())
-    expect(tar.args.slice(2)).toEqual(['-C', '/bundle', '.'])
+    expect(tar.args.slice(2)).toEqual(['-C', bundleDir, '.'])
 
     expect(spawns).toHaveLength(1)
     const upload = spawns[0]!
@@ -226,7 +247,13 @@ describe('WslDeployer', () => {
     expect(upload.proc.received.toString('utf8')).toBe('TGZ-BYTES')
 
     const install = runnerCalls[1]!
-    expect(install.args).toEqual(wslCommandArgs('Ubuntu', buildDeployScriptBody('0.0.0', tgzName)))
+    expect(install.args).toEqual(
+      wslCommandArgs(
+        'Ubuntu',
+        buildDeployScriptBody('0.0.0', tgzName, computeBundleHash(bundleDir)),
+      ),
+    )
+    expect(install.args[5]).toContain('~/.universe-editor-server/0.0.0/bundle.hash')
     expect(install.timeoutMs).toBe(1_800_000)
 
     expect(existsSync(join(tmpdir(), tgzName))).toBe(false)

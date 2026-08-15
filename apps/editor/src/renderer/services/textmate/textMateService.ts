@@ -207,7 +207,7 @@ export class TextMateService extends Disposable implements ITextMateService {
       new TMGrammarFactory(
         {
           logger: this._logger,
-          readFile: (fsPath) => this._fileService.readFileText(URI.file(fsPath)),
+          readFile: (location) => this._fileService.readFileText(location),
         },
         this.grammarRegistry,
         getOnigLib(),

@@ -73,9 +73,15 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     // A host relaunch (workspace swap / crash) re-emits its contributions; re-apply
     // them so contributed commands survive a restart that raced this initial boot.
     this._register(
-      this._client.onDidChangeContributions((contributions) =>
-        this._applyContributions(contributions),
-      ),
+      this._client.onDidChangeContributions((contributions) => {
+        try {
+          this._applyContributions(contributions)
+        } catch (err) {
+          this._logger.error(
+            `failed to apply extension contributions: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }),
     )
 
     // Installing / uninstalling an extension re-scans the restricted tier so the
@@ -181,7 +187,13 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
         this._themeService.registerProductIconThemes(productIconThemes, context),
       (grammars, context) => this._textMateService.registerGrammars(grammars, context),
     )
-    translator.translate(contributions)
+    try {
+      translator.translate(contributions)
+    } catch (err) {
+      this._logger.error(
+        `failed to translate extension contributions: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
     this._translator.value = translator
 
     // Extension-contributed MCP servers are not a core-registry concern — hand

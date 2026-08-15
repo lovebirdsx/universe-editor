@@ -30,10 +30,30 @@ const upstream = spawnSync(
 )
 if (upstream.status !== 0) process.exit(upstream.status ?? 1)
 
+// The remote-server deploy bundle is content-hashed on connect; keep dist-bundle fresh
+// before launching so a stale/missing bundle can't fail-open past the staleness check.
+// Fast no-op once stamped; only input changes pay the esbuild bundle.
+const remoteServerBundle = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-remote-server-bundle.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (remoteServerBundle.status !== 0) process.exit(remoteServerBundle.status ?? 1)
+
 // ELECTRON_RUN_AS_NODE leaks in from an agent/tooling shell would make electron-vite
 // spawn the ESM main process in plain-node mode and crash it. Strip it here so a
 // stray export in the caller's environment can't break `pnpm dev`.
 const { ELECTRON_RUN_AS_NODE: _drop, ...cleanEnv } = process.env
+
+// Watch the bundle inputs so a dev session edits remote-server/extension-host sources
+// keep dist-bundle fresh (the precheck above only guarantees startup freshness). Runs
+// alongside electron-vite; killed when it exits so no orphan watch survives.
+const REMOTE_SERVER_ESBUILD = resolve(REPO_ROOT, 'packages/remote-server/esbuild.config.mjs')
+const remoteWatch = spawn(process.execPath, [REMOTE_SERVER_ESBUILD, '--watch', '--bundle'], {
+  cwd: resolve(REPO_ROOT, 'packages/remote-server'),
+  stdio: 'inherit',
+  env: cleanEnv,
+})
 
 const child = spawn(process.execPath, [ELECTRON_VITE_BIN, 'dev', ...process.argv.slice(2)], {
   cwd: APP_ROOT,
@@ -42,6 +62,7 @@ const child = spawn(process.execPath, [ELECTRON_VITE_BIN, 'dev', ...process.argv
 })
 
 child.on('exit', (code, signal) => {
+  remoteWatch.kill()
   if (signal) process.kill(process.pid, signal)
   else process.exit(code ?? 0)
 })

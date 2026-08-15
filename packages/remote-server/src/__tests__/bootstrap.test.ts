@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeAll, afterAll, describe, expect, it } from 'vitest'
@@ -153,6 +153,27 @@ describe('bootstrap subcommands', () => {
 
     child.kill('SIGTERM')
     await waitForExit(child)
+  }, 30_000)
+
+  it('check prints the bundle hash line even when the daemon is not running', async () => {
+    const dataDir = await makeTempDir()
+    const missing = await runBootstrap(['check'], dataDir)
+    expect(missing.code).toBe(3)
+    expect(missing.stdout).toContain('UNIVERSE_REMOTE_BUNDLE_HASH=\n')
+  }, 30_000)
+
+  it('check reports the bundle hash recorded next to bootstrap.js', async () => {
+    const bundleDir = path.dirname(built.bootstrapPath)
+    const hashPath = path.join(bundleDir, 'bundle.hash')
+    await writeFile(hashPath, '  deadbeef  \n')
+    try {
+      const dataDir = await makeTempDir()
+      const result = await runBootstrap(['check'], dataDir)
+      expect(result.code).toBe(3)
+      expect(result.stdout).toContain('UNIVERSE_REMOTE_BUNDLE_HASH=deadbeef\n')
+    } finally {
+      await rm(hashPath, { force: true })
+    }
   }, 30_000)
 
   it('stop stops a running daemon and cleans server.json/lock', async () => {
