@@ -5,18 +5,19 @@ import {
   ICommandService,
   IEditorGroupsService,
   IHostService,
+  IUriIdentityService,
   IWorkspaceService,
   localize,
   markAsSingleton,
   MutableDisposable,
   combinedDisposable,
-  relativePathUnder,
-  type HostPlatform,
   type IEditorGroup,
   type IWorkspace,
   type EditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { isFileSystemScheme } from '../../services/files/fileSystemScheme.js'
+import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
 import { GoToFileAction } from '../../actions/fileOpenActions.js'
 import { AgentStatusIndicator } from './AgentStatusIndicator.js'
 import { AiTitleBarButton } from './AiTitleBarButton.js'
@@ -39,13 +40,12 @@ const DIRTY_INDICATOR = '● '
 function leftSegment(
   editor: EditorInput,
   workspace: IWorkspace | null,
-  platform: HostPlatform,
+  uriIdentity: IUriIdentityService,
 ): string {
   const resource = editor.resource
-  if (!resource || resource.scheme !== 'file') return editor.getName()
-  const fsPath = resource.fsPath
-  const rel = workspace ? relativePathUnder(workspace.folder.fsPath, fsPath, platform) : null
-  return rel || fsPath
+  if (!resource || !isFileSystemScheme(resource.scheme)) return editor.getName()
+  if (!workspace) return resource.fsPath
+  return uriIdentity.relativePath(workspace.folder, resource) ?? resource.fsPath
 }
 
 /**
@@ -56,13 +56,13 @@ function leftSegment(
 function computeTitle(
   editor: EditorInput | undefined,
   workspace: IWorkspace | null,
-  platform: HostPlatform,
+  uriIdentity: IUriIdentityService,
 ): string {
   if (!editor) return workspace?.name ?? ''
   const dirty = editor.isDirty ? DIRTY_INDICATOR : ''
   const segments = [
-    leftSegment(editor, workspace, platform),
-    workspace?.folder.fsPath ?? '',
+    leftSegment(editor, workspace, uriIdentity),
+    workspace ? workspaceFullLabel(workspace.folder) : '',
   ].filter((s) => s.length > 0)
   return dirty + segments.join(SEPARATOR)
 }
@@ -99,6 +99,7 @@ export function TitleBar() {
   const workspace = useService(IWorkspaceService)
   const groupsService = useService(IEditorGroupsService)
   const commandService = useService(ICommandService)
+  const uriIdentity = useService(IUriIdentityService)
   const isMac = host.platform === 'darwin'
 
   const subscribe = useCallback(
@@ -142,7 +143,7 @@ export function TitleBar() {
   )
 
   const title = useSyncExternalStore(subscribe, () =>
-    computeTitle(groupsService.activeGroup.activeEditor, workspace.current, host.platform),
+    computeTitle(groupsService.activeGroup.activeEditor, workspace.current, uriIdentity),
   )
 
   return (

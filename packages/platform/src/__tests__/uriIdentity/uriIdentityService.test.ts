@@ -31,6 +31,33 @@ describe('UriIdentityService', () => {
     expect(svc.relativePathUnder('D:\\Proj', 'd:/other')).toBeNull()
   })
 
+  it('relativePath computes the URI-level tail under a folder', () => {
+    const svc = new UriIdentityService('win32')
+    expect(svc.relativePath(URI.file('D:/Proj'), URI.file('d:/proj/Src/Foo.ts'))).toBe('Src/Foo.ts')
+    expect(svc.relativePath(URI.file('D:/Proj'), URI.file('D:/Proj'))).toBe('')
+    expect(svc.relativePath(URI.file('D:/Proj'), URI.file('d:/other'))).toBeNull()
+  })
+
+  it('relativePath requires matching scheme and authority', () => {
+    const svc = new UriIdentityService('linux')
+    const remote = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/home/u/proj' })
+    expect(
+      svc.relativePath(remote, URI.from({ scheme: 'file', path: '/home/u/proj/src/a.ts' })),
+    ).toBeNull()
+    expect(
+      svc.relativePath(
+        remote,
+        URI.from({ scheme: 'remote-ssh', authority: 'other', path: '/home/u/proj/src/a.ts' }),
+      ),
+    ).toBeNull()
+    expect(
+      svc.relativePath(
+        remote,
+        URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/home/u/proj/src/a.ts' }),
+      ),
+    ).toBe('src/a.ts')
+  })
+
   it('getPathComparisonKey keys string paths under the bound platform', () => {
     expect(new UriIdentityService('win32').getPathComparisonKey('D:\\x\\Foo.ts')).toBe(
       'd:/x/foo.ts',
@@ -118,5 +145,21 @@ describe('UriIdentityService per-scheme case sensitivity', () => {
     const svc = new UriIdentityService('win32')
     svc.registerSchemeCaseSensitivity('remote-ssh', true)
     expect(svc.arePathsEqual('/src/Foo.ts', '/src/foo.ts')).toBe(true)
+  })
+
+  it('relativePath honours the registered remote case policy', () => {
+    const folder = URI.from({ scheme: 'remote-ssh', authority: 'host', path: '/home/u/proj' })
+    const upperFile = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'host',
+      path: '/HOME/U/PROJ/src/a.ts',
+    })
+
+    const ci = new UriIdentityService('win32')
+    expect(ci.relativePath(folder, upperFile)).toBe('src/a.ts')
+
+    const cs = new UriIdentityService('win32')
+    cs.registerSchemeCaseSensitivity('remote-ssh', true)
+    expect(cs.relativePath(folder, upperFile)).toBeNull()
   })
 })

@@ -11,12 +11,14 @@ import {
   IFileService,
   IHistoryService,
   IHostService,
+  IUriIdentityService,
   ILayoutService,
   IWorkspaceService,
   InstantiationService,
   PartId,
   ServiceCollection,
   URI,
+  UriIdentityService,
   constObservable,
   type IWorkspace,
 } from '@universe-editor/platform'
@@ -142,6 +144,7 @@ function makeContainer(
   const sc = new ServiceCollection()
   sc.set(IHostService, makeHostService(opts.platform ?? 'win32'))
   sc.set(IWorkspaceService, makeWorkspaceService(opts.workspace ?? null))
+  sc.set(IUriIdentityService, new UriIdentityService(opts.platform ?? 'win32'))
   sc.set(IEditorGroupsService, groupsService)
   sc.set(IFileService, makeFs())
   sc.set(IContextKeyService, new ContextKeyService())
@@ -259,6 +262,65 @@ describe('TitleBar — title text', () => {
     )
 
     expect(titleText()).toBe('/other/place/foo.txt — /my/project')
+  })
+
+  it('shows the workspace-relative path for an in-workspace remote file', () => {
+    const folder = URI.parse('remote-ssh://e2e-local/home/user/project')
+    const workspace: IWorkspace = { folder, name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(
+      FileEditorInput,
+      URI.parse('remote-ssh://e2e-local/home/user/project/src/main.ts'),
+    )
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('src/main.ts — remote-ssh://e2e-local/home/user/project')
+  })
+
+  it('shows the full path for a remote file outside the workspace', () => {
+    const folder = URI.parse('remote-ssh://e2e-local/home/user/project')
+    const workspace: IWorkspace = { folder, name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(
+      FileEditorInput,
+      URI.parse('remote-ssh://e2e-local/other/foo.txt'),
+    )
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('/other/foo.txt — remote-ssh://e2e-local/home/user/project')
+  })
+
+  it('does not treat a different remote authority as in-workspace', () => {
+    const folder = URI.parse('remote-ssh://e2e-local/home/user/project')
+    const workspace: IWorkspace = { folder, name: 'project' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(
+      FileEditorInput,
+      URI.parse('remote-ssh://other-host/home/user/project/src/main.ts'),
+    )
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe(
+      '/home/user/project/src/main.ts — remote-ssh://e2e-local/home/user/project',
+    )
   })
 
   it('shows the editor name and workspace path for a non-file editor', () => {

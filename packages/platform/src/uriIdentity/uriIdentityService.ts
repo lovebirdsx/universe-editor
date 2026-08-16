@@ -70,6 +70,14 @@ export interface IUriIdentityService {
   /** Relative path of `child` under `parent` (`''` when equal), or null. */
   relativePathUnder(parent: string, child: string): string | null
 
+  /**
+   * URI-level relative path, mirroring VSCode's `ExtUri.relativePath`: `to`
+   * must share `from`'s scheme and authority, and be equal to or nested under
+   * `from` ('' when equal). Returns null otherwise — callers fall back to a
+   * full path label. Case sensitivity follows `from`'s registered policy.
+   */
+  relativePath(from: URI, to: URI): string | null
+
   /** A {@link ResourceMap} pre-wired with this service's comparison key. */
   createResourceMap<V>(): ResourceMap<V>
 
@@ -125,6 +133,12 @@ export class UriIdentityService implements IUriIdentityService {
 
   relativePathUnder(parent: string, child: string): string | null {
     return relativePathUnderFn(parent, child, this.platform)
+  }
+
+  relativePath(from: URI, to: URI): string | null {
+    if (from.scheme !== to.scheme || from.authority !== to.authority) return null
+    const platform: HostPlatform = this.isCaseSensitive(from) ? 'linux' : 'win32'
+    return relativePathUnderFn(from.path, to.path, platform)
   }
 
   createResourceMap<V>(): ResourceMap<V> {
