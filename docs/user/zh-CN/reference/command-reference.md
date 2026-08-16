@@ -157,7 +157,7 @@ Markdown 的格式命令与预览链接导航命令，目前有相当一部分�
 | Remote-SSH: Open Folder on Host…（英文） | 在已连接的主机上另选文件夹打开                                                           | 无     |
 | Remote-SSH: Close Connection（英文）     | 关闭到某主机的连接（若正打开它的工作区，会先关掉该工作区）                               | 无     |
 | Remote-SSH: Retry Connection（英文）     | 重试一条失败的连接                                                                       | 无     |
-| Remote-SSH: Stop Remote Server（英文）   | 停止远端主机上的 server 并断开连接                                                       | 无     |
+| Remote-SSH: Stop Remote Server（英文）   | 停止远端主机上的 server 并断开连接；若停的是当前工作区所在主机，会先关闭该远程工作区、且不再自动重连 | 无     |
 
 > 更多见 [远程开发概览](../remote/overview.md)。
 

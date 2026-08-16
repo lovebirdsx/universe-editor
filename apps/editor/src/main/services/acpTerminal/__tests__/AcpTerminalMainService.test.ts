@@ -435,6 +435,7 @@ describe('AcpTerminalMainService — remote routing', () => {
     const connService: IRemoteConnectionService = {
       _serviceBrand: undefined,
       getConnection: async () => conn,
+      connect: async () => conn,
       openExtensionHostConnection: async () => {
         throw new Error('not used')
       },

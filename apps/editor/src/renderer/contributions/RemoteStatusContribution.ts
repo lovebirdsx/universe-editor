@@ -59,6 +59,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   private readonly _states = new Map<string, RemoteConnectionStateDto>()
   private readonly _progress = new Map<string, RemoteConnectionProgressDto>()
   private _timer: ReturnType<typeof setInterval> | undefined
+  private _lastConnectAuthority: string | undefined
 
   constructor(
     @IStatusBarService private readonly _statusBar: IStatusBarService,
@@ -90,7 +91,12 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
       ),
     )
 
-    this._register(this._workspace.onDidChangeWorkspace(() => this._render()))
+    this._register(
+      this._workspace.onDidChangeWorkspace(() => {
+        this._connectCurrentAuthority()
+        this._render()
+      }),
+    )
     this._register(
       this._remoteStatus.onDidChangeState((status) => {
         if (status.progress !== undefined) this._progress.set(status.authority, status.progress)
@@ -107,6 +113,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     })
 
     void this._seedStates().then(() => this._render())
+    this._connectCurrentAuthority()
     this._render()
   }
 
@@ -119,6 +126,24 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   private _currentAuthority(): string | undefined {
     const folder = this._workspace.current?.folder
     return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
+  }
+
+  /**
+   * Opening a remote workspace is explicit intent: connecting here turns the
+   * lazy bring-up into an active one and — on the main side — clears the
+   * "user stopped the server" suppression so implicit reconnect is allowed
+   * again. Fire-and-forget; failures surface through the status bar failed
+   * state rather than a dialog.
+   */
+  private _connectCurrentAuthority(): void {
+    const authority = this._currentAuthority()
+    if (authority === undefined) {
+      this._lastConnectAuthority = undefined
+      return
+    }
+    if (this._lastConnectAuthority === authority) return
+    this._lastConnectAuthority = authority
+    void this._remoteStatus.connect(authority).catch(() => {})
   }
 
   /**

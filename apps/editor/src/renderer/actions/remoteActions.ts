@@ -481,6 +481,7 @@ export class StopRemoteServerAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
     const remoteStatus = accessor.get(IRemoteStatusService)
+    const workspace = accessor.get(IWorkspaceService)
     const dialog = accessor.get(IDialogService)
     const notification = accessor.get(INotificationService)
     const quickInput = accessor.get(IQuickInputService)
@@ -502,6 +503,24 @@ export class StopRemoteServerAction extends Action2 {
         false,
       )
       if (!authority) return
+    }
+
+    const current = workspace.current
+    if (current?.folder.scheme === REMOTE_SCHEME && current.folder.authority === authority) {
+      const { confirmed } = await dialog.confirm({
+        type: 'warning',
+        message: localize(
+          'remote.stopServer.confirmCurrent',
+          "Stop the remote server on '{authority}'? This closes the current remote workspace.",
+          { authority },
+        ),
+        primaryButton: localize('remote.stopServer.confirmButton', 'Stop Server'),
+        cancelButton: localize('common.cancel', 'Cancel'),
+      })
+      if (!confirmed) return
+      await workspace.closeFolder()
+      await remoteStatus.stopServer(authority)
+      return
     }
 
     const { confirmed } = await dialog.confirm({

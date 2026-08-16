@@ -88,6 +88,7 @@
 - [prompt 输入框不冒充全局 editorTextFocus](prompt-input-no-global-editortextfocus.md) — 嵌入式 Monaco 用专用 key；VSCode 导入层 User=1000 压过一切 scoped weight，"输入框失效别处正常"先查导入键位
 - [spawn CLI 挂起 / 选错命令](cli-stdin-hang-on-prompt.md) — 交互 CLI 换只读命令；p4 查 ticket 用 `p4 tickets`/`login -s`
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
+- [tsgo 幽灵 typecheck 报错先删 tsbuildinfo](tsgo-stale-tsbuildinfo-phantom-typecheck-errors.md) — 报错与改动无关且 HEAD 同样报时，删 apps/editor 的 .tsbuildinfo-* 重跑，别改源码
 
 ## e2e flaky / 排查
 

@@ -72,7 +72,7 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
   }
 
   async connect(authority: string): Promise<RemoteEnvironmentDto> {
-    const connection = await this._remote.getConnection(authority)
+    const connection = await this._remote.connect(authority)
     return toEnvironmentDto(connection.env)
   }
 

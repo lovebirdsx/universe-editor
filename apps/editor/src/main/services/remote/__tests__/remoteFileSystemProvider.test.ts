@@ -94,6 +94,7 @@ function makeHarness(channels: Record<string, unknown>): {
       calls++
       return conn
     },
+    connect: async () => conn,
     openExtensionHostConnection: async () => {
       throw new Error('not used in this test')
     },

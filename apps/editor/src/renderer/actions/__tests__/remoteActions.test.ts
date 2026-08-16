@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  IDialogService,
   IFileDialogService,
   ILifecycleService,
   INotificationService,
@@ -16,7 +17,9 @@ import {
   LifecycleService,
   MenuId,
   MenuRegistry,
+  REMOTE_SCHEME,
   ServiceCollection,
+  URI,
   registerAction2,
   type IDisposable,
   type IFileDialogService as IFileDialogServiceType,
@@ -26,6 +29,7 @@ import {
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
+  type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
   type QuickPickInput,
 } from '@universe-editor/platform'
@@ -40,6 +44,7 @@ import {
   ConnectToHostAction,
   ConnectToWslAction,
   RemoveManualHostAction,
+  StopRemoteServerAction,
 } from '../remoteActions.js'
 import { IRemoteExplorerService } from '../../services/remote/RemoteExplorerService.js'
 
@@ -381,5 +386,78 @@ describe('remoteActions — RemoveManualHostAction', () => {
     disposables.push(registerAction2(RemoveManualHostAction))
     expect((await invokeHandler()).removed).toEqual([])
     expect((await invokeHandler('   ')).removed).toEqual([])
+  })
+})
+
+describe('remoteActions — StopRemoteServerAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  async function invoke(
+    authorityArg: string,
+    current: IWorkspace | null,
+  ): Promise<{ calls: string[]; confirmMessages: string[] }> {
+    const calls: string[] = []
+    const confirmMessages: string[] = []
+    const remoteStatus = {
+      stopServer: async (authority: string) => {
+        calls.push(`stopServer:${authority}`)
+      },
+    }
+    const workspace = {
+      current,
+      closeFolder: async () => {
+        calls.push('closeFolder')
+      },
+    }
+    const dialog = {
+      confirm: async (opts: { message: string }) => {
+        confirmMessages.push(opts.message)
+        return { confirmed: true, choice: 'primary' as const }
+      },
+      prompt: () => Promise.resolve(undefined),
+    }
+    const services = new ServiceCollection()
+    services.set(IRemoteStatusService, remoteStatus as never)
+    services.set(IWorkspaceService, workspace as never)
+    services.set(IDialogService, dialog as never)
+    services.set(INotificationService, makeNotificationStub())
+    services.set(IQuickInputService, makeQuickInputStub())
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(StopRemoteServerAction.ID)!
+      await cmd.handler(accessor, authorityArg)
+    })
+    return { calls, confirmMessages }
+  }
+
+  it('closes the current remote workspace before stopping its server', async () => {
+    disposables.push(registerAction2(StopRemoteServerAction))
+    const current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/' }),
+      name: 'myhost',
+    }
+    const { calls, confirmMessages } = await invoke('myhost', current)
+    expect(calls).toEqual(['closeFolder', 'stopServer:myhost'])
+    expect(confirmMessages[0]).toContain('This closes the current remote workspace')
+  })
+
+  it('does not close the workspace when the authority is not the current one', async () => {
+    disposables.push(registerAction2(StopRemoteServerAction))
+    const current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'otherhost', path: '/' }),
+      name: 'otherhost',
+    }
+    const { calls } = await invoke('myhost', current)
+    expect(calls).toEqual(['stopServer:myhost'])
+  })
+
+  it('does not close a local workspace', async () => {
+    disposables.push(registerAction2(StopRemoteServerAction))
+    const current = { folder: URI.file('C:/local-project'), name: 'local-project' }
+    const { calls } = await invoke('myhost', current)
+    expect(calls).toEqual(['stopServer:myhost'])
   })
 })

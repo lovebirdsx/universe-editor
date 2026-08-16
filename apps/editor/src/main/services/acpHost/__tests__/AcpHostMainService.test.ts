@@ -555,6 +555,7 @@ function makeRemoteFixture(opts?: { leakSafe?: boolean }): RemoteFixture {
       await gate
       return conn
     },
+    connect: async () => conn,
     openExtensionHostConnection: async () => {
       throw new Error('not used')
     },

@@ -52,7 +52,7 @@ function makeRemoteStatus(): FakeRemoteStatusService {
   return {
     _serviceBrand: undefined,
     getConnections: vi.fn().mockResolvedValue([]),
-    connect: vi.fn(),
+    connect: vi.fn().mockResolvedValue(undefined),
     getEnvironment: vi.fn(),
     listSshHosts: vi.fn().mockResolvedValue([]),
     listWslDistros: vi.fn().mockResolvedValue([]),
@@ -68,11 +68,18 @@ function makeRemoteStatus(): FakeRemoteStatusService {
 
 function makeWorkspace(folder: URI) {
   const emitter = new Emitter<IWorkspace | null>()
+  let current: IWorkspace | null = {
+    folder,
+    name: folder.authority || 'local',
+  }
   return {
     _serviceBrand: undefined,
-    current: {
-      folder,
-      name: folder.authority || 'local',
+    get current() {
+      return current
+    },
+    setCurrent(next: IWorkspace | null) {
+      current = next
+      emitter.fire(current)
     },
     onDidChangeWorkspace: emitter.event,
     _emitter: emitter,
@@ -90,6 +97,7 @@ let contribution: RemoteStatusContribution | undefined
 let contextKeyService: ContextKeyService | undefined
 let remoteStatus: FakeRemoteStatusService
 let statusBar: StatusBarService
+let workspace: ReturnType<typeof makeWorkspace> | undefined
 
 function setup(opts?: { localWorkspace?: boolean }): void {
   remoteStatus = makeRemoteStatus()
@@ -98,7 +106,7 @@ function setup(opts?: { localWorkspace?: boolean }): void {
   const folder = opts?.localWorkspace
     ? URI.file('C:/local-project')
     : URI.from({ scheme: REMOTE_SCHEME, authority: AUTHORITY, path: '/' })
-  const workspace = makeWorkspace(folder)
+  workspace = makeWorkspace(folder)
   const commands = {
     _serviceBrand: undefined,
     executeCommand: vi.fn(),
@@ -137,6 +145,7 @@ describe('RemoteStatusContribution', () => {
     contribution = undefined
     contextKeyService?.dispose()
     contextKeyService = undefined
+    workspace = undefined
     vi.useRealTimers()
   })
 
@@ -201,6 +210,34 @@ describe('RemoteStatusContribution', () => {
 
     fireState(AUTHORITY, 'connected')
     expect(entryText()).toBeUndefined()
+  })
+
+  it('connects the current remote authority once, reconnecting after a local round-trip', () => {
+    setup()
+    expect(remoteStatus.connect).toHaveBeenCalledTimes(1)
+    expect(remoteStatus.connect).toHaveBeenCalledWith(AUTHORITY)
+
+    // Refiring the same remote workspace must not duplicate the connect.
+    workspace!.setCurrent(workspace!.current)
+    expect(remoteStatus.connect).toHaveBeenCalledTimes(1)
+
+    // Leaving the remote workspace clears the record.
+    remoteStatus.connect.mockClear()
+    workspace!.setCurrent(null)
+    expect(remoteStatus.connect).not.toHaveBeenCalled()
+
+    // Re-opening the same remote authority triggers a fresh connect.
+    workspace!.setCurrent({
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: AUTHORITY, path: '/' }),
+      name: AUTHORITY,
+    })
+    expect(remoteStatus.connect).toHaveBeenCalledTimes(1)
+    expect(remoteStatus.connect).toHaveBeenCalledWith(AUTHORITY)
+  })
+
+  it('does not connect when the workspace is local', () => {
+    setup({ localWorkspace: true })
+    expect(remoteStatus.connect).not.toHaveBeenCalled()
   })
 })
 

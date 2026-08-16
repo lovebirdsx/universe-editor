@@ -328,6 +328,7 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
     const connService: IRemoteConnectionService = {
       _serviceBrand: undefined,
       getConnection: async () => conn,
+      connect: async () => conn,
       openExtensionHostConnection: async () => {
         throw new Error('not used in this test')
       },

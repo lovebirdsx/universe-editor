@@ -52,7 +52,7 @@
 | Open Folder on Host… | 在已连接的主机上另选文件夹打开                                                           |
 | Close Connection     | 关闭到某主机的连接（若正打开着它的工作区，会先关掉该工作区）                             |
 | Retry Connection     | 重试一条失败的连接                                                                       |
-| Stop Remote Server   | 停止远端主机上的 server 并断开连接                                                       |
+| Stop Remote Server   | 停止远端主机上的 server 并断开连接；若停的是当前工作区所在主机，会先关闭该远程工作区、且不再自动重连 |
 
 ## 状态栏指示器
 
@@ -112,7 +112,7 @@
 ## 排障
 
 - **看日志**：本地这一侧的连接与部署日志（检测、上传、安装、启动各步骤及耗时）在 **Output 面板**的 **Remote Connection** 频道，首次安装时会自动打开；远端 server 自身的日志在远端主机的 `~/.universe-editor-server/server.log`。部署、连接、转发失败，先看这两处的具体报错。
-- **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。
+- **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。若停止的是当前工作区所在主机，编辑器会先关闭该远程工作区，并抑制自动重连——server 不会被后台立刻拉起；重新打开该主机的远程工作区即可再次连接。
 - **开发期自定义启动命令**：开发模式下可用环境变量 `UNIVERSE_REMOTE_SERVER_CMD` 指定启动远端 server 的命令（用于联调自建 server，仅开发环境生效）。
 
 ### 以 SSH 方式连接 WSL（旧方式，仍可用）

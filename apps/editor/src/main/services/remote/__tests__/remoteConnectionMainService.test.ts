@@ -320,6 +320,60 @@ describe('RemoteConnectionMainService direct mode', () => {
     // its 10s handshake timer kept the process alive (blocking app quit).
     await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
   })
+
+  it('stopServer rejects implicit getConnection without respawning the daemon', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    expect(made.procs).toHaveLength(1)
+
+    await made.svc.stopServer('host')
+
+    await expect(made.svc.getConnection('host')).rejects.toThrow(/disconnected by user/)
+    expect(made.procs).toHaveLength(1)
+  })
+
+  it('closeConnection rejects implicit getConnection', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    await made.svc.closeConnection('host')
+
+    await expect(made.svc.getConnection('host')).rejects.toThrow(/disconnected by user/)
+    expect(made.procs).toHaveLength(1)
+  })
+
+  it('connect clears the user-disconnect guard and brings up again', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    await made.svc.stopServer('host')
+    await expect(made.svc.getConnection('host')).rejects.toThrow(/disconnected by user/)
+
+    const conn = await made.svc.connect('host')
+    expect(conn.authority).toBe('host')
+    expect(made.procs).toHaveLength(2)
+
+    await expect(made.svc.getConnection('host')).resolves.toBe(conn)
+  })
+
+  it('retryConnection clears the user-disconnect guard', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    await made.svc.stopServer('host')
+    await expect(made.svc.getConnection('host')).rejects.toThrow(/disconnected by user/)
+
+    made.svc.retryConnection('host')
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'), {
+      timeout: 5000,
+    })
+    await expect(made.svc.getConnection('host')).resolves.toBeTruthy()
+  })
 })
 
 interface FakeWsl {
@@ -611,6 +665,20 @@ describe('RemoteConnectionMainService wsl mode', () => {
     await wsl.svc.getConnection('wsl+ubuntu')
     await wsl.svc.stopServer('wsl+ubuntu')
     expect(wsl.calls.at(-1)).toBe('stop:ubuntu')
+  })
+
+  it('stopServer blocks implicit getConnection from re-orchestrating the daemon', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu'])
+
+    await wsl.svc.stopServer('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu'])
+
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/disconnected by user/)
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu'])
   })
 
   it('rejects malformed wsl authorities before any orchestration', async () => {

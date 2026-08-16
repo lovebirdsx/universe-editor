@@ -66,6 +66,9 @@ function makeConnectionService(): {
     getConnection: async () => {
       throw new Error('not used')
     },
+    connect: async () => {
+      throw new Error('not used')
+    },
     openExtensionHostConnection: async (_authority, args) => {
       startArgs.push(args ?? {})
       const t = new FakeTunnel()

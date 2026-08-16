@@ -111,6 +111,7 @@ export interface IRemoteConnectionStateChange {
 export interface IRemoteConnectionService {
   readonly _serviceBrand: undefined
   getConnection(authority: string): Promise<IRemoteConnection>
+  connect(authority: string): Promise<IRemoteConnection>
   openExtensionHostConnection(
     authority: string,
     args?: IRemoteExtensionHostStartArgs,
@@ -222,6 +223,7 @@ interface ConnectionEntry {
   reconnectAttempt: number
   reconnectionStart: number
   closedByUser: boolean
+  userDisconnected: boolean
 }
 
 export interface RemoteConnectionMainServiceOptions {
@@ -314,6 +316,16 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     if (entry.state === 'disposed') {
       return Promise.reject(new Error('remote connection service is disposed'))
     }
+    if (entry.userDisconnected) {
+      this._logger.info(
+        `[remote:${authority}] implicit getConnection suppressed (user disconnected)`,
+      )
+      return Promise.reject(
+        new Error(
+          `remote connection to '${authority}' was disconnected by user; reconnect explicitly`,
+        ),
+      )
+    }
     if (entry.connection) return Promise.resolve(entry.connection)
     if (entry.promise) return entry.promise
     if (entry.state === 'failed') {
@@ -321,6 +333,13 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._fireState(entry, 'idle')
     }
     return this._startBringUp(entry)
+  }
+
+  connect(authority: string): Promise<IRemoteConnection> {
+    authority = normalizeRemoteAuthority(authority)
+    const entry = this._entries.get(authority)
+    if (entry) entry.userDisconnected = false
+    return this.getConnection(authority)
   }
 
   retryConnection(authority: string): void {
@@ -331,6 +350,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         void this.getConnection(authority).catch(() => undefined)
         return
       }
+      entry.userDisconnected = false
       this._teardownForRetry(entry)
       this._fireState(entry, 'idle')
       void this.getConnection(authority).catch(() => undefined)
@@ -392,12 +412,14 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   async stopServer(authority: string): Promise<void> {
     const entry = this._entries.get(normalizeRemoteAuthority(authority))
     if (!entry) return
+    entry.userDisconnected = true
     await this._closeEntry(entry, true)
   }
 
   async closeConnection(authority: string): Promise<void> {
     const entry = this._entries.get(normalizeRemoteAuthority(authority))
     if (!entry) return
+    entry.userDisconnected = true
     await this._closeEntry(entry, false)
   }
 
@@ -954,6 +976,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         reconnectAttempt: 0,
         reconnectionStart: 0,
         closedByUser: false,
+        userDisconnected: false,
       }
       this._entries.set(authority, entry)
     }

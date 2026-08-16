@@ -106,6 +106,7 @@ function makeFixture(): Fixture {
       connectionCalls++
       return conn
     },
+    connect: async () => conn,
     openExtensionHostConnection: async () => {
       throw new Error('not used')
     },
