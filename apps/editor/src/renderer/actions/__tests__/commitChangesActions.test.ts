@@ -37,7 +37,7 @@ function payload(overrides?: Partial<ShowCommitChangesPayload>): ShowCommitChang
         path: 'src/a.ts',
         oldPath: null,
         status: 'M',
-        resourceUri: 'file:///ws/src/a.ts',
+        resourcePath: '/ws/src/a.ts',
         args: {},
       },
     ],
@@ -161,12 +161,12 @@ describe('ShowCommitChangesAction', () => {
       'entry oldPath not string|null',
       {
         ...payload(),
-        files: [{ path: 'a', oldPath: 1, status: 'M', resourceUri: null, args: {} }],
+        files: [{ path: 'a', oldPath: 1, status: 'M', resourcePath: null, args: {} }],
       },
     ],
     [
       'entry missing status',
-      { ...payload(), files: [{ path: 'a', oldPath: null, resourceUri: null, args: {} }] },
+      { ...payload(), files: [{ path: 'a', oldPath: null, resourcePath: null, args: {} }] },
     ],
     ['revealPath not a string', { ...payload(), revealPath: 42 }],
     ['silent not a boolean', { ...payload(), silent: 'yes' }],

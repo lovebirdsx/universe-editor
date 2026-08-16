@@ -17,8 +17,14 @@ export interface CommitChangesFileEntry {
   oldPath: string | null
   /** Single-letter status: A/M/D/R/C/T/U. */
   status: string
-  /** Local file URI (as string) when the file exists in the workspace, else null. */
-  resourceUri: string | null
+  /**
+   * Absolute filesystem path of the file on the provider's host (the remote
+   * server for remote workspaces) when the file exists in the workspace, else
+   * null. Deliberately a bare path, not a URI: the payload builder may run on
+   * the extension host, which doesn't know the workspace's remote authority —
+   * the renderer view converts it via `fsPathToWorkspaceUri`.
+   */
+  resourcePath: string | null
   /** Provider-private argument passed verbatim to openExternalCommand. */
   args: unknown
 }

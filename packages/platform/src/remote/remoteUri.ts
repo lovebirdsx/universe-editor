@@ -23,6 +23,17 @@ export function remoteFsPathToUri(fsPath: string, authority: string): URI {
 }
 
 /**
+ * A provider-host filesystem path string → workspace resource URI. SCM wire
+ * contracts carry bare fs-path strings (the extension host only knows its own
+ * host's paths); the renderer reattaches the workspace's remote authority here.
+ * `remoteAuthority` is the current workspace's authority (undefined for a
+ * local workspace), e.g. from `useRemoteAuthority()`.
+ */
+export function fsPathToWorkspaceUri(fsPath: string, remoteAuthority: string | undefined): URI {
+  return remoteAuthority ? remoteFsPathToUri(fsPath, remoteAuthority) : URI.file(fsPath)
+}
+
+/**
  * The server-local filesystem path string for a remote resource. A remote-ssh
  * URI encodes a Windows drive letter with a leading slash (`/C:/...`); `URI.fsPath`
  * strips that leading slash (and is a no-op for POSIX paths), so it yields the

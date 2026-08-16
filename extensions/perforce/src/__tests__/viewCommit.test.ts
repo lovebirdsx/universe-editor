@@ -78,19 +78,19 @@ describe('buildCommitChangesPayload', () => {
         path: 'depot/main/src/a.txt',
         oldPath: null,
         status: 'M',
-        resourceUri: pathToFileURL(LOCAL_A).href,
+        resourcePath: LOCAL_A,
         args: { depotFile: DEPOT_A, status: 'M', rev: '3', localPath: LOCAL_A },
       },
     ])
   })
 
-  it('keeps a null resourceUri for files outside the client view', async () => {
+  it('keeps a null resourcePath for files outside the client view', async () => {
     const client = fakeClient({
       getGraphChangeDetails: vi.fn(async () => ({ ...details(), localPaths: new Map() })),
     })
     const payload = await buildCommitChangesPayload(client, '12345')
 
-    expect(payload?.files[0]?.resourceUri).toBeNull()
+    expect(payload?.files[0]?.resourcePath).toBeNull()
     expect(payload?.files[0]?.args).toEqual({
       depotFile: DEPOT_A,
       status: 'M',

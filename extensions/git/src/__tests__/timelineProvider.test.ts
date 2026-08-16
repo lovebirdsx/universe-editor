@@ -364,7 +364,7 @@ describe('git.timeline commands', () => {
         path: string
         oldPath: string | null
         status: string
-        resourceUri: string
+        resourcePath: string
         args: Record<string, unknown>
       }
       const files = payload.files as Entry[]
@@ -374,7 +374,7 @@ describe('git.timeline commands', () => {
       ])
       for (const f of files) {
         expect(f.args).toMatchObject({ root: ROOT, fromHash: PARENT, toHash: HASH, path: f.path })
-        expect(f.resourceUri).toBe(pathToFileURL(join(ROOT, f.path)).href)
+        expect(f.resourcePath).toBe(join(ROOT, f.path))
       }
     })
 

@@ -30,7 +30,7 @@ function isFileEntry(value: unknown): boolean {
     typeof f['path'] === 'string' &&
     typeof f['status'] === 'string' &&
     (typeof f['oldPath'] === 'string' || f['oldPath'] === null) &&
-    (typeof f['resourceUri'] === 'string' || f['resourceUri'] === null)
+    (typeof f['resourcePath'] === 'string' || f['resourcePath'] === null)
   )
 }
 

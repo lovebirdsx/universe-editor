@@ -32,6 +32,7 @@ import {
   IStorageService,
   autorun,
   CommandsRegistry,
+  fsPathToWorkspaceUri,
   markAsSingleton,
   MenuId,
   StorageScope,
@@ -61,6 +62,7 @@ import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import {
   IScmService,
   type IScmGroupModel,
@@ -478,7 +480,11 @@ const ScmFileRow = memo(function ScmFileRow({
       })
   }
 
-  const uri = useMemo(() => URI.file(resource.resourceUri), [resource.resourceUri])
+  const authority = useRemoteAuthority()
+  const uri = useMemo(
+    () => fsPathToWorkspaceUri(resource.resourceUri, authority),
+    [resource.resourceUri, authority],
+  )
   const openFile = (): void => {
     void editorResolverService.openEditor(uri, { pinned: true })
   }
@@ -559,6 +565,7 @@ const ScmFolderRow = memo(function ScmFolderRow({
   getFolderFileResources: (node: Extract<ScmNode, { kind: 'folder' }>) => readonly ScmResourceArg[]
 }) {
   const commandService = useService(ICommandService)
+  const authority = useRemoteAuthority()
   const folderUri = useMemo(() => URI.file(node.name), [node.name])
   const absPath = useMemo(() => joinFolder(rootUri, node.path), [rootUri, node.path])
 
@@ -606,7 +613,9 @@ const ScmFolderRow = memo(function ScmFolderRow({
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
       onContextMenu={onContextMenu}
       {...resourceDragProps(() =>
-        getFolderFileResources(node).map((r) => URI.file(r.resourceUri).toString()),
+        getFolderFileResources(node).map((r) =>
+          fsPathToWorkspaceUri(r.resourceUri, authority).toString(),
+        ),
       )}
     >
       {expanded ? (
@@ -789,6 +798,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
   const storage = useService(IStorageService)
+  const authority = useRemoteAuthority()
   const inputValue = useObservable(model.inputValue)
   const placeholder = useObservable(model.inputPlaceholder)
   const acceptCommand = useObservable(model.acceptCommand)
@@ -1004,12 +1014,12 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     for (const children of snapshotRef.current.childrenMap.values()) {
       for (const n of children) {
         if (n.kind === 'file' && ids.has(n.id)) {
-          out.push(URI.file(n.resource.resourceUri).toString())
+          out.push(fsPathToWorkspaceUri(n.resource.resourceUri, authority).toString())
         }
       }
     }
     return out
-  }, [treeModel])
+  }, [treeModel, authority])
 
   // Selected file rows as command payloads (path + owning group), read lazily so a
   // multi-selection inline action can act on every selected row. Stable identity

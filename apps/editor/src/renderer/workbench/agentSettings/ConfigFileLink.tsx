@@ -1,5 +1,5 @@
 import { useCallback, type MouseEvent } from 'react'
-import { IEditorResolverService, URI, localize, remoteFsPathToUri } from '@universe-editor/platform'
+import { IEditorResolverService, fsPathToWorkspaceUri, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import styles from './AgentSettingsEditor.module.css'
 
@@ -23,7 +23,7 @@ export function ConfigFileLink({
   const open = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       event.preventDefault()
-      const uri = authority ? remoteFsPathToUri(path, authority) : URI.file(path)
+      const uri = fsPathToWorkspaceUri(path, authority)
       void editorResolver.openEditor(uri, { pinned: true })
     },
     [editorResolver, path, authority],

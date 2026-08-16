@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url'
 import { commands } from '@universe-editor/extension-api'
 import { descriptionFirstLine } from './changelist.js'
 import { displayPath, fileDiffRevs, statusFromAction } from './p4GraphParser.js'
-import { uriToFsPath } from './pathUtil.js'
+import { uriToFsPath, norm } from './pathUtil.js'
 import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
 
@@ -20,7 +20,8 @@ interface CommitChangesFileEntry {
   readonly path: string
   readonly oldPath: string | null
   readonly status: string
-  readonly resourceUri: string | null
+  /** Bare absolute path on the provider's host, else null (deleted file). */
+  readonly resourcePath: string | null
   readonly args: unknown
 }
 
@@ -94,7 +95,7 @@ export async function buildCommitChangesPayload(
       path: displayPath(f.depotFile),
       oldPath: null,
       status,
-      resourceUri: localPath ? pathToFileURL(localPath).href : null,
+      resourcePath: localPath,
       args: { depotFile: f.depotFile, status, rev: f.rev, localPath },
     }
   })
@@ -146,8 +147,8 @@ export async function viewCommit(
 
 /**
  * Match a caller-supplied file uri against the payload's entries (entries carry
- * `pathToFileURL(localPath).href`); returns the entry's `path` or undefined
- * when the file isn't in the changelist.
+ * the bare provider-host path); returns the entry's `path` or undefined when
+ * the file isn't in the changelist.
  */
 export function revealPathForFile(
   payload: ShowCommitChangesPayload,
@@ -162,8 +163,9 @@ export function revealPathForFile(
     path = uriToFsPath(fileUri as { scheme?: string; path?: string })
   }
   if (!path) return undefined
-  const href = pathToFileURL(path).href
-  return payload.files.find((entry) => entry.resourceUri === href)?.path
+  return payload.files.find(
+    (entry) => entry.resourcePath !== null && norm(entry.resourcePath) === norm(path),
+  )?.path
 }
 
 /**

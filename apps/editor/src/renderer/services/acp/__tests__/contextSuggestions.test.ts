@@ -149,6 +149,7 @@ function makeScmProvider(
     rootUri: string | undefined
     groups: readonly ReturnType<typeof scmGroup>[]
   }[],
+  workspace: { current: { folder: URI } | null } = { current: null },
 ) {
   const scm = {
     sourceControls: {
@@ -160,7 +161,7 @@ function makeScmProvider(
     relativePathUnder: (root: string, child: string) =>
       child.startsWith(root) ? child.slice(root.length + 1) : null,
   }
-  return new ScmChangeContextProvider(scm as never, uriIdentity as never)
+  return new ScmChangeContextProvider(scm as never, uriIdentity as never, workspace as never)
 }
 
 describe('ScmChangeContextProvider', () => {
@@ -255,6 +256,30 @@ describe('ScmChangeContextProvider', () => {
     ])
     const items = await provider.query('foo')
     expect(items.map((i) => i.label)).toEqual(['foo.ts', 'barFoo.ts'])
+  })
+
+  it('reattaches the remote authority for a remote-ssh workspace', async () => {
+    const folder = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'ssh-remote+host',
+      path: '/home/u/repo',
+    })
+    const provider = makeScmProvider(
+      [
+        {
+          rootUri: '/home/u/repo',
+          groups: [scmGroup([scmResource('/home/u/repo/src/a.ts', 'M')])],
+        },
+      ],
+      { current: { folder } },
+    )
+    const items = await provider.query('')
+    expect(items).toHaveLength(1)
+    expect(items[0]!.label).toBe('src/a.ts')
+    const uri = URI.parse(items[0]!.uri)
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('ssh-remote+host')
+    expect(uri.path).toBe('/home/u/repo/src/a.ts')
   })
 })
 

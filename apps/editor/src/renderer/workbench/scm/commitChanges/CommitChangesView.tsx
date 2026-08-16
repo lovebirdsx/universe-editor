@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
+  fsPathToWorkspaceUri,
   ICommandService,
   IEditorResolverService,
   IStorageService,
@@ -24,6 +25,7 @@ import type {
   ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import { useObservable, useService } from '../../useService.js'
+import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { COMMIT_CHANGES_VIEW_ID } from '../../../actions/commitChangesActions.js'
 import { ActionButton } from '../scmShared.js'
 import {
@@ -71,15 +73,17 @@ const openFileAction = {
 function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }) {
   const commandService = useService(ICommandService)
   const editorResolverService = useService(IEditorResolverService)
+  const authority = useRemoteAuthority()
   const viewMode = useObservable(commitChangesViewState.viewMode)
 
   const items = useMemo(() => payload.files.map(toItem), [payload.files])
 
   const describeFile = useCallback(
     (entry: CommitChangesFileEntry): ChangesTreeFileDisplay => {
-      const fileUri = entry.resourceUri !== null ? URI.parse(entry.resourceUri) : null
+      const fileUri =
+        entry.resourcePath !== null ? fsPathToWorkspaceUri(entry.resourcePath, authority) : null
       // FileIcon only needs the name/extension for language + icon resolution,
-      // so a deleted file (resourceUri null) still gets its glyph from the path.
+      // so a deleted file (resourcePath null) still gets its glyph from the path.
       const iconUri = fileUri ?? URI.file(entry.path)
       const letter = entry.status.charAt(0)
       return {
@@ -113,7 +117,7 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
         ),
       }
     },
-    [editorResolverService],
+    [editorResolverService, authority],
   )
 
   const openDiff = useCallback(

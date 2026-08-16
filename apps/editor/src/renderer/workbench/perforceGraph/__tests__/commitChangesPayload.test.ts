@@ -41,7 +41,7 @@ describe('buildChangePayload', () => {
         path: 'depot/main/a.txt',
         oldPath: null,
         status: 'M',
-        resourceUri: 'file:///C:/ws/main/a.txt',
+        resourcePath: 'C:/ws/main/a.txt',
         args: {
           depotFile: '//depot/main/a.txt',
           status: 'M',
@@ -56,7 +56,7 @@ describe('buildChangePayload', () => {
     expect(buildChangePayload(makeDetails({ body: '' })).title).toBe('Changelist 42')
   })
 
-  it('nulls resourceUri and omits localPath from args when the file is outside the client view', () => {
+  it('nulls resourcePath and omits localPath from args when the file is outside the client view', () => {
     const payload = buildChangePayload(
       makeDetails({
         files: [
@@ -71,7 +71,7 @@ describe('buildChangePayload', () => {
         ],
       }),
     )
-    expect(payload.files[0]?.resourceUri).toBeNull()
+    expect(payload.files[0]?.resourcePath).toBeNull()
     expect(payload.files[0]?.args).toEqual({
       depotFile: '//depot/main/gone.txt',
       status: 'D',

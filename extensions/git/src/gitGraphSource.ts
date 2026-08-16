@@ -10,7 +10,6 @@
  * rename in extensions-common then breaks this extension's compile immediately.
  */
 import { basename, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type {
   GitGraphTagDto,
   GitGraphRemoteDto,
@@ -69,7 +68,8 @@ export interface CommitChangesFileEntry {
   path: string
   oldPath: string | null
   status: string
-  resourceUri: string | null
+  /** Bare absolute path on the provider's host, else null (deleted file). */
+  resourcePath: string | null
   args: unknown
 }
 
@@ -495,7 +495,7 @@ export async function buildCommitChangesPayload(
       path: f.path,
       oldPath: f.oldPath,
       status: f.status,
-      resourceUri: pathToFileURL(join(root, f.path)).href,
+      resourcePath: join(root, f.path),
       args: {
         root,
         fromHash,
@@ -526,6 +526,7 @@ export function revealPathForFile(
 ): string | undefined {
   const fsPath = normalizeUriArg(fileUri)
   if (!fsPath) return undefined
-  const href = pathToFileURL(fsPath).href
-  return payload.files.find((entry) => entry.resourceUri === href)?.path
+  return payload.files.find(
+    (entry) => entry.resourcePath !== null && norm(entry.resourcePath) === norm(fsPath),
+  )?.path
 }

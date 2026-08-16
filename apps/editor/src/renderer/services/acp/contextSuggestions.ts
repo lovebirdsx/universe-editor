@@ -11,7 +11,9 @@ import {
   IEditorGroupsService,
   IUriIdentityService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   URI,
+  fsPathToWorkspaceUri,
   localize,
 } from '@universe-editor/platform'
 import { fuzzyScore } from '@universe-editor/workbench-ui'
@@ -158,8 +160,9 @@ function toScmItem(
   res: ISourceControlResourceStateDto,
   root: URI | undefined,
   uriIdentity: IUriIdentityService,
+  authority: string | undefined,
 ): ContextSuggestionItem {
-  const uri = URI.file(res.resourceUri)
+  const uri = fsPathToWorkspaceUri(res.resourceUri, authority)
   const letter = badgeLetter(res.contextValue ?? 'M')
   return {
     kind: 'scmChange',
@@ -204,6 +207,7 @@ export class ScmChangeContextProvider {
   constructor(
     @IScmService private readonly _scm: IScmService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {}
 
   async query(query: string): Promise<readonly ContextSuggestionItem[]> {
@@ -211,12 +215,16 @@ export class ScmChangeContextProvider {
   }
 
   private _collect(): readonly ContextSuggestionItem[] {
+    const folder = this._workspace.current?.folder
+    const authority =
+      folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
     const byPath = new Map<string, ContextSuggestionItem>()
     for (const sc of this._scm.sourceControls.get()) {
-      const root = sc.rootUri !== undefined ? URI.file(sc.rootUri) : undefined
+      const root =
+        sc.rootUri !== undefined ? fsPathToWorkspaceUri(sc.rootUri, authority) : undefined
       for (const group of sc.groups.get()) {
         for (const res of group.resources.get()) {
-          byPath.set(res.resourceUri, toScmItem(res, root, this._uriIdentity))
+          byPath.set(res.resourceUri, toScmItem(res, root, this._uriIdentity, authority))
         }
       }
     }

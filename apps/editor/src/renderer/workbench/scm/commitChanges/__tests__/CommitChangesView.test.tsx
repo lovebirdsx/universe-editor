@@ -29,12 +29,15 @@ vi.mock('@tanstack/react-virtual', () => ({
 }))
 
 import {
+  Event,
   ICommandService,
   IEditorResolverService,
   IStorageService,
+  IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   StorageScope,
+  URI,
 } from '@universe-editor/platform'
 import type {
   CommitChangesFileEntry,
@@ -49,7 +52,9 @@ const resolverOpenEditor = vi.fn(async (_uri: unknown, _opts?: unknown) => undef
 const storageGet = vi.fn(async (_key: string, _scope: unknown) => undefined)
 const storageSet = vi.fn(async (_key: string, _value: unknown, _scope: unknown) => undefined)
 
-function createInstantiationService(): InstantiationService {
+function createInstantiationService(
+  extra?: (services: ServiceCollection) => void,
+): InstantiationService {
   const services = new ServiceCollection()
   services.set(ICommandService, {
     _serviceBrand: undefined,
@@ -64,11 +69,12 @@ function createInstantiationService(): InstantiationService {
     get: storageGet,
     set: storageSet,
   } as never)
+  extra?.(services)
   return new InstantiationService(services)
 }
 
 function entry(path: string, overrides?: Partial<CommitChangesFileEntry>): CommitChangesFileEntry {
-  return { path, oldPath: null, status: 'M', resourceUri: null, args: { path }, ...overrides }
+  return { path, oldPath: null, status: 'M', resourcePath: null, args: { path }, ...overrides }
 }
 
 function payload(overrides?: Partial<ShowCommitChangesPayload>): ShowCommitChangesPayload {
@@ -82,9 +88,9 @@ function payload(overrides?: Partial<ShowCommitChangesPayload>): ShowCommitChang
   }
 }
 
-function renderView() {
+function renderView(extra?: (services: ServiceCollection) => void) {
   return render(
-    <ServicesContext.Provider value={createInstantiationService()}>
+    <ServicesContext.Provider value={createInstantiationService(extra)}>
       <CommitChangesView />
     </ServicesContext.Provider>,
   )
@@ -179,13 +185,13 @@ describe('CommitChangesView', () => {
     expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeTruthy()
   })
 
-  it('shows the Open File inline action only for entries with a resourceUri', () => {
+  it('shows the Open File inline action only for entries with a resourcePath', () => {
     renderView()
     act(() => {
       commitChangesViewState.show(
         payload({
           files: [
-            entry('src/a.ts', { resourceUri: 'file:///ws/src/a.ts' }),
+            entry('src/a.ts', { resourcePath: '/ws/src/a.ts' }),
             entry('src/deleted.ts', { status: 'D' }),
           ],
         }),
@@ -202,6 +208,37 @@ describe('CommitChangesView', () => {
     expect(String(resolverOpenEditor.mock.calls[0]![0])).toBe('file:///ws/src/a.ts')
     // The inline action must not bubble into the row's diff-open click.
     expect(executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('opens the file at a remote-ssh URI when the workspace folder is remote', () => {
+    renderView((services) => {
+      services.set(IWorkspaceService, {
+        current: {
+          folder: URI.from({
+            scheme: 'remote-ssh',
+            authority: 'ssh-remote+host',
+            path: '/home/u/repo',
+          }),
+        },
+        onDidChangeWorkspace: Event.None,
+      } as never)
+    })
+    act(() => {
+      commitChangesViewState.show(
+        payload({
+          files: [entry('src/a.ts', { resourcePath: '/home/u/repo/src/a.ts' })],
+        }),
+      )
+    })
+
+    const withFile = document.querySelector('[data-row-key="file:src/a.ts"]')!
+    fireEvent.click(withFile.querySelector('[aria-label="Open File"]')!)
+
+    expect(resolverOpenEditor).toHaveBeenCalledTimes(1)
+    const uri = resolverOpenEditor.mock.calls[0]![0] as URI
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('ssh-remote+host')
+    expect(uri.path).toBe('/home/u/repo/src/a.ts')
   })
 
   it('reveals the revealPath file row and focuses the tree on it', async () => {

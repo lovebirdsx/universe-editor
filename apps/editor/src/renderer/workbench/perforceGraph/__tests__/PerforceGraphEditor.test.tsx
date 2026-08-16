@@ -240,7 +240,7 @@ describe('PerforceGraphEditor', () => {
     expect(payload.metadata).toEqual({ author: 'alice', authorDate: 1, message: 'Fix widget' })
     const files = payload.files as {
       path: string
-      resourceUri: string | null
+      resourcePath: string | null
       args: Record<string, unknown>
     }[]
     expect(files).toHaveLength(1)
@@ -250,7 +250,7 @@ describe('PerforceGraphEditor', () => {
       rev: '3',
       localPath: 'C:/ws/main/a.txt',
     })
-    expect(files[0]!.resourceUri).toContain('a.txt')
+    expect(files[0]!.resourcePath).toContain('a.txt')
   })
 
   it('shows a pending-changes node when files are open', async () => {

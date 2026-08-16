@@ -1,4 +1,3 @@
-import { URI } from '@universe-editor/platform'
 import type {
   GitGraphCommitDetailsDto,
   GitGraphFileChangeDto,
@@ -7,6 +6,13 @@ import type {
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 const OPEN_FILE_DIFF_COMMAND = 'git-graph.openFileDiff'
+
+/** Join a repo root (bare fs path) with a repo-relative posix path into the
+ *  same bare absolute path the provider host produces via `path.join`. */
+function joinFsPath(root: string, rel: string): string {
+  const base = root.endsWith('/') || root.endsWith('\\') ? root.slice(0, -1) : root
+  return `${base}/${rel}`
+}
 
 export function buildCommitPayload(
   root: string,
@@ -24,7 +30,7 @@ export function buildCommitPayload(
       path: f.path,
       oldPath: f.oldPath,
       status: f.status,
-      resourceUri: URI.joinPath(URI.file(root), f.path).toString(),
+      resourcePath: joinFsPath(root, f.path),
       args: {
         root,
         fromHash,
@@ -58,7 +64,7 @@ export function buildComparePayload(
       path: f.path,
       oldPath: f.oldPath,
       status: f.status,
-      resourceUri: URI.joinPath(URI.file(root), f.path).toString(),
+      resourcePath: joinFsPath(root, f.path),
       args: {
         root,
         fromHash: from,

@@ -44,7 +44,7 @@ describe('buildCommitPayload', () => {
         path: 'src/a.ts',
         oldPath: null,
         status: 'M',
-        resourceUri: 'file:///C:/ws/repo/src/a.ts',
+        resourcePath: 'C:/ws/repo/src/a.ts',
         args: { root: ROOT, fromHash: HASH_B, toHash: HASH_A, path: 'src/a.ts', status: 'M' },
       },
     ])
@@ -96,6 +96,6 @@ describe('buildComparePayload', () => {
       path: 'src/a.ts',
       status: 'M',
     })
-    expect(payload.files[0]?.resourceUri).toBe('file:///C:/ws/repo/src/a.ts')
+    expect(payload.files[0]?.resourcePath).toBe('C:/ws/repo/src/a.ts')
   })
 })

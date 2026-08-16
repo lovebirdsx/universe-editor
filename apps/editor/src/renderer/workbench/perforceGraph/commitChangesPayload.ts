@@ -1,4 +1,3 @@
-import { URI } from '@universe-editor/platform'
 import type {
   P4GraphChangeDetailsDto,
   ShowCommitChangesPayload,
@@ -19,7 +18,7 @@ export function buildChangePayload(details: P4GraphChangeDetailsDto): ShowCommit
       path: f.path,
       oldPath: f.oldPath,
       status: f.status,
-      resourceUri: f.localPath !== null ? URI.file(f.localPath).toString() : null,
+      resourcePath: f.localPath,
       args: {
         depotFile: f.depotFile,
         status: f.status,

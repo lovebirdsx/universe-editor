@@ -452,7 +452,7 @@ describe('perforce.timeline.viewCommit', () => {
           expect.objectContaining({
             path: 'depot/main/src/a.txt',
             status: 'M',
-            resourceUri: FILE_URI,
+            resourcePath: FILE,
             args: { depotFile: DEPOT, status: 'M', rev: '3', localPath: FILE },
           }),
         ],

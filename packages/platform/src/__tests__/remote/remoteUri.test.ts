@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '../../base/uri.js'
-import { remoteFsPathToUri, remotePathFromUri } from '../../remote/remoteUri.js'
+import {
+  fsPathToWorkspaceUri,
+  remoteFsPathToUri,
+  remotePathFromUri,
+} from '../../remote/remoteUri.js'
 
 function remote(authority: string, path: string): URI {
   return URI.from({ scheme: 'remote-ssh', authority, path })
@@ -49,5 +53,20 @@ describe('remoteUri.remoteFsPathToUri', () => {
     expect(remotePathFromUri(remoteFsPathToUri(remotePathFromUri(original), 'host'))).toBe(
       original.path,
     )
+  })
+})
+
+describe('remoteUri.fsPathToWorkspaceUri', () => {
+  it('builds a remote-ssh URI when an authority is given', () => {
+    const uri = fsPathToWorkspaceUri('/home/user/file.txt', 'ssh-remote+host')
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('ssh-remote+host')
+    expect(uri.path).toBe('/home/user/file.txt')
+  })
+
+  it('builds a file URI when the authority is undefined (local workspace)', () => {
+    const uri = fsPathToWorkspaceUri('C:\\ws\\repo\\a.ts', undefined)
+    expect(uri.scheme).toBe('file')
+    expect(uri.fsPath.toLowerCase()).toBe('c:/ws/repo/a.ts')
   })
 })
