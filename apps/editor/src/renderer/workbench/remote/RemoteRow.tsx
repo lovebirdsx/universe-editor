@@ -49,6 +49,8 @@ export interface RemoteRowProps {
   readonly chevron?: RemoteRowChevronProps | undefined
   /** Bold the label (group header rows). */
   readonly emphasized?: boolean
+  /** Render `description` as a flexible, ellipsized suffix and keep `label` fully visible. */
+  readonly truncateDescription?: boolean
 }
 
 export function RemoteRow({
@@ -63,6 +65,7 @@ export function RemoteRow({
   indent,
   chevron,
   emphasized,
+  truncateDescription,
 }: RemoteRowProps) {
   const activated = onActivate !== undefined
   const handleKeyDown = activated
@@ -104,12 +107,25 @@ export function RemoteRow({
         <span className={cx(styles['dot'], dotStyles[dotStateOf(dot)])} aria-hidden="true" />
       )}
       <span
-        className={cx(styles['label'], emphasized && styles['labelEmphasized'])}
+        className={cx(
+          styles['label'],
+          emphasized && styles['labelEmphasized'],
+          truncateDescription && styles['labelFixed'],
+        )}
         data-tooltip={tooltip}
       >
         {label}
       </span>
-      {description !== undefined && <span className={styles['description']}>{description}</span>}
+      {description !== undefined && (
+        <span
+          className={cx(
+            styles['description'],
+            truncateDescription && styles['descriptionTruncatable'],
+          )}
+        >
+          {description}
+        </span>
+      )}
       {actions !== undefined && (
         <span className={styles['rowActions']} onClick={(e) => e.stopPropagation()}>
           {actions}

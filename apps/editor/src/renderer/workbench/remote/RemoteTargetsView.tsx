@@ -320,6 +320,7 @@ function RecentRow({
       label={recent.label}
       tooltip={workspaceFullLabel(recent.folder)}
       description={recent.description}
+      truncateDescription
       indent={2}
       onActivate={() => void workspace.openFolder(recent.folder)}
       onContextMenu={onContextMenu}

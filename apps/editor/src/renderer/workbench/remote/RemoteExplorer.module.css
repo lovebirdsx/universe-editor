@@ -108,6 +108,26 @@
   font-size: 11px;
 }
 
+/* Recent 行：目录名完整显示，父目录路径占据剩余空间并在过长时省略。
+   65% 上限保证路径至少保留约 1/3 可见。 */
+.labelFixed {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.descriptionTruncatable {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
 /* Floating row actions — absolutely overlay the right edge so revealing them
    on hover never reflows the label; the opaque backdrop masks the label tail
    (same contract as the Explorer file row). */
