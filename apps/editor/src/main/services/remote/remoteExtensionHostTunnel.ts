@@ -106,9 +106,9 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
   }
 
   dropSocketForTesting(): void {
-    // Disposing the socket does NOT fire onClose (NodeSocket.removeAllListeners
-    // runs first), so kick the reconnect path explicitly — same as the management
-    // connection's dropSocketForTesting.
+    // NodeSocket.dispose() now synthesizes onClose, so this would kick the
+    // reconnect path on its own; the explicit call is just a synchronous
+    // insurance (idempotent via the _reconnectTimer guard).
     this._protocol?.getSocket().dispose()
     this._onSocketDisconnected()
   }
@@ -154,6 +154,10 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
   private async _attemptReconnect(): Promise<void> {
     try {
       const socket = await this._opts.connectSocket()
+      if (this._closedByUser || this._disposed) {
+        socket.dispose()
+        return
+      }
       this._reconnectSocket = socket
       let residual: Uint8Array
       try {

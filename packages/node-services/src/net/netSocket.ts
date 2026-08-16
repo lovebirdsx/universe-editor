@@ -20,6 +20,7 @@ export class NodeSocket extends Disposable implements ISocket {
   readonly onEnd = this._onEnd.event
 
   private lastError: Error | undefined
+  private _closeFired = false
 
   constructor(private readonly socket: NetSocket) {
     super()
@@ -29,6 +30,8 @@ export class NodeSocket extends Disposable implements ISocket {
       this.lastError = err
     })
     socket.on('close', (hadError) => {
+      if (this._closeFired) return
+      this._closeFired = true
       const error = this.lastError
       this._onClose.fire(error ? { hadError, error } : { hadError })
     })
@@ -53,6 +56,12 @@ export class NodeSocket extends Disposable implements ISocket {
   override dispose(): void {
     this.socket.removeAllListeners()
     this.socket.destroy()
+    if (!this._closeFired) {
+      this._closeFired = true
+      // removeAllListeners() above prevents the socket's own 'close' event from
+      // reaching us, so synthesize it: ISocket says onClose fires exactly once.
+      this._onClose.fire({ hadError: false })
+    }
     super.dispose()
   }
 }

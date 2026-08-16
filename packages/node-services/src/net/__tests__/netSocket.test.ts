@@ -4,7 +4,7 @@
 
 import { createServer, type AddressInfo, type Server } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { SocketCloseEvent } from '@universe-editor/platform'
+import { readFirstControlFrame, type SocketCloseEvent } from '@universe-editor/platform'
 import { connectNodeSocket, NodeSocket } from '../netSocket.js'
 
 function deferred<T>() {
@@ -137,6 +137,60 @@ describe('NodeSocket', () => {
     client.dispose()
 
     expect(() => client.write(Buffer.from('late'))).not.toThrow()
+  })
+
+  it('dispose fires onClose exactly once (hadError false) and double dispose is safe', async () => {
+    const { client } = await openPair()
+
+    const events: SocketCloseEvent[] = []
+    client.onClose((e) => events.push(e))
+
+    client.dispose()
+    client.dispose()
+
+    expect(events).toHaveLength(1)
+    expect(events[0]!.hadError).toBe(false)
+    expect(events[0]!.error).toBeUndefined()
+  })
+
+  it('does not fire onClose again when disposed after a real close', async () => {
+    const { client, serverSide } = await openPair()
+
+    const events: SocketCloseEvent[] = []
+    const closed = deferred<void>()
+    client.onClose((e) => {
+      events.push(e)
+      closed.resolve()
+    })
+    serverSide.onEnd(() => serverSide.end())
+
+    client.end()
+    await closed.promise
+
+    expect(events).toHaveLength(1)
+
+    client.dispose()
+    expect(events).toHaveLength(1)
+  })
+
+  it('readFirstControlFrame rejects when the socket is disposed mid-handshake', async () => {
+    const server = createServer(() => {
+      // accept and hold: never answer the handshake
+    })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const port = (server.address() as AddressInfo).port
+
+    const client = await connectNodeSocket(port)
+    sockets.push(client)
+
+    const promise = readFirstControlFrame(client, 10_000)
+    client.dispose()
+
+    await expect(promise).rejects.toThrow('socket closed before control frame')
   })
 
   it('rejects connectNodeSocket when the connection is refused', async () => {

@@ -44,6 +44,7 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
     () => config.get<string>('acp.claude.executablePath') ?? '',
   )
   const [versionInfo, setVersionInfo] = useState<IClaudeBinaryVersionInfo | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [loadingVersion, setLoadingVersion] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<{
@@ -55,11 +56,14 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
 
   const loadVersionInfo = useCallback(() => {
     setLoadingVersion(true)
+    setLoadError(null)
+    setVersionInfo(null)
     void claudeBinary
-      .getVersionInfo()
+      .getVersionInfo(authority)
       .then((info) => setVersionInfo(info))
+      .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
-  }, [claudeBinary])
+  }, [claudeBinary, authority])
 
   useEffect(() => {
     loadVersionInfo()
@@ -95,11 +99,14 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
       // mount — markAsSingleton keeps a mid-download leak snapshot from flagging
       // it while a real teardown still disposes it.
       progressSubRef.current = markAsSingleton(
-        claudeBinary.onDidChangeProgress((p) => setDownloadProgress(p)),
+        claudeBinary.onDidChangeProgress((p) => {
+          if (p.authority !== authority) return
+          setDownloadProgress(p)
+        }),
       )
 
       void claudeBinary
-        .forceDownload(targetVersion)
+        .forceDownload(targetVersion, authority)
         .then(() => {
           loadVersionInfo()
           notifications.notify({
@@ -128,82 +135,87 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
           setDownloadProgress(null)
         })
     },
-    [claudeBinary, downloading, loadVersionInfo, notifications],
+    [claudeBinary, downloading, loadVersionInfo, notifications, authority],
   )
+
+  const isRemote = authority !== undefined
 
   return (
     <div className={styles['panel']}>
-      {authority !== undefined && (
+      {isRemote && (
         <div className={styles['desc']}>
           {localize(
             'binaryPanel.remoteNotice',
-            "Remote workspace: this page manages the local editor's binary. The agent on the remote host resolves its own binary there.",
+            "Remote workspace: this page manages the Claude binary on the remote host. It is downloaded into the remote server's data folder.",
           )}
         </div>
       )}
       {/* ── Binary Source ─────────────────────────────────────────────── */}
-      <section className={styles['section']}>
-        <h3 className={styles['sectionTitle']}>
-          {localize('binaryPanel.source.title', 'Binary source')}
-        </h3>
-        <div className={styles['radioGroup']}>
-          <SourceOption
-            value="download"
-            current={source}
-            label={localize('binaryPanel.source.download', 'Download (recommended)')}
-            desc={localize(
-              'binaryPanel.source.download.desc',
-              'Automatically download the Claude binary into the user data folder on first use.',
-            )}
-            onChange={changeSource}
-          />
-          <SourceOption
-            value="system"
-            current={source}
-            label={localize('binaryPanel.source.system', 'System')}
-            desc={localize(
-              'binaryPanel.source.system.desc',
-              'Use the `claude` executable found on PATH (you manage updates yourself).',
-            )}
-            onChange={changeSource}
-          />
-          <SourceOption
-            value="custom"
-            current={source}
-            label={localize('binaryPanel.source.custom', 'Custom path')}
-            desc={localize(
-              'binaryPanel.source.custom.desc',
-              'Point to a specific Claude executable. Useful for testing or multiple installs.',
-            )}
-            onChange={changeSource}
-          />
-        </div>
-
-        {source === 'custom' && (
-          <div className={styles['field']}>
-            <label className={styles['label']}>
-              {localize('binaryPanel.customPath', 'Executable path')}
-            </label>
-            <Input
-              value={customPath}
-              placeholder={
-                host.platform === 'win32' ? 'C:\\path\\to\\claude.exe' : '/usr/local/bin/claude'
-              }
-              onChange={(e) => setCustomPathState(e.target.value)}
-              onBlur={() => commitCustomPath(customPath)}
+      {!isRemote && (
+        <section className={styles['section']}>
+          <h3 className={styles['sectionTitle']}>
+            {localize('binaryPanel.source.title', 'Binary source')}
+          </h3>
+          <div className={styles['radioGroup']}>
+            <SourceOption
+              value="download"
+              current={source}
+              label={localize('binaryPanel.source.download', 'Download (recommended)')}
+              desc={localize(
+                'binaryPanel.source.download.desc',
+                'Automatically download the Claude binary into the user data folder on first use.',
+              )}
+              onChange={changeSource}
+            />
+            <SourceOption
+              value="system"
+              current={source}
+              label={localize('binaryPanel.source.system', 'System')}
+              desc={localize(
+                'binaryPanel.source.system.desc',
+                'Use the `claude` executable found on PATH (you manage updates yourself).',
+              )}
+              onChange={changeSource}
+            />
+            <SourceOption
+              value="custom"
+              current={source}
+              label={localize('binaryPanel.source.custom', 'Custom path')}
+              desc={localize(
+                'binaryPanel.source.custom.desc',
+                'Point to a specific Claude executable. Useful for testing or multiple installs.',
+              )}
+              onChange={changeSource}
             />
           </div>
-        )}
-      </section>
+
+          {source === 'custom' && (
+            <div className={styles['field']}>
+              <label className={styles['label']}>
+                {localize('binaryPanel.customPath', 'Executable path')}
+              </label>
+              <Input
+                value={customPath}
+                placeholder={
+                  host.platform === 'win32' ? 'C:\\path\\to\\claude.exe' : '/usr/local/bin/claude'
+                }
+                onChange={(e) => setCustomPathState(e.target.value)}
+                onBlur={() => commitCustomPath(customPath)}
+              />
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Version ───────────────────────────────────────────────────── */}
-      {source === 'download' && (
+      {(isRemote || source === 'download') && (
         <section className={styles['section']}>
           <h3 className={styles['sectionTitle']}>
             {localize('binaryPanel.version.title', 'Version')}
           </h3>
           <VersionInfo
             info={versionInfo}
+            loadError={loadError}
             loading={loadingVersion}
             downloading={downloading}
             downloadProgress={downloadProgress}
@@ -250,6 +262,7 @@ function SourceOption({ value, current, label, desc, onChange }: SourceOptionPro
 
 interface VersionInfoProps {
   info: IClaudeBinaryVersionInfo | null
+  loadError: string | null
   loading: boolean
   downloading: boolean
   downloadProgress: { received: number; total: number } | null
@@ -258,6 +271,7 @@ interface VersionInfoProps {
 
 function VersionInfo({
   info,
+  loadError,
   loading,
   downloading,
   downloadProgress,
@@ -273,7 +287,20 @@ function VersionInfo({
     )
   }
 
-  if (!info) return null
+  if (!info) {
+    if (loadError) {
+      return (
+        <div className={styles['statusRow']}>
+          <span className={styles['statusMuted']}>
+            {localize('binaryPanel.version.loadError', 'Version info unavailable: {message}', {
+              message: loadError,
+            })}
+          </span>
+        </div>
+      )
+    }
+    return null
+  }
 
   const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion

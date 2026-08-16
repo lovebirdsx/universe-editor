@@ -274,7 +274,10 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return (await pathExists(vendor)) ? vendor : null
   }
 
-  async getVersionInfo(): Promise<IClaudeBinaryVersionInfo> {
+  async getVersionInfo(authority?: string): Promise<IClaudeBinaryVersionInfo> {
+    if (authority !== undefined) {
+      return (await this._remoteService(authority)).getVersionInfo('claude')
+    }
     return this._binaryStore.getVersionInfo()
   }
 
@@ -282,7 +285,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     await this._binaryStore.prefetch()
   }
 
-  async forceDownload(version: string): Promise<IClaudeBinaryResult> {
+  async forceDownload(version: string, authority?: string): Promise<IClaudeBinaryResult> {
+    if (authority !== undefined) {
+      const { path } = await (await this._remoteService(authority)).forceDownload('claude', version)
+      return { path }
+    }
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
     this._inflight.delete('download::noDownload')

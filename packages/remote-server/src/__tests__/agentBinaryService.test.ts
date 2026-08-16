@@ -13,6 +13,7 @@ import {
   type AgentBinaryProgressEvent,
   type AgentBinaryRemoteProgressEvent,
   type AgentBinaryStore,
+  type AgentBinaryVersionInfo,
 } from '@universe-editor/node-services'
 import { RemoteAgentBinaryService } from '../agentBinaryService.js'
 
@@ -20,6 +21,8 @@ class FakeStore implements IDisposable {
   private readonly _onProgress = new Emitter<AgentBinaryProgressEvent>()
   readonly onDidChangeProgress = this._onProgress.event
   readonly resolves: boolean[] = []
+  versionInfoCalls: number = 0
+  readonly forceDownloads: string[] = []
 
   constructor(
     readonly agent: AgentBinaryId,
@@ -29,6 +32,21 @@ class FakeStore implements IDisposable {
   async resolveDownload(allowDownload: boolean): Promise<string> {
     this.resolves.push(allowDownload)
     return `/fake/${this.agent}`
+  }
+
+  async getVersionInfo(): Promise<AgentBinaryVersionInfo> {
+    this.versionInfoCalls++
+    return {
+      bundledVersion: `bundled-${this.agent}`,
+      installedVersion: null,
+      latestVersion: null,
+      prefetchedVersion: null,
+    }
+  }
+
+  async forceDownload(version: string): Promise<string> {
+    this.forceDownloads.push(version)
+    return `/fake/${this.agent}/${version}`
   }
 
   fireProgress(p: AgentBinaryProgressEvent): void {
@@ -150,6 +168,38 @@ describe('RemoteAgentBinaryService', () => {
       }
     } finally {
       dateSpy.mockRestore()
+    }
+  })
+
+  it('getVersionInfo delegates to the per-agent store and passes the value through', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores)
+    try {
+      await expect(svc.getVersionInfo('codex')).resolves.toEqual({
+        bundledVersion: 'bundled-codex',
+        installedVersion: null,
+        latestVersion: null,
+        prefetchedVersion: null,
+      })
+      expect(stores.get('codex')!.versionInfoCalls).toBe(1)
+      expect(stores.get('claude')).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forceDownload delegates the version to the per-agent store and wraps the path', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores)
+    try {
+      await expect(svc.forceDownload('claude', '1.2.3')).resolves.toEqual({
+        path: '/fake/claude/1.2.3',
+      })
+      expect(stores.get('claude')!.forceDownloads).toEqual(['1.2.3'])
+    } finally {
+      svc.dispose()
     }
   })
 })

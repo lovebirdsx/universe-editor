@@ -18,6 +18,7 @@ import {
   type AgentBinaryId,
   type AgentBinaryProgressEvent,
   type AgentBinaryRemoteProgressEvent,
+  type AgentBinaryVersionInfo,
   type IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
 import { resolveVendorFile } from './vendorAgentEntry.js'
@@ -60,6 +61,14 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
     opts: { readonly allowDownload?: boolean },
   ): Promise<{ readonly path: string }> {
     return { path: await this._storeFor(agent).resolveDownload(opts.allowDownload ?? true) }
+  }
+
+  async getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo> {
+    return this._storeFor(agent).getVersionInfo()
+  }
+
+  async forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }> {
+    return { path: await this._storeFor(agent).forceDownload(version) }
   }
 
   private _storeFor(agent: AgentBinaryId): AgentBinaryStore {

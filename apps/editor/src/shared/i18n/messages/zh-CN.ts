@@ -1826,7 +1826,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Binary: Claude ---
   'binaryPanel.customPath': '可执行文件路径',
   'binaryPanel.remoteNotice':
-    '远程工作区：此页面管理本地编辑器的二进制文件，远程主机上的 Agent 会在远端自行解析其二进制文件。',
+    '远程工作区：此页面管理远端主机上的 Claude 二进制文件，将下载到远端服务器的数据目录。',
   'binaryPanel.source.custom': '自定义路径',
   'binaryPanel.source.custom.desc': '指向特定的 Claude 可执行文件，适用于测试或多版本场景。',
   'binaryPanel.source.download': '自动下载（推荐）',
@@ -1846,6 +1846,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'binaryPanel.version.installed': '已安装：{version}',
   'binaryPanel.version.latest': '最新版本：{version}',
   'binaryPanel.version.latestUnavailable': '最新版本：不可用（网络错误）',
+  'binaryPanel.version.loadError': '版本信息不可用：{message}',
   'binaryPanel.version.loading': '正在加载版本信息…',
   'binaryPanel.version.notDownloaded': '尚未下载',
   'binaryPanel.version.revert': '回退到 {version}',
@@ -1878,7 +1879,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Binary: Codex ---
   'codexBinaryPanel.customPath': '可执行文件路径',
   'codexBinaryPanel.remoteNotice':
-    '远程工作区：此页面管理本地编辑器的 codex-acp 二进制文件，远程主机上的 Agent 会在远端自行解析其二进制文件。',
+    '远程工作区：此页面管理远端主机上的 codex 二进制文件，将下载到远端服务器的数据目录。',
   'codexBinaryPanel.source.custom': '自定义路径',
   'codexBinaryPanel.source.custom.desc':
     '指向特定的 codex-acp 可执行文件，适用于测试或多版本场景。',
@@ -1901,6 +1902,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexBinaryPanel.version.installed': '已安装：{version}',
   'codexBinaryPanel.version.latest': '最新版本：{version}',
   'codexBinaryPanel.version.latestUnavailable': '最新版本：不可用（网络错误）',
+  'codexBinaryPanel.version.loadError': '版本信息不可用：{message}',
   'codexBinaryPanel.version.loading': '正在加载版本信息…',
   'codexBinaryPanel.version.notDownloaded': '尚未下载',
   'codexBinaryPanel.version.pinned': '锁定的 codex-acp：{version}',

@@ -86,8 +86,12 @@ export interface ICodexBinaryService {
 
   resolve(opts: ICodexBinaryResolveOptions): Promise<ICodexBinaryResult>
 
-  /** Returns version metadata for the download-mode binary. */
-  getVersionInfo(): Promise<ICodexBinaryVersionInfo>
+  /**
+   * Returns version metadata for the download-mode binary. When `authority` is
+   * set, the metadata is read from that remote host's binary store instead of
+   * the local one.
+   */
+  getVersionInfo(authority?: string): Promise<ICodexBinaryVersionInfo>
 
   /**
    * Best-effort background download of the most desirable version (latest when
@@ -102,9 +106,10 @@ export interface ICodexBinaryService {
    * Force-downloads (or activates a prefetched) version into its own per-version
    * tree and flips the `.active` pointer to it. Because each version has its own
    * tree, activation never overwrites the running binary's locked files (the EPERM
-   * trap on Windows); the previous version's tree is cleaned up best-effort.
+   * trap on Windows); the previous version's tree is cleaned up best-effort. When
+   * `authority` is set, the download/activation happens on that remote host.
    */
-  forceDownload(version: string): Promise<ICodexBinaryResult>
+  forceDownload(version: string, authority?: string): Promise<ICodexBinaryResult>
 
   /**
    * Removes stale (non-active) version trees left behind by a previous upgrade.

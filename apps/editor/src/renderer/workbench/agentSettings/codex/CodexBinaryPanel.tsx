@@ -46,6 +46,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
     () => config.get<string>('acp.codex.executablePath') ?? '',
   )
   const [versionInfo, setVersionInfo] = useState<ICodexBinaryVersionInfo | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [loadingVersion, setLoadingVersion] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<{
@@ -57,11 +58,14 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
 
   const loadVersionInfo = useCallback(() => {
     setLoadingVersion(true)
+    setLoadError(null)
+    setVersionInfo(null)
     void codexBinary
-      .getVersionInfo()
+      .getVersionInfo(authority)
       .then((info) => setVersionInfo(info))
+      .catch((err: unknown) => setLoadError(String(err)))
       .finally(() => setLoadingVersion(false))
-  }, [codexBinary])
+  }, [codexBinary, authority])
 
   useEffect(() => {
     loadVersionInfo()
@@ -97,11 +101,14 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
       // mount — markAsSingleton keeps a mid-download leak snapshot from flagging
       // it while a real teardown still disposes it.
       progressSubRef.current = markAsSingleton(
-        codexBinary.onDidChangeProgress((p) => setDownloadProgress(p)),
+        codexBinary.onDidChangeProgress((p) => {
+          if (p.authority !== authority) return
+          setDownloadProgress(p)
+        }),
       )
 
       void codexBinary
-        .forceDownload(targetVersion)
+        .forceDownload(targetVersion, authority)
         .then(() => {
           loadVersionInfo()
           notifications.notify({
@@ -130,82 +137,87 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
           setDownloadProgress(null)
         })
     },
-    [codexBinary, downloading, loadVersionInfo, notifications],
+    [codexBinary, downloading, loadVersionInfo, notifications, authority],
   )
+
+  const isRemote = authority !== undefined
 
   return (
     <div className={styles['panel']}>
-      {authority !== undefined && (
+      {isRemote && (
         <div className={styles['desc']}>
           {localize(
             'codexBinaryPanel.remoteNotice',
-            "Remote workspace: this page manages the local editor's codex-acp binary. The agent on the remote host resolves its own binary there.",
+            "Remote workspace: this page manages the codex binary on the remote host. It is downloaded into the remote server's data folder.",
           )}
         </div>
       )}
       {/* ── Binary Source ─────────────────────────────────────────────── */}
-      <section className={styles['section']}>
-        <h3 className={styles['sectionTitle']}>
-          {localize('codexBinaryPanel.source.title', 'Binary source')}
-        </h3>
-        <div className={styles['radioGroup']}>
-          <SourceOption
-            value="download"
-            current={source}
-            label={localize('codexBinaryPanel.source.download', 'Download (recommended)')}
-            desc={localize(
-              'codexBinaryPanel.source.download.desc',
-              'Automatically download the codex binary into the user data folder on first use.',
-            )}
-            onChange={changeSource}
-          />
-          <SourceOption
-            value="system"
-            current={source}
-            label={localize('codexBinaryPanel.source.system', 'System')}
-            desc={localize(
-              'codexBinaryPanel.source.system.desc',
-              'Use the `codex` executable found on PATH (you manage updates yourself).',
-            )}
-            onChange={changeSource}
-          />
-          <SourceOption
-            value="custom"
-            current={source}
-            label={localize('codexBinaryPanel.source.custom', 'Custom path')}
-            desc={localize(
-              'codexBinaryPanel.source.custom.desc',
-              'Point to a specific codex executable. Useful for testing or multiple installs.',
-            )}
-            onChange={changeSource}
-          />
-        </div>
-
-        {source === 'custom' && (
-          <div className={styles['field']}>
-            <label className={styles['label']}>
-              {localize('codexBinaryPanel.customPath', 'Executable path')}
-            </label>
-            <Input
-              value={customPath}
-              placeholder={
-                host.platform === 'win32' ? 'C:\\path\\to\\codex.exe' : '/usr/local/bin/codex'
-              }
-              onChange={(e) => setCustomPathState(e.target.value)}
-              onBlur={() => commitCustomPath(customPath)}
+      {!isRemote && (
+        <section className={styles['section']}>
+          <h3 className={styles['sectionTitle']}>
+            {localize('codexBinaryPanel.source.title', 'Binary source')}
+          </h3>
+          <div className={styles['radioGroup']}>
+            <SourceOption
+              value="download"
+              current={source}
+              label={localize('codexBinaryPanel.source.download', 'Download (recommended)')}
+              desc={localize(
+                'codexBinaryPanel.source.download.desc',
+                'Automatically download the codex binary into the user data folder on first use.',
+              )}
+              onChange={changeSource}
+            />
+            <SourceOption
+              value="system"
+              current={source}
+              label={localize('codexBinaryPanel.source.system', 'System')}
+              desc={localize(
+                'codexBinaryPanel.source.system.desc',
+                'Use the `codex` executable found on PATH (you manage updates yourself).',
+              )}
+              onChange={changeSource}
+            />
+            <SourceOption
+              value="custom"
+              current={source}
+              label={localize('codexBinaryPanel.source.custom', 'Custom path')}
+              desc={localize(
+                'codexBinaryPanel.source.custom.desc',
+                'Point to a specific codex executable. Useful for testing or multiple installs.',
+              )}
+              onChange={changeSource}
             />
           </div>
-        )}
-      </section>
+
+          {source === 'custom' && (
+            <div className={styles['field']}>
+              <label className={styles['label']}>
+                {localize('codexBinaryPanel.customPath', 'Executable path')}
+              </label>
+              <Input
+                value={customPath}
+                placeholder={
+                  host.platform === 'win32' ? 'C:\\path\\to\\codex.exe' : '/usr/local/bin/codex'
+                }
+                onChange={(e) => setCustomPathState(e.target.value)}
+                onBlur={() => commitCustomPath(customPath)}
+              />
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Version ───────────────────────────────────────────────────── */}
-      {source === 'download' && (
+      {(isRemote || source === 'download') && (
         <section className={styles['section']}>
           <h3 className={styles['sectionTitle']}>
             {localize('codexBinaryPanel.version.title', 'Version')}
           </h3>
           <VersionInfo
             info={versionInfo}
+            loadError={loadError}
             loading={loadingVersion}
             downloading={downloading}
             downloadProgress={downloadProgress}
@@ -252,6 +264,7 @@ function SourceOption({ value, current, label, desc, onChange }: SourceOptionPro
 
 interface VersionInfoProps {
   info: ICodexBinaryVersionInfo | null
+  loadError: string | null
   loading: boolean
   downloading: boolean
   downloadProgress: { received: number; total: number } | null
@@ -260,6 +273,7 @@ interface VersionInfoProps {
 
 function VersionInfo({
   info,
+  loadError,
   loading,
   downloading,
   downloadProgress,
@@ -275,7 +289,20 @@ function VersionInfo({
     )
   }
 
-  if (!info) return null
+  if (!info) {
+    if (loadError) {
+      return (
+        <div className={styles['statusRow']}>
+          <span className={styles['statusMuted']}>
+            {localize('codexBinaryPanel.version.loadError', 'Version info unavailable: {message}', {
+              message: loadError,
+            })}
+          </span>
+        </div>
+      )
+    }
+    return null
+  }
 
   const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion

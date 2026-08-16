@@ -215,7 +215,10 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     return resolved
   }
 
-  async getVersionInfo(): Promise<ICodexBinaryVersionInfo> {
+  async getVersionInfo(authority?: string): Promise<ICodexBinaryVersionInfo> {
+    if (authority !== undefined) {
+      return (await this._remoteService(authority)).getVersionInfo('codex')
+    }
     return this._binaryStore.getVersionInfo()
   }
 
@@ -223,7 +226,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     await this._binaryStore.prefetch()
   }
 
-  async forceDownload(version: string): Promise<ICodexBinaryResult> {
+  async forceDownload(version: string, authority?: string): Promise<ICodexBinaryResult> {
+    if (authority !== undefined) {
+      const { path } = await (await this._remoteService(authority)).forceDownload('codex', version)
+      return { path }
+    }
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
     this._inflight.delete('download::noDownload')

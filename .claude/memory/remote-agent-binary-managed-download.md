@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ccf30490-4e23-41fb-9454-b5c051ee5f33
-  modified: 2026-08-15T14:03:01.155Z
+  modified: 2026-08-16T03:03:51.906Z
 ---
 
 远程工作区下 claude/codex 原生二进制改为下载到**远端主机** `<dataDir>/agent-bin/<agent>/`（2026-08-15 落地）。此前 renderer 对 `spec.authority` 直接短路 → 远端 claude-code 必挂（fork 的 claudeCliPath() 无 `CLAUDE_CODE_EXECUTABLE` 直接 throw），codex 靠部署时 npm ci 隐式拉 300MB 平台包。
@@ -17,6 +17,6 @@ metadata:
 **How to apply / 坑**:
 - 红线不变：本地 source/customPath 配置与 `acp.codex.apiKey` 绝不过隧道；进度事件按 `authority` 过滤（本地事件 authority=undefined），本地/远端下载互不驱动对方通知。
 - **store 层必须并发去重**（飞行中共享 promise、settle 后释放）：server 同进程内两个 session 并发首启会写同一 `.extract.<pid>` 临时目录互踩损坏；main 层 _inflight 只保护本地。settle 后释放是为了 forceDownload 版本翻转能被下一次 resolve 看见。
-- 遗留：BinaryPanel 版本面板/prefetch 仍只作用本地主机；远端仅 resolve（按需下载）。
+- BinaryPanel/CodexBinaryPanel 已远程化（2026-08-16，协议 v3→v4）：`IRemoteAgentBinaryService` 增 `getVersionInfo(agent)`/`forceDownload(agent, version)`，editor 契约 `getVersionInfo(authority?)`/`forceDownload(version, authority?)` 按 authority 分流；面板远程模式隐藏 source 区（远端固定受管下载）、进度按 authority 过滤、authority 切换先清陈旧 versionInfo。遗留：prefetch/cleanupStaleVersions 仍 local-only。
 
 关联：[[remote-dev-v2-full-stack]]、[[agent-binary-silent-download-e2e-fix]]

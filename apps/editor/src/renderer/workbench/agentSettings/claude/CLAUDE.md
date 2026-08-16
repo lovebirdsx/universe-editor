@@ -68,6 +68,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 - **authority 必须来自 `useRemoteAuthority()`**（`workbench/useRemoteAuthority.ts`，订阅 `onDidChangeWorkspace`）——workspace hydration 是异步的，用 `useMemo` 读 `workspace.current` 会把 authority 冻结成 undefined（启动恢复的 tab 永远读写本地，真实踩坑）。
 - `readProfiles`/`writeProfiles`（档案库）**刻意 editor-local 不路由**；`applyProfile` 注入时经带 authority 的 `patch` 写远端。
 - `ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件；`runClaudeLogin` remote 分支不解析本地 binary，改在远端终端跑 PATH 上的 `claude auth login`。
+- **BinaryPanel 远程语义**：远端下版本信息/强制下载经 `IClaudeBinaryService.getVersionInfo/forceDownload` 的尾部 `authority` 走 `RemoteChannels.AgentBinary` 作用于远端主机；面板隐藏「Binary source」区（远端固定受管下载），进度事件按 `authority` 过滤，authority 切换先清陈旧 versionInfo。
 
 ### 🔒 安全约束（刻意决策，勿擅改）
 

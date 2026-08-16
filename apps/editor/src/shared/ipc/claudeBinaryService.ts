@@ -81,8 +81,12 @@ export interface IClaudeBinaryService {
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult>
 
-  /** Returns version metadata for the download-mode binary. */
-  getVersionInfo(): Promise<IClaudeBinaryVersionInfo>
+  /**
+   * Returns version metadata for the download-mode binary. When `authority` is
+   * set, the metadata is read from that remote host's binary store instead of
+   * the local one.
+   */
+  getVersionInfo(authority?: string): Promise<IClaudeBinaryVersionInfo>
 
   /**
    * Best-effort background download of the most desirable version (latest when
@@ -97,9 +101,10 @@ export interface IClaudeBinaryService {
    * Force-downloads (or activates a prefetched) version into its own per-version
    * dir and flips the `.active` pointer to it. Because each version has its own
    * dir, activation never overwrites the running binary's locked files (the EPERM
-   * trap on Windows); the previous version's dir is cleaned up best-effort.
+   * trap on Windows); the previous version's dir is cleaned up best-effort. When
+   * `authority` is set, the download/activation happens on that remote host.
    */
-  forceDownload(version: string): Promise<IClaudeBinaryResult>
+  forceDownload(version: string, authority?: string): Promise<IClaudeBinaryResult>
 
   /**
    * Removes stale (non-active) version dirs left behind by a previous upgrade.

@@ -8,6 +8,7 @@
 
 import type { Event } from '@universe-editor/platform'
 import type { AgentBinaryId } from './flavors.js'
+import type { AgentBinaryVersionInfo } from './agentBinaryStore.js'
 
 export interface AgentBinaryRemoteProgressEvent {
   readonly agent: AgentBinaryId
@@ -28,4 +29,8 @@ export interface IRemoteAgentBinaryService {
     agent: AgentBinaryId,
     opts: { readonly allowDownload?: boolean },
   ): Promise<{ readonly path: string }>
+
+  getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo>
+
+  forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }>
 }

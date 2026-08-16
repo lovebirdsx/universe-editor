@@ -768,6 +768,10 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       if (entry.closedByUser || this._disposed) return
       const localPort = entry.transport === 'ssh' ? entry.forward!.localPort : entry.daemonPort
       const socket = await connectNodeSocket(localPort, '127.0.0.1')
+      if (entry.closedByUser || this._disposed) {
+        socket.dispose()
+        return
+      }
       entry.reconnectSocket = socket
       let residual: Uint8Array
       try {

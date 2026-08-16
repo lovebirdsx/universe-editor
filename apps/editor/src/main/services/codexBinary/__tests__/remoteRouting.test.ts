@@ -8,11 +8,18 @@
 
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, Event, ProxyChannel, RemoteChannels } from '@universe-editor/platform'
+import {
+  Emitter,
+  Event,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+} from '@universe-editor/platform'
 import type { IRemoteEnvironment } from '@universe-editor/platform'
 import type {
   AgentBinaryId,
   AgentBinaryRemoteProgressEvent,
+  AgentBinaryVersionInfo,
   IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
 import { CodexBinaryMainService } from '../codexBinaryMainService.js'
@@ -27,7 +34,7 @@ vi.mock('electron', () => ({
 }))
 
 const REMOTE_ENV: IRemoteEnvironment = {
-  protocolVersion: 3,
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
   serverVersion: '0.0.0',
   os: 'linux',
   arch: 'x64',
@@ -42,6 +49,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   private readonly _onProgress = new Emitter<AgentBinaryRemoteProgressEvent>()
   readonly onDidChangeProgress = this._onProgress.event
   readonly resolves: { agent: AgentBinaryId; allowDownload: boolean }[] = []
+  readonly versionInfos: AgentBinaryId[] = []
+  readonly forceDownloads: { agent: AgentBinaryId; version: string }[] = []
 
   async resolve(
     agent: AgentBinaryId,
@@ -49,6 +58,21 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   ): Promise<{ readonly path: string }> {
     this.resolves.push({ agent, allowDownload: opts.allowDownload ?? true })
     return { path: `/remote/${agent}` }
+  }
+
+  async getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo> {
+    this.versionInfos.push(agent)
+    return {
+      bundledVersion: `bundled-${agent}`,
+      installedVersion: `installed-${agent}`,
+      latestVersion: `latest-${agent}`,
+      prefetchedVersion: null,
+    }
+  }
+
+  async forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }> {
+    this.forceDownloads.push({ agent, version })
+    return { path: `/remote/${agent}/${version}` }
   }
 
   fireProgress(e: AgentBinaryRemoteProgressEvent): void {
@@ -141,6 +165,29 @@ describe('CodexBinaryMainService — remote routing', () => {
     } finally {
       sub.dispose()
     }
+  })
+
+  it('routes getVersionInfo(authority) to the remote channel with the codex agent id', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+
+    await expect(svc.getVersionInfo('host')).resolves.toEqual({
+      bundledVersion: 'bundled-codex',
+      installedVersion: 'installed-codex',
+      latestVersion: 'latest-codex',
+      prefetchedVersion: null,
+    })
+    expect(fixture.remote.versionInfos).toEqual(['codex'])
+  })
+
+  it('routes forceDownload(version, authority) to the remote channel and passes the version through', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+
+    await expect(svc.forceDownload('1.2.3', 'host')).resolves.toEqual({
+      path: '/remote/codex/1.2.3',
+    })
+    expect(fixture.remote.forceDownloads).toEqual([{ agent: 'codex', version: '1.2.3' }])
   })
 
   it('rejects an authority resolve when no connection service is injected', async () => {
