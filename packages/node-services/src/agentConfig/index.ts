@@ -1,6 +1,7 @@
 export * from './types.js'
 export * from './atomicFile.js'
 export * from './claudeConfigStore.js'
+export * from './claudeUsage.js'
 export * from './codexConfigStore.js'
 export * from './gatewayConnectivity.js'
 export * from './agentConfigService.js'

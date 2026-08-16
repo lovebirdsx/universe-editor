@@ -1,77 +1,182 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Routing tests for UsageMainService — local (no authority) reads the local
+ *  settings file; remote (authority) proxies through the remote AgentConfig
+ *  channel's claudeFetchUsage.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
-import { toSnapshot } from '../usageMainService.js'
+import { promises as fs } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  Event,
+  ProxyChannel,
+  REMOTE_PROTOCOL_VERSION,
+  RemoteChannels,
+  type IRemoteEnvironment,
+} from '@universe-editor/platform'
+import type {
+  ClaudeAuthStatus,
+  ClaudeSettings,
+  CodexAuthStatus,
+  CodexSettings,
+  IRemoteAgentConfigService,
+  UsageResult,
+} from '@universe-editor/node-services'
+import { UsageMainService } from '../usageMainService.js'
+import type {
+  IRemoteConnection,
+  IRemoteConnectionService,
+} from '../../remote/remoteConnectionMainService.js'
 
-describe('toSnapshot', () => {
-  it('maps provider fields to camelCase snapshot', () => {
-    const snapshot = toSnapshot({
-      date: '20260811',
-      requests: 3,
-      raw_tokens: 1200,
-      period_bucket: 'week:2026W33',
-      period_limit_cny: 30000000,
-      period_used_cny: 12345,
-      period_remaining_cny: 29987655,
-      models: [{ model: 'claude-opus', requests: 3, raw_tokens: 1200, cost_cny: 12345 }],
-    })
-    expect(snapshot).toEqual({
-      date: '20260811',
-      requests: 3,
-      rawTokens: 1200,
-      periodBucket: 'week:2026W33',
-      periodLimitCny: 30000000,
-      periodUsedCny: 12345,
-      periodRemainingCny: 29987655,
-      models: [{ model: 'claude-opus', requests: 3, rawTokens: 1200, costCny: 12345 }],
-    })
+const REMOTE_ENV: IRemoteEnvironment = {
+  protocolVersion: REMOTE_PROTOCOL_VERSION,
+  serverVersion: '0.0.0',
+  os: 'linux',
+  arch: 'x64',
+  nodeVersion: '20.0.0',
+  pathCaseSensitive: true,
+  homeDir: '/home/u',
+  tmpDir: '/tmp',
+}
+
+class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
+  declare readonly _serviceBrand: undefined
+  readonly onDidChangeCodexAuth: Event<void> = Event.None
+  usageResult: UsageResult = { kind: 'disabled', reason: 'not configured' }
+  usageCalls = 0
+
+  claudeRead(): Promise<ClaudeSettings> {
+    return Promise.resolve({})
+  }
+  claudePatch(): Promise<void> {
+    return Promise.resolve()
+  }
+  claudeConfigPath(): Promise<string> {
+    return Promise.resolve('/home/u/.claude/settings.json')
+  }
+  claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
+    return Promise.resolve({ loggedIn: false, expired: false })
+  }
+  claudeFetchUsage(): Promise<UsageResult> {
+    this.usageCalls++
+    return Promise.resolve(this.usageResult)
+  }
+  codexRead(): Promise<CodexSettings> {
+    return Promise.resolve({})
+  }
+  codexPatch(): Promise<void> {
+    return Promise.resolve()
+  }
+  codexApplyCredential(): Promise<CodexAuthStatus> {
+    return Promise.resolve({ active: 'none', hasApiKey: false })
+  }
+  codexConfigPath(): Promise<string> {
+    return Promise.resolve('/home/u/.codex/config.toml')
+  }
+  codexReadAuthStatus(): Promise<CodexAuthStatus> {
+    return Promise.resolve({ active: 'none', hasApiKey: false })
+  }
+  checkGatewayConnectivity(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+  codexMatchActiveApiKey(): Promise<number> {
+    return Promise.resolve(-1)
+  }
+}
+
+function makeConnectionService(remote: FakeRemoteAgentConfigService): IRemoteConnectionService {
+  const conn: IRemoteConnection = {
+    authority: 'host',
+    env: REMOTE_ENV,
+    getChannel: (name) => {
+      expect(name).toBe(RemoteChannels.AgentConfig)
+      return ProxyChannel.fromService(remote)
+    },
+    onDidClose: Event.None,
+  }
+  return {
+    _serviceBrand: undefined,
+    getConnection: async () => conn,
+    connect: async () => conn,
+    openExtensionHostConnection: async () => {
+      throw new Error('not used in this test')
+    },
+    onDidChangeState: Event.None,
+    retryConnection: () => undefined,
+    stopServer: async () => undefined,
+    closeConnection: async () => undefined,
+    dropSocketForTesting: () => undefined,
+    dropExtensionHostSocketForTesting: () => undefined,
+    dispose: () => undefined,
+  }
+}
+
+describe('UsageMainService', () => {
+  const dirs: string[] = []
+  const svcs: UsageMainService[] = []
+
+  afterEach(async () => {
+    for (const s of svcs) s.dispose()
+    svcs.length = 0
+    await Promise.all(dirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })))
   })
 
-  it('coerces missing/null numeric fields to 0 instead of NaN', () => {
-    const snapshot = toSnapshot({
-      date: '20260811',
-      period_bucket: 'week:2026W33',
-      // 未产生消费时接口可能省略数值字段或返回 null
-      requests: undefined as unknown as number,
-      raw_tokens: null as unknown as number,
-      period_limit_cny: 30000000,
-      period_used_cny: undefined as unknown as number,
-      period_remaining_cny: null as unknown as number,
-      models: [
-        {
-          model: 'claude-opus',
-          requests: undefined as unknown as number,
-          raw_tokens: '0' as unknown as number,
-          cost_cny: null as unknown as number,
-        },
-      ],
-    })
-    expect(snapshot.periodUsedCny).toBe(0)
-    expect(snapshot.periodRemainingCny).toBe(0)
-    expect(snapshot.requests).toBe(0)
-    expect(snapshot.rawTokens).toBe(0)
-    expect(snapshot.models[0]).toEqual({
-      model: 'claude-opus',
-      requests: 0,
-      rawTokens: 0,
-      costCny: 0,
-    })
+  async function makeTempDir(): Promise<string> {
+    const dir = await fs.mkdtemp(join(tmpdir(), 'usage-main-'))
+    dirs.push(dir)
+    return dir
+  }
+
+  it('reads the local settings file when no authority is given', async () => {
+    const dir = await makeTempDir()
+    const svc = new UsageMainService(join(dir, 'settings.json'))
+    svcs.push(svc)
+
+    // File absent → disabled, and no remote connection service is required.
+    await expect(svc.getUsage()).resolves.toMatchObject({ kind: 'disabled' })
   })
 
-  it('coerces NaN to 0', () => {
-    const snapshot = toSnapshot({
-      date: '20260811',
-      requests: Number.NaN,
-      raw_tokens: Number.NaN,
-      period_bucket: 'week:2026W33',
-      period_limit_cny: Number.NaN,
-      period_used_cny: Number.NaN,
-      period_remaining_cny: Number.NaN,
-      models: [],
-    })
-    expect(snapshot.periodUsedCny).toBe(0)
-    expect(snapshot.periodLimitCny).toBe(0)
+  it('routes through the remote AgentConfig channel when an authority is given', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.usageResult = {
+      kind: 'ok',
+      snapshot: {
+        date: '20260811',
+        periodBucket: 'week:2026W33',
+        periodUsedCny: 1,
+        periodLimitCny: 2,
+        periodRemainingCny: 1,
+        requests: 3,
+        rawTokens: 4,
+        models: [],
+      },
+    }
+    const dir = await makeTempDir()
+    const svc = new UsageMainService(
+      join(dir, 'settings.json'),
+      undefined,
+      makeConnectionService(remote),
+    )
+    svcs.push(svc)
+
+    await expect(svc.getUsage('host')).resolves.toEqual(remote.usageResult)
+    expect(remote.usageCalls).toBe(1)
+  })
+
+  it('reuses the cached remote proxy across calls', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    const dir = await makeTempDir()
+    const svc = new UsageMainService(
+      join(dir, 'settings.json'),
+      undefined,
+      makeConnectionService(remote),
+    )
+    svcs.push(svc)
+
+    await svc.getUsage('host')
+    await svc.getUsage('host')
+    expect(remote.usageCalls).toBe(2)
   })
 })

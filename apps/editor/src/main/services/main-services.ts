@@ -253,7 +253,8 @@ registerSingleton(
 )
 registerSingletonFactory(
   IUsageService,
-  (acc) => new UsageMainService(undefined, acc.get(ILoggerService)),
+  (acc) =>
+    new UsageMainService(undefined, acc.get(ILoggerService), acc.get(IRemoteConnectionService)),
 )
 registerSingletonFactory(
   ISecretStorageService,

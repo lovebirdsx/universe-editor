@@ -21,6 +21,7 @@ import type {
   CodexAuthStatus,
   CodexSettings,
   IRemoteAgentConfigService,
+  UsageResult,
 } from '@universe-editor/node-services'
 import { ClaudeConfigMainService } from '../claudeConfigMainService.js'
 import type { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
@@ -286,6 +287,9 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
     }
     claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
       return Promise.resolve({ loggedIn: false, expired: false })
+    }
+    claudeFetchUsage(): Promise<UsageResult> {
+      return Promise.resolve({ kind: 'disabled', reason: 'not configured' })
     }
     codexRead(): Promise<CodexSettings> {
       return Promise.resolve({})

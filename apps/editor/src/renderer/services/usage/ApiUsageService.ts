@@ -10,11 +10,13 @@ import {
   createDecorator,
   Disposable,
   IConfigurationService,
+  IWorkspaceService,
   observableValue,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { IUsageService, type UsageResult } from '../../../shared/ipc/services.js'
+import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 
 export type UsageState = { readonly kind: 'loading' } | UsageResult
 
@@ -47,6 +49,7 @@ export class ApiUsageService extends Disposable implements IApiUsageService {
   constructor(
     @IUsageService private readonly _usage: IUsageService,
     @IConfigurationService private readonly _configuration: IConfigurationService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
     this._state = observableValue<UsageState>('apiUsage', { kind: 'loading' })
@@ -61,6 +64,16 @@ export class ApiUsageService extends Disposable implements IApiUsageService {
     this._register(
       this._configuration.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration(REFRESH_INTERVAL_KEY)) this._restartPolling()
+      }),
+    )
+
+    // A workspace switch (local ↔ remote) changes which host's settings/network
+    // answer the usage query — clear any stale disabled state and refetch.
+    this._register(
+      this._workspace.onDidChangeWorkspace(() => {
+        this._disabled = false
+        this._restartPolling()
+        void this._fetch()
       }),
     )
 
@@ -114,7 +127,8 @@ export class ApiUsageService extends Disposable implements IApiUsageService {
     if (this._inflight || this._disabled) return
     this._inflight = true
     try {
-      const result = await this._usage.getUsage()
+      const authority = currentRemoteAuthority(this._workspace.current)
+      const result = await this._usage.getUsage(authority)
       this._state.set(result, undefined)
       if (result.kind === 'disabled') {
         this._disabled = true

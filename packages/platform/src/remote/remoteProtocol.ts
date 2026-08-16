@@ -36,7 +36,7 @@ import type { IFileService } from '../files/fileService.js'
 import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherProtocol.js'
 
 /** Bumped on any incompatible change to the framing, handshake or DTOs below. */
-export const REMOTE_PROTOCOL_VERSION = 4
+export const REMOTE_PROTOCOL_VERSION = 5
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

@@ -1,153 +1,72 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Reads the API credentials from ~/.claude/settings.json and queries the
- *  provider's usage endpoint. Logic ported from scripts/usage.ts. Monetary values
- *  are kept at the provider's raw integer scale; the renderer formats them.
+ *  Main-side API usage service. The fetch core lives in node-services
+ *  (claudeUsage.ts); this class adds the local/remote split — routed by
+ *  `authority`: set → the remote server's AgentConfig channel for that authority
+ *  (remote settings + remote network); absent → the local settings file.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
-import { homedir } from 'node:os'
-import * as https from 'node:https'
-import * as http from 'node:http'
 import {
-  Disposable,
-  type ILogger,
-  ILoggerService,
   createNamedLogger,
+  Disposable,
+  ILoggerService,
+  ProxyChannel,
+  RemoteChannels,
+  type ILogger,
 } from '@universe-editor/platform'
-import type { IUsageService, UsageResult, UsageSnapshot } from '../../../shared/ipc/services.js'
-
-interface RawSettings {
-  env?: Record<string, string>
-}
-
-interface RawModelUsage {
-  model: string
-  requests: number
-  raw_tokens: number
-  cost_cny: number
-}
-
-interface RawUsageData {
-  date: string
-  requests: number
-  raw_tokens: number
-  models: RawModelUsage[]
-  period_bucket: string
-  period_limit_cny: number
-  period_used_cny: number
-  period_remaining_cny: number
-}
-
-const AUTH_TOKEN_KEY = 'ANTHROPIC_AUTH_TOKEN'
-const BASE_URL_KEY = 'ANTHROPIC_BASE_URL'
-const REQUEST_TIMEOUT_MS = 10_000
+import {
+  defaultClaudeSettingsPath,
+  fetchClaudeUsage,
+  type IRemoteAgentConfigService,
+} from '@universe-editor/node-services'
+import type { IUsageService, UsageResult } from '../../../shared/ipc/services.js'
+import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 export class UsageMainService extends Disposable implements IUsageService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+  private readonly _settingsPath: string
+  private readonly _loggerService: ILoggerService | undefined
+  private readonly _remoteServices = new Map<string, IRemoteAgentConfigService>()
 
   constructor(
-    private readonly _settingsPath: string = join(homedir(), '.claude', 'settings.json'),
+    settingsPath: string = defaultClaudeSettingsPath(),
     @ILoggerService loggerService?: ILoggerService,
+    @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
   ) {
     super()
+    this._settingsPath = settingsPath
+    this._loggerService = loggerService
     this._logger = createNamedLogger(loggerService, { id: 'usage', name: 'Usage' })
   }
 
-  async getUsage(): Promise<UsageResult> {
-    const creds = await this._loadCredentials()
-    if (creds.kind !== 'ok') return creds
-    try {
-      const base = creds.baseUrl.replace(/\/$/, '')
-      const date = getDateStr()
-      const url = `${base}/my-usage/api/detail?date=${date}&api_key=${creds.apiKey}`
-      const raw = await fetchUrl(url)
-      const data = JSON.parse(raw) as RawUsageData
-      return { kind: 'ok', snapshot: toSnapshot(data) }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      this._logger.warn(`usage fetch failed: ${message}`)
-      return { kind: 'error', message }
-    }
-  }
-
-  private async _loadCredentials(): Promise<
-    { kind: 'ok'; apiKey: string; baseUrl: string } | { kind: 'disabled'; reason: string }
-  > {
-    let raw: string
-    try {
-      raw = await fs.readFile(this._settingsPath, 'utf8')
-    } catch {
-      return { kind: 'disabled', reason: `settings.json not found at ${this._settingsPath}` }
-    }
-    let env: Record<string, string>
-    try {
-      env = (JSON.parse(raw) as RawSettings).env ?? {}
-    } catch {
-      return { kind: 'disabled', reason: `settings.json is not valid JSON` }
-    }
-    const apiKey = env[AUTH_TOKEN_KEY]
-    const baseUrl = env[BASE_URL_KEY]
-    if (!apiKey || !baseUrl) {
-      return {
-        kind: 'disabled',
-        reason: `${AUTH_TOKEN_KEY} / ${BASE_URL_KEY} not configured in settings.env`,
+  async getUsage(authority?: string): Promise<UsageResult> {
+    if (authority) {
+      this._logger.debug(`usage fetch via remote authority '${authority}'`)
+      try {
+        return await (await this._remoteService(authority)).claudeFetchUsage()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        this._logger.warn(`usage fetch failed (remote '${authority}'): ${message}`)
+        return { kind: 'error', message }
       }
     }
-    return { kind: 'ok', apiKey, baseUrl }
+    this._logger.debug('usage fetch via local settings')
+    return fetchClaudeUsage(this._settingsPath, this._loggerService)
   }
-}
 
-// 用量接口在未产生消费时会省略字段或返回 null/字符串，数值一律收敛为有限数，避免渲染 NaN
-function toFiniteNumber(value: unknown): number {
-  const n = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(n) ? n : 0
-}
-
-export function toSnapshot(data: RawUsageData): UsageSnapshot {
-  return {
-    date: data.date,
-    periodBucket: data.period_bucket,
-    periodUsedCny: toFiniteNumber(data.period_used_cny),
-    periodLimitCny: toFiniteNumber(data.period_limit_cny),
-    periodRemainingCny: toFiniteNumber(data.period_remaining_cny),
-    requests: toFiniteNumber(data.requests),
-    rawTokens: toFiniteNumber(data.raw_tokens),
-    models: (data.models ?? []).map((m) => ({
-      model: m.model,
-      requests: toFiniteNumber(m.requests),
-      rawTokens: toFiniteNumber(m.raw_tokens),
-      costCny: toFiniteNumber(m.cost_cny),
-    })),
+  private async _remoteService(authority: string): Promise<IRemoteAgentConfigService> {
+    const cached = this._remoteServices.get(authority)
+    if (cached) return cached
+    if (!this._connections) {
+      throw new Error('usage: remote connection service not available')
+    }
+    const conn = await this._connections.getConnection(authority)
+    const service = ProxyChannel.toService<IRemoteAgentConfigService>(
+      conn.getChannel(RemoteChannels.AgentConfig),
+    )
+    this._remoteServices.set(authority, service)
+    return service
   }
-}
-
-function getDateStr(): string {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
-}
-
-function fetchUrl(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http
-    const req = client.get(url, (res) => {
-      let data = ''
-      res.on('data', (chunk) => (data += chunk))
-      res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`HTTP ${res.statusCode}`))
-        } else {
-          resolve(data)
-        }
-      })
-    })
-    req.on('error', reject)
-    req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error('request timed out')))
-  })
 }

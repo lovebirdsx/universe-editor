@@ -17,6 +17,7 @@ import {
 import {
   ClaudeConfigStore,
   CodexConfigStore,
+  fetchClaudeUsage,
   probeGatewayConnectivity,
   resolveCodexAuthMode,
   type IRemoteAgentConfigService,
@@ -29,6 +30,7 @@ import type {
   CodexCredentialIntent,
   CodexSettings,
   CodexSettingsPatch,
+  UsageResult,
 } from '@universe-editor/node-services'
 
 export interface RemoteAgentConfigServiceOptions {
@@ -41,6 +43,7 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
 
   private readonly _claude: ClaudeConfigStore
   private readonly _codex: CodexConfigStore
+  private readonly _logger: { createLogger(channel: ILogChannel): ILogger } | undefined
 
   private readonly _onDidChangeCodexAuth = this._register(new Emitter<void>())
   readonly onDidChangeCodexAuth: Event<void> = this._onDidChangeCodexAuth.event
@@ -50,6 +53,7 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
     options: RemoteAgentConfigServiceOptions = {},
   ) {
     super()
+    this._logger = logger
     this._claude = new ClaudeConfigStore({
       ...(options.claudeConfigPath !== undefined ? { settingsPath: options.claudeConfigPath } : {}),
       ...(logger !== undefined ? { logger } : {}),
@@ -74,6 +78,10 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   }
   claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
     return this._claude.readAuthStatus()
+  }
+
+  async claudeFetchUsage(): Promise<UsageResult> {
+    return fetchClaudeUsage(await this._claude.configPath(), this._logger)
   }
 
   codexRead(): Promise<CodexSettings> {
