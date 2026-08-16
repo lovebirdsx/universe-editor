@@ -43,6 +43,12 @@ const extensionApiMock = vi.hoisted(() => {
 
 vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },
+  RelativePattern: class {
+    constructor(
+      public readonly base: string,
+      public readonly pattern: string,
+    ) {}
+  },
   scm: {
     createSourceControl: vi.fn(() => {
       const sc = {
@@ -85,6 +91,12 @@ vi.mock('@universe-editor/extension-api', () => ({
       get: vi.fn(async (key: string, fallback: unknown) =>
         key === 'autofetch' ? false : fallback,
       ),
+    })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose() {} })),
+      onDidChange: vi.fn(() => ({ dispose() {} })),
+      onDidDelete: vi.fn(() => ({ dispose() {} })),
+      dispose() {},
     })),
   },
 }))

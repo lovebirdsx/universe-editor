@@ -122,9 +122,16 @@ export class Repository {
       run: (args, label, progress) => this._run(args, label, progress),
     })
 
-    this._watcher = new RepositoryWatcher(root, () => void this.refresh(), this._log)
+    this._watcher = new RepositoryWatcher(
+      root,
+      () => this._onWatcherChange(),
+      (globPattern) => workspace.createFileSystemWatcher(globPattern),
+      this._log,
+    )
     this._watcher.start()
-    void this._startAutofetch()
+    void this._startAutofetch().catch((err) =>
+      this._log?.(`[git] autofetch init failed: ${String(err)}`),
+    )
   }
 
   /** Subscribe to branch / sync / busy state changes for the status bar. */
@@ -1004,8 +1011,21 @@ export class Repository {
     if (this._disposed) return
     const ms = Math.max(30, period) * 1000
     // Kick off an initial fetch shortly after startup, then on a fixed interval.
-    this._autofetchInitial = setTimeout(() => void this.fetch({ silent: true }), 3000)
-    this._autofetchTimer = setInterval(() => void this.fetch({ silent: true }), ms)
+    // Failures are logged, not toasted, and never left as unhandled rejections.
+    this._autofetchInitial = setTimeout(() => this._runAutofetch(), 3000)
+    this._autofetchTimer = setInterval(() => this._runAutofetch(), ms)
+  }
+
+  private _runAutofetch(): void {
+    this.fetch({ silent: true }).catch((err) => {
+      this._log?.(`[git] autofetch failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }
+
+  private _onWatcherChange(): void {
+    this.refresh().catch((err) => {
+      this._log?.(`[git] refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
   }
 
   get commitMessage(): string {

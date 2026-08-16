@@ -1,24 +1,71 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import {
   PossibleRepoWatcher,
   joinCandidate,
+  POSSIBLE_REPO_DEBOUNCE_MS,
   repoCandidateFromPath,
 } from '../possibleRepoWatcher.js'
 
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, watch: vi.fn() }
+})
+
+const watchMock = vi.mocked(watch)
+
+type WatchListener = (event: string, filename: string | Buffer | null) => void
+
+interface WatcherController {
+  readonly close: ReturnType<typeof vi.fn>
+  readonly listener: WatchListener | undefined
+  emitError(err: unknown): void
+}
+
+/** Install a fake non-recursive watch and expose its listener / error handler. */
+function installWatcher(): WatcherController {
+  let listener: WatchListener | undefined
+  const errorHandlers: ((err: unknown) => void)[] = []
+  const close = vi.fn()
+  watchMock.mockImplementation(((target: unknown, l?: unknown) => {
+    listener = l as WatchListener
+    return {
+      on(event: string, handler: (err: unknown) => void) {
+        if (event === 'error') errorHandlers.push(handler)
+      },
+      close,
+    } as unknown as FSWatcher
+  }) as typeof watch)
+  return {
+    close,
+    get listener() {
+      return listener
+    },
+    emitError(err: unknown) {
+      for (const h of errorHandlers) h(err)
+    },
+  }
+}
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  watchMock.mockReset()
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('repoCandidateFromPath', () => {
-  it('returns the owning directory for a .git entry', () => {
+  it('maps a root-level .git entry to the root dir', () => {
     expect(repoCandidateFromPath('.git')).toBe('')
-    expect(repoCandidateFromPath('sub/.git')).toBe('sub')
-    expect(repoCandidateFromPath('a/b/.git/config')).toBe('a/b')
-    expect(repoCandidateFromPath('sub\\.git\\HEAD')).toBe('sub') // win32 separators
   })
 
-  it('ignores unrelated paths', () => {
+  it('ignores anything else (the non-recursive watch only reports root entries)', () => {
     expect(repoCandidateFromPath('src/index.ts')).toBeUndefined()
     expect(repoCandidateFromPath('.gitignore')).toBeUndefined()
+    expect(repoCandidateFromPath('.git\\HEAD')).toBeUndefined() // nested, win32 separators
+    expect(repoCandidateFromPath('sub/.git')).toBeUndefined()
     expect(repoCandidateFromPath('foo.git/config')).toBeUndefined()
   })
 })
@@ -32,52 +79,67 @@ describe('joinCandidate', () => {
 })
 
 describe('PossibleRepoWatcher', () => {
-  let root: string
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'ue-git-late-watch-'))
-  })
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
-  })
-
-  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-  it('reports a .git directory created after start (debounced, once)', async () => {
+  it('reports a root .git entry after start (debounced, once)', () => {
+    const controller = installWatcher()
     const batches: string[][] = []
-    const watcher = new PossibleRepoWatcher(root, (dirs) => batches.push([...dirs]))
+    const watcher = new PossibleRepoWatcher('/root', (dirs) => batches.push([...dirs]))
     watcher.start()
-    await mkdir(join(root, '.git'))
-    await writeFile(join(root, '.git', 'HEAD'), 'ref: refs/heads/main')
-    await writeFile(join(root, 'plain.txt'), 'x')
-    await wait(900)
+    controller.listener?.('rename', '.git')
+    controller.listener?.('rename', '.git')
+    vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
     watcher.dispose()
-    const flat = batches.flat()
-    expect(flat).toContain('')
-    expect(flat).not.toContain('plain.txt')
+    expect(batches).toEqual([['']])
   })
 
-  it('reports a nested repo directory', async () => {
-    const sub = join(root, 'sub')
-    await mkdir(sub)
+  it('ignores non-.git root entries', () => {
+    const controller = installWatcher()
     const batches: string[][] = []
-    const watcher = new PossibleRepoWatcher(root, (dirs) => batches.push([...dirs]))
+    const watcher = new PossibleRepoWatcher('/root', (dirs) => batches.push([...dirs]))
     watcher.start()
-    // Let the watcher settle so the mkdir of `sub` itself isn't in flight.
-    await wait(200)
-    await mkdir(join(sub, '.git'))
-    await wait(900)
+    controller.listener?.('rename', 'plain.txt')
+    vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
     watcher.dispose()
-    expect(batches.flat()).toContain('sub')
+    expect(batches).toHaveLength(0)
   })
 
-  it('does not fire after dispose', async () => {
+  it('degrades without throwing when watch throws synchronously (ENOSPC)', () => {
+    watchMock.mockImplementation((() => {
+      throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), {
+        code: 'ENOSPC',
+      })
+    }) as typeof watch)
+    const log = vi.fn()
+    const watcher = new PossibleRepoWatcher('/root', () => {}, log)
+    expect(() => watcher.start()).not.toThrow()
+    expect(log).toHaveBeenCalled()
+    watcher.dispose()
+  })
+
+  it("logs and closes on the watcher's 'error' event without crashing", () => {
+    const controller = installWatcher()
+    const log = vi.fn()
+    const watcher = new PossibleRepoWatcher('/root', () => {}, log)
+    watcher.start()
+    expect(() =>
+      controller.emitError(
+        Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), {
+          code: 'ENOSPC',
+        }),
+      ),
+    ).not.toThrow()
+    expect(controller.close).toHaveBeenCalled()
+    expect(log).toHaveBeenCalled()
+    watcher.dispose()
+  })
+
+  it('does not fire after dispose', () => {
+    const controller = installWatcher()
     const batches: string[][] = []
-    const watcher = new PossibleRepoWatcher(root, (dirs) => batches.push([...dirs]))
+    const watcher = new PossibleRepoWatcher('/root', (dirs) => batches.push([...dirs]))
     watcher.start()
     watcher.dispose()
-    await mkdir(join(root, '.git'))
-    await wait(900)
+    controller.listener?.('rename', '.git')
+    vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
     expect(batches).toHaveLength(0)
   })
 })

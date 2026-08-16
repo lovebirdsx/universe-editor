@@ -4,59 +4,65 @@
  * the "changes to reconcile" group can only reflect disk drift if something
  * watches the disk.
  *
- * Mirrors the git extension's RepositoryWatcher: a debounced recursive `fs.watch`.
- * Any on-disk change — a save from the editor (autosave writes the file), or an
- * edit from an external tool — schedules a refresh with reconcile discovery on,
- * so edited/created/deleted-but-unopened files surface without a manual Clean
- * Refresh.
- *
  * Crucially we watch the **opened folder** (`workspace.rootPath`), NOT the p4
  * client root. A p4 client root is the whole workspace mapping (e.g. an entire
  * game project), often many levels above the folder actually open in the editor;
- * a recursive watch over it is slow and, on Windows, frequently fails outright —
- * degrading to a non-recursive watch that never sees edits in nested folders
- * (the original "my file never appears" bug). Watching the opened folder keeps
- * the recursive watch small and reliable, and we narrow the reconcile scan to
- * that folder too (`<folder>/...` instead of `//...`) so a huge depot isn't
- * walked on every save.
+ * watching it is slow, and we narrow the reconcile scan to the opened folder too
+ * (`<folder>/...` instead of `//...`) so a huge depot isn't walked on every save.
+ *
+ * We must NOT do a recursive `node:fs.watch` over a user directory tree here. On
+ * Linux Node implements recursive watch with a per-process inotify instance: a
+ * giant monorepo exhausts the kernel `inotify` quota and Node throws `ENOSPC`
+ * *synchronously from inside the watch callback*, where no caller can catch it —
+ * an uncaughtException that kills the whole extension-host process and sends it
+ * into an endless crash/restart loop. Instead we go through
+ * `workspace.createFileSystemWatcher` armed with a `RelativePattern` rooted at the
+ * opened folder and a recursive `**` glob: the RPC bridge backs it with an
+ * out-of-process @parcel/watcher worker (isolated from our inotify quota,
+ * self-healing after a crash), and the main side prunes
+ * `node_modules` / `.git` / `dist` / `.turbo` at the watcher level so huge trees
+ * never generate events. `isNoise` keeps the leftover temp/lock churn out.
  *
  * Unlike git's `git status` (a cheap local read), a full reconcile runs
  * `p4 reconcile -n <scope>` — a server round-trip that walks the whole scope. To
- * keep that off the hot path, the recursive watch accumulates the *exact* changed
- * paths reported by `fs.watch` and, after the 400ms debounce, asks the client to
- * reconcile only those paths (`client.refreshReconcilePaths`) — cost is
- * O(changed files), not O(tree size). A one-time full scan (edited / created /
- * deleted files discovered across the whole folder) is the explicit Clean Refresh.
- *
- * The non-recursive fallback can't attribute events to a reliable path, so it
- * degrades to a full `refresh({ reconcile: true })`. Users can turn watching off
- * via `perforce.autoRefresh` and fall back to manual Clean Refresh.
- *
- * As a first-party (trusted) extension we run in the host process and may touch
- * `node:fs` directly, exactly like the git extension.
+ * keep that off the hot path, the watcher accumulates the *exact* changed paths
+ * reported by the create/change/delete events and, after the 400ms debounce, asks
+ * the client to reconcile only those paths (`client.refreshReconcilePaths`) — cost
+ * is O(changed files), not O(tree size). A one-time full scan is the explicit
+ * Clean Refresh; users can turn watching off via `perforce.autoRefresh`.
  */
-import { watch, type FSWatcher } from 'node:fs'
-import { join } from 'node:path'
+import {
+  RelativePattern,
+  workspace,
+  type FileSystemWatcher,
+  type Uri,
+} from '@universe-editor/extension-api'
 import type { ClientManager } from './clientManager.js'
 
 const DEBOUNCE_MS = 400
 
 /** Path segments whose changes are never source-control-relevant; skipped so a
- *  busy `.git` or dependency dir doesn't trigger constant reconcile passes. */
+ *  busy `.git` or dependency dir doesn't trigger constant reconcile passes. The
+ *  main-side watcher already prunes these, but this is a cheap double insurance
+ *  for paths that still slip through. */
 const IGNORED_SEGMENTS = ['/.git/', '/node_modules/', '/.hg/', '/.svn/']
 
-/** Editor/tool scratch files that churn without being real content changes. */
-function isNoise(rel: string): boolean {
-  const norm = `/${rel.replace(/\\/g, '/')}/`
+/** Editor/tool scratch files that churn without being real content changes.
+ *  Takes an absolute filesystem path (the watcher event's `uri.fsPath`). */
+export function isNoise(absPath: string): boolean {
+  const norm = `/${absPath.replace(/\\/g, '/')}/`
   if (IGNORED_SEGMENTS.some((seg) => norm.includes(seg))) return true
-  const base = rel.replace(/\\/g, '/').split('/').pop() ?? ''
+  const base = absPath.replace(/\\/g, '/').split('/').pop() ?? ''
   // Common temp/lock artifacts (vim swap, JetBrains, Office locks, trailing ~).
   return base.endsWith('~') || base.endsWith('.swp') || base.startsWith('.~') || base === '4913'
 }
 
+/** Builds the extension-API watcher for a folder. Injectable so the controller
+ *  can be unit-tested without a live RPC bridge. */
+export type WatcherFactory = (folder: string) => FileSystemWatcher
+
 export class WorkspaceWatchController {
-  private _enabled = false
-  private readonly _watchers: FSWatcher[] = []
+  private readonly _watchers: FileSystemWatcher[] = []
   private _timer: ReturnType<typeof setTimeout> | undefined
   private _disposed = false
   /** Absolute paths reported changed since the last debounced flush. */
@@ -65,13 +71,14 @@ export class WorkspaceWatchController {
   constructor(
     private readonly _mgr: ClientManager,
     private readonly _log?: (msg: string) => void,
+    private readonly _createWatcher: WatcherFactory = (folder) =>
+      workspace.createFileSystemWatcher(new RelativePattern(folder, '**/*')),
   ) {}
 
   /** Start watching `folder` (the opened workspace directory). The full reconcile
    *  scan (Clean Refresh) for its owning client is narrowed to that folder so a
    *  huge depot isn't walked; ordinary saves reconcile only the changed paths. */
   start(enabled: boolean, folder: string | undefined): void {
-    this._enabled = enabled
     if (!enabled || !folder) return
 
     const client = this._mgr.resolveClient({ resourceUri: folder }) ?? this._mgr.active
@@ -81,9 +88,9 @@ export class WorkspaceWatchController {
     }
     client.setReconcileScope(folder)
 
-    // Recursive watch: reconcile only the exact changed paths (O(changes)).
-    const triggerIncremental = (filename: string): void => {
-      this._dirty.add(join(folder, filename))
+    // Incremental: reconcile only the exact changed paths (O(changes)).
+    const triggerIncremental = (absPath: string): void => {
+      this._dirty.add(absPath)
       if (this._timer) clearTimeout(this._timer)
       this._timer = setTimeout(() => {
         this._timer = undefined
@@ -93,40 +100,25 @@ export class WorkspaceWatchController {
       }, DEBOUNCE_MS)
     }
 
-    // Non-recursive fallback: events carry no reliable path, so fall back to a
-    // full reconcile walk of the narrowed scope.
-    const triggerFull = (): void => {
-      if (this._timer) clearTimeout(this._timer)
-      this._timer = setTimeout(() => {
-        this._timer = undefined
-        if (!this._disposed) void client.refresh({ reconcile: true })
-      }, DEBOUNCE_MS)
+    const onEvent = (uri: Uri): void => {
+      const absPath = uri.fsPath
+      if (isNoise(absPath)) return
+      triggerIncremental(absPath)
     }
 
     try {
-      this._watchers.push(
-        watch(folder, { recursive: true }, (_event, filename) => {
-          if (!filename) return
-          const rel = filename.toString()
-          if (isNoise(rel)) return
-          triggerIncremental(rel)
-        }),
-      )
-      this._log?.(`[perforce] file watch enabled (recursive) for ${folder}`)
+      const watcher = this._createWatcher(folder)
+      this._watchers.push(watcher)
+      watcher.onDidCreate(onEvent)
+      watcher.onDidChange(onEvent)
+      watcher.onDidDelete(onEvent)
+      this._log?.(`[perforce] file watch enabled for ${folder}`)
     } catch (err) {
-      // Recursive watch isn't available on every platform/filesystem; degrade to
-      // a non-recursive watch of the folder so at least top-level changes refresh.
+      // Watcher creation is a soft failure: the tree still works, just no
+      // auto-refresh. Never let it propagate — activation must not crash the host.
       this._log?.(
-        `[perforce] recursive watch failed for ${folder} (${String(err)}); falling back to non-recursive`,
+        `[perforce] file watcher unavailable for ${folder} (${String(err)}); auto-refresh off`,
       )
-      try {
-        this._watchers.push(watch(folder, () => triggerFull()))
-        this._log?.(`[perforce] file watch enabled (non-recursive) for ${folder}`)
-      } catch (err2) {
-        this._log?.(
-          `[perforce] filesystem watch unavailable for ${folder} (${String(err2)}); auto-refresh off`,
-        )
-      }
     }
   }
 
@@ -136,7 +128,7 @@ export class WorkspaceWatchController {
     this._timer = undefined
     for (const w of this._watchers) {
       try {
-        w.close()
+        w.dispose()
       } catch {
         // ignore
       }

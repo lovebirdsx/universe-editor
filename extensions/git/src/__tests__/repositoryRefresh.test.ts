@@ -15,6 +15,12 @@ vi.mock('../gitService.js', () => ({ gitExec: gitExecMock, gitExecBinary: vi.fn(
 
 vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },
+  RelativePattern: class {
+    constructor(
+      public readonly base: string,
+      public readonly pattern: string,
+    ) {}
+  },
   scm: {
     createSourceControl: vi.fn(() => ({
       acceptInputCommand: undefined,
@@ -45,6 +51,12 @@ vi.mock('@universe-editor/extension-api', () => ({
   workspace: {
     getConfiguration: vi.fn(() => ({
       get: vi.fn(async (_key: string, fallback: unknown) => fallback),
+    })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose() {} })),
+      onDidChange: vi.fn(() => ({ dispose() {} })),
+      onDidDelete: vi.fn(() => ({ dispose() {} })),
+      dispose() {},
     })),
   },
 }))
@@ -102,6 +114,27 @@ describe('Repository refresh coalescing', () => {
       expect(statusCalls).toBeGreaterThanOrEqual(2)
     } finally {
       repo.dispose()
+    }
+  })
+})
+
+describe('Repository autofetch', () => {
+  it('catches a git spawn failure instead of leaking an unhandled rejection', async () => {
+    vi.useFakeTimers()
+    const root = '/not-a-real-repo'
+    const log = vi.fn()
+    gitExecMock.mockRejectedValue(new Error('spawn git ENOENT'))
+    const repo = new Repository(root, log)
+    try {
+      // Let `_startAutofetch` finish its config reads and schedule the timers.
+      await vi.advanceTimersByTimeAsync(0)
+      // Fire the initial 3s autofetch tick.
+      await vi.advanceTimersByTimeAsync(3100)
+      expect(gitExecMock).toHaveBeenCalledWith(['fetch'], root, log)
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('autofetch failed'))
+    } finally {
+      repo.dispose()
+      vi.useRealTimers()
     }
   })
 })

@@ -1,29 +1,34 @@
 /**
- * Watches the whole workspace tree for a `.git` entry appearing (e.g. the user
- * runs `git init` or clones into the folder after the window is open). Mirrors
- * VSCode's `onPossibleGitRepositoryChange`: a recursive fs watch, a path filter
- * that keeps only `.git`-related events, a dedup set, and a debounce so a noisy
- * `git init` (hooks, config, HEAD …) collapses into one candidate callback.
+ * Watches the workspace root for a `.git` entry appearing at the top level
+ * (e.g. the user runs `git init` or clones into the folder after the window is
+ * open). Mirrors VSCode's `onPossibleGitRepositoryChange`, narrowed to root
+ * level: a non-recursive `fs.watch(root)` only reports entries created directly
+ * under the opened folder.
+ *
+ * Recursive watch is intentionally avoided — a recursive `fs.watch` on a huge
+ * tree (pnpm monorepo) exhausts the inotify watch quota, and Node's userland
+ * recursive watch throws ENOSPC synchronously inside its event callback where
+ * neither `on('error')` nor try/catch can intercept it, crashing the extension
+ * host. The RPC filesystem watcher can't take over here because it excludes
+ * `.git` (and its subtree) from its events, and the startup scan (`repoDiscovery`)
+ * already covers every repo that existed at launch. So the watcher only needs to
+ * catch the one case the scan can't: a repo appearing *after* activation in the
+ * open folder itself. Deeper late detection (a `git init` inside a nested
+ * subfolder) is no longer caught — an accepted tradeoff.
  *
  * Self-contained — owns its watcher, pending set and timer; cleans up on
- * dispose. The `candidate` argument is the directory holding the `.git`, never
- * descended into: a change inside `.git/objects` reports the same repo dir, so
- * the first event already covers it.
+ * dispose. The `candidate` is always the root dir (''), since the non-recursive
+ * watch reports `.git` as a bare filename.
  */
 import { watch, type FSWatcher } from 'node:fs'
 import { sep } from 'node:path'
 
 export const POSSIBLE_REPO_DEBOUNCE_MS = 500
 
-/** Pure for tests: `sub/dir/.git` → `sub/dir`; anything else → undefined. */
+/** Pure for tests: a root-level `.git` entry → the root dir (''); else undefined. */
 export function repoCandidateFromPath(filename: string): string | undefined {
   const norm = filename.replace(/\\/g, '/')
-  if (norm === '.git') return ''
-  const idx = norm.indexOf('/.git')
-  if (idx === -1) return undefined
-  const rest = norm.slice(idx + '/.git'.length)
-  if (rest !== '' && !rest.startsWith('/')) return undefined
-  return norm.slice(0, idx)
+  return norm === '.git' ? '' : undefined
 }
 
 export class PossibleRepoWatcher {
@@ -38,10 +43,11 @@ export class PossibleRepoWatcher {
     private readonly _log?: (msg: string) => void,
   ) {}
 
-  /** Recursive watch isn't available on every platform — log and stay inert. */
+  /** Non-recursive watch of the root; on failure log and stay inert. */
   start(): void {
+    let watcher: FSWatcher
     try {
-      this._watcher = watch(this._root, { recursive: true }, (_event, filename) => {
+      watcher = watch(this._root, (_event, filename) => {
         if (filename == null) return
         const candidate = repoCandidateFromPath(filename.toString())
         if (candidate === undefined) return
@@ -50,7 +56,17 @@ export class PossibleRepoWatcher {
       })
     } catch {
       this._log?.('[git] workspace watch unavailable; late repository detection disabled')
+      return
     }
+    watcher.on('error', (err) => {
+      this._log?.(`[git] workspace watch error; closing: ${String(err)}`)
+      try {
+        watcher.close()
+      } catch {
+        // ignore
+      }
+    })
+    this._watcher = watcher
   }
 
   private _schedule(): void {
