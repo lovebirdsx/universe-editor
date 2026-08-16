@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from '../../base/uri.js'
 import {
+  absolutePathToWorkspaceUri,
   fsPathToWorkspaceUri,
   localRevealFsPath,
   remoteFsPathToUri,
@@ -121,5 +122,53 @@ describe('remoteUri.localRevealFsPath', () => {
 
   it('returns undefined for a non-WSL remote', () => {
     expect(localRevealFsPath(remote('user@host', '/home/x'), { isWindows: true })).toBeUndefined()
+  })
+})
+
+describe('remoteUri.absolutePathToWorkspaceUri', () => {
+  const remoteFolder = URI.from({
+    scheme: 'remote-ssh',
+    authority: 'wsl+Ubuntu',
+    path: '/home/xiao/proj',
+  })
+
+  it('inherits the remote folder scheme/authority for a POSIX path', () => {
+    const uri = absolutePathToWorkspaceUri('/home/xiao/a.ts', remoteFolder)
+    expect(uri.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/a.ts')
+  })
+
+  it('normalises mixed backslashes under a remote folder', () => {
+    const uri = absolutePathToWorkspaceUri('/home/xiao\\a\\b.ts', remoteFolder)
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('wsl+Ubuntu')
+    expect(uri.path).toBe('/home/xiao/a/b.ts')
+  })
+
+  it('falls back to a file URI for a Windows drive path under a remote folder', () => {
+    const uri = absolutePathToWorkspaceUri('C:\\x\\a.ts', remoteFolder)
+    expect(uri.scheme).toBe('file')
+    expect(uri.fsPath).toBe('C:/x/a.ts')
+  })
+
+  it('falls back to a file URI under a local file folder', () => {
+    const uri = absolutePathToWorkspaceUri('/home/xiao/a.ts', URI.file('/home/xiao/proj'))
+    expect(uri.scheme).toBe('file')
+    expect(uri.fsPath).toBe('/home/xiao/a.ts')
+  })
+
+  it('falls back to a file URI when no folder is given', () => {
+    const uri = absolutePathToWorkspaceUri('/home/xiao/a.ts', undefined)
+    expect(uri.scheme).toBe('file')
+    expect(uri.fsPath).toBe('/home/xiao/a.ts')
+  })
+
+  it('clears the folder query and fragment when inheriting scheme/authority', () => {
+    const folder = URI.parse('remote-ssh://wsl+Ubuntu/home/xiao/proj?foo=bar#frag')
+    const uri = absolutePathToWorkspaceUri('/home/xiao/a.ts', folder)
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('wsl+Ubuntu')
+    expect(uri.path).toBe('/home/xiao/a.ts')
+    expect(uri.query).toBe('')
+    expect(uri.fragment).toBe('')
   })
 })

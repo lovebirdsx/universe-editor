@@ -14,7 +14,9 @@ import {
   IConfigurationService,
   IEditorService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   URI,
+  absolutePathToWorkspaceUri,
   localize,
 } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
@@ -140,9 +142,12 @@ export const ToolCallCard = memo(function ToolCallCard({
     : () => setInternalCollapsed((v) => !v)
 
   const openDiff = (diff: AcpToolCallDiff): void => {
-    const uri = diff.path.includes('://') ? URI.parse(diff.path) : URI.file(diff.path)
-    // Only local files can be reopened as a source file from the diff title bar.
-    const openable = uri.scheme === 'file' ? uri : undefined
+    const uri = diff.path.includes('://')
+      ? URI.parse(diff.path)
+      : absolutePathToWorkspaceUri(diff.path, workspaceService?.current?.folder)
+    // Local and remote workspace files can both be reopened as a source file
+    // from the diff title bar; only non-file schemes are left closed.
+    const openable = uri.scheme === 'file' || uri.scheme === REMOTE_SCHEME ? uri : undefined
     void editorService.openEditor(
       new DiffEditorInput(uri, diff.oldText, diff.newText, undefined, openable),
     )

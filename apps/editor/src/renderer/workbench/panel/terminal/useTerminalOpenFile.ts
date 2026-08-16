@@ -6,6 +6,7 @@ import {
   IOpenerService,
   IWorkspaceService,
   URI,
+  absolutePathToWorkspaceUri,
   normalizeFsPath,
   withSelection,
 } from '@universe-editor/platform'
@@ -14,16 +15,6 @@ import { useService } from '../../useService.js'
 const CACHE_TTL = 10_000
 
 type CacheEntry = Promise<URI | null> | { uri: URI | null; expiresAt: number }
-
-export function terminalPathToUri(absolutePath: string, folder: URI | undefined): URI {
-  const isPosixAbsolute = absolutePath.startsWith('/') && !/^[A-Za-z]:[/\\]/.test(absolutePath)
-  // remote 工作区的 pty 在远端 spawn，终端输出的是远端路径，须继承 folder 的
-  // scheme/authority 才能被 IFileService 按 scheme 分派到远端。
-  if (folder && folder.scheme !== 'file' && isPosixAbsolute) {
-    return folder.with({ path: normalizeFsPath(absolutePath), query: '', fragment: '' })
-  }
-  return URI.file(absolutePath)
-}
 
 /**
  * Returns a resolver that pre-warms during provideLinks and caches results for 10s.
@@ -50,7 +41,9 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
       const promise = (async (): Promise<URI | null> => {
         try {
           const workspace = workspaceService.current
-          const uri = terminalPathToUri(absolutePath, workspace?.folder)
+          // remote 工作区的 pty 在远端 spawn，终端输出的是远端路径，须继承 folder 的
+          // scheme/authority 才能被 IFileService 按 scheme 分派到远端。
+          const uri = absolutePathToWorkspaceUri(absolutePath, workspace?.folder)
           if (await fileService.exists(uri)) return uri
 
           if (!workspace) {

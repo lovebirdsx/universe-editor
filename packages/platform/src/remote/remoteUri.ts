@@ -6,6 +6,7 @@
  *  URIs back — there is no toWire/fromWire on the client anymore.
  *--------------------------------------------------------------------------------------------*/
 
+import { normalizeFsPath } from '../base/path.js'
 import { URI } from '../base/uri.js'
 import {
   REMOTE_SCHEME,
@@ -37,6 +38,22 @@ export function remoteFsPathToUri(fsPath: string, authority: string): URI {
  */
 export function fsPathToWorkspaceUri(fsPath: string, remoteAuthority: string | undefined): URI {
   return remoteAuthority ? remoteFsPathToUri(fsPath, remoteAuthority) : URI.file(fsPath)
+}
+
+/**
+ * A tool/agent/terminal-reported absolute path string → workspace resource URI.
+ * Unlike {@link fsPathToWorkspaceUri} — which takes an authority and always
+ * attaches it — this takes the workspace folder URI and only inherits its
+ * scheme/authority when the folder is non-`file` (remote) and the path is
+ * POSIX-absolute. Windows drive-letter paths and local workspaces fall back to
+ * `URI.file`.
+ */
+export function absolutePathToWorkspaceUri(absolutePath: string, folder: URI | undefined): URI {
+  const isPosixAbsolute = absolutePath.startsWith('/') && !/^[A-Za-z]:[/\\]/.test(absolutePath)
+  if (folder && folder.scheme !== 'file' && isPosixAbsolute) {
+    return folder.with({ path: normalizeFsPath(absolutePath), query: '', fragment: '' })
+  }
+  return URI.file(absolutePath)
 }
 
 /**

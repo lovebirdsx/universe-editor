@@ -107,6 +107,53 @@ describe('markdownLinkCandidates', () => {
       'C:/Users/u/Universe%20Editor/x.md',
     ])
   })
+
+  describe('remote workspace absolute paths', () => {
+    const remoteRoot = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'wsl+Ubuntu',
+      path: '/home/xiao/proj',
+    })
+
+    it('probes the remote workspace authority before the local file fallback', () => {
+      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', remoteRoot, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      expect(c[1]?.scheme).toBe('file')
+      expect(c).toHaveLength(2)
+    })
+
+    it('inherits the remote authority from the workspace root when the base dir is local', () => {
+      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', baseDir, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      expect(c[1]?.scheme).toBe('file')
+    })
+
+    it('inherits the remote authority from the workspace root when the base dir is missing', () => {
+      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', undefined, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      expect(c[1]?.scheme).toBe('file')
+    })
+
+    it('keeps a single file candidate for a local workspace absolute path', () => {
+      const c = markdownLinkCandidates('/etc/hosts', baseDir, root)
+      expect(c.map((u) => u.toString())).toEqual(['file:///etc/hosts'])
+    })
+
+    it('does not attach a remote authority to a windows drive path', () => {
+      const c = markdownLinkCandidates('C:\\x\\a.ts', remoteRoot, remoteRoot)
+      expect(c.map((u) => u.scheme)).toEqual(['file'])
+      expect(c[0]?.fsPath).toBe('C:/x/a.ts')
+    })
+
+    it('probes the remote authority for decoded percent-encoded variants first', () => {
+      const c = markdownLinkCandidates('/home/xiao/Universe%20Editor/a.ts', remoteRoot, remoteRoot)
+      expect(c[0]?.scheme).toBe('remote-ssh')
+      expect(c[0]?.authority).toBe('wsl+Ubuntu')
+      expect(c[0]?.path).toBe('/home/xiao/Universe Editor/a.ts')
+      expect(c[2]?.scheme).toBe('remote-ssh')
+      expect(c[2]?.path).toBe('/home/xiao/Universe%20Editor/a.ts')
+    })
+  })
 })
 
 describe('searchPatternFor', () => {

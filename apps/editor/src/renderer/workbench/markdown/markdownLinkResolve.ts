@@ -6,15 +6,17 @@
  *  IFileService / IFileSearchService / IQuickAccessController.
  *
  *  Resolution strategy (mirrors how an editor opens a path the user typed):
- *    1. Try concrete candidates in order — an absolute path, the path relative to
- *       the markdown source's directory, then relative to the workspace root.
- *       The first that exists on disk opens immediately (fast path: no search).
+ *    1. Try concrete candidates in order — an absolute path (in a remote
+ *       workspace, first under the workspace's scheme/authority), the path
+ *       relative to the markdown source's directory, then relative to the
+ *       workspace root. The first that exists on disk opens immediately (fast
+ *       path: no search).
  *    2. Only if none exist, fall back to a workspace file search. One hit opens
  *       directly; several hits hand off to Go to File (prefilled) so the user
  *       picks; zero hits surfaces a "not found" notification.
  *--------------------------------------------------------------------------------------------*/
 
-import { expandHomeDir, URI } from '@universe-editor/platform'
+import { absolutePathToWorkspaceUri, expandHomeDir, URI } from '@universe-editor/platform'
 import { splitFilePathLocation } from '../../services/acp/filePathLink.js'
 
 /** True for `C:\…`, `C:/…`, or a leading `/` (POSIX absolute). */
@@ -38,9 +40,10 @@ function markdownLinkPathVariants(rawPath: string): readonly string[] {
 
 /**
  * Ordered, de-duplicated list of concrete URIs to probe for {@link rawPath}.
- * Absolute paths yield a single candidate; relative paths are resolved against
- * the markdown source directory first (closest context wins), then the workspace
- * root — matching how a path written in a doc is usually meant.
+ * Relative paths are resolved against the markdown source directory first
+ * (closest context wins), then the workspace root — matching how a path written
+ * in a doc is usually meant. Absolute paths in a remote workspace probe the
+ * workspace's scheme/authority first, with the local `file` URI as fallback.
  */
 export function markdownLinkCandidates(
   rawPath: string,
@@ -56,12 +59,18 @@ export function markdownLinkCandidates(
     seen.add(key)
     out.push(uri)
   }
+  // The first non-file anchor (markdown source dir or workspace root) carries the
+  // remote authority an absolute host path must inherit.
+  const remoteBase = [baseDir, workspaceRoot].find((u) => u !== undefined && u.scheme !== 'file')
   // Expand a leading `~` before decoding so it applies to the literal path the
   // user wrote; the expanded absolute path then flows through the same
   // percent-decode variants as any other absolute path.
   const expanded = homeDir ? (expandHomeDir(rawPath, homeDir) ?? rawPath) : rawPath
   for (const path of markdownLinkPathVariants(expanded)) {
     if (isAbsolutePath(path)) {
+      // agent/tool-reported paths are host paths: in a remote workspace probe the
+      // workspace's scheme/authority first, URI.file is only the local fallback.
+      push(absolutePathToWorkspaceUri(path, remoteBase))
       push(URI.file(path))
       continue
     }

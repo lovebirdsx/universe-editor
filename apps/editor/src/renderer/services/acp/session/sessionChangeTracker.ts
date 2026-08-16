@@ -33,6 +33,7 @@ import {
   IWorkspaceService,
   ITelemetryService,
   ILoggerService,
+  absolutePathToWorkspaceUri,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
@@ -228,9 +229,11 @@ interface PersistedShape {
 }
 
 /** Canonicalize a file path for display (separators only — casing is preserved;
- *  identity is the comparison key's job). Non-file URIs pass through. */
+ *  identity is the comparison key's job). Non-file URIs pass through; POSIX
+ *  absolute paths pass through unchanged (they are remote host paths — folding
+ *  them through URI.file().fsPath would flip the separators on Windows). */
 function normalizePath(path: string): string {
-  return path.includes('://') ? path : URI.file(path).fsPath
+  return path.includes('://') || path.startsWith('/') ? path : URI.file(path).fsPath
 }
 
 function recordBytes(rec: FileRecord): number {
@@ -604,6 +607,15 @@ export class SessionChangeTrackerService
       : this._uriIdentity.getPathComparisonKey(path)
   }
 
+  /** Agent-reported path string → resource URI. URI strings pass through; bare
+   *  absolute paths inherit the workspace folder's scheme/authority so a remote
+   *  workspace resolves them to remote-ssh instead of the local file scheme. */
+  private _pathToUri(path: string): URI {
+    return path.includes('://')
+      ? URI.parse(path)
+      : absolutePathToWorkspaceUri(path, this._workspace.current?.folder)
+  }
+
   private _filesFor(sessionId: string): Map<string, FileRecord> {
     let files = this._state.get(sessionId)
     if (!files) {
@@ -661,7 +673,7 @@ export class SessionChangeTrackerService
       const removed = rec.batches.filter((b) => b.toolCallId !== undefined && ids.has(b.toolCallId))
       if (removed.length === 0) continue
 
-      const uri = rec.path.includes('://') ? URI.parse(rec.path) : URI.file(rec.path)
+      const uri = this._pathToUri(rec.path)
       let current = ''
       try {
         const stat = await this._files.stat(uri)
@@ -755,7 +767,7 @@ export class SessionChangeTrackerService
   private async _buildChange(record: FileRecord): Promise<SessionFileChange | undefined> {
     if (record.ignored) return undefined
     if (record.batchCount === 0 && record.origin === 'agent') return undefined
-    const uri = record.path.includes('://') ? URI.parse(record.path) : URI.file(record.path)
+    const uri = this._pathToUri(record.path)
     let current = ''
     let existed = true
     let tooLarge = false

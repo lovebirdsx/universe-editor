@@ -14,10 +14,12 @@ import {
   ICommandService,
   INotificationService,
   IQuickInputService,
+  IWorkspaceService,
   type IQuickPickItem,
+  type URI,
+  absolutePathToWorkspaceUri,
   localize,
   Severity,
-  URI,
 } from '@universe-editor/platform'
 import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import { relativeTime } from '../../relativeTime.js'
@@ -57,14 +59,18 @@ function toQuickPickItem(commit: GitGraphCommitDto): CommitQuickPickItem {
   }
 }
 
-function commitToRef(commit: GitGraphCommitDto, repoRoot: string): PromptRef {
+function commitToRef(
+  commit: GitGraphCommitDto,
+  repoRoot: string,
+  folder: URI | undefined,
+): PromptRef {
   const shortHash = commit.hash.slice(0, SHORT_HASH_LENGTH)
   const subject = truncate(commit.message, MAX_SUBJECT_LENGTH)
   return {
     id: generateUuid(),
     kind: 'commit',
     label: `${shortHash} ${subject}`,
-    uri: URI.file(repoRoot).toString(),
+    uri: absolutePathToWorkspaceUri(repoRoot, folder).toString(),
     meta: { commitHash: commit.hash, description: commit.message },
   }
 }
@@ -80,6 +86,7 @@ export class CommitRefPicker {
     @IQuickInputService private readonly _quickInput: IQuickInputService,
     @IScmService private readonly _scm: IScmService,
     @INotificationService private readonly _notification: INotificationService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {}
 
   async pick(): Promise<PromptRef | undefined> {
@@ -146,7 +153,7 @@ export class CommitRefPicker {
       })
     })
     qp.dispose()
-    return picked ? commitToRef(picked, root) : undefined
+    return picked ? commitToRef(picked, root, this._workspace.current?.folder) : undefined
   }
 
   private _resolveRepoRoot(): string | undefined {

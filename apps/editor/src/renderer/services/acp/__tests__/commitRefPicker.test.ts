@@ -9,6 +9,7 @@ import { GitGraphCommands } from '@universe-editor/extensions-common'
 import {
   Emitter,
   Severity,
+  URI,
   type ICommandService,
   type IInputOptions,
   type INotificationHandle,
@@ -166,6 +167,10 @@ function makeScmService(sourceControls: readonly { rootUri: string | undefined }
   return { sourceControls: { get: () => sourceControls } } as never
 }
 
+function makeWorkspace(folder?: URI) {
+  return { current: folder ? { folder } : null } as never
+}
+
 function commit(over: Partial<GitGraphCommitDto> = {}): GitGraphCommitDto {
   return {
     hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
@@ -197,6 +202,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       makeScmService([]),
       notification as never,
+      makeWorkspace(),
     )
 
     const ref = await picker.pick()
@@ -231,6 +237,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       scm,
       notification as never,
+      makeWorkspace(),
     )
     void picker.pick()
     await Promise.resolve()
@@ -265,6 +272,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       scm,
       notification as never,
+      makeWorkspace(),
     )
     void picker.pick()
     await Promise.resolve()
@@ -298,6 +306,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       scm,
       notification as never,
+      makeWorkspace(),
     )
     const pending = picker.pick()
 
@@ -336,6 +345,49 @@ describe('CommitRefPicker', () => {
     expect(ref?.meta?.description).toBe('fix login bug')
   })
 
+  it('resolves a bare repo root to a remote URI in a remote-ssh workspace', async () => {
+    const commands = new FakeCommandService()
+    commands.handlers.set(GitGraphCommands.setRepo, () => undefined)
+    commands.handlers.set(
+      GitGraphCommands.getCommits,
+      () =>
+        ({
+          commits: [commit()],
+          head: commit().hash,
+          headName: 'main',
+          moreAvailable: false,
+          uncommittedChanges: 0,
+        }) as GitGraphLoadResult,
+    )
+    const quickInput = new FakeQuickInputService()
+    const notification = new FakeNotificationService()
+    const scm = makeScmService([{ rootUri: '/home/u/repo' }])
+    const remoteFolder = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'ssh-remote+host',
+      path: '/home/u/repo',
+    })
+
+    const picker = new CommitRefPicker(
+      commands as never,
+      quickInput as never,
+      scm,
+      notification as never,
+      makeWorkspace(remoteFolder),
+    )
+    const pending = picker.pick()
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+
+    quickInput.picker?.accept(quickInput.picker.items[0] as IQuickPickItem)
+    const ref = await pending
+
+    expect(ref?.kind).toBe('commit')
+    const uri = URI.parse(ref!.uri)
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('ssh-remote+host')
+    expect(uri.path).toBe('/home/u/repo')
+  })
+
   it('resolves undefined and disposes the picker when the QuickPick is dismissed', async () => {
     const commands = new FakeCommandService()
     commands.handlers.set(GitGraphCommands.setRepo, () => undefined)
@@ -359,6 +411,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       scm,
       notification as never,
+      makeWorkspace(),
     )
     const pending = picker.pick()
     // Must flush past the point where pick() registers its onDidHide listener,
@@ -387,6 +440,7 @@ describe('CommitRefPicker', () => {
       quickInput as never,
       scm,
       notification as never,
+      makeWorkspace(),
     )
     const ref = await picker.pick()
 

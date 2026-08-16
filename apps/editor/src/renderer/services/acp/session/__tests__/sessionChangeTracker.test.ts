@@ -53,8 +53,9 @@ class FakeWorkspaceService implements IWorkspaceService {
   readonly onDidChangeRecent = Event.None
   readonly onDidChangeWorkspace = Event.None
   readonly whenReady: Promise<void> = Promise.resolve()
+  constructor(private readonly _folder: URI = URI.file('/work')) {}
   get current(): IWorkspace | null {
-    return { folder: URI.file('/work'), name: '/work' }
+    return { folder: this._folder, name: this._folder.fsPath }
   }
   async openFolder(): Promise<void> {}
   async closeFolder(): Promise<void> {}
@@ -879,6 +880,67 @@ describe('SessionChangeTrackerService — path identity (Windows drive-letter ca
     svc.recordWatched(SID, 'D:/work/w.ts', { baseline: 'head' })
     await flush()
     expect(obs.get()).toHaveLength(0)
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — remote workspace (bare POSIX paths inherit authority)', () => {
+  function makeRemote(): { svc: SessionChangeTrackerService; files: FakeFileService } {
+    const files = new FakeFileService()
+    const folder = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'ssh-remote+host',
+      path: '/home/u/project',
+    })
+    const svc = new SessionChangeTrackerService(
+      new FakeStorage(),
+      new FakeWorkspaceService(folder),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      files,
+      new UriIdentityService('linux'),
+    )
+    svc.recomputeThrottleMs = 0
+    return { svc, files }
+  }
+
+  const editHunk: DiffHunk = {
+    oldStart: 1,
+    oldLines: 1,
+    newStart: 1,
+    newLines: 1,
+    lines: ['-a', '+b'],
+  }
+
+  it('resolves a bare POSIX path to the remote workspace scheme/authority', async () => {
+    const { svc, files } = makeRemote()
+    await svc.initialize()
+    files.set('/home/u/project/a.ts', 'b')
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/home/u/project/a.ts', 'tc-1', [editHunk], { baseline: 'a' })
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.uri.scheme).toBe('remote-ssh')
+    expect(list[0]?.uri.authority).toBe('ssh-remote+host')
+    expect(list[0]?.uri.path).toBe('/home/u/project/a.ts')
+    expect(list[0]?.path).toBe('/home/u/project/a.ts')
+    svc.dispose()
+  })
+
+  it('restore rolls a remote-tracked file back through its remote URI', async () => {
+    const { svc, files } = makeRemote()
+    await svc.initialize()
+    files.set('/home/u/project/f.ts', ['a', 'TWO', 'c'].join('\n'))
+    svc.record(SID, '/home/u/project/f.ts', 'tc-2', [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: ['-ONE', '+TWO'] },
+    ])
+    await flush()
+
+    const impact = await svc.restore(SID, ['tc-2'])
+    expect(impact.filesChanged).toEqual(['/home/u/project/f.ts'])
+    // The remote URI's fsPath is the POSIX host path, so the stub keys it identically.
+    expect(files.files.get('/home/u/project/f.ts')).toBe(['a', 'ONE', 'c'].join('\n'))
     svc.dispose()
   })
 })
