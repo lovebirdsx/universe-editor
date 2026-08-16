@@ -120,6 +120,8 @@ core 套件（`@universe-editor/editor#e2e`）走通用 `e2e` task 规则即可�
 
 **CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness`（上游）→ 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job **直接 `pnpm exec playwright test`**（不走根脚本），tag 分流靠 env 前缀；它前面有独立 `pnpm build` step，故裸跑也不会测旧产物（对应下文踩坑第 1 条）。
 
+**Linux 环境预检与自动 Xvfb**：所有经 `scripts/e2e/run-e2e.mjs` / `scripts/e2e/ensure-e2e-build.mjs` 的入口在 Linux 上会先跑 `scripts/e2e/linux-preflight.mjs` 做秒级预检（`ldd` 查缺失系统库、查 electron 二进制、无 `DISPLAY` 时查 Xvfb；`UNIVERSE_E2E_SKIP_PREFLIGHT=1` 跳过）；无 `DISPLAY` 时 e2e-harness 的 globalSetup 会自动启动 Xvfb（`-screen 0 1280x1024x24`，与 CI 一致）并在结束回收。**WSL 下默认离屏**：即便 WSLg 给了 `DISPLAY=:0`，只要没显式要求有头就自动起 Xvfb 覆盖 DISPLAY；未装 xvfb 则回退真实窗口并提示，`UNIVERSE_E2E_SHOW=1` 恢复真实窗口。详见 `docs/development/wsl-e2e.md`。e2e 脚本统一设 `PLAYWRIGHT_FORCE_TTY=0`，reporter 输出各平台一致（只打完成行），有头脚本除外。
+
 ## 新增扩展 e2e suite 的套路
 
 1. 建 `extensions/<ext>/e2e/`：`specs/*.spec.ts` + `playwright.config.ts`（`export default defineE2EConfig()`）+ scoped fixture（`extensions: ['@universe-editor/<ext>']`）+ `e2e/tsconfig.json`（纳入 typecheck）。结构照抄 `extensions/markdown/e2e/`。

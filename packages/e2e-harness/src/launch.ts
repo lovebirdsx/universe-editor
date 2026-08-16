@@ -353,6 +353,15 @@ const TRANSIENT_LAUNCH_ERROR =
   /Process failed to launch|spawn ETXTBSY|Electron failed to install correctly/i
 const LAUNCH_RETRY_DELAYS_MS = [5_000, 10_000, 20_000]
 
+// Missing shared libraries (exit 127, stderr "error while loading shared
+// libraries") and a missing X display are machine/setup defects, not runner
+// contention. They match TRANSIENT_LAUNCH_ERROR's "Process failed to launch"
+// too, so without this guard each case would burn the full 5/10/20s backoff and
+// drown the real cause under Playwright's generic message. Retrying the SAME
+// launch always fails the same way — fail immediately with the fix spelled out.
+const FATAL_LAUNCH_ERROR =
+  /error while loading shared libraries|Unable to open X display|Missing X server or \$DISPLAY/i
+
 /**
  * `electron.launch` with transient-failure retry. Use this instead of the bare
  * `_electron.launch` in self-launching specs so a runner-level file-lock window
@@ -365,6 +374,14 @@ export async function launchElectron(
     try {
       return await electron.launch(options)
     } catch (err) {
+      if (FATAL_LAUNCH_ERROR.test(String(err))) {
+        // Keep the original message intact — Playwright's call log carries the
+        // stderr line ("error while loading shared libraries: lib...") that names
+        // the missing library, and discarding it would bury the root cause.
+        throw new Error(
+          `${String(err)}\n[e2e] 环境缺 Playwright 系统库或无可用 X display；修复：\`bash scripts/wsl/bootstrap.sh\`；详见 \`docs/development/wsl-e2e.md\``,
+        )
+      }
       const delay = LAUNCH_RETRY_DELAYS_MS[attempt - 1]
       if (delay === undefined || !TRANSIENT_LAUNCH_ERROR.test(String(err))) throw err
       console.warn(

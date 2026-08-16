@@ -37,6 +37,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runLinuxPreflight } from './linux-preflight.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const editorDir = join(repoRoot, 'apps', 'editor')
@@ -168,12 +169,18 @@ const PW_CONFIG = ['test', '-c', 'e2e/playwright.config.ts']
 function runCoreSuite(specFilters, { regression = false } = {}) {
   run('pnpm', ['exec', 'playwright', ...PW_CONFIG, ...specFilters, '--pass-with-no-tests'], {
     cwd: editorDir,
-    env: regression ? { UNIVERSE_E2E_INCLUDE_REGRESSION: '1' } : undefined,
+    env: {
+      PLAYWRIGHT_FORCE_TTY: '0',
+      ...(regression ? { UNIVERSE_E2E_INCLUDE_REGRESSION: '1' } : {}),
+    },
   })
   run(
     'pnpm',
     ['exec', 'playwright', ...PW_CONFIG, ...specFilters, '--workers=1', '--pass-with-no-tests'],
-    { cwd: editorDir, env: { UNIVERSE_E2E_ONLY_TAG: '@serial' } },
+    {
+      cwd: editorDir,
+      env: { PLAYWRIGHT_FORCE_TTY: '0', UNIVERSE_E2E_ONLY_TAG: '@serial' },
+    },
   )
 }
 
@@ -201,7 +208,7 @@ function hintSkippedTags(specFiles, { regression = false } = {}) {
   }
 }
 
-function main() {
+async function main() {
   let args
   try {
     args = parseArgs(process.argv.slice(2))
@@ -259,6 +266,13 @@ function main() {
 
   if (dryRun) return
 
+  try {
+    await runLinuxPreflight()
+  } catch (err) {
+    console.error(err.message)
+    process.exit(1)
+  }
+
   if (plan.mode === 'specs') {
     const filters = plan.specs.map((p) => p.slice(EDITOR_PREFIX.length))
     ensureEditorBuild()
@@ -292,5 +306,5 @@ const invokedDirectly =
       .split(sep)
       .join('/')
 if (invokedDirectly) {
-  main()
+  await main()
 }

@@ -10,6 +10,7 @@
 
 import { defineConfig, type PlaywrightTestConfig } from '@playwright/test'
 import { cpus } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 const isCI = Boolean(process.env['CI'])
 
@@ -114,6 +115,10 @@ export interface E2EConfigOptions {
 export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestConfig {
   const { grep, grepInvert } = grepOptions()
   return defineConfig({
+    // Unconditional: the setup itself no-ops unless linux && no DISPLAY, so the
+    // core + every extension suite get headless Xvfb bootstrap for free. The .js
+    // suffix is the ESM convention for the compiled sibling in dist/.
+    globalSetup: fileURLToPath(new URL('./globalSetup.js', import.meta.url)),
     testDir: options.testDir ?? './specs',
     ...(options.snapshotDir !== undefined ? { snapshotDir: options.snapshotDir } : {}),
     ...(grep !== undefined ? { grep } : {}),

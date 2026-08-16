@@ -18,6 +18,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
+import { runLinuxPreflight } from './linux-preflight.mjs'
 
 const selfPackage = process.argv[2]
 if (!selfPackage) {
@@ -27,6 +28,14 @@ if (!selfPackage) {
 
 // Already inside a turbo task — turbo built the dependency graph for us.
 if (process.env['TURBO_HASH']) process.exit(0)
+
+// Preflight before a (possibly full) build — fail fast on a broken Linux env.
+try {
+  await runLinuxPreflight()
+} catch (err) {
+  console.error(err.message)
+  process.exit(1)
+}
 
 const result = spawnSync(
   'pnpm',

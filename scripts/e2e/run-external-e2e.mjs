@@ -128,6 +128,8 @@ if (buildStatus !== 0) {
 const status = run(process.execPath, [playwrightCli, 'test', '-c', config, ...passthrough], {
   env: {
     ...inheritedEnv,
+    // 与 core/内置扩展 suite 一致：强制非 TTY reporter 输出（只打完成行，无光标覆写）。
+    PLAYWRIGHT_FORCE_TTY: '0',
     ...(regression ? { UNIVERSE_E2E_INCLUDE_REGRESSION: '1' } : {}),
     ...(noTagFilter ? { UNIVERSE_E2E_NO_TAG_FILTER: '1' } : {}),
   },
