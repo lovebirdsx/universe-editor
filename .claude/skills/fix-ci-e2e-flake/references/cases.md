@@ -398,6 +398,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 78 — `page.evaluate: Resulting promise was garbage collected.` 栈在 `evaluateWhenRestored` 内：同一导航竞态的第二种错误消息变体击穿了只认 "Execution context was destroyed" 的守卫；修=抽 `isContextTeardownError` 谓词两种消息都认**
+信号：错误恒为 `page.evaluate: Resulting promise was garbage collected.`，栈落在 harness `WorkbenchPO.js` 的 `evaluateWhenRestored`（`await page.evaluate(() => window.__E2E__.whenRestored())` 行）；调用链上游是「刚 launch / 新开窗口 / restart 后」的 `whenRestored` 等待（实证 run 31942198296/31942208957：`remote.newWindow` "stays local" 在 **ubuntu 两 run initial+retry 全挂**（新窗口首次导航提交在 Linux 上稳定晚于 evaluate → 近似必然），`smoke.editorRestore` restart/切 workspace 两用例各偶发一次（ubuntu 与 windows 各一，retry 也没救回）——**同一根因既能表现为"必然"也能表现为 flaky**，看竞态窗口在该平台/场景下的命中率）。
+根因：`evaluateWhenRestored` 的 3-attempt 重试本来就是为「evaluate 撞上导航/reload 提交窗口」设计的（案例 6 沉淀），但守卫正则只认 `/Execution context was destroyed/`。同一竞态有**两种时机变体**：evaluate 派发时 context 已亡 → "Execution context was destroyed"；CDP `awaitPromise` 已挂上、context 随后才亡 → 远端 promise 对象被释放，CDP 报 "Promise was collected"，Playwright 面向用户的措辞是 "Resulting promise was garbage collected"。后者不匹配正则 → attempt 0 直接 rethrow，三次重试一次没用上——**守卫存在但形同虚设**。test 级 retry 重走同一 launch 流程 → 同一竞态窗口 → 同样秒挂，所以 retry 救不回不能据此排除瞬时竞态（与判定流程第 1 步的经验相反的例外：竞态发生在每次重试都必经的固定相位时，retry 无免疫力）。
+修（harness 一处，不动任何 spec 与被测断言）：`WorkbenchPO.ts` 抽模块级谓词 `isContextTeardownError(err)` 匹配 `/Execution context was destroyed|Resulting promise was garbage collected|Promise was collected/`，`evaluateWhenRestored` 与 `fixtures.ts` reload-reset 重试块（同款旧正则）都改用它。sweep 确认：specs 内所有 `whenRestored` 已全部路由到 `evaluateWhenRestored`（helper 修复自动生效）；其余等待型 evaluate（`whenReady`=probe 装配即 resolve 非长挂、`whenBootstrapFocusSettled`=调用点均在已稳定页面）无导航竞态不需加固。验证：两 spec 定向 + repeat-each 全绿。
+教训：a) 对「错误消息守卫」类容错，同一底层竞态可能有多种消息措辞（CDP 时机不同/Playwright 版本措辞演化），守卫谓词要按**竞态语义**收敛成共享谓词并枚举已知变体，散落各处的裸正则会各自漏；b) 看到「守卫明明在却没兜住」，第一步 diff 守卫的匹配条件和实际错误消息全文，别急着怀疑守卫逻辑本身；c) 同一 harness 缺陷在不同平台/场景可同时呈现「必然挂」与「偶发挂」两副面孔——按错误签名+栈归并失败，比按"必然/flaky"二分更快定位同源。锚：`packages/e2e-harness/src/pages/WorkbenchPO.ts`（isContextTeardownError/evaluateWhenRestored）；`packages/e2e-harness/src/fixtures.ts`（reload-reset 重试块）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

@@ -50,13 +50,30 @@ export async function expectNoLeaks(page: Page): Promise<void> {
 }
 
 /**
+ * Recognize the two error-message variants Playwright surfaces for the same
+ * mid-evaluate navigation race, so retry guards tolerate both:
+ *   - "Execution context was destroyed": the evaluate was dispatched after the
+ *     context had already been torn down.
+ *   - "Resulting promise was garbage collected" (CDP "Promise was collected"):
+ *     the awaitPromise had been registered but the context was destroyed
+ *     afterwards, releasing the remote promise object before Playwright could
+ *     await it.
+ */
+export function isContextTeardownError(err: unknown): boolean {
+  return /Execution context was destroyed|Resulting promise was garbage collected|Promise was collected/.test(
+    String(err),
+  )
+}
+
+/**
  * Evaluate `whenRestored()` tolerating a mid-evaluate context teardown.
  *
  * Callers race a navigation: the fixture's firstWindow()/a self-launched
  * `electron.launch` may return before the first navigation commits, and a
  * restart reload may not be fully committed on slow CI. In both cases the
- * evaluate can coincide with a context switch and throw "Execution context was
- * destroyed". Re-wait for the probe to be (re)installed and evaluate again.
+ * evaluate can coincide with a context switch and throw either teardown message
+ * (see {@link isContextTeardownError}). Re-wait for the probe to be (re)installed
+ * and evaluate again.
  *
  * Exported so self-launching specs (which don't use the `workbench` fixture)
  * reuse the same hardening instead of leaving a bare `page.evaluate(whenRestored)`.
@@ -67,7 +84,7 @@ export async function evaluateWhenRestored(page: Page): Promise<void> {
       await page.evaluate(() => window.__E2E__!.whenRestored())
       return
     } catch (err) {
-      if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
+      if (attempt === 2 || !isContextTeardownError(err)) throw err
       await page.waitForLoadState('domcontentloaded')
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),

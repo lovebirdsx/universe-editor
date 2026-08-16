@@ -24,7 +24,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `Test timeout of 30000ms exceeded`（非 poll message）=test 天花板击穿 → 案例 3/10/32
 - CI 每次必挂+本地稳过+received 恒空+retry 救不回=伪 flake（CI 缺产物）→ 案例 4
 - `expect.poll` 里 `keyboard.press` 后 received 稳定错值=盲按污染被测对象 → 案例 5
-- `Execution context was destroyed ... navigation`（fire 后页面 reload/导航再 evaluate）→ 案例 6；冷启动首个裸 evaluate、无任何导航/崩溃（utility world 销毁，挂 CDP 后不复现）→ 案例 58
+- `Execution context was destroyed ... navigation`（fire 后页面 reload/导航再 evaluate）→ 案例 6；冷启动首个裸 evaluate、无任何导航/崩溃（utility world 销毁，挂 CDP 后不复现）→ 案例 58；`Resulting promise was garbage collected` 栈在 evaluateWhenRestored 内（同竞态第二种消息变体击穿只认 destroyed 的守卫，retry 救不回≠非瞬时竞态）→ 案例 78
 - 冷启动首 poll 恒 `""`：局部硬编码 timeout 盖 CI 分档 / 首 poll 漏带大 timeout → 案例 7/25/31
 - `EBUSY/EPERM rmdir` 栈在 teardown=Windows 文件锁 → 案例 8；`ENOTEMPTY`+`.json.tmp`=storage 原子写竞态 → 案例 17；EPERM 在 test body finally 删「app 打开/watch 的目录」+retry 救不回=app/daemon 还活着（fixture teardown 在 finally 之后），用 harness `scratchDir` 排到 closeApp 后 → 案例 77
 - `runCommand`+`expect.poll` 分离、received 卡死初值=fire-once 在就位前空转 → 案例 9

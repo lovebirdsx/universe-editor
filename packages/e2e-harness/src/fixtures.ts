@@ -29,7 +29,7 @@ import {
 import { join } from 'node:path'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO, expectNoLeaks } from './pages/WorkbenchPO.js'
+import { WorkbenchPO, expectNoLeaks, isContextTeardownError } from './pages/WorkbenchPO.js'
 import { closeApp, launchAppReady, seedBaselineUserData, waitForProbe } from './launch.js'
 import { installFailureForensics } from './forensics.js'
 
@@ -294,7 +294,7 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
       await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.clearHistory'))
       return
     } catch (err) {
-      if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
+      if (attempt === 2 || !isContextTeardownError(err)) throw err
       await page.waitForLoadState('domcontentloaded')
       await waitForProbe(page)
     }
