@@ -10,8 +10,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  URI,
   ShutdownReason,
+  fsPathToWorkspaceUri,
   type ILifecycleService,
   type IWindowsService,
   type IWorkspaceService,
@@ -29,15 +29,16 @@ export interface ActivateForeignSessionDeps {
  * modifier-key path switches the current window after confirming shutdown.
  * `sessionId` (optional) is handed to the new window so it resumes that exact
  * session once it is up; the same-window switch does not carry it (the user
- * reopens from the list there).
+ * reopens from the list there). `authority` (optional) routes a remote session's
+ * cwd back to its `remote-ssh` host instead of a local `file` URI.
  * Returns false when the same-window switch was vetoed by the shutdown guard.
  */
 export async function activateForeignSession(
   deps: ActivateForeignSessionDeps,
   cwd: string,
-  options: { newWindow: boolean; sessionId?: string },
+  options: { newWindow: boolean; sessionId?: string; authority?: string },
 ): Promise<boolean> {
-  const folder = URI.file(cwd)
+  const folder = fsPathToWorkspaceUri(cwd, options.authority)
   if (options.newWindow) {
     await deps.windows.openWindow(folder, options.sessionId ? { sessionId: options.sessionId } : {})
     return true

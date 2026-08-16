@@ -155,7 +155,7 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
         </div>
       ) : null}
 
-      <ForeignSessionActions cwd={cwd} sessionId={entry.id} />
+      <ForeignSessionActions cwd={cwd} sessionId={entry.id} authority={entry.authority} />
     </div>
   )
 }
@@ -168,9 +168,11 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
 export function ForeignSessionActions({
   cwd,
   sessionId,
+  authority,
 }: {
   cwd: string | undefined
   sessionId: string
+  authority?: string | undefined
 }) {
   const windows = useService(IWindowsService)
   const lifecycle = useService(ILifecycleService)
@@ -178,7 +180,11 @@ export function ForeignSessionActions({
 
   const activate = (newWindow: boolean) => {
     if (cwd === undefined) return
-    void activateForeignSession({ windows, lifecycle, workspace }, cwd, { newWindow, sessionId })
+    void activateForeignSession({ windows, lifecycle, workspace }, cwd, {
+      newWindow,
+      sessionId,
+      ...(authority !== undefined ? { authority } : {}),
+    })
   }
 
   return (
@@ -227,7 +233,7 @@ export function ForeignSessionFooter({ entry }: { entry: AcpSessionHistoryEntry 
           )}
         </span>
       </div>
-      <ForeignSessionActions cwd={entry.cwd} sessionId={entry.id} />
+      <ForeignSessionActions cwd={entry.cwd} sessionId={entry.id} authority={entry.authority} />
     </div>
   )
 }

@@ -16,8 +16,10 @@ import {
   IUriIdentityService,
   IWindowsService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   ShutdownReason,
   URI,
+  fsPathToWorkspaceUri,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -28,6 +30,17 @@ import {
   revealSelectionInInput,
 } from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+
+/**
+ * Reattaches the current workspace's remote authority to a host fsPath, so
+ * extension-host path strings open against the right workspace (local `file:` or
+ * the workspace's `remote-ssh:` authority).
+ */
+function workspaceResourceUri(accessor: ServicesAccessor, fsPath: string): URI {
+  const folder = accessor.get(IWorkspaceService).current?.folder
+  const authority = folder?.scheme === REMOTE_SCHEME ? folder.authority : undefined
+  return fsPathToWorkspaceUri(fsPath, authority)
+}
 
 /** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */ export class GetConfigurationAction extends Action2 {
   static readonly ID = '_workbench.getConfiguration'
@@ -99,7 +112,7 @@ export class OpenFileAction extends Action2 {
     const group = accessor.get(IEditorGroupsService).activeGroup
     const input = accessor
       .get(IInstantiationService)
-      .createInstance(FileEditorInput, URI.file(fsPath))
+      .createInstance(FileEditorInput, workspaceResourceUri(accessor, fsPath))
     group.openEditor(input, { activate: true, pinned: true })
   }
 }
@@ -138,7 +151,7 @@ export class OpenFileAtAction extends Action2 {
   override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
     if (!fsPath) return
     const groups = accessor.get(IEditorGroupsService)
-    const uri = URI.file(fsPath)
+    const uri = workspaceResourceUri(accessor, fsPath)
     const input = revealExistingOrOpen(accessor, groups, uri)
     void revealSelectionInInput(input, { startLineNumber: line + 1, startColumn: column + 1 })
   }
@@ -184,8 +197,9 @@ export class OpenFolderFromExtensionAction extends Action2 {
     if (!fsPath) return
     const lifecycle = accessor.get(ILifecycleService)
     const workspace = accessor.get(IWorkspaceService)
+    const uri = workspaceResourceUri(accessor, fsPath)
     if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
-    await workspace.openFolder(URI.file(fsPath))
+    await workspace.openFolder(uri)
   }
 }
 
@@ -205,6 +219,6 @@ export class OpenFolderInNewWindowFromExtensionAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {
     if (!fsPath) return
-    await accessor.get(IWindowsService).openWindow(URI.file(fsPath))
+    await accessor.get(IWindowsService).openWindow(workspaceResourceUri(accessor, fsPath))
   }
 }
