@@ -340,6 +340,9 @@ export interface IAcpSessionHistoryService {
    * undefined (empty window) the call is a no-op so the GLOBAL fallback
    * bucket stays empty.
    *
+   * `authority` is the remote authority this sweep targeted: every reported
+   * row is attributed to it. Local sweeps pass undefined.
+   *
    * `scope` controls how strict the cwd filter is: `workspace` keeps only
    * exact-cwd rows; `worktree`/`all` trust the sweep's own scoping and accept
    * every reported session (so sibling-worktree / cross-project rows survive).
@@ -348,6 +351,7 @@ export interface IAcpSessionHistoryService {
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    authority: string | undefined,
     scope: SessionHistoryScope,
   ): void
   /**
@@ -371,6 +375,7 @@ export interface IAcpSessionHistoryService {
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    authority: string | undefined,
     preserveIds: ReadonlySet<string>,
     scope: SessionHistoryScope,
   ): void
@@ -406,6 +411,27 @@ export interface BulkMergeSessionInfo {
   readonly branch?: string | null
   /** Transcript file path reported via `SessionInfo._meta.transcriptPath`, if any. */
   readonly transcriptPath?: string | null
+}
+
+/** Legacy rows created before the hydrate sweep persisted `authority` lack the
+ *  field — when their cwd matches the current workspace, attribute them to the
+ *  current window's authority. Cross-worktree legacy rows are never guessed. */
+export function effectiveEntryAuthority(
+  entry: Pick<AcpSessionHistoryEntry, 'cwd' | 'authority'>,
+  currentCwd: string | undefined,
+  currentAuthority: string | undefined,
+  arePathsEqual: (a: string | undefined, b: string | undefined) => boolean,
+): string | undefined {
+  if (entry.authority !== undefined) return entry.authority
+  if (
+    currentAuthority !== undefined &&
+    entry.cwd !== undefined &&
+    currentCwd !== undefined &&
+    arePathsEqual(entry.cwd, currentCwd)
+  ) {
+    return currentAuthority
+  }
+  return undefined
 }
 
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
@@ -820,29 +846,32 @@ export class AcpSessionHistoryService
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    authority: string | undefined,
     scope: SessionHistoryScope,
   ): void {
     if (sessions.length === 0) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, undefined, scope)
+    this._mergeOrReplace(agentId, sessions, currentCwd, authority, undefined, scope)
   }
 
   replaceAgentEntries(
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    authority: string | undefined,
     preserveIds: ReadonlySet<string>,
     scope: SessionHistoryScope,
   ): void {
     // Empty bucket protection: same as bulkMergeFromAgent. Without a workspace
     // we don't know which rows to prune, so leave everything alone.
     if (currentCwd === undefined) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, preserveIds, scope)
+    this._mergeOrReplace(agentId, sessions, currentCwd, authority, preserveIds, scope)
   }
 
   private _mergeOrReplace(
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    authority: string | undefined,
     preserveIds: ReadonlySet<string> | undefined,
     scope: SessionHistoryScope,
   ): void {
@@ -901,13 +930,27 @@ export class AcpSessionHistoryService
         const sameBranch = existing.branch === branch
         const sameTranscriptPath = existing.transcriptPath === transcriptPath
         const sameLastUsed = existing.lastUsedAt === lastUsedAt
-        if (sameTitle && sameCwd && sameBranch && sameTranscriptPath && sameLastUsed) continue
+        // authority is set once at creation and never overwritten; the only
+        // change it accepts is backfilling a legacy row that predates it.
+        const backfillAuthority =
+          existing.authority === undefined && authority !== undefined ? authority : undefined
+        const sameAuthority = backfillAuthority === undefined
+        if (
+          sameTitle &&
+          sameCwd &&
+          sameBranch &&
+          sameTranscriptPath &&
+          sameLastUsed &&
+          sameAuthority
+        )
+          continue
         const next: AcpSessionHistoryEntry = {
           ...existing,
           title,
           ...(cwd !== undefined ? { cwd } : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(transcriptPath !== undefined ? { transcriptPath } : {}),
+          ...(backfillAuthority !== undefined ? { authority: backfillAuthority } : {}),
           lastUsedAt,
         }
         byKey.set(key, next)
@@ -920,6 +963,7 @@ export class AcpSessionHistoryService
           sessionIdOnAgent: info.sessionId,
           title,
           ...(cwd !== undefined ? { cwd } : {}),
+          ...(authority !== undefined ? { authority } : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(transcriptPath !== undefined ? { transcriptPath } : {}),
           createdAt: created,

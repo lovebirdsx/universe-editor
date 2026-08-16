@@ -87,6 +87,7 @@ import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
 import {
+  effectiveEntryAuthority,
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
@@ -608,6 +609,12 @@ export class AcpSessionService
     return folder.authority || undefined
   }
 
+  private _entryAuthority(entry: AcpSessionHistoryEntry): string | undefined {
+    return effectiveEntryAuthority(entry, this._currentCwd(), this._currentAuthority(), (a, b) =>
+      this._uriIdentity.arePathsEqual(a, b),
+    )
+  }
+
   private _historyScope(): SessionHistoryScope {
     const raw = this._config.get<string>(HISTORY_SCOPE_KEY)
     return raw === 'worktree' || raw === 'all' || raw === 'workspace' ? raw : 'worktree'
@@ -957,15 +964,16 @@ export class AcpSessionService
     // on the foreign worktree, so viewing its history across the boundary is safe.
     const currentCwd = this._currentCwd()
     const currentAuthority = this._currentAuthority()
+    const effectiveAuthority = this._entryAuthority(entry)
     if (
       !readOnly &&
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
       (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
-        entry.authority !== currentAuthority)
+        effectiveAuthority !== currentAuthority)
     ) {
       this._logger.info(
-        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} authority=${entry.authority ?? 'local'} current=${currentCwd} authority=${currentAuthority ?? 'local'}`,
+        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} authority=${effectiveAuthority ?? 'local'} current=${currentCwd} authority=${currentAuthority ?? 'local'}`,
       )
       throw new AcpForeignWorktreeError(sessionId, entry.cwd, currentCwd)
     }
@@ -974,7 +982,7 @@ export class AcpSessionService
     try {
       conn = await this._client.connect(entry.agentId, {
         ...(cwd !== undefined ? { cwd } : {}),
-        ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
+        ...(effectiveAuthority !== undefined ? { authority: effectiveAuthority } : {}),
         leaseFor: entry.sessionIdOnAgent,
       })
     } catch (err) {
@@ -1518,7 +1526,7 @@ export class AcpSessionService
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
       (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
-        entry.authority !== currentAuthority)
+        this._entryAuthority(entry) !== currentAuthority)
     ) {
       return false
     }
@@ -1563,12 +1571,13 @@ export class AcpSessionService
           values: entry.configOptions ?? {},
           labels: entry.configLabels ?? {},
         }
+    const forkAuthority = this._entryAuthority(entry)
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
       title: forkTitle,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
-      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
+      ...(forkAuthority !== undefined ? { authority: forkAuthority } : {}),
       hasMessages: true,
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
       ...(Object.keys(forkConfig.values).length > 0
@@ -1624,12 +1633,13 @@ export class AcpSessionService
     const forkConfig = snapshotConfigSelections(live.configOptions.get())
     const configOptions = { ...forkConfig.values, mode: readOnlyMode }
     const configLabels = { ...forkConfig.labels, mode: readOnlyMode }
+    const forkAuthority = this._entryAuthority(entry)
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
       title: quote.label,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
-      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
+      ...(forkAuthority !== undefined ? { authority: forkAuthority } : {}),
       hasMessages: false,
       sideTaskOf: sourceAgentSessionId,
       sideTaskQuote: quote.text,
@@ -1686,10 +1696,11 @@ export class AcpSessionService
     const cwd = entry.cwd
     const currentCwd = this._currentCwd()
     const currentAuthority = this._currentAuthority()
+    const effectiveAuthority = this._entryAuthority(entry)
     if (
       cwd !== undefined &&
       currentCwd !== undefined &&
-      (!this._uriIdentity.arePathsEqual(cwd, currentCwd) || entry.authority !== currentAuthority)
+      (!this._uriIdentity.arePathsEqual(cwd, currentCwd) || effectiveAuthority !== currentAuthority)
     ) {
       throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
     }
@@ -1697,7 +1708,7 @@ export class AcpSessionService
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const conn = await this._client.connect(entry.agentId, {
       ...(cwd !== undefined ? { cwd } : {}),
-      ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
+      ...(effectiveAuthority !== undefined ? { authority: effectiveAuthority } : {}),
     })
     try {
       const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')

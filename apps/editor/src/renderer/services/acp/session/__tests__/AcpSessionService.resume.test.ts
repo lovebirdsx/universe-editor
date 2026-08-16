@@ -118,9 +118,13 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
 class FakeWorkspaceService implements IWorkspaceService {
   declare readonly _serviceBrand: undefined
   readonly current: IWorkspace | null
-  constructor(folderPath?: string) {
-    this.current = folderPath
-      ? ({ folder: { fsPath: folderPath } as IWorkspace['folder'], name: 'ws' } as IWorkspace)
+  constructor(folder?: string | IWorkspace['folder']) {
+    this.current = folder
+      ? ({
+          folder:
+            typeof folder === 'string' ? ({ fsPath: folder } as IWorkspace['folder']) : folder,
+          name: 'ws',
+        } as IWorkspace)
       : null
   }
   private readonly _onDidChangeWorkspace = new Emitter<IWorkspace | null>()
@@ -301,7 +305,11 @@ interface ConnectedSession {
 class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
   readonly connected: ConnectedSession[] = []
-  readonly connectArgs: { agentId: string; cwd: string | undefined }[] = []
+  readonly connectArgs: {
+    agentId: string
+    cwd: string | undefined
+    authority: string | undefined
+  }[] = []
   /** When true, the next connect() rejects — simulates the pool's bounded
    *  initialize handshake timing out (or any spawn/handshake failure). */
   failConnect = false
@@ -338,11 +346,11 @@ class FakeAcpClientService implements IAcpClientService {
 
   async connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string },
+    options?: { cwd?: string; leaseFor?: string; authority?: string },
   ): Promise<IAcpClientConnection> {
     const sink = this._sink
     if (!sink) throw new Error('FakeAcpClientService.connect: sink not installed')
-    this.connectArgs.push({ agentId, cwd: options?.cwd })
+    this.connectArgs.push({ agentId, cwd: options?.cwd, authority: options?.authority })
     if (this.failConnect) {
       throw new Error('ACP initialize timed out after 1ms')
     }
@@ -385,7 +393,7 @@ class FakeAcpClientService implements IAcpClientService {
 
 function buildService(
   opts: FakeAcpClientOptions = {},
-  serviceCwd?: string,
+  workspaceFolder?: string | IWorkspace['folder'],
 ): {
   svc: AcpSessionService
   client: FakeAcpClientService
@@ -415,7 +423,7 @@ function buildService(
   const svc = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
-    new FakeWorkspaceService(serviceCwd),
+    new FakeWorkspaceService(workspaceFolder),
     config,
     notifications,
     telemetry,
@@ -532,6 +540,27 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(sessionId)
     expect(resumed.id).toBe(sessionId)
+  })
+
+  it('resumes a remote legacy row (no authority) by inferring the current workspace authority', async () => {
+    const remoteFolder = {
+      fsPath: '/home/xiao',
+      scheme: 'remote-ssh',
+      authority: 'wsl+ubuntu-24.04',
+    } as unknown as IWorkspace['folder']
+    const built = buildService({ loadSessionResult: {} }, remoteFolder)
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'remote-legacy',
+      title: 'remote session',
+      cwd: '/home/xiao',
+    })
+    const resumed = await svc.resumeSession('remote-legacy')
+    expect(resumed.id).toBe('remote-legacy')
+    // The effective authority (not entry.authority, which is absent) must reach connect.
+    expect(built.client.connectArgs.at(-1)?.authority).toBe('wsl+ubuntu-24.04')
   })
 
   it('resumeSessionReadOnly loads a foreign session without spawning split-brain', async () => {

@@ -21,7 +21,9 @@ import {
   ILoggerService,
   ProxyChannel,
   RemoteChannels,
+  createNamedLogger,
   type IDisposable,
+  type ILogger,
 } from '@universe-editor/platform'
 import {
   AcpHostService,
@@ -67,6 +69,8 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
 
   private readonly _local: AcpHostService
 
+  private readonly _logger: ILogger
+
   private readonly _remoteServices = new Map<string, IAcpHostService>()
   private readonly _remotePromises = new Map<string, Promise<IAcpHostService>>()
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
@@ -81,6 +85,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, { id: 'acpHost', name: 'ACP Host' })
     this._local = this._register(
       new AcpHostService({
         ...(spawn !== undefined ? { spawn } : {}),
@@ -107,6 +112,13 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       const result = await service.start(rest)
       this._remoteByHandle.set(result.handle, spec.authority)
       return result
+    }
+    if (process.platform === 'win32' && spec.cwd?.startsWith('/')) {
+      // POSIX cwd reaching the local spawn means a remote session lost its
+      // authority — the spawn would ENOENT on Windows.
+      this._logger.warn(
+        `acpHost start: POSIX cwd '${spec.cwd}' reached the local spawn — a remote session likely lost its authority`,
+      )
     }
     return this._local.start(spec)
   }

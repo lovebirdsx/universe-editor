@@ -360,6 +360,8 @@ interface BuildOptions {
   readonly resumeSession?: (historyId: string) => Promise<IAcpSession>
   readonly storage?: FakeStorage
   readonly history?: AcpSessionHistoryService
+  /** Current `remote-ssh` authority the callbacks report (defaults to undefined). */
+  readonly getCurrentAuthority?: () => string | undefined
   /**
    * Promise resolved when the test wants `start()` to proceed with the
    * hydrate sweep. Defaults to `Promise.resolve()` so existing tests keep
@@ -411,7 +413,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     resumeSession: recordingResume,
     hasActiveSession: opts.hasActiveSession ?? (() => false),
     getCurrentCwd: () => opts.cwd,
-    getCurrentAuthority: () => undefined,
+    getCurrentAuthority: opts.getCurrentAuthority ?? (() => undefined),
     whenWorkspaceReady: () => whenWorkspaceReady,
     getLiveSessionIds: opts.getLiveSessionIds ?? (() => new Set<string>()),
     getHistoryScope: opts.getHistoryScope ?? (() => 'workspace'),
@@ -632,6 +634,33 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     const titles = built.history.list().map((e) => e.title)
     expect(titles).toContain('one')
     expect(titles).toContain('two')
+  })
+
+  it('passes the current authority through hydrate into history rows', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/home/xiao',
+      getCurrentAuthority: () => 'wsl+ubuntu-24.04',
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [
+        [
+          {
+            sessionId: 's1',
+            cwd: '/home/xiao',
+            title: 'one',
+            updatedAt: '2026-01-01T00:00:00Z',
+          } as unknown as SessionInfo,
+        ],
+      ],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 50))
+    expect(built.history.get('s1')?.authority).toBe('wsl+ubuntu-24.04')
   })
 
   it('swallows initialize errors and records nothing to history', async () => {

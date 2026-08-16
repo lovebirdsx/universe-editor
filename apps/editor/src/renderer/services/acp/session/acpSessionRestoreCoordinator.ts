@@ -33,10 +33,12 @@ import {
 } from '@agentclientprotocol/sdk'
 import type { IAcpClientService, IAcpClientConnection } from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
-import type {
-  IAcpSessionHistoryService,
-  SessionHistoryScope,
-  BulkMergeSessionInfo,
+import {
+  effectiveEntryAuthority,
+  type IAcpSessionHistoryService,
+  type SessionHistoryScope,
+  type BulkMergeSessionInfo,
+  type AcpSessionHistoryEntry,
 } from './acpSessionHistory.js'
 import type { IAcpSession } from './acpSession.js'
 
@@ -261,13 +263,14 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     const caps = this._agentCaps.get(entry.agentId)
     if (caps?.sessionCapabilities?.delete == null) return 'unsupported'
     const cwd = entry.cwd
+    const authority = this._entryAuthority(entry)
     let conn: IAcpClientConnection | undefined
     try {
       conn = await this._client.connect(
         entry.agentId,
         cwd !== undefined
-          ? { cwd, silent: true, ...(entry.authority ? { authority: entry.authority } : {}) }
-          : { silent: true, ...(entry.authority ? { authority: entry.authority } : {}) },
+          ? { cwd, silent: true, ...(authority ? { authority } : {}) }
+          : { silent: true, ...(authority ? { authority } : {}) },
       )
       await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
@@ -291,6 +294,15 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     this._notification.notify({ severity: Severity.Error, message })
   }
 
+  private _entryAuthority(entry: AcpSessionHistoryEntry): string | undefined {
+    return effectiveEntryAuthority(
+      entry,
+      this._callbacks.getCurrentCwd(),
+      this._callbacks.getCurrentAuthority(),
+      (a, b) => this._uriIdentity.arePathsEqual(a, b),
+    )
+  }
+
   /**
    * Resolve a session's transcript file path on demand. The path normally
    * reaches history via the hydrate sweep's `session/list` (`_meta.transcriptPath`),
@@ -305,6 +317,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     if (!entry) return undefined
     const cached = entry.transcriptPath
     if (cached !== undefined && cached.length > 0) return cached
+    const authority = this._entryAuthority(entry)
     let conn: IAcpClientConnection | undefined
     try {
       conn = await this._client.connect(
@@ -313,9 +326,9 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           ? {
               cwd: entry.cwd,
               silent: true,
-              ...(entry.authority ? { authority: entry.authority } : {}),
+              ...(authority ? { authority } : {}),
             }
-          : { silent: true, ...(entry.authority ? { authority: entry.authority } : {}) },
+          : { silent: true, ...(authority ? { authority } : {}) },
       )
       const init = await withTimeout(
         conn.initializeResult,
@@ -461,11 +474,12 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           agentId,
           merged,
           cwd,
+          authority,
           this._callbacks.getLiveSessionIds(),
           scope,
         )
       } else if (merged.length > 0) {
-        this._history.bulkMergeFromAgent(agentId, merged, cwd, scope)
+        this._history.bulkMergeFromAgent(agentId, merged, cwd, authority, scope)
       }
       this._logger.info(
         `hydrated ${merged.length} sessions from ${agentId} for cwd=${cwd} scope=${scope}`,
