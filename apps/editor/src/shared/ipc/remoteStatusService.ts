@@ -84,7 +84,14 @@ export interface IRemoteStatusService {
   listWslDistros(): Promise<readonly WslDistroDto[]>
   retryConnection(authority: string): Promise<void>
   closeConnection(authority: string): Promise<void>
-  stopServer(authority: string): Promise<void>
+  /**
+   * Close every window scoped to `authority` (each runs its shutdown veto
+   * chain, e.g. the running-session guard), then stop the remote server.
+   * Resolves false when a veto cancelled the whole action — the server keeps
+   * running then. When closing would leave no window, main opens a fresh local
+   * empty window first.
+   */
+  stopServer(authority: string): Promise<boolean>
   readonly onDidChangeState: Event<RemoteConnectionStatusDto>
   /** Only available under UNIVERSE_E2E=1; throws otherwise. */
   dropSocketForTesting(authority: string): Promise<void>

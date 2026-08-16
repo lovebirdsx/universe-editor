@@ -12,12 +12,12 @@ import {
   INotificationService,
   IProgressService,
   IQuickInputService,
+  IWindowsService,
   IWorkspaceService,
   InstantiationService,
   LifecycleService,
   MenuId,
   MenuRegistry,
-  REMOTE_SCHEME,
   ServiceCollection,
   URI,
   registerAction2,
@@ -25,11 +25,11 @@ import {
   type IFileDialogService as IFileDialogServiceType,
   type INotification,
   type INotificationService as INotificationServiceType,
+  type IOpenWindowInfo,
   type IProgressService as IProgressServiceType,
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
-  type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
   type QuickPickInput,
 } from '@universe-editor/platform'
@@ -397,31 +397,33 @@ describe('remoteActions — StopRemoteServerAction', () => {
 
   async function invoke(
     authorityArg: string,
-    current: IWorkspace | null,
-  ): Promise<{ calls: string[]; confirmMessages: string[] }> {
+    openWindows: readonly IOpenWindowInfo[],
+    confirmAnswer = true,
+  ): Promise<{ calls: string[]; confirms: Array<{ message: string; detail?: string }> }> {
     const calls: string[] = []
-    const confirmMessages: string[] = []
+    const confirms: Array<{ message: string; detail?: string }> = []
     const remoteStatus = {
       stopServer: async (authority: string) => {
         calls.push(`stopServer:${authority}`)
+        return true
       },
     }
-    const workspace = {
-      current,
-      closeFolder: async () => {
-        calls.push('closeFolder')
-      },
+    const windows = {
+      getWindows: async () => openWindows,
     }
     const dialog = {
-      confirm: async (opts: { message: string }) => {
-        confirmMessages.push(opts.message)
-        return { confirmed: true, choice: 'primary' as const }
+      confirm: async (opts: { message: string; detail?: string }) => {
+        confirms.push({
+          message: opts.message,
+          ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
+        })
+        return { confirmed: confirmAnswer, choice: 'primary' as const }
       },
       prompt: () => Promise.resolve(undefined),
     }
     const services = new ServiceCollection()
     services.set(IRemoteStatusService, remoteStatus as never)
-    services.set(IWorkspaceService, workspace as never)
+    services.set(IWindowsService, windows as never)
     services.set(IDialogService, dialog as never)
     services.set(INotificationService, makeNotificationStub())
     services.set(IQuickInputService, makeQuickInputStub())
@@ -430,34 +432,49 @@ describe('remoteActions — StopRemoteServerAction', () => {
       const cmd = CommandsRegistry.getCommand(StopRemoteServerAction.ID)!
       await cmd.handler(accessor, authorityArg)
     })
-    return { calls, confirmMessages }
+    return { calls, confirms }
   }
 
-  it('closes the current remote workspace before stopping its server', async () => {
+  function remoteWindow(id: number, name: string | null, remoteAuthority: string): IOpenWindowInfo {
+    return { id, folder: null, name, remoteAuthority }
+  }
+
+  it('lists the related workspace windows in the confirmation and stops the server', async () => {
     disposables.push(registerAction2(StopRemoteServerAction))
-    const current = {
-      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/' }),
-      name: 'myhost',
-    }
-    const { calls, confirmMessages } = await invoke('myhost', current)
-    expect(calls).toEqual(['closeFolder', 'stopServer:myhost'])
-    expect(confirmMessages[0]).toContain('This closes the current remote workspace')
+    const { calls, confirms } = await invoke('myhost', [
+      remoteWindow(1, 'proj-a', 'myhost'),
+      remoteWindow(2, 'proj-b', 'myhost'),
+      { id: 3, folder: URI.file('C:/local-project').toJSON(), name: 'local-project' },
+    ])
+    expect(calls).toEqual(['stopServer:myhost'])
+    expect(confirms[0]?.message).toContain("'myhost'")
+    expect(confirms[0]?.detail).toContain('2 related workspace window(s)')
+    expect(confirms[0]?.detail).toContain('proj-a, proj-b')
+    expect(confirms[0]?.detail).not.toContain('local-project')
   })
 
-  it('does not close the workspace when the authority is not the current one', async () => {
+  it('matches windows through authority normalization (WSL case-insensitive)', async () => {
     disposables.push(registerAction2(StopRemoteServerAction))
-    const current = {
-      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'otherhost', path: '/' }),
-      name: 'otherhost',
-    }
-    const { calls } = await invoke('myhost', current)
-    expect(calls).toEqual(['stopServer:myhost'])
+    const { confirms } = await invoke('wsl+Ubuntu', [remoteWindow(1, 'proj', 'wsl+ubuntu')])
+    expect(confirms[0]?.detail).toContain('proj')
   })
 
-  it('does not close a local workspace', async () => {
+  it('labels an empty remote-scoped window in the confirmation', async () => {
     disposables.push(registerAction2(StopRemoteServerAction))
-    const current = { folder: URI.file('C:/local-project'), name: 'local-project' }
-    const { calls } = await invoke('myhost', current)
+    const { confirms } = await invoke('myhost', [remoteWindow(1, null, 'myhost')])
+    expect(confirms[0]?.detail).toContain('Empty Window')
+  })
+
+  it('keeps a plain teardown message when no window uses the host', async () => {
+    disposables.push(registerAction2(StopRemoteServerAction))
+    const { calls, confirms } = await invoke('myhost', [])
     expect(calls).toEqual(['stopServer:myhost'])
+    expect(confirms[0]?.detail).toBe('The connection will be torn down.')
+  })
+
+  it('does not stop the server when the confirmation is cancelled', async () => {
+    disposables.push(registerAction2(StopRemoteServerAction))
+    const { calls } = await invoke('myhost', [remoteWindow(1, 'proj', 'myhost')], false)
+    expect(calls).toEqual([])
   })
 })

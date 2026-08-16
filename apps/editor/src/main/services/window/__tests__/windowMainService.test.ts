@@ -545,4 +545,100 @@ describe('WindowMainService', () => {
       vi.useRealTimers()
     }
   })
+
+  describe('closeWindowsForRemoteAuthority', () => {
+    const REMOTE = 'remote-ssh'
+
+    function windowAt(index: number): {
+      close: ReturnType<typeof vi.fn>
+      isDestroyed: ReturnType<typeof vi.fn>
+    } {
+      return vi.mocked(BrowserWindow).mock.results[index]?.value as never
+    }
+
+    it('closes only the windows scoped to the authority, sparing local ones', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({
+        workspace: {
+          folder: URI.from({ scheme: REMOTE, authority: 'wsl+ubuntu', path: '/home/u/proj' }),
+          name: 'proj',
+        },
+      })
+      await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
+
+      await expect(svc.closeWindowsForRemoteAuthority('wsl+ubuntu')).resolves.toBe(true)
+
+      expect(windowAt(0).close).toHaveBeenCalledTimes(1)
+      expect(windowAt(1).close).not.toHaveBeenCalled()
+      // Not the last window — no replacement empty window is opened.
+      expect(vi.mocked(BrowserWindow)).toHaveBeenCalledTimes(2)
+    })
+
+    it('matches an empty remote-scoped window and normalizes WSL authority case', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({ remoteAuthority: 'wsl+Ubuntu' })
+      await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
+
+      await expect(svc.closeWindowsForRemoteAuthority('wsl+UBUNTU')).resolves.toBe(true)
+
+      expect(windowAt(0).close).toHaveBeenCalledTimes(1)
+      expect(windowAt(1).close).not.toHaveBeenCalled()
+    })
+
+    it('runs the CloseWindow shutdown veto and aborts the whole batch on a veto', async () => {
+      const vetoingLifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockResolvedValue(false),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: vetoingLifecycle,
+        rendererSessions: {} as never,
+      }))
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({ remoteAuthority: 'myhost' })
+      await svc.createWindow({ remoteAuthority: 'myhost' })
+
+      await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(false)
+
+      expect(vetoingLifecycle.confirmShutdown).toHaveBeenCalledWith(
+        ShutdownReason.CloseWindow,
+        undefined,
+      )
+      expect(windowAt(0).close).not.toHaveBeenCalled()
+      expect(windowAt(1).close).not.toHaveBeenCalled()
+    })
+
+    it('opens an empty local window before closing when none would remain', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({ remoteAuthority: 'myhost' })
+
+      await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(true)
+
+      expect(vi.mocked(BrowserWindow)).toHaveBeenCalledTimes(2)
+      const replacementCreatedAt = vi.mocked(BrowserWindow).mock.invocationCallOrder[1]!
+      const remoteClosedAt = windowAt(0).close.mock.invocationCallOrder[0]!
+      expect(replacementCreatedAt).toBeLessThan(remoteClosedAt)
+    })
+
+    it('is a no-op returning true when no window uses the authority', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
+
+      await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(true)
+
+      expect(windowAt(0).close).not.toHaveBeenCalled()
+      expect(vi.mocked(BrowserWindow)).toHaveBeenCalledTimes(1)
+    })
+
+    it('getOpenWindowInfos reports the window-scoped remote authority', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow({ remoteAuthority: 'wsl+Ubuntu' })
+      await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
+
+      const infos = svc.getOpenWindowInfos()
+      expect(infos[0]?.remoteAuthority).toBe('wsl+ubuntu')
+      expect(infos[1]?.remoteAuthority).toBeUndefined()
+    })
+  })
 })

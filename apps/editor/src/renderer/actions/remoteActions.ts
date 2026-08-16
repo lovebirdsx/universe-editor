@@ -18,6 +18,7 @@ import {
   INotificationService,
   IProgressService,
   IQuickInputService,
+  IWindowsService,
   IWorkspaceService,
   ProgressLocation,
   REMOTE_SCHEME,
@@ -26,6 +27,7 @@ import {
   isValidWslDistroName,
   localize,
   localize2,
+  normalizeRemoteAuthority,
   remoteFsPathToUri,
   wslAuthorityForDistro,
   type IFileDialogService as IFileDialogServiceType,
@@ -474,7 +476,7 @@ export class StopRemoteServerAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, authorityArg?: string): Promise<void> {
     const remoteStatus = accessor.get(IRemoteStatusService)
-    const workspace = accessor.get(IWorkspaceService)
+    const windows = accessor.get(IWindowsService)
     const dialog = accessor.get(IDialogService)
     const notification = accessor.get(INotificationService)
     const quickInput = accessor.get(IQuickInputService)
@@ -498,35 +500,37 @@ export class StopRemoteServerAction extends Action2 {
       if (!authority) return
     }
 
-    const current = workspace.current
-    if (current?.folder.scheme === REMOTE_SCHEME && current.folder.authority === authority) {
-      const { confirmed } = await dialog.confirm({
-        type: 'warning',
-        message: localize(
-          'remote.stopServer.confirmCurrent',
-          "Stop the remote server on '{authority}'? This closes the current remote workspace.",
-          { authority },
-        ),
-        primaryButton: localize('remote.stopServer.confirmButton', 'Stop Server'),
-        cancelButton: localize('common.cancel', 'Cancel'),
-      })
-      if (!confirmed) return
-      await workspace.closeFolder()
-      await remoteStatus.stopServer(authority)
-      return
-    }
-
+    // Every window scoped to this authority (remote workspaces plus empty
+    // remote-scoped windows) goes down with the server — say so up front.
+    const normalized = normalizeRemoteAuthority(authority)
+    const related = (await windows.getWindows()).filter((w) => w.remoteAuthority === normalized)
+    const detail =
+      related.length === 0
+        ? localize('remote.stopServer.detail.none', 'The connection will be torn down.')
+        : localize(
+            'remote.stopServer.detail.windows',
+            'The connection will be torn down and {count} related workspace window(s) will be closed: {names}',
+            {
+              count: related.length,
+              names: related
+                .map((w) => w.name ?? localize('remote.stopServer.emptyWindow', 'Empty Window'))
+                .join(', '),
+            },
+          )
     const { confirmed } = await dialog.confirm({
       type: 'warning',
-      message: localize(
-        'remote.stopServer.confirm',
-        "Stop the remote server on '{authority}'? The connection will be torn down.",
-        { authority },
-      ),
+      message: localize('remote.stopServer.confirm', "Stop the remote server on '{authority}'?", {
+        authority,
+      }),
+      detail,
       primaryButton: localize('remote.stopServer.confirmButton', 'Stop Server'),
       cancelButton: localize('common.cancel', 'Cancel'),
     })
     if (!confirmed) return
+    // Main closes the related windows first (each runs its running-session
+    // shutdown guard; a veto aborts and the server keeps running), opens a
+    // local empty window when none would remain, then stops the server. The
+    // returned promise may never settle when this window is among the closed.
     await remoteStatus.stopServer(authority)
   }
 }

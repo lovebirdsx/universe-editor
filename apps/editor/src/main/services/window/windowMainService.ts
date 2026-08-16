@@ -16,6 +16,7 @@ import {
   localize,
   mark,
   normalizePlatform,
+  normalizeRemoteAuthority,
   ShutdownReason,
   URI,
   type Event,
@@ -69,6 +70,7 @@ export interface IWindowMainService {
   getWindows(): ReadonlyArray<BrowserWindow>
   getOpenWindowInfos(): IOpenWindowInfo[]
   openWindowForFolder(folder?: URI, sessionToOpen?: string, deepLink?: string): Promise<void>
+  closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
   captureSessionForQuit(): Promise<void>
   confirmQuit(requestingWindowId?: number): Promise<boolean>
   isQuitConfirmed(): boolean
@@ -519,13 +521,16 @@ export class WindowMainService implements IWindowMainService {
 
   getOpenWindowInfos(): IOpenWindowInfo[] {
     const infos: IOpenWindowInfo[] = []
-    for (const { win, workspace } of this._windows.values()) {
+    for (const entry of this._windows.values()) {
+      const { win, workspace } = entry
       if (win.isDestroyed()) continue
       const current = workspace.current
+      const remoteAuthority = this._effectiveRemoteAuthority(entry)
       infos.push({
         id: win.id,
         folder: current ? current.folder.toJSON() : null,
         name: current ? current.name : null,
+        ...(remoteAuthority !== undefined ? { remoteAuthority } : {}),
       })
     }
     return infos
@@ -593,6 +598,59 @@ export class WindowMainService implements IWindowMainService {
       ...(sessionToOpen ? { sessionToOpen } : {}),
       ...(deepLink ? { deepLink } : {}),
     })
+  }
+
+  /**
+   * Close every window scoped to `authority` (remote workspaces plus empty
+   * remote-scoped windows) after running each window's renderer shutdown veto
+   * chain (running-session guard, same as a local window close). A single veto
+   * aborts the whole batch — no window is closed and false is returned. When
+   * the batch covers every live window, a fresh local empty window is opened
+   * FIRST so the app never passes through window-all-closed (which quits on
+   * win32/linux).
+   */
+  async closeWindowsForRemoteAuthority(authority: string): Promise<boolean> {
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
+    const normalized = normalizeRemoteAuthority(authority)
+    const related = [...this._windows.values()].filter(
+      (entry) => !entry.win.isDestroyed() && this._effectiveRemoteAuthority(entry) === normalized,
+    )
+    if (related.length === 0) return true
+    logger.info(
+      `closeWindowsForRemoteAuthority authority=${normalized} windows=[${related.map((e) => e.win.id).join(',')}]`,
+    )
+    for (const entry of related) {
+      const proceed = await this._canProceed(
+        entry.win.id,
+        entry.rendererLifecycle,
+        ShutdownReason.CloseWindow,
+      )
+      if (!proceed) {
+        logger.info(`closeWindowsForRemoteAuthority vetoed by window id=${entry.win.id}`)
+        return false
+      }
+    }
+    const liveCount = [...this._windows.values()].filter((e) => !e.win.isDestroyed()).length
+    if (related.length >= liveCount) {
+      logger.info(
+        'closeWindowsForRemoteAuthority would close every window; opening an empty local window first',
+      )
+      await this.createWindow({})
+    }
+    for (const entry of related) {
+      this._allowClose.add(entry.win.id)
+      if (!entry.win.isDestroyed()) entry.win.close()
+    }
+    return true
+  }
+
+  /**
+   * The remote authority a window is currently scoped to: its workspace folder
+   * wins (a window that switched to a local folder is no longer remote-scoped);
+   * an empty window falls back to the authority it was created with.
+   */
+  private _effectiveRemoteAuthority(entry: WindowEntry): string | undefined {
+    return deriveWindowRemoteAuthority(entry.workspace.current?.folder, entry.remoteAuthority)
   }
 
   /**

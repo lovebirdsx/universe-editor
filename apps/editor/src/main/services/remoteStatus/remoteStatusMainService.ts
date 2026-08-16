@@ -41,12 +41,23 @@ function toEnvironmentDto(env: {
   }
 }
 
+/**
+ * Host hook into window management, injected after WindowMainService exists:
+ * lets stopServer close the windows scoped to an authority (running their
+ * shutdown veto chain) before tearing the server down.
+ */
+export interface IRemoteWindowsParticipant {
+  closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
+}
+
 export class RemoteStatusMainService extends Disposable implements IRemoteStatusService {
   declare readonly _serviceBrand: undefined
 
   private readonly _states = new Map<string, RemoteConnectionStatusDto>()
   private readonly _onDidChangeState = this._register(new Emitter<RemoteConnectionStatusDto>())
   readonly onDidChangeState: Event<RemoteConnectionStatusDto> = this._onDidChangeState.event
+
+  private _windowsParticipant: IRemoteWindowsParticipant | undefined
 
   constructor(
     @IRemoteConnectionService private readonly _remote: IRemoteConnectionService,
@@ -104,8 +115,18 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
     await this._remote.closeConnection(authority)
   }
 
-  async stopServer(authority: string): Promise<void> {
+  /** Wired from index.ts once WindowMainService exists (created after this service). */
+  setWindowsParticipant(participant: IRemoteWindowsParticipant): void {
+    this._windowsParticipant = participant
+  }
+
+  async stopServer(authority: string): Promise<boolean> {
+    if (this._windowsParticipant) {
+      const proceed = await this._windowsParticipant.closeWindowsForRemoteAuthority(authority)
+      if (!proceed) return false
+    }
     await this._remote.stopServer(authority)
+    return true
   }
 
   async dropSocketForTesting(authority: string): Promise<void> {

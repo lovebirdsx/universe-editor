@@ -48,6 +48,7 @@ import { IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IRemoteStatusService } from '../shared/ipc/remoteStatusService.js'
+import type { RemoteStatusMainService } from './services/remoteStatus/remoteStatusMainService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../shared/ipc/processMonitorService.js'
@@ -518,7 +519,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
       watcherProcess: accessor.get(IWatcherProcessService),
       remoteConnection: accessor.get(IRemoteConnectionService),
-      remoteStatus: accessor.get(IRemoteStatusService),
+      remoteStatus: accessor.get(IRemoteStatusService) as RemoteStatusMainService,
     }))
   }
   if (!windowMainService) {
@@ -541,6 +542,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     applicationServices.update.setQuitConfirmer((requestingWindowId) =>
       windows.confirmQuit(requestingWindowId),
     )
+    // Stop Remote Server closes every window scoped to that authority (after
+    // their shutdown veto) before tearing the server down.
+    applicationServices.remoteStatus.setWindowsParticipant(windows)
     // Windows taskbar Jump List (right-click the pinned icon). Tracks the shared
     // recent-workspaces list; no-op on non-Windows platforms.
     windowsJumpList = new WindowsJumpList(applicationServices.recentWorkspaces, logMainService)

@@ -41,7 +41,6 @@ import type { ICodexConfigService } from '../../shared/ipc/codexConfigService.js
 import type { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
-import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import type { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import type { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import type { ErrorSinkMainService } from '../services/telemetry/errorSinkMainService.js'
@@ -53,6 +52,7 @@ import type { SessionSwitcherMainService } from '../services/sessionSwitcher/ses
 import type { ConfigLocationMainService } from '../services/configLocation/configLocationMainService.js'
 import type { WatcherProcessClient } from '@universe-editor/node-services'
 import type { IRemoteConnectionService } from '../services/remote/remoteConnectionMainService.js'
+import type { RemoteStatusMainService } from '../services/remoteStatus/remoteStatusMainService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -117,7 +117,7 @@ export interface ApplicationServices {
    */
   readonly remoteConnection: IRemoteConnectionService
   /** Wire facade over `remoteConnection`, exposing connection state to the renderer. */
-  readonly remoteStatus: IRemoteStatusService
+  readonly remoteStatus: RemoteStatusMainService
 }
 
 /**

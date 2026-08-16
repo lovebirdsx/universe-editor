@@ -16,6 +16,12 @@ export interface IOpenWindowInfo {
   readonly folder: UriComponents | null
   /** Display label (workspace name), or null for an empty window. */
   readonly name: string | null
+  /**
+   * Normalized remote authority the window is scoped to — derived from a remote
+   * workspace folder, or window-level for an empty remote-scoped window. Absent
+   * for local windows.
+   */
+  readonly remoteAuthority?: string
 }
 
 /**
