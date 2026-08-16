@@ -51,6 +51,43 @@ describe('formatWindowTitle', () => {
     ).toBe(`universe-editor3 — ● 修复登录Bug ${badge}`)
   })
 
+  it('appends the remote badge to every title shape', () => {
+    const badge = '[WSL: ubuntu-24.04]'
+    expect(formatWindowTitle({ appName: 'Universe Editor', remoteBadge: badge })).toBe(
+      `Universe Editor ${badge}`,
+    )
+    expect(
+      formatWindowTitle({
+        appName: 'Universe Editor',
+        workspaceName: 'myproj',
+        parent: '/home/xiao/git_project',
+        remoteBadge: badge,
+      }),
+    ).toBe(`myproj - /home/xiao/git_project ${badge}`)
+    expect(
+      formatWindowTitle({
+        appName: 'Universe Editor',
+        workspaceName: 'myproj',
+        symbol: '●',
+        sessionTitle: '修复Bug',
+        remoteBadge: badge,
+      }),
+    ).toBe(`myproj — ● 修复Bug ${badge}`)
+  })
+
+  it('appends the remote badge before the dev-host badge', () => {
+    expect(
+      formatWindowTitle({
+        appName: 'Universe Editor',
+        workspaceName: 'myproj',
+        symbol: '●',
+        sessionTitle: '修复Bug',
+        remoteBadge: '[WSL: ubuntu-24.04]',
+        devHostBadge: '[Extension Development Host]',
+      }),
+    ).toBe('myproj — ● 修复Bug [WSL: ubuntu-24.04] [Extension Development Host]')
+  })
+
   it('falls back to "name - parent" without an active session', () => {
     expect(
       formatWindowTitle({

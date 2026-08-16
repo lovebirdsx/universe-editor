@@ -12,8 +12,11 @@ import {
   IEditorInput,
   IEditorService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   localize,
   markAsSingleton,
+  remoteAuthorityLabel,
+  type URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
@@ -21,6 +24,14 @@ import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
 import styles from './EditorArea.module.css'
 
 const RECENT_LIMIT = 5
+
+/** Path line for a recent entry: remote folders show `WSL: <distro> · <path>`. */
+export function recentPathLabel(folder: URI): string {
+  if (folder.scheme === REMOTE_SCHEME) {
+    return `${remoteAuthorityLabel(folder.authority)} · ${folder.path}`
+  }
+  return workspaceFullLabel(folder)
+}
 
 export function WelcomeEditor(_props: { input: IEditorInput }) {
   const workspace = useService(IWorkspaceService)
@@ -133,21 +144,34 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
         <section className={styles['welcome-recent']}>
           <h2>{localize('welcome.recent', 'Recent')}</h2>
           <ul>
-            {visible.map((entry) => (
-              <li key={entry.folder.toString()}>
-                <button
-                  type="button"
-                  className={styles['welcome-recent-item']}
-                  onClick={() => void workspace.openFolder(entry.folder)}
-                  data-tooltip={workspaceFullLabel(entry.folder)}
-                >
-                  <span className={styles['welcome-recent-name']}>{entry.name}</span>
-                  <span className={styles['welcome-recent-path']}>
-                    {workspaceFullLabel(entry.folder)}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {visible.map((entry) => {
+              const isRemote = entry.folder.scheme === REMOTE_SCHEME
+              return (
+                <li key={entry.folder.toString()}>
+                  <button
+                    type="button"
+                    className={styles['welcome-recent-item']}
+                    onClick={() => void workspace.openFolder(entry.folder)}
+                    data-tooltip={workspaceFullLabel(entry.folder)}
+                  >
+                    {isRemote ? (
+                      <span className={styles['welcome-recent-name-row']}>
+                        <span
+                          className={`codicon codicon-remote ${styles['welcome-recent-remote-icon']}`}
+                          aria-hidden="true"
+                        />
+                        <span className={styles['welcome-recent-name']}>{entry.name}</span>
+                      </span>
+                    ) : (
+                      <span className={styles['welcome-recent-name']}>{entry.name}</span>
+                    )}
+                    <span className={styles['welcome-recent-path']}>
+                      {recentPathLabel(entry.folder)}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         </section>
       )}

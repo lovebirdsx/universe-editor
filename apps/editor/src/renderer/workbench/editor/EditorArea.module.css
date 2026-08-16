@@ -482,6 +482,17 @@
   color: var(--vscode-editor-foreground, #cccccc);
 }
 
+.welcome-recent-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.welcome-recent-remote-icon {
+  font-size: 13px;
+  color: var(--vscode-statusBarItem-remoteBackground, #007acc);
+}
+
 .welcome-recent-path {
   font-size: 12px;
   color: var(--vscode-editor-mutedForeground, #888888);

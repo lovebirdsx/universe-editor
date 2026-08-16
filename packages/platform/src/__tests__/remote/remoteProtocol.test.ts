@@ -10,6 +10,7 @@ import {
   isValidWslDistroName,
   isWslAuthority,
   normalizeRemoteAuthority,
+  remoteAuthorityLabel,
   wslAuthorityForDistro,
   wslDistroFromAuthority,
 } from '../../remote/remoteProtocol.js'
@@ -81,6 +82,23 @@ describe('normalizeRemoteAuthority', () => {
     expect(normalizeRemoteAuthority('')).toBe('')
     expect(normalizeRemoteAuthority('wsl+')).toBe('wsl+')
     expect(normalizeRemoteAuthority('wsl+bad name')).toBe('wsl+bad name')
+  })
+})
+
+describe('remoteAuthorityLabel', () => {
+  it('labels a valid WSL authority with its distro', () => {
+    expect(remoteAuthorityLabel('wsl+ubuntu-24.04')).toBe('WSL: ubuntu-24.04')
+    expect(remoteAuthorityLabel('wsl+debian')).toBe('WSL: debian')
+  })
+
+  it('labels ssh-style authorities with the SSH prefix', () => {
+    expect(remoteAuthorityLabel('myhost')).toBe('SSH: myhost')
+    expect(remoteAuthorityLabel('user@host:2222')).toBe('SSH: user@host:2222')
+  })
+
+  it('falls back to SSH for a malformed WSL authority', () => {
+    expect(remoteAuthorityLabel('wsl+')).toBe('SSH: wsl+')
+    expect(remoteAuthorityLabel('wsl+bad name')).toBe('SSH: wsl+bad name')
   })
 })
 

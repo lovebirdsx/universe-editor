@@ -5,7 +5,10 @@
  *  taskbar shows, at a glance, which workspace each window belongs to and what
  *  session it is running. With an active session the title reads
  *  "<folder> — <symbol> <session title>" (e.g. "universe-editor3 — ● 修复登录Bug");
- *  with none it falls back to "<folder name> - <parent directory>". Electron
+ *  with none it falls back to "<folder name> - <parent directory>". A remote
+ *  window appends a "[WSL: ...]" / "[SSH: ...]" badge (from the workspace's
+ *  authority, or the window's argv authority when the window is empty), so the
+ *  taskbar distinguishes remote windows even with no workspace open. Electron
  *  mirrors `document.title` onto the native window title, surfaced even with
  *  `frame: false`. The status symbol maps AcpSessionStatus to a geometric shape:
  *  ● running · ○ idle · ◌ connecting · ✕ errored · ◆ ask (closed → no session
@@ -19,6 +22,7 @@ import {
   autorun,
   localize,
   observableValue,
+  remoteAuthorityLabel,
   type IReader,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -34,6 +38,7 @@ import {
   resolveLiveSessionTitle,
   truncateSessionTitle,
 } from '../services/acp/session/acpSessionTitle.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { workspaceParentLabel } from '../services/workspace/workspaceLabel.js'
 
 const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
@@ -79,8 +84,12 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       window[EXTENSION_DEVELOPMENT_ENABLED_KEY] === true
         ? localize('windowTitle.extDevHost', '[Extension Development Host]')
         : undefined
+    // Remote windows carry a "[WSL: ...]" / "[SSH: ...]" badge — also for an
+    // empty window, where the authority comes from argv (remote "New Window").
+    const authority = currentRemoteAuthority(workspace)
+    const remoteBadge = authority !== undefined ? `[${remoteAuthorityLabel(authority)}]` : undefined
     if (!workspace) {
-      document.title = formatWindowTitle({ appName, devHostBadge })
+      document.title = formatWindowTitle({ appName, remoteBadge, devHostBadge })
       return
     }
     const parent = workspaceParentLabel(workspace.folder)
@@ -105,6 +114,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       parent,
       symbol,
       sessionTitle,
+      remoteBadge,
       devHostBadge,
     })
   }

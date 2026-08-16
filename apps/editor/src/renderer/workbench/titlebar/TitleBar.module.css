@@ -86,6 +86,33 @@
   flex-shrink: 0;
 }
 
+/* Remote badge next to the command center (VSCode remote indicator in the
+ * title bar). Colored pill so a remote window is recognizable at a glance. */
+.remote-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--vscode-statusBarItem-remoteBackground, #007acc);
+  color: var(--vscode-statusBarItem-remoteForeground, #ffffff);
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.remote-badge:hover {
+  filter: brightness(1.12);
+}
+
+.remote-badge-icon {
+  font-size: 12px;
+}
+
 .layout-btn:disabled {
   color: var(--vscode-descriptionForeground, #8a8a92);
   opacity: 0.4;

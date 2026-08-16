@@ -280,7 +280,7 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('src/main.ts — remote-ssh://e2e-local/home/user/project')
+    expect(titleText()).toBe('src/main.ts — /home/user/project')
   })
 
   it('shows the full path for a remote file outside the workspace', () => {
@@ -299,7 +299,7 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('/other/foo.txt — remote-ssh://e2e-local/home/user/project')
+    expect(titleText()).toBe('/other/foo.txt — /home/user/project')
   })
 
   it('does not treat a different remote authority as in-workspace', () => {
@@ -318,9 +318,7 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe(
-      '/home/user/project/src/main.ts — remote-ssh://e2e-local/home/user/project',
-    )
+    expect(titleText()).toBe('/home/user/project/src/main.ts — /home/user/project')
   })
 
   it('shows the editor name and workspace path for a non-file editor', () => {

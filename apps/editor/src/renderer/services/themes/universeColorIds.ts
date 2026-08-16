@@ -475,6 +475,30 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Status bar prominent items foreground color.',
     'color-statusbar-prominent-fg',
   ),
+  d(
+    'statusBarItem.remoteBackground',
+    '#007acc',
+    '#007acc',
+    'Background color for the remote indicator on the status bar.',
+  ),
+  d(
+    'statusBarItem.remoteForeground',
+    '#ffffff',
+    '#ffffff',
+    'Foreground color for the remote indicator on the status bar.',
+  ),
+  d(
+    'statusBarItem.errorBackground',
+    '#b01011',
+    '#b01011',
+    'Status bar item background color when the item has an error.',
+  ),
+  d(
+    'statusBarItem.errorForeground',
+    '#ffffff',
+    '#ffffff',
+    'Status bar item foreground color when the item has an error.',
+  ),
 
   // ---------------------------------------------------------------- Panel
   d('panel.background', '#1a1a1c', '#ffffff', 'Panel background color.', 'color-panel-bg'),

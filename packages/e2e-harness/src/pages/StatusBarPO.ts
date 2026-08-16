@@ -11,4 +11,9 @@ export class StatusBarPO {
   > {
     return this.page.evaluate(() => window.__E2E__!.getStatusBarEntries())
   }
+
+  /** DOM locator for an entry with a semantic id (`data-testid="statusbar-entry-<entryId>"`). */
+  entry(entryId: string): Locator {
+    return this.page.getByTestId(`statusbar-entry-${entryId}`)
+  }
 }

@@ -108,6 +108,20 @@ test.describe('remote workspace ui', () => {
     fs.writeFileSync(path.join(tmpDir, 'a.txt'), 'hello\n')
     const rootUri = remoteUri(tmpDir)
 
+    // Local state: the remote indicator entry always renders (icon-only, no
+    // background), isRemote is false, and the title bar shows no remote badge.
+    await expect
+      .poll(async () => {
+        const entries = await workbench.page.evaluate(() => window.__E2E__!.getStatusBarEntries())
+        const entry = entries.find((e) => e.entryId === 'remote.indicator')
+        return entry ? { text: entry.text, backgroundColor: entry.backgroundColor ?? null } : null
+      })
+      .toEqual({ text: '$(remote)', backgroundColor: null })
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getContextKey('isRemote')))
+      .toBe(false)
+    await expect(workbench.page.getByTestId('titlebar-remote-badge')).toHaveCount(0)
+
     await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
     await expect
       .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
@@ -122,15 +136,39 @@ test.describe('remote workspace ui', () => {
       })
       .toBe(AUTHORITY)
 
-    // A left-aligned status-bar entry shows the SSH indicator for the authority.
+    // A left-aligned status-bar entry shows the SSH indicator for the authority,
+    // identified by its semantic entry id and carrying the remote background color.
     await expect
       .poll(async () => {
         const entries = await workbench.page.evaluate(() => window.__E2E__!.getStatusBarEntries())
         return entries.some(
-          (e) => e.alignment === 'left' && e.text.includes('SSH:') && e.text.includes(AUTHORITY),
+          (e) =>
+            e.entryId === 'remote.indicator' &&
+            e.alignment === 'left' &&
+            e.text.includes('SSH:') &&
+            e.text.includes(AUTHORITY) &&
+            e.backgroundColor === 'statusBarItem.remoteBackground',
         )
       })
       .toBe(true)
+
+    // The remote context keys follow the connected authority (non-wsl → 'ssh').
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getContextKey('isRemote')))
+      .toBe(true)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getContextKey('remoteName')))
+      .toBe('ssh')
+
+    // The title-bar badge shows the remote label next to the command center.
+    const badge = workbench.page.getByTestId('titlebar-remote-badge')
+    await expect(badge).toHaveCount(1)
+    await expect(badge).toContainText(`SSH: ${AUTHORITY}`)
+
+    // The OS window title gains a `[SSH: <authority>]` segment.
+    await expect
+      .poll(() => workbench.page.evaluate(() => document.title), { timeout: 15_000 })
+      .toContain(`[SSH: ${AUTHORITY}]`)
 
     // Remote Explorer container + view are registered in the primary side bar.
     await expect

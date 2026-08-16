@@ -17,13 +17,14 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { isFileSystemScheme } from '../../services/files/fileSystemScheme.js'
-import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
+import { workspaceTitleLabel } from '../../services/workspace/workspaceLabel.js'
 import { GoToFileAction } from '../../actions/fileOpenActions.js'
 import { AgentStatusIndicator } from './AgentStatusIndicator.js'
 import { AiTitleBarButton } from './AiTitleBarButton.js'
 import { LayoutControls } from './LayoutControls.js'
 import { MenuBar } from './MenuBar.js'
 import { NavigationControls } from './NavigationControls.js'
+import { RemoteBadge } from './RemoteBadge.js'
 import { UpdateIndicator } from './UpdateIndicator.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'
@@ -62,7 +63,7 @@ function computeTitle(
   const dirty = editor.isDirty ? DIRTY_INDICATOR : ''
   const segments = [
     leftSegment(editor, workspace, uriIdentity),
-    workspace ? workspaceFullLabel(workspace.folder) : '',
+    workspace ? workspaceTitleLabel(workspace.folder) : '',
   ].filter((s) => s.length > 0)
   return dirty + segments.join(SEPARATOR)
 }
@@ -158,6 +159,7 @@ export function TitleBar() {
       </div>
       <div className={styles['center']}>
         <NavigationControls />
+        <RemoteBadge />
         <button
           type="button"
           className={styles['command-center']}

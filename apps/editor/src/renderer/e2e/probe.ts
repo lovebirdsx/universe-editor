@@ -303,6 +303,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         alignment: entry.alignment === StatusBarAlignment.Right ? 'right' : 'left',
         ...(entry.icon !== undefined && { icon: entry.icon }),
         ...(entry.tooltip !== undefined && { tooltip: entry.tooltip }),
+        ...(entry.id !== undefined && { entryId: entry.id }),
+        ...(entry.backgroundColor !== undefined && { backgroundColor: entry.backgroundColor }),
       })),
     getUpdateState: async (): Promise<E2EUpdateState> => {
       const s = await services.updateService.getState()

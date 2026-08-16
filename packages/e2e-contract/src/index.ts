@@ -31,6 +31,10 @@ export interface E2EStatusBarEntry {
   readonly alignment: 'left' | 'right'
   readonly icon?: string
   readonly tooltip?: string
+  /** Semantic entry id (`IStatusBarEntry.id`), surfaced as `data-testid="statusbar-entry-<entryId>"`. */
+  readonly entryId?: string
+  /** Theme color id of the entry background (e.g. 'statusBarItem.remoteBackground'). */
+  readonly backgroundColor?: string
 }
 
 export interface E2EUpdateState {

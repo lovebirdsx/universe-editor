@@ -39,6 +39,12 @@ export interface IStatusBarEntry {
    * "two-way sync" vs. plain "loading"). Renderer maps to a codicon + CSS animation.
    */
   readonly showProgress?: boolean | 'spinning' | 'syncing'
+  /** Stable semantic identifier; the renderer exposes it as `data-testid="statusbar-entry-<id>"`. */
+  readonly id?: string
+  /** Theme color id for the entry foreground (e.g. 'statusBarItem.remoteForeground'). */
+  readonly color?: string
+  /** Theme color id for the entry background (e.g. 'statusBarItem.remoteBackground'). Entries with a background render as a filled block. */
+  readonly backgroundColor?: string
 }
 
 /** Entry as kept by the service: stable id + the original entry. */

@@ -170,6 +170,46 @@ describe('WindowTitleContribution', () => {
     contribution.dispose()
   })
 
+  it('appends the remote badge and uses the server-side parent path for remote workspaces', () => {
+    const folder = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'wsl+ubuntu-24.04',
+      path: '/home/x/proj',
+    })
+    const ws = makeWorkspaceStub({ folder, name: 'proj' })
+    const { contribution } = makeContribution(ws)
+
+    expect(document.title).toBe('proj - /home/x [WSL: ubuntu-24.04]')
+
+    contribution.dispose()
+  })
+
+  it('appends the remote badge to the session segment for remote workspaces', () => {
+    const folder = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'myhost',
+      path: '/home/x/proj',
+    })
+    const ws = makeWorkspaceStub({ folder, name: 'proj' })
+    const { contribution, acp } = makeContribution(ws)
+    const { session } = makeSessionStub('s1', '修复登录Bug', 'running')
+
+    acp.activeSession.set(session, undefined)
+    expect(document.title).toBe('proj — ● 修复登录Bug [SSH: myhost]')
+
+    contribution.dispose()
+  })
+
+  it('does not append a remote badge for local workspaces', () => {
+    const ws = makeWorkspaceStub({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
+    const { contribution } = makeContribution(ws)
+
+    expect(document.title).toBe(`myProject - ${URI.file('/tmp').fsPath}`)
+    expect(document.title).not.toContain('[')
+
+    contribution.dispose()
+  })
+
   it('drops the session segment when the session is closed or cleared', () => {
     const ws = makeWorkspaceStub({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
     const { contribution, acp } = makeContribution(ws)

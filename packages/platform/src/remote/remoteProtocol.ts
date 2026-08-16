@@ -96,6 +96,20 @@ export function wslDistroFromAuthority(authority: string): string {
 }
 
 /**
+ * Human-facing label for a remote authority, VSCode-style:
+ * `wsl+ubuntu-24.04` → `WSL: ubuntu-24.04`, anything else → `SSH: <authority>`.
+ */
+export function remoteAuthorityLabel(authority: string): string {
+  if (isWslAuthority(authority)) {
+    const distro = authority.slice(WSL_AUTHORITY_PREFIX.length)
+    if (isValidWslDistroName(distro)) {
+      return `WSL: ${distro}`
+    }
+  }
+  return `SSH: ${authority}`
+}
+
+/**
  * One TCP connection per type, both through the same forwarded port. Management
  * carries the channel layer (fs / search / watcher / terminal / acp / config);
  * ExtensionHost is a raw byte pipe to a forked extension host (frames pumped

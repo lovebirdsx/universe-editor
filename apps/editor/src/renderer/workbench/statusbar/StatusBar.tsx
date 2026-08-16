@@ -3,10 +3,11 @@ import {
   StatusBarAlignment,
   ICommandService,
   localize,
+  asCssVariable,
 } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
 import { Bell, Loader2, RefreshCw, Shield, Sparkles, type LucideIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { StatusBarComponentRegistry } from '../../services/statusbar/StatusBarComponentRegistry.js'
@@ -68,9 +69,15 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
     styles['item'],
     entry.command ? styles['clickable'] : '',
     entry.kind === 'prominent' ? styles['kind-prominent'] : '',
+    entry.backgroundColor ? styles['has-background'] : '',
   ]
     .filter(Boolean)
     .join(' ')
+  const style: CSSProperties = {
+    ...(entry.backgroundColor ? { background: asCssVariable(entry.backgroundColor) } : {}),
+    ...(entry.color ? { color: asCssVariable(entry.color) } : {}),
+  }
+  const hasInlineStyle = Boolean(entry.backgroundColor || entry.color)
 
   return (
     <button
@@ -79,6 +86,8 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
       data-tooltip={entry.tooltip}
       data-tooltip-command={entry.command}
       aria-label={label}
+      {...(entry.id ? { 'data-testid': `statusbar-entry-${entry.id}` } : {})}
+      {...(hasInlineStyle ? { style } : {})}
     >
       {showSpinner && (
         <Loader2

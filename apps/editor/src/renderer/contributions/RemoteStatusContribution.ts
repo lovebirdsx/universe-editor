@@ -1,10 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  RemoteStatusContribution — the leftmost status-bar entry for a remote-ssh
- *  workspace (VSCode's RemoteStatusIndicator, simplified). Shows `SSH: <authority>`
- *  with a state-dependent glyph/spinner, seeds the `remoteAuthority` context key,
- *  and opens a QuickPick menu (Open Folder on Host / Close / Retry / Stop Server)
- *  on click. The entry exists only while the current workspace folder is remote-ssh.
+ *  RemoteStatusContribution — the leftmost status-bar entry (VSCode's
+ *  RemoteStatusIndicator, simplified). In a remote window it shows the remote
+ *  authority label (`WSL: <distro>` / `SSH: <authority>`) with a
+ *  state-dependent glyph/spinner and state colors, seeds the `remoteAuthority`
+ *  / `isRemote` / `remoteName` context keys, and opens a QuickPick menu (Open
+ *  Folder on Host / Close / Retry / Stop Server) on click. In a local window
+ *  the same slot renders a plain `$(remote)` block that opens the "Open a
+ *  Remote Window" menu (Connect to Host / Connect to WSL).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -16,9 +19,11 @@ import {
   IStatusBarService,
   IWorkspaceService,
   StatusBarAlignment,
+  isWslAuthority,
   localize,
   localize2,
   registerAction2,
+  remoteAuthorityLabel,
   type IContextKey,
   type IQuickPickItem,
   type IStatusBarEntry,
@@ -33,6 +38,7 @@ import {
 } from '../../shared/ipc/remoteStatusService.js'
 import {
   CloseConnectionAction,
+  ConnectToHostAction,
   ConnectToWslAction,
   OpenFolderOnHostAction,
   RetryConnectionAction,
@@ -56,6 +62,8 @@ interface MenuItem extends IQuickPickItem {
 export class RemoteStatusContribution extends Disposable implements IWorkbenchContribution {
   private _accessor: IStatusBarEntryAccessor | undefined
   private readonly _remoteAuthorityKey: IContextKey<string>
+  private readonly _isRemoteKey: IContextKey<boolean>
+  private readonly _remoteNameKey: IContextKey<string>
   private readonly _states = new Map<string, RemoteConnectionStateDto>()
   private readonly _progress = new Map<string, RemoteConnectionProgressDto>()
   private _timer: ReturnType<typeof setInterval> | undefined
@@ -73,6 +81,8 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     const showMenu = () => void this._showMenu()
 
     this._remoteAuthorityKey = contextKeyService.createKey<string>('remoteAuthority', '')
+    this._isRemoteKey = contextKeyService.createKey<boolean>('isRemote', false)
+    this._remoteNameKey = contextKeyService.createKey<string>('remoteName', '')
 
     this._register(
       registerAction2(
@@ -162,11 +172,15 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   }
 
   private _render(): void {
-    this._remoteAuthorityKey.set(this._currentAuthority() ?? '')
+    const current = this._currentAuthority()
+    this._remoteAuthorityKey.set(current ?? '')
+    this._isRemoteKey.set(current !== undefined)
+    this._remoteNameKey.set(current === undefined ? '' : isWslAuthority(current) ? 'wsl' : 'ssh')
     const authority = this._displayAuthority()
     if (authority === undefined) {
-      this._accessor?.dispose()
-      this._accessor = undefined
+      const entry = this._localEntry()
+      if (this._accessor !== undefined) this._accessor.update(entry)
+      else this._accessor = this._statusBar.addEntry(entry)
       this._stopTimer()
       return
     }
@@ -188,29 +202,43 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
     this._timer = undefined
   }
 
+  /** The local-window remote entry: same slot, no state colors — VSCode parity for the entry point into remote windows. */
+  private _localEntry(): IStatusBarEntry {
+    return {
+      id: 'remote.indicator',
+      text: '$(remote)',
+      tooltip: localize('remote.status.local.tooltip', 'Open a Remote Window'),
+      command: REMOTE_STATUS_MENU_COMMAND_ID,
+      alignment: StatusBarAlignment.Left,
+      priority: Number.POSITIVE_INFINITY,
+    }
+  }
+
   private _entryFor(authority: string): IStatusBarEntry {
     const state = this._states.get(authority)
+    const label = remoteAuthorityLabel(authority)
     const base = {
+      id: 'remote.indicator',
       tooltip: localize('remote.status.tooltip', 'Remote: {authority}', { authority }),
       command: REMOTE_STATUS_MENU_COMMAND_ID,
       alignment: StatusBarAlignment.Left,
       priority: Number.POSITIVE_INFINITY,
+      backgroundColor: 'statusBarItem.remoteBackground',
+      color: 'statusBarItem.remoteForeground',
     }
     switch (state) {
       case 'reconnecting':
         return {
           ...base,
-          text: localize('remote.status.reconnecting', 'SSH: {authority} (Reconnecting...)', {
-            authority,
-          }),
+          text: localize('remote.status.reconnecting', '{label} (Reconnecting...)', { label }),
           showProgress: 'syncing',
         }
       case 'failed':
         return {
           ...base,
-          text: localize('remote.status.failed', '$(warning) SSH: {authority} (Failed)', {
-            authority,
-          }),
+          text: localize('remote.status.failed', '$(warning) {label} (Failed)', { label }),
+          backgroundColor: 'statusBarItem.errorBackground',
+          color: 'statusBarItem.errorForeground',
         }
       case 'deploying':
       case 'forwarding':
@@ -221,9 +249,9 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
             ...base,
             text: localize(
               'remote.status.step',
-              'SSH: {authority} (Step {index}/{total}: {step} · {elapsed})',
+              '{label} (Step {index}/{total}: {step} · {elapsed})',
               {
-                authority,
+                label,
                 index: progress.stepIndex,
                 total: progress.stepTotal,
                 step: REMOTE_STEP_LABEL[progress.stepId],
@@ -235,23 +263,48 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
         }
         return {
           ...base,
-          text: localize('remote.status.connecting', 'SSH: {authority} (Connecting...)', {
-            authority,
-          }),
+          text: localize('remote.status.connecting', '{label} (Connecting...)', { label }),
           showProgress: 'spinning',
         }
       }
       default:
         return {
           ...base,
-          text: localize('remote.status.connected', '$(remote) SSH: {authority}', { authority }),
+          text: localize('remote.status.connected', '$(remote) {label}', { label }),
         }
     }
   }
 
   private async _showMenu(): Promise<void> {
     const authority = this._displayAuthority()
-    if (authority === undefined) return
+    if (authority === undefined) {
+      const wslDistros = await this._remoteStatus.listWslDistros().catch(() => [])
+      const items: MenuItem[] = [
+        {
+          id: ConnectToHostAction.ID,
+          label: localize('remote.menu.connectToHost', 'Connect to Host...'),
+          commandId: ConnectToHostAction.ID,
+        },
+        ...(wslDistros.length > 0
+          ? [
+              {
+                id: ConnectToWslAction.ID,
+                label: localize('remote.menu.connectToWsl', 'Connect to WSL...'),
+                commandId: ConnectToWslAction.ID,
+              },
+            ]
+          : []),
+      ]
+      const picked = await this._quickInput.pick<MenuItem>(items, {
+        placeholder: localize(
+          'remote.menu.local.placeholder',
+          'Select an option to open a Remote Window',
+        ),
+      })
+      if (picked === undefined) return
+      void this._commands.executeCommand(picked.commandId)
+      return
+    }
     const wslDistros = await this._remoteStatus.listWslDistros().catch(() => [])
     const items: MenuItem[] = [
       {

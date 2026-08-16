@@ -44,6 +44,10 @@
   background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
 }
 
+.item.has-background.clickable:hover {
+  filter: brightness(1.12);
+}
+
 .item.kind-prominent {
   color: var(--vscode-statusBarItem-prominentForeground, #5fa8ff);
 }
