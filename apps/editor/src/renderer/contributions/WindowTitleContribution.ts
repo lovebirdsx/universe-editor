@@ -6,11 +6,13 @@
  *  session it is running. With an active session the title reads
  *  "<folder> — <symbol> <session title>" (e.g. "universe-editor3 — ● 修复登录Bug");
  *  with none it falls back to "<folder name> - <parent directory>". A remote
- *  window appends a "[WSL: ...]" / "[SSH: ...]" badge (from the workspace's
- *  authority, or the window's argv authority when the window is empty), so the
- *  taskbar distinguishes remote windows even with no workspace open. Electron
- *  mirrors `document.title` onto the native window title, surfaced even with
- *  `frame: false`. The status symbol maps AcpSessionStatus to a geometric shape:
+ *  window prepends a "⇄" marker (from the workspace's authority, or the
+ *  window's argv authority when the window is empty) so the taskbar
+ *  distinguishes remote windows even with no workspace open — the marker sits
+ *  at the very front because the taskbar truncates the tail of long titles.
+ *  Electron mirrors `document.title` onto the native window title, surfaced
+ *  even with `frame: false`. The status symbol maps AcpSessionStatus to a
+ *  geometric shape:
  *  ● running · ○ idle · ◌ connecting · ✕ errored · ◆ ask (closed → no session
  *  segment); background (agent still executing run_in_background tasks) shares
  *  running's ● because the session is still busy.
@@ -22,7 +24,6 @@ import {
   autorun,
   localize,
   observableValue,
-  remoteAuthorityLabel,
   type IReader,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -50,6 +51,13 @@ const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   background: '●',
   closed: '',
 }
+
+/**
+ * Remote marker prepended to the native window title — a single character
+ * suffices to flag "this is a remote window" in Alt+Tab; the full authority
+ * stays visible in the title-bar badge and the status-bar indicator.
+ */
+const REMOTE_TITLE_PREFIX = '⇄'
 
 export class WindowTitleContribution extends Disposable implements IWorkbenchContribution {
   // `IWorkspaceService.current` is event-driven, not observable; bump this rev
@@ -84,12 +92,12 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       window[EXTENSION_DEVELOPMENT_ENABLED_KEY] === true
         ? localize('windowTitle.extDevHost', '[Extension Development Host]')
         : undefined
-    // Remote windows carry a "[WSL: ...]" / "[SSH: ...]" badge — also for an
-    // empty window, where the authority comes from argv (remote "New Window").
+    // Remote windows prepend the "⇄" marker — also for an empty window, where
+    // the authority comes from argv (remote "New Window").
     const authority = currentRemoteAuthority(workspace)
-    const remoteBadge = authority !== undefined ? `[${remoteAuthorityLabel(authority)}]` : undefined
+    const remotePrefix = authority !== undefined ? REMOTE_TITLE_PREFIX : undefined
     if (!workspace) {
-      document.title = formatWindowTitle({ appName, remoteBadge, devHostBadge })
+      document.title = formatWindowTitle({ appName, remotePrefix, devHostBadge })
       return
     }
     const parent = workspaceParentLabel(workspace.folder)
@@ -114,7 +122,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
       parent,
       symbol,
       sessionTitle,
-      remoteBadge,
+      remotePrefix,
       devHostBadge,
     })
   }

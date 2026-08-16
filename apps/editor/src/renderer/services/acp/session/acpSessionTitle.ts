@@ -35,8 +35,9 @@ export function resolveLiveSessionTitle(
 
 /**
  * 纯函数，便于单测。symbol+sessionTitle 同时存在 → 带 Session 段；否则回退到「name - parent」。
- * remoteBadge（调用方已包好方括号，如 "[WSL: ubuntu-24.04]"）与 devHostBadge（如
- * "[Extension Development Host]"）依次拼在尾部，且在每个分支都生效（含无 workspace）。
+ * remotePrefix（裸字符，如 "⇄"）只出现在远程窗口，放在标题**最前面**（Windows 任务栏/Alt+Tab
+ * 会截断尾部，远程标识必须抢占开头才不会被工作区名/会话标题挤掉）；devHostBadge（如
+ * "[Extension Development Host]"）仍拼在尾部，且在每个分支都生效（含无 workspace）。
  */
 export function formatWindowTitle(args: {
   appName: string
@@ -44,17 +45,15 @@ export function formatWindowTitle(args: {
   parent?: string
   symbol?: string | undefined
   sessionTitle?: string | undefined
-  /** Remote badge appended before the dev-host badge, e.g. "[WSL: ubuntu-24.04]". */
-  remoteBadge?: string | undefined
+  /** Remote marker prepended at the very front, e.g. "⇄". */
+  remotePrefix?: string | undefined
   /** Mode badge appended at the very end, e.g. "[Extension Development Host]". */
   devHostBadge?: string | undefined
 }): string {
-  const { appName, workspaceName, parent, symbol, sessionTitle, remoteBadge, devHostBadge } = args
-  const badge = [remoteBadge, devHostBadge]
-    .filter((b): b is string => b !== undefined)
-    .map((b) => ` ${b}`)
-    .join('')
-  if (workspaceName === undefined) return `${appName}${badge}`
-  if (symbol && sessionTitle) return `${workspaceName} — ${symbol} ${sessionTitle}${badge}`
-  return `${parent ? `${workspaceName} - ${parent}` : workspaceName}${badge}`
+  const { appName, workspaceName, parent, symbol, sessionTitle, remotePrefix, devHostBadge } = args
+  const prefix = remotePrefix !== undefined ? `${remotePrefix} ` : ''
+  const badge = devHostBadge !== undefined ? ` ${devHostBadge}` : ''
+  if (workspaceName === undefined) return `${prefix}${appName}${badge}`
+  if (symbol && sessionTitle) return `${prefix}${workspaceName} — ${symbol} ${sessionTitle}${badge}`
+  return `${prefix}${parent ? `${workspaceName} - ${parent}` : workspaceName}${badge}`
 }

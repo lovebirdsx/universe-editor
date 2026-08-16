@@ -101,6 +101,7 @@ function makeContribution(
 describe('WindowTitleContribution', () => {
   afterEach(() => {
     document.title = ''
+    delete (window as unknown as { ipc?: unknown }).ipc
   })
 
   it('sets the title to "<folder name> - <parent dir>" for the initial workspace', () => {
@@ -170,7 +171,7 @@ describe('WindowTitleContribution', () => {
     contribution.dispose()
   })
 
-  it('appends the remote badge and uses the server-side parent path for remote workspaces', () => {
+  it('prepends the remote marker and uses the server-side parent path for remote workspaces', () => {
     const folder = URI.from({
       scheme: 'remote-ssh',
       authority: 'wsl+ubuntu-24.04',
@@ -179,12 +180,12 @@ describe('WindowTitleContribution', () => {
     const ws = makeWorkspaceStub({ folder, name: 'proj' })
     const { contribution } = makeContribution(ws)
 
-    expect(document.title).toBe('proj - /home/x [WSL: ubuntu-24.04]')
+    expect(document.title).toBe('⇄ proj - /home/x')
 
     contribution.dispose()
   })
 
-  it('appends the remote badge to the session segment for remote workspaces', () => {
+  it('prepends the remote marker to the session segment for remote workspaces', () => {
     const folder = URI.from({
       scheme: 'remote-ssh',
       authority: 'myhost',
@@ -195,17 +196,28 @@ describe('WindowTitleContribution', () => {
     const { session } = makeSessionStub('s1', '修复登录Bug', 'running')
 
     acp.activeSession.set(session, undefined)
-    expect(document.title).toBe('proj — ● 修复登录Bug [SSH: myhost]')
+    expect(document.title).toBe('⇄ proj — ● 修复登录Bug')
 
     contribution.dispose()
   })
 
-  it('does not append a remote badge for local workspaces', () => {
+  it('prepends the remote marker for an empty window scoped to a remote argv authority', () => {
+    const argvAuthority = { remoteAuthority: 'wsl+ubuntu-24.04' }
+    ;(window as unknown as { ipc?: unknown }).ipc = argvAuthority
+    const ws = makeWorkspaceStub(null)
+    const { contribution } = makeContribution(ws)
+
+    expect(document.title).toBe('⇄ Universe Editor')
+
+    contribution.dispose()
+  })
+
+  it('does not prepend a remote marker for local workspaces', () => {
     const ws = makeWorkspaceStub({ folder: URI.file('/tmp/myProject'), name: 'myProject' })
     const { contribution } = makeContribution(ws)
 
     expect(document.title).toBe(`myProject - ${URI.file('/tmp').fsPath}`)
-    expect(document.title).not.toContain('[')
+    expect(document.title).not.toContain('⇄')
 
     contribution.dispose()
   })

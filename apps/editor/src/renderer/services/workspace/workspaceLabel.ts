@@ -6,10 +6,11 @@
  *  - workspaceFullLabel  → full display path for recent menus/descriptions
  *    (scheme-qualified for remote, so equal host paths stay disambiguated);
  *  - workspaceTitleLabel → the title bar / window title's right segment (clean
- *    path only — the authority is carried by the remote badge segment);
+ *    path only — the remote identity is carried by the window title's "⇄"
+ *    marker, not by this segment);
  *  - workspaceParentLabel → the window title's parent segment (server-side parent
- *    path for remote — the authority is already expressed by the "[WSL: ...]"
- *    badge segment, so the parent segment must not repeat it).
+ *    path for remote — the remote identity is already expressed by the "⇄"
+ *    marker, so the parent segment must not repeat the authority).
  *--------------------------------------------------------------------------------------------*/
 
 import type { URI } from '@universe-editor/platform'
@@ -31,7 +32,7 @@ export function workspaceFullLabel(uri: URI): string {
 
 /**
  * Right segment of the title bar / window title: the clean path without any
- * scheme prefix — the authority is carried by the remote badge segment.
+ * scheme prefix — the remote identity is carried by the "⇄" window-title marker.
  */
 export function workspaceTitleLabel(uri: URI): string {
   if (uri.scheme === 'file') return uri.fsPath

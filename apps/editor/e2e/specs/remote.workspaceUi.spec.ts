@@ -165,10 +165,11 @@ test.describe('remote workspace ui', () => {
     await expect(badge).toHaveCount(1)
     await expect(badge).toContainText(`SSH: ${AUTHORITY}`)
 
-    // The OS window title gains a `[SSH: <authority>]` segment.
+    // The OS window title starts with the remote marker, at the very front —
+    // the taskbar truncates the tail, so the marker must not sit at the end.
     await expect
       .poll(() => workbench.page.evaluate(() => document.title), { timeout: 15_000 })
-      .toContain(`[SSH: ${AUTHORITY}]`)
+      .toMatch(/^⇄ /)
 
     // Remote Explorer container + view are registered in the primary side bar.
     await expect
