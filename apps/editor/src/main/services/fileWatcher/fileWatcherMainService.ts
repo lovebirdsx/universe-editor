@@ -468,6 +468,12 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   private _watchExtraFolder(dir: string): void {
     if (this._extraFolderWatchers.has(dir)) return
+    // On linux, fs.watch on a missing path arms a dead watcher instead of
+    // throwing/erroring, so the placeholder below would never engage.
+    if (!existsSync(dir)) {
+      this._watchExtraFolderPlaceholder(dir)
+      return
+    }
     // Recursive fs.watch works on every platform this app runs: win32/darwin
     // via native OS support, linux via Node's recursive inotify watches
     // (Node 19.1+; Electron 43 ships a Node well past that).

@@ -13,11 +13,12 @@ import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appRoot = path.resolve(import.meta.dirname, '../../../../../../..')
+const appPathHolder = { current: appRoot }
 
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
-    getAppPath: () => appRoot,
+    getAppPath: () => appPathHolder.current,
     getPath: () => '',
   },
 }))
@@ -109,13 +110,30 @@ describe('tsServerPaths preference chain', () => {
   })
 
   it('tsls spec carries the typescript package version', async () => {
+    // The vendored node_modules only exists after scripts/release/vendor-install.mjs;
+    // stage a fake tree so the test doesn't depend on that install.
+    const vendorDir = await mkdtemp(path.join(tmpdir(), 'universe-editor-tsls-vendor-'))
+    const vendorRoot = path.join(vendorDir, 'vendor/typescript-language-server/node_modules')
+    await mkdir(path.join(vendorRoot, 'typescript-language-server/lib'), { recursive: true })
+    await writeFile(path.join(vendorRoot, 'typescript-language-server/lib/cli.mjs'), '')
+    await mkdir(path.join(vendorRoot, 'typescript'), { recursive: true })
     await writeFile(
-      path.join(settingsDir, 'settings.json'),
-      JSON.stringify({ 'typescript.server.implementation': 'tsls' }),
+      path.join(vendorRoot, 'typescript/package.json'),
+      JSON.stringify({ version: '5.9.3' }),
     )
-    const spec = createTsServerSpecResolver(settingsDir)()
-    expect(spec.kind).toBe('tsls')
-    expect(spec.version).toMatch(/^[0-9]+.[0-9]+.[0-9]+/)
+    appPathHolder.current = vendorDir
+    try {
+      await writeFile(
+        path.join(settingsDir, 'settings.json'),
+        JSON.stringify({ 'typescript.server.implementation': 'tsls' }),
+      )
+      const spec = createTsServerSpecResolver(settingsDir)()
+      expect(spec.kind).toBe('tsls')
+      expect(spec.version).toBe('5.9.3')
+    } finally {
+      appPathHolder.current = appRoot
+      await rm(vendorDir, { recursive: true, force: true })
+    }
   })
 
   it('native spec carries the native-preview package version', async () => {
