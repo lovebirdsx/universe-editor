@@ -323,6 +323,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openAgentGuide.title': 'AGENT 工具使用说明',
   'action.openConfigLocationFolder.title': '打开配置目录',
   'action.openContainingFolder.title': '打开所在文件夹',
+  'action.openContainingFolder.remoteNotSupported':
+    '该文件位于远程主机，无法在本地文件管理器中打开。',
   'action.openDocs.title': '文档',
   'action.openEditorGuide.title': '编辑器使用说明',
   'action.openExtensionDocs.title': '扩展开发文档',
@@ -347,6 +349,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openVSCodeSettingsJson.title': '打开 VS Code 设置（JSON）',
   'action.openWithDefaultApplication.title': '使用默认应用打开',
   'action.openWorkspaceInVSCode.failed': '打开 VS Code 失败。请确认 `code` 命令已加入 PATH。',
+  'action.openWorkspaceInVSCode.remoteNotSupported':
+    '暂不支持在 VS Code 中打开该类型的远程工作区。',
   'action.openWorkspaceInVSCode.title': '在 VS Code 中打开工作区',
   'action.openWorkspaceSettings.title': '打开工作区设置',
   'action.openWorkspaceSettingsJson.title': '打开工作区设置（JSON）',

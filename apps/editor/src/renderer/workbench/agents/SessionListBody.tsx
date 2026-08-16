@@ -28,6 +28,8 @@ import {
   IInstantiationService,
   IUriIdentityService,
   ICommandService,
+  IHostService,
+  isWslAuthority,
 } from '@universe-editor/platform'
 import {
   X,
@@ -459,6 +461,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
   const commandService = useService(ICommandService)
+  const host = useService(IHostService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders; the value also
   // feeds the optimistic pending rows below.
@@ -735,6 +738,12 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               (entry.transcriptPath !== undefined &&
                 entry.transcriptPath !== null &&
                 entry.transcriptPath.length > 0)
+            // A remote session's transcript lives on the agent host; only a WSL
+            // authority viewed from a Windows client can be revealed locally.
+            // Pending rows (no authority yet) fall through to the runtime check.
+            const revealUnsupported =
+              entry.authority !== undefined &&
+              (!isWslAuthority(entry.authority) || host.platform !== 'win32')
             const openContextMenu = (e: ReactMouseEvent) => {
               e.preventDefault()
               e.stopPropagation()
@@ -766,7 +775,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 items.push({
                   kind: 'item',
                   label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
-                  disabled: !hasTranscript,
+                  disabled: !hasTranscript || revealUnsupported,
                   run: onReveal,
                 })
                 items.push({ kind: 'separator' })

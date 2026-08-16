@@ -907,6 +907,8 @@ describe('RevealAgentSessionInOSAction', () => {
     entries: readonly AcpSessionHistoryEntry[]
     activeSessionId?: string
     liveSessions?: Record<string, IAcpSession>
+    platform?: string
+    remoteAuthority?: string
   }) {
     const showItemInFolder = vi.fn(async () => {})
     const notify = vi.fn()
@@ -933,10 +935,22 @@ describe('RevealAgentSessionInOSAction', () => {
     } as unknown as IEditorService
     const host = {
       _serviceBrand: undefined,
-      platform: 'linux',
+      platform: opts.platform ?? 'linux',
       showItemInFolder,
     } as unknown as IHostService
     const notification = { _serviceBrand: undefined, notify } as unknown as INotificationService
+    const workspace = opts.remoteAuthority
+      ? ({
+          _serviceBrand: undefined,
+          current: {
+            folder: { scheme: 'remote-ssh', authority: opts.remoteAuthority, path: '/root' },
+          },
+        } as unknown as IWorkspaceService)
+      : ({ _serviceBrand: undefined, current: null } as unknown as IWorkspaceService)
+    const logger = {
+      _serviceBrand: undefined,
+      createLogger: () => new NullLogger(),
+    } as unknown as ILoggerService
 
     const services = new ServiceCollection()
     services.set(IAcpSessionService, sessions)
@@ -944,6 +958,8 @@ describe('RevealAgentSessionInOSAction', () => {
     services.set(IEditorService, editor)
     services.set(IHostService, host)
     services.set(INotificationService, notification)
+    services.set(IWorkspaceService, workspace)
+    services.set(ILoggerService, logger)
     const inst = new InstantiationService(services)
     return { inst, showItemInFolder, notify, resolveTranscriptPath }
   }
@@ -1022,6 +1038,51 @@ describe('RevealAgentSessionInOSAction', () => {
     const b = build({ entries: [entry], liveSessions: { 'local-1': live } })
     await run(b, { resource: { scheme: 'universe', path: '/acp/session/local-1' } })
     expect(b.showItemInFolder).toHaveBeenCalledWith('/p/agent-1.jsonl')
+  })
+
+  it('maps a WSL remote transcript to its UNC path on a Windows client', async () => {
+    const entry = makeEntry({
+      authority: 'wsl+ubuntu-24.04',
+      transcriptPath: '/home/u/sess-1.jsonl',
+    })
+    const b = build({ entries: [entry], platform: 'win32' })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).toHaveBeenCalledWith('\\\\wsl$\\ubuntu-24.04\\home\\u\\sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+
+  it('notifies (and does not reveal) a WSL remote on a non-Windows client', async () => {
+    const entry = makeEntry({
+      authority: 'wsl+ubuntu-24.04',
+      transcriptPath: '/home/u/sess-1.jsonl',
+    })
+    const b = build({ entries: [entry], platform: 'linux' })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).not.toHaveBeenCalled()
+    expect(b.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('notifies (and does not reveal) a non-WSL remote session', async () => {
+    const entry = makeEntry({
+      authority: 'ssh-remote+host',
+      transcriptPath: '/home/u/sess-1.jsonl',
+    })
+    const b = build({ entries: [entry], platform: 'win32' })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).not.toHaveBeenCalled()
+    expect(b.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the workspace authority when the history row has none', async () => {
+    const entry = makeEntry({ transcriptPath: '/home/u/sess-1.jsonl' })
+    const b = build({
+      entries: [entry],
+      platform: 'win32',
+      remoteAuthority: 'wsl+ubuntu-24.04',
+    })
+    await run(b, { sessionId: 'sess-1' })
+    expect(b.showItemInFolder).toHaveBeenCalledWith('\\\\wsl$\\ubuntu-24.04\\home\\u\\sess-1.jsonl')
+    expect(b.notify).not.toHaveBeenCalled()
   })
 })
 

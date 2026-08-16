@@ -22,9 +22,12 @@ import {
   ILayoutService,
   MenuId,
   PartId,
+  REMOTE_SCHEME,
   Severity,
+  isWslAuthority,
   localize,
   localize2,
+  wslUncPath,
   type IEditorGroup,
   type IQuickPickItem,
   type ServicesAccessor,
@@ -607,10 +610,14 @@ export class RevealAgentSessionInOSAction extends Action2 {
           order: 4,
           // Match the session list's context menu label for the same action.
           title: localize2('acp.sessions.revealTranscript', 'Open Session Location'),
+          // Menu-level approximation: hide under a remote workspace unless the
+          // client can map it (WSL on Windows). The runtime re-checks against the
+          // session's own authority — the two layers intentionally differ.
+          when: '!isRemoteWorkspace || remoteRevealInOsSupported',
         },
         {
           id: MenuId.EditorTabContext,
-          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && (!isRemoteWorkspace || remoteRevealInOsSupported)`,
           group: '1_session',
           order: 2,
           title: localize2('acp.sessions.revealTranscript', 'Open Session Location'),
@@ -630,6 +637,10 @@ export class RevealAgentSessionInOSAction extends Action2 {
     const editor = accessor.get(IEditorService)
     const host = accessor.get(IHostService)
     const notifications = accessor.get(INotificationService)
+    const workspace = accessor.get(IWorkspaceService)
+    const logger = accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'acp.revealSession', name: 'ACP Reveal Session' })
 
     const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
@@ -638,7 +649,8 @@ export class RevealAgentSessionInOSAction extends Action2 {
     // created in this window is addressed by its local id, so map it first.
     const durableId = sessions.getById(sessionId)?.sessionIdOnAgent.get() ?? sessionId
 
-    let transcriptPath = history.get(durableId)?.transcriptPath
+    const entry = history.get(durableId)
+    let transcriptPath = entry?.transcriptPath
     if (transcriptPath === undefined || transcriptPath.length === 0) {
       transcriptPath = await sessions.resolveTranscriptPath(durableId)
     }
@@ -652,7 +664,42 @@ export class RevealAgentSessionInOSAction extends Action2 {
       })
       return
     }
-    await host.showItemInFolder(transcriptPath)
+
+    // The session's own authority (where the agent spawned) is authoritative;
+    // a live session whose history row hasn't hydrated yet falls back to the
+    // current workspace's remote authority.
+    const folder = workspace.current?.folder
+    const authority =
+      entry?.authority ??
+      (folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined)
+
+    // Local session: reveal the native path as-is.
+    if (authority === undefined) {
+      await host.showItemInFolder(transcriptPath)
+      return
+    }
+
+    // Remote session: only a WSL remote viewed from a Windows client maps to a
+    // local `\\wsl$\` UNC path; anything else has no local file manager entry.
+    if (isWslAuthority(authority) && host.platform === 'win32') {
+      const unc = wslUncPath(authority, transcriptPath)
+      if (unc !== undefined) {
+        await host.showItemInFolder(unc)
+        return
+      }
+      logger.warn(`[acp] reveal: malformed WSL authority '${authority}'`)
+    }
+
+    logger.debug(
+      `[acp] reveal: remote transcript not revealable (authority='${authority}', platform='${host.platform}')`,
+    )
+    notifications.notify({
+      severity: Severity.Info,
+      message: localize(
+        'action.openContainingFolder.remoteNotSupported',
+        'The file is on a remote host and cannot be opened in the local file manager.',
+      ),
+    })
   }
 }
 

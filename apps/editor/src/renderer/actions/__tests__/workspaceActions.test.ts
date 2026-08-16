@@ -2,12 +2,14 @@
  *  Tests for apps/editor/src/renderer/actions/workspaceActions.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
   IFileDialogService,
+  IHostService,
   ILifecycleService,
+  INotificationService,
   IProgressService,
   IQuickInputService,
   IWindowsService,
@@ -18,11 +20,13 @@ import {
   MenuId,
   MenuRegistry,
   ServiceCollection,
+  Severity,
   URI,
   registerAction2,
   type IDisposable,
   type IFileDialogOptions,
   type IFileDialogService as IFileDialogServiceType,
+  type IHostService as IHostServiceType,
   type IOpenWindowInfo,
   type IPickOptions,
   type IProgressOptions,
@@ -31,6 +35,7 @@ import {
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
+  type INotificationService as INotificationServiceType,
   type QuickPickInput,
   type IRecentWorkspace,
   type IWindowsService as IWindowsServiceType,
@@ -43,6 +48,7 @@ import {
   CloseFolderAction,
   OpenFolderAction,
   OpenRecentAction,
+  OpenWorkspaceInVSCodeAction,
   RemoveRecentWorkspaceAction,
 } from '../workspaceActions.js'
 
@@ -397,3 +403,81 @@ describe('workspaceActions', () => {
 
 // Spy on console to silence expected logs (none here, but defensive).
 vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+class VscodeHost {
+  declare readonly _serviceBrand: undefined
+  readonly calls: Array<[string, string | undefined]> = []
+  async openInVSCode(fsPath: string, remoteAuthority?: string): Promise<string> {
+    this.calls.push([fsPath, remoteAuthority])
+    return ''
+  }
+}
+
+class VscodeNotification {
+  declare readonly _serviceBrand: undefined
+  readonly notified: Array<{ severity: Severity; message: string }> = []
+  notify(opts: { severity: Severity; message: string }): void {
+    this.notified.push(opts)
+  }
+}
+
+function makeVscodeWorkspace(folder: URI | null): IWorkspaceServiceType {
+  return {
+    _serviceBrand: undefined,
+    current: folder ? { folder, name: 'ws' } : null,
+  } as unknown as IWorkspaceServiceType
+}
+
+async function runVscode(folder: URI | null, host: VscodeHost, notification: VscodeNotification) {
+  const services = new ServiceCollection()
+  services.set(IWorkspaceService, makeVscodeWorkspace(folder))
+  services.set(IHostService, host as unknown as IHostServiceType)
+  services.set(INotificationService, notification as unknown as INotificationServiceType)
+  const inst = new InstantiationService(services)
+  await inst.invokeFunction(async (accessor) => {
+    const cmd = CommandsRegistry.getCommand(OpenWorkspaceInVSCodeAction.ID)!
+    await cmd.handler(accessor)
+  })
+}
+
+describe('OpenWorkspaceInVSCodeAction', () => {
+  const disposables: Array<{ dispose(): void }> = []
+  beforeEach(() => {
+    disposables.push(registerAction2(OpenWorkspaceInVSCodeAction))
+  })
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('opens a local workspace with its fs path', async () => {
+    const folder = URI.file('/ws')
+    const host = new VscodeHost()
+    await runVscode(folder, host, new VscodeNotification())
+    expect(host.calls).toEqual([[folder.fsPath, undefined]])
+  })
+
+  it('opens a WSL remote workspace via --remote with its POSIX path', async () => {
+    const folder = URI.parse('remote-ssh://wsl+ubuntu-24.04/home/u/proj')
+    const host = new VscodeHost()
+    await runVscode(folder, host, new VscodeNotification())
+    expect(host.calls).toEqual([['/home/u/proj', 'wsl+ubuntu-24.04']])
+  })
+
+  it('notifies for a non-WSL remote workspace without invoking code', async () => {
+    const folder = URI.parse('remote-ssh://alice@host/home/u/proj')
+    const host = new VscodeHost()
+    const notification = new VscodeNotification()
+    await runVscode(folder, host, notification)
+    expect(host.calls).toHaveLength(0)
+    expect(notification.notified).toHaveLength(1)
+    expect(notification.notified[0]?.severity).toBe(Severity.Info)
+  })
+
+  it('does nothing without an open workspace', async () => {
+    const host = new VscodeHost()
+    const notification = new VscodeNotification()
+    await runVscode(null, host, notification)
+    expect(host.calls).toHaveLength(0)
+    expect(notification.notified).toHaveLength(0)
+  })
+})

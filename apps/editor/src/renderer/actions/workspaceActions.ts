@@ -16,9 +16,11 @@ import {
   IWorkspaceService,
   MenuId,
   ProgressLocation,
+  REMOTE_SCHEME,
   Severity,
   ShutdownReason,
   URI,
+  isWslAuthority,
   localize,
   localize2,
   type IKeyMods,
@@ -110,14 +112,26 @@ export class OpenWorkspaceInVSCodeAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const workspace = accessor.get(IWorkspaceService)
     const host = accessor.get(IHostService)
-    // 本机路径，不随远端工作区变化：`code` CLI 在本机 spawn，cwd 必须是本机路径。
-    // 远端工作区没有本机路径可映射 —— 直接跳过（无本机 cwd）。
+    const notification = accessor.get(INotificationService)
     const folder = workspace.current?.folder
-    if (!folder || folder.scheme !== 'file') return
-    const cwd = folder.fsPath
-    const error = await host.openInVSCode(cwd)
+    if (!folder) return
+    if (folder.scheme === REMOTE_SCHEME && !isWslAuthority(folder.authority)) {
+      notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'action.openWorkspaceInVSCode.remoteNotSupported',
+          'Opening this remote workspace in VS Code is not supported for this remote type.',
+        ),
+      })
+      return
+    }
+    // A WSL remote opens via `code --remote <authority>` with its POSIX path
+    // passed verbatim (there is no local fs path for the remote side).
+    const fsPath = folder.scheme === REMOTE_SCHEME ? folder.path : folder.fsPath
+    const remoteAuthority = folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
+    const error = await host.openInVSCode(fsPath, remoteAuthority)
     if (error) {
-      accessor.get(INotificationService).notify({
+      notification.notify({
         severity: Severity.Error,
         message: localize(
           'action.openWorkspaceInVSCode.failed',

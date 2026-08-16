@@ -127,6 +127,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.nextEditor.title': 'Open Next Editor',
   'action.nextViewContainer.title': 'Open Next View Container',
   'action.openContainingFolder.title': 'Open Containing Folder',
+  'action.openContainingFolder.remoteNotSupported':
+    'The file is on a remote host and cannot be opened in the local file manager.',
   'action.openDocs.title': 'Documentation',
   'action.openFile.title': 'Open File…',
   'action.openFolder.title': 'Open Folder…',
@@ -140,6 +142,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.openSettings.title': 'Open Settings',
   'action.openUpdateConfigJson.title': 'Open Update Config (JSON)',
   'action.openWithDefaultApplication.title': 'Open with Default Application',
+  'action.openWorkspaceInVSCode.remoteNotSupported':
+    'Opening this remote workspace in VS Code is not supported for this remote type.',
   'action.previousEditor.title': 'Open Previous Editor',
   'action.previousViewContainer.title': 'Open Previous View Container',
   'action.quickTextSearch.title': 'Quick Search',

@@ -267,12 +267,13 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  openInVSCode(fsPath: string): Promise<string> {
+  openInVSCode(fsPath: string, remoteAuthority?: string): Promise<string> {
     // `code` is a shell launcher (code.cmd on Windows), so wrap it in cmd.exe to
     // resolve it from PATH (not `shell: true` — its unescaped args trip DEP0190).
     // Detach so VS Code outlives the spawning child.
+    const args = remoteAuthority ? ['--remote', remoteAuthority, fsPath] : [fsPath]
     return new Promise<string>((resolve) => {
-      const child = spawnViaCmd('code', [fsPath], {
+      const child = spawnViaCmd('code', args, {
         detached: true,
         stdio: 'ignore',
       })
@@ -282,7 +283,11 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       })
       child.on('spawn', () => {
         child.unref()
-        this._logger.info(`openInVSCode ${fsPath}`)
+        this._logger.info(
+          remoteAuthority
+            ? `openInVSCode ${fsPath} remote=${remoteAuthority}`
+            : `openInVSCode ${fsPath}`,
+        )
         resolve('')
       })
     })

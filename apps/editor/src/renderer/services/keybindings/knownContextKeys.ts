@@ -58,6 +58,8 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'isWindows',
   'isMac',
   'isLinux',
+  'isRemoteWorkspace',
+  'remoteRevealInOsSupported',
   'activityBarVisible',
   'sideBarVisible',
   'secondarySideBarVisible',

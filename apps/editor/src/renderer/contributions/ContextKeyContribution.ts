@@ -37,9 +37,12 @@ import {
   IHostService,
   ILayoutService,
   ILifecycleService,
+  IWorkspaceService,
   IWorkbenchContribution,
   LifecyclePhase,
   PartId,
+  REMOTE_SCHEME,
+  isWslAuthority,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
@@ -56,6 +59,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     @IEditorGroupsService editorGroupsService: IEditorGroupsService,
     @ILifecycleService lifecycleService: ILifecycleService,
     @ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
+    @IWorkspaceService workspaceService: IWorkspaceService,
   ) {
     super()
 
@@ -64,6 +68,23 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     contextKeyService.createKey<boolean>('isWindows', platform === 'win32')
     contextKeyService.createKey<boolean>('isMac', platform === 'darwin')
     contextKeyService.createKey<boolean>('isLinux', platform === 'linux')
+
+    // -- remote workspace keys
+    const isRemoteWorkspace = contextKeyService.createKey<boolean>('isRemoteWorkspace', false)
+    const remoteRevealInOsSupported = contextKeyService.createKey<boolean>(
+      'remoteRevealInOsSupported',
+      false,
+    )
+    const syncRemoteKeys = () => {
+      const folder = workspaceService.current?.folder
+      const remote = folder !== undefined && folder.scheme === REMOTE_SCHEME
+      isRemoteWorkspace.set(remote)
+      remoteRevealInOsSupported.set(
+        remote && folder !== undefined && platform === 'win32' && isWslAuthority(folder.authority),
+      )
+    }
+    this._register(workspaceService.onDidChangeWorkspace(syncRemoteKeys))
+    syncRemoteKeys()
 
     // -- Part visibility keys
     const activityBarVisible = contextKeyService.createKey<boolean>('activityBarVisible', false)

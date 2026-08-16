@@ -13,11 +13,15 @@ import {
   IHostService,
   IInstantiationService,
   ILayoutService,
+  ILoggerService,
+  INotificationService,
   IViewsService,
   IWorkspaceService,
   MenuId,
+  Severity,
   localize,
   localize2,
+  localRevealFsPath,
   PartId,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -96,18 +100,34 @@ export class OpenWithDefaultAppAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const target = reviveUri((args[0] as ITargetArg | undefined)?.target ?? null)
-    // 本机路径，不随远端工作区变化：shell.openPath 只认本机文件。
-    if (!target || target.scheme !== 'file') return
+    if (!target) return
     const host = accessor.get(IHostService)
-    const err = await host.openWithDefaultApp(target.fsPath)
-    if (err) {
-      const dialog = accessor.get(IDialogService)
-      await dialog.confirm({
-        message: localize('dialog.file.open.error', 'Unable to open file'),
-        detail: err,
-        type: 'error',
-      })
+    const fsPath = localRevealFsPath(target, { isWindows: host.platform === 'win32' })
+    if (fsPath) {
+      const err = await host.openWithDefaultApp(fsPath)
+      if (err) {
+        const dialog = accessor.get(IDialogService)
+        await dialog.confirm({
+          message: localize('dialog.file.open.error', 'Unable to open file'),
+          detail: err,
+          type: 'error',
+        })
+      }
+      return
     }
+    // Remote resource without a local path (non-WSL remote, or a non-Windows
+    // client for a WSL remote): the OS can't open it directly.
+    accessor.get(INotificationService).notify({
+      severity: Severity.Info,
+      message: localize(
+        'action.openContainingFolder.remoteNotSupported',
+        'The file is on a remote host and cannot be opened in the local file manager.',
+      ),
+    })
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'fileOpen', name: 'File Open' })
+      .debug(`openWithDefaultApp: no local path for ${target.toString()}`)
   }
 }
 

@@ -150,7 +150,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.openWithDefaultApp',
-        when: '!explorerResourceIsFolder',
+        when: '!explorerResourceIsFolder && (resourceScheme == file || resourceScheme == remote-ssh && remoteRevealInOsSupported)',
         group: '5_open',
         order: 1,
       }),
@@ -158,6 +158,7 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'workbench.files.action.revealInOsExplorer',
+        when: 'resourceScheme == file || resourceScheme == remote-ssh && remoteRevealInOsSupported',
         group: '5_open',
         order: 2,
       }),

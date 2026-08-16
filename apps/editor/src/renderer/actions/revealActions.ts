@@ -13,15 +13,21 @@ import {
   IEditorGroupsService,
   IHostService,
   ILayoutService,
+  ILoggerService,
+  INotificationService,
   IWorkspaceService,
   MenuId,
+  Severity,
   URI,
+  localize,
   localize2,
+  localRevealFsPath,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { isFileSystemUri } from '../services/files/fileSystemScheme.js'
 
 const URI_STRING_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
@@ -57,7 +63,7 @@ function activeFileResource(accessor: ServicesAccessor): URI | null {
 
 async function revealInExplorer(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
   const resource = resourceFromArg(args[0]) ?? activeFileResource(accessor)
-  if (!resource || resource.scheme !== 'file') return
+  if (!resource || !isFileSystemUri(resource)) return
   const layoutService = accessor.get(ILayoutService)
   const treeService = accessor.get(IExplorerTreeService)
   await layoutService.focusView(EXPLORER_TREE_VIEW_ID, { source: 'command' })
@@ -72,7 +78,12 @@ export class RevealInExplorerAction extends Action2 {
       title: localize2('action.revealInExplorer.title', 'Reveal in Explorer View'),
       category: localize2('command.category.file', 'File'),
       menu: [
-        { id: MenuId.EditorTabContext, group: 'reveal', order: 1, when: 'resourceScheme == file' },
+        {
+          id: MenuId.EditorTabContext,
+          group: 'reveal',
+          order: 1,
+          when: 'resourceScheme == file || resourceScheme == remote-ssh',
+        },
       ],
       f1: false,
     })
@@ -108,7 +119,12 @@ export class RevealInOSExplorerAction extends Action2 {
         primary: 'alt+shift+e',
       },
       menu: [
-        { id: MenuId.EditorTabContext, group: 'reveal', order: 2, when: 'resourceScheme == file' },
+        {
+          id: MenuId.EditorTabContext,
+          group: 'reveal',
+          order: 2,
+          when: 'resourceScheme == file || resourceScheme == remote-ssh && remoteRevealInOsSupported',
+        },
       ],
       f1: true,
     })
@@ -119,8 +135,25 @@ export class RevealInOSExplorerAction extends Action2 {
     if (!resource) resource = activeFileResource(accessor)
     if (!resource) resource = accessor.get(IExplorerTreeService).selectedResource
     if (!resource) resource = accessor.get(IWorkspaceService).current?.folder ?? null
-    if (!resource || resource.scheme !== 'file') return
-    // 本机路径，不随远端工作区变化：shell.showItemInFolder 只认本机路径。
-    await accessor.get(IHostService).showItemInFolder(resource.fsPath)
+    if (!resource) return
+    const host = accessor.get(IHostService)
+    const fsPath = localRevealFsPath(resource, { isWindows: host.platform === 'win32' })
+    if (fsPath) {
+      await host.showItemInFolder(fsPath)
+      return
+    }
+    // Remote resource without a local reveal path (non-WSL remote, or a
+    // non-Windows client for a WSL remote): fall back to an in-app notice.
+    accessor.get(INotificationService).notify({
+      severity: Severity.Info,
+      message: localize(
+        'action.openContainingFolder.remoteNotSupported',
+        'The file is on a remote host and cannot be opened in the local file manager.',
+      ),
+    })
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'reveal', name: 'Reveal' })
+      .debug(`revealInOsExplorer: no local path for ${resource.toString()}`)
   }
 }

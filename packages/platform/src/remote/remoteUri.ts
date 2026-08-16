@@ -7,7 +7,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../base/uri.js'
-import { REMOTE_SCHEME } from './remoteProtocol.js'
+import {
+  REMOTE_SCHEME,
+  WSL_AUTHORITY_PREFIX,
+  isWslAuthority,
+  isValidWslDistroName,
+  normalizeRemoteAuthority,
+} from './remoteProtocol.js'
 
 /**
  * A server-side filesystem path string → remote-ssh URI. This is the ONE
@@ -46,4 +52,33 @@ export function remotePathFromUri(uri: URI): string {
     throw new Error(`remoteUri.remotePathFromUri: expected ${REMOTE_SCHEME}, got ${uri.scheme}`)
   }
   return uri.fsPath
+}
+
+/**
+ * The Windows UNC path (`\\wsl$\<distro>\...`) that opens a WSL remote's POSIX
+ * path in the local Windows file manager (VS Code `toLocalFileUri` parity). The
+ * distro name is canonicalized to lowercase (`wsl.exe -d` is case-insensitive);
+ * a malformed WSL authority (e.g. one carrying a port) yields undefined.
+ * Returns undefined for non-WSL authorities or non-absolute paths, leaving the
+ * caller to fall back to its local-only behavior.
+ */
+export function wslUncPath(authority: string, posixPath: string): string | undefined {
+  if (!isWslAuthority(authority) || !posixPath.startsWith('/')) return undefined
+  const distro = normalizeRemoteAuthority(authority).slice(WSL_AUTHORITY_PREFIX.length)
+  if (!isValidWslDistroName(distro)) return undefined
+  return `\\\\wsl$\\${distro}${posixPath.replace(/\//g, '\\')}`
+}
+
+/**
+ * The local (client-host) filesystem path a resource can be revealed at in the
+ * OS file manager: `file` URIs reveal their own path; a WSL remote reveals the
+ * `\\wsl$\` UNC path when the client is Windows. Undefined means "not
+ * revealable" and the caller keeps its in-app fallback.
+ */
+export function localRevealFsPath(uri: URI, opts: { isWindows: boolean }): string | undefined {
+  if (uri.scheme === 'file') return uri.fsPath
+  if (uri.scheme === REMOTE_SCHEME && opts.isWindows) {
+    return wslUncPath(uri.authority, uri.path)
+  }
+  return undefined
 }

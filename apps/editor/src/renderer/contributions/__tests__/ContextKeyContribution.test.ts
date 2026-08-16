@@ -43,6 +43,26 @@ function makeLanguageFeaturesStub() {
   }
 }
 
+interface FakeFolder {
+  scheme: string
+  authority?: string
+}
+
+function makeWorkspaceStub() {
+  const change = new Emitter<{ folder: FakeFolder } | null>()
+  let current: { folder: FakeFolder } | null = null
+  return {
+    get current() {
+      return current
+    },
+    onDidChangeWorkspace: change.event,
+    setCurrent(next: { folder: FakeFolder } | null) {
+      current = next
+      change.fire(next)
+    },
+  }
+}
+
 interface FakeEditor {
   id: string
   isDirty?: boolean
@@ -130,6 +150,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('isWindows')).toBe(false)
     expect(ctx.get('isMac')).toBe(true)
@@ -147,6 +168,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     expect(ctx.get('sideBarVisible')).toBe(true)
@@ -165,6 +187,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.ActivityBar]: false }, undefined)
@@ -183,6 +206,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('sideBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.SideBar]: false }, undefined)
@@ -201,6 +225,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('hasActiveEditor')).toBe(false)
     expect(ctx.get('activeEditorId')).toBeUndefined()
@@ -220,6 +245,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('editorTextFocus')).toBe(false)
     expect(ctx.get('editorLangId')).toBe('')
@@ -244,6 +270,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       lifecycle,
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('workbenchReady')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Ready)
@@ -263,6 +290,7 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       lifecycle,
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('workbenchRestored')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Restored)
@@ -285,6 +313,7 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('editorPartMultipleEditorGroups')).toBe(false)
     groups.groups.push(makeGroup(1, []))
@@ -305,6 +334,7 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('editorIsOpen')).toBe(false)
     g0.editors.push({ id: 'a' })
@@ -325,6 +355,7 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('groupEditorsCount')).toBe(2)
     ctx.dispose()
@@ -343,6 +374,7 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('activeEditorGroupIndex')).toBe(0)
     groups.setActive(g1)
@@ -363,6 +395,7 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('activeEditorIsFirstInGroup')).toBe(true)
     expect(ctx.get('activeEditorIsLastInGroup')).toBe(true)
@@ -382,8 +415,131 @@ describe('ContextKeyContribution', () => {
       groups as never,
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
     )
     expect(ctx.get('activeEditorIsDirty')).toBe(true)
+    ctx.dispose()
+  })
+
+  // ---- remote workspace keys -------------------------------------------
+
+  it('seeds remote workspace keys as false for a local / empty workspace', () => {
+    const ctx = new ContextKeyService()
+    const workspace = makeWorkspaceStub()
+    workspace.setCurrent({ folder: { scheme: 'file', authority: '' } })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      workspace as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(false)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('seeds remote workspace keys as false when no workspace is open', () => {
+    const ctx = new ContextKeyService()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(false)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('sets both keys for a WSL remote workspace on a Windows client', () => {
+    const ctx = new ContextKeyService()
+    const workspace = makeWorkspaceStub()
+    workspace.setCurrent({ folder: { scheme: 'remote-ssh', authority: 'wsl+ubuntu-24.04' } })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      workspace as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(true)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(true)
+    ctx.dispose()
+  })
+
+  it('keeps remoteRevealInOsSupported false for a WSL remote on a non-Windows client', () => {
+    const ctx = new ContextKeyService()
+    const workspace = makeWorkspaceStub()
+    workspace.setCurrent({ folder: { scheme: 'remote-ssh', authority: 'wsl+ubuntu-24.04' } })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('linux') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      workspace as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(true)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('keeps remoteRevealInOsSupported false for a non-WSL remote authority', () => {
+    const ctx = new ContextKeyService()
+    const workspace = makeWorkspaceStub()
+    workspace.setCurrent({ folder: { scheme: 'remote-ssh', authority: 'user@host:22' } })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      workspace as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(true)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('updates the remote workspace keys when the workspace changes', () => {
+    const ctx = new ContextKeyService()
+    const workspace = makeWorkspaceStub()
+    workspace.setCurrent({ folder: { scheme: 'file', authority: '' } })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      workspace as never,
+    )
+    expect(ctx.get('isRemoteWorkspace')).toBe(false)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+
+    workspace.setCurrent({ folder: { scheme: 'remote-ssh', authority: 'wsl+debian' } })
+    expect(ctx.get('isRemoteWorkspace')).toBe(true)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(true)
+
+    workspace.setCurrent(null)
+    expect(ctx.get('isRemoteWorkspace')).toBe(false)
+    expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
     ctx.dispose()
   })
 })

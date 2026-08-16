@@ -106,10 +106,13 @@ export interface IHostService {
 
   /**
    * Launch VS Code (`code` on PATH) with `fsPath` as the folder/file to open.
+   * When `remoteAuthority` is set, `fsPath` is a remote POSIX path and the
+   * launcher is invoked as `code --remote <authority> <path>` (VS Code's WSL
+   * remote authority format `wsl+<distro>` matches this project's).
    * Returns an error string on failure (e.g. `code` not found), or empty string
    * on success.
    */
-  openInVSCode(fsPath: string): Promise<string>
+  openInVSCode(fsPath: string, remoteAuthority?: string): Promise<string>
 
   /**
    * Open the OS external terminal with `cwd` as its working directory.

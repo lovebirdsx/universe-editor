@@ -9,9 +9,12 @@ import {
   IEditorGroupsService,
   IHostService,
   ILayoutService,
+  ILoggerService,
+  INotificationService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  Severity,
   URI,
   registerAction2,
   type EditorInput,
@@ -19,7 +22,9 @@ import {
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IHostService as IHostServiceType,
+  type ILoggerService as ILoggerServiceType,
   type ILayoutService as ILayoutServiceType,
+  type INotificationService as INotificationServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -65,11 +70,31 @@ class FakeLayout {
 
 class FakeHost {
   declare readonly _serviceBrand: undefined
-  readonly platform = 'win32'
   readonly onDidChangeMaximized: Event<boolean> = new Emitter<boolean>().event
   readonly shownItems: string[] = []
+  constructor(readonly platform: IHostServiceType['platform'] = 'win32') {}
   async showItemInFolder(fsPath: string): Promise<void> {
     this.shownItems.push(fsPath)
+  }
+}
+
+class FakeNotification {
+  declare readonly _serviceBrand: undefined
+  readonly notified: Array<{ severity: Severity; message: string }> = []
+  notify(opts: { severity: Severity; message: string }): void {
+    this.notified.push(opts)
+  }
+}
+
+class FakeLogger {
+  declare readonly _serviceBrand: undefined
+  readonly debugMessages: string[] = []
+  createLogger(): { debug(message: string): void } {
+    return { debug: (message: string) => this.debugMessages.push(message) }
+  }
+  setLevel(): void {}
+  getLevel(): number {
+    return 0
   }
 }
 
@@ -91,19 +116,28 @@ function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
   } as IWorkspaceServiceType
 }
 
-function makeHarness(active?: EditorInput, selectedResource?: URI, workspaceFolder?: URI) {
+function makeHarness(
+  active?: EditorInput,
+  selectedResource?: URI,
+  workspaceFolder?: URI,
+  platform: IHostServiceType['platform'] = 'win32',
+) {
   const tree = new FakeExplorerTree()
   const layout = new FakeLayout()
   tree.selectedResource = selectedResource ?? null
-  const host = new FakeHost()
+  const host = new FakeHost(platform)
+  const notification = new FakeNotification()
+  const logger = new FakeLogger()
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, makeGroups(active))
   services.set(ILayoutService, layout as unknown as ILayoutServiceType)
   services.set(IExplorerTreeService, tree as unknown as ExplorerTreeService)
   services.set(IHostService, host as unknown as IHostServiceType)
   services.set(IWorkspaceService, makeWorkspaceService(workspaceFolder))
+  services.set(INotificationService, notification as unknown as INotificationServiceType)
+  services.set(ILoggerService, logger as unknown as ILoggerServiceType)
   const inst = new InstantiationService(services)
-  return { inst, layout, tree, host }
+  return { inst, layout, tree, host, notification, logger }
 }
 
 function run(inst: InstantiationService, id: string, args?: unknown): Promise<unknown> {
@@ -284,5 +318,36 @@ describe('RevealInOSExplorerAction', () => {
     await run(h.inst, RevealInOSExplorerAction.ID)
 
     expect(h.host.shownItems).toEqual([workspace.fsPath])
+  })
+
+  it('reveals a WSL remote resource as a UNC path on a Windows client', async () => {
+    const target = URI.parse('remote-ssh://wsl+ubuntu-24.04/home/u/proj/file.txt')
+    const h = makeHarness(undefined, undefined, undefined, 'win32')
+
+    await run(h.inst, RevealInOSExplorerAction.ID, { resource: target.toJSON() })
+
+    expect(h.host.shownItems).toEqual(['\\\\wsl$\\ubuntu-24.04\\home\\u\\proj\\file.txt'])
+  })
+
+  it('notifies instead of revealing a non-WSL remote resource', async () => {
+    const target = URI.parse('remote-ssh://alice@host/home/u/proj/file.txt')
+    const h = makeHarness(undefined, undefined, undefined, 'win32')
+
+    await run(h.inst, RevealInOSExplorerAction.ID, { resource: target.toJSON() })
+
+    expect(h.host.shownItems).toHaveLength(0)
+    expect(h.notification.notified).toHaveLength(1)
+    expect(h.notification.notified[0]?.severity).toBe(Severity.Info)
+  })
+
+  it('notifies instead of revealing a WSL remote on a non-Windows client', async () => {
+    const target = URI.parse('remote-ssh://wsl+ubuntu-24.04/home/u/proj/file.txt')
+    const h = makeHarness(undefined, undefined, undefined, 'linux')
+
+    await run(h.inst, RevealInOSExplorerAction.ID, { resource: target.toJSON() })
+
+    expect(h.host.shownItems).toHaveLength(0)
+    expect(h.notification.notified).toHaveLength(1)
+    expect(h.notification.notified[0]?.severity).toBe(Severity.Info)
   })
 })
