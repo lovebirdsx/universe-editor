@@ -42,6 +42,8 @@ export interface IPersistedWindow {
   readonly workspace: PersistedWorkspace | null
   readonly uiState: IWindowState | null
   readonly devToolsOpen: boolean
+  /** Window-level remote-ssh authority for an empty (workspace-less) window. */
+  readonly remoteAuthority?: string
 }
 
 // 运行时形态（URI 已 revive，几何已校验）
@@ -49,17 +51,21 @@ export interface IRestoreWindow {
   readonly workspace: IWorkspace | null
   readonly uiState?: IWindowState
   readonly devToolsOpen: boolean
+  /** Window-level remote-ssh authority for an empty (workspace-less) window. */
+  readonly remoteAuthority?: string
 }
 
 export function serializeWindow(
   workspace: IWorkspace | null,
   uiState: IWindowState | null,
   devToolsOpen: boolean,
+  remoteAuthority?: string,
 ): IPersistedWindow {
   return {
     workspace: workspace ? { folder: workspace.folder.toJSON(), name: workspace.name } : null,
     uiState,
     devToolsOpen,
+    ...(workspace === null && remoteAuthority ? { remoteAuthority } : {}),
   }
 }
 
@@ -79,6 +85,7 @@ export async function loadSession(storage: Storage): Promise<IRestoreWindow[]> {
       workspace: reviveWorkspace(entry?.workspace ?? null),
       ...(uiState ? { uiState } : {}),
       devToolsOpen: entry?.devToolsOpen === true,
+      ...(entry?.remoteAuthority ? { remoteAuthority: entry.remoteAuthority } : {}),
     }
   })
 }

@@ -63,10 +63,12 @@ export interface IHostService {
   resetZoom(): Promise<void>
 
   /**
-   * Request the host to open a new application window. The new window
-   * inherits the current workspace context.
+   * Request the host to open a new application window. The new window is
+   * empty by default. When `options.remoteAuthority` is given, the new empty
+   * window stays scoped to that remote authority instead of falling back to
+   * the local context (a remote window's "New Window" keeps its remote).
    */
-  openNewWindow(): Promise<void>
+  openNewWindow(options?: IOpenNewWindowOptions): Promise<void>
 
   /**
    * Show the given file path in the OS file manager (Explorer / Finder / Files)
@@ -148,6 +150,12 @@ export interface IHostService {
 
   /** Application and runtime version info, for the About dialog. */
   getVersionInfo(): Promise<IVersionInfo>
+}
+
+/** Options for {@link IHostService.openNewWindow}. */
+export interface IOpenNewWindowOptions {
+  /** remote-ssh authority the new (empty) window should be scoped to; omit for a local window. */
+  readonly remoteAuthority?: string
 }
 
 /** A PNG image lifted off the OS clipboard by the main process. */

@@ -12,14 +12,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback } from 'react'
-import { Event, IWorkspaceService, REMOTE_SCHEME } from '@universe-editor/platform'
+import { Event, IWorkspaceService } from '@universe-editor/platform'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { useEventValue, useOptionalService } from './useService.js'
 
 export function useRemoteAuthority(): string | undefined {
   const workspace = useOptionalService(IWorkspaceService)
-  const getValue = useCallback(() => {
-    const folder = workspace?.current?.folder
-    return folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
-  }, [workspace])
+  const getValue = useCallback(() => currentRemoteAuthority(workspace?.current), [workspace])
   return useEventValue(workspace?.onDidChangeWorkspace ?? Event.None, getValue)
 }

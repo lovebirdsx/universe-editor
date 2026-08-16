@@ -15,7 +15,6 @@ import {
   IQuickInputService,
   IStatusBarService,
   IWorkspaceService,
-  REMOTE_SCHEME,
   StatusBarAlignment,
   localize,
   localize2,
@@ -39,6 +38,7 @@ import {
   RetryConnectionAction,
   StopRemoteServerAction,
 } from '../actions/remoteActions.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
 const REMOTE_STATUS_MENU_COMMAND_ID = 'workbench.action.remote.showMenu'
 
@@ -124,8 +124,7 @@ export class RemoteStatusContribution extends Disposable implements IWorkbenchCo
   }
 
   private _currentAuthority(): string | undefined {
-    const folder = this._workspace.current?.folder
-    return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
+    return currentRemoteAuthority(this._workspace.current)
   }
 
   /**

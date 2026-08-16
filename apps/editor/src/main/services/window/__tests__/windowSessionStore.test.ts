@@ -64,6 +64,7 @@ function entry(folder: string | null, winOpts: Parameters<typeof fakeWindow>[0] 
     workspace: {
       current: folder ? { folder: URI.file(folder), name: folder } : undefined,
     } as never,
+    remoteAuthority: undefined,
   }
 }
 
@@ -98,6 +99,19 @@ describe('WindowSessionStore', () => {
     const keys = setSpy.mock.calls.map((c) => c[0])
     expect(keys).toContain(WINDOWS_SESSION_STORAGE_KEY)
     expect(keys.some((k) => k !== WINDOWS_SESSION_STORAGE_KEY)).toBe(true)
+  })
+
+  it('persists window-level remoteAuthority for an empty window', async () => {
+    const s = new WindowSessionStore(() => [
+      {
+        win: fakeWindow({}) as never,
+        workspace: { current: null } as never,
+        remoteAuthority: 'wsl+ubuntu',
+      },
+    ])
+    await s.persistNow()
+    const list = store[WINDOWS_SESSION_STORAGE_KEY] as Array<{ remoteAuthority?: string }>
+    expect(list[0]?.remoteAuthority).toBe('wsl+ubuntu')
   })
 
   it('schedule coalesces bursts into a single write', async () => {

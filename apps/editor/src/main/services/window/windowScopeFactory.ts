@@ -33,13 +33,13 @@ import type {
   ApplicationServices,
   WindowScopedServices,
 } from '../../window/scopedServicesFactory.js'
-import type { IWorkspace } from '@universe-editor/platform'
+import type { IWorkspace, IOpenNewWindowOptions } from '@universe-editor/platform'
 import type { WindowMainService } from './windowMainService.js'
 
 /** Facade couplings the per-window stack needs, without a back-reference to it. */
 export interface WindowScopeCallbacks {
-  /** Open a fresh empty window (host "new window" affordance). */
-  readonly createEmptyWindow: () => void
+  /** Open a fresh empty window (host "new window" affordance), optionally remote-scoped. */
+  readonly createEmptyWindow: (options?: IOpenNewWindowOptions) => void
   /** The live renderer lifecycle for a window id, if it is still registered. */
   readonly getRendererLifecycle: (windowId: number) => IRendererLifecycleService | undefined
   /** Focus a window by id (cross-window session switcher target). */
@@ -107,7 +107,7 @@ export async function createWindowScopedServices(opts: {
   const host = disposables.add(
     new MainHostService(
       win,
-      () => callbacks.createEmptyWindow(),
+      (options) => callbacks.createEmptyWindow(options),
       logService.createLogger({ id: 'host', name: 'Host' }),
       {
         getRendererLifecycle: () => callbacks.getRendererLifecycle(win.id),

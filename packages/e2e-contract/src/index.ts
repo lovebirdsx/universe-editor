@@ -1131,6 +1131,15 @@ export interface E2EProbe {
   getCurrentWorkspaceUri(): string | undefined
   /** Recent-workspaces folder URI strings (scheme-preserving), most-recent first. */
   getRecentWorkspaceUris(): readonly string[]
+  /**
+   * The window's current remote-ssh authority, via the renderer's unified getter
+   * (`currentRemoteAuthority`): the workspace folder's authority when the
+   * workspace is remote, otherwise the window's argv authority (an empty remote
+   * window created via "New Window" carries it), otherwise undefined. A local
+   * workspace is always a local window — it never falls back to the argv
+   * authority.
+   */
+  getWindowRemoteAuthority(): Promise<string | undefined>
 }
 
 declare global {

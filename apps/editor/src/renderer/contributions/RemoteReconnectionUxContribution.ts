@@ -15,7 +15,6 @@ import {
   ICommandService,
   INotificationService,
   IWorkspaceService,
-  REMOTE_SCHEME,
   Severity,
   localize,
   type INotificationHandle,
@@ -26,6 +25,7 @@ import {
   type RemoteConnectionStatusDto,
 } from '../../shared/ipc/remoteStatusService.js'
 import { CloseConnectionAction, RetryConnectionAction } from '../actions/remoteActions.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
 const RECONNECT_NOTIFY_DELAY_MS = 800
 
@@ -53,8 +53,7 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
   }
 
   private _currentAuthority(): string | undefined {
-    const folder = this._workspace.current?.folder
-    return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
+    return currentRemoteAuthority(this._workspace.current)
   }
 
   private _onWorkspaceChanged(): void {

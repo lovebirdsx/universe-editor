@@ -24,11 +24,13 @@ import {
   createNamedLogger,
   localize,
   registerSingleton,
+  remoteFsPathToUri,
   type IFileDialogOptions,
   type ILogger,
   type IQuickPickItem,
 } from '@universe-editor/platform'
 import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
+import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
 import {
   endsWithSeparator,
@@ -128,22 +130,30 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   }
 
   showOpenDialog(opts: IFileDialogOptions): Promise<URI[] | undefined> {
-    if (this._useNativeDialog()) {
+    if (this._useNativeDialog(opts)) {
       return this._showNativeOpen(opts)
     }
     return this._show(opts, 'open')
   }
 
   showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
-    if (this._useNativeDialog()) {
+    if (this._useNativeDialog(opts)) {
       return this._showNativeSave(opts)
     }
     // The simple dialog resolves an array internally; a save pick holds one URI.
     return this._show(opts, 'save').then((uris) => uris?.[0])
   }
 
-  private _useNativeDialog(): boolean {
-    return this._config.get<boolean>(NATIVE_DIALOG_SETTING) === true
+  private _useNativeDialog(opts: IFileDialogOptions): boolean {
+    if (this._config.get<boolean>(NATIVE_DIALOG_SETTING) !== true) return false
+    const target = opts.defaultUri ?? this._workspace.current?.folder
+    // The native OS dialog only understands local filesystem paths: a non-file
+    // start point (remote-ssh) must go through the simple dialog.
+    if (target !== undefined && target.scheme !== 'file') return false
+    // An empty remote window starts in the remote home; the native dialog would
+    // open in the local filesystem instead.
+    if (target === undefined && currentRemoteAuthority(this._workspace.current)) return false
+    return true
   }
 
   private async _showNativeOpen(opts: IFileDialogOptions): Promise<URI[] | undefined> {
@@ -631,21 +641,53 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     opts: IFileDialogOptions,
     mode: DialogMode,
   ): Promise<{ folder: URI; fileName?: string }> {
-    const fallback = this._workspace.current?.folder ?? this._homeUri()
+    const workspaceFolder = this._workspace.current?.folder
+    let homeFallback: Promise<URI> | undefined
+    const resolveHome = (): Promise<URI> => {
+      if (workspaceFolder) return Promise.resolve(workspaceFolder)
+      return (homeFallback ??= this._resolveHomeUri())
+    }
+
     if (mode === 'save' && opts.defaultUri) {
       return {
-        folder: this._parentOf(opts.defaultUri) ?? fallback,
+        folder: this._parentOf(opts.defaultUri) ?? (await resolveHome()),
         fileName: this._basename(opts.defaultUri),
       }
     }
-    const base = opts.defaultUri ?? fallback
+    const base = opts.defaultUri ?? (await resolveHome())
     try {
       const stat = await this._fileService.stat(base)
       if (stat.isDirectory) return { folder: base }
-      return { folder: this._parentOf(base) ?? fallback }
+      return { folder: this._parentOf(base) ?? (await resolveHome()) }
     } catch {
-      return { folder: fallback }
+      return { folder: await resolveHome() }
     }
+  }
+
+  /**
+   * The home used as the default start point when neither a defaultUri nor a
+   * workspace folder is available. An empty remote window starts in the remote
+   * user home; any failure to resolve it degrades to the local home so the
+   * dialog still opens.
+   */
+  private async _resolveHomeUri(): Promise<URI> {
+    const authority = currentRemoteAuthority(this._workspace.current)
+    if (!authority) return this._homeUri()
+    try {
+      const env = await this._remoteStatus.getEnvironment(authority)
+      if (env) return remoteFsPathToUri(env.homeDir, authority)
+    } catch (err) {
+      this._logger.warn(
+        `fileDialog: resolving remote home for ${authority} failed, falling back to local home (${
+          err instanceof Error ? err.message : String(err)
+        })`,
+      )
+      return this._homeUri()
+    }
+    this._logger.warn(
+      `fileDialog: remote environment for ${authority} not available, falling back to local home`,
+    )
+    return this._homeUri()
   }
 
   private _homeUri(): URI {

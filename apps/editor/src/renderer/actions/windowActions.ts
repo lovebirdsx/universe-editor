@@ -23,6 +23,7 @@ import {
 } from '@universe-editor/platform'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 import { IRendererDisposableLeakService } from '../services/disposableLeak/DisposableLeakService.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 export class NewWindowAction extends Action2 {
@@ -39,7 +40,10 @@ export class NewWindowAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void accessor.get(IHostService).openNewWindow()
+    const authority = currentRemoteAuthority(accessor.get(IWorkspaceService).current)
+    void accessor
+      .get(IHostService)
+      .openNewWindow(authority ? { remoteAuthority: authority } : undefined)
   }
 }
 

@@ -37,6 +37,7 @@ import { observeDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
 import { normalizeRemoteUri } from '../remote/remoteUri.js'
+import { deriveWindowRemoteAuthority } from './windowRemoteAuthority.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
@@ -55,6 +56,8 @@ export interface ICreateWindowOptions {
   readonly sessionToOpen?: string
   /** A `universe-editor://` deep link (as an opener-target string) to open at startup. */
   readonly deepLink?: string
+  /** remote-ssh authority to scope an empty window to; a workspace folder wins when both are given. */
+  readonly remoteAuthority?: string
 }
 
 export interface IWindowMainService {
@@ -77,6 +80,8 @@ interface WindowEntry {
   readonly workspace: WorkspaceMainService
   readonly disposables: DisposableStore
   readonly rendererLifecycle: IRendererLifecycleService
+  /** Window-level remote authority (empty windows only; a workspace folder wins). */
+  readonly remoteAuthority: string | undefined
 }
 
 export interface WindowMainServiceOptions {
@@ -148,8 +153,12 @@ export class WindowMainService implements IWindowMainService {
 
     const isMac = process.platform === 'darwin'
     const uiState = opts?.uiState
+    const windowRemoteAuthority = deriveWindowRemoteAuthority(
+      opts?.workspace?.folder ?? undefined,
+      opts?.remoteAuthority,
+    )
     logger.info(
-      `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${uiState !== undefined} workspace=${opts?.workspace?.folder.toString() ?? '<none>'}`,
+      `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${uiState !== undefined} workspace=${opts?.workspace?.folder.toString() ?? '<none>'} remoteAuthority=${windowRemoteAuthority ?? '<none>'}`,
     )
     if (this._opts.silentE2E) {
       logger.info(
@@ -195,6 +204,7 @@ export class WindowMainService implements IWindowMainService {
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
           ...(opts?.sessionToOpen ? [`--ue-open-session=${opts.sessionToOpen}`] : []),
           ...(opts?.deepLink ? [`--ue-open-uri=${opts.deepLink}`] : []),
+          ...(windowRemoteAuthority ? [`--ue-remote-authority=${windowRemoteAuthority}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
           ...(extensionDevelopment ? [EXTENSION_DEVELOPMENT_ARGV_FLAG] : []),
         ],
@@ -322,8 +332,10 @@ export class WindowMainService implements IWindowMainService {
         ...(opts?.workspace !== undefined ? { restoreWorkspace: opts.workspace } : {}),
         windowsServiceHost: this,
         callbacks: {
-          createEmptyWindow: () => {
-            void this.createWindow({})
+          createEmptyWindow: (options) => {
+            void this.createWindow(
+              options?.remoteAuthority ? { remoteAuthority: options.remoteAuthority } : {},
+            )
           },
           getRendererLifecycle: (windowId) => this._windows.get(windowId)?.rendererLifecycle,
           focusWindow: (windowId) => this.focusWindow(windowId),
@@ -346,6 +358,7 @@ export class WindowMainService implements IWindowMainService {
       workspace,
       disposables,
       rendererLifecycle,
+      remoteAuthority: windowRemoteAuthority,
     }
     this._windows.set(win.id, entry)
     logger.info(`createWindow created id=${win.id}`)
@@ -481,6 +494,7 @@ export class WindowMainService implements IWindowMainService {
         ...(entry.uiState ? { uiState: entry.uiState } : {}),
         devToolsOpen: entry.devToolsOpen,
         ...(windowFileToOpen ? { fileToOpen: windowFileToOpen } : {}),
+        ...(entry.remoteAuthority ? { remoteAuthority: entry.remoteAuthority } : {}),
       })
       isFirst = false
     }

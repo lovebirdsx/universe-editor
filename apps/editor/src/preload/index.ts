@@ -23,6 +23,12 @@ const OPEN_URI_FLAG = '--ue-open-uri='
 const openUriArg = process.argv.find((a) => a.startsWith(OPEN_URI_FLAG))
 const openUriTarget = openUriArg ? openUriArg.slice(OPEN_URI_FLAG.length) : undefined
 
+const REMOTE_AUTHORITY_FLAG = '--ue-remote-authority='
+const remoteAuthorityArg = process.argv.find((a) => a.startsWith(REMOTE_AUTHORITY_FLAG))
+const remoteAuthority = remoteAuthorityArg
+  ? remoteAuthorityArg.slice(REMOTE_AUTHORITY_FLAG.length)
+  : undefined
+
 /** 存储在监听器没有就绪时收到的 deep link，等待监听器添加后进行处理 */
 const pendingOpenUriTargets: string[] = []
 
@@ -64,6 +70,8 @@ const bridge = {
   },
   /** Absolute path of the file passed via CLI argv at cold-launch (undefined if none). */
   openFilePath,
+  /** remote-ssh authority this window is scoped to at cold-launch (undefined for a local window). */
+  remoteAuthority,
   /** Listen for files pushed by the main process (second-instance scenario). */
   onOpenFile(cb: (path: string) => void): () => void {
     const listener = (_event: IpcRendererEvent, path: unknown): void => {

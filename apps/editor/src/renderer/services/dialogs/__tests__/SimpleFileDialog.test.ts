@@ -1204,3 +1204,112 @@ describe('SimpleFileDialog remote target browsing', () => {
     expect(qp.value).toBe('/home/xiao/')
   })
 })
+
+describe('SimpleFileDialog empty remote window', () => {
+  const REMOTE_ENV: RemoteEnvironmentDto = {
+    os: 'linux',
+    arch: 'x64',
+    homeDir: '/home/xiao',
+    tmpDir: '/tmp',
+    pathCaseSensitive: true,
+    serverVersion: '0.0.0',
+  }
+
+  const remoteUri = (path: string): URI =>
+    URI.from({ scheme: REMOTE_SCHEME, authority: 'wsl+ubuntu2004', path })
+
+  const createRemoteDialog = (
+    remoteStatus: { getEnvironment: (authority: string) => Promise<RemoteEnvironmentDto | null> },
+    config: FakeConfigService = new FakeConfigService(),
+    host: FakeHostService = new FakeHostService(),
+  ): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService; host: FakeHostService } => {
+    const quickInput = new FakeQuickInputService()
+    const dialog = new SimpleFileDialog(
+      quickInput as never,
+      new FakeFileService() as never,
+      fakeWorkspace,
+      fakeDialog,
+      new FakeStorageService() as never,
+      config as unknown as IConfigurationService,
+      host as unknown as IHostService,
+      fakeLoggerService,
+      remoteStatus as never,
+    )
+    return { dialog, quickInput, host }
+  }
+
+  beforeEach(() => {
+    // Empty remote window: no workspace folder, but the argv carries the
+    // remote-ssh authority (mirrors `--ue-remote-authority=` on a New Window).
+    ;(globalThis as { window?: unknown }).window = {
+      ipc: { platform: 'linux', home: '/home/u', remoteAuthority: 'wsl+ubuntu2004' },
+    }
+  })
+
+  it('starts in the remote home for an empty remote window', async () => {
+    const { dialog, quickInput } = createRemoteDialog({ getEnvironment: async () => REMOTE_ENV })
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+    expect(qp.value).toBe('/home/xiao/')
+    expect(labels(qp)).toEqual(['..', 'proj'])
+  })
+
+  it('falls back to the local home when the remote environment cannot be resolved', async () => {
+    const { dialog, quickInput } = createRemoteDialog({
+      getEnvironment: async () => {
+        throw new Error('not connected')
+      },
+    })
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+    expect(qp.value).toBe('/home/u/')
+    expect(labels(qp)).toEqual(['..', 'Documents'])
+  })
+
+  it('keeps the simple dialog for a remote defaultUri when the native dialog is enabled', async () => {
+    const host = new FakeHostService()
+    const { dialog, quickInput } = createRemoteDialog(
+      { getEnvironment: async () => REMOTE_ENV },
+      new FakeConfigService(true),
+      host,
+    )
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: remoteUri('/home/xiao'),
+    })
+    await flush()
+    expect(host.openCalls).toEqual([])
+    expect(quickInput.lastPick).toBeDefined()
+    expect(quickInput.lastPick.value).toBe('/home/xiao/')
+  })
+
+  it('keeps the simple dialog for an empty remote window when the native dialog is enabled', async () => {
+    const host = new FakeHostService()
+    const { dialog, quickInput } = createRemoteDialog(
+      { getEnvironment: async () => REMOTE_ENV },
+      new FakeConfigService(true),
+      host,
+    )
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    expect(host.openCalls).toEqual([])
+    expect(quickInput.lastPick).toBeDefined()
+    expect(quickInput.lastPick.value).toBe('/home/xiao/')
+  })
+})

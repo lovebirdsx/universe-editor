@@ -86,6 +86,7 @@ import type { IExtensionHostClientService } from '../services/extensions/Extensi
 import { EnablementState } from '../services/extensions/ExtensionEnablementService.js'
 import type { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import type { WorkbenchThemeService } from '../services/themes/workbenchThemeService.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -1762,6 +1763,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     openUri: (uri) => services.editorResolverService.openEditor(URI.parse(uri)),
     getCurrentWorkspaceUri: () => services.workspaceService.current?.folder.toString(),
     getRecentWorkspaceUris: () => services.workspaceService.recent.map((r) => r.folder.toString()),
+    getWindowRemoteAuthority: async () => currentRemoteAuthority(services.workspaceService.current),
   }
 
   window[E2E_PROBE_KEY] = probe

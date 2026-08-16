@@ -23,10 +23,10 @@ import {
   REMOTE_SCHEME,
   Severity,
   ShutdownReason,
-  URI,
   isValidWslDistroName,
   localize,
   localize2,
+  remoteFsPathToUri,
   wslAuthorityForDistro,
   type IFileDialogService as IFileDialogServiceType,
   type ILifecycleService as ILifecycleServiceType,
@@ -74,13 +74,6 @@ function gatherConnectServices(accessor: ServicesAccessor): RemoteConnectService
     workspace: accessor.get(IWorkspaceService),
     lifecycle: accessor.get(ILifecycleService),
   }
-}
-
-/** A server-native path string → remote-ssh URI (POSIX separators, leading slash). */
-function remoteHomeUri(authority: string, homeDir: string): URI {
-  let path = homeDir.replace(/\\/g, '/')
-  if (!path.startsWith('/')) path = `/${path}`
-  return URI.from({ scheme: REMOTE_SCHEME, authority, path })
 }
 
 /**
@@ -133,7 +126,7 @@ async function selectAndOpenRemoteFolder(
   const folder = (
     await fileDialog.showOpenDialog({
       title: localize('remote.openFolder.title', 'Open Folder on {authority}', { authority }),
-      defaultUri: remoteHomeUri(authority, env.homeDir),
+      defaultUri: remoteFsPathToUri(env.homeDir, authority),
       canSelectFiles: false,
       canSelectFolders: true,
       openLabel: localize('fileDialog.openFolderButton', 'Open'),

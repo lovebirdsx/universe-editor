@@ -67,6 +67,25 @@ describe('windowsSession', () => {
     expect(list[0]?.devToolsOpen).toBe(false)
   })
 
+  it('round-trips a window-level remoteAuthority for an empty window', async () => {
+    const persisted = serializeWindow(null, validUi, false, 'wsl+ubuntu')
+    expect(persisted.remoteAuthority).toBe('wsl+ubuntu')
+    const list = await loadSession(makeStorage([persisted]))
+    expect(list[0]?.remoteAuthority).toBe('wsl+ubuntu')
+  })
+
+  it('does not persist a window-level remoteAuthority for a workspace window', async () => {
+    const persisted = serializeWindow(
+      { folder: URI.file('/tmp/p'), name: 'p' },
+      validUi,
+      false,
+      'wsl+ubuntu',
+    )
+    expect(persisted.remoteAuthority).toBeUndefined()
+    const list = await loadSession(makeStorage([persisted]))
+    expect(list[0]?.remoteAuthority).toBeUndefined()
+  })
+
   it('returns [] for missing / non-array values', async () => {
     expect(await loadSession(makeStorage())).toEqual([])
     expect(await loadSession(makeStorage(null))).toEqual([])

@@ -29,6 +29,7 @@ import {
   type ILogger,
   type IDisposable,
   type IHostServiceWire,
+  type IOpenNewWindowOptions,
   type IShowOpenFileOptions,
   type IShowSaveFileOptions,
   type ISystemNotificationOptions,
@@ -110,7 +111,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
 
   constructor(
     private readonly _win: BrowserWindow,
-    private readonly _createNewWindow: () => void = () => {},
+    private readonly _createNewWindow: (options?: IOpenNewWindowOptions) => void = () => {},
     private readonly _logger: ILogger = new NullLogger(),
     private readonly _restartHooks?: RestartHooks,
   ) {
@@ -197,8 +198,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  openNewWindow(): Promise<void> {
-    this._createNewWindow()
+  openNewWindow(options?: IOpenNewWindowOptions): Promise<void> {
+    this._createNewWindow(options)
     this._logger.info(`openNewWindow requestedBy=${this._win.id}`)
     return Promise.resolve()
   }

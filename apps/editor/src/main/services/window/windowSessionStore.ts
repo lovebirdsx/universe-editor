@@ -26,6 +26,8 @@ const SESSION_PERSIST_DEBOUNCE_MS = 300
 export interface IWindowSnapshotEntry {
   readonly win: BrowserWindow
   readonly workspace: WorkspaceMainService
+  /** Window-level remote authority (empty windows only; a workspace folder wins). */
+  readonly remoteAuthority: string | undefined
 }
 
 export class WindowSessionStore {
@@ -59,10 +61,17 @@ export class WindowSessionStore {
     // running) restores its last position/size — the session list only holds
     // currently-open windows and forgets a closed one.
     const geometryUpdates: Array<{ workspaceId: string; state: IWindowState }> = []
-    for (const { win, workspace } of this._snapshot()) {
+    for (const { win, workspace, remoteAuthority } of this._snapshot()) {
       if (win.isDestroyed()) continue
       const state = captureWindowState(win)
-      list.push(serializeWindow(workspace.current, state, win.webContents.isDevToolsOpened()))
+      list.push(
+        serializeWindow(
+          workspace.current,
+          state,
+          win.webContents.isDevToolsOpened(),
+          remoteAuthority,
+        ),
+      )
       if (workspace.current) {
         geometryUpdates.push({
           workspaceId: workspaceIdFromUri(workspace.current.folder.toString()),
