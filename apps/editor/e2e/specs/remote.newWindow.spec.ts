@@ -150,8 +150,8 @@ test.describe('remote window context', () => {
     )
     await quickInput.waitForVisible()
 
-    const remoteHome = os.homedir().replace(/\\/g, '/')
-    await expect(quickInput.input).toHaveValue(new RegExp(`^${escapeRegExp(remoteHome)}/?$`))
+    const remoteHome = os.homedir()
+    await expect(quickInput.input).toHaveValue(new RegExp(`^${escapeRegExp(remoteHome)}[\\\\/]?$`))
 
     await newPage.keyboard.press('Escape')
     await quickInput.waitForHidden()

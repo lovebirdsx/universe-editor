@@ -25,6 +25,7 @@ import {
   localize,
   registerSingleton,
   remoteFsPathToUri,
+  remotePathFromUri,
   type IFileDialogOptions,
   type IKeyMods,
   type ILogger,
@@ -121,11 +122,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     const env = await this._remoteStatus.getEnvironment(folder.authority).catch((): null => null)
     return {
       sep: env?.os === 'win32' ? '\\' : '/',
-      homeUri: URI.from({
-        scheme: folder.scheme,
-        authority: folder.authority,
-        path: env?.homeDir || '/',
-      }),
+      homeUri: remoteFsPathToUri(env?.homeDir || '/', folder.authority),
       driveList: false,
     }
   }
@@ -719,12 +716,18 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   }
 
   private _display(uri: URI): string {
-    // 非 file: 资源（remote-ssh）用 path 而非 fsPath：fsPath 会剥掉 Windows
-    // 盘符前导斜杠，round-trip 回 `_uriFromInput` 时就丢了 `/<drive>:` 结构。
-    if (uri.scheme !== 'file') return uri.path
-    // 本机路径：文件对话框恒浏览 file: provider，fsPath 即本机路径。
     const sep = this._ctx().sep
-    return sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, sep)
+    // file: 与 remote-ssh 都渲染浏览主机的原生路径（remote 经 remotePathFromUri
+    // 取服务端路径，盘符前导斜杠由 _uriFromInput 的 remoteFsPathToUri 补回）；
+    // 其它 scheme 无原生路径可渲染，保留 URI path。
+    const native =
+      uri.scheme === 'file'
+        ? uri.fsPath
+        : uri.scheme === REMOTE_SCHEME
+          ? remotePathFromUri(uri)
+          : null
+    if (native === null) return uri.path
+    return sep === '/' ? native : native.replace(/\//g, sep)
   }
 
   private _uriFromInput(value: string, base?: URI): URI {
@@ -739,6 +742,11 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     }
     // 远端路径沿用当前目录的 scheme/authority，不再恒为 file:。
     if (base !== undefined && base.scheme !== 'file') {
+      // remote-ssh 用 remoteFsPathToUri 补回盘符前导斜杠，与 _display 的
+      // remotePathFromUri 互为逆操作（round-trip 不丢 `/<drive>:` 结构）。
+      if (base.scheme === REMOTE_SCHEME) {
+        return remoteFsPathToUri(normalized, base.authority)
+      }
       return URI.from({ scheme: base.scheme, authority: base.authority, path: normalized })
     }
     return URI.file(normalized)

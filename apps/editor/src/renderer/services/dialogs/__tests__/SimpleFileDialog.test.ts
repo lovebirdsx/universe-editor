@@ -118,6 +118,10 @@ const DIRS = new Map<string, string[]>([
   ['/home/xiao', ['.bun', 'proj']],
   ['/home/xiao/.bun', ['bin']],
   ['/home/xiao/proj', []],
+  // win32 remote host layout (Windows direct-mode target; keyed by URI path only).
+  ['/C:/Users/xiao', ['Documents', 'proj']],
+  ['/C:/Users/xiao/Documents', []],
+  ['/C:/Users/xiao/proj', []],
 ])
 const FILES = new Set<string>(['/a/readme.md', '/a/notes.txt', '/a/pic.png', '/a/src/code.ts'])
 
@@ -1377,5 +1381,95 @@ describe('SimpleFileDialog empty remote window', () => {
     expect(host.openCalls).toEqual([])
     expect(quickInput.lastPick).toBeDefined()
     expect(quickInput.lastPick.value).toBe('/home/xiao/')
+  })
+})
+
+describe('SimpleFileDialog win32 remote target browsing', () => {
+  const WIN_REMOTE_ENV: RemoteEnvironmentDto = {
+    os: 'win32',
+    arch: 'x64',
+    homeDir: 'C:\\Users\\xiao',
+    tmpDir: 'C:\\Users\\xiao\\AppData\\Local\\Temp',
+    pathCaseSensitive: false,
+    serverVersion: '0.0.0',
+  }
+
+  const createRemoteDialog = (remoteStatus: {
+    getEnvironment: (authority: string) => Promise<RemoteEnvironmentDto | null>
+  }): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService } => {
+    const quickInput = new FakeQuickInputService()
+    const dialog = new SimpleFileDialog(
+      quickInput as never,
+      new FakeFileService() as never,
+      fakeWorkspace,
+      fakeDialog,
+      new FakeStorageService() as never,
+      new FakeConfigService() as unknown as IConfigurationService,
+      new FakeHostService() as unknown as IHostService,
+      fakeLoggerService,
+      remoteStatus as never,
+    )
+    return { dialog, quickInput }
+  }
+
+  beforeEach(() => {
+    // Empty remote window pointed at a Windows remote host (direct-mode).
+    ;(globalThis as { window?: unknown }).window = {
+      ipc: { platform: 'linux', home: '/home/u', remoteAuthority: 'winhost' },
+    }
+  })
+
+  it('starts at the win32 remote home in server-native form', async () => {
+    const { dialog, quickInput } = createRemoteDialog({
+      getEnvironment: async () => WIN_REMOTE_ENV,
+    })
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+    expect(qp.value).toBe('C:\\Users\\xiao\\')
+    expect(labels(qp)).toEqual(['..', 'Documents', 'proj'])
+  })
+
+  it('round-trips a typed win32 path back to a leading-slash remote URI', async () => {
+    const { dialog, quickInput } = createRemoteDialog({
+      getEnvironment: async () => WIN_REMOTE_ENV,
+    })
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('C:\\Users\\xiao\\proj\\')
+    await flush()
+    qp.accept()
+
+    const picked = await result
+    expect(picked?.[0]?.path).toBe('/C:/Users/xiao/proj')
+    expect(picked?.[0]?.authority).toBe('winhost')
+  })
+
+  it('expands ~ to the win32 remote home', async () => {
+    const { dialog, quickInput } = createRemoteDialog({
+      getEnvironment: async () => WIN_REMOTE_ENV,
+    })
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('~')
+    await flush()
+
+    expect(qp.value).toBe('C:\\Users\\xiao\\')
   })
 })
