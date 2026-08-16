@@ -14,6 +14,7 @@ import {
   type INotificationHandle,
   type INotificationService,
   type IPickOptions,
+  type IKeyMods,
   type IQuickInputButton,
   type IQuickPickItemButtonEvent,
   type IQuickInputService,
@@ -35,7 +36,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidChangeActive = new Emitter<T | undefined>()
   private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
   private readonly _onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
-  private readonly _onDidTriggerOk = new Emitter<void>()
+  private readonly _onDidTriggerOk = new Emitter<IKeyMods>()
 
   readonly onDidAccept = this._onDidAccept.event
   readonly onDidHide = this._onDidHide.event

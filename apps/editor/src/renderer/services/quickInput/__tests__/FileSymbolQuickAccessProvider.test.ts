@@ -13,6 +13,7 @@ import {
   Emitter,
   constObservable,
   observableValue,
+  type IKeyMods,
   type IQuickInputButton,
   type IQuickPickItemButtonEvent,
   type IQuickPick,
@@ -36,7 +37,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
 
   private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
   private readonly _onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
-  private readonly _onDidTriggerOk = new Emitter<void>()
+  private readonly _onDidTriggerOk = new Emitter<IKeyMods>()
   readonly onDidTriggerButton = this._onDidTriggerButton.event
   readonly onDidTriggerItemButton = this._onDidTriggerItemButton.event
   readonly onDidTriggerOk = this._onDidTriggerOk.event

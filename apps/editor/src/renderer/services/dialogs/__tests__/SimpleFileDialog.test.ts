@@ -13,6 +13,7 @@ import type {
   IFileService,
   IFileStat,
   IHostService,
+  IKeyMods,
   ILoggerService,
   IQuickPickItem,
   IShowOpenFileOptions,
@@ -47,12 +48,13 @@ class FakeQuickPick {
   canSelectMany = false
   title: string | undefined
   okLabel: string | undefined
+  keyMods: IKeyMods = { ctrl: false, alt: false }
 
   private readonly _onAccept = new Emitter<IQuickPickItem[]>()
   private readonly _onChangeValue = new Emitter<string>()
   private readonly _onChangeActive = new Emitter<IQuickPickItem | undefined>()
   private readonly _onChangeSelection = new Emitter<IQuickPickItem[]>()
-  private readonly _onTriggerOk = new Emitter<void>()
+  private readonly _onTriggerOk = new Emitter<IKeyMods>()
   private readonly _onTriggerButton = new Emitter<unknown>()
   private readonly _onHide = new Emitter<void>()
 
@@ -76,11 +78,12 @@ class FakeQuickPick {
   fireActive(item: IQuickPickItem | undefined): void {
     this._onChangeActive.fire(item)
   }
-  accept(): void {
+  accept(mods?: IKeyMods): void {
+    if (mods) this.keyMods = mods
     this._onAccept.fire([...this.activeItems])
   }
-  triggerOk(): void {
-    this._onTriggerOk.fire()
+  triggerOk(mods: IKeyMods = { ctrl: false, alt: false }): void {
+    this._onTriggerOk.fire(mods)
   }
   triggerButton(): void {
     this._onTriggerButton.fire(this.buttons[0])
@@ -442,6 +445,69 @@ describe('SimpleFileDialog interaction', () => {
 
     const picked = await result
     expect(picked?.[0]?.path).toBe('/a')
+  })
+
+  it('reports Ctrl held when the OK/Enter path confirms with a modifier', async () => {
+    const { dialog, quickInput } = createDialog()
+    const keyMods: IKeyMods = { ctrl: false, alt: false }
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+      keyMods,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/b/')
+    await flush()
+    qp.triggerOk({ ctrl: true, alt: false })
+
+    const picked = await result
+    expect(picked?.[0]?.path).toBe('/b')
+    expect(keyMods).toEqual({ ctrl: true, alt: false })
+  })
+
+  it('reports no modifier when the OK/Enter path confirms plainly', async () => {
+    const { dialog, quickInput } = createDialog()
+    const keyMods: IKeyMods = { ctrl: false, alt: false }
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+      keyMods,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.triggerOk()
+
+    const picked = await result
+    expect(picked?.[0]?.path).toBe('/a')
+    expect(keyMods.ctrl).toBe(false)
+  })
+
+  it('reports the accept modifier when a file row is accepted', async () => {
+    const { dialog, quickInput } = createDialog()
+    const keyMods: IKeyMods = { ctrl: false, alt: false }
+    const result = dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      defaultUri: URI.file('/a'),
+      keyMods,
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.activeItems = [itemByLabel(qp, 'notes.txt')]
+    qp.accept({ ctrl: true, alt: false })
+
+    const picked = await result
+    expect(picked?.[0]?.path).toBe('/a/notes.txt')
+    expect(keyMods).toEqual({ ctrl: true, alt: false })
   })
 
   it('expands a leading ~ to the home directory and lists it', async () => {

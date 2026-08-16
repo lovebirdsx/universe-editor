@@ -7,6 +7,7 @@
 
 import type { URI } from '../base/uri.js'
 import { createDecorator } from '../di/instantiation.js'
+import type { IKeyMods } from '../workbench/quickInputService.js'
 
 /** A file-type filter group (mirrors Electron's FileFilter / VSCode's dialog filters). */
 export interface IFileDialogFilter {
@@ -31,6 +32,11 @@ export interface IFileDialogOptions {
   readonly filters?: readonly IFileDialogFilter[]
   /** Confirm button label (e.g. "Open", "Save"). */
   readonly openLabel?: string
+  /**
+   * Mutable out-param. Written with the modifier held at accept time (Enter or
+   * click), so callers can branch (e.g. Ctrl+Enter → open in a new window).
+   */
+  readonly keyMods?: IKeyMods
 }
 
 export interface IFileDialogService {

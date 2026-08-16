@@ -71,7 +71,7 @@ export class QuickInputService implements IQuickInputService {
     const onDidChangeActive = new Emitter<T | undefined>()
     const onDidTriggerButton = new Emitter<IQuickInputButton>()
     const onDidTriggerItemButton = new Emitter<IQuickPickItemButtonEvent<T>>()
-    const onDidTriggerOk = new Emitter<void>()
+    const onDidTriggerOk = new Emitter<IKeyMods>()
     const onDidChangeSelection = new Emitter<T[]>()
     let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
@@ -144,7 +144,7 @@ export class QuickInputService implements IQuickInputService {
         onTriggerButton: (button) => onDidTriggerButton.fire(button),
         onTriggerItemButton: (item, button, mods) =>
           onDidTriggerItemButton.fire({ item: item as T, button, keyMods: mods }),
-        onOk: () => onDidTriggerOk.fire(),
+        onOk: (mods) => onDidTriggerOk.fire(mods),
         onHide: () => onDidHide.fire(),
       })
     }

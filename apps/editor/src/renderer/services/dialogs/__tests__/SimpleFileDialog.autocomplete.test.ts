@@ -13,6 +13,7 @@ import type {
   IDirectoryEntry,
   IFileService,
   IFileStat,
+  IKeyMods,
   IQuickPickItem,
   IWorkspaceService,
 } from '@universe-editor/platform'
@@ -54,7 +55,7 @@ class PanelLikeQuickPick {
   private readonly _onChangeValue = new Emitter<string>()
   private readonly _onChangeActive = new Emitter<IQuickPickItem | undefined>()
   private readonly _onChangeSelection = new Emitter<IQuickPickItem[]>()
-  private readonly _onTriggerOk = new Emitter<void>()
+  private readonly _onTriggerOk = new Emitter<IKeyMods>()
   private readonly _onTriggerButton = new Emitter<unknown>()
   private readonly _onHide = new Emitter<void>()
 

@@ -45,17 +45,25 @@ export class OpenFolderAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const progress = accessor.get(IProgressService)
     const fileDialog = accessor.get(IFileDialogService)
+    const windowsService = accessor.get(IWindowsService)
 
+    const keyMods: IKeyMods = { ctrl: false, alt: false }
     const folder = (
       await fileDialog.showOpenDialog({
         title: localize('fileDialog.openFolder.title', 'Open Folder'),
         canSelectFiles: false,
         canSelectFolders: true,
         openLabel: localize('fileDialog.openFolderButton', 'Open'),
+        keyMods,
         ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
       })
     )?.[0]
     if (!folder) return
+    // Ctrl held → open in a new window (same as Open Folder in New Window).
+    if (keyMods.ctrl) {
+      await windowsService.openWindow(folder)
+      return
+    }
     if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
     await progress.withProgress(
       {

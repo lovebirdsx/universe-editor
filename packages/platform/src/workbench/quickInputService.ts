@@ -308,8 +308,9 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    * REMOVE_ITEM = rewriting `items` need no intermediate enum.
    */
   readonly onDidTriggerItemButton: Event<IQuickPickItemButtonEvent<T>>
-  /** Fires when the confirm (OK) button is clicked. Distinct from accepting an item. */
-  readonly onDidTriggerOk: Event<void>
+  /** Fires when the confirm (OK) button is clicked, or Enter falls through with
+   *  no selectable item. Carries the modifier held at that moment. */
+  readonly onDidTriggerOk: Event<IKeyMods>
 
   show(): void
   hide(): void

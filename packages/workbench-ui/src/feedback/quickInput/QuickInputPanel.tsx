@@ -733,7 +733,7 @@ export function QuickPickPanel({
       if (isSelectable(acceptItem)) accept([acceptItem], { ctrl: e.ctrlKey, alt: e.altKey })
       // No selectable item (e.g. an empty directory in the file dialog): fall back
       // to the host's OK handler so a trailing-separator path can still be opened.
-      else state.onOk?.()
+      else state.onOk?.({ ctrl: e.ctrlKey, alt: e.altKey })
     }
   }
 
@@ -807,7 +807,7 @@ export function QuickPickPanel({
             data-testid="quick-input-ok"
             onClick={() => {
               if (state.onOk) {
-                state.onOk()
+                state.onOk({ ctrl: false, alt: false })
                 return
               }
               const item = sortedFiltered[focusedIdx]

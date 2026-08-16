@@ -26,6 +26,7 @@ import {
   registerSingleton,
   remoteFsPathToUri,
   type IFileDialogOptions,
+  type IKeyMods,
   type ILogger,
   type IQuickPickItem,
 } from '@universe-editor/platform'
@@ -238,6 +239,9 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       // The QuickInput keeps focus contention with the dialog, so a second Enter
       // would otherwise queue a duplicate confirm dialog.
       let confirming = false
+      // Modifier held at the accept (Enter / click / OK) that led to the finish.
+      // Written into `opts.keyMods` so the caller can branch (Ctrl+Enter → new window).
+      let lastAcceptMods: IKeyMods = { ctrl: false, alt: false }
 
       const syncHiddenButton = (): void => {
         qp.buttons = [
@@ -259,6 +263,10 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       const finish = (uris: URI[] | undefined): void => {
         if (settled) return
         settled = true
+        if (opts.keyMods) {
+          opts.keyMods.ctrl = lastAcceptMods.ctrl
+          opts.keyMods.alt = lastAcceptMods.alt
+        }
         this._browseCtx = undefined
         qp.hide()
         if (this._session.value === session) this._session.clear()
@@ -284,7 +292,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
 
       // In multi-select mode the OK button confirms the checked set; with nothing
       // checked it falls back to resolving the typed path (single-pick semantics).
-      const confirmSelectionOrValue = (): void => {
+      const confirmSelectionOrValue = (mods: IKeyMods): void => {
+        lastAcceptMods = mods
         if (canSelectMany && selected.size > 0) {
           finish([...selected.values()].map((s) => s.entry.uri))
           return
@@ -550,6 +559,10 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       }
 
       const onAccept = async (items: IQuickPickItem[]): Promise<void> => {
+        // Record the modifier for the accept that is about to run (Enter / click).
+        // `qp.keyMods` reflects the latest accept because the QuickInput service
+        // updates it before firing onDidAccept.
+        lastAcceptMods = { ctrl: qp.keyMods.ctrl, alt: qp.keyMods.alt }
         // A concrete item was chosen (clicked, or focused + Enter): act on it
         // directly. This is independent of the input value, so it can't race the
         // autocomplete that lags a click. [B/C]
@@ -587,7 +600,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       qp.onDidAccept((items) => void onAccept(items), undefined, session)
       qp.onDidChangeValue((value) => void onValueChange(value), undefined, session)
       qp.onDidChangeActive((item) => onActiveChange(item), undefined, session)
-      qp.onDidTriggerOk(() => confirmSelectionOrValue(), undefined, session)
+      qp.onDidTriggerOk((mods) => confirmSelectionOrValue(mods), undefined, session)
       qp.onDidChangeSelection(
         (items) => {
           // The panel proposes the next checked set. Adopt it, but drop rows that

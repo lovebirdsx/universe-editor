@@ -73,8 +73,9 @@ export interface QuickPickState {
   onTriggerItemButton?:
     | ((item: IQuickPickItem, button: IQuickPickItemButton, mods: IKeyMods) => void)
     | undefined
-  /** Fires when the confirm (OK) button is clicked. */
-  onOk?: (() => void) | undefined
+  /** Fires when the confirm (OK) button is clicked, or Enter falls through with
+   *  no selectable item. Carries the modifier held at that moment. */
+  onOk?: ((mods: IKeyMods) => void) | undefined
   onInput?: (value: string) => void
   onHide?: () => void
   validateInput?: ((value: string) => string | undefined) | undefined
