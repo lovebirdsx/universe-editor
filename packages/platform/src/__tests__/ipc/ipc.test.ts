@@ -322,6 +322,52 @@ describe('ChannelClient.dispose rejects pending requests', () => {
   })
 })
 
+describe('ChannelClient after dispose', () => {
+  it('rejects a new call immediately with IpcChannelDisposedError (no hang)', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+    const ch = client.getChannel('chan')
+
+    client.dispose()
+
+    await expect(ch.call('anything')).rejects.toBeInstanceOf(IpcChannelDisposedError)
+
+    server.dispose()
+  })
+
+  it('prefers IpcChannelDisposedError over CancellationError once disposed', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+    const ch = client.getChannel('chan')
+
+    client.dispose()
+
+    await expect(
+      ch.call('anything', undefined, CancellationToken.Cancelled),
+    ).rejects.toBeInstanceOf(IpcChannelDisposedError)
+
+    server.dispose()
+  })
+
+  it('does not send a subscribe when a first listener is added after dispose', () => {
+    const send = vi.fn()
+    const protocol = { onMessage: Event.None, send } as unknown as IMessagePassingProtocol
+    const client = new ChannelClient(protocol)
+
+    const ch = client.getChannel('chan')
+    client.dispose()
+
+    // listen() rebuilds a fresh emitter after dispose cleared the cache; adding
+    // its first listener must neither throw nor reach the protocol.
+    const disposable = ch.listen<unknown>('changed')(() => {})
+    disposable.dispose()
+
+    expect(send).not.toHaveBeenCalled()
+  })
+})
+
 describe('request cancellation', () => {
   function slowPair() {
     const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()

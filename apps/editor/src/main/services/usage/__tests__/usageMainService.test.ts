@@ -11,7 +11,6 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   Event,
-  ProxyChannel,
   REMOTE_PROTOCOL_VERSION,
   RemoteChannels,
   type IRemoteEnvironment,
@@ -86,17 +85,20 @@ class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
   }
 }
 
-function makeConnectionService(remote: FakeRemoteAgentConfigService): IRemoteConnectionService {
+function makeConnectionService(remote: FakeRemoteAgentConfigService): {
+  connService: IRemoteConnectionService
+  proxyCalls: Array<{ authority: string; channel: string }>
+} {
+  const proxyCalls: Array<{ authority: string; channel: string }> = []
   const conn: IRemoteConnection = {
     authority: 'host',
     env: REMOTE_ENV,
-    getChannel: (name) => {
-      expect(name).toBe(RemoteChannels.AgentConfig)
-      return ProxyChannel.fromService(remote)
+    getChannel: () => {
+      throw new Error('getChannel must not be used')
     },
     onDidClose: Event.None,
   }
-  return {
+  const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
     getConnection: async () => conn,
     connect: async () => conn,
@@ -110,7 +112,12 @@ function makeConnectionService(remote: FakeRemoteAgentConfigService): IRemoteCon
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: <T extends object>(authority: string, channelName: string): T => {
+      proxyCalls.push({ authority, channel: channelName })
+      return remote as T
+    },
   }
+  return { connService, proxyCalls }
 }
 
 describe('UsageMainService', () => {
@@ -154,29 +161,28 @@ describe('UsageMainService', () => {
       },
     }
     const dir = await makeTempDir()
-    const svc = new UsageMainService(
-      join(dir, 'settings.json'),
-      undefined,
-      makeConnectionService(remote),
-    )
+    const { connService, proxyCalls } = makeConnectionService(remote)
+    const svc = new UsageMainService(join(dir, 'settings.json'), undefined, connService)
     svcs.push(svc)
 
     await expect(svc.getUsage('host')).resolves.toEqual(remote.usageResult)
     expect(remote.usageCalls).toBe(1)
+    expect(proxyCalls).toEqual([{ authority: 'host', channel: RemoteChannels.AgentConfig }])
   })
 
-  it('reuses the cached remote proxy across calls', async () => {
+  it('routes repeated calls through the stable remote proxy without re-creating it', async () => {
     const remote = new FakeRemoteAgentConfigService()
     const dir = await makeTempDir()
-    const svc = new UsageMainService(
-      join(dir, 'settings.json'),
-      undefined,
-      makeConnectionService(remote),
-    )
+    const { connService, proxyCalls } = makeConnectionService(remote)
+    const svc = new UsageMainService(join(dir, 'settings.json'), undefined, connService)
     svcs.push(svc)
 
     await svc.getUsage('host')
     await svc.getUsage('host')
     expect(remote.usageCalls).toBe(2)
+    expect(proxyCalls).toEqual([
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+    ])
   })
 })

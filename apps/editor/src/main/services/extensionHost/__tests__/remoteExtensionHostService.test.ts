@@ -82,6 +82,9 @@ function makeConnectionService(): {
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: () => {
+      throw new Error('not stubbed')
+    },
   }
   return { connService, tunnels, startArgs }
 }

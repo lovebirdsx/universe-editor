@@ -105,6 +105,17 @@ function makeHarness(channels: Record<string, unknown>): {
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: (() => {
+      const proxies = new Map<string, unknown>()
+      return <T extends object>(_authority: string, channelName: string): T => {
+        let proxy = proxies.get(channelName)
+        if (!proxy) {
+          proxy = ProxyChannel.toService(client.getChannel(channelName))
+          proxies.set(channelName, proxy)
+        }
+        return proxy as T
+      }
+    })(),
   }
   return {
     connService,
@@ -540,7 +551,7 @@ describe('remote service disposable ownership', () => {
     }
   })
 
-  it('releases the file search onDidClose subscription on dispose', async () => {
+  it('file search holds no lingering subscriptions after dispose', async () => {
     const stub: Partial<IFileSearchService> = {
       async search(): Promise<IFileSearchComplete> {
         return { results: [], limitHit: false, filesWalked: 0, directoriesWalked: 0, durationMs: 0 }

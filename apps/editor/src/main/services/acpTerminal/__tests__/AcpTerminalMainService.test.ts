@@ -5,13 +5,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import {
-  Emitter,
-  Event,
-  ProxyChannel,
-  REMOTE_PROTOCOL_VERSION,
-  RemoteChannels,
-} from '@universe-editor/platform'
+import { Event, REMOTE_PROTOCOL_VERSION, RemoteChannels } from '@universe-editor/platform'
 import type {
   AcpTerminalCreateSpec,
   AcpTerminalCreatedInfo,
@@ -421,16 +415,20 @@ describe('AcpTerminalMainService — remote routing', () => {
     svc?.dispose()
   })
 
-  function makeRemoteService(): { svc: AcpTerminalMainService; remote: FakeRemoteTerminal } {
+  function makeRemoteService(): {
+    svc: AcpTerminalMainService
+    remote: FakeRemoteTerminal
+    proxyCalls: Array<{ authority: string; channel: string }>
+  } {
     const remote = new FakeRemoteTerminal()
+    const proxyCalls: Array<{ authority: string; channel: string }> = []
     const conn: IRemoteConnection = {
       authority: 'host',
       env: REMOTE_ENV,
-      getChannel: (name) => {
-        expect(name).toBe(RemoteChannels.AcpTerminal)
-        return ProxyChannel.fromService(remote)
+      getChannel: () => {
+        throw new Error('getChannel must not be used')
       },
-      onDidClose: new Emitter<void>().event,
+      onDidClose: Event.None,
     }
     const connService: IRemoteConnectionService = {
       _serviceBrand: undefined,
@@ -446,9 +444,13 @@ describe('AcpTerminalMainService — remote routing', () => {
       dropSocketForTesting: () => undefined,
       dropExtensionHostSocketForTesting: () => undefined,
       dispose: () => undefined,
+      getServiceProxy: <T extends object>(authority: string, channelName: string): T => {
+        proxyCalls.push({ authority, channel: channelName })
+        return remote as T
+      },
     }
     svc = new AcpTerminalMainService(undefined, undefined, connService)
-    return { svc, remote }
+    return { svc, remote, proxyCalls }
   }
 
   it('routes create to the server channel and strips authority from the spec', async () => {
@@ -475,6 +477,16 @@ describe('AcpTerminalMainService — remote routing', () => {
     expect(remote.killed).toEqual(['remote-terminal'])
     await svc.release(terminalId)
     expect(remote.released).toEqual(['remote-terminal'])
+  })
+
+  it('routes remote terminals through getServiceProxy with the AcpTerminal channel', async () => {
+    const { svc, proxyCalls } = makeRemoteService()
+    await svc.create({ command: 'ls', args: [], authority: 'host' })
+    await svc.create({ command: 'ls', args: [], authority: 'host' })
+    expect(proxyCalls).toEqual([
+      { authority: 'host', channel: RemoteChannels.AcpTerminal },
+      { authority: 'host', channel: RemoteChannels.AcpTerminal },
+    ])
   })
 
   it('rejects a remote create when the connection service is unavailable', async () => {

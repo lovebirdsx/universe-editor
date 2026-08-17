@@ -566,6 +566,9 @@ function makeRemoteFixture(opts?: { leakSafe?: boolean }): RemoteFixture {
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: () => {
+      throw new Error('not stubbed')
+    },
   }
   const svc = new AcpHostMainService(
     undefined,

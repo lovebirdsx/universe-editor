@@ -17,7 +17,6 @@ import {
   createNamedLogger,
   Disposable,
   ILoggerService,
-  ProxyChannel,
   RemoteChannels,
   type ILogger,
 } from '@universe-editor/platform'
@@ -51,7 +50,6 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   private readonly _logger: ILogger
   private readonly _local: ClaudeConfigStore
   private readonly _settingsPath: string
-  private readonly _remoteServices = new Map<string, IRemoteAgentConfigService>()
 
   constructor(
     settingsPath: string = defaultClaudeSettingsPath(),
@@ -69,31 +67,31 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   }
 
   async read(authority?: string): Promise<ClaudeSettings> {
-    if (authority) return (await this._remoteService(authority)).claudeRead()
+    if (authority) return this._remoteService(authority).claudeRead()
     return this._local.read()
   }
 
   async patch(patch: ClaudeSettingsPatch, authority?: string): Promise<void> {
     if (authority) {
-      await (await this._remoteService(authority)).claudePatch(patch)
+      await this._remoteService(authority).claudePatch(patch)
       return
     }
     await this._local.patch(patch)
   }
 
   async configPath(authority?: string): Promise<string> {
-    if (authority) return (await this._remoteService(authority)).claudeConfigPath()
+    if (authority) return this._remoteService(authority).claudeConfigPath()
     return this._local.configPath()
   }
 
   async readAuthStatus(authority?: string): Promise<ClaudeAuthStatus> {
-    if (authority) return (await this._remoteService(authority)).claudeReadAuthStatus()
+    if (authority) return this._remoteService(authority).claudeReadAuthStatus()
     return this._local.readAuthStatus()
   }
 
   async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
     const reachable = authority
-      ? await (await this._remoteService(authority)).checkGatewayConnectivity(baseUrl)
+      ? await this._remoteService(authority).checkGatewayConnectivity(baseUrl)
       : await probeGatewayConnectivity(baseUrl)
     const where = authority ? 'remote' : 'local'
     this._logger.info(
@@ -159,17 +157,13 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return join(dirname(this._settingsPath), '.universe-editor', 'credential-profiles.json')
   }
 
-  private async _remoteService(authority: string): Promise<IRemoteAgentConfigService> {
-    const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+  private _remoteService(authority: string): IRemoteAgentConfigService {
     if (!this._connections) {
       throw new Error('claudeConfig: remote connection service not available')
     }
-    const conn = await this._connections.getConnection(authority)
-    const service = ProxyChannel.toService<IRemoteAgentConfigService>(
-      conn.getChannel(RemoteChannels.AgentConfig),
+    return this._connections.getServiceProxy<IRemoteAgentConfigService>(
+      authority,
+      RemoteChannels.AgentConfig,
     )
-    this._remoteServices.set(authority, service)
-    return service
   }
 }

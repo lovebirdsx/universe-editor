@@ -11,8 +11,8 @@ import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  Emitter,
   Event,
-  ProxyChannel,
   REMOTE_PROTOCOL_VERSION,
   RemoteChannels,
   type IRemoteEnvironment,
@@ -576,7 +576,12 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
 
   class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
     declare readonly _serviceBrand: undefined
-    readonly onDidChangeCodexAuth: Event<void> = Event.None
+    private readonly _authEmitter = new Emitter<void>()
+    authSubscriptions = 0
+    onDidChangeCodexAuth: Event<void> = (listener, thisArgs?, disposables?) => {
+      this.authSubscriptions++
+      return this._authEmitter.event(listener, thisArgs, disposables)
+    }
     codexSettings: CodexSettings = {}
     matchIndex = -1
 
@@ -618,17 +623,18 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
     }
   }
 
-  async function makeRemoteService(
-    remote: FakeRemoteAgentConfigService,
-  ): Promise<CodexConfigMainService> {
+  async function makeRemoteService(remote: FakeRemoteAgentConfigService): Promise<{
+    svc: CodexConfigMainService
+    proxyCalls: Array<{ authority: string; channel: string }>
+  }> {
     const dir = await fs.mkdtemp(join(tmpdir(), 'codex-config-remote-'))
     dirs.push(dir)
+    const proxyCalls: Array<{ authority: string; channel: string }> = []
     const conn: IRemoteConnection = {
       authority: 'host',
       env: REMOTE_ENV,
-      getChannel: (name) => {
-        expect(name).toBe(RemoteChannels.AgentConfig)
-        return ProxyChannel.fromService(remote)
+      getChannel: () => {
+        throw new Error('getChannel must not be used')
       },
       onDidClose: Event.None,
     }
@@ -646,6 +652,10 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
       dropSocketForTesting: () => undefined,
       dropExtensionHostSocketForTesting: () => undefined,
       dispose: () => undefined,
+      getServiceProxy: <T extends object>(authority: string, channelName: string): T => {
+        proxyCalls.push({ authority, channel: channelName })
+        return remote as T
+      },
     }
     const svc = new CodexConfigMainService(
       join(dir, 'config.toml'),
@@ -654,7 +664,7 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
       connService,
     )
     svcs.push(svc)
-    return svc
+    return { svc, proxyCalls }
   }
 
   it('matches a remote gateway profile by baseUrl + bearer token', async () => {
@@ -668,7 +678,7 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
         },
       },
     }
-    const svc = await makeRemoteService(remote)
+    const { svc } = await makeRemoteService(remote)
     await svc.writeProfiles([
       {
         id: 'mine',
@@ -692,7 +702,7 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
     const remote = new FakeRemoteAgentConfigService()
     remote.codexSettings = {}
     remote.matchIndex = 1
-    const svc = await makeRemoteService(remote)
+    const { svc } = await makeRemoteService(remote)
     await svc.writeProfiles([
       { id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' },
       { id: 'b', label: 'b', kind: 'apiKey', apiKey: 'sk-2' },
@@ -704,8 +714,20 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
     const remote = new FakeRemoteAgentConfigService()
     remote.codexSettings = {}
     remote.matchIndex = -1
-    const svc = await makeRemoteService(remote)
+    const { svc } = await makeRemoteService(remote)
     await svc.writeProfiles([{ id: 'a', label: 'a', kind: 'apiKey', apiKey: 'sk-1' }])
     expect(await svc.matchActiveProfile('host')).toBeUndefined()
+  })
+
+  it('subscribes to remote codex auth changes exactly once per authority', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    const { svc, proxyCalls } = await makeRemoteService(remote)
+    await svc.read('host')
+    await svc.read('host')
+    expect(proxyCalls).toEqual([
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+    ])
+    expect(remote.authSubscriptions).toBe(1)
   })
 })

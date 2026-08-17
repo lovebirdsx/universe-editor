@@ -24,10 +24,12 @@ import {
   Disposable,
   DisposableStore,
   Emitter,
+  Event,
   PersistentProtocol,
   ProtocolConstants,
   ProxyChannel,
   REMOTE_PROTOCOL_VERSION,
+  Relay,
   RemoteChannels,
   RemoteConnectionErrorCode,
   RemoteConnectionType,
@@ -35,7 +37,7 @@ import {
   isWslAuthority,
   normalizeRemoteAuthority,
   wslDistroFromAuthority,
-  type Event,
+  type CancellationToken,
   type IChannel,
   type IDisposable,
   type ILogger,
@@ -112,6 +114,9 @@ export interface IRemoteConnectionService {
   readonly _serviceBrand: undefined
   getConnection(authority: string): Promise<IRemoteConnection>
   connect(authority: string): Promise<IRemoteConnection>
+  /** Stable per-(authority, channel) service proxy. Calls always route to the
+   *  current live connection (implicit bring-up); events survive stop/reconnect. */
+  getServiceProxy<T extends object>(authority: string, channelName: string): T
   openExtensionHostConnection(
     authority: string,
     args?: IRemoteExtensionHostStartArgs,
@@ -198,6 +203,20 @@ interface ConnectionForward {
  */
 export type RemoteTransport = 'ssh' | 'direct' | 'wsl'
 
+/**
+ * One stable service proxy built by {@link RemoteConnectionMainService.getServiceProxy}.
+ * The relay inputs are re-bound to the live connection on bring-up and severed on
+ * teardown, so subscribers survive stop/reconnect without ever holding a dead channel.
+ */
+interface ProxyRecord {
+  readonly channelName: string
+  /** Raw forwarding channel — unreachable through the ProxyChannel wrapper, kept as a test seam. */
+  channel: IChannel
+  service: object
+  readonly relays: Map<string, Relay<unknown>>
+  boundTo: RemoteConnection | null
+}
+
 interface ConnectionEntry {
   authority: string
   state: RemoteConnectionState
@@ -224,6 +243,7 @@ interface ConnectionEntry {
   reconnectionStart: number
   closedByUser: boolean
   userDisconnected: boolean
+  proxies: Map<string, ProxyRecord>
 }
 
 export interface RemoteConnectionMainServiceOptions {
@@ -340,6 +360,57 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     const entry = this._entries.get(authority)
     if (entry) entry.userDisconnected = false
     return this.getConnection(authority)
+  }
+
+  getServiceProxy<T extends object>(authority: string, channelName: string): T {
+    authority = normalizeRemoteAuthority(authority)
+    this._validateAuthority(authority)
+    const entry = this._entry(authority)
+    const existing = entry.proxies.get(channelName)
+    if (existing) return existing.service as T
+
+    const record: ProxyRecord = {
+      channelName,
+      channel: undefined as unknown as IChannel,
+      service: undefined as unknown as T,
+      relays: new Map(),
+      boundTo: null,
+    }
+    const forwardingChannel: IChannel = {
+      call: <R>(command: string, arg?: unknown, token?: CancellationToken): Promise<R> => {
+        if (this._disposed) {
+          return Promise.reject(new Error('remote connection service is disposed'))
+        }
+        return this.getConnection(entry.authority).then((conn) =>
+          conn.getChannel(channelName).call<R>(command, arg, token),
+        )
+      },
+      listen: <R>(event: string, arg?: unknown): Event<R> => {
+        if (arg !== undefined) {
+          throw new Error(
+            `getServiceProxy('${entry.authority}', '${channelName}'): listen('${event}') does not support arguments`,
+          )
+        }
+        let relay = record.relays.get(event)
+        if (!relay) {
+          relay = new Relay<unknown>()
+          record.relays.set(event, relay)
+          // A relay created after the record is already bound would otherwise
+          // stay severed until the next reconnect rebinds the whole record.
+          if (entry.connection && record.boundTo === entry.connection) {
+            relay.input = entry.connection.getChannel(channelName).listen(event)
+          }
+        }
+        if (entry.connection && record.boundTo !== entry.connection) {
+          this._bindRecord(entry, record)
+        }
+        return relay.event as Event<R>
+      },
+    }
+    record.channel = forwardingChannel
+    record.service = ProxyChannel.toService<T>(forwardingChannel)
+    entry.proxies.set(channelName, record)
+    return record.service as T
   }
 
   retryConnection(authority: string): void {
@@ -460,6 +531,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
             ? await this._bringUpViaWsl(entry)
             : await this._bringUpViaSsh(entry)
       entry.connection = connection
+      this._bindProxyRecords(entry)
       this._fireState(entry, 'connected')
       return connection
     } catch (err) {
@@ -916,6 +988,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       clearTimeout(entry.reconnectTimer)
       entry.reconnectTimer = null
     }
+    this._unbindProxyRecords(entry)
     entry.reconnectSocket?.dispose()
     entry.reconnectSocket = null
     const connection = entry.connection
@@ -950,6 +1023,41 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     proc?.dispose()
   }
 
+  // ------------------------- proxy relay binding -------------------------
+
+  private _bindRecord(entry: ConnectionEntry, record: ProxyRecord): void {
+    const connection = entry.connection
+    if (!connection || record.boundTo === connection) return
+    record.boundTo = connection
+    for (const [event, relay] of record.relays) {
+      relay.input = connection.getChannel(record.channelName).listen(event)
+    }
+  }
+
+  private _bindProxyRecords(entry: ConnectionEntry): void {
+    for (const record of entry.proxies.values()) {
+      this._bindRecord(entry, record)
+    }
+  }
+
+  private _unbindProxyRecords(entry: ConnectionEntry): void {
+    for (const record of entry.proxies.values()) {
+      record.boundTo = null
+      for (const relay of record.relays.values()) {
+        relay.input = Event.None
+      }
+    }
+  }
+
+  private _disposeProxyRelays(entry: ConnectionEntry): void {
+    for (const record of entry.proxies.values()) {
+      for (const relay of record.relays.values()) {
+        relay.dispose()
+      }
+    }
+    entry.proxies.clear()
+  }
+
   // ------------------------- bookkeeping -------------------------
 
   private _entry(authority: string): ConnectionEntry {
@@ -977,6 +1085,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         reconnectionStart: 0,
         closedByUser: false,
         userDisconnected: false,
+        proxies: new Map(),
       }
       this._entries.set(authority, entry)
     }
@@ -1024,6 +1133,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       entry.connection?.fireClose()
       this._teardownConnection(entry)
       this._teardownDirect(entry)
+      this._disposeProxyRelays(entry)
     }
     this._entries.clear()
     super.dispose()

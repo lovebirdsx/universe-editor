@@ -15,6 +15,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ChannelServer,
+  Emitter,
   PersistentProtocol,
   ProxyChannel,
   REMOTE_PROTOCOL_VERSION,
@@ -26,6 +27,8 @@ import {
   encodeControlJson,
   readFirstControlFrame,
   writeControlFrame,
+  type Event,
+  type IChannel,
   type IRemoteConnectionRequest,
   type IRemoteConnectionResponse,
   type IRemoteEnvironment,
@@ -66,6 +69,7 @@ class FakeDaemon {
   private channelServer: ChannelServer | null = null
   private acceptedToken: string | null = null
   private readonly sockets: NodeSocket[] = []
+  private proxyEventEmitter: Emitter<unknown> | null = null
 
   port = 0
   readonly token = 'test-token'
@@ -75,6 +79,10 @@ class FakeDaemon {
   hangReconnection = false
   acceptedCount = 0
   closedCount = 0
+  /** Increments per fresh (non-reconnection) connection — distinguishes old vs new connections. */
+  connectionGeneration = 0
+  /** Set once the current connection's proxy event emitter gains its first listener. */
+  proxyEventSubscribed = false
 
   async start(port = 0): Promise<void> {
     this.server = createServer((socket) => {
@@ -122,6 +130,22 @@ class FakeDaemon {
         'test',
         createChannelFromObject({ ping: async () => 'pong' }),
       )
+      this.connectionGeneration++
+      const gen = this.connectionGeneration
+      this.proxyEventSubscribed = false
+      const proxyEmitter = new Emitter<unknown>({
+        onDidAddFirstListener: () => {
+          this.proxyEventSubscribed = true
+        },
+      })
+      this.proxyEventEmitter = proxyEmitter
+      this.channelServer.registerChannel(
+        'proxy',
+        ProxyChannel.fromService({
+          ping: async () => `pong-${gen}`,
+          onEvent: proxyEmitter.event,
+        }),
+      )
     } catch {
       socket.dispose()
     }
@@ -137,6 +161,10 @@ class FakeDaemon {
     const server = this.server
     this.server = null
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+
+  fireProxyEvent(payload: unknown): void {
+    this.proxyEventEmitter?.fire(payload)
   }
 }
 
@@ -196,6 +224,14 @@ function makeDirectService(daemon: FakeDaemon): Made {
   )
   svc.onDidChangeState((s) => states.push(s))
   return { svc, procs, states }
+}
+
+/** Test seam: the raw forwarding channel behind a built service proxy. */
+function rawChannel(svc: RemoteConnectionMainService, authority: string, name: string): IChannel {
+  const entry = (svc as unknown as { _entries: Map<string, unknown> })._entries.get(authority) as {
+    proxies: Map<string, { channel: IChannel }>
+  }
+  return entry.proxies.get(name)!.channel
 }
 
 const daemons: FakeDaemon[] = []
@@ -754,5 +790,99 @@ describe('RemoteConnectionMainService wsl mode', () => {
     } finally {
       rmSync(bundleDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('RemoteConnectionMainService getServiceProxy', () => {
+  let made: Made | undefined
+
+  afterEach(() => {
+    made?.svc.dispose()
+    made = undefined
+  })
+
+  it('keeps one proxy alive across stopServer + reconnect and routes to the new connection', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const proxy = made.svc.getServiceProxy<{ ping(): Promise<string> }>('host', 'proxy')
+    await made.svc.connect('host')
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    await made.svc.stopServer('host')
+    await expect(proxy.ping()).rejects.toThrow(/disconnected by user/)
+
+    await made.svc.connect('host')
+    await expect(proxy.ping()).resolves.toBe('pong-2')
+  })
+
+  it('delivers events through the same subscription across stopServer + reconnect', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const proxy = made.svc.getServiceProxy<{ onEvent: Event<string> }>('host', 'proxy')
+    const received: string[] = []
+    proxy.onEvent((e) => received.push(e))
+
+    await made.svc.connect('host')
+    await vi.waitFor(() => expect(daemon.proxyEventSubscribed).toBe(true), { timeout: 5000 })
+    daemon.fireProxyEvent('a')
+    await vi.waitFor(() => expect(received).toEqual(['a']), { timeout: 5000 })
+
+    await made.svc.stopServer('host')
+    await made.svc.connect('host')
+    await vi.waitFor(() => expect(daemon.proxyEventSubscribed).toBe(true), { timeout: 5000 })
+    daemon.fireProxyEvent('b')
+    await vi.waitFor(() => expect(received).toEqual(['a', 'b']), { timeout: 5000 })
+  })
+
+  it('self-heals after a permanent failure: the same proxy triggers a fresh bring-up', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    daemon.handshakeResponse = () => ({
+      type: 'error',
+      code: RemoteConnectionErrorCode.InvalidToken,
+      message: 'bad token',
+    })
+    const proxy = made.svc.getServiceProxy<{ ping(): Promise<string> }>('host', 'proxy')
+    await expect(proxy.ping()).rejects.toThrow(/bad token/)
+    expect(made.states.at(-1)?.state).toBe('failed')
+
+    daemon.handshakeResponse = null
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+  })
+
+  it('binds an event first subscribed after the record is already bound', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const proxy = made.svc.getServiceProxy<{ ping(): Promise<string>; onEvent: Event<string> }>(
+      'host',
+      'proxy',
+    )
+    await made.svc.connect('host')
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    const received: string[] = []
+    proxy.onEvent((e) => received.push(e))
+    await vi.waitFor(() => expect(daemon.proxyEventSubscribed).toBe(true), { timeout: 5000 })
+    daemon.fireProxyEvent('late')
+    await vi.waitFor(() => expect(received).toEqual(['late']), { timeout: 5000 })
+  })
+
+  it('rejects listen with a non-undefined arg and rejects calls after dispose', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+    await made.svc.connect('host')
+
+    const proxy = made.svc.getServiceProxy<{ ping(): Promise<string> }>('host', 'proxy')
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    const raw = rawChannel(made.svc, 'host', 'proxy')
+    expect(() => raw.listen('onEvent', 'arg')).toThrow(/does not support arguments/)
+
+    made.svc.dispose()
+    await expect(proxy.ping()).rejects.toThrow(/disposed/)
   })
 })

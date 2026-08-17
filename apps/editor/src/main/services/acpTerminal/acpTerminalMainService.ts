@@ -7,13 +7,7 @@
  *  by whichever host spawns, so they pass through un-rewritten.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Disposable,
-  ILoggerService,
-  ProxyChannel,
-  RemoteChannels,
-  type IDisposable,
-} from '@universe-editor/platform'
+import { Disposable, ILoggerService, RemoteChannels } from '@universe-editor/platform'
 import { AcpTerminalService, type AcpTerminalSpawner } from '@universe-editor/node-services'
 import type {
   AcpTerminalCreatedInfo,
@@ -32,8 +26,6 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   private readonly _local: AcpTerminalService
 
-  private readonly _remoteServices = new Map<string, IAcpTerminalService>()
-  private readonly _remoteSubs = new Map<string, IDisposable[]>()
   /** terminalId → authority (remote terminals only). */
   private readonly _remoteByTerminal = new Map<string, string>()
 
@@ -55,7 +47,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   async create(spec: AcpTerminalCreateSpec): Promise<AcpTerminalCreatedInfo> {
     if (spec.authority) {
-      const service = await this._remoteService(spec.authority)
+      const service = this._remoteService(spec.authority)
       const { authority: _authority, ...rest } = spec
       const result = await service.create(rest)
       this._remoteByTerminal.set(result.terminalId, spec.authority)
@@ -66,32 +58,19 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   output(terminalId: string): Promise<AcpTerminalOutput> {
     const authority = this._remoteByTerminal.get(terminalId)
-    if (authority) {
-      const service = this._remoteServices.get(authority)
-      return service
-        ? service.output(terminalId)
-        : Promise.reject(new Error(`AcpTerminal: unknown terminal ${terminalId}`))
-    }
+    if (authority) return this._remoteService(authority).output(terminalId)
     return this._local.output(terminalId)
   }
 
   waitForExit(terminalId: string): Promise<AcpTerminalWaitExit> {
     const authority = this._remoteByTerminal.get(terminalId)
-    if (authority) {
-      const service = this._remoteServices.get(authority)
-      return service
-        ? service.waitForExit(terminalId)
-        : Promise.reject(new Error(`AcpTerminal: unknown terminal ${terminalId}`))
-    }
+    if (authority) return this._remoteService(authority).waitForExit(terminalId)
     return this._local.waitForExit(terminalId)
   }
 
   kill(terminalId: string): Promise<void> {
     const authority = this._remoteByTerminal.get(terminalId)
-    if (authority) {
-      const service = this._remoteServices.get(authority)
-      return service ? service.kill(terminalId) : Promise.resolve()
-    }
+    if (authority) return this._remoteService(authority).kill(terminalId)
     return this._local.kill(terminalId)
   }
 
@@ -99,34 +78,23 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     const authority = this._remoteByTerminal.get(terminalId)
     if (authority) {
       this._remoteByTerminal.delete(terminalId)
-      const service = this._remoteServices.get(authority)
-      return service ? service.release(terminalId) : Promise.resolve()
+      return this._remoteService(authority).release(terminalId)
     }
     return this._local.release(terminalId)
   }
 
   override dispose(): void {
-    for (const subs of this._remoteSubs.values()) {
-      for (const s of subs) s.dispose()
-    }
-    this._remoteSubs.clear()
-    this._remoteServices.clear()
     this._remoteByTerminal.clear()
     super.dispose()
   }
 
-  private async _remoteService(authority: string): Promise<IAcpTerminalService> {
-    const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+  private _remoteService(authority: string): IAcpTerminalService {
     if (!this._connections) {
       throw new Error('acpTerminal: remote connection service not available')
     }
-    const conn = await this._connections.getConnection(authority)
-    const service = ProxyChannel.toService<IAcpTerminalService>(
-      conn.getChannel(RemoteChannels.AcpTerminal),
+    return this._connections.getServiceProxy<IAcpTerminalService>(
+      authority,
+      RemoteChannels.AcpTerminal,
     )
-    this._remoteServices.set(authority, service)
-    this._remoteSubs.set(authority, [])
-    return service
   }
 }

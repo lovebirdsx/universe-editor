@@ -21,11 +21,9 @@ import {
   createNamedLogger,
   Disposable,
   Emitter,
-  type IDisposable,
   type ILogger,
   ILoggerService,
   localize,
-  ProxyChannel,
   RemoteChannels,
 } from '@universe-editor/platform'
 import {
@@ -63,9 +61,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
   private readonly _logger: ILogger
   private readonly _binaryStore: AgentBinaryStore
 
-  private readonly _remoteServices = new Map<string, IRemoteAgentBinaryService>()
-  private readonly _remotePromises = new Map<string, Promise<IRemoteAgentBinaryService>>()
-  private readonly _remoteSubs = new Map<string, IDisposable[]>()
+  private readonly _remoteProgressBound = new Set<string>()
 
   constructor(
     @ILoggerService loggerService?: ILoggerService,
@@ -119,64 +115,31 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     authority: string,
     allowDownload: boolean | undefined,
   ): Promise<ICodexBinaryResult> {
-    const service = await this._remoteService(authority)
+    const service = this._remoteService(authority)
     const { path } = await service.resolve('codex', {
       ...(allowDownload !== undefined ? { allowDownload } : {}),
     })
     return { path }
   }
 
-  private _remoteService(authority: string): Promise<IRemoteAgentBinaryService> {
-    const cached = this._remoteServices.get(authority)
-    if (cached) return Promise.resolve(cached)
-    const inflight = this._remotePromises.get(authority)
-    if (inflight) return inflight
+  private _remoteService(authority: string): IRemoteAgentBinaryService {
     if (!this._connections) {
       throw new Error('codexBinary: remote connection service not available')
     }
-    const promise = this._connectRemote(authority).finally(() => {
-      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
-    })
-    this._remotePromises.set(authority, promise)
-    return promise
-  }
-
-  private async _connectRemote(authority: string): Promise<IRemoteAgentBinaryService> {
-    const conn = await this._connections!.getConnection(authority)
-    const service = ProxyChannel.toService<IRemoteAgentBinaryService>(
-      conn.getChannel(RemoteChannels.AgentBinary),
+    const service = this._connections.getServiceProxy<IRemoteAgentBinaryService>(
+      authority,
+      RemoteChannels.AgentBinary,
     )
-    const subs: IDisposable[] = [
-      service.onDidChangeProgress((e) => {
-        if (e.agent !== 'codex') return
-        this._onDidChangeProgress.fire({ received: e.received, total: e.total, authority })
-      }),
-      conn.onDidClose(() => this._dropRemote(authority)),
-    ]
-    if (this._store.isDisposed) {
-      for (const s of subs) s.dispose()
-      throw new Error('codexBinary: service disposed while connecting')
+    if (!this._remoteProgressBound.has(authority)) {
+      this._remoteProgressBound.add(authority)
+      this._register(
+        service.onDidChangeProgress((e) => {
+          if (e.agent !== 'codex') return
+          this._onDidChangeProgress.fire({ received: e.received, total: e.total, authority })
+        }),
+      )
     }
-    for (const s of subs) this._register(s)
-    this._remoteServices.set(authority, service)
-    this._remoteSubs.set(authority, subs)
     return service
-  }
-
-  private _dropRemote(authority: string): void {
-    const subs = this._remoteSubs.get(authority)
-    if (subs) {
-      for (const s of subs) this._store.delete(s)
-      this._remoteSubs.delete(authority)
-    }
-    this._remoteServices.delete(authority)
-  }
-
-  override dispose(): void {
-    this._remoteSubs.clear()
-    this._remoteServices.clear()
-    this._remotePromises.clear()
-    super.dispose()
   }
 
   private async _resolveCustom(customPath: string | undefined): Promise<ICodexBinaryResult> {
@@ -217,7 +180,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
   async getVersionInfo(authority?: string): Promise<ICodexBinaryVersionInfo> {
     if (authority !== undefined) {
-      return (await this._remoteService(authority)).getVersionInfo('codex')
+      return this._remoteService(authority).getVersionInfo('codex')
     }
     return this._binaryStore.getVersionInfo()
   }
@@ -228,7 +191,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
   async forceDownload(version: string, authority?: string): Promise<ICodexBinaryResult> {
     if (authority !== undefined) {
-      const { path } = await (await this._remoteService(authority)).forceDownload('codex', version)
+      const { path } = await this._remoteService(authority).forceDownload('codex', version)
       return { path }
     }
     // Clear inflight cache so the next resolve() call doesn't return the stale result.

@@ -87,6 +87,9 @@ function makeWatcherHarness(): {
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: () => {
+      throw new Error('not stubbed')
+    },
   }
   const localHost = new WatcherProcessClient(() => {
     throw new Error('local watcher transport must not be used in remote tests')

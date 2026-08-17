@@ -8,14 +8,7 @@
 
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  Emitter,
-  Event,
-  ProxyChannel,
-  REMOTE_PROTOCOL_VERSION,
-  RemoteChannels,
-} from '@universe-editor/platform'
-import type { IRemoteEnvironment } from '@universe-editor/platform'
+import { Emitter, Event, RemoteChannels } from '@universe-editor/platform'
 import type {
   AgentBinaryId,
   AgentBinaryRemoteProgressEvent,
@@ -24,25 +17,11 @@ import type {
 } from '@universe-editor/node-services'
 import { CodexBinaryMainService } from '../codexBinaryMainService.js'
 import type { ICodexBinaryProgress } from '../../../../shared/ipc/codexBinaryService.js'
-import type {
-  IRemoteConnection,
-  IRemoteConnectionService,
-} from '../../remote/remoteConnectionMainService.js'
+import type { IRemoteConnectionService } from '../../remote/remoteConnectionMainService.js'
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => tmpdir() },
 }))
-
-const REMOTE_ENV: IRemoteEnvironment = {
-  protocolVersion: REMOTE_PROTOCOL_VERSION,
-  serverVersion: '0.0.0',
-  os: 'linux',
-  arch: 'x64',
-  nodeVersion: '20.0.0',
-  pathCaseSensitive: true,
-  homeDir: '/home/u',
-  tmpDir: '/tmp',
-}
 
 class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   declare readonly _serviceBrand: undefined
@@ -83,30 +62,20 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
 interface Fixture {
   svc: CodexBinaryMainService
   remote: FakeRemoteBinaryService
-  closeEmitter: Emitter<void>
-  connectionCalls: () => number
+  proxyCalls: Array<{ authority: string; channel: string }>
 }
 
 function makeFixture(): Fixture {
   const remote = new FakeRemoteBinaryService()
-  const closeEmitter = new Emitter<void>()
-  let connectionCalls = 0
-  const conn: IRemoteConnection = {
-    authority: 'host',
-    env: REMOTE_ENV,
-    getChannel: (name) => {
-      expect(name).toBe(RemoteChannels.AgentBinary)
-      return ProxyChannel.fromService(remote)
-    },
-    onDidClose: closeEmitter.event,
-  }
+  const proxyCalls: Array<{ authority: string; channel: string }> = []
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
     getConnection: async () => {
-      connectionCalls++
-      return conn
+      throw new Error('getConnection must not be used')
     },
-    connect: async () => conn,
+    connect: async () => {
+      throw new Error('not used')
+    },
     openExtensionHostConnection: async () => {
       throw new Error('not used')
     },
@@ -117,9 +86,13 @@ function makeFixture(): Fixture {
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
     dispose: () => undefined,
+    getServiceProxy: ((authority: string, channelName: string) => {
+      proxyCalls.push({ authority, channel: channelName })
+      return remote
+    }) as IRemoteConnectionService['getServiceProxy'],
   }
   const svc = new CodexBinaryMainService(undefined, connService)
-  return { svc, remote, closeEmitter, connectionCalls: () => connectionCalls }
+  return { svc, remote, proxyCalls }
 }
 
 describe('CodexBinaryMainService — remote routing', () => {
@@ -198,15 +171,33 @@ describe('CodexBinaryMainService — remote routing', () => {
     )
   })
 
-  it('drops the remote proxy on connection close and rebuilds on the next resolve', async () => {
+  it('routes repeated resolves through getServiceProxy with the AgentBinary channel', async () => {
     const fixture = makeFixture()
     svc = fixture.svc
 
     await svc.resolve({ source: 'download', authority: 'host' })
-    expect(fixture.connectionCalls()).toBe(1)
-
-    fixture.closeEmitter.fire()
     await svc.resolve({ source: 'download', authority: 'host' })
-    expect(fixture.connectionCalls()).toBe(2)
+
+    expect(fixture.proxyCalls).toEqual([
+      { authority: 'host', channel: RemoteChannels.AgentBinary },
+      { authority: 'host', channel: RemoteChannels.AgentBinary },
+    ])
+  })
+
+  it('subscribes to remote progress once per authority across repeated resolves', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+    const events: ICodexBinaryProgress[] = []
+    const sub = svc.onDidChangeProgress((e) => events.push(e))
+    try {
+      await svc.resolve({ source: 'download', authority: 'host' })
+      await svc.resolve({ source: 'download', authority: 'host' })
+
+      fixture.remote.fireProgress({ agent: 'codex', received: 5, total: 100 })
+
+      expect(events).toEqual([{ received: 5, total: 100, authority: 'host' }])
+    } finally {
+      sub.dispose()
+    }
   })
 })

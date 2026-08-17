@@ -15,11 +15,9 @@ import {
 } from '@universe-editor/node-services'
 import {
   ILoggerService,
-  ProxyChannel,
   REMOTE_SCHEME,
   RemoteChannels,
   URI,
-  type IDisposable,
   type ILoggerService as ILoggerServiceType,
   type ITextSearchMainComplete,
   type ITextSearchMainQuery,
@@ -35,9 +33,7 @@ function reviveUri(value: URI | UriComponents): URI {
 
 export class TextSearchMainService extends TextSearchService {
   private readonly _authorityBySession = new Map<string, string>()
-  private readonly _remoteServices = new Map<string, ITextSearchMainService>()
-  private readonly _remotePromises = new Map<string, Promise<ITextSearchMainService>>()
-  private readonly _remoteSubs = new Map<string, IDisposable[]>()
+  private readonly _remoteProgressBound = new Set<string>()
 
   constructor(
     @ILoggerService loggerService?: ILoggerServiceType,
@@ -51,11 +47,8 @@ export class TextSearchMainService extends TextSearchService {
     if (root.scheme !== REMOTE_SCHEME) {
       return super.search(query)
     }
-    if (!this._connections) {
-      throw new Error('textSearch: remote connection service not available')
-    }
     const authority = root.authority
-    const service = await this._remoteService(authority)
+    const service = this._remoteService(authority)
     this._authorityBySession.set(query.sessionId, authority)
     try {
       // URIs travel verbatim; the server codec handles remote-ssh <-> file.
@@ -70,50 +63,29 @@ export class TextSearchMainService extends TextSearchService {
     if (authority === undefined) {
       return super.cancel(sessionId)
     }
-    const service = this._remoteServices.get(authority)
-    if (!service) return
-    await service.cancel(sessionId)
+    // Best-effort: the session dies with its connection, so a cancel racing a
+    // disconnect must not surface an error (or trigger a bring-up just to cancel).
+    try {
+      await this._remoteService(authority).cancel(sessionId)
+    } catch {
+      // ignored
+    }
   }
 
-  private _remoteService(authority: string): Promise<ITextSearchMainService> {
-    const cached = this._remoteServices.get(authority)
-    if (cached) return Promise.resolve(cached)
-    const inflight = this._remotePromises.get(authority)
-    if (inflight) return inflight
-    const promise = this._connectRemote(authority).finally(() => {
-      if (this._remotePromises.get(authority) === promise) this._remotePromises.delete(authority)
-    })
-    this._remotePromises.set(authority, promise)
-    return promise
-  }
-
-  private async _connectRemote(authority: string): Promise<ITextSearchMainService> {
-    const conn = await this._connections!.getConnection(authority)
-    const service = ProxyChannel.toService<ITextSearchMainService>(
-      conn.getChannel(RemoteChannels.TextSearch),
+  private _remoteService(authority: string): ITextSearchMainService {
+    if (!this._connections) {
+      throw new Error('textSearch: remote connection service not available')
+    }
+    const service = this._connections.getServiceProxy<ITextSearchMainService>(
+      authority,
+      RemoteChannels.TextSearch,
     )
-    const subs: IDisposable[] = [
-      service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e)),
-      service.onDidSearchResults((e) => this._onDidSearchResults.fire(e)),
-      conn.onDidClose(() => this._dropRemote(authority)),
-    ]
-    if (this._store.isDisposed) {
-      for (const s of subs) s.dispose()
-      throw new Error('textSearch: service disposed while connecting')
+    if (!this._remoteProgressBound.has(authority)) {
+      this._remoteProgressBound.add(authority)
+      this._register(service.onDidSearchProgress((e) => this._onDidSearchProgress.fire(e)))
+      this._register(service.onDidSearchResults((e) => this._onDidSearchResults.fire(e)))
     }
-    for (const s of subs) this._register(s)
-    this._remoteServices.set(authority, service)
-    this._remoteSubs.set(authority, subs)
     return service
-  }
-
-  private _dropRemote(authority: string): void {
-    this._remoteServices.delete(authority)
-    const subs = this._remoteSubs.get(authority)
-    if (subs) {
-      for (const s of subs) this._store.delete(s)
-      this._remoteSubs.delete(authority)
-    }
   }
 }
 

@@ -20,7 +20,6 @@ import {
   Disposable,
   Emitter,
   ILoggerService,
-  ProxyChannel,
   RemoteChannels,
   type Event,
   type ILogger,
@@ -58,7 +57,7 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
   private readonly _logger: ILogger
   private readonly _local: CodexConfigStore
   private readonly _configPath: string
-  private readonly _remoteServices = new Map<string, IRemoteAgentConfigService>()
+  private readonly _remoteAuthSubscribed = new Set<string>()
 
   private readonly _onDidChangeAuth = this._register(new Emitter<void>())
   readonly onDidChangeAuth: Event<void> = this._onDidChangeAuth.event
@@ -82,13 +81,13 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
   }
 
   async read(authority?: string): Promise<CodexSettings> {
-    if (authority) return (await this._remoteService(authority)).codexRead()
+    if (authority) return this._remoteService(authority).codexRead()
     return this._local.read()
   }
 
   async patch(patch: CodexSettingsPatch, authority?: string): Promise<void> {
     if (authority) {
-      await (await this._remoteService(authority)).codexPatch(patch)
+      await this._remoteService(authority).codexPatch(patch)
       return
     }
     await this._local.patch(patch)
@@ -98,23 +97,23 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     intent: CodexCredentialIntent,
     authority?: string,
   ): Promise<CodexAuthStatus> {
-    if (authority) return (await this._remoteService(authority)).codexApplyCredential(intent)
+    if (authority) return this._remoteService(authority).codexApplyCredential(intent)
     return this._local.applyCredential(intent)
   }
 
   async configPath(authority?: string): Promise<string> {
-    if (authority) return (await this._remoteService(authority)).codexConfigPath()
+    if (authority) return this._remoteService(authority).codexConfigPath()
     return this._local.configPath()
   }
 
   async readAuthStatus(authority?: string): Promise<CodexAuthStatus> {
-    if (authority) return (await this._remoteService(authority)).codexReadAuthStatus()
+    if (authority) return this._remoteService(authority).codexReadAuthStatus()
     return this._local.readAuthStatus()
   }
 
   async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
     const reachable = authority
-      ? await (await this._remoteService(authority)).checkGatewayConnectivity(baseUrl)
+      ? await this._remoteService(authority).checkGatewayConnectivity(baseUrl)
       : await probeGatewayConnectivity(baseUrl)
     const where = authority ? 'remote' : 'local'
     this._logger.info(
@@ -194,9 +193,9 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
         (p) => p.kind === 'apiKey' && typeof p.apiKey === 'string' && p.apiKey !== '',
       )
       if (apiKeyProfiles.length === 0) return undefined
-      const idx = await (
-        await this._remoteService(authority)
-      ).codexMatchActiveApiKey(apiKeyProfiles.map((p) => p.apiKey as string))
+      const idx = await this._remoteService(authority).codexMatchActiveApiKey(
+        apiKeyProfiles.map((p) => p.apiKey as string),
+      )
       this._logger.info(
         `active profile match: ${idx >= 0 ? apiKeyProfiles[idx]?.id : 'none'} (remote apiKey)`,
       )
@@ -234,18 +233,18 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return join(dirname(this._configPath), '.universe-editor', 'credential-profiles.json')
   }
 
-  private async _remoteService(authority: string): Promise<IRemoteAgentConfigService> {
-    const cached = this._remoteServices.get(authority)
-    if (cached) return cached
+  private _remoteService(authority: string): IRemoteAgentConfigService {
     if (!this._connections) {
       throw new Error('codexConfig: remote connection service not available')
     }
-    const conn = await this._connections.getConnection(authority)
-    const service = ProxyChannel.toService<IRemoteAgentConfigService>(
-      conn.getChannel(RemoteChannels.AgentConfig),
+    const service = this._connections.getServiceProxy<IRemoteAgentConfigService>(
+      authority,
+      RemoteChannels.AgentConfig,
     )
-    this._remoteServices.set(authority, service)
-    this._register(service.onDidChangeCodexAuth(() => this._onDidChangeAuth.fire()))
+    if (!this._remoteAuthSubscribed.has(authority)) {
+      this._remoteAuthSubscribed.add(authority)
+      this._register(service.onDidChangeCodexAuth(() => this._onDidChangeAuth.fire()))
+    }
     return service
   }
 }

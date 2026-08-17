@@ -10,7 +10,6 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   Event,
-  ProxyChannel,
   REMOTE_PROTOCOL_VERSION,
   RemoteChannels,
   type IRemoteEnvironment,
@@ -315,17 +314,16 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
     }
   }
 
-  it('routes the probe through the remote AgentConfig channel when an authority is given', async () => {
-    const remote = new FakeRemoteAgentConfigService()
-    remote.probeResult = false
-    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
-    dirs.push(dir)
+  function makeRemoteService(remote: FakeRemoteAgentConfigService): {
+    connService: IRemoteConnectionService
+    proxyCalls: Array<{ authority: string; channel: string }>
+  } {
+    const proxyCalls: Array<{ authority: string; channel: string }> = []
     const conn: IRemoteConnection = {
       authority: 'host',
       env: REMOTE_ENV,
-      getChannel: (name) => {
-        expect(name).toBe(RemoteChannels.AgentConfig)
-        return ProxyChannel.fromService(remote)
+      getChannel: () => {
+        throw new Error('getChannel must not be used')
       },
       onDidClose: Event.None,
     }
@@ -343,7 +341,20 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
       dropSocketForTesting: () => undefined,
       dropExtensionHostSocketForTesting: () => undefined,
       dispose: () => undefined,
+      getServiceProxy: <T extends object>(authority: string, channelName: string): T => {
+        proxyCalls.push({ authority, channel: channelName })
+        return remote as T
+      },
     }
+    return { connService, proxyCalls }
+  }
+
+  it('routes the probe through the remote AgentConfig channel when an authority is given', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    remote.probeResult = false
+    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
+    dirs.push(dir)
+    const { connService, proxyCalls } = makeRemoteService(remote)
     const svc = new ClaudeConfigMainService(
       join(dir, 'settings.json'),
       undefined,
@@ -354,5 +365,27 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
 
     expect(await svc.checkGatewayConnectivity('http://10.0.0.1:9080', 'host')).toBe(false)
     expect(remote.probeCalls).toBe(1)
+    expect(proxyCalls).toEqual([{ authority: 'host', channel: RemoteChannels.AgentConfig }])
+  })
+
+  it('routes repeated remote reads through getServiceProxy with the AgentConfig channel', async () => {
+    const remote = new FakeRemoteAgentConfigService()
+    const dir = await fs.mkdtemp(join(tmpdir(), 'claude-config-remote-'))
+    dirs.push(dir)
+    const { connService, proxyCalls } = makeRemoteService(remote)
+    const svc = new ClaudeConfigMainService(
+      join(dir, 'settings.json'),
+      undefined,
+      undefined,
+      connService,
+    )
+    svcs.push(svc)
+
+    await svc.read('host')
+    await svc.read('host')
+    expect(proxyCalls).toEqual([
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+      { authority: 'host', channel: RemoteChannels.AgentConfig },
+    ])
   })
 })

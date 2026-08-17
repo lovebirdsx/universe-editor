@@ -344,6 +344,9 @@ export class ChannelClient extends Disposable implements IChannelClient {
     const client = this
     return {
       call<T>(command: string, arg?: unknown, token?: CancellationToken): Promise<T> {
+        if (client._disposed) {
+          return Promise.reject(new IpcChannelDisposedError())
+        }
         if (token?.isCancellationRequested) {
           return Promise.reject(new CancellationError())
         }
@@ -392,6 +395,9 @@ export class ChannelClient extends Disposable implements IChannelClient {
         if (!emitter) {
           emitter = new Emitter<unknown>({
             onDidAddFirstListener: () => {
+              if (client._disposed) {
+                return
+              }
               client._protocol.send(
                 client._codec.encode({ type: 'subscribe', channel: channelName, event, arg }),
               )
