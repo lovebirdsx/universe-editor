@@ -38,7 +38,6 @@ import {
   planPublish,
   selectPackages,
   tagName,
-  topologicalLevels,
   topologicalOrder,
   unexpectedChanges,
   verifyPublishedDeps,
@@ -421,31 +420,15 @@ async function main() {
       }
     }
 
-    // 发布（拓扑分层：层内并发、层间串行）+ 协议替换验证；层内结果按序回显
+    // 发布（拓扑序串行；stdio inherit 保留 npm OTP 终端交互）+ 协议替换验证
     const workspaceVersions = Object.fromEntries(all.map((p) => [p.name, p.version]))
-    const { levels } = topologicalLevels(toPublishOrdered)
-    const publishCommand = (p) => ['--filter', p.name, 'publish', '--no-git-checks', '--registry', registry]
-    for (const level of levels) {
-      const results = await Promise.all(
-        level.map(async (p) => {
-          if (dryRun) return { p }
-          const pub = await spawnAsync('pnpm', publishCommand(p))
-          if (!pub.ok) return { p, pub }
-          return { p, pub, verdict: await verifyPublished(p, workspaceVersions, registry) }
-        }),
-      )
-      for (const { p, pub, verdict } of results) {
-        console.log(`\n── 发布 ${p.name}@${p.version} ──`)
-        if (dryRun) {
-          info(`  [dry-run] ${printableCommand('pnpm', publishCommand(p))}`)
-          continue
-        }
-        if (pub.stdout) process.stdout.write(pub.stdout)
-        if (pub.stderr) process.stderr.write(pub.stderr)
-        if (!pub.ok) die(`pnpm publish 非零退出 (${pub.status}): ${p.name}`)
-        if (verdict.type === 'warning') warnings.push(verdict.message)
-        else ok(verdict.message)
-      }
+    for (const p of toPublishOrdered) {
+      console.log(`\n── 发布 ${p.name}@${p.version} ──`)
+      run('pnpm', ['--filter', p.name, 'publish', '--no-git-checks', '--registry', registry], { dryRun })
+      if (dryRun) continue
+      const verdict = await verifyPublished(p, workspaceVersions, registry)
+      if (verdict.type === 'warning') warnings.push(verdict.message)
+      else ok(verdict.message)
     }
   }
 

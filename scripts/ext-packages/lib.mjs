@@ -107,25 +107,6 @@ export function topologicalOrder(selected) {
 }
 
 /**
- * 拓扑分层：输入 topologicalOrder 的线性序，输出 { levels: [[pkg, ...], ...] }。
- * 层 = 在序内 workspace: 依赖的最大层 + 1（无依赖为 0）；层内可并发发布，层间须串行。
- */
-export function topologicalLevels(order) {
-  const byShort = new Map(order.map((p) => [p.shortName, p]))
-  const levelOf = new Map()
-  const levels = []
-  for (const p of order) {
-    let level = 0
-    for (const depShort of workspaceDepShorts(p, byShort)) {
-      level = Math.max(level, levelOf.get(depShort) + 1)
-    }
-    levelOf.set(p.shortName, level)
-    ;(levels[level] ??= []).push(p)
-  }
-  return { levels }
-}
-
-/**
  * 版本计划：本地 > latest（或从未发布）→ publish；相等 → skipped；本地更小 → 抛错。
  * publishedVersions: { shortName: latestVersion | null }。
  */

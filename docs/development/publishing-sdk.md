@@ -55,7 +55,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 1. **preflight**：工作区白名单（SDK 目录外有未提交改动则拒绝）、main 分支、与 upstream 同步、`npm whoami` 登录态、各包本地版本高于 npm 已发布版（相同增量跳过、更低报错）、集合外 workspace 依赖已在 npm 发布（防发布出指向未发布版本的包）、git tag 未占用、extension-api 的 COMPATIBILITY.md 变更记录与 `src/index.ts` 版本常量、create-extension/uex 注入的版本常量、内网上传配置。
 2. **build**（拓扑序，连同 workspace 依赖）+ extension-api 契约测试（快照兜底）。
 3. **pack 内容检查**：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
-4. **发布**（拓扑分层并发 `pnpm publish --no-git-checks`：层内并行、层间串行）+ 发布后核对依赖表无 `workspace:` / `catalog:` 残留、`@universe-editor/*` 互赖为精确版本（异常只警告不中断，结尾汇总）。
+4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）+ 发布后核对依赖表无 `workspace:` / `catalog:` 残留、`@universe-editor/*` 互赖为精确版本（异常只警告不中断，结尾汇总）。
 5. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
 6. **内网同步**（`--no-gallery` 跳过）：pack 五件套 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
 

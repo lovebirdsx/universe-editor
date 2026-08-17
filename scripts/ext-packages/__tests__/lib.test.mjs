@@ -25,7 +25,6 @@ import {
   planPublish,
   selectPackages,
   tagName,
-  topologicalLevels,
   topologicalOrder,
   unexpectedChanges,
   verifyPublishedDeps,
@@ -114,40 +113,6 @@ test('topologicalOrder 检测依赖环', () => {
   const b = pkg('b', { '@universe-editor/a': 'workspace:*' })
   const { error } = topologicalOrder([a, b])
   assert.match(error, /依赖环/)
-})
-
-test('topologicalLevels 5 件套分层（同层可并发）', () => {
-  const { order } = topologicalOrder(sdk5)
-  const { levels } = topologicalLevels(order)
-  const shorts = levels.map((level) => level.map((p) => p.shortName).sort())
-  assert.deepEqual(shorts, [
-    ['create-extension', 'extension-api', 'extension-manifest'],
-    ['extension-packaging'],
-    ['uex'],
-  ])
-})
-
-test('topologicalLevels 单包无依赖只有一层', () => {
-  const { order } = topologicalOrder([pkg('a')])
-  const { levels } = topologicalLevels(order)
-  assert.deepEqual(
-    levels.map((level) => level.map((p) => p.shortName)),
-    [['a']],
-  )
-})
-
-test('topologicalLevels 线性依赖链逐层展开', () => {
-  const chain = [
-    pkg('a'),
-    pkg('b', { '@universe-editor/a': 'workspace:*' }),
-    pkg('c', { '@universe-editor/b': 'workspace:*' }),
-  ]
-  const { order } = topologicalOrder(chain)
-  const { levels } = topologicalLevels(order)
-  assert.deepEqual(
-    levels.map((level) => level.map((p) => p.shortName)),
-    [['a'], ['b'], ['c']],
-  )
 })
 
 test('parseWorkspaceSpec 识别 workspace 协议', () => {
