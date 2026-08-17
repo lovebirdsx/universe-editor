@@ -63,6 +63,16 @@ export function parseWorkspaceSpec(spec) {
   return match ? { protocol: match[1] } : null
 }
 
+/** p 的 manifest 依赖中、目标在 byShort 内的 workspace: 依赖短名列表。 */
+function workspaceDepShorts(p, byShort) {
+  const out = []
+  for (const [depName, spec] of Object.entries(p.manifest.dependencies ?? {})) {
+    const depShort = depName.startsWith('@') ? depName.split('/')[1] : depName
+    if (parseWorkspaceSpec(spec) && byShort.has(depShort)) out.push(depShort)
+  }
+  return out
+}
+
 /**
  * Kahn 拓扑排序：边 = dependencies 中 workspace: 协议且目标在 selected 内。
  * 集合外依赖与 catalog: 不进图（集合外由依赖完整性检查兜底）。
@@ -72,11 +82,8 @@ export function topologicalOrder(selected) {
   const dependentsOf = new Map()
   const inDegree = new Map()
   for (const p of selected) {
-    const deps = []
-    for (const [depName, spec] of Object.entries(p.manifest.dependencies ?? {})) {
-      const depShort = depName.startsWith('@') ? depName.split('/')[1] : depName
-      if (!parseWorkspaceSpec(spec) || !byShort.has(depShort)) continue
-      deps.push(depShort)
+    const deps = workspaceDepShorts(p, byShort)
+    for (const depShort of deps) {
       if (!dependentsOf.has(depShort)) dependentsOf.set(depShort, [])
       dependentsOf.get(depShort).push(p.shortName)
     }
@@ -97,6 +104,25 @@ export function topologicalOrder(selected) {
     return { error: `检测到依赖环: ${[...inDegree.entries()].filter(([, d]) => d > 0).map(([s]) => s).join(', ')}` }
   }
   return { order: order.map((short) => byShort.get(short)) }
+}
+
+/**
+ * 拓扑分层：输入 topologicalOrder 的线性序，输出 { levels: [[pkg, ...], ...] }。
+ * 层 = 在序内 workspace: 依赖的最大层 + 1（无依赖为 0）；层内可并发发布，层间须串行。
+ */
+export function topologicalLevels(order) {
+  const byShort = new Map(order.map((p) => [p.shortName, p]))
+  const levelOf = new Map()
+  const levels = []
+  for (const p of order) {
+    let level = 0
+    for (const depShort of workspaceDepShorts(p, byShort)) {
+      level = Math.max(level, levelOf.get(depShort) + 1)
+    }
+    levelOf.set(p.shortName, level)
+    ;(levels[level] ??= []).push(p)
+  }
+  return { levels }
 }
 
 /**

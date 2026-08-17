@@ -19,7 +19,7 @@
  *  纯逻辑（选择/拓扑/计划/清单校验）在 lib.mjs，便于单测。
  *--------------------------------------------------------------------------------------------*/
 
-import { spawnSync, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,7 @@ import {
   planPublish,
   selectPackages,
   tagName,
+  topologicalLevels,
   topologicalOrder,
   unexpectedChanges,
   verifyPublishedDeps,
@@ -125,7 +126,8 @@ function run(command, args, { cwd, dryRun } = {}) {
 }
 
 function git(args) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  // trimEnd 而非 trim：status --porcelain 多行输出首行的前导状态空格必须保留
+  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trimEnd()
 }
 
 function gitMaybe(args) {
@@ -144,19 +146,28 @@ function tagExists(tag) {
   return Boolean(gitMaybe(['rev-parse', '-q', '--verify', `refs/tags/${tag}`]))
 }
 
+/** 异步执行命令并捕获输出（可并发环节用）；串行且需直连终端的环节仍用 run()。 */
+function spawnAsync(command, args, { cwd } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: cwd ?? repoRoot,
+      shell: shouldUseShell(command),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => (stdout += chunk))
+    child.stderr.on('data', (chunk) => (stderr += chunk))
+    child.on('error', (error) => resolve({ ok: false, status: null, stdout, stderr, error }))
+    child.on('close', (status) => resolve({ ok: status === 0, status, stdout, stderr }))
+  })
+}
+
 /** 执行 npm 命令并捕获输出。registry 一律显式透传，不依赖全局 .npmrc。 */
 function npmRun(args, registry) {
-  const res = spawnSync('npm', [...args, '--registry', registry], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    shell: shouldUseShell('npm'),
-  })
-  return {
-    ok: !res.error && res.status === 0,
-    status: res.status,
-    stdout: res.stdout ?? '',
-    stderr: res.stderr ?? '',
-  }
+  return spawnAsync('npm', [...args, '--registry', registry])
 }
 
 function isE404(res) {
@@ -164,19 +175,39 @@ function isE404(res) {
 }
 
 /** npm 上该包的最新版本；从未发布返回 null。 */
-function npmLatestVersion(name, registry) {
-  const res = npmRun(['view', name, 'version'], registry)
+async function npmLatestVersion(name, registry) {
+  const res = await npmRun(['view', name, 'version'], registry)
   if (res.ok) return res.stdout.trim()
   if (isE404(res)) return null
   die(`查询 npm 失败: npm view ${name} version\n  ${(res.stderr ?? '').trim()}`)
 }
 
 /** 精确版本是否已在 npm 上：'published' | 'missing'。 */
-function npmVersionPublished(name, version, registry) {
-  const res = npmRun(['view', `${name}@${version}`, 'version'], registry)
+async function npmVersionPublished(name, version, registry) {
+  const res = await npmRun(['view', `${name}@${version}`, 'version'], registry)
   if (res.ok) return 'published'
   if (isE404(res)) return 'missing'
   die(`查询 npm 失败: npm view ${name}@${version} version\n  ${(res.stderr ?? '').trim()}`)
+}
+
+/** 发布后核对 npm 上依赖表：无 workspace:/catalog: 残留、互赖为精确版本。返回 { type, message }。 */
+async function verifyPublished(p, workspaceVersions, registry) {
+  const res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
+  if (!res.ok) return { type: 'warning', message: `${p.name}: 协议替换验证查询失败: ${(res.stderr ?? '').trim()}` }
+  let deps = {}
+  const text = res.stdout.trim()
+  if (text && text !== 'undefined') {
+    try {
+      deps = JSON.parse(text)
+    } catch {
+      return { type: 'warning', message: `${p.name}: 依赖表 JSON 解析失败: ${text}` }
+    }
+  }
+  const depErrors = verifyPublishedDeps(deps, workspaceVersions)
+  if (depErrors.length > 0) {
+    return { type: 'warning', message: `${p.name} 依赖协议异常:\n${depErrors.map((e) => `  - ${e}`).join('\n')}` }
+  }
+  return { type: 'ok', message: `${p.name} 依赖协议已替换为真实版本` }
 }
 
 function assertUpToDateWithUpstream() {
@@ -203,11 +234,11 @@ function assertGalleryConfig() {
   if (issue) die(issue)
 }
 
-function preflight(args, all, selected, registry) {
+async function preflight(args, all, selected, registry) {
   const dryRun = Boolean(args.dryRun)
 
   // 1) 工作区白名单：SDK 目录内改动随发布 commit，目录外改动必须先自行处理
-  const statusLines = git(['status', '--porcelain']).split('\n').filter(Boolean)
+  const statusLines = git(['status', '--porcelain']).split(/\r?\n/).filter(Boolean)
   const outside = unexpectedChanges(statusLines, SDK_PACKAGE_DIRS)
   if (outside.length > 0) {
     const msg =
@@ -225,20 +256,31 @@ function preflight(args, all, selected, registry) {
     die(`当前分支是 ${branch || '(detached)'}，发布默认只允许在 main 上执行（--allow-non-main 绕开）`)
   }
 
-  // 3) fetch tags + upstream 同步
-  if (!dryRun) run('git', ['fetch', '--tags', 'origin'])
-  assertUpToDateWithUpstream()
-
-  // 4) npm 登录态
-  const who = npmRun(['whoami'], registry)
+  // 3/4/5/6) 一批并发只读网络查询：fetch tags、npm 登录态、各包最新版本、依赖完整性（互不依赖）
+  const sdkVersionMap = Object.fromEntries(all.map((p) => [p.shortName, p.version]))
+  const { queries, errors: planErrors } = planExternalDepQueries(selected, sdkVersionMap)
+  const [fetchRes, who, latestEntries, queryEntries] = await Promise.all([
+    dryRun ? Promise.resolve({ ok: true, stderr: '' }) : spawnAsync('git', ['fetch', '--tags', 'origin']),
+    npmRun(['whoami'], registry),
+    Promise.all(selected.map(async (p) => [p.shortName, await npmLatestVersion(p.name, registry)])),
+    Promise.all(
+      queries.map(async (q) => [
+        `${q.depName}@${q.targetVersion}`,
+        await npmVersionPublished(q.depName, q.targetVersion, registry),
+      ]),
+    ),
+  ])
+  if (!dryRun && !fetchRes.ok) die(`git fetch --tags origin 失败:\n  ${(fetchRes.stderr ?? '').trim()}`)
   if (!who.ok) {
     die(`未登录 npm（${registry}）: ${(who.stderr ?? '').trim()}\n  先执行 npm login --registry ${registry}`)
   }
   ok(`npm 登录: ${who.stdout.trim()}（${registry}）`)
 
+  // upstream 同步（依赖 fetch 完成）
+  assertUpToDateWithUpstream()
+
   // 5) 版本计划：本地版本必须高于 npm 已发布版
-  const publishedVersions = {}
-  for (const p of selected) publishedVersions[p.shortName] = npmLatestVersion(p.name, registry)
+  const publishedVersions = Object.fromEntries(latestEntries)
   let plan
   try {
     plan = planPublish(selected, publishedVersions)
@@ -247,13 +289,7 @@ function preflight(args, all, selected, registry) {
   }
 
   // 6) 依赖完整性：集合外的 workspace 依赖必须已在 npm 发布，否则发布会指向悬空版本
-  const sdkVersionMap = Object.fromEntries(all.map((p) => [p.shortName, p.version]))
-  const { queries, errors: planErrors } = planExternalDepQueries(selected, sdkVersionMap)
-  const queryResults = {}
-  for (const q of queries) {
-    queryResults[`${q.depName}@${q.targetVersion}`] = npmVersionPublished(q.depName, q.targetVersion, registry)
-  }
-  const depErrors = [...planErrors, ...assessExternalDeps(queries, queryResults)]
+  const depErrors = [...planErrors, ...assessExternalDeps(queries, Object.fromEntries(queryEntries))]
   if (depErrors.length > 0) {
     die(`依赖完整性检查失败:\n${depErrors.map((e) => `  - ${e}`).join('\n')}`)
   }
@@ -296,7 +332,7 @@ function preflight(args, all, selected, registry) {
   return plan
 }
 
-function main() {
+async function main() {
   let args
   try {
     args = parseArgs(process.argv.slice(2))
@@ -339,7 +375,7 @@ function main() {
   console.log(`范围: ${sel.selected.map((p) => `${p.name}@${p.version}`).join(', ')}`)
   console.log('')
 
-  const { toPublish, skipped } = preflight(args, all, sel.selected, registry)
+  const { toPublish, skipped } = await preflight(args, all, sel.selected, registry)
   const toPublishOrdered = topo.order.filter((p) => toPublish.includes(p))
   for (const p of skipped) info(`  skip ${p.name}@${p.version}（npm 已有，增量跳过）`)
 
@@ -355,55 +391,61 @@ function main() {
       run('pnpm', ['--filter', '@universe-editor/extension-api', 'test'], { dryRun })
     }
 
-    // pack 内容检查（dry-run 下 dist 未重建，检查结果不可信，跳过）
+    // pack 内容检查（dry-run 下 dist 未重建，检查结果不可信，跳过）；并行执行、按拓扑序回显
     if (dryRun) {
       info('  [dry-run] 跳过 pack 内容检查（dist 未重建）')
     } else {
-      for (const p of toPublishOrdered) {
-        const res = spawnSync('pnpm', ['pack', '--dry-run'], {
-          cwd: join(repoRoot, p.dir),
-          encoding: 'utf8',
-          shell: shouldUseShell('pnpm'),
-        })
-        if (res.error) die(`pnpm pack --dry-run 执行失败: ${p.name}\n  ${res.error.message}`)
-        if (res.status !== 0) die(`pnpm pack --dry-run 非零退出 (${res.status}): ${p.name}\n${res.stderr}`)
-        const parsed = parsePackListing(`${res.stdout ?? ''}\n${res.stderr ?? ''}`)
-        if (parsed.error) die(`${p.name}: ${parsed.error}`)
+      const packResults = await Promise.all(
+        toPublishOrdered.map(async (p) => ({
+          p,
+          res: await spawnAsync('pnpm', ['pack', '--dry-run'], { cwd: join(repoRoot, p.dir) }),
+        })),
+      )
+      for (const { p, res } of packResults) {
+        const fail = (msg) => {
+          if (res.stdout) process.stdout.write(res.stdout)
+          if (res.stderr) process.stderr.write(res.stderr)
+          die(msg)
+        }
+        if (!res.ok) fail(`pnpm pack --dry-run 非零退出 (${res.status}): ${p.name}`)
+        const parsed = parsePackListing(`${res.stdout}\n${res.stderr}`)
+        if (parsed.error) fail(`${p.name}: ${parsed.error}`)
         const errors = checkPackListing(parsed.files, {
           isBin: Boolean(p.manifest.bin),
           hasTemplates: Boolean(p.manifest.files?.includes('templates')),
         })
         if (errors.length > 0) {
-          die(`${p.name} pack 内容检查失败:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
+          fail(`${p.name} pack 内容检查失败:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
         }
         ok(`${p.name} pack 内容检查通过（${parsed.files.length} 个文件）`)
       }
     }
 
-    // 发布（拓扑序）+ 协议替换验证
+    // 发布（拓扑分层：层内并发、层间串行）+ 协议替换验证；层内结果按序回显
     const workspaceVersions = Object.fromEntries(all.map((p) => [p.name, p.version]))
-    for (const p of toPublishOrdered) {
-      console.log(`\n── 发布 ${p.name}@${p.version} ──`)
-      run('pnpm', ['--filter', p.name, 'publish', '--no-git-checks', '--registry', registry], { dryRun })
-      if (dryRun) continue
-      const res = npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
-      if (!res.ok) {
-        warnings.push(`${p.name}: 协议替换验证查询失败: ${(res.stderr ?? '').trim()}`)
-        continue
-      }
-      let deps = {}
-      const text = res.stdout.trim()
-      if (text && text !== 'undefined') {
-        try {
-          deps = JSON.parse(text)
-        } catch {
-          warnings.push(`${p.name}: 依赖表 JSON 解析失败: ${text}`)
+    const { levels } = topologicalLevels(toPublishOrdered)
+    const publishCommand = (p) => ['--filter', p.name, 'publish', '--no-git-checks', '--registry', registry]
+    for (const level of levels) {
+      const results = await Promise.all(
+        level.map(async (p) => {
+          if (dryRun) return { p }
+          const pub = await spawnAsync('pnpm', publishCommand(p))
+          if (!pub.ok) return { p, pub }
+          return { p, pub, verdict: await verifyPublished(p, workspaceVersions, registry) }
+        }),
+      )
+      for (const { p, pub, verdict } of results) {
+        console.log(`\n── 发布 ${p.name}@${p.version} ──`)
+        if (dryRun) {
+          info(`  [dry-run] ${printableCommand('pnpm', publishCommand(p))}`)
           continue
         }
+        if (pub.stdout) process.stdout.write(pub.stdout)
+        if (pub.stderr) process.stderr.write(pub.stderr)
+        if (!pub.ok) die(`pnpm publish 非零退出 (${pub.status}): ${p.name}`)
+        if (verdict.type === 'warning') warnings.push(verdict.message)
+        else ok(verdict.message)
       }
-      const depErrors = verifyPublishedDeps(deps, workspaceVersions)
-      if (depErrors.length > 0) warnings.push(`${p.name} 依赖协议异常:\n${depErrors.map((e) => `  - ${e}`).join('\n')}`)
-      else ok(`${p.name} 依赖协议已替换为真实版本`)
     }
   }
 
@@ -426,8 +468,8 @@ function main() {
     ok(`tag ${t} 已创建`)
   }
   if (!args.noPush) {
-    run('git', ['push', 'origin', 'HEAD:main'], { dryRun })
-    for (const p of sel.selected) run('git', ['push', 'origin', tagName(p.shortName, p.version)], { dryRun })
+    const refs = ['HEAD:main', ...sel.selected.map((p) => tagName(p.shortName, p.version))]
+    run('git', ['push', 'origin', ...refs], { dryRun })
   } else {
     info('  --no-push：跳过 push，重跑本命令（不带该旗标）可补推收敛')
   }
@@ -454,4 +496,4 @@ function main() {
 }
 
 const isMain = process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
-if (isMain) main()
+if (isMain) await main()
