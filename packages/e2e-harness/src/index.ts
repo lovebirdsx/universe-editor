@@ -18,12 +18,14 @@ export {
   launchAppReady,
   launchElectron,
   resolveEditorBuild,
+  resolveEditorLaunchTarget,
   seedBaselineUserData,
   waitForProbe,
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
   INITIAL_STATE,
   type EditorBuild,
+  type EditorLaunchTarget,
   type LaunchAppOptions,
 } from './launch.js'
 

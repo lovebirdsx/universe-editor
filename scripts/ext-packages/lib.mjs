@@ -130,7 +130,7 @@ export function planPublish(selected, publishedVersions) {
 /**
  * 依赖完整性计划：收集 selected 包「集合外（本次不同发）的 workspace: 依赖」需要向 npm 查证的清单。
  * 依赖目标不在 SDK 集合内（如 extensions-common 等不可发布包）直接计入 errors——发布出去会指向 0.0.0 悬空版本。
- * sdkVersionMap: { shortName: version }（SDK 全量 5 件套）。
+ * sdkVersionMap: { shortName: version }（SDK 全量发布集合）。
  */
 export function planExternalDepQueries(selected, sdkVersionMap) {
   const selectedShorts = new Set(selected.map((p) => p.shortName))

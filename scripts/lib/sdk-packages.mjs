@@ -10,6 +10,8 @@ export const SDK_PACKAGE_DIRS = [
   'packages/extension-packaging',
   'packages/uex',
   'packages/create-extension',
+  'packages/e2e-contract',
+  'packages/e2e-harness',
 ]
 
 export const SDK_PACKAGE_SHORT_NAMES = SDK_PACKAGE_DIRS.map((dir) => dir.split('/')[1])

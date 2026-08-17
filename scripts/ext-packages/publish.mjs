@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  一键发布外部 SDK 五件套（@universe-editor/*）到公开 npm，并同步内网 tarball。
+ *  一键发布外部 SDK 发布集合（@universe-editor/*）到公开 npm，并同步内网 tarball。
  *
  *  用法（在仓库根目录）:
  *    pnpm ext-packages:publish [-- 选项] [pkg ...]
@@ -350,7 +350,7 @@ async function main() {
   if (args.help) {
     console.log(
       [
-        '发布扩展 SDK 五件套到 npm（@universe-editor/*）并同步内网 tarball。',
+        '发布扩展 SDK 发布集合到 npm（@universe-editor/*）并同步内网 tarball。',
         '',
         '选项:',
         '  --dry-run        只读检查照跑，写操作只打印 [dry-run]',
@@ -360,7 +360,7 @@ async function main() {
         '  --registry <url> npm registry（默认 https://registry.npmjs.org）',
         '  --stage <dir>    市场 stage 目录（默认 UE_GALLERY_STAGE 或 <repo>/market-stage）',
         '  --env <mode>     .env 分层加载模式（透传 loadEnv）',
-        '  [pkg ...]        只发布指定包（目录名或完整包名），默认全部五件套',
+        '  [pkg ...]        只发布指定包（目录名或完整包名），默认全部发布集合',
         '',
         '版本需开发者提前 bump（extension-api 必须先走 COMPATIBILITY.md 流程）；',
         'SDK 目录内未提交改动会被脚本 commit，目录外改动请先自行提交。',

@@ -70,7 +70,11 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
         localize('releaseNotes.whatsNew', "What's New in {version}", { version: currentVersion }),
         'whatsNew',
       )
-      openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
+      // Don't steal the active editor: a file opened right after restore (e.g. by
+      // an extension host lazy-activating on `onLanguage:`) would otherwise stay a
+      // background tab whose model never mounts. In an empty group this still
+      // becomes active implicitly, so a bare upgrade still surfaces the notes.
+      openInLockAwareGroup(this._groups, input, { activate: false, pinned: true })
     }
     await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
   }

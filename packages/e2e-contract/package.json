@@ -1,8 +1,21 @@
 {
   "name": "@universe-editor/e2e-contract",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Universe Editor E2E probe contract: the window.__E2E__ probe types and constants, shared by @universe-editor/e2e-harness and the editor.",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovebirdsx/universe-editor.git",
+    "directory": "packages/e2e-contract"
+  },
+  "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
+  "keywords": [
+    "universe-editor",
+    "e2e",
+    "contract",
+    "probe"
+  ],
   "files": [
     "dist"
   ],
@@ -11,6 +24,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsgo --build",

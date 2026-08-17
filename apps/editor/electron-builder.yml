@@ -87,5 +87,8 @@ mac:
   target: dmg
 linux:
   target: AppImage
+  # 默认可执行名取 package.json name 净化成 "@universe-editoreditor"（带 @ 且难读），
+  # 显式固定为 universe-editor，samples 仓库 e2e 以 linux-unpacked/universe-editor 定位。
+  executableName: universe-editor
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

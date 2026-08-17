@@ -1,8 +1,21 @@
 {
   "name": "@universe-editor/e2e-harness",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Playwright fixtures, page objects, and launch helpers for running E2E tests against Universe Editor.",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovebirdsx/universe-editor.git",
+    "directory": "packages/e2e-harness"
+  },
+  "homepage": "https://github.com/lovebirdsx/universe-editor#readme",
+  "keywords": [
+    "universe-editor",
+    "e2e",
+    "playwright",
+    "testing"
+  ],
   "files": [
     "dist"
   ],
@@ -11,6 +24,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsgo --build",
@@ -21,10 +40,13 @@
     "clean": "tsgo --build --clean"
   },
   "dependencies": {
-    "@playwright/test": "catalog:",
     "@universe-editor/e2e-contract": "workspace:*"
   },
+  "peerDependencies": {
+    "@playwright/test": "^1.62.0"
+  },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@universe-editor/config-eslint": "workspace:*",
     "@universe-editor/config-ts": "workspace:*",
     "@types/node": "catalog:",

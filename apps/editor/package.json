@@ -32,7 +32,8 @@
     "package": "pnpm run package:win",
     "package:win": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis dir && pnpm -w run runtime:verify:packaged",
     "package:win:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win dir && pnpm -w run runtime:verify:packaged",
-    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis && pnpm -w run runtime:verify:packaged"
+    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis && pnpm -w run runtime:verify:packaged",
+    "package:linux:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --linux dir && pnpm -w run runtime:verify:packaged -- apps/editor/release/linux-unpacked/resources"
   },
   "dependencies": {
     "@parcel/watcher": "catalog:",

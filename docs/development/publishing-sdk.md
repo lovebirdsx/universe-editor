@@ -1,6 +1,6 @@
 # 发布扩展 SDK（npm）
 
-把扩展开发五件套发布到公开 npm（`@universe-editor` scope），供仓库外的第三方扩展作者 `npm install`。这是内部运维手册；面向扩展作者的版本语义说明在 [`docs/extension-dev/zh-CN/versioning.md`](../extension-dev/zh-CN/versioning.md)。
+把扩展开发发布集合发布到公开 npm（`@universe-editor` scope），供仓库外的第三方扩展作者 `npm install`。这是内部运维手册；面向扩展作者的版本语义说明在 [`docs/extension-dev/zh-CN/versioning.md`](../extension-dev/zh-CN/versioning.md)。
 
 > 发布**外部扩展**（`.vsix` → 市场）是另一条链路，见 [发布外部扩展](publishing-extensions.md)。
 
@@ -13,10 +13,16 @@
 | `@universe-editor/extension-packaging` | 独立 semver，同上 | `createVsix` / `readVsixManifest`（`uex package` 的依赖） |
 | `@universe-editor/uex` | 独立 semver，同上 | 对外 CLI（bin `uex`）：`package` / `ls` / `dev` / `login` / `publish` / `unpublish` |
 | `@universe-editor/create-extension` | 独立 semver，同上 | `npm create @universe-editor/extension` 脚手架（basic / webview 两模板） |
+| `@universe-editor/e2e-contract` | 独立 semver，有对外可见变更才发 | `window.__E2E__` 探针的类型/常量 |
+| `@universe-editor/e2e-harness` | **minor 跟随编辑器 minor** | Playwright fixtures / 页面对象 / launch 辅助 |
 
 **版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 常量表与 `uex` 的 `src/lib/sdkVersion.ts` 分别注入了 extension-api / uex 的版本号，各有守卫测试锁定——bump 那两个包后必须同步这两处，否则测试红。
 
 `@universe-editor/extensions-common` **不在发布集合**：它的 RPC 基建（`stdioProtocol` 等）运行时依赖不可发布的 `@universe-editor/platform`。作者面模块已物理迁入 `extension-manifest`，`extensions-common` 依赖并 re-export 它，仓库内消费方零改动。
+
+### e2e-harness 的 `@playwright/test` 是 peerDependency
+
+`@universe-editor/e2e-harness` 不内置 `@playwright/test`——它是 peerDependency（当前 `^1.62.0`，与 `pnpm-workspace.yaml` catalog 的 playwright 区间一致）。消费方（如 samples 仓库）必须**显式**在 devDependencies 安装同区间的 `@playwright/test`。红线：整个依赖树只能有一份 `@playwright/test` 物理拷贝（两份会各自维护 worker/进程表，启动即崩）；`pnpm why @playwright/test` 出现两份时，把消费方版本对齐到同一区间。版本联动：e2e-contract 独立 semver，e2e-harness 的 minor 跟随编辑器 minor——升编辑器时同步升 e2e-harness。
 
 ## 前置（运营，一次性）
 
@@ -31,7 +37,7 @@
 
 1. bump 各包 `package.json` 的 version（独立 semver）。extension-api 的 bump 必须先完成契约测试快照更新 + COMPATIBILITY.md 变更记录，否则脚本 preflight 会拒绝发布。
 2. 同步版本常量（`create-extension/src/sdkVersions.ts` 与 `uex/src/lib/sdkVersion.ts`），守卫测试与脚本 preflight 都会校验。
-3. 非 SDK 目录的联动改动（如 `extensions/*` 的 `engines.universe` 同步）先单独提交——脚本只放行 SDK 五件套目录内的未提交改动，并将其 commit。
+3. 非 SDK 目录的联动改动（如 `extensions/*` 的 `engines.universe` 同步）先单独提交——脚本只放行 SDK 发布集合目录内的未提交改动，并将其 commit。
 
 然后一条命令：
 
@@ -41,7 +47,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 
 | 选项 | 说明 |
 |---|---|
-| `[pkg ...]` | 只发布指定包（目录名或包名），默认全部五件套 |
+| `[pkg ...]` | 只发布指定包（目录名或包名），默认全部发布集合 |
 | `--dry-run` | 只读检查照跑，写操作只打印 `[dry-run]` |
 | `--no-gallery` | 跳过内网 pack + scp 同步 |
 | `--no-push` | 跳过 git push（本地验证用；不带该旗标重跑可补推收敛） |
@@ -57,7 +63,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 3. **pack 内容检查**：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
 4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）+ 发布后核对依赖表无 `workspace:` / `catalog:` 残留、`@universe-editor/*` 互赖为精确版本（异常只警告不中断，结尾汇总）。
 5. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
-6. **内网同步**（`--no-gallery` 跳过）：pack 五件套 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
+6. **内网同步**（`--no-gallery` 跳过）：pack 发布集合 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
 
 **幂等自愈**：npm 发布成功但 tag/push/gallery 中断时，重跑同一命令即可收敛（已发布版本增量跳过、缺失 tag 补打、gallery 重同步）。npm 版本不可变，同版本重跑不会重复发布。
 
@@ -69,7 +75,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 #    否则视为破坏性变更流程未走完，禁止发布。
 # 1. 全量校验 + 构建（dist 必须是最新）
 pnpm check
-pnpm --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging --filter @universe-editor/uex --filter @universe-editor/create-extension build
+pnpm --filter @universe-editor/extension-api --filter @universe-editor/extension-manifest --filter @universe-editor/extension-packaging --filter @universe-editor/uex --filter @universe-editor/create-extension --filter @universe-editor/e2e-contract --filter @universe-editor/e2e-harness build
 
 # 2. 内容检查点：dist 无 __tests__，LICENSE / README.md 在列
 cd packages/extension-api && npm pack --dry-run   # 其余包同样过目
@@ -81,15 +87,18 @@ pnpm --filter @universe-editor/extension-manifest publish
 pnpm --filter @universe-editor/extension-packaging publish
 pnpm --filter @universe-editor/uex publish
 pnpm --filter @universe-editor/create-extension publish
+pnpm --filter @universe-editor/e2e-contract publish
+pnpm --filter @universe-editor/e2e-harness publish
 
 # 4. 核对协议替换结果（catalog 首次对外，别盲信）
 npm view @universe-editor/extension-api dependencies
 npm view @universe-editor/extension-packaging dependencies
 npm view @universe-editor/uex dependencies
+npm view @universe-editor/e2e-harness dependencies
 # 期望：vscode-languageserver-types / adm-zip / @clack/prompts 是真实版本区间；
 #       @universe-editor/* 互赖是真实版本号（不是 workspace:* / catalog:）
 
-# 5. 打 tag（extension-api 必打；另四个有发布就打）
+# 5. 打 tag（extension-api 必打；另六个有发布就打）
 git tag extension-api@0.7.1 && git push origin extension-api@0.7.1
 ```
 
@@ -147,7 +156,7 @@ uex unpublish <name>.<ext> --yes --registry http://localhost:8788
 完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）。一键命令在每次 npm 发布后默认自动同步（`--no-gallery` 关闭）；也可单独手动：
 
 ```bash
-# pack 五件套 → <stage>/gallery/sdk/（pnpm pack 与 publish 共用打包逻辑，产物与 npm 一致）
+# pack 发布集合 → <stage>/gallery/sdk/（pnpm pack 与 publish 共用打包逻辑，产物与 npm 一致）
 pnpm gallery:publish-sdk -- --stage ./market-stage
 
 # 与扩展市场同一入口上传（sdk/** 随 assets 一起先于 registry 落地）

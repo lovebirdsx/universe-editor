@@ -19,6 +19,7 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 
 // Env var the app's extension-host bootstrap reads as an allowlist (P2). When
 // unset the host activates every scanned extension; when set (even to empty) it
@@ -54,6 +55,96 @@ export function resolveEditorBuild(): EditorBuild {
   throw new Error(
     'resolveEditorBuild: could not find apps/editor/out/main/index.js — run `pnpm build` first',
   )
+}
+
+/**
+ * Resolved shape a fixture hands to `launchApp`: it either names the editor's
+ * dev build (appRoot/mainEntry + optionally an explicit electron binary) or a
+ * packaged executable. Fields are mutually exclusive by mode.
+ */
+export interface EditorLaunchTarget {
+  readonly appRoot?: string
+  readonly mainEntry?: string
+  /** dev 模式显式 electron 二进制 */
+  readonly electronPath?: string
+  /** packaged 模式 app 可执行文件 */
+  readonly executablePath?: string
+  readonly cwd?: string
+}
+
+function findPackageRoot(mainEntry: string): string {
+  let dir = dirname(mainEntry)
+  for (;;) {
+    if (existsSync(join(dir, 'package.json'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  throw new Error(
+    `resolveEditorLaunchTarget: 无法从 mainEntry 向上找到包含 package.json 的编辑器包根（mainEntry=${mainEntry}）`,
+  )
+}
+
+function resolveElectronBinary(appRoot: string): string {
+  let dir = appRoot
+  for (;;) {
+    try {
+      // electron 包主模块（CommonJS）导出二进制绝对路径（string）。
+      return createRequire(join(dir, 'package.json'))('electron') as string
+    } catch {
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  throw new Error(
+    `resolveEditorLaunchTarget: 无法从 ${appRoot} 逐级向上解析 electron 二进制（createRequire 解析 'electron' 失败）。` +
+      `请设置 UNIVERSE_EDITOR_BIN 指向打包版编辑器可执行文件（如 Windows 安装版 "Universe Editor.exe" / linux-unpacked 可执行文件），` +
+      `或同时设置 UNIVERSE_EDITOR_BIN 与 UNIVERSE_EDITOR_MAIN_ENTRY（dev-bundle 形态：BIN=electron 二进制，MAIN_ENTRY=out/main/index.js）。`,
+  )
+}
+
+/**
+ * Resolve where to launch the editor from. `UNIVERSE_EDITOR_BIN` selects the
+ * source (three forms); when unset it probes the installed Windows build, then
+ * falls back to the in-repo dev build (current behaviour). This is the seam the
+ * samples repo uses to run against a published editor without depending on this
+ * repo's layout.
+ */
+export function resolveEditorLaunchTarget(env?: NodeJS.ProcessEnv): EditorLaunchTarget {
+  const e = env ?? process.env
+  const bin = e.UNIVERSE_EDITOR_BIN
+  const mainEntryEnv = e.UNIVERSE_EDITOR_MAIN_ENTRY
+
+  if (bin) {
+    // dev 形态：UNIVERSE_EDITOR_BIN 指向 dev 产物 main entry（.js 结尾）。
+    if (bin.endsWith('.js')) {
+      const appRoot = findPackageRoot(bin)
+      return { mainEntry: bin, appRoot, electronPath: resolveElectronBinary(appRoot) }
+    }
+    // dev-bundle 形态：BIN=electron 二进制，MAIN_ENTRY=out/main/index.js。
+    if (mainEntryEnv) {
+      const appRoot = findPackageRoot(mainEntryEnv)
+      return { electronPath: bin, mainEntry: mainEntryEnv, appRoot }
+    }
+    // packaged 形态：可直接执行的编辑器（NSIS 安装版 / win-unpacked / linux-unpacked）。
+    return { executablePath: bin }
+  }
+
+  if (process.platform === 'win32' && e.LOCALAPPDATA) {
+    const installedExe = join(e.LOCALAPPDATA, 'Programs', 'Universe Editor', 'Universe Editor.exe')
+    if (existsSync(installedExe)) return { executablePath: installedExe }
+  }
+
+  try {
+    const { appRoot, mainEntry } = resolveEditorBuild()
+    return { appRoot, mainEntry }
+  } catch (err) {
+    throw new Error(
+      `${String(err)}\nresolveEditorLaunchTarget: 请设置 UNIVERSE_EDITOR_BIN 指向打包版编辑器可执行文件（如 "C:\\Users\\<you>\\AppData\\Local\\Programs\\Universe Editor\\Universe Editor.exe"），` +
+        `或指向 dev 产物 apps/editor/out/main/index.js（dev 形态），或同时设置 UNIVERSE_EDITOR_BIN + UNIVERSE_EDITOR_MAIN_ENTRY（dev-bundle 形态）。`,
+    )
+  }
 }
 
 // `app.close()` waits for Playwright's pipe connection to the Electron process
@@ -317,8 +408,16 @@ export function seedBaselineUserData(userDataDir: string): void {
 }
 
 export interface LaunchAppOptions {
-  readonly appRoot: string
-  readonly mainEntry: string
+  /** Editor package root (dev branch only). */
+  readonly appRoot?: string
+  /** Packaged main entry (dev branch only). */
+  readonly mainEntry?: string
+  /** Explicit electron binary (dev branch). */
+  readonly electronPath?: string
+  /** Packaged app executable — when set (and mainEntry unset), launches the packaged build. */
+  readonly executablePath?: string
+  /** Launch cwd; defaults to appRoot (dev) or dirname(executablePath) (packaged). */
+  readonly cwd?: string
   readonly userDataDir: string
   /**
    * Extension allowlist (P2 minimal-extension-set). `undefined` → activate all
@@ -426,19 +525,38 @@ export async function launchApp(options: LaunchAppOptions): Promise<ElectronAppl
     options.userDataDir,
     'vscode-user-keybindings.json',
   )
+  const launchEnv = {
+    ...inheritedEnv,
+    UNIVERSE_E2E: '1',
+    NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
+    ...extraEnv,
+  }
+
+  // Packaged branch: the asar ships its own entry, so no mainEntry first arg.
+  if (options.executablePath !== undefined && options.mainEntry === undefined) {
+    return launchElectron({
+      executablePath: options.executablePath,
+      args: [`--user-data-dir=${options.userDataDir}`, ...(options.extraArgs ?? [])],
+      cwd: options.cwd ?? dirname(options.executablePath),
+      env: launchEnv,
+    })
+  }
+
+  // Dev branch (current behaviour): mainEntry is the first positional arg.
+  if (options.mainEntry === undefined || options.appRoot === undefined) {
+    throw new Error(
+      'launchApp: dev 分支缺少 mainEntry 或 appRoot——未提供 executablePath 时，须同时提供 mainEntry 与 appRoot（可经 resolveEditorLaunchTarget 解析）',
+    )
+  }
   return launchElectron({
+    ...(options.electronPath !== undefined ? { executablePath: options.electronPath } : {}),
     args: [
       options.mainEntry,
       `--user-data-dir=${options.userDataDir}`,
       ...(options.extraArgs ?? []),
     ],
-    cwd: options.appRoot,
-    env: {
-      ...inheritedEnv,
-      UNIVERSE_E2E: '1',
-      NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
-      ...extraEnv,
-    },
+    cwd: options.cwd ?? options.appRoot,
+    env: launchEnv,
   })
 }
 

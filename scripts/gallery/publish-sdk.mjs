@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  把 SDK 五件套打包成 npm tarball 并落地 <stage>/gallery/sdk/，供拉不到公网 npm 的内网
+ *  把 SDK 发布集合打包成 npm tarball 并落地 <stage>/gallery/sdk/，供拉不到公网 npm 的内网
  *  环境经市场服务器静态托管安装：
  *
  *    npm i <base>gallery/sdk/universe-editor-extension-api-0.7.0.tgz

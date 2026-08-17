@@ -30,7 +30,13 @@ import { join } from 'node:path'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks, isContextTeardownError } from './pages/WorkbenchPO.js'
-import { closeApp, launchAppReady, seedBaselineUserData, waitForProbe } from './launch.js'
+import {
+  closeApp,
+  launchAppReady,
+  seedBaselineUserData,
+  waitForProbe,
+  type LaunchAppOptions,
+} from './launch.js'
 import { installFailureForensics } from './forensics.js'
 
 // Lives in launch.ts (launchAppReady needs it); re-exported so existing deep
@@ -38,8 +44,16 @@ import { installFailureForensics } from './forensics.js'
 export { waitForProbe } from './launch.js'
 
 export interface AppFixtureConfig {
-  readonly appRoot: string
-  readonly mainEntry: string
+  /** Editor package root (dev launch only). */
+  readonly appRoot?: string
+  /** Packaged main entry (dev launch only). */
+  readonly mainEntry?: string
+  /** Explicit electron binary (dev launch). */
+  readonly electronPath?: string
+  /** Packaged app executable — set to launch the packaged build. */
+  readonly executablePath?: string
+  /** Launch cwd; defaults to appRoot (dev) / dirname(executablePath) (packaged). */
+  readonly cwd?: string
   /** Extension allowlist (P2). Omit to activate all scanned extensions. */
   readonly extensions?: readonly string[]
   /**
@@ -54,6 +68,25 @@ export interface AppFixtureConfig {
    * than an env injection). Placed before any workspace positional arg.
    */
   readonly extraArgs?: readonly string[]
+}
+
+/** Fold the fixture config into LaunchAppOptions, dropping unset optional fields. */
+function buildLaunchOptions(
+  config: AppFixtureConfig,
+  userDataDir: string,
+  extraArgs: readonly string[],
+): LaunchAppOptions {
+  return {
+    ...(config.appRoot !== undefined ? { appRoot: config.appRoot } : {}),
+    ...(config.mainEntry !== undefined ? { mainEntry: config.mainEntry } : {}),
+    ...(config.electronPath !== undefined ? { electronPath: config.electronPath } : {}),
+    ...(config.executablePath !== undefined ? { executablePath: config.executablePath } : {}),
+    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+    userDataDir,
+    ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
+    ...(config.env !== undefined ? { env: config.env } : {}),
+    extraArgs,
+  }
 }
 
 export interface E2EFixtures {
@@ -156,19 +189,14 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
         // process itself — a fixture throwing here before use() would skip this
         // teardown's closeApp and orphan the Electron (secondary symptom:
         // "Worker teardown timeout").
-        const { app, page } = await launchAppReady({
-          appRoot: config.appRoot,
-          mainEntry: config.mainEntry,
-          userDataDir,
-          ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
-          ...(config.env !== undefined ? { env: config.env } : {}),
+        const { app, page } = await launchAppReady(
           // Positional folder arg → main's parseFileToOpen → openWindowForFolder:
           // the app boots with this workspace already attached.
-          extraArgs: [
+          buildLaunchOptions(config, userDataDir, [
             ...(config.extraArgs ?? []),
             ...(launchWorkspace ? [launchWorkspace.dir] : []),
-          ],
-        })
+          ]),
+        )
         // After closeApp so the log tail is flushed before the failure copy.
         const finalizeForensics = installFailureForensics(page, userDataDir)
         await use(app)
@@ -332,14 +360,9 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         // Same launch-succeeded-but-no-window guard as the cold fixture — on
         // failure launchAppReady reaps the half-dead process itself (a worker
         // fixture throwing before use() skips teardown entirely).
-        const { app, page } = await launchAppReady({
-          appRoot: config.appRoot,
-          mainEntry: config.mainEntry,
-          userDataDir,
-          ...(config.extensions !== undefined ? { extensions: config.extensions } : {}),
-          ...(config.env !== undefined ? { env: config.env } : {}),
-          ...(config.extraArgs !== undefined ? { extraArgs: config.extraArgs } : {}),
-        })
+        const { app, page } = await launchAppReady(
+          buildLaunchOptions(config, userDataDir, config.extraArgs ?? []),
+        )
         await use({ app, page, userDataDir, firstTest: { value: true } })
         // A still-running ACP session / node-pty child can wedge a graceful
         // app.close() past the worker-teardown budget (the SessionShutdownParticipant

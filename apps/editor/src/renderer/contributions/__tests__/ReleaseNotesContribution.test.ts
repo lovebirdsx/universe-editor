@@ -67,16 +67,22 @@ function fakeStorage(initial?: string | Record<string, unknown>): {
   return { service, read: (key = LAST_VERSION_KEY) => store.get(key) }
 }
 
-function fakeGroups(): { service: IEditorGroupsService; opened: IEditorInput[] } {
+function fakeGroups(): {
+  service: IEditorGroupsService
+  opened: IEditorInput[]
+  openOptions: Record<string, unknown>[]
+} {
   const opened: IEditorInput[] = []
+  const openOptions: Record<string, unknown>[] = []
   const service = {
     activeGroup: {
-      openEditor(input: IEditorInput) {
+      openEditor(input: IEditorInput, options?: Record<string, unknown>) {
         opened.push(input)
+        openOptions.push(options ?? {})
       },
     },
   } as unknown as IEditorGroupsService
-  return { service, opened }
+  return { service, opened, openOptions }
 }
 
 describe('ReleaseNotesContribution', () => {
@@ -128,6 +134,21 @@ describe('ReleaseNotesContribution', () => {
     expect(md).toContain('## 0.1.2')
     expect(md).not.toContain('## 0.1.1')
     expect(storage.read()).toBe('0.1.3')
+  })
+
+  it('opens the what’s-new tab without stealing the active editor', async () => {
+    const storage = fakeStorage('0.1.1')
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.1.3'),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    // A background open must not displace the editor the user is working in —
+    // a file opened right after restore would otherwise never mount its model
+    // and its extension host `onLanguage:` activation would never fire.
+    expect(groups.openOptions[0]?.activate).toBe(false)
   })
 
   it('does nothing when the version is unchanged', async () => {

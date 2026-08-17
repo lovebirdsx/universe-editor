@@ -44,7 +44,7 @@ function pkg(shortName, dependencies = {}) {
   }
 }
 
-const sdk5 = [
+const sdk7 = [
   pkg('extension-api', { 'vscode-languageserver-types': 'catalog:' }),
   pkg('extension-manifest', { zod: 'catalog:' }),
   pkg('extension-packaging', {
@@ -56,6 +56,8 @@ const sdk5 = [
     '@universe-editor/extension-packaging': 'workspace:*',
   }),
   pkg('create-extension', { '@clack/prompts': 'catalog:' }),
+  pkg('e2e-contract'),
+  pkg('e2e-harness', { '@universe-editor/e2e-contract': 'workspace:*' }),
 ]
 
 test('compareVersions 大小比较与非法版本', () => {
@@ -67,9 +69,9 @@ test('compareVersions 大小比较与非法版本', () => {
   assert.throws(() => compareVersions('v0.1.0', '0.1.0'), /X\.Y\.Z/)
 })
 
-test('loadPackageManifests 读取真实 5 件套清单', () => {
+test('loadPackageManifests 读取真实 7 件套清单', () => {
   const all = loadPackageManifests(repoRoot, SDK_PACKAGE_DIRS)
-  assert.equal(all.length, 5)
+  assert.equal(all.length, 7)
   for (const p of all) {
     assert.equal(p.name, `@universe-editor/${p.shortName}`)
     assert.match(p.version, /^\d+\.\d+\.\d+$/)
@@ -77,26 +79,27 @@ test('loadPackageManifests 读取真实 5 件套清单', () => {
 })
 
 test('selectPackages 无参全选、按目录名/包名选择、未命中报错', () => {
-  assert.equal(selectPackages(sdk5, []).selected.length, 5)
+  assert.equal(selectPackages(sdk7, []).selected.length, 7)
   assert.deepEqual(
-    selectPackages(sdk5, ['uex']).selected.map((p) => p.shortName),
+    selectPackages(sdk7, ['uex']).selected.map((p) => p.shortName),
     ['uex'],
   )
   assert.deepEqual(
-    selectPackages(sdk5, ['@universe-editor/extension-manifest']).selected.map((p) => p.shortName),
+    selectPackages(sdk7, ['@universe-editor/extension-manifest']).selected.map((p) => p.shortName),
     ['extension-manifest'],
   )
-  const err = selectPackages(sdk5, ['nope'])
+  const err = selectPackages(sdk7, ['nope'])
   assert.match(err.error, /未找到可发布包: nope/)
 })
 
-test('topologicalOrder 5 件套拓扑正确（依赖先于被依赖）', () => {
-  const { order, error } = topologicalOrder(sdk5)
+test('topologicalOrder 7 件套拓扑正确（依赖先于被依赖）', () => {
+  const { order, error } = topologicalOrder(sdk7)
   assert.equal(error, undefined)
   const shorts = order.map((p) => p.shortName)
-  assert.deepEqual(new Set(shorts), new Set(['extension-api', 'extension-manifest', 'extension-packaging', 'uex', 'create-extension']))
+  assert.deepEqual(new Set(shorts), new Set(['extension-api', 'extension-manifest', 'extension-packaging', 'uex', 'create-extension', 'e2e-contract', 'e2e-harness']))
   assert.ok(shorts.indexOf('extension-manifest') < shorts.indexOf('extension-packaging'))
   assert.ok(shorts.indexOf('extension-packaging') < shorts.indexOf('uex'))
+  assert.ok(shorts.indexOf('e2e-contract') < shorts.indexOf('e2e-harness'))
 })
 
 test('topologicalOrder 忽略集合外依赖与 catalog 依赖', () => {
@@ -155,6 +158,8 @@ test('planExternalDepQueries 集合内免查、集合外查询、非 SDK 集合�
     'extension-packaging': '0.2.0',
     uex: '0.1.0',
     'create-extension': '0.1.0',
+    'e2e-contract': '0.1.0',
+    'e2e-harness': '0.1.0',
   }
   // manifest 在 selected 集合内 → 免查；packaging 在集合外 → 查询
   const { queries, errors } = planExternalDepQueries(selected, sdkVersionMap)
@@ -274,13 +279,15 @@ test('verifyPublishedDeps 协议残留与精确版本校验', () => {
   assert.match(mismatch.join('\n'), /应为精确版本 0\.1\.0/)
 })
 
-test('共享清单防线：5 件套、拓扑合法、publish-sdk.mjs 引用共享常量', () => {
+test('共享清单防线：7 件套、拓扑合法、publish-sdk.mjs 引用共享常量', () => {
   assert.deepEqual(SDK_PACKAGE_DIRS, [
     'packages/extension-api',
     'packages/extension-manifest',
     'packages/extension-packaging',
     'packages/uex',
     'packages/create-extension',
+    'packages/e2e-contract',
+    'packages/e2e-harness',
   ])
   const all = loadPackageManifests(repoRoot, SDK_PACKAGE_DIRS)
   const { error } = topologicalOrder(all)
