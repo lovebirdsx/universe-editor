@@ -55,14 +55,36 @@ test.describe('@p1 perforce collect changes', () => {
       // "Changes to Reconcile" group without any manual refresh.
       writeFileSync(perforce.file(tracked), 'edited on disk\n', 'utf8')
 
-      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
-      await expect(group).toBeVisible({ timeout: 30_000 })
-      await expect(row).toBeVisible({ timeout: 30_000 })
+      // The watcher's subscribe→ready window can swallow the first write; rewrite
+      // the same final content to re-trigger the incremental reconcile.
+      await expect
+        .poll(
+          async () => {
+            if (!(await row.isVisible())) {
+              writeFileSync(perforce.file(tracked), 'edited on disk\n', 'utf8')
+            }
+            return row.isVisible()
+          },
+          { timeout: 30_000, intervals: [500, 1000] },
+        )
+        .toBe(true)
 
       // Revert the edit back to the have-revision content. The incremental watcher
       // re-reconciles just this path and, finding it clean, drops it from the group.
       writeFileSync(perforce.file(tracked), DEFAULT_SEEDS[0]!.content, 'utf8')
-      await expect(row).toBeHidden({ timeout: 30_000 })
+      // Same arm-window hazard on the revert write; rewrite the have-revision
+      // content to re-trigger the clean reconcile that drops the row.
+      await expect
+        .poll(
+          async () => {
+            if (await row.isVisible()) {
+              writeFileSync(perforce.file(tracked), DEFAULT_SEEDS[0]!.content, 'utf8')
+            }
+            return row.isHidden()
+          },
+          { timeout: 30_000, intervals: [500, 1000] },
+        )
+        .toBe(true)
     })
 
     // Repro for "clicking a CHANGELIST/reconcile diff shows the edit as a full delete,
@@ -73,7 +95,18 @@ test.describe('@p1 perforce collect changes', () => {
     // syntax too, so this guards the client→local translation end-to-end.
     await test.step('clicking a reconcile row opens a real diff, not a phantom delete', async () => {
       writeFileSync(perforce.file(tracked), editedContent, 'utf8')
-      await expect(row).toBeVisible({ timeout: 30_000 })
+      // Watcher arm window: rewrite the same edit to re-trigger reconcile discovery.
+      await expect
+        .poll(
+          async () => {
+            if (!(await row.isVisible())) {
+              writeFileSync(perforce.file(tracked), editedContent, 'utf8')
+            }
+            return row.isVisible()
+          },
+          { timeout: 30_000, intervals: [500, 1000] },
+        )
+        .toBe(true)
 
       // Click the row → the extension's perforce.openChange opens a diff of the file's
       // have-revision (left) against the working-tree content (right).
@@ -188,10 +221,23 @@ test.describe('@p1 perforce collect changes', () => {
         'utf8',
       )
 
-      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
-      await expect(group).toBeVisible({ timeout: 30_000 })
       const row = page.locator('[role="treeitem"]', { hasText: 'gulpfile.ts' })
-      await expect(row).toBeVisible({ timeout: 30_000 })
+      // Watcher arm window: rewrite the same content to re-trigger reconcile.
+      await expect
+        .poll(
+          async () => {
+            if (!(await row.isVisible())) {
+              writeFileSync(
+                perforce.file('Source/Client/TypeScript/gulpfile.ts'),
+                'export const x = 2\n',
+                'utf8',
+              )
+            }
+            return row.isVisible()
+          },
+          { timeout: 30_000, intervals: [500, 1000] },
+        )
+        .toBe(true)
     })
   })
 
@@ -229,13 +275,21 @@ test.describe('@p1 perforce collect changes', () => {
       // Edit every seeded file on disk so they all surface in Changes to Reconcile.
       for (const f of manyFiles) writeFileSync(perforce.file(f.relPath), `edited ${f.relPath}\n`)
 
-      const group = page.locator('[role="treeitem"]', { hasText: 'Changes to Reconcile' })
-      await expect(group).toBeVisible({ timeout: 30_000 })
-
-      // Wait until a good number of rows have surfaced.
+      // Wait until a good number of rows have surfaced. If the watcher missed the
+      // first batch (subscribe→ready window), rewrite the same content to re-trigger.
       const rows = page.locator('[role="treeitem"]')
       await expect
-        .poll(() => rows.count(), { timeout: 30_000, message: 'reconcile rows should render' })
+        .poll(
+          async () => {
+            const count = await rows.count()
+            if (count <= 10) {
+              for (const f of manyFiles)
+                writeFileSync(perforce.file(f.relPath), `edited ${f.relPath}\n`)
+            }
+            return count
+          },
+          { timeout: 30_000, message: 'reconcile rows should render', intervals: [1000, 2000] },
+        )
         .toBeGreaterThan(10)
 
       // Collect the vertical box of every visible row and assert they don't

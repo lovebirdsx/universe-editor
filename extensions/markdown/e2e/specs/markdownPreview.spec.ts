@@ -1025,12 +1025,21 @@ test.describe('@p1 markdown preview', () => {
       // Edit the file on disk out-of-band.
       await writeFile(ws.realWatch, '# Updated heading\n\nsecond body\n')
 
-      // The preview must reflect the new content without any user action.
-      await expect(page.locator('[data-testid="markdown-preview"]')).toContainText(
-        'Updated heading',
-        { timeout: 8000 },
-      )
-      await expect(page.locator('[data-testid="markdown-preview"]')).toContainText('second body')
+      // The preview must reflect the new content without any user action. The
+      // parcel watcher's subscribe→ready window can swallow the first write, so
+      // rewrite the same content while the preview is still stale to re-trigger
+      // the ExternalChangeWatcher reload.
+      await expect
+        .poll(
+          async () => {
+            const text = await page.locator('[data-testid="markdown-preview"]').textContent()
+            const updated = text?.includes('Updated heading') && text?.includes('second body')
+            if (!updated) await writeFile(ws.realWatch, '# Updated heading\n\nsecond body\n')
+            return updated
+          },
+          { timeout: 8000, intervals: [500, 1000] },
+        )
+        .toBe(true)
     })
 
     // Same bug, second entry path: a preview reached by clicking a
@@ -1056,10 +1065,19 @@ test.describe('@p1 markdown preview', () => {
       // The target file's source was never opened; edit it on disk.
       await writeFile(ws.realTarget, '# Target updated\n\nnew body\n')
 
-      await expect(page.locator('[data-testid="markdown-preview"]')).toContainText(
-        'Target updated',
-        { timeout: 8000 },
-      )
+      // Watcher arm window: rewrite the same content to re-trigger the reload.
+      await expect
+        .poll(
+          async () => {
+            const text = await page.locator('[data-testid="markdown-preview"]').textContent()
+            if (!text?.includes('Target updated')) {
+              await writeFile(ws.realTarget, '# Target updated\n\nnew body\n')
+            }
+            return text?.includes('Target updated') ?? false
+          },
+          { timeout: 8000, intervals: [500, 1000] },
+        )
+        .toBe(true)
     })
   })
 })

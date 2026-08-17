@@ -406,6 +406,12 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 79 — iframe 计数钩子以静态 HTML 标记为门控静默空转 + 单次写赛跑 createFileSystemWatcher arm 窗口：`__openCount` poll 恒 0（双竞态叠加，spec-only 修）**
+信号：`expect.poll` 读 evaluate 装的计数钩子恒收初值 0、initial+retry 同形态（run 32031924631）；失败 commit 与被测链路毫无交集（只删 samples/改文档）+ 此前同 job 连续多轮绿 → spec 结构性弱点被慢 runner 触发，非回归。钩子安装形如 `const app = w?.['PDFViewerApplication']; if (!app?.open) return`（案例 9 的 iframe 变体），门控只是 `#outerContainer` attached——那是 viewer.html **静态标记**，早于 pdf.js 模块加载完成；断言触发端是**单次** `fs.writeFile` + extension host 的 `workspace.createFileSystemWatcher`（案例 55 的 exthost 链路变体，订阅跨 exthost→main→watcher utility process 异步 arm）。
+`pdfViewer.spec.ts`「reloads the preview when the pdf changes on disk」：两个独立竞态任一命中都表现为 count 恒 0——①钩子静默空转（装不上）；②写落在 watcher arm 窗口内事件永久丢失（reload 消息从未发出）。还有第三个潜伏缺陷反向为**假阳性**：webview 的 main.mjs 启动时 `await initializedPromise; await app.open(config)`，钩子若恰装在 initial open 前，初始打开也被计数。三修（spec-only，产品不动）：a) 测试文件改用手工构造的**合法最小单页 PDF**（`makeMinimalPdf`，真实 xref 偏移），使 initial open 真正完成；b) 装钩子前先 poll `PDFViewerApplication.pdfDocument != null`（= app 就位**且** initial open 已落地，此后计到的 open 只可能是 reload），钩子里 `!app?.open` 改**显式 throw**——前置门控已保证就位，静默 return 是把断言失败推迟成不可诊断的超时；c) 最终 poll 每 tick **重写**文件（内容带自增序号、每版都是合法且不同的 PDF），任一写落在 arm 后即触发 reload。整类扫（约 165 spec）：模式①无其它命中（其余 `if (!x) return` 都在 poll 回调里返回未就绪占位值，会重试，不是装钩子）；模式②强命中 `perforceCollectChanges.spec.ts`（5 处单次写+裸 toBeVisible/toBeHidden 等 watcher reconcile）、弱命中 `markdownPreview.spec.ts` 外部编辑两处 + `smoke.extensionDev.spec.ts` auto-reload touch 一处，全部按 `remote.fsRoundtrip` 先例收敛为「poll 内 miss 时幂等重做同一磁盘变更」（消失类断言重写 have 内容同样幂等）。教训：a) 「元素 attached」对 webview/iframe 只证明静态 HTML 到位，给页面对象装 instrumentation 前必须 poll **对象本身**就位，且钩子内的存在性守卫应 throw 不应 return；b) 凡「写盘一次→等 watcher 驱动的 UI」都在与订阅 arm 赛跑，poll 内幂等重触发是零产品改动的标准兜底；c) 计数类钩子要同时想清楚**漏计**（恒 0）与**多计**（初始动作被算进来）两个方向。锚：`extensions-external/pdf/e2e/specs/pdfViewer.spec.ts`（makeMinimalPdf/pdfDocument 门控/poll 内重写）；`extensions-external/pdf/assets/main.mjs`（initial open 与 reload 同走 `app.open`）；案例 9/55 互参。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

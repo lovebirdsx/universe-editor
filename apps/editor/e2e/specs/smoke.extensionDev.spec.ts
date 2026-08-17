@@ -116,9 +116,18 @@ test.describe('@p1 extension development mode', () => {
       // The generation counter only moves when the host re-scans after a restart,
       // which pins the auto-restart even though the contributions DTO is unchanged.
       await expect
-        .poll(() => workbench.page.evaluate(() => window.__E2E__!.getExtensionHostGeneration()), {
-          timeout: 15000,
-        })
+        .poll(
+          async () => {
+            const generation = await workbench.page.evaluate(() =>
+              window.__E2E__!.getExtensionHostGeneration(),
+            )
+            // The out-of-workspace watcher's subscribe→ready window can swallow the
+            // first touch; appending the same idempotent comment line re-triggers it.
+            if (generation <= generationBefore) fs.appendFileSync(entryPath, '\n// touch')
+            return generation
+          },
+          { timeout: 15000, intervals: [500, 1000] },
+        )
         .toBeGreaterThan(generationBefore)
 
       // After the automatic restart the dev extension's command is registered again.

@@ -74,6 +74,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - palette `type→Enter` 后命令效果 poll 恒卡初值、焦点断言正常+**双平台同 run initial+retry 全灭**+插桩（type 与 Enter 间加 evaluate）后不复现=QuickInputPanel useDeferredValue 旧列表被 accept（产品竞态,慢机高概率）,修产品 accept 路径不改 spec → 案例 74
 - 复制图片后剪贴板 poll 恒无图、`toPngBase64` 快路径剥前缀未校验 payload=echo fixture 发伪 PNG 字节，main nativeImage 解出空图静默跳过写（**多 worker 各自独立 app 时不复现，serial lane 共享 app 才现**）→ 案例 75；Ctrl+V 粘贴后 chip 恒不出现、仅 CI Linux=xvfb 剪贴板 ownership 翻转不同步，seed 后先 poll 剪贴板可读回图再粘 → 案例 75b
 - `electronApplication.firstWindow: Timeout 30000ms` 栈在 harness fixtures（非 spec 体）+ 报错无 `electron.launch:` 前缀（launch 已成功）+ initial+retry 双挂 + 伴随无 fixture 名 `Worker teardown timeout`=post-launch→pre-window 相位被 runner 环境窗口拖死（72 家族守卫不覆盖此相位），harness `launchAppReady` 已内建整链重试+log dump+closeApp 防孤儿 → 案例 76
+- webview/iframe 计数钩子 poll 恒 0+initial/retry 同形态+失败 commit 与被测链路无关=钩子以静态 HTML 标记为门控 `if(!obj) return` 静默空转（案例 9 iframe 变体）叠加单次写赛跑 createFileSystemWatcher arm 窗口（案例 55 exthost 变体）；修=poll 对象本身就位+钩子守卫改 throw+poll 内幂等重写 → 案例 79
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
