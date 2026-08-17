@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/uex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Command-line toolchain for Universe Editor extension authors: package, dev, login, publish (the Universe equivalent of vsce).",
   "type": "module",
   "license": "Apache-2.0",
