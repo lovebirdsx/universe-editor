@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  ext-packages 的纯逻辑（可单测）：版本比较、包选择、拓扑排序、发布计划、
- *  依赖完整性、工作区白名单、pack 清单校验、COMPATIBILITY/版本常量校验、协议替换校验。
+ *  依赖完整性、工作区白名单、pack 清单校验、COMPATIBILITY/版本常量校验、协议替换校验、
+ *  gallery 配置自诊断。
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
@@ -275,4 +276,31 @@ export function verifyPublishedDeps(deps, workspaceVersions) {
     }
   }
   return errors
+}
+
+const GALLERY_ENV_KEYS = ['UE_RELEASE_HOST', 'UE_RELEASE_USER', 'UE_GALLERY_DIR']
+
+/**
+ * 内网同步配置自诊断：三变量齐备返回 null，否则返回多行错误消息。
+ * 纯函数无 fs 访问；envFileNames 传仓库根文件名列表（过滤与否均可，内部按正则匹配候选 mode）。
+ */
+export function galleryConfigIssue({ env, mode, explicit, envFileNames }) {
+  const missing = GALLERY_ENV_KEYS.filter((key) => !env[key])
+  if (missing.length === 0) return null
+  const lines = [`内网同步缺少环境变量: ${missing.join(' / ')}（或用 --no-gallery 跳过）`]
+  if (!explicit) {
+    const candidates = []
+    for (const name of envFileNames) {
+      const match = /^\.env\.([a-z0-9-]+)$/.exec(name)
+      if (match && match[1] !== 'example' && match[1] !== 'local') candidates.push(match[1])
+    }
+    if (candidates.length > 0) {
+      lines.push(
+        `当前 mode=${mode}（未显式指定）；检测到 ${candidates
+          .map((c) => `.env.${c}`)
+          .join(' / ')}，若配置在其中，用 --env <mode> 重跑，如: pnpm ext-packages:publish -- --env ${candidates[0]}`,
+      )
+    }
+  }
+  return lines.join('\n')
 }

@@ -16,6 +16,7 @@ import {
   checkPackListing,
   checkVersionConstants,
   compareVersions,
+  galleryConfigIssue,
   hasCompatibilityEntry,
   loadPackageManifests,
   parsePackListing,
@@ -287,4 +288,73 @@ test('共享清单防线：5 件套、拓扑合法、publish-sdk.mjs 引用共�
   const publishSdkText = readFileSync(join(repoRoot, 'scripts/gallery/publish-sdk.mjs'), 'utf8')
   assert.match(publishSdkText, /SDK_PACKAGE_DIRS/, 'publish-sdk.mjs 应引用共享清单而非本地副本')
   assert.doesNotMatch(publishSdkText, /SDK_PACKAGES\s*=/, 'publish-sdk.mjs 不应保留本地清单副本')
+})
+
+const FULL_GALLERY_ENV = { UE_RELEASE_HOST: 'h', UE_RELEASE_USER: 'u', UE_GALLERY_DIR: 'd' }
+
+test('galleryConfigIssue: 三变量齐备返回 null', () => {
+  assert.equal(galleryConfigIssue({ env: FULL_GALLERY_ENV, mode: 'dev', explicit: false, envFileNames: [] }), null)
+})
+
+test('galleryConfigIssue: 缺一个/缺多个 → 第一行只列缺失项，含 --no-gallery 提示', () => {
+  const one = galleryConfigIssue({
+    env: { UE_RELEASE_HOST: 'h', UE_RELEASE_USER: 'u' },
+    mode: 'dev',
+    explicit: false,
+    envFileNames: [],
+  })
+  assert.equal(one.split('\n')[0], '内网同步缺少环境变量: UE_GALLERY_DIR（或用 --no-gallery 跳过）')
+  assert.doesNotMatch(one.split('\n')[0], /UE_RELEASE_HOST/)
+  const many = galleryConfigIssue({ env: {}, mode: 'dev', explicit: false, envFileNames: [] })
+  assert.equal(
+    many.split('\n')[0],
+    '内网同步缺少环境变量: UE_RELEASE_HOST / UE_RELEASE_USER / UE_GALLERY_DIR（或用 --no-gallery 跳过）',
+  )
+})
+
+test('galleryConfigIssue: 空字符串视作缺失', () => {
+  const issue = galleryConfigIssue({
+    env: { UE_RELEASE_HOST: '', UE_RELEASE_USER: 'u', UE_GALLERY_DIR: 'd' },
+    mode: 'dev',
+    explicit: false,
+    envFileNames: [],
+  })
+  assert.equal(issue.split('\n')[0], '内网同步缺少环境变量: UE_RELEASE_HOST（或用 --no-gallery 跳过）')
+})
+
+test('galleryConfigIssue: explicit=false 候选只出 prod/win，示例用 --env prod', () => {
+  const issue = galleryConfigIssue({
+    env: {},
+    mode: 'dev',
+    explicit: false,
+    envFileNames: ['.env.example', '.env.local', '.env.prod', '.env.prod.local', '.env.win'],
+  })
+  const [first, hint] = issue.split('\n')
+  assert.match(first, /内网同步缺少环境变量/)
+  assert.match(hint, /当前 mode=dev（未显式指定）/)
+  assert.match(hint, /检测到 \.env\.prod \/ \.env\.win/)
+  assert.doesNotMatch(hint, /\.env\.example/)
+  assert.doesNotMatch(hint, /\.env\.local/)
+  assert.match(hint, /pnpm ext-packages:publish -- --env prod$/)
+})
+
+test('galleryConfigIssue: explicit=true 无候选提示行', () => {
+  const issue = galleryConfigIssue({
+    env: {},
+    mode: 'prod',
+    explicit: true,
+    envFileNames: ['.env.prod', '.env.win'],
+  })
+  assert.equal(issue.split('\n').length, 1)
+  assert.doesNotMatch(issue, /检测到/)
+})
+
+test('galleryConfigIssue: explicit=false 但无候选文件 → 只有第一行', () => {
+  const issue = galleryConfigIssue({
+    env: {},
+    mode: 'dev',
+    explicit: false,
+    envFileNames: ['.env.example', '.env.local'],
+  })
+  assert.equal(issue.split('\n').length, 1)
 })

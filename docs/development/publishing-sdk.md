@@ -48,7 +48,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 | `--allow-non-main` | 允许非 main 分支（本地 verdaccio 验证用） |
 | `--registry <url>` | npm registry，默认 `https://registry.npmjs.org` |
 | `--stage <dir>` | 市场 stage 目录（默认 `UE_GALLERY_STAGE` 或 `<repo>/market-stage`） |
-| `--env <mode>` | `.env` 分层加载模式 |
+| `--env <mode>` | `.env` 分层加载模式；内网同步变量（UE_RELEASE_HOST / UE_RELEASE_USER / UE_GALLERY_DIR）通常按环境放 `.env.<mode>`（如 `.env.prod`），不带该旗标默认 `dev`、只加载 `.env` / `.env.local`，配置 `.env.prod` 的机器发布需带 `-- --env prod` |
 
 它做了什么（顺序）：
 

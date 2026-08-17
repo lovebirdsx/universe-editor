@@ -20,7 +20,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadEnv } from '../lib/env.mjs'
@@ -30,6 +30,7 @@ import {
   assessExternalDeps,
   checkPackListing,
   checkVersionConstants,
+  galleryConfigIssue,
   hasCompatibilityEntry,
   loadPackageManifests,
   parsePackListing,
@@ -42,7 +43,7 @@ import {
   verifyPublishedDeps,
 } from './lib.mjs'
 
-loadEnv()
+const { mode: envMode, explicit: envExplicit } = loadEnv()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
@@ -193,12 +194,13 @@ function assertUpToDateWithUpstream() {
 }
 
 function assertGalleryConfig() {
-  const host = process.env.UE_RELEASE_HOST
-  const user = process.env.UE_RELEASE_USER
-  const dir = process.env.UE_GALLERY_DIR
-  if (!host || !user || !dir) {
-    die('内网同步需要 UE_RELEASE_HOST / UE_RELEASE_USER / UE_GALLERY_DIR（或用 --no-gallery 跳过）')
-  }
+  const issue = galleryConfigIssue({
+    env: process.env,
+    mode: envMode,
+    explicit: envExplicit,
+    envFileNames: readdirSync(repoRoot),
+  })
+  if (issue) die(issue)
 }
 
 function preflight(args, all, selected, registry) {
