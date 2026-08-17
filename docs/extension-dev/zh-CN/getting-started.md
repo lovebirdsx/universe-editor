@@ -105,12 +105,15 @@ npx uex package
 
 ## ⑧ 发布
 
+浏览器打开 `<市场地址>/gallery/register` 自助注册 publisher（token 只展示这一次，立即保存；注册是审批制），然后：
+
 ```bash
-npx uex login acme      # 一次性：粘贴运维签发的 token，会先调 whoami 验证
+npx uex login acme --registry <市场地址>   # 一次性：粘贴注册页展示的 token，会先调 whoami 验证归属
+npx uex whoami          # 查看审批状态；管理员批准后即可发布
 npx uex publish         # 自动先 universe:prepublish（build + package）再上传
 ```
 
-发布后其他用户就能在编辑器的扩展视图里搜到并安装。token 怎么申请、版本不可变规则、下架流程见 [发布扩展](./publishing.md)。
+发布后其他用户就能在编辑器的扩展视图里搜到并安装。token 申请与审批细节、版本不可变规则、下架流程见 [发布扩展](./publishing.md)。
 
 ## 下一步
 

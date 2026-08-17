@@ -30,8 +30,11 @@ Install the `.vsix` from the editor's Extensions view ("Install from VSIX…") a
 
 ## Publish
 
+Register at `<marketplace-url>/gallery/register` (the token is shown once;
+publishing is approval-based — `npx uex whoami` shows the status), then:
+
 ```bash
-npx uex login universe-samples   # once, with the token from your marketplace operator
+npx uex login universe-samples --registry <marketplace-url>
 npx uex publish               # packages (via universe:prepublish) and uploads
 ```
 

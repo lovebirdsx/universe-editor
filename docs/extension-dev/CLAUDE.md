@@ -18,6 +18,6 @@
 
 1. `migration-from-vscode.md` 的 API 对照表
 2. 各篇头部的"以 API x.y 为准"标注
-3. `samples/hello-world` 的 `engines.universe` 与依赖版本（重新 scaffold 同步——CI `external-consumer-smoke` 的漂移检查会强制暴露，见 `samples/hello-world/README.md` "Drift check"）
+3. `samples/hello-world` 的 `engines.universe` 与依赖版本（重新 scaffold 同步——CI `external-consumer-smoke` 的漂移检查会强制暴露，见 `samples/hello-world/README.md` "Drift check"）；`samples/webview-panel` 不在漂移检查内，版本与 icon 须手动同步（icon 经 `scripts/toolchain/generate-sample-icons.mjs` 生成）
 
 新 API 进 `extension-api` 时必须带 JSDoc（含语义与边界）——JSDoc 是对外文档，不是内部注释。

@@ -34,6 +34,16 @@ npm run package        # → <publisher>.<name>-<version>.vsix
 Install the `.vsix` from the editor's Extensions view ("Install from VSIX…")
 and run `Webview Panel: Show Panel` from the command palette.
 
+## Publish
+
+Register at `<marketplace-url>/gallery/register` (the token is shown once;
+publishing is approval-based — `npx uex whoami` shows the status), then:
+
+```bash
+npx uex login universe-samples --registry <marketplace-url>
+npx uex publish               # packages (via universe:prepublish) and uploads
+```
+
 ## Documentation
 
 The full guide to webview surfaces (custom editors and standalone panels)
