@@ -1,5 +1,44 @@
 [
   {
+    "version": "0.1.67",
+    "date": "2026-08-17",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "claude 回放的session包含子agent的完整执行过程",
+          "Session Editor支持 Alt+H/L 在子代理时间线层级间导航",
+          "claude 子代理 usage 按 message.id 去重，修复流式帧重复累加导致的价格计算偏差过大问题",
+          "使claude原生 CLI 能识别 ACP 会话",
+          "子 Agent 消息的样式和主Agent进行统一",
+          "codex 子 Agent 支持计费显示",
+          "session能够显示子Agent的思考过程",
+          "remote传输层重构为常驻daemon+TCP+PersistentProtocol透明重连",
+          "支持文件路径中 `~` 自动展开为 home 目录",
+          "文件路径链接支持 `:line-endLine` 行范围语法",
+          "ACP 空闲进程自动回收（idleProcessTimeoutMs）",
+          "状态栏语言模式支持点击切换与实时同步",
+          "Swarm 评审版本查看diff支持 re-shelve 自动跳转到最新版本",
+          "子agent的调用过程也支持快捷按键导航",
+          "claude和codex的二进制支持回退到内置版本"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "session中子代理回放改为同步等待，并增加单文件和累计字节上限防止 OOM",
+          "修复session输入聚焦时，alt+方向键没有生效的bug",
+          "终端链接统一走 IOpenerService 打开并修复 WebLinksAddon 失效",
+          "回放时，能够正确显示子agent的开销",
+          "修复编辑器焦点切换时非文件编辑器无法聚焦的问题",
+          "修复session changes中diff基线计算不正确的bug和 watched 变更的排除临时文件"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.66",
     "date": "2026-08-12",
     "groups": [
