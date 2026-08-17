@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { IMainThreadTimeline } from '@universe-editor/extensions-common'
 import type { TimelineChangeEvent, TimelineProvider } from '@universe-editor/extension-api'
+import { URI } from '@universe-editor/platform'
 import { ExtHostTimelineRegistry } from '../hostTimeline.js'
 
 function fakeMainThread() {
@@ -69,10 +70,48 @@ describe('ExtHostTimelineRegistry', () => {
 
     const d = registry.registerTimelineProvider(['file'], provider)
     fire?.({ uri: 'file:///a.ts', reset: false })
-    expect(mainThread.$emitTimelineChangeEvent).toHaveBeenCalledWith(0, 'file:///a.ts', false)
+    expect(mainThread.$emitTimelineChangeEvent).toHaveBeenCalledWith(0, expect.any(URI), false)
+    const uri = mainThread.$emitTimelineChangeEvent.mock.calls[0]?.[1] as URI | undefined
+    expect(uri?.toString()).toBe('file:///a.ts')
 
     d.dispose()
     expect(fire).toBeUndefined()
+  })
+
+  it('maps the change uri to null when absent and to a URI instance when present', () => {
+    const mainThread = fakeMainThread()
+    const registry = new ExtHostTimelineRegistry(mainThread)
+    let fire: ((e: TimelineChangeEvent) => void) | undefined
+    const provider = fakeProvider({
+      onDidChange: (listener) => {
+        fire = listener
+        return { dispose: () => (fire = undefined) }
+      },
+    })
+    registry.registerTimelineProvider(['file'], provider)
+
+    fire?.({ reset: true })
+    expect(mainThread.$emitTimelineChangeEvent).toHaveBeenLastCalledWith(0, null, true)
+
+    fire?.({ uri: 'file:///a/b', reset: false })
+    const uri = mainThread.$emitTimelineChangeEvent.mock.calls[1]?.[1] as URI | undefined
+    expect(uri?.toString()).toBe('file:///a/b')
+  })
+
+  it('translates registered schemes through transformScheme when provided', () => {
+    const mainThread = fakeMainThread()
+    const registry = new ExtHostTimelineRegistry(mainThread, (s) =>
+      s === 'file' ? 'remote-ssh' : s,
+    )
+
+    registry.registerTimelineProvider(['file', 'untitled'], fakeProvider())
+
+    expect(mainThread.$registerTimelineProvider).toHaveBeenCalledWith(
+      0,
+      'git-history',
+      'Git History',
+      ['remote-ssh', 'untitled'],
+    )
   })
 
   it('routes provideTimeline by handle and maps items to DTOs', async () => {
@@ -103,7 +142,7 @@ describe('ExtHostTimelineRegistry', () => {
     })
     registry.registerTimelineProvider(['file'], provider)
 
-    const dto = await registry.provideTimeline(0, 'file:///a.ts', { limit: 50 })
+    const dto = await registry.provideTimeline(0, URI.file('/a.ts'), { limit: 50 })
 
     expect(provider.provideTimeline).toHaveBeenCalledWith(
       'file:///a.ts',
@@ -136,7 +175,7 @@ describe('ExtHostTimelineRegistry', () => {
     const registry = new ExtHostTimelineRegistry(mainThread)
     registry.registerTimelineProvider(['file'], fakeProvider())
 
-    await expect(registry.provideTimeline(99, 'file:///a.ts', {})).resolves.toBeUndefined()
+    await expect(registry.provideTimeline(99, URI.file('/a.ts'), {})).resolves.toBeUndefined()
   })
 
   it('dispose unregisters every provider', () => {

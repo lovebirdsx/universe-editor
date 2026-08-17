@@ -99,6 +99,11 @@ describe('HostTreeViewRegistry', () => {
       command: { command: 'test.open', title: 'Open' },
     })
     expect(dtos[0]!.command).not.toHaveProperty('arguments')
+    const sentResourceUri = dtos[0]!.resourceUri as unknown as { toJSON(): unknown }
+    expect(sentResourceUri.toJSON()).toEqual({
+      ...resource.toJSON(),
+      $mid: 1,
+    })
     expect(dtos[1]).toMatchObject({ handle: 2, label: 'label:root-b', collapsibleState: 1 })
   })
 

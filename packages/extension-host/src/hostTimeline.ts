@@ -10,6 +10,7 @@
  * covers host shutdown.
  */
 import type { Disposable, TimelineProvider } from '@universe-editor/extension-api'
+import { URI, type UriComponents } from '@universe-editor/platform'
 import type {
   IMainThreadTimeline,
   ITimelineDto,
@@ -62,16 +63,29 @@ export class ExtHostTimelineRegistry {
   private readonly _schemeByHandle = new Map<number, string[]>()
   private _handle = 0
 
-  constructor(private readonly _mainThread: IMainThreadTimeline) {}
+  constructor(
+    private readonly _mainThread: IMainThreadTimeline,
+    private readonly _transformScheme?: (scheme: string) => string,
+  ) {}
 
   registerTimelineProvider(scheme: string[], provider: TimelineProvider): Disposable {
     const handle = this._handle++
     const changeListener = provider.onDidChange?.((e) => {
-      this._mainThread.$emitTimelineChangeEvent(handle, e.uri, e.reset)
+      this._mainThread.$emitTimelineChangeEvent(
+        handle,
+        e.uri === undefined ? null : URI.parse(e.uri),
+        e.reset,
+      )
     })
+    const wireSchemes = this._transformScheme ? scheme.map(this._transformScheme) : scheme
     this._providers.set(handle, { provider, changeListener })
-    this._schemeByHandle.set(handle, scheme)
-    void this._mainThread.$registerTimelineProvider(handle, provider.id, provider.label, scheme)
+    this._schemeByHandle.set(handle, wireSchemes)
+    void this._mainThread.$registerTimelineProvider(
+      handle,
+      provider.id,
+      provider.label,
+      wireSchemes,
+    )
     return {
       dispose: () => {
         if (!this._providers.delete(handle)) return
@@ -84,12 +98,18 @@ export class ExtHostTimelineRegistry {
 
   async provideTimeline(
     handle: number,
-    uri: string,
+    uri: UriComponents,
     options: ITimelineOptionsDto,
   ): Promise<ITimelineDto | undefined> {
     const entry = this._providers.get(handle)
     if (!entry) return undefined
-    const timeline = await entry.provider.provideTimeline(uri, options, NEVER_CANCELLED)
+    const resource = URI.revive(uri)
+    if (!resource) return undefined
+    const timeline = await entry.provider.provideTimeline(
+      resource.toString(),
+      options,
+      NEVER_CANCELLED,
+    )
     if (!timeline) return undefined
     return {
       source: entry.provider.id,

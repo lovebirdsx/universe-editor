@@ -935,7 +935,9 @@ describe('ExtensionService window additions', () => {
     const pending = service.openTextDocument(untitledComponents)
     setTimeout(() => service.acceptDocumentOpen(untitledComponents, 'plaintext', 1, ''), 0)
     const doc = await pending
-    expect(openRpc).toHaveBeenCalledWith(untitledComponents)
+    expect(openRpc).toHaveBeenCalledOnce()
+    const sentUri = openRpc.mock.calls[0]![0] as { toJSON(): unknown }
+    expect(sentUri.toJSON()).toEqual({ ...untitledComponents, $mid: 1 })
     expect(openUntitledRpc).not.toHaveBeenCalled()
     expect(doc.isUntitled).toBe(true)
   })

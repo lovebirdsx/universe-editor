@@ -27,6 +27,13 @@ vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   },
 }))
 
+vi.mock('../../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
+  MonacoModelRegistry: {
+    peek: () => undefined,
+    acquire: () => ({}),
+  },
+}))
+
 describe('MainThreadEditor.$applyWorkspaceEdit', () => {
   const bulkApply = vi.fn()
   const logger = { warn: vi.fn() } as unknown as ILogger
@@ -113,5 +120,38 @@ describe('MainThreadEditor.$applyWorkspaceEdit', () => {
   it('short-circuits true for an empty edit without calling the bulk service', async () => {
     await expect(mt.$applyWorkspaceEdit({})).resolves.toBe(true)
     expect(bulkApply).not.toHaveBeenCalled()
+  })
+})
+
+function makeMainThread(files: Partial<IFileService> = {}): MainThreadEditor {
+  return new MainThreadEditor(
+    {} as IEditorService,
+    {} as IUriIdentityService,
+    undefined,
+    files as IFileService,
+    {} as IEditorGroupsService,
+    { createInstance: () => ({ apply: vi.fn() }) } as unknown as IInstantiationService,
+    { warn: vi.fn() } as unknown as ILogger,
+  )
+}
+
+describe('MainThreadEditor remote-ssh document opening', () => {
+  it('opens a remote-ssh resource through IFileService instead of rejecting it', async () => {
+    const readFileText = vi.fn().mockResolvedValue('remote text')
+    const mt = makeMainThread({ readFileText })
+    await expect(
+      mt.$openTextDocument({ scheme: 'remote-ssh', authority: 'wsl+Ubuntu', path: '/home/u/a.ts' }),
+    ).resolves.toBeUndefined()
+    expect(readFileText).toHaveBeenCalledOnce()
+    const resource = readFileText.mock.calls[0]![0] as { scheme: string; authority: string }
+    expect(resource.scheme).toBe('remote-ssh')
+    expect(resource.authority).toBe('wsl+Ubuntu')
+  })
+
+  it('still rejects an unsupported scheme', async () => {
+    const mt = makeMainThread()
+    await expect(mt.$openTextDocument({ scheme: 'https', path: '/x' })).rejects.toThrow(
+      /unsupported URI/,
+    )
   })
 })

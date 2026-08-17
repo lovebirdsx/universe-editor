@@ -40,6 +40,12 @@ describe('createRemoteURITransformer', () => {
     expect(t.transformOutgoing(uri)).toBe(uri)
   })
 
+  it('translates file to remote-ssh for scheme-only outgoing registration', () => {
+    expect(t.transformOutgoingScheme('file')).toBe('remote-ssh')
+    expect(t.transformOutgoingScheme('untitled')).toBe('untitled')
+    expect(t.transformOutgoingScheme('remote-ssh')).toBe('remote-ssh')
+  })
+
   it('round-trips a file uri through outgoing then incoming', () => {
     const out = t.transformOutgoing({ scheme: 'file', path: '/a' })
     const back = t.transformIncoming(out)

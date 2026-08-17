@@ -1,18 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
+  Emitter,
   GroupDirection,
   IEditorGroupsService,
+  IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  URI,
   registerAction2,
+  type IWorkspace,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { OpenDiffAction, OpenWebviewDiffAction, type OpenDiffPayload } from '../diffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
 
-function buildServices(groups: EditorGroupsService): InstantiationService {
+function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
+  const current: IWorkspace | null = folder ? { folder, name: 'workspace' } : null
+  return {
+    _serviceBrand: undefined,
+    current,
+    recent: [],
+    onDidChangeWorkspace: new Emitter<IWorkspace | null>().event,
+    onDidChangeRecent: new Emitter<readonly []>().event,
+    whenReady: Promise.resolve(),
+    async openFolder() {},
+    async closeFolder() {},
+    async removeRecent() {},
+    async clearRecent() {},
+  } as IWorkspaceServiceType
+}
+
+function buildServices(groups: EditorGroupsService, folder?: URI): InstantiationService {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
+  services.set(IWorkspaceService, makeWorkspaceService(folder))
   return new InstantiationService(services)
 }
 
@@ -130,5 +154,59 @@ describe('OpenDiffAction — lock-aware routing', () => {
     expect(locked.editors).toHaveLength(0)
     expect(unlocked.editors).toHaveLength(1)
     expect(groups.activeGroup).toBe(unlocked)
+  })
+
+  const remoteFolder = () => URI.parse('remote-ssh://ws/home/dev')
+
+  it('leaves a file:// URI unchanged in a local workspace', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups, URI.file('/ws'))
+    runOpenDiff(inst, payload({ originalUri: 'file:///ws/a.txt', openableUri: 'file:///ws/a.txt' }))
+    expect(groups.activeGroup.editors.map((e) => e.id)).toContain('diff:file:///ws/a.txt')
+  })
+
+  it('re-attaches the workspace authority to a file:// URI in a remote workspace', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups, remoteFolder())
+    runOpenDiff(
+      inst,
+      payload({ originalUri: 'file:///home/x/a.txt', openableUri: 'file:///home/x/a.txt' }),
+    )
+    const input = groups.activeGroup.editors.find((e) => e instanceof DiffEditorInput)
+    expect(input).toBeInstanceOf(DiffEditorInput)
+    expect((input as DiffEditorInput).originalUri.toString()).toBe('remote-ssh://ws/home/x/a.txt')
+    expect((input as DiffEditorInput).openableResource?.toString()).toBe(
+      'remote-ssh://ws/home/x/a.txt',
+    )
+    expect(input?.id).toBe('diff:remote-ssh://ws/home/x/a.txt')
+  })
+
+  it('leaves an already-remote-ssh URI unchanged in a remote workspace', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups, remoteFolder())
+    runOpenDiff(inst, payload({ originalUri: 'remote-ssh://ws/home/x/a.txt' }))
+    expect(groups.activeGroup.editors.map((e) => e.id)).toContain(
+      'diff:remote-ssh://ws/home/x/a.txt',
+    )
+  })
+
+  it('re-attaches both webview diff sides to the remote workspace authority', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups, remoteFolder())
+    const cmd = CommandsRegistry.getCommand(OpenWebviewDiffAction.ID)!
+    inst.invokeFunction((accessor) =>
+      cmd.handler(accessor, {
+        viewType: 'test.diff',
+        title: 'a.xlsx',
+        leftUri: 'file:///home/x/a.xlsx',
+        rightUri: 'file:///home/x/a.xlsx',
+        leftBase64: btoa('left'),
+        rightBase64: btoa('right'),
+      }),
+    )
+    const input = groups.activeGroup.editors.find((e) => e instanceof WebviewDiffInput)
+    expect(input).toBeInstanceOf(WebviewDiffInput)
+    expect((input as WebviewDiffInput).leftUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
+    expect((input as WebviewDiffInput).rightUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
   })
 })

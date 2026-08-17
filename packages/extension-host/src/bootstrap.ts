@@ -110,14 +110,11 @@ const protocol = new StdioFramingProtocol(transport)
 // renderer keeps its plain defaultCodec; the stdio wire stays newline-delimited
 // JSON, so the binary codec (raw attachment segments) is not an option here.
 const remoteAuthority = process.env.UNIVERSE_REMOTE_AUTHORITY
+const uriTransformer = remoteAuthority ? createRemoteURITransformer(remoteAuthority) : undefined
 // One decode per frame, routed by message type (see ChannelPair): a huge
 // didOpen/didChange from the renderer must not be JSON-parsed twice.
-const { client, server } = remoteAuthority
-  ? new ChannelPair(
-      protocol,
-      undefined,
-      createJsonCodec(createRemoteURITransformer(remoteAuthority)),
-    )
+const { client, server } = uriTransformer
+  ? new ChannelPair(protocol, undefined, createJsonCodec(uriTransformer))
   : new ChannelPair(protocol)
 
 const mainThreadCommands = ProxyChannel.toService<IMainThreadCommands>(
@@ -466,6 +463,7 @@ async function main(): Promise<void> {
       mainThreadExtensions,
       mainThreadFileEvents,
       mainThreadTreeViews,
+      uriTransformer,
     ),
   )
   console.info('[ext-host] ready')

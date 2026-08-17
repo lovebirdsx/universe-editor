@@ -10,8 +10,11 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
+  IWorkspaceService,
   MenuId,
+  REMOTE_SCHEME,
   URI,
+  absolutePathToWorkspaceUri,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -22,7 +25,13 @@ import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 
 export interface OpenDiffPayload {
   readonly title: string
-  /** Serialized `file:` URI naming the file under comparison (used for the label/language). */
+  /**
+   * Serialized `file:` URI naming the file under comparison (used for the label/
+   * language). Produced on the provider host via `pathToFileURL`, so it travels as
+   * a bare string that bypasses the codec's URI translation (a documented protocol
+   * exception) — in a remote workspace the renderer re-attaches the current
+   * workspace authority.
+   */
   readonly originalUri: string
   /** Left-hand side content (e.g. the HEAD or staged version). */
   readonly original: string
@@ -34,7 +43,8 @@ export interface OpenDiffPayload {
   readonly preserveFocus?: boolean
   /**
    * Serialized `file:` URI of the real on-disk file the "Open File" title-bar
-   * button should open. Omit when the diff has no local source (depot/revision
+   * button should open, with the same provider-host / codec-bypass caveat as
+   * {@link originalUri}. Omit when the diff has no local source (depot/revision
    * blobs, cross-file compare) — the button is then hidden.
    */
   readonly openableUri?: string
@@ -47,6 +57,22 @@ export interface OpenDiffPayload {
   readonly liveModified?: boolean
 }
 
+/**
+ * Resolve a provider-host `file:` URI string to the workspace resource it names.
+ * The extension host emits `pathToFileURL(...)` strings that bypass the codec's
+ * URI translation (a bare string, not a UriComponents), so a `file:` URI here
+ * points at the *remote* filesystem — re-attach the current workspace's authority
+ * when it is a remote folder. Non-`file` URIs (already `remote-ssh://...` from a
+ * renderer-internal caller) and local workspaces pass through unchanged.
+ */
+function toWorkspaceResource(uriString: string, folder: URI | undefined): URI {
+  const parsed = URI.parse(uriString)
+  if (parsed.scheme === 'file' && folder?.scheme === REMOTE_SCHEME) {
+    return absolutePathToWorkspaceUri(parsed.fsPath, folder)
+  }
+  return parsed
+}
+
 export class OpenDiffAction extends Action2 {
   static readonly ID = '_workbench.openDiff'
 
@@ -56,8 +82,9 @@ export class OpenDiffAction extends Action2 {
 
   override run(accessor: ServicesAccessor, payload: OpenDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
+    const folder = accessor.get(IWorkspaceService).current?.folder
     const activeGroup = groups.activeGroup
-    const id = `diff:${URI.parse(payload.originalUri).toString()}`
+    const id = `diff:${toWorkspaceResource(payload.originalUri, folder).toString()}`
 
     const pinned = payload.pinned ?? false
     const preserveFocus = payload.preserveFocus ?? false
@@ -74,11 +101,11 @@ export class OpenDiffAction extends Action2 {
     }
 
     const input = new DiffEditorInput(
-      URI.parse(payload.originalUri),
+      toWorkspaceResource(payload.originalUri, folder),
       payload.original,
       payload.modified,
       undefined,
-      payload.openableUri ? URI.parse(payload.openableUri) : undefined,
+      payload.openableUri ? toWorkspaceResource(payload.openableUri, folder) : undefined,
       payload.liveModified ?? false,
     )
     // A brand-new diff respects the group lock: route to an unlocked group and
@@ -101,9 +128,17 @@ export interface OpenWebviewDiffPayload {
   /** The custom-editor viewType that renders this diff (e.g. `universe.excel`). */
   readonly viewType: string
   readonly title: string
-  /** Serialized `file:` URI of the left-hand (baseline) side, for labels. */
+  /**
+   * Serialized `file:` URI of the left-hand (baseline) side, for labels. Provider
+   * host `pathToFileURL(...)` string that bypasses the codec's URI translation
+   * (documented protocol exception) — re-attached to the workspace authority in a
+   * remote workspace.
+   */
   readonly leftUri: string
-  /** Serialized `file:` URI of the right-hand (modified) side, for labels. */
+  /**
+   * Serialized `file:` URI of the right-hand (modified) side, for labels. Same
+   * provider-host / codec-bypass caveat as {@link leftUri}.
+   */
   readonly rightUri: string
   /** Base64-encoded bytes of the left-hand side. */
   readonly leftBase64: string
@@ -138,9 +173,10 @@ export class OpenWebviewDiffAction extends Action2 {
 
   override run(accessor: ServicesAccessor, payload: OpenWebviewDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
+    const folder = accessor.get(IWorkspaceService).current?.folder
     const activeGroup = groups.activeGroup
-    const leftUri = URI.parse(payload.leftUri)
-    const rightUri = URI.parse(payload.rightUri)
+    const leftUri = toWorkspaceResource(payload.leftUri, folder)
+    const rightUri = toWorkspaceResource(payload.rightUri, folder)
     const pinned = payload.pinned ?? false
     const preserveFocus = payload.preserveFocus ?? false
 

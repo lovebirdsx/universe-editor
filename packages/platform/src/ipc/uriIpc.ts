@@ -12,6 +12,7 @@ import { REMOTE_SCHEME } from '../remote/remoteProtocol.js'
 export interface IURITransformer {
   transformIncoming(uri: UriComponents): UriComponents
   transformOutgoing(uri: UriComponents): UriComponents
+  transformOutgoingScheme(scheme: string): string
 }
 
 const URI_MID = 1
@@ -42,6 +43,9 @@ export function createRemoteURITransformer(remoteAuthority: string): IURITransfo
         ...(uri.fragment ? { fragment: uri.fragment } : {}),
       }
       return wire
+    },
+    transformOutgoingScheme(scheme: string): string {
+      return scheme === 'file' ? REMOTE_SCHEME : scheme
     },
   }
 }

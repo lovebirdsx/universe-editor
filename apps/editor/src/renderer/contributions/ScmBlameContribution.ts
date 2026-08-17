@@ -24,14 +24,16 @@ import {
   IEditorService,
   ILoggerService,
   IStatusBarService,
+  REMOTE_SCHEME,
   StatusBarAlignment,
   ThrottledDelayer,
-  type ILogger,
-  type IStatusBarEntryAccessor,
-  type IWorkbenchContribution,
   URI,
   autorun,
   localize,
+  remotePathFromUri,
+  type ILogger,
+  type IStatusBarEntryAccessor,
+  type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { blameCommandId, type BlameResultDto } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -65,6 +67,20 @@ function viewCommitCommand(providerId: string): string | undefined {
   const generic = `${providerId}.viewCommit`
   return CommandsRegistry.getCommand(generic) ? generic : undefined
 }
+
+/**
+ * Serialize the active editor resource for `<providerId>.viewCommit`. The
+ * provider host (git/perforce) parses a `file:` URI string back into its own
+ * host's filesystem path, but rejects a `remote-ssh://` string (its scheme is
+ * not `file`), so a remote resource is re-encoded as the `file:` URI of its
+ * server-local path — the one form the host understands. A local file passes
+ * through as its real resource.
+ */
+function toViewCommitResource(resource: URI): string {
+  if (resource.scheme === REMOTE_SCHEME) return URI.file(remotePathFromUri(resource)).toString()
+  return resource.toString()
+}
+
 /**
  * Editing invalidates the blame cache, so an un-throttled refresh would rerun
  * `git blame` on every keystroke (typing fires content + cursor events as a
@@ -123,6 +139,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
   private readonly _inflight = new Map<string, Promise<BlameResultDto | null>>()
 
   private _activePath: string | undefined
+  private _activeResource: URI | undefined
   private _currentHash: string | undefined
   /** Provider the current status-bar entry was rendered from (drives its click target). */
   private _activeProviderId: string | undefined
@@ -249,6 +266,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
 
   private _bind(input: FileEditorInput): void {
     this._activePath = input.resource.fsPath
+    this._activeResource = input.resource
     this._editorStore.clear()
     this._registryStore.clear()
 
@@ -336,7 +354,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
       return this._commandService.executeCommand(openCommitGraphCommand(provider), target)
     }
     this._logger.debug(`routing openCommitChanges to ${viewCommit} for ${target}`)
-    const resource = this._activePath ? URI.file(this._activePath).toString() : undefined
+    const resource = this._activeResource ? toViewCommitResource(this._activeResource) : undefined
     return this._commandService.executeCommand(viewCommit, resource, target)
   }
 
@@ -595,6 +613,7 @@ export class ScmBlameContribution extends Disposable implements IWorkbenchContri
     this._entry = undefined
     this._activeEditor = undefined
     this._activePath = undefined
+    this._activeResource = undefined
     this._currentHash = undefined
     this._activeProviderId = undefined
   }

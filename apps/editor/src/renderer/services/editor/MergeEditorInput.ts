@@ -14,7 +14,9 @@ import {
   Emitter,
   ICommandService,
   IFileService,
+  IWorkspaceService,
   URI,
+  absolutePathToWorkspaceUri,
   type Event,
 } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
@@ -41,6 +43,7 @@ export class MergeEditorInput extends EditorInput {
   static readonly TYPE_ID = 'merge'
 
   private readonly _resource: URI
+  private readonly _fileUri: URI
   private _result: string
 
   private readonly _onDidChangeContents = this._register(new Emitter<void>())
@@ -51,9 +54,14 @@ export class MergeEditorInput extends EditorInput {
     private _contents: MergeEditorContents,
     @IFileService private readonly _fileService: IFileService,
     @ICommandService private readonly _commandService: ICommandService,
+    @IWorkspaceService workspaceService: IWorkspaceService,
   ) {
     super()
     this._resource = URI.from({ scheme: 'merge', path: this._contents.path })
+    this._fileUri = absolutePathToWorkspaceUri(
+      this._contents.path,
+      workspaceService.current?.folder,
+    )
     this._result = this._contents.merged
   }
 
@@ -77,9 +85,11 @@ export class MergeEditorInput extends EditorInput {
     return this._contents
   }
 
-  /** A `file:` URI for the conflicted file, used for language detection / labels. */
+  /** The conflicted file as a workspace resource URI: `file:` for a local
+   *  workspace, `remote-ssh://…` when remote so `save()` writes to the right
+   *  machine. Used for language detection / labels. */
   get fileUri(): URI {
-    return URI.file(this._contents.path)
+    return this._fileUri
   }
 
   /** Track the Result pane's live text so `save()` and dirty state stay in sync. */

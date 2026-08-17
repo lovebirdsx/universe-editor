@@ -40,14 +40,14 @@ describe('TimelineService', () => {
     expect(service.getProvidersForUri(UNTITLED).map((p) => p.id)).toEqual(['other'])
   })
 
-  it('forwards getTimeline to the ext host proxy with the stringified uri', async () => {
+  it('forwards getTimeline to the ext host proxy with the uri instance', async () => {
     const { service } = makeService()
     await expect(service.getTimeline(0, FILE_A, { limit: 10 })).resolves.toBeUndefined()
 
     const $provideTimeline = vi.fn(() => Promise.resolve(undefined))
     service.setExtHost({ $provideTimeline } satisfies IExtHostTimeline)
     await service.getTimeline(0, FILE_A, { limit: 10 })
-    expect($provideTimeline).toHaveBeenCalledWith(0, FILE_A.toString(), { limit: 10 })
+    expect($provideTimeline).toHaveBeenCalledWith(0, FILE_A, { limit: 10 })
   })
 
   it('re-emits provider change events with the revived uri and source id', () => {
@@ -59,14 +59,30 @@ describe('TimelineService', () => {
     )
 
     // Unknown handles are dropped.
-    service.$emitTimelineChangeEvent(9, 'file:///repo/a.ts', false)
-    service.$emitTimelineChangeEvent(0, 'file:///repo/a.ts', false)
-    service.$emitTimelineChangeEvent(0, undefined, true)
+    service.$emitTimelineChangeEvent(9, FILE_A.toJSON(), false)
+    service.$emitTimelineChangeEvent(0, FILE_A.toJSON(), false)
+    service.$emitTimelineChangeEvent(0, null, true)
 
     expect(seen).toEqual([
       { source: 'git-history', uri: FILE_A.toString(), reset: false },
       { source: 'git-history', uri: undefined, reset: true },
     ])
+  })
+
+  it('revives UriComponents and tolerates a null uri in change events', () => {
+    const { service } = makeService()
+    void service.$registerTimelineProvider(0, 'git-history', 'Git History', ['file'])
+    const seen: { uri: URI | undefined; reset: boolean }[] = []
+    service.onDidChangeTimeline((e) => seen.push({ uri: e.uri, reset: e.reset }))
+
+    expect(() => service.$emitTimelineChangeEvent(0, null, true)).not.toThrow()
+    service.$emitTimelineChangeEvent(0, FILE_A.toJSON(), false)
+
+    expect(seen).toEqual([
+      { uri: undefined, reset: true },
+      { uri: FILE_A, reset: false },
+    ])
+    expect(seen[1]?.uri?.toString()).toBe(FILE_A.toString())
   })
 
   it('pin blocks follow until unpin', () => {

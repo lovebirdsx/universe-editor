@@ -21,6 +21,7 @@ import {
   type Event,
   type IObservable,
   type ISettableObservable,
+  type UriComponents,
   URI,
 } from '@universe-editor/platform'
 import type {
@@ -135,7 +136,7 @@ export class TimelineService extends Disposable implements ITimelineService, IMa
     options: ITimelineOptionsDto,
   ): Promise<ITimelineDto | undefined> {
     if (!this._extHost) return Promise.resolve(undefined)
-    return this._extHost.$provideTimeline(handle, uri.toString(), options)
+    return this._extHost.$provideTimeline(handle, uri, options)
   }
 
   pinUri(uri: URI): void {
@@ -184,12 +185,12 @@ export class TimelineService extends Disposable implements ITimelineService, IMa
     return Promise.resolve()
   }
 
-  $emitTimelineChangeEvent(handle: number, uri: string | undefined, reset: boolean): void {
+  $emitTimelineChangeEvent(handle: number, uri: UriComponents | null, reset: boolean): void {
     const provider = this._providers.get(handle)
     if (!provider) return
     this._onDidChangeTimeline.fire({
       source: provider.id,
-      uri: uri !== undefined ? URI.parse(uri) : undefined,
+      uri: uri == null ? undefined : (URI.revive(uri) ?? undefined),
       reset,
     })
   }

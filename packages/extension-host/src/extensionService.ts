@@ -12,7 +12,13 @@
  *
  * Errors are isolated per extension (see ExtensionActivationService).
  */
-import { Emitter, isCancellationError, URI, type Event } from '@universe-editor/platform'
+import {
+  Emitter,
+  isCancellationError,
+  URI,
+  type Event,
+  type IURITransformer,
+} from '@universe-editor/platform'
 import {
   CancellationTokenSource,
   Disposable,
@@ -158,6 +164,7 @@ import { HostAi } from './hostAi.js'
 import { ExtHostDocuments } from './hostDocuments.js'
 import { HostFileWatcherRegistry } from './hostFileWatchers.js'
 import { HostDiagnostics } from './hostDiagnostics.js'
+import { reviveWireUri } from './wireUri.js'
 import {
   HostOutputChannel,
   HostStatusBarItem,
@@ -334,10 +341,14 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadExtensions?: IMainThreadExtensions,
     private readonly _mainThreadFileEvents?: IMainThreadFileEvents,
     private readonly _mainThreadTreeViews?: IMainThreadTreeViews,
+    private readonly _uriTransformer?: IURITransformer,
   ) {
     this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
     this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
-    this._timelines = new ExtHostTimelineRegistry(_mainThreadTimeline)
+    this._timelines = new ExtHostTimelineRegistry(
+      _mainThreadTimeline,
+      this._uriTransformer ? (s) => this._uriTransformer!.transformOutgoingScheme(s) : undefined,
+    )
     this._activation = new ExtensionActivationService(
       _extensions,
       () => this._trusted,
@@ -634,7 +645,7 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostTimeline.$provideTimeline */
   provideTimeline(
     handle: number,
-    uri: string,
+    uri: UriComponents,
     options: ITimelineOptionsDto,
   ): Promise<ITimelineDto | undefined> {
     return this._timelines.provideTimeline(handle, uri, options)
@@ -890,7 +901,7 @@ export class ExtensionService implements IExtensionHostBridge {
     const components = uri.toJSON()
     const existing = this._documents.get(components)
     if (existing) return existing
-    await this._editor().$openTextDocument(components)
+    await this._editor().$openTextDocument(reviveWireUri(components))
     const document = await this._documents.whenOpen(components, OPEN_TEXT_DOCUMENT_WAIT_MS)
     if (!document) {
       throw new Error(`openTextDocument: document mirror never arrived for ${uri.toString()}`)
@@ -912,7 +923,10 @@ export class ExtensionService implements IExtensionHostBridge {
       ...(options?.preview !== undefined ? { preview: options.preview } : {}),
       ...(options?.selection !== undefined ? { selection: options.selection } : {}),
     }
-    const snapshot = await this._editor().$showTextDocument(document.uri, showOptions)
+    const snapshot = await this._editor().$showTextDocument(
+      reviveWireUri(document.uri),
+      showOptions,
+    )
     if (!snapshot) {
       throw new Error('showTextDocument: the editor did not open')
     }

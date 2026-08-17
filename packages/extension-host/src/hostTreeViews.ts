@@ -32,6 +32,7 @@ import type {
 } from '@universe-editor/extension-api'
 import type { IMainThreadTreeViews, ITreeItemDto } from '@universe-editor/extensions-common'
 import { toCommandDto } from './hostHandles.js'
+import { reviveWireUri } from './wireUri.js'
 
 /** Page key for the roots (no parent handle). Handles start at 1. */
 const ROOT_PAGE = -1
@@ -469,7 +470,7 @@ export class HostTreeViewRegistry {
       ...(item.tooltip !== undefined ? { tooltip: item.tooltip } : {}),
       ...(item.contextValue !== undefined ? { contextValue: item.contextValue } : {}),
       ...(item.iconPath !== undefined ? { iconId: item.iconPath } : {}),
-      ...(item.resourceUri !== undefined ? { resourceUri: item.resourceUri.toJSON() } : {}),
+      ...(item.resourceUri !== undefined ? { resourceUri: reviveWireUri(item.resourceUri) } : {}),
       // Only the display surface crosses the wire: `arguments` stay host-side
       // in `commandByHandle`, so live objects (Uri, custom payloads) never get
       // flattened before the handler sees them (tree click re-runs host-side).

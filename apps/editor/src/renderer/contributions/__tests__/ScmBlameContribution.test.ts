@@ -574,6 +574,40 @@ describe('ScmBlameContribution', () => {
     }
   })
 
+  it('routes a remote resource to viewCommit as the file: URI of its server-local path', async () => {
+    const { inst, active } = setup([{ id: 'git', rootUri: '/ws/git' }])
+    const viewCommit = vi.fn()
+    const regs = [
+      CommandsRegistry.registerCommand(GET_BLAME, () => blameResult('Ada')),
+      CommandsRegistry.registerCommand('git.viewCommit', viewCommit),
+      CommandsRegistry.registerCommand('git-graph.view', () => undefined),
+    ]
+    try {
+      const input = inst.createInstance(
+        FileEditorInput,
+        URI.from({ scheme: 'remote-ssh', authority: 'auth', path: '/ws/git/a.txt' }),
+      )
+      const editor = makeFakeEditor()
+      FileEditorRegistry.register(
+        input,
+        editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+      )
+      active.set(input, undefined)
+      await flushMicrotasks()
+
+      await CommandsRegistry.getCommand('scm.blame.openCommitChanges')!.handler({} as never)
+      // A remote-ssh resource is re-encoded as the file: URI of its server-local
+      // path — the only form the provider host's normalizeUriArg parses.
+      expect(viewCommit).toHaveBeenCalledWith(
+        expect.anything(),
+        URI.file('/ws/git/a.txt').toString(),
+        'b'.repeat(40),
+      )
+    } finally {
+      regs.forEach((r) => r.dispose())
+    }
+  })
+
   it('scm.blame.openCommitChanges routes an explicit hash+provider to the provider viewCommit', async () => {
     setup([
       { id: 'git', rootUri: '/ws/git' },

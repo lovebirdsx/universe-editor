@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { URI, type ICommandService, type IFileService } from '@universe-editor/platform'
+import {
+  URI,
+  type ICommandService,
+  type IFileService,
+  type IWorkspaceService,
+} from '@universe-editor/platform'
 import { getOriginalResource } from '../editorResourceAccessor.js'
 import { DiffEditorInput } from '../DiffEditorInput.js'
 import { FileEditorInput } from '../FileEditorInput.js'
@@ -9,6 +14,7 @@ import { WebviewDiffInput } from '../WebviewDiffInput.js'
 
 const fileService = {} as IFileService
 const commandService = {} as ICommandService
+const workspaceService = { current: null } as IWorkspaceService
 
 describe('getOriginalResource', () => {
   it('returns the resource of a file editor', () => {
@@ -60,6 +66,7 @@ describe('getOriginalResource', () => {
       },
       fileService,
       commandService,
+      workspaceService,
     )
     expect(getOriginalResource(input)?.toString()).toBe(URI.file('/ws/a.ts').toString())
   })

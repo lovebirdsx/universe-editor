@@ -10,6 +10,7 @@
  * identity across reloads.
  */
 
+import type { UriComponents } from '@universe-editor/platform'
 import type { ICommandDto } from './scmWire.js'
 
 export interface ITimelineItemDto {
@@ -59,18 +60,26 @@ export interface IMainThreadTimeline {
   /**
    * A provider's data changed. `uri` set → only that resource's timeline is
    * stale; `reset` → drop every cached page for the provider.
+   *
+   * `uri` is a mid-argument optional: `null` crosses the wire (JSON turns a
+   * trailing/mid `undefined` into `null`), so consumers must check `== null`.
    */
-  $emitTimelineChangeEvent(handle: number, uri: string | undefined, reset: boolean): void
+  $emitTimelineChangeEvent(handle: number, uri: UriComponents | null, reset: boolean): void
 }
 
 /**
  * Host ← renderer: page requests from the built-in timeline view. The
  * renderer's ChannelClient calls these on the host's ChannelServer.
+ *
+ * All URIs cross the wire as `UriComponents` (`$mid`), so the host-side codec
+ * can translate `remote-ssh` ↔ `file` for remote workspaces (see
+ * `remoteProtocol.ts`: DTO paths are always URIs). The host revives them before
+ * handing a string to the extension provider.
  */
 export interface IExtHostTimeline {
   $provideTimeline(
     handle: number,
-    uri: string,
+    uri: UriComponents,
     options: ITimelineOptionsDto,
   ): Promise<ITimelineDto | undefined>
 }
