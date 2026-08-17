@@ -323,6 +323,21 @@ describe('workspaceActions', () => {
     expect(asQuickPickItem(items[1])?.iconId).toBeUndefined()
   })
 
+  it('OpenRecent.run prepends the remote marker to remote recent entries', async () => {
+    disposables.push(registerAction2(OpenRecentAction))
+    const remoteFolder = URI.from({ scheme: 'remote-ssh', authority: 'e2e-local', path: '/tmp/a' })
+    const localFolder = URI.file('/tmp/b')
+    const ws = makeWorkspaceStub([
+      { folder: remoteFolder, name: 'a', lastOpened: 2 },
+      { folder: localFolder, name: 'b', lastOpened: 1 },
+    ])
+    const qi = makeQuickInputStub({})
+    await runCommand(OpenRecentAction.ID, ws, qi)
+    const items = qi.pickCalls[0]!
+    expect(asQuickPickItem(items[0])?.label).toBe('⇄ a')
+    expect(asQuickPickItem(items[1])?.label).toBe('b')
+  })
+
   it('OpenRecent.run with Ctrl held opens the choice in a new window', async () => {
     disposables.push(registerAction2(OpenRecentAction))
     const folderA = URI.file('/tmp/a')

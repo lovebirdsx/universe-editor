@@ -24,7 +24,7 @@ import {
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 import { IRendererDisposableLeakService } from '../services/disposableLeak/DisposableLeakService.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
-import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
+import { REMOTE_MARKER, workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 export class NewWindowAction extends Action2 {
   static readonly ID = 'workbench.action.newWindow'
@@ -120,9 +120,11 @@ export class SwitchWindowAction extends Action2 {
     if (windows.length === 0) return
     const items: WindowPickItem[] = windows.map((w) => {
       const folder = w.folder ? URI.revive(w.folder) : null
+      const isRemote = w.remoteAuthority !== undefined
+      const name = w.name ?? localize('window.untitled', 'Untitled (Window {id})', { id: w.id })
       return {
         id: `window.${w.id}`,
-        label: w.name ?? localize('window.untitled', 'Untitled (Window {id})', { id: w.id }),
+        label: isRemote ? `${REMOTE_MARKER} ${name}` : name,
         ...(folder ? { description: workspaceFullLabel(folder) } : {}),
         windowId: w.id,
       }

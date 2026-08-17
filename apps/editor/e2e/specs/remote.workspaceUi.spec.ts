@@ -171,6 +171,16 @@ test.describe('remote workspace ui', () => {
       .poll(() => workbench.page.evaluate(() => document.title), { timeout: 15_000 })
       .toMatch(/^⇄ /)
 
+    // The Open Recent quick pick marks the remote workspace with the same
+    // marker (showQuickPick-style action awaits user input → fire-and-forget).
+    void workbench.page.evaluate(
+      () => void window.__E2E__!.runCommand('workbench.action.openRecent'),
+    )
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.dialog.getByText(/^⇄ /)).toBeVisible()
+    await workbench.page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+
     // Remote Explorer container + view are registered in the primary side bar.
     await expect
       .poll(() => workbench.page.evaluate(() => window.__E2E__!.getViewContainerIdsByLocation(0)))

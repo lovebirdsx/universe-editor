@@ -6,14 +6,23 @@
  *  - workspaceFullLabel  → full display path for recent menus/descriptions
  *    (scheme-qualified for remote, so equal host paths stay disambiguated);
  *  - workspaceTitleLabel → the title bar / window title's right segment (clean
- *    path only — the remote identity is carried by the window title's "⇄"
- *    marker, not by this segment);
+ *    path only — the remote identity is carried by the "⇄" marker
+ *    (REMOTE_MARKER), not by this segment);
  *  - workspaceParentLabel → the window title's parent segment (server-side parent
  *    path for remote — the remote identity is already expressed by the "⇄"
  *    marker, so the parent segment must not repeat the authority).
  *--------------------------------------------------------------------------------------------*/
 
 import type { URI } from '@universe-editor/platform'
+
+/**
+ * Remote marker prepended to remote workspace/window entries — the native
+ * window title (Alt+Tab / taskbar) and the workspace-switch quick picks (Open
+ * Recent / Switch Window). A single character suffices to flag "this is
+ * remote"; the full authority stays visible in the title-bar badge and the
+ * status-bar indicator.
+ */
+export const REMOTE_MARKER = '⇄'
 
 /** Parent segment for the native window title — server-side parent path for remote folders. */
 export function workspaceParentLabel(uri: URI): string {

@@ -40,7 +40,7 @@ import {
   truncateSessionTitle,
 } from '../services/acp/session/acpSessionTitle.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
-import { workspaceParentLabel } from '../services/workspace/workspaceLabel.js'
+import { REMOTE_MARKER, workspaceParentLabel } from '../services/workspace/workspaceLabel.js'
 
 const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   running: '●',
@@ -51,13 +51,6 @@ const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   background: '●',
   closed: '',
 }
-
-/**
- * Remote marker prepended to the native window title — a single character
- * suffices to flag "this is a remote window" in Alt+Tab; the full authority
- * stays visible in the title-bar badge and the status-bar indicator.
- */
-const REMOTE_TITLE_PREFIX = '⇄'
 
 export class WindowTitleContribution extends Disposable implements IWorkbenchContribution {
   // `IWorkspaceService.current` is event-driven, not observable; bump this rev
@@ -95,7 +88,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
     // Remote windows prepend the "⇄" marker — also for an empty window, where
     // the authority comes from argv (remote "New Window").
     const authority = currentRemoteAuthority(workspace)
-    const remotePrefix = authority !== undefined ? REMOTE_TITLE_PREFIX : undefined
+    const remotePrefix = authority !== undefined ? REMOTE_MARKER : undefined
     if (!workspace) {
       document.title = formatWindowTitle({ appName, remotePrefix, devHostBadge })
       return

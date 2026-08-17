@@ -27,7 +27,7 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
+import { REMOTE_MARKER, workspaceFullLabel } from '../services/workspace/workspaceLabel.js'
 
 export class OpenFolderAction extends Action2 {
   static readonly ID = 'workbench.action.files.openFolder'
@@ -181,9 +181,10 @@ export class OpenRecentAction extends Action2 {
 
     const items: RecentPickItem[] = recent.map((r, index) => {
       const isOpen = openFolders.has(r.folder.toString())
+      const isRemote = r.folder.scheme === REMOTE_SCHEME
       return {
         id: `recent.${index}`,
-        label: r.name,
+        label: isRemote ? `${REMOTE_MARKER} ${r.name}` : r.name,
         description: workspaceFullLabel(r.folder),
         ...(isOpen ? { iconId: 'check' } : {}),
         index,

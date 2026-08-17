@@ -8,6 +8,7 @@ import {
   IHostService,
   ILifecycleService,
   ILoggerService,
+  IQuickInputService,
   InstantiationService,
   KeybindingsRegistry,
   LogLevel,
@@ -25,14 +26,18 @@ import {
   type IDisposable,
   type IFileDialogService as IFileDialogServiceType,
   type IHostService as IHostServiceType,
+  type IQuickInputService as IQuickInputServiceType,
+  type IQuickPickItem,
   type IWindowsService as IWindowsServiceType,
   type IWorkspaceService as IWorkspaceServiceType,
+  type QuickPickInput,
 } from '@universe-editor/platform'
 import {
   AboutAction,
   CloseWindowAction,
   OpenFolderInNewWindowAction,
   ReloadWindowAction,
+  SwitchWindowAction,
   ToggleDevToolsAction,
 } from '../windowActions.js'
 import {
@@ -265,6 +270,48 @@ describe('windowActions', () => {
 
     expect(openWindow).toHaveBeenCalledTimes(1)
     expect(openWindow.mock.calls[0]?.[0]).toBe(picked)
+  })
+
+  it('SwitchWindow.run prepends the remote marker to remote windows', async () => {
+    disposables.push(registerAction2(SwitchWindowAction))
+
+    const windowsService = {
+      _serviceBrand: undefined,
+      onDidChangeWindows: new Emitter<void>().event,
+      getWindows: vi.fn(async () => [
+        { id: 1, folder: null, name: 'remote', remoteAuthority: 'e2e-local' },
+        { id: 2, folder: URI.file('/tmp/local').toJSON(), name: 'local' },
+      ]),
+      isCurrentWindowFirst: vi.fn(async () => true),
+      focusWindow: vi.fn(async () => undefined),
+      openWindow: vi.fn(async () => undefined),
+      quit: vi.fn(async () => undefined),
+    } as unknown as IWindowsServiceType
+    const pickCalls: QuickPickInput<IQuickPickItem>[][] = []
+    const quickInput = {
+      _serviceBrand: undefined,
+      createQuickPick() {
+        throw new Error('not used in this test')
+      },
+      pick: vi.fn(async (items: readonly QuickPickInput<IQuickPickItem>[]) => {
+        pickCalls.push([...items])
+        return undefined
+      }),
+      input: vi.fn(async () => undefined),
+    } as unknown as IQuickInputServiceType
+
+    const services = new ServiceCollection()
+    services.set(IWindowsService, windowsService)
+    services.set(IQuickInputService, quickInput)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction((accessor) => {
+      const cmd = CommandsRegistry.getCommand(SwitchWindowAction.ID)!
+      return cmd.handler(accessor) as unknown as Promise<void>
+    })
+
+    const items = pickCalls[0]!
+    expect((items[0] as IQuickPickItem).label).toBe('⇄ remote')
+    expect((items[1] as IQuickPickItem).label).toBe('local')
   })
 })
 
