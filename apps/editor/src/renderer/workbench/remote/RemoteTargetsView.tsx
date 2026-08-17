@@ -5,7 +5,8 @@
  *  views into one tree: two collapsible groups (SSH always, WSL data-driven),
  *  each target row showing its live connection state, and its recent remote
  *  workspaces as indented child rows. Left-click / Enter runs the row's primary
- *  action (connect / open folder / retry per state); hover reveals the same
+ *  action (connect / open folder / retry per state; recent rows open in the
+ *  current window, ctrl/cmd+click in a new one); hover reveals the same
  *  actions as floating buttons; right-click opens the RemoteExplorerContext menu.
  *  This view owns the explorer's mount-triggered refresh (it is the only view,
  *  so data is fetched exactly once per container open).
@@ -30,7 +31,11 @@ import {
   RetryConnectionAction,
   StopRemoteServerAction,
 } from '../../actions/remoteActions.js'
-import { RemoveRecentWorkspaceAction } from '../../actions/workspaceActions.js'
+import {
+  OpenWorkspaceInCurrentWindowAction,
+  OpenWorkspaceInNewWindowAction,
+  RemoveRecentWorkspaceAction,
+} from '../../actions/workspaceActions.js'
 import { workspaceFullLabel } from '../../services/workspace/workspaceLabel.js'
 import {
   buildRemoteTree,
@@ -311,7 +316,6 @@ function RecentRow({
   recent: RemoteTreeRecent
   onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void
 }) {
-  const workspace = useService(IWorkspaceService)
   const commands = useService(ICommandService)
 
   return (
@@ -322,7 +326,13 @@ function RecentRow({
       description={recent.description}
       truncateDescription
       indent={2}
-      onActivate={() => void workspace.openFolder(recent.folder)}
+      onActivate={(e) => {
+        const id =
+          e.ctrlKey || e.metaKey
+            ? OpenWorkspaceInNewWindowAction.ID
+            : OpenWorkspaceInCurrentWindowAction.ID
+        void commands.executeCommand(id, recent.folder.toString())
+      }}
       onContextMenu={onContextMenu}
       actions={
         <IconButton

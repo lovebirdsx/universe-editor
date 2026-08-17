@@ -97,8 +97,10 @@ describe('RemoteExplorerMenuContribution', () => {
     ])
   })
 
-  it('shows Remove from Recent for a recent row', () => {
+  it('shows Open-in-Current/New + Remove from Recent for a recent row', () => {
     expect(commandsInMenu(contextKeyService, 'recent', undefined)).toEqual([
+      'workbench.action.openWorkspaceInCurrentWindow',
+      'workbench.action.openWorkspaceInNewWindow',
       'workbench.action.removeRecent',
     ])
   })

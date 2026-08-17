@@ -21,6 +21,30 @@ describe('RemoteRow', () => {
     expect(onActivate).toHaveBeenCalledTimes(1)
   })
 
+  it('passes the click event (with modifiers) to onActivate', () => {
+    const onActivate = vi.fn()
+    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" onActivate={onActivate} />)
+    const row = screen.getByTestId('remote-recent-row')
+    fireEvent.click(row, { ctrlKey: true })
+    fireEvent.click(row)
+    expect(onActivate).toHaveBeenCalledTimes(2)
+    const first = onActivate.mock.calls[0]?.[0] as { ctrlKey: boolean }
+    const second = onActivate.mock.calls[1]?.[0] as { ctrlKey: boolean }
+    expect(first.ctrlKey).toBe(true)
+    expect(second.ctrlKey).toBe(false)
+  })
+
+  it('passes modifier state for keyboard activation', () => {
+    const onActivate = vi.fn()
+    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" onActivate={onActivate} />)
+    const row = screen.getByTestId('remote-recent-row')
+    fireEvent.keyDown(row, { key: 'Enter', ctrlKey: true })
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    const e = onActivate.mock.calls[0]?.[0] as { key: string; ctrlKey: boolean }
+    expect(e.key).toBe('Enter')
+    expect(e.ctrlKey).toBe(true)
+  })
+
   it('marks the row as a focusable button only when activatable', () => {
     const { unmount } = render(
       <RemoteRow testId="remote-target-row" label="h" tooltip="h" onActivate={() => {}} />,

@@ -40,8 +40,14 @@ export interface RemoteRowProps {
   readonly description?: string | undefined
   /** Hover-revealed IconButtons, overlaid on the right edge. */
   readonly actions?: ReactNode
-  /** Primary action: whole-row click + Enter/Space keyboard activation. */
-  readonly onActivate?: (() => void) | undefined
+  /**
+   * Primary action: whole-row click + Enter/Space keyboard activation. The
+   * event is passed through so consumers can honour modifiers (e.g. the
+   * recent row's ctrl/cmd = open in new window).
+   */
+  readonly onActivate?:
+    | ((e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>) => void)
+    | undefined
   readonly onContextMenu?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined
   /** Left indentation depth in levels (group = 0, target = 1, recent = 2). */
   readonly indent?: number
@@ -72,7 +78,7 @@ export function RemoteRow({
     ? (e: KeyboardEvent<HTMLDivElement>) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onActivate()
+          onActivate(e)
         }
       }
     : undefined

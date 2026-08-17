@@ -260,3 +260,52 @@ export class RemoveRecentWorkspaceAction extends Action2 {
     await workspace.removeRecent(URI.parse(folderArg))
   }
 }
+
+/**
+ * Open a recent workspace in the CURRENT window. Driven by the Remote Explorer
+ * recent-row plain click / context menu (the folder URI is passed as a string
+ * arg). Deliberately mirrors the row click's semantics: direct
+ * IWorkspaceService.openFolder without a confirm/progress wrapper.
+ */
+export class OpenWorkspaceInCurrentWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.openWorkspaceInCurrentWindow'
+  constructor() {
+    super({
+      id: OpenWorkspaceInCurrentWindowAction.ID,
+      title: localize2('action.openWorkspaceInCurrentWindow.title', 'Open in Current Window'),
+      category: localize2('command.category.file', 'File'),
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, folderArg?: string): Promise<void> {
+    if (folderArg === undefined || folderArg.trim() === '') return
+    const workspace = accessor.get(IWorkspaceService)
+    await workspace.openFolder(URI.parse(folderArg))
+  }
+}
+
+/**
+ * Open a recent workspace in a NEW window (Remote Explorer recent-row
+ * ctrl+click / context menu). Main's openWindowForFolder focuses an existing
+ * window for that folder instead of duplicating it, and bumps the shared
+ * recent list itself (restoreCurrent), so nothing extra is needed here. A
+ * remote-ssh URI relies on the app-scoped connection's implicit bring-up.
+ */
+export class OpenWorkspaceInNewWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.openWorkspaceInNewWindow'
+  constructor() {
+    super({
+      id: OpenWorkspaceInNewWindowAction.ID,
+      title: localize2('action.openWorkspaceInNewWindow.title', 'Open in New Window'),
+      category: localize2('command.category.file', 'File'),
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, folderArg?: string): Promise<void> {
+    if (folderArg === undefined || folderArg.trim() === '') return
+    const windows = accessor.get(IWindowsService)
+    await windows.openWindow(URI.parse(folderArg))
+  }
+}

@@ -128,6 +128,8 @@ import {
   CloseFolderAction,
   OpenFolderAction,
   OpenRecentAction,
+  OpenWorkspaceInCurrentWindowAction,
+  OpenWorkspaceInNewWindowAction,
   OpenWorkspaceInVSCodeAction,
   RemoveRecentWorkspaceAction,
 } from './workspaceActions.js'
@@ -520,6 +522,8 @@ registerAction2(OpenFolderAction)
 registerAction2(OpenRecentAction)
 registerAction2(ClearRecentWorkspacesAction)
 registerAction2(RemoveRecentWorkspaceAction)
+registerAction2(OpenWorkspaceInCurrentWindowAction)
+registerAction2(OpenWorkspaceInNewWindowAction)
 registerAction2(CloseFolderAction)
 registerAction2(OpenWorkspaceInVSCodeAction)
 

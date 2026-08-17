@@ -21,7 +21,11 @@ import {
   RetryConnectionAction,
   StopRemoteServerAction,
 } from '../actions/remoteActions.js'
-import { RemoveRecentWorkspaceAction } from '../actions/workspaceActions.js'
+import {
+  OpenWorkspaceInCurrentWindowAction,
+  OpenWorkspaceInNewWindowAction,
+  RemoveRecentWorkspaceAction,
+} from '../actions/workspaceActions.js'
 
 export class RemoteExplorerMenuContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -82,6 +86,23 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
         when: "remoteRowKind == 'sshTarget' && remoteRowManual",
         group: '3_manage',
         order: 1,
+      }),
+    )
+    // Recent-remote-workspace rows: open targets (current vs new window) on top.
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
+        command: OpenWorkspaceInCurrentWindowAction.ID,
+        when: "remoteRowKind == 'recent'",
+        group: '1_open',
+        order: 1,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
+        command: OpenWorkspaceInNewWindowAction.ID,
+        when: "remoteRowKind == 'recent'",
+        group: '1_open',
+        order: 2,
       }),
     )
     this._register(

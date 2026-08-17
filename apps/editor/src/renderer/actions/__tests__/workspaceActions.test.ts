@@ -48,6 +48,8 @@ import {
   CloseFolderAction,
   OpenFolderAction,
   OpenRecentAction,
+  OpenWorkspaceInCurrentWindowAction,
+  OpenWorkspaceInNewWindowAction,
   OpenWorkspaceInVSCodeAction,
   RemoveRecentWorkspaceAction,
 } from '../workspaceActions.js'
@@ -413,6 +415,73 @@ describe('workspaceActions', () => {
       await cmd.handler(accessor, '   ')
     })
     expect(ws.removeCalls).toHaveLength(0)
+  })
+
+  it('OpenWorkspaceInCurrentWindow.run opens the parsed folder in this window', async () => {
+    disposables.push(registerAction2(OpenWorkspaceInCurrentWindowAction))
+    const folder = URI.parse('remote-ssh://alice@host/home/u/proj')
+    const ws = makeWorkspaceStub([{ folder, name: 'proj', lastOpened: 1 }])
+    const windows = makeWindowsStub()
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, ws)
+    services.set(IWindowsService, windows)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(OpenWorkspaceInCurrentWindowAction.ID)!
+      await cmd.handler(accessor, folder.toString())
+    })
+    expect(ws.openCalls).toHaveLength(1)
+    expect(ws.openCalls[0]?.toString()).toBe(folder.toString())
+    expect(windows.openWindowCalls).toHaveLength(0)
+  })
+
+  it('OpenWorkspaceInNewWindow.run delegates to windowsService.openWindow', async () => {
+    disposables.push(registerAction2(OpenWorkspaceInNewWindowAction))
+    const folder = URI.parse('remote-ssh://alice@host/home/u/proj')
+    const ws = makeWorkspaceStub([{ folder, name: 'proj', lastOpened: 1 }])
+    const windows = makeWindowsStub()
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, ws)
+    services.set(IWindowsService, windows)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(OpenWorkspaceInNewWindowAction.ID)!
+      await cmd.handler(accessor, folder.toString())
+    })
+    expect(windows.openWindowCalls).toHaveLength(1)
+    expect(windows.openWindowCalls[0]?.toString()).toBe(folder.toString())
+    expect(ws.openCalls).toHaveLength(0)
+  })
+
+  it('OpenWorkspaceIn*Window.run is a no-op without a folder argument or with a blank one', async () => {
+    disposables.push(registerAction2(OpenWorkspaceInCurrentWindowAction))
+    disposables.push(registerAction2(OpenWorkspaceInNewWindowAction))
+    const ws = makeWorkspaceStub([{ folder: URI.file('/tmp/x'), name: 'x', lastOpened: 1 }])
+    const windows = makeWindowsStub()
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, ws)
+    services.set(IWindowsService, windows)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const current = CommandsRegistry.getCommand(OpenWorkspaceInCurrentWindowAction.ID)!
+      const next = CommandsRegistry.getCommand(OpenWorkspaceInNewWindowAction.ID)!
+      await current.handler(accessor, undefined)
+      await current.handler(accessor, '   ')
+      await next.handler(accessor, undefined)
+      await next.handler(accessor, '   ')
+    })
+    expect(ws.openCalls).toHaveLength(0)
+    expect(windows.openWindowCalls).toHaveLength(0)
+  })
+
+  it('OpenWorkspaceIn*Window are hidden from the command palette', () => {
+    disposables.push(registerAction2(OpenWorkspaceInCurrentWindowAction))
+    disposables.push(registerAction2(OpenWorkspaceInNewWindowAction))
+    const paletteIds = MenuRegistry.getMenuItems(MenuId.CommandPalette)
+      .filter((i): i is { command: string } => 'command' in i)
+      .map((i) => i.command)
+    expect(paletteIds).not.toContain(OpenWorkspaceInCurrentWindowAction.ID)
+    expect(paletteIds).not.toContain(OpenWorkspaceInNewWindowAction.ID)
   })
 })
 
