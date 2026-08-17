@@ -414,6 +414,21 @@ export function diagnosticToMarker(
     ...(d.source ? { source: d.source } : {}),
     ...(d.code !== undefined ? { code: codeForMarker(d, monacoNs) } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    ...(d.relatedInformation && d.relatedInformation.length > 0
+      ? {
+          relatedInformation: d.relatedInformation.map((ri) => {
+            const location = locationToMonaco(ri.location, monacoNs)
+            return {
+              resource: location.uri,
+              message: ri.message,
+              startLineNumber: location.range.startLineNumber,
+              startColumn: location.range.startColumn,
+              endLineNumber: location.range.endLineNumber,
+              endColumn: location.range.endColumn,
+            }
+          }),
+        }
+      : {}),
   }
 }
 

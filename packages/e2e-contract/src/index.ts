@@ -58,11 +58,61 @@ export interface E2EOpenWindow {
   readonly name: string | null
 }
 
+export interface E2EMarkerRelatedInformation {
+  readonly message: string
+  readonly uri: string
+}
+
 export interface E2EMarker {
   readonly message: string
   /** Monaco MarkerSeverity: 8 Error, 4 Warning, 2 Info, 1 Hint. */
   readonly severity: number
   readonly startLineNumber: number
+  readonly relatedInformation?: readonly E2EMarkerRelatedInformation[]
+}
+
+/** One toast/center notification as surfaced by the renderer notification service. */
+export interface E2ENotification {
+  readonly message: string
+  readonly severity: 'info' | 'warning' | 'error'
+  readonly actions: readonly string[]
+}
+
+/** One code action offered at a range (title + optional kind + whether it carries an edit). */
+export interface E2ECodeAction {
+  readonly title: string
+  readonly kind?: string
+  readonly hasEdit: boolean
+}
+
+/** A decoration currently painted on a document model (monaco's internal
+ *  decorations included — filter by className to find extension-contributed ones). */
+export interface E2EEditorDecoration {
+  readonly startLineNumber: number
+  readonly startColumn: number
+  readonly endLineNumber: number
+  readonly endColumn: number
+  readonly className?: string
+  readonly description?: string
+}
+
+/** One top-level node of an extension-contributed tree view. */
+export interface E2ETreeItem {
+  readonly label: string
+  readonly collapsibleState: 0 | 1 | 2
+}
+
+/** One timeline entry for a resource (provider-flattened). */
+export interface E2ETimelineItem {
+  readonly label: string
+  readonly timestamp?: number
+  readonly contextValue?: string
+}
+
+/** One extension-contributed MCP server resolved from `contributes.mcpServers`. */
+export interface E2EContributedMcpServer {
+  readonly name: string
+  readonly command: string
 }
 
 export interface E2EAiDebugRecord {
@@ -282,6 +332,8 @@ export interface E2EProbe {
   isReferencePeekFocused(): boolean
   /** Snapshot of currently visible status bar entries. */
   getStatusBarEntries(): E2EStatusBarEntry[]
+  /** Non-dismissed notifications (toast + center), newest last. */
+  getNotifications(): E2ENotification[]
   /** Current auto-update state (status machine + versions). */
   getUpdateState(): Promise<E2EUpdateState>
   /**
@@ -567,6 +619,11 @@ export interface E2EProbe {
    */
   getAcpMcpServers(): ReadonlyArray<{ name: string; status: string; transport?: string }>
   /**
+   * Extension-contributed MCP servers resolved from `contributes.mcpServers`
+   * (name + resolved command). Empty when no extension contributes any.
+   */
+  getContributedMcpServers(): readonly E2EContributedMcpServer[]
+  /**
    * Pin the active session's MCP whitelist (`null` resets to inherit), exactly
    * like toggling checkboxes in the session MCP picker. May trigger a seamless
    * session reload in the background.
@@ -799,6 +856,25 @@ export interface E2EProbe {
    */
   getMarkers(uri: string, owner?: string): Promise<readonly E2EMarker[]>
   /**
+   * Code actions offered at a 1-based range for any language, via the registered
+   * code-action providers (title + optional kind + whether the action carries an edit).
+   */
+  getCodeActions(
+    uri: string,
+    range: {
+      startLineNumber: number
+      startColumn: number
+      endLineNumber: number
+      endColumn: number
+    },
+  ): Promise<readonly E2ECodeAction[]>
+  /**
+   * Decorations currently painted on a document model (monaco's internal
+   * decorations included). Filter by `className` to find extension-contributed
+   * decorations (their line decorations carry an `ext-deco-*` class).
+   */
+  getEditorDecorations(uri: string): Promise<readonly E2EEditorDecoration[]>
+  /**
    * Monarch token types for a single line of markdown source (1-based line),
    * as `[startColumn, type]` pairs. Used to assert YAML frontmatter highlighting
    * (keys tokenize as `type.md`, values as `string.md`).
@@ -863,6 +939,12 @@ export interface E2EProbe {
     lineNumber: number,
     column: number,
   ): Promise<readonly string[]>
+  /**
+   * Completion item labels offered at a 1-based position for any language, via
+   * the registered completion providers (generic counterpart to
+   * getMarkdownCompletions).
+   */
+  getCompletions(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
   /** Reference location URIs at a 1-based position (Shift+F12 backing). */
   getMarkdownReferences(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
   /**
@@ -1000,6 +1082,16 @@ export interface E2EProbe {
   getActiveViewContainerId(location: number): string | undefined
   /** Ids of the views in a container, in display order. */
   getViewIdsByContainer(containerId: string): readonly string[]
+  /**
+   * Top-level nodes of an extension-contributed tree view, pulled lazily from
+   * the host through the TreeViewsService cache (label + collapsible state).
+   */
+  getTreeItems(viewId: string): Promise<readonly E2ETreeItem[]>
+  /**
+   * Timeline entries for a resource, flattened across every provider whose
+   * schemes cover it (label + timestamp + optional contextValue).
+   */
+  getTimelineItems(uri: string): Promise<readonly E2ETimelineItem[]>
   /** Container ids at a location, in display order. */
   getViewContainerIdsByLocation(location: number): readonly string[]
   /** Move views into an existing container. */

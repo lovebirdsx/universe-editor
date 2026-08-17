@@ -186,6 +186,7 @@ describe('MainThreadWindow progress', () => {
     progress: IProgress<IProgressStep>
     taskPromise: Promise<unknown>
     cancel: () => void
+    cancelSubDisposed: () => boolean
   }
 
   function fakeProgress(): { service: IProgressService; runs: FakeProgressRun[] } {
@@ -197,11 +198,16 @@ describe('MainThreadWindow progress', () => {
       ): Promise<R> {
         const progress: IProgress<IProgressStep> = { report: () => undefined }
         let cancelListener: (() => void) | undefined
+        let cancelSubDisposed = false
         const token = {
           isCancellationRequested: false,
           onCancellationRequested: (listener: () => void) => {
             cancelListener = listener
-            return { dispose: () => undefined }
+            return {
+              dispose: () => {
+                cancelSubDisposed = true
+              },
+            }
           },
         }
         const run: FakeProgressRun = {
@@ -209,6 +215,7 @@ describe('MainThreadWindow progress', () => {
           progress,
           taskPromise: undefined as unknown as Promise<unknown>,
           cancel: () => cancelListener?.(),
+          cancelSubDisposed: () => cancelSubDisposed,
         }
         runs.push(run)
         run.taskPromise = task(progress, token)
@@ -275,6 +282,24 @@ describe('MainThreadWindow progress', () => {
     mt.dispose()
     await expect(progress.runs[0]!.taskPromise).resolves.toBeUndefined()
     await expect(progress.runs[1]!.taskPromise).resolves.toBeUndefined()
+  })
+
+  it('disposes the cancel subscription when the progress ends', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+    await mt.$startProgress(1, { location: 15, cancellable: true })
+    expect(progress.runs[0]!.cancelSubDisposed()).toBe(false)
+
+    await mt.$endProgress(1)
+    expect(progress.runs[0]!.cancelSubDisposed()).toBe(true)
+  })
+
+  it('disposes the cancel subscription on teardown', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+    await mt.$startProgress(1, { location: 15, cancellable: true })
+    mt.dispose()
+    expect(progress.runs[0]!.cancelSubDisposed()).toBe(true)
   })
 })
 

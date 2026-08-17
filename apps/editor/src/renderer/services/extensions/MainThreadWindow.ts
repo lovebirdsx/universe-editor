@@ -27,6 +27,7 @@ import {
   StatusBarAlignment,
   URI,
   type IConfirmOptions,
+  type IDisposable,
   type IProgress,
   type IProgressStep,
   type IQuickPickItem,
@@ -58,6 +59,7 @@ function mapSeverity(severity: ExtHostMessageSeverity): Severity {
 interface ProgressEntry {
   readonly progress: IProgress<IProgressStep>
   readonly done: DeferredPromise<void>
+  readonly cancelSub: IDisposable
 }
 
 export class MainThreadWindow extends Disposable implements IMainThreadWindow {
@@ -180,10 +182,10 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
         // The task body runs synchronously inside withProgress, so the handle is
         // registered before this RPC resolves — a $reportProgress that follows
         // immediately after $startProgress can never arrive to a missing entry.
-        this._progress.set(handle, { progress, done })
-        token.onCancellationRequested(() => {
+        const cancelSub = token.onCancellationRequested(() => {
           void this._extHostWindow.$acceptProgressCanceled(handle).catch(() => undefined)
         })
+        this._progress.set(handle, { progress, done, cancelSub })
         return done.p
       },
     )
@@ -205,6 +207,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     const entry = this._progress.get(handle)
     if (entry) {
       this._progress.delete(handle)
+      entry.cancelSub.dispose()
       entry.done.complete(undefined)
     }
     return Promise.resolve()
@@ -255,6 +258,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     // Connection teardown: settle every held-open progress so its UI tears down.
     for (const [handle, entry] of this._progress) {
       this._progress.delete(handle)
+      entry.cancelSub.dispose()
       entry.done.complete(undefined)
     }
     super.dispose()

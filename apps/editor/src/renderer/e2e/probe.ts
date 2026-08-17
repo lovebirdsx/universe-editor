@@ -17,6 +17,7 @@ import {
   KeybindingsRegistry,
   LifecyclePhase,
   LogLevel,
+  Severity,
   StatusBarAlignment,
   StorageScope,
   URI,
@@ -32,6 +33,7 @@ import {
   type ILayoutService,
   type ILifecycleService,
   type ILoggerService,
+  type INotificationService,
   type IOutputService,
   type IStatusBarService,
   type IStorageService,
@@ -44,6 +46,9 @@ import {
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import type { IMcpServerEnablementService } from '../services/acp/mcpServerEnablementService.js'
+import type { ITimelineService } from '../services/timeline/TimelineService.js'
+import type { ITreeViewsService } from '../services/extensions/TreeViewsService.js'
+import type { IExtensionMcpServersService } from '../services/extensions/extensionMcpServersService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
@@ -75,6 +80,13 @@ import {
   type E2EStatusBarEntry,
   type E2EUpdateState,
   type E2EAiDebugRecord,
+  type E2ECodeAction,
+  type E2EContributedMcpServer,
+  type E2EEditorDecoration,
+  type E2EMarker,
+  type E2ENotification,
+  type E2ETimelineItem,
+  type E2ETreeItem,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
@@ -96,6 +108,7 @@ export interface E2EProbeServices {
   readonly editorGroupsService: IEditorGroupsService
   readonly editorResolverService: IEditorResolverService
   readonly statusBarService: IStatusBarService
+  readonly notificationService: INotificationService
   readonly workspaceService: IWorkspaceService
   readonly windowsService: IWindowsService
   readonly layoutService: ILayoutService
@@ -106,6 +119,7 @@ export interface E2EProbeServices {
   readonly acpSessionService: IAcpSessionService
   readonly acpSessionHistoryService: IAcpSessionHistoryService
   readonly mcpServerEnablementService: IMcpServerEnablementService
+  readonly extensionMcpServersService: IExtensionMcpServersService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
@@ -113,6 +127,8 @@ export interface E2EProbeServices {
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
+  readonly timelineService: ITimelineService
+  readonly treeViewsService: ITreeViewsService
   readonly aiDebugService: IAiDebugService
   readonly timerService: ITimerService
   readonly interactionPerfService: IInteractionPerfService
@@ -190,6 +206,58 @@ const NONE_TOKEN = {
 /** Same none-token, widened for the platform-typed workspace symbol providers. */
 const NONE_PLATFORM_TOKEN =
   NONE_TOKEN as unknown as import('@universe-editor/platform').CancellationToken
+
+function severityName(severity: Severity): 'info' | 'warning' | 'error' {
+  switch (severity) {
+    case Severity.Warning:
+      return 'warning'
+    case Severity.Error:
+      return 'error'
+    default:
+      return 'info'
+  }
+}
+
+function toE2EMarker(m: monaco.editor.IMarker): E2EMarker {
+  return {
+    message: m.message,
+    severity: m.severity,
+    startLineNumber: m.startLineNumber,
+    ...(m.relatedInformation !== undefined && m.relatedInformation.length > 0
+      ? {
+          relatedInformation: m.relatedInformation.map((ri) => ({
+            message: ri.message,
+            uri: ri.resource.toString(),
+          })),
+        }
+      : {}),
+  }
+}
+
+async function getCompletionLabels(
+  uri: string,
+  lineNumber: number,
+  column: number,
+): Promise<readonly string[]> {
+  const monacoNs = await MonacoLoader.ensureInitialized()
+  const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+  if (!model) return []
+  const features = await MonacoLoader.getLanguageFeaturesService()
+  const position = new monacoNs.Position(lineNumber, column)
+  const labels: string[] = []
+  for (const provider of features.completionProvider.ordered(model)) {
+    const list = await provider.provideCompletionItems(
+      model,
+      position,
+      { triggerKind: 0 },
+      NONE_TOKEN,
+    )
+    for (const item of list?.suggestions ?? []) {
+      labels.push(typeof item.label === 'string' ? item.label : item.label.label)
+    }
+  }
+  return labels
+}
 
 class DummyEditorInput extends EditorInput {
   constructor(
@@ -305,6 +373,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(entry.tooltip !== undefined && { tooltip: entry.tooltip }),
         ...(entry.id !== undefined && { entryId: entry.id }),
         ...(entry.backgroundColor !== undefined && { backgroundColor: entry.backgroundColor }),
+      })),
+    getNotifications: (): E2ENotification[] =>
+      services.notificationService.notifications.get().map((n) => ({
+        message: n.message,
+        severity: severityName(n.severity),
+        actions: n.actions?.map((a) => a.label) ?? [],
       })),
     getUpdateState: async (): Promise<E2EUpdateState> => {
       const s = await services.updateService.getState()
@@ -588,6 +662,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(m.transport !== undefined && { transport: m.transport }),
       }))
     },
+    getContributedMcpServers: (): readonly E2EContributedMcpServer[] =>
+      Object.entries(services.extensionMcpServersService.rawRecord).map(([name, entry]) => {
+        const command =
+          entry !== null && typeof entry === 'object' && 'command' in entry
+            ? String((entry as { command: unknown }).command ?? '')
+            : ''
+        return { name, command }
+      }),
     setAcpSessionMcpServers: (names) => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')
@@ -880,11 +962,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         owner: 'markdown',
         resource: monacoNs.Uri.parse(uri),
       })
-      return markers.map((m) => ({
-        message: m.message,
-        severity: m.severity,
-        startLineNumber: m.startLineNumber,
-      }))
+      return markers.map(toE2EMarker)
     },
     getMarkers: async (uri: string, owner?: string) => {
       const monacoNs = await MonacoLoader.ensureInitialized()
@@ -892,11 +970,62 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(owner !== undefined ? { owner } : {}),
         resource: monacoNs.Uri.parse(uri),
       })
-      return markers.map((m) => ({
-        message: m.message,
-        severity: m.severity,
-        startLineNumber: m.startLineNumber,
-      }))
+      return markers.map(toE2EMarker)
+    },
+    getCodeActions: async (
+      uri: string,
+      range: {
+        startLineNumber: number
+        startColumn: number
+        endLineNumber: number
+        endColumn: number
+      },
+    ): Promise<readonly E2ECodeAction[]> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const out: E2ECodeAction[] = []
+      for (const provider of features.codeActionProvider.ordered(model)) {
+        const list = await provider.provideCodeActions(
+          model,
+          new monacoNs.Range(
+            range.startLineNumber,
+            range.startColumn,
+            range.endLineNumber,
+            range.endColumn,
+          ),
+          { markers: [], trigger: monacoNs.languages.CodeActionTriggerType.Invoke },
+          NONE_TOKEN,
+        )
+        for (const action of list?.actions ?? []) {
+          out.push({
+            title: action.title,
+            ...(action.kind !== undefined && { kind: action.kind }),
+            hasEdit: action.edit !== undefined,
+          })
+        }
+      }
+      return out
+    },
+    getEditorDecorations: async (uri: string): Promise<readonly E2EEditorDecoration[]> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      return model.getAllDecorations().map((d) => {
+        const hover = d.options.hoverMessage
+        const hoverParts = Array.isArray(hover) ? hover : hover ? [hover] : []
+        const description =
+          hoverParts.length > 0 ? hoverParts.map((h) => h.value).join('\n') : undefined
+        return {
+          startLineNumber: d.range.startLineNumber,
+          startColumn: d.range.startColumn,
+          endLineNumber: d.range.endLineNumber,
+          endColumn: d.range.endColumn,
+          ...(d.options.className != null && { className: d.options.className }),
+          ...(description !== undefined && { description }),
+        }
+      })
     },
     getMarkdownLineTokens: async (
       uri: string,
@@ -1207,30 +1336,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
       return parts.join('\n')
     },
-    getMarkdownCompletions: async (
-      uri: string,
-      lineNumber: number,
-      column: number,
-    ): Promise<readonly string[]> => {
-      const monacoNs = await MonacoLoader.ensureInitialized()
-      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
-      if (!model) return []
-      const features = await MonacoLoader.getLanguageFeaturesService()
-      const position = new monacoNs.Position(lineNumber, column)
-      const labels: string[] = []
-      for (const provider of features.completionProvider.ordered(model)) {
-        const list = await provider.provideCompletionItems(
-          model,
-          position,
-          { triggerKind: 0 },
-          NONE_TOKEN,
-        )
-        for (const item of list?.suggestions ?? []) {
-          labels.push(typeof item.label === 'string' ? item.label : item.label.label)
-        }
-      }
-      return labels
-    },
+    getMarkdownCompletions: (uri: string, lineNumber: number, column: number) =>
+      getCompletionLabels(uri, lineNumber, column),
+    getCompletions: (uri: string, lineNumber: number, column: number) =>
+      getCompletionLabels(uri, lineNumber, column),
     getMarkdownReferences: async (
       uri: string,
       lineNumber: number,
@@ -1513,6 +1622,32 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.viewsService.getActiveViewContainerId(location),
     getViewIdsByContainer: (containerId: string) =>
       services.viewDescriptorService.getViewsByContainer(containerId).map((v) => v.id),
+    getTreeItems: async (viewId: string): Promise<readonly E2ETreeItem[]> => {
+      await services.treeViewsService.loadChildren(viewId)
+      const roots = services.treeViewsService.getRoots(viewId)
+      if (!roots) return []
+      return roots.map((item) => ({
+        label: item.label,
+        collapsibleState: item.collapsibleState,
+      }))
+    },
+    getTimelineItems: async (uri: string): Promise<readonly E2ETimelineItem[]> => {
+      const resource = URI.parse(uri)
+      const out: E2ETimelineItem[] = []
+      for (const provider of services.timelineService.getProvidersForUri(resource)) {
+        const dto = await services.timelineService.getTimeline(provider.handle, resource, {
+          resetCache: true,
+        })
+        for (const item of dto?.items ?? []) {
+          out.push({
+            label: item.label,
+            timestamp: item.timestamp,
+            ...(item.contextValue !== undefined && { contextValue: item.contextValue }),
+          })
+        }
+      }
+      return out
+    },
     getViewContainerIdsByLocation: (location: number) =>
       services.viewDescriptorService.getViewContainersByLocation(location).map((c) => c.id),
     moveViewsToContainer: (viewIds: readonly string[], targetContainerId: string) =>

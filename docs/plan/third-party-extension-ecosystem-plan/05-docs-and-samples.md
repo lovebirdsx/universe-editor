@@ -60,7 +60,7 @@ docs/extension-dev/zh-CN/
 - **形态**：仓库新顶层目录 `samples/`，**不进 pnpm workspace globs**（与 `extensions-external` 同理但更进一步）——依赖写**真实 npm 版本号**（`"@universe-editor/extension-api": "^0.7.0"`），无任何 workspace/createRequire hack，`git clone` 单拎这个目录出去就能构建。它就是"仓库外开发者项目"在仓库里的替身。
 - **产生方式**：用 create-extension 模板生成后提交固化——它同时验证模板产物质量；模板改版时重新生成同步（脚手架单测里加"模板生成物 ≡ samples 骨架"的漂移检查，或干脆由 CI 重生成比对）。
 - **数量**：MVP 只放 `hello-world`（basic 模板产物 + 少量真实注释）。webview 等进阶场景**不复制样例**，文档直接链 `extensions-external/pdf` 的 `src/`（标注：src 可参考、构建脚本是仓库内形态勿照抄）。
-- 公开阶段若要独立 samples 仓库（对标 vscode-extension-samples），从 `samples/` 平移即可（登记 06）。
+- 公开阶段若要独立 samples 仓库（对标 vscode-extension-samples），从 `samples/` 平移即可（登记 06）。**现状（2026-08）**：已落地——独立仓库 `universe-editor-extension-samples`（与主仓库同级，暂无远程 URL）汇集 19 个 sample，每个三件套（package.json/README/spec）+ e2e 冒烟验证，并带一张与官方 vscode-extension-samples 的 81 项能力对照表，详见该仓库根 README。
 
 ## 5. CI：外部消费者冒烟（防"仓库内能跑、仓库外必挂"）
 
