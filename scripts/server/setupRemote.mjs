@@ -15,8 +15,10 @@
  *  install 流程：本地 bundle → tar 打包（setup.mjs/setup.sh/setup.ps1/serverEnv.mjs +
  *  dist/server.js + dist/server.env）→ scp 上传 → 远端解包 → 提权执行首装 → 健康检查。
  *  提权密码在本地控制台输入：
- *    Ubuntu  ssh -t 分配 TTY，sudo 密码提示直接出现在本地终端；
- *            顺带为该用户写 /etc/sudoers.d/<service> 的 deploy 免密规则（--deploy-user 下传）。
+ *    Ubuntu  本地星号回显读 sudo 密码，经 ssh 的 stdin 管道喂远端 sudo -S（不走 ssh -t——
+ *            Windows OpenSSH 的 TTY 密码输入偶发不转发首次输入，远端 sudo 会一直卡在读
+ *            密码）；远端已免密（sudo -n 通过）则自动跳过密码。顺带为该用户写
+ *            /etc/sudoers.d/<service> 的 deploy 免密规则（--deploy-user 下传）。
  *    Windows Administrators 组成员的 ssh 会话自带提升令牌，无需 UAC；先探测 node，
  *            已有则直接 setup.mjs，缺失走 setup.ps1（winget 装 Node——ssh 非交互会话下
  *            经常不可用，失败时会提示先手动装一次 Node LTS）。
@@ -41,7 +43,8 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { createInterface } from 'node:readline/promises'
+import { createInterface as createPromptInterface } from 'node:readline/promises'
+import { StringDecoder } from 'node:string_decoder'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { extractLocalVersion, extractRemoteVersion, isWindowsAppDir, parseArgs } from './deploy.mjs'
@@ -117,9 +120,18 @@ export function buildRemoteUnpackCommand({ staging, windows }) {
   )
 }
 
-// Linux 提权靠 ssh -t 下 sudo 交互（密码在本地终端输入）；
+// Linux 提权靠 sudo：useStdinPassword 时用 sudo -S 从 stdin 读密码（密码由本地经 ssh 管道喂入，
+// 不走 TTY——Windows OpenSSH 的 TTY 密码输入偶发不转发首次输入）；否则直接 sudo（远端已免密/
+// root，未免密时 sudo 因无 TTY 立即报错 fail-fast）。
 // Windows 管理员 ssh 会话已是提升令牌，直接执行（有 node 跳 setup.ps1 省掉 winget）。
-export function buildRemoteSetupCommand({ appDir, deployUser, staging, windows, hasNode }) {
+export function buildRemoteSetupCommand({
+  appDir,
+  deployUser,
+  staging,
+  windows,
+  hasNode,
+  useStdinPassword = false,
+}) {
   if (windows) {
     const dir = appDir.replace(/\//g, '\\').replace(/[\\]+$/, '')
     const setupArgs = `install --app-dir "${dir}"`
@@ -128,7 +140,10 @@ export function buildRemoteSetupCommand({ appDir, deployUser, staging, windows, 
       : `cd ${staging} && powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 ${setupArgs}`
   }
   const deployFlag = deployUser ? ` --deploy-user '${deployUser}'` : ''
-  return `cd ~/${staging} && sudo bash setup.sh install --app-dir '${appDir}'${deployFlag}`
+  // -S 从 stdin 读密码；-p '' 抑制远端重复的密码提示（本地已星号回显提示过一次），
+  // 密码错误时 "Sorry, try again." 仍正常显示。
+  const sudo = useStdinPassword ? "sudo -S -p ''" : 'sudo'
+  return `cd ~/${staging} && ${sudo} bash setup.sh install --app-dir '${appDir}'${deployFlag}`
 }
 
 export function buildRemoteCleanupCommand({ staging, windows }) {
@@ -139,7 +154,9 @@ export function buildRemoteCleanupCommand({ staging, windows }) {
 // status/restart/uninstall 不上传产物，直接用原生命令操作远端已安装的服务
 // （安装目录里没有 setup.mjs，原生命令与 setup.mjs 对应动作行为一致）。
 // Windows 防火墙规则按装机端口命名，卸载时 .env 里的端口未必与当初一致——用通配匹配。
-export function buildRemoteManageCommand({ action, appDir, windows }) {
+// Linux 提权同 buildRemoteSetupCommand：useStdinPassword 时 sudo -S 从 stdin 读密码，
+// uninstall 的多条 sudo 收进一个 bash -c（stdin 密码只喂得了一次）。
+export function buildRemoteManageCommand({ action, appDir, windows, useStdinPassword = false }) {
   if (windows) {
     switch (action) {
       case 'status':
@@ -164,14 +181,16 @@ export function buildRemoteManageCommand({ action, appDir, windows }) {
       case 'status':
         return `systemctl status ${SERVICE_NAME}`
       case 'restart':
-        return `sudo systemctl restart ${SERVICE_NAME}`
-      case 'uninstall':
+        return `${useStdinPassword ? "sudo -S -p ''" : 'sudo'} systemctl restart ${SERVICE_NAME}`
+      case 'uninstall': {
+        const sudo = useStdinPassword ? "sudo -S -p ''" : 'sudo'
+        // appDir 已校验无单引号；单引号防 bash -c 内的 $ 展开，与旧多 sudo 版本同安全级别。
         return (
-          `sudo systemctl disable --now ${SERVICE_NAME}; ` +
-          `sudo rm -f /etc/systemd/system/${SERVICE_NAME}.service; ` +
-          `sudo systemctl daemon-reload; ` +
-          `sudo rm -rf '${appDir}'`
+          `${sudo} bash -c "systemctl disable --now ${SERVICE_NAME}; ` +
+          `rm -f /etc/systemd/system/${SERVICE_NAME}.service; ` +
+          `systemctl daemon-reload; rm -rf '${appDir}'"`
         )
+      }
     }
   }
   return null
@@ -184,6 +203,66 @@ function die(msg) {
 
 function warn(msg) {
   console.warn(`\x1b[33m⚠ ${msg}\x1b[0m`)
+}
+
+// 交互终端读密码（星号回显、不回显明文）：raw 模式逐键拼装，回车结束。
+// 密码经 ssh 的 stdin 管道喂远端 sudo -S——不走 ssh -t（Windows OpenSSH 的 TTY 密码输入
+// 偶发不转发首次输入，远端 sudo 会一直卡在读密码且本地无任何输出，见 remoteShell.mjs）。
+// 不用 readline 的 terminal 模式：Interface 会自己回显每个输入字符（行编辑功能），
+// 与控制台 echo 一起把明文混进星号（k*u*r*o*）——这里直接 setRawMode + data 事件，
+// 屏幕回显全由本函数写。raw 下 Ctrl+C 是字符（）不是信号，退出前必须恢复回显。
+function readSecret(prompt) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin
+    const decoder = new StringDecoder('utf8')
+    const prevRaw = stdin.isRaw
+    let secret = ''
+    let done = false
+    const cleanup = () => {
+      stdin.removeListener('data', onData)
+      process.removeListener('SIGINT', onSigint)
+      if (!prevRaw && stdin.isRaw) stdin.setRawMode(false)
+      // resume 过的 TTY 读句柄会撑住事件循环：必须 pause 回退，否则主流程结束后进程挂起
+      stdin.pause()
+    }
+    const finish = () => {
+      if (done) return
+      done = true
+      cleanup()
+      process.stdout.write('\n')
+      resolve(secret)
+    }
+    const onData = (chunk) => {
+      for (const ch of decoder.write(chunk)) {
+        if (ch === '\r' || ch === '\n') return finish()
+        if (ch === '\x03') {
+          cleanup()
+          process.stdout.write('\n')
+          process.exit(130)
+        }
+        if (ch === '\x04') return finish() // Ctrl+D：按空密码结束（sudo 会自行报错）
+        if (ch === '\b' || ch === '\x7f') {
+          if (secret) {
+            secret = secret.slice(0, -1)
+            process.stdout.write('\b \b')
+          }
+        } else if (ch >= ' ') {
+          secret += ch
+          process.stdout.write('*')
+        }
+      }
+    }
+    const onSigint = () => {
+      cleanup()
+      process.stdout.write('\n')
+      process.exit(130)
+    }
+    process.once('SIGINT', onSigint)
+    stdin.resume()
+    stdin.setRawMode(true)
+    process.stdout.write(prompt)
+    stdin.on('data', onData)
+  })
 }
 
 async function fetchVersion(url) {
@@ -222,7 +301,9 @@ export function buildHealthTimeoutMessage({ healthUrl, localVersion, windows, re
   const lines = [`健康验证超时：${healthUrl} 未返回 v${localVersion}。`]
   if (windows) {
     const dir = appDir.replace(/\//g, '\\').replace(/[\\]+$/, '')
-    lines.push(`  上服务器查看任务状态：ssh ${remote} "schtasks /Query /TN ${TASK_NAME} /V /FO LIST"`)
+    lines.push(
+      `  上服务器查看任务状态：ssh ${remote} "schtasks /Query /TN ${TASK_NAME} /V /FO LIST"`,
+    )
     lines.push(
       `  若 State=Ready 且 LastTaskResult 非 0（启动即崩）：登服务器把 ${dir}\\run.cmd 里 ` +
         'node 命令行尾的 >nul 2>&1 临时去掉，手动执行 run.cmd 即可看到启动报错（修完恢复重定向）。',
@@ -291,13 +372,22 @@ async function main() {
       console.log(`  [dry-run] ${printable}`)
       return
     }
-    const res = spawnSync(cmd, cmdArgs, {
-      stdio: 'inherit',
+    const spawnOpts = {
+      stdio: opts.input === undefined ? 'inherit' : ['pipe', 'inherit', 'inherit'],
+      input: opts.input,
       timeout: opts.timeoutMs,
       ...opts.spawnOpts,
-    })
+    }
+    // shell:true + args 数组触发 node DEP0190 弃用警告（args 只拼接不转义）——Windows 上
+    // pnpm 是 .cmd shim 必须经 shell，改传拼好的单命令字符串（printable 已对含空格参数
+    // 加引号；参数均为脚本内定值，无外部输入）。
+    const res = spawnOpts.shell
+      ? spawnSync(printable, spawnOpts)
+      : spawnSync(cmd, cmdArgs, spawnOpts)
     if (res.error?.code === 'ETIMEDOUT') {
-      die(`命令超时（${Math.round((opts.timeoutMs ?? 0) / 1000)}s 无返回）: ${printable}${opts.hint ?? ''}`)
+      die(
+        `命令超时（${Math.round((opts.timeoutMs ?? 0) / 1000)}s 无返回）: ${printable}${opts.hint ?? ''}`,
+      )
     }
     if (res.error) die(`执行失败: ${printable}\n  ${res.error.message}`)
     if (res.status === null) die(`命令被信号终止 (${res.signal}): ${printable}${opts.hint ?? ''}`)
@@ -310,10 +400,21 @@ async function main() {
     }
   }
 
-  // tty=true 时加 -t 分配远端 TTY（sudo 密码提示出现在本地终端）；否则 -n（stdin=nul），
+  // tty=true 时加 -t 分配远端 TTY；stdinPipe=true 时不加 -t/-n（stdin 管道喂远端 sudo -S，
+  // 密码经管道可靠传输），加 BatchMode=yes 让 ssh 层交互 fail-fast；否则 -n（stdin=nul），
   // 规避 Win32-OpenSSH 非交互挂起，见 remoteShell.mjs 文件头。
   function sshRemote(cmdStr, opts = {}) {
-    run('ssh', buildSshArgs({ baseArgs: sshBase, remote, command: cmdStr, tty: opts.tty }), opts)
+    run(
+      'ssh',
+      buildSshArgs({
+        baseArgs: sshBase,
+        remote,
+        command: cmdStr,
+        tty: opts.tty,
+        stdinPipe: opts.stdinPipe,
+      }),
+      opts,
+    )
   }
 
   // 登录探测（node 是否就绪），不应答视为缺失。
@@ -336,17 +437,43 @@ async function main() {
     const answer = probeRemoteShellAnswer({ baseArgs: sshBase, remote })
     if (isCmdExeShell(answer)) return
     if (answer !== null) {
-      die(`远端 OpenSSH 默认 shell 不是 cmd.exe（${CMD_SHELL_PROBE} 回显: "${answer}"）\n  ${CMD_SHELL_FIX_HINT}`)
+      die(
+        `远端 OpenSSH 默认 shell 不是 cmd.exe（${CMD_SHELL_PROBE} 回显: "${answer}"）\n  ${CMD_SHELL_FIX_HINT}`,
+      )
     }
-    warn(`远端默认 shell 探测未应答（ssh 失败？），仍按 cmd 语法执行——解析失败请先检查 DefaultShell`)
+    warn(
+      `远端默认 shell 探测未应答（ssh 失败？），仍按 cmd 语法执行——解析失败请先检查 DefaultShell`,
+    )
   }
 
   async function confirm(prompt) {
     if (!process.stdin.isTTY) die('非交互终端下必须加 --yes（或先用 --dry-run 检查）')
-    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    const rl = createPromptInterface({ input: process.stdin, output: process.stdout })
     const answer = (await rl.question(prompt)).trim().toLowerCase()
     rl.close()
     if (answer !== 'y' && answer !== 'yes') die('已取消')
+  }
+
+  // Linux 提权的 sudo 密码：远端已免密直接跳过；交互终端本地读密码（星号回显，经 ssh
+  // stdin 管道喂 sudo -S——不走 -t，见 remoteShell.mjs）；非交互终端无法读密码，要求
+  // 远端已免密/root（否则远端 sudo 因无 TTY 立即报错）。dry-run 不读密码，按 TTY 与否
+  // 返回占位串决定打印 -S 形态，保证与真实执行一致。
+  // 免密探测用与目标命令同形态的无副作用命令（sudoers 只认精确命令匹配）：
+  //   install/uninstall 探测 `sudo -n bash -c true`——只有全免密（ALL NOPASSWD）才跳过，
+  //   命令特定的 deploy 规则不覆盖 setup.sh / bash -c，仍读密码喂 sudo -S；
+  //   restart 探测 `sudo -n /usr/bin/true`——deploy 规则含该锚点（buildDeploySudoers），
+  //   规则在 ⇒ restart 亦在规则内 ⇒ 免密跳过。
+  async function resolveSudoPassword(remote, probeCmd) {
+    if (!process.stdin.isTTY) {
+      warn('非交互终端：不读 sudo 密码，远端 sudo 须已免密（或改用 root 登录）')
+      return null
+    }
+    if (config.dryRun) return '<password>'
+    if (probeRemote(`sudo -n ${probeCmd}`) !== null) {
+      console.log('  远端 sudo 已免密，无需输入密码')
+      return null
+    }
+    return readSecret(`远端 sudo 密码（${remote}，不回显）: `)
   }
 
   if (config.action !== 'install') {
@@ -357,14 +484,24 @@ async function main() {
       await confirm(`确认卸载 ${remote} 上的服务（删除服务与安装目录，发布目录保留）? [y/N] `)
     }
     if (isWindowsTarget) assertRemoteCmdShell()
+    // Linux restart/uninstall 需提权：本地读密码经 ssh stdin 喂远端 sudo -S（已免密则跳过）。
+    const needsSudo = !isWindowsTarget && config.action !== 'status'
+    const password = needsSudo
+      ? await resolveSudoPassword(
+          remote,
+          config.action === 'restart' ? '/usr/bin/true' : 'bash -c true',
+        )
+      : null
     const cmdStr = buildRemoteManageCommand({
       action: config.action,
       appDir: config.appDir,
       windows: isWindowsTarget,
+      useStdinPassword: password !== null,
     })
-    // systemctl status 不接 TTY（避免 pager 阻塞）；restart/uninstall 需要 sudo 密码用 -t。
+    // systemctl status 不接 TTY（避免 pager 阻塞）；提权用 stdinPipe（密码经管道喂 sudo -S）。
     sshRemote(cmdStr, {
-      tty: !isWindowsTarget && config.action !== 'status',
+      stdinPipe: password !== null,
+      input: password === null ? undefined : `${password}\n`,
       tolerant: config.action !== 'restart',
       timeoutMs: TIMEOUT_MS.manage,
     })
@@ -445,7 +582,9 @@ async function main() {
     hint: '\n  远端解包失败：确认远端装有 tar（Windows 10+ 自带 bsdtar）且上载目录可写',
   })
 
-  console.log(`🔧 提权执行首装${isWindowsTarget ? '' : '（sudo 密码在本地终端输入）'}`)
+  console.log(
+    `🔧 提权执行首装${isWindowsTarget ? '' : '（密码本地输入 → ssh stdin → 远端 sudo -S）'}`,
+  )
   if (isWindowsTarget) {
     // winget 在 ssh 非交互会话下经常不可用——有 node 就走 setup.mjs 直装，绕开装 Node 步骤。
     let hasNode = true
@@ -481,17 +620,20 @@ async function main() {
     if (!deployUser) {
       warn(`ssh 用户名 "${config.user}" 不是合法 Linux 用户名，跳过自动写 deploy sudoers`)
     }
+    const password = await resolveSudoPassword(remote, 'bash -c true')
     sshRemote(
       buildRemoteSetupCommand({
         appDir: config.appDir,
         deployUser,
         staging,
         windows: false,
+        useStdinPassword: password !== null,
       }),
       {
-        tty: true,
+        stdinPipe: password !== null,
+        input: password === null ? undefined : `${password}\n`,
         timeoutMs: TIMEOUT_MS.install,
-        hint: '\n  sudo 提权失败：确认 ssh 用户有 sudo 权限（或改用 root 登录）',
+        hint: '\n  sudo 提权失败：确认 ssh 用户有 sudo 权限（或改用 root 登录）；密码输错直接重跑本命令',
       },
     )
   }

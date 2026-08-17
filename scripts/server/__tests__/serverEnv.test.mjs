@@ -160,14 +160,15 @@ test('renderServerEnv 文本可被 parseEnvText 还原成 values', () => {
   assert.deepEqual(parseEnvText(text), values)
 })
 
-test('buildDeploySudoers 覆盖 deploy 四条远端 root 操作（cp 三路 + restart）', () => {
+test('buildDeploySudoers 覆盖 deploy 四条远端 root 操作（cp 三路 + restart）+ true 探测锚点', () => {
   assert.equal(
     buildDeploySudoers('deploy', '/opt/universe-update-server', '/srv/universe-editor'),
     'deploy ALL=(root) NOPASSWD: ' +
       '/usr/bin/cp /home/deploy/server.js.v* /opt/universe-update-server/server.mjs, ' +
       '/usr/bin/cp /home/deploy/server.env.v* /opt/universe-update-server/server.env, ' +
       '/usr/bin/cp /home/deploy/index.html.v* /srv/universe-editor/index.html, ' +
-      '/usr/bin/systemctl restart universe-update-server',
+      '/usr/bin/systemctl restart universe-update-server, ' +
+      '/usr/bin/true',
   )
 })
 

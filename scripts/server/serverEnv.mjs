@@ -174,6 +174,9 @@ export function findAuthDirConflict({ root, galleryRoot, authDir }) {
 
 // deploy 通道的免密 sudo 白名单（server:deploy 的四条远端 root 操作：cp 三路 + restart）。
 // index.html 落 <UE_SERVER_ROOT>（发布根）而非 <appDir>，所以 serverRoot 是第三个入参。
+// 末尾的 /usr/bin/true 是免密探测锚点：sudoers 引擎只认精确命令匹配，`sudo -n true` 检查
+// 在只有命令特定 NOPASSWD 规则时必然失败（true 不在规则里）——把 true 也写进规则，
+// deploy 与 setupRemote 的免密探测（sudo -n /usr/bin/true）才能无副作用通过。
 // 单一事实源：setup 首装自动写 /etc/sudoers.d/ 与 deploy 的手动配置提示都用它——
 // 规则变化（如新增 server.env / index.html 通道）只改这里，两处不再漂移。
 export function buildDeploySudoers(user, appDir, serverRoot) {
@@ -181,7 +184,8 @@ export function buildDeploySudoers(user, appDir, serverRoot) {
     `${user} ALL=(root) NOPASSWD: /usr/bin/cp /home/${user}/server.js.v* ${appDir}/server.mjs, ` +
     `/usr/bin/cp /home/${user}/${SERVER_ENV_FILE}.v* ${appDir}/${SERVER_ENV_FILE}, ` +
     `/usr/bin/cp /home/${user}/index.html.v* ${serverRoot}/index.html, ` +
-    `/usr/bin/systemctl restart universe-update-server`
+    `/usr/bin/systemctl restart universe-update-server, ` +
+    `/usr/bin/true`
   )
 }
 

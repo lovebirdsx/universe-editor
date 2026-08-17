@@ -273,11 +273,13 @@ async function main() {
       console.log(`  [dry-run] ${printable}`)
       return
     }
-    const res = spawnSync(cmd, cmdArgs, {
-      stdio: 'inherit',
-      timeout: opts.timeoutMs,
-      ...opts.spawnOpts,
-    })
+    const spawnOpts = { stdio: 'inherit', timeout: opts.timeoutMs, ...opts.spawnOpts }
+    // shell:true + args 数组触发 node DEP0190 弃用警告（args 只拼接不转义）——Windows 上
+    // pnpm 是 .cmd shim 必须经 shell，改传拼好的单命令字符串（printable 已对含空格参数
+    // 加引号；参数均为脚本内定值，无外部输入）。
+    const res = spawnOpts.shell
+      ? spawnSync(printable, spawnOpts)
+      : spawnSync(cmd, cmdArgs, spawnOpts)
     if (res.error?.code === 'ETIMEDOUT') {
       die(
         `命令超时（${Math.round((opts.timeoutMs ?? 0) / 1000)}s 无返回）: ${printable}${opts.hint ?? ''}`,
@@ -318,7 +320,9 @@ async function main() {
         `远端 OpenSSH 默认 shell 不是 cmd.exe（${CMD_SHELL_PROBE} 回显: "${answer}"）\n  ${CMD_SHELL_FIX_HINT}`,
       )
     }
-    warn(`远端默认 shell 探测未应答（ssh 失败？），仍按 cmd 语法执行——解析失败请先检查 DefaultShell`)
+    warn(
+      `远端默认 shell 探测未应答（ssh 失败？），仍按 cmd 语法执行——解析失败请先检查 DefaultShell`,
+    )
   }
 
   // 下载页 index.html 随 server.js 一并部署，落 <UE_SERVER_ROOT>/index.html（发布根，与安装目录解耦）。
@@ -346,7 +350,9 @@ async function main() {
     serverRoot = renderedEnv.values.UE_SERVER_ROOT
   }
   if (!serverRoot) {
-    die(`无法确定 UE_SERVER_ROOT——index.html 需要落到发布根（在 .env.${mode} 里配置 UE_SERVER_ROOT）`)
+    die(
+      `无法确定 UE_SERVER_ROOT——index.html 需要落到发布根（在 .env.${mode} 里配置 UE_SERVER_ROOT）`,
+    )
   }
 
   console.log(`\n🚀 [${mode}] 部署 ${SERVICE_NAME} v${localVersion} → ${remote}:${config.appDir}`)
@@ -372,7 +378,9 @@ async function main() {
     })
   } else {
     console.log('🔐 检查远端免密 sudo')
-    sshExec('sudo -n true', {
+    // 探测锚点 /usr/bin/true 在 buildDeploySudoers 规则内（sudoers 只认精确命令匹配，
+    // `sudo -n true` 对命令特定 NOPASSWD 规则必然失败）；无副作用、免密即过。
+    sshExec('sudo -n /usr/bin/true', {
       timeoutMs: TIMEOUT_MS.remote,
       hint:
         `\n  部署用户缺免密 sudo。在服务器上执行 sudo visudo -f /etc/sudoers.d/${SERVICE_NAME}，加入：\n` +

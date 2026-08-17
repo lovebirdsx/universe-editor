@@ -91,7 +91,7 @@ test('buildRemoteUnpackCommand 两平台都先清重建 staging，且 Windows �
   assert.ok(linux.indexOf('mkdir -p ~/s') < linux.indexOf('tar -xzf'))
 })
 
-test('buildRemoteSetupCommand Linux：sudo bash setup.sh，--deploy-user 按需追加', () => {
+test('buildRemoteSetupCommand Linux：sudo bash setup.sh，--deploy-user 按需追加；密码经 stdin 时 sudo -S', () => {
   assert.equal(
     buildRemoteSetupCommand({
       appDir: '/opt/universe-update-server',
@@ -110,6 +110,16 @@ test('buildRemoteSetupCommand Linux：sudo bash setup.sh，--deploy-user 按需�
       windows: false,
     }),
     "cd ~/ue-server-setup-v4 && sudo bash setup.sh install --app-dir '/data/app'",
+  )
+  assert.equal(
+    buildRemoteSetupCommand({
+      appDir: '/data/app',
+      deployUser: 'deploy',
+      staging: 'ue-server-setup-v4',
+      windows: false,
+      useStdinPassword: true,
+    }),
+    "cd ~/ue-server-setup-v4 && sudo -S -p '' bash setup.sh install --app-dir '/data/app' --deploy-user 'deploy'",
   )
 })
 
@@ -146,7 +156,7 @@ test('buildRemoteCleanupCommand 两平台清理暂存目录与 tar 包', () => {
   )
 })
 
-test('buildRemoteManageCommand Linux：status 无 sudo，restart 用 sudo，uninstall 复刻 setup 语义', () => {
+test('buildRemoteManageCommand Linux：status 无 sudo；restart 提权；uninstall 单 sudo bash -c 收多条命令', () => {
   assert.equal(
     buildRemoteManageCommand({ action: 'status', appDir: '/opt/app', windows: false }),
     'systemctl status universe-update-server',
@@ -157,14 +167,34 @@ test('buildRemoteManageCommand Linux：status 无 sudo，restart 用 sudo，unin
   )
   assert.equal(
     buildRemoteManageCommand({
+      action: 'restart',
+      appDir: '/opt/app',
+      windows: false,
+      useStdinPassword: true,
+    }),
+    "sudo -S -p '' systemctl restart universe-update-server",
+  )
+  // 密码经 stdin 只能喂一次，多条 sudo 收进一个 bash -c；appDir 单引号防 bash -c 内 $ 展开
+  assert.equal(
+    buildRemoteManageCommand({
+      action: 'uninstall',
+      appDir: '/opt/universe-update-server',
+      windows: false,
+      useStdinPassword: true,
+    }),
+    "sudo -S -p '' bash -c \"systemctl disable --now universe-update-server; " +
+      'rm -f /etc/systemd/system/universe-update-server.service; ' +
+      "systemctl daemon-reload; rm -rf '/opt/universe-update-server'\"",
+  )
+  assert.equal(
+    buildRemoteManageCommand({
       action: 'uninstall',
       appDir: '/opt/universe-update-server',
       windows: false,
     }),
-    'sudo systemctl disable --now universe-update-server; ' +
-      'sudo rm -f /etc/systemd/system/universe-update-server.service; ' +
-      'sudo systemctl daemon-reload; ' +
-      "sudo rm -rf '/opt/universe-update-server'",
+    'sudo bash -c "systemctl disable --now universe-update-server; ' +
+      'rm -f /etc/systemd/system/universe-update-server.service; ' +
+      "systemctl daemon-reload; rm -rf '/opt/universe-update-server'\"",
   )
 })
 
@@ -237,7 +267,7 @@ const linuxDryRun = [
   'http://127.0.0.1:9/',
 ]
 
-test('install dry-run：全链路只打印命令，ssh -t 下 sudo 提权并下传 --deploy-user', () => {
+test('install dry-run：全链路只打印命令，ssh 下 sudo 提权并下传 --deploy-user', () => {
   const res = runSetup(linuxDryRun)
   assert.equal(res.status, 0, res.stderr)
   assert.match(res.stdout, /\[prod\] 远程首装/)
@@ -245,11 +275,13 @@ test('install dry-run：全链路只打印命令，ssh -t 下 sudo 提权并下�
   assert.match(res.stdout, /\[dry-run\] tar -czf .*ue-server-setup-v\d+\.tgz -C .*setup\.mjs/)
   assert.match(res.stdout, /\[dry-run\] scp .*example\.invalid:~\/ue-server-setup-v\d+\.tgz/)
   assert.match(res.stdout, /mkdir -p ~\/ue-server-setup-v\d+ && tar -xzf/)
-  assert.match(res.stdout, /ssh .*-t .*sudo bash setup\.sh install --app-dir/)
+  // 测试进程 stdin 非 TTY：不读密码，走 sudo（无 -S），ssh 无 -t
+  assert.match(res.stdout, /ssh .*sudo bash setup\.sh install --app-dir/)
   assert.match(res.stdout, /--deploy-user 'deploy'/)
   assert.match(res.stdout, /\[dry-run\] .*rm -rf ~\/ue-server-setup-v\d+/)
   assert.match(res.stdout, /健康验证将轮询/)
   assert.doesNotMatch(res.stdout, /继续远程首装\?/)
+  assert.doesNotMatch(res.stdout, / -t /)
 })
 
 test('install dry-run：非法 Linux 用户名时下传被跳过', () => {
@@ -289,16 +321,19 @@ test('install dry-run Windows：tar 相对落 %USERPROFILE%，探测 node 后直
   assert.match(res.stdout, /\[test\] 远程首装/)
   assert.match(res.stdout, /\[dry-run\] ssh .*echo %comspec%.*探测远端默认 shell/)
   assert.match(res.stdout, /\[dry-run\] scp .*example\.invalid:ue-server-setup-v\d+\.tgz/)
-  assert.match(res.stdout, /rmdir \/s \/q ue-server-setup-v\d+ 2>nul & mkdir ue-server-setup-v\d+ && tar -xzf/)
+  assert.match(
+    res.stdout,
+    /rmdir \/s \/q ue-server-setup-v\d+ 2>nul & mkdir ue-server-setup-v\d+ && tar -xzf/,
+  )
   assert.match(res.stdout, /\[dry-run\] ssh .*node --version/)
   assert.match(res.stdout, /cd ue-server-setup-v\d+ && node setup\.mjs install --app-dir/)
   assert.doesNotMatch(res.stdout, /sudo/)
 })
 
-test('status/restart dry-run Linux：原生命令直发，restart 带 -t，无确认', () => {
+test('status/restart dry-run Linux：原生命令直发，无确认；非 TTY 下 restart 不读密码', () => {
   for (const [action, pattern] of [
     ['status', /ssh .*systemctl status universe-update-server/],
-    ['restart', /ssh .*-t .*sudo systemctl restart universe-update-server/],
+    ['restart', /ssh .*sudo systemctl restart universe-update-server/],
   ]) {
     const res = runSetup([...linuxDryRun, '--action', action])
     assert.equal(res.status, 0, res.stderr)
@@ -307,12 +342,12 @@ test('status/restart dry-run Linux：原生命令直发，restart 带 -t，无�
   }
 })
 
-test('uninstall dry-run Linux：复刻 setup 语义的原生命令链', () => {
+test('uninstall dry-run Linux：单 sudo bash -c 复刻 setup 语义的命令链', () => {
   const res = runSetup([...linuxDryRun, '--action', 'uninstall'])
   assert.equal(res.status, 0, res.stderr)
-  assert.match(res.stdout, /sudo systemctl disable --now universe-update-server/)
-  assert.match(res.stdout, /sudo rm -f \/etc\/systemd\/system\/universe-update-server\.service/)
-  assert.match(res.stdout, /sudo rm -rf '\/opt\/universe-update-server'/)
+  assert.match(res.stdout, /sudo bash -c "systemctl disable --now universe-update-server;/)
+  assert.match(res.stdout, /rm -f \/etc\/systemd\/system\/universe-update-server\.service/)
+  assert.match(res.stdout, /rm -rf '\/opt\/universe-update-server'/)
   assert.doesNotMatch(res.stdout, /确认卸载/)
 })
 

@@ -11,6 +11,12 @@
  *  另一个坑：Win32-OpenSSH 在继承控制台 stdin 的非交互命令上退出时可能挂起
  *  （close - IO is still pending on closed socket，scp 上是无害告警，ssh 上会整进程
  *  卡死）。非交互调用一律加 -n 让 ssh 从 nul 读 stdin；密码/host-key 确认走 TTY 不受影响。
+ *
+ *  还有一个坑：ssh -t 下远端 sudo 从 TTY 读密码，Windows 控制台经 spawnSync 继承的
+ *  stdin 偶发不转发首次输入——远端 sudo 一直卡在读密码（termios -echo），本地却无任何
+ *  输出。所以提权路径不再走 -t，改为本地读密码后经 ssh 的 stdin 管道喂远端 sudo -S
+ *  （stdinPipe）：数据经管道可靠传输，不依赖控制台交互；BatchMode=yes 让 host-key
+ *  未信任等情况 fail-fast 而非挂起，也不拦 stdin 数据转发。
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
@@ -27,8 +33,11 @@ export function isCmdExeShell(answer) {
   return typeof answer === 'string' && /\\cmd\.exe\s*$/i.test(answer.trim())
 }
 
-// tty=true（Linux sudo 就地输密码）分配 TTY；否则一律 -n（stdin=nul），见文件头坑说明。
-export function buildSshArgs({ baseArgs, remote, command, tty = false }) {
+// tty=true（Linux sudo 就地输密码）分配 TTY；stdinPipe=true 不加 -t/-n（要转发 stdin 给远端
+// sudo -S 读密码），改用 BatchMode=yes 禁用 ssh 层交互（host-key 确认等 fail-fast）；否则 -n
+// （stdin=nul），见文件头坑说明。
+export function buildSshArgs({ baseArgs, remote, command, tty = false, stdinPipe = false }) {
+  if (stdinPipe) return [...baseArgs, '-o', 'BatchMode=yes', remote, command]
   return [...baseArgs, tty ? '-t' : '-n', remote, command]
 }
 

@@ -187,7 +187,7 @@ test('buildServerEnvReadCommand：Linux cat、Windows type 且路径归一成反
   )
 })
 
-test('sudoersHint 覆盖 server.js、server.env 与 index.html 三条 cp 通道', () => {
+test('sudoersHint 覆盖 server.js、server.env 与 index.html 三条 cp 通道 + true 探测锚点', () => {
   const hint = sudoersHint('deploy', '/opt/universe-update-server', '/srv/universe-editor')
   assert.match(hint, /^deploy ALL=\(root\) NOPASSWD: /)
   assert.match(hint, /\/home\/deploy\/server\.js\.v\*/)
@@ -195,6 +195,8 @@ test('sudoersHint 覆盖 server.js、server.env 与 index.html 三条 cp 通道'
   assert.match(hint, /\/home\/deploy\/index\.html\.v\* \/srv\/universe-editor\/index\.html/)
   assert.match(hint, /\/opt\/universe-update-server\/server\.mjs/)
   assert.match(hint, /systemctl restart universe-update-server/)
+  // /usr/bin/true 是免密探测锚点：deploy 检查 `sudo -n /usr/bin/true`，缺它命令特定规则下检查必失败
+  assert.match(hint, /\/usr\/bin\/true$/)
 })
 
 const deployScript = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'deploy.mjs')
@@ -376,10 +378,16 @@ test('--skip-env 仍部署 index.html，UE_SERVER_ROOT 从远端 server.env 读�
   ])
   assert.equal(res.status, 0, res.stderr)
   // dry-run 下只打印远端读取命令（真实部署时执行 ssh cat 并解析 UE_SERVER_ROOT）
-  assert.match(res.stdout, /ssh .*"cat \/opt\/universe-update-server\/server\.env".*读远端 server\.env 取 UE_SERVER_ROOT/)
+  assert.match(
+    res.stdout,
+    /ssh .*"cat \/opt\/universe-update-server\/server\.env".*读远端 server\.env 取 UE_SERVER_ROOT/,
+  )
   // index.html 上传与安装步骤不受 --skip-env 影响，安装目标占位为远端读出的 UE_SERVER_ROOT
   assert.match(res.stdout, /\[dry-run\] scp .*index\.html\.v\d+/)
-  assert.match(res.stdout, /sudo -n cp ~\/index\.html\.v\d+ <远端 server\.env 的 UE_SERVER_ROOT>\/index\.html/)
+  assert.match(
+    res.stdout,
+    /sudo -n cp ~\/index\.html\.v\d+ <远端 server\.env 的 UE_SERVER_ROOT>\/index\.html/,
+  )
   // server.env 通道仍被跳过
   assert.doesNotMatch(res.stdout, /scp .*server\.env\.v/)
 })

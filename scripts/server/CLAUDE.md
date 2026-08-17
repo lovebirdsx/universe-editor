@@ -40,6 +40,13 @@ Universe Editor 的**更新分发 + 扩展市场后端**：单文件 Node 服务
 `serializeServerEnv` 遇到含换行的值直接抛错——systemd `EnvironmentFile` 与 cmd `set` 都不支持多行值，
 而 Ed25519 私钥是多行 PEM。想"图方便直接把私钥塞进环境变量"是走不通的，也不该走通。
 
+**4. `publishers.json`（认证数据）的读必须走 `readJsonFresh` 直读，勿退回 mtime 缓存。**
+Windows 下快速连续写同一文件 `mtimeMs` 可能不变（NTFS 时间戳更新合并，实测连 `mtimeNs` 都相同），
+`readJsonCached` 的 mtime 严格相等判定会误命中旧内容——「吊销 token → 请求 → 恢复 token → 请求」
+的毫秒级流程因此偶发 401（`publish-api.test.mjs` 曾 8/21 稳定挂）。registry/control.json 是市场数据
+（服务端自写 + `invalidateJsonCache` 已覆盖），保留 mtime 缓存没问题；认证数据正确性优先，文件
+极小，直读成本可忽略。2026-08 修复（SERVER_VERSION 6→7）。
+
 ## 配置怎么流动
 
 ```
@@ -86,8 +93,15 @@ Universe Editor 的**更新分发 + 扩展市场后端**：单文件 Node 服务
    报错+修复指引（remoteShell.mjs）。
 3. **Win32-OpenSSH 非交互 ssh 可能退出挂起**（`close - IO is still pending on closed
    socket`：scp 上是无害告警，ssh 上会整进程卡死无输出）。非交互调用一律 `-n`
-   （stdin=nul；密码/host-key 确认走 TTY 不受影响），只有 Linux sudo 交互用 `-t`；
-   且每个远端单步设了墙钟 timeout，挂死必然报错而不是无限等。
+   （stdin=nul），且每个远端单步设了墙钟 timeout，挂死必然报错而不是无限等。
+   唯一例外是**提权路径（stdinPipe）**：不加 `-n`（stdin 要喂远端 `sudo -S` 读密码），
+   改加 `-o BatchMode=yes` 让 ssh 层交互（host-key 确认等）fail-fast。这条是 2026-08
+   实机踩坑后换掉的：此前 `ssh -t` 下远端 sudo 从 TTY 读密码，Windows 控制台经
+   spawnSync 继承的 stdin **偶发不转发首次输入**——远端 sudo 一直卡在读密码（`ps` 见
+   sudo 进程 CPU 0 无子进程，`stty -a < /dev/pts/N` 显示 `-echo`），本地却无任何输出。
+   改后：本地 readline 星号回显读密码 → ssh stdin 管道 → 远端 `sudo -S`（`-p ''` 可
+   抑制远端重复提示）；远端已免密（`sudo -n -v` 通过——`-v` 只校验免密授权不执行命令，
+   首装后的 deploy 规则即此场景）自动跳过读密码。别退回 `-t`。
 4. **重装（已安装 + --force）顺序**：setup.mjs `installWin` 先 `schtasks /End` + 等停
    再覆盖 `server.mjs`/`run.cmd`，避免文件占用与 cmd 流式读到半截批文件；Linux 侧
    靠 unlink 语义不受影响，restart 收尾即可。

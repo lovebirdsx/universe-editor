@@ -36,7 +36,7 @@ Universe Editor 通过 **electron-updater 的 generic provider** 从一个**静�
 | `adminPage.mjs` | 审批管理页（`GET {base}gallery/admin`）的内嵌 HTML（中文，待审批/已启用/已拒绝三分区，零外部资源）。由 `server.mjs` 静态 import。 |
 | `bundle.mjs` | 打包脚本（`pnpm server:bundle`）：把 server + 发布依赖（adm-zip/zod/extension-packaging）esbuild 成单文件产物 `dist/server.js`。**部署跑的是这个产物**（服务器上无 node_modules）。加 `-- --env <mode>` 时按开发机 `.env.<mode>` 一并生成 `dist/server.env`，让首装即带配置。 |
 | `deploy.mjs` | 一键部署脚本（`pnpm server:deploy -- --env prod`）：比对远端 `SERVER_VERSION` → 交互确认 → 打包 → scp 上传 → 远端安装重启（Ubuntu=免密 sudo + systemctl，Windows=schtasks）→ 轮询健康检查断言新版本。按 `--app-dir` 是否为 Windows 路径自动识别远端形态，详见[第六节](#六更新服务器程序改了-servermjs-后)。 |
-| `setupRemote.mjs` | 远程首装/运维脚本（`pnpm server:setup -- --env prod`）：不登服务器，本地一条命令完成首次安装——打包 → tar+scp 上传 → 远端解包 → 提权首装（Linux 走 `ssh -t` 就地输 sudo 密码，Windows 管理员 ssh 会话自带提升令牌）→ 健康检查；`--action status/restart/uninstall` 直发原生命令做日常运维。详见[第一节方式 B](#方式-b本地一条命令远程首装推荐)。 |
+| `setupRemote.mjs` | 远程首装/运维脚本（`pnpm server:setup -- --env prod`）：不登服务器，本地一条命令完成首次安装——打包 → tar+scp 上传 → 远端解包 → 提权首装（Linux 本地星号回显读 sudo 密码、经 ssh stdin 喂远端 `sudo -S`；Windows 管理员 ssh 会话自带提升令牌）→ 健康检查；`--action status/restart/uninstall` 直发原生命令做日常运维。详见[第一节方式 B](#方式-b本地一条命令远程首装推荐)。 |
 | `download-page/index.html` | 面向用户的静态下载页。纯前端，运行时读同目录 `latest.yml` / `release-notes.json`，展示最新版本、发布日期与更新日志，并提供下载按钮；卡片右上角以图标入口链接到注册页与审批管理页（悬停/聚焦显示说明，相对路径 `gallery/register` / `gallery/admin`）。它是发布目录的数据文件（不进 bundle）：首装由 `setup` 落地到 `<root>/index.html`，之后由 `server:deploy` 随 `SERVER_VERSION` 一并同步。 |
 | `pageStyles.mjs` | `registerPage.mjs` / `adminPage.mjs` 共享的深色基础样式（与下载页同一套设计令牌；下载页是静态 HTML 无法 import，令牌在两处各存一份，改主题时两边同步）。 |
 | `setup.mjs` | 跨平台部署逻辑（按平台分支）：拷 `dist/server.js` / 写 `server.env` / 注册服务 / 自动生成缺失的签名私钥与管理令牌 / 防火墙 / 启停 / 卸载。 |
@@ -68,9 +68,12 @@ pnpm server:setup -- --env test    # 测试机
 
 **提权确认发生在本地控制台**，不需要事先登服务器：
 
-- **Ubuntu**：脚本用 `ssh -t` 分配 TTY，sudo 密码提示直接出现在本地终端，就地输入（也可以直接用
-  root 登录）。首装会顺带把 ssh 用户写进 `/etc/sudoers.d/universe-update-server`（deploy 免密规则，
-  `visudo` 校验通过才落盘）——装完即可直接 `server:deploy`，无需第六节的手动 sudoers 配置。
+- **Ubuntu**：脚本在本地控制台**星号回显**读 sudo 密码，经 ssh 的 stdin 管道喂远端 `sudo -S`
+  （不走 `ssh -t`——Windows OpenSSH 的 TTY 密码输入偶发不转发首次输入，远端 sudo 会一直卡在读
+  密码；管道传输不依赖控制台交互，彻底规避）。远端已免密（`sudo -n -v` 通过，如首装后的 deploy
+  规则）时自动跳过密码；密码输错会快速失败，直接重跑即可。也可以用 root 登录。首装会顺带把
+  ssh 用户写进 `/etc/sudoers.d/universe-update-server`（deploy 免密规则，`visudo` 校验通过才
+  落盘）——装完即可直接 `server:deploy`，无需第六节的手动 sudoers 配置。
 - **Windows**：Administrators 组成员的 ssh 会话默认发放提升令牌，无需 UAC。脚本先探测远端 `node`：
   已装 Node LTS 则直接跑 `setup.mjs`；没装则走 `setup.ps1`（winget 装 Node——**ssh 非交互会话下
   winget 经常不可用**，失败会提示「请先在服务器装一次 Node LTS」，手动装好后重跑本命令即可）。
@@ -277,8 +280,8 @@ pnpm server:setup -- --env prod --action restart     # 重启
 pnpm server:setup -- --env prod --action uninstall   # 卸载（删除服务与安装目录，发布目录保留）
 ```
 
-Ubuntu 走 `systemctl`（restart/uninstall 经 `ssh -t` 在本地终端就地输 sudo 密码），Windows 走
-`schtasks`；uninstall 顺带清掉首装创建的防火墙规则。
+Ubuntu 走 `systemctl`（restart/uninstall 的提权与首装同一套：本地读密码 → ssh stdin → 远端
+`sudo -S`，已免密自动跳过），Windows 走 `schtasks`；uninstall 顺带清掉首装创建的防火墙规则。
 
 ### Ubuntu
 

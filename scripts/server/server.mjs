@@ -41,7 +41,7 @@ import { adminPageHtml } from './adminPage.mjs'
 // 改服务器行为或下载页 UI 都需要 bump（deploy 会随 server.js 一起把 download-page/index.html
 // 同步到发布目录，健康断言依赖此版本对齐）。
 // 启动横幅与健康检查响应都会带上，用来确认服务器上跑的到底是哪版代码。
-const SERVER_VERSION = '6'
+const SERVER_VERSION = '7'
 
 function parseArgs(argv) {
   const out = {}
@@ -317,6 +317,22 @@ function invalidateJsonCache(file) {
   jsonCache.delete(file)
 }
 
+// 直读版（不经 mtime 缓存）：publishers.json 等认证数据专用。Windows 下快速连续写同一
+// 文件 mtimeMs 可能不变（NTFS 时间戳更新合并），mtime 严格相等判定会误命中旧内容——
+// 「吊销 token → 请求 → 恢复 token → 请求」的毫秒级流程因此偶发 401。认证数据正确性
+// 优先于读缓存，文件极小，每请求直读成本可忽略。ENOENT 静默回退（与 readJsonCached
+// 的 stat 失败语义一致），解析失败打日志。
+function readJsonFresh(file, fallback) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'))
+  } catch (err) {
+    if (err?.code !== 'ENOENT') {
+      console.error(`\x1b[33m⚠ 读取失败 ${file}: ${err?.message ?? err}\x1b[0m`)
+    }
+    return fallback
+  }
+}
+
 function loadRegistry() {
   const reg = readJsonCached(join(galleryRoot(), 'registry.json'), { extensions: [] })
   return Array.isArray(reg?.extensions) ? reg.extensions : []
@@ -576,6 +592,7 @@ async function handleGallery(req, res, pathname) {
         logLine,
         readJsonCached,
         invalidateJsonCache,
+        readJsonFresh,
         readBody,
         registerRateLimit: config.registerRateLimit,
       }),

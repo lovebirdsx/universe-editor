@@ -67,6 +67,7 @@ export function createGalleryApi(deps) {
     logLine,
     readJsonCached,
     invalidateJsonCache,
+    readJsonFresh,
     readBody,
     registerRateLimit = 0,
   } = deps
@@ -93,13 +94,15 @@ export function createGalleryApi(deps) {
 
   // Bearer → sha256 → publishers.json 查归属。401 一律不区分原因（不给探测面）。
   // 命中返回 { name, status }；status 经 publisherStatus 归一（缺省 active，审批制门控）。
+  // 认证数据直读不走 mtime 缓存：令牌吊销/恢复必须即时生效（Windows 快速连续写 mtime
+  // 可能不变，缓存会误命中旧内容，见 server.mjs readJsonFresh）。
   function authenticate(req) {
     const header = req.headers.authorization
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null
     const token = header.slice('Bearer '.length).trim()
     if (!token) return null
     const hash = createHash('sha256').update(token).digest()
-    const data = readJsonCached(publishersPath, { publishers: [] })
+    const data = readJsonFresh(publishersPath, { publishers: [] })
     for (const p of data.publishers ?? []) {
       for (const t of p.tokens ?? []) {
         if (t.revoked) continue
@@ -202,10 +205,10 @@ export function createGalleryApi(deps) {
     }
 
     await enqueue(async () => {
-      // 与 publish 处理 registry 同一约定：直接改 readJsonCached 返回的对象，写盘后显式失效。
-      // 失效在这里是关键正确性点：authenticate 走 mtime 缓存，同秒内写入 mtime 可能不变，
-      // 不失效的话新 token 紧接着 whoami/publish 会 401。
-      const data = readJsonCached(publishersPath, { publishers: [] })
+      // 与 publish 处理 registry 同一约定：直接改读入的对象，写盘后显式失效。
+      // 认证数据一律直读（readJsonFresh）：外部改文件（吊销/恢复）必须即时生效，
+      // mtime 缓存在 Windows 快速连续写下会误命中旧内容（见 server.mjs readJsonFresh）。
+      const data = readJsonFresh(publishersPath, { publishers: [] })
       if (!Array.isArray(data.publishers)) data.publishers = []
       // 已存在一律 409，不区分原因（不给占名探测面；含潜在的 label 冲突场景）
       if (data.publishers.some((p) => p.name === publisher)) {
@@ -372,7 +375,8 @@ export function createGalleryApi(deps) {
       throw new ApiError(400, 'invalid JSON body')
     }
     const id = String(body?.id ?? '')
-    const version = body?.version === null || body?.version === undefined ? null : String(body.version)
+    const version =
+      body?.version === null || body?.version === undefined ? null : String(body.version)
     const dot = id.indexOf('.')
     if (dot <= 0 || dot === id.length - 1) {
       throw new ApiError(400, '"id" must be <publisher>.<name>')
@@ -411,7 +415,7 @@ export function createGalleryApi(deps) {
 
   // publisher 列表 + registry 汇总（每行的 extensions 是该名下已上架的扩展 id）。
   function listPublishers(req, res) {
-    const data = readJsonCached(publishersPath, { publishers: [] })
+    const data = readJsonFresh(publishersPath, { publishers: [] })
     const registry = readJsonCached(registryPath, { extensions: [] })
     const extByPublisher = new Map()
     for (const e of registry.extensions ?? []) {
@@ -448,7 +452,7 @@ export function createGalleryApi(deps) {
   async function setPublisherStatus(req, res, action, target) {
     const name = await readAdminName(req)
     await enqueue(async () => {
-      const data = readJsonCached(publishersPath, { publishers: [] })
+      const data = readJsonFresh(publishersPath, { publishers: [] })
       const entry = (data.publishers ?? []).find((p) => p.name === name)
       if (!entry) throw new ApiError(404, `publisher "${name}" not found`)
       if (publisherStatus(entry) !== 'pending') {
@@ -466,13 +470,16 @@ export function createGalleryApi(deps) {
   async function removePublisher(req, res) {
     const name = await readAdminName(req)
     await enqueue(async () => {
-      const data = readJsonCached(publishersPath, { publishers: [] })
+      const data = readJsonFresh(publishersPath, { publishers: [] })
       if (!Array.isArray(data.publishers)) data.publishers = []
       const entry = data.publishers.find((p) => p.name === name)
       if (!entry) throw new ApiError(404, `publisher "${name}" not found`)
       const status = publisherStatus(entry)
       if (status !== 'pending' && status !== 'rejected') {
-        throw new ApiError(409, `publisher "${name}" is active — only pending/rejected records can be removed`)
+        throw new ApiError(
+          409,
+          `publisher "${name}" is active — only pending/rejected records can be removed`,
+        )
       }
       const registry = readJsonCached(registryPath, { extensions: [] })
       if ((registry.extensions ?? []).some((e) => e.publisher === name)) {
