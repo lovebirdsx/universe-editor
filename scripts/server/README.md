@@ -177,6 +177,17 @@ CLI 旗标  >  server.env（--env-file > dist/server.env > 同目录 > 安装目
 > 不带任何旗标重跑 `install` 不会丢配置：会沿用安装目录里已有的 `server.env`。
 > 只想换程序、完全不动服务器配置时用 `pnpm server:deploy -- --env prod --skip-env`。
 
+### 发布目录权限与上传账号（Linux）
+
+首装会把发布根 `UE_SERVER_ROOT` 与市场根 `UE_SERVER_GALLERY_ROOT` `chown www-data`，服务也以 `www-data`
+运行，所以发布用户（`release:upload` 的 `--user` / `gallery:upload` 的 ssh 用户）scp 直写发布根会
+Permission denied。
+
+带 `--deploy-user` 的首装（`pnpm server:setup` 默认即下传 ssh 用户名为 `--deploy-user`）会**自动为发布用户开通组写**：
+把它加进 `www-data` 组、对发布根/市场根（在 root 树内已被递归覆盖，不重复）`chmod -R g+w` 并给目录 `g+s` setgid，
+新上传的文件自动归 `www-data` 组；签名私钥与 admin 令牌等机密文件保持 0600，不被组写泄露。
+老装机带 `--deploy-user` 重跑 `setup.sh install` 即可补齐，不影响已生成的机密。
+
 ### 首装会自动生成的机密
 
 `install` 时若 `UE_SERVER_SIGNING_KEY_FILE` / `UE_SERVER_ADMIN_TOKEN_FILE` 指向的文件不存在，setup 会**自动生成**（权限 0600，Linux 下一并 `chown www-data`），并在安装结束时**一次性打印**：

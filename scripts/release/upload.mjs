@@ -165,6 +165,7 @@ if (!config.dryRun) {
         `  在服务器上用 root/sudo 执行其一后重试：\n` +
         `    sudo chown -R ${config.user} ${config.dir}\n` +
         `    sudo chmod -R 0775 ${config.dir}\n` +
+        `  新版首装会自动为发布用户开通组写：重跑 pnpm server:setup -- --env <mode> --force 即可补齐。\n` +
         `  或改用 ${config.user} 有写权限的目录（--dir）。`,
     )
   }

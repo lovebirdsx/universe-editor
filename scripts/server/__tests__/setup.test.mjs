@@ -7,6 +7,7 @@ import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   buildConfig,
+  buildPublishAccessCommands,
   buildSystemdUnit,
   buildWindowsLauncher,
   decodeNativeOutput,
@@ -209,6 +210,65 @@ test('decodeNativeOutput：GBK 字节按中文系统 ANSI 代码页解码，UTF-
   assert.equal(decodeNativeOutput(Buffer.from('已是UTF-8文本\n', 'utf8')), '已是UTF-8文本\n')
   assert.equal(decodeNativeOutput(null), '')
   assert.equal(decodeNativeOutput(Buffer.alloc(0)), '')
+})
+
+test('buildPublishAccessCommands：deployUser 为 null/空时返回空数组', () => {
+  for (const deployUser of [null, '']) {
+    assert.deepEqual(
+      buildPublishAccessCommands({
+        deployUser,
+        root: '/srv/x',
+        galleryRoot: '/srv/x/gallery',
+        secretFiles: [],
+      }),
+      [],
+    )
+  }
+})
+
+test('buildPublishAccessCommands 完整序列：usermod → root 组写+setgid → 机密 600（galleryRoot 在 root 内不重复）', () => {
+  const cmds = buildPublishAccessCommands({
+    deployUser: 'publish',
+    root: '/srv/x',
+    galleryRoot: '/srv/x/gallery',
+    secretFiles: ['/srv/x/auth/market-key.pem', '/srv/x/auth/admin-token.txt'],
+  })
+  assert.deepEqual(cmds, [
+    ['usermod', ['-aG', 'www-data', 'publish']],
+    ['chmod', ['-R', 'g+w', '/srv/x']],
+    ['find', ['/srv/x', '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+']],
+    ['chmod', ['600', '/srv/x/auth/market-key.pem']],
+    ['chmod', ['600', '/srv/x/auth/admin-token.txt']],
+  ])
+})
+
+test('buildPublishAccessCommands galleryRoot 在 root 外时追加它自己的 chmod+find', () => {
+  const cmds = buildPublishAccessCommands({
+    deployUser: 'publish',
+    root: '/srv/x',
+    galleryRoot: '/data/gallery',
+    secretFiles: [],
+  })
+  assert.deepEqual(cmds, [
+    ['usermod', ['-aG', 'www-data', 'publish']],
+    ['chmod', ['-R', 'g+w', '/srv/x']],
+    ['find', ['/srv/x', '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+']],
+    ['chmod', ['-R', 'g+w', '/data/gallery']],
+    ['find', ['/data/gallery', '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+']],
+  ])
+})
+
+test('buildPublishAccessCommands 机密文件每个追加 chmod 600 且排在序列末尾', () => {
+  const cmds = buildPublishAccessCommands({
+    deployUser: 'publish',
+    root: '/srv/x',
+    galleryRoot: '/srv/x/gallery',
+    secretFiles: ['/srv/x/key.pem', '/srv/x/token.txt'],
+  })
+  assert.deepEqual(cmds.slice(-2), [
+    ['chmod', ['600', '/srv/x/key.pem']],
+    ['chmod', ['600', '/srv/x/token.txt']],
+  ])
 })
 
 const setupScript = resolve(serverDir, 'setup.mjs')

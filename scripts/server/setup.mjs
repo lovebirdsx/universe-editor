@@ -408,6 +408,23 @@ function writeDeploySudoers(cfg) {
   ok(`已写入 ${dest}：${cfg.deployUser} 免密执行 deploy 所需的 cp / systemctl restart`)
 }
 
+// 发布根/市场根归 www-data 运行，上传脚本用发布用户（scp 直写）则需要写路径：把发布用户
+// 加进 www-data 组 + 对根目录开组写并 setgid（新文件自动归组）——scp 每次新建 ssh 会话即时生效。
+// 最后对机密文件无条件补 0600 兜底：若机密被显式配在 root 树内，前面的 -R g+w 会把 0600 变 0620，
+// 而发布用户刚进了 www-data 组，等于机密对它可写——必须回收回 0600。
+export function buildPublishAccessCommands({ deployUser, root, galleryRoot, secretFiles }) {
+  if (!deployUser) return []
+  const cmds = [['usermod', ['-aG', 'www-data', deployUser]]]
+  cmds.push(['chmod', ['-R', 'g+w', root]])
+  cmds.push(['find', [root, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+']])
+  if (galleryRoot !== root && !galleryRoot.startsWith(root + '/')) {
+    cmds.push(['chmod', ['-R', 'g+w', galleryRoot]])
+    cmds.push(['find', [galleryRoot, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+']])
+  }
+  for (const file of secretFiles) cmds.push(['chmod', ['600', file]])
+  return cmds
+}
+
 function installLinux(cfg) {
   if (process.getuid && process.getuid() !== 0) die('请用 sudo 运行（写 systemd unit 需 root）')
 
@@ -439,6 +456,17 @@ function installLinux(cfg) {
   // 机密文件可能被指到 authDir 之外，逐个归属——服务以 www-data 跑，读不到就启动失败。
   for (const secret of [cfg.signingKeyFile, cfg.adminTokenFile]) {
     if (existsSync(secret)) run('chown', ['www-data:www-data', secret], { ignoreFail: true })
+  }
+
+  // 发布用户（--deploy-user，scp 直写发布根）进 www-data 组并对根开组写；机密无条件回收 0600。
+  if (cfg.deployUser && isValidDeployUser(cfg.deployUser)) {
+    for (const [cmd, cmdArgs] of buildPublishAccessCommands({
+      deployUser: cfg.deployUser,
+      root: cfg.root,
+      galleryRoot: cfg.galleryRoot,
+      secretFiles: [cfg.signingKeyFile, cfg.adminTokenFile].filter((f) => existsSync(f)),
+    })) run(cmd, cmdArgs, { ignoreFail: true })
+    info(`已为 ${cfg.deployUser} 开通发布根/市场根组写（www-data 组）`)
   }
 
   run('systemctl', ['daemon-reload'])
