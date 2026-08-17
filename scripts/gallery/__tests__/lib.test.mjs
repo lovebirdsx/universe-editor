@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { generateKeyPairSync, createHash, verify } from 'node:crypto'
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -148,6 +148,17 @@ test('writeJsonAtomic 写入并可覆盖，JSON 完整可读，不留 tmp 文件
     [],
   )
 })
+
+test(
+  'writeJsonAtomic 传 mode 后 POSIX 权限位落到该 mode',
+  { skip: process.platform === 'win32' },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-atomic-mode-'))
+    const file = join(dir, 'data.json')
+    writeJsonAtomic(file, { a: 1 }, { mode: 0o664 })
+    assert.equal(statSync(file).mode & 0o777, 0o664)
+  },
+)
 
 test('signVsix 产出 sha256 + 可用公钥验证的 Ed25519 签名', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ue-sign-'))

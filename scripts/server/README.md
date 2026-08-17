@@ -188,6 +188,11 @@ Permission denied。
 新上传的文件自动归 `www-data` 组；签名私钥与 admin 令牌等机密文件保持 0600，不被组写泄露。
 老装机带 `--deploy-user` 重跑 `setup.sh install` 即可补齐，不影响已生成的机密。
 
+服务端在 publish/unpublish 时自写的市场文件（`registry.json`、`assets/**`）会主动保持组可写（文件 0664、
+目录 02775 setgid），不会再被服务进程用 umask 022 重建出的 644 把 scp 发布通道锁死。**旧部署升级**需一次性
+修复现存权限：带 `--deploy-user` 重跑 `pnpm server:setup`（install 幂等，会重新 `chmod -R g+w` 覆盖旧 644），
+并 `pnpm server:deploy` 让 SERVER_VERSION 8 生效。
+
 ### 首装会自动生成的机密
 
 `install` 时若 `UE_SERVER_SIGNING_KEY_FILE` / `UE_SERVER_ADMIN_TOKEN_FILE` 指向的文件不存在，setup 会**自动生成**（权限 0600，Linux 下一并 `chown www-data`），并在安装结束时**一次性打印**：

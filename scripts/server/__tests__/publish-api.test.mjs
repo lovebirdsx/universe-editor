@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, verify } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -193,6 +193,19 @@ test('publish: happy path → 201，资产落地 + registry 更新 + extensionqu
   assert.equal(ext.versions[0].assetDir, 'assets/acme.demo/1.0.0')
   assert.equal(ext.versions[0].files.vsix, 'acme.demo-1.0.0.vsix')
   assert.equal(ext.versions[0].engine, '^0.1.0')
+
+  // 服务端重建的市场文件须保持组可写（registry 0664、版本目录 02775、资产文件 0664），
+  // 否则 scp 发布通道会被自己写出的 644 锁死。
+  if (process.platform !== 'win32') {
+    const mode = async (p) => (await stat(p)).mode & 0o7777
+    assert.equal(await mode(join(galleryRoot, 'registry.json')), 0o664, 'registry.json 组可写')
+    assert.equal(await mode(assetDir), 0o2775, '版本目录 02775 setgid')
+    assert.equal(
+      await mode(join(assetDir, 'acme.demo-1.0.0.vsix')),
+      0o664,
+      '资产文件组可写',
+    )
+  }
 
   // 缓存显式失效：紧随 publish 的搜索必须立刻可见（不等 mtime tick）
   const hits = await queryExtension(PORT, '/', 'acme.demo')

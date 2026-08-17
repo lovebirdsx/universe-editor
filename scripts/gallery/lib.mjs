@@ -9,7 +9,7 @@
 
 import AdmZip from 'adm-zip'
 import { createHash, randomBytes, randomUUID, sign } from 'node:crypto'
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -101,10 +101,12 @@ export function readRegistry(stageDir) {
 }
 
 /** 同目录 tmp + rename 原子写 JSON（半写文件不会让读侧落到 fallback 空态）。 */
-export function writeJsonAtomic(file, value) {
+export function writeJsonAtomic(file, value, { mode } = {}) {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = resolve(dirname(file), `.tmp-${randomUUID()}`)
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n')
+  // writeFileSync 的 mode 会被 umask 掩掉，必须显式 chmod；win32 下 chmod 只碰只读位，跳过。
+  if (mode && process.platform !== 'win32') chmodSync(tmp, mode)
   renameSync(tmp, file)
 }
 

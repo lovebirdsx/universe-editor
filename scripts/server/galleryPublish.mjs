@@ -25,7 +25,7 @@
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { copyFile, mkdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { Transform } from 'node:stream'
@@ -55,6 +55,18 @@ class ApiError extends Error {
 class SizeLimitError extends Error {}
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
+// 服务端重建的市场文件必须保持组可写，否则 scp 发布通道会被自己写出的 644 锁死。
+async function makeGroupWritable(dir) {
+  if (process.platform === 'win32') return
+  await chmod(dir, 0o2775)
+  for (const name of await readdir(dir)) {
+    const p = join(dir, name)
+    const st = await stat(p)
+    if (st.isDirectory()) await makeGroupWritable(p)
+    else await chmod(p, 0o664)
+  }
+}
 
 export function createGalleryApi(deps) {
   const {
@@ -345,9 +357,14 @@ export function createGalleryApi(deps) {
           const finalDir = join(galleryRoot, assetDir)
           await rm(finalDir, { recursive: true, force: true }) // 只可能来自上次崩溃残留（registry 无此版本）
           await mkdir(join(galleryRoot, 'assets', id), { recursive: true })
+          // 目录可能是 scp 通道（发布用户）先建的，非属主 chmod 会 EPERM，只做 best-effort
+          if (process.platform !== 'win32') {
+            await chmod(join(galleryRoot, 'assets', id), 0o2775).catch(() => {})
+          }
+          await makeGroupWritable(staging)
           await rename(staging, finalDir)
           upsertVersion(registry, meta, versionEntry)
-          writeJsonAtomic(registryPath, registry)
+          writeJsonAtomic(registryPath, registry, { mode: 0o664 })
           invalidateJsonCache(registryPath)
         } catch (err) {
           await rm(staging, { recursive: true, force: true }).catch(() => {})
@@ -397,7 +414,7 @@ export function createGalleryApi(deps) {
         version ?? undefined,
       )
       if (!found) throw new ApiError(404, `${label} not found`)
-      writeJsonAtomic(registryPath, registry)
+      writeJsonAtomic(registryPath, registry, { mode: 0o664 })
       invalidateJsonCache(registryPath)
       for (const dir of removedAssetDirs) {
         const target = resolve(galleryRoot, dir)
