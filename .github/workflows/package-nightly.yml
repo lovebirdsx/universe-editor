@@ -1,0 +1,169 @@
+name: Package Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每日一次 UTC 5:43（分钟避开 :00/:30 的整点/半点，随机偏移），滚动刷新
+    # editor-nightly release 里的 linux / windows 双平台产物，供 samples 仓库 e2e 下载。
+    - cron: '43 5 * * *'
+
+# 滚动 release 同名资产上传非原子：同一时刻只允许一个打包运行，新触发排队等待而非取消。
+concurrency:
+  group: package-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # 两个打包 job 并发时，各自 view||create 同一 release 存在竞态：两者都 view 不到
+  # 又都去 create。这个 job 串在打包前，把 create/update 收口到单点。
+  ensure-release:
+    name: Ensure rolling nightly release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 本 job 不 checkout，gh 需要显式仓库上下文。
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create or update editor-nightly release
+        run: |
+          if gh release view editor-nightly >/dev/null 2>&1; then
+            gh release edit editor-nightly \
+              --title "Universe Editor nightly" \
+              --notes "滚动的双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
+          else
+            gh release create editor-nightly \
+              --prerelease \
+              --title "Universe Editor nightly" \
+              --notes "滚动的双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
+          fi
+
+  package-linux:
+    name: Package Linux (dir)
+    needs: ensure-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      # runtime:stage 内部跑 `pnpm -w run agent:build`，需要 claude-agent-acp /
+      # codex-acp 两个 git submodule 的 dist 产物。
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Cache agent vendor deps
+        uses: actions/cache@v5
+        with:
+          path: vendor/claude-agent-acp/node_modules
+          key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
+
+      - name: Cache codex agent vendor deps
+        uses: actions/cache@v5
+        with:
+          path: vendor/codex-acp/node_modules
+          key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
+
+      # --linux dir 覆盖 yml 里的 AppImage target（CI 无 FUSE，不能产 .AppImage），
+      # 产出 release/linux-unpacked/ 目录。verify-packaged 的 resourcesRoot 位置参数
+      # 相对 repoRoot 解析，故这里传 apps/editor/release/linux-unpacked/resources。
+      - name: Build Linux release artifacts (linux-unpacked dir)
+        run: pnpm --filter @universe-editor/editor package:linux:dir
+
+      # zip 保留 linux-unpacked/ 顶层目录；消费方解压后以
+      # linux-unpacked/universe-editor 作为 UNIVERSE_EDITOR_BIN。
+      - name: Zip linux-unpacked directory
+        run: |
+          cd apps/editor/release
+          zip -r universe-editor-linux-x64.zip linux-unpacked
+
+      - name: Upload Linux nightly artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload editor-nightly apps/editor/release/universe-editor-linux-x64.zip --clobber
+
+  package-windows:
+    name: Package Windows (dir)
+    needs: ensure-release
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      # runtime:stage 内部跑 `pnpm -w run agent:build`，需要 claude-agent-acp /
+      # codex-acp 两个 git submodule 的 dist 产物。
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Cache agent vendor deps
+        uses: actions/cache@v5
+        with:
+          path: vendor/claude-agent-acp/node_modules
+          key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
+
+      - name: Cache codex agent vendor deps
+        uses: actions/cache@v5
+        with:
+          path: vendor/codex-acp/node_modules
+          key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
+
+      # --win dir 只产 win-unpacked/ 目录（不打 nsis 安装器）。verify-packaged 无需
+      # 位置参数，默认即校验 release/win-unpacked/resources。
+      - name: Build Windows release artifacts (win-unpacked dir)
+        run: pnpm --filter @universe-editor/editor package:win:dir
+
+      # 7z 保留 win-unpacked/ 顶层目录；消费方解压后以 win-unpacked/Universe Editor.exe
+      # 作为 UNIVERSE_EDITOR_BIN。用 7z 而非 pwsh Compress-Archive：后者对大目录慢且易
+      # 超时/损坏，7z 是 windows runner 预装、更快更可靠。
+      - name: Zip win-unpacked directory
+        run: |
+          cd apps/editor/release
+          7z a universe-editor-win-x64.zip win-unpacked
+
+      - name: Upload Windows nightly artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload editor-nightly apps/editor/release/universe-editor-win-x64.zip --clobber
