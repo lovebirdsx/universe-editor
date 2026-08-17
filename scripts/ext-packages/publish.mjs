@@ -191,8 +191,17 @@ async function npmVersionPublished(name, version, registry) {
 
 /** 发布后核对 npm 上依赖表：无 workspace:/catalog: 残留、互赖为精确版本。返回 { type, message }。 */
 async function verifyPublished(p, workspaceVersions, registry) {
-  const res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
-  if (!res.ok) return { type: 'warning', message: `${p.name}: 协议替换验证查询失败: ${(res.stderr ?? '').trim()}` }
+  let res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
+  // 发布成功后 registry 复制层可能短暂不可见新版本（E404），等待后重试
+  for (let attempt = 0; !res.ok && isE404(res) && attempt < 4; attempt++) {
+    info(`  ${p.name}: registry 暂未可见新版本，3s 后重试（${attempt + 1}/4）`)
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
+  }
+  if (!res.ok) {
+    const hint = isE404(res) ? '（可能是 registry 复制延迟，稍后自动收敛，可用 npm view 复核）' : ''
+    return { type: 'warning', message: `${p.name}: 协议替换验证查询失败${hint}: ${(res.stderr ?? '').trim()}` }
+  }
   let deps = {}
   const text = res.stdout.trim()
   if (text && text !== 'undefined') {
