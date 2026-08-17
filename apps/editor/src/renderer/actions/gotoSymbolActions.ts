@@ -46,7 +46,7 @@ export class GoToFileSymbolAction extends Action2 {
         // later, same default weight). In the graph editors the commits are
         // listed as symbols, so there gotoSymbol must win instead — hence the
         // extra scoped, weighted twin.
-        { primary: 'ctrl+r' },
+        { primary: 'ctrl+r', when: '!terminalFocus' },
         {
           primary: 'ctrl+r',
           when: "activeEditorId == 'universe:/gitGraph' || activeEditorId == 'universe:/perforceGraph'",
