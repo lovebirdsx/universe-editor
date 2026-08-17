@@ -200,7 +200,7 @@ export function activate(context: ExtensionContext): void {
 - **与 VSCode 的差异**（如实列举）：没有 `ViewColumn` 参数——tab 开在当前活动编辑器组，showOptions 只支持 `{ preserveFocus: true }`（后台打开不抢焦点）；没有 `retainContextWhenHidden`——iframe 在隐藏期间从不重建，状态天然保留；没有 `WebviewPanelSerializer`——窗口 reload / 重启后 tab 不恢复，扩展重新激活后自行重建即可。
 - **句柄即身份**：每个面板一个 tab；扩展侧保存引用、重复调用前先判 `panel` 是否还活着（如上例），不要无脑重复创建。
 
-仓库里的 [`samples/webview-panel/`](../../../samples/webview-panel/) 是可安装的最小范例（Show / Reveal / Dispose 三个命令走完整生命周期）。
+独立示例仓库 `universe-editor-extension-samples` 的 webview-panel 示例是可安装的最小范例（Show / Reveal / Dispose 三个命令走完整生命周期）。
 
 ## 安全边界：webview 不是强沙箱
 

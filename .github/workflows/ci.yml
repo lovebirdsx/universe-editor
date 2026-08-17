@@ -113,11 +113,10 @@ jobs:
 
   # External consumer anti-rot: scaffold both extension templates from packed
   # tarballs, build them against those tarballs, and `uex package` each into a
-  # VSIX; additionally drift-checks samples/hello-world against the basic
-  # template and builds/packages it the same way. Catches SDK/template/sample/
-  # CLI drift the way a third-party author would. Runs on both OSes because
-  # path/shell handling in the toolchain differs (uex dev's editor lookup is
-  # excluded — it needs an installed editor, covered by e2e instead).
+  # VSIX. Catches SDK/template/CLI drift the way a third-party author would.
+  # Runs on both OSes because path/shell handling in the toolchain differs
+  # (uex dev's editor lookup is excluded — it needs an installed editor,
+  # covered by e2e instead).
   external-consumer-smoke:
     name: External Consumer Smoke
     strategy:

@@ -255,7 +255,7 @@
     `reveal(preserveFocus?)`；新导出类型
     `WebviewPanelOnDidChangeViewStateEvent`。
   - 用户关 tab 或 `panel.dispose()` 均 fire `onDidDispose`。
-  - 配套：`samples/webview-panel/` 最小范例（Show/Reveal/Dispose 三命令）；
+  - 配套：独立示例仓库 `universe-editor-extension-samples` 的 webview-panel 最小范例（Show/Reveal/Dispose 三命令）；
     `docs/extension-dev/zh-CN/webview-guide.md` 新增「独立 webview 面板（0.11.0
     起）」小节。
 

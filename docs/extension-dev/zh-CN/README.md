@@ -26,9 +26,7 @@ npx uex package                          # ⑤ 产出 <publisher>.<name>-<versio
 npx uex login → npx uex publish          # ⑦ 发布到市场，其他用户搜索即得
 ```
 
-从零开始跟着做一遍：[快速上手](./getting-started.md)。想看一个已经走通全流程的最小项目：仓库里的 [`samples/hello-world`](../../../samples/hello-world/README.md) 就是脚手架产物加少量注释，可以单拎出来 `npm install` 直接用。
-
-想看各能力的可抄写示例：与主仓库同级的独立仓库 `universe-editor-extension-samples`（暂无远程 URL）汇集 19 个示例，覆盖命令/状态栏/通知/进度/QuickInput/配置/文档编辑/补全/CodeLens/Code Action/装饰/语义高亮/诊断/树视图/Webview/自定义编辑器，每个示例带 e2e 冒烟验证。
+从零开始跟着做一遍：[快速上手](./getting-started.md)。想看已经走通全流程的最小项目或各能力的可抄写示例：与主仓库同级的独立仓库 `universe-editor-extension-samples`（暂无远程 URL）汇集 19 个示例（含 hello-world 起步与 webview-panel），覆盖命令/状态栏/通知/进度/QuickInput/配置/文档编辑/补全/CodeLens/Code Action/装饰/语义高亮/诊断/树视图/Webview/自定义编辑器，每个示例带 e2e 冒烟验证。
 
 ## 文档地图
 

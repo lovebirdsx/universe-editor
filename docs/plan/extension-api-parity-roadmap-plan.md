@@ -21,11 +21,11 @@ provider 18→21 类）。完整变更与限制见 `packages/extension-api/COMPA
 
 1. 契约测试快照同步：`packages/extension-api/src/__tests__/index.test.ts` 的
    `RUNTIME_EXPORTS` / `NAMESPACE_METHODS` / 枚举断言。
-2. 版本 bump **五处联动**（有守卫测试锁定前两处，见 memory
+2. 版本 bump **四处联动**（有守卫测试锁定前两处，见 memory
    `extension-api-09-surface-expansion`）：extension-api 的 `src/index.ts` `version` 常量 +
    `package.json`、`packages/uex/src/lib/sdkVersion.ts` 的 `CURRENT_API_VERSION`、
-   `packages/create-extension/src/sdkVersions.ts`、`samples/hello-world/package.json`
-   （engines + devDep，CI drift check 要求与 scaffold 字节一致）。
+   `packages/create-extension/src/sdkVersions.ts`。示例仓库
+   `universe-editor-extension-samples` 侧由其 `check-sdk-drift.mjs` 兜底。
 3. `COMPATIBILITY.md` 追加变更记录；`docs/extension-dev/zh-CN/` 同步（重点
    `api/README.md` 总览表与 `migration-from-vscode.md` 对照表）。
 4. 加 RPC 方法走 `packages/extension-host/CLAUDE.md`「加一条新通道」五步清单；

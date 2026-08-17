@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * 生成 samples 与 create-extension 模板的示例图标（256×256 PNG）。
+ * 生成 create-extension 模板的示例图标（256×256 PNG）。
  * 图标是脚本产物：改设计改这里，然后 `node scripts/toolchain/generate-sample-icons.mjs` 重跑。
  * pngjs 借自 apps/editor 的依赖（与 mcp-bridge 的 rasterize-icon.mjs 同一借法）。
  */
@@ -31,14 +31,14 @@ const union = (x, y, parts) => Math.min(...parts.map((fn) => fn(x, y)))
 
 const base = (x, y) => sdRoundRect(x, y, 64, 64, 40, 40, 24) // 全幅 rx24 圆角方块
 
-// hello-world：白色对话气泡（「hello…」）+ 尾巴 + 三个紫点
+// basic 模板：白色对话气泡（「hello…」）+ 尾巴 + 三个紫点
 const helloWhite = [
   (x, y) => sdRoundRect(x, y, 64, 55, 34, 23, 14),
   (x, y) => sdCircle(x, y, 45, 84, 7),
 ]
 const helloDots = [48, 64, 80].map((cx) => (x, y) => sdCircle(x, y, cx, 55, 4))
 
-// webview-panel：白色浏览器窗口 + 顶部三个控制点 + 两行内容条
+// webview 模板：白色浏览器窗口 + 顶部三个控制点 + 两行内容条
 const panelWhite = [(x, y) => sdRoundRect(x, y, 64, 64, 38, 36, 10)]
 const panelDots = [40, 52, 64].map((cx) => (x, y) => sdCircle(x, y, cx, 38, 3.5))
 const panelBars = [
@@ -91,9 +91,7 @@ function render(whiteShape, purpleDetails) {
 }
 
 const targets = [
-  [render(helloWhite, helloDots), 'samples/hello-world/icon.png'],
   [render(helloWhite, helloDots), 'packages/create-extension/templates/basic/icon.png'],
-  [render(panelWhite, panelDots.concat(panelBars)), 'samples/webview-panel/icon.png'],
   [render(panelWhite, panelDots.concat(panelBars)), 'packages/create-extension/templates/webview/icon.png'],
 ]
 

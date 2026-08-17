@@ -5,13 +5,8 @@
  * scaffold both templates from the tarball, install them against the tarballs,
  * build, and `uex package` each into a VSIX that readVsixManifest round-trips.
  *
- * Also covers samples/hello-world, the repo's stand-in for a real third-party
- * project: a drift check asserts it stays byte-identical to the scaffold output
- * (except the two files with intentional comments), then a consumer smoke
- * builds and packages it against the tarballs.
- *
- * Any drift between the SDK, the templates, the sample, and the CLI fails
- * loudly here instead of in a third-party author's terminal.
+ * Any drift between the SDK, the templates, and the CLI fails loudly here
+ * instead of in a third-party author's terminal.
  *
  * Usage: node scripts/toolchain/template-smoke.mjs [--keep]
  */
@@ -23,7 +18,6 @@ import {
   writeFileSync,
   rmSync,
   readdirSync,
-  cpSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
@@ -33,20 +27,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const keep = process.argv.includes('--keep')
 
 const PACKAGES = ['extension-api', 'extension-manifest', 'extension-packaging', 'uex', 'create-extension']
-
-// samples/hello-world is the committed stand-in for a third-party project.
-// It must stay byte-identical to the scaffold output of this exact command,
-// except the two files that carry intentional comments on top.
-const SAMPLE_DIR = path.join(repoRoot, 'samples', 'hello-world')
-const SAMPLE_SCAFFOLD_ARGS = [
-  '--name', 'hello-world',
-  '--publisher', 'universe-samples',
-  '--display-name', 'Hello World',
-  '--description', 'A minimal Universe Editor extension sample.',
-  '--template', 'basic',
-]
-const SAMPLE_DRIFT_EXCLUDES = new Set(['src/extension.ts', 'README.md'])
-const SAMPLE_COPY_EXCLUDES = new Set(['node_modules', 'dist', 'package-lock.json'])
 
 function die(msg) {
   console.error(`error: ${msg}`)
@@ -92,93 +72,6 @@ function pack(pkg, destDir) {
     .find((f) => f.includes(pkg))
   if (!own) die(`pnpm pack for ${pkg} produced no recognizable tarball in ${destDir}`)
   return path.join(destDir, own)
-}
-
-/** Recursively list files under dir as posix-relative paths. */
-function listFiles(dir, base = dir) {
-  const out = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      out.push(...listFiles(full, base))
-    } else if (entry.isFile()) {
-      out.push(path.relative(base, full).split(path.sep).join('/'))
-    }
-  }
-  return out.sort()
-}
-
-/** Assert the committed sample matches a fresh scaffold of the same command. */
-function driftCheckSample(createCli, tmp) {
-  const freshDir = path.join(tmp, 'drift-check')
-  run(process.execPath, [createCli, freshDir, ...SAMPLE_SCAFFOLD_ARGS], { stdio: 'pipe' })
-
-  const freshFiles = listFiles(freshDir)
-  const sampleFiles = listFiles(SAMPLE_DIR, SAMPLE_DIR).filter((f) => !SAMPLE_COPY_EXCLUDES.has(f.split('/')[0]))
-  const freshSet = new Set(freshFiles)
-  const sampleSet = new Set(sampleFiles)
-  const missing = sampleFiles.filter((f) => !freshSet.has(f))
-  const extra = freshFiles.filter((f) => !sampleSet.has(f))
-  if (missing.length || extra.length) {
-    die(
-      `samples/hello-world drifted from scaffold output:\n` +
-        missing.map((f) => `  only in sample: ${f}`).join('\n') +
-        extra.map((f) => `  only in scaffold: ${f}`).join('\n'),
-    )
-  }
-  for (const rel of sampleFiles) {
-    if (SAMPLE_DRIFT_EXCLUDES.has(rel)) continue
-    const a = readFileSync(path.join(SAMPLE_DIR, rel))
-    const b = readFileSync(path.join(freshDir, rel))
-    if (!a.equals(b)) {
-      die(
-        `samples/hello-world/${rel} drifted from the basic template — ` +
-          `regenerate the sample (see samples/hello-world/README.md "Drift check")`,
-      )
-    }
-  }
-  ok('samples/hello-world matches the basic template scaffold (modulo documented comments)')
-}
-
-/** Build and package a copy of the committed sample against the tarballs. */
-function consumeSample(tarballs, tmp, readVsixManifest) {
-  const projectDir = path.join(tmp, 'hello-world')
-  cpSync(SAMPLE_DIR, projectDir, {
-    recursive: true,
-    filter: (src) => {
-      const rel = path.relative(SAMPLE_DIR, src).split(path.sep).join('/')
-      if (!rel) return true
-      if (SAMPLE_COPY_EXCLUDES.has(rel.split('/')[0])) return false
-      return !rel.endsWith('.vsix')
-    },
-  })
-
-  const pkgPath = path.join(projectDir, 'package.json')
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-  pkg.devDependencies['@universe-editor/extension-api'] = `file:${tarballs['extension-api']}`
-  pkg.devDependencies['@universe-editor/uex'] = `file:${tarballs.uex}`
-  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-
-  run(npmCmd, ['install'], { cwd: projectDir, shell: true })
-  run(npmCmd, ['run', 'build'], { cwd: projectDir, shell: true })
-  if (!existsSync(path.join(projectDir, 'dist', 'extension.js'))) {
-    die('sample: build produced no dist/extension.js')
-  }
-  ok('samples/hello-world built against the tarballs')
-
-  run(
-    process.execPath,
-    [path.join(projectDir, 'node_modules', '@universe-editor', 'uex', 'dist', 'cli.js'), 'package'],
-    { cwd: projectDir },
-  )
-  const vsixPath = path.join(projectDir, 'universe-samples.hello-world-0.0.1.vsix')
-  if (!existsSync(vsixPath)) die('sample: expected universe-samples.hello-world-0.0.1.vsix')
-
-  const manifest = readVsixManifest(vsixPath)
-  if (manifest.publisher !== 'universe-samples' || manifest.name !== 'hello-world' || manifest.version !== '0.0.1') {
-    die(`sample: VSIX manifest mismatch: ${manifest.publisher}.${manifest.name}@${manifest.version}`)
-  }
-  ok('samples/hello-world packaged and round-trips readVsixManifest')
 }
 
 async function main() {
@@ -262,10 +155,7 @@ async function main() {
       ok(`${template} packaged and round-trips readVsixManifest`)
     }
 
-    driftCheckSample(createCli, tmp)
-    consumeSample(tarballs, tmp, readVsixManifest)
-
-    console.log('\ntemplate smoke passed (basic + webview + samples/hello-world)')
+    console.log('\ntemplate smoke passed (basic + webview)')
   } finally {
     if (keep) {
       console.log(`kept smoke workspace: ${tmp}`)
