@@ -1,6 +1,6 @@
 # 发布扩展 SDK（npm）
 
-把扩展开发三件套发布到公开 npm（`@universe-editor` scope），供仓库外的第三方扩展作者 `npm install`。这是内部运维手册；面向扩展作者的版本语义说明在 [`docs/extension-dev/zh-CN/versioning.md`](../extension-dev/zh-CN/versioning.md)。
+把扩展开发五件套发布到公开 npm（`@universe-editor` scope），供仓库外的第三方扩展作者 `npm install`。这是内部运维手册；面向扩展作者的版本语义说明在 [`docs/extension-dev/zh-CN/versioning.md`](../extension-dev/zh-CN/versioning.md)。
 
 > 发布**外部扩展**（`.vsix` → 市场）是另一条链路，见 [发布外部扩展](publishing-extensions.md)。
 
@@ -23,9 +23,45 @@
 1. 注册 npm org `@universe-editor`（包名写死进所有第三方代码，**发布后不可再改**；若被占用，备选 scope 需升级拍板）。
 2. 发布账号 `npm login`，且该账号在 org 内有 publish 权限。
 
-## 发布步骤（手动）
+## 发布步骤（一键）
 
-发版频率低，手动发布；CI 自动化属公开阶段前置（计划 Phase F）。
+发版频率低，本地一键发布；CI 自动化属公开阶段前置（计划 Phase F）。
+
+**发布前，开发者自己做的事**：
+
+1. bump 各包 `package.json` 的 version（独立 semver）。extension-api 的 bump 必须先完成契约测试快照更新 + COMPATIBILITY.md 变更记录，否则脚本 preflight 会拒绝发布。
+2. 同步版本常量（`create-extension/src/sdkVersions.ts` 与 `uex/src/lib/sdkVersion.ts`），守卫测试与脚本 preflight 都会校验。
+3. 非 SDK 目录的联动改动（如 `extensions/*` 的 `engines.universe` 同步）先单独提交——脚本只放行 SDK 五件套目录内的未提交改动，并将其 commit。
+
+然后一条命令：
+
+```bash
+pnpm ext-packages:publish [-- 选项] [pkg ...]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `[pkg ...]` | 只发布指定包（目录名或包名），默认全部五件套 |
+| `--dry-run` | 只读检查照跑，写操作只打印 `[dry-run]` |
+| `--no-gallery` | 跳过内网 pack + scp 同步 |
+| `--no-push` | 跳过 git push（本地验证用；不带该旗标重跑可补推收敛） |
+| `--allow-non-main` | 允许非 main 分支（本地 verdaccio 验证用） |
+| `--registry <url>` | npm registry，默认 `https://registry.npmjs.org` |
+| `--stage <dir>` | 市场 stage 目录（默认 `UE_GALLERY_STAGE` 或 `<repo>/market-stage`） |
+| `--env <mode>` | `.env` 分层加载模式 |
+
+它做了什么（顺序）：
+
+1. **preflight**：工作区白名单（SDK 目录外有未提交改动则拒绝）、main 分支、与 upstream 同步、`npm whoami` 登录态、各包本地版本高于 npm 已发布版（相同增量跳过、更低报错）、集合外 workspace 依赖已在 npm 发布（防发布出指向未发布版本的包）、git tag 未占用、extension-api 的 COMPATIBILITY.md 变更记录与 `src/index.ts` 版本常量、create-extension/uex 注入的版本常量、内网上传配置。
+2. **build**（拓扑序，连同 workspace 依赖）+ extension-api 契约测试（快照兜底）。
+3. **pack 内容检查**：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
+4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）+ 发布后核对依赖表无 `workspace:` / `catalog:` 残留、`@universe-editor/*` 互赖为精确版本（异常只警告不中断，结尾汇总）。
+5. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
+6. **内网同步**（`--no-gallery` 跳过）：pack 五件套 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
+
+**幂等自愈**：npm 发布成功但 tag/push/gallery 中断时，重跑同一命令即可收敛（已发布版本增量跳过、缺失 tag 补打、gallery 重同步）。npm 版本不可变，同版本重跑不会重复发布。
+
+### 手动兜底（一键脚本异常时）
 
 ```bash
 # 0. 确认版本号
@@ -53,7 +89,7 @@ npm view @universe-editor/uex dependencies
 # 期望：vscode-languageserver-types / adm-zip / @clack/prompts 是真实版本区间；
 #       @universe-editor/* 互赖是真实版本号（不是 workspace:* / catalog:）
 
-# 5. 打 tag（extension-api 必打；另两个有发布就打）
+# 5. 打 tag（extension-api 必打；另四个有发布就打）
 git tag extension-api@0.7.1 && git push origin extension-api@0.7.1
 ```
 
@@ -61,7 +97,7 @@ git tag extension-api@0.7.1 && git push origin extension-api@0.7.1
 
 ## uex 的 npm 发布
 
-`@universe-editor/uex` 已发布就绪：`LICENSE` / `README.md` / `publishConfig.access: public` / `files`（`dist`、排除 `__tests__`）齐备，`cd packages/uex && npm pack --dry-run` 可自检产物内容。npm org（见上面「前置」节）就绪后与三件套同流程手动 `pnpm publish`（已并入上面「发布步骤」）。发布后外部用户即可 `npx uex ...` 或 `npm i -g @universe-editor/uex` 使用完整工具链（打包 / 登录 / 发布 / 下架），无需克隆本仓库。
+`@universe-editor/uex` 已发布就绪：`LICENSE` / `README.md` / `publishConfig.access: public` / `files`（`dist`、排除 `__tests__`）齐备，`cd packages/uex && npm pack --dry-run` 可自检产物内容。npm org（见上面「前置」节）就绪后与其余 SDK 包同流程发布（已并入上面「发布步骤」）。发布后外部用户即可 `npx uex ...` 或 `npm i -g @universe-editor/uex` 使用完整工具链（打包 / 登录 / 发布 / 下架），无需克隆本仓库。
 
 ## uex 本地验证（发 npm 前）
 
@@ -108,10 +144,10 @@ uex unpublish <name>.<ext> --yes --registry http://localhost:8788
 
 ## 内网 fallback：市场托管 tarball
 
-完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）：
+完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）。一键命令在每次 npm 发布后默认自动同步（`--no-gallery` 关闭）；也可单独手动：
 
 ```bash
-# pack 三件套 → <stage>/gallery/sdk/（pnpm pack 与 publish 共用打包逻辑，产物与 npm 一致）
+# pack 五件套 → <stage>/gallery/sdk/（pnpm pack 与 publish 共用打包逻辑，产物与 npm 一致）
 pnpm gallery:publish-sdk -- --stage ./market-stage
 
 # 与扩展市场同一入口上传（sdk/** 随 assets 一起先于 registry 落地）
@@ -125,7 +161,7 @@ npm i https://<市场地址>/gallery/sdk/universe-editor-extension-api-0.7.1.tgz
 npm i https://<市场地址>/gallery/sdk/universe-editor-extension-manifest-0.1.0.tgz
 ```
 
-每次 npm 发布后应同步跑一遍 `gallery:publish-sdk` + `gallery:upload`，保持内网 tarball 与 npm 版本一致。
+每次 npm 发布后应同步跑一遍（一键命令已自动执行）。
 
 ## 0.x 版本政策（对外的强制声明位）
 

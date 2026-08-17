@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  把 SDK 三件套（extension-api / extension-manifest / extension-packaging）打包成 npm
- *  tarball 并落地 <stage>/gallery/sdk/，供拉不到公网 npm 的内网环境经市场服务器静态
- *  托管安装：
+ *  把 SDK 五件套打包成 npm tarball 并落地 <stage>/gallery/sdk/，供拉不到公网 npm 的内网
+ *  环境经市场服务器静态托管安装：
  *
  *    npm i <base>gallery/sdk/universe-editor-extension-api-0.7.0.tgz
  *
@@ -15,20 +14,15 @@
  *
  *  <stage>/gallery/sdk/ 由本脚本独占管理：每次运行先清空再重新 pack，保证不残留旧版本。
  *  pnpm pack 与 pnpm publish 共用同一套打包逻辑（workspace:/catalog: 协议会被替换为
- *  真实版本号），故产出的 tarball 与将来 npm 上发布的包内容一致。
+ *  真实版本号），故产出的 tarball 与 npm 上发布的包内容一致。
+ *  发布集合清单见 scripts/lib/sdk-packages.mjs（与 ext-packages/publish.mjs 共用）。
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { repoRoot } from './lib.mjs'
-
-/** SDK 发布集合（发布手册 docs/development/publishing-sdk.md 的同一清单）。 */
-const SDK_PACKAGES = [
-  'packages/extension-api',
-  'packages/extension-manifest',
-  'packages/extension-packaging',
-]
+import { SDK_PACKAGE_DIRS } from '../lib/sdk-packages.mjs'
 
 function parseArgs(argv) {
   const out = {}
@@ -71,7 +65,7 @@ if (!dryRun) {
 }
 
 const produced = []
-for (const rel of SDK_PACKAGES) {
+for (const rel of SDK_PACKAGE_DIRS) {
   const pkgDir = resolve(repoRoot, rel)
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   console.log(`\n▸ ${pkg.name}@${pkg.version}`)
@@ -89,8 +83,8 @@ for (const rel of SDK_PACKAGES) {
 
 if (!dryRun) {
   const tarballs = readdirSync(sdkDir).filter((f) => f.endsWith('.tgz'))
-  if (tarballs.length !== SDK_PACKAGES.length)
-    die(`产物数量不符：期望 ${SDK_PACKAGES.length} 个 tarball，实际 ${tarballs.length} 个 (${tarballs.join(', ')})`)
+  if (tarballs.length !== SDK_PACKAGE_DIRS.length)
+    die(`产物数量不符：期望 ${SDK_PACKAGE_DIRS.length} 个 tarball，实际 ${tarballs.length} 个 (${tarballs.join(', ')})`)
   for (const f of tarballs.sort()) console.log(`   ${f}`)
   ok(`${tarballs.length} 个 SDK tarball 就绪。内网安装：`)
   console.log(`   npm i <市场地址>gallery/sdk/${tarballs.sort()[0]}`)

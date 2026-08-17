@@ -59,7 +59,8 @@
     "gallery:unpublish": "node scripts/gallery/unpublish.mjs",
     "gallery:upload": "node scripts/gallery/upload.mjs",
     "gallery:token": "node scripts/gallery/token.mjs",
-    "ext:release": "node scripts/ext-release/release.mjs"
+    "ext:release": "node scripts/ext-release/release.mjs",
+    "ext-packages:publish": "node scripts/ext-packages/publish.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "catalog:",
