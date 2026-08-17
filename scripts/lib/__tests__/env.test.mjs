@@ -116,7 +116,7 @@ test('loadEnv: 四层优先级 .env.<mode>.local > .env.<mode> > .env.local > .e
   writeFileSync(join(dir, '.env.prod.local'), 'A=prod-local\n')
   const env = {}
   const result = loadEnv({ cwd: dir, argv: ['--env', 'prod'], env, quiet: true })
-  assert.deepEqual(env, { A: 'prod-local', B: 'prod', C: 'local', D: 'base' })
+  assert.deepEqual(env, { A: 'prod-local', B: 'prod', C: 'local', D: 'base', UE_ENV: 'prod' })
   assert.equal(result.mode, 'prod')
   assert.equal(result.files.length, 4)
 })
@@ -156,6 +156,20 @@ test('loadEnv: 显式 --env 时 explicit 为 true', (t) => {
   const result = loadEnv({ cwd: dir, argv: ['--env', 'test'], env: {}, quiet: true })
   assert.equal(result.mode, 'test')
   assert.equal(result.explicit, true)
+})
+
+test('loadEnv: 显式 --env 时回写 env.UE_ENV', (t) => {
+  const dir = makeTmpEnvDir(t)
+  const env = {}
+  loadEnv({ cwd: dir, argv: ['--env', 'prod'], env, quiet: true })
+  assert.equal(env.UE_ENV, 'prod')
+})
+
+test('loadEnv: 未显式指定时不写入 UE_ENV', (t) => {
+  const dir = makeTmpEnvDir(t)
+  const env = {}
+  loadEnv({ cwd: dir, argv: [], env, quiet: true })
+  assert.ok(!('UE_ENV' in env))
 })
 
 test('loadEnv: 无文件命中时也不报错', (t) => {

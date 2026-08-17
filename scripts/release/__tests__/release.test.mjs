@@ -55,6 +55,11 @@ test('parseArgs rejects unknown or missing values', () => {
   assert.throws(() => parseArgs(['oops']), /无法识别参数/)
 })
 
+test('parseArgs reads --env', () => {
+  assert.deepEqual(parseArgs(['--env', 'prod']), { env: 'prod' })
+  assert.throws(() => parseArgs(['--env']), /缺少 --env 的值/)
+})
+
 test('bumpVersion supports stable semver bumps', () => {
   assert.equal(bumpVersion('0.1.4', 'patch'), '0.1.5')
   assert.equal(bumpVersion('0.1.4', 'minor'), '0.2.0')

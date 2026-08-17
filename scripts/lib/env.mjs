@@ -85,5 +85,7 @@ export function loadEnv({ cwd, argv, env, quiet } = {}) {
         : '（未找到 .env 文件）'
     console.log(`\x1b[2m[env] mode=${mode} ${detail}\x1b[0m`)
   }
+  // 回写 UE_ENV，让父脚本 spawn 的子脚本复用同一 mode，避免它们回落 dev 再加载 .env.dev
+  if (explicit) env.UE_ENV = mode
   return { mode, files, explicit }
 }

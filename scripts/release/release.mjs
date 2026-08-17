@@ -53,6 +53,7 @@ const VALUE_OPTIONS = new Set([
   'port',
   'key',
   'remote-os',
+  'env',
 ])
 
 function camelCaseFlag(flag) {

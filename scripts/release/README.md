@@ -156,6 +156,7 @@ pnpm release -- --version 0.1.5
 | `--skip-check`               | 跳过 `pnpm check` 与 `pnpm test:release`              |
 | `--e2e`                      | 额外运行 `pnpm e2e`                                   |
 | `--package-script <script>`  | 覆盖默认打包脚本，默认 `package:win:installer`        |
+| `--env <mode>`               | 指定加载仓库根 `.env.<mode>` 分层文件，默认 `dev`      |
 
 > **版本说明从哪来**：`release:notes` 遍历所有 `vX.Y.Z` tag，对每个 tag 与其前驱之间的提交
 > 按 `<type>(<scope>): <summary>` 解析（见 `docs/development/git-commit-msg-rule.md`），
