@@ -16,7 +16,7 @@
 - [发布扩展 SDK（npm）](publishing-sdk.md) — `@universe-editor/extension-api` 等发布集合发公开 npm 的手动流程 + 内网 tarball 托管 fallback。
 - [配置扩展市场服务器](marketplace-server.md) — 自建市场后端：`/extensionquery` 协议、registry 格式、部署与联调。
 
-App 本体的发布（版本 bump、打包、上传）见 [`scripts/release/README.md`](../../scripts/release/README.md)；市场运维脚本细节见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)。
+App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后自动创建 GitHub Release 并触发 samples 仓库 CI）见 [`scripts/release/README.md`](../../scripts/release/README.md)；市场运维脚本细节见 [`scripts/gallery/README.md`](../../scripts/gallery/README.md)。
 
 ## 约定与协作
 

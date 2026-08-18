@@ -1,25 +1,52 @@
-name: Package Nightly
+# 正式发布：v* tag push（或 workflow_dispatch 手动回填历史 tag）后，解析 tag/title，
+# 创建同名 GitHub Release，打包 linux / windows 双平台 zip 上传到该 Release，
+# 最后向 samples 仓库发 repository_dispatch 触发其 CI 下载产物跑 e2e。
+
+name: Release Editor
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
-  schedule:
-    # 每日一次 UTC 5:43（分钟避开 :00/:30 的整点/半点，随机偏移），滚动刷新
-    # editor-nightly release 里的 linux / windows 双平台产物，供 samples 仓库 e2e 下载。
-    - cron: '43 5 * * *'
+    inputs:
+      tag:
+        description: 要回填发布的版本 tag（如 v0.1.68）
+        required: true
+        type: string
 
-# 滚动 release 同名资产上传非原子：同一时刻只允许一个打包运行，新触发排队等待而非取消。
+# 同名 Release 的并发 view||create 竞态：正式发布串行排队（cancel-in-progress: false）。
 concurrency:
-  group: package-nightly
+  group: release-editor
   cancel-in-progress: false
 
+# gh release create/edit/upload 需要 contents:write。
 permissions:
   contents: write
 
 jobs:
+  # 把 push tag 与 workflow_dispatch 两种触发统一解析出目标 tag，并算出去掉 v 前缀
+  # 的标题。GitHub 表达式无字符串替换函数，只能落到 shell 里用 ${tag#v} 剥离。
+  resolve:
+    name: Resolve tag and title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      title: ${{ steps.resolve.outputs.title }}
+    steps:
+      - name: Resolve tag and title
+        id: resolve
+        run: |
+          tag="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "title=Universe Editor ${tag#v}" >> "$GITHUB_OUTPUT"
+
   # 两个打包 job 并发时，各自 view||create 同一 release 存在竞态：两者都 view 不到
   # 又都去 create。这个 job 串在打包前，把 create/update 收口到单点。
   ensure-release:
-    name: Ensure rolling nightly release
+    name: Ensure release
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -27,22 +54,22 @@ jobs:
       # 本 job 不 checkout，gh 需要显式仓库上下文。
       GH_REPO: ${{ github.repository }}
     steps:
-      - name: Create or update editor-nightly release
+      - name: Create or update release
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.resolve.outputs.title }}
         run: |
-          if gh release view editor-nightly >/dev/null 2>&1; then
-            gh release edit editor-nightly \
-              --title "Universe Editor nightly" \
-              --notes "滚动的双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
+          set -euo pipefail
+          notes="双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$notes"
           else
-            gh release create editor-nightly \
-              --prerelease \
-              --title "Universe Editor nightly" \
-              --notes "滚动的双平台编辑器产物，供 samples 仓库 e2e 下载。可执行文件：linux-unpacked/universe-editor、win-unpacked/Universe Editor.exe"
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$notes"
           fi
 
   package-linux:
     name: Package Linux (dir)
-    needs: ensure-release
+    needs: [resolve, ensure-release]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -51,9 +78,11 @@ jobs:
     steps:
       # runtime:stage 内部跑 `pnpm -w run agent:build`，需要 claude-agent-acp /
       # codex-acp 两个 git submodule 的 dist 产物。
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           submodules: recursive
+          ref: ${{ needs.resolve.outputs.tag }}
 
       - uses: pnpm/action-setup@v4.4.0
 
@@ -99,14 +128,14 @@ jobs:
           cd apps/editor/release
           zip -r universe-editor-linux-x64.zip linux-unpacked
 
-      - name: Upload Linux nightly artifact
+      - name: Upload Linux artifact
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload editor-nightly apps/editor/release/universe-editor-linux-x64.zip --clobber
+        run: gh release upload ${{ needs.resolve.outputs.tag }} apps/editor/release/universe-editor-linux-x64.zip --clobber
 
   package-windows:
     name: Package Windows (dir)
-    needs: ensure-release
+    needs: [resolve, ensure-release]
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -115,9 +144,11 @@ jobs:
     steps:
       # runtime:stage 内部跑 `pnpm -w run agent:build`，需要 claude-agent-acp /
       # codex-acp 两个 git submodule 的 dist 产物。
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           submodules: recursive
+          ref: ${{ needs.resolve.outputs.tag }}
 
       - uses: pnpm/action-setup@v4.4.0
 
@@ -163,7 +194,25 @@ jobs:
           cd apps/editor/release
           7z a universe-editor-win-x64.zip win-unpacked
 
-      - name: Upload Windows nightly artifact
+      - name: Upload Windows artifact
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload editor-nightly apps/editor/release/universe-editor-win-x64.zip --clobber
+        run: gh release upload ${{ needs.resolve.outputs.tag }} apps/editor/release/universe-editor-win-x64.zip --clobber
+
+  notify-samples:
+    name: Notify samples repo
+    needs: [resolve, package-linux, package-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.SAMPLES_DISPATCH_TOKEN }}
+    steps:
+      - name: Dispatch editor-release to samples repo
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::SAMPLES_DISPATCH_TOKEN 未配置，跳过 samples CI 触发"
+            exit 0
+          fi
+          gh api repos/lovebirdsx/universe-editor-extension-samples/dispatches \
+            -f event_type=editor-release \
+            -f "client_payload[tag]=${{ needs.resolve.outputs.tag }}"

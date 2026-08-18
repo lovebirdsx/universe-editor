@@ -177,6 +177,23 @@ pnpm release -- --version 0.1.5
 > **历史版本不要删**：保留旧的 `.exe` 与 `.blockmap`，electron-updater 的差分下载
 > 需要它们；同时也方便回滚（把 `latest.yml` 换回旧版本即可降级）。
 
+### GitHub Release 与 samples CI（自动）
+
+`pnpm release` 第 9 步 push 出 `vX.Y.Z` tag 后，GitHub Actions 会自动接着做两件事（无需本地干预）：
+
+1. `.github/workflows/release-editor.yml` 监听到 `v*` tag push，创建同名 GitHub Release（标题 `Universe Editor X.Y.Z`），打包并上传 `universe-editor-linux-x64.zip`（含 `linux-unpacked/`）与 `universe-editor-win-x64.zip`（含 `win-unpacked/`）。
+2. 随后向 samples 仓库（`lovebirdsx/universe-editor-extension-samples`）发 `repository_dispatch`（`event_type=editor-release`，payload 携带 `tag`），触发其 CI 下载上述 zip 跑 e2e。
+
+**前置配置**：在主仓库 Settings → Secrets and variables → Actions 里配置 `SAMPLES_DISPATCH_TOKEN`——一个对 samples 仓库有 Contents read/write 权限的 fine-grained PAT，或 repo scope 的 classic PAT。未配置时 workflow 不会挂红，只会打印 `SAMPLES_DISPATCH_TOKEN 未配置，跳过 samples CI 触发` 警告并跳过第 2 步。
+
+**手动回填历史版本**（例如 tag 已 push 但当时未生成 Release，或想补发某个老版本）：
+
+```bash
+gh workflow run release-editor.yml -f tag=v0.1.68
+```
+
+它会 checkout 到该 tag 的代码重新打包上传，并同样触发 samples CI。
+
 ---
 
 ## 四、`upload.mjs` 用法
