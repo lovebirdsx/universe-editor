@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createServer, type Server } from 'node:net'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ILogger } from '@universe-editor/platform'
 import {
+  NODE_ARCHIVE_PROBE_BYTES,
   NODE_RUNTIME_VERSION,
   buildCheckCommand,
   buildDeployRemoteScript,
@@ -24,6 +25,7 @@ import {
   parseAuthority,
   parseBundleHashLine,
   parseDaemonInfoLine,
+  pickFastestNodeArchiveUrl,
   RemoteDeployer,
   resolveNodeArtifact,
   scpArgs,
@@ -36,6 +38,35 @@ import {
 
 const NODE_BIN_PATH = '$HOME/.universe-editor-server/node/v24.19.0/bin'
 const NODE_PATH_PRELUDE = `PATH="$PATH:${NODE_BIN_PATH}"; `
+const ARCHIVE_FILE_NAME = 'node-v24.19.0-linux-x64.tar.gz'
+const OFFICIAL_URL = `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${ARCHIVE_FILE_NAME}`
+const MIRROR_URL = `https://npmmirror.com/mirrors/node/v${NODE_RUNTIME_VERSION}/${ARCHIVE_FILE_NAME}`
+const noopLogger = { info: () => {}, warn: () => {} } as unknown as ILogger
+
+/** A successful probe response with a full byte window. */
+function rangeResponse(bytes = NODE_ARCHIVE_PROBE_BYTES): ReturnType<NodeArchiveFetcher> {
+  return Promise.resolve({
+    ok: true,
+    status: 206,
+    body: Readable.toWeb(Readable.from([Buffer.alloc(bytes)])),
+  })
+}
+
+/** Resolve after `ms`, or reject as soon as `signal` aborts. */
+async function delayOrAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? new Error('aborted')
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(signal.reason ?? new Error('aborted'))
+      },
+      { once: true },
+    )
+  })
+}
 
 describe('validateAuthority', () => {
   it('accepts a bare host, user@host, host:port and user@host:port', () => {
@@ -369,13 +400,74 @@ describe('buildNodeInstallScriptBody', () => {
   })
 })
 
+describe('pickFastestNodeArchiveUrl', () => {
+  it('picks the faster source and aborts the slower probe', async () => {
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      await delayOrAbort(url.startsWith('https://nodejs.org') ? 60 : 5, init?.signal)
+      return rangeResponse()
+    }
+    const winner = await pickFastestNodeArchiveUrl([OFFICIAL_URL, MIRROR_URL], noopLogger, fetcher)
+    expect(winner?.url).toBe(MIRROR_URL)
+    const officialProbe = winner!.probes.find((p) => p.url === OFFICIAL_URL)!
+    expect('error' in officialProbe).toBe(true)
+    if ('error' in officialProbe) {
+      expect(officialProbe.error).toMatch(/abort/i)
+    }
+  })
+
+  it('treats a stream ending before the probe window as failure', async () => {
+    const fetcher: NodeArchiveFetcher = async (url) => {
+      if (url.startsWith('https://nodejs.org')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: Readable.toWeb(Readable.from([Buffer.from('tiny')])),
+        })
+      }
+      return rangeResponse()
+    }
+    const winner = await pickFastestNodeArchiveUrl([OFFICIAL_URL, MIRROR_URL], noopLogger, fetcher)
+    expect(winner?.url).toBe(MIRROR_URL)
+  })
+
+  it('returns undefined when every probe stream ends early', async () => {
+    const fetcher: NodeArchiveFetcher = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: Readable.toWeb(Readable.from([Buffer.from('tiny')])),
+      })
+    const winner = await pickFastestNodeArchiveUrl([OFFICIAL_URL, MIRROR_URL], noopLogger, fetcher)
+    expect(winner).toBeUndefined()
+  })
+
+  it('returns undefined without fetching when there is a single source', async () => {
+    const fetcher = vi.fn<NodeArchiveFetcher>()
+    const winner = await pickFastestNodeArchiveUrl([OFFICIAL_URL], noopLogger, fetcher)
+    expect(winner).toBeUndefined()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('times out when a probe never settles', async () => {
+    const fetcher: NodeArchiveFetcher = async (_url, init) => {
+      await delayOrAbort(60_000, init?.signal)
+      return rangeResponse()
+    }
+    const winner = await pickFastestNodeArchiveUrl(
+      [OFFICIAL_URL, MIRROR_URL],
+      noopLogger,
+      fetcher,
+      50,
+    )
+    expect(winner).toBeUndefined()
+  })
+})
+
 describe('downloadNodeArchive', () => {
   const dirs: string[] = []
   afterEach(() => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
   })
-
-  const noopLogger = { info: () => {}, warn: () => {} } as unknown as ILogger
 
   function okResponse(body: string): ReturnType<NodeArchiveFetcher> {
     return Promise.resolve({
@@ -385,49 +477,105 @@ describe('downloadNodeArchive', () => {
     })
   }
 
-  it('streams the archive from nodejs.org on the first try', async () => {
-    const calls: string[] = []
-    const fetcher: NodeArchiveFetcher = (url) => {
-      calls.push(url)
-      return okResponse('TGZ-BYTES')
-    }
+  function mkDest(): string {
     const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
     dirs.push(dir)
-    const dest = join(dir, 'archive.tar.gz')
-    await downloadNodeArchive('node-v24.19.0-linux-x64.tar.gz', dest, noopLogger, fetcher)
-    expect(calls).toEqual([
-      `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v24.19.0-linux-x64.tar.gz`,
-    ])
+    return join(dir, 'archive.tar.gz')
+  }
+
+  it('streams the archive from nodejs.org when it wins the probe', async () => {
+    const calls: { url: string; ranged: boolean }[] = []
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      const ranged = init?.headers?.Range !== undefined
+      calls.push({ url, ranged })
+      return ranged ? rangeResponse() : okResponse('TGZ-BYTES')
+    }
+    const dest = mkDest()
+    await downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)
+    expect(calls.map((c) => c.url)).toEqual([OFFICIAL_URL, MIRROR_URL, OFFICIAL_URL])
+    expect(calls.map((c) => c.ranged)).toEqual([true, true, false])
     expect(readFileSync(dest, 'utf8')).toBe('TGZ-BYTES')
   })
 
-  it('falls back to npmmirror when the first mirror fails', async () => {
-    const calls: string[] = []
-    const fetcher: NodeArchiveFetcher = (url) => {
-      calls.push(url)
-      if (url.startsWith('https://nodejs.org')) {
+  it('downloads from npmmirror when the official probe fails', async () => {
+    const calls: { url: string; ranged: boolean }[] = []
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      const ranged = init?.headers?.Range !== undefined
+      calls.push({ url, ranged })
+      if (ranged && url.startsWith('https://nodejs.org')) {
         return Promise.resolve({ ok: false, status: 500, body: null })
       }
-      return okResponse('MIRROR-BYTES')
+      return ranged ? rangeResponse() : okResponse('MIRROR-BYTES')
     }
-    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
-    dirs.push(dir)
-    const dest = join(dir, 'archive.tar.gz')
-    await downloadNodeArchive('x.tar.gz', dest, noopLogger, fetcher)
-    expect(calls).toHaveLength(2)
-    expect(calls[1]).toContain('npmmirror.com')
+    const dest = mkDest()
+    await downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)
+    expect(calls.map((c) => c.url)).toEqual([OFFICIAL_URL, MIRROR_URL, MIRROR_URL])
     expect(readFileSync(dest, 'utf8')).toBe('MIRROR-BYTES')
   })
 
+  it('downloads from the probe winner first', async () => {
+    const calls: { url: string; ranged: boolean }[] = []
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      const ranged = init?.headers?.Range !== undefined
+      calls.push({ url, ranged })
+      if (ranged) {
+        await delayOrAbort(url.startsWith('https://nodejs.org') ? 60 : 5, init?.signal)
+        return rangeResponse()
+      }
+      return okResponse(url.startsWith('https://npmmirror.com') ? 'MIRROR-BYTES' : 'OFFICIAL-BYTES')
+    }
+    const dest = mkDest()
+    await downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)
+    expect(calls.map((c) => c.url)).toEqual([OFFICIAL_URL, MIRROR_URL, MIRROR_URL])
+    expect(readFileSync(dest, 'utf8')).toBe('MIRROR-BYTES')
+  })
+
+  it('falls back to the remaining source when the preferred download fails', async () => {
+    const calls: { url: string; ranged: boolean }[] = []
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      const ranged = init?.headers?.Range !== undefined
+      calls.push({ url, ranged })
+      if (ranged) {
+        await delayOrAbort(url.startsWith('https://nodejs.org') ? 60 : 5, init?.signal)
+        return rangeResponse()
+      }
+      if (url.startsWith('https://npmmirror.com')) {
+        return Promise.resolve({ ok: false, status: 500, body: null })
+      }
+      return okResponse('OFFICIAL-BYTES')
+    }
+    const dest = mkDest()
+    await downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)
+    expect(calls.map((c) => c.url)).toEqual([OFFICIAL_URL, MIRROR_URL, MIRROR_URL, OFFICIAL_URL])
+    expect(readFileSync(dest, 'utf8')).toBe('OFFICIAL-BYTES')
+  })
+
+  it('keeps the fixed order when every probe fails', async () => {
+    const calls: string[] = []
+    const fetcher: NodeArchiveFetcher = async (url, init) => {
+      calls.push(url)
+      if (init?.headers?.Range !== undefined) {
+        return Promise.resolve({ ok: false, status: 500, body: null })
+      }
+      return okResponse('TGZ-BYTES')
+    }
+    const dest = mkDest()
+    await downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)
+    expect(calls).toEqual([OFFICIAL_URL, MIRROR_URL, OFFICIAL_URL])
+    expect(readFileSync(dest, 'utf8')).toBe('TGZ-BYTES')
+  })
+
   it('throws including both URLs when every mirror fails', async () => {
-    const fetcher: NodeArchiveFetcher = () =>
-      Promise.resolve({ ok: false, status: 404, body: null })
-    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
-    dirs.push(dir)
-    const dest = join(dir, 'archive.tar.gz')
-    await expect(downloadNodeArchive('x.tar.gz', dest, noopLogger, fetcher)).rejects.toThrow(
+    const calls: string[] = []
+    const fetcher: NodeArchiveFetcher = async (url) => {
+      calls.push(url)
+      return Promise.resolve({ ok: false, status: 404, body: null })
+    }
+    const dest = mkDest()
+    await expect(downloadNodeArchive(ARCHIVE_FILE_NAME, dest, noopLogger, fetcher)).rejects.toThrow(
       /failed to download Node.js .*nodejs\.org.*npmmirror/,
     )
+    expect(calls).toHaveLength(4)
   })
 })
 

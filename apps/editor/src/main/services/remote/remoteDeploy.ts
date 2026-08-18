@@ -232,14 +232,112 @@ export function resolveNodeArtifact(output: string): NodeArtifactResolution {
 
 export type NodeArchiveFetcher = (
   url: string,
-  init?: { signal?: AbortSignal },
+  init?: { signal?: AbortSignal; headers?: Record<string, string> },
 ) => Promise<{
   readonly ok: boolean
   readonly status: number
   readonly body: ReadableStream<Uint8Array> | null
 }>
 
-/** Stream the official Node.js archive to `destPath`, falling back to a mirror. */
+// ------------------------- node archive download -------------------------
+
+export const NODE_ARCHIVE_PROBE_BYTES = 256 * 1024
+export const NODE_ARCHIVE_PROBE_TIMEOUT_MS = 5000
+
+export type NodeArchiveProbeResult =
+  | { readonly url: string; readonly elapsedMs: number }
+  | { readonly url: string; readonly error: string }
+
+/**
+ * Race a `Range: bytes=0-<window-1>` GET against `signal` and resolve the time
+ * to receive that byte window. The body is always cancelled once the window is
+ * full, so a server that ignores Range and streams the whole ~40MB archive only
+ * costs the first window. Throws on non-2xx, a missing body, a stream that ends
+ * before the window (e.g. a tiny error page), or abort.
+ */
+async function probeNodeArchiveUrl(
+  url: string,
+  fetchImpl: NodeArchiveFetcher,
+  signal: AbortSignal,
+): Promise<number> {
+  const startedAt = Date.now()
+  const res = await fetchImpl(url, {
+    signal,
+    headers: { Range: `bytes=0-${NODE_ARCHIVE_PROBE_BYTES - 1}` },
+  })
+  const body = res.body
+  if (!res.ok) {
+    await body?.cancel().catch(() => undefined)
+    throw new Error(`HTTP ${res.status}`)
+  }
+  if (!body) {
+    throw new Error(`HTTP ${res.status} with no body`)
+  }
+  const reader = body.getReader()
+  let received = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      received += value.byteLength
+      if (received >= NODE_ARCHIVE_PROBE_BYTES) break
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  if (received < NODE_ARCHIVE_PROBE_BYTES) {
+    throw new Error(`stream ended after ${received} of ${NODE_ARCHIVE_PROBE_BYTES} bytes`)
+  }
+  return Date.now() - startedAt
+}
+
+/**
+ * Probe every candidate concurrently and return the first source that answers
+ * with the requested byte window (losers are aborted), or `undefined` when
+ * every probe fails — the caller then keeps the fixed URL order.
+ */
+export async function pickFastestNodeArchiveUrl(
+  urls: readonly string[],
+  logger: ILogger,
+  fetchImpl: NodeArchiveFetcher = fetch,
+  probeTimeoutMs: number = NODE_ARCHIVE_PROBE_TIMEOUT_MS,
+): Promise<{ url: string; probes: NodeArchiveProbeResult[] } | undefined> {
+  if (urls.length <= 1) return undefined
+  logger.info(
+    `[remote] probing ${urls.length} node archive sources (${NODE_ARCHIVE_PROBE_BYTES} bytes, ${probeTimeoutMs}ms timeout)`,
+  )
+  const cancelLosers = new AbortController()
+  const probes: NodeArchiveProbeResult[] = []
+  const contenders = urls.map((url) => {
+    const signal = AbortSignal.any([cancelLosers.signal, AbortSignal.timeout(probeTimeoutMs)])
+    return probeNodeArchiveUrl(url, fetchImpl, signal).then(
+      (elapsedMs) => {
+        probes.push({ url, elapsedMs })
+        return { url, elapsedMs }
+      },
+      (error: unknown) => {
+        probes.push({ url, error: error instanceof Error ? error.message : String(error) })
+        throw error
+      },
+    )
+  })
+  const winner = await Promise.any(contenders).catch(() => undefined)
+  cancelLosers.abort()
+  await Promise.allSettled(contenders)
+  logger.info(
+    `[remote] node archive probe results: ${probes
+      .map((p) =>
+        'elapsedMs' in p ? `${p.url} in ${p.elapsedMs}ms` : `${p.url} failed: ${p.error}`,
+      )
+      .join(', ')}`,
+  )
+  if (winner)
+    logger.info(`[remote] node archive probe winner: ${winner.url} (${winner.elapsedMs}ms)`)
+  else logger.warn('[remote] node archive probe found no reachable source, using fixed order')
+  return winner ? { url: winner.url, probes } : undefined
+}
+
+/** Stream the official Node.js archive to `destPath`, probing sources first. */
 export async function downloadNodeArchive(
   fileName: string,
   destPath: string,
@@ -250,8 +348,10 @@ export async function downloadNodeArchive(
     `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${fileName}`,
     `https://npmmirror.com/mirrors/node/v${NODE_RUNTIME_VERSION}/${fileName}`,
   ]
+  const probe = await pickFastestNodeArchiveUrl(urls, logger, fetchImpl)
+  const ordered = probe ? [probe.url, ...urls.filter((url) => url !== probe.url)] : urls
   let lastError: Error | undefined
-  for (const url of urls) {
+  for (const url of ordered) {
     const startedAt = Date.now()
     try {
       logger.info(`[remote] downloading node runtime from ${url}`)

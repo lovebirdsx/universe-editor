@@ -23,7 +23,7 @@
 **以 SSH 连接远端主机时：**
 
 - **远端主机**：一台能通过 SSH 登录的 **Linux** 主机。
-- **远端环境**：无需预装 Node.js。编辑器检测到远端没有 Node.js 时会**自动安装**一个私有 Node 运行时（Node 24.19.0，从 nodejs.org 下载、npmmirror 兜底，装到远端 `~/.universe-editor-server/node/v24.19.0/`）；远端已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线且下载失败）才需要你在远端手动安装 **Node.js ≥ 20** 后重连。
+- **远端环境**：无需预装 Node.js。编辑器检测到远端没有 Node.js 时会**自动安装**一个私有 Node 运行时（Node 24.19.0，下载前自动测速 nodejs.org 与 npmmirror 镜像并选择较快的一个，另一源作为失败兜底，装到远端 `~/.universe-editor-server/node/v24.19.0/`）；远端已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线且下载失败）才需要你在远端手动安装 **Node.js ≥ 20** 后重连。
 - **本地 SSH**：本地已配置好 `~/.ssh/config` 或能直接用 `user@host[:port]` 免密登录（SSH 密钥认证）。连接过程会以非交互方式（BatchMode）运行 `ssh`，如果登录需要你手输密码，连接会失败——请先配好密钥。
 
 **连接本机 WSL 时（Windows）：**
