@@ -11,6 +11,9 @@ export function stubWindowsService(crash?: IWindowRenderCrashInfo | null | Error
     onDidChangeWindows: () => ({ dispose: () => {} }),
     getWindows: async () => [],
     isCurrentWindowFirst: async () => true,
+    getCurrentWindowId: async () => 1,
+    getFocusedWindowId: async () => 1,
+    onDidChangeFocusedWindow: () => ({ dispose: () => {} }),
     getLastRenderCrash:
       crash instanceof Error ? async () => Promise.reject(crash) : async () => crash ?? null,
     focusWindow: async () => {},

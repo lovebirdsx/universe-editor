@@ -85,6 +85,13 @@ function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
       async isCurrentWindowFirst() {
         return true
       },
+      async getCurrentWindowId() {
+        return 1
+      },
+      async getFocusedWindowId() {
+        return 1
+      },
+      onDidChangeFocusedWindow: () => ({ dispose: () => {} }),
       async getLastRenderCrash() {
         return null
       },

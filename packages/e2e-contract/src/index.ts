@@ -363,6 +363,12 @@ export interface E2EProbe {
    */
   getOpenWindows(): Promise<readonly E2EOpenWindow[]>
   /**
+   * Bring the window with the given id to the foreground. Drives main-side
+   * focus tracking (even in silent E2E mode where windows never take real
+   * OS focus) — used to exercise the pending-error reveal on focus.
+   */
+  focusWindow(id: number): Promise<void>
+  /**
    * Open a folder in a NEW window by file-system path, bypassing the native
    * folder dialog. If the folder is already open in some window, that window is
    * focused instead (single-writer constraint).

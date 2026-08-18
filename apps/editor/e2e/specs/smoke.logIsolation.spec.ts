@@ -3,7 +3,10 @@
  *
  *  An unexpected error logged in one window must not leak into another window's
  *  Output. The auto-reveal contribution subscribes to the per-window logFiles
- *  stream, so window B's error reveals B's panel but leaves A's panel untouched.
+ *  stream, so window B's error never reveals window A's panel. B holds the
+ *  reveal pending until it becomes the top window — focused (or the last
+ *  focused fallback in silent E2E), at which point it reveals and A stays
+ *  untouched.
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdtempSync } from 'node:fs'
@@ -32,8 +35,12 @@ async function hidePanel(page: Page): Promise<void> {
     .toBe(false)
 }
 
+async function panelVisible(page: Page): Promise<boolean> {
+  return page.evaluate(() => window.__E2E__!.getContextKey('panelVisible') as boolean)
+}
+
 test.describe('@p1 log isolation', () => {
-  test('an error in one window does not reveal another window output', async ({
+  test('an error in a background window reveals only after it becomes the top window', async ({
     electronApp,
     workbench,
     page,
@@ -53,12 +60,25 @@ test.describe('@p1 log isolation', () => {
       window.__E2E__!.triggerUnexpectedError('E2E window-B private error')
     })
 
-    // Window B reveals its own panel...
-    await expect
-      .poll(() => pageB.evaluate(() => window.__E2E__!.getContextKey('panelVisible') as boolean), {
-        timeout: 10_000,
-      })
-      .toBe(true)
+    // Window B is not the top window (window A is), so its error stays pending
+    // and the panel must remain hidden — no immediate cross-window reveal.
+    expect(await panelVisible(pageB)).toBe(false)
+    await pageB.waitForTimeout(1000)
+    expect(await panelVisible(pageB)).toBe(false)
+
+    // Once B becomes the top window (programmatic focus — silent E2E windows
+    // never take real OS focus), the pending error reveals B's panel...
+    const bId = await page.evaluate(async (targetFolder) => {
+      const windows = await window.__E2E__!.getOpenWindows()
+      const match = windows.find((w) => w.folder === targetFolder)
+      if (!match) {
+        throw new Error(`no window for folder ${targetFolder}: ${JSON.stringify(windows)}`)
+      }
+      return match.id
+    }, folder)
+    await pageB.evaluate((id) => window.__E2E__!.focusWindow(id), bId)
+
+    await expect.poll(() => panelVisible(pageB), { timeout: 10_000 }).toBe(true)
 
     // ...while window A stays hidden — no cross-window leak.
     await expect

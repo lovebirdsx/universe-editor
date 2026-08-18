@@ -29,12 +29,24 @@ export class MainWindowsService implements IWindowsService, IDisposable {
     return this._windows.onDidChangeWindows
   }
 
+  get onDidChangeFocusedWindow(): Event<number> {
+    return this._windows.onDidChangeFocusedWindow
+  }
+
   getWindows(): Promise<readonly IOpenWindowInfo[]> {
     return Promise.resolve(this._windows.getOpenWindowInfos())
   }
 
   isCurrentWindowFirst(): Promise<boolean> {
     return Promise.resolve(this._isCurrentWindowFirst)
+  }
+
+  getCurrentWindowId(): Promise<number> {
+    return Promise.resolve(this._windowId)
+  }
+
+  getFocusedWindowId(): Promise<number | null> {
+    return Promise.resolve(this._windows.getFocusedWindowId())
   }
 
   getLastRenderCrash(): Promise<IWindowRenderCrashInfo | null> {

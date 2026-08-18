@@ -407,6 +407,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         const revived = w.folder ? URI.revive(w.folder) : null
         return { id: w.id, folder: revived?.fsPath ?? null, name: w.name }
       }),
+    focusWindow: (id) => services.windowsService.focusWindow(id),
     openFolderInNewWindow: (fsPath) => services.windowsService.openWindow(URI.file(fsPath)),
     getRecentWorkspacePaths: () => services.workspaceService.recent.map((r) => r.folder.fsPath),
     removeRecentWorkspace: (fsPath) => services.workspaceService.removeRecent(URI.file(fsPath)),

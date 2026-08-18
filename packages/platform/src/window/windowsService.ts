@@ -55,6 +55,18 @@ export interface IWindowsService {
   /** Whether the renderer using this service belongs to the first window in this app session. */
   isCurrentWindowFirst(): Promise<boolean>
 
+  /** This renderer's own window id (captured per-window by the main adapter). */
+  getCurrentWindowId(): Promise<number>
+
+  /**
+   * The app's "top" window id: the OS-focused window, falling back to the last
+   * focused (still-alive) window, then the first open window, else null.
+   */
+  getFocusedWindowId(): Promise<number | null>
+
+  /** Fires with the window id whenever a window becomes the focused/top window. */
+  readonly onDidChangeFocusedWindow: Event<number>
+
   /**
    * The most recent unexpected renderer exit of the calling window, or null
    * when it has not crashed (or the record aged out with the window).

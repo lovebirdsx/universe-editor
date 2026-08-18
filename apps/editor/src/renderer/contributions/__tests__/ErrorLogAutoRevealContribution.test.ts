@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   ILayoutService,
-  IOutputService,
   InstantiationService,
+  IOutputService,
   IViewsService,
+  IWindowsService,
   LogLevel,
   PartId,
   ServiceCollection,
@@ -94,17 +95,64 @@ function makeViewsService() {
   }
 }
 
+const MY_ID = 1
+const OTHER_ID = 2
+
+interface FakeWindowsService {
+  _serviceBrand: undefined
+  onDidChangeWindows: ReturnType<typeof vi.fn>
+  getWindows: ReturnType<typeof vi.fn>
+  isCurrentWindowFirst: ReturnType<typeof vi.fn>
+  getCurrentWindowId: ReturnType<typeof vi.fn>
+  getFocusedWindowId: ReturnType<typeof vi.fn>
+  onDidChangeFocusedWindow: Emitter<number>['event']
+  getLastRenderCrash: ReturnType<typeof vi.fn>
+  focusWindow: ReturnType<typeof vi.fn>
+  openWindow: ReturnType<typeof vi.fn>
+  quit: ReturnType<typeof vi.fn>
+  /** Mirrors main: the top window id flips and the change event fires together. */
+  fireFocused(id: number): void
+  setFocusedId(id: number | null): void
+}
+
+function makeWindowsService(focusedId: number | null = MY_ID): FakeWindowsService {
+  const state = { focusedId }
+  const focusedEmitter = new Emitter<number>()
+  return {
+    _serviceBrand: undefined,
+    onDidChangeWindows: vi.fn(() => ({ dispose: () => {} })),
+    getWindows: vi.fn(async () => []),
+    isCurrentWindowFirst: vi.fn(async () => true),
+    getCurrentWindowId: vi.fn(async () => MY_ID),
+    getFocusedWindowId: vi.fn(async () => state.focusedId),
+    onDidChangeFocusedWindow: focusedEmitter.event,
+    getLastRenderCrash: vi.fn(async () => null),
+    focusWindow: vi.fn(async () => {}),
+    openWindow: vi.fn(async () => {}),
+    quit: vi.fn(async () => {}),
+    fireFocused(id) {
+      state.focusedId = id
+      focusedEmitter.fire(id)
+    },
+    setFocusedId(id) {
+      state.focusedId = id
+    },
+  }
+}
+
 function instantiate(
   output: OutputService,
   logFiles: FakeLogFilesService,
   layout: ReturnType<typeof makeLayoutService>,
   views: ReturnType<typeof makeViewsService>,
+  windows: FakeWindowsService = makeWindowsService(),
 ): ErrorLogAutoRevealContribution {
   const services = new ServiceCollection()
   services.set(ILogFilesService, logFiles as never)
   services.set(IOutputService, output)
   services.set(ILayoutService, layout as never)
   services.set(IViewsService, views as never)
+  services.set(IWindowsService, windows as never)
   const inst = new InstantiationService(services)
   return inst.createInstance(ErrorLogAutoRevealContribution)
 }
@@ -119,7 +167,7 @@ function fireAppend(
 }
 
 async function flush(): Promise<void> {
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 40; i++) {
     await Promise.resolve()
   }
 }
@@ -249,6 +297,120 @@ describe('ErrorLogAutoRevealContribution', () => {
     out.createChannel('acp/claude/new-handle')
     expect(out.hasPendingRestoredChannel).toBe(false)
     expect(out.activeChannelName.get()).toBe('acp/claude/new-handle')
+    contribution.dispose()
+  })
+
+  it('holds the reveal until this window becomes the top window', async () => {
+    const windows = makeWindowsService(OTHER_ID)
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] boom\n', LogLevel.Error)
+    await flush()
+
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    expect(views.openViewContainer).not.toHaveBeenCalled()
+
+    windows.fireFocused(MY_ID)
+    await flush()
+
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(rendererDescriptor.id, 1024 * 1024)
+    expect(output.activeChannelName.get()).toBe('Renderer')
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
+    contribution.dispose()
+  })
+
+  it('does not reveal on another window focus event', async () => {
+    const windows = makeWindowsService(OTHER_ID)
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] boom\n', LogLevel.Error)
+    await flush()
+
+    windows.fireFocused(OTHER_ID)
+    await flush()
+
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    contribution.dispose()
+  })
+
+  it('ignores focus events without a pending error', async () => {
+    const windows = makeWindowsService()
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    windows.fireFocused(MY_ID)
+    await flush()
+
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    contribution.dispose()
+  })
+
+  it('keeps the first pending error when more appends arrive before reveal', async () => {
+    const windows = makeWindowsService(OTHER_ID)
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] first\n', LogLevel.Error)
+    fireAppend(logFiles, 'main', '[10:00:01] [error] second\n', LogLevel.Error)
+    await flush()
+
+    windows.fireFocused(MY_ID)
+    await flush()
+
+    expect(logFiles.readLogFile).toHaveBeenCalledTimes(1)
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(rendererDescriptor.id, 1024 * 1024)
+    expect(output.activeChannelName.get()).toBe('Renderer')
+    contribution.dispose()
+  })
+
+  it('clears pending when the reveal fails so a later append retries', async () => {
+    const windows = makeWindowsService()
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    fireAppend(logFiles, 'unknown-channel', '[10:00:00] [error] ghost\n', LogLevel.Error)
+    await flush()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+
+    fireAppend(logFiles, 'renderer', '[10:00:01] [error] real\n', LogLevel.Error)
+    await flush()
+
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(rendererDescriptor.id, 1024 * 1024)
+    expect(output.activeChannelName.get()).toBe('Renderer')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
+    contribution.dispose()
+  })
+
+  it('reveals after a focus event races an in-flight top-window check', async () => {
+    const windows = makeWindowsService(OTHER_ID)
+    let resolveFocused!: (id: number | null) => void
+    windows.getFocusedWindowId.mockImplementationOnce(
+      () =>
+        new Promise<number | null>((resolve) => {
+          resolveFocused = resolve
+        }),
+    )
+    const contribution = instantiate(output, logFiles, layout, views, windows)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] boom\n', LogLevel.Error)
+    await flush() // _runReveal now hangs on getFocusedWindowId
+
+    windows.fireFocused(MY_ID) // in-flight → sets the retry flag
+    await flush()
+
+    resolveFocused(OTHER_ID) // stale answer: not the top window
+    await flush()
+
+    // The retry re-queries (state now MY_ID) and reveals.
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(rendererDescriptor.id, 1024 * 1024)
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
     contribution.dispose()
   })
 })

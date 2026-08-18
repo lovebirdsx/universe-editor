@@ -45,35 +45,41 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn((_name: string) => join(tmpdir(), 'ue-wintest')),
   },
-  BrowserWindow: vi.fn().mockImplementation(() => ({
-    id: windowIdCounter.value++,
-    on: vi.fn(),
-    once: vi.fn(),
-    removeListener: vi.fn(),
-    show: vi.fn(),
-    showInactive: vi.fn(),
-    focus: vi.fn(),
-    restore: vi.fn(),
-    reload: vi.fn(),
-    close: vi.fn(),
-    loadURL: vi.fn().mockResolvedValue(undefined),
-    loadFile: vi.fn().mockResolvedValue(undefined),
-    isDestroyed: vi.fn().mockReturnValue(false),
-    isMinimized: vi.fn().mockReturnValue(false),
-    isMaximized: vi.fn().mockReturnValue(false),
-    isFullScreen: vi.fn().mockReturnValue(false),
-    getNormalBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
-    getBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
-    webContents: {
-      toggleDevTools: vi.fn(),
+  BrowserWindow: Object.assign(
+    vi.fn().mockImplementation(() => ({
+      id: windowIdCounter.value++,
       on: vi.fn(),
+      once: vi.fn(),
       removeListener: vi.fn(),
-      openDevTools: vi.fn(),
-      isDevToolsOpened: vi.fn().mockReturnValue(false),
-      setWindowOpenHandler: vi.fn(),
-      getOSProcessId: vi.fn().mockReturnValue(1000),
+      show: vi.fn(),
+      showInactive: vi.fn(),
+      focus: vi.fn(),
+      restore: vi.fn(),
+      reload: vi.fn(),
+      close: vi.fn(),
+      loadURL: vi.fn().mockResolvedValue(undefined),
+      loadFile: vi.fn().mockResolvedValue(undefined),
+      isDestroyed: vi.fn().mockReturnValue(false),
+      isMinimized: vi.fn().mockReturnValue(false),
+      isMaximized: vi.fn().mockReturnValue(false),
+      isFullScreen: vi.fn().mockReturnValue(false),
+      getNormalBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
+      getBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
+      webContents: {
+        toggleDevTools: vi.fn(),
+        on: vi.fn(),
+        removeListener: vi.fn(),
+        openDevTools: vi.fn(),
+        isDevToolsOpened: vi.fn().mockReturnValue(false),
+        setWindowOpenHandler: vi.fn(),
+        getOSProcessId: vi.fn().mockReturnValue(1000),
+      },
+    })),
+    {
+      getFocusedWindow: vi.fn(() => null),
+      getAllWindows: vi.fn(() => []),
     },
-  })),
+  ),
   dialog: {
     showMessageBox: vi.fn().mockResolvedValue({ response: 1, checkboxChecked: false }),
   },
@@ -639,6 +645,108 @@ describe('WindowMainService', () => {
       const infos = svc.getOpenWindowInfos()
       expect(infos[0]?.remoteAuthority).toBe('wsl+ubuntu')
       expect(infos[1]?.remoteAuthority).toBeUndefined()
+    })
+  })
+
+  describe('focused-window tracking', () => {
+    function grabHandlerAt(windowIndex: number, event: string): () => void {
+      const win = vi.mocked(BrowserWindow).mock.results.at(windowIndex)?.value as {
+        on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+      }
+      const call = win.on.mock.calls.find(([name]) => name === event)
+      if (!call) throw new Error(`no ${event} handler registered`)
+      return call[1] as () => void
+    }
+
+    function grabWindowFocusHandler(windowIndex = -1): () => void {
+      return grabHandlerAt(windowIndex, 'focus')
+    }
+
+    function grabWindowClosedHandler(windowIndex = -1): () => void {
+      return grabHandlerAt(windowIndex, 'closed')
+    }
+
+    it('tracks the last focused window and fires the change event once per id', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id = await svc.createWindow()
+      const listener = vi.fn()
+      svc.onDidChangeFocusedWindow(listener)
+
+      grabWindowFocusHandler()()
+      grabWindowFocusHandler()() // same id → deduped
+
+      expect(svc.getFocusedWindowId()).toBe(id)
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(listener).toHaveBeenCalledWith(id)
+    })
+
+    it('prefers the OS-focused window over the last focused one', async () => {
+      const svc = new WindowMainService(makeOpts())
+      await svc.createWindow()
+      const id2 = await svc.createWindow()
+
+      grabWindowFocusHandler(0)() // lastFocused = first window
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValueOnce({
+        id: id2,
+        isDestroyed: () => false,
+      } as never)
+
+      expect(svc.getFocusedWindowId()).toBe(id2)
+    })
+
+    it('falls back to the last focused window when nothing has OS focus', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id1 = await svc.createWindow()
+      const id2 = await svc.createWindow()
+
+      grabWindowFocusHandler(1)() // lastFocused = id2
+
+      expect(svc.getFocusedWindowId()).toBe(id2)
+      expect(svc.getFocusedWindowId()).not.toBe(id1)
+    })
+
+    it('falls back to the first surviving window when the last focused window closed', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id1 = await svc.createWindow()
+      await svc.createWindow()
+      grabWindowFocusHandler(1)() // lastFocused = second window
+      grabWindowClosedHandler(1)()
+
+      expect(svc.getFocusedWindowId()).toBe(id1)
+    })
+
+    it('returns null with no windows', async () => {
+      const svc = new WindowMainService(makeOpts())
+      expect(svc.getFocusedWindowId()).toBeNull()
+    })
+
+    it('focusWindow updates the last focused window and fires the event', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id1 = await svc.createWindow()
+      await svc.createWindow()
+      const listener = vi.fn()
+      svc.onDidChangeFocusedWindow(listener)
+
+      svc.focusWindow(id1)
+      svc.focusWindow(id1) // same id → deduped
+
+      expect(svc.getFocusedWindowId()).toBe(id1)
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(listener).toHaveBeenCalledWith(id1)
+    })
+
+    it('refires the fallback top window when the last focused window closes', async () => {
+      const svc = new WindowMainService(makeOpts())
+      const id1 = await svc.createWindow()
+      await svc.createWindow()
+      const listener = vi.fn()
+      svc.onDidChangeFocusedWindow(listener)
+      grabWindowFocusHandler(1)() // lastFocused = second window
+
+      grabWindowClosedHandler(1)()
+
+      expect(listener).toHaveBeenCalledTimes(2)
+      expect(listener).toHaveBeenLastCalledWith(id1)
     })
   })
 })

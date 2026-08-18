@@ -299,8 +299,10 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// First Error log in a window reveals the Output panel and activates the
-// channel that emitted the error so failures do not stay hidden in the logs.
+// The first Error log reveals the Output panel and activates the channel that
+// emitted the error so failures do not stay hidden in the logs. Only the top
+// window (focused, or last focused) reveals; other windows hold it pending and
+// catch up when they become the top window.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.errorLogAutoReveal',
   ErrorLogAutoRevealContribution,

@@ -63,9 +63,16 @@ export interface ICreateWindowOptions {
 
 export interface IWindowMainService {
   readonly onDidChangeWindows: Event<void>
+  /** Fires with the window id whenever a window becomes the focused/top window. */
+  readonly onDidChangeFocusedWindow: Event<number>
   createWindow(opts?: ICreateWindowOptions): Promise<number>
   restoreSession(list: readonly IRestoreWindow[], fileToOpen?: string): Promise<void>
   focusWindow(id: number): void
+  /**
+   * The app's "top" window id: the OS-focused window, falling back to the last
+   * focused (still-alive) window, then the first open window, else null.
+   */
+  getFocusedWindowId(): number | null
   getWindowById(id: number): BrowserWindow | undefined
   getWindows(): ReadonlyArray<BrowserWindow>
   getOpenWindowInfos(): IOpenWindowInfo[]
@@ -132,9 +139,13 @@ export class WindowMainService implements IWindowMainService {
   private readonly _lastRenderCrash = new Map<number, IWindowRenderCrashInfo>()
   private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
   private _hasCreatedFirstWindow = false
+  /** Window id that last had OS focus (or was programmatically focused). */
+  private _lastFocusedWindowId: number | undefined
 
   private readonly _onDidChangeWindows = new Emitter<void>()
   readonly onDidChangeWindows: Event<void> = this._onDidChangeWindows.event
+  private readonly _onDidChangeFocusedWindow = new Emitter<number>()
+  readonly onDidChangeFocusedWindow: Event<number> = this._onDidChangeFocusedWindow.event
 
   constructor(private readonly _opts: WindowMainServiceOptions) {}
 
@@ -233,6 +244,7 @@ export class WindowMainService implements IWindowMainService {
     }
     registerRendererRole()
     win.webContents.on('did-finish-load', registerRendererRole)
+    win.on('focus', () => this._noteFocused(win.id))
 
     win.webContents.on('will-navigate', (event, url) => {
       // Allow in-app navigation on the shell's own origins (file:// dev fallback,
@@ -408,6 +420,12 @@ export class WindowMainService implements IWindowMainService {
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)
       this._lastRenderCrash.delete(win.id)
+      // The top window fell to the fallback chain; let pending consumers re-check.
+      if (this._lastFocusedWindowId === win.id) {
+        this._lastFocusedWindowId = undefined
+        const next = this.getFocusedWindowId()
+        if (next !== null) this._onDidChangeFocusedWindow.fire(next)
+      }
       this._opts.appServices.sessionSwitcher.unregisterWindow(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
@@ -505,10 +523,27 @@ export class WindowMainService implements IWindowMainService {
   focusWindow(id: number): void {
     const entry = this._windows.get(id)
     if (entry && !entry.win.isDestroyed()) {
+      this._noteFocused(id)
       if (this._opts.silentE2E) entry.win.showInactive()
       else entry.win.focus()
       this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)
     }
+  }
+
+  private _noteFocused(id: number): void {
+    if (this._lastFocusedWindowId === id) return
+    this._lastFocusedWindowId = id
+    this._onDidChangeFocusedWindow.fire(id)
+  }
+
+  getFocusedWindowId(): number | null {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (focused && !focused.isDestroyed() && this._windows.has(focused.id)) return focused.id
+    if (this._lastFocusedWindowId !== undefined && this._windows.has(this._lastFocusedWindowId)) {
+      return this._lastFocusedWindowId
+    }
+    const first = this._windows.keys().next().value
+    return first === undefined ? null : first
   }
 
   getWindowById(id: number): BrowserWindow | undefined {
@@ -828,5 +863,6 @@ export class WindowMainService implements IWindowMainService {
     }
     this._windows.clear()
     this._onDidChangeWindows.dispose()
+    this._onDidChangeFocusedWindow.dispose()
   }
 }
