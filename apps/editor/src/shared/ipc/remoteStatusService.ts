@@ -32,6 +32,7 @@ export type RemoteConnectionProgressStepDto =
   | 'stopping-old'
   | 'uploading'
   | 'installing'
+  | 'installing-node'
   | 'starting-daemon'
 
 export interface RemoteConnectionProgressDto {

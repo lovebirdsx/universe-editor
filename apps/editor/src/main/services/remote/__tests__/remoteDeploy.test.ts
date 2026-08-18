@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { Readable } from 'node:stream'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createServer, type Server } from 'node:net'
@@ -7,24 +8,34 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ILogger } from '@universe-editor/platform'
 import {
+  NODE_RUNTIME_VERSION,
   buildCheckCommand,
   buildDeployRemoteScript,
   buildDeployScriptBody,
+  buildNodeInstallRemoteScript,
+  buildNodeInstallScriptBody,
   buildStartCommand,
   buildStopCommand,
+  buildUnameCommand,
   classifyCheckResult,
   computeBundleHash,
+  downloadNodeArchive,
   forwardArgs,
   parseAuthority,
   parseBundleHashLine,
   parseDaemonInfoLine,
   RemoteDeployer,
+  resolveNodeArtifact,
   scpArgs,
   sshCommandArgs,
   validateAuthority,
+  type NodeArchiveFetcher,
   type RemoteRunner,
   type RemoteSpawner,
 } from '../remoteDeploy.js'
+
+const NODE_BIN_PATH = '$HOME/.universe-editor-server/node/v24.19.0/bin'
+const NODE_PATH_PRELUDE = `PATH="$PATH:${NODE_BIN_PATH}"; `
 
 describe('validateAuthority', () => {
   it('accepts a bare host, user@host, host:port and user@host:port', () => {
@@ -64,7 +75,7 @@ describe('argv assembly', () => {
       '-o',
       'StrictHostKeyChecking=accept-new',
       'user@host',
-      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check',
+      `${NODE_PATH_PRELUDE}command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check`,
     ])
   })
 
@@ -77,7 +88,7 @@ describe('argv assembly', () => {
       '-p',
       '2222',
       'host',
-      'node ~/.universe-editor-server/0.0.0/bootstrap.js start',
+      `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/0.0.0/bootstrap.js start`,
     ])
   })
 
@@ -141,12 +152,14 @@ describe('argv assembly', () => {
 
   it('builds check/start/stop commands against the versioned bootstrap', () => {
     expect(buildCheckCommand('1.2.3')).toBe(
-      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/1.2.3/bootstrap.js check',
+      `${NODE_PATH_PRELUDE}command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/1.2.3/bootstrap.js check`,
     )
     expect(buildStartCommand('1.2.3')).toBe(
-      'node ~/.universe-editor-server/1.2.3/bootstrap.js start',
+      `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/1.2.3/bootstrap.js start`,
     )
-    expect(buildStopCommand('1.2.3')).toBe('node ~/.universe-editor-server/1.2.3/bootstrap.js stop')
+    expect(buildStopCommand('1.2.3')).toBe(
+      `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/1.2.3/bootstrap.js stop`,
+    )
   })
 })
 
@@ -290,6 +303,190 @@ describe('classifyCheckResult node-missing and incomplete install', () => {
       state: 'not-deployed',
       reason: 'Error [ERR_MODULE_NOT_FOUND]: Cannot find package x',
     })
+  })
+})
+
+describe('resolveNodeArtifact', () => {
+  it('maps Linux and Darwin platforms to their node dist filenames', () => {
+    expect(resolveNodeArtifact('Linux x86_64\n')).toEqual({
+      platformKey: 'linux-x64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-linux-x64.tar.gz`,
+    })
+    expect(resolveNodeArtifact('Linux aarch64\n')).toEqual({
+      platformKey: 'linux-arm64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-linux-arm64.tar.gz`,
+    })
+    expect(resolveNodeArtifact('Linux arm64\n')).toEqual({
+      platformKey: 'linux-arm64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-linux-arm64.tar.gz`,
+    })
+    expect(resolveNodeArtifact('Linux armv7l\n')).toEqual({
+      platformKey: 'linux-armv7l',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-linux-armv7l.tar.gz`,
+    })
+    expect(resolveNodeArtifact('Darwin x86_64\n')).toEqual({
+      platformKey: 'darwin-x64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-darwin-x64.tar.gz`,
+    })
+    expect(resolveNodeArtifact('Darwin arm64\n')).toEqual({
+      platformKey: 'darwin-arm64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-darwin-arm64.tar.gz`,
+    })
+  })
+
+  it('rejects musl libc (Alpine) with manual-install guidance', () => {
+    const result = resolveNodeArtifact('Linux x86_64\nmusl libc (x86_64)\n')
+    expect('error' in result).toBe(true)
+    expect(result).toHaveProperty('error', expect.stringMatching(/musl/i))
+  })
+
+  it('rejects unknown platforms with manual-install guidance', () => {
+    expect(resolveNodeArtifact('Windows_NT x86_64\n')).toHaveProperty(
+      'error',
+      expect.stringContaining('unsupported remote platform'),
+    )
+    expect(resolveNodeArtifact('Linux s390x\n')).toHaveProperty('error')
+    expect(resolveNodeArtifact('')).toHaveProperty('error')
+  })
+})
+
+describe('buildUnameCommand', () => {
+  it('probes kernel/machine and the libc flavor', () => {
+    expect(buildUnameCommand()).toBe('uname -sm; (ldd --version 2>&1 || true) | head -n 1')
+  })
+})
+
+describe('buildNodeInstallScriptBody', () => {
+  it('extracts to a temp dir, atomically swaps and self-checks the runtime', () => {
+    const body = buildNodeInstallScriptBody('node-runtime-abc.tar.gz')
+    expect(body).toContain('dir="$HOME/.universe-editor-server/node/v24.19.0"')
+    expect(body).toContain('tar xzf /tmp/node-runtime-abc.tar.gz')
+    expect(body).toContain('--strip-components=1')
+    expect(body).toContain('mv "$dir.tmp" "$dir"')
+    expect(body).toContain('rm -f /tmp/node-runtime-abc.tar.gz')
+    expect(body).toContain('"$dir/bin/node" --version')
+    expect(body).not.toContain("'")
+  })
+})
+
+describe('downloadNodeArchive', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  const noopLogger = { info: () => {}, warn: () => {} } as unknown as ILogger
+
+  function okResponse(body: string): ReturnType<NodeArchiveFetcher> {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      body: Readable.toWeb(Readable.from(Buffer.from(body))),
+    })
+  }
+
+  it('streams the archive from nodejs.org on the first try', async () => {
+    const calls: string[] = []
+    const fetcher: NodeArchiveFetcher = (url) => {
+      calls.push(url)
+      return okResponse('TGZ-BYTES')
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
+    dirs.push(dir)
+    const dest = join(dir, 'archive.tar.gz')
+    await downloadNodeArchive('node-v24.19.0-linux-x64.tar.gz', dest, noopLogger, fetcher)
+    expect(calls).toEqual([
+      `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v24.19.0-linux-x64.tar.gz`,
+    ])
+    expect(readFileSync(dest, 'utf8')).toBe('TGZ-BYTES')
+  })
+
+  it('falls back to npmmirror when the first mirror fails', async () => {
+    const calls: string[] = []
+    const fetcher: NodeArchiveFetcher = (url) => {
+      calls.push(url)
+      if (url.startsWith('https://nodejs.org')) {
+        return Promise.resolve({ ok: false, status: 500, body: null })
+      }
+      return okResponse('MIRROR-BYTES')
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
+    dirs.push(dir)
+    const dest = join(dir, 'archive.tar.gz')
+    await downloadNodeArchive('x.tar.gz', dest, noopLogger, fetcher)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toContain('npmmirror.com')
+    expect(readFileSync(dest, 'utf8')).toBe('MIRROR-BYTES')
+  })
+
+  it('throws including both URLs when every mirror fails', async () => {
+    const fetcher: NodeArchiveFetcher = () =>
+      Promise.resolve({ ok: false, status: 404, body: null })
+    const dir = mkdtempSync(join(tmpdir(), 'ue-node-dl-'))
+    dirs.push(dir)
+    const dest = join(dir, 'archive.tar.gz')
+    await expect(downloadNodeArchive('x.tar.gz', dest, noopLogger, fetcher)).rejects.toThrow(
+      /failed to download Node.js .*nodejs\.org.*npmmirror/,
+    )
+  })
+})
+
+describe('RemoteDeployer.provisionNodeRuntime', () => {
+  it('probes → downloads → scp → installs the private node runtime', async () => {
+    const calls: {
+      command: string
+      args: readonly string[]
+      cwd?: string
+      timeoutMs?: number
+    }[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      calls.push({
+        command,
+        args,
+        ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
+      if (command === 'ssh' && args[args.length - 1] === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      if (command === 'ssh') {
+        return Promise.resolve({ code: 0, stdout: `v${NODE_RUNTIME_VERSION}\n`, stderr: '' })
+      }
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' })
+    }
+    const fetcher: NodeArchiveFetcher = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: Readable.toWeb(Readable.from(Buffer.from('NODE-TGZ-BYTES'))),
+      })
+    const deployer = new RemoteDeployer({
+      runner,
+      nodeArchiveFetcher: fetcher,
+      serverVersion: '0.0.0',
+    })
+    await deployer.provisionNodeRuntime('user@host')
+
+    expect(calls.map((c) => c.command)).toEqual(['ssh', 'scp', 'ssh'])
+    const [uname, scp, install] = calls
+    expect(uname!.args).toEqual(sshCommandArgs('user@host', buildUnameCommand()))
+    const tgzName = scp!.args.find((a) => a.includes('node-runtime-'))!
+    expect(tgzName).toMatch(/^node-runtime-[0-9a-f]+\.tar\.gz$/)
+    expect(scp!.args).toContain(`user@host:/tmp/${tgzName}`)
+    expect(scp!.cwd).toBe(tmpdir())
+    expect(install!.args).toEqual(
+      sshCommandArgs('user@host', buildNodeInstallRemoteScript(tgzName)),
+    )
+    expect(install!.timeoutMs).toBe(300_000)
+  })
+
+  it('throws when the remote platform is unsupported', async () => {
+    const runner: RemoteRunner = () =>
+      Promise.resolve({ code: 0, stdout: 'Windows_NT x86_64\n', stderr: '' })
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
+      'unsupported remote platform',
+    )
   })
 })
 

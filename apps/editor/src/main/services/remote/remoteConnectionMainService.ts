@@ -93,6 +93,7 @@ export type RemoteConnectionProgressStep =
   | 'stopping-old'
   | 'uploading'
   | 'installing'
+  | 'installing-node'
   | 'starting-daemon'
 
 export interface IRemoteConnectionProgress {
@@ -655,9 +656,25 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   ): Promise<IRemoteDaemonInfo> {
     const authority = entry.authority
     const localHash = this._skipDeployCheck ? undefined : orchestrator.localBundleHash()
-    this._logger.info(`[remote:${authority}] checking remote server`)
-    const check = await orchestrator.checkRemoteServer(target)
     const shortHash = (h: string | undefined): string => (h ?? '').slice(0, 12) || '(none)'
+    this._logger.info(`[remote:${authority}] checking remote server`)
+    let check = await orchestrator.checkRemoteServer(target)
+    if (check.state === 'node-missing') {
+      this._logger.warn(
+        `[remote:${authority}] Node.js not found on remote host; installing a private runtime`,
+      )
+      this._fireProgress(entry, 'installing-node', 1, 1, true)
+      try {
+        await orchestrator.provisionNodeRuntime(target, this._logger)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        throw new Error(
+          `Automatic Node.js installation failed (${reason}). Install Node.js 20 or later on the remote machine and reconnect. If Node.js is managed by nvm, make sure it is available in non-interactive SSH sessions (e.g. symlink it into /usr/local/bin or export PATH in ~/.bashrc before the interactivity check).`,
+        )
+      }
+      this._logger.info(`[remote:${authority}] re-checking after node runtime install`)
+      check = await orchestrator.checkRemoteServer(target)
+    }
     switch (check.state) {
       case 'running': {
         const versionMismatch = check.info.serverVersion !== orchestrator.serverVersion
@@ -705,9 +722,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         return orchestrator.startRemoteDaemon(target)
       }
       case 'node-missing': {
-        this._logger.warn(`[remote:${authority}] Node.js not found on remote host`)
+        this._logger.warn(
+          `[remote:${authority}] Node.js still missing after private runtime install`,
+        )
         throw new Error(
-          `Node.js was not found on the remote host '${authority}'. Install Node.js 20 or later on the remote machine and reconnect. If Node.js is managed by nvm, make sure it is available in non-interactive SSH sessions (e.g. symlink it into /usr/local/bin or export PATH in ~/.bashrc before the interactivity check).`,
+          `Automatic Node.js installation failed: Node.js is still missing on the remote host '${authority}' after installing the private runtime. Install Node.js 20 or later on the remote machine and reconnect. If Node.js is managed by nvm, make sure it is available in non-interactive SSH sessions (e.g. symlink it into /usr/local/bin or export PATH in ~/.bashrc before the interactivity check).`,
         )
       }
       case 'error':

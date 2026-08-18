@@ -421,12 +421,18 @@ function makeFakeWslDeployer(
   daemon: FakeDaemon,
   opts: {
     firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
+    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
+    provisionError?: string
   } = {},
 ): FakeWsl {
   const calls: string[] = []
-  let firstCheckDone = false
+  const checks = [
+    ...(opts.firstCheck !== undefined ? [opts.firstCheck] : []),
+    ...(opts.secondCheck !== undefined ? [opts.secondCheck] : []),
+  ]
+  let checkIndex = 0
   const info = (): unknown => ({
     serverVersion: '0.0.0',
     protocolVersion: REMOTE_PROTOCOL_VERSION,
@@ -441,13 +447,11 @@ function makeFakeWslDeployer(
     localBundleHash: () => opts.localBundleHash,
     checkRemoteServer: async (distro: string) => {
       calls.push(`check:${distro}`)
-      if (opts.firstCheck && !firstCheckDone) {
-        firstCheckDone = true
-        if (opts.firstCheck === 'node-missing') return { state: 'node-missing' }
-        return opts.firstCheck === 'not-deployed'
-          ? { state: 'not-deployed', reason: 'missing' }
-          : { state: 'not-running', ...hashField() }
-      }
+      const next = checks[checkIndex]
+      checkIndex++
+      if (next === 'node-missing') return { state: 'node-missing' }
+      if (next === 'not-deployed') return { state: 'not-deployed', reason: 'missing' }
+      if (next === 'not-running') return { state: 'not-running', ...hashField() }
       return { state: 'running', info: info(), ...hashField() }
     },
     startRemoteDaemon: async (distro: string) => {
@@ -466,6 +470,10 @@ function makeFakeWslDeployer(
       onPhase?.('uploading')
       onPhase?.('installing')
     },
+    provisionNodeRuntime: async (distro: string, _logger?: unknown) => {
+      calls.push(`provision:${distro}`)
+      if (opts.provisionError !== undefined) throw new Error(opts.provisionError)
+    },
   } as unknown as WslDeployer
   return { deployer, calls }
 }
@@ -480,8 +488,10 @@ function makeWslService(
   daemon: FakeDaemon,
   opts: {
     firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
+    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
+    provisionError?: string
   } = {},
 ): MadeWsl {
   const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
@@ -594,15 +604,59 @@ describe('RemoteConnectionMainService wsl mode', () => {
     expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
   })
 
-  it('rejects the connect with a readable message when Node is missing on the remote', async () => {
+  it('auto-installs a private node runtime then deploys and connects', async () => {
     const daemon = await startDaemon()
-    const wsl = (made = makeWslService(daemon, { firstCheck: 'node-missing' }))
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'node-missing',
+      secondCheck: 'not-deployed',
+    }))
 
-    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/Node.js was not found/)
-    // No deploy/start is attempted when node is missing.
-    expect(wsl.calls).toEqual(['check:ubuntu'])
+    const conn = await wsl.svc.getConnection('wsl+ubuntu')
+    expect(conn.authority).toBe('wsl+ubuntu')
+    expect(wsl.calls).toEqual([
+      'check:ubuntu',
+      'provision:ubuntu',
+      'check:ubuntu',
+      'deploy:ubuntu',
+      'start:ubuntu',
+    ])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+    const progress = wsl.states.filter((s) => s.progress !== undefined)
+    expect(progress.map((s) => s.progress!.stepId)).toEqual([
+      'installing-node',
+      'uploading',
+      'installing',
+      'starting-daemon',
+    ])
+  })
+
+  it('surfaces manual-install guidance when node provisioning fails', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'node-missing',
+      provisionError: 'unsupported remote platform',
+    }))
+
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(
+      /Automatic Node.js installation failed/,
+    )
     expect(wsl.states.at(-1)?.state).toBe('failed')
-    expect(wsl.states.at(-1)?.error).toContain('Node.js was not found')
+    expect(wsl.states.at(-1)?.error).toContain('Install Node.js 20 or later')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'provision:ubuntu'])
+  })
+
+  it('gives up without looping when node is still missing after provisioning', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'node-missing',
+      secondCheck: 'node-missing',
+    }))
+
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(
+      /Automatic Node.js installation failed/,
+    )
+    expect(wsl.states.at(-1)?.state).toBe('failed')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'provision:ubuntu', 'check:ubuntu'])
   })
 
   it('start (no deploy) when not running and the bundle hash matches', async () => {

@@ -5,26 +5,31 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  NODE_RUNTIME_VERSION,
   buildCheckCommand,
   buildDeployRemoteScript,
   buildDeployScriptBody,
+  buildNodeInstallScriptBody,
   buildStartCommand,
   buildStopCommand,
+  buildUnameCommand,
   classifyCheckResult,
   computeBundleHash,
+  type NodeArchiveFetcher,
   type RemoteRunner,
   type RemoteSpawner,
 } from '../remoteDeploy.js'
 import { WslDeployer, stripWslNuls, wslCommandArgs } from '../wslDeploy.js'
 
 const WSL_EXE = 'C:\\Windows\\System32\\wsl.exe'
+const NODE_PATH_PRELUDE = `PATH="$PATH:$HOME/.universe-editor-server/node/v24.19.0/bin"; `
 
 function utf16Nulled(text: string): string {
   return [...text].map((c) => `${c}\0`).join('')
@@ -38,13 +43,13 @@ describe('wslCommandArgs', () => {
       '-e',
       'bash',
       '-lc',
-      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check',
+      `${NODE_PATH_PRELUDE}command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check`,
     ])
     expect(wslCommandArgs('Ubuntu', buildStartCommand('1.2.3'))[5]).toBe(
-      'node ~/.universe-editor-server/1.2.3/bootstrap.js start',
+      `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/1.2.3/bootstrap.js start`,
     )
     expect(wslCommandArgs('Ubuntu', buildStopCommand('1.2.3'))[5]).toBe(
-      'node ~/.universe-editor-server/1.2.3/bootstrap.js stop',
+      `${NODE_PATH_PRELUDE}node ~/.universe-editor-server/1.2.3/bootstrap.js stop`,
     )
   })
 })
@@ -52,7 +57,9 @@ describe('wslCommandArgs', () => {
 describe('buildDeployScriptBody', () => {
   it('is the unwrapped body of the ssh deploy script', () => {
     const body = buildDeployScriptBody('0.0.0', 'u.tgz', 'deadbeef')
-    expect(body.startsWith('mkdir -p ~/.universe-editor-server/0.0.0')).toBe(true)
+    expect(body.startsWith(NODE_PATH_PRELUDE + 'mkdir -p ~/.universe-editor-server/0.0.0')).toBe(
+      true,
+    )
     expect(body).not.toContain('sh -c')
     expect(buildDeployRemoteScript('0.0.0', 'u.tgz', 'deadbeef')).toBe(`sh -c '${body}'`)
   })
@@ -278,5 +285,58 @@ describe('WslDeployer', () => {
     const phases: string[] = []
     await deployer.deployRemoteServer('Ubuntu', undefined, (phase) => phases.push(phase))
     expect(phases).toEqual(['uploading', 'installing'])
+  })
+})
+
+describe('WslDeployer.provisionNodeRuntime', () => {
+  it('probes via wsl.exe, streams the archive through stdin and installs', async () => {
+    const runnerCalls: { command: string; args: readonly string[]; timeoutMs?: number }[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      runnerCalls.push({
+        command,
+        args,
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
+      if (args[args.length - 1] === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({ code: 0, stdout: `v${NODE_RUNTIME_VERSION}\n`, stderr: '' })
+    }
+    const spawns: { command: string; args: readonly string[]; proc: FakeUploadProc }[] = []
+    const spawner: RemoteSpawner = (command, args) => {
+      const proc = new FakeUploadProc(0)
+      spawns.push({ command, args, proc })
+      return proc as unknown as ChildProcessWithoutNullStreams
+    }
+    const fetcher: NodeArchiveFetcher = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: Readable.toWeb(Readable.from(Buffer.from('NODE-TGZ-BYTES'))),
+      })
+    const deployer = new WslDeployer({
+      runner,
+      spawner,
+      nodeArchiveFetcher: fetcher,
+      serverVersion: '0.0.0',
+      wslExePath: WSL_EXE,
+    })
+    await deployer.provisionNodeRuntime('Ubuntu')
+
+    expect(runnerCalls.map((c) => c.command)).toEqual([WSL_EXE, WSL_EXE])
+    expect(runnerCalls[0]!.args).toEqual(wslCommandArgs('Ubuntu', buildUnameCommand()))
+
+    expect(spawns).toHaveLength(1)
+    const upload = spawns[0]!
+    const tgzName = upload.args[5]!.slice('cat > /tmp/'.length)
+    expect(tgzName).toMatch(/^node-runtime-[0-9a-f]+\.tar\.gz$/)
+    expect(upload.command).toBe(WSL_EXE)
+    expect(upload.args).toEqual(wslCommandArgs('Ubuntu', `cat > /tmp/${tgzName}`))
+    expect(upload.proc.received.toString('utf8')).toBe('NODE-TGZ-BYTES')
+
+    expect(runnerCalls[1]!.args).toEqual(
+      wslCommandArgs('Ubuntu', buildNodeInstallScriptBody(tgzName)),
+    )
+    expect(runnerCalls[1]!.timeoutMs).toBe(300_000)
   })
 })

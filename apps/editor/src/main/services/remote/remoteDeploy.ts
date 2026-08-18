@@ -10,7 +10,9 @@
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { connect, createServer } from 'node:net'
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { createWriteStream, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
@@ -33,6 +35,8 @@ const BUNDLE_HASH_FILE = 'bundle.hash'
 // Reserved exit code for "node not on the remote PATH" — kept clear of the shell
 // codes the probe collides with (127 command-not-found, 3 check not-running, 2/1).
 const NODE_MISSING_EXIT_CODE = 40
+export const NODE_RUNTIME_VERSION = '24.19.0'
+const NODE_RUNTIME_DIR = `$HOME/.universe-editor-server/node/v${NODE_RUNTIME_VERSION}`
 const SSH_BATCH_MODE = 'BatchMode=yes'
 const SSH_STRICT_HOST_KEY = 'StrictHostKeyChecking=accept-new'
 
@@ -135,16 +139,26 @@ function serverBootstrapPath(version: string): string {
   return `${DATA_DIR}/${version}/bootstrap.js`
 }
 
+/**
+ * Tail-append the private node runtime bin dir to PATH: a system node (when
+ * present) keeps winning, and the fallback only resolves when `command -v node`
+ * would otherwise fail. `$HOME` (not `~`) so the assignment expands in the
+ * remote shell; no single quotes so it survives the `sh -c '...'` wrapper.
+ */
+function nodePathPrelude(): string {
+  return `PATH="$PATH:${NODE_RUNTIME_DIR}/bin"; `
+}
+
 export function buildCheckCommand(version: string): string {
-  return `command -v node >/dev/null 2>&1 || exit ${NODE_MISSING_EXIT_CODE}; node ${serverBootstrapPath(version)} check`
+  return `${nodePathPrelude()}command -v node >/dev/null 2>&1 || exit ${NODE_MISSING_EXIT_CODE}; node ${serverBootstrapPath(version)} check`
 }
 
 export function buildStartCommand(version: string): string {
-  return `node ${serverBootstrapPath(version)} start`
+  return `${nodePathPrelude()}node ${serverBootstrapPath(version)} start`
 }
 
 export function buildStopCommand(version: string): string {
-  return `node ${serverBootstrapPath(version)} stop`
+  return `${nodePathPrelude()}node ${serverBootstrapPath(version)} stop`
 }
 
 export function buildDeployScriptBody(
@@ -163,7 +177,7 @@ export function buildDeployScriptBody(
   // The bundle.hash marker is written only after npm install + vendor install
   // both succeed: a mid-install failure must not leave a "complete install"
   // marker that would later make `check` skip the redeploy.
-  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && printf %s "${bundleHash}" > ${BUNDLE_HASH_FILE} && rm /tmp/${tmpName}`
+  return `${nodePathPrelude()}mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && printf %s "${bundleHash}" > ${BUNDLE_HASH_FILE} && rm /tmp/${tmpName}`
 }
 
 export function buildDeployRemoteScript(
@@ -172,6 +186,103 @@ export function buildDeployRemoteScript(
   bundleHash: string,
 ): string {
   return `sh -c '${buildDeployScriptBody(version, tmpName, bundleHash)}'`
+}
+
+// ------------------------- node runtime provisioning -------------------------
+
+export type NodeArtifactResolution =
+  | { readonly platformKey: string; readonly fileName: string }
+  | { readonly error: string }
+
+export function buildUnameCommand(): string {
+  return 'uname -sm; (ldd --version 2>&1 || true) | head -n 1'
+}
+
+/** Map `uname -sm` + the first `ldd --version` line to a Node.js dist filename. */
+export function resolveNodeArtifact(output: string): NodeArtifactResolution {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const uname = lines[0] ?? ''
+  const lddLine = lines.find((line) => line !== uname) ?? ''
+  if (/musl/i.test(lddLine)) {
+    return {
+      error:
+        'musl libc (e.g. Alpine Linux) is not supported by the official Node.js binaries. Install Node.js 20 or later manually and reconnect.',
+    }
+  }
+  const [os, machine] = uname.split(/\s+/)
+  let platformKey: string | undefined
+  if (os === 'Linux') {
+    if (machine === 'x86_64') platformKey = 'linux-x64'
+    else if (machine === 'aarch64' || machine === 'arm64') platformKey = 'linux-arm64'
+    else if (machine === 'armv7l') platformKey = 'linux-armv7l'
+  } else if (os === 'Darwin') {
+    if (machine === 'x86_64') platformKey = 'darwin-x64'
+    else if (machine === 'arm64') platformKey = 'darwin-arm64'
+  }
+  if (platformKey === undefined) {
+    return {
+      error: `unsupported remote platform '${uname || '(unknown)'}'. Install Node.js 20 or later manually on the remote machine and reconnect.`,
+    }
+  }
+  return { platformKey, fileName: `node-v${NODE_RUNTIME_VERSION}-${platformKey}.tar.gz` }
+}
+
+export type NodeArchiveFetcher = (
+  url: string,
+  init?: { signal?: AbortSignal },
+) => Promise<{
+  readonly ok: boolean
+  readonly status: number
+  readonly body: ReadableStream<Uint8Array> | null
+}>
+
+/** Stream the official Node.js archive to `destPath`, falling back to a mirror. */
+export async function downloadNodeArchive(
+  fileName: string,
+  destPath: string,
+  logger: ILogger,
+  fetchImpl: NodeArchiveFetcher = fetch,
+): Promise<void> {
+  const urls = [
+    `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${fileName}`,
+    `https://npmmirror.com/mirrors/node/v${NODE_RUNTIME_VERSION}/${fileName}`,
+  ]
+  let lastError: Error | undefined
+  for (const url of urls) {
+    const startedAt = Date.now()
+    try {
+      logger.info(`[remote] downloading node runtime from ${url}`)
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(600_000) })
+      if (!res.ok || !res.body) {
+        const err = new Error(`download returned HTTP ${res.status}`)
+        logger.warn(`[remote] node runtime download failed: ${err.message}`)
+        lastError = err
+        continue
+      }
+      await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath))
+      logger.info(`[remote] node runtime downloaded in ${Date.now() - startedAt}ms`)
+      return
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.warn(`[remote] node runtime download failed from ${url}: ${message}`)
+      lastError = err instanceof Error ? err : new Error(message)
+    }
+  }
+  throw new Error(
+    `failed to download Node.js ${NODE_RUNTIME_VERSION} runtime (tried ${urls.join(', ')})${lastError ? `: ${lastError.message}` : ''}`,
+  )
+}
+
+export function buildNodeInstallScriptBody(tmpName: string): string {
+  const dir = NODE_RUNTIME_DIR
+  return `dir="${dir}"; rm -rf "$dir.tmp" && mkdir -p "$dir.tmp" && tar xzf /tmp/${tmpName} -C "$dir.tmp" --strip-components=1 && rm -rf "$dir" && mv "$dir.tmp" "$dir" && rm -f /tmp/${tmpName} && "$dir/bin/node" --version`
+}
+
+export function buildNodeInstallRemoteScript(tmpName: string): string {
+  return `sh -c '${buildNodeInstallScriptBody(tmpName)}'`
 }
 
 // ------------------------- daemon info line -------------------------
@@ -382,6 +493,7 @@ export interface RemoteDeployerOptions {
   readonly serverVersion?: string
   readonly logger?: ILogger
   readonly bundleDir?: string
+  readonly nodeArchiveFetcher?: NodeArchiveFetcher
 }
 
 export type RemoteCheckResult =
@@ -449,6 +561,7 @@ export interface IRemoteServerOrchestrator {
     logger?: ILogger,
     onPhase?: (phase: RemoteDeployPhase) => void,
   ): Promise<void>
+  provisionNodeRuntime(target: string, logger?: ILogger): Promise<void>
 }
 
 export class RemoteDeployer {
@@ -457,6 +570,7 @@ export class RemoteDeployer {
   private readonly _serverVersion: string
   private readonly _logger: ILogger
   private readonly _bundleDir: string | undefined
+  private readonly _nodeArchiveFetcher: NodeArchiveFetcher
 
   constructor(options: RemoteDeployerOptions = {}) {
     this._runner = options.runner ?? defaultRemoteRunner
@@ -464,6 +578,7 @@ export class RemoteDeployer {
     this._serverVersion = options.serverVersion ?? resolveRemoteServerVersion()
     this._logger = options.logger ?? new NullLogger()
     this._bundleDir = options.bundleDir
+    this._nodeArchiveFetcher = options.nodeArchiveFetcher ?? fetch
   }
 
   get serverVersion(): string {
@@ -580,6 +695,65 @@ export class RemoteDeployer {
       }
       log.info(`[remote:${authority}] remote install completed in ${Date.now() - installStarted}ms`)
       log.info(`[remote:${authority}] remote server deployed in ${Date.now() - startedAt}ms`)
+    } finally {
+      try {
+        rmSync(localTgz, { force: true })
+      } catch {
+        // best effort cleanup
+      }
+    }
+  }
+
+  async provisionNodeRuntime(authority: string, logger?: ILogger): Promise<void> {
+    const log = logger ?? this._logger
+    const startedAt = Date.now()
+    log.info(
+      `[remote:${authority}] Node.js missing; provisioning private runtime v${NODE_RUNTIME_VERSION}`,
+    )
+    const probeResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()))
+    if (probeResult.code !== 0) {
+      throw new Error(
+        `failed to probe remote platform: ${probeResult.stderr.trim() || probeResult.spawnError || `exit ${probeResult.code}`}`,
+      )
+    }
+    const resolution = resolveNodeArtifact(probeResult.stdout)
+    if ('error' in resolution) throw new Error(resolution.error)
+    log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
+    const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
+    const localTgz = join(tmpdir(), tmpName)
+    const remoteTgz = `/tmp/${tmpName}`
+    try {
+      await downloadNodeArchive(resolution.fileName, localTgz, log, this._nodeArchiveFetcher)
+      const scpStarted = Date.now()
+      const scpResult = await this._runner(
+        'scp',
+        scpArgs(authority, tmpName, `${destination(authority)}:${remoteTgz}`),
+        { cwd: tmpdir() },
+      )
+      if (scpResult.code !== 0) {
+        throw new Error(
+          `scp failed: ${scpResult.stderr.trim() || scpResult.spawnError || `exit ${scpResult.code}`}`,
+        )
+      }
+      log.info(`[remote:${authority}] node runtime uploaded in ${Date.now() - scpStarted}ms`)
+      const installStarted = Date.now()
+      const installResult = await this._runner(
+        'ssh',
+        sshCommandArgs(authority, buildNodeInstallRemoteScript(tmpName)),
+        { timeoutMs: 300_000 },
+      )
+      if (installResult.code !== 0) {
+        throw new Error(
+          `remote node install failed: ${installResult.stderr.trim() || installResult.spawnError || `exit ${installResult.code}`}`,
+        )
+      }
+      if (!installResult.stdout.includes(`v${NODE_RUNTIME_VERSION}`)) {
+        throw new Error(
+          `remote node install self-check failed: ${installResult.stdout.trim() || '(no output)'}`,
+        )
+      }
+      log.info(`[remote:${authority}] node runtime installed in ${Date.now() - installStarted}ms`)
+      log.info(`[remote:${authority}] node runtime provisioned in ${Date.now() - startedAt}ms`)
     } finally {
       try {
         rmSync(localTgz, { force: true })

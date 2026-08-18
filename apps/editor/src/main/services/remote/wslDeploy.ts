@@ -19,17 +19,23 @@ import { randomBytes } from 'node:crypto'
 import { NullLogger, type ILogger, type IRemoteDaemonInfo } from '@universe-editor/platform'
 import { buildChildEnv } from '../process/env.js'
 import {
+  NODE_RUNTIME_VERSION,
   buildCheckCommand,
   buildDeployScriptBody,
+  buildNodeInstallScriptBody,
   buildStartCommand,
   buildStopCommand,
+  buildUnameCommand,
   classifyCheckResult,
   computeBundleHash,
   defaultRemoteRunner,
   defaultRemoteSpawner,
+  downloadNodeArchive,
   parseDaemonInfoLine,
+  resolveNodeArtifact,
   resolveRemoteServerBundleDir,
   resolveRemoteServerVersion,
+  type NodeArchiveFetcher,
   type RemoteCheckResult,
   type RemoteDeployPhase,
   type RemoteRunner,
@@ -58,6 +64,7 @@ export interface WslDeployerOptions {
   readonly bundleDir?: string
   /** Test seam — production resolves via getWslExePath(). */
   readonly wslExePath?: string
+  readonly nodeArchiveFetcher?: NodeArchiveFetcher
 }
 
 export class WslDeployer {
@@ -67,6 +74,7 @@ export class WslDeployer {
   private readonly _logger: ILogger
   private readonly _bundleDir: string | undefined
   private readonly _wslExePath: string | undefined
+  private readonly _nodeArchiveFetcher: NodeArchiveFetcher
 
   constructor(options: WslDeployerOptions = {}) {
     this._runner = options.runner ?? defaultRemoteRunner
@@ -75,6 +83,7 @@ export class WslDeployer {
     this._logger = options.logger ?? new NullLogger()
     this._bundleDir = options.bundleDir
     this._wslExePath = options.wslExePath
+    this._nodeArchiveFetcher = options.nodeArchiveFetcher ?? fetch
   }
 
   get serverVersion(): string {
@@ -185,6 +194,56 @@ export class WslDeployer {
       }
       log.info(`[wsl:${distro}] remote install completed in ${Date.now() - installStarted}ms`)
       log.info(`[wsl:${distro}] remote server deployed in ${Date.now() - startedAt}ms`)
+    } finally {
+      try {
+        rmSync(localTgz, { force: true })
+      } catch {
+        // best effort cleanup
+      }
+    }
+  }
+
+  async provisionNodeRuntime(distro: string, logger?: ILogger): Promise<void> {
+    const log = logger ?? this._logger
+    const startedAt = Date.now()
+    log.info(`[wsl:${distro}] Node.js missing; provisioning private runtime`)
+    const probeResult = await this._runner(
+      this._wslExe(),
+      wslCommandArgs(distro, buildUnameCommand()),
+    )
+    if (probeResult.code !== 0) {
+      throw new Error(
+        `failed to probe WSL platform: ${stripWslNuls(probeResult.stderr).trim() || probeResult.spawnError || `exit ${probeResult.code}`}`,
+      )
+    }
+    const resolution = resolveNodeArtifact(stripWslNuls(probeResult.stdout))
+    if ('error' in resolution) throw new Error(resolution.error)
+    log.info(`[wsl:${distro}] platform '${resolution.platformKey}'`)
+    const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
+    const localTgz = join(tmpdir(), tmpName)
+    try {
+      await downloadNodeArchive(resolution.fileName, localTgz, log, this._nodeArchiveFetcher)
+      const uploadStarted = Date.now()
+      await this._uploadViaStdin(distro, localTgz, tmpName, log)
+      log.info(`[wsl:${distro}] node runtime uploaded in ${Date.now() - uploadStarted}ms`)
+      const installStarted = Date.now()
+      const installResult = await this._runner(
+        this._wslExe(),
+        wslCommandArgs(distro, buildNodeInstallScriptBody(tmpName)),
+        { timeoutMs: 300_000 },
+      )
+      if (installResult.code !== 0) {
+        throw new Error(
+          `wsl node install failed: ${stripWslNuls(installResult.stderr).trim() || installResult.spawnError || `exit ${installResult.code}`}`,
+        )
+      }
+      if (!stripWslNuls(installResult.stdout).includes(`v${NODE_RUNTIME_VERSION}`)) {
+        throw new Error(
+          `wsl node install self-check failed: ${stripWslNuls(installResult.stdout).trim() || '(no output)'}`,
+        )
+      }
+      log.info(`[wsl:${distro}] node runtime installed in ${Date.now() - installStarted}ms`)
+      log.info(`[wsl:${distro}] node runtime provisioned in ${Date.now() - startedAt}ms`)
     } finally {
       try {
         rmSync(localTgz, { force: true })

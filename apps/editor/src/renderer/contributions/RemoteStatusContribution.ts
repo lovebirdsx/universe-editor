@@ -52,6 +52,7 @@ const REMOTE_STEP_LABEL: Record<RemoteConnectionProgressDto['stepId'], string> =
   'stopping-old': localize('remote.status.step.stoppingOld', 'Stopping old server'),
   uploading: localize('remote.status.step.uploading', 'Uploading server bundle'),
   installing: localize('remote.status.step.installing', 'Installing server'),
+  'installing-node': localize('remote.status.step.installingNode', 'Installing Node.js runtime'),
   'starting-daemon': localize('remote.status.step.startingDaemon', 'Starting server'),
 }
 

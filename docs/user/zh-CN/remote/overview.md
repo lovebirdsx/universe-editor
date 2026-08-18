@@ -23,13 +23,13 @@
 **以 SSH 连接远端主机时：**
 
 - **远端主机**：一台能通过 SSH 登录的 **Linux** 主机。
-- **远端环境**：远端主机上已安装 **Node.js ≥ 20** 和 **npm**（编辑器需要它们把 server 部署并跑起来），且 `node` 在**非交互 SSH 会话**下也必须在 PATH 里可用（用 nvm 安装时请确认初始化脚本写进了 `~/.bashrc` / `~/.profile`，见下方排障）。
+- **远端环境**：无需预装 Node.js。编辑器检测到远端没有 Node.js 时会**自动安装**一个私有 Node 运行时（Node 24.19.0，从 nodejs.org 下载、npmmirror 兜底，装到远端 `~/.universe-editor-server/node/v24.19.0/`）；远端已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线且下载失败）才需要你在远端手动安装 **Node.js ≥ 20** 后重连。
 - **本地 SSH**：本地已配置好 `~/.ssh/config` 或能直接用 `user@host[:port]` 免密登录（SSH 密钥认证）。连接过程会以非交互方式（BatchMode）运行 `ssh`，如果登录需要你手输密码，连接会失败——请先配好密钥。
 
 **连接本机 WSL 时（Windows）：**
 
 - **不需要 sshd、不需要查 IP、不需要配免密**——编辑器会自动枚举本机已安装的 WSL 发行版，直接通过 WSL 通道连入。
-- 唯一要求：发行版内已安装 **Node.js ≥ 20**，且在 **bash 登录 shell** 中可见（编辑器以 `bash -l` 方式探测）。用 nvm 安装的 Node 请确认 nvm 的初始化脚本写在 `~/.bashrc` 或 `~/.profile` 里（默认安装即如此），否则可能探测不到。
+- 无需预装 Node.js：与 SSH 一样，编辑器检测到发行版里没有 Node.js 时会自动安装私有 Node 运行时（装到 `~/.universe-editor-server/node/v24.19.0/`）；已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线）才需要手动安装 **Node.js ≥ 20**。
 
 ## 连接流程
 
@@ -67,7 +67,7 @@
 
 - **本地窗口**：显示一个无底色的远端图标作为入口。
 - **远程工作区**：变成**蓝底**徽章，显示 `WSL: <发行版>`（连 WSL 时）或 `SSH: <主机>`（连 SSH 主机时），带远端图标。
-- **连接中**（部署 / 转发 / 握手）：在名称后追加状态后缀，如 `SSH: <主机> (Connecting...)`，图标转圈。首次连接（或 server 版本变化）需要上传并安装远端 server 时，会进一步显示具体步骤和已耗时，如 `SSH: <主机> (Step 2/3: Uploading server bundle · 45s)`，此时底部 **Output 面板**会自动打开并定位到 **Remote Connection** 频道，实时滚动部署日志。
+- **连接中**（部署 / 转发 / 握手）：在名称后追加状态后缀，如 `SSH: <主机> (Connecting...)`，图标转圈。首次连接（或 server 版本变化）需要上传并安装远端 server 时，会进一步显示具体步骤和已耗时，如 `SSH: <主机> (Step 2/3: Uploading server bundle · 45s)`；远端没有 Node.js 需要先自动安装运行时时，会显示 `Installing Node.js runtime` 步骤。此时底部 **Output 面板**会自动打开并定位到 **Remote Connection** 频道，实时滚动部署日志。
 - **重连中**：显示 `SSH: <主机> (Reconnecting...)`，图标同步动画。
 - **失败**：变成红底，显示 `SSH: <主机> (Failed)`，前缀带警告符号。
 
@@ -92,7 +92,7 @@
 
 - 掉线超过约 1 秒，弹出「Connection to <主机> lost. Reconnecting...」的进度通知。
 - 重连成功：关闭进度通知，并短暂提示「Reconnected to <主机>.」。
-- 重连失败：弹出错误通知，提供 **Retry**（重试连接）和 **Close Remote Workspace**（关闭远端工作区）两个按钮；通知会显示具体失败原因（如「Node.js was not found...」）。同一连接的反复失败只会弹一条通知，不会叠加；只有连接真正恢复后再次失败、或你点过 **Retry**，才会重新弹出。**Close Remote Workspace** 会真正关闭该主机对应的窗口（而不只是清空工作区），若关完不剩窗口会自动打开一个本地空白窗口。
+- 重连失败：弹出错误通知，提供 **Retry**（重试连接）和 **Close Remote Workspace**（关闭远端工作区）两个按钮；通知会显示具体失败原因（如「Automatic Node.js installation failed...」）。同一连接的反复失败只会弹一条通知，不会叠加；只有连接真正恢复后再次失败、或你点过 **Retry**，才会重新弹出。**Close Remote Workspace** 会真正关闭该主机对应的窗口（而不只是清空工作区），若关完不剩窗口会自动打开一个本地空白窗口。
 
 短暂的网络抖动（1 秒内即恢复）不会弹通知，避免闪烁。
 
@@ -140,7 +140,7 @@
 
 ## 排障
 
-- **提示 `Node.js was not found`**：远端主机上没有可用的 Node.js（或非交互 SSH 会话里 PATH 找不到 node）。在远端装好 Node.js 20+ 后直接重连即可，无需手动清理 `~/.universe-editor-server` 目录。
+- **提示 `Automatic Node.js installation failed`**：远端没有 Node.js，且自动安装私有运行时失败。常见原因：Alpine/musl（官方 Node 二进制不支持）、未知平台、或离线且下载失败。这种情况下在远端手动装好 **Node.js ≥ 20** 后直接重连即可，无需手动清理 `~/.universe-editor-server` 目录。
 - **看日志**：本地这一侧的连接与部署日志（检测、上传、安装、启动各步骤及耗时）在 **Output 面板**的 **Remote Connection** 频道，首次安装时会自动打开；远端 server 自身的日志在远端主机的 `~/.universe-editor-server/server.log`。部署、连接、转发失败，先看这两处的具体报错。
 - **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。确认框会列出所有使用该主机的窗口——确认后这些窗口会一并关闭（有会话正在运行时，关闭前还会像本地关窗一样再次确认，取消即整体中止、server 保持运行）；若关完不剩窗口，会自动打开一个本地空白窗口。停止后会抑制自动重连——server 不会被后台立刻拉起；重新打开该主机的远程工作区即可再次连接。
 - **开发期自定义启动命令**：开发模式下可用环境变量 `UNIVERSE_REMOTE_SERVER_CMD` 指定启动远端 server 的命令（用于联调自建 server，仅开发环境生效）。
@@ -150,7 +150,7 @@
 现在连接本机 WSL 推荐直接用 **WSL: Connect to WSL…**（自动识别，无需下面这些配置）。如果你仍想把 WSL 当作一台普通 SSH 主机来连（例如从另一台机器连过来），注意：
 
 - **别用 `localhost` 连**：若 Windows 自带的 OpenSSH Server 服务也在运行，它会占住 22 端口，`ssh localhost` 连到的是 Windows 而不是 WSL。用 `wsl hostname -I` 查出 WSL 的虚拟网卡 IP（如 `user@172.x.x.x`）来连；该 IP 在 WSL 重启后可能变化。
-- **Node 版本要对非交互 SSH 生效**：编辑器通过非交互 SSH 执行远端命令。若你的默认 shell 是 zsh，非交互会话只读 `~/.zshenv`（不读 `.bashrc`/`.zshrc`）——用 nvm 装的 Node 需要把 PATH 导出写进 `~/.zshenv`，否则连接时可能探测到系统旧版 Node 而失败。
+- **手动安装 Node 时注意非交互 SSH 的 PATH**：只有自动安装失败、需要你自己装 Node 时才需要留意。编辑器通过非交互 SSH 执行远端命令，若你的默认 shell 是 zsh，非交互会话只读 `~/.zshenv`（不读 `.bashrc`/`.zshrc`）——用 nvm 装的 Node 需要把 PATH 导出写进 `~/.zshenv`，否则可能探测不到。
 - **WSL 会闲置自动关机**：没有活动交互会话时 WSL 可能自动停止，导致连接中断且无法重连（Connection refused）。从 Windows 侧起一个保活进程（如 `wsl -- sleep 7200`）或在 `.wslconfig` 调整 `vmIdleTimeout` 可避免。
 
 ## 下一步
