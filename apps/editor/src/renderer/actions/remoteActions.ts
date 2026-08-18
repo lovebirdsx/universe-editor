@@ -21,7 +21,6 @@ import {
   IWindowsService,
   IWorkspaceService,
   ProgressLocation,
-  REMOTE_SCHEME,
   Severity,
   ShutdownReason,
   isValidWslDistroName,
@@ -47,6 +46,7 @@ import {
   type WslDistroDto,
 } from '../../shared/ipc/remoteStatusService.js'
 import { IRemoteExplorerService } from '../services/remote/RemoteExplorerService.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 
 const CATEGORY = localize2('command.category.remoteSsh', 'Remote-SSH')
 const WSL_CATEGORY = localize2('command.category.wsl', 'WSL')
@@ -378,8 +378,10 @@ export class CloseConnectionAction extends Action2 {
       if (!authority) return
     }
 
-    const current = workspace.current
-    if (current?.folder.scheme === REMOTE_SCHEME && current.folder.authority === authority) {
+    const currentAuthority = currentRemoteAuthority(workspace.current)
+    const closesCurrentWindow =
+      currentAuthority !== undefined && currentAuthority === normalizeRemoteAuthority(authority)
+    if (closesCurrentWindow) {
       const { confirmed } = await dialog.confirm({
         type: 'warning',
         message: localize(
@@ -391,9 +393,11 @@ export class CloseConnectionAction extends Action2 {
         cancelButton: localize('common.cancel', 'Cancel'),
       })
       if (!confirmed) return
-      await workspace.closeFolder()
     }
-    await remoteStatus.closeConnection(authority)
+    // Main closes every window scoped to this authority (running each window's
+    // shutdown veto chain; opening a fresh local empty window when none would
+    // remain), then disconnects so it won't auto-reconnect.
+    await remoteStatus.closeRemoteWorkspace(authority)
   }
 }
 

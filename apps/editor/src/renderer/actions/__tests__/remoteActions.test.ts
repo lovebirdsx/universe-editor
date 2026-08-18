@@ -18,6 +18,7 @@ import {
   LifecycleService,
   MenuId,
   MenuRegistry,
+  REMOTE_SCHEME,
   ServiceCollection,
   URI,
   registerAction2,
@@ -41,6 +42,7 @@ import type {
   WslDistroDto,
 } from '../../../shared/ipc/remoteStatusService.js'
 import {
+  CloseConnectionAction,
   ConnectToHostAction,
   ConnectToWslAction,
   RemoveManualHostAction,
@@ -476,5 +478,82 @@ describe('remoteActions — StopRemoteServerAction', () => {
     disposables.push(registerAction2(StopRemoteServerAction))
     const { calls } = await invoke('myhost', [remoteWindow(1, 'proj', 'myhost')], false)
     expect(calls).toEqual([])
+  })
+})
+
+describe('remoteActions — CloseConnectionAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  async function invoke(
+    authorityArg: string,
+    currentFolder: URI | null,
+    confirmAnswer = true,
+  ): Promise<{ calls: string[]; confirms: Array<{ message: string }> }> {
+    const calls: string[] = []
+    const confirms: Array<{ message: string }> = []
+    const remoteStatus = {
+      closeRemoteWorkspace: async (authority: string) => {
+        calls.push(`closeRemoteWorkspace:${authority}`)
+        return true
+      },
+      closeConnection: async (authority: string) => {
+        calls.push(`closeConnection:${authority}`)
+      },
+    }
+    const workspace = {
+      current: currentFolder
+        ? { folder: currentFolder, name: currentFolder.authority || 'local' }
+        : null,
+    }
+    const dialog = {
+      confirm: async (opts: { message: string }) => {
+        confirms.push({ message: opts.message })
+        return { confirmed: confirmAnswer, choice: 'primary' as const }
+      },
+      prompt: () => Promise.resolve(undefined),
+    }
+    const services = new ServiceCollection()
+    services.set(IRemoteStatusService, remoteStatus as never)
+    services.set(IWorkspaceService, workspace as never)
+    services.set(IDialogService, dialog as never)
+    services.set(INotificationService, makeNotificationStub())
+    services.set(IQuickInputService, makeQuickInputStub())
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(CloseConnectionAction.ID)!
+      await cmd.handler(accessor, authorityArg)
+    })
+    return { calls, confirms }
+  }
+
+  it('closes the remote workspace window via closeRemoteWorkspace for the current authority', async () => {
+    disposables.push(registerAction2(CloseConnectionAction))
+    const { calls, confirms } = await invoke(
+      'myhost',
+      URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/' }),
+    )
+    expect(confirms).toHaveLength(1)
+    expect(confirms[0]?.message).toContain("'myhost'")
+    expect(calls).toEqual(['closeRemoteWorkspace:myhost'])
+  })
+
+  it('skips the close when the confirmation is cancelled', async () => {
+    disposables.push(registerAction2(CloseConnectionAction))
+    const { calls } = await invoke(
+      'myhost',
+      URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/' }),
+      false,
+    )
+    expect(calls).toEqual([])
+  })
+
+  it('disconnects without a confirmation when the current window is not scoped to the authority', async () => {
+    disposables.push(registerAction2(CloseConnectionAction))
+    const { calls, confirms } = await invoke('myhost', URI.file('C:/local-project'))
+    expect(confirms).toHaveLength(0)
+    expect(calls).toEqual(['closeRemoteWorkspace:myhost'])
   })
 })

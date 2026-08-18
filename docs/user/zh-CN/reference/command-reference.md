@@ -155,7 +155,7 @@ Markdown 的格式命令与预览链接导航命令，目前有相当一部分�
 | Remote-SSH: Connect to Host…（英文）     | 连接一台主机（或输入 `user@host[:port]`）并打开远端文件夹；列表里也会列出本机 WSL 发行版 | 无     |
 | WSL: Connect to WSL…（英文）             | 连接本机 WSL 发行版（单个直连，多个弹出列表）                                            | 无     |
 | Remote-SSH: Open Folder on Host…（英文） | 在已连接的主机上另选文件夹打开                                                           | 无     |
-| Remote-SSH: Close Connection（英文）     | 关闭到某主机的连接（若正打开它的工作区，会先关掉该工作区）                               | 无     |
+| Remote-SSH: Close Connection（英文）     | 关闭到某主机的连接，并关闭该主机对应的窗口；若当前窗口正打开着该主机的工作区，会先弹确认框；关完若不再剩窗口，会自动打开一个本地空白窗口 | 无     |
 | Remote-SSH: Retry Connection（英文）     | 重试一条失败的连接                                                                       | 无     |
 | Remote-SSH: Stop Remote Server（英文）   | 停止远端主机上的 server 并断开连接；所有使用该主机的窗口会一并关闭（确认框列出受影响工作区，运行中的会话会再次确认）；若关完不剩窗口，自动打开本地空白窗口；停止后不再自动重连 | 无     |
 

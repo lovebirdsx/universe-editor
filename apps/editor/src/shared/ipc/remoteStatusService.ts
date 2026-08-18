@@ -86,6 +86,14 @@ export interface IRemoteStatusService {
   closeConnection(authority: string): Promise<void>
   /**
    * Close every window scoped to `authority` (each runs its shutdown veto
+   * chain, e.g. the running-session guard), then disconnect the connection so
+   * it does not auto-reconnect. Resolves false when a veto cancelled the whole
+   * action — the connection stays up then. When closing would leave no window,
+   * main opens a fresh local empty window first.
+   */
+  closeRemoteWorkspace(authority: string): Promise<boolean>
+  /**
+   * Close every window scoped to `authority` (each runs its shutdown veto
    * chain, e.g. the running-session guard), then stop the remote server.
    * Resolves false when a veto cancelled the whole action — the server keeps
    * running then. When closing would leave no window, main opens a fresh local

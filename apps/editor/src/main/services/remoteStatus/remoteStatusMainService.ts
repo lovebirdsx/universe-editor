@@ -7,7 +7,14 @@
  *  main-internal type.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, Emitter, type Event } from '@universe-editor/platform'
+import {
+  Disposable,
+  Emitter,
+  ILoggerService,
+  createNamedLogger,
+  type Event,
+  type ILogger,
+} from '@universe-editor/platform'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import { listSshHosts } from '../remote/sshConfig.js'
 import { isWslAvailable, listWslDistros as enumerateWslDistros } from '../remote/wslTargets.js'
@@ -53,6 +60,7 @@ export interface IRemoteWindowsParticipant {
 export class RemoteStatusMainService extends Disposable implements IRemoteStatusService {
   declare readonly _serviceBrand: undefined
 
+  private readonly _logger: ILogger
   private readonly _states = new Map<string, RemoteConnectionStatusDto>()
   private readonly _onDidChangeState = this._register(new Emitter<RemoteConnectionStatusDto>())
   readonly onDidChangeState: Event<RemoteConnectionStatusDto> = this._onDidChangeState.event
@@ -62,8 +70,13 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
   constructor(
     @IRemoteConnectionService private readonly _remote: IRemoteConnectionService,
     @IEnvironmentMainService private readonly _environment: EnvironmentMainService,
+    @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, {
+      id: 'remoteStatus',
+      name: 'Remote Status',
+    })
     this._register(
       this._remote.onDidChangeState((e) => {
         const dto: RemoteConnectionStatusDto = {
@@ -113,6 +126,19 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
 
   async closeConnection(authority: string): Promise<void> {
     await this._remote.closeConnection(authority)
+  }
+
+  async closeRemoteWorkspace(authority: string): Promise<boolean> {
+    if (this._windowsParticipant) {
+      const proceed = await this._windowsParticipant.closeWindowsForRemoteAuthority(authority)
+      if (!proceed) {
+        this._logger.info(`[remote:${authority}] closeRemoteWorkspace vetoed; connection kept`)
+        return false
+      }
+    }
+    this._logger.info(`[remote:${authority}] closeRemoteWorkspace: disconnecting`)
+    await this._remote.closeConnection(authority)
+    return true
   }
 
   /** Wired from index.ts once WindowMainService exists (created after this service). */

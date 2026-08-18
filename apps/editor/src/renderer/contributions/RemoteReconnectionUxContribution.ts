@@ -13,10 +13,13 @@
 import {
   Disposable,
   ICommandService,
+  ILoggerService,
   INotificationService,
   IWorkspaceService,
   Severity,
+  createNamedLogger,
   localize,
+  type ILogger,
   type INotificationHandle,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -30,7 +33,10 @@ import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority
 const RECONNECT_NOTIFY_DELAY_MS = 800
 
 export class RemoteReconnectionUxContribution extends Disposable implements IWorkbenchContribution {
+  private readonly _logger: ILogger
   private _progressHandle: INotificationHandle | undefined
+  private _failedHandle: INotificationHandle | undefined
+  private _failedAuthority: string | undefined
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined
   private _reconnecting = false
 
@@ -39,8 +45,13 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @INotificationService private readonly _notification: INotificationService,
     @ICommandService private readonly _commands: ICommandService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, {
+      id: 'remoteReconnectUx',
+      name: 'Remote Reconnect UX',
+    })
 
     this._register(this._remoteStatus.onDidChangeState((status) => this._onState(status)))
     this._register(this._workspace.onDidChangeWorkspace(() => this._onWorkspaceChanged()))
@@ -48,6 +59,7 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
       dispose: () => {
         this._clearDebounce()
         this._dismissProgress()
+        this._dismissFailed()
       },
     })
   }
@@ -58,10 +70,11 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
 
   private _onWorkspaceChanged(): void {
     // The authority changed (switch / close folder): reset the reconnect UX so
-    // a stale "reconnecting" state never leaks into the next workspace.
+    // a stale "reconnecting"/"failed" state never leaks into the next workspace.
     this._reconnecting = false
     this._clearDebounce()
     this._dismissProgress()
+    this._dismissFailed()
   }
 
   private _onState(status: RemoteConnectionStatusDto): void {
@@ -72,6 +85,8 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
         this._scheduleReconnectNotification(status.authority)
         break
       case 'connected':
+        // A real recovery re-arms the failed-toast guard for a future failure.
+        this._dismissFailed()
         if (this._reconnecting) {
           this._reconnecting = false
           this._clearDebounce()
@@ -83,7 +98,7 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
         this._reconnecting = false
         this._clearDebounce()
         this._dismissProgress()
-        this._notifyFailed(status.authority)
+        this._notifyFailed(status.authority, status.errorMessage)
         break
       default:
         break
@@ -123,16 +138,38 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
     })
   }
 
-  private _notifyFailed(authority: string): void {
-    this._notification.notify({
+  private _notifyFailed(authority: string, errorMessage?: string): void {
+    // One failed toast per authority: the main-side failed → idle → bring-up
+    // loop keeps firing `failed`, but a second identical toast would just stack.
+    // The guard is cleared on `connected` (real recovery), on Retry, and on a
+    // workspace switch — never on a plain user dismissal, so an X'd toast does
+    // not re-pop while the loop keeps failing.
+    if (this._failedAuthority === authority) {
+      this._logger.debug(`[remote:${authority}] suppressed duplicate failed toast`)
+      return
+    }
+    this._failedAuthority = authority
+    this._logger.warn(
+      `[remote:${authority}] reconnection failed${errorMessage !== undefined ? `: ${errorMessage}` : ''}`,
+    )
+    const message =
+      errorMessage === undefined
+        ? localize('remote.reconnect.failed', 'Cannot reconnect to {authority}.', { authority })
+        : localize('remote.reconnect.failed.detail', 'Cannot reconnect to {authority}. {error}', {
+            authority,
+            error: errorMessage,
+          })
+    const handle = this._notification.notify({
       severity: Severity.Error,
-      message: localize('remote.reconnect.failed', 'Cannot reconnect to {authority}.', {
-        authority,
-      }),
+      message,
       actions: [
         {
           label: localize('remote.reconnect.retry', 'Retry'),
-          run: () => void this._commands.executeCommand(RetryConnectionAction.ID, authority),
+          run: () => {
+            // Retry re-arms the guard so a fresh failure can surface a new toast.
+            this._dismissFailed()
+            void this._commands.executeCommand(RetryConnectionAction.ID, authority)
+          },
         },
         {
           label: localize('remote.reconnect.closeRemote', 'Close Remote Workspace'),
@@ -141,6 +178,16 @@ export class RemoteReconnectionUxContribution extends Disposable implements IWor
         },
       ],
     })
+    this._failedHandle = handle
+  }
+
+  private _dismissFailed(): void {
+    this._failedAuthority = undefined
+    if (this._failedHandle !== undefined) {
+      this._notification.dismiss(this._failedHandle.id)
+      this._failedHandle.dispose()
+      this._failedHandle = undefined
+    }
   }
 
   private _clearDebounce(): void {
