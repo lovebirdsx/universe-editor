@@ -25,6 +25,7 @@ import {
   type SessionFileChange,
 } from '../services/acp/session/sessionChangeTracker.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 
 export class SessionChangesDiffSyncContribution
@@ -64,12 +65,30 @@ export class SessionChangesDiffSyncContribution
         if (!(editor instanceof DiffEditorInput) || editor.isCrossFile) continue
         const change = byUri.get(editor.originalUri.toString())
         if (!change) continue
+
+        const liveModel = MonacoModelRegistry.peek(editor.originalUri)
+        const model = liveModel && !liveModel.isDisposed() ? liveModel : undefined
+
+        if (editor.modifiedEditable && model) {
+          // The modified side IS the shared buffer. Reconcile it like a file
+          // editor on an external change: a clean buffer takes the tracker's
+          // fresh disk read (`change.current`) and is marked clean again; a
+          // dirty buffer keeps the user's unsaved edits. Without this, the
+          // diff's own editable model — still holding the previous edit — would
+          // mask the newer disk content and the tab never refreshes in place.
+          if (!editor.isDirty && model.getValue() !== change.current) {
+            applyMinimalTextEdit(model, change.current)
+            MonacoModelRegistry.markModelClean(model)
+          }
+          editor.update(change.baseline, model.getValue())
+          continue
+        }
+
         // The tracker's `current` is read from disk. If the file is open in an
         // editor with unsaved edits, its live buffer — not the stale disk text —
         // is the modified side's truth; using `change.current` here would clobber
         // an in-place live edit (DiffLiveContentSyncContribution) back to disk.
-        const liveModel = MonacoModelRegistry.peek(editor.originalUri)
-        const current = liveModel && !liveModel.isDisposed() ? liveModel.getValue() : change.current
+        const current = model ? model.getValue() : change.current
         editor.update(change.baseline, current)
       }
     }

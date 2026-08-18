@@ -4,7 +4,7 @@
  *  the same file.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   observableValue,
@@ -24,6 +24,23 @@ import {
 } from '../../services/acp/session/sessionChangeTracker.js'
 import { type IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import { type IAcpSession } from '../../services/acp/session/acpSessionModel.js'
+
+// Stub the model registry so a test can inject a live shared model for a URI
+// (the editable diff's modified side). Default: no live model (peek → undefined).
+const liveModels = new Map<
+  string,
+  { getValue: () => string; setValue?: (v: string) => void; isDisposed: () => boolean }
+>()
+const markCleanCalls: unknown[] = []
+vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
+  MonacoModelRegistry: {
+    peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
+    onDidMarkModelClean: () => ({ dispose() {} }),
+    markModelClean(model: unknown) {
+      markCleanCalls.push(model)
+    },
+  },
+}))
 
 function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType {
   const modelEmitter = new Emitter<IEditorGroupModelChangeEvent>()
@@ -101,6 +118,51 @@ describe('SessionChangesDiffSyncContribution', () => {
     expect(input.originalContent).toBe('base-2')
     expect(input.modifiedContent).toBe('current-2')
     expect(fired).toBe(1)
+    contrib.dispose()
+  })
+
+  it('refreshes an editable diff from the tracker disk read, not its stale shared model', () => {
+    // An editable (liveModified=true) session diff owns the shared model under
+    // originalUri. After a second agent edit that model still holds the first
+    // edit, so the sync must reconcile it from the tracker's fresh disk read
+    // instead of pinning the stale buffer — otherwise the tab never refreshes.
+    const uri = URI.file('/ws/foo.ts')
+    const input = new DiffEditorInput(
+      uri,
+      'base-1',
+      'current-1',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    let modelValue = 'current-1'
+    const model = {
+      getValue: () => modelValue,
+      setValue: (v: string) => (modelValue = v),
+      isDisposed: () => false,
+    }
+    liveModels.set(uri.toString(), model)
+    markCleanCalls.length = 0
+
+    const groups = makeGroups([input])
+    const sessions = makeSessions('agent-1')
+    const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
+      change(uri, 'base-1', 'current-1'),
+    ])
+    const contrib = new SessionChangesDiffSyncContribution(
+      sessions,
+      makeTracker(changesObs),
+      groups,
+    )
+
+    changesObs.set([change(uri, 'base-2', 'current-2')], undefined)
+
+    expect(modelValue).toBe('current-2')
+    expect(input.modifiedContent).toBe('current-2')
+    expect(input.originalContent).toBe('base-2')
+    expect(markCleanCalls).toContain(model)
+    liveModels.delete(uri.toString())
     contrib.dispose()
   })
 
