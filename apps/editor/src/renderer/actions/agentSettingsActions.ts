@@ -8,9 +8,10 @@ import {
   IEditorResolverService,
   IEditorService,
   IStorageService,
+  IWorkspaceService,
   MenuId,
   StorageScope,
-  URI,
+  fsPathToWorkspaceUri,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -18,6 +19,7 @@ import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
 import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { CATEGORY } from './_agentShared.js'
 
 export class OpenAcpMcpSettingsAction extends Action2 {
@@ -77,6 +79,22 @@ export class OpenAgentSettingsAction extends Action2 {
   }
 }
 
+interface AgentConfigPathProvider {
+  configPath(authority?: string): Promise<string>
+}
+
+async function openAgentConfig(
+  accessor: ServicesAccessor,
+  configService: AgentConfigPathProvider,
+): Promise<void> {
+  // All services must be grabbed before the first await — the accessor is invocation-scoped.
+  const editorResolver = accessor.get(IEditorResolverService)
+  const workspace = accessor.get(IWorkspaceService)
+  const authority = currentRemoteAuthority(workspace.current)
+  const path = await configService.configPath(authority)
+  await editorResolver.openEditor(fsPathToWorkspaceUri(path, authority), { pinned: true })
+}
+
 export class OpenCodexConfigAction extends Action2 {
   static readonly ID = 'workbench.action.agent.openCodexConfig'
 
@@ -91,10 +109,7 @@ export class OpenCodexConfigAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const configService = accessor.get(ICodexConfigService)
-    const editorResolver = accessor.get(IEditorResolverService)
-    const path = await configService.configPath()
-    await editorResolver.openEditor(URI.file(path), { pinned: true })
+    await openAgentConfig(accessor, accessor.get(ICodexConfigService))
   }
 }
 
@@ -112,9 +127,6 @@ export class OpenClaudeConfigAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const configService = accessor.get(IClaudeConfigService)
-    const editorResolver = accessor.get(IEditorResolverService)
-    const path = await configService.configPath()
-    await editorResolver.openEditor(URI.file(path), { pinned: true })
+    await openAgentConfig(accessor, accessor.get(IClaudeConfigService))
   }
 }
