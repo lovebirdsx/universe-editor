@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.1.68",
+    "date": "2026-08-18",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "DiffEditor可以编辑",
+          "支持extension samples独立跑e2e"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.67",
     "date": "2026-08-17",
     "groups": [
