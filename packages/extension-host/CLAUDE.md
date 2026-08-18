@@ -150,6 +150,7 @@
 12. **撤销信任必须重启 host，授予不用**：已激活扩展无法就地卸载，撤销走 `_restart`；授予是动态 `$onDidGrantWorkspaceTrust` + host `replayFiredEvents()` 重放激活事件。built-in 恒豁免门控（scanner `builtin` 标志），别给内置加信任判断。
 13. **teardown 无条件清全局能力（单 host 下是对的）**：`_teardownConnection` 里 `resetSourceControls()` + `timeline.reset()` + `treeViews.reset()` + `webview.reset(kind)` 无条件调——单 host 只有这一个连接，teardown 时清全局状态不会误伤其它 tier。临终 host 的 `$unregisterSourceControl` fire-and-forget 消息可能随 IPC 关闭丢失，必须主动清，否则视图残留上一 workspace 的 provider。
 14. **可选 wire 尾参的 undefined 已在 RPC 层根治**：`ProxyChannel.toService` 序列化前剥掉参数数组尾部的 `undefined`，远端 `param === undefined` 判定可靠，无需调用端省略/接收端 `!= null` 双保险。残余约定只剩中段参数：`undefined` 夹在实参中间仍按 JSON 数组语义变 `null`，中段可选参数必须声明 `| null`（如 `$findFiles` 的 exclude/maxResults）并用 `== null` 判定。
+15. **远程 host 的 $mid URI 会被 codec 互译，renderer 侧 MainThread\* 收到的是 remote-ssh 空间**：远程模式下 host 进程自带 `createJsonCodec(createRemoteURITransformer(authority))`（`bootstrap.ts`），带 `$mid:1` 的 URI 出线 `file:`→`remote-ssh://<authority>/…`、入线反向。renderer 的 MainThread\* 若对 host 来的 URI 做 `scheme === 'file'` 判断，远程下必失效（曾致 `MainThreadFileEvents` 拒收 watcher interest base，git 扩展收不到文件事件、SCM 不自动刷新）——workspace URI 空间判断要同时接受 `file:` 与 `REMOTE_SCHEME`；反向发往 host 的 `$mid` URI 无需手动翻译，codec 会转回 host 本地 `file:`。注意裸字符串路径（LSP wire、SCM fsPath 字段）不带 `$mid`，codec 看不见，仍走 `parseWireUri`/`fsPathToWorkspaceUri` 手动互译。
 
 ### E2E
 

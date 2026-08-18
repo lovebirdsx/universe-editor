@@ -11,11 +11,13 @@ import {
   Event,
   normalizePlatform,
   NullLogger,
+  REMOTE_SCHEME,
   URI,
   UriIdentityService,
   type IDisposable,
   type IFileChangeEvent,
   type IFileWatcherService,
+  type UriComponents,
 } from '@universe-editor/platform'
 import type { IFileChangeEventDto, IExtHostFileEvents } from '@universe-editor/extensions-common'
 import type { IOutOfWorkspaceWatchService } from '../../files/outOfWorkspaceWatchService.js'
@@ -247,5 +249,78 @@ describe('MainThreadFileEvents', () => {
     expect(watcher.clearCalls).toBe(1)
     expect(watcher.folders).toHaveLength(0)
     expect(fileWatch.disposedCount).toBe(1)
+  })
+})
+
+describe('MainThreadFileEvents remote workspace', () => {
+  const authority = 'e2e-local'
+  // The shape an interest base takes after the host codec's URI transformer
+  // rewrites the host-local `file:` URI into the workspace's remote scheme.
+  const remoteBase = (): UriComponents => ({
+    scheme: REMOTE_SCHEME,
+    authority,
+    path: '/home/user/repo',
+  })
+  const remoteFile = (rel: string): URI =>
+    URI.from({ scheme: REMOTE_SCHEME, authority, path: `/home/user/repo/${rel}` })
+
+  function makeWithLogger(logger?: { warn?: (message: string) => void }) {
+    const watcher = fakeWatcher()
+    const fileWatch = fakeFileWatch()
+    const extHost = fakeExtHost()
+    const warns: string[] = []
+    const mt = new MainThreadFileEvents(
+      watcher,
+      extHost,
+      {
+        ...new NullLogger(),
+        warn: (message: string) => {
+          warns.push(message)
+          logger?.warn?.(message)
+        },
+      } as never,
+      new UriIdentityService(platform),
+      fileWatch,
+      '/home/user/repo',
+    )
+    return { watcher, fileWatch, extHost, mt, warns }
+  }
+
+  it('forwards remote events for a remote base interest', async () => {
+    const { watcher, extHost, mt } = makeWithLogger()
+    await mt.$subscribeFileEvents({ base: remoteBase(), pattern: '**/*' })
+
+    watcher.fire([{ type: 'modified', resource: remoteFile('src/a.txt') }])
+    expect(extHost.batches).toHaveLength(1)
+    expect(extHost.batches[0]).toEqual([{ type: 'changed', uri: remoteFile('src/a.txt').toJSON() }])
+    expect(URI.revive(extHost.batches[0]![0]!.uri)!.toString()).toBe(
+      remoteFile('src/a.txt').toString(),
+    )
+  })
+
+  it('stops forwarding remote events once the interest is dropped', async () => {
+    const { watcher, extHost, mt } = makeWithLogger()
+    const interest = { base: remoteBase(), pattern: '**/*' }
+    await mt.$subscribeFileEvents(interest)
+    await mt.$unsubscribeFileEvents(interest)
+
+    watcher.fire([{ type: 'modified', resource: remoteFile('src/a.txt') }])
+    expect(extHost.batches).toHaveLength(0)
+  })
+
+  it('pre-filters remote events that do not match the pattern', async () => {
+    const { watcher, extHost, mt } = makeWithLogger()
+    await mt.$subscribeFileEvents({ base: remoteBase(), pattern: '*.ts' })
+
+    watcher.fire([{ type: 'modified', resource: remoteFile('src/a.txt') }])
+    expect(extHost.batches).toHaveLength(0)
+  })
+
+  it('still rejects a non-file, non-remote base with a warn', async () => {
+    const { watcher, fileWatch, mt, warns } = makeWithLogger()
+    await mt.$subscribeFileEvents({ base: { scheme: 'untitled', path: '/x' }, pattern: '**/*' })
+    expect(warns).toContain('file-events subscription with a non-file base ignored')
+    expect(watcher.added).toHaveLength(0)
+    expect(fileWatch.watched).toHaveLength(0)
   })
 })

@@ -24,6 +24,7 @@
 
 import {
   Disposable,
+  REMOTE_SCHEME,
   URI,
   type IDisposable,
   type IFileChangeEvent,
@@ -55,9 +56,15 @@ function anchorsSingleFile(pattern: string): boolean {
   return pattern.replace(/\\/g, '/').replace(/^\/+/, '').includes('/')
 }
 
-function reviveFileUri(base: UriComponents): URI | undefined {
+/** Revive a watcher base. A remote host's base crosses the host-side codec as a
+ *  `remote-ssh` URI (the host's `file:` URI is translated out-of-band), so both
+ *  `file:` (local workspace) and `REMOTE_SCHEME` (remote workspace) are valid
+ *  here; matching and arming happen in the workspace URI space, and event DTOs
+ *  go back verbatim for the host codec to translate into its local `file:` space. */
+function reviveWatchBase(base: UriComponents): URI | undefined {
   const uri = URI.revive(base)
-  if (!(uri instanceof URI) || uri.scheme !== 'file') return undefined
+  if (!(uri instanceof URI)) return undefined
+  if (uri.scheme !== 'file' && uri.scheme !== REMOTE_SCHEME) return undefined
   return uri
 }
 
@@ -86,7 +93,7 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
   }
 
   $subscribeFileEvents(interest: IFileWatcherInterestDto): Promise<void> {
-    const base = interest.base === undefined ? undefined : reviveFileUri(interest.base)
+    const base = interest.base === undefined ? undefined : reviveWatchBase(interest.base)
     if (interest.base !== undefined && base === undefined) {
       this._logger.warn('file-events subscription with a non-file base ignored')
       return Promise.resolve()
@@ -121,7 +128,7 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
   }
 
   $unsubscribeFileEvents(interest: IFileWatcherInterestDto): Promise<void> {
-    const base = interest.base === undefined ? undefined : reviveFileUri(interest.base)
+    const base = interest.base === undefined ? undefined : reviveWatchBase(interest.base)
     const key = this._interestKey(base, interest.pattern)
     if (!this._interests.delete(key)) return Promise.resolve()
     if (base !== undefined) {
@@ -175,7 +182,9 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
       { anchor: string | undefined; matchers: ((rel: string) => boolean)[] }
     >()
     for (const entry of this._interests.values()) {
-      // 本机路径：anchor 来自 `reviveFileUri` 过滤后的 file: URI（或本地 workspaceRoot 字符串）。
+      // Workspace URI space: the anchor is the POSIX fsPath of the base (a
+      // `file:` URI locally, a `remote-ssh` URI for a remote workspace) or the
+      // workspaceRoot string — both fold to a POSIX path on every platform.
       const anchor = entry.base?.fsPath ?? this._workspaceRoot
       const anchorKey = anchor === undefined ? '' : this._uriIdentity.getPathComparisonKey(anchor)
       let group = groups.get(anchorKey)
@@ -188,7 +197,9 @@ export class MainThreadFileEvents extends Disposable implements IMainThreadFileE
     const kept: IFileChangeEvent[] = []
     let dropped = 0
     for (const event of events) {
-      // 本机路径：工作区 watch 产出的 file: 资源事件，fsPath 即本机路径。
+      // Workspace URI space: the workspace watch yields `file:` resources
+      // locally and `remote-ssh` resources for a remote workspace, whose
+      // fsPath is the POSIX path either way.
       const fsPath = event.resource.fsPath
       let include = false
       for (const group of groups.values()) {
