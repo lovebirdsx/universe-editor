@@ -11,7 +11,7 @@
     "dev:run": "node scripts/dev-run.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsgo --build integration/tsconfig.json && tsgo --project bench/tsconfig.json && tsgo --project e2e/tsconfig.json",
+    "typecheck": "node scripts/typecheck.mjs",
     "test": "pnpm run test:unit && pnpm run test:integration",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config integration/vitest.config.ts --reporter=verbose",
