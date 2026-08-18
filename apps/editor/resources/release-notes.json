@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.1.69",
+    "date": "2026-08-18",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "claude SendMessage 续跑子 Agent 时 live 重定向 + replay 分段回放"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.68",
     "date": "2026-08-18",
     "groups": [
