@@ -126,6 +126,9 @@ function makeFs(initial: Record<string, string>): IFileServiceType {
     async readFile() {
       return new Uint8Array()
     },
+    async readFileHead() {
+      return new Uint8Array()
+    },
     async readFileText(resource: URI) {
       const value = store[resource.toString()]
       if (value === undefined) throw new Error('ENOENT')

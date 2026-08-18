@@ -31,6 +31,9 @@ function makeFs(initial: Record<string, FsState>): IFileServiceType & {
     async readFile() {
       throw new Error('not implemented')
     },
+    async readFileHead() {
+      throw new Error('not implemented')
+    },
     async readFileText(resource: URI) {
       const s = state[resource.toString()]
       if (!s) throw new Error('ENOENT')

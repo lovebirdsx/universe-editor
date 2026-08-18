@@ -86,6 +86,9 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
     async readFile() {
       throw new Error('not used')
     },
+    async readFileHead() {
+      throw new Error('not used')
+    },
     async readFileText() {
       throw new Error('not used')
     },

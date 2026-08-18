@@ -75,6 +75,9 @@ function makeFileService(): IFileServiceType {
     async readFile() {
       return new Uint8Array()
     },
+    async readFileHead() {
+      return new Uint8Array()
+    },
     async readFileText() {
       return ''
     },

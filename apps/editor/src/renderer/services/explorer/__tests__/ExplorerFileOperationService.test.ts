@@ -82,6 +82,9 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}) {
       if (content === undefined) throw new Error('ENOENT')
       return new TextEncoder().encode(content)
     },
+    async readFileHead() {
+      throw new Error('not implemented')
+    },
     async readFileText(resource: URI) {
       const content = fileContents.get(resource.toString())
       if (content === undefined) throw new Error('ENOENT')
