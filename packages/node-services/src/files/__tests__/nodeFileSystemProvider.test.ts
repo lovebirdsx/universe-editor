@@ -60,3 +60,41 @@ describe('NodeFileSystemProvider read-size backstop', () => {
     expect(err.message).toMatch(/1MB/)
   })
 })
+
+describe('NodeFileSystemProvider readFileHead', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-head-'))
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('reads only the first maxBytes of a larger file', async () => {
+    const file = join(dir, 'head.bin')
+    await fs.writeFile(file, Buffer.from([1, 2, 3, 4, 5]))
+    const provider = new NodeFileSystemProvider()
+    const head = await provider.readFileHead(URI.file(file), 3)
+    expect([...head]).toEqual([1, 2, 3])
+  })
+
+  it('reads the whole file when it is smaller than maxBytes', async () => {
+    const file = join(dir, 'small.bin')
+    await fs.writeFile(file, Buffer.from([1, 2]))
+    const provider = new NodeFileSystemProvider()
+    const head = await provider.readFileHead(URI.file(file), 16)
+    expect([...head]).toEqual([1, 2])
+  })
+
+  it('maps a missing file to FileSystemError ENOENT', async () => {
+    const provider = new NodeFileSystemProvider()
+    await expect(
+      provider.readFileHead(URI.file(join(dir, 'missing.bin')), 16),
+    ).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'ENOENT',
+    })
+  })
+})

@@ -110,6 +110,9 @@ class FakeFileService implements IFileService {
   async readFile(): Promise<Uint8Array> {
     throw new Error('not implemented')
   }
+  async readFileHead(): Promise<Uint8Array> {
+    throw new Error('not implemented')
+  }
   async writeFile(resource: URI, content: Uint8Array | string): Promise<void> {
     this.files.set(resource.fsPath, typeof content === 'string' ? content : content.toString())
   }

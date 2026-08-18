@@ -54,7 +54,7 @@ import {
 } from '../../services/scm/ScmDecorationsService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
-import { confirmLargeFile } from '../../services/editor/largeFileGuard.js'
+import { confirmOpenFile } from '../../services/editor/largeFileGuard.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { importDroppedResources } from '../../services/dnd/importDroppedFiles.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -102,7 +102,8 @@ export function ExplorerView() {
   const openFile = useCallback(
     (resource: URI, options?: { preview?: boolean }) => {
       void (async () => {
-        if (!(await confirmLargeFile(resource, fileService, dialogService))) return
+        if (!(await confirmOpenFile(resource, fileService, dialogService, editorResolverService)))
+          return
         const preview = options?.preview === true
         // Single-click / Space preview keeps focus in the Explorer so the
         // selected row stays highlighted; double-click (pinned) hands focus to

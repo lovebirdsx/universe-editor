@@ -32,6 +32,10 @@ class RecordingProvider implements IFileSystemProvider {
     this.seen.push(resource)
     return new Uint8Array()
   }
+  async readFileHead(resource: URI): Promise<Uint8Array> {
+    this.seen.push(resource)
+    return new Uint8Array()
+  }
   async readFileText(resource: URI): Promise<string> {
     this.seen.push(resource)
     return resource.toString()

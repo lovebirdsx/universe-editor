@@ -23,7 +23,7 @@ import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.j
 import { ICompareService } from '../services/explorer/CompareService.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
-import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
+import { confirmOpenFile } from '../services/editor/largeFileGuard.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { implicitPrimaryTarget, resolvePrimaryTarget } from './fileActionsCommon.js'
 
@@ -51,8 +51,8 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
   const editorResolver = accessor.get(IEditorResolverService)
   const inst = accessor.get(IInstantiationService)
   if (sameUri(left, right)) return
-  if (!(await confirmLargeFile(left, fileService, dialog))) return
-  if (!(await confirmLargeFile(right, fileService, dialog))) return
+  if (!(await confirmOpenFile(left, fileService, dialog, editorResolver))) return
+  if (!(await confirmOpenFile(right, fileService, dialog, editorResolver))) return
 
   const custom = editorResolver.resolveEditors(right)[0]
   try {

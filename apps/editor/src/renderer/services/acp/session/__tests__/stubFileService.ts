@@ -23,6 +23,9 @@ export class StubFileService implements IFileService {
     if (c === undefined) throw new Error('ENOENT')
     return new TextEncoder().encode(c)
   }
+  async readFileHead(): Promise<Uint8Array> {
+    throw new Error('not implemented')
+  }
   async readFileText(resource: URI): Promise<string> {
     const c = this.files.get(resource.toString())
     if (c === undefined) throw new Error('ENOENT')

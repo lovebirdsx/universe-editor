@@ -7,6 +7,7 @@ import {
   Action2,
   IDialogService,
   IEditorGroupsService,
+  IEditorResolverService,
   IEditorService,
   IFileDialogService,
   IFileService,
@@ -31,7 +32,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { ITimelineService } from '../services/timeline/TimelineService.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
+import { confirmOpenFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
@@ -54,6 +55,7 @@ export class OpenFileAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const fileService = accessor.get(IFileService)
     const dialog = accessor.get(IDialogService)
+    const resolver = accessor.get(IEditorResolverService)
     const fileDialog = accessor.get(IFileDialogService)
 
     const picked = await fileDialog.showOpenDialog({
@@ -66,8 +68,9 @@ export class OpenFileAction extends Action2 {
     })
     if (!picked || picked.length === 0) return
     for (const uri of picked) {
-      if (!(await confirmLargeFile(uri, fileService, dialog))) continue
-      const input = inst.createInstance(FileEditorInput, uri)
+      if (!(await confirmOpenFile(uri, fileService, dialog, resolver))) continue
+      const chosen = resolver.resolveEditors(uri)[0]
+      const input = chosen ? chosen.factory(uri) : inst.createInstance(FileEditorInput, uri)
       openInLockAwareGroup(groups, input, { activate: true })
     }
   }

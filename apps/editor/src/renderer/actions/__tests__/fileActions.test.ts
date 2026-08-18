@@ -16,6 +16,7 @@ import {
   IContextKeyService,
   IDialogService,
   IEditorGroupsService,
+  IEditorResolverService,
   IFileDialogService,
   IFileSearchService,
   IFileService,
@@ -639,6 +640,12 @@ function makeHarness(
   services.set(IHostService, host)
   services.set(IFileDialogService, fileDialog)
   services.set(IEditorGroupsService, groupsService)
+  services.set(IEditorResolverService, {
+    _serviceBrand: undefined,
+    registerEditor: () => ({ dispose: () => {} }),
+    resolveEditors: () => [],
+    openEditor: async () => {},
+  } as unknown as IEditorResolverService)
   services.set(IQuickInputService, quickInput)
   services.set(IRecentFilesService, recentFiles)
   services.set(ICommandService, cmd)

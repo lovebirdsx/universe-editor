@@ -54,6 +54,8 @@ export interface IFileService {
   readonly _serviceBrand: undefined
 
   readFile(resource: URI): Promise<Uint8Array>
+  /** Reads at most the first `maxBytes` bytes of a file (e.g. binary detection). */
+  readFileHead(resource: URI, maxBytes: number): Promise<Uint8Array>
   readFileText(resource: URI, encoding?: 'utf8'): Promise<string>
   writeFile(resource: URI, content: Uint8Array | string): Promise<void>
 

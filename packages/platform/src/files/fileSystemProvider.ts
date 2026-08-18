@@ -37,6 +37,7 @@ export interface IFileSystemProvider {
   readonly capabilities: IFileSystemProviderCapabilities
 
   readFile(resource: URI): Promise<Uint8Array>
+  readFileHead(resource: URI, maxBytes: number): Promise<Uint8Array>
   readFileText(resource: URI, encoding?: 'utf8'): Promise<string>
   writeFile(resource: URI, content: Uint8Array | string): Promise<void>
 
@@ -122,6 +123,11 @@ export class FileService extends Disposable implements IFileService {
   async readFile(resource: URI): Promise<Uint8Array> {
     const { provider, uri } = this._resolve(resource)
     return provider.readFile(uri)
+  }
+
+  async readFileHead(resource: URI, maxBytes: number): Promise<Uint8Array> {
+    const { provider, uri } = this._resolve(resource)
+    return provider.readFileHead(uri, maxBytes)
   }
 
   async readFileText(resource: URI, encoding?: 'utf8'): Promise<string> {

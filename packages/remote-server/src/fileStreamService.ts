@@ -59,6 +59,10 @@ export class RemoteFileStreamService extends Disposable implements IRemoteFileSt
     return this._fileService.readFile(resource)
   }
 
+  readFileHead(resource: URI, maxBytes: number): Promise<Uint8Array> {
+    return this._fileService.readFileHead(resource, maxBytes)
+  }
+
   readFileText(resource: URI, encoding?: 'utf8'): Promise<string> {
     return this._fileService.readFileText(resource, encoding)
   }

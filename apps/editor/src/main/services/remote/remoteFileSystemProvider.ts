@@ -241,6 +241,11 @@ export class RemoteFileSystemProvider extends Disposable implements IFileSystemP
     })
   }
 
+  async readFileHead(resource: URI, maxBytes: number): Promise<Uint8Array> {
+    const svc = await this._service(resource.authority)
+    return svc.readFileHead(resource, maxBytes)
+  }
+
   async readFileText(resource: URI, encoding?: 'utf8'): Promise<string> {
     const svc = await this._service(resource.authority)
     return svc.readFileText(resource, encoding)

@@ -198,6 +198,10 @@ export const EN_US_MESSAGES: MessageMap = {
   'fileDialog.move.title': 'Select Destination Folder',
   'dialog.largeFile.detail': 'Large files may cause the editor to become unresponsive.',
   'dialog.largeFile.message': 'The file is {size}. Open anyway?',
+  'dialog.binaryFile.detail': 'The file cannot be displayed correctly in the text editor.',
+  'dialog.binaryFile.message':
+    'The file is not displayed in the text editor because it is either binary or uses an unsupported text encoding.',
+  'dialog.binaryFile.openAnyway': 'Open Anyway',
   'quickInput.commandPalette.placeholder': 'Type a command name…',
   'quickInput.displayLanguage.auto.description': 'Use the operating system display language.',
   'quickInput.displayLanguage.en-US.description': 'Display the editor UI in English.',

@@ -491,6 +491,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'fileDialog.move.title': '选择目标文件夹',
   'dialog.largeFile.detail': '大文件可能导致编辑器无响应。',
   'dialog.largeFile.message': '该文件大小为 {size}。仍要打开吗？',
+  'dialog.binaryFile.detail': '该文件无法在文本编辑器中正常显示。',
+  'dialog.binaryFile.message': '文件是二进制文件或使用了不受支持的文本编码。',
+  'dialog.binaryFile.openAnyway': '仍然打开',
 
   // --- Quick input ---
   'quickAccess.commands.placeholder': '输入命令名称…',

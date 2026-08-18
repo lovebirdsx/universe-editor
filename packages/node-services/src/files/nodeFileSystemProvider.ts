@@ -100,6 +100,26 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
     }
   }
 
+  async readFileHead(uri: URI, maxBytes: number): Promise<Uint8Array> {
+    try {
+      const fd = await fs.open(uri.fsPath, 'r')
+      try {
+        const stat = await fd.stat()
+        const length = Math.min(stat.size, maxBytes)
+        const buf = new Uint8Array(length)
+        const { bytesRead } = await fd.read(buf, 0, length, 0)
+        this._logger.debug(`readFileHead ${uri.fsPath} bytes=${bytesRead}`)
+        return buf.subarray(0, bytesRead)
+      } finally {
+        await fd.close()
+      }
+    } catch (err) {
+      const mapped = err instanceof FileSystemError ? err : mapError(err, 'readFileHead failed')
+      this._logReadFailure('readFileHead', uri, mapped)
+      throw mapped
+    }
+  }
+
   async readFileText(uri: URI, encoding: 'utf8' = 'utf8'): Promise<string> {
     try {
       await this._assertReadableSize(uri, this._maxTextBytes)
