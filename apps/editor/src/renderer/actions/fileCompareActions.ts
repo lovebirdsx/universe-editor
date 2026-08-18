@@ -13,6 +13,7 @@ import {
   IEditorResolverService,
   IEditorService,
   IFileService,
+  IInstantiationService,
   localize,
   localize2,
   type ServicesAccessor,
@@ -48,6 +49,7 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
   const dialog = accessor.get(IDialogService)
   const editorService = accessor.get(IEditorService)
   const editorResolver = accessor.get(IEditorResolverService)
+  const inst = accessor.get(IInstantiationService)
   if (sameUri(left, right)) return
   if (!(await confirmLargeFile(left, fileService, dialog))) return
   if (!(await confirmLargeFile(right, fileService, dialog))) return
@@ -76,9 +78,12 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
       fileService.readFileText(left),
       fileService.readFileText(right),
     ])
-    editorService.openEditor(new DiffEditorInput(left, leftText, rightText, right), {
-      pinned: true,
-    })
+    editorService.openEditor(
+      inst.createInstance(DiffEditorInput, left, leftText, rightText, right, undefined, false),
+      {
+        pinned: true,
+      },
+    )
   } catch (err) {
     await dialog.confirm({
       message: localize('dialog.file.compare.error', 'Failed to compare'),

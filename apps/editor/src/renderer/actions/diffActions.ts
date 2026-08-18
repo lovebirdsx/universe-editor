@@ -83,6 +83,7 @@ export class OpenDiffAction extends Action2 {
   override run(accessor: ServicesAccessor, payload: OpenDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
     const folder = accessor.get(IWorkspaceService).current?.folder
+    const inst = accessor.get(IInstantiationService)
     const activeGroup = groups.activeGroup
     const id = `diff:${toWorkspaceResource(payload.originalUri, folder).toString()}`
 
@@ -100,7 +101,8 @@ export class OpenDiffAction extends Action2 {
       return
     }
 
-    const input = new DiffEditorInput(
+    const input = inst.createInstance(
+      DiffEditorInput,
       toWorkspaceResource(payload.originalUri, folder),
       payload.original,
       payload.modified,

@@ -91,6 +91,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  type IFileService,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
@@ -98,6 +99,8 @@ import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModel
 import { ServicesContext } from '../../useService.js'
 import { DiffEditor } from '../DiffEditor.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
+
+const fileService = {} as IFileService
 
 class CountingConfigService {
   declare readonly _serviceBrand: undefined
@@ -149,7 +152,15 @@ describe('DiffEditor disposal', () => {
   it('disposes every config + content subscription on unmount', async () => {
     const config = new CountingConfigService()
     const instantiation = createInstantiationService(config)
-    const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/a.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
 
     let contentSubscribeCount = 0
     let contentDisposeCount = 0
@@ -190,7 +201,15 @@ describe('DiffEditor disposal', () => {
   it('reuses the cached model pair on remount instead of rebuilding', async () => {
     const config = new CountingConfigService()
     const instantiation = createInstantiationService(config)
-    const input = new DiffEditorInput(URI.file('/ws/big.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/big.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
 
     const renderDiff = () =>
       render(

@@ -1,17 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  DiffEditorInput — a transient, read-only EditorInput that drives the Monaco
- *  diff editor. Holds original and modified text for a single file.
+ *  DiffEditorInput — a transient EditorInput that drives the Monaco diff editor.
+ *  Holds original and modified text for a single file. When the modified side is
+ *  the live working tree (same file, `liveModified`), the right pane is editable:
+ *  it shares the file's Monaco model and `save()` writes it back to disk.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  DisposableStore,
   EditorInput,
   Emitter,
+  IFileService,
+  IInstantiationService,
   URI,
   type Event,
+  type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
+import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { SaveParticipant } from '../extensions/SaveParticipant.js'
+import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
+import { noteSelfWrite } from './selfWriteRegistry.js'
+import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
+import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 /** Structural + content snapshot for reopen / session restore. A diff's two sides
  *  are frequently passed by value with no on-disk backing (a Git HEAD blob, a
@@ -43,15 +55,36 @@ export class DiffEditorInput extends EditorInput {
   /** Fires when original/modified content is refreshed in place (e.g. after a discard). */
   readonly onDidChangeContent: Event<void> = this._onDidChangeContent.event
 
+  private _hasLeadingBom = false
+  /** Last-known on-disk content of the modified side; undefined until read. */
+  private _cleanModifiedContent: string | undefined
+  /** VSCode-style clean model version; avoids false dirty from Monaco EOL normalization. */
+  private _savedAlternativeVersionId: number | undefined
+  /** Dirty-tracking subscriptions for the currently-bound shared model. */
+  private readonly _modifiedModelStore = this._register(new DisposableStore())
+  private _boundModifiedModel: monaco.editor.ITextModel | undefined
+
   constructor(
     private readonly _originalUri: URI,
     private _originalContent: string,
     private _modifiedContent: string,
-    private readonly _modifiedUri?: URI,
-    private readonly _openableResource?: URI,
-    private _liveModified = false,
+    private readonly _modifiedUri: URI | undefined,
+    private readonly _openableResource: URI | undefined,
+    private _liveModified: boolean,
+    @IFileService private readonly _fileService: IFileService,
   ) {
     super()
+    this._register(
+      MonacoModelRegistry.onDidMarkModelClean((model) => {
+        // Only our own modified model. `modifiedEditable` + identity check guards
+        // against snapshot diffs reacting to a FileEditor saving the same file —
+        // and lets a background editable diff clear its dirty when the same file
+        // is saved through a FileEditor elsewhere.
+        if (this.modifiedEditable && MonacoModelRegistry.peek(this.modifiedUri) === model) {
+          this._acceptModelClean(model)
+        }
+      }),
+    )
   }
 
   override get typeId(): string {
@@ -74,6 +107,15 @@ export class DiffEditorInput extends EditorInput {
    */
   get isCrossFile(): boolean {
     return this._isCrossFile
+  }
+
+  /**
+   * True when the modified side is editable: the right pane is the live
+   * working-tree buffer (same file, `liveModified`), not a frozen snapshot or a
+   * distinct file. Edits mark the input dirty and `save()` writes back to disk.
+   */
+  get modifiedEditable(): boolean {
+    return this._liveModified && !this._isCrossFile
   }
 
   override get resource(): URI {
@@ -140,6 +182,95 @@ export class DiffEditorInput extends EditorInput {
     return this._modifiedContent
   }
 
+  /**
+   * Acquire the shared Monaco model backing the editable modified side. The
+   * caller (the DiffEditor component) owns the returned reference and must pair
+   * every call with {@link releaseModifiedModel} — the input itself holds no
+   * registry ref, so the model is only disposed once the widget has detached
+   * from it (a DiffEditorWidget asserts if its model dies first). Re-acquiring
+   * an existing entry (e.g. a FileEditor sharing the file) just bumps its
+   * refcount. On first acquire it kicks an async disk read so dirty compares
+   * against the real baseline.
+   */
+  acquireModifiedModel(): monaco.editor.ITextModel {
+    const model = MonacoModelRegistry.acquire(this.modifiedUri, this._modifiedContent)
+    this._bindModifiedModel(model)
+    void this._refreshCleanBaseline()
+    return model
+  }
+
+  /** The shared model currently backing the editable modified side, without
+   *  changing its refcount or reading disk. Undefined when the diff is not
+   *  editable or no live model exists right now (e.g. a background tab whose
+   *  file model was disposed after its component released it). */
+  peekModifiedModel(): monaco.editor.ITextModel | undefined {
+    if (!this.modifiedEditable) return undefined
+    const model = MonacoModelRegistry.peek(this.modifiedUri)
+    return model && !model.isDisposed() ? model : undefined
+  }
+
+  /**
+   * Release the caller's reference to the shared modified model. Only drops our
+   * dirty-tracking subscription when the model actually died (refcount hit zero);
+   * a still-live model keeps the listener bound so a background tab keeps
+   * following the file's dirty state. Tolerates being called after the input was
+   * already disposed (tab close disposes the input before the component unmounts,
+   * so the component's cleanup release lands on a disposed input).
+   */
+  releaseModifiedModel(): void {
+    MonacoModelRegistry.release(this.modifiedUri)
+    const model = MonacoModelRegistry.peek(this.modifiedUri)
+    if (!model || model.isDisposed()) {
+      this._modifiedModelStore.clear()
+      this._boundModifiedModel = undefined
+    }
+  }
+
+  private _bindModifiedModel(model: monaco.editor.ITextModel): void {
+    if (this._boundModifiedModel === model) return
+    this._boundModifiedModel = model
+    this._modifiedModelStore.clear()
+    this._modifiedModelStore.add(model.onDidChangeContent(() => this._recomputeDirty(model)))
+  }
+
+  private _recomputeDirty(model: monaco.editor.ITextModel): void {
+    if (this._savedAlternativeVersionId !== undefined) {
+      this.setDirty(model.getAlternativeVersionId() !== this._savedAlternativeVersionId)
+      return
+    }
+    // Baseline not yet read → treat as clean until the disk read lands.
+    this.setDirty(
+      this._cleanModifiedContent !== undefined && model.getValue() !== this._cleanModifiedContent,
+    )
+  }
+
+  private _acceptModelClean(model: monaco.editor.ITextModel): void {
+    this._cleanModifiedContent = model.getValue()
+    this._savedAlternativeVersionId = model.getAlternativeVersionId()
+    this.setDirty(false)
+  }
+
+  private async _refreshCleanBaseline(): Promise<void> {
+    let diskText: string
+    try {
+      diskText = await this._fileService.readFileText(this.modifiedUri)
+    } catch {
+      // File not on disk (e.g. a session-added file): the current buffer is the
+      // baseline, so stay clean.
+      const model = this.peekModifiedModel()
+      this._cleanModifiedContent = model?.getValue()
+      if (model) this._savedAlternativeVersionId = model.getAlternativeVersionId()
+      this.setDirty(false)
+      return
+    }
+    const content = splitLeadingBom(diskText)
+    this._hasLeadingBom = content.hadBom
+    this._cleanModifiedContent = content.text
+    this._savedAlternativeVersionId = undefined
+    const model = this.peekModifiedModel()
+    if (model) this._recomputeDirty(model)
+  }
+
   /** Refresh both sides in place and notify the mounted DiffEditor to re-render. */
   update(originalContent: string, modifiedContent: string, liveModified?: boolean): void {
     const nextLive = liveModified ?? this._liveModified
@@ -150,9 +281,22 @@ export class DiffEditorInput extends EditorInput {
     ) {
       return
     }
+    const wasEditable = this.modifiedEditable
     this._originalContent = originalContent
     this._modifiedContent = modifiedContent
     this._liveModified = nextLive
+    if (wasEditable && !this.modifiedEditable) {
+      // Editable → frozen: drop dirty tracking + baseline. The shared-model ref
+      // is owned by the component, whose set-model effect cleanup releases it
+      // when the flip re-runs that effect (its old editable closure). Any
+      // unsaved edits are discarded — the snapshot semantics now own the right side.
+      this._modifiedModelStore.clear()
+      this._boundModifiedModel = undefined
+      this._cleanModifiedContent = undefined
+      this._savedAlternativeVersionId = undefined
+      this._hasLeadingBom = false
+      this.setDirty(false)
+    }
     this._onDidChangeContent.fire()
   }
 
@@ -196,22 +340,62 @@ export class DiffEditorInput extends EditorInput {
     }
   }
 
+  override async save(): Promise<boolean> {
+    if (!this.modifiedEditable) return true
+    const model = this.peekModifiedModel()
+    if (!model) {
+      // Background tab hit by Save All: no live model (its component released it
+      // and the refcount dropped to zero). If still dirty, persist the mirrored
+      // buffer — DiffLiveContentSyncContribution keeps `_modifiedContent` tracking
+      // the live file while the diff is open.
+      if (!this.isDirty) return true
+      const text = this._modifiedContent
+      noteSelfWrite(this.modifiedUri)
+      await this._fileService.writeFile(
+        this.modifiedUri,
+        this._hasLeadingBom ? UTF8_BOM + text : text,
+      )
+      this._cleanModifiedContent = text
+      this._savedAlternativeVersionId = undefined
+      this.setDirty(false)
+      DidSaveNotification.notify(this.modifiedUri)
+      return true
+    }
+    // Let save participants (e.g. ESLint fix-all-on-save via
+    // workspace.onWillSaveTextDocument) mutate the model before we read it.
+    await SaveParticipant.participate(model, 1)
+    if (model.isDisposed()) return true
+    const text = model.getValue()
+    noteSelfWrite(this.modifiedUri)
+    await this._fileService.writeFile(
+      this.modifiedUri,
+      this._hasLeadingBom ? UTF8_BOM + text : text,
+    )
+    // Fires onDidMarkModelClean, clearing this input AND a same-file FileEditor.
+    MonacoModelRegistry.markModelClean(model)
+    DidSaveNotification.notify(this.modifiedUri)
+    return true
+  }
+
   /**
    * Rebuild a diff input from its persisted structure + content (Ctrl+Shift+T /
    * window restore). Both sides are restored verbatim; live SCM/session
    * contributions refresh them in place once the tab is mounted if the
    * underlying file has changed since.
    */
-  static deserialize(data: unknown): DiffEditorInput | null {
+  static deserialize(data: unknown, accessor?: ServicesAccessor): DiffEditorInput | null {
     const d = data as ISerializedDiffEditor | null
     if (!d || !d.originalUri) return null
     if (d.contentDropped) return null
+    if (!accessor) return null
     const originalUri = URI.revive(d.originalUri) as URI
     const modifiedUri = d.modifiedUri ? (URI.revive(d.modifiedUri) as URI) : undefined
     const openableResource = d.openableResource
       ? (URI.revive(d.openableResource) as URI)
       : undefined
-    return new DiffEditorInput(
+    const inst = accessor.get(IInstantiationService)
+    return inst.createInstance(
+      DiffEditorInput,
       originalUri,
       d.originalContent ?? '',
       d.modifiedContent ?? '',
@@ -219,5 +403,14 @@ export class DiffEditorInput extends EditorInput {
       openableResource,
       d.liveModified === true,
     )
+  }
+
+  override dispose(): void {
+    // The shared model ref is owned by the mounted component, which releases it
+    // in its set-model effect cleanup after detaching the widget. Disposing the
+    // input first (tab close) must NOT release here — a DiffEditorWidget asserts
+    // if its model is disposed before the widget resets. `_modifiedModelStore`
+    // (the dirty-tracking listener) is cleaned up by `super.dispose()`.
+    super.dispose()
   }
 }

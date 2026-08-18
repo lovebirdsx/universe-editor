@@ -13,6 +13,7 @@ import {
   type IEditorGroup,
   type IEditorGroupModelChangeEvent,
   type IEditorGroupsService as IEditorGroupsServiceType,
+  type IFileService,
   type IObservable,
 } from '@universe-editor/platform'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
@@ -68,10 +69,20 @@ function change(uri: URI, baseline: string, current: string): SessionFileChange 
   }
 }
 
+const fileService = {} as IFileService
+
 describe('SessionChangesDiffSyncContribution', () => {
   it('refreshes an open diff tab when the tracker reports newer content', () => {
     const uri = URI.file('/ws/foo.ts')
-    const input = new DiffEditorInput(uri, 'base-1', 'current-1')
+    const input = new DiffEditorInput(
+      uri,
+      'base-1',
+      'current-1',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     const groups = makeGroups([input])
     const sessions = makeSessions('agent-1')
     const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
@@ -95,7 +106,15 @@ describe('SessionChangesDiffSyncContribution', () => {
 
   it('ignores diff tabs with no matching tracked change', () => {
     const openUri = URI.file('/ws/foo.ts')
-    const input = new DiffEditorInput(openUri, 'base', 'current')
+    const input = new DiffEditorInput(
+      openUri,
+      'base',
+      'current',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     const groups = makeGroups([input])
     const sessions = makeSessions('agent-1')
     const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
@@ -114,7 +133,15 @@ describe('SessionChangesDiffSyncContribution', () => {
 
   it('does nothing while the session has no agent id yet', () => {
     const uri = URI.file('/ws/foo.ts')
-    const input = new DiffEditorInput(uri, 'base', 'current')
+    const input = new DiffEditorInput(
+      uri,
+      'base',
+      'current',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     const groups = makeGroups([input])
     const sessions = makeSessions(undefined)
     const changesObs = observableValue<readonly SessionFileChange[]>('changes', [

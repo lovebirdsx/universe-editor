@@ -550,6 +550,20 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!model) return undefined
       return { original: model.original.getValue(), modified: model.modified.getValue() }
     },
+    getActiveDiffEditable: () => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof DiffEditorInput)) return undefined
+      return { editable: active.modifiedEditable, dirty: active.isDirty }
+    },
+    setActiveDiffModifiedText: (text: string) => {
+      const group = services.editorGroupsService.activeGroup
+      const active = group?.activeEditor
+      if (!(active instanceof DiffEditorInput) || !active.modifiedEditable) return false
+      const model = DiffEditorRegistry.get(active, group?.id)?.getModel()?.modified
+      if (!model) return false
+      model.setValue(text)
+      return true
+    },
     openDirtyDiffPeekAtLine: (line: number): boolean =>
       DirtyDiffPeekRegistry.getHost()?.openAtLine(line) ?? false,
     getDirtyDiffPeekState: () => {

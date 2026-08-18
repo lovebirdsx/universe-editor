@@ -9,7 +9,7 @@
  *  one tab (see memory `editor-input-identity-isolation`).
  *--------------------------------------------------------------------------------------------*/
 
-import { URI } from '@universe-editor/platform'
+import { IFileService, URI } from '@universe-editor/platform'
 import { DiffEditorInput } from './DiffEditorInput.js'
 
 export interface SwarmDiffContext {
@@ -48,6 +48,7 @@ export class SwarmDiffEditorInput extends DiffEditorInput {
     private readonly _context: SwarmDiffContext,
     originalContent: string,
     modifiedContent: string,
+    @IFileService fileService: IFileService,
   ) {
     super(
       swarmFileUri(_context),
@@ -55,6 +56,8 @@ export class SwarmDiffEditorInput extends DiffEditorInput {
       modifiedContent,
       undefined,
       _context.localPath ? URI.file(_context.localPath) : undefined,
+      false,
+      fileService,
     )
   }
 

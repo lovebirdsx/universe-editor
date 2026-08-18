@@ -13,6 +13,7 @@ import { memo, useState, type ReactNode } from 'react'
 import {
   IConfigurationService,
   IEditorService,
+  IInstantiationService,
   IWorkspaceService,
   REMOTE_SCHEME,
   URI,
@@ -124,6 +125,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const editorService = useService(IEditorService)
   const configService = useService(IConfigurationService)
   const workspaceService = useOptionalService(IWorkspaceService)
+  const inst = useService(IInstantiationService)
   // Reuse the same file opener the markdown renderer / code blocks use, so a path
   // on a tool-call card resolves (absolute / relative to workspace) and reveals
   // its line exactly like a path clicked anywhere else in the chat.
@@ -149,7 +151,15 @@ export const ToolCallCard = memo(function ToolCallCard({
     // from the diff title bar; only non-file schemes are left closed.
     const openable = uri.scheme === 'file' || uri.scheme === REMOTE_SCHEME ? uri : undefined
     void editorService.openEditor(
-      new DiffEditorInput(uri, diff.oldText, diff.newText, undefined, openable),
+      inst.createInstance(
+        DiffEditorInput,
+        uri,
+        diff.oldText,
+        diff.newText,
+        undefined,
+        openable,
+        false,
+      ),
     )
   }
 

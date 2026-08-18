@@ -108,6 +108,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  type IFileService,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
@@ -115,6 +116,8 @@ import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModel
 import { ServicesContext } from '../../useService.js'
 import { DiffEditor } from '../DiffEditor.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
+
+const fileService = {} as IFileService
 
 class FakeConfigurationService {
   declare readonly _serviceBrand: undefined
@@ -155,7 +158,15 @@ describe('DiffEditor view-state survives unmount (diff ↔ file switch)', () => 
   it('flushes a live view state before disposing the editor on unmount', async () => {
     const instantiation = createInstantiationService()
     const group = { id: 7 }
-    const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/a.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
 
     const { unmount } = render(
       <ServicesContext.Provider value={instantiation}>

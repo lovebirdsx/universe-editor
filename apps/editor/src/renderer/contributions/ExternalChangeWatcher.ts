@@ -31,6 +31,7 @@ import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
+import { splitLeadingBom } from '../services/editor/leadingBom.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 import { IOutOfWorkspaceWatchService } from '../services/files/outOfWorkspaceWatchService.js'
 
@@ -230,7 +231,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
 
     const handled = await this._reloadChangedFileEditors(changedKeys)
     await this._reconcilePreviewModels(changedKeys, handled)
-    await this._refreshChangedDiffEditors(changedKeys)
+    await this._refreshChangedDiffEditors(changedKeys, handled)
   }
 
   private async _exists(resource: URI): Promise<boolean> {
@@ -342,15 +343,16 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
    * only the modified side is refreshed — after a discard it equals HEAD and the
    * diff collapses to empty.
    *
-   * A file open in an editor with *unsaved* edits is the exception: its live
-   * buffer, not the (stale) disk text, is the modified side's truth — refreshing
-   * from disk would clobber the user's in-progress edit that
-   * DiffLiveContentSyncContribution mirrors into the diff. When a live model
-   * exists we push its value (which equals disk for a clean file, incl. after an
-   * SCM discard that reverts the model); only when no model is loaded do we fall
-   * back to reading disk.
+   * An editable diff's modified side IS the shared buffer, so it reconciles like
+   * a file editor: a key already `handled` by `_reloadChangedFileEditors` means
+   * the same-file FileEditor already reconciled the model — mirror it. Otherwise
+   * read disk and, when the buffer is clean and differs, reconcile with a minimal
+   * edit + markClean; a dirty buffer keeps the user's in-progress edits.
    */
-  private async _refreshChangedDiffEditors(changedKeys: Set<string>): Promise<void> {
+  private async _refreshChangedDiffEditors(
+    changedKeys: Set<string>,
+    handled: Set<string>,
+  ): Promise<void> {
     const byUri = new Map<string, DiffEditorInput[]>()
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
@@ -366,17 +368,46 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     }
     for (const inputs of byUri.values()) {
       const uri = inputs[0]!.originalUri
-      // The editor buffer wins over disk when the file is open: it may hold
-      // unsaved edits the stale fs event must not clobber.
+      const key = this._uriIdentity.getComparisonKey(uri)
       const liveModel = MonacoModelRegistry.peek(uri)
+      const model = liveModel && !liveModel.isDisposed() ? liveModel : undefined
+
+      if (inputs[0]!.modifiedEditable) {
+        if (!handled.has(key)) {
+          let diskText: string
+          try {
+            diskText = await this._fileService.readFileText(uri)
+          } catch {
+            // Gone from disk — the deletion path closes it; nothing to refresh.
+            continue
+          }
+          const content = splitLeadingBom(diskText)
+          if (model && !inputs[0]!.isDirty && model.getValue() !== content.text) {
+            applyMinimalTextEdit(model, content.text)
+            MonacoModelRegistry.markModelClean(model)
+          }
+          if (!model) {
+            for (const input of inputs) input.update(input.originalContent, content.text)
+            continue
+          }
+        }
+        // Mirror the live buffer into the input: after a handled FileEditor
+        // reconcile the model is fresh, and a dirty buffer wins over disk.
+        if (model) {
+          const text = model.getValue()
+          for (const input of inputs) input.update(input.originalContent, text)
+        }
+        continue
+      }
+
+      // Non-editable liveModified diff (defensive): existing buffer-wins path.
       let text: string
-      if (liveModel && !liveModel.isDisposed()) {
-        text = liveModel.getValue()
+      if (model) {
+        text = model.getValue()
       } else {
         try {
           text = await this._fileService.readFileText(uri)
         } catch {
-          // Gone from disk — the deletion path closes it; nothing to refresh.
           continue
         }
       }

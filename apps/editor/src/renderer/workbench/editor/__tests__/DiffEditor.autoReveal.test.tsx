@@ -122,6 +122,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  type IFileService,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { EditorViewStateCache } from '../../../services/editor/EditorViewStateCache.js'
@@ -129,6 +130,8 @@ import { _resetDiffModelCacheForTests } from '../../../services/editor/diffModel
 import { ServicesContext } from '../../useService.js'
 import { DiffEditor } from '../DiffEditor.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
+
+const fileService = {} as IFileService
 
 class FakeConfigurationService {
   declare readonly _serviceBrand: undefined
@@ -194,7 +197,15 @@ afterEach(() => {
 
 describe('DiffEditor auto reveal', () => {
   it('reveals the first change on a fresh open, despite the initial cursor event populating the cache', async () => {
-    const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/a.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     renderDiffEditor(input, { id: 1 })
 
     const editor = await waitForDiffEditor()
@@ -206,7 +217,15 @@ describe('DiffEditor auto reveal', () => {
 
   it('restores saved view state instead of revealing the first change', async () => {
     const group = { id: 2 }
-    const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/a.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     const savedState = { modified: { cursorState: [] } }
     EditorViewStateCache.save(group.id, input.resource.toString(), savedState)
 
@@ -222,7 +241,15 @@ describe('DiffEditor auto reveal', () => {
   })
 
   it('only handles the first diff update for initial navigation', async () => {
-    const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
+    const input = new DiffEditorInput(
+      URI.file('/ws/a.txt'),
+      'before\n',
+      'after\n',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     renderDiffEditor(input, { id: 1 })
 
     const editor = await waitForDiffEditor()

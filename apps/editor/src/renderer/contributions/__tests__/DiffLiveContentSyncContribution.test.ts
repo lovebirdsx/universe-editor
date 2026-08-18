@@ -12,6 +12,7 @@ import {
   type IEditorGroup,
   type IEditorGroupModelChangeEvent,
   type IEditorGroupsService,
+  type IFileService,
   URI,
 } from '@universe-editor/platform'
 
@@ -30,11 +31,19 @@ vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
     onDidAddModel: (listener: () => void) => addModelEmitter.event(listener),
+    onDidMarkModelClean: () => ({ dispose() {} }),
+    markModelClean() {},
+    release() {},
+    acquire() {
+      throw new Error('not used')
+    },
   },
 }))
 
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+
+const fileService = {} as IFileService
 
 function makeModel(initial: string): FakeModel {
   const emitter = new Emitter<void>()
@@ -77,7 +86,7 @@ describe('DiffLiveContentSyncContribution', () => {
   it('mirrors the live model into a working-tree diff (liveModified)', () => {
     const uri = URI.file('/ws/a.txt')
     liveModels.set(uri.toString(), makeModel('working'))
-    const diff = new DiffEditorInput(uri, 'head', 'stale', undefined, undefined, true)
+    const diff = new DiffEditorInput(uri, 'head', 'stale', undefined, undefined, true, fileService)
     const groups = makeGroups([diff])
     const contribution = new DiffLiveContentSyncContribution(groups)
 
@@ -93,7 +102,7 @@ describe('DiffLiveContentSyncContribution', () => {
 
   it('picks up a working-tree diff whose model appears after the diff opened', () => {
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'head', 'stale', undefined, undefined, true)
+    const diff = new DiffEditorInput(uri, 'head', 'stale', undefined, undefined, true, fileService)
     const groups = makeGroups([diff])
     const contribution = new DiffLiveContentSyncContribution(groups)
 
@@ -113,7 +122,15 @@ describe('DiffLiveContentSyncContribution', () => {
   it('never touches a snapshot diff (commit-to-commit), even with a live model', () => {
     const uri = URI.file('/ws/a.txt')
     liveModels.set(uri.toString(), makeModel('working'))
-    const diff = new DiffEditorInput(uri, 'parent-blob', 'commit-blob')
+    const diff = new DiffEditorInput(
+      uri,
+      'parent-blob',
+      'commit-blob',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     const groups = makeGroups([diff])
     const contribution = new DiffLiveContentSyncContribution(groups)
 
@@ -131,7 +148,15 @@ describe('DiffLiveContentSyncContribution', () => {
   // diff promoted over a snapshot tab (or vice versa) syncs correctly.
   it('adopts the liveModified flag when content is refreshed with one', () => {
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'parent-blob', 'commit-blob')
+    const diff = new DiffEditorInput(
+      uri,
+      'parent-blob',
+      'commit-blob',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
     diff.update('head', 'working', true)
     expect(diff.liveModified).toBe(true)
     expect(diff.modifiedContent).toBe('working')

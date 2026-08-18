@@ -533,6 +533,20 @@ export interface E2EProbe {
    * reopening the tab.
    */
   getActiveDiffContent(): { original: string; modified: string } | undefined
+  /**
+   * Whether the active diff editor's modified side is the editable live
+   * working-tree buffer, plus its current dirty state. Undefined when the active
+   * editor is not a diff editor. Backs the editable-diff spec: a live working-tree
+   * diff must report editable, a snapshot diff must not.
+   */
+  getActiveDiffEditable(): { editable: boolean; dirty: boolean } | undefined
+  /**
+   * Replace the active diff editor's editable modified buffer with `text` (the
+   * same mutation a user typing over the whole file would produce). Returns false
+   * when the active editor is not an editable diff. Backs the editable-diff save
+   * spec's edit → dirty → save round-trip without driving Monaco's DOM.
+   */
+  setActiveDiffModifiedText(text: string): boolean
   // -- Dirty-diff inline peek (quick diff widget) ---------------------------
   /**
    * Open the inline dirty-diff peek at the active editor's given line (the change

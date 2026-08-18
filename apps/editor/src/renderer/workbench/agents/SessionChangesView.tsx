@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { EyeOff, FileSymlink } from 'lucide-react'
 import {
   IEditorResolverService,
+  IInstantiationService,
   IStorageService,
   IUriIdentityService,
   IWorkspaceService,
@@ -232,12 +233,14 @@ export function SessionChangesView() {
   )
 }
 
-function diffInputFor(c: SessionFileChange): DiffEditorInput {
-  return new DiffEditorInput(c.uri, c.baseline, c.current, undefined, c.uri, true)
-}
-
 function useOpenChange(): (c: SessionFileChange, preview: boolean) => void {
-  return useOpenDiffEditor(diffInputFor)
+  const inst = useService(IInstantiationService)
+  const createInput = useCallback(
+    (c: SessionFileChange) =>
+      inst.createInstance(DiffEditorInput, c.uri, c.baseline, c.current, undefined, c.uri, true),
+    [inst],
+  )
+  return useOpenDiffEditor(createInput)
 }
 
 function useOpenFile(): (c: SessionFileChange) => void {

@@ -178,7 +178,7 @@ export class BuiltInEditorProvidersContribution
       registerEditorWithComponent(
         {
           typeId: DiffEditorInput.TYPE_ID,
-          deserialize: (data) => DiffEditorInput.deserialize(data),
+          deserialize: (data, accessor) => DiffEditorInput.deserialize(data, accessor),
         },
         DiffEditor,
       ),

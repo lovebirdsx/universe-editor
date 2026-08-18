@@ -26,17 +26,21 @@ describe('getOriginalResource', () => {
 
   it('resolves a same-file diff to the file itself (timeline stays on the file)', () => {
     const uri = URI.file('/ws/a.ts')
-    expect(getOriginalResource(new DiffEditorInput(uri, 'base', 'current'))?.toString()).toBe(
-      uri.toString(),
-    )
+    expect(
+      getOriginalResource(
+        new DiffEditorInput(uri, 'base', 'current', undefined, undefined, false, fileService),
+      )?.toString(),
+    ).toBe(uri.toString())
   })
 
   it('resolves a cross-file diff to the modified (right-hand) side', () => {
     const left = URI.file('/ws/a.ts')
     const right = URI.file('/ws/b.ts')
-    expect(getOriginalResource(new DiffEditorInput(left, 'A', 'B', right))?.toString()).toBe(
-      right.toString(),
-    )
+    expect(
+      getOriginalResource(
+        new DiffEditorInput(left, 'A', 'B', right, undefined, false, fileService),
+      )?.toString(),
+    ).toBe(right.toString())
   })
 
   it('resolves a webview diff to the modified (right-hand) side', () => {

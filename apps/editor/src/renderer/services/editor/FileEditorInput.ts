@@ -23,20 +23,13 @@ import { SaveParticipant } from '../extensions/SaveParticipant.js'
 import { DidSaveNotification } from '../extensions/DidSaveNotification.js'
 import { applyMinimalTextEdit } from './minimalModelEdit.js'
 import { noteSelfWrite } from './selfWriteRegistry.js'
+import { splitLeadingBom, UTF8_BOM } from './leadingBom.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 interface ISerializedFileEditor {
   readonly resource: UriComponents
   readonly dirtyContent?: string
   readonly isReadonly?: boolean
-}
-
-const UTF8_BOM = '\uFEFF'
-
-function splitLeadingBom(text: string): { text: string; hadBom: boolean } {
-  return text.startsWith(UTF8_BOM)
-    ? { text: text.slice(UTF8_BOM.length), hadBom: true }
-    : { text, hadBom: false }
 }
 
 export class FileEditorInput extends EditorInput {

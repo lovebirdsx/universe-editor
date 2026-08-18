@@ -34,11 +34,14 @@ const liveModels = new Map<
   string,
   { getValue: () => string; setValue?: (v: string) => void; isDisposed: () => boolean }
 >()
+const markCleanCalls: unknown[] = []
 vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
     onDidMarkModelClean: () => ({ dispose() {} }),
-    markModelClean() {},
+    markModelClean(model: unknown) {
+      markCleanCalls.push(model)
+    },
   },
 }))
 
@@ -47,6 +50,8 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+
+const fileServiceStub = {} as IFileServiceType
 
 class FakeWatcher implements IFileWatcherServiceType {
   declare readonly _serviceBrand: undefined
@@ -430,7 +435,15 @@ describe('ExternalChangeWatcher', () => {
 
   it('refreshes the working-tree side of an open diff editor on change', async () => {
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'head', 'old-working', undefined, undefined, true)
+    const diff = new DiffEditorInput(
+      uri,
+      'head',
+      'old-working',
+      undefined,
+      undefined,
+      true,
+      fileServiceStub,
+    )
     const groups = makeGroups([diff])
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(
@@ -451,12 +464,64 @@ describe('ExternalChangeWatcher', () => {
     expect(diff.originalContent).toBe('head')
   })
 
+  it('reconciles a clean editable diff from disk and marks its shared model clean', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const diff = new DiffEditorInput(
+      uri,
+      'head',
+      'old-working',
+      undefined,
+      undefined,
+      true,
+      fileServiceStub,
+    )
+    const groups = makeGroups([diff])
+    let modelValue = 'old-working'
+    const model = {
+      getValue: () => modelValue,
+      setValue: (v: string) => {
+        modelValue = v
+      },
+      isDisposed: () => false,
+    }
+    liveModels.set(uri.toString(), model)
+    markCleanCalls.length = 0
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri], contents: [[uri, 'head']] }),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: uri }])
+    await flush()
+    // Clean buffer reconciles to disk via a minimal edit and is marked clean.
+    expect(modelValue).toBe('head')
+    expect(diff.modifiedContent).toBe('head')
+    expect(markCleanCalls).toContain(model)
+    liveModels.delete(uri.toString())
+  })
+
   it('pushes the live editor buffer (not stale disk) into an open diff', async () => {
     // The file is open with unsaved edits (live model = 'live-edit') AND diffed.
     // A stale/late fs event must not overwrite the diff's modified side from disk
     // — the live buffer, mirrored by DiffLiveContentSyncContribution, is truth.
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'head', 'live-edit', undefined, undefined, true)
+    const diff = new DiffEditorInput(
+      uri,
+      'head',
+      'live-edit',
+      undefined,
+      undefined,
+      true,
+      fileServiceStub,
+    )
+    diff.setDirty(true)
     const groups = makeGroups([diff])
     liveModels.set(uri.toString(), { getValue: () => 'live-edit', isDisposed: () => false })
     const watcher = new FakeWatcher()
@@ -482,7 +547,15 @@ describe('ExternalChangeWatcher', () => {
   // commit diff silently morphs into "latest file vs parent commit".
   it('does not refresh a snapshot diff (liveModified=false) on change', async () => {
     const uri = URI.file('/ws/a.txt')
-    const diff = new DiffEditorInput(uri, 'parent-blob', 'commit-blob')
+    const diff = new DiffEditorInput(
+      uri,
+      'parent-blob',
+      'commit-blob',
+      undefined,
+      undefined,
+      false,
+      fileServiceStub,
+    )
     const groups = makeGroups([diff])
     const watcher = new FakeWatcher()
     new ExternalChangeWatcher(

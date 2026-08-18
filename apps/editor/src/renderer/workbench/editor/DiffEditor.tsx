@@ -2,11 +2,11 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  DiffEditor — React wrapper around Monaco's built-in diff editor widget.
  *
- *  Creates a read-only side-by-side diff view driven by DiffEditorInput. The
- *  Monaco diff instance lives for the component lifetime; swapping inputs
- *  replaces the two models. Models are not shared via MonacoModelRegistry, but
- *  on unmount they go to the diffModelCache LRU (services/editor/diffModelCache)
- *  so a reopen skips the createModel + tokenization + diff-compute trio and the
+ *  Driven by DiffEditorInput. When the input's modified side is editable (a live
+ *  working-tree diff), the right pane shares the file's MonacoModelRegistry model
+ *  and is writable; otherwise it stays read-only over snapshot models that on
+ *  unmount go to the diffModelCache LRU (services/editor/diffModelCache) so a
+ *  reopen skips the createModel + tokenization + diff-compute trio and the
  *  unmount commit never pays a synchronous multi-MB model teardown.
  *--------------------------------------------------------------------------------------------*/
 
@@ -29,7 +29,12 @@ import {
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
-import { acquireDiffModels, storeDiffModels } from '../../services/editor/diffModelCache.js'
+import {
+  acquireDiffModels,
+  discardDiffModels,
+  storeDiffModels,
+} from '../../services/editor/diffModelCache.js'
+import { applyMinimalTextEdit } from '../../services/editor/minimalModelEdit.js'
 import { wireDiffEditorViewState } from './diffEditorViewState.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
@@ -72,6 +77,11 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const diffLanguageRef = useRef<string>('plaintext')
   const instanceQualifierRef = useRef(`d${nextDiffEditorInstanceId++}`)
+  // Whether the currently-mounted modified model is the editable shared model
+  // (true) or a read-only snapshot (false). Lets the content-refresh handler skip
+  // the modified side when a liveModified flip rebuilds the models.
+  const modifiedModelEditableRef = useRef(false)
+  const [modifiedEditable, setModifiedEditable] = useState(diffInput.modifiedEditable)
   // Holds the current view-state wiring so the create-effect cleanup can flush it
   // (persist scroll/cursor) *before* it disposes the Monaco instance — otherwise,
   // on unmount, React runs the create-effect cleanup first and disposes the editor,
@@ -157,32 +167,51 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const modifiedLanguage = languageForResource(diffInput.modifiedUri)
     diffLanguageRef.current = modifiedLanguage
     const qualifier = instanceQualifierRef.current
-    // Reopening a diff (Ctrl+Shift+T, or switching back to an unmounted tab)
-    // reuses the cached live model pair — skipping two createModel + full
-    // tokenization passes plus a fresh diff computation, and sparing the
-    // unmount path a synchronous multi-MB model teardown.
-    const cached = acquireDiffModels(diffInput.id, {
-      originalText: diffInput.originalContent,
-      modifiedText: diffInput.modifiedContent,
-    })
-    const originalModel =
-      cached?.original ??
-      monacoNs.editor.createModel(
+
+    let originalModel: monaco.editor.ITextModel
+    let modifiedModel: monaco.editor.ITextModel
+    if (modifiedEditable) {
+      // Editable: the modified side IS the file's shared model. Drop any cached
+      // snapshot pair so a flip back to read-only rebuilds fresh snapshot models.
+      discardDiffModels(diffInput.id)
+      originalModel = monacoNs.editor.createModel(
         diffInput.originalContent,
         language,
         monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original', qualifier).toString()),
       )
-    const modifiedModel =
-      cached?.modified ??
-      monacoNs.editor.createModel(
-        diffInput.modifiedContent,
-        modifiedLanguage,
-        monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified', qualifier).toString()),
-      )
+      modifiedModel = diffInput.acquireModifiedModel()
+    } else {
+      // Reopening a diff (Ctrl+Shift+T, or switching back to an unmounted tab)
+      // reuses the cached live model pair — skipping two createModel + full
+      // tokenization passes plus a fresh diff computation, and sparing the
+      // unmount path a synchronous multi-MB model teardown.
+      const cached = acquireDiffModels(diffInput.id, {
+        originalText: diffInput.originalContent,
+        modifiedText: diffInput.modifiedContent,
+      })
+      originalModel =
+        cached?.original ??
+        monacoNs.editor.createModel(
+          diffInput.originalContent,
+          language,
+          monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original', qualifier).toString()),
+        )
+      modifiedModel =
+        cached?.modified ??
+        monacoNs.editor.createModel(
+          diffInput.modifiedContent,
+          modifiedLanguage,
+          monacoNs.Uri.parse(diffModelUri(diffInput.modifiedUri, 'modified', qualifier).toString()),
+        )
+    }
     ed.setModel({ original: originalModel, modified: modifiedModel })
-    ed.updateOptions(getEditorFontOptions(configService, modifiedLanguage))
+    ed.updateOptions({
+      readOnly: !modifiedEditable,
+      ...getEditorFontOptions(configService, modifiedLanguage),
+    })
     originalModelRef.current = originalModel
     modifiedModelRef.current = modifiedModel
+    modifiedModelEditableRef.current = modifiedEditable
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
     // Monaco loads asynchronously, so the group's synchronous focus attempt (in
@@ -218,29 +247,56 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       diffEditorRef.current?.setModel(null)
       originalModelRef.current = null
       modifiedModelRef.current = null
-      // Hand the pair to the LRU instead of disposing: reopening this diff is
-      // then model-free, and the synchronous teardown of two potentially huge
-      // TextModels leaves the unmount commit (the cache disposes on eviction).
-      storeDiffModels(diffInput.id, originalModel, modifiedModel)
+      if (modifiedEditable) {
+        // The shared model is owned (refcounted) by this component, not the input —
+        // never dispose or cache it. Only the original snapshot dies here. Release
+        // our ref AFTER setModel(null) detaches the widget: the input's release is
+        // what drops the refcount to zero and disposes the model, and a
+        // DiffEditorWidget asserts if its model is disposed while still attached.
+        originalModel.dispose()
+        diffInput.releaseModifiedModel()
+      } else {
+        // Hand the pair to the LRU instead of disposing: reopening this diff is
+        // then model-free, and the synchronous teardown of two potentially huge
+        // TextModels leaves the unmount commit (the cache disposes on eviction).
+        storeDiffModels(diffInput.id, originalModel, modifiedModel)
+      }
     }
-  }, [monacoNs, diffInput, group, configService, groupsService, contextKeyService])
+  }, [
+    monacoNs,
+    diffInput,
+    modifiedEditable,
+    group,
+    configService,
+    groupsService,
+    contextKeyService,
+  ])
 
   // Refresh both sides in place when the input's content changes (e.g. the file
   // is reverted via SCM discard). The diffInput instance is mutated, so the
-  // set-model effect above won't re-run — update the live models directly.
+  // set-model effect above won't re-run — update the live models directly. A
+  // liveModified flip rebuilds the models via that effect instead, so the
+  // modified side is skipped here (its ref still points at the old model).
   useEffect(() => {
+    setModifiedEditable(diffInput.modifiedEditable)
     const disposable = diffInput.onDidChangeContent(() => {
-      if (
-        originalModelRef.current &&
-        originalModelRef.current.getValue() !== diffInput.originalContent
-      ) {
-        originalModelRef.current.setValue(diffInput.originalContent)
+      setModifiedEditable(diffInput.modifiedEditable)
+      const originalModel = originalModelRef.current
+      if (originalModel && originalModel.getValue() !== diffInput.originalContent) {
+        originalModel.setValue(diffInput.originalContent)
       }
-      if (
-        modifiedModelRef.current &&
-        modifiedModelRef.current.getValue() !== diffInput.modifiedContent
-      ) {
-        modifiedModelRef.current.setValue(diffInput.modifiedContent)
+      const modifiedModel = modifiedModelRef.current
+      if (!modifiedModel || modifiedModel.isDisposed()) return
+      if (diffInput.modifiedEditable !== modifiedModelEditableRef.current) return
+      if (diffInput.modifiedEditable) {
+        // The shared model holds the user's live edits; only push a clean
+        // in-place refresh (e.g. an SCM discard). A minimal edit preserves
+        // undo/redo, folding and the cursor — setValue would wipe them.
+        if (!diffInput.isDirty && modifiedModel.getValue() !== diffInput.modifiedContent) {
+          applyMinimalTextEdit(modifiedModel, diffInput.modifiedContent)
+        }
+      } else if (modifiedModel.getValue() !== diffInput.modifiedContent) {
+        modifiedModel.setValue(diffInput.modifiedContent)
       }
     })
     return () => disposable.dispose()

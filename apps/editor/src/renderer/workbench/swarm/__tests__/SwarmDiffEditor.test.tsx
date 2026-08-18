@@ -120,6 +120,7 @@ import {
   IEditorGroupsService,
   InstantiationService,
   ServiceCollection,
+  type IFileService,
 } from '@universe-editor/platform'
 import { SwarmDiffEditorInput } from '../../../services/editor/SwarmDiffEditorInput.js'
 import { DiffEditorRegistry } from '../../../services/editor/DiffEditorRegistry.js'
@@ -164,6 +165,7 @@ function createInput() {
     },
     'before\n',
     'after\n',
+    {} as IFileService,
   )
 }
 

@@ -27,7 +27,9 @@ describe('timelineFollowTarget', () => {
 
   it('follows the file behind a diff editor', () => {
     const uri = URI.file('/ws/a.ts')
-    const target = timelineFollowTarget(new DiffEditorInput(uri, 'base', 'current'))
+    const target = timelineFollowTarget(
+      new DiffEditorInput(uri, 'base', 'current', undefined, undefined, false, fileService),
+    )
     expect(target).not.toBe('keep')
     expect(target?.toString()).toBe(uri.toString())
   })

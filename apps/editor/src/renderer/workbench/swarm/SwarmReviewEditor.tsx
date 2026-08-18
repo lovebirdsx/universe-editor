@@ -14,6 +14,7 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  IInstantiationService,
   ILoggerService,
   INotificationService,
   IOpenerService,
@@ -137,6 +138,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const inst = useService(IInstantiationService)
   const loggerService = useService(ILoggerService)
   const logger = useMemo(
     () => loggerService.createLogger({ id: 'swarmReview', name: 'Swarm Review' }),
@@ -867,7 +869,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             original = left.content
             modified = right.content
           }
-          await editorService.openEditor(new SwarmDiffEditorInput(context, original, modified))
+          await editorService.openEditor(
+            inst.createInstance(SwarmDiffEditorInput, context, original, modified),
+          )
         })
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e))
@@ -876,6 +880,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     [
       commands,
       editorService,
+      inst,
       detail,
       logger,
       notifications,
