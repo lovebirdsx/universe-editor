@@ -30,6 +30,9 @@ const DEFAULT_SERVER_VERSION = '0.0.0'
 const DAEMON_INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
 const BUNDLE_HASH_PREFIX = 'UNIVERSE_REMOTE_BUNDLE_HASH='
 const BUNDLE_HASH_FILE = 'bundle.hash'
+// Reserved exit code for "node not on the remote PATH" — kept clear of the shell
+// codes the probe collides with (127 command-not-found, 3 check not-running, 2/1).
+const NODE_MISSING_EXIT_CODE = 40
 const SSH_BATCH_MODE = 'BatchMode=yes'
 const SSH_STRICT_HOST_KEY = 'StrictHostKeyChecking=accept-new'
 
@@ -133,7 +136,7 @@ function serverBootstrapPath(version: string): string {
 }
 
 export function buildCheckCommand(version: string): string {
-  return `node ${serverBootstrapPath(version)} check`
+  return `command -v node >/dev/null 2>&1 || exit ${NODE_MISSING_EXIT_CODE}; node ${serverBootstrapPath(version)} check`
 }
 
 export function buildStartCommand(version: string): string {
@@ -157,7 +160,10 @@ export function buildDeployScriptBody(
   // @openai/codex platform packages, ~500MB total) — those are now downloaded on
   // demand by the AgentBinary channel instead of being pulled in by npm.
   const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --omit=optional --no-audit --no-fund); fi; done`
-  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && printf %s "${bundleHash}" > ${dir}/${BUNDLE_HASH_FILE} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && rm /tmp/${tmpName}`
+  // The bundle.hash marker is written only after npm install + vendor install
+  // both succeed: a mid-install failure must not leave a "complete install"
+  // marker that would later make `check` skip the redeploy.
+  return `mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && printf %s "${bundleHash}" > ${BUNDLE_HASH_FILE} && rm /tmp/${tmpName}`
 }
 
 export function buildDeployRemoteScript(
@@ -386,6 +392,7 @@ export type RemoteCheckResult =
     }
   | { readonly state: 'not-running'; readonly deployedBundleHash?: string }
   | { readonly state: 'not-deployed'; readonly reason: string }
+  | { readonly state: 'node-missing' }
   | { readonly state: 'error'; readonly message: string }
 
 /**
@@ -408,9 +415,12 @@ export function classifyCheckResult(result: RemoteRunResult, transport: string):
       state: 'not-running',
       ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
     }
+  if (result.code === NODE_MISSING_EXIT_CODE) return { state: 'node-missing' }
   if (
     result.code === 127 ||
-    /not found|cannot find module|ENOENT|no such file/i.test(result.stderr)
+    /not found|cannot find module|cannot find package|ERR_MODULE_NOT_FOUND|ENOENT|no such file/i.test(
+      result.stderr,
+    )
   ) {
     return { state: 'not-deployed', reason: result.stderr.trim() || `exit ${result.code}` }
   }

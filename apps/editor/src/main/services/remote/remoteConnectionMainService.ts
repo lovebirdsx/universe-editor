@@ -704,6 +704,12 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         this._fireProgress(entry, 'starting-daemon', 3, 3, true)
         return orchestrator.startRemoteDaemon(target)
       }
+      case 'node-missing': {
+        this._logger.warn(`[remote:${authority}] Node.js not found on remote host`)
+        throw new Error(
+          `Node.js was not found on the remote host '${authority}'. Install Node.js 20 or later on the remote machine and reconnect. If Node.js is managed by nvm, make sure it is available in non-interactive SSH sessions (e.g. symlink it into /usr/local/bin or export PATH in ~/.bashrc before the interactivity check).`,
+        )
+      }
       case 'error':
         throw new Error(`remote check failed for '${authority}': ${check.message}`)
     }

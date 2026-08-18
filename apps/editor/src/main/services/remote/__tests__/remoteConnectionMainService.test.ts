@@ -420,7 +420,7 @@ interface FakeWsl {
 function makeFakeWslDeployer(
   daemon: FakeDaemon,
   opts: {
-    firstCheck?: 'not-deployed' | 'not-running'
+    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
   } = {},
@@ -443,6 +443,7 @@ function makeFakeWslDeployer(
       calls.push(`check:${distro}`)
       if (opts.firstCheck && !firstCheckDone) {
         firstCheckDone = true
+        if (opts.firstCheck === 'node-missing') return { state: 'node-missing' }
         return opts.firstCheck === 'not-deployed'
           ? { state: 'not-deployed', reason: 'missing' }
           : { state: 'not-running', ...hashField() }
@@ -478,7 +479,7 @@ interface MadeWsl {
 function makeWslService(
   daemon: FakeDaemon,
   opts: {
-    firstCheck?: 'not-deployed' | 'not-running'
+    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
   } = {},
@@ -579,6 +580,29 @@ describe('RemoteConnectionMainService wsl mode', () => {
 
     await wsl.svc.getConnection('wsl+ubuntu')
     expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
+  })
+
+  it('deploy → start when not running and the deployed hash is unknown (no bundle.hash)', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      localBundleHash: 'aaaabbbbccccdddd',
+      // deployedBundleHash omitted → undefined, e.g. a partial install left no bundle.hash
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
+  })
+
+  it('rejects the connect with a readable message when Node is missing on the remote', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, { firstCheck: 'node-missing' }))
+
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/Node.js was not found/)
+    // No deploy/start is attempted when node is missing.
+    expect(wsl.calls).toEqual(['check:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('failed')
+    expect(wsl.states.at(-1)?.error).toContain('Node.js was not found')
   })
 
   it('start (no deploy) when not running and the bundle hash matches', async () => {

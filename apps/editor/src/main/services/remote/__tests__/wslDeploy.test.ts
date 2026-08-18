@@ -38,7 +38,7 @@ describe('wslCommandArgs', () => {
       '-e',
       'bash',
       '-lc',
-      'node ~/.universe-editor-server/0.0.0/bootstrap.js check',
+      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check',
     ])
     expect(wslCommandArgs('Ubuntu', buildStartCommand('1.2.3'))[5]).toBe(
       'node ~/.universe-editor-server/1.2.3/bootstrap.js start',
@@ -59,7 +59,7 @@ describe('buildDeployScriptBody', () => {
 
   it('writes the bundle hash after extraction without breaking the outer single quotes', () => {
     const body = buildDeployScriptBody('0.0.0', 'u.tgz', 'deadbeef')
-    expect(body).toContain('printf %s "deadbeef" > ~/.universe-editor-server/0.0.0/bundle.hash')
+    expect(body).toContain('printf %s "deadbeef" > bundle.hash')
     expect(body).not.toContain("'")
   })
 })
@@ -253,7 +253,7 @@ describe('WslDeployer', () => {
         buildDeployScriptBody('0.0.0', tgzName, computeBundleHash(bundleDir)),
       ),
     )
-    expect(install.args[5]).toContain('~/.universe-editor-server/0.0.0/bundle.hash')
+    expect(install.args[5]).toContain('> bundle.hash')
     expect(install.timeoutMs).toBe(1_800_000)
 
     expect(existsSync(join(tmpdir(), tgzName))).toBe(false)

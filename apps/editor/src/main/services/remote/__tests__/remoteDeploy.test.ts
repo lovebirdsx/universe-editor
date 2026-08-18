@@ -9,6 +9,7 @@ import type { ILogger } from '@universe-editor/platform'
 import {
   buildCheckCommand,
   buildDeployRemoteScript,
+  buildDeployScriptBody,
   buildStartCommand,
   buildStopCommand,
   classifyCheckResult,
@@ -63,7 +64,7 @@ describe('argv assembly', () => {
       '-o',
       'StrictHostKeyChecking=accept-new',
       'user@host',
-      'node ~/.universe-editor-server/0.0.0/bootstrap.js check',
+      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/0.0.0/bootstrap.js check',
     ])
   })
 
@@ -120,12 +121,27 @@ describe('argv assembly', () => {
     expect(script).toContain('vendor/claude-agent-acp vendor/codex-acp')
     expect(script).toContain('npm ci --omit=dev --omit=optional --no-audit --no-fund')
     expect(script).toContain('rm /tmp/universe-server-abc123.tgz')
-    expect(script).toContain('printf %s "deadbeef" > ~/.universe-editor-server/0.0.0/bundle.hash')
+    expect(script).toContain('printf %s "deadbeef" > bundle.hash')
+  })
+
+  it('writes bundle.hash only after npm install and vendor install succeed', () => {
+    const body = buildDeployScriptBody('0.0.0', 'universe-server-abc123.tgz', 'deadbeef')
+    const installIdx = body.indexOf('npm install --omit=dev --no-audit --no-fund')
+    const vendorIdx = body.indexOf('npm ci --omit=dev --omit=optional --no-audit --no-fund')
+    const hashIdx = body.indexOf('printf %s "deadbeef" > bundle.hash')
+    const rmIdx = body.indexOf('rm /tmp/universe-server-abc123.tgz')
+    expect(installIdx).toBeGreaterThan(-1)
+    expect(vendorIdx).toBeGreaterThan(-1)
+    expect(hashIdx).toBeGreaterThan(-1)
+    expect(rmIdx).toBeGreaterThan(-1)
+    expect(installIdx).toBeLessThan(hashIdx)
+    expect(vendorIdx).toBeLessThan(hashIdx)
+    expect(hashIdx).toBeLessThan(rmIdx)
   })
 
   it('builds check/start/stop commands against the versioned bootstrap', () => {
     expect(buildCheckCommand('1.2.3')).toBe(
-      'node ~/.universe-editor-server/1.2.3/bootstrap.js check',
+      'command -v node >/dev/null 2>&1 || exit 40; node ~/.universe-editor-server/1.2.3/bootstrap.js check',
     )
     expect(buildStartCommand('1.2.3')).toBe(
       'node ~/.universe-editor-server/1.2.3/bootstrap.js start',
@@ -239,6 +255,44 @@ describe('classifyCheckResult bundle hash', () => {
   })
 })
 
+describe('classifyCheckResult node-missing and incomplete install', () => {
+  it('maps exit 40 to node-missing', () => {
+    expect(classifyCheckResult({ code: 40, stdout: '', stderr: '' }, 'ssh')).toEqual({
+      state: 'node-missing',
+    })
+  })
+
+  it('maps a missing node_modules ESM load error to not-deployed (self-heal redeploy)', () => {
+    expect(
+      classifyCheckResult(
+        {
+          code: 1,
+          stdout: '',
+          stderr:
+            "Cannot find package '@universe-editor/platform' imported from /home/u/.universe-editor-server/0.0.0/bootstrap.js",
+        },
+        'ssh',
+      ),
+    ).toEqual({
+      state: 'not-deployed',
+      reason:
+        "Cannot find package '@universe-editor/platform' imported from /home/u/.universe-editor-server/0.0.0/bootstrap.js",
+    })
+  })
+
+  it('maps ERR_MODULE_NOT_FOUND stderr to not-deployed', () => {
+    expect(
+      classifyCheckResult(
+        { code: 1, stdout: '', stderr: 'Error [ERR_MODULE_NOT_FOUND]: Cannot find package x' },
+        'wsl',
+      ),
+    ).toEqual({
+      state: 'not-deployed',
+      reason: 'Error [ERR_MODULE_NOT_FOUND]: Cannot find package x',
+    })
+  })
+})
+
 describe('RemoteDeployer.deployRemoteServer', () => {
   const dirs: string[] = []
   afterEach(() => {
@@ -279,7 +333,7 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     const remoteScript = install!.args[install!.args.length - 1]!
     expect(remoteScript).toContain(`tar xzf /tmp/${tgzName}`)
     expect(remoteScript).toContain('printf %s "')
-    expect(remoteScript).toContain('~/.universe-editor-server/0.0.0/bundle.hash')
+    expect(remoteScript).toContain('> bundle.hash')
   })
 
   it('surfaces the failing step in the thrown error', async () => {
