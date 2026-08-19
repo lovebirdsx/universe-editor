@@ -9,9 +9,6 @@
  *  untouched.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
@@ -44,10 +41,12 @@ test.describe('@p1 log isolation', () => {
     electronApp,
     workbench,
     page,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
 
-    const folder = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-logiso-'))
+    // 探针的 folder 是 URI.fsPath（正斜杠），此处统一为同一形式再比较。
+    const folder = scratchDir('universe-editor-e2e-logiso-').replace(/\\/g, '/')
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(folder)
     const pageB = await newWindow
