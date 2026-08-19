@@ -75,6 +75,22 @@ const QUOTA_TEXT = /quota exceeded|usage limit|billing|insufficient.?quota|credi
 const RUNTIME_ERROR_TEXT =
   /cannot read propert|cannot read private member|is not a function|is not a constructor|is not iterable|is not an object|is not defined|\bis undefined\b|\(intermediate value\)|cannot destructure|cannot set propert|right-hand side of 'in'|invalid assignment|assignment to undeclared|too much recursion|maximum call stack|out of memory/i
 
+/**
+ * Known claude CLI bug (anthropics/claude-code#74059, unfixed as of 2.1.220):
+ * when a third-party gateway's response carries `usage.iterations[]` with an
+ * advisor_message entry missing `model`, the CLI's cost accounting throws
+ * TypeError on `model.includes("application-inference-profile")` — AFTER the
+ * turn's work completed and persisted to the transcript. The CLI catches it
+ * and ends the turn as an errored result, which the fork forwards verbatim
+ * (errorKind 'unknown' or absent, no `details` payload), so only the message
+ * text identifies it. The session and agent process are healthy and the next
+ * response rarely carries the bad entry again, so a continue-retry is safe
+ * and typically rescues the turn. Matches the JSC (Bun-compiled CLI) and V8
+ * phrasings with any minified identifier.
+ */
+const CLI_USAGE_ACCOUNTING_CRASH_TEXT =
+  /(?:undefined|null) is not an object \(evaluating '[$\w.]+\.includes'\)|cannot read propert(?:y|ies) of (?:undefined|null) \(reading 'includes'\)/i
+
 function readData(err: unknown): Record<string, unknown> | undefined {
   if (!err || typeof err !== 'object') return undefined
   const data = (err as { data?: unknown }).data
@@ -157,6 +173,9 @@ export function classifyAcpError(err: unknown): AcpErrorVerdict {
     const lower = message.toLowerCase()
     if (lower.includes('authentication required') || lower.includes('auth_required')) {
       return { cls: 'auth' }
+    }
+    if (CLI_USAGE_ACCOUNTING_CRASH_TEXT.test(message)) {
+      return { cls: 'transient', kind: 'cli_usage_accounting_crash' }
     }
     if (QUOTA_TEXT.test(message)) return { cls: 'quota' }
     if (TRANSIENT_TEXT.test(message)) return { cls: 'transient' }

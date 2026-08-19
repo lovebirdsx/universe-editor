@@ -105,6 +105,40 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError({ code: -32603, message: 'Internal error' }).cls).toBe('fatal')
   })
 
+  it('treats the claude CLI usage-accounting TypeError as transient', () => {
+    // Real-world shape: a third-party gateway returns usage.iterations[] with
+    // an advisor_message entry missing `model`; the CLI's cost accounting then
+    // throws TypeError on `model.includes(...)` AFTER the turn's work is done
+    // and persisted. The fork forwards the errored result verbatim (errorKind
+    // 'unknown' or absent, no `details`), so only the message identifies it.
+    // A continue-retry is safe and usually succeeds — the next response rarely
+    // carries the bad entry again.
+    const jsc = classifyAcpError({
+      code: -32603,
+      message: "Internal error: undefined is not an object (evaluating 'e.includes')",
+      data: { errorKind: 'unknown' },
+    })
+    expect(jsc.cls).toBe('transient')
+    expect(jsc.kind).toBe('cli_usage_accounting_crash')
+    // Minified identifier varies across CLI builds; V8 phrasing covered too.
+    expect(
+      classifyAcpError({
+        code: -32603,
+        message: "Internal error: API Error: undefined is not an object (evaluating 'Qz.includes')",
+      }).cls,
+    ).toBe('transient')
+    expect(
+      classifyAcpError({
+        code: -32603,
+        message: "Internal error: Cannot read properties of undefined (reading 'includes')",
+      }).cls,
+    ).toBe('transient')
+    // Unrelated `.includes` mentions must not match.
+    expect(
+      classifyAcpError({ code: -32603, message: 'Internal error: prompt includes bad data' }).cls,
+    ).toBe('fatal')
+  })
+
   it('falls back to message text when no structured data', () => {
     expect(classifyAcpError(new Error('HTTP 429 Too Many Requests')).cls).toBe('transient')
     expect(classifyAcpError(new Error('service temporarily unavailable')).cls).toBe('transient')
