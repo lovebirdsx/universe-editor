@@ -89,7 +89,7 @@ npm create @universe-editor/extension@latest <目录名> -- \
 cd <目录名> && npm install && npm run build
 ```
 
-构建通过说明骨架完好。骨架自带 `esbuild.config.mjs`、`tsconfig.json`、`src/extension.ts`,scripts 有 `build` / `watch` / `package`(= `uex package`)。
+`npm run build` 与 `npm test` 都通过说明骨架完好。骨架自带 `esbuild.config.mjs`、`tsconfig.json`、`vitest.config.ts`、`src/extension.ts` + `src/hello.ts`(纯逻辑模块范例)、`src/__tests__/`(vitest 单测)、`e2e/`(完整 e2e 骨架:playwright.config.ts + fixtures + 示例 spec)、`scripts/e2e.mjs`(e2e 入口);scripts 有 `build` / `watch` / `test` / `test:e2e` / `package`(= `uex package`)。
 
 `<目录名>` 写 `.` 可在当前目录就地初始化(当前目录已是扩展目录时避免多套一层);目录**非空**时需追加 `--force`——只覆盖脚手架自己生成的文件,外来文件永不删除。
 
@@ -103,72 +103,22 @@ cd <目录名> && npm install && npm run build
 - 全 ESM(`"type": "module"`),产物由 esbuild 打包。
 - `capabilities.untrustedWorkspaces`:脚手架已声明 `true`(模板只做 helloWorld/只读预览)。一旦你的扩展要运行工作区代码、跑构建、发网络请求,必须显式改成 `{ "supported": false, "description": "…" }`(或 `"supported": "limited"` 自行降级)——有 `main` 且不声明,在未受信任的工作区里**静默不激活**(形态与判断标准见安装目录文档 `extension-anatomy.md` 的 capabilities 节)。
 
-实现过程中可随时 `npm run build` + `npx uex dev` 拉起「扩展开发宿主」窗口自测(它会自动定位本机安装的编辑器;失败时按提示设 `UNIVERSE_EDITOR_PATH`)。
+实现过程中可随时 `npm run build` + `npx uex dev` 拉起「扩展开发宿主」窗口自测(它会自动定位本机安装的编辑器;失败时按提示设 `UNIVERSE_EDITOR_PATH`)。把纯逻辑抽离成独立模块(照模板 `hello.ts` 模式,与宿主 API 解耦),可单测的顺手在 `src/__tests__/` 补用例——宿主 API 用 `vi.mock('@universe-editor/extension-api')` 假掉,模板 `extension.test.ts` 是现成范例——跑 `npm test` 验证。
 
-## 第 5 步:e2e 测试
+## 第 5 步:测试(单测 + e2e)
 
-e2e 使用官方 harness 冷启动真实编辑器、junction 装载本扩展、经 `window.__E2E__` 探针断言,**不需要下载浏览器**。搭建:
+脚手架已自带两条测试链路(依赖、配置、fixture 全部就位),**不需要再手工搭建**:
 
-1. 加 devDependencies(版本须满足 harness 的 peerDependency):
+**单测**:`npm test` 跑 `src/__tests__/` 下的 vitest 用例(node 环境,配置排除 `e2e/`,见 `vitest.config.ts`)。宿主 API 在测试里用 `vi.mock('@universe-editor/extension-api')` 假掉(模板 `src/__tests__/extension.test.ts` 是现成范例),不用起编辑器。核心逻辑抽离成独立模块(照模板 `hello.ts` 模式)后即可直接单测。
 
-```bash
-npm i -D @universe-editor/e2e-harness @universe-editor/e2e-contract @playwright/test
-```
+**e2e**:harness 冷启动真实编辑器、经 `window.__E2E__` 探针断言,**不需要下载浏览器**。脚手架自带 `e2e/playwright.config.ts`、`e2e/fixtures/app.mjs`(把本扩展目录 junction 进隔离的用户扩展目录,冷启动真实编辑器、只加载本扩展,等价 VSCode 的 `--extension-development-path`)、示例 spec(`basic` 模板为 `e2e/specs/command.spec.ts`)。你要做的:
 
-2. `e2e/playwright.config.ts`:
+1. 把 `e2e/specs/` 下的示例 spec 替换/扩充为第 2 步确认的场景清单——**每条已确认的需求至少对应一条用例**。断言模式照抄示例 spec:先 `expect.poll` 轮询 `window.__E2E__!.hasCommand('<扩展id>.<命令>')` 等命令注册(留出冷启动窗口,首次执行命令才会触发 `onCommand:` 激活),再 `runCommand` 执行、经探针断言效果(输出通道内容 / ContextKey / 编辑器状态),不要断言编辑器内部 DOM。
+2. 跑 `npm run test:e2e`——自动先 build 再起 Playwright(`scripts/e2e.mjs` 已处理 agent shell 注入的 `ELECTRON_RUN_AS_NODE`,直接用 npm script 即可)。编辑器二进制自动探测本机安装,否则设 `UNIVERSE_EDITOR_BIN` 指向编辑器可执行文件;e2e 使用独立的 userData,不会与用户正开着的编辑器互相干扰。
 
-```ts
-import { defineE2EConfig } from '@universe-editor/e2e-harness'
+探针 API(`hasCommand` / `runCommand` / `getOutputChannelContent` / `getContextKey` / `openFileUri` 等)来自 `@universe-editor/e2e-contract`;更多真实用法参考示例仓库各 `samples/<name>/e2e/*.spec.ts`——同一套 harness,每个示例都有一条可运行的 e2e。
 
-const config = defineE2EConfig({ testDir: './specs' })
-export default { ...config, testMatch: '**/*.spec.ts' }
-```
-
-3. `e2e/app.mjs`(fixture,把本扩展目录 junction 进隔离的用户扩展目录):
-
-```js
-import { createColdAppTest, resolveEditorLaunchTarget, expect } from '@universe-editor/e2e-harness'
-import { mkdtempSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const extensionDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const userExtensionsDir = mkdtempSync(join(tmpdir(), 'ext-e2e-'))
-symlinkSync(extensionDir, join(userExtensionsDir, 'ext-under-test'), 'junction')
-
-export const test = createColdAppTest({
-  ...resolveEditorLaunchTarget(),
-  extensions: [],
-  env: { UNIVERSE_USER_EXTENSIONS_DIR: userExtensionsDir },
-})
-export { expect }
-```
-
-4. `e2e/specs/<场景>.spec.ts`(探针 API 如 `hasCommand` / `runCommand` / `getOutputChannelContent` / `getContextKey` / `openFileUri` 来自 `@universe-editor/e2e-contract`):
-
-```ts
-import { test, expect } from '../app.mjs'
-
-test.describe('my extension', () => {
-  test('registers and runs its command', async ({ page, workbench }) => {
-    test.slow()
-    await workbench.waitForRestored()
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('<扩展id>.<命令>')), {
-        timeout: 15000,
-      })
-      .toBe(true)
-    // 首次执行命令会触发激活(onCommand:),留出冷启动窗口轮询断言效果
-  })
-})
-```
-
-5. 跑:`npm run build && npx playwright test -c e2e/playwright.config.ts`。编辑器可执行文件默认自动探测本机安装(Windows);否则设 `UNIVERSE_EDITOR_BIN` 指向编辑器 exe。e2e 使用独立的 userData,不会与用户正开着的编辑器互相干扰。
-
-探针 API 与断言的更多真实用法,参考示例仓库各 `samples/<name>/e2e/*.spec.ts`——同一套 harness,每个示例都有一条可运行的 e2e。
-
-全部用例通过后才进入验收。
+单测与 e2e 全部通过后才进入验收。
 
 ## 第 6 步:人肉验收(门 3)
 
