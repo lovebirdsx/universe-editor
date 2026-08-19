@@ -123,6 +123,16 @@ const REQUIRED_SOURCE_FILES = [
     source: join(repoRoot, 'docs/extension-dev/zh-CN/README.md'),
     packaged: 'docs/extension-dev/zh-CN/README.md',
   },
+  {
+    label: 'built-in agent skill (new-extension)',
+    source: join(editorRoot, 'resources/agent-skills/.claude/skills/new-extension/SKILL.md'),
+    packaged: 'agent-skills/.claude/skills/new-extension/SKILL.md',
+  },
+  {
+    label: 'built-in agent skill (port-vscode-extension)',
+    source: join(editorRoot, 'resources/agent-skills/.claude/skills/port-vscode-extension/SKILL.md'),
+    packaged: 'agent-skills/.claude/skills/port-vscode-extension/SKILL.md',
+  },
 ]
 
 function readJson(path) {
@@ -242,6 +252,11 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   // Extension-author docs ship the same way and load through the same
   // IDocsService pipeline, as a separate doc category.
   copyPath(join(repoRoot, 'docs/extension-dev'), join(stageDir, 'docs/extension-dev'))
+
+  // Built-in agent skills (`.claude/skills/<name>/SKILL.md` tree) ship beside
+  // app.asar; the renderer passes this root to every local ACP session as an
+  // `additionalDirectories` entry so both agent forks discover the skills.
+  copyPath(join(editorRoot, 'resources/agent-skills'), join(stageDir, 'agent-skills'))
 
   // Remote server deploy bundle (WSL/SSH): keep dist-bundle fresh, then stage the
   // whole tree so the packaged app can deploy to a remote host with no workspace

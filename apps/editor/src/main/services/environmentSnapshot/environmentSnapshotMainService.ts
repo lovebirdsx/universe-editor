@@ -10,12 +10,15 @@
  *  with this env, so exposing it to the renderer does not widen the trust surface.
  *--------------------------------------------------------------------------------------------*/
 
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import * as path from 'node:path'
 import { app } from 'electron'
 import type {
   IEnvironmentSnapshot,
   IEnvironmentSnapshotService,
 } from '../../../shared/ipc/environmentSnapshotService.js'
+import { resolveFromRepo } from '../../repoPaths.js'
 
 export interface EnvironmentSnapshotSources {
   readonly env: Readonly<Record<string, string | undefined>>
@@ -24,6 +27,7 @@ export interface EnvironmentSnapshotSources {
   readonly execPath: () => string
   readonly userDataDir: () => string
   readonly appResourcesPath: () => string | undefined
+  readonly builtinAgentSkillsRoot: () => string | undefined
 }
 
 const defaultSources: EnvironmentSnapshotSources = {
@@ -33,6 +37,12 @@ const defaultSources: EnvironmentSnapshotSources = {
   execPath: () => process.execPath,
   userDataDir: () => app.getPath('userData'),
   appResourcesPath: () => (app.isPackaged ? process.resourcesPath : undefined),
+  builtinAgentSkillsRoot: () => {
+    const root = app.isPackaged
+      ? path.join(process.resourcesPath, 'agent-skills')
+      : resolveFromRepo('apps/editor/resources/agent-skills')
+    return existsSync(root) ? root : undefined
+  },
 }
 
 export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotService {
@@ -45,6 +55,7 @@ export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotServi
     for (const [key, value] of Object.entries(this._sources.env)) {
       if (typeof value === 'string') env[key] = value
     }
+    const builtinAgentSkillsRoot = this._sources.builtinAgentSkillsRoot()
     return Promise.resolve({
       userHome: this._sources.userHome(),
       cwd: this._sources.cwd(),
@@ -52,6 +63,7 @@ export class EnvironmentSnapshotMainService implements IEnvironmentSnapshotServi
       userDataDir: this._sources.userDataDir(),
       appResourcesPath: this._sources.appResourcesPath(),
       env,
+      ...(builtinAgentSkillsRoot !== undefined ? { builtinAgentSkillsRoot } : {}),
     })
   }
 }

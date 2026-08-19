@@ -96,6 +96,7 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubWindowsService } from './stubWindowsService.js'
+import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -4475,5 +4476,110 @@ describe('AcpSessionService — idle process reaper', () => {
     await vi.advanceTimersByTimeAsync(idleMs)
     expect(killSpy).toHaveBeenCalledTimes(1)
     svc.dispose()
+  })
+})
+
+describe('AcpSessionService builtin agent skills injection', () => {
+  const SKILLS_ROOT = '/app/resources/agent-skills'
+
+  function stubEnvSnapshot(root: string | undefined): IEnvironmentSnapshotService {
+    return {
+      _serviceBrand: undefined,
+      getSnapshot: async () => ({
+        userHome: '/home/user',
+        cwd: '/cwd',
+        execPath: '/exec',
+        userDataDir: '/data',
+        appResourcesPath: undefined,
+        env: {},
+        ...(root !== undefined ? { builtinAgentSkillsRoot: root } : {}),
+      }),
+    }
+  }
+
+  function makeService(client: FakeAcpClientService, envSnapshot?: IEnvironmentSnapshotService) {
+    const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const agentDefaults = makeAgentDefaults()
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      stubWindowsService(),
+      envSnapshot,
+    )
+  }
+
+  it('seeds session/new with the builtin skills root as an additionalDirectories entry', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubEnvSnapshot(SKILLS_ROOT))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toEqual([
+        SKILLS_ROOT,
+      ])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not inject the skills root into remote-authority sessions', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubEnvSnapshot(SKILLS_ROOT))
+    try {
+      const session = await svc.createSession(undefined, { cwd: '/w', authority: 'ssh-remote+box' })
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('omits additionalDirectories when the snapshot has no skills root', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubEnvSnapshot(undefined))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('omits additionalDirectories when no environment snapshot service is available', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
   })
 })

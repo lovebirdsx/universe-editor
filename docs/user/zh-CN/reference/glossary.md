@@ -63,7 +63,7 @@
 
 ## 技能（Skill）
 
-放在项目 `.claude/skills` 下的可复用能力包，让智能体按你的规范产出。在输入框敲 `/` 可看到可用技能。详见 [技能、记忆与 MCP](../ai-agent/skills-memory-mcp.md)。
+放在项目 `.claude/skills` 下的可复用能力包，让智能体按你的规范产出。编辑器也自带一批内置技能（如创建扩展）。在输入框敲 `/` 可看到可用技能。详见 [技能、记忆与 MCP](../ai-agent/skills-memory-mcp.md)。
 
 ## 记忆（Memory）
 

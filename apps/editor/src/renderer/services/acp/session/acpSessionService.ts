@@ -75,6 +75,7 @@ import {
   type IAcpClientNotificationSink,
 } from '../acpClientService.js'
 import { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import { IEnvironmentSnapshotService } from '../../../../shared/ipc/environmentSnapshotService.js'
 import {
   AcpSessionCreateProfiler,
   formatSessionCreateProfile,
@@ -502,6 +503,8 @@ export class AcpSessionService
     @IMcpServerEnablementService
     private readonly _mcpEnablement: IMcpServerEnablementService,
     @IWindowsService private readonly _windows: IWindowsService,
+    @IEnvironmentSnapshotService
+    private readonly _envSnapshot?: IEnvironmentSnapshotService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -731,6 +734,29 @@ export class AcpSessionService
     return session
   }
 
+  /** Memoized snapshot read for {@link _builtinAgentDirs}. */
+  private _builtinSkillsRoot: Promise<string | undefined> | undefined
+
+  /**
+   * `additionalDirectories` seed carrying the editor's bundled agent skills
+   * (`<resources>/agent-skills`, laid out as `.claude/skills/...`). Both agent
+   * forks discover skills under every additional root, so bundled skills (e.g.
+   * `/new-extension`) surface as slash commands in every session. Local
+   * sessions only: a remote agent runs on the remote host where this local
+   * path does not exist.
+   */
+  private async _builtinAgentDirs(
+    authority: string | undefined,
+  ): Promise<{ additionalDirectories?: string[] }> {
+    if (authority !== undefined || this._envSnapshot === undefined) return {}
+    this._builtinSkillsRoot ??= this._envSnapshot.getSnapshot().then(
+      (snapshot) => snapshot.builtinAgentSkillsRoot,
+      () => undefined,
+    )
+    const root = await this._builtinSkillsRoot
+    return root !== undefined ? { additionalDirectories: [root] } : {}
+  }
+
   /**
    * Background connect for a freshly created session: spawn + initialize +
    * session/new, then hand the live connection to the session via
@@ -779,6 +805,7 @@ export class AcpSessionService
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
+        ...(await this._builtinAgentDirs(authority)),
         _meta: EMIT_INIT_SDK_MESSAGE_META,
       }
       profile.step('willNewSession')
@@ -1084,6 +1111,7 @@ export class AcpSessionService
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
         mcpServers: kept,
+        ...(await this._builtinAgentDirs(effectiveAuthority)),
         _meta: buildResumeMeta(entry),
       }
       const loadResult = await withTimeout(
@@ -1214,6 +1242,7 @@ export class AcpSessionService
                 sessionId: sid,
                 cwd: cwd ?? '',
                 mcpServers: kept,
+                ...(await this._builtinAgentDirs(authority)),
                 _meta: buildResumeMeta(entry),
               }),
               timeoutMs,
@@ -1725,6 +1754,7 @@ export class AcpSessionService
           sessionId: sourceAgentSessionId,
           cwd: cwd ?? '',
           mcpServers: kept,
+          ...(await this._builtinAgentDirs(effectiveAuthority)),
           // Ask the fork to truncate at this user turn (回退 point) instead of the
           // session tip. Unknown/absent id → the agent forks from the tip.
           ...(messageId !== undefined ? { _meta: { rewindTo: messageId } } : {}),

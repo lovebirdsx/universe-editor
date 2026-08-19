@@ -50,7 +50,14 @@ import { AcpSessionService } from '../acpSessionService.js'
 // restore coordinator's shouldSkipAutoResume callback — the coordinator
 // itself is constructed with plain callbacks and stays IPC-free, so the
 // dependency cannot move there without leaking the proxy into its tests.
-const MAX_INJECTED = 19
+// +1 IEnvironmentSnapshotService (builtin agent skills root): every local
+// session request (new/load/resume/fork) seeds `additionalDirectories` with
+// the editor's bundled agent-skills directory. That path is a main-process
+// runtime fact (app.isPackaged / process.resourcesPath) no renderer-side
+// collaborator can derive — config reads settings layers, the registry owns
+// agent presets, the coordinator owns restore timing. Injected as an optional
+// trailing parameter (memoized single read; absent in tests = no injection).
+const MAX_INJECTED = 20
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

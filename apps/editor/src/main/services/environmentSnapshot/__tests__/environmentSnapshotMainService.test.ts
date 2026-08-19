@@ -14,6 +14,7 @@ describe('EnvironmentSnapshotMainService', () => {
       execPath: () => '/app/editor.exe',
       userDataDir: () => '/data/user',
       appResourcesPath: () => '/app/resources',
+      builtinAgentSkillsRoot: () => '/app/resources/agent-skills',
     })
 
     const snap = await service.getSnapshot()
@@ -23,6 +24,7 @@ describe('EnvironmentSnapshotMainService', () => {
     expect(snap.execPath).toBe('/app/editor.exe')
     expect(snap.userDataDir).toBe('/data/user')
     expect(snap.appResourcesPath).toBe('/app/resources')
+    expect(snap.builtinAgentSkillsRoot).toBe('/app/resources/agent-skills')
     expect(snap.env).toEqual({ FOO: 'bar', PATH: '/usr/bin' })
   })
 
@@ -34,6 +36,7 @@ describe('EnvironmentSnapshotMainService', () => {
       execPath: () => '/',
       userDataDir: () => '/',
       appResourcesPath: () => undefined,
+      builtinAgentSkillsRoot: () => undefined,
     })
 
     const snap = await service.getSnapshot()

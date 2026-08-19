@@ -2,6 +2,8 @@
 
 > 从一个空目录开始，走完「创建 → 调试 → 打包 → 安装自测 → 发布」的完整流程。全程不需要接触 Universe Editor 的源码仓库。
 
+> 💡 也可以让编辑器里的 AI 替你走这套流程：在 Agent 会话输入框敲 `/`，选择内置技能 `new-extension`（从零创建）或 `port-vscode-extension`（移植 VSCode 插件），Agent 会按本套文档确认需求、搭骨架、写实现、配 e2e 测试。
+
 ## 前置条件
 
 - **Node.js 22+** 与 npm（脚手架产物用 npm 安装依赖，不要求 pnpm）

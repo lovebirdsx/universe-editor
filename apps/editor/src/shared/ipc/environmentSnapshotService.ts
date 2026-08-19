@@ -25,6 +25,11 @@ export interface IEnvironmentSnapshot {
   readonly appResourcesPath: string | undefined
   /** Full process environment (name → value), undefined entries dropped. */
   readonly env: Readonly<Record<string, string>>
+  /** Root of the built-in agent skills tree shipped with the editor
+   *  (`<resources>/agent-skills`, laid out as `.claude/skills/<name>/SKILL.md`).
+   *  Injected into local ACP sessions as an `additionalDirectories` root so the
+   *  bundled skills surface as slash commands; absent when the directory is missing. */
+  readonly builtinAgentSkillsRoot?: string
 }
 
 export interface IEnvironmentSnapshotService {

@@ -5,6 +5,7 @@
 ## 功能实现进展
 
 - [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService+op-service 编排撤销；坑=await 前取完 service
+- [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — resources/agent-skills 经 additionalDirectories 注入四条 wire 路径,两 fork 零改动发现;加 skill=放文件+补 sentinel;remote 不注入
 - [session 开销含子 Agent](session-cost-subagent-inclusion.md) — claude SDK 总额天然已含勿双计；codex 须 fork 订阅子 thread tokenUsage 聚合进 _meta.quota
 - [agent 二进制静默下载 + e2e teardown 修复](agent-binary-silent-download-e2e-fix.md) — allowDownload 网关；tsserver 孤儿卡 app.close()→优雅关+扫孤儿
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸；坑=变更源须区分
