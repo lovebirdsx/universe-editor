@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/create-extension",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Scaffold a new Universe Editor extension (npm create @universe-editor/extension).",
   "type": "module",
   "license": "Apache-2.0",
