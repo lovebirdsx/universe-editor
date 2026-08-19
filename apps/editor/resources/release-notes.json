@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.1.71",
+    "date": "2026-08-19",
+    "groups": [
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "codex fork 补 MCP 启动状态通知，刷新面板状态"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.70",
     "date": "2026-08-19",
     "groups": []
