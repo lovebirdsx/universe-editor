@@ -278,6 +278,8 @@ test('checkPackListing 各项硬性校验', () => {
   assert.deepEqual(checkPackListing([...good, 'dist/cli.js'], { isBin: true }), [])
   assert.match(checkPackListing(good, { hasTemplates: true }).join('\n'), /缺少 templates\//)
   assert.deepEqual(checkPackListing([...good, 'templates/basic/index.ts'], { hasTemplates: true }), [])
+  assert.match(checkPackListing(good, { hasCompatibility: true }).join('\n'), /缺少 COMPATIBILITY\.md/)
+  assert.deepEqual(checkPackListing([...good, 'COMPATIBILITY.md'], { hasCompatibility: true }), [])
 })
 
 test('hasCompatibilityEntry 命中与版本号转义', () => {

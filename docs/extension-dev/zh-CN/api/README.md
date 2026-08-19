@@ -219,7 +219,7 @@ const api = await ts?.activate() // 未激活则先激活；已激活直接拿 e
 
 ## timeline — 文件历史
 
-文件历史 provider，喂给编辑器内置的 Timeline 视图（对等 VSCode 的 proposed `timeline` API）。扩展用 `workspace.registerTimelineProvider(scheme | scheme[], provider)` 为一个或多个 URI scheme 注册 provider；视图对活动文件**分页**拉取 `TimelineItem`（`TimelineOptions` 带 `cursor` / `limit`，返回的 `Timeline.cursor` 表示还有下一页），点击条目时执行条目的 `command`（通常是打开 diff）。条目的 `contextValue` 经 `timelineItem` context key 暴露给 `timeline/item/context` 菜单贡献点的 `when` 子句。数据变化时触发 `onDidChange`（`reset: true` 让视图丢弃全部缓存页重载）。视图归工作台所有，扩展只提供数据。
+文件历史 provider，喂给编辑器内置的 Timeline 视图（对等 VSCode 的 proposed `timeline` API）。扩展用 `workspace.registerTimelineProvider(scheme | scheme[], provider)` 为一个或多个 URI scheme 注册 provider；视图对活动文件**分页**拉取 `TimelineItem`（`TimelineOptions` 带 `cursor` / `limit`，返回的 `Timeline.cursor` 表示还有下一页），点击条目时执行条目的 `command`（通常是打开 diff）。条目的 `contextValue` 经 `timelineItem` context key 暴露给 `timeline/item/context` 菜单贡献点的 `when` 子句(完整 context key 清单见 [Context Key 清单](../context-keys.md))。数据变化时触发 `onDidChange`（`reset: true` 让视图丢弃全部缓存页重载）。视图归工作台所有，扩展只提供数据。
 
 ```ts
 import { workspace, type ExtensionContext, type TimelineProvider } from '@universe-editor/extension-api'
@@ -276,7 +276,7 @@ Tree View 表面（0.12.0 起，对等 VSCode 的 `window.registerTreeDataProvid
 - **`registerTreeDataProvider(viewId, provider)`**：最小形态，返回 `Disposable`。
 - **`createTreeView(viewId, { treeDataProvider })`**：同一注册，另同步返回 `TreeView<T>` 句柄——`visible` / `selection` 属性与 `onDidChangeVisibility` / `onDidChangeSelection` / `onDidExpandElement` / `onDidCollapseElement` 事件把视图状态回镜像给扩展。
 
-provider 实现 `getTreeItem(element)`（元素 → 行渲染模型 `TreeItem`）与 `getChildren(element?)`（省略 `element` 时返回根节点）。**懒拉取**：只在用户展开节点时拉其子节点。行点击执行 `TreeItem.command`——与 vscode 对齐：handler 收到扩展在 `command.arguments` 里原样放置的对象（`Uri`、自定义类实例均可存活，不经 wire 扁平化；`command` 未带 `arguments` 时 handler 收到该行的 tree element）。`view/item/context` 菜单命令的 handler 第一个参数同样是该行 tree element。`TreeItem.contextValue` 经 `viewItem` context key 暴露给菜单 `when` 子句（`view` 键 = viewId）。配套激活事件 `onView:<viewId>` 在视图首次显示时触发（须显式声明，宿主不做自动推导）。视图归工作台所有，扩展只提供数据。
+provider 实现 `getTreeItem(element)`（元素 → 行渲染模型 `TreeItem`）与 `getChildren(element?)`（省略 `element` 时返回根节点）。**懒拉取**：只在用户展开节点时拉其子节点。行点击执行 `TreeItem.command`——与 vscode 对齐：handler 收到扩展在 `command.arguments` 里原样放置的对象（`Uri`、自定义类实例均可存活，不经 wire 扁平化；`command` 未带 `arguments` 时 handler 收到该行的 tree element）。`view/item/context` 菜单命令的 handler 第一个参数同样是该行 tree element。`TreeItem.contextValue` 经 `viewItem` context key 暴露给菜单 `when` 子句（`view` 键 = viewId；完整 context key 清单见 [Context Key 清单](../context-keys.md)）。配套激活事件 `onView:<viewId>` 在视图首次显示时触发（须显式声明，宿主不做自动推导）。视图归工作台所有，扩展只提供数据。
 
 刷新语义与 vscode 一致：元素句柄跨刷新稳定（身份依次取 `TreeItem.id`、元素对象本身、父句柄下的 label），因此 **刷新后展开态与选中态保留**；`onDidChangeTreeData(element)` 只失效该元素所在子树（该行就地替换、子节点重拉，兄弟与无关分支的缓存不动），无参 `onDidChangeTreeData()` 为整树失效；一个 50ms 窗口内的连续 fire 合并为一次刷新。想让重建元素对象、且 label 也会变的 provider 保住展开态，给 `TreeItem.id` 赋一个稳定值。
 

@@ -6,6 +6,10 @@ A [Universe Editor](https://github.com/lovebirdsx/universe-editor) extension wit
 
 Opening any `*.__name__` file renders it in a preview editor tab (`__displayName__ Preview`). The renderer in `src/extension.ts` is a static-HTML starting point — replace it with your own (see the webview guide for CSP, `asWebviewUri`, and `localResourceRoots`).
 
+## Workspace Trust
+
+The manifest declares `"capabilities": { "untrustedWorkspaces": true }` — this starter only renders a static preview, so it activates in untrusted workspaces. If your extension will read or execute workspace code (running builds, spawning processes from workspace content), change it to `{ "supported": false, "description": "…" }` (or `"supported": "limited"` to degrade gracefully). With a `main` entry and no declaration, the extension silently does not activate in untrusted workspaces.
+
 ## Develop
 
 ```bash

@@ -202,8 +202,8 @@ export function parsePackListing(stdout) {
   return { files }
 }
 
-/** pack 内容硬性校验。isBin：要求 dist/cli.js 在列；hasTemplates：要求 templates/ 下有文件。 */
-export function checkPackListing(files, { isBin, hasTemplates } = {}) {
+/** pack 内容硬性校验。isBin：要求 dist/cli.js 在列；hasTemplates：要求 templates/ 下有文件；hasCompatibility：要求 COMPATIBILITY.md 在列。 */
+export function checkPackListing(files, { isBin, hasTemplates, hasCompatibility } = {}) {
   const errors = []
   const has = (f) => files.includes(f)
   if (files.some((f) => f.startsWith('dist/__tests__/'))) errors.push('pack 内容含 dist/__tests__/')
@@ -211,6 +211,7 @@ export function checkPackListing(files, { isBin, hasTemplates } = {}) {
   if (!has('README.md')) errors.push('pack 内容缺少 README.md')
   if (isBin && !has('dist/cli.js')) errors.push('pack 内容缺少 bin 入口 dist/cli.js')
   if (hasTemplates && !files.some((f) => f.startsWith('templates/'))) errors.push('pack 内容缺少 templates/')
+  if (hasCompatibility && !has('COMPATIBILITY.md')) errors.push('pack 内容缺少 COMPATIBILITY.md')
   return errors
 }
 

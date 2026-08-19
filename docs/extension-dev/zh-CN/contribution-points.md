@@ -60,7 +60,7 @@
 |---|---|---|---|
 | `command` | string | 二选一 | 点击执行的命令 id |
 | `submenu` | string | 二选一 | 嵌套子菜单的 id（须在 `submenus` 里声明） |
-| `when` | string | 否 | ContextKey 表达式，决定条目何时可见 |
+| `when` | string | 否 | ContextKey 表达式，决定条目何时可见（可用 key 见 [Context Key 清单](./context-keys.md)） |
 | `group` | string | 否 | 分组与排序，支持 `group@order` 形式（如 `navigation@1`） |
 | `icon` | string | 否 | 图标标识 |
 
@@ -72,7 +72,7 @@
 |---|---|
 | `commandPalette` | 命令面板（用途见 commands 节的 opt-out） |
 | `editor/title` | 编辑器标签页标题栏右侧 |
-| `editor/context` | 编辑器内右键菜单 |
+| `editor/context` | 编辑器内右键菜单（⚠ 截至 0.12.0 宿主未渲染：贡献被接受但条目**永不出现**，暂不要使用） |
 | `explorer/context` | 资源管理器右键菜单 |
 | `view/title` | 侧栏视图标题栏 |
 | `scm/title` | 源代码管理视图标题栏 |
@@ -82,6 +82,28 @@
 | `scm/inputBox` | SCM 提交输入框区域 |
 | `timeline/item/context` | Timeline 条目右键 |
 | `view/item/context` | Tree View 条目右键（`when` 可用 `view` = 视图 id、`viewItem` = 条目 `contextValue`） |
+
+### 命令 handler 收到的参数
+
+菜单命令的 handler 参数由**宿主 UI 契约**决定（不写进 API 的 d.ts，那里是 API 面）。以下以宿主 0.12.0 的真实实现为准，URI 与类实例经跨进程 IPC 后都是 JSON 序列化副本：
+
+| 位置 | 第一个参数 | 第二个参数 |
+|---|---|---|
+| `commandPalette` / `scm/title` / `scm/inputBox` | 无 | — |
+| `editor/title` | `{ groupId: number }` 编辑器组 id | — |
+| `explorer/context` | `{ target, resource, parent, isDirectory: boolean }` | — |
+| `view/title` | 视图 id（字符串） | — |
+| `scm/resourceState/context` | `{ resourceUri: string, contextValue?: string, scmResourceGroupId: string }` | 多选行的同形数组 |
+| `scm/resourceGroup/context` | `{ rootUri, sourceControlId, scmResourceGroupId }` | — |
+| `scm/resourceFolder/context` | `{ resourceUri: string, isDirectory: true, scmResourceGroupId: string }` | 子树下全部文件行的同形数组（同 resourceState 形） |
+| `timeline/item/context` | timeline item 对象（序列化副本，原型丢失） | — |
+| `view/item/context` | provider `getChildren` 返回的**原始 tree element 本体**（host 进程内直接传递，非序列化副本） | — |
+
+两点注意：
+
+- **`explorer/context` 的 `resource`/`target`/`parent` 是 `UriComponents` 而非 `URI` 实例**——经 IPC JSON 序列化后 `fsPath` getter 丢失，从 `scheme + path` 拼路径或 `URI.revive()` 恢复（内置 perforce 扩展的 `resolveTargetPath` 是实证写法）。`parent` 恒存在（目录自身或其父目录，最坏回退工作区根）。
+- **SCM 三个位置的 `resourceUri` 是本地文件路径字符串**（由你的 `SourceControlResource.resourceUri` 提供，`string` 类型），不是 URI。
+
 
 ```jsonc
 {
@@ -144,7 +166,7 @@
 |---|---|---|---|
 | `command` | string | 是 | 目标命令 id |
 | `key` | string | 是 | 平台中立的按键组合，如 `ctrl+shift+g`；**支持两键 chord**，空格分隔：`ctrl+k ctrl+s` |
-| `when` | string | 否 | ContextKey 表达式，决定绑定何时生效 |
+| `when` | string | 否 | ContextKey 表达式，决定绑定何时生效（可用 key 见 [Context Key 清单](./context-keys.md)） |
 | `mac` | string | 否 | macOS 专属按键。**schema 接受该字段，但当前版本未生效**——写与不写行为一致，所有平台都用 `key` |
 
 ```jsonc

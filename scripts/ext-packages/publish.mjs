@@ -443,6 +443,7 @@ async function main() {
         const errors = checkPackListing(parsed.files, {
           isBin: Boolean(p.manifest.bin),
           hasTemplates: Boolean(p.manifest.files?.includes('templates')),
+          hasCompatibility: Boolean(p.manifest.files?.includes('COMPATIBILITY.md')),
         })
         if (errors.length > 0) {
           fail(`${p.name} pack 内容检查失败:\n${errors.map((e) => `  - ${e}`).join('\n')}`)

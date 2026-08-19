@@ -140,10 +140,14 @@ test('buildConfig 只给 root 时机密文件与 authDir 跟着派生', () =>
     assert.match(cfg.adminTokenFile.replace(/\\/g, '/'), /\/data\/auth\/admin-token\.txt$/)
   }))
 
-test('buildConfig 布尔旗标（--port 后没跟值）不覆盖配置', () => {
-  const cfg = buildConfig({ port: true })
-  assert.equal(cfg.port, '80')
-})
+test('buildConfig 布尔旗标（--port 后没跟值）不覆盖配置', () =>
+  withTempDir((dir) => {
+    // 显式空 env-file 跳过查找链——本机真装过服务时安装目录的 server.env 会经 fallback 命中污染用例
+    const empty = join(dir, 'empty.env')
+    writeFileSync(empty, '')
+    const cfg = buildConfig({ port: true, 'env-file': empty })
+    assert.equal(cfg.port, '80')
+  }))
 
 test('buildConfig --deploy-user：字符串生效，未传或布尔占位为 null（跳过 sudoers 写入）', () => {
   assert.equal(buildConfig({ 'deploy-user': 'deploy' }).deployUser, 'deploy')

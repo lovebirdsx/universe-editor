@@ -4,6 +4,10 @@ __description__
 
 A [Universe Editor](https://github.com/lovebirdsx/universe-editor) extension, scaffolded with `npm create @universe-editor/extension`.
 
+## Workspace Trust
+
+The manifest declares `"capabilities": { "untrustedWorkspaces": true }` — this starter only runs a hello-world command, so it activates in untrusted workspaces. If your extension will read or execute workspace code (running builds, spawning processes from workspace content), change it to `{ "supported": false, "description": "…" }` (or `"supported": "limited"` to degrade gracefully). With a `main` entry and no declaration, the extension silently does not activate in untrusted workspaces.
+
 ## Develop
 
 ```bash

@@ -20,9 +20,9 @@ disable-model-invocation: true
 
 三层资料各有分工,**优先读示例与类型声明而不是凭记忆写代码**:
 
-1. **扩展项目里的 API 包**(第 3 步 `npm install` 之后即有):`node_modules/@universe-editor/extension-api/dist/*.d.ts` 是带 JSDoc 的 API 权威面——某个 API 是否存在、签名与语义**以此为最终裁决**;同目录 `README.md` 有最小示例,包根若带 `COMPATIBILITY.md`(较新版本随包分发),内含激活事件清单与逐版本 API 变更记录。写代码、查签名首选这里。
+1. **扩展项目里的 API 包**(第 3 步 `npm install` 之后即有):`node_modules/@universe-editor/extension-api/dist/*.d.ts` 是带 JSDoc 的 API 权威面——某个 API 是否存在、签名与语义**以此为最终裁决**;同目录 `README.md` 有最小示例。API 版本变更与激活事件清单以随编辑器分发的开发文档为准(见第 3 条);包根若带 `COMPATIBILITY.md`(0.12.1 起随包分发,0.12.0 的包没有)以包内文件为准。写代码、查签名首选这里。
 2. **官方示例仓库**(本地克隆,见下节):每种能力面一个可运行示例且都带 e2e,写某类功能前先找对应示例照着写,比读文档更快更准。
-3. **随编辑器分发的开发文档**(概念与指南):本 SKILL.md 位于编辑器安装目录的 `resources/agent-skills/` 下;开发文档在同级的 `resources/docs/extension-dev/zh-CN/`(Windows 默认安装目录 `%LOCALAPPDATA%\Programs\Universe Editor`)。若当前在 universe-editor 仓库的开发模式下,文档位于仓库根 `docs/extension-dev/zh-CN/`。文档地图:`getting-started.md`(上手)、`extension-anatomy.md`(结构)、`contribution-points.md`(贡献点参考)、`api/`(API 面)、`webview-guide.md`、`language-guide.md`、`debugging.md`、`versioning.md`(engines.universe 语义)、`publishing.md`(发布)、`security-and-trust.md`。
+3. **随编辑器分发的开发文档**(概念与指南):本 SKILL.md 位于编辑器安装目录的 `resources/agent-skills/` 下;开发文档在同级的 `resources/docs/extension-dev/zh-CN/`(Windows 默认安装目录 `%LOCALAPPDATA%\Programs\Universe Editor`)。若当前在 universe-editor 仓库的开发模式下,文档位于仓库根 `docs/extension-dev/zh-CN/`。文档地图:`getting-started.md`(上手)、`extension-anatomy.md`(结构)、`contribution-points.md`(贡献点参考,含菜单命令参数)、`context-keys.md`(Context Key 清单,写 `when` 子句时)、`api/`(API 面)、`webview-guide.md`、`language-guide.md`、`debugging.md`、`versioning.md`(engines.universe 语义)、`publishing.md`(发布)、`security-and-trust.md`。
 
 ### 示例仓库:克隆与自动更新
 
@@ -91,6 +91,8 @@ cd <目录名> && npm install && npm run build
 
 构建通过说明骨架完好。骨架自带 `esbuild.config.mjs`、`tsconfig.json`、`src/extension.ts`,scripts 有 `build` / `watch` / `package`(= `uex package`)。
 
+`<目录名>` 写 `.` 可在当前目录就地初始化(当前目录已是扩展目录时避免多套一层);目录**非空**时需追加 `--force`——只覆盖脚手架自己生成的文件,外来文件永不删除。
+
 ## 第 4 步:实现
 
 动手前先把参考示例的 `package.json` 与 `src/extension.ts` 打开对照着写(示例仓库先 pull 到最新);概念性问题读安装目录文档;API 是否存在、签名与语义以项目里 `node_modules/@universe-editor/extension-api/dist/*.d.ts`(带 JSDoc)为最终裁决,拿不准就先查再写。**红线自查清单**(违反任意一条,扩展会静默不加载或打包丢文件):
@@ -99,6 +101,7 @@ cd <目录名> && npm install && npm run build
 - `package.json` 的 `files` 是**白名单**:dist、图标、NLS 文件(`package.nls*.json`)等运行需要的文件都必须列入,漏列 = 打包丢失。
 - import 一律 `@universe-editor/extension-api`,**没有** `vscode` 模块。
 - 全 ESM(`"type": "module"`),产物由 esbuild 打包。
+- `capabilities.untrustedWorkspaces`:脚手架已声明 `true`(模板只做 helloWorld/只读预览)。一旦你的扩展要运行工作区代码、跑构建、发网络请求,必须显式改成 `{ "supported": false, "description": "…" }`(或 `"supported": "limited"` 自行降级)——有 `main` 且不声明,在未受信任的工作区里**静默不激活**(形态与判断标准见安装目录文档 `extension-anatomy.md` 的 capabilities 节)。
 
 实现过程中可随时 `npm run build` + `npx uex dev` 拉起「扩展开发宿主」窗口自测(它会自动定位本机安装的编辑器;失败时按提示设 `UNIVERSE_EDITOR_PATH`)。
 
@@ -182,7 +185,8 @@ test.describe('my extension', () => {
 
 ## 常见坑速查
 
-- 扩展装了却不出现:九成是 `engines.universe` 不合法被扫描器静默跳过,其次是 `main` 指向的 `dist/extension.js` 没构建。
+- 扩展装了却不出现:最常见两类——① `engines.universe` 不合法被扫描器静默跳过;② 有 `main` 但未声明 `capabilities.untrustedWorkspaces`,在未受信任的工作区被信任门控拦下(症状:命令已注册但**永不执行**)。此外检查 `main` 指向的 `dist/extension.js` 是否已构建。
+- 菜单命令 handler 收到什么参数(含 URI 序列化坑)?看安装目录文档 `contribution-points.md` 的 menus 节——每个菜单位置的参数结构有总表。
 - 打包后功能缺失/文案不本地化:`files` 白名单漏了资源或 `package.nls*.json`。
 - 任何交互式 CLI(会等 stdin 的)在 agent 环境都会挂:一律用全旗标非交互形式。
 - e2e 里断言 UI 优先走探针与 `expect.poll`,不要断言编辑器内部 DOM 结构。

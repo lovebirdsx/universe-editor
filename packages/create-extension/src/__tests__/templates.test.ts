@@ -72,4 +72,13 @@ describe('templates', () => {
       expect(statSync(icon).size, template).toBeGreaterThan(0)
     }
   })
+
+  it('templates declare capabilities.untrustedWorkspaces: true', () => {
+    for (const template of readdirSync(templatesDir)) {
+      const pkg = JSON.parse(
+        readFileSync(path.join(templatesDir, template, 'package.json'), 'utf8'),
+      ) as { capabilities?: { untrustedWorkspaces?: unknown } }
+      expect(pkg.capabilities?.untrustedWorkspaces, template).toBe(true)
+    }
+  })
 })

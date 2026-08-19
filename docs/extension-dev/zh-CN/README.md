@@ -35,6 +35,7 @@ npx uex login → npx uex publish          # ⑦ 发布到市场，其他用户�
 | 起步 | [快速上手](./getting-started.md) | 第一次开发扩展，从 create 到 publish 全程实操 |
 | 结构 | [扩展的结构](./extension-anatomy.md) | 想知道 package.json 每个字段的含义、激活生命周期 |
 | 贡献点 | [贡献点参考](./contribution-points.md) | 往命令面板/菜单/快捷键/设置里加东西 |
+| 上下文 | [Context Key 清单](./context-keys.md) | 写 menus / keybindings 的 `when` 子句时 |
 | API | [API 概览](./api/README.md) | 查宿主提供哪些能力（逐方法细节看编辑器里的类型提示） |
 | 调试 | [调试扩展](./debugging.md) | 断点不命中、要看日志、attach 配置 |
 | Webview | [自定义编辑器与 Webview](./webview-guide.md) | 做 PDF 预览这类自定义界面 |

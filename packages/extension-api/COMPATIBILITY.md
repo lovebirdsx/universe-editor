@@ -301,6 +301,8 @@
     - `TreeView.visible` 为挂载粒度近似。
   - 配套：`docs/extension-dev/zh-CN/migration-from-vscode.md` 的 TreeView 行翻
     「部分对齐」；`contribution-points.md` 新增 `viewsContainers` / `views` 两节。
+- `0.12.1` — 无 API 变更（patch，2026-08-19）：`COMPATIBILITY.md` 加入包 `files`
+  白名单随包分发（0.12.0 的 tarball 缺该文件，本次补发）。
 
 ## 激活事件清单（activation events）
 

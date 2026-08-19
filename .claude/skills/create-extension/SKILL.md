@@ -11,7 +11,7 @@ description: 从零创建一个新插件（extension）时使用。当任务是�
 
 > ⚠️ 第一原则：**先判断你要的是"纯声明"还是"有代码"**。很多需求（给某 JSON 配 schema、给已有命令加键位、挂个菜单项）只需一个 `package.json`，**不写一行 TS、不需要构建**（见 `claude-helper`）。只有当激活时要跑逻辑（注册命令处理器、装饰、状态栏、SCM、provider）才需要 `src/extension.ts` + esbuild。别默认从代码起步。
 >
-> ⚠️ 第二原则：**`engines.universe` 必须能满足当前 host API 版本**。host API 版本 = `packages/extension-api/src/index.ts` 的 `version` 常量（现为 `0.2.0`）。范围写不对，扫描器会**静默跳过整个插件**（只在扩展输出通道 `console.error` 一行），表现为"插件完全不生效"。**统一写 `">=0.1.0 <1.0.0"`**，别用 `^0.1.0`（0.x 下 caret 锁 minor，`0.2.0` 会被挡下）。原因见文末"engines 兼容红线"。
+> ⚠️ 第二原则：**`engines.universe` 必须能满足当前 host API 版本**。host API 版本 = `packages/extension-api/src/index.ts` 的 `version` 常量（现为 `0.12.0`）。范围写不对，扫描器会**静默跳过整个插件**（只在扩展输出通道 `console.error` 一行），表现为"插件完全不生效"。**统一写 `">=0.1.0 <1.0.0"`**，别用 `^0.1.0`（0.x 下 caret 锁 minor，`0.12.0` 会被挡下）。原因见文末"engines 兼容红线"。
 
 ## 两种形态 → 选哪种
 
@@ -141,9 +141,9 @@ export function deactivate(): void {} // 通常空实现——subscriptions 已�
 
 - 支持：exact / `*` / `x` / partial(`1`,`1.2`) / `^` / `~` / 比较符 / **空格连接的 AND**（`>=0.1.0 <1.0.0`）。
 - **不支持**：`||`（OR）、hyphen range（`1.0.0 - 2.0.0`）——一律 **fail-closed 直接拒绝加载**。
-- pre-1.0 的 `^` 按 npm 语义**锁 minor**：`^0.1.0` = `>=0.1.0 <0.2.0`，`0.2.0` 不满足 → 插件被跳过。
+- pre-1.0 的 `^` 按 npm 语义**锁 minor**：`^0.1.0` = `>=0.1.0 <0.2.0`，`0.12.0` 不满足 → 插件被跳过。
 
-**规则**：内置插件统一写 `">=0.1.0 <1.0.0"`（接受整个 0.x）。若插件依赖某次 minor 引入的新 API，把下界抬到那次 minor（如 webview 需要 `">=0.2.0 <1.0.0"`）。
+**规则**：内置插件统一写 `">=0.1.0 <1.0.0"`（接受整个 0.x）。若插件依赖某次 minor 引入的新 API，把下界抬到那次 minor（如 Tree View 需要 `">=0.12.0 <1.0.0"`）。
 
 **当 `packages/extension-api` 的 `version` bump 时**（走 `COMPATIBILITY.md` 的破坏性变更流程），必须**同步检查全部内置插件的 `engines.universe`**——这一步漏了会导致所有插件被静默拒载（历史事故：0.1.0→0.2.0 时内置插件仍写 `^0.1.0`，全崩）。
 
