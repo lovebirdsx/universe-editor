@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /*---------------------------------------------------------------------------------------------
- *  一键发布外部 SDK 发布集合（@universe-editor/*）到公开 npm，并同步内网 tarball。
+ *  一键发布外部 SDK 发布集合（@universe-editor/*）到公开 npm；可选同步内网 tarball（--gallery-sync）。
  *
  *  用法（在仓库根目录）:
  *    pnpm ext-packages:publish [-- 选项] [pkg ...]
  *    node scripts/ext-packages/publish.mjs [选项] [pkg ...]
  *
- *  流程: preflight → build → pack 内容检查 → 拓扑序 publish → 协议替换验证
- *        → git commit/tag/push → gallery 内网同步（--no-gallery 跳过）。
+ *  流程: preflight → build → pack 内容检查 → 拓扑序 publish
+ *        → git commit/tag/push → gallery 内网同步（--gallery-sync 显式开启，默认不执行）。
  *
  *  「版本由开发者提前 bump」: 本脚本不 bump 版本；preflight 校验本地版本高于 npm 已发布版
  *  （相同则增量跳过，更低则报错）。extension-api 的 bump 必须先走 COMPATIBILITY.md 流程。
@@ -42,7 +42,6 @@ import {
   tagName,
   topologicalOrder,
   unexpectedChanges,
-  verifyPublishedDeps,
 } from './lib.mjs'
 
 const { mode: envMode, explicit: envExplicit } = loadEnv()
@@ -51,7 +50,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 
-const BOOL_OPTIONS = new Set(['dry-run', 'no-gallery', 'no-push', 'allow-non-main', 'help'])
+const BOOL_OPTIONS = new Set(['dry-run', 'gallery-sync', 'no-push', 'allow-non-main', 'help'])
 const VALUE_OPTIONS = new Set(['registry', 'stage', 'env'])
 
 function camelCaseFlag(flag) {
@@ -189,35 +188,6 @@ async function npmVersionPublished(name, version, registry) {
   if (res.ok) return 'published'
   if (isE404(res)) return 'missing'
   die(`查询 npm 失败: npm view ${name}@${version} version\n  ${(res.stderr ?? '').trim()}`)
-}
-
-/** 发布后核对 npm 上依赖表：无 workspace:/catalog: 残留、互赖为精确版本。返回 { type, message }。 */
-async function verifyPublished(p, workspaceVersions, registry) {
-  let res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
-  // 发布成功后 registry 复制层可能短暂不可见新版本（E404），等待后重试
-  for (let attempt = 0; !res.ok && isE404(res) && attempt < 4; attempt++) {
-    info(`  ${p.name}: registry 暂未可见新版本，3s 后重试（${attempt + 1}/4）`)
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    res = await npmRun(['view', `${p.name}@${p.version}`, 'dependencies', '--json'], registry)
-  }
-  if (!res.ok) {
-    const hint = isE404(res) ? '（可能是 registry 复制延迟，稍后自动收敛，可用 npm view 复核）' : ''
-    return { type: 'warning', message: `${p.name}: 协议替换验证查询失败${hint}: ${(res.stderr ?? '').trim()}` }
-  }
-  let deps = {}
-  const text = res.stdout.trim()
-  if (text && text !== 'undefined') {
-    try {
-      deps = JSON.parse(text)
-    } catch {
-      return { type: 'warning', message: `${p.name}: 依赖表 JSON 解析失败: ${text}` }
-    }
-  }
-  const depErrors = verifyPublishedDeps(deps, workspaceVersions)
-  if (depErrors.length > 0) {
-    return { type: 'warning', message: `${p.name} 依赖协议异常:\n${depErrors.map((e) => `  - ${e}`).join('\n')}` }
-  }
-  return { type: 'ok', message: `${p.name} 依赖协议已替换为真实版本` }
 }
 
 function assertUpToDateWithUpstream() {
@@ -359,7 +329,7 @@ async function preflight(args, all, selected, registry) {
   }
 
   // 10) 内网同步配置
-  if (!args.noGallery) assertGalleryConfig()
+  if (args.gallerySync) assertGalleryConfig()
 
   return plan
 }
@@ -374,11 +344,11 @@ async function main() {
   if (args.help) {
     console.log(
       [
-        '发布扩展 SDK 发布集合到 npm（@universe-editor/*）并同步内网 tarball。',
+        '发布扩展 SDK 发布集合到 npm（@universe-editor/*）；可选同步内网 tarball（--gallery-sync）。',
         '',
         '选项:',
         '  --dry-run        只读检查照跑，写操作只打印 [dry-run]',
-        '  --no-gallery     跳过内网 pack + scp 同步',
+        '  --gallery-sync   内网 pack + scp 同步（默认不执行）',
         '  --no-push        跳过 git push（本地验证用；不带该旗标重跑可补推收敛）',
         '  --allow-non-main 允许在非 main 分支发布（本地验证用）',
         '  --registry <url> npm registry（默认 https://registry.npmjs.org）',
@@ -411,7 +381,6 @@ async function main() {
   const toPublishOrdered = topo.order.filter((p) => toPublish.includes(p))
   for (const p of skipped) info(`  skip ${p.name}@${p.version}（npm 已有，增量跳过）`)
 
-  const warnings = []
   if (toPublish.length === 0) {
     ok('npm 段: 全部已发布（增量跳过）；继续 git/gallery 段收敛半状态')
   } else {
@@ -454,15 +423,10 @@ async function main() {
       }
     }
 
-    // 发布（拓扑序串行；stdio inherit 保留 npm OTP 终端交互）+ 协议替换验证
-    const workspaceVersions = Object.fromEntries(all.map((p) => [p.name, p.version]))
+    // 发布（拓扑序串行；stdio inherit 保留 npm OTP 终端交互）
     for (const p of toPublishOrdered) {
       console.log(`\n── 发布 ${p.name}@${p.version} ──`)
       run('pnpm', ['--filter', p.name, 'publish', '--no-git-checks', '--registry', registry], { dryRun })
-      if (dryRun) continue
-      const verdict = await verifyPublished(p, workspaceVersions, registry)
-      if (verdict.type === 'warning') warnings.push(verdict.message)
-      else ok(verdict.message)
     }
   }
 
@@ -492,7 +456,7 @@ async function main() {
   }
 
   // gallery 内网同步
-  if (!args.noGallery) {
+  if (args.gallerySync) {
     const galleryArgs = ['scripts/gallery/publish-sdk.mjs', '--stage', stageDir]
     run(process.execPath, dryRun ? [...galleryArgs, '--dry-run'] : galleryArgs, { dryRun })
     if (existsSync(join(stageDir, 'gallery', 'registry.json'))) {
@@ -504,12 +468,7 @@ async function main() {
     }
   }
 
-  if (warnings.length > 0) {
-    warn(`发布完成，但存在 ${warnings.length} 项警告（npm 已是既成事实，请人工核对）:`)
-    for (const w of warnings) console.warn(w)
-  } else {
-    ok('发布完成')
-  }
+  ok('发布完成')
 }
 
 const isMain = process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)

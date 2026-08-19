@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  ext-packages 的纯逻辑（可单测）：版本比较、包选择、拓扑排序、发布计划、
- *  依赖完整性、工作区白名单、pack 清单校验、COMPATIBILITY/版本常量校验、协议替换校验、
+ *  依赖完整性、工作区白名单、pack 清单校验、COMPATIBILITY/版本常量校验、
  *  gallery 配置自诊断。
  *--------------------------------------------------------------------------------------------*/
 
@@ -318,23 +318,6 @@ export function tagName(shortName, version) {
   return `${shortName}@${version}`
 }
 
-/**
- * 校验 npm 上已发布包的依赖表：无 workspace: / catalog: 协议残留；
- * @universe-editor/* 互赖必须是 workspaceVersions 里的精确版本。
- */
-export function verifyPublishedDeps(deps, workspaceVersions) {
-  const errors = []
-  for (const [depName, spec] of Object.entries(deps ?? {})) {
-    if (spec.startsWith('workspace:') || spec.startsWith('catalog:')) {
-      errors.push(`${depName}: 依赖残留 ${spec}（协议未被替换为真实版本）`)
-    }
-    if (depName in workspaceVersions && spec !== workspaceVersions[depName]) {
-      errors.push(`${depName}: 应为精确版本 ${workspaceVersions[depName]}，实际 ${spec}`)
-    }
-  }
-  return errors
-}
-
 const GALLERY_ENV_KEYS = ['UE_RELEASE_HOST', 'UE_RELEASE_USER', 'UE_GALLERY_DIR']
 
 /**
@@ -344,7 +327,7 @@ const GALLERY_ENV_KEYS = ['UE_RELEASE_HOST', 'UE_RELEASE_USER', 'UE_GALLERY_DIR'
 export function galleryConfigIssue({ env, mode, explicit, envFileNames }) {
   const missing = GALLERY_ENV_KEYS.filter((key) => !env[key])
   if (missing.length === 0) return null
-  const lines = [`内网同步缺少环境变量: ${missing.join(' / ')}（或用 --no-gallery 跳过）`]
+  const lines = [`内网同步缺少环境变量: ${missing.join(' / ')}（补齐环境变量，或去掉 --gallery-sync 跳过内网同步）`]
   if (!explicit) {
     const candidates = []
     for (const name of envFileNames) {

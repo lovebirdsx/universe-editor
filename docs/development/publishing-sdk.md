@@ -49,7 +49,7 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 |---|---|
 | `[pkg ...]` | 只发布指定包（目录名或包名），默认全部发布集合 |
 | `--dry-run` | 只读检查照跑，写操作只打印 `[dry-run]` |
-| `--no-gallery` | 跳过内网 pack + scp 同步 |
+| `--gallery-sync` | 内网 pack + scp 同步（默认不执行，需显式开启） |
 | `--no-push` | 跳过 git push（本地验证用；不带该旗标重跑可补推收敛） |
 | `--allow-non-main` | 允许非 main 分支（本地 verdaccio 验证用） |
 | `--registry <url>` | npm registry，默认 `https://registry.npmjs.org` |
@@ -61,9 +61,9 @@ pnpm ext-packages:publish [-- 选项] [pkg ...]
 1. **preflight**：工作区白名单（SDK 目录外有未提交改动则拒绝）、main 分支、与 upstream 同步、`npm whoami` 登录态、各包本地版本高于 npm 已发布版（相同增量跳过、更低报错）、集合外 workspace 依赖已在 npm 发布（防发布出指向未发布版本的包）、git tag 未占用、extension-api 的 COMPATIBILITY.md 变更记录与 `src/index.ts` 版本常量、自动再生成 create-extension/uex 的版本常量（生成物，随发布 commit）、版本耦合检查（源包发布而目标包未 bump/未选则拒绝）、内网上传配置。
 2. **build**（拓扑序，连同 workspace 依赖）+ extension-api 契约测试（快照兜底）。
 3. **pack 内容检查**：无 `dist/__tests__/`、LICENSE / README.md 在列、bin 入口 `dist/cli.js` 与 templates/ 在列。
-4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）+ 发布后核对依赖表无 `workspace:` / `catalog:` 残留、`@universe-editor/*` 互赖为精确版本（异常只警告不中断，结尾汇总）。
+4. **发布**（拓扑序逐个 `pnpm publish --no-git-checks`）。
 5. **git**：commit SDK 目录改动（`chore(release): publish ...`）、每个发布包打 annotated tag（`extension-api@0.13.0`，不带 scope）、push 到 main。
-6. **内网同步**（`--no-gallery` 跳过）：pack 发布集合 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
+6. **内网同步**（`--gallery-sync` 显式开启，默认不执行）：pack 发布集合 tarball 到市场 stage 并 scp 上传（保持内网 tarball 与 npm 一致）。
 
 **幂等自愈**：npm 发布成功但 tag/push/gallery 中断时，重跑同一命令即可收敛（已发布版本增量跳过、缺失 tag 补打、gallery 重同步）。npm 版本不可变，同版本重跑不会重复发布。
 
@@ -153,7 +153,7 @@ uex unpublish <name>.<ext> --yes --registry http://localhost:8788
 
 ## 内网 fallback：市场托管 tarball
 
-完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）。一键命令在每次 npm 发布后默认自动同步（`--no-gallery` 关闭）；也可单独手动：
+完全离线内网拉不到公网 npm 时，SDK tarball 由市场服务器静态托管（**不建私有 registry**）。一键命令默认不执行内网同步，需显式传 `--gallery-sync`；也可单独手动：
 
 ```bash
 # pack 发布集合 → <stage>/gallery/sdk/（pnpm pack 与 publish 共用打包逻辑，产物与 npm 一致）

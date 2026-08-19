@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  scripts/ext-packages 纯逻辑单测。Run with `node --test`.
  *  覆盖：版本比较、包选择、拓扑排序、发布计划、依赖完整性、白名单判定、
- *        pack 清单解析/校验、COMPATIBILITY/版本常量校验、协议替换校验、共享清单防线。
+ *        pack 清单解析/校验、COMPATIBILITY/版本常量校验、共享清单防线。
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test'
@@ -30,7 +30,6 @@ import {
   tagName,
   topologicalOrder,
   unexpectedChanges,
-  verifyPublishedDeps,
 } from '../lib.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -386,18 +385,6 @@ test('tagName 不带 scope', () => {
   assert.equal(tagName('extension-api', '0.12.0'), 'extension-api@0.12.0')
 })
 
-test('verifyPublishedDeps 协议残留与精确版本校验', () => {
-  const workspaceVersions = { '@universe-editor/extension-manifest': '0.1.0' }
-  assert.deepEqual(verifyPublishedDeps({ 'vscode-languageserver-types': '^3.17.5' }, workspaceVersions), [])
-  assert.deepEqual(verifyPublishedDeps(undefined, workspaceVersions), [])
-  const leftover = verifyPublishedDeps({ '@universe-editor/extension-manifest': 'workspace:*' }, workspaceVersions)
-  assert.match(leftover.join('\n'), /workspace:\*/)
-  const catalog = verifyPublishedDeps({ zod: 'catalog:' }, workspaceVersions)
-  assert.match(catalog.join('\n'), /catalog:/)
-  const mismatch = verifyPublishedDeps({ '@universe-editor/extension-manifest': '^0.1.0' }, workspaceVersions)
-  assert.match(mismatch.join('\n'), /应为精确版本 0\.1\.0/)
-})
-
 test('共享清单防线：7 件套、拓扑合法、publish-sdk.mjs 引用共享常量', () => {
   assert.deepEqual(SDK_PACKAGE_DIRS, [
     'packages/extension-api',
@@ -422,19 +409,22 @@ test('galleryConfigIssue: 三变量齐备返回 null', () => {
   assert.equal(galleryConfigIssue({ env: FULL_GALLERY_ENV, mode: 'dev', explicit: false, envFileNames: [] }), null)
 })
 
-test('galleryConfigIssue: 缺一个/缺多个 → 第一行只列缺失项，含 --no-gallery 提示', () => {
+test('galleryConfigIssue: 缺一个/缺多个 → 第一行只列缺失项，含 --gallery-sync 提示', () => {
   const one = galleryConfigIssue({
     env: { UE_RELEASE_HOST: 'h', UE_RELEASE_USER: 'u' },
     mode: 'dev',
     explicit: false,
     envFileNames: [],
   })
-  assert.equal(one.split('\n')[0], '内网同步缺少环境变量: UE_GALLERY_DIR（或用 --no-gallery 跳过）')
+  assert.equal(
+    one.split('\n')[0],
+    '内网同步缺少环境变量: UE_GALLERY_DIR（补齐环境变量，或去掉 --gallery-sync 跳过内网同步）',
+  )
   assert.doesNotMatch(one.split('\n')[0], /UE_RELEASE_HOST/)
   const many = galleryConfigIssue({ env: {}, mode: 'dev', explicit: false, envFileNames: [] })
   assert.equal(
     many.split('\n')[0],
-    '内网同步缺少环境变量: UE_RELEASE_HOST / UE_RELEASE_USER / UE_GALLERY_DIR（或用 --no-gallery 跳过）',
+    '内网同步缺少环境变量: UE_RELEASE_HOST / UE_RELEASE_USER / UE_GALLERY_DIR（补齐环境变量，或去掉 --gallery-sync 跳过内网同步）',
   )
 })
 
@@ -445,7 +435,10 @@ test('galleryConfigIssue: 空字符串视作缺失', () => {
     explicit: false,
     envFileNames: [],
   })
-  assert.equal(issue.split('\n')[0], '内网同步缺少环境变量: UE_RELEASE_HOST（或用 --no-gallery 跳过）')
+  assert.equal(
+    issue.split('\n')[0],
+    '内网同步缺少环境变量: UE_RELEASE_HOST（补齐环境变量，或去掉 --gallery-sync 跳过内网同步）',
+  )
 })
 
 test('galleryConfigIssue: explicit=false 候选只出 prod/win，示例用 --env prod', () => {
