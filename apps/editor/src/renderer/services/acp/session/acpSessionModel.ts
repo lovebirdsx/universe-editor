@@ -53,6 +53,12 @@ export interface AcpMessage {
    * sentinel exactly (best-effort — see `AcpSession.applyUpdate`).
    */
   readonly autoRetry?: true
+  /**
+   * True when this message's heavy content was released by the live resident
+   * budget (`AcpSession._trimLiveResidentContent`); the text/block carry a short
+   * notice in place of the original content. The card shell stays on the timeline.
+   */
+  readonly memoryTrimmed?: boolean
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -140,6 +146,13 @@ export interface AcpToolCall {
   readonly startedAt?: number
   /** Elapsed ms at settle (`completed`/`failed`), computed from {@link startedAt}. */
   readonly durationMs?: number
+  /**
+   * True when this card's heavy content (text / blocks / diffs / raw input /
+   * terminal accumulator) was released by the live resident budget
+   * (`AcpSession._trimLiveResidentContent`). The card shell (title / status /
+   * kind / locations) stays; the body shows a short memory-protection notice.
+   */
+  readonly memoryTrimmed?: boolean
 }
 
 /**

@@ -152,7 +152,7 @@ function makeOpts() {
       textSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
-      acpHost: {} as never,
+      acpHost: { stopAllForWindow: () => Promise.resolve() } as never,
       acpTerminal: {} as never,
       extensionHost: {} as never,
       extensionManagement: {} as never,
@@ -254,6 +254,16 @@ describe('WindowMainService', () => {
       await vi.waitFor(() => {
         expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalledTimes(1)
       })
+    })
+
+    it("reclaims the crashed window's ACP agents via stopAllForWindow", async () => {
+      const opts = makeOpts()
+      const stopAllForWindow = vi.fn(() => Promise.resolve())
+      opts.appServices.acpHost = { stopAllForWindow } as never
+      const svc = new WindowMainService(opts)
+      const id = await svc.createWindow()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
+      expect(stopAllForWindow).toHaveBeenCalledWith(id)
     })
   })
 

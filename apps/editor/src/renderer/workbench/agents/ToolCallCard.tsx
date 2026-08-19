@@ -31,6 +31,7 @@ import type {
 import {
   firstLineSummary,
   hasVisibleMessageContent,
+  memoryTrimmedNotice,
 } from '../../services/acp/session/acpSession.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
@@ -355,6 +356,12 @@ export const ToolCallCard = memo(function ToolCallCard({
     </span>
   )
 
+  const trimmedNotice = call.memoryTrimmed && (
+    <div className={styles['toolCallMemoryTrimmed']} data-testid="acp-toolcall-memory-trimmed">
+      {memoryTrimmedNotice()}
+    </div>
+  )
+
   return (
     <CollapsibleSlot
       as="li"
@@ -375,7 +382,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         ...(dataStickyDepth !== undefined ? { 'data-sticky-depth': String(dataStickyDepth) } : {}),
       }}
     >
-      {body}
+      {call.memoryTrimmed ? trimmedNotice : body}
       {childTimeline}
     </CollapsibleSlot>
   )

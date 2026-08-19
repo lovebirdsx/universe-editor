@@ -310,25 +310,25 @@ describe('truncateDiffSideText', () => {
 })
 
 describe('estimateUpdateResidentBytes', () => {
-  it('sums text chunk content', () => {
+  it('sums text chunk content plus its derived text copy (UTF-16 bytes)', () => {
     expect(
       estimateUpdateResidentBytes({
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: 'hello' },
       }),
-    ).toBe(5)
+    ).toBe(5 * 2 * 2)
   })
 
-  it('sums media data in chunk content', () => {
+  it('sums media data in chunk content (no text copy for media)', () => {
     expect(
       estimateUpdateResidentBytes({
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'image', data: 'AAA', mimeType: 'image/png' },
       }),
-    ).toBe(3)
+    ).toBe(3 * 2)
   })
 
-  it('sums tool call content blocks and both diff sides', () => {
+  it('sums tool call content blocks, diff sides, and the text copy', () => {
     expect(
       estimateUpdateResidentBytes({
         sessionUpdate: 'tool_call',
@@ -341,7 +341,59 @@ describe('estimateUpdateResidentBytes', () => {
           { type: 'terminal', terminalId: 't1' },
         ],
       }),
-    ).toBe(4 + 2 + 3 + 5)
+    ).toBe((4 + 2) * 2 + (3 + 5) * 2 + 4 * 2)
+  })
+
+  it('counts out-of-band terminal output carried in _meta', () => {
+    expect(
+      estimateUpdateResidentBytes({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc',
+        title: 'execute',
+        kind: 'execute',
+        status: 'in_progress',
+        content: [],
+        _meta: { terminal_output: { data: 'xyz' } },
+      } as never),
+    ).toBe(3 * 2)
+  })
+
+  it('counts a terminal delta as its incremental size', () => {
+    expect(
+      estimateUpdateResidentBytes({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc',
+        title: 'execute',
+        kind: 'execute',
+        status: 'in_progress',
+        content: [],
+        _meta: { terminal_output_delta: { data: 'abcd' } },
+      } as never),
+    ).toBe(4 * 2)
+  })
+
+  it('counts raw tool input by its JSON size', () => {
+    expect(
+      estimateUpdateResidentBytes({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc',
+        title: 't',
+        content: [],
+        rawInput: { command: 'ls' },
+      } as never),
+    ).toBe('{"command":"ls"}'.length * 2)
+  })
+
+  it('costs an oversized raw input 0 (it is dropped downstream)', () => {
+    expect(
+      estimateUpdateResidentBytes({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc',
+        title: 't',
+        content: [],
+        rawInput: { blob: 'x'.repeat(RAW_INPUT_CAP) },
+      } as never),
+    ).toBe(0)
   })
 
   it('returns 0 for metadata-only updates', () => {

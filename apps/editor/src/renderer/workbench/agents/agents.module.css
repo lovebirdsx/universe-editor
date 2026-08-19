@@ -787,6 +787,16 @@
   color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
+/* 内存保护修剪后的工具卡片占位提示（live 驻留预算释放了旧内容）。 */
+.toolCallMemoryTrimmed {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--vscode-input-background, rgba(127, 127, 127, 0.1));
+  font-size: calc(var(--agent-font-size, 12px) * 0.917);
+  color: var(--vscode-agent-messageRoleForeground, #888);
+}
+
 /* MCP card Input / Output collapsible sections. */
 .toolCallSection {
   margin: 6px 0 0;

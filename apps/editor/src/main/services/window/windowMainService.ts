@@ -289,6 +289,10 @@ export class WindowMainService implements IWindowMainService {
       const line = `render-process-gone id=${win.id} reason=${details.reason} exitCode=${details.exitCode ?? 'n/a'}`
       logger.error(line)
       appServices.errorSink.recordLocal('renderProcessGone', line, `renderer:${win.id}`)
+      // The renderer is dead, so its beforeunload/confirmShutdown stop() never
+      // reached us — its agent processes would otherwise orphan and keep grepping
+      // the workspace. Reclaim exactly this window's local agents.
+      void appServices.acpHost.stopAllForWindow(win.id)
       if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
@@ -322,6 +326,15 @@ export class WindowMainService implements IWindowMainService {
         .catch(() => {
           this._crashHandled.delete(win.id)
         })
+    })
+
+    // A main-frame reload re-hydrates the renderer, which resumes sessions and
+    // spawns fresh agents; the old frame's agents would otherwise orphan (no
+    // confirmShutdown runs on reload). Reclaim on main-frame navigation only —
+    // subframe loads and same-document navigations keep their agents.
+    win.webContents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      void appServices.acpHost.stopAllForWindow(win.id)
     })
 
     win.once('ready-to-show', () => {

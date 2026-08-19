@@ -6,9 +6,11 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import {
+  AbstractLogger,
   DisposableTracker,
   Emitter,
   Event,
+  LogLevel,
   markAsSingleton,
   NullLogger,
   ProxyChannel,
@@ -19,6 +21,7 @@ import {
 import type { IDisposable } from '@universe-editor/platform'
 import {
   AcpHostMainService,
+  createWindowScopedAcpHost,
   type AcpCommandLookup,
   type AcpSpawner,
 } from '../acpHostMainService.js'
@@ -733,5 +736,89 @@ describe('AcpHostMainService — remote connection lifecycle', () => {
       fixture?.svc.dispose()
       setDisposableTracker(null)
     }
+  })
+})
+
+describe('AcpHostMainService — window-scoped reclaim', () => {
+  let svc: AcpHostMainService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  class CapturingLogger extends AbstractLogger {
+    readonly warns: string[] = []
+    protected override _log(level: LogLevel, message: string): void {
+      if (level === LogLevel.Warning) this.warns.push(message)
+    }
+  }
+
+  it("stopAllForWindow kills only that window's local handles and logs the count", async () => {
+    const logger = markAsSingleton(new CapturingLogger())
+    const procA = new FakeProc()
+    const procB = new FakeProc()
+    const procC = new FakeProc()
+    const realSvc = new AcpHostMainService(
+      fakeSpawnerWith([procA, procB, procC]),
+      undefined,
+      undefined,
+      { createLogger: () => logger } as unknown as ConstructorParameters<
+        typeof AcpHostMainService
+      >[3],
+    )
+    svc = realSvc
+
+    const win1 = createWindowScopedAcpHost(realSvc, 1)
+    const win2 = createWindowScopedAcpHost(realSvc, 2)
+
+    await win1.start({ command: 'a', args: [] })
+    await win1.start({ command: 'b', args: [] })
+    await win2.start({ command: 'c', args: [] })
+
+    await realSvc.stopAllForWindow(1)
+
+    expect(procA.killCalls).toBe(1)
+    expect(procB.killCalls).toBe(1)
+    expect(procC.killCalls).toBe(0)
+    expect(logger.warns).toEqual(['stopAllForWindow windowId=1 killed=2'])
+
+    // A second call is a no-op: the window's handles were already reclaimed.
+    await realSvc.stopAllForWindow(1)
+    expect(logger.warns).toHaveLength(1)
+  })
+
+  it('stopAllForWindow leaves remote (server-managed) handles untouched', async () => {
+    const fixture = makeRemoteFixture()
+    svc = fixture.svc
+    const win1 = createWindowScopedAcpHost(fixture.svc, 1)
+
+    await win1.start({ command: 'agent', args: [], authority: 'host' })
+
+    await fixture.svc.stopAllForWindow(1)
+
+    expect(fixture.remote.stops).toEqual([])
+  })
+
+  it('reclaims local handles for the crashing window without touching another window', async () => {
+    const procA = new FakeProc()
+    const procB = new FakeProc()
+    svc = makeService(fakeSpawnerWith([procA, procB]))
+
+    const win1 = createWindowScopedAcpHost(svc, 1)
+    const win2 = createWindowScopedAcpHost(svc, 2)
+
+    const { handle: h1 } = await win1.start({ command: 'a', args: [] })
+    const { handle: h2 } = await win2.start({ command: 'b', args: [] })
+
+    await svc.stopAllForWindow(2)
+
+    expect(procA.killCalls).toBe(0)
+    expect(procB.killCalls).toBe(1)
+
+    // handle bookkeeping: the reclaimed handle is gone, the live one remains.
+    procA.emitExit(0, null)
+    procB.emitExit(0, null)
+    expect(h1).toBeTruthy()
+    expect(h2).toBeTruthy()
   })
 })

@@ -4,12 +4,14 @@
  *  AcpSession view model. A restored or long-running session can stream
  *  arbitrarily large tool output (terminal deltas, command stdout forwarded
  *  as text blocks, raw tool inputs) and keep it all resident — these pure
- *  functions bound what the renderer retains. Sizes are in UTF-16 code units
- *  (string.length), a cheap proxy for bytes. Markers are plain ASCII: they
- *  are embedded in content, never localized.
+ *  functions bound what the renderer retains. Resident-cost estimates are in
+ *  UTF-16 bytes (`string.length` code units × 2), the true cost of a JS string's
+ *  backing store. Markers are plain ASCII: they are embedded in content, never
+ *  localized.
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock, SessionUpdate } from '@agentclientprotocol/sdk'
+import { readTerminalOutput } from './acpSessionUpdateMeta.js'
 
 export const TERMINAL_OUTPUT_CAP = 1024 * 1024
 
@@ -164,11 +166,46 @@ export function truncateDiffSideText(text: string): string {
 export const REPLAY_INGESTION_BUDGET = 256 * 1024 * 1024
 
 /**
- * Rough resident cost of one SessionUpdate in UTF-16 code units: sums the
- * string fields that actually land in the view model (chunk text / media
- * data / tool content blocks / diff sides) without JSON-stringifying the
- * whole update. Metadata-only updates (usage / plan / commands / config)
- * cost 0.
+ * Live-run resident budget (non-replay). A running turn has no replay gate, so
+ * a single long Grep/Read session can accumulate hundreds of tool cards each
+ * retaining up to 1MB of terminal output — enough to OOM the renderer. Once the
+ * live view model's retained content passes this, the oldest heavy tool-call /
+ * message content is trimmed in place (see `AcpSession._trimLiveResidentContent`).
+ */
+export const LIVE_INGESTION_BUDGET = 256 * 1024 * 1024
+
+/** UTF-16 byte size of a string: `length` counts code units, each 2 bytes. */
+function utf16Bytes(s: string): number {
+  return s.length * 2
+}
+
+/** Resident bytes of one content block (text / media data) in UTF-16. */
+function contentBlockBytes(block: ContentBlock): number {
+  if (block.type === 'text') return utf16Bytes(block.text)
+  if (block.type === 'image' || block.type === 'audio') return utf16Bytes(block.data)
+  return 0
+}
+
+/** Resident bytes of a raw tool input kept for UI inspection: the JSON form is
+ * what `capRawInput` measures, and an oversized / unstringifiable input is
+ * dropped outright downstream, so it costs 0 here too. */
+function rawInputBytes(rawInput: unknown): number {
+  if (rawInput === undefined) return 0
+  try {
+    const json = JSON.stringify(rawInput)
+    if (json === undefined || json.length > RAW_INPUT_CAP) return 0
+    return utf16Bytes(json)
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Rough resident cost of one SessionUpdate in UTF-16 bytes: sums the string
+ * fields that actually land in the view model — chunk text / media data / tool
+ * content blocks / diff sides / out-of-band terminal output / raw tool input —
+ * plus the derived `text` copy (`blocksToText`) that duplicates text blocks on
+ * the card. Metadata-only updates (usage / plan / commands / config) cost 0.
  */
 export function estimateUpdateResidentBytes(update: SessionUpdate): number {
   let total = 0
@@ -176,25 +213,31 @@ export function estimateUpdateResidentBytes(update: SessionUpdate): number {
     case 'user_message_chunk':
     case 'agent_message_chunk':
     case 'agent_thought_chunk':
-      total += contentBlockSize(update.content)
+      total += contentBlockBytes(update.content)
+      if (update.content.type === 'text') total += utf16Bytes(update.content.text)
       break
     case 'tool_call':
-    case 'tool_call_update':
+    case 'tool_call_update': {
+      let blockTextBytes = 0
       if (update.content != null) {
         for (const item of update.content) {
-          if (item.type === 'content') total += contentBlockSize(item.content)
-          else if (item.type === 'diff') total += (item.oldText?.length ?? 0) + item.newText.length
+          if (item.type === 'content') {
+            total += contentBlockBytes(item.content)
+            if (item.content.type === 'text') blockTextBytes += utf16Bytes(item.content.text)
+          } else if (item.type === 'diff') {
+            total += utf16Bytes(item.oldText ?? '') + utf16Bytes(item.newText)
+          }
         }
       }
+      // The card's `text` copy: the terminal accumulator when present (it shares
+      // the `_terminalOutput` map entry), else the joined text blocks.
+      const terminal = readTerminalOutput(update)
+      total += terminal !== undefined ? utf16Bytes(terminal.data) : blockTextBytes
+      total += rawInputBytes(update.rawInput)
       break
+    }
     default:
       break
   }
   return total
-}
-
-function contentBlockSize(block: ContentBlock): number {
-  if (block.type === 'text') return block.text.length
-  if (block.type === 'image' || block.type === 'audio') return block.data.length
-  return 0
 }

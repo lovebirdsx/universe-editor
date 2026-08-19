@@ -57,6 +57,7 @@ import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import {
+  LIVE_INGESTION_BUDGET,
   MESSAGE_TEXT_REBUILD_AT,
   REPLAY_INGESTION_BUDGET,
   capContentBlock,
@@ -192,6 +193,88 @@ export function replayHistoryOverflowNotice(): string {
     'acp.session.historyOverflow',
     'Session history is too large; only the first part of the history was loaded.',
   )
+}
+
+/**
+ * Body shown on a timeline card whose heavy content was released by the live
+ * resident budget (oldest-first trimming) to protect the renderer from OOM.
+ * Function rather than a module constant: `localize` reads the NLS state at call
+ * time, and the trimmed card bakes the resolved text in at trim time.
+ */
+export function memoryTrimmedNotice(): string {
+  return localize(
+    'acp.session.memoryTrimmed',
+    'Content released to protect memory; the newest output was kept.',
+  )
+}
+
+/** UTF-16 byte size of a string (`length` code units × 2). */
+function stringBytes(s: string): number {
+  return s.length * 2
+}
+
+/** Heavy resident bytes a tool card holds: the `text` copy, its content blocks,
+ * and its diff sides — exactly what trimming releases. */
+function toolCallHeavyBytes(call: AcpToolCall): number {
+  let bytes = stringBytes(call.text)
+  for (const b of call.blocks) {
+    if (b.type === 'text') bytes += stringBytes(b.text)
+    else if (b.type === 'image' || b.type === 'audio') bytes += stringBytes(b.data)
+  }
+  for (const d of call.diffs) bytes += stringBytes(d.oldText) + stringBytes(d.newText)
+  return bytes
+}
+
+/** Heavy resident bytes a message holds: the `text` copy plus its blocks. */
+function messageHeavyBytes(message: AcpMessage): number {
+  let bytes = stringBytes(message.text)
+  for (const b of message.blocks) {
+    if (b.type === 'text') bytes += stringBytes(b.text)
+    else if (b.type === 'image' || b.type === 'audio') bytes += stringBytes(b.data)
+  }
+  return bytes
+}
+
+/** Release a tool card's heavy content, keeping the shell (title / status /
+ * kind / locations / children) so the timeline still renders a recognisable
+ * card marked `memoryTrimmed`. */
+function trimToolCall(call: AcpToolCall): AcpToolCall {
+  return {
+    id: call.id,
+    title: call.title,
+    kind: call.kind,
+    status: call.status,
+    blocks: [],
+    diffs: [],
+    text: '',
+    memoryTrimmed: true,
+    ...(call.mcpServer !== undefined ? { mcpServer: call.mcpServer } : {}),
+    ...(call.mcpTool !== undefined ? { mcpTool: call.mcpTool } : {}),
+    ...(call.locations !== undefined ? { locations: call.locations } : {}),
+    ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
+    ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
+    ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+    ...(call.children !== undefined && call.children.length > 0 ? { children: call.children } : {}),
+  }
+}
+
+/** Release a message's heavy content, replacing it with the memory-protection
+ * notice while keeping the shell (role / id / anchor / selection contexts). */
+function trimMessage(message: AcpMessage): AcpMessage {
+  const notice = memoryTrimmedNotice()
+  return {
+    id: message.id,
+    role: message.role,
+    blocks: [{ type: 'text', text: notice }],
+    text: notice,
+    streaming: false,
+    memoryTrimmed: true,
+    ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
+    ...(message.autoRetry === true ? { autoRetry: true as const } : {}),
+    ...(message.selectionContexts !== undefined
+      ? { selectionContexts: message.selectionContexts }
+      : {}),
+  }
 }
 
 /**
@@ -577,6 +660,15 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _replayOverflow = false
 
   /**
+   * Live-run resident accounting (the non-replay path): tallies the resident
+   * cost of updates as they land, and once it passes `_liveIngestionBudget`
+   * the oldest heavy content is trimmed in place instead of rejecting new
+   * output. Unlike the replay gate (which drops the remaining history), a live
+   * turn must always surface its newest output.
+   */
+  private _liveIngestedBytes = 0
+
+  /**
    * Replay boundary paired with {@link _suppressReplayToTimeline}: the side
    * task's first own user prompt id. The replayed user chunk carrying this id
    * lifts the suppression so the side task's own turns (from that message on)
@@ -667,6 +759,11 @@ export class AcpSession extends Disposable implements IAcpSession {
      * Injectable so tests can exercise the overflow path with tiny payloads.
      */
     private readonly _replayIngestionBudget: number = REPLAY_INGESTION_BUDGET,
+    /**
+     * Resident-cost budget for the live (non-replay) view model. Injectable so
+     * tests can exercise the trim path with tiny payloads.
+     */
+    private readonly _liveIngestionBudget: number = LIVE_INGESTION_BUDGET,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -1855,6 +1952,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._terminalOutput.clear()
     this._streamingIds.clear()
     this._planSeen = false
+    this._liveIngestedBytes = 0
     this._setImmediate(this.messages, this._messages)
     this._setImmediate(this.toolCalls, this._toolCalls)
     this._setImmediate(this.timeline, this._timeline)
@@ -2066,6 +2164,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._orphanChildren.clear()
     this._toolCallParent.clear()
     this._terminalOutput.clear()
+    this._liveIngestedBytes = 0
     this._setImmediate(this.messages, this._messages)
     this._setImmediate(this.toolCalls, this._toolCalls)
     this._setImmediate(this.timeline, this._timeline)
@@ -2088,6 +2187,93 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._terminalOutput.set(toolCallId, capTerminalOutputTail(next))
     }
     return this._terminalOutput.get(toolCallId)
+  }
+
+  /**
+   * Release the oldest heavy content until the live resident tally is back under
+   * the budget. Unlike the replay gate (which drops the rest of the history), a
+   * live turn keeps every new update — only the oldest cards are slimmed, newest
+   * first-wins. Each trim releases the card's `text` / blocks / diffs (and the
+   * per-call terminal accumulator) while keeping the card shell on the timeline.
+   */
+  private _trimLiveResidentContent(): void {
+    let released = 0
+    while (this._liveIngestedBytes > this._liveIngestionBudget) {
+      const freed = this._trimOldestHeavyItem()
+      if (freed === 0) break
+      released += freed
+      this._liveIngestedBytes -= freed
+    }
+    if (released > 0) {
+      const tx = this._batchedTx()
+      this.messages.set(this._messages, tx)
+      this.toolCalls.set(this._toolCalls, tx)
+      this.timeline.set(this._timeline, tx)
+      console.warn(
+        `[acp] session ${this.id}: live content exceeded the resident budget, ` +
+          `released ${released} bytes from the oldest cards to protect memory`,
+      )
+    }
+  }
+
+  /** Trim the oldest timeline slot that still holds heavy content, returning the
+   * released byte count (0 when nothing left to release). */
+  private _trimOldestHeavyItem(): number {
+    for (let i = 0; i < this._timeline.length; i++) {
+      const slot = this._timeline[i]
+      if (slot === undefined) continue
+      if (slot.kind === 'toolCall') {
+        const freed = toolCallHeavyBytes(slot.call)
+        if (freed === 0) continue
+        this._replaceToolCall(slot.call.id, trimToolCall(slot.call))
+        this._terminalOutput.delete(slot.call.id)
+        return freed
+      }
+      if (slot.kind === 'message') {
+        const freed = messageHeavyBytes(slot.message)
+        if (freed === 0) continue
+        this._replaceMessage(slot.message.id, trimMessage(slot.message))
+        return freed
+      }
+    }
+    return 0
+  }
+
+  /** Replace a tool card in both the lane array and the timeline slot (keeping
+   * any sub-agent children already attached to the slot). */
+  private _replaceToolCall(id: string, trimmed: AcpToolCall): void {
+    const ci = this._toolCalls.findIndex((t) => t.id === id)
+    if (ci !== -1) {
+      this._toolCalls = [...this._toolCalls.slice(0, ci), trimmed, ...this._toolCalls.slice(ci + 1)]
+    }
+    const ti = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === id)
+    if (ti === -1) return
+    const slot = this._timeline[ti]
+    if (slot === undefined || slot.kind !== 'toolCall') return
+    const children = slot.call.children
+    const merged =
+      children !== undefined && children.length > 0 ? { ...trimmed, children } : trimmed
+    this._timeline = [
+      ...this._timeline.slice(0, ti),
+      { kind: 'toolCall', id, call: merged },
+      ...this._timeline.slice(ti + 1),
+    ]
+  }
+
+  /** Replace a message in both the lane array and the timeline slot. */
+  private _replaceMessage(id: string, trimmed: AcpMessage): void {
+    const mi = this._messages.findIndex((m) => m.id === id)
+    if (mi !== -1) {
+      this._messages = [...this._messages.slice(0, mi), trimmed, ...this._messages.slice(mi + 1)]
+    }
+    const ti = this._timeline.findIndex((it) => it.kind === 'message' && it.id === id)
+    if (ti !== -1) {
+      this._timeline = [
+        ...this._timeline.slice(0, ti),
+        { kind: 'message', id, message: trimmed },
+        ...this._timeline.slice(ti + 1),
+      ]
+    }
   }
 
   /**
@@ -2135,23 +2321,25 @@ export class AcpSession extends Disposable implements IAcpSession {
           return
       }
     }
+    const residentCost = estimateUpdateResidentBytes(update)
     if (this.isReplayingHistory.get()) {
       // Budget gate for history replays: updates suppressed above never reach
       // the timeline so they are not tallied; everything else counts against
       // the budget, and once it overflows the remaining replay is dropped
       // (only counted) instead of swelling the view model without bound.
-      this._replayIngestedBytes += estimateUpdateResidentBytes(update)
+      this._replayIngestedBytes += residentCost
       if (this._replayOverflow) return
       if (this._replayIngestedBytes > this._replayIngestionBudget) {
         this._replayOverflow = true
         console.warn(
           `[acp] session ${this.id}: history replay exceeded the ingestion budget ` +
-            `(${this._replayIngestedBytes}/${this._replayIngestionBudget} chars resident); ` +
+            `(${this._replayIngestedBytes}/${this._replayIngestionBudget} bytes resident); ` +
             'dropping the remaining replayed updates',
         )
         return
       }
     }
+    const liveCost = this.isReplayingHistory.get() ? 0 : residentCost
     const parentId = readParentToolUseId(update)
     if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -2444,6 +2632,10 @@ export class AcpSession extends Disposable implements IAcpSession {
       default:
         // unhandled SessionUpdate variants — ignored for now.
         break
+    }
+    if (liveCost > 0) {
+      this._liveIngestedBytes += liveCost
+      this._trimLiveResidentContent()
     }
   }
 

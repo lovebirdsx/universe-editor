@@ -76,6 +76,8 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
   /** handle → authority (remote handles only). */
   private readonly _remoteByHandle = new Map<string, string>()
+  /** handle → windowId for local handles, so a window crash can reclaim its agents. */
+  private readonly _windowByHandle = new Map<string, number>()
 
   constructor(
     spawn?: AcpSpawner,
@@ -102,7 +104,12 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     )
     this._register(this._local.onStdout((e) => this._onStdout.fire(e)))
     this._register(this._local.onStderr((e) => this._onStderr.fire(e)))
-    this._register(this._local.onExit((e) => this._onExit.fire(e)))
+    this._register(
+      this._local.onExit((e) => {
+        this._windowByHandle.delete(e.handle)
+        this._onExit.fire(e)
+      }),
+    )
   }
 
   async start(spec: AcpLaunchSpec): Promise<AcpStartResult> {
@@ -141,6 +148,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       const service = this._remoteServices.get(authority)
       return service ? service.stop(handle) : Promise.resolve()
     }
+    this._windowByHandle.delete(handle)
     return this._local.stop(handle)
   }
 
@@ -148,6 +156,32 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     // PATH probing stays local: the renderer's agent registry detects local
     // agents here; a remote agent is declared on the remote host instead.
     return this._local.probe(command)
+  }
+
+  /**
+   * Main-internal: start an agent and associate its handle with the calling
+   * window so a renderer crash can reclaim exactly that window's processes.
+   * Remote launches (`spec.authority`) are server-managed and never tracked here.
+   */
+  async startForWindow(spec: AcpLaunchSpec, windowId: number): Promise<AcpStartResult> {
+    const result = await this.start(spec)
+    if (!spec.authority) this._windowByHandle.set(result.handle, windowId)
+    return result
+  }
+
+  /**
+   * Reclaim every local agent a window spawned (renderer crash / reload). Remote
+   * handles stay with the server's own lifecycle. Logs a warn so the diagnostics
+   * package can tie orphaned processes back to the window that leaked them.
+   */
+  async stopAllForWindow(windowId: number): Promise<void> {
+    const handles = [...this._windowByHandle.entries()]
+      .filter(([, w]) => w === windowId)
+      .map(([handle]) => handle)
+    for (const handle of handles) await this.stop(handle)
+    if (handles.length > 0) {
+      this._logger.warn(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
+    }
   }
 
   override dispose(): void {
@@ -209,5 +243,26 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       // a bare exit lets renderer sessions close instead of waiting forever.
       this._onExit.fire({ handle, code: null, signal: null })
     }
+  }
+}
+
+/**
+ * Bind the application acpHost singleton to the BrowserWindow serving one IPC
+ * channel, stamping the windowId onto every `start` so a crash can reclaim that
+ * window's processes (mirrors createWindowScopedUpdateService).
+ */
+export function createWindowScopedAcpHost(
+  host: AcpHostMainService,
+  windowId: number,
+): IAcpHostService {
+  return {
+    _serviceBrand: undefined,
+    onStdout: host.onStdout,
+    onStderr: host.onStderr,
+    onExit: host.onExit,
+    start: (spec) => host.startForWindow(spec, windowId),
+    writeStdin: (handle, data) => host.writeStdin(handle, data),
+    stop: (handle) => host.stop(handle),
+    probe: (command) => host.probe(command),
   }
 }

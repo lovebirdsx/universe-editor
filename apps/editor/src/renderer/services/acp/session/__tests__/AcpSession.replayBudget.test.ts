@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Replay ingestion budget: while a session replays its history (session/load
- *  or rewind), the resident cost of the replayed updates is tallied. Past the
- *  budget the remaining updates are dropped instead of swelling the timeline
- *  (a restored multi-GB history was enough to OOM the renderer), and a system
- *  notice marks the truncation when the replay ends.
+ *  or rewind), the resident cost of the replayed updates is tallied in UTF-16
+ *  bytes. Past the budget the remaining updates are dropped instead of swelling
+ *  the timeline (a restored multi-GB history was enough to OOM the renderer),
+ *  and a system notice marks the truncation when the replay ends.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,7 +13,9 @@ import { AcpSession, replayHistoryOverflowNotice } from '../acpSession.js'
 import { REPLAY_INGESTION_BUDGET } from '../acpContentLimits.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
-const TEST_BUDGET = 1024
+// 4 KiB — small enough to overflow quickly; each text chunk costs 2× its
+// character count in UTF-16 bytes (block + derived `text` copy).
+const TEST_BUDGET = 4096
 
 function createSession(replayIngestionBudget = TEST_BUDGET): AcpSession {
   return new AcpSession(
@@ -57,11 +59,12 @@ describe('AcpSession — replay ingestion budget', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     session.beginHistoryReplay()
 
+    // 600 chars → 2400 bytes: within the 4096 budget.
     session.applyUpdate(agentTextChunk('a'.repeat(600)))
     expect(session.messages.get()).toHaveLength(1)
 
-    // 600 + 600 crosses the 1024 budget: this update and everything after it
-    // must not land on the timeline.
+    // 2400 + 2400 crosses the budget: this update and everything after it must
+    // not land on the timeline.
     session.applyUpdate(agentTextChunk('b'.repeat(600)))
     session.applyUpdate(agentTextChunk('c'.repeat(50)))
     session.applyUpdate({
@@ -75,7 +78,7 @@ describe('AcpSession — replay ingestion budget', () => {
     expect(session.messages.get()).toHaveLength(1)
     expect(session.toolCalls.get()).toHaveLength(0)
     expect(warn).toHaveBeenCalledOnce()
-    expect(String(warn.mock.calls[0]?.[0])).toContain('1200')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('4800')
 
     session.endHistoryReplay()
     const messages = session.messages.get()
@@ -111,14 +114,15 @@ describe('AcpSession — replay ingestion budget', () => {
     expect(messages[0]?.text).toBe('a'.repeat(100) + 'b'.repeat(100))
   })
 
-  it('live (non-replay) updates are never budgeted', () => {
+  it('live (non-replay) updates are budgeted separately and not dropped', () => {
     session = createSession()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Live budget uses the 256MB default here, so this lands untrimmed.
     session.applyUpdate(agentTextChunk('a'.repeat(TEST_BUDGET * 4)))
-    expect(warn).not.toHaveBeenCalled()
     expect(session.messages.get()).toHaveLength(1)
-    // No replay ever ran, so no notice either.
+    // No replay ever ran, so no replay-overflow notice either.
     session.endHistoryReplay()
     expect(session.messages.get()).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 })

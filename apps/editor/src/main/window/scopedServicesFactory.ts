@@ -28,7 +28,7 @@ import type { ITextSearchMainService } from '@universe-editor/platform'
 import type { UpdateMainService } from '../services/update/updateMainService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IDocsService } from '../../shared/ipc/docsService.js'
-import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import type { AcpHostMainService } from '../services/acpHost/acpHostMainService.js'
 import type { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
@@ -61,7 +61,11 @@ export interface ApplicationServices {
   readonly fileSearch: IFileSearchService
   readonly textSearch: ITextSearchMainService
   readonly recentWorkspaces: RecentWorkspacesMainService
-  readonly acpHost: IAcpHostService
+  /**
+   * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
+   * crashes, which is main-internal and not on the wire contract.
+   */
+  readonly acpHost: AcpHostMainService
   readonly extensionHost: IExtensionHostService
   readonly extensionManagement: IExtensionManagementService
   readonly extensionGallery: IExtensionGalleryService
