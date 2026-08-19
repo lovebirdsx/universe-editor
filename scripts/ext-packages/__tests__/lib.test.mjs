@@ -6,13 +6,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SDK_PACKAGE_DIRS } from '../../lib/sdk-packages.mjs'
+import { SDK_PACKAGE_DIRS, SDK_VERSION_COUPLINGS } from '../../lib/sdk-packages.mjs'
+import { generateSdkVersions } from '../generate-sdk-versions.mjs'
 import {
   apiVersionConstantMatches,
   assessExternalDeps,
+  checkCoupledPublishes,
   checkPackListing,
   checkVersionConstants,
   compareVersions,
@@ -144,6 +147,49 @@ test('planPublish 未发布/更高发、相同跳、更低抛错', () => {
   assert.throws(() => planPublish(selected, { a: null, b: '0.3.0', c: '0.1.0' }), /禁止发布旧版本/)
 })
 
+test('checkCoupledPublishes 源发布目标同发通过、目标跳过/未选拦截', () => {
+  const couplings = { 'extension-api': ['uex', 'create-extension'], uex: ['create-extension'] }
+  const api = pkg('extension-api')
+  api.version = '0.13.0'
+  const uex = pkg('uex')
+  uex.version = '0.3.0'
+  const ce = pkg('create-extension')
+  ce.version = '0.2.0'
+  const all = [api, uex, ce]
+
+  // 三者同发 → 无错误
+  assert.deepEqual(checkCoupledPublishes({ toPublish: [api, uex, ce], skipped: [], all, couplings }), [])
+
+  // 源发布、目标跳过 → 两条「与 npm 已发布版本相同将被跳过」错误
+  const skippedBoth = checkCoupledPublishes({ toPublish: [api], skipped: [uex, ce], all, couplings })
+  assert.equal(skippedBoth.length, 2)
+  assert.match(skippedBoth[0], /extension-api 将发布 0\.13\.0/)
+  assert.match(skippedBoth[0], /uex\(0\.3\.0\) 与 npm 已发布版本相同将被跳过/)
+  assert.match(skippedBoth[1], /create-extension\(0\.2\.0\) 与 npm 已发布版本相同将被跳过/)
+
+  // 只选源包未选目标包 → 「未在本次发布集合中」错误（版本从 all 回查）
+  const partial = checkCoupledPublishes({ toPublish: [api], skipped: [], all, couplings })
+  assert.equal(partial.length, 2)
+  assert.match(partial[0], /uex\(0\.3\.0\) 未在本次发布集合中/)
+  assert.match(partial[1], /create-extension\(0\.2\.0\) 未在本次发布集合中/)
+
+  // uex 发布、create-extension 跳过 → 一条错误（extension-api 不参与）
+  const uexOnly = checkCoupledPublishes({ toPublish: [uex], skipped: [ce], all, couplings })
+  assert.equal(uexOnly.length, 1)
+  assert.match(uexOnly[0], /uex 将发布 0\.3\.0/)
+  assert.match(uexOnly[0], /create-extension\(0\.2\.0\) 与 npm 已发布版本相同将被跳过/)
+
+  // 源不发布 → 无约束（extension-api/uex 均不发，create-extension 跳过也无妨）
+  assert.deepEqual(checkCoupledPublishes({ toPublish: [], skipped: [api, uex, ce], all, couplings }), [])
+})
+
+test('SDK_VERSION_COUPLINGS 覆盖 extension-api→uex/create-extension 与 uex→create-extension', () => {
+  assert.deepEqual(SDK_VERSION_COUPLINGS, {
+    'extension-api': ['uex', 'create-extension'],
+    uex: ['create-extension'],
+  })
+})
+
 test('planExternalDepQueries 集合内免查、集合外查询、非 SDK 集合报错', () => {
   const selected = [
     pkg('uex', {
@@ -261,6 +307,44 @@ test('checkVersionConstants 全一致通过、漂移报错含期望值', () => {
   assert.match(uexDrift.join('\n'), /SDK_VERSIONS\.uex 应为 0\.2\.0/)
   // 都不发布 → 不校验任何常量
   assert.deepEqual(checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: null, uexVersion: null }), [])
+})
+
+test('generateSdkVersions 从 package.json+catalog 生成、幂等、含生成头注释', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sdk-gen-'))
+  for (const dir of [
+    'packages/extension-api',
+    'packages/uex',
+    'packages/create-extension/src',
+    'packages/uex/src/lib',
+  ]) {
+    mkdirSync(join(root, dir), { recursive: true })
+  }
+  writeFileSync(join(root, 'packages/extension-api/package.json'), JSON.stringify({ version: '0.13.0' }))
+  writeFileSync(join(root, 'packages/uex/package.json'), JSON.stringify({ version: '0.3.0' }))
+  writeFileSync(
+    join(root, 'pnpm-workspace.yaml'),
+    ['catalog:', "  esbuild: ^0.25.0", "  typescript: ^5.8.0", "  '@types/node': ^22.0.0"].join('\n'),
+  )
+
+  const first = generateSdkVersions({ repoRoot: root })
+  assert.deepEqual(first.updated, [
+    'packages/create-extension/src/sdkVersions.ts',
+    'packages/uex/src/lib/sdkVersion.ts',
+  ])
+
+  const sdkVersionsText = readFileSync(join(root, 'packages/create-extension/src/sdkVersions.ts'), 'utf8')
+  assert.ok(sdkVersionsText.includes('do not edit by hand'))
+  assert.ok(sdkVersionsText.includes("extensionApi: '0.13.0'"))
+  assert.ok(sdkVersionsText.includes("uex: '0.3.0'"))
+  assert.ok(sdkVersionsText.includes("esbuild: '^0.25.0'"))
+  assert.ok(sdkVersionsText.includes("typescript: '^5.8.0'"))
+  assert.ok(sdkVersionsText.includes("nodeTypes: '^22.0.0'"))
+
+  const sdkVersionText = readFileSync(join(root, 'packages/uex/src/lib/sdkVersion.ts'), 'utf8')
+  assert.ok(sdkVersionText.includes("export const CURRENT_API_VERSION = '0.13.0'"))
+
+  // 幂等：内容未变第二次不写盘
+  assert.deepEqual(generateSdkVersions({ repoRoot: root }).updated, [])
 })
 
 test('tagName 不带 scope', () => {

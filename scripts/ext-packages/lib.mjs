@@ -263,6 +263,33 @@ export function checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVers
   return errors
 }
 
+/**
+ * 版本耦合检查：源包内嵌版本常量被目标包引用（见 sdk-packages.mjs 的 SDK_VERSION_COUPLINGS），
+ * 源包在 toPublish 而目标包不在时返回错误。目标包可能「被跳过」（本地==npm 未 bump，见 skipped）
+ * 或「未选入本次发布集合」（不在 toPublish/skipped，版本从 all 回查）——两者都会让目标包 npm
+ * 发布物里仍是旧版本常量，无法送达用户。couplings 形如 { 'extension-api': ['uex', 'create-extension'] }。
+ */
+export function checkCoupledPublishes({ toPublish, skipped, all, couplings }) {
+  const errors = []
+  const toPublishShorts = new Set(toPublish.map((p) => p.shortName))
+  const byShort = new Map(all.map((p) => [p.shortName, p]))
+  for (const [source, targets] of Object.entries(couplings)) {
+    const src = toPublish.find((p) => p.shortName === source)
+    if (!src) continue
+    for (const target of targets) {
+      if (toPublishShorts.has(target)) continue
+      const skippedTarget = skipped.find((p) => p.shortName === target)
+      const t = skippedTarget ?? byShort.get(target)
+      if (!t) continue
+      const tail = skippedTarget
+        ? `与 npm 已发布版本相同将被跳过，请先 bump packages/${target}/package.json 的版本后重试`
+        : `未在本次发布集合中，请将 ${target} 纳入本次发布并 bump packages/${target}/package.json 的版本后重试`
+      errors.push(`${source} 将发布 ${src.version}，但 ${target}(${t.version}) ${tail}；其内嵌的 ${source} 版本无法送达用户`)
+    }
+  }
+  return errors
+}
+
 /** git tag 名：`${shortName}@${version}`（不带 scope，与手动手册约定一致）。 */
 export function tagName(shortName, version) {
   return `${shortName}@${version}`

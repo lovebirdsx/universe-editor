@@ -24,10 +24,12 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadEnv } from '../lib/env.mjs'
-import { SDK_PACKAGE_DIRS } from '../lib/sdk-packages.mjs'
+import { SDK_PACKAGE_DIRS, SDK_VERSION_COUPLINGS } from '../lib/sdk-packages.mjs'
+import { generateSdkVersions } from './generate-sdk-versions.mjs'
 import {
   apiVersionConstantMatches,
   assessExternalDeps,
+  checkCoupledPublishes,
   checkPackListing,
   checkVersionConstants,
   galleryConfigIssue,
@@ -245,6 +247,15 @@ function assertGalleryConfig() {
 async function preflight(args, all, selected, registry) {
   const dryRun = Boolean(args.dryRun)
 
+  // 0) 重新生成版本常量（幂等，内容没变化不写盘）；产物随后续 commit 步骤带走。
+  //    dry-run 只报告不写入，若常量漂移则由下面的 checkVersionConstants 兜底断言报错。
+  const gen = generateSdkVersions({ repoRoot, dryRun })
+  if (gen.updated.length > 0) {
+    const note = gen.updated.join(', ')
+    if (dryRun) warn(`dry-run: 版本常量将重新生成（未写入）: ${note}`)
+    else info(`已重新生成版本常量: ${note}`)
+  }
+
   // 1) 工作区白名单：SDK 目录内改动随发布 commit，目录外改动必须先自行处理
   const statusLines = git(['status', '--porcelain']).split(/\r?\n/).filter(Boolean)
   const outside = unexpectedChanges(statusLines, SDK_PACKAGE_DIRS)
@@ -302,6 +313,17 @@ async function preflight(args, all, selected, registry) {
     die(`依赖完整性检查失败:\n${depErrors.map((e) => `  - ${e}`).join('\n')}`)
   }
 
+  // 6b) 版本耦合：源包发布而目标包被跳过/未选时拦截（目标包内嵌源包版本常量，须同发）
+  const couplingErrors = checkCoupledPublishes({
+    toPublish: plan.toPublish,
+    skipped: plan.skipped,
+    all,
+    couplings: SDK_VERSION_COUPLINGS,
+  })
+  if (couplingErrors.length > 0) {
+    die(`版本耦合检查失败:\n${couplingErrors.map((e) => `  - ${e}`).join('\n')}`)
+  }
+
   // 7) tag 与 npm 事实一致性：npm 上没有该版本但 tag 已存在属人为异常
   for (const p of plan.toPublish) {
     const t = tagName(p.shortName, p.version)
@@ -331,7 +353,7 @@ async function preflight(args, all, selected, registry) {
     uexVersion: plan.toPublish.find((p) => p.shortName === 'uex')?.version ?? null,
   })
   if (constErrors.length > 0) {
-    die(`版本常量未同步:\n${constErrors.map((e) => `  - ${e}`).join('\n')}`)
+    die(`版本常量未同步（可运行 pnpm ext-packages:gen 重新生成）:\n${constErrors.map((e) => `  - ${e}`).join('\n')}`)
   }
 
   // 10) 内网同步配置

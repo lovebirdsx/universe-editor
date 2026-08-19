@@ -10,11 +10,13 @@ const pkgRoot = (name: string) =>
 describe('SDK_VERSIONS bump guards', () => {
   it('extensionApi matches packages/extension-api', () => {
     const pkg = JSON.parse(readFileSync(pkgRoot('extension-api'), 'utf8')) as { version: string }
-    expect(SDK_VERSIONS.extensionApi).toBe(pkg.version)
+    expect(SDK_VERSIONS.extensionApi, '漂移：请运行 pnpm ext-packages:gen 重新生成').toBe(
+      pkg.version,
+    )
   })
 
   it('uex matches packages/uex', () => {
     const pkg = JSON.parse(readFileSync(pkgRoot('uex'), 'utf8')) as { version: string }
-    expect(SDK_VERSIONS.uex).toBe(pkg.version)
+    expect(SDK_VERSIONS.uex, '漂移：请运行 pnpm ext-packages:gen 重新生成').toBe(pkg.version)
   })
 })

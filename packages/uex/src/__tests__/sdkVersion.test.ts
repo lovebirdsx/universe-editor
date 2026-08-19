@@ -15,6 +15,6 @@ describe('CURRENT_API_VERSION', () => {
       'package.json',
     )
     const apiPkg = JSON.parse(readFileSync(apiPkgPath, 'utf8')) as { version: string }
-    expect(CURRENT_API_VERSION).toBe(apiPkg.version)
+    expect(CURRENT_API_VERSION, '漂移：请运行 pnpm ext-packages:gen 重新生成').toBe(apiPkg.version)
   })
 })

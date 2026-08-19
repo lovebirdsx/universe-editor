@@ -60,6 +60,7 @@
     "gallery:upload": "node scripts/gallery/upload.mjs",
     "gallery:token": "node scripts/gallery/token.mjs",
     "ext:release": "node scripts/ext-release/release.mjs",
+    "ext-packages:gen": "node scripts/ext-packages/generate-sdk-versions.mjs",
     "ext-packages:publish": "node scripts/ext-packages/publish.mjs"
   },
   "devDependencies": {

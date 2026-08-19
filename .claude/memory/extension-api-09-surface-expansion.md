@@ -23,9 +23,11 @@ viewsContainers/views + registerTreeDataProvider/createTreeView，见 [[tree-vie
 **Why:** 外部插件开发开放前 API 面不足；各版变更与限制全记录在 packages/extension-api/COMPATIBILITY.md 对应条目。
 
 **How to apply:**
-- **bump extension-api 版本必须四处联动**：extension-api 的 index.ts version 常量 + package.json、
-  `packages/uex/src/lib/sdkVersion.ts` 的 CURRENT_API_VERSION、`packages/create-extension/src/sdkVersions.ts`。
-  前两处有守卫测试锁定。示例仓库 `universe-editor-extension-samples` 侧由其 `check-sdk-drift.mjs` 兜底。
+- **bump extension-api 版本**：uex/create-extension 内嵌的版本常量已是生成物（`pnpm ext-packages:gen`，
+  发布 preflight 自动再生成，勿手改），仍须手动联动的只剩 extension-api 自己的 index.ts version 常量 +
+  package.json；bump 后 uex 与 create-extension 须一并 bump 版本同发，publish 的耦合检查
+  （SDK_VERSION_COUPLINGS）会强制拦截漏发。示例仓库 `universe-editor-extension-samples` 侧由其
+  `check-sdk-drift.mjs` 兜底。
 - openTextDocument 走模型级同步（MonacoModelRegistry.acquire + DocumentMirrorTracking 挂进
   DocumentSyncContribution 管线），与编辑器打开的文档在 host 同构；ref 有意驻留不释放。untitled 也进镜像，
   save-as 语义 close(untitled)→open(file)→didSave(file)，didSave 经 whenOpened 门控保证排在镜像 open 后。
