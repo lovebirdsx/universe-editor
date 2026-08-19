@@ -127,12 +127,14 @@ const autofetch = await workspace.getConfiguration('git').get('autofetch', true)
 
 定义（`registerDefinitionProvider`）、引用（`registerReferenceProvider`）、实现（`registerImplementationProvider`）、类型定义（`registerTypeDefinitionProvider`）、hover（`registerHoverProvider`）、补全（`registerCompletionItemProvider`）、签名帮助（`registerSignatureHelpProvider`）、文档符号（`registerDocumentSymbolProvider`）、重命名（`registerRenameProvider`）、工作区符号（`registerWorkspaceSymbolProvider`）、折叠（`registerFoldingRangeProvider`）、文档链接（`registerDocumentLinkProvider`）、高亮（`registerDocumentHighlightProvider`）、选区扩展（`registerSelectionRangeProvider`）、code action（`registerCodeActionsProvider`）、格式化（`registerDocumentFormattingEditProvider`）、范围格式化（`registerDocumentRangeFormattingEditProvider`，Format Selection）、键入即格式化（`registerOnTypeFormattingEditProvider`，需用户开启 `editor.formatOnType`）、inlay hints（`registerInlayHintsProvider`，可选 `resolveInlayHint` 惰性解析 label parts 的 tooltip/location/command 与 hint 级 tooltip、textEdits；`InlayHint.data` 有效且不出 host 进程）、语义 token（`registerDocumentSemanticTokensProvider`）、代码透镜（`registerCodeLensProvider`）。
 
-外加四个设施：
+外加六个设施：
 
 - **`createDiagnosticCollection(name?)`**：创建诊断集合，`set` 替换某个 URI 的诊断（传 `undefined` 清除）；集合名即 marker 归属者，多个 provider 标注同一文件互不覆盖。
 - **`getDiagnostics()` / `getDiagnostics(resource)`**：读全源（所有集合的）诊断快照——VSCode 里是同步返回，这里经 RPC 故返回 `Promise`；快照非 live 视图，且读回不含 `relatedInformation`。配套的 `onDidChangeDiagnostics` 在任意集合变更时触发（50ms 防抖），事件携带受影响 URI 列表。
 - **`setLanguageServerStatus(id, status)`**：上报语言服务生命周期（`'starting' | 'ready' | 'error'`）。宿主据此在状态栏显示启动 spinner，并让「转到定义 / 查看引用」等导航命令在服务就绪前显示进度并等待，而不是静默卡住。
 - **`getLanguages()`**：编辑器当前已知的全部语言 id（如 `'typescript'`）。
+- **`setTextDocumentLanguage(document, languageId)`**：切换已打开文档的语言 id，等价 close(旧语言)+open(新语言)——触发 `onDidCloseTextDocument` / `onDidOpenTextDocument` 与 `onLanguage:<新id>` 激活，返回替换后的 `TextDocument`；文档未打开时 reject。
+- **`setLanguageConfiguration(language, configuration)`**：动态设置语言配置（`comments` / `brackets` / `autoClosingPairs` / `surroundingPairs` / `wordPattern`），返回 `Disposable` 撤销。
 
 provider 的第一个参数是 `DocumentSelector`（语言 id 或 id 数组），返回值类型 `ProviderResult<T>`（同步/异步/可空均可）。provider 签名里的 `Position` / `Range` / `Hover` 等类型是 LSP 形状（见下文「基础类型与约定」）。完整的 provider 写法与 LSP 对接套路见[语言特性](../language-guide.md)。
 

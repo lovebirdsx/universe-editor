@@ -8,6 +8,7 @@ import {
   ConfigurationTarget,
   Event,
   URI,
+  getColorRegistry,
   type IFileService,
   type IHostService,
 } from '@universe-editor/platform'
@@ -389,5 +390,93 @@ describe('WorkbenchThemeService', () => {
     await vi.waitFor(() => {
       expect(service.getFileIconTheme().id).toBe('')
     })
+  })
+})
+
+describe('WorkbenchThemeService.registerColors', () => {
+  let config: ConfigurationService
+  let service: WorkbenchThemeService
+
+  beforeEach(() => {
+    localStorage.clear()
+    document.head
+      .querySelectorAll(
+        'style.contributedColorTheme, style.contributedFileIconTheme, style.contributedProductIconTheme',
+      )
+      .forEach((el) => el.remove())
+    delete document.documentElement.dataset.theme
+    registerUniverseColorIds()
+    config = new ConfigurationService()
+    service = new WorkbenchThemeService(
+      config,
+      makeFileService(makeFiles()),
+      undefined as never,
+      makeHostService(),
+    )
+  })
+
+  afterEach(() => {
+    service.dispose()
+  })
+
+  it('registers a contributed color and refreshes the CSS variable block', async () => {
+    registerBuiltInThemes(service)
+    await service.setColorTheme('Universe Dark')
+
+    service.registerColors([
+      {
+        id: 'myExt.color1',
+        description: 'Custom color',
+        defaults: { light: '#ff0000', dark: '#00ff00' },
+      },
+    ])
+
+    expect(styleElement()?.textContent).toContain('--vscode-myExt-color1: #00ff00')
+    expect(service.getColor('myExt.color1')?.toString()).toBe('#00ff00')
+  })
+
+  it('maps high-contrast overrides to hcLight/hcDark, falling back to light/dark', async () => {
+    service.registerColors([
+      {
+        id: 'myExt.color2',
+        description: 'With HC',
+        defaults: {
+          light: '#111111',
+          dark: '#222222',
+          highContrastLight: '#333333',
+        },
+      },
+    ])
+
+    const contrib = getColorRegistry()
+      .getColors()
+      .find((c) => c.id === 'myExt.color2')
+    expect(contrib?.defaults).toMatchObject({
+      light: '#111111',
+      dark: '#222222',
+      hcLight: '#333333',
+      hcDark: '#222222',
+    })
+  })
+
+  it('deregisters its colors on dispose', async () => {
+    registerBuiltInThemes(service)
+    await service.setColorTheme('Universe Dark')
+
+    const handle = service.registerColors([
+      { id: 'myExt.color3', description: 'Gone', defaults: { light: '#aaa', dark: '#bbb' } },
+    ])
+    expect(
+      getColorRegistry()
+        .getColors()
+        .some((c) => c.id === 'myExt.color3'),
+    ).toBe(true)
+
+    handle.dispose()
+    expect(
+      getColorRegistry()
+        .getColors()
+        .some((c) => c.id === 'myExt.color3'),
+    ).toBe(false)
   })
 })

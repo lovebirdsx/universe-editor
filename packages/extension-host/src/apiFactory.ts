@@ -23,6 +23,7 @@ import type {
   DocumentRangeFormattingEditProvider,
   DocumentSelector,
   DocumentSemanticTokensProvider,
+  DocumentRangeSemanticTokensProvider,
   DocumentSymbolProvider,
   Event,
   Extension,
@@ -35,6 +36,7 @@ import type {
   ImplementationProvider,
   InlayHintsProvider,
   InputBoxOptions,
+  LanguageConfiguration,
   LanguageServerStatus,
   Memento,
   OnTypeFormattingEditProvider,
@@ -293,10 +295,25 @@ export interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerDocumentRangeSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeSemanticTokensProvider,
+  ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getLanguages(): Promise<string[]>
+  /**
+   * Switch an open document's language id. Rejects when the document is not
+   * (yet) mirrored; otherwise resolves the replacement TextDocument after the
+   * renderer re-pushed it as close(old) + open(new).
+   */
+  setTextDocumentLanguage(document: TextDocument, languageId: string): Promise<TextDocument>
+  /**
+   * Apply a language configuration (comments/brackets/wordPattern/…) for
+   * `language`; the returned Disposable revokes it.
+   */
+  setLanguageConfiguration(language: string, configuration: LanguageConfiguration): Disposable
   /**
    * `languages.getDiagnostics` — every diagnostic the workbench currently
    * shows (all owners), forwarded uncached. Returns LSP-shaped diagnostics

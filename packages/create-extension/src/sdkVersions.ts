@@ -19,8 +19,8 @@ export interface SdkVersions {
 }
 
 export const SDK_VERSIONS: SdkVersions = {
-  extensionApi: '0.12.1',
-  uex: '0.3.1',
+  extensionApi: '0.13.0',
+  uex: '0.3.2',
   esbuild: '^0.25.0',
   typescript: '^5.8.0',
   nodeTypes: '^22.0.0',

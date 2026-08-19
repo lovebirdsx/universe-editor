@@ -33,6 +33,8 @@ import {
   NullLogger,
   ThemeTypeSelector,
   URI,
+  getColorRegistry,
+  registerColor,
   type ColorIdentifier,
   type Event,
   type IColorTheme,
@@ -44,6 +46,7 @@ import {
   type IThemeService,
 } from '@universe-editor/platform'
 import type {
+  IColorContribution as IManifestColorContribution,
   IIconThemeContribution as IManifestIconThemeContribution,
   IProductIconThemeContribution as IManifestProductIconThemeContribution,
   IThemeContribution as IManifestThemeContribution,
@@ -299,6 +302,52 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     return [...this._colorThemeRegistry.getThemes()]
   }
 
+  /**
+   * Register `contributes.colors` entries (called by the extension translator).
+   * Each id joins the global color registry so its `--vscode-*` CSS variable is
+   * emitted and `new ThemeColor(id)` resolves. Idempotent across host restarts:
+   * registerColor overwrites a re-registered id with identical values. Returns a
+   * disposable that deregisters the batch (translator teardown / extension removal).
+   */
+  registerColors(contributions: readonly IManifestColorContribution[]): IDisposable {
+    const registered: string[] = []
+    for (const contribution of contributions) {
+      if (
+        getColorRegistry()
+          .getColors()
+          .some((c) => c.id === contribution.id)
+      ) {
+        this._logger.warn(`duplicate color id replaced: ${contribution.id}`)
+      }
+      registerColor(
+        contribution.id,
+        {
+          light: contribution.defaults.light,
+          dark: contribution.defaults.dark,
+          hcDark: contribution.defaults.highContrastDark ?? contribution.defaults.dark,
+          hcLight: contribution.defaults.highContrastLight ?? contribution.defaults.light,
+        },
+        contribution.description,
+      )
+      registered.push(contribution.id)
+    }
+    // New colors only reach the CSS variable block when the theme is re-applied.
+    // On a live theme (host restart / late registration), refresh it now.
+    if (this._colorThemeApplied) {
+      this._applyCurrentTheme()
+    }
+    return {
+      dispose: () => {
+        for (const id of registered) {
+          getColorRegistry().deregisterColor(id)
+        }
+        if (this._colorThemeApplied) {
+          this._applyCurrentTheme()
+        }
+      },
+    }
+  }
+
   // ------------------------------------------------------------------ icon theme registration
 
   /**
@@ -489,6 +538,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   }
 
   private _initialized = false
+  private _colorThemeApplied = false
   private readonly _onDidChangeColorThemes = this._register(new Emitter<void>())
   /** Fires when the set of registered color themes changes. */
   readonly onDidChangeColorThemes: Event<void> = this._onDidChangeColorThemes.event
@@ -556,6 +606,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
       this._currentColorTheme = theme
       this._applyCustomizationsToCurrentTheme()
       this._applyCurrentTheme()
+      this._colorThemeApplied = true
       if (options.writeConfiguration === true) {
         // VSCode 同款：跟随系统时写到当前 scheme 的 preferred 设置键。
         this._configurationService.update(

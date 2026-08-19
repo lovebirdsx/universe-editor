@@ -37,6 +37,7 @@ import {
   IQuickInputService,
   IStatusBarService,
   IStorageService,
+  IThemeService,
   IUriIdentityService,
   IViewsService,
   IWorkspaceService,
@@ -199,6 +200,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @ILayoutService private readonly _layout: ILayoutService,
     @IViewsService private readonly _views: IViewsService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IThemeService private readonly _themeService: IThemeService,
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
     @IWorkspaceTrustManagementService
@@ -349,6 +351,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       languageFeatures: this._languageFeatures,
       editorService: this._editorService,
       uriIdentity: this._uriIdentity,
+      themeService: this._themeService,
       aiModel: this._aiModel,
       output: this._output,
       layout: this._layout,

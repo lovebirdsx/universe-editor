@@ -20,6 +20,7 @@ import type {
   DocumentHighlightProvider,
   DocumentLinkProvider,
   DocumentRangeFormattingEditProvider,
+  DocumentRangeSemanticTokensProvider,
   DocumentSelector,
   DocumentSemanticTokensProvider,
   DocumentSymbolProvider,
@@ -97,6 +98,7 @@ type AnyLanguageProvider =
   | DocumentFormattingEditProvider
   | CodeLensProvider
   | DocumentSemanticTokensProvider
+  | DocumentRangeSemanticTokensProvider
   | DocumentRangeFormattingEditProvider
   | OnTypeFormattingEditProvider
   | InlayHintsProvider
@@ -322,11 +324,37 @@ export class LanguageProviderRegistry {
     )
   }
 
+  /**
+   * Full-document semantic tokens. Inlined (rather than `_register`) for the same
+   * reason as CodeLens: `onDidChangeSemanticTokens` is a server-driven refresh
+   * signal, forwarded to the renderer as `$emitSemanticTokensDidChange(handle)`.
+   */
   registerDocumentSemanticTokensProvider(
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable {
-    return this._register('documentSemanticTokens', selector, provider, {
+    const languages = this._languages()
+    const handle = this._languageHandle++
+    this._providers.set(handle, { type: 'documentSemanticTokens', provider })
+    void languages.$registerProvider(handle, 'documentSemanticTokens', toSelector(selector), {
+      semanticTokensLegend: provider.legend,
+    })
+    const changeSub = provider.onDidChangeSemanticTokens?.(() => {
+      languages.$emitSemanticTokensDidChange(handle)
+    })
+    return {
+      dispose: () => {
+        changeSub?.dispose()
+        if (this._providers.delete(handle)) void languages.$unregisterProvider(handle)
+      },
+    }
+  }
+
+  registerDocumentRangeSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeSemanticTokensProvider,
+  ): Disposable {
+    return this._register('documentRangeSemanticTokens', selector, provider, {
       semanticTokensLegend: provider.legend,
     })
   }
@@ -718,6 +746,24 @@ export class LanguageProviderRegistry {
     if (!provider) return null
     return (
       (await provider.provideDocumentSemanticTokens(this._documents.getOrSynthesize(uri))) ?? null
+    )
+  }
+
+  async provideDocumentRangeSemanticTokens(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<SemanticTokens | null> {
+    const provider = this._provider<DocumentRangeSemanticTokensProvider>(
+      handle,
+      'documentRangeSemanticTokens',
+    )
+    if (!provider) return null
+    return (
+      (await provider.provideDocumentRangeSemanticTokens(
+        this._documents.getOrSynthesize(uri),
+        range,
+      )) ?? null
     )
   }
 

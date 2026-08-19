@@ -118,6 +118,34 @@ export class ExtHostDocuments {
     })
   }
 
+  /**
+   * Resolve once the document for `uri` re-opens as `languageId` (an already-open
+   * document with that language resolves immediately). Backs
+   * `setTextDocumentLanguage`, whose renderer round-trip re-pushes the document
+   * as close(old) + open(new) — this waiter catches that open.
+   */
+  whenOpenWithLanguage(
+    uri: UriComponents,
+    languageId: string,
+    timeoutMs: number,
+  ): Promise<TextDocument | undefined> {
+    const key = this._key(uri)
+    const existing = this._docs.get(key)
+    if (existing && existing.languageId === languageId) return Promise.resolve(existing)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        sub.dispose()
+        resolve(undefined)
+      }, timeoutMs)
+      const sub = this.onDidOpen((doc) => {
+        if (this._key(doc.uri) !== key || doc.languageId !== languageId) return
+        clearTimeout(timer)
+        sub.dispose()
+        resolve(doc)
+      })
+    })
+  }
+
   /** The mirrored document for `uri`, or a synthetic empty one (providers only
    *  need its URI to forward to the LSP server, which holds the real text). */
   getOrSynthesize(uri: UriComponents): TextDocument {

@@ -87,6 +87,7 @@ function fakeLanguageFeatures(): {
     registerOnTypeFormattingEditProvider: register('onTypeFormatting'),
     registerInlayHintsProvider: register('inlayHints'),
     registerDocumentSemanticTokensProvider: register('documentSemanticTokens'),
+    registerDocumentRangeSemanticTokensProvider: register('documentRangeSemanticTokens'),
     registerCodeLensProvider: register('codeLens'),
   } as unknown as ILanguageFeaturesService
   return {
@@ -248,6 +249,54 @@ describe('MainThreadLanguages', () => {
     // The emitter is released with the provider store: a late emit finds nothing.
     mt.$emitInlayHintsDidChange(7)
     expect(fired).toBe(1)
+  })
+
+  it('$emitSemanticTokensDidChange fires the provider onDidChange so Monaco re-requests', async () => {
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+
+    const legend = { tokenTypes: ['variable'], tokenModifiers: ['readonly'] }
+    await mt.$registerProvider(7, 'documentSemanticTokens', ['typescript'], {
+      semanticTokensLegend: legend,
+    })
+    const provider = lf.registeredProviders().get('documentSemanticTokens')?.[0] as {
+      onDidChange: (listener: () => void) => IDisposable
+      getLegend: () => { tokenTypes: string[]; tokenModifiers: string[] }
+    }
+    expect(provider.getLegend()).toEqual(legend)
+    let fired = 0
+    const sub = provider.onDidChange(() => fired++)
+
+    mt.$emitSemanticTokensDidChange(7)
+    expect(fired).toBe(1)
+    // An unknown handle is a no-op (the host may emit after an unregister raced).
+    mt.$emitSemanticTokensDidChange(99)
+    expect(fired).toBe(1)
+
+    sub.dispose()
+    mt.dispose()
+    mt.$emitSemanticTokensDidChange(7)
+    expect(fired).toBe(1)
+  })
+
+  it('registers document-range-semantic-tokens providers per language with legend', async () => {
+    const lf = fakeLanguageFeatures()
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, lf.service)
+
+    const legend = { tokenTypes: ['type'], tokenModifiers: [] }
+    await mt.$registerProvider(1, 'documentRangeSemanticTokens', ['typescript', 'javascript'], {
+      semanticTokensLegend: legend,
+    })
+    expect(lf.live()).toBe(2)
+
+    const provider = lf.registeredProviders().get('documentRangeSemanticTokens')?.[0] as {
+      getLegend: () => { tokenTypes: string[]; tokenModifiers: string[] }
+    }
+    expect(provider.getLegend()).toEqual(legend)
+
+    await mt.$unregisterProvider(1)
+    expect(lf.live()).toBe(0)
+    mt.dispose()
   })
 
   it('$getLanguages enumerates the Monaco language registry ids', async () => {
@@ -554,5 +603,98 @@ describe('MainThreadLanguages — leak tracking', () => {
     )
 
     expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+})
+
+describe('MainThreadLanguages — language switching & configuration', () => {
+  interface FakeLanguageMonaco {
+    monacoNs: Record<string, unknown>
+    configCalls: Array<{ languageId: string; config: unknown }>
+    disposedConfigs: string[]
+    setModelLanguage: Array<{ languageId: string }>
+    setModel: (model: unknown) => void
+  }
+
+  function fakeLanguageMonaco(): FakeLanguageMonaco {
+    const configCalls: Array<{ languageId: string; config: unknown }> = []
+    const disposedConfigs: string[] = []
+    const setModelLanguage: Array<{ languageId: string }> = []
+    let currentModel: unknown = { isDisposed: () => false, getLanguageId: () => 'plaintext' }
+    return {
+      configCalls,
+      disposedConfigs,
+      setModelLanguage,
+      setModel: (model) => {
+        currentModel = model
+      },
+      monacoNs: {
+        languages: {
+          getLanguages: () => [],
+          setLanguageConfiguration: (languageId: string, config: unknown) => {
+            configCalls.push({ languageId, config })
+            return { dispose: () => disposedConfigs.push(languageId) }
+          },
+        },
+        Uri: { parse: (s: string) => ({ toString: () => s }) },
+        editor: {
+          getModel: () => currentModel,
+          setModelLanguage: (_model: unknown, languageId: string) => {
+            setModelLanguage.push({ languageId })
+          },
+        },
+      },
+    }
+  }
+
+  it('$setTextDocumentLanguage switches the matched model language', async () => {
+    const fake = fakeLanguageMonaco()
+    monacoNs = fake.monacoNs
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, fakeLanguageFeatures().service)
+
+    await mt.$setTextDocumentLanguage(URI.file('/ws/a.ts').toJSON(), 'javascript')
+    expect(fake.setModelLanguage).toEqual([{ languageId: 'javascript' }])
+    mt.dispose()
+  })
+
+  it('$setTextDocumentLanguage rejects when no live model matches', async () => {
+    const fake = fakeLanguageMonaco()
+    fake.setModel(undefined)
+    monacoNs = fake.monacoNs
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, fakeLanguageFeatures().service)
+
+    await expect(
+      mt.$setTextDocumentLanguage(URI.file('/ws/a.ts').toJSON(), 'javascript'),
+    ).rejects.toThrow('no open document')
+    mt.dispose()
+  })
+
+  it('$setLanguageConfiguration recompiles the wordPattern and dispose revokes it', async () => {
+    const fake = fakeLanguageMonaco()
+    monacoNs = fake.monacoNs
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, fakeLanguageFeatures().service)
+
+    await mt.$setLanguageConfiguration(7, 'typescript', {
+      comments: { lineComment: '//' },
+      wordPattern: '[a-z]+',
+    })
+    expect(fake.configCalls[0]?.languageId).toBe('typescript')
+    expect(fake.configCalls[0]?.config).toMatchObject({ comments: { lineComment: '//' } })
+    expect((fake.configCalls[0]?.config as { wordPattern: unknown }).wordPattern).toBeInstanceOf(
+      RegExp,
+    )
+
+    await mt.$unregisterLanguageConfiguration(7)
+    expect(fake.disposedConfigs).toEqual(['typescript'])
+    mt.dispose()
+  })
+
+  it('$setLanguageConfiguration drops an uncompilable wordPattern', async () => {
+    const fake = fakeLanguageMonaco()
+    monacoNs = fake.monacoNs
+    const mt = new MainThreadLanguages({} as IExtHostLanguages, fakeLanguageFeatures().service)
+
+    await mt.$setLanguageConfiguration(3, 'typescript', { wordPattern: '[' })
+    expect(fake.configCalls[0]?.config).toEqual({})
+    mt.dispose()
   })
 })

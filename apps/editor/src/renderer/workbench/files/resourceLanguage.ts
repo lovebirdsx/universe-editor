@@ -1,4 +1,6 @@
 import type { URI } from '@universe-editor/platform'
+import { languageRegistry } from '../../services/languages/LanguageRegistry.js'
+import { toMonacoLanguageId } from '../../services/textmate/languageIdMapping.js'
 import { extensionOfBasename, basenameOfResource } from './resourceInfo.js'
 
 // Maps file extensions to Monaco language ids. Most ids ship Monaco tokenizers
@@ -157,13 +159,29 @@ const LANG_BY_BASENAME_PATTERN: readonly [RegExp, string][] = [[/^\.env\./, 'dot
 export function languageForResource(resource: URI): string {
   const basename = basenameOfResource(resource)
   const lowerBasename = basename.toLowerCase()
+
+  // Exact filename: extension declarations win over the built-in table (VSCode
+  // semantics — later-registered associations take precedence).
+  const contributedName = languageRegistry.lookupByFilename(lowerBasename)
+  if (contributedName) return toMonacoLanguageId(contributedName.id)
   const byName = LANG_BY_FILENAME[lowerBasename]
   if (byName) return byName
+
+  // Basename pattern / filenamePatterns, before the extension fallback.
+  const contributedPattern = languageRegistry.lookupByPattern(resource.path.toLowerCase())
+  if (contributedPattern) return toMonacoLanguageId(contributedPattern.id)
   for (const [pattern, language] of LANG_BY_BASENAME_PATTERN) {
     if (pattern.test(lowerBasename)) return language
   }
+
+  // Extension: contributed first, then the built-in table.
   const ext = extensionOfBasename(basename)
-  return ext ? (LANG_BY_EXT[ext] ?? 'plaintext') : 'plaintext'
+  if (ext) {
+    const contributedExt = languageRegistry.lookupByExtension(ext)
+    if (contributedExt) return toMonacoLanguageId(contributedExt.id)
+    return LANG_BY_EXT[ext] ?? 'plaintext'
+  }
+  return 'plaintext'
 }
 
 export function isMarkdownPreviewResource(resource: URI): boolean {

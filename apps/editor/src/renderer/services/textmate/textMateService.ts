@@ -16,13 +16,21 @@ import {
   type IDisposable,
   type ILogger,
 } from '@universe-editor/platform'
-import type { IGrammarContribution } from '@universe-editor/extensions-common'
+import type {
+  IGrammarContribution,
+  ILanguageContribution,
+} from '@universe-editor/extensions-common'
 import type {
   ITokenizationSupport,
   LazyTokenizationSupport as LazyTokenizationSupportClass,
 } from 'monaco-editor/esm/vs/editor/common/languages.js'
 import type { IRawTheme } from 'vscode-textmate'
 import type { IThemeRegistrationContext } from '../extensions/ExtensionPointTranslator.js'
+import { languageRegistry, type ILanguageDefinition } from '../languages/LanguageRegistry.js'
+import {
+  parseLanguageConfiguration,
+  type ILanguageConfigurationMapping,
+} from '../languages/languageConfiguration.js'
 import { GrammarRegistry, type IGrammarDefinition } from './grammarRegistry.js'
 import { toMonacoLanguageId } from './languageIdMapping.js'
 import { getOnigLib } from './onigurumaLoader.js'
@@ -38,6 +46,12 @@ export interface ITextMateService {
     context: IThemeRegistrationContext,
   ): IDisposable
 
+  /** Batch-register `contributes.languages` entries (translator callback). */
+  registerLanguages(
+    languages: readonly ILanguageContribution[],
+    context: IThemeRegistrationContext,
+  ): IDisposable
+
   readonly grammarRegistry: GrammarRegistry
   readonly onDidChangeGrammars: Event<void>
 
@@ -49,7 +63,11 @@ export interface ITextMateService {
     languages: {
       getEncodedLanguageId(languageId: string): number
       getLanguages(): readonly { id: string }[]
-      register(language: { id: string }): void
+      register(language: IMonacoLanguagePoint): void
+      setLanguageConfiguration(
+        languageId: string,
+        configuration: ILanguageConfigurationMapping,
+      ): void
     }
     editor: {
       getModels(): readonly { getLanguageId(): string }[]
@@ -75,6 +93,16 @@ export interface ITextMateService {
 
 export const ITextMateService = createDecorator<ITextMateService>('textMateService')
 
+/** A language registration handed to `monaco.languages.register`. */
+export interface IMonacoLanguagePoint {
+  readonly id: string
+  readonly aliases?: string[]
+  readonly extensions?: string[]
+  readonly filenames?: string[]
+  readonly filenamePatterns?: string[]
+  readonly mimetypes?: string[]
+}
+
 /** monaco deep-import surface resolved during initialize(). */
 interface IMonacoTokenizationBindings {
   readonly TokenizationRegistry: {
@@ -96,7 +124,16 @@ export class TextMateService extends Disposable implements ITextMateService {
   private readonly _logger: ILogger
   private _monaco: IMonacoTokenizationBindings | undefined
   private _encodeLanguageId: ((languageId: string) => number) | undefined
-  private _registerMonacoLanguage: ((languageId: string) => void) | undefined
+  private _languages:
+    | {
+        register(language: IMonacoLanguagePoint): void
+        setLanguageConfiguration(
+          languageId: string,
+          configuration: ILanguageConfigurationMapping,
+        ): void
+      }
+    | undefined
+  private _knownLanguages: Set<string> | undefined
   private _getLiveLanguages: (() => Set<string>) | undefined
   private _registrations: DisposableStore | undefined
   private _grammarFactory: TMGrammarFactory | undefined
@@ -125,11 +162,27 @@ export class TextMateService extends Disposable implements ITextMateService {
     return this.grammarRegistry.registerGrammars(definitions)
   }
 
+  registerLanguages(
+    languages: readonly ILanguageContribution[],
+    context: IThemeRegistrationContext,
+  ): IDisposable {
+    const definitions: ILanguageDefinition[] = languages.map((language) => ({
+      ...language,
+      extensionLocation: context.extensionLocation,
+      sourceExtensionId: context.extensionId,
+    }))
+    return languageRegistry.registerLanguages(definitions)
+  }
+
   async initialize(monaco: {
     languages: {
       getEncodedLanguageId(languageId: string): number
       getLanguages(): readonly { id: string }[]
-      register(language: { id: string }): void
+      register(language: IMonacoLanguagePoint): void
+      setLanguageConfiguration(
+        languageId: string,
+        configuration: ILanguageConfigurationMapping,
+      ): void
     }
     editor: {
       getModels(): readonly { getLanguageId(): string }[]
@@ -148,20 +201,17 @@ export class TextMateService extends Disposable implements ITextMateService {
       LazyTokenizationSupport: languages.LazyTokenizationSupport,
     }
     this._encodeLanguageId = (languageId) => monaco.languages.getEncodedLanguageId(languageId)
+    this._languages = monaco.languages
     // Monaco's createModel falls back to plaintext for language ids its own
     // registry doesn't know (LanguageService._createAndGetLanguageIdentifier),
     // which would silently un-tokenize grammar-only languages like toml. The
     // selection re-evaluates on language registration, so models already open
     // switch over once we register the id here.
-    const knownLanguages = new Set(monaco.languages.getLanguages().map((l) => l.id))
-    this._registerMonacoLanguage = (languageId) => {
-      if (knownLanguages.has(languageId)) {
-        return
-      }
-      knownLanguages.add(languageId)
-      monaco.languages.register({ id: languageId })
-    }
+    this._knownLanguages = new Set(monaco.languages.getLanguages().map((l) => l.id))
     this._register(this.grammarRegistry.onDidChangeGrammars(() => this._rebuildRegistrations()))
+    this._register(
+      languageRegistry.onDidChangeLanguages(() => this._rebuildLanguageRegistrations()),
+    )
     this._getLiveLanguages = () =>
       new Set(monaco.editor.getModels().map((model) => model.getLanguageId()))
     // Models resolve tokenization exactly once per language via monaco's
@@ -178,6 +228,7 @@ export class TextMateService extends Disposable implements ITextMateService {
       monaco.editor.onDidChangeModelLanguage((e) => this._warmUpLanguage(e.model.getLanguageId())),
     )
     this._rebuildRegistrations()
+    this._rebuildLanguageRegistrations()
     if (this._pendingTheme !== undefined) {
       this.setTheme(this._pendingTheme.theme, this._pendingTheme.colorMap)
       this._pendingTheme = undefined
@@ -231,7 +282,7 @@ export class TextMateService extends Disposable implements ITextMateService {
         continue
       }
       seenLanguages.add(monacoLanguageId)
-      this._registerMonacoLanguage?.(monacoLanguageId)
+      this._registerMonacoLanguagePoint({ id: monacoLanguageId })
       const lazySupport = new monaco.LazyTokenizationSupport(() =>
         this._createTokenizationSupport(monacoLanguageId, definition),
       )
@@ -254,6 +305,68 @@ export class TextMateService extends Disposable implements ITextMateService {
     // here instead of bookkeeping past resolutions: it is the only condition
     // that matters.
     this._warmUpLiveModels()
+  }
+
+  /** Register a language id into monaco, deduped across grammar + language registrations. */
+  private _registerMonacoLanguagePoint(point: IMonacoLanguagePoint): void {
+    const languages = this._languages
+    const known = this._knownLanguages
+    if (languages === undefined || known === undefined) return
+    if (known.has(point.id)) return
+    known.add(point.id)
+    languages.register(point)
+  }
+
+  /**
+   * Apply `contributes.languages` to monaco: register every declared language id
+   * (mapped onto monaco's id space, as grammars are) and, for contributions with
+   * a `configuration`, read + apply its language-configuration.json. A registration
+   * arrives before monaco loads, so the registry change re-runs this once monaco
+   * is live; a re-scan (host restart) unregisters + re-registers and re-applies.
+   */
+  private _rebuildLanguageRegistrations(): void {
+    if (this._languages === undefined || this._knownLanguages === undefined) return
+    const configured = new Set<string>()
+    for (const definition of languageRegistry.getDefinitions()) {
+      const monacoLanguageId = toMonacoLanguageId(definition.id)
+      this._registerMonacoLanguagePoint({
+        id: monacoLanguageId,
+        ...(definition.aliases !== undefined ? { aliases: definition.aliases } : {}),
+        ...(definition.extensions !== undefined ? { extensions: definition.extensions } : {}),
+        ...(definition.filenames !== undefined ? { filenames: definition.filenames } : {}),
+        ...(definition.filenamePatterns !== undefined
+          ? { filenamePatterns: definition.filenamePatterns }
+          : {}),
+        ...(definition.mimetypes !== undefined ? { mimetypes: definition.mimetypes } : {}),
+      })
+      // Several manifest languages can collapse onto one monaco id (json + jsonc
+      // + jsonl → json): the first contribution in registration order wins.
+      if (definition.configuration !== undefined && !configured.has(monacoLanguageId)) {
+        configured.add(monacoLanguageId)
+        void this._applyLanguageConfiguration(monacoLanguageId, definition)
+      }
+    }
+  }
+
+  private async _applyLanguageConfiguration(
+    monacoLanguageId: string,
+    definition: ILanguageDefinition,
+  ): Promise<void> {
+    if (definition.configuration === undefined) return
+    try {
+      const location = URI.joinPath(definition.extensionLocation, definition.configuration)
+      const content = await this._fileService.readFileText(location)
+      const configuration = parseLanguageConfiguration(content)
+      if (configuration === undefined) return
+      this._languages?.setLanguageConfiguration(monacoLanguageId, configuration)
+      this._logger.info(`language configuration applied for ${monacoLanguageId}`)
+    } catch (err) {
+      this._logger.warn(
+        `failed to apply language configuration for ${monacoLanguageId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
   }
 
   /** Force-resolve the factory of every registered language a live model uses. */

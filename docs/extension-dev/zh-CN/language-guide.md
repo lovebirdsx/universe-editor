@@ -64,12 +64,15 @@ import { languages, type Hover, type Diagnostic } from '@universe-editor/extensi
 | `registerDocumentRangeFormattingEditProvider` | 格式化选中范围（Format Selection） | 传入 range 是提示，provider 可扩到完整语法节点 |
 | `registerOnTypeFormattingEditProvider` | 键入触发字符即格式化 | 至少一个触发字符；仅用户开启 `editor.formatOnType`（默认关）时生效 |
 | `registerInlayHintsProvider` | 行内注解（参数名、推断类型） | 可选 `resolveInlayHint` 惰性解析详情（label parts 的 tooltip/location/command、hint 级 tooltip、textEdits；`InlayHint.data` 有效）；可选 `onDidChangeInlayHints` 让编辑器重取 |
-| `registerDocumentSemanticTokensProvider` | 语义着色 | provider 以字段形式携带 `legend`（注册时同步返回给编辑器） |
+| `registerDocumentSemanticTokensProvider` | 语义着色（全文档） | provider 以字段形式携带 `legend`（注册时同步返回给编辑器）；可选 `onDidChangeSemanticTokens` 事件让编辑器重取 |
+| `registerDocumentRangeSemanticTokensProvider` | 语义着色（可见范围） | 与全文档版同契约，编辑器仅对可见范围懒取；`legend` 挂在 provider 上 |
 | `registerCodeLensProvider` | 行上方可操作注解（"3 references"） | 两阶段 `resolveCodeLens`；可选 `onDidChangeCodeLenses` 事件让编辑器重取 |
 | `createDiagnosticCollection` | 建一组诊断（编辑器里的红/黄波浪线） | 见下节 |
 | `getDiagnostics` / `onDidChangeDiagnostics` | 读全源诊断快照 / 订阅诊断变更 | 见下节 |
 | `setLanguageServerStatus` | 上报语言服务器生命周期状态 | 见「语言服务器状态」节 |
 | `getLanguages` | 列出编辑器已知的全部语言 id | |
+| `setTextDocumentLanguage` | 切换已打开文档的语言 id | 等价 close(旧语言)+open(新语言)，返回替换后的 `TextDocument`；文档未打开时 reject |
+| `setLanguageConfiguration` | 动态设置语言配置（comments/brackets/wordPattern 等） | 返回 `Disposable` 撤销 |
 
 逐方法签名与 JSDoc 以编辑器里的类型提示为准。
 

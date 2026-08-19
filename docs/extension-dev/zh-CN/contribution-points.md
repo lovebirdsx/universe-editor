@@ -18,7 +18,9 @@
 | `themes` | 颜色主题 |
 | `iconThemes` | 文件图标主题 |
 | `productIconThemes` | 产品图标主题 |
+| `colors` | 声明自定义主题色（供 `ThemeColor` 装饰引用） |
 | `grammars` | TextMate 语法（词法高亮） |
+| `languages` | 声明语言（id / 文件关联 / language-configuration） |
 | `mcpServers` | 声明式注入 MCP server（stdio），供 AI agent 会话使用 |
 
 **前向兼容**：`contributes` 对象本身是透传（passthrough）校验的——写了宿主不认识的贡献点不会报错，会被静默忽略。这是为了旧宿主能加载新扩展，不是给你试验幻想贡献点的许可证：**只写本文列出的分支**。
@@ -72,7 +74,7 @@
 |---|---|
 | `commandPalette` | 命令面板（用途见 commands 节的 opt-out） |
 | `editor/title` | 编辑器标签页标题栏右侧 |
-| `editor/context` | 编辑器内右键菜单（⚠ 截至 0.12.0 宿主未渲染：贡献被接受但条目**永不出现**，暂不要使用） |
+| `editor/context` | 编辑器内右键菜单 |
 | `explorer/context` | 资源管理器右键菜单 |
 | `view/title` | 侧栏视图标题栏 |
 | `scm/title` | 源代码管理视图标题栏 |
@@ -91,6 +93,7 @@
 |---|---|---|
 | `commandPalette` / `scm/title` / `scm/inputBox` | 无 | — |
 | `editor/title` | `{ groupId: number }` 编辑器组 id | — |
+| `editor/context` | 右键的文档 URI（`UriComponents`，需 `URI.revive()` 恢复） | — |
 | `explorer/context` | `{ target, resource, parent, isDirectory: boolean }` | — |
 | `view/title` | 视图 id（字符串） | — |
 | `scm/resourceState/context` | `{ resourceUri: string, contextValue?: string, scmResourceGroupId: string }` | 多选行的同形数组 |
@@ -102,6 +105,7 @@
 两点注意：
 
 - **`explorer/context` 的 `resource`/`target`/`parent` 是 `UriComponents` 而非 `URI` 实例**——经 IPC JSON 序列化后 `fsPath` getter 丢失，从 `scheme + path` 拼路径或 `URI.revive()` 恢复（内置 perforce 扩展的 `resolveTargetPath` 是实证写法）。`parent` 恒存在（目录自身或其父目录，最坏回退工作区根）。
+- **`editor/context` 的第一个参数是右键那一刻编辑器持有的文档 URI**——同样经 IPC 后是 `UriComponents`，用 `URI.revive()` 恢复。`when` 可用 `editorHasSelection` / `editorReadonly` / `editorLangId` / `resourceScheme` / `resourceExtname` 等编辑器上下文 key。
 - **SCM 三个位置的 `resourceUri` 是本地文件路径字符串**（由你的 `SourceControlResource.resourceUri` 提供，`string` 类型），不是 URI。
 
 
@@ -421,6 +425,43 @@
 }
 ```
 
+## colors
+
+声明自定义主题色：一个带 light/dark（及可选高对比度）默认值的颜色 id。扩展随后用 `new ThemeColor(id)` 把它引用进装饰的颜色字段（`backgroundColor` / `borderColor` / `overviewRulerColor`），颜色随当前主题自动切换。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 颜色 id，如 `my-extension.tint`；`new ThemeColor(id)` 与主题 JSON 的 `colors` 键都用它 |
+| `description` | string | 是 | 颜色用途说明 |
+| `defaults.light` | string | 是 | 亮色主题默认值：hex（`#RRGGBB` / `#RRGGBBAA`）或引用另一个颜色 id（如 `editor.background`） |
+| `defaults.dark` | string | 是 | 暗色主题默认值，同上 |
+| `defaults.highContrastLight` | string | 否 | 高对比亮色默认值；缺省回退 `defaults.light` |
+| `defaults.highContrastDark` | string | 否 | 高对比暗色默认值；缺省回退 `defaults.dark` |
+
+```jsonc
+{
+  "contributes": {
+    "colors": [
+      {
+        "id": "my-extension.tint",
+        "description": "The accent color for my decorations",
+        "defaults": {
+          "light": "#e0a0a0",
+          "dark": "#a06060",
+          "highContrastDark": "#ff8080"
+        }
+      }
+    ]
+  }
+}
+```
+
+行为：
+
+- **注册进颜色注册表**：宿主为每个 id 生成 `--vscode-<id>`（`.` 转 `-`）CSS 变量，随主题切换自动刷新；主题 JSON 与 `workbench.colorCustomizations` 都能覆盖它。
+- **装饰引用**：`window.createTextEditorDecorationType({ backgroundColor: new ThemeColor('my-extension.tint') })` 让装饰颜色跟随主题——`backgroundColor` / `borderColor` 走 CSS 变量实时追新；`overviewRulerColor` 在创建装饰时解析为当前主题色，切换主题后需重新 `setDecorations` 才会追新（Monaco 概览标尺不能画 `var()`）。
+- **id 冲突**：与已注册 id 重复时，后注册者覆盖先注册者（宿主记一条 warning）；扩展卸载/禁用时其贡献的颜色一并撤销。
+
 ## grammars
 
 贡献 TextMate 语法，给语言提供词法高亮。`path` 指向 `.tmLanguage`（或 JSON 形式）语法文件。
@@ -448,6 +489,43 @@
   }
 }
 ```
+
+## languages
+
+贡献一门语言：声明语言 id、文件关联（后缀 / 文件名 / glob）与 language-configuration.json（注释、括号、自动闭合/环绕对、词边界正则）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | 是 | 语言 id（VSCode 语言 id；宿主按 grammar 同款映射并入 monaco id 空间，如 `jsonc` → `json`） |
+| `aliases` | string[] | 否 | 语言别名（「更改语言模式」列表的显示名来源） |
+| `extensions` | string[] | 否 | 关联的后缀，如 `.csv`；大小写不敏感，缺前导点自动补 |
+| `filenames` | string[] | 否 | 关联的精确文件名，如 `Makefile`；大小写不敏感 |
+| `filenamePatterns` | string[] | 否 | 关联的 glob，如 `*.sql`、`**/*.sql`（无斜杠形式匹配任意深度的 basename） |
+| `mimetypes` | string[] | 否 | 关联的 MIME 类型（当前仅透传给 Monaco 语言探测；检测主路径是 extensions/filenames/patterns） |
+| `configuration` | string | 否 | language-configuration.json（JSONC，允许注释）扩展根相对路径 |
+
+```jsonc
+{
+  "contributes": {
+    "languages": [
+      {
+        "id": "csv",
+        "aliases": ["CSV", "csv"],
+        "extensions": [".csv"],
+        "filenamePatterns": ["**/*.csv"],
+        "configuration": "./language-configuration.json"
+      }
+    ]
+  }
+}
+```
+
+行为：
+
+- **文件 → 语言检测**（打开文件时的语言推断，顺序）：精确文件名（内置表 + 扩展 `filenames`）→ basename/glob（内置 pattern + 扩展 `filenamePatterns`）→ 扩展名（内置表 + 扩展 `extensions`）→ `plaintext`。同一层级里**扩展声明优先于内置表**（VSCode 语义：后注册者胜），所以扩展既能覆盖内置关联，也能为 `.csv` 这类内置表没有的后缀补上语言。
+- **语言 id 注册进 Monaco**：语言声明在 Monaco 加载后统一注册，`id` 经 grammar 同款映射（`jsonc`→`json` 等）并入 monaco id 空间；新语言因此出现在「更改语言模式」列表里（列表来源 `monaco.languages.getLanguages()`）。
+- **language configuration**：`configuration` 指向的 JSONC 被解析后经 `monaco.languages.setLanguageConfiguration` 应用，生效字段为 `comments` / `brackets` / `autoClosingPairs` / `surroundingPairs` / `wordPattern`（`wordPattern` 写字符串形式，编译失败则忽略该项）。其余 VSCode 字段（`indentationRules` / `onEnterRules` / `folding` 等）当前不生效。
+- **纯声明式**：不需要 `main` / `activationEvents`——纯声明语言即可让匹配文件获得括号配对与注释切换。要真正着色通常还配一条 `grammars` 指向同 id 的 TextMate 语法（见 [grammars](#grammars)）。
 
 ## mcpServers
 

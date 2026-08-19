@@ -27,6 +27,7 @@ function recording(): {
   diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }>
   codeLensRefreshes: number[]
   inlayHintsRefreshes: number[]
+  semanticTokensRefreshes: number[]
 } {
   const registered: Array<{
     handle: number
@@ -38,12 +39,14 @@ function recording(): {
   const diagnostics: Array<{ owner: string; uri?: UriComponents; count?: number }> = []
   const codeLensRefreshes: number[] = []
   const inlayHintsRefreshes: number[] = []
+  const semanticTokensRefreshes: number[] = []
   return {
     registered,
     unregistered,
     diagnostics,
     codeLensRefreshes,
     inlayHintsRefreshes,
+    semanticTokensRefreshes,
     impl: {
       $registerProvider: (
         handle: number,
@@ -76,11 +79,17 @@ function recording(): {
       $emitInlayHintsDidChange: (handle: number) => {
         inlayHintsRefreshes.push(handle)
       },
+      $emitSemanticTokensDidChange: (handle: number) => {
+        semanticTokensRefreshes.push(handle)
+      },
       $setLanguageServerStatus: () => {},
       $getLanguages: () => Promise.resolve([]),
       $getDiagnostics: () => Promise.resolve([]),
       $subscribeDiagnostics: () => Promise.resolve(),
       $unsubscribeDiagnostics: () => Promise.resolve(),
+      $setTextDocumentLanguage: () => Promise.resolve(),
+      $setLanguageConfiguration: () => Promise.resolve(),
+      $unregisterLanguageConfiguration: () => Promise.resolve(),
     },
   }
 }
@@ -382,6 +391,78 @@ describe('LanguageProviderRegistry', () => {
     await expect(reg.resolveInlayHint(0, 0, 0)).resolves.toBeNull()
   })
 
+  it('registers document-semantic-tokens with legend metadata and bridges onDidChangeSemanticTokens', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const legend = { tokenTypes: ['variable'], tokenModifiers: ['readonly'] }
+    const listeners: Array<() => void> = []
+    const tokens = { data: [0, 0, 3, 0, 0] }
+    const disposable = reg.registerDocumentSemanticTokensProvider('typescript', {
+      legend,
+      onDidChangeSemanticTokens: (listener) => {
+        listeners.push(listener)
+        return { dispose: () => undefined }
+      },
+      provideDocumentSemanticTokens: () => tokens,
+    })
+    expect(mt.registered).toEqual([
+      {
+        handle: 0,
+        type: 'documentSemanticTokens',
+        selector: ['typescript'],
+        metadata: { semanticTokensLegend: legend },
+      },
+    ])
+    listeners.forEach((l) => l())
+    expect(mt.semanticTokensRefreshes).toEqual([0])
+    await expect(reg.provideDocumentSemanticTokens(0, uri)).resolves.toEqual(tokens)
+    disposable.dispose()
+    expect(mt.unregistered).toEqual([0])
+  })
+
+  it('stops forwarding document-semantic-tokens refreshes after dispose', () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    let disposed = false
+    const listeners: Array<() => void> = []
+    const disposable = reg.registerDocumentSemanticTokensProvider('typescript', {
+      legend: { tokenTypes: [], tokenModifiers: [] },
+      onDidChangeSemanticTokens: (listener) => {
+        listeners.push(listener)
+        return { dispose: () => (disposed = true) }
+      },
+      provideDocumentSemanticTokens: () => null,
+    })
+    disposable.dispose()
+    expect(disposed).toBe(true)
+  })
+
+  it('registers a document-range-semantic-tokens provider and routes provideDocumentRangeSemanticTokens', async () => {
+    const mt = recording()
+    const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
+    const legend = { tokenTypes: ['type'], tokenModifiers: [] }
+    const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } }
+    const tokens = { data: [0, 0, 3, 1, 0] }
+    const disposable = reg.registerDocumentRangeSemanticTokensProvider('typescript', {
+      legend,
+      provideDocumentRangeSemanticTokens: (_doc, r) => {
+        expect(r).toEqual(range)
+        return tokens
+      },
+    })
+    expect(mt.registered).toEqual([
+      {
+        handle: 0,
+        type: 'documentRangeSemanticTokens',
+        selector: ['typescript'],
+        metadata: { semanticTokensLegend: legend },
+      },
+    ])
+    await expect(reg.provideDocumentRangeSemanticTokens(0, uri, range)).resolves.toEqual(tokens)
+    disposable.dispose()
+    expect(mt.unregistered).toEqual([0])
+  })
+
   it('returns null from the new provide* routes when the handle type does not match', async () => {
     const mt = recording()
     const reg = new LanguageProviderRegistry(() => mt.impl, new ExtHostDocuments())
@@ -397,6 +478,7 @@ describe('LanguageProviderRegistry', () => {
       }),
     ).resolves.toBeNull()
     await expect(reg.provideInlayHints(0, uri, range)).resolves.toBeNull()
+    await expect(reg.provideDocumentRangeSemanticTokens(0, uri, range)).resolves.toBeNull()
   })
 
   it('throws when language features are unavailable', () => {

@@ -481,6 +481,7 @@ export type LanguageProviderType =
   | 'codeAction'
   | 'documentFormatting'
   | 'documentSemanticTokens'
+  | 'documentRangeSemanticTokens'
   | 'codeLens'
   | 'documentRangeFormatting'
   | 'onTypeFormatting'
@@ -686,6 +687,11 @@ export interface IExtHostLanguages {
    */
   $resolveInlayHint(handle: number, cacheId: number, index: number): Promise<IInlayHintDto | null>
   $provideDocumentSemanticTokens(handle: number, uri: UriComponents): Promise<SemanticTokens | null>
+  $provideDocumentRangeSemanticTokens(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<SemanticTokens | null>
   $provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null>
   $resolveCodeLens(handle: number, lens: CodeLens): Promise<CodeLens | null>
   /**
@@ -752,6 +758,24 @@ export interface IExtHostDocuments {
 export type WillSaveReason = 1 | 2 | 3
 
 /**
+ * Wire form of a language configuration handed to
+ * {@link IMainThreadLanguages.$setLanguageConfiguration}. Mirrors the extension
+ * API's `LanguageConfiguration` with `wordPattern` flattened to its source string
+ * (a RegExp cannot cross the structured-clone wire).
+ */
+export interface ILanguageConfigurationDto {
+  readonly comments?: { readonly lineComment?: string; readonly blockComment?: [string, string] }
+  readonly brackets?: readonly [string, string][]
+  readonly autoClosingPairs?: readonly {
+    readonly open: string
+    readonly close: string
+    readonly notIn?: readonly string[]
+  }[]
+  readonly surroundingPairs?: readonly { readonly open: string; readonly close: string }[]
+  readonly wordPattern?: string
+}
+
+/**
  * Ext host → exposed to the renderer: a plugin registers/unregisters language
  * providers (addressed by handle) and publishes diagnostics. The renderer builds
  * the matching Monaco provider shells and feeds diagnostics into the editor as
@@ -800,6 +824,13 @@ export interface IMainThreadLanguages {
    * and per-handle emitter wiring as `$emitCodeLensDidChange`.
    */
   $emitInlayHintsDidChange(handle: number): void
+  /**
+   * A document-semantic-tokens provider's tokens changed (its
+   * `onDidChangeSemanticTokens` fired): tell the renderer to re-request tokens
+   * for that provider. Same push direction and per-handle emitter wiring as
+   * `$emitCodeLensDidChange`.
+   */
+  $emitSemanticTokensDidChange(handle: number): void
   /** Every language id the editor currently knows (Monaco's language registry). */
   $getLanguages(): Promise<string[]>
   /**
@@ -810,6 +841,25 @@ export interface IMainThreadLanguages {
    * state spans all its providers.
    */
   $setLanguageServerStatus(id: string, status: LanguageServerStatus): void
+  /**
+   * Switch an already-mirrored document's language id. The renderer calls
+   * `setModelLanguage`, which drives the document-sync pipeline to re-push the
+   * document as close(old) + open(new). Rejects when no live model matches `uri`.
+   */
+  $setTextDocumentLanguage(uri: UriComponents, languageId: string): Promise<void>
+  /**
+   * Apply a language configuration (comments/brackets/wordPattern/…) addressed by
+   * a host-allocated `handle`; the handle is the unit of revocation via
+   * `$unregisterLanguageConfiguration` (Monaco's own registration disposable is
+   * tracked by handle renderer-side).
+   */
+  $setLanguageConfiguration(
+    handle: number,
+    languageId: string,
+    configuration: ILanguageConfigurationDto,
+  ): Promise<void>
+  /** Revoke a language configuration previously registered under `handle`. */
+  $unregisterLanguageConfiguration(handle: number): Promise<void>
 }
 
 /** A single text edit applied by {@link IMainThreadEditor.$applyEdits}: replace
@@ -829,16 +879,23 @@ export interface ISelectionDto {
 /** Where a decoration paints in the overview ruler. Mirrors Monaco's lane enum. */
 export type OverviewRulerLaneDto = 1 | 2 | 4 | 7
 
+/**
+ * A color on the decoration wire: either a literal CSS color string, or a
+ * `ThemeColor` reference serialized to `{ id }` (resolved by the renderer against
+ * the color registry / current theme).
+ */
+export type ThemeColorDto = string | { readonly id: string }
+
 /** Static look of a decoration type, allocated once via {@link IMainThreadEditor.$createDecorationType}.
  *  `gutterIconPath` is a data-URI (e.g. an inline SVG) painted in the glyph margin;
  *  the renderer turns these into a Monaco `IModelDecorationOptions`. */
 export interface IDecorationRenderOptionsDto {
   readonly gutterIconPath?: string
   readonly isWholeLine?: boolean
-  readonly backgroundColor?: string
-  readonly borderColor?: string
+  readonly backgroundColor?: ThemeColorDto
+  readonly borderColor?: ThemeColorDto
   readonly borderWidth?: string
-  readonly overviewRulerColor?: string
+  readonly overviewRulerColor?: ThemeColorDto
   readonly overviewRulerLane?: OverviewRulerLaneDto
 }
 

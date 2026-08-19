@@ -103,7 +103,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
 /** Semantic version of this API surface. The host checks `engines.universe`.
  *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
  *  package.json version and the contract test's frozen snapshot. */
-export const version = '0.12.1'
+export const version = '0.13.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
@@ -513,20 +513,36 @@ export enum OverviewRulerLane {
 }
 
 /**
+ * A reference to a workbench color by id — a built-in color or one the extension
+ * declared via `contributes.colors`. Pass it to a decoration's color fields
+ * (`backgroundColor`/`borderColor`/`overviewRulerColor`) so the color follows the
+ * active theme automatically instead of being pinned to a hex literal.
+ */
+export class ThemeColor {
+  constructor(public readonly id: string) {}
+}
+
+/**
  * The visual styling of a decoration type. `gutterIconPath` is a data-URI (an
  * inline SVG, typically) painted in the editor's glyph margin; the color/border
  * fields style the line itself. Fixed at creation — to restyle, dispose and
- * recreate.
+ * recreate. Color fields accept a `ThemeColor` (theme-following) or a literal
+ * hex/rgba string.
  */
 export interface DecorationRenderOptions {
   /** Data-URI of an icon painted in the glyph margin (gutter). */
   gutterIconPath?: string
   /** Apply the line styling to the whole line, not just the decorated range. */
   isWholeLine?: boolean
-  backgroundColor?: string
-  borderColor?: string
+  backgroundColor?: string | ThemeColor
+  borderColor?: string | ThemeColor
   borderWidth?: string
-  overviewRulerColor?: string
+  /**
+   * Color painted in the overview ruler. A `ThemeColor` is resolved at decoration
+   * creation; it does NOT live-refresh when the theme switches until the
+   * decoration is re-set (VSCode semantic difference).
+   */
+  overviewRulerColor?: string | ThemeColor
   overviewRulerLane?: OverviewRulerLane
 }
 
@@ -1039,6 +1055,25 @@ export interface InlayHintsProvider {
 export interface DocumentSemanticTokensProvider {
   readonly legend: SemanticTokensLegend
   provideDocumentSemanticTokens(document: TextDocument): ProviderResult<SemanticTokens>
+  /**
+   * Fire to make the editor re-request the whole document's tokens (e.g. after
+   * a config change that swaps the highlight dialect). Mirrors
+   * `onDidChangeCodeLenses`.
+   */
+  onDidChangeSemanticTokens?: Event<void>
+}
+
+/**
+ * Range-limited semantic tokens. Same `legend` contract as
+ * {@link DocumentSemanticTokensProvider}; the editor calls it lazily for the
+ * visible range only.
+ */
+export interface DocumentRangeSemanticTokensProvider {
+  readonly legend: SemanticTokensLegend
+  provideDocumentRangeSemanticTokens(
+    document: TextDocument,
+    range: Range,
+  ): ProviderResult<SemanticTokens>
 }
 
 /**
@@ -1166,6 +1201,35 @@ export interface DiagnosticChangeEvent {
   readonly uris: readonly Uri[]
 }
 
+/** A pair of strings (`[open, close]`), e.g. a bracket or block-comment pair. */
+export type CharacterPair = [string, string]
+
+/** Comment rules for a {@link LanguageConfiguration}. */
+export interface CommentRule {
+  /** The line-comment token, e.g. `//`. */
+  readonly lineComment?: string
+  /** The block-comment delimiters (an opening and a closing token pair). */
+  readonly blockComment?: CharacterPair
+}
+
+/**
+ * Language configuration applied via {@link LanguagesApi.setLanguageConfiguration}.
+ * Mirrors VSCode's type for the subset the editor supports: comments / brackets /
+ * autoClosingPairs / surroundingPairs / wordPattern (indentation/onEnter/folding
+ * rules are not applied).
+ */
+export interface LanguageConfiguration {
+  readonly comments?: CommentRule
+  readonly brackets?: readonly CharacterPair[]
+  readonly autoClosingPairs?: readonly {
+    readonly open: string
+    readonly close: string
+    readonly notIn?: readonly string[]
+  }[]
+  readonly surroundingPairs?: readonly { readonly open: string; readonly close: string }[]
+  readonly wordPattern?: RegExp
+}
+
 /** The `languages` namespace: register language feature providers with the editor. */
 export interface LanguagesApi {
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
@@ -1236,6 +1300,10 @@ export interface LanguagesApi {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerDocumentRangeSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeSemanticTokensProvider,
+  ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   /**
@@ -1270,6 +1338,21 @@ export interface LanguagesApi {
    * uris, and pushes only while at least one listener is registered.
    */
   readonly onDidChangeDiagnostics: Event<DiagnosticChangeEvent>
+  /**
+   * Switch the language id of an already-open document. Equivalent to closing the
+   * document in the old language and reopening it in `languageId`: `onDidCloseTextDocument`
+   * / `onDidOpenTextDocument` fire and `onLanguage:<languageId>` extensions
+   * activate. Resolves the replacement document; rejects when the document is not
+   * open (or the switch fails).
+   */
+  setTextDocumentLanguage(document: TextDocument, languageId: string): Promise<TextDocument>
+  /**
+   * Apply a language configuration (comments / brackets / wordPattern / …) for
+   * `language`. The returned Disposable revokes it. Later registrations for the
+   * same language override earlier ones only until they are disposed (Monaco
+   * semantics).
+   */
+  setLanguageConfiguration(language: string, configuration: LanguageConfiguration): Disposable
 }
 /**
  * Dialog options as they cross the in-process bridge: `defaultUri` is already
@@ -1487,10 +1570,16 @@ interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: DocumentSemanticTokensProvider,
   ): Disposable
+  registerDocumentRangeSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeSemanticTokensProvider,
+  ): Disposable
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   setLanguageServerStatus(id: string, status: LanguageServerStatus): void
   getLanguages(): Promise<string[]>
+  setTextDocumentLanguage(document: TextDocument, languageId: string): Promise<TextDocument>
+  setLanguageConfiguration(language: string, configuration: LanguageConfiguration): Disposable
   getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>>
   readonly onDidChangeDiagnostics: Event<DiagnosticChangeEventBridge>
   getTextDocuments(): readonly TextDocument[]
@@ -1693,11 +1782,17 @@ export const languages: LanguagesApi = {
     bridge().registerInlayHintsProvider(selector, provider),
   registerDocumentSemanticTokensProvider: (selector, provider) =>
     bridge().registerDocumentSemanticTokensProvider(selector, provider),
+  registerDocumentRangeSemanticTokensProvider: (selector, provider) =>
+    bridge().registerDocumentRangeSemanticTokensProvider(selector, provider),
   registerCodeLensProvider: (selector, provider) =>
     bridge().registerCodeLensProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
   setLanguageServerStatus: (id, status) => bridge().setLanguageServerStatus(id, status),
   getLanguages: () => bridge().getLanguages(),
+  setTextDocumentLanguage: (document, languageId) =>
+    bridge().setTextDocumentLanguage(document, languageId),
+  setLanguageConfiguration: (language, configuration) =>
+    bridge().setLanguageConfiguration(language, configuration),
   getDiagnostics: (resource?: Uri) =>
     bridge()
       .getDiagnostics(resource?.toJSON())

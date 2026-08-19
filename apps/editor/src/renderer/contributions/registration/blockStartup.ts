@@ -35,6 +35,7 @@ import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContex
 import { CompareContextContribution } from '../CompareContextContribution.js'
 import { ExplorerFileConfigurationContribution } from '../ExplorerFileConfigurationContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
+import { EditorContextMenuContribution } from '../EditorContextMenuContribution.js'
 import { RemoteExplorerMenuContribution } from '../RemoteExplorerMenuContribution.js'
 import { EditMenuContribution } from '../EditMenuContribution.js'
 import { LogLevelContribution } from '../LogLevelContribution.js'
@@ -285,6 +286,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerMenu',
   ExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Editor right-click menu items (command palette / add-selection / clipboard).
+// BlockStartup so the menu exists before any EditorContextMenu renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.editorContextMenu',
+  EditorContextMenuContribution,
   WorkbenchPhase.BlockStartup,
 )
 

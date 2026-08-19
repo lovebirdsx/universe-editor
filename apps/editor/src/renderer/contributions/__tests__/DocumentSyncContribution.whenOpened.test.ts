@@ -30,6 +30,7 @@ function fakeModel(uriString = MODEL_URI_STRING) {
     getLanguageId: () => 'plaintext',
     isDisposed: () => disposed,
     onDidChangeContent: Event.None,
+    onDidChangeLanguage: Event.None,
     onWillDispose: willDispose.event,
     dispose: () => {
       disposed = true

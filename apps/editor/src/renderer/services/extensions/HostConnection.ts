@@ -38,6 +38,7 @@ import {
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
+  type IThemeService,
   type IUriIdentityService,
   type IViewsService,
 } from '@universe-editor/platform'
@@ -116,6 +117,8 @@ export interface HostConnectionDeps {
   readonly editorService: IEditorService
   /** Wired with editorService so MainThreadEditor can compare resources. */
   readonly uriIdentity: IUriIdentityService
+  /** Resolves `ThemeColor` decoration colors against the current theme. */
+  readonly themeService: IThemeService
   readonly aiModel: IAiModelService
   /** Persisted extension state. */
   readonly storage: IStorageService
@@ -267,6 +270,7 @@ export class HostConnection extends Disposable {
         deps.editorGroups,
         deps.instantiation,
         deps.logger,
+        deps.themeService,
       ),
     )
     server.registerChannel(

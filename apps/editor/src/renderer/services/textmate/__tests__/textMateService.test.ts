@@ -12,7 +12,8 @@
 
 import { URI, type IFileService } from '@universe-editor/platform'
 import { TokenizationRegistry } from 'monaco-editor/esm/vs/editor/common/languages.js'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { languageRegistry } from '../../languages/LanguageRegistry.js'
 import { TextMateService } from '../textMateService.js'
 
 // The wasm asset only resolves through vite; tests never create a real grammar
@@ -30,6 +31,7 @@ function makeService(): TextMateService {
 
 function makeMonacoStub(knownLanguages: readonly string[], modelLanguages: readonly string[] = []) {
   const registered: string[] = []
+  const configured: Array<{ id: string; config: unknown }> = []
   const modelListeners: Array<(model: { getLanguageId(): string }) => void> = []
   const stub = {
     languages: {
@@ -37,6 +39,9 @@ function makeMonacoStub(knownLanguages: readonly string[], modelLanguages: reado
       getLanguages: () => knownLanguages.map((id) => ({ id })),
       register: (language: { id: string }) => {
         registered.push(language.id)
+      },
+      setLanguageConfiguration: (id: string, config: unknown) => {
+        configured.push({ id, config })
       },
     },
     editor: {
@@ -53,7 +58,7 @@ function makeMonacoStub(knownLanguages: readonly string[], modelLanguages: reado
       listener({ getLanguageId: () => languageId })
     }
   }
-  return { stub, registered, createModel }
+  return { stub, registered, configured, createModel }
 }
 
 describe('TextMateService.initialize', () => {
@@ -90,6 +95,69 @@ describe('TextMateService.initialize', () => {
     handle.dispose()
 
     expect(registered).toEqual(['toml'])
+    service.dispose()
+  })
+})
+
+describe('TextMateService.registerLanguages', () => {
+  afterEach(() => {
+    languageRegistry._resetForTests()
+  })
+
+  it('registers contributed language ids into monaco so models keep their language', async () => {
+    const service = makeService()
+    service.registerLanguages([{ id: 'csv', aliases: ['CSV'], extensions: ['.csv'] }], {
+      extensionId: 'test',
+      extensionLocation: URI.file('/ext'),
+      extensionIsBuiltin: true,
+    })
+    const { stub, registered } = makeMonacoStub([])
+
+    await service.initialize(stub)
+
+    expect(registered).toContain('csv')
+    service.dispose()
+  })
+
+  it('maps vscode language ids onto monaco ids (jsonc → json)', async () => {
+    const service = makeService()
+    service.registerLanguages([{ id: 'jsonc', extensions: ['.jsonc'] }], {
+      extensionId: 'test',
+      extensionLocation: URI.file('/ext'),
+      extensionIsBuiltin: true,
+    })
+    const { stub, registered } = makeMonacoStub(['json'])
+
+    await service.initialize(stub)
+
+    expect(registered).not.toContain('jsonc')
+    expect(registered).not.toContain('json')
+    service.dispose()
+  })
+
+  it('applies a contributed language-configuration.json', async () => {
+    const readFileText = vi.fn(() =>
+      Promise.resolve(JSON.stringify({ comments: { lineComment: '--' }, brackets: [['[', ']']] })),
+    )
+    const service = new TextMateService(
+      { readFileText } as unknown as IFileService,
+      undefined as never,
+    )
+    service.registerLanguages([{ id: 'csv', configuration: './language-configuration.json' }], {
+      extensionId: 'test',
+      extensionLocation: URI.file('/ext'),
+      extensionIsBuiltin: true,
+    })
+    const { stub, configured } = makeMonacoStub([])
+
+    await service.initialize(stub)
+    await vi.waitFor(() => expect(configured).toHaveLength(1))
+
+    expect(configured[0]!.id).toBe('csv')
+    expect(configured[0]!.config).toMatchObject({ comments: { lineComment: '--' } })
+    expect(readFileText).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/ext/language-configuration.json' }),
+    )
     service.dispose()
   })
 })

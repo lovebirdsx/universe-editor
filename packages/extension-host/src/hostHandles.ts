@@ -16,6 +16,7 @@ import {
   type TextEditor,
   type TextEditorDecorationType,
   type TextEditorEdit,
+  type ThemeColor,
 } from '@universe-editor/extension-api'
 import {
   type ICommandDto,
@@ -60,17 +61,26 @@ export function toSelectionDto(sel: Selection): ISelectionDto {
   return { anchor: sel.anchor, active: sel.active }
 }
 
+/** A literal color string stays verbatim; a `ThemeColor` collapses to `{ id }`. */
+function toThemeColorDto(color: string | ThemeColor): string | { id: string } {
+  return typeof color === 'string' ? color : { id: color.id }
+}
+
 export function toDecorationOptionsDto(
   options: DecorationRenderOptions,
 ): IDecorationRenderOptionsDto {
   return {
     ...(options.gutterIconPath !== undefined ? { gutterIconPath: options.gutterIconPath } : {}),
     ...(options.isWholeLine !== undefined ? { isWholeLine: options.isWholeLine } : {}),
-    ...(options.backgroundColor !== undefined ? { backgroundColor: options.backgroundColor } : {}),
-    ...(options.borderColor !== undefined ? { borderColor: options.borderColor } : {}),
+    ...(options.backgroundColor !== undefined
+      ? { backgroundColor: toThemeColorDto(options.backgroundColor) }
+      : {}),
+    ...(options.borderColor !== undefined
+      ? { borderColor: toThemeColorDto(options.borderColor) }
+      : {}),
     ...(options.borderWidth !== undefined ? { borderWidth: options.borderWidth } : {}),
     ...(options.overviewRulerColor !== undefined
-      ? { overviewRulerColor: options.overviewRulerColor }
+      ? { overviewRulerColor: toThemeColorDto(options.overviewRulerColor) }
       : {}),
     ...(options.overviewRulerLane !== undefined
       ? { overviewRulerLane: options.overviewRulerLane as OverviewRulerLaneDto }

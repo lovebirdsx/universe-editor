@@ -16,6 +16,7 @@
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
 - [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 注册页+服务端发布签名已落地（2026-08-10 修订决策2）；发布闭环 register→login→publish→可装已通；uex 待用户手动发 npm
 - [extension-api 0.9→0.12 API 面补全](extension-api-09-surface-expansion.md) — parity 计划 P1-P4 全落地；bump 版本常量已生成物化+publish 耦合拦截，示例仓库 check-sdk-drift 兜底；事件推兴趣订阅+防抖
+- [extension-api 0.13 语言/主题/菜单面补全](extension-api-013-language-theme-menu-surface.md) — contributes.languages/colors+setTextDocumentLanguage+semantic tokens 刷新+editor/context 渲染；坑=overviewRulerColor 不能透传 {id}、Monaco semantic provider 原生支持 onDidChange
 - [插件 manifest NLS](extension-manifest-nls.md) — %key%+package.nls.json；nls 文件须列 files 数组否则打包丢失
 - [TypeScript 内置插件](typescript-builtin-plugin.md) — 插件自 spawn tsserver+10 类 provider；地图见 extensions/typescript/CLAUDE.md
 - [通用 UI 抽取 workbench-ui](workbench-ui-consolidation.md) — 通用件沉淀 workbench-ui，editor 留薄 wrapper；展示组件纯数据+回调

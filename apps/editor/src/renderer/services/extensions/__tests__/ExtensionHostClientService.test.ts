@@ -34,6 +34,7 @@ import {
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
+  type IThemeService,
   type IViewsService,
   type IWorkspaceService,
   type IWorkspaceTrustManagementService,
@@ -223,6 +224,7 @@ function makeServiceWith(
     {} as ILayoutService,
     {} as IViewsService,
     new UriIdentityService('linux'),
+    {} as IThemeService,
     {
       getDisabledIds: vi.fn().mockResolvedValue([]),
       getInstalled: vi.fn().mockResolvedValue((stubs?.installedIds ?? []).map(asLocal)),

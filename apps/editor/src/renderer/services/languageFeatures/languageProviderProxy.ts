@@ -393,8 +393,13 @@ export function createDocumentSemanticTokensProxy(
   handle: number,
   extHost: IExtHostLanguages,
   legend: ISemanticTokensLegend,
+  onDidChange: Event<void>,
 ): monaco.languages.DocumentSemanticTokensProvider {
   return {
+    // Monaco's DocumentSemanticTokensProvider exposes `onDidChange` (typed
+    // `IEvent<void>`); its semantic-tokens controller re-requests the document's
+    // tokens on any fire. Same server-driven refresh wiring as CodeLens.
+    onDidChange,
     getLegend: () => ({
       tokenTypes: [...legend.tokenTypes],
       tokenModifiers: [...legend.tokenModifiers],
@@ -404,6 +409,27 @@ export function createDocumentSemanticTokensProxy(
     // Monaco requires the method; the token stream carries no server-side handle
     // to release (tsserver full-tokens have no lifecycle), so this is a no-op.
     releaseDocumentSemanticTokens: () => undefined,
+  }
+}
+
+export function createDocumentRangeSemanticTokensProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  legend: ISemanticTokensLegend,
+): monaco.languages.DocumentRangeSemanticTokensProvider {
+  return {
+    getLegend: () => ({
+      tokenTypes: [...legend.tokenTypes],
+      tokenModifiers: [...legend.tokenModifiers],
+    }),
+    provideDocumentRangeSemanticTokens: async (model, range) =>
+      semanticTokensToMonaco(
+        await extHost.$provideDocumentRangeSemanticTokens(
+          handle,
+          model.uri,
+          monacoRangeToLsp(range),
+        ),
+      ),
   }
 }
 

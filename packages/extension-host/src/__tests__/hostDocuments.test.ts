@@ -92,6 +92,31 @@ describe('ExtHostDocuments.whenOpen', () => {
   })
 })
 
+describe('ExtHostDocuments.whenOpenWithLanguage', () => {
+  it('resolves immediately when the document is already open with that language', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'typescript', 1, 'text')
+    await expect(docs.whenOpenWithLanguage(uri, 'typescript', 50)).resolves.toBe(docs.get(uri))
+  })
+
+  it('ignores a reopen with the wrong language and resolves the matching one', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'plaintext', 1, 'text')
+    const pending = docs.whenOpenWithLanguage(uri, 'javascript', 5_000)
+    docs.acceptOpen(uri, 'markdown', 1, 'wrong language')
+    docs.acceptOpen(uri, 'javascript', 2, 'the one')
+    const doc = await pending
+    expect(doc?.languageId).toBe('javascript')
+    expect(doc?.getText()).toBe('the one')
+  })
+
+  it('resolves undefined when the target language never arrives', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'plaintext', 1, 'text')
+    await expect(docs.whenOpenWithLanguage(uri, 'javascript', 10)).resolves.toBeUndefined()
+  })
+})
+
 describe('ExtHostDocuments did-save', () => {
   it('fires onDidSave with the mirrored document', () => {
     const docs = new ExtHostDocuments()

@@ -364,6 +364,71 @@ describe('ExtensionPointTranslator', () => {
     expect(dispose).toHaveBeenCalledTimes(1)
   })
 
+  it('invokes the language callback with the contributed languages batch and context', () => {
+    const registerLanguages = vi.fn(() => ({ dispose: vi.fn() }))
+    const t = new ExtensionPointTranslator(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      registerLanguages,
+    )
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'csv.ext',
+        contributes: { languages: [{ id: 'csv', extensions: ['.csv'] }] },
+      }),
+    ])
+
+    expect(registerLanguages).toHaveBeenCalledWith(
+      [{ id: 'csv', extensions: ['.csv'] }],
+      expect.objectContaining({ extensionId: 'csv.ext' }),
+    )
+  })
+
+  it('invokes the color callback with the contributed colors batch and context', () => {
+    const registerColors = vi.fn(() => ({ dispose: vi.fn() }))
+    const t = new ExtensionPointTranslator(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      registerColors,
+    )
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'color.ext',
+        contributes: {
+          colors: [
+            {
+              id: 'color.ext.tint',
+              description: 'Tint',
+              defaults: { light: '#111', dark: '#222' },
+            },
+          ],
+        },
+      }),
+    ])
+
+    expect(registerColors).toHaveBeenCalledWith(
+      [{ id: 'color.ext.tint', description: 'Tint', defaults: { light: '#111', dark: '#222' } }],
+      expect.objectContaining({ extensionId: 'color.ext' }),
+    )
+  })
+
   describe('views / viewsContainers', () => {
     it('registers an activitybar container and its views with the shared componentKey', () => {
       const t = new ExtensionPointTranslator(vi.fn(), vi.fn())

@@ -22,6 +22,7 @@ import {
 import type {
   DocumentSelector,
   IExtHostLanguages,
+  ILanguageConfigurationDto,
   ILanguageProviderMetadata,
   IMainThreadLanguages,
   LanguageProviderType,
@@ -29,6 +30,7 @@ import type {
 } from '@universe-editor/extensions-common'
 import type { Diagnostic } from 'vscode-languageserver-types'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import type { ILanguageConfigurationMapping } from '../languages/languageConfiguration.js'
 import {
   diagnosticToMarker,
   markerToLspDiagnostic,
@@ -43,6 +45,7 @@ import {
   createDocumentHighlightProxy,
   createDocumentLinkProxy,
   createDocumentRangeFormattingProxy,
+  createDocumentRangeSemanticTokensProxy,
   createDocumentSemanticTokensProxy,
   createDocumentSymbolProxy,
   createFoldingRangeProxy,
@@ -64,8 +67,39 @@ import {
  *  history). 50ms matches the document-mirror change debounce. */
 const DIAGNOSTICS_CHANGE_DEBOUNCE_MS = 50
 
+/** Wire language-configuration DTO → the Monaco shape `setLanguageConfiguration`
+ *  takes: `wordPattern` crosses the wire as a source string and is recompiled
+ *  here (an uncompilable pattern is dropped, same as parseLanguageConfiguration). */
+function toLanguageConfigurationMapping(
+  config: ILanguageConfigurationDto,
+): ILanguageConfigurationMapping {
+  const mapped: ILanguageConfigurationMapping = {}
+  if (config.comments) mapped.comments = { ...config.comments }
+  if (config.brackets) mapped.brackets = [...config.brackets]
+  if (config.autoClosingPairs) {
+    mapped.autoClosingPairs = config.autoClosingPairs.map((p) => ({
+      open: p.open,
+      close: p.close,
+      ...(p.notIn !== undefined ? { notIn: [...p.notIn] } : {}),
+    }))
+  }
+  if (config.surroundingPairs) {
+    mapped.surroundingPairs = config.surroundingPairs.map((p) => ({ ...p }))
+  }
+  if (config.wordPattern !== undefined) {
+    try {
+      mapped.wordPattern = new RegExp(config.wordPattern)
+    } catch {
+      // Uncompilable word pattern: ignore (VSCode logs and continues too).
+    }
+  }
+  return mapped
+}
+
 export class MainThreadLanguages extends Disposable implements IMainThreadLanguages {
   private readonly _providers = this._register(new DisposableMap<number>())
+  /** Per-handle Monaco disposable for `$setLanguageConfiguration` registrations. */
+  private readonly _languageConfigurations = this._register(new DisposableMap<number>())
   /** Per-handle refresh signal for CodeLens providers: the host calls
    *  `$emitCodeLensDidChange(handle)` and we fire the Emitter the provider's
    *  `onDidChange` is wired to, making Monaco re-request that provider's lenses. */
@@ -73,6 +107,9 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
   /** Per-handle refresh signal for inlay-hints providers — same wiring as
    *  `_codeLensChange`, driven by `$emitInlayHintsDidChange(handle)`. */
   private readonly _inlayHintsChange = new Map<number, Emitter<void>>()
+  /** Per-handle refresh signal for document-semantic-tokens providers, driven by
+   *  `$emitSemanticTokensDidChange(handle)`. */
+  private readonly _semanticTokensChange = new Map<number, Emitter<void>>()
   /** Live `onDidChangeDiagnostics` listeners on the host; pushes only flow
    *  while this is non-zero (see MainThreadFileEvents for the same pattern). */
   private _diagnosticsInterest = 0
@@ -237,6 +274,10 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
     this._inlayHintsChange.get(handle)?.fire()
   }
 
+  $emitSemanticTokensDidChange(handle: number): void {
+    this._semanticTokensChange.get(handle)?.fire()
+  }
+
   async $getLanguages(): Promise<string[]> {
     const monacoNs = await MonacoLoader.ensureInitialized()
     return monacoNs.languages.getLanguages().map((l) => l.id)
@@ -244,6 +285,42 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
 
   $setLanguageServerStatus(id: string, status: LanguageServerStatus): void {
     this._languageFeatures.setLanguageServerStatus(id, status)
+  }
+
+  async $setTextDocumentLanguage(uri: UriComponents, languageId: string): Promise<void> {
+    const monacoNs = await MonacoLoader.ensureInitialized()
+    const resource = URI.revive(uri)
+    if (!resource) {
+      throw new Error(`setTextDocumentLanguage: invalid URI ${JSON.stringify(uri)}`)
+    }
+    const model = monacoNs.editor.getModel(monacoNs.Uri.parse(resource.toString()))
+    if (!model || model.isDisposed()) {
+      throw new Error(`setTextDocumentLanguage: no open document for ${resource.toString()}`)
+    }
+    // This fires the model's onDidChangeLanguage, which DocumentSyncContribution
+    // mirrors to the host as close(old language) + open(new language).
+    monacoNs.editor.setModelLanguage(model, languageId)
+  }
+
+  async $setLanguageConfiguration(
+    handle: number,
+    languageId: string,
+    configuration: ILanguageConfigurationDto,
+  ): Promise<void> {
+    const monacoNs = await MonacoLoader.ensureInitialized()
+    if (this._store.isDisposed) return
+    this._languageConfigurations.set(
+      handle,
+      monacoNs.languages.setLanguageConfiguration(
+        languageId,
+        toLanguageConfigurationMapping(configuration),
+      ),
+    )
+  }
+
+  async $unregisterLanguageConfiguration(handle: number): Promise<void> {
+    await MonacoLoader.ensureInitialized()
+    this._languageConfigurations.deleteAndDispose(handle)
   }
 
   private _createProvider(
@@ -401,9 +478,23 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
         // so it must be known at registration time, not fetched per request.
         const legend = metadata?.semanticTokensLegend
         if (legend) {
-          const p = createDocumentSemanticTokensProxy(handle, ext, legend)
+          const changeEmitter = new Emitter<void>()
+          this._semanticTokensChange.set(handle, changeEmitter)
+          store.add(toDisposable(() => this._semanticTokensChange.delete(handle)))
+          store.add(changeEmitter)
+          const p = createDocumentSemanticTokensProxy(handle, ext, legend, changeEmitter.event)
           for (const lang of selector) {
             store.add(lf.registerDocumentSemanticTokensProvider(lang, p))
+          }
+        }
+        break
+      }
+      case 'documentRangeSemanticTokens': {
+        const legend = metadata?.semanticTokensLegend
+        if (legend) {
+          const p = createDocumentRangeSemanticTokensProxy(handle, ext, legend)
+          for (const lang of selector) {
+            store.add(lf.registerDocumentRangeSemanticTokensProvider(lang, p))
           }
         }
         break

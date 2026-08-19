@@ -9,6 +9,7 @@ import {
   Uri,
 } from '@universe-editor/extension-api'
 import type {
+  TextDocument,
   TextEditor,
   TextEditorSelectionChangeEvent,
   UriComponents,
@@ -1448,5 +1449,145 @@ describe('ExtensionService workspace additions', () => {
 
     service.dispose()
     expect(flips).toEqual(['sub', 'unsub'])
+  })
+})
+
+describe('ExtensionService language configuration / setTextDocumentLanguage', () => {
+  const docComponents = URI.file('/ws/a.ts').toJSON() as UriComponents
+
+  function recordingLanguages(): {
+    impl: IMainThreadLanguages
+    setLanguageConfiguration: Array<{ handle: number; languageId: string; config: unknown }>
+    unregistered: number[]
+    setTextDocumentLanguage: Array<{ uri: unknown; languageId: string }>
+  } {
+    const setLanguageConfiguration: Array<{
+      handle: number
+      languageId: string
+      config: unknown
+    }> = []
+    const unregistered: number[] = []
+    const setTextDocumentLanguage: Array<{ uri: unknown; languageId: string }> = []
+    return {
+      setLanguageConfiguration,
+      unregistered,
+      setTextDocumentLanguage,
+      impl: {
+        $setLanguageConfiguration: (handle: number, languageId: string, config: unknown) => {
+          setLanguageConfiguration.push({ handle, languageId, config })
+          return Promise.resolve()
+        },
+        $unregisterLanguageConfiguration: (handle: number) => {
+          unregistered.push(handle)
+          return Promise.resolve()
+        },
+        $setTextDocumentLanguage: (uri: UriComponents, languageId: string) => {
+          setTextDocumentLanguage.push({ uri, languageId })
+          return Promise.resolve()
+        },
+      } as unknown as IMainThreadLanguages,
+    }
+  }
+
+  function serviceWithLanguages(languages: IMainThreadLanguages): ExtensionService {
+    const mt = recordingMainThread()
+    return new ExtensionService(
+      [scanned(['*'])],
+      mt.impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      undefined,
+      undefined,
+      undefined,
+      languages,
+    )
+  }
+
+  const fakeDoc = (languageId: string): TextDocument => ({
+    uri: docComponents,
+    languageId,
+    version: 1,
+    isUntitled: false,
+    getText: () => '',
+  })
+
+  it('setLanguageConfiguration registers a handle with the wordPattern as a source string', async () => {
+    const rec = recordingLanguages()
+    const service = serviceWithLanguages(rec.impl)
+    const disposable = service.setLanguageConfiguration('typescript', {
+      comments: { lineComment: '//' },
+      brackets: [['{', '}']],
+      wordPattern: /[a-z]+/,
+    })
+    expect(rec.setLanguageConfiguration).toHaveLength(1)
+    expect(rec.setLanguageConfiguration[0]?.handle).toBe(0)
+    expect(rec.setLanguageConfiguration[0]?.languageId).toBe('typescript')
+    expect(rec.setLanguageConfiguration[0]?.config).toEqual({
+      comments: { lineComment: '//' },
+      brackets: [['{', '}']],
+      wordPattern: '[a-z]+',
+    })
+
+    disposable.dispose()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(rec.unregistered).toEqual([0])
+    service.dispose()
+  })
+
+  it('setLanguageConfiguration serializes autoClosingPairs and surroundingPairs verbatim', () => {
+    const rec = recordingLanguages()
+    const service = serviceWithLanguages(rec.impl)
+    service.setLanguageConfiguration('typescript', {
+      autoClosingPairs: [{ open: '{', close: '}', notIn: ['string'] }],
+      surroundingPairs: [{ open: '[', close: ']' }],
+    })
+    expect(rec.setLanguageConfiguration[0]?.config).toEqual({
+      autoClosingPairs: [{ open: '{', close: '}', notIn: ['string'] }],
+      surroundingPairs: [{ open: '[', close: ']' }],
+    })
+    service.dispose()
+  })
+
+  it('setTextDocumentLanguage rejects when the document is not mirrored', async () => {
+    const rec = recordingLanguages()
+    const service = serviceWithLanguages(rec.impl)
+    await expect(
+      service.setTextDocumentLanguage(fakeDoc('plaintext'), 'javascript'),
+    ).rejects.toThrow('not open')
+    expect(rec.setTextDocumentLanguage).toHaveLength(0)
+    service.dispose()
+  })
+
+  it('setTextDocumentLanguage resolves the replacement document after the re-push', async () => {
+    const rec = recordingLanguages()
+    const service = serviceWithLanguages(rec.impl)
+    service.acceptDocumentOpen(docComponents, 'plaintext', 1, 'const x = 1')
+    const doc = service.getTextDocuments()[0]!
+
+    const pending = service.setTextDocumentLanguage(doc, 'javascript')
+    // The renderer's close(old) + open(new) re-push lands a tick after the RPC.
+    setTimeout(() => {
+      service.acceptDocumentClose(docComponents)
+      service.acceptDocumentOpen(docComponents, 'javascript', 2, 'const x = 1')
+    }, 0)
+    const reopened = await pending
+    expect(rec.setTextDocumentLanguage).toEqual([
+      { uri: URI.from(docComponents), languageId: 'javascript' },
+    ])
+    expect(reopened).toBe(service.getTextDocuments()[0])
+    expect(reopened.languageId).toBe('javascript')
+    expect(reopened.getText()).toBe('const x = 1')
+    service.dispose()
+  })
+
+  it('setTextDocumentLanguage is a no-op when the document already has the language', async () => {
+    const rec = recordingLanguages()
+    const service = serviceWithLanguages(rec.impl)
+    service.acceptDocumentOpen(docComponents, 'plaintext', 1, 'const x = 1')
+    const doc = service.getTextDocuments()[0]!
+    await expect(service.setTextDocumentLanguage(doc, 'plaintext')).resolves.toBe(doc)
+    expect(rec.setTextDocumentLanguage).toHaveLength(0)
+    service.dispose()
   })
 })

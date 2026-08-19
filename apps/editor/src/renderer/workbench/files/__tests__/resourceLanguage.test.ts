@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { URI } from '@universe-editor/platform'
+import { languageRegistry } from '../../../services/languages/LanguageRegistry.js'
 import { isMarkdownPreviewResource, languageForResource } from '../resourceLanguage.js'
 
 const lang = (path: string): string => languageForResource(URI.file(path))
@@ -110,5 +111,50 @@ describe('languageForResource', () => {
     expect(isMarkdownPreviewResource(URI.file('/proj/README.md'))).toBe(true)
     expect(isMarkdownPreviewResource(URI.file('/proj/README.mdx'))).toBe(true)
     expect(isMarkdownPreviewResource(URI.file('/proj/readme.txt'))).toBe(false)
+  })
+})
+
+describe('languageForResource with contributed languages', () => {
+  afterEach(() => {
+    languageRegistry._resetForTests()
+  })
+
+  function contribute(
+    def: Partial<import('../../../services/languages/LanguageRegistry.js').ILanguageDefinition> & {
+      id: string
+    },
+  ): void {
+    languageRegistry.registerLanguages([
+      {
+        extensionLocation: URI.file('/ext'),
+        sourceExtensionId: 'test-ext',
+        ...def,
+      },
+    ])
+  }
+
+  it('resolves a contributed extension (e.g. .csv) instead of plaintext', () => {
+    contribute({ id: 'csv', extensions: ['.csv'] })
+    expect(lang('/proj/data.csv')).toBe('csv')
+  })
+
+  it('lets a contributed extension win over the built-in table', () => {
+    contribute({ id: 'my-ts', extensions: ['.ts'] })
+    expect(lang('/proj/a.ts')).toBe('my-ts')
+  })
+
+  it('matches a contributed exact filename', () => {
+    contribute({ id: 'my-make', filenames: ['Makefile'] })
+    expect(lang('/proj/Makefile')).toBe('my-make')
+  })
+
+  it('matches a contributed filenamePattern at any depth', () => {
+    contribute({ id: 'sql', filenamePatterns: ['**/*.sql'] })
+    expect(lang('/proj/db/query.sql')).toBe('sql')
+  })
+
+  it('maps a vscode language id onto the monaco id (jsonc → json)', () => {
+    contribute({ id: 'jsonc', extensions: ['.jsonc'] })
+    expect(lang('/proj/tsconfig.jsonc')).toBe('json')
   })
 })

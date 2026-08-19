@@ -11,10 +11,11 @@ import type {
   IFileService,
   IInstantiationService,
   ILogger,
+  IThemeService,
   IUriIdentityService,
 } from '@universe-editor/platform'
 import type { WorkspaceEdit } from 'vscode-languageserver-types'
-import { MainThreadEditor } from '../MainThreadEditor.js'
+import { MainThreadEditor, toCssColor, toOverviewRulerColor } from '../MainThreadEditor.js'
 
 vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: {
@@ -53,6 +54,7 @@ describe('MainThreadEditor.$applyWorkspaceEdit', () => {
       {} as IEditorGroupsService,
       instantiation,
       logger,
+      {} as IThemeService,
     )
   })
 
@@ -132,6 +134,7 @@ function makeMainThread(files: Partial<IFileService> = {}): MainThreadEditor {
     {} as IEditorGroupsService,
     { createInstance: () => ({ apply: vi.fn() }) } as unknown as IInstantiationService,
     { warn: vi.fn() } as unknown as ILogger,
+    {} as IThemeService,
   )
 }
 
@@ -153,5 +156,29 @@ describe('MainThreadEditor remote-ssh document opening', () => {
     await expect(mt.$openTextDocument({ scheme: 'https', path: '/x' })).rejects.toThrow(
       /unsupported URI/,
     )
+  })
+})
+
+describe('decoration color helpers', () => {
+  it('toCssColor passes literals through and maps ThemeColor to a CSS variable', () => {
+    expect(toCssColor('#ff0000')).toBe('#ff0000')
+    expect(toCssColor({ id: 'myExt.color1' })).toBe('var(--vscode-myExt-color1)')
+  })
+
+  it('toOverviewRulerColor passes strings through and resolves ThemeColor ids', () => {
+    const getColor = vi.fn(() => ({ toString: () => '#00ff00' }))
+    const themeService = { getColorTheme: () => ({ getColor }) } as unknown as IThemeService
+
+    expect(toOverviewRulerColor(undefined, themeService)).toBeUndefined()
+    expect(toOverviewRulerColor('#ffffff', themeService)).toBe('#ffffff')
+    expect(toOverviewRulerColor({ id: 'myExt.color1' }, themeService)).toBe('#00ff00')
+    expect(getColor).toHaveBeenCalledWith('myExt.color1')
+  })
+
+  it('toOverviewRulerColor returns undefined when the theme does not define the color', () => {
+    const themeService = {
+      getColorTheme: () => ({ getColor: () => undefined }),
+    } as unknown as IThemeService
+    expect(toOverviewRulerColor({ id: 'missing.color' }, themeService)).toBeUndefined()
   })
 })

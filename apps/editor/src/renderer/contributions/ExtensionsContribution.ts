@@ -186,6 +186,8 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
       (productIconThemes, context) =>
         this._themeService.registerProductIconThemes(productIconThemes, context),
       (grammars, context) => this._textMateService.registerGrammars(grammars, context),
+      (languages, context) => this._textMateService.registerLanguages(languages, context),
+      (colors) => this._themeService.registerColors(colors),
     )
     try {
       translator.translate(contributions)

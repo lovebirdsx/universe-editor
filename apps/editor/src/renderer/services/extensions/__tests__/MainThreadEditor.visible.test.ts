@@ -17,6 +17,7 @@ import {
   type IFileService,
   type IInstantiationService,
   type ILogger,
+  type IThemeService,
   type IUriIdentityService,
 } from '@universe-editor/platform'
 import type { IActiveTextEditorDto, IExtHostEditor } from '@universe-editor/extensions-common'
@@ -111,6 +112,7 @@ describe('MainThreadEditor visible editors mirror', () => {
       groupsService,
       instantiation,
       logger,
+      {} as IThemeService,
     )
   })
 

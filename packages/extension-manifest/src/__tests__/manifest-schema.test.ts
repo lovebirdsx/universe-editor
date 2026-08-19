@@ -195,6 +195,117 @@ describe('parseManifest', () => {
     })
   })
 
+  describe('contributes.languages', () => {
+    it('accepts a language with file associations and configuration', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: {
+          languages: [
+            {
+              id: 'csv',
+              aliases: ['CSV', 'csv'],
+              extensions: ['.csv'],
+              filenames: ['DATA.CSV'],
+              filenamePatterns: ['*.csv'],
+              mimetypes: ['text/csv'],
+              configuration: './language-configuration.json',
+            },
+          ],
+        },
+      })
+      expect(m.contributes?.languages?.[0]).toMatchObject({ id: 'csv', extensions: ['.csv'] })
+    })
+
+    it('rejects a language without an id', () => {
+      expect(() =>
+        parseManifest({ ...baseManifest(), contributes: { languages: [{ extensions: ['.x'] }] } }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects non-string association items', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { languages: [{ id: 'x', extensions: [42] }] },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+  })
+
+  describe('contributes.colors', () => {
+    it('accepts a color with light/dark defaults and optional high-contrast overrides', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: {
+          colors: [
+            {
+              id: 'myExt.color1',
+              description: 'A themeable color',
+              defaults: {
+                light: '#ff0000',
+                dark: '#00ff00',
+                highContrastLight: '#000000',
+                highContrastDark: '#ffffff',
+              },
+            },
+          ],
+        },
+      })
+      expect(m.contributes?.colors?.[0]).toMatchObject({
+        id: 'myExt.color1',
+        defaults: { light: '#ff0000', dark: '#00ff00' },
+      })
+      expect(m.contributes?.colors?.[0]?.defaults.highContrastDark).toBe('#ffffff')
+    })
+
+    it('accepts a defaults value that references another color id', () => {
+      const m = parseManifest({
+        ...baseManifest(),
+        contributes: {
+          colors: [
+            {
+              id: 'myExt.color2',
+              description: 'Ref',
+              defaults: { light: 'editor.background', dark: '#000000' },
+            },
+          ],
+        },
+      })
+      expect(m.contributes?.colors?.[0]?.defaults.light).toBe('editor.background')
+    })
+
+    it('rejects a color without an id', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: {
+            colors: [{ description: 'x', defaults: { light: '#fff', dark: '#000' } }],
+          },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects a color without defaults', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: { colors: [{ id: 'x', description: 'x' }] },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+
+    it('rejects a color missing the dark default', () => {
+      expect(() =>
+        parseManifest({
+          ...baseManifest(),
+          contributes: {
+            colors: [{ id: 'x', description: 'x', defaults: { light: '#fff' } }],
+          },
+        }),
+      ).toThrow(/invalid manifest/)
+    })
+  })
+
   describe('forward-compat passthrough', () => {
     it('tolerates unknown contribution points', () => {
       const m = parseManifest({

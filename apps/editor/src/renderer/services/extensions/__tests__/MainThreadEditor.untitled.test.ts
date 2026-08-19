@@ -15,6 +15,7 @@ import {
   type IFileService,
   type IInstantiationService,
   type ILogger,
+  type IThemeService,
   type IUriIdentityService,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -60,6 +61,7 @@ describe('MainThreadEditor untitled documents', () => {
       {} as IEditorGroupsService,
       instantiation,
       logger,
+      {} as IThemeService,
     )
   }
 

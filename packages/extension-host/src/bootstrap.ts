@@ -270,6 +270,8 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).resolveInlayHint(handle, cacheId, index),
   $provideDocumentSemanticTokens: async (handle, uri) =>
     (await serviceReady).provideDocumentSemanticTokens(handle, uri),
+  $provideDocumentRangeSemanticTokens: async (handle, uri, range) =>
+    (await serviceReady).provideDocumentRangeSemanticTokens(handle, uri, range),
   $provideCodeLenses: async (handle, uri) => (await serviceReady).provideCodeLenses(handle, uri),
   $resolveCodeLens: async (handle, lens) => (await serviceReady).resolveCodeLens(handle, lens),
   $acceptDiagnosticsChange: async (uris) => {

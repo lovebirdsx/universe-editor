@@ -19,7 +19,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `.vscodeignore`（黑名单） | `package.json` 的 `files` 数组（白名单） | 语义反转：从「排除不要的」变成「只带列出的」——漏列的文件进不了 `.vsix` |
 | `vsce package` / `vsce publish` / `vsce login` | `uex package` / `uex publish` / `uex login` | 子命令同名 |
 | `activationEvents` | 同名 | 支持 `*`、`onStartupFinished`、`onCommand:`、`onLanguage:`、`onView:`、`onCustomEditor:`；无 `workspaceContains:`、`onFileSystem:`、`onUri:` |
-| `contributes.*` | 同名 | 支持 commands / menus / keybindings / configuration / jsonValidation / customEditors / themes / iconThemes / productIconThemes / grammars，逐字段见 [贡献点参考](./contribution-points.md)；未识别的贡献点静默忽略 |
+| `contributes.*` | 同名 | 支持 commands / menus / keybindings / configuration / jsonValidation / customEditors / themes / iconThemes / productIconThemes / colors / grammars / languages，逐字段见 [贡献点参考](./contribution-points.md)；未识别的贡献点静默忽略 |
 | `vscode.workspace.rootPath` 等带前缀调用 | `workspace.rootPath` 等 | 去掉 `vscode.` 前缀，具名导入后直呼 namespace |
 
 代码层面的最小 diff：
@@ -67,7 +67,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `window.showTextDocument` | 同名 | 部分对齐：`TextDocumentShowOptions` 支持 `preserveFocus/preview/selection`；无 `viewColumn`（组布局由工作台管理） |
 | `window.visibleTextEditors` / `onDidChangeVisibleTextEditors` | 同名 | 语义差异：快照语义——每编辑器组 active 文本编辑器一项，集合按 URI 身份去重；`version`/`selection` 变化与编辑器内部编辑不触发事件；冷文档镜像落地前有短暂缺员窗口（getter 只含已镜像成员，事件经约 0.5 秒宽限期后先报已知子集、落地后并入再报），VSCode 无此窗口 |
 | `window.onDidChangeTextEditorSelection` | 同名 | 部分对齐：防抖派发（一波输入只投递最新一次）；仅活动编辑器触发；程序化 `setSelections` 时 `kind` 为 `undefined` |
-| `window.createTextEditorDecorationType` + `TextEditor.setDecorations` | 同名 | 部分对齐：装饰选项是子集（`gutterIconPath` 只收 data-URI；整行/颜色/边框/概览标尺可用） |
+| `window.createTextEditorDecorationType` + `TextEditor.setDecorations` | 同名 | 部分对齐：装饰选项是子集（`gutterIconPath` 只收 data-URI；整行/颜色/边框/概览标尺可用）；颜色字段（`backgroundColor`/`borderColor`/`overviewRulerColor`）接受 `ThemeColor`——`backgroundColor`/`borderColor` 随主题实时追新，`overviewRulerColor` 的 `ThemeColor` 在创建装饰时解析为当前主题色（Monaco 概览标尺不能画 `var()`），切换主题后需重新 `setDecorations` 才追新 |
 | `window.registerCustomEditorProvider` | 同名 | 部分对齐：仅只读 `CustomReadonlyEditorProvider`（`openCustomDocument` + `resolveCustomEditor`）；可写 custom editor（save/backup/edit）**计划中** |
 | `window.createWebviewPanel`（自由面板） | 同名 | 部分对齐（0.11.0 起）：无 `ViewColumn`（面板开在当前活动组），`showOptions` 仅 `{preserveFocus}`；无 `retainContextWhenHidden`（iframe 不随 tab 隐藏重建，隐藏期状态天然保留）；无 `WebviewPanelSerializer`（reload/重启不恢复）；`active/visible` 跟踪编辑器组（visible=所在组选中 tab，active=且该组为焦点组）、变化时触发 `onDidChangeViewState`；`title` 可写、`reveal()`、`onDidDispose` 均有。详见 [自定义编辑器与 Webview](./webview-guide.md)「独立 webview 面板」 |
 | `window.withProgress` | 同名 | 部分对齐：`ProgressLocation` 仅 `Window/Notification/SourceControl`（SourceControl 当前按 Window 渲染）；report 载荷仅 `{message, increment}` |
@@ -99,7 +99,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 
 ### languages
 
-21 个 `register*Provider` + `createDiagnosticCollection` + `getDiagnostics` / `onDidChangeDiagnostics` + `setLanguageServerStatus` + `getLanguages`。两处整体差异先说清：
+21 个 `register*Provider` + `createDiagnosticCollection` + `getDiagnostics` / `onDidChangeDiagnostics` + `setLanguageServerStatus` + `getLanguages` + `setTextDocumentLanguage` + `setLanguageConfiguration`。两处整体差异先说清：
 
 - `DocumentSelector` 简化为 `string | string[]`（语言 id），无 `{language, scheme, pattern}` 对象形。
 - provider 签名里的类型（`Hover`、`CompletionItem`、`Diagnostic`…）是 **LSP 类型**（从 `vscode-languageserver-types` 再导出），不是 `vscode.*` 类型——字段大多同形，但构造结果时按 LSP 形状写字面量。
@@ -114,13 +114,16 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `languages.registerSignatureHelpProvider` | 同名 | 语义差异：第三参是 metadata 对象 `{triggerCharacters, retriggerCharacters}`，不是可变参数 |
 | `languages.registerRenameProvider` | 同名 | 部分对齐：无 `prepareRename` |
 | `languages.registerCodeActionsProvider` | `languages.registerCodeActionsProvider` | 部分对齐：无注册 metadata（`providedCodeActionKinds`）；`CodeActionContext` 仅 `only` |
-| `languages.registerDocumentSemanticTokensProvider` | 同名 | 部分对齐：仅全量文档（`legend` 挂在 provider 上）；无 range/delta provider、无 `onDidChangeSemanticTokens` |
+| `languages.registerDocumentSemanticTokensProvider` | 同名 | 对齐（`legend` 挂在 provider 上；支持 `onDidChangeSemanticTokens`）；无 delta provider |
+| `languages.registerDocumentRangeSemanticTokensProvider` | 同名 | 对齐（仅对可见范围懒取） |
 | `languages.registerFoldingRangeProvider` | 同名 | 部分对齐：无 `onDidChangeFoldingRanges` |
 | `languages.registerCodeLensProvider` | 同名 | 对齐（`resolveCodeLens` + `onDidChangeCodeLenses`） |
 | `languages.registerDocumentLinkProvider` | 同名 | 对齐（`resolveDocumentLink`） |
 | `languages.createDiagnosticCollection` | 同名 | 部分对齐：`set/delete/clear/dispose`；无 `get/forEach`；`Diagnostic` 是 LSP 类型 |
 | `languages.getDiagnostics` / `onDidChangeDiagnostics` | 同名 | 语义差异：`getDiagnostics` 返回 **Promise**（全源诊断快照，非 live 视图；读回不含 `relatedInformation`；`code` 读回恒为字符串形式，数字 code 读回为字符串——与 VSCode 同款有损；含前导零的字符串 code 原样保留）；变更事件 50ms 防抖、按兴趣订阅 |
 | —（VSCode 无对应） | `languages.setLanguageServerStatus` | Universe 扩展：上报语言服务 `starting/ready/error`，状态栏显示 spinner、导航命令等待就绪而非静默阻塞 |
+| `languages.setTextDocumentLanguage` | 同名 | 对齐（等价 close(旧语言)+open(新语言)：触发 `onDidCloseTextDocument`/`onDidOpenTextDocument` 与 `onLanguage:<新id>` 激活，返回替换后的 `TextDocument`；文档未打开时 reject） |
+| `languages.setLanguageConfiguration` | 同名 | 部分对齐：仅 `comments`/`brackets`/`autoClosingPairs`/`surroundingPairs`/`wordPattern` 生效（`indentationRules`/`onEnterRules`/`folding` 不生效）；返回 `Disposable` 撤销 |
 | InlineCompletion / CallHierarchy / TypeHierarchy / LinkedEditing / Color / Declaration / DropEdit 等 provider | — | 缺失（暂无计划） |
 
 ### scm

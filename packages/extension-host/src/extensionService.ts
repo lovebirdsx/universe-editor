@@ -38,6 +38,7 @@ import {
   type DocumentFormattingEditProvider,
   type DocumentSelector,
   type DocumentSemanticTokensProvider,
+  type DocumentRangeSemanticTokensProvider,
   type DocumentHighlightProvider,
   type DocumentLinkProvider,
   type DocumentRangeFormattingEditProvider,
@@ -50,6 +51,7 @@ import {
   type ImplementationProvider,
   type InlayHintsProvider,
   type InputBoxOptions,
+  type LanguageConfiguration,
   type LanguageServerStatus,
   type OnTypeFormattingEditProvider,
   type OutputChannel,
@@ -94,6 +96,7 @@ import {
   type IExtensionDescriptionDto,
   type IFileChangeEventDto,
   type IInlayHintDto,
+  type ILanguageConfigurationDto,
   type IOpenDialogOptionsDto,
   type IProgressStepDto,
   type IReferenceContext,
@@ -231,6 +234,10 @@ const VISIBLE_EDITORS_DOC_GRACE_MS = 500
  *  `$openTextDocument` RPC returned (language activation runs in between). */
 const OPEN_TEXT_DOCUMENT_WAIT_MS = 15_000
 
+/** How long `setTextDocumentLanguage` waits for the document's close+open re-push
+ *  to arrive with the new language (activation of the new language runs in between). */
+const SET_TEXT_DOCUMENT_LANGUAGE_WAIT_MS = 5_000
+
 /** Status-bar priority for `window.setStatusBarMessage`: higher sorts further
  *  from center, so a very negative value keeps transient messages closest. */
 const STATUS_MESSAGE_PRIORITY = -1000
@@ -246,6 +253,26 @@ function toWireGlobPattern(pattern: GlobPattern): string | IRelativePatternDto {
     : { base: Uri.file(pattern.base).toJSON(), pattern: pattern.pattern }
 }
 
+/** Extension `LanguageConfiguration` → wire DTO: `wordPattern` crosses as its
+ *  source string (RegExp cannot survive the structured-clone wire). */
+function toLanguageConfigurationDto(config: LanguageConfiguration): ILanguageConfigurationDto {
+  const comments = config.comments
+  return {
+    ...(comments !== undefined
+      ? {
+          comments: {
+            ...(comments.lineComment !== undefined ? { lineComment: comments.lineComment } : {}),
+            ...(comments.blockComment !== undefined ? { blockComment: comments.blockComment } : {}),
+          },
+        }
+      : {}),
+    ...(config.brackets !== undefined ? { brackets: config.brackets } : {}),
+    ...(config.autoClosingPairs !== undefined ? { autoClosingPairs: config.autoClosingPairs } : {}),
+    ...(config.surroundingPairs !== undefined ? { surroundingPairs: config.surroundingPairs } : {}),
+    ...(config.wordPattern !== undefined ? { wordPattern: config.wordPattern.source } : {}),
+  }
+}
+
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands: ExtensionCommandRegistry
   private readonly _languageRegistry: LanguageProviderRegistry
@@ -259,6 +286,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private _scmHandle = 0
   private _outputHandle = 0
   private _decorationTypeHandle = 0
+  private _languageConfigHandle = 0
   private _progressHandle = 0
   /** Cancellation sources of in-flight `withProgress` tasks, keyed by handle. */
   private readonly _progressCancels = new Map<number, CancellationTokenSource>()
@@ -1222,6 +1250,13 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerDocumentSemanticTokensProvider(selector, provider)
   }
 
+  registerDocumentRangeSemanticTokensProvider(
+    selector: DocumentSelector,
+    provider: DocumentRangeSemanticTokensProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentRangeSemanticTokensProvider(selector, provider)
+  }
+
   registerCodeLensProvider(selector: DocumentSelector, provider: CodeLensProvider): Disposable {
     return this._languageRegistry.registerCodeLensProvider(selector, provider)
   }
@@ -1236,6 +1271,52 @@ export class ExtensionService implements IExtensionHostBridge {
 
   getLanguages(): Promise<string[]> {
     return this._languages().$getLanguages()
+  }
+
+  /**
+   * `languages.setTextDocumentLanguage`: switch an open document's language id,
+   * mirrored as close(old) + open(new) — the replacement document carries the new
+   * languageId and `onLanguage:<new>` activation runs before it opens. Rejects
+   * when the document is not open or the re-push never arrives.
+   */
+  async setTextDocumentLanguage(document: TextDocument, languageId: string): Promise<TextDocument> {
+    const uri = document.uri
+    const existing = this._documents.get(uri)
+    if (!existing) {
+      throw new Error('setTextDocumentLanguage: the document is not open')
+    }
+    if (existing.languageId === languageId) return existing
+    const reopening = this._documents.whenOpenWithLanguage(
+      uri,
+      languageId,
+      SET_TEXT_DOCUMENT_LANGUAGE_WAIT_MS,
+    )
+    await this._languages().$setTextDocumentLanguage(reviveWireUri(uri), languageId)
+    const reopened = await reopening
+    if (!reopened) {
+      throw new Error(
+        `setTextDocumentLanguage: the document did not reopen as ${languageId} for ${Uri.from(uri).toString()}`,
+      )
+    }
+    return reopened
+  }
+
+  /**
+   * `languages.setLanguageConfiguration`: apply a language configuration
+   * (comments/brackets/wordPattern/…) addressed by a host handle; dispose revokes it.
+   */
+  setLanguageConfiguration(language: string, configuration: LanguageConfiguration): Disposable {
+    const handle = this._languageConfigHandle++
+    void this._languages().$setLanguageConfiguration(
+      handle,
+      language,
+      toLanguageConfigurationDto(configuration),
+    )
+    return new Disposable(() => {
+      void this._languages()
+        .$unregisterLanguageConfiguration(handle)
+        .catch(() => undefined)
+    })
   }
 
   getDiagnostics(uri?: UriComponents): Promise<Array<[UriComponents, Diagnostic[]]>> {
@@ -1466,6 +1547,14 @@ export class ExtensionService implements IExtensionHostBridge {
     uri: UriComponents,
   ): Promise<SemanticTokens | null> {
     return this._languageRegistry.provideDocumentSemanticTokens(handle, uri)
+  }
+
+  provideDocumentRangeSemanticTokens(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+  ): Promise<SemanticTokens | null> {
+    return this._languageRegistry.provideDocumentRangeSemanticTokens(handle, uri, range)
   }
 
   provideCodeLenses(handle: number, uri: UriComponents): Promise<CodeLens[] | null> {

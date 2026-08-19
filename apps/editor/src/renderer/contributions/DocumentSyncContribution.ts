@@ -256,6 +256,19 @@ export class DocumentSyncContribution
     )
     store.add(model.onWillDispose(() => this._detach(key)))
 
+    // A language switch (setTextDocumentLanguage / user "Change Language Mode")
+    // re-mirrors the document as close(old) + open(new): Monaco fires
+    // onDidChangeLanguage inside setModelLanguage, so detach + re-attach here makes
+    // the API path and the manual mode switch flow through this one sync pipeline.
+    store.add(
+      model.onDidChangeLanguage(() => {
+        const newLanguageId = model.getLanguageId()
+        if (newLanguageId === entry.languageId) return
+        this._detach(key)
+        this._attach(key, model, newLanguageId)
+      }),
+    )
+
     // Let a completion (which fires immediately on a trigger char) force the
     // host's mirror current before it runs, beating the 200ms debounce above.
     PendingDocumentSync.register(key, () => this._flush(entry))

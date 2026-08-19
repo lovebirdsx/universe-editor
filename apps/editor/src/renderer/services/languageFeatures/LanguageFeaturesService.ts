@@ -125,6 +125,10 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.DocumentSemanticTokensProvider,
   ): IDisposable
+  registerDocumentRangeSemanticTokensProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentRangeSemanticTokensProvider,
+  ): IDisposable
   registerCodeLensProvider(
     languageId: string,
     provider: monaco.languages.CodeLensProvider,
@@ -495,6 +499,16 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     provider: monaco.languages.DocumentSemanticTokensProvider,
   ): IDisposable {
     return MonacoLoader.get().languages.registerDocumentSemanticTokensProvider(languageId, provider)
+  }
+
+  registerDocumentRangeSemanticTokensProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentRangeSemanticTokensProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerDocumentRangeSemanticTokensProvider(
+      languageId,
+      provider,
+    )
   }
 
   registerCodeLensProvider(

@@ -304,6 +304,43 @@
 - `0.12.1` — 无 API 变更（patch，2026-08-19）：`COMPATIBILITY.md` 加入包 `files`
   白名单随包分发（0.12.0 的 tarball 缺该文件，本次补发）。
 
+- `0.13.0` — 向后兼容的新增（minor，2026-08-20）：语言/主题/菜单面补全，支撑
+  Rainbow CSV 类「自定义语言 + 动态高亮」扩展的移植。除注明外均为纯新增，不改
+  既有签名：
+  - manifest 贡献点 `contributes.languages`：`[{ id, aliases?, extensions?,
+    filenames?, filenamePatterns?, mimetypes?, configuration? }]`——声明语言 id
+    并注册文件名/后缀/glob 关联（打开匹配文件即按声明推断语言，不再落
+    plaintext）；`configuration` 指向 language-configuration.json（JSONC），
+    当前生效 comments / brackets / autoClosingPairs / surroundingPairs /
+    wordPattern 五项。声明的语言 id 可用于 `onLanguage:<id>` 激活事件与
+    `contributes.grammars[].language`。
+  - manifest 贡献点 `contributes.colors`：`[{ id, description, defaults: { light,
+    dark, highContrastLight?, highContrastDark? } }]`——注册扩展自定义主题色
+    （defaults 接受 hex 或既有颜色 id 引用），自动生成 `--vscode-<id>` CSS 变量
+    并随主题切换。
+  - `languages.setTextDocumentLanguage(document, languageId)`：切换已打开文档的
+    语言（VSCode 对等语义：旧文档 close、新语言 open，resolve 新 `TextDocument`；
+    文档未打开则 reject）。
+  - `languages.setLanguageConfiguration(language, configuration)` + 新类型
+    `LanguageConfiguration` / `CommentRule` / `CharacterPair`：动态设置语言配置
+    （comments / brackets / autoClosingPairs / surroundingPairs / wordPattern），
+    返回 `Disposable` 撤销。
+  - `languages.registerDocumentRangeSemanticTokensProvider(selector, provider)` +
+    新类型 `DocumentRangeSemanticTokensProvider`：按可视区域请求语义 token。
+  - `DocumentSemanticTokensProvider.onDidChangeSemanticTokens?: Event<void>`（可选
+    新增字段）：扩展 fire 后编辑器主动重新拉取语义 token（运行时切换着色方案
+    不再需要编辑/重开文件）。
+  - `ThemeColor` class；`DecorationRenderOptions` 的 `backgroundColor` /
+    `borderColor` / `overviewRulerColor` 由 `string` 放宽为 `string | ThemeColor`
+    （联合放宽，既有字符串调用不受影响）。`backgroundColor`/`borderColor` 经
+    CSS 变量随主题实时更新；`overviewRulerColor` 在创建装饰类型时解析一次，
+    切主题后需重建装饰（JSDoc 已注明）。
+  - 菜单贡献点 `editor/context` 开始渲染（此前接受但不显示）：编辑器右键菜单
+    展示扩展条目，命令第一个参数为当前文档 URI（跨 RPC 后为 `UriComponents`，
+    扩展侧用 `Uri`/`URI.revive` 恢复）；`when` 可用 `editorLangId` /
+    `editorHasSelection` / `editorReadonly` / `resourceScheme` /
+    `resourceExtname` 等键。API 导出表面无变化，行为对齐 manifest 声明。
+
 ## 激活事件清单（activation events）
 
 扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则

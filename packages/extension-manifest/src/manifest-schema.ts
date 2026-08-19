@@ -96,6 +96,27 @@ const productIconThemeSchema = z.object({
   path: z.string().min(1),
 })
 
+const languageContributionSchema = z.object({
+  id: z.string().min(1),
+  aliases: z.array(z.string().min(1)).optional(),
+  extensions: z.array(z.string().min(1)).optional(),
+  filenames: z.array(z.string().min(1)).optional(),
+  filenamePatterns: z.array(z.string().min(1)).optional(),
+  mimetypes: z.array(z.string().min(1)).optional(),
+  configuration: z.string().min(1).optional(),
+})
+
+const colorContributionSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  defaults: z.object({
+    light: z.string().min(1),
+    dark: z.string().min(1),
+    highContrastLight: z.string().min(1).optional(),
+    highContrastDark: z.string().min(1).optional(),
+  }),
+})
+
 const grammarTokenTypeSchema = z.enum(['comment', 'string', 'regex', 'other'])
 
 const grammarSchema = z.object({
@@ -150,6 +171,8 @@ const contributesSchema = z
     iconThemes: z.array(iconThemeSchema).optional(),
     productIconThemes: z.array(productIconThemeSchema).optional(),
     grammars: z.array(grammarSchema).optional(),
+    languages: z.array(languageContributionSchema).optional(),
+    colors: z.array(colorContributionSchema).optional(),
     mcpServers: z.record(mcpServerContributionSchema).optional(),
     viewsContainers: viewsContainersSchema.optional(),
     views: z.record(z.array(viewContributionSchema)).optional(),

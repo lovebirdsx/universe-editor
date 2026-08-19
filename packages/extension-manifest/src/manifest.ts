@@ -158,6 +158,23 @@ export interface IProductIconThemeContribution {
 }
 
 /**
+ * A single `contributes.colors[]` entry (VSCode color contribution point). The
+ * id is what extensions reference via `new ThemeColor(id)`; each `defaults`
+ * value is either a hex literal (`#RRGGBB` / `#RRGGBBAA`) or a reference to
+ * another color id (resolved by the color registry).
+ */
+export interface IColorContribution {
+  id: string
+  description: string
+  defaults: {
+    light: string
+    dark: string
+    highContrastLight?: string
+    highContrastDark?: string
+  }
+}
+
+/**
  * A single `contributes.grammars[]` entry (VSCode TextMate grammar point).
  * `path` is relative to the extension root (e.g. `./syntaxes/ts.tmLanguage.json`);
  * the renderer resolves it against {@link IExtensionDescriptionDto.extensionLocation}.
@@ -174,6 +191,24 @@ export interface IGrammarContribution {
   injectTo?: string[]
   balancedBracketScopes?: string[]
   unbalancedBracketScopes?: string[]
+}
+
+/**
+ * A single `contributes.languages[]` entry (VSCode language contribution point).
+ * `id` is the language id; the association fields (`extensions` / `filenames` /
+ * `filenamePatterns` / `mimetypes`) drive file→language detection, and
+ * `configuration` points at a language-configuration.json (comments, brackets,
+ * auto-closing/surrounding pairs, word pattern) relative to the extension root.
+ */
+export interface ILanguageContribution {
+  id: string
+  aliases?: string[]
+  extensions?: string[]
+  filenames?: string[]
+  filenamePatterns?: string[]
+  mimetypes?: string[]
+  /** Path to a language-configuration.json (JSONC), relative to the extension root. */
+  configuration?: string
 }
 
 /**
@@ -245,6 +280,10 @@ export interface IExtensionContributions {
   iconThemes?: IIconThemeContribution[]
   productIconThemes?: IProductIconThemeContribution[]
   grammars?: IGrammarContribution[]
+  /** Language declarations: id + file associations + language configuration. */
+  languages?: ILanguageContribution[]
+  /** Custom theme colors referenced by `new ThemeColor(id)` in decorations. */
+  colors?: IColorContribution[]
   /** Declarative MCP servers, keyed by server name (stdio only in v1). */
   mcpServers?: Record<string, IMcpServerContribution>
   /** Extension-owned view containers (activity bar). */

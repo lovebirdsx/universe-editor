@@ -33,6 +33,7 @@ import {
 } from './monaco/editorOptionsFromConfig.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
+import { EditorContextMenu } from './EditorContextMenu.js'
 import { clampRevealScrollTop } from './previewScrollMap.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { recordPerfPhase } from '../../services/performance/perfPhases.js'
@@ -136,6 +137,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // effect below so switching tabs stays a cheap setModel — no editor rebuild.
   const fileInputRef = useRef(fileInput)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const activeGroup = groupsService.activeGroup
   const activeGroupActiveEditor = activeGroup.activeEditor
 
@@ -157,6 +159,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       {
         automaticLayout: true,
         editContext: true,
+        // Monaco's built-in right-click menu is replaced by the MenuRegistry-driven
+        // EditorContextMenu (see the contextmenu listener below), so extension
+        // `contributes.menus['editor/context']` items actually render.
+        contextmenu: false,
         // Semantic highlighting re-colors TextMate's guesses with real type info
         // from the TS language server. It is governed by the
         // `editor.semanticHighlighting.enabled` setting + the active theme's
@@ -184,29 +190,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     ed.addCommand(monacoNs.KeyCode.F1, () => {
       void commandService.executeCommand('workbench.action.showCommands')
     })
-    // Surface "Add Selection to Agent Chat" in Monaco's native context menu.
-    // Monaco's right-click menu reads its own action registry, not our
-    // MenuRegistry, so we mirror the command as an editor action here. Gated on a
-    // non-empty selection so it only shows when there's something to attach.
-    const addSelectionAction = ed.addAction({
-      id: 'workbench.action.agent.addSelectionToChat',
-      label: localize('action.agent.addSelectionToChat', 'Add Selection to Agent Chat'),
-      // Mirror the global `ctrl+k ctrl+l` chord (agentContextActions.ts) so Monaco's
-      // native context menu renders the shortcut next to the item. Monaco reads the
-      // hint from its own keybinding service, which doesn't know our global binding.
-      keybindings: [
-        monacoNs.KeyMod.chord(
-          monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.KeyK,
-          monacoNs.KeyMod.CtrlCmd | monacoNs.KeyCode.KeyL,
-        ),
-      ],
-      contextMenuGroupId: '1_agent',
-      contextMenuOrder: 1,
-      precondition: 'editorHasSelection',
-      run: () => {
-        void commandService.executeCommand('workbench.action.agent.addSelectionToChat')
-      },
-    })
+    // "Add Selection to Agent Chat" is registered against MenuId.EditorContext by
+    // EditorContextMenuContribution (with `when: editorHasSelection`), so it shows
+    // in the MenuRegistry-driven right-click menu wired up below.
+    //
     // Bridge Monaco widget focus → `editorFocus` contextKey, so the global ESC
     // binding (FocusActiveEditorGroupAction) bows out while Monaco has focus and
     // Monaco's own ESC handling (cancel multi-cursor, close find widget, dismiss
@@ -282,10 +269,19 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       })
     }
     dropContainer.addEventListener('dragover', armDropIntoEditorOnShift, true)
+    // Right-click opens the MenuRegistry-driven context menu instead of Monaco's
+    // native one (`contextmenu: false` above). clientX/clientY are viewport
+    // coordinates, matching the other ContextMenu consumers.
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+      setContextMenu({ x: e.clientX, y: e.clientY })
+    }
+    dropContainer.addEventListener('contextmenu', onContextMenu)
     const hoverGuard = MonacoLoader.trackEditorDispose(ed)
     editorRef.current = ed
     return () => {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
+      dropContainer.removeEventListener('contextmenu', onContextMenu)
       hoverGuard.dispose()
       focusSub.dispose()
       blurSub.dispose()
@@ -297,7 +293,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       inlineSuggestSub.dispose()
       inlineEditSub.dispose()
       columnSelectionSub.dispose()
-      addSelectionAction.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
@@ -584,6 +579,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     <div className={styles['fileEditorRoot']}>
       <Breadcrumbs input={fileInput} />
       <div ref={containerRef} className={styles['fileEditor']} data-testid="file-editor" />
+      {contextMenu && editorRef.current && (
+        <EditorContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          resource={fileInput.resource}
+          editor={editorRef.current}
+          isReadonly={fileInput.isReadonly}
+          commandService={commandService}
+          contextKeyService={contextKeyService}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   )
 }

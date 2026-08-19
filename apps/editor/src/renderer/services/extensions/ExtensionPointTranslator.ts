@@ -37,6 +37,7 @@ import {
 } from '@universe-editor/platform'
 import {
   commandActivationEvent,
+  type IColorContribution,
   type ICommandContribution,
   type IConfigurationContribution,
   type ICustomEditorContribution,
@@ -44,6 +45,7 @@ import {
   type IGrammarContribution,
   type IIconThemeContribution,
   type IKeybindingContribution,
+  type ILanguageContribution,
   type IMenuContribution,
   type IProductIconThemeContribution,
   type IResolvedJsonValidation,
@@ -160,6 +162,23 @@ export class ExtensionPointTranslator extends Disposable {
       grammars: readonly IGrammarContribution[],
       context: IThemeRegistrationContext,
     ) => IDisposable,
+    /**
+     * Register a batch of `contributes.languages` entries into the language
+     * registry (id + file associations + language configuration). Supplied by
+     * ExtensionsContribution; absent in unit tests.
+     */
+    private readonly _registerLanguages?: (
+      languages: readonly ILanguageContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
+    /**
+     * Register a batch of `contributes.colors` entries into the color registry.
+     * Supplied by ExtensionsContribution; absent in unit tests.
+     */
+    private readonly _registerColors?: (
+      colors: readonly IColorContribution[],
+      context: IThemeRegistrationContext,
+    ) => IDisposable,
   ) {
     super()
   }
@@ -233,6 +252,20 @@ export class ExtensionPointTranslator extends Disposable {
         this._registerContributionBatch(
           contributes.grammars,
           this._registerGrammars,
+          this._themeContext(ext),
+        )
+      })
+      this._guardContribution(ext.id, 'language', () => {
+        this._registerContributionBatch(
+          contributes.languages,
+          this._registerLanguages,
+          this._themeContext(ext),
+        )
+      })
+      this._guardContribution(ext.id, 'color', () => {
+        this._registerContributionBatch(
+          contributes.colors,
+          this._registerColors,
           this._themeContext(ext),
         )
       })
