@@ -17,6 +17,7 @@ import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleServic
 import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.js'
 import { createWindowScopedSessionSwitcher } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 import { createWindowScopedAcpHost } from '../services/acpHost/acpHostMainService.js'
+import { createWindowScopedExtensionHost } from '../services/extensionHost/extensionHostMainService.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 import { createWindowScopedUpdateService } from '../services/update/updateMainService.js'
@@ -68,7 +69,10 @@ export function bootstrapWindowIpc(
     ServiceChannels.AcpHost,
     ProxyChannel.fromService(createWindowScopedAcpHost(app.acpHost, win.id)),
   )
-  server.registerChannel(ServiceChannels.ExtensionHost, ProxyChannel.fromService(app.extensionHost))
+  server.registerChannel(
+    ServiceChannels.ExtensionHost,
+    ProxyChannel.fromService(createWindowScopedExtensionHost(app.extensionHost, win.id)),
+  )
   server.registerChannel(
     ServiceChannels.ExtensionManagement,
     ProxyChannel.fromService(app.extensionManagement),

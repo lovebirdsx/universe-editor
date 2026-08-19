@@ -145,6 +145,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   /** Handles owned by the remote implementation (routed by spec authority). */
   private readonly _remoteHandles = new Set<string>()
 
+  /** handle → windowId for local handles, so a window crash can reclaim its host. */
+  private readonly _windowByHandle = new Map<string, number>()
+
   private readonly _logger: ILogger
 
   /** Set once the first host process spawns, so the perf mark fires only once. */
@@ -339,6 +342,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
           }
           this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
         }
+        this._windowByHandle.delete(handle)
         this._procs.delete(handle)
         store.dispose()
       }),
@@ -410,6 +414,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       this._remoteHandles.delete(handle)
       return this._remoteService!.stop(handle)
     }
+    this._windowByHandle.delete(handle)
     const entry = this._procs.get(handle)
     if (!entry || entry.exited) {
       return Promise.resolve()
@@ -489,6 +494,35 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     }
   }
 
+  /**
+   * Main-internal: start a host and associate its handle with the calling window
+   * so a renderer crash can reclaim exactly that window's processes. Remote
+   * launches (`spec.authority`) are server-managed and never tracked here.
+   */
+  async startForWindow(
+    spec: ExtHostStartSpec | undefined,
+    windowId: number,
+  ): Promise<ExtHostStartResult> {
+    const result = await this.start(spec)
+    if (spec?.authority === undefined) this._windowByHandle.set(result.handle, windowId)
+    return result
+  }
+
+  /**
+   * Reclaim every local host a window spawned (renderer crash / reload). Remote
+   * handles stay with the server's own lifecycle. Logs a warn so the diagnostics
+   * package can tie orphaned processes back to the window that leaked them.
+   */
+  async stopAllForWindow(windowId: number): Promise<void> {
+    const handles = [...this._windowByHandle.entries()]
+      .filter(([, w]) => w === windowId)
+      .map(([handle]) => handle)
+    for (const handle of handles) await this.stop(handle)
+    if (handles.length > 0) {
+      this._logger.warn(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
+    }
+  }
+
   override dispose(): void {
     for (const [handle, entry] of this._procs) {
       if (!entry.exited) {
@@ -497,6 +531,29 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       }
     }
     this._procs.clear()
+    this._windowByHandle.clear()
     super.dispose()
+  }
+}
+
+/**
+ * Bind the application extensionHost singleton to the BrowserWindow serving one
+ * IPC channel, stamping the windowId onto every `start` so a crash can reclaim
+ * that window's processes (mirrors createWindowScopedAcpHost).
+ */
+export function createWindowScopedExtensionHost(
+  host: ExtensionHostMainService,
+  windowId: number,
+): IExtensionHostService {
+  return {
+    _serviceBrand: undefined,
+    onStdout: host.onStdout,
+    onStderr: host.onStderr,
+    onExit: host.onExit,
+    start: (spec) => host.startForWindow(spec, windowId),
+    writeStdin: (handle, data) => host.writeStdin(handle, data),
+    stop: (handle) => host.stop(handle),
+    stopAll: () => host.stopAll(),
+    hasUserExtensions: () => host.hasUserExtensions(),
   }
 }

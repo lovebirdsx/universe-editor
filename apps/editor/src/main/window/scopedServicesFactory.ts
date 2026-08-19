@@ -29,7 +29,7 @@ import type { UpdateMainService } from '../services/update/updateMainService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IDocsService } from '../../shared/ipc/docsService.js'
 import type { AcpHostMainService } from '../services/acpHost/acpHostMainService.js'
-import type { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
+import type { ExtensionHostMainService } from '../services/extensionHost/extensionHostMainService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
@@ -66,7 +66,11 @@ export interface ApplicationServices {
    * crashes, which is main-internal and not on the wire contract.
    */
   readonly acpHost: AcpHostMainService
-  readonly extensionHost: IExtensionHostService
+  /**
+   * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
+   * crashes, which is main-internal and not on the wire contract.
+   */
+  readonly extensionHost: ExtensionHostMainService
   readonly extensionManagement: IExtensionManagementService
   readonly extensionGallery: IExtensionGalleryService
   readonly acpTerminal: IAcpTerminalService

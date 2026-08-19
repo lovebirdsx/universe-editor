@@ -68,6 +68,7 @@ import {
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
+import { ExtensionHostMainService } from './services/extensionHost/extensionHostMainService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
@@ -492,7 +493,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       textSearch: accessor.get(ITextSearchMainService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       acpHost: accessor.get(IAcpHostService) as AcpHostMainService,
-      extensionHost: accessor.get(IExtensionHostService),
+      extensionHost: accessor.get(IExtensionHostService) as ExtensionHostMainService,
       extensionManagement: accessor.get(IExtensionManagementService),
       extensionGallery: accessor.get(IExtensionGalleryService),
       acpTerminal: accessor.get(IAcpTerminalService),

@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 8d8b29b6-d769-401e-92a5-fd0900a78982
-  modified: 2026-08-19T07:59:14.360Z
+  modified: 2026-08-19T10:58:33.291Z
 ---
 
 2026-08-19 分析用户诊断包(0.1.69,8/18-19 三次 renderer OOM,0.4GB→3.6~5GB 分钟级):[[subagent-replay-bypasses-budget-renderer-oom]] 的修复(01a0e7f)已在 0.1.67+ 发布且未被 03b6a5f 破坏,但 OOM 仍复发。根因是三个独立缺口叠加:
@@ -17,3 +17,5 @@ metadata:
 **Why:** 预算必须覆盖"每一条通往驻留内存的路径"——回放窗口内、窗口外(live)、源头(fork 下发)三层任一缺口都足以 OOM;且崩溃恢复流程若不回收旧进程,每次 OOM 都让系统压力翻倍。
 
 **How to apply:** ① 新增任何 session 内容入库路径时,先问"它被哪个预算覆盖?估算函数计到它了吗?";② 诊断这类问题三件套(processMetrics 内存曲线+acpSessionRestore 的 skipping auto-restore+processes.txt 的 --resume 命令行)依然有效,另加 sessionWatchedChanges.log 的 watched-change storm 是大规模工具活动的旁证;③ 遗留未修:live 运行期 main-heap 周期性 2-3.6GB 尖峰(疑似 stream-json parse,本诊断包未观察到 main 侧尖峰,维持另案);子 agent 嵌套内容(`AcpToolCall.children`)未纳入 live 修剪。
+
+2026-08-19 第二台用户机(linzhenqun,0.1.69,Bash 密集构建型会话 d7b51b31,3 次 OOM)复核确认同三缺口(A 主因分钟级爬 2.7~5.1GB、B resume 循环参与、C 孤儿 claude.exe 累积至 3 个)——升级 0.1.70 即覆盖。**新发现相邻缺口并已修(task3 分支):每次 renderer crash reload 曾遗留一整套 extension-host+typescript-language-server+3×tsserver 孤儿(约 0.5GB/套)——`stopAllForWindow` 只回收了 acp agent。修=ExtensionHostMainService 镜像 ACP 同套(_windowByHandle+startForWindow+stopAllForWindow+createWindowScopedExtensionHost 包装),windowMainService 的 render-process-gone/did-start-navigation 两处并联回收**;另 sysinfo 的 renderProcessGone 聚合会漏掉"整 app 重启型"OOM(renderer 死透没机会上报 errors.jsonl),window.log 的 render-process-gone 才是完整口径。

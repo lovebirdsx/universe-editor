@@ -290,9 +290,11 @@ export class WindowMainService implements IWindowMainService {
       logger.error(line)
       appServices.errorSink.recordLocal('renderProcessGone', line, `renderer:${win.id}`)
       // The renderer is dead, so its beforeunload/confirmShutdown stop() never
-      // reached us — its agent processes would otherwise orphan and keep grepping
-      // the workspace. Reclaim exactly this window's local agents.
+      // reached us — its agent and extension-host processes would otherwise
+      // orphan (the host's tsserver tree keeps running too). Reclaim exactly
+      // this window's local processes.
       void appServices.acpHost.stopAllForWindow(win.id)
+      void appServices.extensionHost.stopAllForWindow(win.id)
       if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
@@ -335,6 +337,7 @@ export class WindowMainService implements IWindowMainService {
     win.webContents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return
       void appServices.acpHost.stopAllForWindow(win.id)
+      void appServices.extensionHost.stopAllForWindow(win.id)
     })
 
     win.once('ready-to-show', () => {

@@ -10,13 +10,22 @@ import { EventEmitter } from 'node:events'
 import { delimiter } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { markAsSingleton } from '@universe-editor/platform'
+import { AbstractLogger, Emitter, LogLevel, markAsSingleton } from '@universe-editor/platform'
+import type { IDisposable } from '@universe-editor/platform'
 import {
   ExtensionHostMainService,
+  createWindowScopedExtensionHost,
   type ExtHostDevPathsResolver,
   type ExtHostInspectResolver,
   type ExtHostSpawner,
 } from '../extensionHostMainService.js'
+import type {
+  ExtHostExitEvent,
+  ExtHostStartResult,
+  ExtHostStartSpec,
+  ExtHostStdioChunk,
+  IExtensionHostService,
+} from '../../../../shared/ipc/extensionHostService.js'
 
 // The service imports `app` from electron for its default resolvers; the tests
 // inject their own, so these stubs are never exercised.
@@ -31,9 +40,13 @@ class FakeStdStream extends EventEmitter {
 class FakeStdinStream extends EventEmitter {
   destroyed = false
   writable = true
+  endCalls = 0
   write(_data: string, _enc: string, cb: (err?: Error | null) => void): boolean {
     cb(null)
     return true
+  }
+  end(): void {
+    this.endCalls++
   }
 }
 
@@ -41,7 +54,9 @@ class FakeProc extends EventEmitter {
   readonly stdout = new FakeStdStream()
   readonly stderr = new FakeStdStream()
   readonly stdin = new FakeStdinStream()
+  killCalls = 0
   kill(): boolean {
+    this.killCalls++
     return true
   }
   emitStderr(data: string): void {
@@ -210,5 +225,140 @@ describe('ExtensionHostMainService dev extensions + inspect flags', () => {
   it('leaves argv as just the entry when neither dev nor inspect is configured', async () => {
     const { args } = await captureStart()
     expect(args).toEqual(['/fake/entry.js'])
+  })
+})
+
+describe('ExtensionHostMainService — window-scoped reclaim', () => {
+  let svc: ExtensionHostMainService | undefined
+
+  afterEach(() => {
+    svc?.dispose()
+    svc = undefined
+  })
+
+  class CapturingLogger extends AbstractLogger {
+    readonly warns: string[] = []
+    protected override _log(level: LogLevel, message: string): void {
+      if (level === LogLevel.Warning) this.warns.push(message)
+    }
+  }
+
+  function makeScopedService(procs: FakeProc[], logger: CapturingLogger): ExtensionHostMainService {
+    let i = 0
+    const spawner: ExtHostSpawner = () => {
+      const next = procs[i++]
+      if (!next) throw new Error('no more procs queued')
+      return next as unknown as ChildProcessWithoutNullStreams
+    }
+    const realSvc = new ExtensionHostMainService(
+      spawner,
+      () => '/fake/entry.js',
+      () => '/fake/builtin',
+      () => '/fake/user',
+      () => ({ kind: 'tsls', cli: '/fake/cli.mjs', tsserver: '/fake/tsserver.js', version: '0' }),
+      () => [],
+      () => ({ port: undefined, brk: undefined }),
+      { createLogger: () => markAsSingleton(logger) } as unknown as ConstructorParameters<
+        typeof ExtensionHostMainService
+      >[7],
+    )
+    return realSvc
+  }
+
+  class FakeRemoteHost implements IExtensionHostService, IDisposable {
+    declare readonly _serviceBrand: undefined
+    private readonly _onStdout = new Emitter<ExtHostStdioChunk>()
+    private readonly _onStderr = new Emitter<ExtHostStdioChunk>()
+    private readonly _onExit = new Emitter<ExtHostExitEvent>()
+    readonly onStdout = this._onStdout.event
+    readonly onStderr = this._onStderr.event
+    readonly onExit = this._onExit.event
+    readonly starts: Array<ExtHostStartSpec | undefined> = []
+    readonly stops: string[] = []
+    start(spec?: ExtHostStartSpec): Promise<ExtHostStartResult> {
+      this.starts.push(spec)
+      return Promise.resolve({ handle: 'remote-handle' })
+    }
+    writeStdin(_handle: string, _data: string): Promise<void> {
+      return Promise.resolve()
+    }
+    stop(handle: string): Promise<void> {
+      this.stops.push(handle)
+      return Promise.resolve()
+    }
+    stopAll(): Promise<void> {
+      return Promise.resolve()
+    }
+    hasUserExtensions(): Promise<boolean> {
+      return Promise.resolve(false)
+    }
+    dispose(): void {}
+  }
+
+  it("startForWindow reclaims only that window's local hosts and logs the count", async () => {
+    const logger = markAsSingleton(new CapturingLogger())
+    const procA = new FakeProc()
+    const procB = new FakeProc()
+    const procC = new FakeProc()
+    const realSvc = makeScopedService([procA, procB, procC], logger)
+    svc = realSvc
+
+    const win1 = createWindowScopedExtensionHost(realSvc, 1)
+    const win2 = createWindowScopedExtensionHost(realSvc, 2)
+
+    await win1.start()
+    await win1.start()
+    await win2.start()
+
+    await realSvc.stopAllForWindow(1)
+
+    expect(procA.stdin.endCalls).toBe(1)
+    expect(procB.stdin.endCalls).toBe(1)
+    expect(procC.stdin.endCalls).toBe(0)
+    expect(logger.warns).toEqual(['stopAllForWindow windowId=1 killed=2'])
+
+    // A second call is a no-op: the window's handles were already reclaimed.
+    await realSvc.stopAllForWindow(1)
+    expect(logger.warns).toHaveLength(1)
+  })
+
+  it('clears a handle from the window map when its host exits (stopAllForWindow becomes a no-op)', async () => {
+    const logger = markAsSingleton(new CapturingLogger())
+    const proc = new FakeProc()
+    const realSvc = makeScopedService([proc], logger)
+    svc = realSvc
+
+    const win1 = createWindowScopedExtensionHost(realSvc, 1)
+    await win1.start()
+    proc.emitExit(0, null)
+
+    await realSvc.stopAllForWindow(1)
+
+    expect(logger.warns).toEqual([])
+    expect(proc.stdin.endCalls).toBe(0)
+  })
+
+  it('stopAllForWindow leaves remote (server-managed) hosts untouched', async () => {
+    const remote = new FakeRemoteHost()
+    svc = new ExtensionHostMainService(
+      () => {
+        throw new Error('local spawn must not be used')
+      },
+      () => '/fake/entry.js',
+      () => '/fake/builtin',
+      () => '/fake/user',
+      () => ({ kind: 'tsls', cli: '/fake/cli.mjs', tsserver: '/fake/tsserver.js', version: '0' }),
+      () => [],
+      () => ({ port: undefined, brk: undefined }),
+      undefined,
+      remote,
+    )
+
+    const win1 = createWindowScopedExtensionHost(svc, 1)
+    await win1.start({ authority: 'host' })
+
+    await svc.stopAllForWindow(1)
+
+    expect(remote.stops).toEqual([])
   })
 })
