@@ -55,6 +55,16 @@ export const ACP_EXT_METHODS = {
    * session/load and session/resume.
    */
   backgroundActivity: '_universe/background_activity',
+  /**
+   * agent->client notification: MCP server startup outcome (codex fork). The
+   * editor seeds every configured server as `pending` in the MCP panel; claude
+   * refreshes it from the SDK system-init passthrough, codex has no equivalent
+   * so its fork forwards the startup result — ready servers included, which
+   * the startup-failure tool_call cards never mention. Params:
+   * `{ sessionId, servers: Array<{ name, status }> }` with status one of
+   * `connected` | `failed` | `cancelled`.
+   */
+  mcpServerStatus: '_universe/mcp_server_status',
   /** agent->client notification: raw Claude SDK message passthrough (init snapshot). */
   sdkMessage: '_claude/sdkMessage',
 } as const

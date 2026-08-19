@@ -2,8 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  McpServersView — the "MCP Servers" view in the AGENTS container. Shows the
  *  active session's configured + connected MCP servers: name, transport, live
- *  connection status (from the Claude SDK system-init snapshot) and per-server
- *  tool-call counts derived from the timeline. Empty when no session is active
+ *  connection status (claude: SDK system-init snapshot; codex: the fork's
+ *  _universe/mcp_server_status startup notification) and per-server tool-call
+ *  counts derived from the timeline. Empty when no session is active
  *  or no MCP servers are involved; offers a shortcut to the settings.
  *--------------------------------------------------------------------------------------------*/
 

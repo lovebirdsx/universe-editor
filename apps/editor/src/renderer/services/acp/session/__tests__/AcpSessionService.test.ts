@@ -2715,6 +2715,34 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.dispose()
   })
 
+  it('refreshes mcpServers status from the codex _universe/mcp_server_status notification', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      good: { command: 'node', args: [] },
+      broken: { command: 'node', args: [] },
+    })
+    const svc = makeService(client, config)
+    const session = await svc.createSession()
+    await session.whenConnected()
+    expect(session.mcpServers.get()).toEqual([
+      { name: 'good', status: 'pending', transport: 'stdio' },
+      { name: 'broken', status: 'pending', transport: 'stdio' },
+    ])
+    svc.onExtNotification('_universe/mcp_server_status', {
+      sessionId: session.id,
+      servers: [
+        { name: 'good', status: 'connected' },
+        { name: 'broken', status: 'failed' },
+      ],
+    })
+    expect(session.mcpServers.get()).toEqual([
+      { name: 'good', status: 'connected', transport: 'stdio' },
+      { name: 'broken', status: 'failed', transport: 'stdio' },
+    ])
+    svc.dispose()
+  })
+
   it('ignores non-init / malformed extNotification payloads', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())
@@ -2723,6 +2751,11 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     svc.onExtNotification('_claude/sdkMessage', {
       sessionId: session.id,
       message: { type: 'result' },
+    })
+    svc.onExtNotification('_universe/mcp_server_status', { sessionId: session.id })
+    svc.onExtNotification('_universe/mcp_server_status', {
+      sessionId: session.id,
+      servers: [{ name: 42, status: 'connected' }],
     })
     svc.onExtNotification('_other/method', { sessionId: session.id })
     expect(session.mcpServers.get()).toEqual([])

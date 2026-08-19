@@ -105,6 +105,7 @@ import {
   BACKGROUND_ACTIVITY_METHOD,
   COMPACTION_METHOD,
   LIVENESS_PING_METHOD,
+  MCP_SERVER_STATUS_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
@@ -1860,6 +1861,12 @@ export class AcpSessionService
       this._findSession(sessionId)?.applyBackgroundActivity({ backgroundTasks, autonomousTurn })
       return
     }
+    if (method === MCP_SERVER_STATUS_METHOD) {
+      const sessionId = params['sessionId']
+      if (typeof sessionId !== 'string' || !Array.isArray(params['servers'])) return
+      this._findSession(sessionId)?.applyMcpServerSnapshot(readMcpServerStatuses(params['servers']))
+      return
+    }
     if (method !== SDK_MESSAGE_EXT_METHOD) return
     const sessionId = params['sessionId']
     const message = params['message']
@@ -1868,14 +1875,7 @@ export class AcpSessionService
     if (m.type !== 'system' || m.subtype !== 'init' || !Array.isArray(m.mcp_servers)) return
     const session = this._findSession(sessionId)
     if (!session) return
-    const servers = m.mcp_servers
-      .filter((s): s is { name: string; status: string } => {
-        if (s == null || typeof s !== 'object') return false
-        const o = s as { name?: unknown; status?: unknown }
-        return typeof o.name === 'string' && typeof o.status === 'string'
-      })
-      .map((s) => ({ name: s.name, status: s.status }))
-    session.applyMcpServerSnapshot(servers)
+    session.applyMcpServerSnapshot(readMcpServerStatuses(m.mcp_servers))
   }
 
   private _handleCompactionNotification(params: Record<string, unknown>): void {
@@ -2374,6 +2374,21 @@ function selectionEquals(a: readonly string[] | null, b: readonly string[] | nul
   if (a === null || b === null) return false
   if (a.length !== b.length) return false
   return a.every((x, i) => x === b[i])
+}
+
+/**
+ * Normalize an MCP status payload (claude's system-init `mcp_servers` or the
+ * codex fork's `_universe/mcp_server_status` `servers`) into the shape
+ * {@link AcpSession.applyMcpServerSnapshot} accepts, dropping malformed entries.
+ */
+function readMcpServerStatuses(raw: readonly unknown[]): Array<{ name: string; status: string }> {
+  return raw
+    .filter((s): s is { name: string; status: string } => {
+      if (s == null || typeof s !== 'object') return false
+      const o = s as { name?: unknown; status?: unknown }
+      return typeof o.name === 'string' && typeof o.status === 'string'
+    })
+    .map((s) => ({ name: s.name, status: s.status }))
 }
 
 function messageIdsThrough(

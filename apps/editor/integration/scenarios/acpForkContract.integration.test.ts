@@ -67,6 +67,7 @@ const EXPECTED_METHOD_NAMES = {
   sessionResurrection: '_universe/sessionResurrection',
   livenessPing: '_universe/liveness_ping',
   backgroundActivity: '_universe/background_activity',
+  mcpServerStatus: '_universe/mcp_server_status',
   sdkMessage: '_claude/sdkMessage',
 } as const
 
@@ -106,6 +107,9 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.setSessionTitle,
     EXPECTED_METHOD_NAMES.rewindSession,
     EXPECTED_METHOD_NAMES.livenessPing,
+    // MCP startup outcome notification — flips the editor MCP panel's
+    // config-seeded "pending" rows (claude covers this via sdkMessage instead).
+    EXPECTED_METHOD_NAMES.mcpServerStatus,
     'universe-editor/capabilities',
   ],
 }

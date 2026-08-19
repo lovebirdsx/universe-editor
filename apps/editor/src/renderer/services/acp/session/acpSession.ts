@@ -118,6 +118,7 @@ export {
   BACKGROUND_ACTIVITY_METHOD,
   COMPACTION_METHOD,
   LIVENESS_PING_METHOD,
+  MCP_SERVER_STATUS_METHOD,
   PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   REWIND_SESSION_METHOD,
@@ -1293,10 +1294,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * Refresh connection status from the Claude SDK system-init snapshot
-   * (`mcp_servers: { name, status }[]`). Merges onto the config-seeded list,
-   * preserving the known transport; servers present only in the snapshot are
-   * appended with no transport.
+   * Refresh connection status from an agent status snapshot (claude: SDK
+   * system-init `mcp_servers: { name, status }[]`; codex: the fork's
+   * `_universe/mcp_server_status` notification). Merges onto the config-seeded
+   * list, preserving the known transport; servers present only in the snapshot
+   * are appended with no transport.
    */
   applyMcpServerSnapshot(servers: ReadonlyArray<{ name: string; status: string }>): void {
     const prev = this.mcpServers.get()

@@ -374,6 +374,17 @@ export const LIVENESS_PING_METHOD = ACP_EXT_METHODS.livenessPing
  */
 export const BACKGROUND_ACTIVITY_METHOD = ACP_EXT_METHODS.backgroundActivity
 
+/**
+ * Custom ACP extension notification the codex agent fork sends once MCP server
+ * startup settles, carrying `{ sessionId, servers: Array<{ name, status }> }`
+ * (status `connected` | `failed` | `cancelled`). The editor seeds configured
+ * servers as `pending` and this snapshot flips them — the claude fork covers
+ * the same need via its SDK system-init passthrough instead. Shared verbatim
+ * with the fork's `ACPSessionConnection.ts` (`MCP_SERVER_STATUS_METHOD`) —
+ * keep both in sync.
+ */
+export const MCP_SERVER_STATUS_METHOD = ACP_EXT_METHODS.mcpServerStatus
+
 /** Result the agent returns from {@link REWIND_SESSION_METHOD} (mirrors the SDK's RewindFilesResult). */
 export interface RewindFilesResult {
   readonly canRewind: boolean
