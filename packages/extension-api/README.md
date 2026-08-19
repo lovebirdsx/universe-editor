@@ -2,7 +2,7 @@
 
 Universe Editor 的扩展 API 面——相当于 VSCode 的 `vscode.d.ts`。**包版本即扩展 API 版本**：扩展在自己的 `package.json` 里用 `engines.universe` 声明兼容区间，宿主按 semver 区间校验后加载。
 
-> **0.x 版本政策**：1.0 之前 API 仍在演进，**minor 版本即可携带破坏性变更**（semver 0.x 惯例）。破坏性变更走显式流程（契约测试快照 + 版本 bump + 变更记录），见仓库内 `COMPATIBILITY.md`。锁定依赖时请使用区间 `">=0.7.0 <1.0.0"`，**不要用 `^0.x`**（caret 在 0.x 下会把兼容的 minor 新增也挡掉）。
+> **0.x 版本政策**：1.0 之前 API 仍在演进，**minor 版本即可携带破坏性变更**（semver 0.x 惯例）。破坏性变更走显式流程（契约测试快照 + 版本 bump + 变更记录），见包内 `COMPATIBILITY.md`。锁定依赖时请使用区间 `">=0.7.0 <1.0.0"`，**不要用 `^0.x`**（caret 在 0.x 下会把兼容的 minor 新增也挡掉）。
 
 ## 安装
 
@@ -47,8 +47,10 @@ export function activate() {
 
 ## 文档
 
-- API 版本承诺与破坏性变更流程：仓库 `packages/extension-api/COMPATIBILITY.md`
-- 第三方开发者文档：`docs/extension-dev/`（随生态 Phase E 落地）
+- API 版本承诺与破坏性变更流程：包内 [`COMPATIBILITY.md`](./COMPATIBILITY.md)（随包分发，含各版本变更记录与激活事件清单）
+- API 签名与语义：`dist/*.d.ts`（带 JSDoc，本包即权威 API 面）
+- 第三方开发者文档（上手 / 贡献点 / webview / 从 VSCode 迁移等）：[`docs/extension-dev/`](https://github.com/lovebirdsx/universe-editor/tree/main/docs/extension-dev)，也随编辑器安装分发（安装目录 `resources/docs/extension-dev/`）
+- 可运行示例（每个能力面一个示例，均带 e2e）：[universe-editor-extension-samples](https://github.com/lovebirdsx/universe-editor-extension-samples)
 
 ## License
 

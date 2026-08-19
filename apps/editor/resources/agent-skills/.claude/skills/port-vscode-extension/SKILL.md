@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 你负责把一个现有的 VSCode 插件移植成 Universe Editor 扩展。与从零创建的最大差别是:**动工之前必须完成可行性评估并让用户确认**——Universe Editor 的扩展 API 与 VSCode 高度同构但不是全集,不评估就动工很可能做到一半发现核心能力缺失。
 
-本 skill 只覆盖「评估 + 移植改写」这段;环境检测、脚手架、e2e、验收、发布等通用流程**复用同目录旁 `../new-extension/SKILL.md`**,先把它读了,其全局规则(三道门、publish 永不自动、不硬造 API、密钥红线)在本流程同样生效。权威 API 对照文档的位置也见该文件「权威资料在哪」一节,其中**`migration-from-vscode.md` 是本流程的核心参考**,评估前必读。
+本 skill 只覆盖「评估 + 移植改写」这段;环境检测、脚手架、e2e、验收、发布等通用流程**复用同目录旁 `../new-extension/SKILL.md`**,先把它读了,其全局规则(三道门、publish 永不自动、不硬造 API、密钥红线)在本流程同样生效。权威资料的三层分工(项目内 `.d.ts` = API 最终裁决 / 示例仓库 / 安装目录文档)也见该文件「权威资料在哪」一节,其中**`migration-from-vscode.md` 是本流程的核心参考**,评估前必读。评估前还要按该文件「示例仓库:克隆与自动更新」准备好本地示例副本(每次参考前先 pull):示例仓库根 `README.md` 带一份**与官方 vscode-extension-samples 的逐条能力对照表(✅/⚠️/❌/➖)**,是四档评估的快速定位入口。
 
 ## 第 1 步:需求确认(门 1)
 
@@ -38,7 +38,12 @@ git clone --depth 1 <仓库地址> <临时目录>
 
 ## 第 4 步:可行性四档评估(门 2)
 
-拿着 API 使用清单,逐条对照 `migration-from-vscode.md` 的 namespace 对照表(以文档为准,不要背清单),给每个 API 定档:
+拿着 API 使用清单定档,按「先粗后细」两轮:
+
+1. **粗定位**:用示例仓库根 `README.md` 的官方示例对照表,快速看清该插件所属功能域(语言特性 / 视图 / SCM / 调试…)在 Universe Editor 的整体支持度,提前发现整域缺失。
+2. **逐条定档**:对照 `migration-from-vscode.md` 的 namespace 对照表(以文档为准,不要背清单)给每个 API 定档;文档拿不准的 API,动工起骨架 `npm install` 后以 `node_modules/@universe-editor/extension-api/dist/*.d.ts` 为最终裁决,发现与文档不一致时以 `.d.ts` 为准并回报用户。
+
+四档定义:
 
 | 档 | 含义 |
 |---|---|
@@ -53,7 +58,7 @@ git clone --depth 1 <仓库地址> <临时目录>
 
 ## 第 5 步:移植执行
 
-先按 `new-extension` 第 3 步用脚手架起骨架(拿到正确的构建配置与 manifest 基线),再把源插件代码迁入 `src/`,套用机械替换表:
+先按 `new-extension` 第 3 步用脚手架起骨架(拿到正确的构建配置与 manifest 基线),再把源插件代码迁入 `src/`。迁每块功能前,先看示例仓库同能力示例的地道写法(索引见 `new-extension`「示例仓库」一节,参考前先 pull),不要 1:1 平移 VSCode 的代码结构。机械替换表:
 
 | VSCode | Universe Editor |
 |---|---|

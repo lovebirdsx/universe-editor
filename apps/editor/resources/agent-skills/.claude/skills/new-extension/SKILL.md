@@ -18,11 +18,40 @@ disable-model-invocation: true
 
 ## 权威资料在哪
 
-完整的扩展开发文档随编辑器安装分发,**优先读文档而不是凭记忆写代码**:
+三层资料各有分工,**优先读示例与类型声明而不是凭记忆写代码**:
 
-- 本 SKILL.md 位于编辑器安装目录的 `resources/agent-skills/` 下;开发文档在同级的 `resources/docs/extension-dev/zh-CN/`(Windows 默认安装目录 `%LOCALAPPDATA%\Programs\Universe Editor`)。
-- 若当前在 universe-editor 仓库的开发模式下,文档位于仓库根 `docs/extension-dev/zh-CN/`。
-- 文档地图:`getting-started.md`(上手)、`extension-anatomy.md`(结构)、`contribution-points.md`(贡献点参考)、`api/`(API 面)、`webview-guide.md`、`language-guide.md`、`debugging.md`、`versioning.md`(engines.universe 语义)、`publishing.md`(发布)、`security-and-trust.md`。
+1. **扩展项目里的 API 包**(第 3 步 `npm install` 之后即有):`node_modules/@universe-editor/extension-api/dist/*.d.ts` 是带 JSDoc 的 API 权威面——某个 API 是否存在、签名与语义**以此为最终裁决**;同目录 `README.md` 有最小示例,包根若带 `COMPATIBILITY.md`(较新版本随包分发),内含激活事件清单与逐版本 API 变更记录。写代码、查签名首选这里。
+2. **官方示例仓库**(本地克隆,见下节):每种能力面一个可运行示例且都带 e2e,写某类功能前先找对应示例照着写,比读文档更快更准。
+3. **随编辑器分发的开发文档**(概念与指南):本 SKILL.md 位于编辑器安装目录的 `resources/agent-skills/` 下;开发文档在同级的 `resources/docs/extension-dev/zh-CN/`(Windows 默认安装目录 `%LOCALAPPDATA%\Programs\Universe Editor`)。若当前在 universe-editor 仓库的开发模式下,文档位于仓库根 `docs/extension-dev/zh-CN/`。文档地图:`getting-started.md`(上手)、`extension-anatomy.md`(结构)、`contribution-points.md`(贡献点参考)、`api/`(API 面)、`webview-guide.md`、`language-guide.md`、`debugging.md`、`versioning.md`(engines.universe 语义)、`publishing.md`(发布)、`security-and-trust.md`。
+
+### 示例仓库:克隆与自动更新
+
+官方示例仓库:https://github.com/lovebirdsx/universe-editor-extension-samples 。从第 2 步(定计划)起就要用到;**每次会话首次参考示例前,先跑一遍下面的幂等命令**(存在则 pull 取最新,不存在则克隆):
+
+```bash
+SAMPLES_DIR="$HOME/.universe-editor/extension-samples"
+if [ -d "$SAMPLES_DIR/.git" ]; then
+  git -C "$SAMPLES_DIR" pull --ff-only || echo "pull failed, using existing local copy"
+else
+  git clone --depth 1 https://github.com/lovebirdsx/universe-editor-extension-samples.git "$SAMPLES_DIR"
+fi
+```
+
+克隆/pull 失败(离线等)**不阻塞流程**:有旧副本就用旧副本;完全没有就退化为只用 `.d.ts` 与文档,并向用户说明。示例仓库只用于参考,不要在里面写代码。
+
+按能力面找示例(位于 `$SAMPLES_DIR/samples/<name>/`;完整索引与新增示例以克隆副本根 `README.md` 为准):
+
+| 想做什么 | 参考示例 |
+|---|---|
+| 命令 / 输出通道 | helloworld |
+| 状态栏 / 通知 / 进度 / QuickPick·InputBox | statusbar / notifications / progress / quickinput |
+| 配置读写与监听 | configuration |
+| 文档编辑 / 补全 / CodeLens / 代码操作 / 装饰 / 语义高亮 / 诊断 | document-editing / completions / codelens / code-actions / decorator / semantic-tokens / diagnostic-related-information |
+| 树视图 / webview 面板 / 自定义编辑器 / SCM | tree-view / webview-panel / custom-editor / source-control |
+| 主题 / 产品图标主题 / 纯声明式贡献 / NLS 本地化 | color-theme / product-icon-theme / declarative-features / l10n |
+| timeline / MCP server / workspace.fs | timeline-provider / mcp-server / fsconsumer |
+
+⚠️ 示例仓库始终追最新 SDK;其依赖版本与脚手架生成的不一致时,**以脚手架为准**(脚手架与用户已装的编辑器匹配)——只参考示例的代码模式,不要照抄版本号或 `engines.universe`。
 
 ## 第 0 步:环境检测
 
@@ -38,10 +67,11 @@ disable-model-invocation: true
 
 ## 第 2 步:计划确认(门 2)
 
-根据需求推断扩展形态(纯声明型 / 命令型 / webview 面板 / 自定义编辑器 / 语言支持),需要时先读对应文档,然后给用户一页纸计划:
+根据需求推断扩展形态(纯声明型 / 命令型 / webview 面板 / 自定义编辑器 / 语言支持),先更新示例仓库并定位最接近的示例(见「示例仓库」一节),需要时再读对应文档,然后给用户一页纸计划:
 
 - 扩展 id(小写 npm 命名规则)、displayName、publisher
 - 模板选型:`basic`(命令型起点)或 `webview`
+- 参考示例:示例仓库中最接近的 1~2 个示例名(没有对应示例就写"无")
 - 贡献点清单(commands / keybindings / configuration / menus / customEditors / …)
 - 实现要点与已知限制(API 不支持的点此时讲清)
 - e2e 测试场景清单——**每条已确认的需求至少对应一条 e2e 用例**
@@ -63,7 +93,7 @@ cd <目录名> && npm install && npm run build
 
 ## 第 4 步:实现
 
-先读安装目录里与形态对应的文档,再写代码。**红线自查清单**(违反任意一条,扩展会静默不加载或打包丢文件):
+动手前先把参考示例的 `package.json` 与 `src/extension.ts` 打开对照着写(示例仓库先 pull 到最新);概念性问题读安装目录文档;API 是否存在、签名与语义以项目里 `node_modules/@universe-editor/extension-api/dist/*.d.ts`(带 JSDoc)为最终裁决,拿不准就先查再写。**红线自查清单**(违反任意一条,扩展会静默不加载或打包丢文件):
 
 - `engines.universe` 必须是合法普通区间(脚手架已写好,如 `">=0.12.0 <1.0.0"`),不要改成 `||` 或连字符区间——不合法会被扫描器**静默跳过**。
 - `package.json` 的 `files` 是**白名单**:dist、图标、NLS 文件(`package.nls*.json`)等运行需要的文件都必须列入,漏列 = 打包丢失。
@@ -132,6 +162,8 @@ test.describe('my extension', () => {
 ```
 
 5. 跑:`npm run build && npx playwright test -c e2e/playwright.config.ts`。编辑器可执行文件默认自动探测本机安装(Windows);否则设 `UNIVERSE_EDITOR_BIN` 指向编辑器 exe。e2e 使用独立的 userData,不会与用户正开着的编辑器互相干扰。
+
+探针 API 与断言的更多真实用法,参考示例仓库各 `samples/<name>/e2e/*.spec.ts`——同一套 harness,每个示例都有一条可运行的 e2e。
 
 全部用例通过后才进入验收。
 
