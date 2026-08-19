@@ -192,10 +192,25 @@ export function buildDeployRemoteScript(
 
 export type NodeArtifactResolution =
   | { readonly platformKey: string; readonly fileName: string }
-  | { readonly error: string }
+  | { readonly error: string; readonly unsupportedHost?: true }
+
+/** A host we will never be able to run the remote server on (e.g. Windows) — the "install Node manually" advice does not apply. */
+export class UnsupportedRemoteHostError extends Error {}
+
+const WINDOWS_HOST_GUIDANCE =
+  'Windows hosts are not supported as SSH remotes — only Linux and macOS. To work on the local machine use "Connect to WSL" instead.'
 
 export function buildUnameCommand(): string {
   return 'uname -sm; (ldd --version 2>&1 || true) | head -n 1'
+}
+
+/**
+ * `%OS%` expands to `Windows_NT` under cmd.exe but stays literal under a POSIX
+ * shell — run after a failed uname probe to tell a Windows remote (whose sshd
+ * default shell is cmd.exe) apart from a genuinely broken POSIX shell.
+ */
+export function buildWindowsShellProbeCommand(): string {
+  return 'echo %OS%'
 }
 
 /** Map `uname -sm` + the first `ldd --version` line to a Node.js dist filename. */
@@ -213,6 +228,12 @@ export function resolveNodeArtifact(output: string): NodeArtifactResolution {
     }
   }
   const [os, machine] = uname.split(/\s+/)
+  if (os !== undefined && /^(Windows_NT|MINGW|MSYS|CYGWIN)/i.test(os)) {
+    return {
+      error: `the remote host is Windows ('${uname}'). ${WINDOWS_HOST_GUIDANCE}`,
+      unsupportedHost: true,
+    }
+  }
   let platformKey: string | undefined
   if (os === 'Linux') {
     if (machine === 'x86_64') platformKey = 'linux-x64'
@@ -812,12 +833,25 @@ export class RemoteDeployer {
     )
     const probeResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()))
     if (probeResult.code !== 0) {
+      const osProbe = await this._runner(
+        'ssh',
+        sshCommandArgs(authority, buildWindowsShellProbeCommand()),
+      )
+      if (/\bWindows_NT\b/.test(osProbe.stdout)) {
+        throw new UnsupportedRemoteHostError(
+          `the remote host '${authority}' appears to be Windows (its SSH shell is cmd.exe). ${WINDOWS_HOST_GUIDANCE}`,
+        )
+      }
       throw new Error(
         `failed to probe remote platform: ${probeResult.stderr.trim() || probeResult.spawnError || `exit ${probeResult.code}`}`,
       )
     }
     const resolution = resolveNodeArtifact(probeResult.stdout)
-    if ('error' in resolution) throw new Error(resolution.error)
+    if ('error' in resolution) {
+      throw resolution.unsupportedHost
+        ? new UnsupportedRemoteHostError(resolution.error)
+        : new Error(resolution.error)
+    }
     log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
     const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
     const localTgz = join(tmpdir(), tmpName)

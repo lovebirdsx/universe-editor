@@ -58,6 +58,7 @@ import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
 import {
   RemoteDeployer,
+  UnsupportedRemoteHostError,
   defaultRemoteSpawner,
   parseDaemonInfoLine,
   validateAuthority,
@@ -667,6 +668,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       try {
         await orchestrator.provisionNodeRuntime(target, this._logger)
       } catch (err) {
+        // "Install Node manually" advice below is wrong for a host we can never run on.
+        if (err instanceof UnsupportedRemoteHostError) throw err
         const reason = err instanceof Error ? err.message : String(err)
         throw new Error(
           `Automatic Node.js installation failed (${reason}). Install Node.js 20 or later on the remote machine and reconnect. If Node.js is managed by nvm, make sure it is available in non-interactive SSH sessions (e.g. symlink it into /usr/local/bin or export PATH in ~/.bashrc before the interactivity check).`,

@@ -18,6 +18,7 @@ import {
   buildStartCommand,
   buildStopCommand,
   buildUnameCommand,
+  buildWindowsShellProbeCommand,
   classifyCheckResult,
   computeBundleHash,
   downloadNodeArchive,
@@ -30,6 +31,7 @@ import {
   resolveNodeArtifact,
   scpArgs,
   sshCommandArgs,
+  UnsupportedRemoteHostError,
   validateAuthority,
   type NodeArchiveFetcher,
   type RemoteRunner,
@@ -371,12 +373,18 @@ describe('resolveNodeArtifact', () => {
     expect(result).toHaveProperty('error', expect.stringMatching(/musl/i))
   })
 
+  it('rejects a Windows uname (git-bash/cygwin sshd) as an unsupported host', () => {
+    const result = resolveNodeArtifact('Windows_NT x86_64\n')
+    expect(result).toHaveProperty('error', expect.stringContaining('Windows'))
+    expect(result).toHaveProperty('unsupportedHost', true)
+    expect(resolveNodeArtifact('MINGW64_NT-10.0 x86_64\n')).toHaveProperty('unsupportedHost', true)
+  })
+
   it('rejects unknown platforms with manual-install guidance', () => {
-    expect(resolveNodeArtifact('Windows_NT x86_64\n')).toHaveProperty(
+    expect(resolveNodeArtifact('Linux s390x\n')).toHaveProperty(
       'error',
       expect.stringContaining('unsupported remote platform'),
     )
-    expect(resolveNodeArtifact('Linux s390x\n')).toHaveProperty('error')
     expect(resolveNodeArtifact('')).toHaveProperty('error')
   })
 })
@@ -630,10 +638,55 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
 
   it('throws when the remote platform is unsupported', async () => {
     const runner: RemoteRunner = () =>
-      Promise.resolve({ code: 0, stdout: 'Windows_NT x86_64\n', stderr: '' })
+      Promise.resolve({ code: 0, stdout: 'Linux s390x\n', stderr: '' })
     const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
     await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
       'unsupported remote platform',
+    )
+  })
+
+  it('throws UnsupportedRemoteHostError when uname reports Windows', async () => {
+    const runner: RemoteRunner = () =>
+      Promise.resolve({ code: 0, stdout: 'Windows_NT x86_64\n', stderr: '' })
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
+      UnsupportedRemoteHostError,
+    )
+  })
+
+  it('detects a cmd.exe remote (Windows sshd) when the uname probe fails', async () => {
+    const probed: string[] = []
+    const runner: RemoteRunner = (_command, args) => {
+      const remoteCommand = args[args.length - 1]!
+      probed.push(remoteCommand)
+      if (remoteCommand === buildUnameCommand()) {
+        return Promise.resolve({
+          code: 1,
+          stdout: '',
+          stderr: "'true)' 不是内部或外部命令，也不是可运行的程序或批处理文件。",
+        })
+      }
+      return Promise.resolve({ code: 0, stdout: 'Windows_NT\r\n', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
+      /appears to be Windows \(its SSH shell is cmd\.exe\)/,
+    )
+    expect(probed).toEqual([buildUnameCommand(), buildWindowsShellProbeCommand()])
+  })
+
+  it('keeps the raw probe error when the failing remote shell is not cmd.exe', async () => {
+    const runner: RemoteRunner = (_command, args) => {
+      const remoteCommand = args[args.length - 1]!
+      if (remoteCommand === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'uname: not found' })
+      }
+      // POSIX sh echoes %OS% literally
+      return Promise.resolve({ code: 0, stdout: '%OS%\n', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
+      'failed to probe remote platform: uname: not found',
     )
   })
 })

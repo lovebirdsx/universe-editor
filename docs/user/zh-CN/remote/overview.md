@@ -141,6 +141,7 @@
 ## 排障
 
 - **提示 `Automatic Node.js installation failed`**：远端没有 Node.js，且自动安装私有运行时失败。常见原因：Alpine/musl（官方 Node 二进制不支持）、未知平台、或离线且下载失败。这种情况下在远端手动装好 **Node.js ≥ 20** 后直接重连即可，无需手动清理 `~/.universe-editor-server` 目录。
+- **提示 `the remote host ... appears to be Windows`（或日志里出现乱码的 cmd 报错，如「不是内部或外部命令」）**：目标主机是 Windows。SSH 远程主机只支持 **Linux 和 macOS**——Windows 上 OpenSSH 的默认 shell 是 cmd.exe，无法运行远端 server，在它上面装 Node.js 也无济于事。若你真正想连的是那台机器里的 WSL，请直接 SSH 到 WSL 发行版（见下方「以 SSH 方式连接 WSL」）；本机的 WSL 用 **WSL: Connect to WSL…** 即可。
 - **看日志**：本地这一侧的连接与部署日志（检测、上传、安装、启动各步骤及耗时）在 **Output 面板**的 **Remote Connection** 频道，首次安装时会自动打开；远端 server 自身的日志在远端主机的 `~/.universe-editor-server/server.log`。部署、连接、转发失败，先看这两处的具体报错。
 - **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。确认框会列出所有使用该主机的窗口——确认后这些窗口会一并关闭（有会话正在运行时，关闭前还会像本地关窗一样再次确认，取消即整体中止、server 保持运行）；若关完不剩窗口，会自动打开一个本地空白窗口。停止后会抑制自动重连——server 不会被后台立刻拉起；重新打开该主机的远程工作区即可再次连接。
 - **开发期自定义启动命令**：开发模式下可用环境变量 `UNIVERSE_REMOTE_SERVER_CMD` 指定启动远端 server 的命令（用于联调自建 server，仅开发环境生效）。
