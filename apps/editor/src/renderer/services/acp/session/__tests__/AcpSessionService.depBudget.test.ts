@@ -55,8 +55,9 @@ import { AcpSessionService } from '../acpSessionService.js'
 // the editor's bundled agent-skills directory. That path is a main-process
 // runtime fact (app.isPackaged / process.resourcesPath) no renderer-side
 // collaborator can derive — config reads settings layers, the registry owns
-// agent presets, the coordinator owns restore timing. Injected as an optional
-// trailing parameter (memoized single read; absent in tests = no injection).
+// agent presets, the coordinator owns restore timing. Memoized single read;
+// must be a required injection — an optional (`?`) trailing service parameter
+// breaks createInstance's GetLeadingNonServiceArgs overload under tsc.
 const MAX_INJECTED = 20
 
 describe('AcpSessionService dependency budget', () => {

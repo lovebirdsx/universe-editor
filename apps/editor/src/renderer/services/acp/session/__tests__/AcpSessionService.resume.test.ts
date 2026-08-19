@@ -81,6 +81,7 @@ import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 // ---------------------------------------------------------------------------
@@ -451,6 +452,7 @@ function buildService(
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
     stubWindowsService(),
+    stubEnvSnapshotService(),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1189,6 +1191,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1317,6 +1320,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1384,6 +1388,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1449,6 +1454,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1516,6 +1522,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

@@ -91,6 +91,7 @@
 - [spawn CLI 挂起 / 选错命令](cli-stdin-hang-on-prompt.md) — 交互 CLI 换只读命令；p4 查 ticket 用 `p4 tickets`/`login -s`
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
 - [WSL 时钟漂移毒化 tsgo 增量缓存（已根治）](tsgo-stale-tsbuildinfo-phantom-typecheck-errors.md) — RTC 快 24h→未来 mtime→tsgo 误判 up-to-date；已修=ensure-fresh-mtimes 入口守卫+editor typecheck 失败自愈重试
+- [可选注入参数破坏 createInstance + tsgo Windows 漏报](tsgo-optional-di-param-ci-only-typecheck-fail.md) — 注入服务禁写 `?`；「CI typecheck 挂本地绿」用 tsc 复现即真错
 
 ## e2e flaky / 排查
 

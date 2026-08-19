@@ -504,7 +504,7 @@ export class AcpSessionService
     private readonly _mcpEnablement: IMcpServerEnablementService,
     @IWindowsService private readonly _windows: IWindowsService,
     @IEnvironmentSnapshotService
-    private readonly _envSnapshot?: IEnvironmentSnapshotService,
+    private readonly _envSnapshot: IEnvironmentSnapshotService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -748,7 +748,7 @@ export class AcpSessionService
   private async _builtinAgentDirs(
     authority: string | undefined,
   ): Promise<{ additionalDirectories?: string[] }> {
-    if (authority !== undefined || this._envSnapshot === undefined) return {}
+    if (authority !== undefined) return {}
     this._builtinSkillsRoot ??= this._envSnapshot.getSnapshot().then(
       (snapshot) => snapshot.builtinAgentSkillsRoot,
       () => undefined,

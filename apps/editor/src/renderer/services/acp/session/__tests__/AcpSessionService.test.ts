@@ -95,6 +95,7 @@ import {
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
+import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
 
@@ -534,6 +535,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
   })
 
@@ -628,6 +630,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await slowSvc.createSession()
     await s.whenConnected()
@@ -753,6 +756,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1009,6 +1013,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1070,6 +1075,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1123,6 +1129,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1192,6 +1199,7 @@ describe('AcpSessionService', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1256,6 +1264,7 @@ describe('AcpSessionService', () => {
         new StubExtensionMcpServersService(),
         new StubMcpServerEnablementService(),
         stubWindowsService(),
+        stubEnvSnapshotService(),
       )
     }
 
@@ -1573,6 +1582,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     return { svc, history }
   }
@@ -2343,6 +2353,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -2394,6 +2405,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -2453,6 +2465,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       extensionMcp,
       enablement,
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
   }
 
@@ -3119,6 +3132,7 @@ describe('AcpSessionService — session MCP selection', () => {
       new StubExtensionMcpServersService(),
       enablement,
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     return { svc, history, agentDefaults, enablement }
   }
@@ -3455,6 +3469,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     return { svc, history }
   }
@@ -3712,6 +3727,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     return { svc, history }
   }
@@ -3830,6 +3846,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
     return { svc, history }
   }
@@ -3890,6 +3907,7 @@ describe('AcpSessionService — stall watchdog', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
   }
 
@@ -4326,6 +4344,7 @@ describe('AcpSessionService — idle process reaper', () => {
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
       stubWindowsService(),
+      stubEnvSnapshotService(),
     )
   }
 
@@ -4482,22 +4501,10 @@ describe('AcpSessionService — idle process reaper', () => {
 describe('AcpSessionService builtin agent skills injection', () => {
   const SKILLS_ROOT = '/app/resources/agent-skills'
 
-  function stubEnvSnapshot(root: string | undefined): IEnvironmentSnapshotService {
-    return {
-      _serviceBrand: undefined,
-      getSnapshot: async () => ({
-        userHome: '/home/user',
-        cwd: '/cwd',
-        execPath: '/exec',
-        userDataDir: '/data',
-        appResourcesPath: undefined,
-        env: {},
-        ...(root !== undefined ? { builtinAgentSkillsRoot: root } : {}),
-      }),
-    }
-  }
-
-  function makeService(client: FakeAcpClientService, envSnapshot?: IEnvironmentSnapshotService) {
+  function makeService(
+    client: FakeAcpClientService,
+    envSnapshot: IEnvironmentSnapshotService = stubEnvSnapshotService(),
+  ) {
     const history = makeHistory()
     const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
@@ -4535,7 +4542,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
 
   it('seeds session/new with the builtin skills root as an additionalDirectories entry', async () => {
     const client = new FakeAcpClientService()
-    const svc = makeService(client, stubEnvSnapshot(SKILLS_ROOT))
+    const svc = makeService(client, stubEnvSnapshotService(SKILLS_ROOT))
     try {
       const session = await svc.createSession()
       await session.whenConnected()
@@ -4549,7 +4556,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
 
   it('does not inject the skills root into remote-authority sessions', async () => {
     const client = new FakeAcpClientService()
-    const svc = makeService(client, stubEnvSnapshot(SKILLS_ROOT))
+    const svc = makeService(client, stubEnvSnapshotService(SKILLS_ROOT))
     try {
       const session = await svc.createSession(undefined, { cwd: '/w', authority: 'ssh-remote+box' })
       await session.whenConnected()
@@ -4561,19 +4568,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
 
   it('omits additionalDirectories when the snapshot has no skills root', async () => {
     const client = new FakeAcpClientService()
-    const svc = makeService(client, stubEnvSnapshot(undefined))
-    try {
-      const session = await svc.createSession()
-      await session.whenConnected()
-      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toBeUndefined()
-    } finally {
-      svc.dispose()
-    }
-  })
-
-  it('omits additionalDirectories when no environment snapshot service is available', async () => {
-    const client = new FakeAcpClientService()
-    const svc = makeService(client)
+    const svc = makeService(client, stubEnvSnapshotService())
     try {
       const session = await svc.createSession()
       await session.whenConnected()
