@@ -518,6 +518,12 @@ describe('createDaemon', () => {
       terminal.onData((e) => data.push(e))
       terminal.onExit((e) => exits.push(e))
 
+      // The subscribe frames above must reach the server before pty data is
+      // fired, otherwise the throttled emission lands on an unsubscribed
+      // Emitter and is lost for good. A list round-trip rides the same TCP
+      // FIFO after the subscribes, so its response proves they were handled.
+      await terminal.list()
+
       // Two quick writes must merge into a single throttled event.
       ptys[0]!.fireData('hel')
       ptys[0]!.fireData('lo')
