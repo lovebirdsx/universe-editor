@@ -17,12 +17,15 @@ export const SDK_PACKAGE_DIRS = [
 export const SDK_PACKAGE_SHORT_NAMES = SDK_PACKAGE_DIRS.map((dir) => dir.split('/')[1])
 
 /**
- * 版本耦合表：源包内嵌的版本常量被目标包引用——create-extension 内嵌 extension-api/uex，
- * uex 内嵌 extension-api（见各自 sdkVersions.ts / sdkVersion.ts，由 generate-sdk-versions.mjs 生成）。
+ * 版本耦合表：源包内嵌的版本常量被目标包引用——create-extension 内嵌 extension-api/uex/
+ * e2e-contract/e2e-harness，uex 内嵌 extension-api（见各自 sdkVersions.ts / sdkVersion.ts，
+ * 由 generate-sdk-versions.mjs 生成）。
  * 源包发布时目标包必须同发，否则目标包 npm 发布物里仍是旧版本常量，无法送达用户。
  * 键 = 源包短名，值 = 引用该源包版本常量的目标包短名列表。
  */
 export const SDK_VERSION_COUPLINGS = {
   'extension-api': ['uex', 'create-extension'],
   uex: ['create-extension'],
+  'e2e-contract': ['create-extension'],
+  'e2e-harness': ['create-extension'],
 }

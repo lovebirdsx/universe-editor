@@ -46,11 +46,20 @@ describe('scaffold', () => {
       '.vscode/launch.json',
       '.vscode/tasks.json',
       'README.md',
+      'e2e/fixtures/app.d.mts',
+      'e2e/fixtures/app.mjs',
+      'e2e/playwright.config.ts',
+      'e2e/specs/command.spec.ts',
       'esbuild.config.mjs',
       'icon.png',
       'package.json',
+      'scripts/e2e.mjs',
+      'src/__tests__/extension.test.ts',
+      'src/__tests__/hello.test.ts',
       'src/extension.ts',
+      'src/hello.ts',
       'tsconfig.json',
+      'vitest.config.ts',
     ])
 
     const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as Record<
@@ -77,7 +86,10 @@ describe('scaffold', () => {
     for (const rel of listRel(dir)) {
       if (rel === 'icon.png') continue
       const content = readFileSync(path.join(dir, rel), 'utf8')
-      expect(content, rel).not.toMatch(/__\w+__/)
+      // window.__E2E__ (e2e probe handle) and __tests__ (vitest dir name) are
+      // real names, not template tokens.
+      const withoutHandles = content.replaceAll('__E2E__', '').replaceAll('__tests__', '')
+      expect(withoutHandles, rel).not.toMatch(/__\w+__/)
     }
   })
 

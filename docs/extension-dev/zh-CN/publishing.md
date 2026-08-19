@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- 扩展已经能 `npx uex package` 打包出 vsix 并在编辑器里安装自测通过（见 [快速上手](./getting-started.md) ⑦）
+- 扩展已经能 `npx uex package` 打包出 vsix 并在编辑器里安装自测通过（见 [快速上手](./getting-started.md) ⑧）
 - `package.json` 里 `publisher`、`version`、`engines.universe`、`files` 都已就绪
 - 已拿到发布 token 且审批已通过（见下文，自助注册即可获得 token，但发布需等管理员批准）
 

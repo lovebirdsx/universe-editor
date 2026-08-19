@@ -22,13 +22,19 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "package": "uex package",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
     "universe:prepublish": "npm run build"
   },
   "devDependencies": {
+    "@playwright/test": "__playwrightVersion__",
     "@types/node": "__nodeTypesVersion__",
+    "@universe-editor/e2e-contract": "^__e2eContractVersion__",
+    "@universe-editor/e2e-harness": "^__e2eHarnessVersion__",
     "@universe-editor/extension-api": "^__apiVersion__",
     "@universe-editor/uex": "^__uexVersion__",
     "esbuild": "__esbuildVersion__",
-    "typescript": "__tsVersion__"
+    "typescript": "__tsVersion__",
+    "vitest": "__vitestVersion__"
   }
 }

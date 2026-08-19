@@ -183,10 +183,12 @@ test('checkCoupledPublishes 源发布目标同发通过、目标跳过/未选拦
   assert.deepEqual(checkCoupledPublishes({ toPublish: [], skipped: [api, uex, ce], all, couplings }), [])
 })
 
-test('SDK_VERSION_COUPLINGS 覆盖 extension-api→uex/create-extension 与 uex→create-extension', () => {
+test('SDK_VERSION_COUPLINGS 覆盖 extension-api/uex/e2e-contract/e2e-harness→create-extension', () => {
   assert.deepEqual(SDK_VERSION_COUPLINGS, {
     'extension-api': ['uex', 'create-extension'],
     uex: ['create-extension'],
+    'e2e-contract': ['create-extension'],
+    'e2e-harness': ['create-extension'],
   })
 })
 
@@ -296,10 +298,22 @@ test('apiVersionConstantMatches 精确匹配', () => {
 })
 
 test('checkVersionConstants 全一致通过、漂移报错含期望值', () => {
-  const sdkVersionsText = "extensionApi: '0.12.0',\n  uex: '0.1.0',"
+  const sdkVersionsText = [
+    "extensionApi: '0.12.0',",
+    "  uex: '0.1.0',",
+    "  e2eHarness: '0.2.0',",
+    "  e2eContract: '0.3.0',",
+  ].join('\n')
   const sdkVersionText = "export const CURRENT_API_VERSION = '0.12.0'"
   assert.deepEqual(
-    checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: '0.12.0', uexVersion: '0.1.0' }),
+    checkVersionConstants({
+      sdkVersionsText,
+      sdkVersionText,
+      apiVersion: '0.12.0',
+      uexVersion: '0.1.0',
+      e2eHarnessVersion: '0.2.0',
+      e2eContractVersion: '0.3.0',
+    }),
     [],
   )
   const apiDrift = checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: '0.13.0', uexVersion: null })
@@ -307,6 +321,10 @@ test('checkVersionConstants 全一致通过、漂移报错含期望值', () => {
   assert.match(apiDrift.join('\n'), /CURRENT_API_VERSION 应为 0\.13\.0/)
   const uexDrift = checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: null, uexVersion: '0.2.0' })
   assert.match(uexDrift.join('\n'), /SDK_VERSIONS\.uex 应为 0\.2\.0/)
+  const harnessDrift = checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: null, uexVersion: null, e2eHarnessVersion: '0.9.0' })
+  assert.match(harnessDrift.join('\n'), /SDK_VERSIONS\.e2eHarness 应为 0\.9\.0/)
+  const contractDrift = checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: null, uexVersion: null, e2eContractVersion: '0.9.0' })
+  assert.match(contractDrift.join('\n'), /SDK_VERSIONS\.e2eContract 应为 0\.9\.0/)
   // 都不发布 → 不校验任何常量
   assert.deepEqual(checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion: null, uexVersion: null }), [])
 })
@@ -316,6 +334,8 @@ test('generateSdkVersions 从 package.json+catalog 生成、幂等、含生成�
   for (const dir of [
     'packages/extension-api',
     'packages/uex',
+    'packages/e2e-harness',
+    'packages/e2e-contract',
     'packages/create-extension/src',
     'packages/uex/src/lib',
   ]) {
@@ -323,9 +343,18 @@ test('generateSdkVersions 从 package.json+catalog 生成、幂等、含生成�
   }
   writeFileSync(join(root, 'packages/extension-api/package.json'), JSON.stringify({ version: '0.13.0' }))
   writeFileSync(join(root, 'packages/uex/package.json'), JSON.stringify({ version: '0.3.0' }))
+  writeFileSync(join(root, 'packages/e2e-harness/package.json'), JSON.stringify({ version: '0.1.0' }))
+  writeFileSync(join(root, 'packages/e2e-contract/package.json'), JSON.stringify({ version: '0.1.0' }))
   writeFileSync(
     join(root, 'pnpm-workspace.yaml'),
-    ['catalog:', "  esbuild: ^0.25.0", "  typescript: ^5.8.0", "  '@types/node': ^22.0.0"].join('\n'),
+    [
+      'catalog:',
+      '  esbuild: ^0.25.0',
+      '  typescript: ^5.8.0',
+      "  '@types/node': ^22.0.0",
+      '  vitest: ^3.0.0',
+      "  '@playwright/test': ^1.62.0",
+    ].join('\n'),
   )
 
   const first = generateSdkVersions({ repoRoot: root })
@@ -341,6 +370,10 @@ test('generateSdkVersions 从 package.json+catalog 生成、幂等、含生成�
   assert.ok(sdkVersionsText.includes("esbuild: '^0.25.0'"))
   assert.ok(sdkVersionsText.includes("typescript: '^5.8.0'"))
   assert.ok(sdkVersionsText.includes("nodeTypes: '^22.0.0'"))
+  assert.ok(sdkVersionsText.includes("vitest: '^3.0.0'"))
+  assert.ok(sdkVersionsText.includes("playwright: '^1.62.0'"))
+  assert.ok(sdkVersionsText.includes("e2eHarness: '0.1.0'"))
+  assert.ok(sdkVersionsText.includes("e2eContract: '0.1.0'"))
 
   const sdkVersionText = readFileSync(join(root, 'packages/uex/src/lib/sdkVersion.ts'), 'utf8')
   assert.ok(sdkVersionText.includes("export const CURRENT_API_VERSION = '0.13.0'"))

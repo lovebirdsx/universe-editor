@@ -6,7 +6,7 @@ Scaffold a new [Universe Editor](https://github.com/lovebirdsx/universe-editor) 
 npm create @universe-editor/extension my-extension
 ```
 
-Answer four prompts (name / publisher / displayName / template) and you get a buildable extension project: esbuild bundle + watch, strict TypeScript, VSCode attach debugging preconfigured, and the `uex` CLI wired into npm scripts.
+Answer four prompts (name / publisher / displayName / template) and you get a buildable extension project: esbuild bundle + watch, strict TypeScript, VSCode attach debugging preconfigured, vitest unit tests plus Playwright e2e (via `@universe-editor/e2e-harness`), and the `uex` CLI wired into npm scripts.
 
 Then:
 
@@ -14,6 +14,8 @@ Then:
 cd my-extension
 npm install
 npm run watch          # bundle to dist/ and rebuild on change
+npm test               # vitest unit tests (src/__tests__)
+npm run test:e2e       # Playwright e2e against a real editor (see README inside the project)
 npx uex dev --inspect=9229   # launch the Extension Development Host
 # F5 in VSCode attaches the debugger to the extension host process
 ```

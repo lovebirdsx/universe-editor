@@ -237,10 +237,18 @@ function extractString(text, re, label) {
 
 /**
  * 校验 create-extension/uex 注入的 SDK 版本常量与本次发布版本一致。
- * apiVersion / uexVersion 传 null 表示本次不发布该包、跳过对应校验。
+ * apiVersion / uexVersion / e2eHarnessVersion / e2eContractVersion 传 null
+ * 表示本次不发布该包、跳过对应校验。
  * 返回错误文案列表（含文件名 + 常量名 + 期望值）。
  */
-export function checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVersion, uexVersion }) {
+export function checkVersionConstants({
+  sdkVersionsText,
+  sdkVersionText,
+  apiVersion,
+  uexVersion,
+  e2eHarnessVersion,
+  e2eContractVersion,
+}) {
   const errors = []
   if (apiVersion != null) {
     const api = extractString(sdkVersionsText, /extensionApi:\s*'([^']+)'/, 'SDK_VERSIONS.extensionApi')
@@ -259,6 +267,20 @@ export function checkVersionConstants({ sdkVersionsText, sdkVersionText, apiVers
     if (uex.error) errors.push(`create-extension/src/sdkVersions.ts: ${uex.error}`)
     else if (uex.value !== uexVersion) {
       errors.push(`create-extension/src/sdkVersions.ts 的 SDK_VERSIONS.uex 应为 ${uexVersion}，实际 ${uex.value}`)
+    }
+  }
+  if (e2eHarnessVersion != null) {
+    const harness = extractString(sdkVersionsText, /e2eHarness:\s*'([^']+)'/, 'SDK_VERSIONS.e2eHarness')
+    if (harness.error) errors.push(`create-extension/src/sdkVersions.ts: ${harness.error}`)
+    else if (harness.value !== e2eHarnessVersion) {
+      errors.push(`create-extension/src/sdkVersions.ts 的 SDK_VERSIONS.e2eHarness 应为 ${e2eHarnessVersion}，实际 ${harness.value}`)
+    }
+  }
+  if (e2eContractVersion != null) {
+    const contract = extractString(sdkVersionsText, /e2eContract:\s*'([^']+)'/, 'SDK_VERSIONS.e2eContract')
+    if (contract.error) errors.push(`create-extension/src/sdkVersions.ts: ${contract.error}`)
+    else if (contract.value !== e2eContractVersion) {
+      errors.push(`create-extension/src/sdkVersions.ts 的 SDK_VERSIONS.e2eContract 应为 ${e2eContractVersion}，实际 ${contract.value}`)
     }
   }
   return errors

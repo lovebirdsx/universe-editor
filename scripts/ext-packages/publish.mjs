@@ -351,6 +351,8 @@ async function preflight(args, all, selected, registry) {
     sdkVersionText,
     apiVersion: plan.toPublish.find((p) => p.shortName === 'extension-api')?.version ?? null,
     uexVersion: plan.toPublish.find((p) => p.shortName === 'uex')?.version ?? null,
+    e2eHarnessVersion: plan.toPublish.find((p) => p.shortName === 'e2e-harness')?.version ?? null,
+    e2eContractVersion: plan.toPublish.find((p) => p.shortName === 'e2e-contract')?.version ?? null,
   })
   if (constErrors.length > 0) {
     die(`版本常量未同步（可运行 pnpm ext-packages:gen 重新生成）:\n${constErrors.map((e) => `  - ${e}`).join('\n')}`)

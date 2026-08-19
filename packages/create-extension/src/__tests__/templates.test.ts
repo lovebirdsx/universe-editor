@@ -23,6 +23,10 @@ function walk(dir: string, acc: string[] = []): string[] {
 
 const isBinary = (file: string) => ['.png', '.ico', '.icns'].includes(path.extname(file))
 
+// Real handles that merely look like tokens — the e2e probe key in the specs
+// and the conventional vitest test directory name.
+const NON_PLACEHOLDER_TOKENS = new Set(['__E2E__', '__tests__'])
+
 describe('templates', () => {
   it('every __token__ in any template is covered by buildPlaceholders', () => {
     const known = new Set(
@@ -38,6 +42,7 @@ describe('templates', () => {
         if (isBinary(file)) continue
         const content = readFileSync(file, 'utf8')
         for (const match of content.matchAll(/__\w+__/g)) {
+          if (NON_PLACEHOLDER_TOKENS.has(match[0])) continue
           expect(known.has(match[0]), `${template}/${path.basename(file)} uses ${match[0]}`).toBe(
             true,
           )

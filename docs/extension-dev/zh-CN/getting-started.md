@@ -36,7 +36,12 @@ npm create @universe-editor/extension my-extension -- \
 my-extension/
   package.json          # 扩展清单：id、engines.universe、activationEvents、contributes
   src/extension.ts      # 入口：activate / deactivate
+  src/hello.ts          # 纯逻辑模块（命令的问候语），与宿主 API 解耦、可单测
+  src/__tests__/        # vitest 单元测试（extension-api 用 vi.mock）
   esbuild.config.mjs    # 打包：src → dist/extension.js（ESM，inline sourcemap）
+  vitest.config.ts      # 单测配置（node 环境，不收集 e2e/）
+  e2e/                  # Playwright e2e：playwright.config.ts + fixtures/ + specs/
+  scripts/e2e.mjs       # test:e2e 入口：先 build，再起 Playwright
   tsconfig.json         # strict 全套
   .vscode/
     launch.json         # "Attach to Extension Host"，attach 127.0.0.1:9229
@@ -97,7 +102,21 @@ esbuild 已配置 inline sourcemap，断点直接落在 `src/extension.ts` 的 T
 
 注意：自动重启同样会断开已 attach 的调试器（原进程已退出），需要重新 attach；首次触发自动重启时会弹一次性通知说明这一点。
 
-## ⑦ 打包与安装自测
+## ⑦ 测试
+
+脚手架自带两条测试链路：
+
+```bash
+npm test               # vitest 单元测试（src/__tests__，node 环境）
+npm run test:e2e       # Playwright e2e（e2e/specs），先自动 build 再跑
+```
+
+- **单测**面向纯逻辑：模板把命令逻辑抽在 `src/hello.ts`，测试里用 `vi.mock('@universe-editor/extension-api')` 假掉宿主 API 断言 activate 的注册行为，不用起编辑器。
+- **e2e**面向整链路：`test:e2e` 会**冷启动一个只加载本扩展的全新编辑器实例**（把项目目录 junction 进隔离的用户扩展目录，等价 VSCode 的 `--extension-development-path`——不打 vsix、不安装、无宿主重启竞态），通过编辑器内置的 `window.__E2E__` 探针断言命令注册、输出通道、自定义编辑器渲染等。编辑器二进制由环境变量 `UNIVERSE_EDITOR_BIN` 指定（打包版可执行文件，或开发构建的 `out/main/index.js`）；Windows 上未设置时自动探测 `%LOCALAPPDATA%\Programs\Universe Editor\Universe Editor.exe`。
+
+跑一遍摸清两条链路的节奏，之后加功能时顺手补测试即可。
+
+## ⑧ 打包与安装自测
 
 ```bash
 npx uex package
@@ -105,7 +124,7 @@ npx uex package
 
 产出 `acme.my-extension-0.0.1.vsix`。发布前先在真实安装路径里自测一遍：打开你日常使用的编辑器（不是开发宿主），在扩展视图里执行「从 VSIX 安装…」（*Extensions: Install from VSIX…*）选中这个文件，确认命令可用。
 
-## ⑧ 发布
+## ⑨ 发布
 
 浏览器打开 `<市场地址>/gallery/register` 自助注册 publisher（token 只展示这一次，立即保存；注册是审批制），然后：
 

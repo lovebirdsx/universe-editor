@@ -16,7 +16,7 @@
 | `@universe-editor/e2e-contract` | 独立 semver，有对外可见变更才发 | `window.__E2E__` 探针的类型/常量 |
 | `@universe-editor/e2e-harness` | **minor 跟随编辑器 minor** | Playwright fixtures / 页面对象 / launch 辅助 |
 
-**版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 与 `uex` 的 `src/lib/sdkVersion.ts` 是**生成物**（`pnpm ext-packages:gen` 从 extension-api / uex 的 `package.json` 与 pnpm-workspace.yaml catalog 生成，勿手改）。由于 `create-extension` 内嵌 extension-api / uex 的版本号、`uex` 内嵌 extension-api 的版本号，bump extension-api 时必须同时 bump uex 与 create-extension、bump uex 时必须同时 bump create-extension——否则目标包 npm 发布物里仍是旧版本号，preflight 的版本耦合检查会强制拦截。
+**版本联动注意**：`create-extension` 的 `src/sdkVersions.ts` 与 `uex` 的 `src/lib/sdkVersion.ts` 是**生成物**（`pnpm ext-packages:gen` 从 extension-api / uex / e2e-contract / e2e-harness 的 `package.json` 与 pnpm-workspace.yaml catalog 生成，勿手改）。由于 `create-extension` 内嵌 extension-api / uex / e2e-contract / e2e-harness 的版本号、`uex` 内嵌 extension-api 的版本号，bump 任一被内嵌包时必须同时 bump create-extension（bump extension-api 时还需同时 bump uex）——否则目标包 npm 发布物里仍是旧版本号，preflight 的版本耦合检查会强制拦截。
 
 `@universe-editor/extensions-common` **不在发布集合**：它的 RPC 基建（`stdioProtocol` 等）运行时依赖不可发布的 `@universe-editor/platform`。作者面模块已物理迁入 `extension-manifest`，`extensions-common` 依赖并 re-export 它，仓库内消费方零改动。
 
@@ -36,7 +36,7 @@
 **发布前，开发者自己做的事**：
 
 1. bump 各包 `package.json` 的 version（独立 semver）。extension-api 的 bump 必须先完成契约测试快照更新 + COMPATIBILITY.md 变更记录，否则脚本 preflight 会拒绝发布。
-2. 版本常量无需手改——`create-extension/src/sdkVersions.ts` 与 `uex/src/lib/sdkVersion.ts` 是生成物（`pnpm ext-packages:gen`，发布 preflight 也会自动再生成），守卫测试仍会校验漂移。bump extension-api / uex 时必须同时 bump create-extension（及 uex），preflight 的版本耦合检查会拦截漏发的目标包。
+2. 版本常量无需手改——`create-extension/src/sdkVersions.ts` 与 `uex/src/lib/sdkVersion.ts` 是生成物（`pnpm ext-packages:gen`，发布 preflight 也会自动再生成），守卫测试仍会校验漂移。bump extension-api / uex / e2e-contract / e2e-harness 时必须同时 bump create-extension（extension-api 还需连带 uex），preflight 的版本耦合检查会拦截漏发的目标包。
 3. 非 SDK 目录的联动改动（如 `extensions/*` 的 `engines.universe` 同步）先单独提交——脚本只放行 SDK 发布集合目录内的未提交改动，并将其 commit。
 
 然后一条命令：

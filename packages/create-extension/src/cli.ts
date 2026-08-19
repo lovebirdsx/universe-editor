@@ -96,6 +96,8 @@ async function main(argv: string[]): Promise<number> {
   console.log(`  cd ${rel}`)
   console.log('  npm install')
   console.log('  npm run watch            # bundle src → dist, rebuild on change')
+  console.log('  npm test                 # run unit tests (vitest)')
+  console.log('  npm run test:e2e         # run e2e against the installed editor')
   console.log('  npx uex dev --inspect=9229   # launch the Extension Development Host')
   console.log('  # then F5 in VSCode attaches the debugger\n')
   return 0

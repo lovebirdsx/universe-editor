@@ -17,13 +17,16 @@ npx uex dev --inspect=9229              # ③ 拉起扩展开发宿主：直接�
 改代码 → watch 重编 → 宿主自动重启          # ④ 迭代循环（autoRestartOnChange 可关）
         │
         ▼
-npx uex package                          # ⑤ 产出 <publisher>.<name>-<version>.vsix
+npm test && npm run test:e2e              # ⑤ 单测（vitest）+ 冷启动编辑器跑 e2e
         │
         ▼
-编辑器里「从 VSIX 安装」自测               # ⑥ 真实安装路径验证
+npx uex package                          # ⑥ 产出 <publisher>.<name>-<version>.vsix
         │
         ▼
-npx uex login → npx uex publish          # ⑦ 发布到市场，其他用户搜索即得
+编辑器里「从 VSIX 安装」自测               # ⑦ 真实安装路径验证
+        │
+        ▼
+npx uex login → npx uex publish          # ⑧ 发布到市场，其他用户搜索即得
 ```
 
 从零开始跟着做一遍：[快速上手](./getting-started.md)。也可以直接让编辑器里的 AI 代劳——在 Agent 会话输入框敲 `/` 选内置技能 `new-extension`（从零创建）或 `port-vscode-extension`（移植 VSCode 插件）。想看已经走通全流程的最小项目或各能力的可抄写示例：与主仓库同级的独立仓库 `universe-editor-extension-samples`（暂无远程 URL）汇集 19 个示例（含 hello-world 起步与 webview-panel），覆盖命令/状态栏/通知/进度/QuickInput/配置/文档编辑/补全/CodeLens/Code Action/装饰/语义高亮/诊断/树视图/Webview/自定义编辑器，每个示例带 e2e 冒烟验证。

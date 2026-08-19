@@ -27,6 +27,10 @@ export function buildPlaceholders(
     __esbuildVersion__: versions.esbuild,
     __tsVersion__: versions.typescript,
     __nodeTypesVersion__: versions.nodeTypes,
+    __vitestVersion__: versions.vitest,
+    __playwrightVersion__: versions.playwright,
+    __e2eHarnessVersion__: versions.e2eHarness,
+    __e2eContractVersion__: versions.e2eContract,
     // Host semver fails closed on ^ / || / hyphen ranges — the generated
     // range is the one form guaranteed to load (see engines red line).
     __enginesUniverse__: `>=${versions.extensionApi} <1.0.0`,

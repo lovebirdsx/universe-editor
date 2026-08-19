@@ -19,7 +19,17 @@ export interface ScaffoldOptions {
 
 /** Extensions whose content gets token substitution; anything else (icon.png)
  *  is copied byte-for-byte. */
-const TEXT_EXTENSIONS = new Set(['.ts', '.mjs', '.json', '.md', '.yml', '.yaml', '.html', '.css'])
+const TEXT_EXTENSIONS = new Set([
+  '.ts',
+  '.mjs',
+  '.mts',
+  '.json',
+  '.md',
+  '.yml',
+  '.yaml',
+  '.html',
+  '.css',
+])
 
 /** `_gitignore` ships under that name because npm/git special-case dotfiles;
  *  it lands as `.gitignore` in the generated project. */

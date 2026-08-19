@@ -3,7 +3,8 @@
  * Template anti-rot smoke: pack the toolchain the same way npm publish does
  * (pnpm pack — which also exercises workspace:/catalog: protocol rewriting),
  * scaffold both templates from the tarball, install them against the tarballs,
- * build, and `uex package` each into a VSIX that readVsixManifest round-trips.
+ * run their unit tests, build, and `uex package` each into a VSIX that
+ * readVsixManifest round-trips.
  *
  * Any drift between the SDK, the templates, and the CLI fails loudly here
  * instead of in a third-party author's terminal.
@@ -133,6 +134,8 @@ async function main() {
       writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
 
       run(npmCmd, ['install'], { cwd: projectDir, shell: true })
+      run(npmCmd, ['test'], { cwd: projectDir, shell: true })
+      ok(`${template} unit tests passed`)
       run(npmCmd, ['run', 'build'], { cwd: projectDir, shell: true })
       if (!existsSync(path.join(projectDir, 'dist', 'extension.js'))) {
         die(`${template}: build produced no dist/extension.js`)

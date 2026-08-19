@@ -20,6 +20,19 @@ npx uex dev --inspect=9229
 
 Iterate: edit `src/extension.ts`, let watch rebuild, then run **Restart Extension Host** in the dev-host window's command palette.
 
+## Test
+
+```bash
+npm test               # vitest unit tests (src/__tests__)
+npm run test:e2e       # Playwright e2e (e2e/specs) against a real editor
+```
+
+`test:e2e` builds the extension and cold-launches a fresh editor with only this
+extension loaded, asserting through the editor's E2E probe (see `e2e/specs/`).
+The editor binary is auto-detected on Windows (`%LOCALAPPDATA%\Programs\Universe Editor\Universe Editor.exe`);
+set `UNIVERSE_EDITOR_BIN` to point at another build (a packaged executable, or
+`out/main/index.js` for a dev build) to override it.
+
 ## Package and install
 
 ```bash
