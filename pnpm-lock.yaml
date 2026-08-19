@@ -1006,6 +1006,12 @@ importers:
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../config-ts
+      '@universe-editor/extension-api':
+        specifier: workspace:*
+        version: link:../extension-api
+      '@universe-editor/extension-host':
+        specifier: workspace:*
+        version: link:../extension-host
       '@universe-editor/extension-packaging':
         specifier: workspace:*
         version: link:../extension-packaging

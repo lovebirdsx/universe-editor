@@ -24,6 +24,8 @@
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@universe-editor/extension-host": "workspace:*",
     "@universe-editor/extension-packaging": "workspace:*",
     "@types/node": "catalog:",
     "esbuild": "catalog:",

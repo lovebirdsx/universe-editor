@@ -93,6 +93,7 @@
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
 - [WSL 时钟漂移毒化 tsgo 增量缓存（已根治）](tsgo-stale-tsbuildinfo-phantom-typecheck-errors.md) — RTC 快 24h→未来 mtime→tsgo 误判 up-to-date；已修=ensure-fresh-mtimes 入口守卫+editor typecheck 失败自愈重试
 - [可选注入参数破坏 createInstance + tsgo Windows 漏报](tsgo-optional-di-param-ci-only-typecheck-fail.md) — 注入服务禁写 `?`；「CI typecheck 挂本地绿」用 tsc 复现即真错
+- [esbuild 跨包引源码须声明 workspace 依赖](esbuild-cross-pkg-src-needs-workspace-dep.md) — 裸 `../pkg/src` 引用对 turbo 隐形→依赖图缺边→上游 miss 时下游并发读未生成的 dist（CI-only 竞态）；声明 workspace:* 同时修调度与 hash 感知
 
 ## e2e flaky / 排查
 
