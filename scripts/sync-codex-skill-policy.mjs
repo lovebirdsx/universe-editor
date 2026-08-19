@@ -18,6 +18,10 @@
  *  implicit invocation on Codex, hand-edit its openai.yaml to `true` — the script
  *  respects handwritten values. Claude ignores the `agents/` subdir entirely.
  *
+ *  Note: in the shipped product, product-side Codex sessions bridge the SKILL.md
+ *  frontmatter to openai.yaml at runtime (vendor/codex-acp/src/skillPolicyBridge.ts);
+ *  this script still serves repo developers running the official codex CLI directly.
+ *
  *  Usage:
  *    node scripts/sync-codex-skill-policy.mjs           # fill in missing openai.yaml
  *    node scripts/sync-codex-skill-policy.mjs --check    # CI: fail on missing/invalid

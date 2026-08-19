@@ -1,6 +1,7 @@
 ---
 name: port-vscode-extension
 description: 把现有 VSCode 插件移植为 Universe Editor 扩展。当用户给出某 VSCode 插件的仓库/名称希望在本编辑器实现同样功能,或询问某 VSCode 插件能否在 Universe Editor 使用时使用。先做 API 兼容性四档评估与 license 检查并让用户确认,再接 new-extension 流程完成搭建、e2e 与发布。
+disable-model-invocation: true
 ---
 
 # 移植 VSCode 插件到 Universe Editor

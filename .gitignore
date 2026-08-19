@@ -28,3 +28,6 @@ coverage/
 # Playwright
 playwright-report/
 test-results/
+
+# codex-acp fork 运行时由内置 skill 的 SKILL.md `disable-model-invocation` frontmatter 桥接生成（见 vendor/codex-acp/src/skillPolicyBridge.ts）
+apps/editor/resources/agent-skills/.claude/skills/*/agents/openai.yaml

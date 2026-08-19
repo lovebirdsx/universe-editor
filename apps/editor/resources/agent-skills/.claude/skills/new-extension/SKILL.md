@@ -1,6 +1,7 @@
 ---
 name: new-extension
 description: 为 Universe Editor 从零创建扩展(插件)。当用户想新建/开发编辑器插件,或想给编辑器加命令、webview 面板、自定义编辑器、语言支持等能力时使用。覆盖需求确认→脚手架→实现→e2e 测试→发布全流程。若用户要移植现有 VSCode 插件,改用 port-vscode-extension。
+disable-model-invocation: true
 ---
 
 # 创建 Universe Editor 扩展
