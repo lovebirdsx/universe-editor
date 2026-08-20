@@ -76,28 +76,46 @@
   opacity: 0.7;
 }
 
+.rowActions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  z-index: 1;
+  display: none;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.row:hover .rowActions,
+.row:focus-within .rowActions {
+  display: flex;
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.row.selected .rowActions {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+/* The action container is absolutely positioned over the row's text (the
+   relative time), so its backdrop must stay opaque for the icons to read —
+   never let the half-opaque inactive selection colour reach it. */
+.view:not([data-focused='true']) .row.selected:hover .rowActions {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
 .rowAction {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-left: 4px;
   padding: 2px;
   border: none;
   border-radius: 3px;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  opacity: 0;
-}
-
-.row:hover .rowAction,
-.row:focus-within .rowAction {
-  opacity: 0.8;
 }
 
 .rowAction:hover {
-  opacity: 1;
   background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
 }
 

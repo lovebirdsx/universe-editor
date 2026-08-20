@@ -155,6 +155,8 @@ test.describe('@p1 git view commit', () => {
       const row = page.locator(`[data-row-key="git-history|${secondHash}"]`)
       await expect(row).toBeVisible({ timeout: 30_000 })
 
+      // The inline actions only appear on row hover.
+      await row.hover()
       await row.getByRole('button', { name: 'Open Commit' }).click()
 
       const view = page.locator('[data-testid="commitChanges-view"]')

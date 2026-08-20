@@ -386,39 +386,43 @@ export function TimelineView() {
                 {item.description && (
                   <span className={styles['description']}>{item.description}</span>
                 )}
-                {commitDiffTarget && (
-                  <button
-                    type="button"
-                    className={styles['rowAction']}
-                    data-tooltip={commitDiffTarget.tooltip}
-                    aria-label={commitDiffTarget.tooltip}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      // Act on the row under the mouse, so it becomes the selected
-                      // one (same as openRowMenu) — without firing runItem's diff.
-                      model.setSelection([row.id], row.id)
-                      void commandService.executeCommand(commitDiffTarget.command, item)
-                    }}
-                  >
-                    <FileDiff size={14} strokeWidth={1.6} />
-                  </button>
-                )}
-                {graphTarget && (
-                  <button
-                    type="button"
-                    className={styles['rowAction']}
-                    data-tooltip={graphTarget.tooltip}
-                    aria-label={graphTarget.tooltip}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      // Act on the row under the mouse, so it becomes the selected
-                      // one (same as openRowMenu) — without firing runItem's diff.
-                      model.setSelection([row.id], row.id)
-                      void commandService.executeCommand(graphTarget.command, item.id)
-                    }}
-                  >
-                    <Waypoints size={14} strokeWidth={1.6} />
-                  </button>
+                {(commitDiffTarget || graphTarget) && (
+                  <span className={styles['rowActions']}>
+                    {commitDiffTarget && (
+                      <button
+                        type="button"
+                        className={styles['rowAction']}
+                        data-tooltip={commitDiffTarget.tooltip}
+                        aria-label={commitDiffTarget.tooltip}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // Act on the row under the mouse, so it becomes the selected
+                          // one (same as openRowMenu) — without firing runItem's diff.
+                          model.setSelection([row.id], row.id)
+                          void commandService.executeCommand(commitDiffTarget.command, item)
+                        }}
+                      >
+                        <FileDiff size={14} strokeWidth={1.6} />
+                      </button>
+                    )}
+                    {graphTarget && (
+                      <button
+                        type="button"
+                        className={styles['rowAction']}
+                        data-tooltip={graphTarget.tooltip}
+                        aria-label={graphTarget.tooltip}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // Act on the row under the mouse, so it becomes the selected
+                          // one (same as openRowMenu) — without firing runItem's diff.
+                          model.setSelection([row.id], row.id)
+                          void commandService.executeCommand(graphTarget.command, item.id)
+                        }}
+                      >
+                        <Waypoints size={14} strokeWidth={1.6} />
+                      </button>
+                    )}
+                  </span>
                 )}
               </div>
             )

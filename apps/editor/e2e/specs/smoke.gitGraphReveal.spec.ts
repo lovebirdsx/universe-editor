@@ -270,6 +270,8 @@ test.describe('@p1 git graph reveal', () => {
 
       // Clicking the older row's inline graph button must move the timeline
       // selection to that row (previously it stayed on the earlier selection).
+      // The inline actions only appear on row hover.
+      await row(firstHash).hover()
       await row(firstHash).getByRole('button', { name: 'Open in Git Graph' }).click()
       await expect(row(firstHash)).toHaveAttribute('aria-selected', 'true')
       await expect(row(secondHash)).toHaveAttribute('aria-selected', 'false')
