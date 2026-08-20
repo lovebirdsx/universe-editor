@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  InlineCompletionService — drives Copilot-style ghost-text completions. It owns
- *  the runtime enable flag and the (separately persisted) completion model id,
+ *  the (persisted) enable flag and the (separately persisted) completion model id,
  *  extracts prefix/suffix context around the cursor, asks IAiModelService to
  *  continue the text, and post-processes the reply into a Monaco inline
  *  completion. The Monaco-facing provider is a thin shell registered by
@@ -13,6 +13,7 @@ import {
   AiErrorCode,
   AiMessageRole,
   CancellationTokenSource,
+  ConfigurationTarget,
   Disposable,
   Emitter,
   IAiModelService,
@@ -70,7 +71,7 @@ export interface IInlineCompletionService {
   readonly _serviceBrand: undefined
   /** Fires when enablement, the selected model, or the in-flight state changes. */
   readonly onDidChange: Event<void>
-  /** Runtime on/off; seeded from config, toggled by the status bar / command. */
+  /** Runtime on/off; persisted to the User settings layer by the toggle / command. */
   readonly enabled: boolean
   /** True while a request is in flight (drives the status-bar spinner). */
   readonly requesting: boolean
@@ -129,8 +130,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     this._register(
       this._config.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration(CONFIG.enabled)) {
-          this._enabled = this._config.get<boolean>(CONFIG.enabled) ?? DEFAULTS.enabled
-          this._onDidChange.fire()
+          this._applyEnabled(this._config.get<boolean>(CONFIG.enabled) ?? DEFAULTS.enabled)
         }
       }),
     )
@@ -163,6 +163,16 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   }
 
   setEnabled(enabled: boolean): void {
+    if (this._enabled === enabled) return
+    this._applyEnabled(enabled)
+    // Persist globally and drop any per-workspace override. Project ranks above
+    // User, so clear it FIRST — deleting it while a stale User value is in place
+    // makes the config event converge instead of bouncing off the shadowing layer.
+    this._config.update(CONFIG.enabled, undefined, ConfigurationTarget.Project)
+    this._config.update(CONFIG.enabled, enabled, ConfigurationTarget.User)
+  }
+
+  private _applyEnabled(enabled: boolean): void {
     if (this._enabled === enabled) return
     this._enabled = enabled
     if (!enabled) this._cancelInFlight()

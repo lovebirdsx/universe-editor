@@ -50,6 +50,7 @@ import type { ITimelineService } from '../services/timeline/TimelineService.js'
 import type { ITreeViewsService } from '../services/extensions/TreeViewsService.js'
 import type { IExtensionMcpServersService } from '../services/extensions/extensionMcpServersService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
+import type { IUserSettingsSyncService } from '../services/configuration/UserSettingsSync.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
@@ -81,6 +82,7 @@ import {
   type E2EUpdateState,
   type E2EAiDebugRecord,
   type E2ECodeAction,
+  type E2EConfigTarget,
   type E2EContributedMcpServer,
   type E2EEditorDecoration,
   type E2EExtensionUpdate,
@@ -146,6 +148,7 @@ export interface E2EProbeServices {
   readonly outputModelService: IOutputModelService
   readonly loggerService: ILoggerService
   readonly userKeybindingsService: IUserKeybindingsService
+  readonly userSettingsSync: IUserSettingsSyncService
   readonly themeService: WorkbenchThemeService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
@@ -310,6 +313,16 @@ function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
   }
 }
 
+/** ConfigurationTarget (const enum) → E2EConfigTarget name, by layer index. */
+const CONFIG_TARGET_NAMES: readonly E2EConfigTarget[] = [
+  'default',
+  'vscodeUser',
+  'user',
+  'vscodeWorkspace',
+  'project',
+  'memory',
+]
+
 export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposable {
   const ds = new DisposableStore()
   if (typeof window === 'undefined' || window[E2E_PROBE_ENABLED_KEY] !== true) return ds
@@ -360,6 +373,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getLifecyclePhase: () => phaseToName(services.lifecycleService.phase),
     getContextKey: (key) => services.contextKeyService.get(key),
     getConfigurationValue: (key) => services.configurationService.get(key),
+    getConfigurationValueOrigin: (key) =>
+      CONFIG_TARGET_NAMES[services.configurationService.getValueOrigin(key) ?? -1],
+    whenUserSettingsInitialized: () => services.userSettingsSync.whenInitialized,
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),
     getActiveEditorUri: () => services.editorService.activeEditorId.get(),
     isReferencePeekFocused: () => {

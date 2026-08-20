@@ -25,6 +25,15 @@ export interface E2EDisposableLeakReport {
 
 export type E2ELifecyclePhase = 'Starting' | 'Ready' | 'Restored' | 'Eventually'
 
+/** Configuration layer names, ordered low → high priority (mirrors ConfigurationTarget). */
+export type E2EConfigTarget =
+  | 'default'
+  | 'vscodeUser'
+  | 'user'
+  | 'vscodeWorkspace'
+  | 'project'
+  | 'memory'
+
 export interface E2EStatusBarEntry {
   readonly id: string
   readonly text: string
@@ -331,6 +340,18 @@ export interface E2EProbe {
   getContextKey(key: string): unknown
   /** Reads a configuration value through the merged layer stack (IConfigurationService.get). */
   getConfigurationValue(key: string): unknown
+  /**
+   * Highest-priority layer that owns the key, or undefined. Asserts which scope a
+   * setting was written to (e.g. 'user' proves a toggle persisted globally).
+   */
+  getConfigurationValueOrigin(key: string): E2EConfigTarget | undefined
+  /**
+   * Resolves once settings.json hydration finished AND the write-back
+   * subscription is live — a cold-start toggle fired before this would never
+   * reach disk (the sync service subscribes to config events only at the end of
+   * its initialize()).
+   */
+  whenUserSettingsInitialized(): Promise<void>
   /** Executes a command via ICommandService.executeCommand. */
   runCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined>
   /** Active editor URI string, or undefined if none. */

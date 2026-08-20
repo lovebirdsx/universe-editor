@@ -100,9 +100,25 @@ test.describe('@p1 inline completion', () => {
 
     await workbench.runCommand(TOGGLE)
     await expect.poll(() => toggle.getAttribute('aria-checked')).not.toBe(before)
+    // The toggle persists to the global User layer and clears any per-workspace
+    // override — origin 'user' proves both at once.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.__E2E__!.getConfigurationValueOrigin('ai.inlineCompletion.enabled'),
+        ),
+      )
+      .toBe('user')
 
     // Toggle back so the shared worker instance is left in its default state.
     await workbench.runCommand(TOGGLE)
     await expect.poll(() => toggle.getAttribute('aria-checked')).toBe(before)
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.__E2E__!.getConfigurationValueOrigin('ai.inlineCompletion.enabled'),
+        ),
+      )
+      .toBe('user')
   })
 })

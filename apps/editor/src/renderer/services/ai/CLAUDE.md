@@ -55,7 +55,7 @@ editor.trigger('editor.action.inlineSuggest.commit') → Monaco 把 ghost text �
   - `onDidChange: Event<void>`——enabled / 选中模型 / requesting 任一变化时触发（驱动状态栏）。
   - `enabled: boolean`——运行时开关；`requesting: boolean`——有在途请求（状态栏 spinner）。
   - `getModelId() / setModelId(id)`——读写补全模型（**与 chat 模型分开存**，见下）。
-  - `toggleEnabled() / setEnabled(b)`。
+  - `toggleEnabled() / setEnabled(b)`——**全局持久化**：先 `update(…, undefined, Project)` 清工作区层覆盖、再写 `ConfigurationTarget.User`（顺序勿反，见易踩坑 #11），经 UserSettingsSync 落全局 settings.json；内存即时翻转 + 对外恰 fire 一次 onDidChange（配置事件回音由 `_applyEnabled` 同值守卫吞掉）。
   - `provide(model, position, context, token)`——Monaco provider 的真正入口。
 - **provide() 的 gate 顺序**（任一不过返回 null，**新增 gate 加在这里**）：`!enabled` → 语言在 `disabledLanguages` → 无 `model`（modelId 空或已从模型列表删除）。
 - **FIM 提示构建** `_buildPrompt`：`[system, user]`，user 体为 `<|prefix|>...{prefix}<|cursor|>{suffix}<|suffix|>`；prefix/suffix 分别裁到 `maxContextPrefixChars` / `maxContextSuffixChars`。
@@ -63,7 +63,7 @@ editor.trigger('editor.action.inlineSuggest.commit') → Monaco 把 ghost text �
 - **错误处理**：失败 toast **去重**（同一 errorKey 只弹一次，成功后清零；取消 token 不弹），toast 带 Disable 按钮。
 - **配置存储**：8 个 key 全走 `IConfigurationService`，写用 `ConfigurationTarget.User`；`setModelId(undefined)` 落盘为 `''`，`getModelId()` 把 `''` 读回 `undefined`。
 - **DI 注册**：`renderer/main.tsx`——`createInstance(InlineCompletionService)` → `services.set(IInlineCompletionService, …)`。
-- **单测**：`services/ai/__tests__/InlineCompletionService.test.ts`——覆盖 sanitizeCompletion 各分支、provide 的四种 gate、模型持久化 undefined↔'' 往返、错误 toast 去重。改生成层逻辑**优先在这里加用例**（用 FakeAiModel/FakeConfig/FakeNotification，无需起 Monaco）。
+- **单测**：`services/ai/__tests__/InlineCompletionService.test.ts`——覆盖 sanitizeCompletion 各分支、provide 的四种 gate、模型持久化 undefined↔'' 往返、错误 toast 去重、**enabled persistence**（toggle 写 User 层+清 Project 覆盖+恰 fire 一次+层种子恢复）。改生成层逻辑**优先在这里加用例**（用 FakeAiModel/FakeNotification + 真 `ConfigurationService`，无需起 Monaco）。
 
 ### 集成层：provider 注册 + context key 镜像 + Tab 接受
 
@@ -150,6 +150,7 @@ schema 定义在 `contributions/InlineCompletionConfigurationContribution.ts`（
 5. **sanitize 空串 = 不出建议**：纯空白/只有围栏的回复被归一为空 → provide 返回 null，表现为「触发了但没 ghost」，这是预期不是 bug。
 6. **配置 schema 要在 BlockStartup 注册**：晚于读取方注册会让默认值读不到。
 7. **provide 的 activeEditor 守卫**：非 `FileEditorInput`（如 markdown 预览、设置页）时 trigger/commit/provide 都应静默 no-op，别假设永远有 Monaco 实例。
+8. **toggle 写配置层必须先删 Project 再写 User**：`ConfigurationService.update` 按「写前 effective ≠ 写入值」fire（不是按写后 effective），若先写 User 再删工作区覆盖，被遮罩期间 fire 的中间态事件会把 `_enabled` 回弹（对订阅者可见一次假翻转）。顺序 = 先 `update(key, undefined, Project)` 清覆盖、再 `update(key, value, User)` 写全局，所有场景对外恰 fire 一次（有单测守护）。
 
 ### 验证
 

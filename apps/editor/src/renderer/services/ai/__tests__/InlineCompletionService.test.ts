@@ -13,6 +13,8 @@ import {
   AiMessageRole,
   CancellationToken,
   CancellationTokenSource,
+  ConfigurationService,
+  ConfigurationTarget,
   Emitter,
   Severity,
   type AiMessage,
@@ -86,21 +88,6 @@ class FakeAiModel implements Partial<IAiModelService> {
   }
 }
 
-class FakeConfig implements Partial<IConfigurationService> {
-  values: Record<string, unknown> = {}
-  private readonly _onDidChange = new Emitter<{ affectsConfiguration: (k: string) => boolean }>()
-  readonly onDidChangeConfiguration = this._onDidChange
-    .event as IConfigurationService['onDidChangeConfiguration']
-  get<T>(key: string): T | undefined {
-    return this.values[key] as T | undefined
-  }
-  update(key: string, value: unknown): void {
-    const old = this.values[key]
-    this.values[key] = value
-    if (old !== value) this._onDidChange.fire({ affectsConfiguration: (k) => k === key })
-  }
-}
-
 const NULL_LOGGER: ILogger = {
   trace() {},
   debug() {},
@@ -165,17 +152,17 @@ const EXPLICIT_NES = { triggerKind: 1, includeInlineEdits: true } as never
 
 function createService(overrides?: {
   ai?: FakeAiModel
-  config?: FakeConfig
+  config?: IConfigurationService
   notification?: FakeNotification
   recentEdits?: FakeRecentEditsTracker
 }) {
   const ai = overrides?.ai ?? new FakeAiModel()
-  const config = overrides?.config ?? new FakeConfig()
+  const config = overrides?.config ?? new ConfigurationService()
   const notification = overrides?.notification ?? new FakeNotification()
   const recentEdits = overrides?.recentEdits ?? new FakeRecentEditsTracker()
   const service = new InlineCompletionService(
     ai as unknown as IAiModelService,
-    config as unknown as IConfigurationService,
+    config,
     notification as unknown as INotificationService,
     FAKE_LOGGER_SERVICE,
     recentEdits,
@@ -272,7 +259,7 @@ describe('InlineCompletionService.provide', () => {
   it('returns null for a disabled language', async () => {
     const { service, ai, config } = createService()
     ai.inlineModelId = MODEL.id
-    config.values['ai.inlineCompletion.disabledLanguages'] = ['json']
+    config.update('ai.inlineCompletion.disabledLanguages', ['json'], ConfigurationTarget.Memory)
     const result = await provide(
       service,
       fakeMonacoModel({ value: '{}', cursorOffset: 1, languageId: 'json' }),
@@ -304,7 +291,7 @@ describe('InlineCompletionService.provide', () => {
   it('honors maxTokens from config', async () => {
     const { service, ai, config } = createService()
     ai.inlineModelId = MODEL.id
-    config.values['ai.inlineCompletion.maxTokens'] = 42
+    config.update('ai.inlineCompletion.maxTokens', 42, ConfigurationTarget.Memory)
     await provide(service, fakeMonacoModel({ value: 'hello ', cursorOffset: 6 }))
     expect(ai.lastOptions?.maxTokens).toBe(42)
   })
@@ -372,9 +359,62 @@ describe('InlineCompletionService.provide', () => {
   })
 })
 
+describe('enabled persistence', () => {
+  const KEY = 'ai.inlineCompletion.enabled'
+
+  it('persists setEnabled to the User layer and fires once', () => {
+    const { service, config } = createService()
+    let fires = 0
+    service.onDidChange(() => fires++)
+    service.setEnabled(false)
+    expect(service.enabled).toBe(false)
+    expect(fires).toBe(1)
+    expect(config.getLayerSnapshot(ConfigurationTarget.User)[KEY]).toBe(false)
+    expect(config.getLayerSnapshot(ConfigurationTarget.Project)[KEY]).toBeUndefined()
+    expect(config.getLayerSnapshot(ConfigurationTarget.Memory)[KEY]).toBeUndefined()
+  })
+
+  it('toggle clears a per-project override', () => {
+    const config = new ConfigurationService()
+    config.update(KEY, false, ConfigurationTarget.Project)
+    const { service } = createService({ config })
+    expect(service.enabled).toBe(false)
+    let fires = 0
+    service.onDidChange(() => fires++)
+    service.toggleEnabled()
+    expect(service.enabled).toBe(true)
+    expect(fires).toBe(1)
+    expect(config.getLayerSnapshot(ConfigurationTarget.User)[KEY]).toBe(true)
+    expect(config.getLayerSnapshot(ConfigurationTarget.Project)[KEY]).toBeUndefined()
+  })
+
+  it('seeds from persisted layers', () => {
+    const userDisabled = new ConfigurationService()
+    userDisabled.update(KEY, false, ConfigurationTarget.User)
+    expect(createService({ config: userDisabled }).service.enabled).toBe(false)
+
+    const projectShadowsUser = new ConfigurationService()
+    projectShadowsUser.update(KEY, true, ConfigurationTarget.User)
+    projectShadowsUser.update(KEY, false, ConfigurationTarget.Project)
+    expect(createService({ config: projectShadowsUser }).service.enabled).toBe(false)
+  })
+
+  it('reacts to external configuration changes', () => {
+    const { service, config } = createService()
+    let fires = 0
+    service.onDidChange(() => fires++)
+    config.update(KEY, false, ConfigurationTarget.Memory)
+    expect(service.enabled).toBe(false)
+    expect(fires).toBe(1)
+    config.update(KEY, undefined, ConfigurationTarget.Memory)
+    expect(service.enabled).toBe(true)
+    expect(fires).toBe(2)
+  })
+})
+
 describe('InlineCompletionService NES mode', () => {
-  function enableNes(config: FakeConfig): void {
-    config.values['ai.nes.enabled'] = true
+  function enableNes(config: IConfigurationService): void {
+    config.update('ai.nes.enabled', true, ConfigurationTarget.Memory)
   }
 
   it('falls back to ghost text when NES is disabled', async () => {
@@ -392,7 +432,7 @@ describe('InlineCompletionService NES mode', () => {
   })
 
   it('produces an inline-edit item from a JSON reply', async () => {
-    const config = new FakeConfig()
+    const config = new ConfigurationService()
     enableNes(config)
     const { service, ai } = createService({ config })
     ai.inlineModelId = MODEL.id
@@ -411,7 +451,7 @@ describe('InlineCompletionService NES mode', () => {
   })
 
   it('merges multiple edits into one span, keeping gap lines verbatim', async () => {
-    const config = new FakeConfig()
+    const config = new ConfigurationService()
     enableNes(config)
     const { service, ai } = createService({ config })
     ai.inlineModelId = MODEL.id
@@ -437,9 +477,9 @@ describe('InlineCompletionService NES mode', () => {
   })
 
   it('returns null on a noEdit reply when fallback is off', async () => {
-    const config = new FakeConfig()
+    const config = new ConfigurationService()
     enableNes(config)
-    config.values['ai.nes.fallbackToCompletion'] = false
+    config.update('ai.nes.fallbackToCompletion', false, ConfigurationTarget.Memory)
     const { service, ai } = createService({ config })
     ai.inlineModelId = MODEL.id
     ai.reply = '{"noEdit":true}'
@@ -452,11 +492,11 @@ describe('InlineCompletionService NES mode', () => {
   })
 
   it('skips NES on automatic triggers with no recent edits', async () => {
-    const config = new FakeConfig()
+    const config = new ConfigurationService()
     enableNes(config)
-    config.values['ai.nes.fallbackToCompletion'] = false
-    config.values['ai.inlineCompletion.debounceDelay'] = 0
-    config.values['ai.nes.debounceDelay'] = 0
+    config.update('ai.nes.fallbackToCompletion', false, ConfigurationTarget.Memory)
+    config.update('ai.inlineCompletion.debounceDelay', 0, ConfigurationTarget.Memory)
+    config.update('ai.nes.debounceDelay', 0, ConfigurationTarget.Memory)
     const { service, ai } = createService({ config })
     ai.inlineModelId = MODEL.id
     ai.reply = '{"edits":[{"startLine":1,"endLine":1,"newText":"x"}]}'
@@ -470,9 +510,9 @@ describe('InlineCompletionService NES mode', () => {
   })
 
   it('drops a no-op edit that restates the current lines', async () => {
-    const config = new FakeConfig()
+    const config = new ConfigurationService()
     enableNes(config)
-    config.values['ai.nes.fallbackToCompletion'] = false
+    config.update('ai.nes.fallbackToCompletion', false, ConfigurationTarget.Memory)
     const { service, ai } = createService({ config })
     ai.inlineModelId = MODEL.id
     ai.reply = '{"edits":[{"startLine":1,"endLine":1,"newText":"const a = 1"}]}'

@@ -104,6 +104,7 @@ import { ViewDescriptorService } from './services/views/ViewDescriptorService.js
 import { OutputService } from './services/output/OutputService.js'
 import { IOutputModelService, OutputModelService } from './services/output/OutputModelService.js'
 import { IUserKeybindingsService } from './services/keybindings/UserKeybindingsService.js'
+import { IUserSettingsSyncService } from './services/configuration/UserSettingsSync.js'
 import {
   IKeyboardDebugService,
   KeyboardDebugService,
@@ -894,6 +895,7 @@ async function bootstrapWorkbench(): Promise<void> {
     outputModelService: instantiation.invokeFunction((a) => a.get(IOutputModelService)),
     loggerService,
     userKeybindingsService: instantiation.invokeFunction((a) => a.get(IUserKeybindingsService)),
+    userSettingsSync: instantiation.invokeFunction((a) => a.get(IUserSettingsSyncService)),
     themeService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
