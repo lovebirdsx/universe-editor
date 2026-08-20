@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+declare const __APP_VERSION__: string
+
 const showItemInFolder = vi.fn()
 const openPath = vi.fn().mockResolvedValue('')
 
@@ -123,7 +125,7 @@ describe('DiagnosticsMainService', () => {
       }) + '\n',
     )
     const md = await service.collectIssueReport()
-    expect(md).toContain('App version: 0.13.0 (release)')
+    expect(md).toContain(`App version: ${__APP_VERSION__} (release)`)
     expect(md).toContain('| pub.ext | 0.1.0 | gallery |')
     expect(md).toContain('| 4 | unhandledError | run@thing/doer.ts | main | boom |')
   })

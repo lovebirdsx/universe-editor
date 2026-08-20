@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dialog, nativeTheme } from 'electron'
 import { ShutdownReason, URI } from '@universe-editor/platform'
 
+declare const __APP_VERSION__: string
+
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events')
   const { mkdtempSync } = await import('node:fs')
@@ -21,7 +23,7 @@ vi.mock('electron', async () => {
   return {
     app: {
       getName: () => 'Test',
-      getVersion: () => '1.0.0',
+      getVersion: () => __APP_VERSION__,
       getPath: () => userDataDir,
       getAppPath: () => '/app/root',
     },
@@ -196,7 +198,7 @@ describe('MainHostService', () => {
     const svc = new MainHostService(win.asWin())
     const info = await svc.getVersionInfo()
     expect(info.productName).toBe('Test')
-    expect(info.version).toBe('0.13.0')
+    expect(info.version).toBe(__APP_VERSION__)
     expect(info.extensionApi).toMatch(/^\d+\.\d+\.\d+$/)
     expect(info.node).toBe(process.versions.node)
     svc.dispose()
