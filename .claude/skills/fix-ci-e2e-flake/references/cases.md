@@ -412,6 +412,14 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 80 — teardown 泄漏栈在 Monaco `bindDocumentChangeListeners`：provider 挂上 `onDidChange` 后 Monaco 的 model 级订阅存普通数组成孤儿 root，全 ts spec 恒定挂（泄漏门误报，产品无泄漏）；修=proxy 侧包装 event 给订阅 `setParentOfDisposable(store)`**
+信号：多个 spec 同轮恒定挂（run 32274624181/32275685995：smoke.outline / smoke.tsStatusBar / smoke.peekPreview / remote.extensionHost / tsCodeLens / tsSemanticTokens——共性=都会打开 ts 文件），**被测断言全过**，失败只在 teardown 泄漏门 `N Disposable leak(s) detected`；**initial+retry 全灭、双平台一致**（结构性非 flake）；泄漏栈固定为 `toDisposable → Object._event [as onDidChange] → bindDocumentChangeListeners → LanguageFeatureRegistry.register`（或 `→ new ModelSemanticColoring`，outline 用例两条都出 count=2）；触发提交是给 documentSemanticTokens proxy 挂 `onDidChange` Emitter 的功能提交（d4a293b0），本地跑同 spec 稳定复现（非环境噪音）。
+根因：Monaco 的 `ModelSemanticColoring` 是 **model 级**宿主（挂在 ITextModel 上，React unmount 只 dispose editor 不删 model → 合法活到 teardown），它订阅 provider 的 `onDidChange` 后把返回的 disposable push 进**普通数组** `_documentProvidersChangeListeners`（monaco 0.55 `contrib/semanticTokens/browser/documentSemanticTokens.js`），不进 DisposableStore → 无 parent。我们的 `DisposableTracker.computeLeakingDisposables` 判定「活着且 root 链不通向 singleton 即泄漏」→ 该订阅是孤儿 root → 误报。实际释放由 Monaco rebind/dispose 负责，产品无泄漏。对照：codeLens/inlayHints 的 proxy 同样挂 `onDidChange` 却从不报——它们的 Monaco 端 controller 是 **editor 级** contribution，随 unmount 的 `editor.dispose()` 连订阅一起释放。区分同门泄漏案例：54 是 dying-host 帧打 disposed 对象、56 是激活竞态半建 store 成孤儿，本条是第三形态「宿主合法长活 + Monaco 端订阅容器无 parent」。
+修（产品 proxy 层一处，不动 spec 不动 Monaco）：`createDocumentSemanticTokensProxy` 增加 `store: DisposableStore` 参数（即 MainThreadLanguages 的 provider 注册 store，其 root 链通向 singleton），`onDidChange` 不直接透传，包一层——订阅发生时对返回的 disposable `setParentOfDisposable(subscription, store)`，只锚定 leak-tracker 的 root 链，dispose 时机仍归 Monaco。验证：修复前本地 smoke.outline 必挂（栈与 CI 一致），修复后 outline/tsStatusBar/peekPreview 全绿。
+教训：a) 给 Monaco 注册带 `onDidChange` 的 provider 时，先看 Monaco 端订阅的**持有方式与宿主生命周期**——editor 级 contribution（codeLens/inlayHints）随 unmount 释放无需处理；model 级 feature（semantic tokens）把订阅存普通数组且活到 teardown，必须在 proxy 侧 setParent 锚定；b) 「泄漏门失败但断言全过 + 栈在 Monaco 内部（我们的 Emitter 订阅帧）」→ 先判定是误报（宿主合法长活）还是真泄漏（宿主该死没死），别急着 markAsSingleton 一刀切豁免（会盖住该 emitter 后续真泄漏）；c) 功能提交给既有 provider 面挂新事件后，CI 全量 e2e 是暴露此类 tracker 语义碰撞的第一现场——本地只跑定向 spec 会漏（任何打开 ts 文件的 spec 都会中）。锚：`apps/editor/src/renderer/services/languageFeatures/languageProviderProxy.ts`（parentedOnDidChange）；`apps/editor/src/renderer/services/extensions/MainThreadLanguages.ts`（documentSemanticTokens 注册传 store）；monaco `documentSemanticTokens.js`（bindDocumentChangeListeners 普通数组）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

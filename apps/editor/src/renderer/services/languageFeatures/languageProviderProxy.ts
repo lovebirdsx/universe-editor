@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IExtHostLanguages, ISemanticTokensLegend } from '@universe-editor/extensions-common'
+import { setParentOfDisposable } from '@universe-editor/platform'
 import type { DisposableStore, Event } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { PendingDocumentSync } from '../extensions/PendingDocumentSync.js'
@@ -394,12 +395,22 @@ export function createDocumentSemanticTokensProxy(
   extHost: IExtHostLanguages,
   legend: ISemanticTokensLegend,
   onDidChange: Event<void>,
+  store: DisposableStore,
 ): monaco.languages.DocumentSemanticTokensProvider {
+  // Monaco's ModelSemanticColoring stores each subscription in a plain array
+  // (no DisposableStore parent), so the leak tracker flags every one as an
+  // orphan root; anchoring them under the provider store keeps the root chain
+  // reachable to a singleton while Monaco still owns the real dispose.
+  const parentedOnDidChange: Event<void> = (listener, thisArgs?, disposables?) => {
+    const subscription = onDidChange(listener, thisArgs, disposables)
+    setParentOfDisposable(subscription, store)
+    return subscription
+  }
   return {
     // Monaco's DocumentSemanticTokensProvider exposes `onDidChange` (typed
     // `IEvent<void>`); its semantic-tokens controller re-requests the document's
     // tokens on any fire. Same server-driven refresh wiring as CodeLens.
-    onDidChange,
+    onDidChange: parentedOnDidChange,
     getLegend: () => ({
       tokenTypes: [...legend.tokenTypes],
       tokenModifiers: [...legend.tokenModifiers],

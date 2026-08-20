@@ -482,7 +482,13 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
           this._semanticTokensChange.set(handle, changeEmitter)
           store.add(toDisposable(() => this._semanticTokensChange.delete(handle)))
           store.add(changeEmitter)
-          const p = createDocumentSemanticTokensProxy(handle, ext, legend, changeEmitter.event)
+          const p = createDocumentSemanticTokensProxy(
+            handle,
+            ext,
+            legend,
+            changeEmitter.event,
+            store,
+          )
           for (const lang of selector) {
             store.add(lf.registerDocumentSemanticTokensProvider(lang, p))
           }
