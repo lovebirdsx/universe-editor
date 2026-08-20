@@ -1111,6 +1111,12 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     '#007100',
     'Foreground color for renamed or copied git resources.',
   ),
+  d(
+    'gitDecoration.ignoredResourceForeground',
+    '#8c8c8c',
+    '#8e8e90',
+    'Foreground color for ignored git resources.',
+  ),
 
   // ---------------------------------------------------------------- Merge conflicts
   d(

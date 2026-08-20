@@ -160,6 +160,7 @@
     "gitDecoration.conflictingResourceForeground": "#e2c08d",
     "gitDecoration.deletedResourceForeground": "#c74e39",
     "gitDecoration.renamedResourceForeground": "#73c991",
+    "gitDecoration.ignoredResourceForeground": "#8c8c8c",
     "merge.currentContentBackground": "#40c84029",
     "merge.incomingContentBackground": "#408cff29",
     "merge.commonContentBackground": "#8c8c8c29",

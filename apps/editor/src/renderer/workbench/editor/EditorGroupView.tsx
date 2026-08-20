@@ -65,6 +65,10 @@ import {
   scmPathKey,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
+import {
+  IGNORED_RESOURCE_FOREGROUND,
+  IScmIgnoredResourcesService,
+} from '../../services/scm/ScmIgnoredResourcesService.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { EditorTabContextMenu } from './EditorTabContextMenu.js'
@@ -80,6 +84,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
   'emptyScmDecorations',
   { files: new Map(), folders: new Map() },
 )
+
+const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
 
 const PATH_LIKE_TOOLTIP_SCHEMES = new Set(['file', 'diff', 'merge', 'markdown-preview'])
 
@@ -301,15 +307,25 @@ const EditorTab = memo(function EditorTab({
 
   const scmDecorations = useOptionalService(IScmDecorationsService)
   const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
+  // Re-render the tab once a check-ignore batch resolves so the cached answer re-applies.
+  useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
   const deco =
     resource && resource.scheme === 'file'
       ? decorations.files.get(scmPathKey(resource.fsPath))
       : undefined
+  // 无 git 状态装饰时，被 gitignore 忽略的文件标签变暗（VSCode 对标）。
+  const ignored =
+    deco === undefined &&
+    resource !== undefined &&
+    resource.scheme === 'file' &&
+    scmIgnoredResources?.isIgnored(resource) === true
+  const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
   const labelStyle =
-    deco?.color !== undefined || deco?.strikeThrough
+    decoColor !== undefined || deco?.strikeThrough
       ? {
-          ...(deco.color !== undefined ? { color: deco.color } : {}),
-          ...(deco.strikeThrough ? { textDecoration: 'line-through' } : {}),
+          ...(decoColor !== undefined ? { color: decoColor } : {}),
+          ...(deco?.strikeThrough ? { textDecoration: 'line-through' } : {}),
         }
       : undefined
 

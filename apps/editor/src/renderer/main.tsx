@@ -203,6 +203,10 @@ import {
   ScmDecorationsService,
 } from './services/scm/ScmDecorationsService.js'
 import {
+  IScmIgnoredResourcesService,
+  ScmIgnoredResourcesService,
+} from './services/scm/ScmIgnoredResourcesService.js'
+import {
   IDirtyDiffNavigationService,
   DirtyDiffNavigationService,
 } from './services/scm/DirtyDiffNavigationService.js'
@@ -752,6 +756,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // editor tabs by file change state.
   const scmDecorationsService = workbenchStore.add(new ScmDecorationsService(scmService))
   services.set(IScmDecorationsService, scmDecorationsService)
+
+  // Git-ignored files/folders render dimmed in the Explorer and editor tabs; a
+  // batch-resolved cache backed by the owning provider's checkIgnore command.
+  const scmIgnoredResourcesService = workbenchStore.add(
+    instantiation.createInstance(ScmIgnoredResourcesService),
+  )
+  services.set(IScmIgnoredResourcesService, scmIgnoredResourcesService)
 
   // Holds the active editor's dirty-diff regions and the `quickDiffDecorationCount`
   // context key; consumed by the "go to next/previous change" commands. Eager so the

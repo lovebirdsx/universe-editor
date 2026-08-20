@@ -52,6 +52,10 @@ import {
   scmPathKey,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
+import {
+  IGNORED_RESOURCE_FOREGROUND,
+  IScmIgnoredResourcesService,
+} from '../../services/scm/ScmIgnoredResourcesService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmOpenFile } from '../../services/editor/largeFileGuard.js'
@@ -65,6 +69,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
   { files: new Map(), folders: new Map() },
 )
 
+const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
+
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
   const workspaceService = useService(IWorkspaceService)
@@ -77,6 +83,9 @@ export function ExplorerView() {
   const fileOps = useService(IExplorerFileOperationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
   const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
+  // Re-render rows once a check-ignore batch resolves so cached answers re-apply.
+  useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
 
   // Re-render when selection / active-editor change so renderRow closes over a
   // fresh active-editor key. Structure changes are handled inside <Tree>.
@@ -177,12 +186,19 @@ export function ExplorerView() {
     const entry = ctx.node.element
     const key = ctx.node.id
     // SCM 装饰是本机 git/perforce 概念；非 file: 资源（未来远端 provider）无装饰。
+    const decoKey = entry.resource.scheme === 'file' ? scmPathKey(entry.resource.fsPath) : undefined
     const deco =
-      entry.resource.scheme === 'file'
+      decoKey !== undefined
         ? entry.isDirectory
-          ? decorations.folders.get(scmPathKey(entry.resource.fsPath))
-          : decorations.files.get(scmPathKey(entry.resource.fsPath))
+          ? decorations.folders.get(decoKey)
+          : decorations.files.get(decoKey)
         : undefined
+    // 无 git 状态装饰时，被 gitignore 忽略的文件/文件夹变暗（VSCode 对标）。
+    const ignored =
+      deco === undefined &&
+      decoKey !== undefined &&
+      scmIgnoredResources?.isIgnored(entry.resource) === true
+    const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
     return (
       <ExplorerTreeNode
         key={key}
@@ -200,7 +216,7 @@ export function ExplorerView() {
         isCut={
           tree.isCut(entry.resource) || (entry.compactRoot ? tree.isCut(entry.compactRoot) : false)
         }
-        {...(deco?.color !== undefined ? { decoColor: deco.color } : {})}
+        {...(decoColor !== undefined ? { decoColor } : {})}
         {...(deco?.letter !== undefined ? { decoLetter: deco.letter } : {})}
         {...(deco?.strikeThrough ? { decoStrike: true } : {})}
         {...(deco?.tooltip !== undefined ? { decoTooltip: deco.tooltip } : {})}
