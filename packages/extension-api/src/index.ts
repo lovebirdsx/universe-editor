@@ -106,7 +106,7 @@ export { InlayHintKind } from 'vscode-languageserver-types'
  *  version space); the host checks `engines.universe` against its own runtime
  *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
  *  package.json (release.mjs syncs both; publish preflight enforces it). */
-export const version = '0.13.0'
+export const version = '0.13.1'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
 export type { CancellationToken, Event } from './util.js'
