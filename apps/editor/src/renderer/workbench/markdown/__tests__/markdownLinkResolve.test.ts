@@ -139,10 +139,11 @@ describe('markdownLinkCandidates', () => {
       expect(c.map((u) => u.toString())).toEqual(['file:///etc/hosts'])
     })
 
-    it('does not attach a remote authority to a windows drive path', () => {
+    it('attaches the remote authority to a windows drive path before the file fallback', () => {
       const c = markdownLinkCandidates('C:\\x\\a.ts', remoteRoot, remoteRoot)
-      expect(c.map((u) => u.scheme)).toEqual(['file'])
-      expect(c[0]?.fsPath).toBe('C:/x/a.ts')
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/C:/x/a.ts')
+      expect(c[1]?.scheme).toBe('file')
+      expect(c).toHaveLength(2)
     })
 
     it('probes the remote authority for decoded percent-encoded variants first', () => {

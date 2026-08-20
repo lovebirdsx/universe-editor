@@ -144,10 +144,41 @@ describe('remoteUri.absolutePathToWorkspaceUri', () => {
     expect(uri.path).toBe('/home/xiao/a/b.ts')
   })
 
-  it('falls back to a file URI for a Windows drive path under a remote folder', () => {
-    const uri = absolutePathToWorkspaceUri('C:\\x\\a.ts', remoteFolder)
+  it('inherits the remote folder scheme/authority for a Windows drive path', () => {
+    const uri = absolutePathToWorkspaceUri('C:\\Users\\a\\proj\\f.ts', remoteFolder)
+    expect(uri.toString()).toBe('remote-ssh://wsl+Ubuntu/C:/Users/a/proj/f.ts')
+  })
+
+  it('normalises a forward-slash Windows drive path under a remote folder', () => {
+    const uri = absolutePathToWorkspaceUri('C:/Users/a/proj/f.ts', remoteFolder)
+    expect(uri.toString()).toBe('remote-ssh://wsl+Ubuntu/C:/Users/a/proj/f.ts')
+  })
+
+  it('clears the folder query and fragment for a Windows drive path', () => {
+    const folder = URI.parse('remote-ssh://host/home/xiao/proj?foo=bar#frag')
+    const uri = absolutePathToWorkspaceUri('C:\\Users\\a\\proj\\f.ts', folder)
+    expect(uri.scheme).toBe('remote-ssh')
+    expect(uri.authority).toBe('host')
+    expect(uri.path).toBe('/C:/Users/a/proj/f.ts')
+    expect(uri.query).toBe('')
+    expect(uri.fragment).toBe('')
+  })
+
+  it('round-trips a Windows drive path back to its server fsPath', () => {
+    const uri = absolutePathToWorkspaceUri('C:\\a\\b', remoteFolder)
+    expect(remotePathFromUri(uri)).toBe('C:/a/b')
+  })
+
+  it('falls back to a file URI for a Windows drive path under a local file folder', () => {
+    const uri = absolutePathToWorkspaceUri('C:\\x\\a.ts', URI.file('/home/xiao/proj'))
     expect(uri.scheme).toBe('file')
     expect(uri.fsPath).toBe('C:/x/a.ts')
+  })
+
+  it('falls back to a file URI for a relative path under a remote folder', () => {
+    const uri = absolutePathToWorkspaceUri('src/a.ts', remoteFolder)
+    expect(uri.scheme).toBe('file')
+    expect(uri.toString()).toBe('file:///src/a.ts')
   })
 
   it('falls back to a file URI under a local file folder', () => {

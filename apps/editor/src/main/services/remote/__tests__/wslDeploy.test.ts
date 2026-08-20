@@ -64,9 +64,9 @@ describe('buildDeployScriptBody', () => {
     expect(buildDeployRemoteScript('0.0.0', 'u.tgz', 'deadbeef')).toBe(`sh -c '${body}'`)
   })
 
-  it('writes the bundle hash after extraction without breaking the outer single quotes', () => {
+  it('delegates dependency install to install.js without breaking the outer single quotes', () => {
     const body = buildDeployScriptBody('0.0.0', 'u.tgz', 'deadbeef')
-    expect(body).toContain('printf %s "deadbeef" > bundle.hash')
+    expect(body).toContain('node ~/.universe-editor-server/0.0.0/install.js --bundle-hash deadbeef')
     expect(body).not.toContain("'")
   })
 })
@@ -260,7 +260,7 @@ describe('WslDeployer', () => {
         buildDeployScriptBody('0.0.0', tgzName, computeBundleHash(bundleDir)),
       ),
     )
-    expect(install.args[5]).toContain('> bundle.hash')
+    expect(install.args[5]).toMatch(/install\.js --bundle-hash [0-9a-f]+/)
     expect(install.timeoutMs).toBe(1_800_000)
 
     expect(existsSync(join(tmpdir(), tgzName))).toBe(false)

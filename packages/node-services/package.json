@@ -2,6 +2,7 @@
   "name": "@universe-editor/node-services",
   "version": "0.0.0",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],

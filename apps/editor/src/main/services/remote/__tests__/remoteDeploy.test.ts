@@ -18,7 +18,12 @@ import {
   buildStartCommand,
   buildStopCommand,
   buildUnameCommand,
-  buildWindowsShellProbeCommand,
+  buildWindowsCheckCommand,
+  buildWindowsDeployCommand,
+  buildWindowsNodeInstallCommand,
+  buildWindowsProbeCommand,
+  buildWindowsStartCommand,
+  buildWindowsStopCommand,
   classifyCheckResult,
   computeBundleHash,
   downloadNodeArchive,
@@ -29,9 +34,9 @@ import {
   pickFastestNodeArchiveUrl,
   RemoteDeployer,
   resolveNodeArtifact,
+  resolveWindowsNodeArtifact,
   scpArgs,
   sshCommandArgs,
-  UnsupportedRemoteHostError,
   validateAuthority,
   type NodeArchiveFetcher,
   type RemoteRunner,
@@ -157,30 +162,24 @@ describe('argv assembly', () => {
     ])
   })
 
-  it('builds the remote deploy install script', () => {
+  it('builds the remote deploy install script delegating to install.js', () => {
     const script = buildDeployRemoteScript('0.0.0', 'universe-server-abc123.tgz', 'deadbeef')
     expect(script).toContain('mkdir -p ~/.universe-editor-server/0.0.0')
     expect(script).toContain('tar xzf /tmp/universe-server-abc123.tgz')
-    expect(script).toContain('npm install --omit=dev --no-audit --no-fund')
-    expect(script).toContain('vendor/claude-agent-acp vendor/codex-acp')
-    expect(script).toContain('npm ci --omit=dev --omit=optional --no-audit --no-fund')
+    expect(script).toContain(
+      'node ~/.universe-editor-server/0.0.0/install.js --bundle-hash deadbeef',
+    )
     expect(script).toContain('rm /tmp/universe-server-abc123.tgz')
-    expect(script).toContain('printf %s "deadbeef" > bundle.hash')
   })
 
-  it('writes bundle.hash only after npm install and vendor install succeed', () => {
+  it('removes the uploaded tgz only after install.js succeeds', () => {
     const body = buildDeployScriptBody('0.0.0', 'universe-server-abc123.tgz', 'deadbeef')
-    const installIdx = body.indexOf('npm install --omit=dev --no-audit --no-fund')
-    const vendorIdx = body.indexOf('npm ci --omit=dev --omit=optional --no-audit --no-fund')
-    const hashIdx = body.indexOf('printf %s "deadbeef" > bundle.hash')
+    const installIdx = body.indexOf('install.js --bundle-hash deadbeef')
     const rmIdx = body.indexOf('rm /tmp/universe-server-abc123.tgz')
     expect(installIdx).toBeGreaterThan(-1)
-    expect(vendorIdx).toBeGreaterThan(-1)
-    expect(hashIdx).toBeGreaterThan(-1)
     expect(rmIdx).toBeGreaterThan(-1)
-    expect(installIdx).toBeLessThan(hashIdx)
-    expect(vendorIdx).toBeLessThan(hashIdx)
-    expect(hashIdx).toBeLessThan(rmIdx)
+    expect(installIdx).toBeLessThan(rmIdx)
+    expect(body.slice(installIdx, rmIdx)).toContain('&&')
   })
 
   it('builds check/start/stop commands against the versioned bootstrap', () => {
@@ -373,13 +372,6 @@ describe('resolveNodeArtifact', () => {
     expect(result).toHaveProperty('error', expect.stringMatching(/musl/i))
   })
 
-  it('rejects a Windows uname (git-bash/cygwin sshd) as an unsupported host', () => {
-    const result = resolveNodeArtifact('Windows_NT x86_64\n')
-    expect(result).toHaveProperty('error', expect.stringContaining('Windows'))
-    expect(result).toHaveProperty('unsupportedHost', true)
-    expect(resolveNodeArtifact('MINGW64_NT-10.0 x86_64\n')).toHaveProperty('unsupportedHost', true)
-  })
-
   it('rejects unknown platforms with manual-install guidance', () => {
     expect(resolveNodeArtifact('Linux s390x\n')).toHaveProperty(
       'error',
@@ -392,6 +384,88 @@ describe('resolveNodeArtifact', () => {
 describe('buildUnameCommand', () => {
   it('probes kernel/machine and the libc flavor', () => {
     expect(buildUnameCommand()).toBe('uname -sm; (ldd --version 2>&1 || true) | head -n 1')
+  })
+})
+
+describe('buildWindowsProbeCommand', () => {
+  it('round-trips %OS%/%PROCESSOR_ARCHITECTURE% through cmd.exe', () => {
+    expect(buildWindowsProbeCommand()).toBe(
+      'cmd /d /s /c "echo UNIVERSE_REMOTE_OS=%OS%.%PROCESSOR_ARCHITECTURE%"',
+    )
+  })
+})
+
+describe('windows command family', () => {
+  const NODE_DIR = '.universe-editor-server\\node\\v24.19.0'
+  // Every body pins the cwd first: the ssh session cwd is not reliably the home
+  // directory (Win32-OpenSSH starts admin users in System32).
+  const CD_HOME = 'cd /d %USERPROFILE%&'
+  const PRELUDE = `${CD_HOME}set PATH=%PATH%;%USERPROFILE%\\${NODE_DIR}&`
+
+  it('builds the exact check/start/stop commands', () => {
+    expect(buildWindowsCheckCommand('0.0.0')).toBe(
+      `cmd /d /s /c "${PRELUDE}(where node >nul 2>&1||exit /b 40)&node .universe-editor-server\\0.0.0\\bootstrap.js check"`,
+    )
+    expect(buildWindowsStartCommand('0.0.0')).toBe(
+      `cmd /d /s /c "${PRELUDE}node .universe-editor-server\\0.0.0\\bootstrap.js start"`,
+    )
+    expect(buildWindowsStopCommand('0.0.0')).toBe(
+      `cmd /d /s /c "${PRELUDE}node .universe-editor-server\\0.0.0\\bootstrap.js stop"`,
+    )
+  })
+
+  it('builds the exact node install command', () => {
+    expect(buildWindowsNodeInstallCommand('node-runtime-abc123.zip')).toBe(
+      `cmd /d /s /c "${CD_HOME}(rmdir /s /q ${NODE_DIR}.tmp 2>nul)&(mkdir ${NODE_DIR}.tmp 2>nul)&%SystemRoot%\\System32\\tar.exe -xf node-runtime-abc123.zip --strip-components=1 -C ${NODE_DIR}.tmp&&(rmdir /s /q ${NODE_DIR} 2>nul)&move /y ${NODE_DIR}.tmp ${NODE_DIR} >nul&&del node-runtime-abc123.zip&&${NODE_DIR}\\node.exe --version"`,
+    )
+  })
+
+  it('builds the exact deploy command', () => {
+    expect(buildWindowsDeployCommand('0.0.0', 'universe-server-abc123.tgz', 'deadbeef')).toBe(
+      `cmd /d /s /c "${CD_HOME}(rmdir /s /q .universe-editor-server\\0.0.0 2>nul)&mkdir .universe-editor-server\\0.0.0&&%SystemRoot%\\System32\\tar.exe -xzf universe-server-abc123.tgz -C .universe-editor-server\\0.0.0&&del universe-server-abc123.tgz&&set PATH=%PATH%;%USERPROFILE%\\${NODE_DIR}&node .universe-editor-server\\0.0.0\\install.js --bundle-hash deadbeef"`,
+    )
+  })
+
+  it('keeps every body free of double quotes, $ and backticks (cmd/PowerShell invariant)', () => {
+    const bodies = [
+      buildWindowsCheckCommand('0.0.0'),
+      buildWindowsStartCommand('0.0.0'),
+      buildWindowsStopCommand('0.0.0'),
+      buildWindowsNodeInstallCommand('node-runtime-abc123.zip'),
+      buildWindowsDeployCommand('0.0.0', 'universe-server-abc123.tgz', 'deadbeef'),
+    ].map((cmd) => cmd.slice('cmd /d /s /c "'.length, -1))
+    for (const body of bodies) {
+      expect(body).not.toContain('"')
+      expect(body).not.toContain('$')
+      expect(body).not.toContain('`')
+    }
+  })
+
+  it('pins the cwd to the profile dir before any relative path (admin sessions start in System32)', () => {
+    for (const cmd of [
+      buildWindowsCheckCommand('0.0.0'),
+      buildWindowsStartCommand('0.0.0'),
+      buildWindowsStopCommand('0.0.0'),
+      buildWindowsNodeInstallCommand('node-runtime-abc123.zip'),
+      buildWindowsDeployCommand('0.0.0', 'universe-server-abc123.tgz', 'deadbeef'),
+    ]) {
+      expect(cmd.startsWith(`cmd /d /s /c "${CD_HOME}`)).toBe(true)
+      // %CD% would expand before the cd runs (cmd expands the whole line once).
+      expect(cmd).not.toContain('%CD%')
+    }
+  })
+})
+
+describe('resolveWindowsNodeArtifact', () => {
+  it('maps x64 and arm64 to win dist zip filenames', () => {
+    expect(resolveWindowsNodeArtifact('x64')).toEqual({
+      platformKey: 'win-x64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-win-x64.zip`,
+    })
+    expect(resolveWindowsNodeArtifact('arm64')).toEqual({
+      platformKey: 'win-arm64',
+      fileName: `node-v${NODE_RUNTIME_VERSION}-win-arm64.zip`,
+    })
   })
 })
 
@@ -587,6 +661,102 @@ describe('downloadNodeArchive', () => {
   })
 })
 
+describe('RemoteDeployer platform probing', () => {
+  it('treats a Linux uname as posix and skips the windows probe', async () => {
+    const commands: string[] = []
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      commands.push(remote)
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({ code: 3, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).resolves.toEqual({
+      state: 'not-running',
+    })
+    expect(commands).toEqual([buildUnameCommand(), buildCheckCommand('0.0.0')])
+  })
+
+  it('detects a cmd.exe Windows remote via the probe and uses the windows check command', async () => {
+    const commands: string[] = []
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      commands.push(remote)
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'not recognized' })
+      }
+      if (remote === buildWindowsProbeCommand()) {
+        return Promise.resolve({
+          code: 0,
+          stdout: 'UNIVERSE_REMOTE_OS=Windows_NT.AMD64\r\n',
+          stderr: '',
+        })
+      }
+      return Promise.resolve({ code: 3, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).resolves.toEqual({
+      state: 'not-running',
+    })
+    expect(commands).toEqual([
+      buildUnameCommand(),
+      buildWindowsProbeCommand(),
+      buildWindowsCheckCommand('0.0.0'),
+    ])
+  })
+
+  it('rejects a git-bash (MINGW) uname with DefaultShell guidance', async () => {
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'MINGW64_NT-10.0 x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({ code: 3, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).rejects.toThrow(
+      /git-bash\/MSYS.*DefaultShell/s,
+    )
+  })
+
+  it('throws failed-to-probe when neither uname nor the windows probe identify the host', async () => {
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'uname: not found' })
+      }
+      // POSIX sh echoes %OS% literally
+      return Promise.resolve({ code: 0, stdout: '%OS%\n', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await expect(deployer.checkRemoteServer('user@host')).rejects.toThrow(
+      'failed to probe remote platform: uname: not found',
+    )
+  })
+
+  it('caches the probe result per authority (no second uname)', async () => {
+    const commands: string[] = []
+    const runner: RemoteRunner = (_command, args) => {
+      const remote = args[args.length - 1]!
+      commands.push(remote)
+      if (remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 0, stdout: 'Linux x86_64\n', stderr: '' })
+      }
+      return Promise.resolve({ code: 3, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
+    await deployer.checkRemoteServer('user@host')
+    await deployer.checkRemoteServer('user@host')
+    expect(commands).toEqual([
+      buildUnameCommand(),
+      buildCheckCommand('0.0.0'),
+      buildCheckCommand('0.0.0'),
+    ])
+  })
+})
+
 describe('RemoteDeployer.provisionNodeRuntime', () => {
   it('probes → downloads → scp → installs the private node runtime', async () => {
     const calls: {
@@ -645,49 +815,65 @@ describe('RemoteDeployer.provisionNodeRuntime', () => {
     )
   })
 
-  it('throws UnsupportedRemoteHostError when uname reports Windows', async () => {
-    const runner: RemoteRunner = () =>
-      Promise.resolve({ code: 0, stdout: 'Windows_NT x86_64\n', stderr: '' })
-    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
-    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
-      UnsupportedRemoteHostError,
-    )
-  })
-
-  it('detects a cmd.exe remote (Windows sshd) when the uname probe fails', async () => {
-    const probed: string[] = []
-    const runner: RemoteRunner = (_command, args) => {
-      const remoteCommand = args[args.length - 1]!
-      probed.push(remoteCommand)
-      if (remoteCommand === buildUnameCommand()) {
+  it('provisions a windows node runtime (zip → relative-home scp → cmd install)', async () => {
+    const calls: {
+      command: string
+      args: readonly string[]
+      cwd?: string
+      timeoutMs?: number
+    }[] = []
+    const fetched: string[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      calls.push({
+        command,
+        args,
+        ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      })
+      const remote = args[args.length - 1]!
+      if (command === 'ssh' && remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'not recognized' })
+      }
+      if (command === 'ssh' && remote === buildWindowsProbeCommand()) {
         return Promise.resolve({
-          code: 1,
-          stdout: '',
-          stderr: "'true)' 不是内部或外部命令，也不是可运行的程序或批处理文件。",
+          code: 0,
+          stdout: 'UNIVERSE_REMOTE_OS=Windows_NT.AMD64\r\n',
+          stderr: '',
         })
       }
-      return Promise.resolve({ code: 0, stdout: 'Windows_NT\r\n', stderr: '' })
-    }
-    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
-    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
-      /appears to be Windows \(its SSH shell is cmd\.exe\)/,
-    )
-    expect(probed).toEqual([buildUnameCommand(), buildWindowsShellProbeCommand()])
-  })
-
-  it('keeps the raw probe error when the failing remote shell is not cmd.exe', async () => {
-    const runner: RemoteRunner = (_command, args) => {
-      const remoteCommand = args[args.length - 1]!
-      if (remoteCommand === buildUnameCommand()) {
-        return Promise.resolve({ code: 1, stdout: '', stderr: 'uname: not found' })
+      if (command === 'ssh') {
+        return Promise.resolve({ code: 0, stdout: `v${NODE_RUNTIME_VERSION}\n`, stderr: '' })
       }
-      // POSIX sh echoes %OS% literally
-      return Promise.resolve({ code: 0, stdout: '%OS%\n', stderr: '' })
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' })
     }
-    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0' })
-    await expect(deployer.provisionNodeRuntime('user@host')).rejects.toThrow(
-      'failed to probe remote platform: uname: not found',
+    const fetcher: NodeArchiveFetcher = (url) => {
+      fetched.push(url)
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: Readable.toWeb(Readable.from(Buffer.from('NODE-ZIP-BYTES'))),
+      })
+    }
+    const deployer = new RemoteDeployer({
+      runner,
+      nodeArchiveFetcher: fetcher,
+      serverVersion: '0.0.0',
+    })
+    await deployer.provisionNodeRuntime('user@host')
+
+    expect(calls.map((c) => c.command)).toEqual(['ssh', 'ssh', 'scp', 'ssh'])
+    const [, probe, scp, install] = calls
+    expect(probe!.args).toEqual(sshCommandArgs('user@host', buildWindowsProbeCommand()))
+    const zipName = scp!.args.find((a) => a.includes('node-runtime-'))!
+    expect(zipName).toMatch(/^node-runtime-[0-9a-f]+\.zip$/)
+    expect(scp!.args).toContain(`user@host:${zipName}`)
+    expect(scp!.args).not.toContain('/tmp/')
+    expect(scp!.cwd).toBe(tmpdir())
+    expect(install!.args).toEqual(
+      sshCommandArgs('user@host', buildWindowsNodeInstallCommand(zipName)),
     )
+    expect(install!.timeoutMs).toBe(300_000)
+    expect(fetched.some((u) => u.includes(`node-v${NODE_RUNTIME_VERSION}-win-x64.zip`))).toBe(true)
   })
 })
 
@@ -714,9 +900,9 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir })
     await deployer.deployRemoteServer('user@host')
 
-    expect(calls.map((c) => c.command)).toEqual(['tar', 'scp', 'ssh'])
+    expect(calls.map((c) => c.command)).toEqual(['ssh', 'tar', 'scp', 'ssh'])
 
-    const [tar, scp, install] = calls
+    const [, tar, scp, install] = calls
     expect(tar!.args[0]).toBe('-czf')
     const tgzName = tar!.args[1]!
     expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
@@ -730,8 +916,7 @@ describe('RemoteDeployer.deployRemoteServer', () => {
 
     const remoteScript = install!.args[install!.args.length - 1]!
     expect(remoteScript).toContain(`tar xzf /tmp/${tgzName}`)
-    expect(remoteScript).toContain('printf %s "')
-    expect(remoteScript).toContain('> bundle.hash')
+    expect(remoteScript).toMatch(/install\.js --bundle-hash [0-9a-f]+/)
   })
 
   it('surfaces the failing step in the thrown error', async () => {
@@ -761,6 +946,41 @@ describe('RemoteDeployer.deployRemoteServer', () => {
     const phases: string[] = []
     await deployer.deployRemoteServer('user@host', undefined, (phase) => phases.push(phase))
     expect(phases).toEqual(['uploading', 'installing'])
+  })
+
+  it('deploys to a windows remote via relative-home scp + cmd deploy', async () => {
+    const bundleDir = makeBundle()
+    const bundleHash = computeBundleHash(bundleDir)
+    const calls: { command: string; args: readonly string[]; cwd?: string }[] = []
+    const runner: RemoteRunner = (command, args, options) => {
+      calls.push({ command, args, ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}) })
+      const remote = args[args.length - 1]!
+      if (command === 'ssh' && remote === buildUnameCommand()) {
+        return Promise.resolve({ code: 1, stdout: '', stderr: 'not recognized' })
+      }
+      if (command === 'ssh' && remote === buildWindowsProbeCommand()) {
+        return Promise.resolve({
+          code: 0,
+          stdout: 'UNIVERSE_REMOTE_OS=Windows_NT.AMD64\r\n',
+          stderr: '',
+        })
+      }
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' })
+    }
+    const deployer = new RemoteDeployer({ runner, serverVersion: '0.0.0', bundleDir })
+    await deployer.deployRemoteServer('user@host')
+
+    expect(calls.map((c) => c.command)).toEqual(['ssh', 'ssh', 'tar', 'scp', 'ssh'])
+    const [uname, probe, tar, scp, install] = calls
+    expect(uname!.args).toEqual(sshCommandArgs('user@host', buildUnameCommand()))
+    expect(probe!.args).toEqual(sshCommandArgs('user@host', buildWindowsProbeCommand()))
+    const tgzName = tar!.args[1]!
+    expect(tgzName).toMatch(/^universe-server-[0-9a-f]+\.tgz$/)
+    expect(scp!.args).toContain(`user@host:${tgzName}`)
+    expect(scp!.args).not.toContain('/tmp/')
+    expect(install!.args).toEqual(
+      sshCommandArgs('user@host', buildWindowsDeployCommand('0.0.0', tgzName, bundleHash)),
+    )
   })
 })
 

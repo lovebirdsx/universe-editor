@@ -27,6 +27,9 @@ const deploy = process.argv.includes('--bundle')
 const outDir = deploy ? resolve(root, 'dist-bundle') : resolve(root, 'dist')
 const entries = {
   bootstrap: resolve(root, 'src/bootstrap.ts'),
+  // Post-deploy npm install. Own entry (not a bootstrap subcommand) because
+  // bootstrap.js statically imports the native packages this install creates.
+  install: resolve(root, 'src/installCli.ts'),
   watcherChild: resolve(root, 'src/watcherChild.ts'),
   // The extension-host bootstrap is re-bundled (same technique as bootstrap.js)
   // so the daemon can fork it on the remote host without shipping that package's

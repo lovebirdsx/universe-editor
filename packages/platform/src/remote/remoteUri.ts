@@ -45,13 +45,22 @@ export function fsPathToWorkspaceUri(fsPath: string, remoteAuthority: string | u
  * Unlike {@link fsPathToWorkspaceUri} — which takes an authority and always
  * attaches it — this takes the workspace folder URI and only inherits its
  * scheme/authority when the folder is non-`file` (remote) and the path is
- * POSIX-absolute. Windows drive-letter paths and local workspaces fall back to
+ * absolute. The reporting tool/agent/terminal runs on the workspace host, so any
+ * absolute path — POSIX or Windows drive-letter (a Windows remote host) — is a
+ * host path and inherits the folder's scheme/authority. A Windows drive path is
+ * normalized to the leading-slash URI form (`C:\foo` → `/C:/foo`), matching
+ * {@link remoteFsPathToUri}. Relative paths and local workspaces fall back to
  * `URI.file`.
  */
 export function absolutePathToWorkspaceUri(absolutePath: string, folder: URI | undefined): URI {
-  const isPosixAbsolute = absolutePath.startsWith('/') && !/^[A-Za-z]:[/\\]/.test(absolutePath)
-  if (folder && folder.scheme !== 'file' && isPosixAbsolute) {
-    return folder.with({ path: normalizeFsPath(absolutePath), query: '', fragment: '' })
+  const isAbsolute = absolutePath.startsWith('/') || /^[A-Za-z]:[/\\]/.test(absolutePath)
+  if (folder && folder.scheme !== 'file' && isAbsolute) {
+    const normalized = normalizeFsPath(absolutePath)
+    return folder.with({
+      path: normalized.startsWith('/') ? normalized : `/${normalized}`,
+      query: '',
+      fragment: '',
+    })
   }
   return URI.file(absolutePath)
 }

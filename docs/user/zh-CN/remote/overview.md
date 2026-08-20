@@ -1,6 +1,6 @@
 # 远程开发
 
-远程开发让你把「编辑体验留在本地、代码与文件系统放在远端」——像 VSCode 的 Remote-SSH 一样，Universe Editor 通过 SSH 连到一台 Linux 主机，在那台机器上部署一个轻量 server，把文件浏览、搜索、保存等操作路由到远端执行，本地的编辑器则负责界面与交互。在 Windows 上，本机安装的 **WSL 发行版会被自动识别**，无需配置 SSH 即可一键连入。
+远程开发让你把「编辑体验留在本地、代码与文件系统放在远端」——像 VSCode 的 Remote-SSH 一样，Universe Editor 通过 SSH 连到一台 Linux、macOS 或 Windows 主机，在那台机器上部署一个轻量 server，把文件浏览、搜索、保存等操作路由到远端执行，本地的编辑器则负责界面与交互。在 Windows 上，本机安装的 **WSL 发行版会被自动识别**，无需配置 SSH 即可一键连入。
 
 这一页讲清前置条件、怎么连、连上后有哪些入口与状态反馈，以及出问题时去哪看日志。
 
@@ -22,8 +22,8 @@
 
 **以 SSH 连接远端主机时：**
 
-- **远端主机**：一台能通过 SSH 登录的 **Linux** 主机。
-- **远端环境**：无需预装 Node.js。编辑器检测到远端没有 Node.js 时会**自动安装**一个私有 Node 运行时（Node 24.19.0，下载前自动测速 nodejs.org 与 npmmirror 镜像并选择较快的一个，另一源作为失败兜底，装到远端 `~/.universe-editor-server/node/v24.19.0/`）；远端已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线且下载失败）才需要你在远端手动安装 **Node.js ≥ 20** 后重连。
+- **远端主机**：一台能通过 SSH 登录的 **Linux / macOS / Windows** 主机。Windows 主机需要 64 位的 Windows 10 1803 及以上（依赖系统自带的 `tar.exe`）并启用 OpenSSH Server；sshd 的默认 shell 须为 cmd.exe（安装 OpenSSH Server 后的默认值）或 PowerShell，**不支持 git-bash 作为默认 shell**（连接时会报错提示，把注册表 `HKLM\SOFTWARE\OpenSSH` 下的 `DefaultShell` 改回 cmd/PowerShell 或删除该值即可）。
+- **远端环境**：无需预装 Node.js。编辑器检测到远端没有 Node.js 时会**自动安装**一个私有 Node 运行时（Node 24.19.0，下载前自动测速 nodejs.org 与 npmmirror 镜像并选择较快的一个，另一源作为失败兜底，装到远端 `~/.universe-editor-server/node/v24.19.0/`，Windows 主机为 `%USERPROFILE%\.universe-editor-server\node\v24.19.0\`）；远端已有 Node.js 时仍优先用系统里的。仅当自动安装失败（如 Alpine/musl、未知平台、离线且下载失败）才需要你在远端手动安装 **Node.js ≥ 20** 后重连。
 - **本地 SSH**：本地已配置好 `~/.ssh/config` 或能直接用 `user@host[:port]` 免密登录（SSH 密钥认证）。连接过程会以非交互方式（BatchMode）运行 `ssh`，如果登录需要你手输密码，连接会失败——请先配好密钥。
 
 **连接本机 WSL 时（Windows）：**
@@ -139,8 +139,8 @@
 ## 排障
 
 - **提示 `Automatic Node.js installation failed`**：远端没有 Node.js，且自动安装私有运行时失败。常见原因：Alpine/musl（官方 Node 二进制不支持）、未知平台、或离线且下载失败。这种情况下在远端手动装好 **Node.js ≥ 20** 后直接重连即可，无需手动清理 `~/.universe-editor-server` 目录。
-- **提示 `the remote host ... appears to be Windows`（或日志里出现乱码的 cmd 报错，如「不是内部或外部命令」）**：目标主机是 Windows。SSH 远程主机只支持 **Linux 和 macOS**——Windows 上 OpenSSH 的默认 shell 是 cmd.exe，无法运行远端 server，在它上面装 Node.js 也无济于事。若你真正想连的是那台机器里的 WSL，请直接 SSH 到 WSL 发行版（见下方「以 SSH 方式连接 WSL」）；本机的 WSL 用 **WSL: Connect to WSL…** 即可。
-- **看日志**：本地这一侧的连接与部署日志（检测、上传、安装、启动各步骤及耗时）在 **Output 面板**的 **Remote Connection** 频道，首次安装时会自动打开；远端 server 自身的日志在远端主机的 `~/.universe-editor-server/server.log`。部署、连接、转发失败，先看这两处的具体报错。
+- **Windows 远程主机连接失败**：先确认远端是 64 位的 Windows 10 1803 及以上——部署依赖系统自带的 `C:\Windows\System32\tar.exe`，更老的系统没有它；32 位 Windows 不支持（会提示 `32-bit Windows (x86) is not supported`）。若提示 `git-bash/MSYS ... is not supported`，说明远端 sshd 的默认 shell 被设成了 git-bash——把注册表 `HKLM\SOFTWARE\OpenSSH` 下的 `DefaultShell` 改为 cmd/PowerShell（或删除该值恢复默认 cmd）后重连。提示 `failed to probe remote platform` 说明平台探测两步（`uname` 与 cmd 探测）都失败了，检查 Output 面板 **Remote Connection** 频道里探测命令的原始报错。若你想连的是那台机器里的 WSL 而不是 Windows 本身，请直接 SSH 到 WSL 发行版（见下方「以 SSH 方式连接 WSL」）；本机的 WSL 用 **WSL: Connect to WSL…** 即可。
+- **看日志**：本地这一侧的连接与部署日志（检测、上传、安装、启动各步骤及耗时）在 **Output 面板**的 **Remote Connection** 频道，首次安装时会自动打开；远端 server 自身的日志在远端主机的 `~/.universe-editor-server/server.log`（Windows 主机为 `%USERPROFILE%\.universe-editor-server\server.log`）。部署、连接、转发失败，先看这两处的具体报错。
 - **停止 server**：想彻底停掉远端那台进程，运行 **Remote-SSH: Stop Remote Server**（或在状态栏条目菜单 / 远程资源管理器里点停止）。确认框会列出所有使用该主机的窗口——确认后这些窗口会一并关闭（有会话正在运行时，关闭前还会像本地关窗一样再次确认，取消即整体中止、server 保持运行）；若关完不剩窗口，会自动打开一个本地空白窗口。停止后会抑制自动重连——server 不会被后台立刻拉起；重新打开该主机的远程工作区即可再次连接。
 - **开发期自定义启动命令**：开发模式下可用环境变量 `UNIVERSE_REMOTE_SERVER_CMD` 指定启动远端 server 的命令（用于联调自建 server，仅开发环境生效）。
 

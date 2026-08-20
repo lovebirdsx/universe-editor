@@ -5,6 +5,7 @@
  *    start [--data-dir <dir>]                             detached-spawn serve and wait until ready
  *    check [--data-dir <dir>]                             verify a daemon is alive + version-matched
  *    stop  [--data-dir <dir>]                             stop the daemon and clean bookkeeping files
+ *  (post-deploy dependency install is the separate install.js entry — see installCli.ts)
  *
  *  The data dir (default ~/.universe-editor-server) holds daemon.lock (single-instance
  *  guard), server.json (IRemoteDaemonInfo, written atomically 0600) and server.log.
@@ -17,7 +18,7 @@ import { createWriteStream, readFileSync, type WriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   AbstractLogger,
   LogLevel,
@@ -26,12 +27,12 @@ import {
   type IRemoteDaemonInfo,
 } from '@universe-editor/platform'
 import { createDaemon } from './daemon.js'
+import { BUNDLE_HASH_FILE } from './install.js'
 import { SERVER_VERSION } from './version.js'
 
 const DEFAULT_DATA_DIR = path.join(homedir(), '.universe-editor-server')
 const INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
 const BUNDLE_HASH_PREFIX = 'UNIVERSE_REMOTE_BUNDLE_HASH='
-const BUNDLE_HASH_FILE = 'bundle.hash'
 const START_TIMEOUT_MS = 10_000
 const STOP_TIMEOUT_MS = 3_000
 
@@ -192,16 +193,74 @@ async function serve(opts: CliOptions): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'))
 }
 
+function toWindowsCommandLine(argv: readonly string[]): string {
+  return argv.map((arg) => (/[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg)).join(' ')
+}
+
+/**
+ * Windows OpenSSH wraps each session in a kill-on-close job object, so a plain
+ * detached spawn dies with the SSH session (node cannot pass
+ * CREATE_BREAKAWAY_FROM_JOB — vscode's rust CLI can). Win32_Process.Create runs
+ * the daemon from the WMI provider host instead, outside that job.
+ */
+export function buildWindowsDaemonLaunch(argv: readonly string[]): {
+  file: string
+  args: string[]
+} {
+  const commandLine = toWindowsCommandLine(argv)
+  const script = [
+    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${commandLine.replace(/'/g, "''")}' }`,
+    'exit $r.ReturnValue',
+  ].join('; ')
+  const systemRoot = process.env['SystemRoot'] ?? 'C:\\Windows'
+  return {
+    file: path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+  }
+}
+
+function spawnDaemonWindows(argv: readonly string[]): Promise<void> {
+  const launch = buildWindowsDaemonLaunch(argv)
+  return new Promise((resolve, reject) => {
+    const child = spawn(launch.file, launch.args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve()
+      else {
+        reject(
+          new Error(
+            `Win32_Process.Create failed (exit ${code})${stderr ? `: ${stderr.trim()}` : ''}`,
+          ),
+        )
+      }
+    })
+  })
+}
+
 async function startDaemon(dataDir: string): Promise<void> {
   const script = path.resolve(process.argv[1] ?? '')
-  const child = spawn(process.execPath, [script, 'serve', '--data-dir', dataDir], {
-    // detached: POSIX = setsid (escape the caller's SIGHUP); Windows = independent
-    // process. windowsHide keeps the detached Windows child from opening a console.
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  child.unref()
+  const serveArgv = [process.execPath, script, 'serve', '--data-dir', dataDir]
+  if (process.platform === 'win32') {
+    await spawnDaemonWindows(serveArgv)
+  } else {
+    const child = spawn(process.execPath, serveArgv.slice(1), {
+      // detached = setsid: escape the caller's SIGHUP when the SSH session ends.
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+  }
 
   const deadline = Date.now() + START_TIMEOUT_MS
   for (;;) {
@@ -244,23 +303,57 @@ async function checkDaemon(dataDir: string): Promise<void> {
   printInfo(info)
 }
 
+export type KillSpawner = (command: string, args: readonly string[]) => Promise<void>
+
+/** Spawn and swallow the result — a tree-kill of an already-gone pid is not an error. */
+export const defaultKillSpawner: KillSpawner = (command, args) =>
+  new Promise<void>((resolve) => {
+    const child = spawn(command, [...args], { shell: false, windowsHide: true })
+    child.on('error', () => resolve())
+    child.on('close', () => resolve())
+  })
+
+export function killProcessTree(
+  pid: number,
+  spawner: KillSpawner = defaultKillSpawner,
+): Promise<void> {
+  return spawner('taskkill', ['/pid', String(pid), '/t', '/f'])
+}
+
 async function stopDaemon(dataDir: string): Promise<void> {
   const info = await readServerInfo(dataDir)
   if (info && isAlive(info.pid)) {
-    try {
-      process.kill(info.pid, 'SIGTERM')
-    } catch {
-      // already gone
-    }
-    const deadline = Date.now() + STOP_TIMEOUT_MS
-    while (isAlive(info.pid) && Date.now() < deadline) {
-      await sleep(100)
-    }
-    if (isAlive(info.pid)) {
+    if (process.platform === 'win32') {
+      // process.kill maps to TerminateProcess on Windows and leaves the process
+      // tree (exthost/pty/agent) orphaned — taskkill /t kills the whole tree.
+      await killProcessTree(info.pid)
+      const deadline = Date.now() + STOP_TIMEOUT_MS
+      while (isAlive(info.pid) && Date.now() < deadline) {
+        await sleep(100)
+      }
+      if (isAlive(info.pid)) {
+        // No second-stage kill exists on Windows (taskkill /f already is one);
+        // leave a trace before the bookkeeping cleanup orphans the daemon.
+        process.stderr.write(
+          `warning: daemon pid ${info.pid} still alive after taskkill; cleaning bookkeeping files anyway\n`,
+        )
+      }
+    } else {
       try {
-        process.kill(info.pid, 'SIGKILL')
+        process.kill(info.pid, 'SIGTERM')
       } catch {
         // already gone
+      }
+      const deadline = Date.now() + STOP_TIMEOUT_MS
+      while (isAlive(info.pid) && Date.now() < deadline) {
+        await sleep(100)
+      }
+      if (isAlive(info.pid)) {
+        try {
+          process.kill(info.pid, 'SIGKILL')
+        } catch {
+          // already gone
+        }
       }
     }
   }
@@ -362,4 +455,6 @@ async function main(): Promise<void> {
   }
 }
 
-void main()
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  void main()
+}

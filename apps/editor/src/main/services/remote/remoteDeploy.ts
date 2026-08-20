@@ -6,6 +6,19 @@
  *  lives at `~/.universe-editor-server/<version>/` on the remote host; `~` is
  *  expanded remotely. All functions log liberally — this chain is the lifeline for
  *  WSL/real-machine debugging.
+ *
+ *  Windows remotes: the sshd default shell may be cmd.exe or PowerShell 5.1, so
+ *  every Windows command is a single `cmd /d /s /c "<body>"` string whose body
+ *  contains no double quotes, no `$` and no backticks (PowerShell would expand
+ *  the latter two inside its double quotes). git-bash/MSYS as DefaultShell is
+ *  rejected at probe time: its runtime rewrites `/d /s /c` argv entries into
+ *  drive paths when spawning cmd.exe (vscode remote-ssh shares this limit).
+ *  Every body starts with `cd /d %USERPROFILE%` — the session cwd is NOT
+ *  reliably the home directory (Win32-OpenSSH starts admin users in System32) —
+ *  and all paths stay relative to it under `.universe-editor-server` (never `~`,
+ *  which cmd/powershell leave literal; never absolute, which would need quotes
+ *  when the profile path has spaces). scp targets use bare filenames:
+ *  sftp-server starts in the profile dir independent of the shell rule above.
  *--------------------------------------------------------------------------------------------*/
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -31,12 +44,13 @@ const DATA_DIR = '~/.universe-editor-server'
 const DEFAULT_SERVER_VERSION = '0.0.0'
 const DAEMON_INFO_PREFIX = 'UNIVERSE_REMOTE_DAEMON_INFO='
 const BUNDLE_HASH_PREFIX = 'UNIVERSE_REMOTE_BUNDLE_HASH='
-const BUNDLE_HASH_FILE = 'bundle.hash'
 // Reserved exit code for "node not on the remote PATH" — kept clear of the shell
 // codes the probe collides with (127 command-not-found, 3 check not-running, 2/1).
 const NODE_MISSING_EXIT_CODE = 40
 export const NODE_RUNTIME_VERSION = '24.19.0'
 const NODE_RUNTIME_DIR = `$HOME/.universe-editor-server/node/v${NODE_RUNTIME_VERSION}`
+const WINDOWS_DATA_DIR = '.universe-editor-server'
+const WINDOWS_NODE_DIR = `${WINDOWS_DATA_DIR}\\node\\v${NODE_RUNTIME_VERSION}`
 const SSH_BATCH_MODE = 'BatchMode=yes'
 const SSH_STRICT_HOST_KEY = 'StrictHostKeyChecking=accept-new'
 
@@ -167,17 +181,10 @@ export function buildDeployScriptBody(
   bundleHash: string,
 ): string {
   const dir = `${DATA_DIR}/${version}`
-  // Vendored ACP agents ship without node_modules (client-platform binaries must
-  // not cross the wire); `npm ci --omit=dev --omit=optional` in each vendor dir
-  // resolves the remote host's own platform packages. `--omit=optional` skips the
-  // native agent binaries (claude's @anthropic-ai/claude-agent-sdk-* / codex's
-  // @openai/codex platform packages, ~500MB total) — those are now downloaded on
-  // demand by the AgentBinary channel instead of being pulled in by npm.
-  const vendorInstall = `for v in vendor/claude-agent-acp vendor/codex-acp; do if [ -d "$v" ]; then (cd "$v" && npm ci --omit=dev --omit=optional --no-audit --no-fund); fi; done`
-  // The bundle.hash marker is written only after npm install + vendor install
-  // both succeed: a mid-install failure must not leave a "complete install"
-  // marker that would later make `check` skip the redeploy.
-  return `${nodePathPrelude()}mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && cd ${dir} && npm install --omit=dev --no-audit --no-fund && ${vendorInstall} && printf %s "${bundleHash}" > ${BUNDLE_HASH_FILE} && rm /tmp/${tmpName}`
+  // Dependency install (npm install + vendor npm ci + the bundle.hash success
+  // marker) lives in the bundled install.js — the single source shared with the
+  // Windows deploy path.
+  return `${nodePathPrelude()}mkdir -p ${dir} && tar xzf /tmp/${tmpName} -C ${dir} && node ${dir}/install.js --bundle-hash ${bundleHash} && rm /tmp/${tmpName}`
 }
 
 export function buildDeployRemoteScript(
@@ -188,29 +195,71 @@ export function buildDeployRemoteScript(
   return `sh -c '${buildDeployScriptBody(version, tmpName, bundleHash)}'`
 }
 
+// ------------------------- Windows command family -------------------------
+
+export type RemotePlatform = 'posix' | 'windows'
+
+export type WindowsNodeArch = 'x64' | 'arm64'
+
+type ResolvedRemotePlatform =
+  | { readonly platform: 'posix'; readonly uname: string }
+  | { readonly platform: 'windows'; readonly arch: WindowsNodeArch }
+
+/**
+ * `cd /d %USERPROFILE%` pins the cwd (cmd's `cd` takes the rest of the segment
+ * verbatim, so a profile path with spaces needs no quotes), then tail-appends
+ * the private node runtime to PATH. `%USERPROFILE%` (not `%CD%`) in the PATH
+ * entry: cmd expands the whole line before the `cd` runs.
+ */
+function windowsPathPrelude(): string {
+  return `cd /d %USERPROFILE%&set PATH=%PATH%;%USERPROFILE%\\${WINDOWS_NODE_DIR}&`
+}
+
+export function buildWindowsCheckCommand(version: string): string {
+  return `cmd /d /s /c "${windowsPathPrelude()}(where node >nul 2>&1||exit /b ${NODE_MISSING_EXIT_CODE})&node ${WINDOWS_DATA_DIR}\\${version}\\bootstrap.js check"`
+}
+
+export function buildWindowsStartCommand(version: string): string {
+  return `cmd /d /s /c "${windowsPathPrelude()}node ${WINDOWS_DATA_DIR}\\${version}\\bootstrap.js start"`
+}
+
+export function buildWindowsStopCommand(version: string): string {
+  return `cmd /d /s /c "${windowsPathPrelude()}node ${WINDOWS_DATA_DIR}\\${version}\\bootstrap.js stop"`
+}
+
+export function buildWindowsNodeInstallCommand(zipName: string): string {
+  const tmp = `${WINDOWS_NODE_DIR}.tmp`
+  const tar = '%SystemRoot%\\System32\\tar.exe'
+  return `cmd /d /s /c "cd /d %USERPROFILE%&(rmdir /s /q ${tmp} 2>nul)&(mkdir ${tmp} 2>nul)&${tar} -xf ${zipName} --strip-components=1 -C ${tmp}&&(rmdir /s /q ${WINDOWS_NODE_DIR} 2>nul)&move /y ${tmp} ${WINDOWS_NODE_DIR} >nul&&del ${zipName}&&${WINDOWS_NODE_DIR}\\node.exe --version"`
+}
+
+export function buildWindowsDeployCommand(
+  version: string,
+  tgzName: string,
+  bundleHash: string,
+): string {
+  const dir = `${WINDOWS_DATA_DIR}\\${version}`
+  const tar = '%SystemRoot%\\System32\\tar.exe'
+  return `cmd /d /s /c "cd /d %USERPROFILE%&(rmdir /s /q ${dir} 2>nul)&mkdir ${dir}&&${tar} -xzf ${tgzName} -C ${dir}&&del ${tgzName}&&set PATH=%PATH%;%USERPROFILE%\\${WINDOWS_NODE_DIR}&node ${dir}\\install.js --bundle-hash ${bundleHash}"`
+}
+
 // ------------------------- node runtime provisioning -------------------------
 
 export type NodeArtifactResolution =
   | { readonly platformKey: string; readonly fileName: string }
-  | { readonly error: string; readonly unsupportedHost?: true }
-
-/** A host we will never be able to run the remote server on (e.g. Windows) — the "install Node manually" advice does not apply. */
-export class UnsupportedRemoteHostError extends Error {}
-
-const WINDOWS_HOST_GUIDANCE =
-  'Windows hosts are not supported as SSH remotes — only Linux and macOS. To work on the local machine use "Connect to WSL" instead.'
+  | { readonly error: string }
 
 export function buildUnameCommand(): string {
   return 'uname -sm; (ldd --version 2>&1 || true) | head -n 1'
 }
 
 /**
- * `%OS%` expands to `Windows_NT` under cmd.exe but stays literal under a POSIX
- * shell — run after a failed uname probe to tell a Windows remote (whose sshd
- * default shell is cmd.exe) apart from a genuinely broken POSIX shell.
+ * `%OS%`/`%PROCESSOR_ARCHITECTURE%` expand under cmd.exe (and via cmd.exe when
+ * PowerShell is the sshd shell) but stay literal under a POSIX shell — run after
+ * a failed uname probe to tell a Windows remote apart from a broken POSIX shell.
  */
-export function buildWindowsShellProbeCommand(): string {
-  return 'echo %OS%'
+export function buildWindowsProbeCommand(): string {
+  return 'cmd /d /s /c "echo UNIVERSE_REMOTE_OS=%OS%.%PROCESSOR_ARCHITECTURE%"'
 }
 
 /** Map `uname -sm` + the first `ldd --version` line to a Node.js dist filename. */
@@ -228,12 +277,6 @@ export function resolveNodeArtifact(output: string): NodeArtifactResolution {
     }
   }
   const [os, machine] = uname.split(/\s+/)
-  if (os !== undefined && /^(Windows_NT|MINGW|MSYS|CYGWIN)/i.test(os)) {
-    return {
-      error: `the remote host is Windows ('${uname}'). ${WINDOWS_HOST_GUIDANCE}`,
-      unsupportedHost: true,
-    }
-  }
   let platformKey: string | undefined
   if (os === 'Linux') {
     if (machine === 'x86_64') platformKey = 'linux-x64'
@@ -249,6 +292,26 @@ export function resolveNodeArtifact(output: string): NodeArtifactResolution {
     }
   }
   return { platformKey, fileName: `node-v${NODE_RUNTIME_VERSION}-${platformKey}.tar.gz` }
+}
+
+export function resolveWindowsNodeArtifact(arch: WindowsNodeArch): {
+  readonly platformKey: 'win-x64' | 'win-arm64'
+  readonly fileName: string
+} {
+  const platformKey = arch === 'arm64' ? 'win-arm64' : 'win-x64'
+  return { platformKey, fileName: `node-v${NODE_RUNTIME_VERSION}-${platformKey}.zip` }
+}
+
+function windowsArchFromProbe(processorArch: string): WindowsNodeArch {
+  const arch = processorArch.toUpperCase()
+  if (arch === 'AMD64') return 'x64'
+  if (arch === 'ARM64') return 'arm64'
+  if (arch === 'x86') {
+    throw new Error(
+      'the remote host is 32-bit Windows (x86), which is not supported. Use a 64-bit Windows host and reconnect.',
+    )
+  }
+  throw new Error(`unsupported Windows architecture '${processorArch}' on the remote host`)
 }
 
 export type NodeArchiveFetcher = (
@@ -692,6 +755,7 @@ export class RemoteDeployer {
   private readonly _logger: ILogger
   private readonly _bundleDir: string | undefined
   private readonly _nodeArchiveFetcher: NodeArchiveFetcher
+  private readonly _platformCache = new Map<string, ResolvedRemotePlatform>()
 
   constructor(options: RemoteDeployerOptions = {}) {
     this._runner = options.runner ?? defaultRemoteRunner
@@ -716,21 +780,65 @@ export class RemoteDeployer {
     }
   }
 
+  private async _ensurePlatform(authority: string): Promise<ResolvedRemotePlatform> {
+    const cached = this._platformCache.get(authority)
+    if (cached) return cached
+    const unameResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()))
+    let resolved: ResolvedRemotePlatform
+    if (unameResult.code === 0) {
+      const uname = unameResult.stdout.split('\n')[0]?.trim() ?? ''
+      const [os] = uname.split(/\s+/)
+      if (os !== undefined && /^(MINGW|MSYS|CYGWIN)/i.test(os)) {
+        // A Windows host whose sshd DefaultShell is git-bash/MSYS: bash's MSYS
+        // runtime rewrites `/d /s /c` argv entries into drive paths (D:/ S:/ C:/)
+        // when spawning cmd.exe, so no single command string works under all
+        // three shells. vscode remote-ssh has the same restriction.
+        throw new Error(
+          `the remote Windows host's ssh shell is git-bash/MSYS ('${uname}'), which is not supported. ` +
+            'Set the OpenSSH DefaultShell to cmd.exe or PowerShell on the remote host ' +
+            '(registry key HKLM\\SOFTWARE\\OpenSSH, value DefaultShell) and reconnect.',
+        )
+      }
+      resolved = { platform: 'posix', uname: unameResult.stdout }
+      this._logger.info(`[remote:${authority}] remote platform 'posix' (probe: uname '${uname}')`)
+    } else {
+      const probe = await this._runner('ssh', sshCommandArgs(authority, buildWindowsProbeCommand()))
+      const match = /UNIVERSE_REMOTE_OS=Windows_NT\.(\S+)/.exec(probe.stdout)
+      if (match?.[1]) {
+        const arch = windowsArchFromProbe(match[1])
+        resolved = { platform: 'windows', arch }
+        this._logger.info(
+          `[remote:${authority}] remote platform 'windows-${arch}' (probe: ${match[1]})`,
+        )
+      } else {
+        throw new Error(
+          `failed to probe remote platform: ${unameResult.stderr.trim() || unameResult.spawnError || `exit ${unameResult.code}`}`,
+        )
+      }
+    }
+    this._platformCache.set(authority, resolved)
+    return resolved
+  }
+
   async checkRemoteServer(authority: string): Promise<RemoteCheckResult> {
-    const result = await this._runner(
-      'ssh',
-      sshCommandArgs(authority, buildCheckCommand(this._serverVersion)),
-    )
+    const platform = await this._ensurePlatform(authority)
+    const command =
+      platform.platform === 'windows'
+        ? buildWindowsCheckCommand(this._serverVersion)
+        : buildCheckCommand(this._serverVersion)
+    const result = await this._runner('ssh', sshCommandArgs(authority, command))
     return classifyCheckResult(result, 'ssh')
   }
 
   async startRemoteDaemon(authority: string): Promise<IRemoteDaemonInfo> {
+    const platform = await this._ensurePlatform(authority)
     const startedAt = Date.now()
     this._logger.info(`[remote:${authority}] starting remote daemon`)
-    const result = await this._runner(
-      'ssh',
-      sshCommandArgs(authority, buildStartCommand(this._serverVersion)),
-    )
+    const command =
+      platform.platform === 'windows'
+        ? buildWindowsStartCommand(this._serverVersion)
+        : buildStartCommand(this._serverVersion)
+    const result = await this._runner('ssh', sshCommandArgs(authority, command))
     const info = parseDaemonInfoLine(result.stdout)
     if (!info) {
       throw new Error(
@@ -745,11 +853,13 @@ export class RemoteDeployer {
   }
 
   async stopRemoteDaemon(authority: string): Promise<void> {
+    const platform = await this._ensurePlatform(authority)
     this._logger.info(`[remote:${authority}] stopping remote daemon`)
-    const result = await this._runner(
-      'ssh',
-      sshCommandArgs(authority, buildStopCommand(this._serverVersion)),
-    )
+    const command =
+      platform.platform === 'windows'
+        ? buildWindowsStopCommand(this._serverVersion)
+        : buildStopCommand(this._serverVersion)
+    const result = await this._runner('ssh', sshCommandArgs(authority, command))
     if (result.code !== 0) {
       this._logger.warn(
         `[remote:${authority}] stop daemon returned exit ${result.code ?? result.signal}: ${result.stderr.trim()}`,
@@ -765,12 +875,13 @@ export class RemoteDeployer {
     onPhase?: (phase: RemoteDeployPhase) => void,
   ): Promise<void> {
     const log = logger ?? this._logger
+    const platform = await this._ensurePlatform(authority)
     const startedAt = Date.now()
     const bundleDir = this._bundleDir ?? resolveRemoteServerBundleDir()
     const bundleHash = computeBundleHash(bundleDir)
     const tmpName = `universe-server-${randomBytes(6).toString('hex')}.tgz`
     const localTgz = join(tmpdir(), tmpName)
-    const remoteTgz = `/tmp/${tmpName}`
+    const remoteTgz = platform.platform === 'windows' ? tmpName : `/tmp/${tmpName}`
     log.info(`[remote:${authority}] deploying bundle ${bundleDir} as v${this._serverVersion}`)
     try {
       onPhase?.('uploading')
@@ -801,14 +912,13 @@ export class RemoteDeployer {
       log.info(`[remote:${authority}] bundle uploaded in ${Date.now() - scpStarted}ms`)
       onPhase?.('installing')
       const installStarted = Date.now()
-      const installResult = await this._runner(
-        'ssh',
-        sshCommandArgs(
-          authority,
-          buildDeployRemoteScript(this._serverVersion, tmpName, bundleHash),
-        ),
-        { timeoutMs: 1_800_000 },
-      )
+      const installCommand =
+        platform.platform === 'windows'
+          ? buildWindowsDeployCommand(this._serverVersion, tmpName, bundleHash)
+          : buildDeployRemoteScript(this._serverVersion, tmpName, bundleHash)
+      const installResult = await this._runner('ssh', sshCommandArgs(authority, installCommand), {
+        timeoutMs: 1_800_000,
+      })
       if (installResult.code !== 0) {
         throw new Error(
           `remote install failed: ${installResult.stderr.trim() || installResult.spawnError || `exit ${installResult.code}`}`,
@@ -827,31 +937,25 @@ export class RemoteDeployer {
 
   async provisionNodeRuntime(authority: string, logger?: ILogger): Promise<void> {
     const log = logger ?? this._logger
+    const platform = await this._ensurePlatform(authority)
+    if (platform.platform === 'windows') {
+      await this._provisionNodeRuntimeWindows(authority, platform.arch, log)
+    } else {
+      await this._provisionNodeRuntimePosix(authority, platform.uname, log)
+    }
+  }
+
+  private async _provisionNodeRuntimePosix(
+    authority: string,
+    uname: string,
+    log: ILogger,
+  ): Promise<void> {
     const startedAt = Date.now()
     log.info(
       `[remote:${authority}] Node.js missing; provisioning private runtime v${NODE_RUNTIME_VERSION}`,
     )
-    const probeResult = await this._runner('ssh', sshCommandArgs(authority, buildUnameCommand()))
-    if (probeResult.code !== 0) {
-      const osProbe = await this._runner(
-        'ssh',
-        sshCommandArgs(authority, buildWindowsShellProbeCommand()),
-      )
-      if (/\bWindows_NT\b/.test(osProbe.stdout)) {
-        throw new UnsupportedRemoteHostError(
-          `the remote host '${authority}' appears to be Windows (its SSH shell is cmd.exe). ${WINDOWS_HOST_GUIDANCE}`,
-        )
-      }
-      throw new Error(
-        `failed to probe remote platform: ${probeResult.stderr.trim() || probeResult.spawnError || `exit ${probeResult.code}`}`,
-      )
-    }
-    const resolution = resolveNodeArtifact(probeResult.stdout)
-    if ('error' in resolution) {
-      throw resolution.unsupportedHost
-        ? new UnsupportedRemoteHostError(resolution.error)
-        : new Error(resolution.error)
-    }
+    const resolution = resolveNodeArtifact(uname)
+    if ('error' in resolution) throw new Error(resolution.error)
     log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
     const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.tar.gz`
     const localTgz = join(tmpdir(), tmpName)
@@ -891,6 +995,60 @@ export class RemoteDeployer {
     } finally {
       try {
         rmSync(localTgz, { force: true })
+      } catch {
+        // best effort cleanup
+      }
+    }
+  }
+
+  private async _provisionNodeRuntimeWindows(
+    authority: string,
+    arch: WindowsNodeArch,
+    log: ILogger,
+  ): Promise<void> {
+    const startedAt = Date.now()
+    log.info(
+      `[remote:${authority}] Node.js missing; provisioning private runtime v${NODE_RUNTIME_VERSION}`,
+    )
+    const resolution = resolveWindowsNodeArtifact(arch)
+    log.info(`[remote:${authority}] remote platform '${resolution.platformKey}'`)
+    const tmpName = `node-runtime-${randomBytes(6).toString('hex')}.zip`
+    const localZip = join(tmpdir(), tmpName)
+    try {
+      await downloadNodeArchive(resolution.fileName, localZip, log, this._nodeArchiveFetcher)
+      const scpStarted = Date.now()
+      const scpResult = await this._runner(
+        'scp',
+        scpArgs(authority, tmpName, `${destination(authority)}:${tmpName}`),
+        { cwd: tmpdir() },
+      )
+      if (scpResult.code !== 0) {
+        throw new Error(
+          `scp failed: ${scpResult.stderr.trim() || scpResult.spawnError || `exit ${scpResult.code}`}`,
+        )
+      }
+      log.info(`[remote:${authority}] node runtime uploaded in ${Date.now() - scpStarted}ms`)
+      const installStarted = Date.now()
+      const installResult = await this._runner(
+        'ssh',
+        sshCommandArgs(authority, buildWindowsNodeInstallCommand(tmpName)),
+        { timeoutMs: 300_000 },
+      )
+      if (installResult.code !== 0) {
+        throw new Error(
+          `remote node install failed: ${installResult.stderr.trim() || installResult.spawnError || `exit ${installResult.code}`}`,
+        )
+      }
+      if (!installResult.stdout.includes(`v${NODE_RUNTIME_VERSION}`)) {
+        throw new Error(
+          `remote node install self-check failed: ${installResult.stdout.trim() || '(no output)'}`,
+        )
+      }
+      log.info(`[remote:${authority}] node runtime installed in ${Date.now() - installStarted}ms`)
+      log.info(`[remote:${authority}] node runtime provisioned in ${Date.now() - startedAt}ms`)
+    } finally {
+      try {
+        rmSync(localZip, { force: true })
       } catch {
         // best effort cleanup
       }

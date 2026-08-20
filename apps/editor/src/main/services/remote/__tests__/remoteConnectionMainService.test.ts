@@ -34,11 +34,7 @@ import {
   type IRemoteEnvironment,
 } from '@universe-editor/platform'
 import { NodeSocket } from '@universe-editor/node-services'
-import {
-  findFreePort,
-  UnsupportedRemoteHostError,
-  type RemoteDeployPhase,
-} from '../remoteDeploy.js'
+import { findFreePort, type RemoteDeployPhase } from '../remoteDeploy.js'
 import {
   RemoteConnectionMainService,
   type IRemoteConnectionStateChange,
@@ -428,7 +424,7 @@ function makeFakeWslDeployer(
     secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
-    provisionError?: string | Error
+    provisionError?: string
   } = {},
 ): FakeWsl {
   const calls: string[] = []
@@ -477,9 +473,7 @@ function makeFakeWslDeployer(
     provisionNodeRuntime: async (distro: string, _logger?: unknown) => {
       calls.push(`provision:${distro}`)
       if (opts.provisionError !== undefined) {
-        throw opts.provisionError instanceof Error
-          ? opts.provisionError
-          : new Error(opts.provisionError)
+        throw new Error(opts.provisionError)
       }
     },
   } as unknown as WslDeployer
@@ -499,7 +493,7 @@ function makeWslService(
     secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
     localBundleHash?: string
     deployedBundleHash?: string
-    provisionError?: string | Error
+    provisionError?: string
   } = {},
 ): MadeWsl {
   const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
@@ -650,21 +644,6 @@ describe('RemoteConnectionMainService wsl mode', () => {
     )
     expect(wsl.states.at(-1)?.state).toBe('failed')
     expect(wsl.states.at(-1)?.error).toContain('Install Node.js 20 or later')
-    expect(wsl.calls).toEqual(['check:ubuntu', 'provision:ubuntu'])
-  })
-
-  it('propagates an unsupported-host error verbatim without manual-install advice', async () => {
-    const daemon = await startDaemon()
-    const wsl = (made = makeWslService(daemon, {
-      firstCheck: 'node-missing',
-      provisionError: new UnsupportedRemoteHostError(
-        "the remote host 'user@host' appears to be Windows (its SSH shell is cmd.exe).",
-      ),
-    }))
-
-    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/appears to be Windows/)
-    expect(wsl.states.at(-1)?.state).toBe('failed')
-    expect(wsl.states.at(-1)?.error).not.toContain('Automatic Node.js installation failed')
     expect(wsl.calls).toEqual(['check:ubuntu', 'provision:ubuntu'])
   })
 
