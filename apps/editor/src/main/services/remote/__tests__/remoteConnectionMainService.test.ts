@@ -420,11 +420,13 @@ interface FakeWsl {
 function makeFakeWslDeployer(
   daemon: FakeDaemon,
   opts: {
-    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
-    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
+    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
+    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
     localBundleHash?: string
     deployedBundleHash?: string
     provisionError?: string
+    runningProtocolVersion?: number
+    startError?: string
   } = {},
 ): FakeWsl {
   const calls: string[] = []
@@ -433,9 +435,10 @@ function makeFakeWslDeployer(
     ...(opts.secondCheck !== undefined ? [opts.secondCheck] : []),
   ]
   let checkIndex = 0
+  let startError = opts.startError
   const info = (): unknown => ({
     serverVersion: '0.0.0',
-    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    protocolVersion: opts.runningProtocolVersion ?? REMOTE_PROTOCOL_VERSION,
     port: daemon.port,
     token: daemon.token,
     pid: 1,
@@ -452,10 +455,16 @@ function makeFakeWslDeployer(
       if (next === 'node-missing') return { state: 'node-missing' }
       if (next === 'not-deployed') return { state: 'not-deployed', reason: 'missing' }
       if (next === 'not-running') return { state: 'not-running', ...hashField() }
+      if (next === 'stale') return { state: 'stale', ...hashField() }
       return { state: 'running', info: info(), ...hashField() }
     },
     startRemoteDaemon: async (distro: string) => {
       calls.push(`start:${distro}`)
+      if (startError !== undefined) {
+        const err = new Error(startError)
+        startError = undefined
+        throw err
+      }
       return info()
     },
     stopRemoteDaemon: async (distro: string) => {
@@ -489,11 +498,13 @@ interface MadeWsl {
 function makeWslService(
   daemon: FakeDaemon,
   opts: {
-    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing'
-    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing'
+    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
+    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
     localBundleHash?: string
     deployedBundleHash?: string
     provisionError?: string
+    runningProtocolVersion?: number
+    startError?: string
   } = {},
 ): MadeWsl {
   const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
@@ -606,13 +617,122 @@ describe('RemoteConnectionMainService wsl mode', () => {
     expect(wsl.calls).toEqual(['check:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
   })
 
+  it('stop → deploy → start when the running daemon reports an old protocol version', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      runningProtocolVersion: REMOTE_PROTOCOL_VERSION - 1,
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
+  it('stop → deploy → start when the check reports a stale daemon and a different hash', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'stale',
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'ffffffffffffffff',
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu', 'deploy:ubuntu', 'start:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
+  it('stop → start (no redeploy) when the stale daemon sits on a current bundle', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'stale',
+      localBundleHash: 'aaaabbbbccccdddd',
+      deployedBundleHash: 'aaaabbbbccccdddd',
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'stop:ubuntu', 'start:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
+  it('recovers with a stop → start retry when start hits an already-running daemon', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      startError: "failed to start WSL daemon in 'ubuntu': already running (pid 5)",
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual(['check:ubuntu', 'start:ubuntu', 'stop:ubuntu', 'start:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
+  it('recovers with a stop → start retry when a fresh deploy start hits a stale daemon', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-deployed',
+      startError:
+        "failed to start WSL daemon in 'ubuntu': error: stale daemon already running (pid 5, protocol 5 != 6)",
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    expect(wsl.calls).toEqual([
+      'check:ubuntu',
+      'deploy:ubuntu',
+      'start:ubuntu',
+      'stop:ubuntu',
+      'start:ubuntu',
+    ])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
+  it('propagates a non-stale start failure without a recovery stop', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      startError: "failed to start WSL daemon in 'ubuntu': timed out waiting for server.json",
+    }))
+
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/timed out waiting/)
+    expect(wsl.calls).toEqual(['check:ubuntu', 'start:ubuntu'])
+    expect(wsl.states.at(-1)?.state).toBe('failed')
+  })
+
+  it('self-heals once on a handshake versionMismatch by stopping and re-bringing-up', async () => {
+    const daemon = await startDaemon()
+    let handshakes = 0
+    daemon.handshakeResponse = () => {
+      handshakes++
+      return handshakes === 1
+        ? {
+            type: 'error',
+            code: RemoteConnectionErrorCode.VersionMismatch,
+            message: 'protocol version 6 != 5',
+          }
+        : { type: 'ok' }
+    }
+    const wsl = (made = makeWslService(daemon, {
+      firstCheck: 'not-running',
+      secondCheck: 'not-running',
+    }))
+
+    const conn = await wsl.svc.getConnection('wsl+ubuntu')
+    expect(conn.authority).toBe('wsl+ubuntu')
+    expect(wsl.calls).toEqual([
+      'check:ubuntu',
+      'start:ubuntu',
+      'stop:ubuntu',
+      'check:ubuntu',
+      'start:ubuntu',
+    ])
+    expect(wsl.states.at(-1)?.state).toBe('connected')
+  })
+
   it('auto-installs a private node runtime then deploys and connects', async () => {
     const daemon = await startDaemon()
     const wsl = (made = makeWslService(daemon, {
       firstCheck: 'node-missing',
       secondCheck: 'not-deployed',
     }))
-
     const conn = await wsl.svc.getConnection('wsl+ubuntu')
     expect(conn.authority).toBe('wsl+ubuntu')
     expect(wsl.calls).toEqual([

@@ -687,6 +687,7 @@ export type RemoteCheckResult =
       readonly deployedBundleHash?: string
     }
   | { readonly state: 'not-running'; readonly deployedBundleHash?: string }
+  | { readonly state: 'stale'; readonly deployedBundleHash?: string }
   | { readonly state: 'not-deployed'; readonly reason: string }
   | { readonly state: 'node-missing' }
   | { readonly state: 'error'; readonly message: string }
@@ -706,11 +707,21 @@ export function classifyCheckResult(result: RemoteRunResult, transport: string):
       ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
     }
   if (result.spawnError) return { state: 'not-deployed', reason: result.spawnError }
-  if (result.code === 3)
+  if (result.code === 3) {
+    // bootstrap check exits 3 with a `version-mismatch: ...` stderr line when a
+    // LIVE daemon from an older editor version owns the shared server.json —
+    // distinct from a plain not-running daemon: it must be stopped before start.
+    if (/version-mismatch/.test(result.stderr)) {
+      return {
+        state: 'stale',
+        ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
+      }
+    }
     return {
       state: 'not-running',
       ...(deployedBundleHash !== undefined ? { deployedBundleHash } : {}),
     }
+  }
   if (result.code === NODE_MISSING_EXIT_CODE) return { state: 'node-missing' }
   if (
     result.code === 127 ||

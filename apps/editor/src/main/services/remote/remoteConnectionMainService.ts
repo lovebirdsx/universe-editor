@@ -523,25 +523,56 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
   }
 
   private async _bringUp(entry: ConnectionEntry): Promise<IRemoteConnection> {
-    try {
-      this._logger.info(`[remote:${entry.authority}] bring-up via ${entry.transport}`)
-      const connection =
-        entry.transport === 'direct'
-          ? await this._bringUpDirect(entry)
-          : entry.transport === 'wsl'
-            ? await this._bringUpViaWsl(entry)
-            : await this._bringUpViaSsh(entry)
-      entry.connection = connection
-      this._bindProxyRecords(entry)
-      this._fireState(entry, 'connected')
-      return connection
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      this._logger.error(`[remote:${entry.authority}] bring-up failed: ${message}`)
-      this._teardownConnection(entry)
-      this._teardownDirect(entry)
-      this._fireState(entry, 'failed', message)
-      throw err
+    let repaired = false
+    for (;;) {
+      try {
+        this._logger.info(`[remote:${entry.authority}] bring-up via ${entry.transport}`)
+        const connection =
+          entry.transport === 'direct'
+            ? await this._bringUpDirect(entry)
+            : entry.transport === 'wsl'
+              ? await this._bringUpViaWsl(entry)
+              : await this._bringUpViaSsh(entry)
+        entry.connection = connection
+        this._bindProxyRecords(entry)
+        this._fireState(entry, 'connected')
+        return connection
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const code = (err as Partial<RemoteHandshakeError>).code
+        if (
+          !repaired &&
+          entry.transport !== 'direct' &&
+          code === RemoteConnectionErrorCode.VersionMismatch
+        ) {
+          // The daemon rejected the TCP handshake: a live daemon from an older
+          // editor version slipped past the pre-check. Stop it once and re-run
+          // bring-up — the second _ensureDaemon sees a not-running/stale daemon
+          // and walks the normal repair path.
+          repaired = true
+          this._logger.warn(
+            `[remote:${entry.authority}] handshake version mismatch; stopping the remote daemon and re-bringing-up once: ${message}`,
+          )
+          this._teardownConnection(entry)
+          this._teardownDirect(entry)
+          const orchestrator = entry.transport === 'wsl' ? this._getWslDeployer() : this._deployer
+          const target =
+            entry.transport === 'wsl' ? wslDistroFromAuthority(entry.authority) : entry.authority
+          await orchestrator.stopRemoteDaemon(target).catch((stopErr: unknown) => {
+            this._logger.warn(
+              `[remote:${entry.authority}] recovery stop failed: ${
+                stopErr instanceof Error ? stopErr.message : String(stopErr)
+              }`,
+            )
+          })
+          continue
+        }
+        this._logger.error(`[remote:${entry.authority}] bring-up failed: ${message}`)
+        this._teardownConnection(entry)
+        this._teardownDirect(entry)
+        this._fireState(entry, 'failed', message)
+        throw err
+      }
     }
   }
 
@@ -677,12 +708,15 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     }
     switch (check.state) {
       case 'running': {
+        const protocolMismatch = check.info.protocolVersion !== REMOTE_PROTOCOL_VERSION
         const versionMismatch = check.info.serverVersion !== orchestrator.serverVersion
         const staleHash = localHash !== undefined && check.deployedBundleHash !== localHash
-        if (versionMismatch || staleHash) {
-          const reason = versionMismatch
-            ? `version ${check.info.serverVersion} != local ${orchestrator.serverVersion}`
-            : `bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}`
+        if (protocolMismatch || versionMismatch || staleHash) {
+          const reason = protocolMismatch
+            ? `protocol ${check.info.protocolVersion} != local ${REMOTE_PROTOCOL_VERSION}`
+            : versionMismatch
+              ? `version ${check.info.serverVersion} != local ${orchestrator.serverVersion}`
+              : `bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}`
           this._logger.warn(`[remote:${authority}] daemon ${reason}; redeploying`)
           this._fireProgress(entry, 'stopping-old', 1, 4, true)
           await orchestrator.stopRemoteDaemon(target)
@@ -691,7 +725,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
             if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4, true)
           })
           this._fireProgress(entry, 'starting-daemon', 4, 4, true)
-          return orchestrator.startRemoteDaemon(target)
+          return this._startDaemonWithRecovery(entry, orchestrator, target)
         }
         this._logger.info(`[remote:${authority}] remote server up-to-date (running)`)
         return check.info
@@ -707,10 +741,31 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
             if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
           })
           this._fireProgress(entry, 'starting-daemon', 3, 3, true)
-          return orchestrator.startRemoteDaemon(target)
+          return this._startDaemonWithRecovery(entry, orchestrator, target)
         }
         this._fireProgress(entry, 'starting-daemon', 1, 1, false)
-        return orchestrator.startRemoteDaemon(target)
+        return this._startDaemonWithRecovery(entry, orchestrator, target)
+      }
+      case 'stale': {
+        const staleHash = localHash !== undefined && check.deployedBundleHash !== localHash
+        this._logger.warn(
+          `[remote:${authority}] stale daemon detected (protocol/version mismatch); stopping it`,
+        )
+        this._fireProgress(entry, 'stopping-old', 1, staleHash ? 4 : 2, true)
+        await orchestrator.stopRemoteDaemon(target)
+        if (staleHash) {
+          this._logger.info(
+            `[remote:${authority}] deployed bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}; redeploying`,
+          )
+          this._fireProgress(entry, 'uploading', 2, 4, true)
+          await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4, true)
+          })
+          this._fireProgress(entry, 'starting-daemon', 4, 4, true)
+        } else {
+          this._fireProgress(entry, 'starting-daemon', 2, 2, true)
+        }
+        return this._startDaemonWithRecovery(entry, orchestrator, target)
       }
       case 'not-deployed': {
         this._logger.info(`[remote:${authority}] not deployed (${check.reason}); deploying`)
@@ -719,7 +774,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
           if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
         })
         this._fireProgress(entry, 'starting-daemon', 3, 3, true)
-        return orchestrator.startRemoteDaemon(target)
+        return this._startDaemonWithRecovery(entry, orchestrator, target)
       }
       case 'node-missing': {
         this._logger.warn(
@@ -731,6 +786,38 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       }
       case 'error':
         throw new Error(`remote check failed for '${authority}': ${check.message}`)
+    }
+  }
+
+  /**
+   * Start the daemon, recovering from a live stale daemon that still owns the
+   * shared data-dir (daemon.lock + server.json): the server-side start refuses
+   * it with a "stale daemon already running" / "already running" error, so stop
+   * it once and retry. Non-occupancy failures propagate untouched.
+   */
+  private async _startDaemonWithRecovery(
+    entry: ConnectionEntry,
+    orchestrator: IRemoteServerOrchestrator,
+    target: string,
+  ): Promise<IRemoteDaemonInfo> {
+    try {
+      return await orchestrator.startRemoteDaemon(target)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!/stale|already running/i.test(message)) throw err
+      this._logger.warn(
+        `[remote:${entry.authority}] start hit a stale/occupied daemon; stopping it and retrying once: ${message}`,
+      )
+      try {
+        await orchestrator.stopRemoteDaemon(target)
+      } catch (stopErr) {
+        throw new Error(
+          `daemon start failed ('${message}') and the recovery stop also failed: ${
+            stopErr instanceof Error ? stopErr.message : String(stopErr)
+          }`,
+        )
+      }
+      return orchestrator.startRemoteDaemon(target)
     }
   }
 

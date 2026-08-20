@@ -266,6 +266,18 @@ async function startDaemon(dataDir: string): Promise<void> {
   for (;;) {
     const info = await readServerInfo(dataDir)
     if (info && isAlive(info.pid)) {
+      // A daemon from an older editor version can still own the shared data-dir
+      // (daemon.lock + server.json): the spawned serve exits immediately, but the
+      // poll would happily report the stale info as success. Refuse it so the
+      // client can stop the old daemon and retry.
+      if (
+        info.protocolVersion !== REMOTE_PROTOCOL_VERSION ||
+        info.serverVersion !== SERVER_VERSION
+      ) {
+        throw new Error(
+          `stale daemon already running (pid ${info.pid}, protocol ${info.protocolVersion} != ${REMOTE_PROTOCOL_VERSION}, version ${info.serverVersion} != ${SERVER_VERSION}); stop it before starting a new daemon`,
+        )
+      }
       printInfo(info)
       return
     }

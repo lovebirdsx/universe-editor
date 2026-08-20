@@ -29,6 +29,15 @@ afterAll(async () => {
 })
 
 afterEach(async () => {
+  // `start` spawns the serve detached (WMI on Windows, detached+unref on posix)
+  // so it escapes the child-process tracking below; a serve that takes over a
+  // stale daemon.lock after the placeholder process is killed would otherwise
+  // leak past the suite. stop is version-agnostic (server.json pid + kill) and
+  // a success no-op when nothing runs.
+  const dirs = tempDirs.splice(0)
+  for (const dir of dirs) {
+    await runBootstrap(['stop'], dir)
+  }
   for (const child of trackedChildren.splice(0)) {
     try {
       child.kill('SIGKILL')
@@ -36,9 +45,7 @@ afterEach(async () => {
       // already gone
     }
   }
-  await Promise.all(
-    tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5 })),
-  )
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5 })))
 })
 
 async function makeTempDir(): Promise<string> {
@@ -117,6 +124,34 @@ function parseInfo(stdout: string): IRemoteDaemonInfo {
   const line = stdout.split('\n').find((l) => l.startsWith(INFO_PREFIX))
   if (!line) throw new Error(`no info line in stdout: ${stdout}`)
   return JSON.parse(line.slice(INFO_PREFIX.length)) as IRemoteDaemonInfo
+}
+
+function spawnPlaceholderProcess(): ChildProcess {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], {
+    stdio: 'ignore',
+  })
+  trackedChildren.push(child)
+  return child
+}
+
+async function writeStaleDaemonFiles(
+  dataDir: string,
+  overrides: Partial<IRemoteDaemonInfo>,
+): Promise<number> {
+  const child = spawnPlaceholderProcess()
+  const pid = child.pid
+  if (pid === undefined) throw new Error('placeholder process has no pid')
+  const info: IRemoteDaemonInfo = {
+    serverVersion: '0.0.0',
+    protocolVersion: REMOTE_PROTOCOL_VERSION,
+    port: 12345,
+    token: 'stale-token',
+    pid,
+    ...overrides,
+  }
+  await writeFile(path.join(dataDir, 'daemon.lock'), String(pid))
+  await writeFile(path.join(dataDir, 'server.json'), JSON.stringify(info))
+  return pid
 }
 
 describe('bootstrap subcommands', () => {
@@ -209,5 +244,29 @@ describe('bootstrap subcommands', () => {
     const stopped = await runBootstrap(['stop'], dataDir)
     expect(stopped.code).toBe(0)
     expect(isAlive(info.pid)).toBe(false)
+  }, 30_000)
+
+  it('start fails fast against a live daemon with a stale protocol version', async () => {
+    const dataDir = await makeTempDir()
+    const stalePid = await writeStaleDaemonFiles(dataDir, {
+      protocolVersion: REMOTE_PROTOCOL_VERSION - 1,
+    })
+
+    const started = await runBootstrap(['start'], dataDir)
+    expect(started.code).toBe(1)
+    expect(started.stderr).toContain('stale daemon already running')
+    expect(started.stderr).toContain(`protocol ${REMOTE_PROTOCOL_VERSION - 1}`)
+    expect(isAlive(stalePid)).toBe(true)
+  }, 30_000)
+
+  it('start fails fast against a live daemon with a mismatched server version', async () => {
+    const dataDir = await makeTempDir()
+    const stalePid = await writeStaleDaemonFiles(dataDir, { serverVersion: '9.9.9' })
+
+    const started = await runBootstrap(['start'], dataDir)
+    expect(started.code).toBe(1)
+    expect(started.stderr).toContain('stale daemon already running')
+    expect(started.stderr).toContain('9.9.9')
+    expect(isAlive(stalePid)).toBe(true)
   }, 30_000)
 })

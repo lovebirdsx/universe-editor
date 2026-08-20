@@ -300,6 +300,41 @@ describe('classifyCheckResult bundle hash', () => {
   })
 })
 
+describe('classifyCheckResult stale daemon', () => {
+  it('maps exit 3 with a version-mismatch stderr to stale, keeping the bundle hash', () => {
+    expect(
+      classifyCheckResult(
+        {
+          code: 3,
+          stdout: 'UNIVERSE_REMOTE_BUNDLE_HASH=abc\n',
+          stderr: 'version-mismatch: protocol version 5 != 6\n',
+        },
+        'wsl',
+      ),
+    ).toEqual({ state: 'stale', deployedBundleHash: 'abc' })
+
+    expect(
+      classifyCheckResult(
+        {
+          code: 3,
+          stdout: '',
+          stderr: 'version-mismatch: server version 0.1.70 != 0.13.0\n',
+        },
+        'ssh',
+      ),
+    ).toEqual({ state: 'stale' })
+  })
+
+  it('keeps plain exit 3 (not-running) when stderr has no version-mismatch marker', () => {
+    expect(
+      classifyCheckResult(
+        { code: 3, stdout: '', stderr: 'not-running: server pid 123 is not alive\n' },
+        'wsl',
+      ),
+    ).toEqual({ state: 'not-running' })
+  })
+})
+
 describe('classifyCheckResult node-missing and incomplete install', () => {
   it('maps exit 40 to node-missing', () => {
     expect(classifyCheckResult({ code: 40, stdout: '', stderr: '' }, 'ssh')).toEqual({
