@@ -63,14 +63,15 @@ describe('RecentWorkspacesMainService', () => {
     svc.dispose()
   })
 
-  it('caps recent list at 20 entries (LRU)', async () => {
+  it('keeps all entries in LRU order (no cap)', async () => {
     const svc = new RecentWorkspacesMainService(makeStorage())
     for (let i = 0; i < 25; i++) {
       await svc.add({ folder: URI.file(`/tmp/p${i}`), name: `p${i}` })
     }
     const recent = await svc.getRecent()
-    expect(recent.length).toBe(20)
+    expect(recent.length).toBe(25)
     expect(recent[0]?.folder.toString()).toBe(URI.file('/tmp/p24').toString())
+    expect(recent[24]?.folder.toString()).toBe(URI.file('/tmp/p0').toString())
     svc.dispose()
   })
 

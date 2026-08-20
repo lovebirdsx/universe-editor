@@ -23,7 +23,6 @@ import { IMainStorageService, type Storage } from '../../storage.js'
 import { normalizeRemoteUri } from '../remote/remoteUri.js'
 
 export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
-const MAX_RECENT = 20
 
 interface PersistedRecent {
   readonly folder: UriComponents
@@ -64,7 +63,6 @@ export class RecentWorkspacesMainService implements IDisposable {
           })
           .filter((r): r is IRecentWorkspace => r !== null)
           .sort((a, b) => b.lastOpened - a.lastOpened)
-          .slice(0, MAX_RECENT)
       }
       this._hydrated = true
       this._logger.debug(`hydrate recentWorkspaces count=${this._recent.length}`)
@@ -87,7 +85,7 @@ export class RecentWorkspacesMainService implements IDisposable {
       name: workspace.name,
       lastOpened: Date.now(),
     }
-    this._recent = [entry, ...filtered].slice(0, MAX_RECENT)
+    this._recent = [entry, ...filtered]
     this._onDidChangeRecent.fire(this._recent)
     await this._persist()
     this._logger.debug(`recentWorkspaces count=${this._recent.length}`)
