@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.13.2",
+    "date": "2026-08-20",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "gitignore忽略的资源在资源管理器与标签页变暗显示"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.1",
     "date": "2026-08-20",
     "groups": []
