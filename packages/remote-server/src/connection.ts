@@ -31,8 +31,8 @@ export interface ManagementConnectionOptions {
   readonly onSocketClose: (conn: ManagementConnection) => void
   /** Fake pty spawner for daemon integration tests. */
   readonly terminalSpawner?: PtySpawner
-  /** Root dir for downloaded native agent binaries (threaded from the daemon's dataDir). */
-  readonly agentBinaryDir?: string
+  /** Daemon data dir (`--data-dir`): threaded to host-scoped state paths. */
+  readonly dataDir?: string
 }
 
 export class ManagementConnection extends Disposable {
@@ -75,7 +75,7 @@ export class ManagementConnection extends Disposable {
       createRemoteServer(pair.server, opts.logger, {
         serverVersion: opts.serverVersion,
         ...(opts.terminalSpawner !== undefined ? { terminalSpawner: opts.terminalSpawner } : {}),
-        ...(opts.agentBinaryDir !== undefined ? { agentBinaryDir: opts.agentBinaryDir } : {}),
+        ...(opts.dataDir !== undefined ? { dataDir: opts.dataDir } : {}),
       }),
     )
 

@@ -9,7 +9,6 @@
 
 import { randomBytes } from 'node:crypto'
 import { createServer, type Server, type Socket as NetSocket } from 'node:net'
-import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   NullLogger,
@@ -214,9 +213,7 @@ export async function createDaemon(opts: DaemonOptions = {}): Promise<RunningDae
                   ...(opts.terminalSpawner !== undefined
                     ? { terminalSpawner: opts.terminalSpawner }
                     : {}),
-                  ...(opts.dataDir !== undefined
-                    ? { agentBinaryDir: join(opts.dataDir, 'agent-bin') }
-                    : {}),
+                  ...(opts.dataDir !== undefined ? { dataDir: opts.dataDir } : {}),
                 })
           entries.set(req.reconnectionToken, {
             conn,

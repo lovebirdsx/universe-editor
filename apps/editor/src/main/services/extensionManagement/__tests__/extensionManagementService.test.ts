@@ -10,11 +10,7 @@ import {
   ExtensionManagementMainService,
   type IManagementGallery,
 } from '../extensionManagementService.js'
-import {
-  deleteExtensionFolder,
-  sweepDeletedFolders,
-  writeInstalledRecords,
-} from '../installedExtensionsManifest.js'
+import { writeInstalledRecords } from '@universe-editor/node-services'
 
 const HOST_API = '0.1.0'
 
@@ -738,38 +734,5 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     const url = await svc2.getLocalIcon('acme.iterating')
     expect(url.startsWith('data:image/png;base64,')).toBe(true)
     svc2.dispose()
-  })
-})
-
-describe('deleteExtensionFolder / sweepDeletedFolders', () => {
-  let dir: string
-
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'ext-del-'))
-  })
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true })
-  })
-
-  it('renames-then-deletes a folder, leaving no residue', async () => {
-    const loc = 'acme.sample-1.0.0'
-    await mkdir(path.join(dir, loc, 'dist'), { recursive: true })
-    await writeFile(path.join(dir, loc, 'dist', 'extension.js'), 'x')
-
-    const ok = await deleteExtensionFolder(dir, loc)
-    expect(ok).toBe(true)
-    const remaining = await readdir(dir)
-    expect(remaining).toEqual([])
-  })
-
-  it('reports success when the folder is already gone', async () => {
-    expect(await deleteExtensionFolder(dir, 'not-here-1.0.0')).toBe(true)
-  })
-
-  it('sweeps leftover .vsctmp folders', async () => {
-    await mkdir(path.join(dir, 'acme.sample-1.0.0.abc123.vsctmp'), { recursive: true })
-    await mkdir(path.join(dir, 'keep-1.0.0'), { recursive: true })
-    await sweepDeletedFolders(dir)
-    expect((await readdir(dir)).sort()).toEqual(['keep-1.0.0'])
   })
 })

@@ -26,6 +26,7 @@ import {
   Emitter,
   IStorageService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   StorageScope,
   type Event,
 } from '@universe-editor/platform'
@@ -90,12 +91,26 @@ export class ExtensionEnablementService extends Disposable implements IExtension
   private readonly _onDidChangeEnablement = this._register(new Emitter<void>())
   readonly onDidChangeEnablement: Event<void> = this._onDidChangeEnablement.event
 
+  /** Current workspace folder's remote authority; undefined for a local workspace. */
+  private _authority: string | undefined
+
   constructor(
     @IExtensionManagementService private readonly _management: IExtensionManagementService,
     @IStorageService private readonly _storage: IStorageService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
+    // Authority must follow the workspace (async hydration after startup) — never
+    // a one-shot construction-time snapshot.
+    this._authority = this._currentAuthority()
+    this._register(
+      this._workspace.onDidChangeWorkspace(() => {
+        const next = this._currentAuthority()
+        if (next === this._authority) return
+        this._authority = next
+        this._onDidChangeEnablement.fire()
+      }),
+    )
   }
 
   hasWorkspace(): boolean {
@@ -111,7 +126,7 @@ export class ExtensionEnablementService extends Disposable implements IExtension
     if (ws.disabled.includes(id)) return EnablementState.DisabledWorkspace
     if (ws.enabled.includes(id)) return EnablementState.EnabledWorkspace
 
-    const globalDisabled = await this._management.getDisabledIds()
+    const globalDisabled = await this._management.getDisabledIds(this._authority)
     return globalDisabled.includes(id)
       ? EnablementState.DisabledGlobally
       : EnablementState.EnabledGlobally
@@ -133,11 +148,11 @@ export class ExtensionEnablementService extends Disposable implements IExtension
     switch (state) {
       case EnablementState.EnabledGlobally:
         await this._clearWorkspace(id)
-        await this._management.setEnablement(id, true)
+        await this._management.setEnablement(id, true, this._authority)
         break
       case EnablementState.DisabledGlobally:
         await this._clearWorkspace(id)
-        await this._management.setEnablement(id, false)
+        await this._management.setEnablement(id, false, this._authority)
         break
       case EnablementState.EnabledWorkspace:
         await this._setWorkspace(id, true)
@@ -153,7 +168,7 @@ export class ExtensionEnablementService extends Disposable implements IExtension
 
   async getEffectiveDisabledIds(): Promise<string[]> {
     const [globalDisabled, ws] = await Promise.all([
-      this._management.getDisabledIds(),
+      this._management.getDisabledIds(this._authority),
       this._readWorkspace(),
     ])
     const disabled = new Set<string>()
@@ -200,5 +215,11 @@ export class ExtensionEnablementService extends Disposable implements IExtension
       enabled: ws.enabled.filter((x) => x !== id),
       disabled: ws.disabled.filter((x) => x !== id),
     })
+  }
+
+  /** The current workspace folder's remote authority, or undefined for a local folder. */
+  private _currentAuthority(): string | undefined {
+    const folder = this._workspace.current?.folder
+    return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
   }
 }

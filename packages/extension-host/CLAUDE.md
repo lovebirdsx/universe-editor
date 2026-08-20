@@ -125,6 +125,7 @@
 - **改信任门控语义**（哪些扩展在未受信工作区可激活）：`activationService.ts` 的 `_isActivatable` + manifest `capabilities.untrustedWorkspaces` zod（`packages/extension-host/src/manifest.ts`）。
 - **改 host spawn / env**：`extensionHostMainService.start`（env 组装）。
 - **改内置/外部扫描目录**：`builtinExtensionsDir.ts` / `userExtensionsDir.ts`（单一真相，host 与管理服务共用）。
+- **远端 host 的用户扩展**：远端用户扩展经 `RemoteChannels.ExtensionManagement` channel 分发安装（`packages/remote-server`），远端 host 恒扫 `<dataDir>/user-extensions`（`serverPaths.ts` 单一真相，server 自己 set `UNIVERSE_USER_EXTENSIONS_DIR`）——不经过本机 `userExtensionsDir.ts`。
 - **改启用禁用的 4 态语义 / 优先级**：`ExtensionEnablementService`（决策）。
 - **改启用禁用生效方式**：生效链五环（enablement → \_disabledIds → spec.disabledIds → env → bootstrap filter）。
 - **改启用禁用命令 / 快捷键 / 菜单**：`extensionsActions.ts`（4 个 VSCode 对齐 ID：`extensions.enableGlobally`/`disableGlobally`/`enableForWorkspace`/`disableForWorkspace`），在 `actions/index.ts` 注册（套路 A）。workspace 命令先 `ctx.enablement.hasWorkspace()` 检查。

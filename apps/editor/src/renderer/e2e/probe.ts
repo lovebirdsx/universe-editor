@@ -845,8 +845,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
       return out
     },
-    installVsixExtension: async (vsixPath: string): Promise<string> => {
-      const local = await services.extensionManagementService.installVSIX(vsixPath)
+    installVsixExtension: async (vsixPath: string, authority?: string): Promise<string> => {
+      const local = await services.extensionManagementService.installVSIX(vsixPath, authority)
       return local.identifier
     },
     installGalleryExtension: async (identifier: string): Promise<string> => {
@@ -855,10 +855,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const local = await services.extensionManagementService.installFromGallery(gallery)
       return local.identifier
     },
-    uninstallExtension: (identifier: string): Promise<void> =>
-      services.extensionManagementService.uninstall(identifier),
-    getInstalledExtensionIds: async (): Promise<readonly string[]> => {
-      const list = await services.extensionManagementService.getInstalled()
+    uninstallExtension: (identifier: string, authority?: string): Promise<void> =>
+      services.extensionManagementService.uninstall(identifier, authority),
+    getInstalledExtensionIds: async (authority?: string): Promise<readonly string[]> => {
+      const list = await services.extensionManagementService.getInstalled(authority)
       return list.map((e) => e.identifier)
     },
     getInstalledExtensionVersions: async (): Promise<readonly E2EInstalledExtension[]> => {

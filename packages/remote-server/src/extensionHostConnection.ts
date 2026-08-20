@@ -25,6 +25,7 @@ import {
   type ISocket,
 } from '@universe-editor/platform'
 import { buildChildEnv } from '@universe-editor/node-services'
+import { resolveExtensionGlobalStorageDir, resolveUserExtensionsDir } from './serverPaths.js'
 
 /** Grace period after the host's stdin EOF before the child is force-killed. */
 const EXT_HOST_GRACEFUL_STOP_MS = 2000
@@ -118,10 +119,10 @@ function resolveServerEnv(dataDir: string | undefined): Record<string, string> {
   }
 
   if (dataDir) {
-    const userExtensions = path.join(dataDir, 'user-extensions')
+    const userExtensions = resolveUserExtensionsDir(dataDir)
     mkdirSync(userExtensions, { recursive: true })
     env.UNIVERSE_USER_EXTENSIONS_DIR = userExtensions
-    const globalStorage = path.join(dataDir, 'data', 'extensionGlobalStorage')
+    const globalStorage = resolveExtensionGlobalStorageDir(dataDir)
     mkdirSync(globalStorage, { recursive: true })
     env.UNIVERSE_GLOBAL_STORAGE_DIR = globalStorage
   }

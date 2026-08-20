@@ -938,6 +938,12 @@ importers:
       '@parcel/watcher':
         specifier: 'catalog:'
         version: 2.6.0
+      '@universe-editor/extension-packaging':
+        specifier: workspace:*
+        version: link:../extension-packaging
+      '@universe-editor/extensions-common':
+        specifier: workspace:*
+        version: link:../extensions-common
       '@universe-editor/platform':
         specifier: workspace:*
         version: link:../platform

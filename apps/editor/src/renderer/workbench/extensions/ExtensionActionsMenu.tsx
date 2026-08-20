@@ -34,6 +34,7 @@ export interface ExtensionActionsMenuHandlers {
   readonly onOpen: (entry: IExtensionEntry) => void
   readonly onUninstall: (entry: IExtensionEntry) => void
   readonly onSetEnablement: (entry: IExtensionEntry, state: EnablementState) => void
+  readonly onInstallInRemote: (entry: IExtensionEntry) => void
   readonly hasWorkspace: boolean
 }
 
@@ -57,6 +58,40 @@ function buildItems(
       run: () => {
         close()
         h.onOpen(entry)
+      },
+    })
+    return items
+  }
+
+  // A local-side extension in a remote workspace isn't running, so
+  // enable/disable has no effect on it — offer Install-in-Remote + local
+  // uninstall instead.
+  if (entry.installableInRemote) {
+    items.push({
+      kind: 'item',
+      label: localize('extensions.installInRemote', 'Install in Remote'),
+      run: () => {
+        close()
+        h.onInstallInRemote(entry)
+      },
+    })
+    items.push({ kind: 'sep' })
+    items.push({
+      kind: 'item',
+      label: localize('extensions.viewDetails', 'View Details'),
+      run: () => {
+        close()
+        h.onOpen(entry)
+      },
+    })
+    items.push({ kind: 'sep' })
+    items.push({
+      kind: 'item',
+      label: localize('extensions.uninstall', 'Uninstall'),
+      danger: true,
+      run: () => {
+        close()
+        h.onUninstall(entry)
       },
     })
     return items

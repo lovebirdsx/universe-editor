@@ -12,29 +12,40 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import {
   createNamedLogger,
   Disposable,
   Emitter,
   ILoggerService,
+  RemoteChannels,
   type Event,
   type ILogger,
   localize,
 } from '@universe-editor/platform'
-import {
-  readVsixManifest,
-  extractVsix,
-  verifyVsixSignature,
-} from '@universe-editor/extension-packaging'
+import { readVsixManifest, verifyVsixSignature } from '@universe-editor/extension-packaging'
 import { parseManifest } from '@universe-editor/extensions-common/manifest-schema'
 import {
-  satisfies,
   compareVersions,
+  satisfies,
   type IExtensionManifest,
+  type IInstalledExtensionRecord,
 } from '@universe-editor/extensions-common'
 import { pickCompatibleVersion, type IGalleryExtension } from '@universe-editor/extension-gallery'
+import {
+  installVsix,
+  listInstalledExtensions,
+  readEnablement,
+  readExtensionIconDataUrl,
+  readInstalledRecords,
+  readManifestJson,
+  sweepObsolete,
+  uninstallExtension,
+  writeEnablement,
+  type IRemoteExtensionManagementService,
+  type IRemoteInstalledExtension,
+  type IRemoteInstallOptions,
+} from '@universe-editor/node-services'
 import type {
   ILocalExtension,
   IExtensionGalleryMetadata,
@@ -42,21 +53,14 @@ import type {
   IExtensionUpdate,
 } from '../../../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../../../shared/ipc/extensionGalleryService.js'
+import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { resolveUserExtensionsDir } from '../extensionHost/userExtensionsDir.js'
 import { resolveBuiltinExtensionsDir } from '../extensionHost/builtinExtensionsDir.js'
 import { BUILTIN_MARKETPLACE_SIGNING_KEYS } from './marketplaceSigningKeys.js'
-import {
-  readInstalledRecords,
-  writeInstalledRecords,
-  readEnablement,
-  writeEnablement,
-  readObsolete,
-  writeObsolete,
-  deleteExtensionFolder,
-  sweepDeletedFolders,
-  type IInstalledExtensionRecord,
-} from './installedExtensionsManifest.js'
+
+/** Chunk size for streaming a VSIX to the remote host (≤ 1 MiB tunnel attachment). */
+const REMOTE_UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 /** Resolves the user extensions directory. Injectable for tests. */
 export type UserExtensionsDirResolver = () => string
@@ -81,24 +85,9 @@ export class MaliciousExtensionError extends Error {
   }
 }
 
-/** Folder name for an installed extension: `<id>-<version>`. */
-function folderName(id: string, version: string): string {
-  return `${id}-${version}`
-}
-
 /** True when `candidate` is a strictly higher semver than `current`. */
 function isNewerVersion(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0
-}
-
-/** Icon file extension → MIME type for the `data:` URL. */
-const ICON_MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
 }
 
 export class ExtensionManagementMainService
@@ -132,6 +121,7 @@ export class ExtensionManagementMainService
     private readonly _signingKeys: Readonly<
       Record<string, string>
     > = BUILTIN_MARKETPLACE_SIGNING_KEYS,
+    @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -158,25 +148,116 @@ export class ExtensionManagementMainService
     this._onDidChangeExtensions.fire()
   }
 
-  async getInstalled(): Promise<ILocalExtension[]> {
-    const dir = this._resolveDir()
-    const records = await readInstalledRecords(dir)
-    const result: ILocalExtension[] = []
-    for (const rec of records) {
-      const location = path.join(dir, rec.location)
-      try {
-        const manifest = parseManifest(await readManifestJson(location))
-        result.push({
-          ...toLocalExtension(rec, location, manifest),
-          ...engineCompat(this._hostApiVersion, manifest),
-        })
-      } catch (err) {
-        this._logger.warn(
-          `installed extension ${rec.identifier} has an unreadable manifest: ${(err as Error).message}`,
-        )
-      }
+  /** Resolve the stable per-(authority, channel) proxy; never cached across calls. */
+  private _remoteProxy(authority: string): IRemoteExtensionManagementService {
+    if (!this._connections) {
+      throw new Error(
+        localize(
+          'extManagement.error.remoteUnavailable',
+          'Remote extension management is unavailable for {authority}.',
+          { authority },
+        ),
+      )
     }
-    return result
+    return this._connections.getServiceProxy<IRemoteExtensionManagementService>(
+      authority,
+      RemoteChannels.ExtensionManagement,
+    )
+  }
+
+  /** Run a remote read, annotating failures with the authority for user visibility. */
+  private async _callRemote<T>(
+    authority: string,
+    fn: (service: IRemoteExtensionManagementService) => Promise<T>,
+  ): Promise<T> {
+    const service = this._remoteProxy(authority)
+    try {
+      return await fn(service)
+    } catch (err) {
+      throw this._wrapRemoteError(authority, err)
+    }
+  }
+
+  private _wrapRemoteError(authority: string, err: unknown): Error {
+    const message = err instanceof Error ? err.message : String(err)
+    return new Error(
+      localize(
+        'extManagement.error.remoteOperation',
+        'Extension operation on {authority} failed: {message}',
+        { authority, message },
+      ),
+    )
+  }
+
+  /** Client-side engine gate for remote installs (the server re-checks only id/version). */
+  private _assertCompatibleHost(manifest: IExtensionManifest): void {
+    if (!satisfies(this._hostApiVersion, manifest.engines.universe)) {
+      throw new Error(
+        localize(
+          'extManagement.error.engineMismatch',
+          'The extension requires universe {required}, host API is {actual}.',
+          { required: manifest.engines.universe, actual: this._hostApiVersion },
+        ),
+      )
+    }
+  }
+
+  /**
+   * Stream a locally-verified VSIX to the remote host in ≤ 1 MiB chunks and
+   * install it from the server-side temp file. Aborts the upload on any failure.
+   */
+  private async _uploadAndInstall(
+    vsixPath: string,
+    authority: string,
+    manifest: IExtensionManifest,
+    options: IRemoteInstallOptions,
+  ): Promise<ILocalExtension> {
+    this._assertCompatibleHost(manifest)
+    const expected = { identifier: extensionId(manifest), version: manifest.version }
+    const service = this._remoteProxy(authority)
+    const handle = await fs.open(vsixPath, 'r')
+    let uploadId: string | undefined
+    try {
+      uploadId = await service.uploadBegin()
+      let offset = 0
+      for (;;) {
+        // A fresh buffer each round: the tunnel may serialize the previous chunk
+        // after this iteration returns, so it must not be overwritten in place.
+        const buffer = Buffer.alloc(REMOTE_UPLOAD_CHUNK_SIZE)
+        const { bytesRead } = await handle.read(buffer, 0, REMOTE_UPLOAD_CHUNK_SIZE, offset)
+        if (bytesRead === 0) break
+        await service.uploadChunk(uploadId, buffer.subarray(0, bytesRead))
+        offset += bytesRead
+      }
+      const installed = await service.installUploaded(uploadId, expected, options)
+      this._notifyChanged()
+      return toRemoteLocalExtension(installed)
+    } catch (err) {
+      if (uploadId !== undefined) {
+        await service.uploadAbort(uploadId).catch(() => undefined)
+      }
+      throw this._wrapRemoteError(authority, err)
+    } finally {
+      await handle.close()
+    }
+  }
+
+  async getInstalled(authority?: string): Promise<ILocalExtension[]> {
+    if (authority !== undefined) {
+      const installed = await this._callRemote(authority, (s) =>
+        s.listInstalled(getCurrentLocale()),
+      )
+      return installed.map(toRemoteLocalExtension)
+    }
+    const installed = await listInstalledExtensions(
+      this._resolveDir(),
+      getCurrentLocale(),
+      (message) => this._logger.warn(message),
+    )
+    return installed.map((e) => ({
+      ...toLocalExtension(e.record, e.location, e.manifest),
+      ...engineCompat(this._hostApiVersion, e.manifest),
+    }))
   }
 
   async listBuiltinExtensions(): Promise<ILocalExtension[]> {
@@ -193,7 +274,7 @@ export class ExtensionManagementMainService
     for (const name of names) {
       const location = path.join(dir, name)
       try {
-        const manifest = parseManifest(await readManifestJson(location))
+        const manifest = parseManifest(await readManifestJson(location, getCurrentLocale()))
         result.push({
           identifier: extensionId(manifest),
           manifest,
@@ -216,7 +297,7 @@ export class ExtensionManagementMainService
     const result: ILocalExtension[] = []
     for (const devPath of this._resolveDevExtensionPaths()) {
       try {
-        const manifest = parseManifest(await readManifestJson(devPath))
+        const manifest = parseManifest(await readManifestJson(devPath, getCurrentLocale()))
         result.push({
           identifier: extensionId(manifest),
           manifest,
@@ -235,15 +316,50 @@ export class ExtensionManagementMainService
     return result
   }
 
-  installVSIX(vsixPath: string): Promise<ILocalExtension> {
-    return this._enqueue(() => this._installVSIX(vsixPath))
+  installVSIX(vsixPath: string, authority?: string): Promise<ILocalExtension> {
+    return this._enqueue(() =>
+      authority !== undefined
+        ? this._installVSIXRemote(vsixPath, authority)
+        : this._installVSIX(vsixPath),
+    )
   }
 
-  installFromGallery(extension: IGalleryExtension): Promise<ILocalExtension> {
-    return this._enqueue(() => this._installFromGallery(extension))
+  installFromGallery(extension: IGalleryExtension, authority?: string): Promise<ILocalExtension> {
+    return this._enqueue(() =>
+      authority !== undefined
+        ? this._installFromGalleryRemote(extension, authority)
+        : this._installFromGallery(extension),
+    )
   }
 
   private async _installFromGallery(extension: IGalleryExtension): Promise<ILocalExtension> {
+    const { vsixPath, galleryMetadata } = await this._downloadAndVerifyGallery(extension)
+    return this._install(vsixPath, 'gallery', galleryMetadata)
+  }
+
+  /** Shared with the local path so the poison/signature gates stay in one place. */
+  private async _installFromGalleryRemote(
+    extension: IGalleryExtension,
+    authority: string,
+  ): Promise<ILocalExtension> {
+    const { vsixPath, manifest, galleryMetadata } = await this._downloadAndVerifyGallery(extension)
+    return this._uploadAndInstall(vsixPath, authority, manifest, {
+      source: 'gallery',
+      galleryMetadata,
+      locale: getCurrentLocale(),
+    })
+  }
+
+  /**
+   * Download the marketplace VSIX and run every local gate on it (malicious,
+   * id/version anti-poisoning, fail-closed signature), returning the verified
+   * bytes' path + manifest + gallery metadata for the caller to install.
+   */
+  private async _downloadAndVerifyGallery(extension: IGalleryExtension): Promise<{
+    vsixPath: string
+    manifest: IExtensionManifest
+    galleryMetadata: IExtensionGalleryMetadata
+  }> {
     if (!this._gallery) {
       throw new Error(
         localize('extManagement.error.noMarketplace', 'The marketplace is not available.'),
@@ -325,7 +441,7 @@ export class ExtensionManagementMainService
       vsixUrl: target.vsixUrl,
       vsixHash: target.vsixHash,
     }
-    return this._install(vsixPath, manifest, 'gallery', galleryMetadata)
+    return { vsixPath, manifest, galleryMetadata }
   }
 
   private async _installVSIX(vsixPath: string): Promise<ILocalExtension> {
@@ -334,74 +450,32 @@ export class ExtensionManagementMainService
     // No signature verification here by design: a local file was explicitly
     // chosen by the user (explicit trust), and there is no marketplace
     // signature to check it against.
-    return this._install(vsixPath, manifest, 'vsix', undefined)
+    return this._install(vsixPath, 'vsix', undefined)
+  }
+
+  private async _installVSIXRemote(vsixPath: string, authority: string): Promise<ILocalExtension> {
+    const manifest = readVsixManifest(vsixPath)
+    await this._assertNotMalicious(extensionId(manifest))
+    return this._uploadAndInstall(vsixPath, authority, manifest, {
+      source: 'vsix',
+      locale: getCurrentLocale(),
+    })
   }
 
   private async _install(
     vsixPath: string,
-    manifest: IExtensionManifest,
     source: 'vsix' | 'gallery',
     galleryMetadata: IExtensionGalleryMetadata | undefined,
   ): Promise<ILocalExtension> {
-    if (!satisfies(this._hostApiVersion, manifest.engines.universe)) {
-      throw new Error(
-        localize(
-          'extManagement.error.engineMismatch',
-          'The extension requires universe {required}, host API is {actual}.',
-          { required: manifest.engines.universe, actual: this._hostApiVersion },
-        ),
-      )
-    }
-
-    const id = extensionId(manifest)
-    const version = manifest.version
-    const dir = this._resolveDir()
-    const location = folderName(id, version)
-    const targetDir = path.join(dir, location)
-
-    await fs.mkdir(dir, { recursive: true })
-
-    // Idempotent for a local .vsix: same id+version already on disk → return it.
-    // Gallery reinstalls deliberately fall through and overwrite: a dev rebuild
-    // keeps the version but changes dist/, and the user clicking reinstall expects
-    // the new bits, not a short-circuit to the stale folder.
-    const records = await readInstalledRecords(dir)
-    const existing = records.find((r) => r.identifier === id && r.version === version)
-    if (source === 'vsix' && existing && (await pathExists(targetDir))) {
-      this._logger.info(`extension ${id}@${version} already installed`)
-      return toLocalExtension(existing, targetDir, manifest)
-    }
-
-    // Clear any obsolete mark on the target folder before writing into it.
-    await this._clearObsolete(dir, location)
-
-    const tmpDir = path.join(dir, `.${randomUUID()}.tmp`)
-    try {
-      await fs.mkdir(tmpDir, { recursive: true })
-      await extractVsix(vsixPath, tmpDir)
-      // A stale folder (same-version overwrite) is renamed out of the way before
-      // the atomic rename-in, so a concurrent host rescan can't re-adopt it.
-      await deleteExtensionFolder(dir, location)
-      await fs.rename(tmpDir, targetDir)
-    } catch (err) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
-      throw err
-    }
-
-    const record: IInstalledExtensionRecord = {
-      identifier: id,
-      version,
-      location,
+    const result = await installVsix(this._resolveDir(), vsixPath, {
       source,
-      installedAt: Date.now(),
       ...(galleryMetadata ? { galleryMetadata } : {}),
-    }
-    const next = [...records.filter((r) => r.identifier !== id || r.version !== version), record]
-    await writeInstalledRecords(dir, next)
-
-    this._logger.info(`installed extension ${id}@${version} from ${source}`)
+      hostApiVersion: this._hostApiVersion,
+      locale: getCurrentLocale(),
+      logger: this._logger,
+    })
     this._notifyChanged()
-    return toLocalExtension(record, targetDir, manifest)
+    return toLocalExtension(result.record, result.location, result.manifest)
   }
 
   /** Refuse an install of an id the control manifest marks malicious. */
@@ -420,41 +494,35 @@ export class ExtensionManagementMainService
     }
   }
 
-  uninstall(identifier: string): Promise<void> {
-    return this._enqueue(() => this._uninstall(identifier))
+  uninstall(identifier: string, authority?: string): Promise<void> {
+    return this._enqueue(() =>
+      authority !== undefined
+        ? this._uninstallRemote(identifier, authority)
+        : this._uninstall(identifier),
+    )
   }
 
   private async _uninstall(identifier: string): Promise<void> {
-    const dir = this._resolveDir()
-    const records = await readInstalledRecords(dir)
-    const record = records.find((r) => r.identifier === identifier)
-    if (!record) {
-      this._logger.warn(`uninstall: ${identifier} is not installed`)
-      return
-    }
-
-    const next = records.filter((r) => r.identifier !== identifier)
-    await writeInstalledRecords(dir, next)
-
-    // Rename-then-delete: the folder name disappears atomically so a host rescan
-    // (fired by _notifyChanged below) can't re-adopt a half-deleted directory.
-    // Only if even the rename fails do we fall back to an obsolete mark for the
-    // startup sweep.
-    if (await deleteExtensionFolder(dir, record.location)) {
-      this._logger.info(`uninstalled extension ${identifier}`)
-    } else {
-      this._logger.warn(
-        `uninstall ${identifier}: could not remove folder now, marking obsolete for next start`,
-      )
-      const marks = await readObsolete(dir)
-      marks[record.location] = true
-      await writeObsolete(dir, marks)
-    }
-
-    this._notifyChanged()
+    const removed = await uninstallExtension(this._resolveDir(), identifier, this._logger)
+    if (removed) this._notifyChanged()
   }
 
-  async getDisabledIds(): Promise<string[]> {
+  private async _uninstallRemote(identifier: string, authority: string): Promise<void> {
+    const service = this._remoteProxy(authority)
+    let removed: boolean
+    try {
+      removed = await service.uninstall(identifier)
+    } catch (err) {
+      throw this._wrapRemoteError(authority, err)
+    }
+    if (removed) this._notifyChanged()
+    else this._logger.warn(`uninstall: ${identifier} is not installed on ${authority}`)
+  }
+
+  async getDisabledIds(authority?: string): Promise<string[]> {
+    if (authority !== undefined) {
+      return this._callRemote(authority, (s) => s.getDisabledIds())
+    }
     const enablement = await readEnablement(this._resolveDir())
     return Object.keys(enablement).filter((id) => enablement[id] === false)
   }
@@ -466,7 +534,10 @@ export class ExtensionManagementMainService
    * found, or the file can't be read. Mirrors VSCode resolving `manifest.icon`
    * against the extension location.
    */
-  async getLocalIcon(identifier: string): Promise<string> {
+  async getLocalIcon(identifier: string, authority?: string): Promise<string> {
+    if (authority !== undefined) {
+      return this._callRemote(authority, (s) => s.getIcon(identifier))
+    }
     const cached = this._localIconCache.get(identifier)
     if (cached !== undefined) return cached
     const dataUrl = await this._readLocalIcon(identifier)
@@ -483,22 +554,30 @@ export class ExtensionManagementMainService
     const local = all.find((e) => e.identifier === identifier)
     const iconPath = local?.manifest.icon
     if (!local || !iconPath) return ''
-    try {
-      // Resolve within the extension folder; reject path escapes.
-      const resolved = path.resolve(local.location, iconPath)
-      const root = path.resolve(local.location)
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) return ''
-      const bytes = await fs.readFile(resolved)
-      const mime = ICON_MIME_BY_EXT[path.extname(resolved).toLowerCase()] ?? 'image/png'
-      return `data:${mime};base64,${bytes.toString('base64')}`
-    } catch (err) {
-      this._logger.warn(`getLocalIcon ${identifier} failed: ${(err as Error).message}`)
-      return ''
-    }
+    return readExtensionIconDataUrl(local.location, iconPath)
   }
 
-  setEnablement(identifier: string, enabled: boolean): Promise<void> {
-    return this._enqueue(() => this._setEnablement(identifier, enabled))
+  setEnablement(identifier: string, enabled: boolean, authority?: string): Promise<void> {
+    return this._enqueue(() =>
+      authority !== undefined
+        ? this._setEnablementRemote(identifier, enabled, authority)
+        : this._setEnablement(identifier, enabled),
+    )
+  }
+
+  private async _setEnablementRemote(
+    identifier: string,
+    enabled: boolean,
+    authority: string,
+  ): Promise<void> {
+    const service = this._remoteProxy(authority)
+    try {
+      await service.setEnablement(identifier, enabled)
+    } catch (err) {
+      throw this._wrapRemoteError(authority, err)
+    }
+    // No onDidChangeExtensions here, matching the local path: the renderer's
+    // ExtensionEnablementService orchestrates the host restart.
   }
 
   private async _setEnablement(identifier: string, enabled: boolean): Promise<void> {
@@ -545,15 +624,23 @@ export class ExtensionManagementMainService
     })
   }
 
-  async checkForUpdates(): Promise<IExtensionUpdate[]> {
+  async checkForUpdates(authority?: string): Promise<IExtensionUpdate[]> {
     if (!this._gallery) return []
-    const installed = await this.getInstalled()
+    const installed = await this.getInstalled(authority)
+    return this._computeUpdates(this._gallery, installed)
+  }
+
+  /** Compare installed gallery extensions against the marketplace; shared local/remote. */
+  private async _computeUpdates(
+    gallery: IManagementGallery,
+    installed: readonly ILocalExtension[],
+  ): Promise<IExtensionUpdate[]> {
     const galleryInstalled = installed.filter((e) => e.source === 'gallery')
     if (galleryInstalled.length === 0) return []
 
     let latest: IGalleryExtension[]
     try {
-      latest = await this._gallery.getExtensions(galleryInstalled.map((e) => e.identifier))
+      latest = await gallery.getExtensions(galleryInstalled.map((e) => e.identifier))
     } catch (err) {
       this._logger.warn(`update check failed: ${(err as Error).message}`)
       return []
@@ -561,9 +648,9 @@ export class ExtensionManagementMainService
 
     const updates: IExtensionUpdate[] = []
     for (const local of galleryInstalled) {
-      const gallery = latest.find((g) => g.identifier === local.identifier)
-      if (!gallery) continue
-      const compatible = pickCompatibleVersion(gallery, this._hostApiVersion)
+      const galleryExt = latest.find((g) => g.identifier === local.identifier)
+      if (!galleryExt) continue
+      const compatible = pickCompatibleVersion(galleryExt, this._hostApiVersion)
       // No compatible version → never offer the (incompatible) latest as an update.
       if (!compatible) continue
       if (isNewerVersion(compatible.version, local.version)) {
@@ -571,44 +658,20 @@ export class ExtensionManagementMainService
           identifier: local.identifier,
           fromVersion: local.version,
           toVersion: compatible.version,
-          gallery,
+          gallery: galleryExt,
         })
       }
     }
     return updates
   }
 
-  async updateExtension(update: IExtensionUpdate): Promise<ILocalExtension> {
-    return this.installFromGallery(update.gallery)
-  }
-
-  /** Remove a folder from the obsolete marks (called before reinstalling into it). */
-  private async _clearObsolete(dir: string, location: string): Promise<void> {
-    const marks = await readObsolete(dir)
-    if (marks[location]) {
-      delete marks[location]
-      await writeObsolete(dir, marks)
-    }
+  async updateExtension(update: IExtensionUpdate, authority?: string): Promise<ILocalExtension> {
+    return this.installFromGallery(update.gallery, authority)
   }
 
   /** Delete every folder still marked obsolete; drop the ones we manage to remove. */
   private async _sweepObsolete(): Promise<void> {
-    const dir = this._resolveDir()
-    // Collect any `.vsctmp` folders left by an interrupted rename-then-delete.
-    await sweepDeletedFolders(dir)
-    const marks = await readObsolete(dir)
-    const remaining: typeof marks = {}
-    let changed = false
-    for (const location of Object.keys(marks)) {
-      if (!marks[location]) continue
-      try {
-        await fs.rm(path.join(dir, location), { recursive: true, force: true })
-        changed = true
-      } catch {
-        remaining[location] = true // still locked; keep for next start
-      }
-    }
-    if (changed) await writeObsolete(dir, remaining)
+    await sweepObsolete(this._resolveDir())
   }
 }
 
@@ -646,71 +709,15 @@ function toLocalExtension(
   }
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.stat(p)
-    return true
-  } catch {
-    return false
+/** Map a remote DTO (server-private paths) to the wire shape; `location` stays ''. */
+function toRemoteLocalExtension(e: IRemoteInstalledExtension): ILocalExtension {
+  return {
+    identifier: e.identifier,
+    manifest: e.manifest,
+    version: e.version,
+    location: '',
+    source: e.source,
+    installedAt: e.installedAt,
+    ...(e.galleryMetadata ? { galleryMetadata: e.galleryMetadata } : {}),
   }
-}
-
-/** Read `package.json` from an extension folder with `%key%` placeholders localized. */
-async function readManifestJson(location: string): Promise<unknown> {
-  const raw: unknown = JSON.parse(await fs.readFile(path.join(location, 'package.json'), 'utf8'))
-  const bundle = await loadNlsBundle(location, getCurrentLocale())
-  return bundle ? localizeManifest(raw, bundle) : raw
-}
-
-/* --------------------------------------------------------------------------
- * Manifest NLS (`%key%` → `package.nls*.json`), mirroring VSCode's scheme.
- * Duplicated from packages/extension-host/src/nls.ts — that package ships
- * only a bundled host entry (no importable modules), and this lister is the
- * second consumer: the host scanner localizes contributions for activation,
- * this one localizes manifests for the Extensions UI. Keep the two in sync.
- * ------------------------------------------------------------------------ */
-
-type NlsBundle = Readonly<Record<string, string>>
-
-const NLS_PLACEHOLDER = /^%([\w.-]+)%$/
-
-async function readNlsBundle(filePath: string): Promise<NlsBundle | undefined> {
-  try {
-    const parsed: unknown = JSON.parse(await fs.readFile(filePath, 'utf8'))
-    if (parsed && typeof parsed === 'object') return parsed as NlsBundle
-  } catch {
-    // absent or unreadable bundle → no translation for that file
-  }
-  return undefined
-}
-
-/** Default bundle merged with the per-locale override (locale wins per key). */
-async function loadNlsBundle(
-  extensionPath: string,
-  locale?: string,
-): Promise<NlsBundle | undefined> {
-  const defaultBundle = await readNlsBundle(path.join(extensionPath, 'package.nls.json'))
-  const localeBundle =
-    locale && locale.toLowerCase() !== 'en' && locale.toLowerCase() !== 'en-us'
-      ? await readNlsBundle(path.join(extensionPath, `package.nls.${locale.toLowerCase()}.json`))
-      : undefined
-  if (!defaultBundle && !localeBundle) return undefined
-  return { ...defaultBundle, ...localeBundle }
-}
-
-/** Deep-clone `value`, translating every whole-string `%key%` placeholder. */
-function localizeManifest<T>(value: T, bundle: NlsBundle): T {
-  if (typeof value === 'string') {
-    const match = NLS_PLACEHOLDER.exec(value)
-    if (!match) return value
-    const key = match[1]!
-    return (key in bundle ? bundle[key]! : value) as T
-  }
-  if (Array.isArray(value)) return value.map((item) => localizeManifest(item, bundle)) as T
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) out[k] = localizeManifest(v, bundle)
-    return out as T
-  }
-  return value
 }

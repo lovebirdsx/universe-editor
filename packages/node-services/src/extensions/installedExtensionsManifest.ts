@@ -12,10 +12,7 @@
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
-import type {
-  ExtensionInstallSource,
-  IExtensionGalleryMetadata,
-} from '../../../shared/ipc/extensionManagementService.js'
+import type { IInstalledExtensionRecord } from '@universe-editor/extensions-common'
 
 /**
  * Suffix for a folder that has been renamed out of the way for deletion. The
@@ -23,18 +20,6 @@ import type {
  * by a host rescan in the meantime. Mirrors VSCode's `.vsctmp` postfix.
  */
 export const DELETED_FOLDER_POSTFIX = '.vsctmp'
-
-/** One entry in `extensions.json` `installed[]`. */
-export interface IInstalledExtensionRecord {
-  readonly identifier: string
-  readonly version: string
-  /** Folder name relative to the extensions directory. */
-  readonly location: string
-  readonly source: ExtensionInstallSource
-  readonly installedAt: number
-  /** Present for gallery-sourced installs. */
-  readonly galleryMetadata?: IExtensionGalleryMetadata
-}
 
 interface IExtensionsManifestFile {
   version: 1

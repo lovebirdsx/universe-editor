@@ -19,6 +19,7 @@ import {
   Severity,
   StorageScope,
   localize,
+  remoteAuthorityLabel,
 } from '@universe-editor/platform'
 import {
   IExtensionManagementService,
@@ -87,8 +88,17 @@ export interface IExtensionEntry {
    * `version` (marketplace entries only). Drives the "will install version X" note.
    */
   readonly installCompatibleVersion?: string
-  /** Installed but not active in the current remote workspace (external ext only). */
-  readonly unavailableInRemote?: boolean
+  /**
+   * Runs on the remote host — the effective side of the current workspace: a
+   * remote-installed user extension, or a built-in (same-source copy on the
+   * remote). Absent for local-side entries and in a local workspace.
+   */
+  readonly remote?: boolean
+  /**
+   * A local-side user extension shown in a remote workspace: installed on this
+   * machine but not on the remote, so it offers "Install in Remote".
+   */
+  readonly installableInRemote?: boolean
   /** Source references for actions (present when known). */
   readonly local?: ILocalExtension
   readonly gallery?: IGalleryExtension
@@ -162,6 +172,24 @@ export interface IExtensionsWorkbenchService {
 
   /** Find an entry by id across installed + search results (detail page lookup). */
   find(id: string): IExtensionEntry | undefined
+
+  /** The current workspace folder's remote-ssh authority, or undefined when local. */
+  readonly authority: string | undefined
+
+  /**
+   * Human label for the current remote authority ("WSL: ubuntu" / "SSH: host"),
+   * or undefined when the workspace is local.
+   */
+  readonly remoteLabel: string | undefined
+
+  /** Whether the marketplace currently has an entry for this local-side id (drives Install-in-Remote availability). */
+  canInstallInRemote(id: string): Promise<boolean>
+
+  /**
+   * Install a local-side extension into the remote via the marketplace. Resolves
+   * false when the marketplace has no entry for it (pure local VSIX / unreachable).
+   */
+  installInRemote(entry: IExtensionEntry): Promise<boolean>
 }
 
 export const IExtensionsWorkbenchService = createDecorator<IExtensionsWorkbenchService>(
@@ -177,6 +205,10 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _installed: ILocalExtension[] = []
   private _builtin: ILocalExtension[] = []
   private _dev: ILocalExtension[] = []
+  /** Remote host's user extensions (empty for a local workspace). */
+  private _remoteInstalled: ILocalExtension[] = []
+  /** Current workspace folder's remote authority; undefined for a local workspace. */
+  private _authority: string | undefined
   private _results: IGalleryExtension[] = []
   private _searchText = ''
   private _searching = false
@@ -186,6 +218,15 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private readonly _installing = new Set<string>()
   /** Monotonic search token so a slow earlier query can't clobber a newer one. */
   private _searchSeq = 0
+  /** Monotonic refresh token so a slow earlier authority's response can't clobber a newer one. */
+  private _refreshSeq = 0
+  /**
+   * One marketplace lookup covering every local-side id that will offer
+   * "Install in Remote" (rebuilt on each refresh; avoids a per-row N+1 query).
+   */
+  private _remoteGalleryPrefetch: Promise<Map<string, IGalleryExtension>> | undefined
+  /** ids covered by the current prefetch; outside this set we fall back to a single lookup. */
+  private _remoteGalleryPrefetchedIds = new Set<string>()
   /** Resolved enablement state per id, refreshed alongside the installed set. */
   private _enablementStates = new Map<string, EnablementState>()
   /** Activation failures keyed by extension id (cleared when the host relaunches). */
@@ -203,6 +244,17 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     @IHostService private readonly _host: IHostService,
   ) {
     super()
+    // Authority must follow the workspace (it hydrates async after startup) —
+    // never a one-shot construction-time snapshot.
+    this._authority = this._currentAuthority()
+    this._register(
+      this._workspace.onDidChangeWorkspace(() => {
+        const next = this._currentAuthority()
+        if (next === this._authority) return
+        this._authority = next
+        void this.refreshInstalled()
+      }),
+    )
     // Fetch the host API version once (async) so gallery entries can annotate
     // version compatibility; re-fire so views recompute once it lands.
     void this._host
@@ -238,6 +290,14 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     return this._searching
   }
 
+  get authority(): string | undefined {
+    return this._authority
+  }
+
+  get remoteLabel(): string | undefined {
+    return this._authority !== undefined ? remoteAuthorityLabel(this._authority) : undefined
+  }
+
   isMarketplaceEnabled(): Promise<boolean> {
     return this._gallery.isEnabled()
   }
@@ -248,12 +308,18 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   getInstalled(): IExtensionEntry[] {
     // Dev extensions first (the thing you're iterating on should be on top),
-    // then built-ins, then user-installed. A dev extension sharing an id with a
-    // built-in shows BOTH entries — the UI presents "what is installed" (the
-    // badge tells them apart); the host's scan dedupe governs which activates.
-    return [...this._dev, ...this._builtin, ...this._installed].map((local) =>
-      this._entryFromLocal(local),
-    )
+    // then built-ins, then remote-installed, then local user-installed. In a
+    // remote workspace the effective side (built-ins + remote) precedes the
+    // local side; a dev extension sharing an id with a built-in still shows
+    // BOTH entries — the badge tells them apart, the host scan dedupe governs
+    // which activates.
+    const remote = this._authority !== undefined
+    const entries: IExtensionEntry[] = []
+    for (const local of this._dev) entries.push(this._entryFromLocal(local, false))
+    for (const local of this._builtin) entries.push(this._entryFromLocal(local, remote))
+    for (const local of this._remoteInstalled) entries.push(this._entryFromLocal(local, true))
+    for (const local of this._installed) entries.push(this._entryFromLocal(local, false))
+    return entries
   }
 
   getSearchResults(): IExtensionEntry[] {
@@ -261,17 +327,29 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   }
 
   async refreshInstalled(): Promise<void> {
-    const [installed, builtin, dev] = await Promise.all([
+    const seq = ++this._refreshSeq
+    const authority = this._authority
+    const [installed, builtin, dev, remoteInstalled] = await Promise.all([
       this._management.getInstalled(),
       this._management.listBuiltinExtensions(),
       this._management.listDevExtensions(),
+      authority !== undefined
+        ? this._management.getInstalled(authority).catch(() => this._remoteInstalled)
+        : Promise.resolve([] as ILocalExtension[]),
     ])
+    if (seq !== this._refreshSeq) return // a newer refresh superseded this one
     this._installed = installed
     this._builtin = builtin
-    this._dev = dev
+    // Dev extensions are local-only paths the remote host never loads; showing
+    // them in a remote workspace would claim an extension that isn't active.
+    this._dev = authority !== undefined ? [] : dev
+    this._remoteInstalled = remoteInstalled
+    this._remoteGalleryPrefetch =
+      authority !== undefined ? this._prefetchRemoteGallery(installed) : undefined
     // Resolve enablement for every id in one pass so entry mapping stays sync.
-    const ids = [...builtin, ...installed].map((e) => e.identifier)
+    const ids = [...builtin, ...remoteInstalled, ...installed].map((e) => e.identifier)
     const states = await Promise.all(ids.map((id) => this._enablement.getEnablementState(id)))
+    if (seq !== this._refreshSeq) return
     this._enablementStates = new Map(ids.map((id, i) => [id, states[i]!]))
     this._onDidChange.fire()
   }
@@ -325,7 +403,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   async installVSIX(vsixPath: string): Promise<void> {
     try {
-      const local = await this._management.installVSIX(vsixPath)
+      const local = await this._management.installVSIX(vsixPath, this._authority)
       this._notification.notify({
         severity: Severity.Info,
         message: localize('extensions.installVsix.done', 'Installed "{name}" ({version}).', {
@@ -351,7 +429,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     this._installing.add(entry.id)
     this._onDidChange.fire()
     try {
-      await this._management.installFromGallery(entry.gallery)
+      await this._management.installFromGallery(entry.gallery, this._authority)
     } catch (err) {
       this._notification.notify({
         severity: Severity.Error,
@@ -413,7 +491,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     this._installing.add(entry.id)
     this._onDidChange.fire()
     try {
-      await this._management.uninstall(entry.id)
+      // Route by the entry's side: remote-side entries uninstall from the remote
+      // host, local-side entries from this machine.
+      await this._management.uninstall(entry.id, this._authorityFor(entry))
     } finally {
       this._installing.delete(entry.id)
     }
@@ -427,8 +507,12 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 
   getIcon(entry: IExtensionEntry): Promise<string> {
     if (entry.gallery) return this._gallery.getIcon(entry.gallery)
-    // Installed / built-in: read the extension's own manifest icon from disk.
-    if (entry.installed) return this._management.getLocalIcon(entry.id)
+    // Installed / built-in: read the extension's own manifest icon. Remote-side
+    // entries resolve through the remote host (their `location` is ''); built-ins
+    // stay local — the same-source copy on this machine has the same icon.
+    if (entry.installed) {
+      return this._management.getLocalIcon(entry.id, this._authorityFor(entry))
+    }
     return Promise.resolve('')
   }
 
@@ -439,25 +523,102 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     )
   }
 
+  async canInstallInRemote(id: string): Promise<boolean> {
+    return (await this._resolveRemoteGallery(id)) !== undefined
+  }
+
+  async installInRemote(entry: IExtensionEntry): Promise<boolean> {
+    const gallery = await this._resolveRemoteGallery(entry.id)
+    if (!gallery) return false
+    if (!(await this._ensurePublisherTrusted(entry))) return false
+
+    this._installing.add(entry.id)
+    this._onDidChange.fire()
+    try {
+      await this._management.installFromGallery(gallery, this._authority)
+    } catch (err) {
+      this._notification.notify({
+        severity: Severity.Error,
+        message: localize(
+          'extensions.installInRemote.failed',
+          'Failed to install {name} on {label}: {error}',
+          {
+            name: entry.displayName,
+            label: this.remoteLabel ?? this._authority ?? '',
+            error: (err as Error).message,
+          },
+        ),
+      })
+      return false
+    } finally {
+      this._installing.delete(entry.id)
+      await this.refreshInstalled()
+    }
+    return true
+  }
+
+  /** Look up a local-side id in the marketplace (empty when unreachable / pure local VSIX). */
+  private async _resolveRemoteGallery(id: string): Promise<IGalleryExtension | undefined> {
+    if (this._remoteGalleryPrefetch !== undefined && this._remoteGalleryPrefetchedIds.has(id)) {
+      return (await this._remoteGalleryPrefetch).get(id)
+    }
+    try {
+      const [found] = await this._gallery.getExtensions([id])
+      return found
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Prefetch the marketplace entries for every local-side id that will offer "Install in Remote". */
+  private _prefetchRemoteGallery(
+    installed: ILocalExtension[],
+  ): Promise<Map<string, IGalleryExtension>> {
+    const ids = installed
+      .filter((e) => e.source !== 'builtin' && e.source !== 'development')
+      .map((e) => e.identifier)
+    this._remoteGalleryPrefetchedIds = new Set(ids)
+    if (ids.length === 0) return Promise.resolve(new Map())
+    return this._gallery
+      .getExtensions(ids)
+      .then((exts) => new Map(exts.map((e) => [e.identifier, e])))
+      .catch(() => new Map())
+  }
+
   /** Resolved enablement state for an id (defaults to EnabledGlobally if unknown). */
   private _stateOf(id: string): EnablementState {
     return this._enablementStates.get(id) ?? EnablementState.EnabledGlobally
   }
 
-  private _isRemoteWorkspace(): boolean {
+  /** The current workspace folder's remote authority, or undefined for a local folder. */
+  private _currentAuthority(): string | undefined {
     const folder = this._workspace.current?.folder
-    return folder !== undefined && folder.scheme === REMOTE_SCHEME
+    return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
+  }
+
+  /**
+   * The authority to route a management/icon call through: remote-side entries
+   * resolve remotely, but built-ins (same source on both machines) stay local.
+   */
+  private _authorityFor(entry: IExtensionEntry): string | undefined {
+    return entry.remote && !entry.isBuiltin ? this._authority : undefined
   }
 
   private _isEnabledState(state: EnablementState): boolean {
     return state === EnablementState.EnabledGlobally || state === EnablementState.EnabledWorkspace
   }
 
-  private _entryFromLocal(local: ILocalExtension): IExtensionEntry {
+  /** The installed set the current workspace actually runs (remote or local user extensions). */
+  private _effectiveInstalled(): ILocalExtension[] {
+    return this._authority !== undefined ? this._remoteInstalled : this._installed
+  }
+
+  private _entryFromLocal(local: ILocalExtension, remote: boolean): IExtensionEntry {
     const m = local.manifest
     const state = this._stateOf(local.identifier)
     const activationError = this._activationErrors.get(local.identifier)
     const isBuiltin = local.source === 'builtin'
+    const isDev = local.source === 'development'
     return {
       id: local.identifier,
       displayName: m.displayName ?? m.name,
@@ -468,7 +629,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       outdated: false,
       installing: this._installing.has(local.identifier),
       isBuiltin,
-      isUnderDevelopment: local.source === 'development',
+      isUnderDevelopment: isDev,
       enabled: this._isEnabledState(state),
       enablementState: state,
       isVersionIncompatible: local.isVersionCompatible === false,
@@ -477,7 +638,10 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
         ? { validationMessage: local.validationMessage }
         : {}),
       local,
-      ...(!isBuiltin && this._isRemoteWorkspace() ? { unavailableInRemote: true } : {}),
+      ...(remote ? { remote: true } : {}),
+      ...(this._authority !== undefined && !remote && !isBuiltin && !isDev
+        ? { installableInRemote: true }
+        : {}),
       ...(activationError ? { activationError } : {}),
       ...(local.galleryMetadata?.publisherDisplayName
         ? { publisherDisplayName: local.galleryMetadata.publisherDisplayName }
@@ -489,7 +653,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   }
 
   private _entryFromGallery(gallery: IGalleryExtension): IExtensionEntry {
-    const local = this._installed.find((l) => l.identifier === gallery.identifier)
+    const local = this._effectiveInstalled().find((l) => l.identifier === gallery.identifier)
     const state = this._stateOf(gallery.identifier)
     const picked =
       this._hostVersion !== undefined
@@ -515,7 +679,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       installIncompatible,
       ...(installCompatibleVersion !== undefined ? { installCompatibleVersion } : {}),
       gallery,
-      ...(local ? { local } : {}),
+      ...(local ? { local, ...(this._authority !== undefined ? { remote: true } : {}) } : {}),
       ...(gallery.publisherDisplayName
         ? { publisherDisplayName: gallery.publisherDisplayName }
         : {}),

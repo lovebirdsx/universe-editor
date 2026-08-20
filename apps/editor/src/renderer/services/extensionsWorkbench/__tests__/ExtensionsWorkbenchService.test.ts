@@ -82,11 +82,12 @@ function makeMocks() {
     installFromGallery: vi.fn(async () => localExtension()),
     installVSIX: vi.fn(async () => localExtension()),
     uninstall: vi.fn(async () => undefined),
+    getLocalIcon: vi.fn(async () => ''),
   } as unknown as IExtensionManagementService
   const gallery = {
     isEnabled: vi.fn(async () => true),
     query: vi.fn(async () => ({ extensions: [], total: 0 })),
-    getExtensions: vi.fn(),
+    getExtensions: vi.fn(async () => [] as IGalleryExtension[]),
     download: vi.fn(),
     getReadme: vi.fn(async () => 'readme text'),
     getControlManifest: vi.fn(),
@@ -272,7 +273,7 @@ describe('ExtensionsWorkbenchService', () => {
     await svc.search('market')
     const entry = svc.getSearchResults()[0]!
     await svc.install(entry)
-    expect(mocks.management.installFromGallery).toHaveBeenCalledWith(entry.gallery)
+    expect(mocks.management.installFromGallery).toHaveBeenCalledWith(entry.gallery, undefined)
     // Trusted publisher (storage returns ['acme']) → no confirm dialog.
     expect(mocks.dialog.confirm).not.toHaveBeenCalled()
   })
@@ -404,7 +405,7 @@ describe('ExtensionsWorkbenchService', () => {
     const svc = makeService(mocks)
     await svc.installVSIX('/tmp/ext.vsix')
 
-    expect(mocks.management.installVSIX).toHaveBeenCalledWith('/tmp/ext.vsix')
+    expect(mocks.management.installVSIX).toHaveBeenCalledWith('/tmp/ext.vsix', undefined)
     expect(mocks.management.getInstalled).toHaveBeenCalled()
     expect(mocks.notification.notify).toHaveBeenCalledWith(
       expect.objectContaining({ severity: Severity.Info }),
@@ -461,9 +462,15 @@ describe('ExtensionsWorkbenchService', () => {
     ).toBeUndefined()
   })
 
-  it('marks external extensions unavailable in a remote workspace but leaves built-ins alone', async () => {
+  it('splits remote-installed and local user extensions across the remote/local sides', async () => {
     const mocks = makeMocks()
-    vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(
+        authority
+          ? [localExtension({ identifier: 'acme.remote', location: '' })]
+          : [localExtension()],
+      ),
+    )
     vi.mocked(mocks.management.listBuiltinExtensions).mockResolvedValue([
       localExtension({ identifier: 'universe.git', source: 'builtin' }),
     ])
@@ -474,19 +481,240 @@ describe('ExtensionsWorkbenchService', () => {
     const svc = makeService(mocks)
     await svc.refreshInstalled()
 
-    const external = svc.getInstalled().find((e) => e.id === 'acme.installed')
-    const builtin = svc.getInstalled().find((e) => e.id === 'universe.git')
-    expect(external?.unavailableInRemote).toBe(true)
-    expect(builtin?.unavailableInRemote).toBeUndefined()
+    const entries = svc.getInstalled()
+    const remoteEntry = entries.find((e) => e.id === 'acme.remote')
+    expect(remoteEntry?.remote).toBe(true)
+    expect(remoteEntry?.installableInRemote).toBeUndefined()
+    expect(entries.find((e) => e.id === 'universe.git')).toMatchObject({
+      remote: true,
+      isBuiltin: true,
+    })
+    const localEntry = entries.find((e) => e.id === 'acme.installed')
+    expect(localEntry?.remote).toBeUndefined()
+    expect(localEntry?.installableInRemote).toBe(true)
+    // Dev extensions aren't listed in a remote workspace (the host never loads them).
+    expect(entries.some((e) => e.isUnderDevelopment)).toBe(false)
+    // The facade exposes the authority + its label.
+    expect(svc.authority).toBe('host')
+    expect(svc.remoteLabel).toBe('SSH: host')
   })
 
-  it('does not flag external extensions unavailable in a local workspace', async () => {
+  it('does not mark remote/local side flags in a local workspace', async () => {
     const mocks = makeMocks()
     vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
     const svc = makeService(mocks)
     await svc.refreshInstalled()
 
-    expect(svc.getInstalled()[0]?.unavailableInRemote).toBeUndefined()
+    expect(svc.authority).toBeUndefined()
+    expect(svc.getInstalled()[0]?.remote).toBeUndefined()
+    expect(svc.getInstalled()[0]?.installableInRemote).toBeUndefined()
+  })
+
+  it('routes gallery + VSIX installs through the remote authority in a remote workspace', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.gallery.query).mockResolvedValue({
+      extensions: [galleryExtension()],
+      total: 1,
+    })
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+    await svc.search('market')
+
+    await svc.install(svc.getSearchResults()[0]!)
+    expect(mocks.management.installFromGallery).toHaveBeenCalledWith(expect.anything(), 'host')
+
+    await svc.installVSIX('/tmp/ext.vsix')
+    expect(mocks.management.installVSIX).toHaveBeenCalledWith('/tmp/ext.vsix', 'host')
+  })
+
+  it('uninstalls a remote-side entry remotely and a local-side entry locally', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(
+        authority
+          ? [localExtension({ identifier: 'acme.remote', location: '' })]
+          : [localExtension()],
+      ),
+    )
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const remoteEntry = svc.getInstalled().find((e) => e.id === 'acme.remote')!
+    await svc.uninstall(remoteEntry)
+    expect(mocks.management.uninstall).toHaveBeenCalledWith('acme.remote', 'host')
+
+    const localEntry = svc.getInstalled().find((e) => e.id === 'acme.installed')!
+    await svc.uninstall(localEntry)
+    expect(mocks.management.uninstall).toHaveBeenCalledWith('acme.installed', undefined)
+  })
+
+  it('installInRemote looks up the marketplace and installs into the remote', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(authority ? [] : [localExtension()]),
+    )
+    vi.mocked(mocks.gallery.getExtensions).mockResolvedValue([
+      galleryExtension({ identifier: 'acme.installed' }),
+    ])
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entry = svc.getInstalled().find((e) => e.id === 'acme.installed')!
+    expect(entry.installableInRemote).toBe(true)
+
+    await expect(svc.canInstallInRemote('acme.installed')).resolves.toBe(true)
+    await expect(svc.installInRemote(entry)).resolves.toBe(true)
+    expect(mocks.gallery.getExtensions).toHaveBeenCalledWith(['acme.installed'])
+    expect(mocks.management.installFromGallery).toHaveBeenCalledWith(expect.anything(), 'host')
+  })
+
+  it('installInRemote returns false without installing when the marketplace has no entry', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(authority ? [] : [localExtension()]),
+    )
+    vi.mocked(mocks.gallery.getExtensions).mockResolvedValue([])
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await expect(svc.canInstallInRemote('acme.installed')).resolves.toBe(false)
+    await expect(svc.installInRemote(svc.getInstalled()[0]!)).resolves.toBe(false)
+    expect(mocks.management.installFromGallery).not.toHaveBeenCalled()
+  })
+
+  it('resolves built-in icons locally and remote user-extension icons remotely', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(
+        authority ? [localExtension({ identifier: 'acme.remote', location: '' })] : [],
+      ),
+    )
+    vi.mocked(mocks.management.listBuiltinExtensions).mockResolvedValue([
+      localExtension({ identifier: 'universe.git', source: 'builtin' }),
+    ])
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const builtin = svc.getInstalled().find((e) => e.id === 'universe.git')!
+    const remoteUser = svc.getInstalled().find((e) => e.id === 'acme.remote')!
+
+    await svc.getIcon(builtin)
+    await svc.getIcon(remoteUser)
+
+    expect(mocks.management.getLocalIcon).toHaveBeenCalledWith('universe.git', undefined)
+    expect(mocks.management.getLocalIcon).toHaveBeenCalledWith('acme.remote', 'host')
+  })
+
+  it('ignores a stale refresh whose remote response lands after a newer one', async () => {
+    const mocks = makeMocks()
+    let resolveFirstRemote: (v: ILocalExtension[]) => void = () => {}
+    let firstRemoteCalled = false
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) => {
+      if (!authority) return Promise.resolve([localExtension({ identifier: 'acme.local' })])
+      if (!firstRemoteCalled) {
+        firstRemoteCalled = true
+        return new Promise<ILocalExtension[]>((res) => {
+          resolveFirstRemote = res
+        })
+      }
+      return Promise.resolve([localExtension({ identifier: 'acme.second', location: '' })])
+    })
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+
+    const first = svc.refreshInstalled()
+    const second = svc.refreshInstalled()
+    await second
+
+    // Now let the stale first remote response land — it must not overwrite state.
+    resolveFirstRemote([localExtension({ identifier: 'acme.first', location: '' })])
+    await first
+
+    const ids = svc.getInstalled().map((e) => e.id)
+    expect(ids).toContain('acme.second')
+    expect(ids).not.toContain('acme.first')
+  })
+
+  it('keeps the last remote set and updates the local set when the remote host is unreachable', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(
+        authority
+          ? [localExtension({ identifier: 'acme.remote', location: '' })]
+          : [localExtension()],
+      ),
+    )
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    // Remote goes down; the remote branch now rejects while the local branch returns a new set.
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) => {
+      if (authority) return Promise.reject(new Error('disconnected'))
+      return Promise.resolve([localExtension({ identifier: 'acme.updated' })])
+    })
+
+    await expect(svc.refreshInstalled()).resolves.toBeUndefined()
+
+    const entries = svc.getInstalled()
+    expect(entries.find((e) => e.id === 'acme.remote')?.remote).toBe(true)
+    expect(entries.find((e) => e.id === 'acme.updated')).toBeDefined()
+  })
+
+  it('prefetches the marketplace once for all installable-in-remote ids', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockImplementation((authority?: string) =>
+      Promise.resolve(
+        authority
+          ? []
+          : [
+              localExtension({ identifier: 'acme.one' }),
+              localExtension({ identifier: 'acme.two' }),
+            ],
+      ),
+    )
+    vi.mocked(mocks.gallery.getExtensions).mockResolvedValue([
+      galleryExtension({ identifier: 'acme.one' }),
+      galleryExtension({ identifier: 'acme.two' }),
+    ])
+    ;(mocks.workspace as { current: IWorkspaceService['current'] }).current = {
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/root' }),
+      name: 'root',
+    }
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    await expect(svc.canInstallInRemote('acme.one')).resolves.toBe(true)
+    await expect(svc.canInstallInRemote('acme.two')).resolves.toBe(true)
+
+    expect(mocks.gallery.getExtensions).toHaveBeenCalledTimes(1)
+    expect(mocks.gallery.getExtensions).toHaveBeenCalledWith(['acme.one', 'acme.two'])
   })
 
   it('annotates gallery version compatibility (fallback version + all-incompatible)', async () => {

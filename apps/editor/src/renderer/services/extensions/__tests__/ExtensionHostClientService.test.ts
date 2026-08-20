@@ -12,6 +12,7 @@ import {
   Emitter,
   Event,
   IpcChannelDisposedError,
+  REMOTE_SCHEME,
   type IAiModelService,
   type ICommandService,
   type IConfigurationChangeEvent,
@@ -159,7 +160,7 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
 
 /** Mutable workspace state a test flips before firing the change event. */
 interface WorkspaceState {
-  current: { folder: { fsPath: string } } | undefined
+  current: { folder: { fsPath: string; scheme?: string; authority?: string } } | undefined
 }
 
 function makeServiceWith(
@@ -172,6 +173,7 @@ function makeServiceWith(
     effectiveDisabledIds?: string[]
     builtinIds?: string[]
     installedIds?: string[]
+    installedRemoteIds?: string[]
   },
   configChange: Event<IConfigurationChangeEvent> = Event.None,
 ) {
@@ -227,7 +229,16 @@ function makeServiceWith(
     {} as IThemeService,
     {
       getDisabledIds: vi.fn().mockResolvedValue([]),
-      getInstalled: vi.fn().mockResolvedValue((stubs?.installedIds ?? []).map(asLocal)),
+      getInstalled: vi
+        .fn()
+        .mockImplementation((authority?: string) =>
+          Promise.resolve(
+            (authority !== undefined
+              ? (stubs?.installedRemoteIds ?? [])
+              : (stubs?.installedIds ?? [])
+            ).map(asLocal),
+          ),
+        ),
       listBuiltinExtensions: vi.fn().mockResolvedValue((stubs?.builtinIds ?? []).map(asLocal)),
     } as unknown as IExtensionManagementService,
     {
@@ -318,6 +329,36 @@ describe('ExtensionHostClientService', () => {
     await svc.start()
     const spec = vi.mocked(host.start).mock.calls[0]?.[0]
     expect(spec?.disabledIds).toEqual(['shipped.disabled'])
+
+    svc.dispose()
+  })
+
+  it('intersects the disabled set against builtins ∪ remote-installed in a remote workspace', async () => {
+    // In a remote workspace the host scans built-ins ∪ remote user extensions, so
+    // a remote-disabled extension must be reachable from UNIVERSE_DISABLED_EXTENSIONS
+    // — but a local-only id must stay out (the host never scans it).
+    const host = fakeHost()
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      {
+        current: {
+          folder: { fsPath: '/remote', scheme: REMOTE_SCHEME, authority: 'host' },
+        },
+      },
+      {
+        effectiveDisabledIds: ['remote.disabled', 'local.disabled'],
+        builtinIds: [],
+        installedIds: ['local.disabled'],
+        installedRemoteIds: ['remote.disabled'],
+      },
+    )
+
+    await svc.start()
+    const spec = vi.mocked(host.start).mock.calls[0]?.[0]
+    expect(spec?.disabledIds).toEqual(['remote.disabled'])
 
     svc.dispose()
   })

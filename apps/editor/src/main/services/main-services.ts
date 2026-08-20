@@ -197,6 +197,7 @@ registerSingletonFactory(
       undefined,
       () => normalizeDevExtensionPaths(acc.get(IEnvironmentMainService).extensionDevPaths),
       resolveMarketplaceSigningKeys(acc.get(IEnvironmentMainService).gallerySigningKeys),
+      acc.get(IRemoteConnectionService),
     ),
 )
 registerSingleton(

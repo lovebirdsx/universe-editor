@@ -8,3 +8,4 @@
 export * from './protocol/index.js'
 export * from './contracts/index.js'
 export * from './glob/index.js'
+export * from './installedExtensions.js'

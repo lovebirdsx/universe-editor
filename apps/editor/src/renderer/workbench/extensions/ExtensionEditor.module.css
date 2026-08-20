@@ -59,6 +59,24 @@
   display: flex;
   gap: 8px;
   margin-top: 4px;
+  align-items: center;
+}
+
+.badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--vscode-badge-background, rgba(255, 255, 255, 0.12));
+  color: var(--vscode-badge-foreground, #cccccc);
+}
+
+.remoteHint {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.8;
 }
 
 .warning {

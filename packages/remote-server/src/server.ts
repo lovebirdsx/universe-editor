@@ -52,6 +52,7 @@ import { RemoteFileStreamService } from './fileStreamService.js'
 import { RemoteTerminalService } from './terminalService.js'
 import { RemoteAgentConfigService } from './agentConfigService.js'
 import { RemoteAgentBinaryService } from './agentBinaryService.js'
+import { RemoteExtensionManagementService } from './extensionManagementService.js'
 import { resolveVendorAgentEntry } from './vendorAgentEntry.js'
 import { SERVER_VERSION } from './version.js'
 
@@ -67,7 +68,9 @@ export interface CreateRemoteServerOptions {
   /** Override the claude/codex config roots (tests; default = remote home). */
   readonly claudeConfigPath?: string
   readonly codexConfigPath?: string
-  /** Root dir for downloaded native agent binaries; default = <server data dir>/agent-bin. */
+  /** Server data dir (`--data-dir`); default = ~/.universe-editor-server. */
+  readonly dataDir?: string
+  /** Root dir for downloaded native agent binaries; default = <dataDir>/agent-bin. */
   readonly agentBinaryDir?: string
 }
 
@@ -78,6 +81,7 @@ export function createRemoteServer(
 ): IDisposable {
   const log = logger ?? new NullLogger()
   const disposables = new DisposableStore()
+  const dataDir = options?.dataDir ?? join(homedir(), '.universe-editor-server')
 
   // Route every `file:` resource to the local disk provider. No trash hook: the
   // remote host cannot reach the desktop's recycle bin, so useTrash fails loud.
@@ -204,11 +208,16 @@ export function createRemoteServer(
     ProxyChannel.fromService(
       disposables.add(
         new RemoteAgentBinaryService({
-          agentBinaryDir:
-            options?.agentBinaryDir ?? join(homedir(), '.universe-editor-server', 'agent-bin'),
+          agentBinaryDir: options?.agentBinaryDir ?? join(dataDir, 'agent-bin'),
           loggerService,
         }),
       ),
+    ),
+  )
+  server.registerChannel(
+    RemoteChannels.ExtensionManagement,
+    ProxyChannel.fromService(
+      disposables.add(new RemoteExtensionManagementService({ dataDir, loggerService })),
     ),
   )
 

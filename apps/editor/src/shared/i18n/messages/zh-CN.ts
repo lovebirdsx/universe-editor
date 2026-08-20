@@ -76,7 +76,18 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'extManagement.error.unsigned': '市场条目 {id}@{version} 未签名——拒绝安装。',
   'extManagement.error.engineMismatch':
     '该扩展需要 universe {required}，而当前宿主 API 为 {actual}。',
+  'extManagement.error.remoteUnavailable': '{authority} 的远程扩展管理不可用。',
+  'extManagement.error.remoteOperation': '在 {authority} 上的扩展操作失败：{message}',
   'extGallery.error.downloadFailed': '下载 {id} 失败：HTTP {status}',
+  'extensions.installInRemote': '安装到远程',
+  'extensions.installInRemote.label': '安装到 {label}',
+  'extensions.installInRemote.hint':
+    '此扩展已安装在本机，但需安装到 {label} 才能在此工作区中运行。',
+  'extensions.installInRemote.failed': '在 {label} 上安装 {name} 失败：{error}',
+  'extensions.installInRemote.unavailable': '该扩展在市场中不可用，因此无法安装到远程工作区。',
+  'extensions.installInRemote.unavailable.badge': '远程不可用',
+  'extensions.group.local': '本机',
+  'extensions.noneInstalled.local': '没有已安装的本机扩展',
 
   // --- Menus ---
   'menu.activityBar': '活动栏',

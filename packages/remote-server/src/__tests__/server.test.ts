@@ -24,7 +24,10 @@ import {
   type WatcherHostResponse,
 } from '@universe-editor/platform'
 import { createRemoteServer } from '../server.js'
-import type { IRemoteAgentBinaryService } from '@universe-editor/node-services'
+import type {
+  IRemoteAgentBinaryService,
+  IRemoteExtensionManagementService,
+} from '@universe-editor/node-services'
 
 const tempRoots: string[] = []
 
@@ -42,7 +45,7 @@ afterEach(async () => {
   )
 })
 
-function connect(options?: { agentBinaryDir?: string }): {
+function connect(options?: { agentBinaryDir?: string; dataDir?: string }): {
   getClient: <T extends object>(name: string) => T
   dispose: () => void
 } {
@@ -51,6 +54,7 @@ function connect(options?: { agentBinaryDir?: string }): {
   const clientPair = new ChannelPair(b)
   const serverDisposable = createRemoteServer(serverPair.server, undefined, {
     ...(options?.agentBinaryDir !== undefined ? { agentBinaryDir: options.agentBinaryDir } : {}),
+    ...(options?.dataDir !== undefined ? { dataDir: options.dataDir } : {}),
   })
   return {
     getClient: <T extends object>(name: string) =>
@@ -103,6 +107,18 @@ describe('createRemoteServer', () => {
       await expect(svc.resolve('codex', { allowDownload: false })).rejects.toThrow(
         /not downloaded yet/,
       )
+    } finally {
+      dispose()
+    }
+  })
+
+  it('registers the extensionManagement channel and lists an empty install over the wire', async () => {
+    const dataDir = await makeTempRoot()
+    const { getClient, dispose } = connect({ dataDir })
+    try {
+      const svc = getClient<IRemoteExtensionManagementService>(RemoteChannels.ExtensionManagement)
+      expect(await svc.listInstalled()).toEqual([])
+      expect(await svc.getDisabledIds()).toEqual([])
     } finally {
       dispose()
     }

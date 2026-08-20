@@ -18,10 +18,12 @@
    packages/extension-gallery/src/{protocol,query,parse}.ts   /extensionquery POST 协议 codec + pickVsixAsset + readEngineConstraint
    packages/extensions-common/src/{manifest,manifest-schema}.ts   manifest 校验（含市场元数据字段）+ semver.ts（satisfies/compareVersions）
 
-② main 服务（IO / 网络 / 落盘）
-   apps/editor/src/main/services/extensionManagement/extensionManagementService.ts   install/uninstall/getInstalled + installFromGallery + 启用禁用 + 更新 + 恶意隔离
+② main 服务（IO / 网络 / 落盘编排）
+   apps/editor/src/main/services/extensionManagement/extensionManagementService.ts   install/uninstall/getInstalled + installFromGallery + 启用禁用 + 更新 + 恶意隔离（落盘调共享引擎）
    apps/editor/src/main/services/extensionManagement/extensionGalleryService.ts      query/getExtensions/download/getControlManifest（网络失败一律降级空、绝不 throw）
-   apps/editor/src/main/services/extensionManagement/installedExtensionsManifest.ts  extensions.json 读写（installed[] + enablement 往返）
+   packages/node-services/src/extensions/extensionInstallEngine.ts                    纯 node 安装引擎（installVsix 七步 / uninstallExtension / listInstalledExtensions / sweepObsolete，main 与远端 server 共享）
+   packages/node-services/src/extensions/installedExtensionsManifest.ts               extensions.json 读写（installed[] + enablement 往返 + .obsolete + rename-with-retries）
+   packages/node-services/src/extensions/nls.ts                                       manifest NLS 本地化（%key% → package.nls*.json，与 extension-host/src/nls.ts 并行）
 
 ③ shared IPC 契约（createDecorator + wire DTO）
    apps/editor/src/shared/ipc/extensionManagementService.ts   IExtensionManagementService + ILocalExtension + IExtensionUpdate
@@ -49,7 +51,7 @@
 
 ### 管理服务 `extensionManagementService.ts`
 
-- **落盘七步（install）**：解压到临时目录 → 校验 manifest → 目标 `<userData>/extensions/<id>-<version>/` → 原子 rename → 写 `extensions.json` → 清 `.obsolete` 标记 → fire `onDidChangeExtensions`。Windows 文件占用兜底：删不掉的目录打 `.obsolete` 标记，下次启动扫描时清扫。
+- **落盘七步（install）**：解压到临时目录 → 校验 manifest → 目标 `<userData>/extensions/<id>-<version>/` → 原子 rename → 写 `extensions.json` → 清 `.obsolete` 标记 → fire `onDidChangeExtensions`。Windows 文件占用兜底：删不掉的目录打 `.obsolete` 标记，下次启动扫描时清扫。**落盘本身在共享引擎 `installVsix`（`packages/node-services/src/extensions/extensionInstallEngine.ts`），本服务只做 gallery 下载/验签/防投毒 + 队列 + 事件编排。**
 - **`installFromGallery`（防投毒核心）**：`_assertNotMalicious` → `gallery.download` → `readVsixManifest` → **校验下载包的 `publisher.name.version` 与市场元数据一致**（不一致 throw `does not match the marketplace entry`）→ 复用本地 install（带 `galleryMetadata`）。这一步是防"市场元数据说是 A、下载下来是 B"的投毒。
 - **`IManagementGallery`**（注入接口，`{download, getControlManifest, getExtensions}`）：构造函数第 3 参，让管理服务能反查市场（更新检查、恶意清单）。
 - **启用禁用**：`getDisabledIds` / `setEnablement`（全局粒度，持久化在 `extensions.json` 的 enablement 段）。
@@ -62,13 +64,29 @@
 - **网络红线：`query`/`getExtensions` 任何网络失败都降级返回空、绝不 throw**（市场不可达时 UI 仍可用，只是搜不到）。
 - `GALLERY_URL` 经 `IEnvironmentMainService.galleryUrl` 读（三层配置 cli `--gallery-url` / env `UNIVERSE_GALLERY_URL` / file `galleryUrl`）。**默认空 = OSS 语义**：未配置则市场搜索恒空，只有本地 `.vsix` 可用。
 
-### enablement 持久化 `installedExtensionsManifest.ts`
+### enablement 持久化（`packages/node-services/src/extensions/installedExtensionsManifest.ts`）
 
 `extensions.json` 同时存 `installed[]` 和 enablement。**坑：`writeInstalledRecords` 必须保留 enablement**（经 `readManifestFile` 往返），否则装一个新扩展就把别的禁用状态冲掉了。
 
 ### 启用禁用 → 生效链路（host 过滤）
 
 禁用不是运行时卸载，是**扫描时过滤**：`getDisabledIds` → renderer 传进 host 启动 spec 的 `disabledIds` → main 写 env `UNIVERSE_DISABLED_EXTENSIONS` → `packages/extension-host/src/bootstrap.ts` 扫描时按 `e.id` 过滤掉。改启用禁用生效方式就顺这条链找。
+
+### 远程路由（authority 尾参）
+
+9 个方法带可选 `authority?` 尾参（`getInstalled` / `installVSIX` / `installFromGallery` / `uninstall` / `getDisabledIds` / `getLocalIcon` / `setEnablement` / `checkForUpdates` / `updateExtension`），非空即路由到远端：
+
+- **代理取得**：`_remoteProxy(authority)` = `IRemoteConnectionService.getServiceProxy(authority, RemoteChannels.ExtensionManagement)`，**每次调用都重取、绝不缓存**（跨 stop/reconnect 稳定，缓存会致死代理——见根 CLAUDE.md 远程行）。
+- **远端目录**：server 侧 `RemoteExtensionManagementService`（`packages/remote-server/src/extensionManagementService.ts`）管理 `<dataDir>/user-extensions`；目录解析单一真相在 `packages/remote-server/src/serverPaths.ts`（与 extensionHostConnection 共用，host 恒扫同目录）。
+- **远端安装 = 本地验签 + 分片上传**：`_installVSIXRemote`/`_installFromGalleryRemote` 先在 client 侧跑完所有本地闸门（防投毒、市场验签、引擎兼容 `_assertCompatibleHost`），再把 VSIX 经 `uploadBegin → uploadChunk(≤1 MiB) → installUploaded` 分片上传到远端；server 端只 re-check `identifier/version` 一致后调共享 `installVsix` 引擎落盘（引擎兼容不在 server 重验）。
+- **协议契约**：`IRemoteExtensionManagementService` + 通道名 `RemoteChannels.ExtensionManagement` 在 `packages/node-services/src/extensions/extensionManagementProtocol.ts`（协议 v6，见 `packages/platform/src/remote/remoteProtocol.ts`）。
+- **错误包 authority 上下文**：`_callRemote`/`_wrapRemoteError` 把远端失败包成 `{authority,message}` 的本地化错误（`extManagement.error.remoteUnavailable` / `remoteOperation`）。
+
+**已知限制**（每条一行）：
+- `quarantineMalicious` 只治理本机——远端安装时 `_assertNotMalicious` 已在客户端拦截，事后被标恶意的远端已装扩展暂不自动禁用；
+- Install in Remote 的可用性判定中"市场不可达"与"市场查无此扩展"同显示为不可安装；
+- 同 id 扩展本地/远端两侧条目在 UI 共用同一 enablement 徽标状态（状态 Map 以 id 为键）；
+- 写序列化为 daemon 进程级（按 user-extensions 目录 keyed），跨 daemon 进程（不同 dataDir）天然隔离。
 
 ## ③ shared IPC 契约
 
@@ -103,12 +121,13 @@
 
 - **加一类市场协议字段 / 换 asset 解析**：`extension-gallery/parse.ts`（+ `protocol.ts` 常量），纯单测。
 - **改 VSIX 读取 / 打包兼容**：`extension-packaging/vsix.ts`（zip-slip 防护勿动）。
-- **改安装落盘流程 / 原子性 / 占用兜底**：`extensionManagementService.ts` 的 install 七步 + `installedExtensionsManifest.ts`。
+- **改安装落盘流程 / 原子性 / 占用兜底**：`packages/node-services/src/extensions/extensionInstallEngine.ts` 的 installVsix 七步 + 同目录 `installedExtensionsManifest.ts`。
 - **改防投毒校验**：`extensionManagementService._installFromGallery` 的一致性校验段。
 - **改市场验签 / 密钥轮换**：纯逻辑在 `extension-packaging/signature.ts`（verifyVsixSignature，fail-closed 错误码）；公钥在 `marketplaceSigningKeys.ts`（env `UNIVERSE_GALLERY_SIGNING_KEYS` 叠加）；插入点在 `_installFromGallery` 防投毒段后；发布侧签名在 `scripts/gallery`（keygen/publish）。
 - **改市场地址配置**：`main/environment/configItems.ts`（GALLERY_URL 项 + CLI_OPTIONS）+ `environmentMainService.ts` getter。
 - **改启用禁用粒度 / 生效方式**：管理服务 `getDisabledIds/setEnablement` + host 过滤链（env `UNIVERSE_DISABLED_EXTENSIONS` → bootstrap 过滤）。
 - **改更新检查策略**：`checkForUpdates`（版本比较用 `extensions-common/semver.ts` 的 `compareVersions`；选版/兼容过滤用 `extension-gallery` 的 `pickCompatibleVersion`，不推不兼容新版）。
+- **改远端路由 / 分片上传 / 远端目录**：`extensionManagementService.ts` 的 `_remoteProxy`/`_uploadAndInstall` + `packages/remote-server/src/{extensionManagementService,serverPaths}.ts` + 协议 `packages/node-services/src/extensions/extensionManagementProtocol.ts`。
 - **改信任提示文案/记住策略**：门面 `ExtensionsWorkbenchService._ensurePublisherTrusted`（storage key `extensions.trustedPublishers`）。
 - **改扩展视图/详情页 UI**：`workbench/extensions/{ExtensionsView,ExtensionEditor}.tsx`。
 - **加扩展相关命令**：`actions/extensionsActions.ts` + `actions/index.ts`（套路 A）。
@@ -156,9 +175,11 @@ pnpm check    # lint+typecheck+test（含 docs:check），仅看错误
 - `packages/extension-packaging/src/vsix.ts` —— VSIX 读取 + zip-slip 防护
 - `packages/extension-gallery/src/{protocol,query,parse}.ts` —— `/extensionquery` 协议 codec + 引擎约束
 - `packages/extensions-common/src/{manifest,manifest-schema}.ts` —— manifest 校验（含市场字段）；`semver.ts` —— satisfies / compareVersions
-- `apps/editor/src/main/services/extensionManagement/extensionManagementService.ts` —— install 七步 + installFromGallery（防投毒）+ 启用禁用 + 更新 + quarantineMalicious
+- `apps/editor/src/main/services/extensionManagement/extensionManagementService.ts` —— install/uninstall/getInstalled + installFromGallery（防投毒）+ 启用禁用 + 更新 + quarantineMalicious（落盘调 node-services 引擎）
 - `apps/editor/src/main/services/extensionManagement/extensionGalleryService.ts` —— query/download/getControlManifest（网络失败降级空）
-- `apps/editor/src/main/services/extensionManagement/installedExtensionsManifest.ts` —— extensions.json（installed + enablement 往返）
+- `packages/node-services/src/extensions/extensionInstallEngine.ts` —— installVsix 七步 + uninstallExtension + listInstalledExtensions + sweepObsolete（main 与远端 server 共享）
+- `packages/node-services/src/extensions/installedExtensionsManifest.ts` —— extensions.json（installed + enablement 往返）+ .obsolete + rename-with-retries
+- `packages/node-services/src/extensions/nls.ts` —— manifest NLS 本地化（与 `packages/extension-host/src/nls.ts` 并行）
 - `apps/editor/src/shared/ipc/{extensionManagementService,extensionGalleryService}.ts` —— IPC 契约 + wire DTO
 - `apps/editor/src/renderer/services/extensionsWorkbench/ExtensionsWorkbenchService.ts` —— 门面 + 信任门禁
 - `apps/editor/src/renderer/workbench/extensions/{ExtensionsView,ExtensionEditor}.tsx` —— 视图 + 详情页

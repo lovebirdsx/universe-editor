@@ -10,20 +10,19 @@
 import { createDecorator } from '@universe-editor/platform'
 import type { Event } from '@universe-editor/platform'
 import type { IExtensionManifest } from '@universe-editor/extensions-common'
+import type {
+  ExtensionInstallSource,
+  IExtensionGalleryMetadata,
+} from '@universe-editor/extensions-common'
 import type { IGalleryExtension } from './extensionGalleryService.js'
 
-/** How an installed extension entered the user extensions directory. */
-export type ExtensionInstallSource = 'vsix' | 'gallery' | 'builtin' | 'development'
-
-/** Marketplace metadata carried forward for gallery-sourced installs (UI + updates). */
-export interface IExtensionGalleryMetadata {
-  readonly publisherDisplayName?: string
-  readonly installCount?: number
-  /** The gallery `vsixUrl` at install time — lets update-check re-download. */
-  readonly vsixUrl?: string
-  /** sha256 of the installed VSIX, as advertised + verified at install time. */
-  readonly vsixHash?: string
-}
+// Wire-neutral install-source + gallery-metadata types now live in
+// `@universe-editor/extensions-common` (shared with the node-services install
+// engine); re-exported here so existing IPC import surfaces don't move.
+export type {
+  ExtensionInstallSource,
+  IExtensionGalleryMetadata,
+} from '@universe-editor/extensions-common'
 
 /** A user-installed extension, as tracked in `extensions.json` + on disk. */
 export interface ILocalExtension {
@@ -59,8 +58,12 @@ export interface IExtensionManagementService {
    */
   readonly onDidChangeExtensions: Event<void>
 
-  /** Every extension currently registered in `extensions.json` (and on disk). */
-  getInstalled(): Promise<ILocalExtension[]>
+  /**
+   * Every extension currently registered in `extensions.json` (and on disk).
+   * With `authority`, lists the remote host's user extensions instead (icons
+   * resolve via {@link getLocalIcon}, `location` is empty on the remote).
+   */
+  getInstalled(authority?: string): Promise<ILocalExtension[]>
 
   /**
    * The bundled built-in extensions (git / typescript / markdown / …). Scanned
@@ -84,38 +87,48 @@ export interface IExtensionManagementService {
    * against the marketplace Ed25519 signature (fail-closed: unsigned or invalid
    * packages are refused), then install it. Refuses extensions the control
    * manifest marks malicious. Carries the gallery metadata into the installed
-   * record.
+   * record. With `authority`, downloads + verifies locally then uploads the
+   * VSIX to the remote host for install.
    */
-  installFromGallery(extension: IGalleryExtension): Promise<ILocalExtension>
+  installFromGallery(extension: IGalleryExtension, authority?: string): Promise<ILocalExtension>
 
   /**
    * Install from a local `.vsix` path: read + validate the manifest, check engine
    * compatibility, extract into `<userExtensions>/<id>-<version>` atomically, and
    * register it. Idempotent: re-installing the same id+version returns the
-   * existing entry without error.
+   * existing entry without error. With `authority`, uploads the VSIX chunks to
+   * the remote host and installs it there.
    */
-  installVSIX(vsixPath: string): Promise<ILocalExtension>
+  installVSIX(vsixPath: string, authority?: string): Promise<ILocalExtension>
 
-  /** Uninstall by identifier; removes the folder (or marks it obsolete if busy). */
-  uninstall(identifier: string): Promise<void>
+  /**
+   * Uninstall by identifier; removes the folder (or marks it obsolete if busy).
+   * With `authority`, uninstalls from the remote host's user extensions.
+   */
+  uninstall(identifier: string, authority?: string): Promise<void>
 
-  /** The disabled identifiers (persisted in `extensions.json` enablement map). */
-  getDisabledIds(): Promise<string[]>
+  /**
+   * The disabled identifiers (persisted in `extensions.json` enablement map).
+   * With `authority`, the remote host's disabled set.
+   */
+  getDisabledIds(authority?: string): Promise<string[]>
 
   /**
    * Read a locally-installed / built-in extension's own icon (the manifest `icon`
    * path, relative to its folder) as a `data:` URL. Returns '' when it declares
    * no icon or the file can't be read. The renderer CSP blocks `file://`, so main
-   * reads + encodes it — same pattern as gallery icons.
+   * reads + encodes it — same pattern as gallery icons. With `authority`, fetches
+   * the remote extension's icon from the remote host.
    */
-  getLocalIcon(identifier: string): Promise<string>
+  getLocalIcon(identifier: string, authority?: string): Promise<string>
 
   /**
    * Enable / disable an installed extension. Persists to `extensions.json` and
    * fires onDidChangeExtensions so the host re-scans (a disabled extension is
-   * filtered out of the scan — it stops running entirely).
+   * filtered out of the scan — it stops running entirely). With `authority`,
+   * persists enablement on the remote host.
    */
-  setEnablement(identifier: string, enabled: boolean): Promise<void>
+  setEnablement(identifier: string, enabled: boolean, authority?: string): Promise<void>
 
   /**
    * On startup: disable any installed extension the control manifest now marks
@@ -126,12 +139,13 @@ export interface IExtensionManagementService {
 
   /**
    * Check the marketplace for newer versions of installed gallery-sourced
-   * extensions. Returns the ones with an available update.
+   * extensions. Returns the ones with an available update. With `authority`,
+   * checks the remote host's installed set against the local marketplace.
    */
-  checkForUpdates(): Promise<IExtensionUpdate[]>
+  checkForUpdates(authority?: string): Promise<IExtensionUpdate[]>
 
-  /** Install the newer version for a pending update. */
-  updateExtension(update: IExtensionUpdate): Promise<ILocalExtension>
+  /** Install the newer version for a pending update (remote when `authority` set). */
+  updateExtension(update: IExtensionUpdate, authority?: string): Promise<ILocalExtension>
 }
 
 /** A pending update: an installed extension with a newer gallery version. */

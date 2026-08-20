@@ -38,6 +38,7 @@ import {
 } from '../../services/extensionsWorkbench/extensionListQuery.js'
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
 import { ExtensionIcon } from './ExtensionIcon.js'
+import { InstallInRemoteButton } from './InstallInRemoteButton.js'
 import { ExtensionActionsMenu, type ExtensionActionsMenuState } from './ExtensionActionsMenu.js'
 import styles from './ExtensionsView.module.css'
 
@@ -52,13 +53,14 @@ export function ExtensionsView() {
   const notificationService = useService(INotificationService)
 
   // Re-read the facade's live snapshot whenever it fires onDidChange.
-  const { installed, searching, results } = useEventValue(
+  const { installed, searching, results, remoteLabel } = useEventValue(
     service.onDidChange,
     useCallback(
       () => ({
         installed: service.getInstalled(),
         searching: service.searching,
         results: service.getSearchResults(),
+        remoteLabel: service.remoteLabel,
       }),
       [service],
     ),
@@ -68,6 +70,14 @@ export function ExtensionsView() {
   const [query, setQuery] = useState('')
   const listQuery = parseExtensionListQuery(query)
   const visibleEntries = filterExtensionEntries(installed, listQuery)
+  // In a remote workspace the INSTALLED group splits into the effective remote
+  // side and the local side (built-ins are only listed under @builtin, which
+  // keeps the single-section rendering below).
+  const splitRemote = remoteLabel !== undefined && !listQuery.builtin
+  const remoteEntries = splitRemote
+    ? visibleEntries.filter((e) => e.remote === true)
+    : visibleEntries
+  const localEntries = splitRemote ? visibleEntries.filter((e) => e.remote !== true) : []
   const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -124,6 +134,19 @@ export function ExtensionsView() {
   const openMenu = useCallback((entry: IExtensionEntry, x: number, y: number) => {
     setMenu({ entry, x, y })
   }, [])
+
+  const renderRow = useCallback(
+    (entry: IExtensionEntry) => (
+      <ExtensionRow
+        key={entry.id}
+        entry={entry}
+        onOpen={openDetail}
+        onInstall={() => void service.install(entry)}
+        onOpenMenu={openMenu}
+      />
+    ),
+    [openDetail, openMenu, service],
+  )
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     if (!dragContainsResources(e.dataTransfer)) return
@@ -186,45 +209,52 @@ export function ExtensionsView() {
       </div>
 
       <div className={styles.scroll} ref={scrollRef}>
-        <Section
-          title={
-            listQuery.builtin
-              ? localize('extensions.group.builtin', 'Built-in')
-              : localize('extensions.group.installed', 'Installed')
-          }
-        >
-          {visibleEntries.map((entry) => (
-            <ExtensionRow
-              key={entry.id}
-              entry={entry}
-              onOpen={openDetail}
-              onInstall={() => void service.install(entry)}
-              onOpenMenu={openMenu}
-            />
-          ))}
-          {visibleEntries.length === 0 && (
-            <div className={styles.empty}>
-              {listQuery.text || listQuery.builtin
-                ? localize('extensions.noResults', 'No extensions found')
-                : localize('extensions.noneInstalled', 'No extensions installed')}
-            </div>
-          )}
-        </Section>
+        {splitRemote ? (
+          <>
+            <Section title={remoteLabel!}>
+              {remoteEntries.map(renderRow)}
+              {remoteEntries.length === 0 && (
+                <div className={styles.empty}>
+                  {listQuery.text
+                    ? localize('extensions.noResults', 'No extensions found')
+                    : localize('extensions.noneInstalled', 'No extensions installed')}
+                </div>
+              )}
+            </Section>
+            <Section title={localize('extensions.group.local', 'Local')}>
+              {localEntries.map(renderRow)}
+              {localEntries.length === 0 && (
+                <div className={styles.empty}>
+                  {localize('extensions.noneInstalled.local', 'No local extensions installed')}
+                </div>
+              )}
+            </Section>
+          </>
+        ) : (
+          <Section
+            title={
+              listQuery.builtin
+                ? localize('extensions.group.builtin', 'Built-in')
+                : localize('extensions.group.installed', 'Installed')
+            }
+          >
+            {visibleEntries.map(renderRow)}
+            {visibleEntries.length === 0 && (
+              <div className={styles.empty}>
+                {listQuery.text || listQuery.builtin
+                  ? localize('extensions.noResults', 'No extensions found')
+                  : localize('extensions.noneInstalled', 'No extensions installed')}
+              </div>
+            )}
+          </Section>
+        )}
 
         {marketplaceEnabled && !listQuery.builtin && (
           <Section
             title={localize('extensions.group.marketplace', 'Market Extensions')}
             loading={searching}
           >
-            {results.map((entry) => (
-              <ExtensionRow
-                key={entry.id}
-                entry={entry}
-                onOpen={openDetail}
-                onInstall={() => void service.install(entry)}
-                onOpenMenu={openMenu}
-              />
-            ))}
+            {results.map(renderRow)}
             {!searching && results.length === 0 && (
               <div className={styles.empty}>
                 {localize('extensions.noResults', 'No extensions found')}
@@ -242,6 +272,7 @@ export function ExtensionsView() {
             onOpen: openDetail,
             onUninstall: (entry) => void service.uninstall(entry),
             onSetEnablement: (entry, state) => void service.setEnablement(entry, state),
+            onInstallInRemote: (entry) => void service.installInRemote(entry),
           }}
           onClose={() => setMenu(undefined)}
         />
@@ -359,18 +390,6 @@ function ExtensionRow({
               {localize('extensions.activationFailed', 'Activation Failed')}
             </span>
           )}
-          {entry.unavailableInRemote && (
-            <span
-              className={styles.badge}
-              data-tooltip={localize(
-                'extensions.unavailableInRemote.tooltip',
-                'This extension is installed locally but cannot run in the remote workspace.',
-              )}
-              data-testid="extension-remote-unavailable"
-            >
-              {localize('extensions.unavailableInRemote', 'Unavailable in Remote')}
-            </span>
-          )}
         </div>
         <div className={styles.description}>{entry.description}</div>
         <div className={styles.footer}>
@@ -389,6 +408,12 @@ function ExtensionRow({
             )}
             {entry.installing ? (
               <Spinner size={14} />
+            ) : entry.installableInRemote ? (
+              <InstallInRemoteButton
+                entry={entry}
+                label={localize('extensions.installInRemote', 'Install in Remote')}
+                badgeClassName={styles.badge}
+              />
             ) : entry.installed ? (
               <IconButton
                 label={localize('extensions.manage', 'Manage')}

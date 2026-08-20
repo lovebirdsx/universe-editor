@@ -816,8 +816,11 @@ export interface E2EProbe {
    */
   getScmGroupIdsForResource(suffix: string): readonly string[]
   // -- Extension management probe -------------------------------------------
-  /** Install a local `.vsix`, returning the installed extension's identifier. */
-  installVsixExtension(vsixPath: string): Promise<string>
+  /**
+   * Install a local `.vsix`, returning the installed extension's identifier.
+   * With `authority`, uploads + installs it on the remote host instead.
+   */
+  installVsixExtension(vsixPath: string, authority?: string): Promise<string>
   /**
    * Install from the configured marketplace by `publisher.name`, returning the
    * installed identifier. Requires GALLERY_URL (and signing keys) to be wired
@@ -825,10 +828,10 @@ export interface E2EProbe {
    * management service directly.
    */
   installGalleryExtension(identifier: string): Promise<string>
-  /** Uninstall an extension by identifier. */
-  uninstallExtension(identifier: string): Promise<void>
-  /** Identifiers of every user-installed extension. */
-  getInstalledExtensionIds(): Promise<readonly string[]>
+  /** Uninstall an extension by identifier (from the remote host when `authority` set). */
+  uninstallExtension(identifier: string, authority?: string): Promise<void>
+  /** Identifiers of every user-installed extension (remote host's set when `authority` set). */
+  getInstalledExtensionIds(authority?: string): Promise<readonly string[]>
   /** Identifier + version of every user-installed extension (for version-selection assertions). */
   getInstalledExtensionVersions(): Promise<readonly E2EInstalledExtension[]>
   /** Run the marketplace update check; returns only the compatible pending updates. */

@@ -23,8 +23,10 @@
   "dependencies": {
     "@lydell/node-pty": "catalog:",
     "@parcel/watcher": "catalog:",
-    "@vscode/ripgrep": "catalog:",
+    "@universe-editor/extensions-common": "workspace:*",
+    "@universe-editor/extension-packaging": "workspace:*",
     "@universe-editor/platform": "workspace:*",
+    "@vscode/ripgrep": "catalog:",
     "smol-toml": "catalog:",
     "tar": "catalog:"
   },

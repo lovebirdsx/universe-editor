@@ -24,6 +24,7 @@ import {
   EnablementState,
 } from '../services/extensions/ExtensionEnablementService.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import { IExtensionsWorkbenchService } from '../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
 
 const CATEGORY = localize2('command.category.extensions', 'Extensions')
 
@@ -196,10 +197,13 @@ export class CheckForExtensionUpdatesAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
+    // Snapshot every service synchronously — the accessor is invalid after the
+    // first await.
     const management = accessor.get(IExtensionManagementService)
     const notification = accessor.get(INotificationService)
+    const authority = accessor.get(IExtensionsWorkbenchService).authority
 
-    const updates = await management.checkForUpdates()
+    const updates = await management.checkForUpdates(authority)
     if (updates.length === 0) {
       notification.notify({
         severity: Severity.Info,
@@ -213,7 +217,7 @@ export class CheckForExtensionUpdatesAction extends Action2 {
 
     for (const update of updates) {
       try {
-        await management.updateExtension(update)
+        await management.updateExtension(update, authority)
       } catch (err) {
         notification.notify({
           severity: Severity.Error,

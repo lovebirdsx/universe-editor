@@ -23,6 +23,7 @@ import {
 import { ExtensionEditorInput } from '../../services/editor/ExtensionEditorInput.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
 import { ExtensionIcon } from './ExtensionIcon.js'
+import { InstallInRemoteButton } from './InstallInRemoteButton.js'
 import styles from './ExtensionEditor.module.css'
 
 type Tab = 'readme' | 'contributions'
@@ -82,6 +83,7 @@ function Header({
   entry: IExtensionEntry
   service: IExtensionsWorkbenchService
 }) {
+  const remoteLabel = service.remoteLabel
   return (
     <div className={styles.header}>
       <div className={styles.headerIcon}>
@@ -106,6 +108,22 @@ function Header({
         <div className={styles.headerActions}>
           {entry.installing ? (
             <Spinner size={16} />
+          ) : entry.installableInRemote ? (
+            <>
+              <InstallInRemoteButton
+                entry={entry}
+                label={localize('extensions.installInRemote.label', 'Install in {label}', {
+                  label: remoteLabel ?? '',
+                })}
+                variant="primary"
+                badgeClassName={styles.badge}
+              />
+              {!entry.isBuiltin && (
+                <Button variant="secondary" onClick={() => void service.uninstall(entry)}>
+                  {localize('extensions.uninstall', 'Uninstall')}
+                </Button>
+              )}
+            </>
           ) : entry.installed ? (
             <>
               {!entry.isUnderDevelopment && !entry.isVersionIncompatible && (
@@ -126,6 +144,15 @@ function Header({
             </Button>
           )}
         </div>
+        {entry.installableInRemote && (
+          <div className={styles.remoteHint}>
+            {localize(
+              'extensions.installInRemote.hint',
+              'This extension is installed locally but must be installed on {label} to run in this workspace.',
+              { label: remoteLabel ?? '' },
+            )}
+          </div>
+        )}
         {entry.isVersionIncompatible && (
           <div className={styles.warning} data-testid="extension-version-incompatible-detail">
             {localize('extensions.versionIncompatible', 'Disabled (requires universe {reason})', {

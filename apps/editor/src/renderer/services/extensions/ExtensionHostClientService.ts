@@ -420,11 +420,20 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private async _disabledIds(): Promise<string[]> {
     const effective = new Set(await this._enablement.getEffectiveDisabledIds())
     if (effective.size === 0) return []
+    // A remote host scans built-ins ∪ remote user extensions, so intersect
+    // against that set — otherwise a remote-disabled extension would never reach
+    // UNIVERSE_DISABLED_EXTENSIONS.
     const owned = [
       ...(await this._management.listBuiltinExtensions()),
-      ...(await this._management.getInstalled()),
+      ...(await this._management.getInstalled(this._remoteAuthority())),
     ]
     return owned.map((e) => e.identifier).filter((id) => effective.has(id))
+  }
+
+  /** The current workspace folder's remote authority, or undefined for a local folder. */
+  private _remoteAuthority(): string | undefined {
+    const folder = this._workspace.current?.folder
+    return folder !== undefined && folder.scheme === REMOTE_SCHEME ? folder.authority : undefined
   }
 
   private _claimCommand(id: string): void {

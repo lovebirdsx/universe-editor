@@ -36,7 +36,7 @@ import type { IFileService } from '../files/fileService.js'
 import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherProtocol.js'
 
 /** Bumped on any incompatible change to the framing, handshake or DTOs below. */
-export const REMOTE_PROTOCOL_VERSION = 5
+export const REMOTE_PROTOCOL_VERSION = 6
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'
@@ -131,6 +131,16 @@ export const RemoteChannels = {
   AcpTerminal: 'acpTerminal',
   AgentConfig: 'agentConfig',
   AgentBinary: 'agentBinary',
+  /**
+   * Remote user-extension management (list / chunked vsix upload + install /
+   * uninstall / enablement). Service contract lives in
+   * `@universe-editor/node-services` (extensionManagementProtocol) — like
+   * AgentBinary, both the editor main process and the server implement against
+   * it. DTOs carry no paths (extension locations stay server-private); the vsix
+   * is downloaded + signature-verified on the CLIENT and streamed up in chunks,
+   * so the server never needs gallery/network access.
+   */
+  ExtensionManagement: 'extensionManagement',
 } as const
 
 export type RemoteChannelName = (typeof RemoteChannels)[keyof typeof RemoteChannels]

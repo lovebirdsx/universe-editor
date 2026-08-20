@@ -158,8 +158,9 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
   }
 
   hasUserExtensions(): Promise<boolean> {
-    // Remote user extensions are not synchronized this phase.
-    return Promise.resolve(false)
+    // The remote host always scans its user-extensions dir (the server sets
+    // UNIVERSE_USER_EXTENSIONS_DIR itself); there is no client-side dir to check.
+    return Promise.resolve(true)
   }
 
   override dispose(): void {

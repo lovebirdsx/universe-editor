@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Emitter } from '@universe-editor/platform'
+import { Emitter, REMOTE_SCHEME } from '@universe-editor/platform'
 import type { IStorageService, IWorkspaceService, IWorkspace } from '@universe-editor/platform'
 import type { IExtensionManagementService } from '../../../../shared/ipc/extensionManagementService.js'
 import { ExtensionEnablementService, EnablementState } from '../ExtensionEnablementService.js'
@@ -21,27 +21,46 @@ function makeStorage() {
   return { storage, workspace, onDidChangeWorkspaceScope }
 }
 
-function makeMocks(opts: { hasWorkspace?: boolean; globalDisabled?: string[] } = {}) {
+function makeMocks(
+  opts: { hasWorkspace?: boolean; globalDisabled?: string[]; authority?: string } = {},
+) {
   const globalDisabled = new Set(opts.globalDisabled ?? [])
   const onDidChangeExtensions = new Emitter<void>()
+  const calls: { id: string; enabled: boolean; authority: string | undefined }[] = []
   const management = {
     onDidChangeExtensions: onDidChangeExtensions.event,
-    getDisabledIds: vi.fn(async () => [...globalDisabled]),
-    setEnablement: vi.fn(async (id: string, enabled: boolean) => {
+    getDisabledIds: vi.fn(async (_authority?: string) => [...globalDisabled]),
+    setEnablement: vi.fn(async (id: string, enabled: boolean, authority?: string) => {
+      calls.push({ id, enabled, authority })
       if (enabled) globalDisabled.delete(id)
       else globalDisabled.add(id)
     }),
   } as unknown as IExtensionManagementService
   const { storage, workspace } = makeStorage()
+  const onDidChangeWorkspace = new Emitter<IWorkspace | null>()
   const current: IWorkspace | null = opts.hasWorkspace
-    ? ({ folder: { fsPath: '/ws' } } as unknown as IWorkspace)
+    ? ({
+        folder: {
+          fsPath: '/ws',
+          scheme: opts.authority !== undefined ? REMOTE_SCHEME : 'file',
+          ...(opts.authority !== undefined ? { authority: opts.authority } : {}),
+        },
+      } as unknown as IWorkspace)
     : null
   const workspaceService = {
     current,
     whenReady: Promise.resolve(),
-    onDidChangeWorkspace: new Emitter<IWorkspace | null>().event,
+    onDidChangeWorkspace: onDidChangeWorkspace.event,
   } as unknown as IWorkspaceService
-  return { management, storage, workspace, workspaceService, globalDisabled }
+  return {
+    management,
+    storage,
+    workspace,
+    workspaceService,
+    globalDisabled,
+    calls,
+    onDidChangeWorkspace,
+  }
 }
 
 function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionEnablementService {
@@ -65,11 +84,14 @@ describe('ExtensionEnablementService', () => {
     const mocks = makeMocks()
     const svc = makeService(mocks)
     await svc.setEnablement('a.b', EnablementState.DisabledGlobally)
-    expect(mocks.management.setEnablement).toHaveBeenCalledWith('a.b', false)
+    expect(mocks.calls).toEqual([{ id: 'a.b', enabled: false, authority: undefined }])
     expect(await svc.getEnablementState('a.b')).toBe(EnablementState.DisabledGlobally)
 
     await svc.setEnablement('a.b', EnablementState.EnabledGlobally)
-    expect(mocks.management.setEnablement).toHaveBeenCalledWith('a.b', true)
+    expect(mocks.calls).toEqual([
+      { id: 'a.b', enabled: false, authority: undefined },
+      { id: 'a.b', enabled: true, authority: undefined },
+    ])
     expect(await svc.getEnablementState('a.b')).toBe(EnablementState.EnabledGlobally)
   })
 
@@ -120,6 +142,36 @@ describe('ExtensionEnablementService', () => {
     const fired = vi.fn()
     svc.onDidChangeEnablement(fired)
     await svc.setEnablement('a.b', EnablementState.DisabledGlobally)
+    expect(fired).toHaveBeenCalled()
+  })
+
+  it('routes global enable/disable through the remote authority', async () => {
+    const mocks = makeMocks({ hasWorkspace: true, authority: 'host' })
+    const svc = makeService(mocks)
+    await svc.setEnablement('a.b', EnablementState.DisabledGlobally)
+    expect(mocks.calls).toEqual([{ id: 'a.b', enabled: false, authority: 'host' }])
+  })
+
+  it('reads the remote disabled set in a remote workspace', async () => {
+    const remoteDisabled = new Set(['a.remote'])
+    const mocks = makeMocks({ hasWorkspace: true, authority: 'host' })
+    vi.mocked(mocks.management.getDisabledIds).mockImplementation(async (authority?: string) =>
+      authority === 'host' ? [...remoteDisabled] : [],
+    )
+    const svc = makeService(mocks)
+    expect(await svc.getEnablementState('a.remote')).toBe(EnablementState.DisabledGlobally)
+    expect(await svc.getEffectiveDisabledIds()).toContain('a.remote')
+  })
+
+  it('re-fires enablement change when the authority changes', async () => {
+    const mocks = makeMocks({ hasWorkspace: true, authority: 'host' })
+    const svc = makeService(mocks)
+    const fired = vi.fn()
+    svc.onDidChangeEnablement(fired)
+    ;(mocks.workspaceService as { current: IWorkspace | null }).current = {
+      folder: { fsPath: '/ws', scheme: 'file' },
+    } as unknown as IWorkspace
+    mocks.onDidChangeWorkspace.fire(mocks.workspaceService.current)
     expect(fired).toHaveBeenCalled()
   })
 })
