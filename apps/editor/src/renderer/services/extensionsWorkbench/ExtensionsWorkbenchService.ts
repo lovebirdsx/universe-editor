@@ -11,6 +11,7 @@
 import { createDecorator, Disposable, Emitter, type Event } from '@universe-editor/platform'
 import {
   IDialogService,
+  IHostService,
   INotificationService,
   IStorageService,
   IWorkspaceService,
@@ -28,7 +29,7 @@ import {
   type IGalleryExtension,
   type IQueryOptions,
 } from '../../../shared/ipc/extensionGalleryService.js'
-import { GallerySortBy } from '@universe-editor/extension-gallery'
+import { GallerySortBy, pickCompatibleVersion } from '@universe-editor/extension-gallery'
 import {
   IExtensionEnablementService,
   EnablementState,
@@ -68,6 +69,24 @@ export interface IExtensionEntry {
   readonly enabled: boolean
   /** The resolved enablement state (drives which enable/disable actions to show). */
   readonly enablementState: EnablementState
+  /**
+   * True when the extension's `engines.universe` is incompatible with the host
+   * API version (auto-disabled at load; not a user-controlled disablement, so
+   * enable/disable affordances are hidden).
+   */
+  readonly isVersionIncompatible: boolean
+  /** Reason for `isVersionIncompatible`, e.g. `requires universe >=99.0.0, host is 0.13.0`. */
+  readonly validationMessage?: string
+  /**
+   * True when no gallery version is compatible with the current host (marketplace
+   * entries only) — the Install affordance is disabled.
+   */
+  readonly installIncompatible: boolean
+  /**
+   * The compatible version install will select, when it differs from the latest
+   * `version` (marketplace entries only). Drives the "will install version X" note.
+   */
+  readonly installCompatibleVersion?: string
   /** Installed but not active in the current remote workspace (external ext only). */
   readonly unavailableInRemote?: boolean
   /** Source references for actions (present when known). */
@@ -161,6 +180,8 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _results: IGalleryExtension[] = []
   private _searchText = ''
   private _searching = false
+  /** Editor app version (host API), fetched once from IHostService. */
+  private _hostVersion: string | undefined
   /** ids with an install/uninstall in flight. */
   private readonly _installing = new Set<string>()
   /** Monotonic search token so a slow earlier query can't clobber a newer one. */
@@ -179,8 +200,20 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
     @IExtensionEnablementService private readonly _enablement: IExtensionEnablementService,
     @IExtensionHostClientService private readonly _hostClient: IExtensionHostClientService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IHostService private readonly _host: IHostService,
   ) {
     super()
+    // Fetch the host API version once (async) so gallery entries can annotate
+    // version compatibility; re-fire so views recompute once it lands.
+    void this._host
+      .getVersionInfo()
+      .then((info) => {
+        this._hostVersion = info.version
+        this._onDidChange.fire()
+      })
+      .catch(() => {
+        // host version unavailable — compatibility notes degrade to absent
+      })
     this._register(this._management.onDidChangeExtensions(() => void this.refreshInstalled()))
     this._register(this._enablement.onDidChangeEnablement(() => void this.refreshInstalled()))
     this._register(
@@ -438,6 +471,11 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       isUnderDevelopment: local.source === 'development',
       enabled: this._isEnabledState(state),
       enablementState: state,
+      isVersionIncompatible: local.isVersionCompatible === false,
+      installIncompatible: false,
+      ...(local.validationMessage !== undefined
+        ? { validationMessage: local.validationMessage }
+        : {}),
       local,
       ...(!isBuiltin && this._isRemoteWorkspace() ? { unavailableInRemote: true } : {}),
       ...(activationError ? { activationError } : {}),
@@ -453,6 +491,13 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
   private _entryFromGallery(gallery: IGalleryExtension): IExtensionEntry {
     const local = this._installed.find((l) => l.identifier === gallery.identifier)
     const state = this._stateOf(gallery.identifier)
+    const picked =
+      this._hostVersion !== undefined
+        ? pickCompatibleVersion(gallery, this._hostVersion)
+        : undefined
+    const installIncompatible = this._hostVersion !== undefined && picked === undefined
+    const installCompatibleVersion =
+      picked !== undefined && picked.version !== gallery.version ? picked.version : undefined
     return {
       id: gallery.identifier,
       displayName: gallery.displayName,
@@ -466,6 +511,9 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
       isUnderDevelopment: false,
       enabled: local === undefined || this._isEnabledState(state),
       enablementState: state,
+      isVersionIncompatible: false,
+      installIncompatible,
+      ...(installCompatibleVersion !== undefined ? { installCompatibleVersion } : {}),
       gallery,
       ...(local ? { local } : {}),
       ...(gallery.publisherDisplayName

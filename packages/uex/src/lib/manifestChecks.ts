@@ -18,12 +18,16 @@ export interface CheckIssue {
   readonly level: 'error' | 'warning'
   readonly message: string
   readonly hint?: string
+  /** Stable marker so callers can target one check (e.g. the --force downgrade) without matching on message text. */
+  readonly code?: string
 }
 
 export interface CheckContext {
   readonly extensionDir: string
-  /** API version of the host the author most likely targets (uex's bundled SDK). */
+  /** Editor version the author most likely targets (uex's bundled SDK; unified app version space). */
   readonly currentApiVersion: string
+  /** --force: downgrade the coverage error to a warning instead of blocking. */
+  readonly force?: boolean
 }
 
 /** The manifest plus the npm-level `files` whitelist (not part of the host schema). */
@@ -86,9 +90,10 @@ export function checkManifestForPublish(
     })
   } else if (!satisfies(ctx.currentApiVersion, m.engines.universe)) {
     issues.push({
-      level: 'warning',
-      message: `"engines.universe" ("${m.engines.universe}") does not cover the current extension API (${ctx.currentApiVersion})`,
-      hint: 'the extension will install but refuse to activate on the current editor — widen the range or pin the matching API',
+      level: ctx.force ? 'warning' : 'error',
+      code: 'engine-coverage',
+      message: `"engines.universe" ("${m.engines.universe}") does not cover the current editor version (${ctx.currentApiVersion})`,
+      hint: 'the extension will install but refuse to activate on the current editor — widen the range or pin the matching editor version',
     })
   }
 

@@ -59,7 +59,12 @@ import { scanExtensions, scanSingleExtension, type IScannedExtension } from './e
 import { computeActiveExtensions, parseIdSet } from './extensionActivationFilter.js'
 import { ExtensionService } from './extensionService.js'
 import { protectStdout } from './stdoutProtection.js'
-import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
+
+// The editor app version `engines.universe` ranges are checked against. The
+// spawner (local extensionHostMainService via app.getVersion(), remote via the
+// client env handshake) injects it; absent (tests / bare launches) the scanner
+// skips the engine check (fail-open).
+const HOST_APP_VERSION = process.env.UNIVERSE_APP_VERSION || undefined
 
 // stdout IS the RPC wire — protect it before any extension (and its bundled
 // dependencies) can run a stray `console.log` that would corrupt a frame. This
@@ -391,7 +396,7 @@ async function main(): Promise<void> {
   for (const devPath of devPaths) {
     try {
       devScanned.push(
-        await scanSingleExtension(devPath, false, HOST_API_VERSION, locale, {
+        await scanSingleExtension(devPath, false, HOST_APP_VERSION, locale, {
           isUnderDevelopment: true,
         }),
       )
@@ -405,7 +410,7 @@ async function main(): Promise<void> {
   const scanned = [
     ...devScanned,
     ...(
-      await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_API_VERSION, locale)))
+      await Promise.all(dirs.map((d) => scanExtensions(d.dir, d.builtin, HOST_APP_VERSION, locale)))
     ).flat(),
   ]
   // De-dupe by id (dev > built-in > user), then apply the disabled set and the
@@ -416,6 +421,7 @@ async function main(): Promise<void> {
     ...(disabled !== undefined ? { disabled } : {}),
     ...(allowlist !== undefined ? { allowlist } : {}),
   })
+  const invalidExtensions = extensions.filter((e) => e.isValid === false)
   if (dirs.length === 0) {
     console.warn('[ext-host] no extensions directory configured')
   } else {
@@ -425,6 +431,11 @@ async function main(): Promise<void> {
         .join(', ')}]` +
         (devScanned.length > 0
           ? `, ${devScanned.length} under development [${devScanned.map((e) => e.id).join(', ')}]`
+          : '') +
+        (invalidExtensions.length > 0
+          ? `, ${invalidExtensions.length} invalid (version incompatible) [${invalidExtensions
+              .map((e) => e.id)
+              .join(', ')}]`
           : '') +
         (allowlist !== undefined
           ? `, allowlist active → ${activeExtensions.length} enabled [${activeExtensions

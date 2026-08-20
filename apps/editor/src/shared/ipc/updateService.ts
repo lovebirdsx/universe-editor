@@ -25,7 +25,7 @@ export type UpdateStateType =
 export type UpdateDisabledReason = 'manual' | 'none' | 'not-supported'
 
 interface UpdateStateBase {
-  /** App version currently running (`app.getVersion()`). Present on every state. */
+  /** App version currently running (`getAppVersion()`). Present on every state. */
   readonly currentVersion: string
 }
 

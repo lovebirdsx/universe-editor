@@ -1,6 +1,6 @@
 # 从 VSCode 移植
 
-> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.12.0** 为准。
+> 已有一个 VSCode 扩展，想让它跑在 Universe Editor 上：哪些只要机械替换、哪些要换写法、哪些能力根本没有。以 **API 0.13.0** 为准。
 
 ## 决策背景：不 shim，但对齐
 
@@ -15,7 +15,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `import * as vscode from 'vscode'` | `import { commands, window, workspace } from '@universe-editor/extension-api'` | 具名导入各 namespace；类型用 `type` 导入（`ExtensionContext`、`Disposable` 等） |
 | devDependencies `@types/vscode` | dependencies `@universe-editor/extension-api` | API 包即类型定义与版本锚点；esbuild 打包时内联，运行时调用委托给宿主 |
 | 产物 CommonJS | 产物 ESM | `"type": "module"`，相对导入带 `.js` 后缀；脚手架模板已配好 |
-| `"engines": { "vscode": "^1.85.0" }` | `"engines": { "universe": ">=0.7.0 <1.0.0" }` | 语义变了：声明的是**扩展 API 版本**（= API 包版本），不是编辑器版本。写法与理由见 [API 版本与 `engines.universe`](./versioning.md) |
+| `"engines": { "vscode": "^1.85.0" }` | `"engines": { "universe": ">=0.13.0 <1.0.0" }` | 语义变了：声明的是**编辑器版本**兼容区间（0.13.0 起 API 包版本与编辑器版本同空间）。写法与理由见 [API 版本与 `engines.universe`](./versioning.md) |
 | `.vscodeignore`（黑名单） | `package.json` 的 `files` 数组（白名单） | 语义反转：从「排除不要的」变成「只带列出的」——漏列的文件进不了 `.vsix` |
 | `vsce package` / `vsce publish` / `vsce login` | `uex package` / `uex publish` / `uex login` | 子命令同名 |
 | `activationEvents` | 同名 | 支持 `*`、`onStartupFinished`、`onCommand:`、`onLanguage:`、`onView:`、`onCustomEditor:`；无 `workspaceContains:`、`onFileSystem:`、`onUri:` |

@@ -107,6 +107,7 @@
     → bootstrap.ts 扫描时 extensions.filter(e => !disabled.has(e.id))
   ```
   改启用禁用的生效方式就顺这条链找。
+- **版本不兼容 ≠ 用户禁用**：`scanSingleExtension` 对 `engines.universe` 不满足**不再 throw-skip**，返回带 `isValid: false` + `validationMessage` 的条目（manifest 解析失败仍 throw-skip）。`computeActiveExtensions` 把 `isValid === false` 从 `active` 排除（`deduped` 保留供可见性），builtin/dev 均不豁免。UI 侧由 main 管理服务用同源 `satisfies` 填 `ILocalExtension.isVersionCompatible` 呈现（对照 VSCode `DisabledByInvalidExtension`）。
 - **只在签名变化时重启**（`_onEnablementChanged`）：记 `_launchedDisabledIds`（`disabledSignature` = 排序后 join 的 order-independent 签名），enablement 变更时只有签名变了才重启——**否则无谓重启会杀 + 重 spawn tsserver**。host 未跑时（之前全禁用）先清 `_starting` memo 再 `_restart`（无连接时跳过 stop）。
 
 ### 生命周期：懒启动 / 崩溃 / workspace / reload

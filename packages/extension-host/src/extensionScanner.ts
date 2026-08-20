@@ -47,6 +47,16 @@ export interface IScannedExtension {
    * the management UI), which must NOT apply to a dev extension.
    */
   readonly isUnderDevelopment?: boolean
+  /**
+   * False when the extension's `engines.universe` range is incompatible with the
+   * host API version. An invalid extension is still scanned + reported (for
+   * visibility) but must not be activated and its contributions must not leak.
+   * Absent = valid (or the engine check was skipped because no host version was
+   * provided).
+   */
+  readonly isValid?: boolean
+  /** Reason for `isValid: false`, e.g. `requires universe >=99.0.0, host is 0.13.0`. */
+  readonly validationMessage?: string
   /** Absolute path to the entry module, or undefined for a declaration-only extension. */
   readonly mainPath?: string
   /**
@@ -107,7 +117,9 @@ async function resolveJsonValidation(
  * Scan ONE extension root (a directory that itself contains a `package.json` —
  * the --extension-development-path shape), as opposed to {@link scanExtensions}
  * where every subdirectory is an extension. Throws on a missing/invalid manifest
- * or an unsatisfied `engines.universe` — the caller decides whether to skip.
+ * (the caller decides whether to skip); an unsatisfied `engines.universe` does
+ * NOT throw — the entry is returned with `isValid: false` so it stays visible
+ * while the activation layer excludes it.
  */
 export async function scanSingleExtension(
   extensionPath: string,
@@ -124,9 +136,7 @@ export async function scanSingleExtension(
   const bundle = await loadNlsBundle(extensionPath, locale)
   const localized = bundle ? localizeManifest(raw, bundle) : raw
   const manifest = parseManifest(localized)
-  if (hostApiVersion !== undefined && !satisfies(hostApiVersion, manifest.engines.universe)) {
-    throw new Error(`requires universe ${manifest.engines.universe}, host API is ${hostApiVersion}`)
-  }
+  const valid = hostApiVersion === undefined || satisfies(hostApiVersion, manifest.engines.universe)
   const resolvedJsonValidation = await resolveJsonValidation(extensionPath, manifest)
   return {
     id: extensionId(manifest),
@@ -134,6 +144,12 @@ export async function scanSingleExtension(
     extensionPath,
     builtin,
     ...(opts?.isUnderDevelopment === true ? { isUnderDevelopment: true } : {}),
+    ...(valid
+      ? {}
+      : {
+          isValid: false,
+          validationMessage: `requires universe ${manifest.engines.universe}, host is ${hostApiVersion}`,
+        }),
     ...(manifest.main !== undefined
       ? { mainPath: path.resolve(extensionPath, manifest.main) }
       : {}),
@@ -144,8 +160,9 @@ export async function scanSingleExtension(
 /**
  * Scan `dir` for extension folders. Returns `[]` if the directory is absent.
  * When `hostApiVersion` is given, extensions whose `engines.universe` range
- * doesn't satisfy it are skipped (logged), same as a malformed manifest.
- * `locale` selects the `package.nls.<locale>.json` bundle for manifest
+ * doesn't satisfy it are still returned, flagged `isValid: false` (the
+ * activation filter drops them); a malformed manifest is skipped, same as
+ * before. `locale` selects the `package.nls.<locale>.json` bundle for manifest
  * localization (falls back to `package.nls.json`, then to the raw `%key%`).
  * `builtin` marks the results as app-shipped (trusted; bypasses the trust gate).
  */

@@ -13,7 +13,7 @@
   "displayName": "Universe Themes",
   "description": "Built-in default color themes (Universe Dark / Universe Light) and the classic VSCode default themes.",
   "engines": {
-    "universe": ">=0.1.0 <1.0.0"
+    "universe": "^0.13.0"
   },
   "contributes": {
     "themes": [

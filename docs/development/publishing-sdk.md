@@ -8,7 +8,7 @@
 
 | 包 | 版本规则 | 内容 |
 |---|---|---|
-| `@universe-editor/extension-api` | **版本号 = 扩展 API 版本**，bump 走 [COMPATIBILITY.md](../../packages/extension-api/COMPATIBILITY.md) 的破坏性变更流程（契约测试快照 + 变更记录） | API 面（Universe 版 `vscode.d.ts`） |
+| `@universe-editor/extension-api` | **版本号 = 编辑器 App 版本**（0.13.0 起单一版本空间，对齐 VSCode 的 product version 即 API 版本），bump 走 [COMPATIBILITY.md](../../packages/extension-api/COMPATIBILITY.md) 的破坏性变更流程（契约测试快照 + 变更记录） | API 面（Universe 版 `vscode.d.ts`） |
 | `@universe-editor/extension-manifest` | 独立 semver，有对外可见变更才发 | manifest 类型/zod 校验、激活事件构造器、`engines.universe` 协商、分类集合 |
 | `@universe-editor/extension-packaging` | 独立 semver，同上 | `createVsix` / `readVsixManifest`（`uex package` 的依赖） |
 | `@universe-editor/uex` | 独立 semver，同上 | 对外 CLI（bin `uex`）：`package` / `ls` / `dev` / `login` / `publish` / `unpublish` |
@@ -35,7 +35,7 @@
 
 **发布前，开发者自己做的事**：
 
-1. bump 各包 `package.json` 的 version（独立 semver）。extension-api 的 bump 必须先完成契约测试快照更新 + COMPATIBILITY.md 变更记录，否则脚本 preflight 会拒绝发布。
+1. bump 各包 `package.json` 的 version（extension-api 与编辑器 App 版本同空间锁步，其余独立 semver）。extension-api 的 bump 必须先完成契约测试快照更新 + COMPATIBILITY.md 变更记录，否则脚本 preflight 会拒绝发布。
 2. 版本常量无需手改——`create-extension/src/sdkVersions.ts` 与 `uex/src/lib/sdkVersion.ts` 是生成物（`pnpm ext-packages:gen`，发布 preflight 也会自动再生成），守卫测试仍会校验漂移。bump extension-api / uex / e2e-contract / e2e-harness 时必须同时 bump create-extension（extension-api 还需连带 uex），preflight 的版本耦合检查会拦截漏发的目标包。
 3. 非 SDK 目录的联动改动（如 `extensions/*` 的 `engines.universe` 同步）先单独提交——脚本只放行 SDK 发布集合目录内的未提交改动，并将其 commit。
 
@@ -179,5 +179,5 @@ npm i https://<市场地址>/gallery/sdk/universe-editor-extension-manifest-0.1.
 ## 红线
 
 - **`npm` 是唯一真相源**：仓库内部继续 `workspace:*`，仓库外消费走 npm；两世界由"外部消费者冒烟 CI"（计划 Phase E）持续对齐，防漂移。
-- 包名、`engines.universe` 的语义解释（API 版本而非编辑器版本）进了第三方代码即锁死，发布前按"不可再改"标准过目。
+- 包名、`engines.universe` 的语义解释（编辑器版本兼容区间）进了第三方代码即锁死，发布前按"不可再改"标准过目。
 - 扩展 API 的 `enum` 一律普通 enum（非 const enum，`isolatedModules` 下 TS2748）——已升级为 API 设计规则，见 COMPATIBILITY.md。

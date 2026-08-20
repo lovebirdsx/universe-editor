@@ -3,6 +3,7 @@ import {
   buildQuery,
   parseQueryResult,
   pickVsixAsset,
+  pickCompatibleVersion,
   readEngineConstraint,
   AssetType,
   GalleryFilterType,
@@ -184,5 +185,121 @@ describe('parseQueryResult', () => {
     const ext = result.extensions[0]!
     expect(ext.vsixHash).toBe('ab12')
     expect(ext.vsixSignature).toBeUndefined()
+  })
+})
+
+describe('multi-version parsing + pickCompatibleVersion', () => {
+  const oldCompat: IRawGalleryVersion = {
+    version: '1.0.0',
+    files: [{ assetType: AssetType.Vsix, source: 'https://host/pkg-1.0.0.vsix' }],
+    properties: [{ key: 'Universe.Editor.Engine', value: '>=0.13.0 <1.0.0' }],
+  }
+  const newIncompat: IRawGalleryVersion = {
+    version: '2.0.0',
+    files: [{ assetType: AssetType.Vsix, source: 'https://host/pkg-2.0.0.vsix' }],
+    properties: [{ key: 'Universe.Editor.Engine', value: '>=99.0.0' }],
+  }
+  const noEngine: IRawGalleryVersion = {
+    version: '0.5.0',
+    files: [{ assetType: AssetType.Vsix, source: 'https://host/pkg-0.5.0.vsix' }],
+  }
+
+  function parsed(versions: IRawGalleryVersion[]) {
+    const result = parseQueryResult(
+      rawResult([{ extensionName: 'demo', publisher: { publisherName: 'acme' }, versions }]),
+    )
+    return result.extensions[0]!
+  }
+
+  it('parses every installable version and fills top-level fields from the newest', () => {
+    const ext = parsed([newIncompat, oldCompat])
+    expect(ext.version).toBe('2.0.0')
+    expect(ext.vsixUrl).toBe('https://host/pkg-2.0.0.vsix')
+    expect(ext.versions.map((v) => v.version)).toEqual(['2.0.0', '1.0.0'])
+    expect(ext.versions[0]?.engineConstraint).toBe('>=99.0.0')
+    expect(ext.versions[1]?.engineConstraint).toBe('>=0.13.0 <1.0.0')
+  })
+
+  it('drops a version without a VSIX asset but keeps the rest', () => {
+    const noVsix: IRawGalleryVersion = {
+      version: '3.0.0',
+      files: [{ assetType: AssetType.Icon, source: 'https://host/icon.png' }],
+    }
+    const ext = parsed([noVsix, newIncompat, oldCompat])
+    expect(ext.versions.map((v) => v.version)).toEqual(['2.0.0', '1.0.0'])
+    expect(ext.version).toBe('2.0.0')
+  })
+
+  it('takes display assets from the newest installable version, not a dropped one', () => {
+    const noVsix: IRawGalleryVersion = {
+      version: '3.0.0',
+      lastUpdated: '2026-03-01',
+      files: [
+        { assetType: AssetType.Icon, source: 'https://host/icon-3.0.0.png' },
+        { assetType: AssetType.Details, source: 'https://host/readme-3.0.0.md' },
+      ],
+    }
+    const installable: IRawGalleryVersion = {
+      version: '2.0.0',
+      lastUpdated: '2026-01-01',
+      files: [
+        { assetType: AssetType.Vsix, source: 'https://host/pkg-2.0.0.vsix' },
+        { assetType: AssetType.Icon, source: 'https://host/icon-2.0.0.png' },
+        { assetType: AssetType.Details, source: 'https://host/readme-2.0.0.md' },
+      ],
+    }
+    const ext = parsed([noVsix, installable])
+    expect(ext.version).toBe('2.0.0')
+    expect(ext.iconUrl).toBe('https://host/icon-2.0.0.png')
+    expect(ext.readmeUrl).toBe('https://host/readme-2.0.0.md')
+    expect(ext.lastUpdated).toBe('2026-01-01')
+  })
+
+  it('carries per-version hash + signature into the versions array', () => {
+    const signed: IRawGalleryVersion = {
+      version: '1.0.0',
+      files: [{ assetType: AssetType.Vsix, source: 'x' }],
+      properties: [
+        { key: 'Universe.Editor.VsixHash', value: 'ab12' },
+        { key: 'Universe.Editor.VsixSignature', value: 'c2ln' },
+        { key: 'Universe.Editor.SignatureKeyId', value: 'market-v1' },
+      ],
+    }
+    const ext = parsed([signed])
+    expect(ext.versions[0]?.vsixHash).toBe('ab12')
+    expect(ext.versions[0]?.vsixSignature).toEqual({
+      algorithm: 'ed25519',
+      keyId: 'market-v1',
+      value: 'c2ln',
+    })
+    expect(ext.vsixHash).toBe('ab12')
+    expect(ext.vsixSignature?.keyId).toBe('market-v1')
+  })
+
+  describe('pickCompatibleVersion', () => {
+    it('returns the newest version when it is itself compatible', () => {
+      const compat: IRawGalleryVersion = {
+        version: '2.0.0',
+        files: [{ assetType: AssetType.Vsix, source: 'x' }],
+        properties: [{ key: 'Universe.Editor.Engine', value: '^0.13.0' }],
+      }
+      expect(pickCompatibleVersion(parsed([compat, oldCompat]), '0.13.0')?.version).toBe('2.0.0')
+    })
+
+    it('falls back to an older compatible version when the newest is incompatible', () => {
+      expect(pickCompatibleVersion(parsed([newIncompat, oldCompat]), '0.13.0')?.version).toBe(
+        '1.0.0',
+      )
+    })
+
+    it('treats a version without an engine constraint as compatible (fail-open)', () => {
+      expect(pickCompatibleVersion(parsed([newIncompat, noEngine]), '0.13.0')?.version).toBe(
+        '0.5.0',
+      )
+    })
+
+    it('returns undefined when no version is compatible', () => {
+      expect(pickCompatibleVersion(parsed([newIncompat]), '0.13.0')).toBeUndefined()
+    })
   })
 })

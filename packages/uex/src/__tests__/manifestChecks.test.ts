@@ -61,14 +61,25 @@ describe('checkManifestForPublish', () => {
     },
   )
 
-  it('warns when engines.universe does not cover the current API', () => {
+  it('errors when engines.universe does not cover the current editor version', () => {
     const { dir, base } = fixture()
     const issues = checkManifestForPublish(
       { ...base, engines: { universe: '>=0.9.0 <1.0.0' } },
       ctx(dir),
     )
     expect(issues).toHaveLength(1)
-    expect(issues[0]).toMatchObject({ level: 'warning' })
+    expect(issues[0]).toMatchObject({ level: 'error', code: 'engine-coverage' })
+    expect(issues[0]!.message).toContain('editor version')
+  })
+
+  it('--force downgrades the coverage error to a warning', () => {
+    const { dir, base } = fixture()
+    const issues = checkManifestForPublish(
+      { ...base, engines: { universe: '>=0.9.0 <1.0.0' } },
+      { ...ctx(dir), force: true },
+    )
+    expect(issues).toHaveLength(1)
+    expect(issues[0]).toMatchObject({ level: 'warning', code: 'engine-coverage' })
   })
 
   it('errors on unknown categories and lists the valid ones', () => {

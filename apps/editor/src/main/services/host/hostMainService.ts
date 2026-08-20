@@ -6,6 +6,7 @@
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { spawnViaCmd } from '../process/cmdSpawn.js'
+import { getAppVersion } from '../../appVersion.js'
 import {
   app,
   clipboard,
@@ -465,7 +466,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   async getVersionInfo(): Promise<IVersionInfo> {
     return {
       productName: app.getName(),
-      version: app.getVersion(),
+      version: getAppVersion(),
       extensionApi: EXTENSION_API_VERSION,
       electron: process.versions.electron,
       node: process.versions.node,

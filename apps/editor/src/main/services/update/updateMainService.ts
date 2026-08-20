@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { app } from 'electron'
+import { getAppVersion } from '../../appVersion.js'
 // electron-updater is CommonJS; default-import then destructure (electron-vite convention).
 import electronUpdater from 'electron-updater'
 import { promises as fs } from 'node:fs'
@@ -52,7 +53,7 @@ export class UpdateMainService implements IUpdateService {
   private readonly _onDidChangeState = new Emitter<UpdateState>()
   readonly onDidChangeState: Event<UpdateState> = this._onDidChangeState.event
 
-  private readonly _currentVersion = app.getVersion()
+  private readonly _currentVersion = getAppVersion()
   private _state: UpdateState = { type: 'idle', currentVersion: this._currentVersion }
 
   private readonly _logger: ILogger

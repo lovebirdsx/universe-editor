@@ -23,7 +23,6 @@ import {
   type ILogger,
   localize,
 } from '@universe-editor/platform'
-import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
 import {
   readVsixManifest,
   extractVsix,
@@ -35,7 +34,7 @@ import {
   compareVersions,
   type IExtensionManifest,
 } from '@universe-editor/extensions-common'
-import type { IGalleryExtension } from '@universe-editor/extension-gallery'
+import { pickCompatibleVersion, type IGalleryExtension } from '@universe-editor/extension-gallery'
 import type {
   ILocalExtension,
   IExtensionGalleryMetadata,
@@ -124,7 +123,8 @@ export class ExtensionManagementMainService
 
   constructor(
     private readonly _resolveDir: UserExtensionsDirResolver = resolveUserExtensionsDir,
-    private readonly _hostApiVersion: string = HOST_API_VERSION,
+    /** Editor app version `engines.universe` is checked against (DI passes getAppVersion()). */
+    private readonly _hostApiVersion: string,
     @IExtensionGalleryService private readonly _gallery?: IManagementGallery,
     @ILoggerService loggerService?: ILoggerService,
     private readonly _resolveBuiltinDir: UserExtensionsDirResolver = resolveBuiltinExtensionsDir,
@@ -166,7 +166,10 @@ export class ExtensionManagementMainService
       const location = path.join(dir, rec.location)
       try {
         const manifest = parseManifest(await readManifestJson(location))
-        result.push(toLocalExtension(rec, location, manifest))
+        result.push({
+          ...toLocalExtension(rec, location, manifest),
+          ...engineCompat(this._hostApiVersion, manifest),
+        })
       } catch (err) {
         this._logger.warn(
           `installed extension ${rec.identifier} has an unreadable manifest: ${(err as Error).message}`,
@@ -198,6 +201,7 @@ export class ExtensionManagementMainService
           location,
           source: 'builtin',
           installedAt: 0,
+          ...engineCompat(this._hostApiVersion, manifest),
         })
       } catch (err) {
         this._logger.warn(
@@ -220,6 +224,7 @@ export class ExtensionManagementMainService
           location: devPath,
           source: 'development',
           installedAt: 0,
+          ...engineCompat(this._hostApiVersion, manifest),
         })
       } catch (err) {
         this._logger.warn(
@@ -245,16 +250,38 @@ export class ExtensionManagementMainService
       )
     }
 
-    await this._assertNotMalicious(extension.identifier)
+    // Version selection: pick the newest version compatible with the host API
+    // version instead of blindly installing the latest (which may require a newer
+    // editor). The manifest `engines.universe` check in `_install` stays as a
+    // second gate.
+    const selected = pickCompatibleVersion(extension, this._hostApiVersion)
+    if (!selected) {
+      throw new Error(
+        `No compatible version of ${extension.identifier} for Universe ${this._hostApiVersion}`,
+      )
+    }
 
-    const vsixPath = await this._gallery.download(extension)
+    // Narrow the gallery entry to the selected version so download, the
+    // anti-poisoning check, and signature verification all operate on exactly
+    // the version we chose.
+    const target: IGalleryExtension = {
+      ...extension,
+      version: selected.version,
+      vsixUrl: selected.vsixUrl,
+      ...(selected.vsixHash !== undefined ? { vsixHash: selected.vsixHash } : {}),
+      ...(selected.vsixSignature !== undefined ? { vsixSignature: selected.vsixSignature } : {}),
+    }
+
+    await this._assertNotMalicious(target.identifier)
+
+    const vsixPath = await this._gallery.download(target)
     const manifest = readVsixManifest(vsixPath)
 
     // Anti-poisoning: the downloaded package must be exactly what the gallery
     // advertised. A mismatch means the file was swapped in transit or the backend
     // is inconsistent — refuse it rather than install something unexpected.
     const downloadedId = extensionId(manifest)
-    if (downloadedId !== extension.identifier || manifest.version !== extension.version) {
+    if (downloadedId !== target.identifier || manifest.version !== target.version) {
       throw new Error(
         localize(
           'extManagement.error.packageMismatch',
@@ -262,8 +289,8 @@ export class ExtensionManagementMainService
           {
             downloadedId,
             downloadedVersion: manifest.version,
-            expectedId: extension.identifier,
-            expectedVersion: extension.version,
+            expectedId: target.identifier,
+            expectedVersion: target.version,
           },
         ),
       )
@@ -272,22 +299,22 @@ export class ExtensionManagementMainService
     // Marketplace signature gate (fail-closed): the VSIX bytes must verify
     // against the marketplace signing key built into the client. An unsigned
     // entry or any mismatch means the package (or registry) was tampered with.
-    if (!extension.vsixHash || !extension.vsixSignature) {
+    if (!target.vsixHash || !target.vsixSignature) {
       throw new Error(
         localize(
           'extManagement.error.unsigned',
           'Marketplace entry {id}@{version} is unsigned — refusing to install.',
-          { id: extension.identifier, version: extension.version },
+          { id: target.identifier, version: target.version },
         ),
       )
     }
     await verifyVsixSignature(
       vsixPath,
-      { hash: extension.vsixHash, signature: extension.vsixSignature },
+      { hash: target.vsixHash, signature: target.vsixSignature },
       this._signingKeys,
     )
     this._logger.info(
-      `verified marketplace signature for ${extension.identifier}@${extension.version} (keyId ${extension.vsixSignature.keyId})`,
+      `verified marketplace signature for ${target.identifier}@${target.version} (keyId ${target.vsixSignature.keyId})`,
     )
 
     const galleryMetadata: IExtensionGalleryMetadata = {
@@ -295,8 +322,8 @@ export class ExtensionManagementMainService
         ? { publisherDisplayName: extension.publisherDisplayName }
         : {}),
       ...(extension.installCount !== undefined ? { installCount: extension.installCount } : {}),
-      vsixUrl: extension.vsixUrl,
-      vsixHash: extension.vsixHash,
+      vsixUrl: target.vsixUrl,
+      vsixHash: target.vsixHash,
     }
     return this._install(vsixPath, manifest, 'gallery', galleryMetadata)
   }
@@ -535,11 +562,15 @@ export class ExtensionManagementMainService
     const updates: IExtensionUpdate[] = []
     for (const local of galleryInstalled) {
       const gallery = latest.find((g) => g.identifier === local.identifier)
-      if (gallery && isNewerVersion(gallery.version, local.version)) {
+      if (!gallery) continue
+      const compatible = pickCompatibleVersion(gallery, this._hostApiVersion)
+      // No compatible version → never offer the (incompatible) latest as an update.
+      if (!compatible) continue
+      if (isNewerVersion(compatible.version, local.version)) {
         updates.push({
           identifier: local.identifier,
           fromVersion: local.version,
-          toVersion: gallery.version,
+          toVersion: compatible.version,
           gallery,
         })
       }
@@ -578,6 +609,24 @@ export class ExtensionManagementMainService
       }
     }
     if (changed) await writeObsolete(dir, remaining)
+  }
+}
+
+/**
+ * `engines.universe` compatibility fields for a UI listing. Duplicates the host's
+ * activation-time check (pure + cheap) so the Extensions UI can mark an
+ * incompatible extension without a host round-trip.
+ */
+function engineCompat(
+  hostApiVersion: string,
+  manifest: IExtensionManifest,
+): { readonly isVersionCompatible: boolean; readonly validationMessage?: string } {
+  if (satisfies(hostApiVersion, manifest.engines.universe)) {
+    return { isVersionCompatible: true }
+  }
+  return {
+    isVersionCompatible: false,
+    validationMessage: `requires universe ${manifest.engines.universe}, host is ${hostApiVersion}`,
   }
 }
 

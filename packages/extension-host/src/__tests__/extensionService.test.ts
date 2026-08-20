@@ -28,6 +28,7 @@ import type {
 } from '@universe-editor/extensions-common'
 import { ExtensionService } from '../extensionService.js'
 import type { IScannedExtension } from '../extensionScanner.js'
+import { computeActiveExtensions } from '../extensionActivationFilter.js'
 
 // A standalone ESM extension module that registers a command through the global
 // host bridge — exactly what the bundled extension-api shim does at runtime.
@@ -192,6 +193,22 @@ describe('ExtensionService', () => {
     const dtos = service.getContributions()
     expect(dtos.find((d) => d.id === 'test.ext')?.extensionIsUnderDevelopment).toBeUndefined()
     expect(dtos.find((d) => d.id === 'dev.ext')?.extensionIsUnderDevelopment).toBe(true)
+  })
+
+  it('does not expose contributions of a version-incompatible extension', () => {
+    // The activation filter excludes isValid:false before the service is built —
+    // the DTO source is the active set, so an incompatible extension's
+    // contributions never reach the renderer's translator.
+    const mt = recordingMainThread()
+    const invalid: IScannedExtension = {
+      ...scanned(['*']),
+      id: 'bad.ext',
+      isValid: false,
+      validationMessage: 'requires universe >=99.0.0, host is 0.13.0',
+    }
+    const { active } = computeActiveExtensions([invalid, scanned(['onCommand:test.cmd'])])
+    const service = new ExtensionService(active, mt.impl, noopWindow, noopScm, noopTimeline)
+    expect(service.getContributions().map((d) => d.id)).toEqual(['test.ext'])
   })
 
   it('does not activate until a matching event fires', async () => {

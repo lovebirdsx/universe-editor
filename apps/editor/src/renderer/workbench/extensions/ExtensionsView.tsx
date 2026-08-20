@@ -283,7 +283,9 @@ function ExtensionRow({
   onInstall: () => void
   onOpenMenu: (entry: IExtensionEntry, x: number, y: number) => void
 }) {
-  const disabled = entry.installed && !entry.enabled
+  const userDisabled = entry.installed && !entry.enabled
+  const versionIncompatible = entry.isVersionIncompatible
+  const rowDisabled = userDisabled || versionIncompatible
   const workspaceScoped =
     entry.enablementState === EnablementState.DisabledWorkspace ||
     entry.enablementState === EnablementState.EnabledWorkspace
@@ -295,7 +297,7 @@ function ExtensionRow({
   }
   return (
     <div
-      className={cx(styles.row, disabled && styles.disabledRow)}
+      className={cx(styles.row, rowDisabled && styles.disabledRow)}
       onClick={() => onOpen(entry)}
       onContextMenu={onContextMenu}
       data-testid="extension-row"
@@ -315,11 +317,37 @@ function ExtensionRow({
               {localize('extensions.development', 'Development')}
             </span>
           )}
-          {disabled && (
+          {userDisabled && (
             <span className={cx(styles.badge, styles.disabledBadge)}>
               {workspaceScoped
                 ? localize('extensions.disabledWorkspace', 'Disabled (Workspace)')
                 : localize('extensions.disabled', 'Disabled')}
+            </span>
+          )}
+          {versionIncompatible && (
+            <span
+              className={cx(styles.badge, styles.disabledBadge)}
+              data-tooltip={entry.validationMessage}
+              data-testid="extension-version-incompatible"
+            >
+              {localize('extensions.versionIncompatible', 'Disabled (requires universe {reason})', {
+                reason: entry.validationMessage ?? '',
+              })}
+            </span>
+          )}
+          {!entry.installed && entry.installIncompatible && (
+            <span
+              className={cx(styles.badge, styles.disabledBadge)}
+              data-testid="extension-install-incompatible"
+            >
+              {localize('extensions.installIncompatible', 'Incompatible with current version')}
+            </span>
+          )}
+          {!entry.installed && entry.installCompatibleVersion !== undefined && (
+            <span className={styles.badge} data-testid="extension-install-compatible-version">
+              {localize('extensions.installCompatibleVersion', 'Will install version {version}', {
+                version: entry.installCompatibleVersion,
+              })}
             </span>
           )}
           {entry.activationError && (
@@ -376,7 +404,9 @@ function ExtensionRow({
                 <Settings size={16} />
               </IconButton>
             ) : (
-              <Button onClick={onInstall}>{localize('extensions.install', 'Install')}</Button>
+              <Button onClick={onInstall} disabled={entry.installIncompatible}>
+                {localize('extensions.install', 'Install')}
+              </Button>
             )}
           </div>
         </div>

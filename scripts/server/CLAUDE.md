@@ -11,7 +11,7 @@ Universe Editor 的**更新分发 + 扩展市场后端**：单文件 Node 服务
 | 文件 | 跑在哪 | 职责 |
 |---|---|---|
 | `server.mjs` | 服务器 | 服务核心：静态更新分发（Range/差分/no-store）+ 市场路由（`/extensionquery`、`gallery/**`、publish/admin API） |
-| `galleryPublish.mjs` | 服务器 | 自助发布 + 审批管理 API。被 `server.mjs` 在命中 `gallery/api/*` 时 lazy import |
+| `galleryPublish.mjs` | 服务器 | 自助发布 + 审批管理 API。被 `server.mjs` 在命中 `gallery/api/*` 时 lazy import。engines.universe 的 range 语法与 uex 同源 fail-closed 拦截（`\|\|` / hyphen 拒发，见 `gallery/lib.mjs` `UNSUPPORTED_RANGE`，改 uex 那份时两边同步） |
 | `registerPage.mjs` / `adminPage.mjs` | 服务器 | 内嵌 HTML 页面（零外部资源） |
 | `pageStyles.mjs` | 服务器 | 两页面共享的深色基础样式（与下载页同一套令牌；下载页是静态 HTML 无法 import，令牌各存一份，改主题两边同步） |
 | `download-page/index.html` | 开发机 → 发布根 | 面向用户的静态下载页（发布目录数据文件，**不进 bundle**）。首装由 `setup.mjs` 落到 `<UE_SERVER_ROOT>/index.html`，之后 `server:deploy` 随 `SERVER_VERSION` 同步（staged `index.html.v*`，sudoers 第三条 cp 通道） |

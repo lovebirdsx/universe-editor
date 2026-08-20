@@ -39,6 +39,14 @@ export interface ILocalExtension {
   readonly installedAt: number
   /** Present for gallery-sourced installs. */
   readonly galleryMetadata?: IExtensionGalleryMetadata
+  /**
+   * False when the extension's `engines.universe` range is incompatible with the
+   * host API version (computed by the management service for the UI list — the
+   * host independently refuses to activate such an extension). Absent = compatible.
+   */
+  readonly isVersionCompatible?: boolean
+  /** Reason for `isVersionCompatible: false`, e.g. `requires universe >=99.0.0, host is 0.13.0`. */
+  readonly validationMessage?: string
 }
 
 export interface IExtensionManagementService {

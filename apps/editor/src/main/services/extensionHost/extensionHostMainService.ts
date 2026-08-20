@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
+import { getAppVersion } from '../../appVersion.js'
 import {
   createNamedLogger,
   Disposable,
@@ -215,6 +216,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     // Node access once its workspace is trusted.
     env.UNIVERSE_BUILTIN_EXTENSIONS_DIR = spec?.extensionsDir ?? this._resolveExtensionsDir()
     env.UNIVERSE_USER_EXTENSIONS_DIR = spec?.userExtensionsDir ?? this._resolveUserExtensionsDir()
+    // The editor app version the host checks `engines.universe` ranges against
+    // (single version space — the app version IS the extension API version).
+    env.UNIVERSE_APP_VERSION = getAppVersion()
     // The `typescript` built-in plugin spawns the LSP server itself; hand it the
     // server spec (the only Electron-aware resolution). Default is the vendored
     // TSLS; `typescript.server.implementation` in workspace (.universe-editor >

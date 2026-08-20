@@ -1,6 +1,6 @@
 # API 概览
 
-> 宿主为扩展提供的全部编程表面，按 namespace 逐个导览，每个给一个可直接粘贴的最小示例。本文以 **API 0.12.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，版本协商见 [API 版本与 `engines.universe`](../versioning.md)）。
+> 宿主为扩展提供的全部编程表面，按 namespace 逐个导览，每个给一个可直接粘贴的最小示例。本文以 **API 0.13.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，版本协商见 [API 版本与 `engines.universe`](../versioning.md)）。
 >
 > **本文的定位是导览，不是参考手册。** 逐方法、逐字段的权威说明在编辑器里的类型提示中——`@universe-editor/extension-api` 的 d.ts 带完整 JSDoc，它是唯一不会随版本漂移的真相。本文不逐方法抄写签名与注释（抄了必漂移），只告诉你「有什么、从哪进、最小怎么用」。
 
@@ -13,7 +13,7 @@
 | `workspace` | 工作区文件夹、信任状态、受限文件系统、文件查找与监听、打开的文档、配置、timeline |
 | `languages` | 21 类语言特性 provider、诊断集合与全源诊断读取、语言服务状态上报、语言清单 |
 | `scm` | 源码管理集成（资源分组、提交输入框） |
-| `ai` | 推理模型访问（**内置扩展专属**，外部扩展不可用） |
+| `ai` | 推理模型访问（所有扩展可用，激活后即可调用） |
 | `env` | 应用信息（名称/版本/语言/会话/机器 id/安装根/深链 scheme）、剪贴板、打开外部目标 |
 | `extensions` | 枚举与激活已安装的扩展 |
 
@@ -174,11 +174,11 @@ export function activate(context: ExtensionContext) {
 
 资源行的 `contextValue` 会以 `scmResourceState` 暴露给菜单 `when` 子句；分组支持嵌套（`parentId`）、提交按钮支持拆分多动作（`acceptInputActions`）——细节看 d.ts。
 
-## ai — 推理模型（内置扩展专属）
+## ai — 推理模型
 
 推理模型访问：枚举可用模型（`getModels`）、按条件挑模型（`selectModels`）、算 token 数（`computeTokenLength`）、读用户当前选中的聊天/提交信息模型（`getActiveModelId` / `getCommitModelId`）、发请求并流式读响应（`sendRequest` 返回 `AiResponse`，迭代 `stream` 逐块收文本，可 `cancel()` 中止）。
 
-> **红线：`ai` 是内置（trusted）扩展专属能力。外部（restricted）扩展调不到 AI 模型**——桥接上不会为该 namespace 提供实现，不要围绕它设计外部扩展。
+> `ai` 对所有扩展开放——单 host 下没有 trusted/restricted 之分，与其它能力一样在扩展激活后可用、受 Workspace Trust 激活门控约束。
 
 ```ts
 import { ai, AiMessageRole } from '@universe-editor/extension-api'

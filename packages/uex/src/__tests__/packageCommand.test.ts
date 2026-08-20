@@ -51,6 +51,18 @@ describe('runPackage', () => {
     expect((err as UexError).hints.join(' ')).toContain('npm run build')
   })
 
+  it('blocks when engines.universe does not cover the current editor version', async () => {
+    const dir = makeExtension({ engines: { universe: '>=0.9.0 <0.12.0' } })
+    const err = await runPackage({ cwd: dir }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UexError)
+  })
+
+  it('--force downgrades the coverage error and still packages', async () => {
+    const dir = makeExtension({ engines: { universe: '>=0.9.0 <0.12.0' } })
+    const { vsixPath } = await runPackage({ cwd: dir, force: true })
+    expect(existsSync(vsixPath)).toBe(true)
+  })
+
   it('refuses outside an extension root', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'uex-pkg-empty-'))
     await expect(runPackage({ cwd: dir })).rejects.toBeInstanceOf(UexError)

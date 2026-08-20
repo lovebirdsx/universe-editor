@@ -17,13 +17,15 @@ export async function run(argv: string[]): Promise<number> {
   const { values } = parseCommandArgs('publish', argv, {
     'package-path': { type: 'string' },
     registry: { type: 'string' },
+    force: { type: 'boolean' },
     help: { type: 'boolean' },
   })
   if (values.help) {
-    info('usage: uex publish [--package-path <vsix>] [--registry <url>]')
+    info('usage: uex publish [--package-path <vsix>] [--registry <url>] [--force]')
     info('')
     info('package the extension (unless --package-path is given) and upload the VSIX')
     info('to the marketplace. Credentials come from `uex login` or UNIVERSE_MARKET_TOKEN.')
+    info('--force downgrades the engines.universe coverage error to a warning.')
     return 0
   }
   try {
@@ -40,7 +42,7 @@ export async function run(argv: string[]): Promise<number> {
       vsixPath = path.resolve(values['package-path'])
     } else {
       info('packaging first (no --package-path given)…')
-      vsixPath = (await runPackage({ cwd: process.cwd() })).vsixPath
+      vsixPath = (await runPackage({ cwd: process.cwd(), force: values.force === true })).vsixPath
     }
 
     const manifest = readVsixManifest(vsixPath)

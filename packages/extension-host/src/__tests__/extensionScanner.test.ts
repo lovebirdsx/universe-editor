@@ -121,15 +121,32 @@ describe('scanExtensions', () => {
     expect(ids).toEqual(['good'])
   })
 
-  it('skips an extension whose engines.universe is incompatible with the host', async () => {
+  it('marks (not skips) an extension whose engines.universe is incompatible with the host', async () => {
     await writeExtension('good', goodManifest) // ^0.1.0
     await writeExtension('future', {
       ...goodManifest,
       name: 'future',
       engines: { universe: '^2.0.0' },
     })
-    const ids = (await scanExtensions(dir, false, '0.1.5')).map((e) => e.id)
-    expect(ids).toEqual(['good'])
+    const scanned = await scanExtensions(dir, false, '0.1.5')
+    expect(scanned.map((e) => e.id).sort()).toEqual(['future', 'good'])
+    const future = scanned.find((e) => e.id === 'future')
+    expect(future?.isValid).toBe(false)
+    expect(future?.validationMessage).toBe('requires universe ^2.0.0, host is 0.1.5')
+    const good = scanned.find((e) => e.id === 'good')
+    expect(good?.isValid).toBeUndefined()
+    expect(good?.validationMessage).toBeUndefined()
+  })
+
+  it('does not exempt built-ins from the engine check', async () => {
+    await writeExtension('future', {
+      ...goodManifest,
+      name: 'future',
+      engines: { universe: '^2.0.0' },
+    })
+    const [ext] = await scanExtensions(dir, true, '0.1.5')
+    expect(ext?.builtin).toBe(true)
+    expect(ext?.isValid).toBe(false)
   })
 
   it('does not enforce engines when no host API version is provided', async () => {
@@ -262,8 +279,10 @@ describe('scanSingleExtension', () => {
     await expect(scanSingleExtension(root, false)).rejects.toThrow()
   })
 
-  it('throws on an unsatisfied engines.universe when a host API version is given', async () => {
+  it('returns isValid:false (does not throw) on an unsatisfied engines.universe', async () => {
     const root = await writeRoot({ ...goodManifest, engines: { universe: '^2.0.0' } })
-    await expect(scanSingleExtension(root, false, '0.1.5')).rejects.toThrow(/requires universe/)
+    const ext = await scanSingleExtension(root, false, '0.1.5')
+    expect(ext.isValid).toBe(false)
+    expect(ext.validationMessage).toBe('requires universe ^2.0.0, host is 0.1.5')
   })
 })

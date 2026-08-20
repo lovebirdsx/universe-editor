@@ -20,7 +20,7 @@ function jsonResponse(body: unknown, ok = true): Response {
 }
 
 function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryExtension {
-  return {
+  const base = {
     identifier: 'acme.demo',
     name: 'demo',
     publisher: 'acme',
@@ -29,6 +29,16 @@ function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryE
     version: '1.0.0',
     vsixUrl: 'https://host/demo.vsix',
     ...overrides,
+  }
+  return {
+    ...base,
+    versions: overrides.versions ?? [
+      {
+        version: base.version,
+        vsixUrl: base.vsixUrl,
+        ...(base.vsixHash !== undefined ? { vsixHash: base.vsixHash } : {}),
+      },
+    ],
   }
 }
 

@@ -18,7 +18,12 @@ import { ExtensionHostMainService } from '../extensionHostMainService.js'
 import type { IRemoteExtensionHostStartArgs } from '@universe-editor/platform'
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => '/fake/userData' },
+  app: {
+    isPackaged: false,
+    getVersion: () => '0.13.0',
+    getAppPath: () => '/fake/app',
+    getPath: () => '/fake/userData',
+  },
 }))
 
 const decode = (b: Uint8Array): string => new TextDecoder().decode(b)
@@ -164,6 +169,7 @@ describe('RemoteExtensionHostService', () => {
           UNIVERSE_WORKSPACE_ROOT: '/remote/root',
           UNIVERSE_DISPLAY_LOCALE: 'zh-CN',
           UNIVERSE_DISABLED_EXTENSIONS: 'a.b,c.d',
+          UNIVERSE_APP_VERSION: '0.13.0',
         },
       },
     ])

@@ -90,6 +90,50 @@ test('metadataFromManifest engines.universe 空串 / engines 缺失均拒绝发�
   )
 })
 
+test('metadataFromManifest 拒绝客户端 fail-closed 的 range 语法（|| / hyphen）', () => {
+  assert.throws(
+    () =>
+      metadataFromManifest({
+        publisher: 'p',
+        name: 'x',
+        version: '1.0.0',
+        engines: { universe: '>=0.1.0 || >=0.2.0' },
+      }),
+    /range/,
+  )
+  assert.throws(
+    () =>
+      metadataFromManifest({
+        publisher: 'p',
+        name: 'x',
+        version: '1.0.0',
+        engines: { universe: '1.2.3 - 2.0.0' },
+      }),
+    /range/,
+  )
+})
+
+test('metadataFromManifest 放行受支持的 range 形式', () => {
+  assert.equal(
+    metadataFromManifest({
+      publisher: 'p',
+      name: 'x',
+      version: '1.0.0',
+      engines: { universe: '>=0.13.0 <1.0.0' },
+    }).engine,
+    '>=0.13.0 <1.0.0',
+  )
+  assert.equal(
+    metadataFromManifest({
+      publisher: 'p',
+      name: 'x',
+      version: '1.0.0',
+      engines: { universe: '^0.13.0' },
+    }).engine,
+    '^0.13.0',
+  )
+})
+
 test('upsertVersion 新增后按 semver 降序，最新在首位', () => {
   const reg = { extensions: [] }
   const meta = { publisher: 'p', name: 'x', displayName: 'X', shortDescription: '' }

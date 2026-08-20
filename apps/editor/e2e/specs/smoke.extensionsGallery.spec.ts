@@ -36,6 +36,7 @@ const PRIVATE_PEM = KEY_PAIR.privateKey.export({ format: 'pem', type: 'pkcs8' })
 
 const EXT_ID = 'acme.e2e-gallery'
 const COMMAND_ID = 'e2eGallery.hello'
+const VERSIONED_EXT_ID = 'acme.e2e-versions'
 
 // The gallery URL is only known once beforeAll has bound a free port. The env
 // object is shared by reference with the fixture, and launchApp reads it at
@@ -77,6 +78,30 @@ async function makeVsix(dir: string): Promise<string> {
     Buffer.from('module.exports = { activate() {}, deactivate() {} }'),
   )
   const vsixPath = path.join(dir, 'e2e-gallery.vsix')
+  await fs.writeFile(vsixPath, zip.toBuffer())
+  return vsixPath
+}
+
+/** Build one version of the version-selection extension with an explicit engine range. */
+async function makeVersionedVsix(dir: string, version: string, engine: string): Promise<string> {
+  const manifest = {
+    name: 'e2e-versions',
+    publisher: 'acme',
+    version,
+    displayName: 'E2E Versions Sample',
+    engines: { universe: engine },
+    main: 'dist/extension.js',
+    contributes: {
+      commands: [{ command: 'e2eVersions.hello', title: 'E2E Versions: Hello' }],
+    },
+  }
+  const zip = new AdmZip()
+  zip.addFile('extension/package.json', Buffer.from(JSON.stringify(manifest)))
+  zip.addFile(
+    'extension/dist/extension.js',
+    Buffer.from('module.exports = { activate() {}, deactivate() {} }'),
+  )
+  const vsixPath = path.join(dir, `e2e-versions-${version}.vsix`)
   await fs.writeFile(vsixPath, zip.toBuffer())
   return vsixPath
 }
@@ -150,6 +175,28 @@ test.describe('@p1 extensions gallery', () => {
       vsixPath,
     ])
     if (publish.code !== 0) throw new Error(`publish.mjs failed: ${publish.stderr}`)
+
+    // A second extension with two versions: 1.0.0 compatible with any host,
+    // 2.0.0 requiring a future editor (>=99.0.0). The host version in e2e is
+    // app.getVersion(), which is the Electron version for a non-packaged file
+    // launch — so the "compatible" range is written host-agnostic (`*`) to keep
+    // the selection assertion independent of the launch-mode version.
+    const v1Path = await makeVersionedVsix(stageDir, '1.0.0', '*')
+    const v2Path = await makeVersionedVsix(stageDir, '2.0.0', '>=99.0.0')
+    const publishVersions = await run(process.execPath, [
+      PUBLISH_SCRIPT,
+      '--stage',
+      stageDir,
+      '--signing-key-file',
+      keyFile,
+      '--key-id',
+      KEY_ID,
+      v1Path,
+      v2Path,
+    ])
+    if (publishVersions.code !== 0) {
+      throw new Error(`publish.mjs failed (versions): ${publishVersions.stderr}`)
+    }
 
     const port = await getFreePort()
     galleryUrl = `http://127.0.0.1:${port}`
@@ -238,5 +285,30 @@ test.describe('@p1 extensions gallery', () => {
     await expect(
       page.getByTestId('extension-row').filter({ hasText: 'E2E Gallery Sample' }),
     ).toHaveCount(1, { timeout: 10000 })
+  })
+
+  test('installs the newest compatible version and skips an incompatible update', async ({
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    const installedId = await workbench.page.evaluate(
+      (id) => window.__E2E__!.installGalleryExtension(id),
+      VERSIONED_EXT_ID,
+    )
+    expect(installedId).toBe(VERSIONED_EXT_ID)
+
+    // The latest (2.0.0) requires >=99.0.0, so selection falls back to 1.0.0.
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getInstalledExtensionVersions()), {
+        timeout: 10000,
+      })
+      .toContainEqual({ identifier: VERSIONED_EXT_ID, version: '1.0.0' })
+
+    // checkForUpdates must not offer the incompatible 2.0.0.
+    const updates = await workbench.page.evaluate(() => window.__E2E__!.checkForExtensionUpdates())
+    expect(updates.filter((u) => u.identifier === VERSIONED_EXT_ID)).toHaveLength(0)
+
+    await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), VERSIONED_EXT_ID)
   })
 })

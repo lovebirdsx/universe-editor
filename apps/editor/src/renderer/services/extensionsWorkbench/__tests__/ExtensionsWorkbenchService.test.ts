@@ -3,6 +3,7 @@ import { Emitter, REMOTE_SCHEME, Severity, URI } from '@universe-editor/platform
 import { GallerySortBy } from '@universe-editor/extension-gallery'
 import type {
   IDialogService,
+  IHostService,
   INotificationService,
   IStorageService,
   IWorkspaceService,
@@ -46,7 +47,7 @@ function localExtension(overrides: Partial<ILocalExtension> = {}): ILocalExtensi
 }
 
 function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryExtension {
-  return {
+  const base = {
     identifier: 'acme.market',
     name: 'market',
     publisher: 'acme',
@@ -55,6 +56,18 @@ function galleryExtension(overrides: Partial<IGalleryExtension> = {}): IGalleryE
     version: '2.0.0',
     vsixUrl: 'https://host/market.vsix',
     ...overrides,
+  }
+  return {
+    ...base,
+    versions: overrides.versions ?? [
+      {
+        version: base.version,
+        vsixUrl: base.vsixUrl,
+        ...(base.engineConstraint !== undefined ? { engineConstraint: base.engineConstraint } : {}),
+        ...(base.vsixHash !== undefined ? { vsixHash: base.vsixHash } : {}),
+        ...(base.vsixSignature !== undefined ? { vsixSignature: base.vsixSignature } : {}),
+      },
+    ],
   }
 }
 
@@ -114,6 +127,9 @@ function makeMocks() {
     removeRecent: vi.fn(async () => undefined),
     clearRecent: vi.fn(async () => undefined),
   } as IWorkspaceService
+  const host = {
+    getVersionInfo: vi.fn(async () => ({ version: '0.13.0' })),
+  } as unknown as IHostService
   return {
     management,
     gallery,
@@ -123,6 +139,7 @@ function makeMocks() {
     enablement,
     hostClient,
     workspace,
+    host,
     onDidChangeExtensions,
     onDidChangeEnablement,
     onDidActivationError,
@@ -140,6 +157,7 @@ function makeService(mocks: ReturnType<typeof makeMocks>): ExtensionsWorkbenchSe
     mocks.enablement,
     mocks.hostClient,
     mocks.workspace,
+    mocks.host,
   )
 }
 
@@ -324,6 +342,35 @@ describe('ExtensionsWorkbenchService', () => {
     expect(entry.enablementState).toBe(EnablementState.DisabledGlobally)
   })
 
+  it('maps a version-incompatible local extension to isVersionIncompatible + message', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([
+      localExtension({
+        isVersionCompatible: false,
+        validationMessage: 'requires universe ^9.0.0, host is 0.1.0',
+      }),
+    ])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entry = svc.getInstalled()[0]!
+    expect(entry.isVersionIncompatible).toBe(true)
+    expect(entry.validationMessage).toBe('requires universe ^9.0.0, host is 0.1.0')
+  })
+
+  it('leaves a compatible local extension unflagged', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.management.getInstalled).mockResolvedValue([
+      localExtension({ isVersionCompatible: true }),
+    ])
+    const svc = makeService(mocks)
+    await svc.refreshInstalled()
+
+    const entry = svc.getInstalled()[0]!
+    expect(entry.isVersionIncompatible).toBe(false)
+    expect(entry.validationMessage).toBeUndefined()
+  })
+
   it('forwards setEnablement to the enablement service', async () => {
     const mocks = makeMocks()
     vi.mocked(mocks.management.getInstalled).mockResolvedValue([localExtension()])
@@ -440,5 +487,46 @@ describe('ExtensionsWorkbenchService', () => {
     await svc.refreshInstalled()
 
     expect(svc.getInstalled()[0]?.unavailableInRemote).toBeUndefined()
+  })
+
+  it('annotates gallery version compatibility (fallback version + all-incompatible)', async () => {
+    const mocks = makeMocks()
+    vi.mocked(mocks.gallery.query).mockResolvedValue({
+      extensions: [
+        galleryExtension({
+          version: '2.0.0',
+          versions: [
+            {
+              version: '2.0.0',
+              vsixUrl: 'https://host/market-2.vsix',
+              engineConstraint: '>=9.0.0',
+            },
+            { version: '1.0.0', vsixUrl: 'https://host/market.vsix' },
+          ],
+        }),
+        galleryExtension({
+          identifier: 'acme.broken',
+          name: 'broken',
+          displayName: 'Broken',
+          version: '2.0.0',
+          versions: [
+            {
+              version: '2.0.0',
+              vsixUrl: 'https://host/broken.vsix',
+              engineConstraint: '>=9.0.0',
+            },
+          ],
+        }),
+      ],
+      total: 2,
+    })
+    const svc = makeService(mocks)
+    await svc.search('market')
+
+    const [fallback, broken] = svc.getSearchResults()
+    expect(fallback?.installIncompatible).toBe(false)
+    expect(fallback?.installCompatibleVersion).toBe('1.0.0')
+    expect(broken?.installIncompatible).toBe(true)
+    expect(broken?.installCompatibleVersion).toBeUndefined()
   })
 })

@@ -5,11 +5,16 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import AdmZip from 'adm-zip'
 import { hashVsixFile } from '@universe-editor/extension-packaging'
+import type { IGalleryExtensionVersion } from '@universe-editor/extension-gallery'
 import {
   ExtensionManagementMainService,
   type IManagementGallery,
 } from '../extensionManagementService.js'
-import { deleteExtensionFolder, sweepDeletedFolders } from '../installedExtensionsManifest.js'
+import {
+  deleteExtensionFolder,
+  sweepDeletedFolders,
+  writeInstalledRecords,
+} from '../installedExtensionsManifest.js'
 
 const HOST_API = '0.1.0'
 
@@ -69,6 +74,19 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Derive a one-element `versions` array from an extension's top-level fields (test stub convenience). */
+function versionOf(ext: Record<string, unknown>): IGalleryExtensionVersion[] {
+  return [
+    {
+      version: ext.version,
+      vsixUrl: ext.vsixUrl,
+      ...(ext.vsixHash !== undefined ? { vsixHash: ext.vsixHash } : {}),
+      ...(ext.vsixSignature !== undefined ? { vsixSignature: ext.vsixSignature } : {}),
+      ...(ext.engineConstraint !== undefined ? { engineConstraint: ext.engineConstraint } : {}),
+    } as IGalleryExtensionVersion,
+  ]
 }
 
 describe('ExtensionManagementMainService', () => {
@@ -144,6 +162,30 @@ describe('ExtensionManagementMainService', () => {
     expect(await svc.getInstalled()).toHaveLength(0)
   })
 
+  it('fills isVersionCompatible + reason on the installed list', async () => {
+    // An incompatible extension can't be installed through the gate, so seed an
+    // installed record + folder directly — what a pre-existing install looks like
+    // after the editor upgraded past its engines range.
+    await mkdir(path.join(extDir, 'acme.future-1.0.0'), { recursive: true })
+    await writeFile(
+      path.join(extDir, 'acme.future-1.0.0', 'package.json'),
+      JSON.stringify(manifest({ name: 'future', engines: { universe: '^9.0.0' } })),
+    )
+    await writeInstalledRecords(extDir, [
+      {
+        identifier: 'acme.future',
+        version: '1.0.0',
+        location: 'acme.future-1.0.0',
+        source: 'vsix',
+        installedAt: 0,
+      },
+    ])
+    const list = await svc.getInstalled()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.isVersionCompatible).toBe(false)
+    expect(list[0]?.validationMessage).toBe('requires universe ^9.0.0, host is 0.1.0')
+  })
+
   it('supports a publisher-less extension (id = name)', async () => {
     const m = manifest()
     delete m.publisher
@@ -186,7 +228,7 @@ describe('ExtensionManagementMainService — gallery install', () => {
   function galleryExtension(
     overrides: Record<string, unknown> = {},
   ): Parameters<ExtensionManagementMainService['installFromGallery']>[0] {
-    return {
+    const base = {
       identifier: 'acme.sample',
       name: 'sample',
       publisher: 'acme',
@@ -197,6 +239,10 @@ describe('ExtensionManagementMainService — gallery install', () => {
       publisherDisplayName: 'ACME Inc',
       installCount: 42,
       ...overrides,
+    }
+    return {
+      ...base,
+      versions: versionOf(base),
     } as Parameters<ExtensionManagementMainService['installFromGallery']>[0]
   }
 
@@ -350,6 +396,51 @@ describe('ExtensionManagementMainService — gallery install', () => {
     await expect(svc.installVSIX(vsix)).rejects.toThrow(/malicious/)
     svc.dispose()
   })
+
+  it('installs the newest compatible version when the latest is incompatible', async () => {
+    // The downloaded VSIX is v1.0.0 (engines ^0.1.0, compatible); the gallery also
+    // advertises a v2.0.0 that requires a future editor. Selection must fall back.
+    const { gallery, signing } = await signedGallery(manifest())
+    const svc = gallerySvc(gallery)
+    const extension = {
+      identifier: 'acme.sample',
+      name: 'sample',
+      publisher: 'acme',
+      displayName: 'Sample',
+      description: '',
+      version: '2.0.0',
+      vsixUrl: 'https://host/sample-2.vsix',
+      ...signing,
+      versions: [
+        { version: '2.0.0', vsixUrl: 'https://host/sample-2.vsix', engineConstraint: '>=9.0.0' },
+        { version: '1.0.0', vsixUrl: 'https://host/sample.vsix', ...signing },
+      ],
+    } as Parameters<ExtensionManagementMainService['installFromGallery']>[0]
+    const local = await svc.installFromGallery(extension)
+    expect(local.version).toBe('1.0.0')
+    expect(local.galleryMetadata?.vsixHash).toBe(signing.vsixHash)
+    svc.dispose()
+  })
+
+  it('refuses a gallery entry with no version compatible with the host', async () => {
+    const { gallery, signing } = await signedGallery(manifest())
+    const svc = gallerySvc(gallery)
+    const extension = {
+      ...galleryExtension(signing),
+      versions: [
+        { version: '2.0.0', vsixUrl: 'https://host/sample-2.vsix', engineConstraint: '>=9.0.0' },
+        {
+          version: '1.0.0',
+          vsixUrl: 'https://host/sample.vsix',
+          engineConstraint: '>=9.0.0',
+          ...signing,
+        },
+      ],
+    } as Parameters<ExtensionManagementMainService['installFromGallery']>[0]
+    await expect(svc.installFromGallery(extension)).rejects.toThrow(/No compatible version/)
+    expect(await svc.getInstalled()).toHaveLength(0)
+    svc.dispose()
+  })
 })
 
 describe('ExtensionManagementMainService — enablement, quarantine, updates', () => {
@@ -416,6 +507,7 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
       version: '2.0.0',
       vsixUrl: 'https://host/sample.vsix',
       ...signing,
+      versions: versionOf({ version: '2.0.0', vsixUrl: 'https://host/sample.vsix', ...signing }),
     }
     const gallery = {
       download: async () => vsixPath,
@@ -432,7 +524,11 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
       TEST_PUBLIC_KEYS,
     )
     // Install a v1 gallery extension first.
-    await svc.installFromGallery({ ...galleryEntry, version: '1.0.0' })
+    await svc.installFromGallery({
+      ...galleryEntry,
+      version: '1.0.0',
+      versions: versionOf({ version: '1.0.0', vsixUrl: 'https://host/sample.vsix', ...signing }),
+    })
 
     const updates = await svc.checkForUpdates()
     expect(updates).toHaveLength(1)
@@ -441,6 +537,50 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
       fromVersion: '1.0.0',
       toVersion: '2.0.0',
     })
+    svc.dispose()
+  })
+
+  it('does not push an incompatible newer gallery version as an update', async () => {
+    const vsixPath = await makeVsix(root, 'dl.vsix', manifest())
+    const signing = await signedByTestKey(vsixPath)
+    const galleryEntry = {
+      identifier: 'acme.sample',
+      name: 'sample',
+      publisher: 'acme',
+      displayName: 'Sample',
+      description: '',
+      version: '2.0.0',
+      vsixUrl: 'https://host/sample-2.vsix',
+      ...signing,
+      versions: [
+        { version: '2.0.0', vsixUrl: 'https://host/sample-2.vsix', engineConstraint: '>=9.0.0' },
+        { version: '1.0.0', vsixUrl: 'https://host/sample.vsix', ...signing },
+      ],
+    }
+    const gallery = {
+      download: async () => vsixPath,
+      getControlManifest: async () => ({ malicious: [] as string[] }),
+      getExtensions: async () => [galleryEntry],
+    }
+    const svc = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      gallery,
+      undefined,
+      undefined,
+      undefined,
+      TEST_PUBLIC_KEYS,
+    )
+    // Install v1.0.0 (compatible); v2.0.0 requires a future editor.
+    await svc.installFromGallery({
+      ...galleryEntry,
+      version: '1.0.0',
+      versions: versionOf({ version: '1.0.0', vsixUrl: 'https://host/sample.vsix', ...signing }),
+    })
+
+    // The newest gallery version (2.0.0) is incompatible → no update offered.
+    const updates = await svc.checkForUpdates()
+    expect(updates).toHaveLength(0)
     svc.dispose()
   })
 
@@ -462,6 +602,32 @@ describe('ExtensionManagementMainService — enablement, quarantine, updates', (
     const builtins = await svc2.listBuiltinExtensions()
     expect(builtins).toHaveLength(1)
     expect(builtins[0]).toMatchObject({ identifier: 'universe.git', source: 'builtin' })
+    expect(builtins[0]?.isVersionCompatible).toBe(true)
+    expect(builtins[0]?.validationMessage).toBeUndefined()
+    svc2.dispose()
+  })
+
+  it('marks a version-incompatible built-in with isVersionCompatible:false', async () => {
+    const builtinDir = path.join(root, 'builtins')
+    const futureDir = path.join(builtinDir, 'future')
+    await mkdir(futureDir, { recursive: true })
+    await writeFile(
+      path.join(futureDir, 'package.json'),
+      JSON.stringify(
+        manifest({ name: 'future', publisher: 'universe', engines: { universe: '^9.0.0' } }),
+      ),
+    )
+    const svc2 = new ExtensionManagementMainService(
+      () => extDir,
+      HOST_API,
+      undefined,
+      undefined,
+      () => builtinDir,
+    )
+    const [future] = await svc2.listBuiltinExtensions()
+    expect(future?.identifier).toBe('universe.future')
+    expect(future?.isVersionCompatible).toBe(false)
+    expect(future?.validationMessage).toBe('requires universe ^9.0.0, host is 0.1.0')
     svc2.dispose()
   })
 

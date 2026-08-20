@@ -10,7 +10,7 @@ PDF 预览扩展——webview / 自定义编辑器预览的**范例扩展**，�
 extensions-external/<name>/
   src/extension.ts        activate 里 window.registerCustomEditorProvider(viewType, { openCustomDocument, resolveCustomEditor })
   assets/                 预览器静态资产（如 pdf.js 19MB）——运行时经 asWebviewUri 加载，不打进 bundle
-  package.json            engines.universe 匹配 bump 后 API version；contributes.customEditors；activationEvents:["onCustomEditor:<viewType>"]；files:["dist","assets","icon.png"]
+  package.json            engines.universe 匹配 bump 后编辑器版本；contributes.customEditors；activationEvents:["onCustomEditor:<viewType>"]；files:["dist","assets","icon.png"]
   esbuild.config.mjs      bundle src→dist；.html 走 text loader 内联模板 HTML；alias @universe-editor/extension-api → 其 dist
   scripts/pack.mjs        压成 extension/** 结构的 .vsix（[Content_Types].xml + extension.vsixmanifest 占位 + extension/package.json + dist + assets）
   tsconfig.json / src/html.d.ts / README.md / .gitignore(dist,*.vsix)

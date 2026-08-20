@@ -83,6 +83,8 @@ import {
   type E2ECodeAction,
   type E2EContributedMcpServer,
   type E2EEditorDecoration,
+  type E2EExtensionUpdate,
+  type E2EInstalledExtension,
   type E2EMarker,
   type E2ENotification,
   type E2ETimelineItem,
@@ -859,6 +861,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const list = await services.extensionManagementService.getInstalled()
       return list.map((e) => e.identifier)
     },
+    getInstalledExtensionVersions: async (): Promise<readonly E2EInstalledExtension[]> => {
+      const list = await services.extensionManagementService.getInstalled()
+      return list.map((e) => ({ identifier: e.identifier, version: e.version }))
+    },
+    checkForExtensionUpdates: async (): Promise<readonly E2EExtensionUpdate[]> => {
+      const updates = await services.extensionManagementService.checkForUpdates()
+      return updates.map((u) => ({
+        identifier: u.identifier,
+        fromVersion: u.fromVersion,
+        toVersion: u.toVersion,
+      }))
+    },
     getBuiltinExtensionIds: async (): Promise<readonly string[]> => {
       const list = await services.extensionManagementService.listBuiltinExtensions()
       return list.map((e) => e.identifier)
@@ -870,6 +884,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getExtensionHostGeneration: (): number => extensionHostGeneration,
     getDisabledExtensionIds: (): Promise<readonly string[]> =>
       services.extensionEnablementService.getEffectiveDisabledIds(),
+    getVersionIncompatibleExtensionIds: async (): Promise<readonly string[]> => {
+      const all = [
+        ...(await services.extensionManagementService.getInstalled()),
+        ...(await services.extensionManagementService.listBuiltinExtensions()),
+        ...(await services.extensionManagementService.listDevExtensions()),
+      ]
+      return all.filter((e) => e.isVersionCompatible === false).map((e) => e.identifier)
+    },
     setExtensionEnablement: (
       identifier: string,
       enabled: boolean,

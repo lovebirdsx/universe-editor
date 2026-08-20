@@ -46,6 +46,8 @@ import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
 export class ExtensionsContribution extends Disposable implements IWorkbenchContribution {
   private readonly _translator = this._register(new MutableDisposable<ExtensionPointTranslator>())
   private readonly _logger: ILogger
+  /** Ids already notified as version-incompatible (memory-only dedup). */
+  private readonly _seenVersionIncompatibleIds = new Set<string>()
 
   constructor(
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
@@ -91,6 +93,7 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
         void this._client.refreshExtensions().catch((err: unknown) => {
           this._logger.warn(`extension refresh failed: ${(err as Error).message}`)
         })
+        void this._notifyVersionIncompatible()
       }),
     )
 
@@ -108,6 +111,36 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     // Remote kill switch: disable any installed extension the control manifest
     // now marks malicious (found bad after it was installed) and tell the user.
     void this._quarantineMalicious()
+
+    // One-shot: warn once per newly-seen extension whose `engines.universe` is
+    // incompatible with this editor version (auto-disabled by the host).
+    void this._notifyVersionIncompatible()
+  }
+
+  private async _notifyVersionIncompatible(): Promise<void> {
+    try {
+      const all = [
+        ...(await this._management.getInstalled()),
+        ...(await this._management.listBuiltinExtensions()),
+        ...(await this._management.listDevExtensions()),
+      ]
+      const fresh = all.filter(
+        (e) =>
+          e.isVersionCompatible === false && !this._seenVersionIncompatibleIds.has(e.identifier),
+      )
+      if (fresh.length === 0) return
+      for (const e of fresh) this._seenVersionIncompatibleIds.add(e.identifier)
+      this._notification.notify({
+        severity: Severity.Warning,
+        message: localize(
+          'extensions.versionIncompatible.disabled',
+          'Disabled {count} extension(s) because they are incompatible with this version: {ids}',
+          { count: fresh.length, ids: fresh.map((e) => e.identifier).join(', ') },
+        ),
+      })
+    } catch (err) {
+      this._logger.warn(`version-incompatible check failed: ${(err as Error).message}`)
+    }
   }
 
   private async _quarantineMalicious(): Promise<void> {

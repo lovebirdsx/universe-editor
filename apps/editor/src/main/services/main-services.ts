@@ -27,6 +27,7 @@ import { IFileSearchService } from '@universe-editor/platform'
 import { ISecretStorageService } from '@universe-editor/platform'
 import { IMainStorageService } from '../storage.js'
 import { IEnvironmentMainService } from '../environment/environmentMainService.js'
+import { getAppVersion } from '../appVersion.js'
 import { ITextSearchMainService } from '@universe-editor/platform'
 import {
   IDisposableLeakService,
@@ -190,7 +191,7 @@ registerSingletonFactory(
   (acc) =>
     new ExtensionManagementMainService(
       undefined,
-      undefined,
+      getAppVersion(),
       acc.get(IExtensionGalleryService),
       acc.get(ILoggerService),
       undefined,
@@ -341,12 +342,12 @@ registerSingletonFactory(IRemoteConnectionService, (acc) => {
   const remoteServerCmd = acc.get(IEnvironmentMainService).remoteServerCmd
   const remoteSkipDeployCheck = acc.get(IEnvironmentMainService).remoteSkipDeployCheck
   // Packaged apps deploy from resources/remote-server (staged by runtime-resources),
-  // not a workspace checkout; the version must match app.getVersion() so the
+  // not a workspace checkout; the version must match getAppVersion() so the
   // remote daemon doesn't report a mismatch and force-redeploy every connect.
   const deployerOptions = app.isPackaged
     ? {
         bundleDir: join(process.resourcesPath, 'remote-server'),
-        serverVersion: process.env['UNIVERSE_REMOTE_SERVER_VERSION'] ?? app.getVersion(),
+        serverVersion: process.env['UNIVERSE_REMOTE_SERVER_VERSION'] ?? getAppVersion(),
       }
     : {}
   return new RemoteConnectionMainService(

@@ -961,7 +961,7 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._editorFromSnapshot(snapshot, document)
   }
 
-  // --- IExtensionHostBridge: editor (trusted-only) ---
+  // --- IExtensionHostBridge: editor ---
 
   private _editor(): IMainThreadEditor {
     if (!this._mainThreadEditor) {
@@ -1336,7 +1336,7 @@ export class ExtensionService implements IExtensionHostBridge {
     this._diagnostics?.acceptDiagnosticsChange(uris)
   }
 
-  // --- IExtensionHostBridge: ai (trusted-only) ---
+  // --- IExtensionHostBridge: ai ---
 
   private _aiApi: AiApi | undefined
 

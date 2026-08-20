@@ -12,6 +12,7 @@ import { app, shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { cpus, freemem, release as osRelease, totalmem } from 'node:os'
 import { basename, join } from 'node:path'
+import { getAppVersion } from '../../appVersion.js'
 import {
   Disposable,
   type ILogger,
@@ -165,7 +166,7 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
     const osName =
       process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux'
     return {
-      appVersion: app.getVersion(),
+      appVersion: getAppVersion(),
       electron: process.versions.electron ?? 'unknown',
       chromium: process.versions.chrome ?? 'unknown',
       node: process.versions.node ?? 'unknown',

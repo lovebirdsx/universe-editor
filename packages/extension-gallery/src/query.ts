@@ -19,8 +19,7 @@ const DEFAULT_FLAGS =
   GalleryFlags.IncludeVersions |
   GalleryFlags.IncludeFiles |
   GalleryFlags.IncludeVersionProperties |
-  GalleryFlags.IncludeStatistics |
-  GalleryFlags.IncludeLatestVersionOnly
+  GalleryFlags.IncludeStatistics
 
 export function buildQuery(options: IQueryOptions = {}): IRawGalleryQuery {
   const criteria: IRawGalleryQueryCriterion[] = [

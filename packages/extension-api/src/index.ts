@@ -100,9 +100,12 @@ export { FoldingRangeKind } from 'vscode-languageserver-types'
  *  re-exports separately from the type-only block above. */
 export { InlayHintKind } from 'vscode-languageserver-types'
 
-/** Semantic version of this API surface. The host checks `engines.universe`.
- *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
- *  package.json version and the contract test's frozen snapshot. */
+/** The editor (engine) version this SDK build targets — a bundle-time constant,
+ *  like the `@types/vscode` version, NOT the live host version (use
+ *  `env.appVersion` for that). Tracks the editor app version 1:1 (single
+ *  version space); the host checks `engines.universe` against its own runtime
+ *  version. Bumping is governed by COMPATIBILITY.md — keep in sync with
+ *  package.json (release.mjs syncs both; publish preflight enforces it). */
 export const version = '0.13.0'
 
 export { CancellationTokenSource, Disposable, EventEmitter } from './util.js'
@@ -1168,8 +1171,10 @@ export interface AiResponse {
 }
 
 /**
- * The `ai` namespace: inference models and streaming requests. Trusted (built-in)
- * extensions only; restricted (external) extensions cannot reach AI models.
+ * The `ai` namespace: inference models and streaming requests. Available to all
+ * extensions (single host — no trusted/restricted split); reachable once the
+ * extension activates, subject to the same Workspace Trust gating as the rest
+ * of the API.
  */
 export interface AiApi {
   getModels(): Promise<readonly AiModelMetadata[]>

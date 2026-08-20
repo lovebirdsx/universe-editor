@@ -115,6 +115,19 @@ export interface E2EContributedMcpServer {
   readonly command: string
 }
 
+/** One user-installed extension's identifier + version (version-selection assertions). */
+export interface E2EInstalledExtension {
+  readonly identifier: string
+  readonly version: string
+}
+
+/** A pending marketplace update as reported by the management service. */
+export interface E2EExtensionUpdate {
+  readonly identifier: string
+  readonly fromVersion: string
+  readonly toVersion: string
+}
+
 export interface E2EAiDebugRecord {
   readonly id: string
   readonly purpose?: string
@@ -816,6 +829,10 @@ export interface E2EProbe {
   uninstallExtension(identifier: string): Promise<void>
   /** Identifiers of every user-installed extension. */
   getInstalledExtensionIds(): Promise<readonly string[]>
+  /** Identifier + version of every user-installed extension (for version-selection assertions). */
+  getInstalledExtensionVersions(): Promise<readonly E2EInstalledExtension[]>
+  /** Run the marketplace update check; returns only the compatible pending updates. */
+  checkForExtensionUpdates(): Promise<readonly E2EExtensionUpdate[]>
   /** Identifiers of every bundled built-in extension. */
   getBuiltinExtensionIds(): Promise<readonly string[]>
   /**
@@ -832,6 +849,12 @@ export interface E2EProbe {
   getExtensionHostGeneration(): number
   /** Effective disabled identifiers (global ∪ workspace, workspace overrides applied). */
   getDisabledExtensionIds(): Promise<readonly string[]>
+  /**
+   * Identifiers of every extension whose `engines.universe` is incompatible with
+   * the host version (across installed + built-in + dev), as the management
+   * service reports for the UI list. These are auto-disabled by the host.
+   */
+  getVersionIncompatibleExtensionIds(): Promise<readonly string[]>
   /** Enable / disable an extension, globally (default) or for the current workspace. */
   setExtensionEnablement(identifier: string, enabled: boolean, workspace?: boolean): Promise<void>
   // -- Markdown language server probe ---------------------------------------

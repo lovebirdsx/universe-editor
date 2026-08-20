@@ -97,6 +97,7 @@
 - **System（内置、不可卸） vs User（市场/VSIX 装）**：市场只管 User。
 - **启用禁用只做全局粒度**，workspace 级后置。
 - **市场签名已落地（2026-08）**：gallery 安装强制验签（fail-closed），本地 VSIX 不验签；硬隔离/权限模型经决策不做（隔离架构另行拍板）。
+- **市场安装/更新按 host 版本 engine-aware 选版（2026-08）**：`IGalleryExtension.versions[]`（从新到旧，每项 version/vsixUrl/engineConstraint?/vsixHash?/vsixSignature?）由 `extension-gallery/parse.ts` 解析全量版本；纯函数 `pickCompatibleVersion(ext, hostVersion)` 返回第一个 `satisfies(hostVersion, engineConstraint)` 的版本项（engineConstraint 缺失视为兼容 fail-open）。main 的 `_installFromGallery` 用它选版（无兼容版本 throw 含 id + host 版本），防投毒/验签全走选中版本；`checkForUpdates` 只推兼容的新版。renderer 经 `IHostService.getVersionInfo()` 拿 host 版本，标注「将安装兼容版本 X」/「不兼容当前版本」并禁用安装按钮。
 
 ## 常见任务 → 改哪里
 
@@ -107,7 +108,7 @@
 - **改市场验签 / 密钥轮换**：纯逻辑在 `extension-packaging/signature.ts`（verifyVsixSignature，fail-closed 错误码）；公钥在 `marketplaceSigningKeys.ts`（env `UNIVERSE_GALLERY_SIGNING_KEYS` 叠加）；插入点在 `_installFromGallery` 防投毒段后；发布侧签名在 `scripts/gallery`（keygen/publish）。
 - **改市场地址配置**：`main/environment/configItems.ts`（GALLERY_URL 项 + CLI_OPTIONS）+ `environmentMainService.ts` getter。
 - **改启用禁用粒度 / 生效方式**：管理服务 `getDisabledIds/setEnablement` + host 过滤链（env `UNIVERSE_DISABLED_EXTENSIONS` → bootstrap 过滤）。
-- **改更新检查策略**：`checkForUpdates`（版本比较用 `extensions-common/semver.ts` 的 `compareVersions`）。
+- **改更新检查策略**：`checkForUpdates`（版本比较用 `extensions-common/semver.ts` 的 `compareVersions`；选版/兼容过滤用 `extension-gallery` 的 `pickCompatibleVersion`，不推不兼容新版）。
 - **改信任提示文案/记住策略**：门面 `ExtensionsWorkbenchService._ensurePublisherTrusted`（storage key `extensions.trustedPublishers`）。
 - **改扩展视图/详情页 UI**：`workbench/extensions/{ExtensionsView,ExtensionEditor}.tsx`。
 - **加扩展相关命令**：`actions/extensionsActions.ts` + `actions/index.ts`（套路 A）。

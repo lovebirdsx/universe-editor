@@ -21,6 +21,8 @@ function entry(
     isUnderDevelopment: false,
     enabled: true,
     enablementState: EnablementState.EnabledGlobally,
+    isVersionIncompatible: false,
+    installIncompatible: false,
   }
 }
 

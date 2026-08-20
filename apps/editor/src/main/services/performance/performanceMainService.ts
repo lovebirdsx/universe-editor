@@ -8,7 +8,7 @@
  *  open the Startup Performance report on that exact launch.
  *--------------------------------------------------------------------------------------------*/
 
-import { app } from 'electron'
+import { getAppVersion } from '../../appVersion.js'
 import {
   createNamedLogger,
   getMarks,
@@ -30,7 +30,7 @@ const LAST_RUN_VERSION_KEY = 'startup.lastRunVersion'
 export class PerformanceMainService implements IPerformanceMarksService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _currentVersion = app.getVersion()
+  private readonly _currentVersion = getAppVersion()
   private readonly _logger: ILogger
   private _contextPromise: Promise<StartupContext> | undefined
 

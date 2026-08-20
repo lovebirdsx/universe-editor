@@ -25,7 +25,7 @@ export interface IReleaseNote {
 }
 
 export interface IReleaseNotesData {
-  /** App version currently running (`app.getVersion()`). */
+  /** App version currently running (`getAppVersion()`). */
   readonly currentVersion: string
   /** All released versions, newest first. */
   readonly notes: readonly IReleaseNote[]

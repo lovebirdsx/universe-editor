@@ -108,7 +108,9 @@ function Header({
             <Spinner size={16} />
           ) : entry.installed ? (
             <>
-              {!entry.isUnderDevelopment && <EnablementActions entry={entry} service={service} />}
+              {!entry.isUnderDevelopment && !entry.isVersionIncompatible && (
+                <EnablementActions entry={entry} service={service} />
+              )}
               {!entry.isBuiltin && !entry.isUnderDevelopment && (
                 <Button variant="secondary" onClick={() => void service.uninstall(entry)}>
                   {localize('extensions.uninstall', 'Uninstall')}
@@ -116,11 +118,33 @@ function Header({
               )}
             </>
           ) : (
-            <Button onClick={() => void service.install(entry)}>
+            <Button
+              onClick={() => void service.install(entry)}
+              disabled={entry.installIncompatible}
+            >
               {localize('extensions.install', 'Install')}
             </Button>
           )}
         </div>
+        {entry.isVersionIncompatible && (
+          <div className={styles.warning} data-testid="extension-version-incompatible-detail">
+            {localize('extensions.versionIncompatible', 'Disabled (requires universe {reason})', {
+              reason: entry.validationMessage ?? '',
+            })}
+          </div>
+        )}
+        {!entry.installed && entry.installIncompatible && (
+          <div className={styles.warning} data-testid="extension-install-incompatible-detail">
+            {localize('extensions.installIncompatible', 'Incompatible with current version')}
+          </div>
+        )}
+        {!entry.installed && entry.installCompatibleVersion !== undefined && (
+          <div className={styles.warning}>
+            {localize('extensions.installCompatibleVersion', 'Will install version {version}', {
+              version: entry.installCompatibleVersion,
+            })}
+          </div>
+        )}
         <div className={styles.warning}>
           {localize(
             'extensions.detail.capabilityWarning',

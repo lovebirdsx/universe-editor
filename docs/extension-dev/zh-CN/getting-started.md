@@ -51,7 +51,7 @@ my-extension/
 
 `package.json` 里三个字段值得立刻看一眼：
 
-- `"engines": { "universe": ">=0.12.0 <1.0.0" }` —— 声明兼容的扩展 API 版本区间。**不是编辑器版本**；语义与推荐写法见 [API 版本与 `engines.universe`](./versioning.md)。
+- `"engines": { "universe": ">=0.13.0 <1.0.0" }` —— 声明兼容的**编辑器版本**区间（0.13.0 起 API 包版本与编辑器版本同空间）。语义与推荐写法见 [API 版本与 `engines.universe`](./versioning.md)。
 - `"activationEvents": ["onCommand:my-extension.helloWorld"]` —— 扩展什么时候被激活（懒加载，不拖慢启动）。
 - `"files": ["dist", "icon.png"]` —— 打包白名单，只有列进去的会进 `.vsix`。
 

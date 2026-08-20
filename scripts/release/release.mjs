@@ -21,6 +21,7 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { verifyPackagedRuntimeResources } from './runtime-resources.mjs'
+import { generateSdkVersions } from '../ext-packages/generate-sdk-versions.mjs'
 import { loadEnv } from '../lib/env.mjs'
 
 loadEnv()
@@ -28,6 +29,8 @@ loadEnv()
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 const editorPackageJson = join(repoRoot, 'apps/editor/package.json')
+const extensionApiPackageJson = join(repoRoot, 'packages/extension-api/package.json')
+const extensionApiIndexTs = join(repoRoot, 'packages/extension-api/src/index.ts')
 const releaseNotesJson = join(repoRoot, 'apps/editor/resources/release-notes.json')
 const releaseDir = join(repoRoot, 'apps/editor/release')
 
@@ -281,11 +284,49 @@ function updateEditorVersion(version, dryRun) {
   const pkg = readJson(editorPackageJson)
   if (pkg.version === version) {
     log(`版本: apps/editor/package.json 已是 ${version}`)
-    return
+  } else {
+    pkg.version = version
+    writeJson(editorPackageJson, pkg, dryRun)
+    log(`版本: apps/editor/package.json ${version}`)
   }
-  pkg.version = version
-  writeJson(editorPackageJson, pkg, dryRun)
-  log(`版本: apps/editor/package.json ${version}`)
+  syncVersionSpace(version, dryRun)
+}
+
+/**
+ * 单一版本空间：extension-api 包版本 = App 版本（engines.universe 对标编辑器版本，
+ * 对齐 VSCode 的 product version 即 API 版本）。bump 时同步：
+ *   1. packages/extension-api/package.json 的 version
+ *   2. packages/extension-api/src/index.ts 的 `export const version` 常量
+ *   3. 生成的 SDK 版本常量（uex / create-extension）
+ *   4. 内置插件 extensions/* 的 engines.universe（minor bump 时守卫脚本 --fix）
+ */
+function syncVersionSpace(version, dryRun) {
+  const apiPkg = readJson(extensionApiPackageJson)
+  if (apiPkg.version !== version) {
+    apiPkg.version = version
+    writeJson(extensionApiPackageJson, apiPkg, dryRun)
+    log(`版本: packages/extension-api/package.json ${version}`)
+  }
+  const indexText = readFileSync(extensionApiIndexTs, 'utf8')
+  const nextIndexText = indexText.replace(
+    /^export const version = '[^']+'$/m,
+    `export const version = '${version}'`,
+  )
+  if (!/^export const version = '/m.test(indexText)) {
+    die('packages/extension-api/src/index.ts 缺少 `export const version` 常量')
+  }
+  if (nextIndexText !== indexText) {
+    if (dryRun) log(`  [dry-run] write ${extensionApiIndexTs}`)
+    else writeFileSync(extensionApiIndexTs, nextIndexText, 'utf8')
+    log(`版本: extension-api index.ts version 常量 ${version}`)
+  }
+  if (dryRun) {
+    log('  [dry-run] 将重新生成 SDK 版本常量（uex sdkVersion.ts / create-extension sdkVersions.ts）')
+  } else {
+    const { updated } = generateSdkVersions({ repoRoot })
+    for (const rel of updated) log(`版本: 已重新生成 ${rel}`)
+  }
+  run(process.execPath, ['scripts/check-builtin-extensions-engines.mjs', '--fix'], { dryRun })
 }
 
 function generateReleaseNotes(version, dryRun) {
@@ -295,14 +336,19 @@ function generateReleaseNotes(version, dryRun) {
   if (top !== version) die(`release-notes.json 顶部版本是 ${top || '(空)'}，期望 ${version}`)
 }
 
+/** 随 release commit 一起提交的版本相关文件（单一版本空间的全部落点）。 */
+const RELEASE_FILE_GLOBS = [
+  'apps/editor/package.json',
+  'apps/editor/resources/release-notes.json',
+  'packages/extension-api/package.json',
+  'packages/extension-api/src/index.ts',
+  'packages/uex/src/lib/sdkVersion.ts',
+  'packages/create-extension/src/sdkVersions.ts',
+  'extensions/*/package.json',
+]
+
 function changedReleaseFiles() {
-  return git([
-    'status',
-    '--porcelain',
-    '--',
-    'apps/editor/package.json',
-    'apps/editor/resources/release-notes.json',
-  ])
+  return git(['status', '--porcelain', '--', ...RELEASE_FILE_GLOBS])
 }
 
 function commitReleaseFiles(version, dryRun) {
@@ -311,9 +357,7 @@ function commitReleaseFiles(version, dryRun) {
     log('提交: 版本文件和 release notes 无变化，跳过 commit')
     return
   }
-  run('git', ['add', 'apps/editor/package.json', 'apps/editor/resources/release-notes.json'], {
-    dryRun,
-  })
+  run('git', ['add', ...RELEASE_FILE_GLOBS], { dryRun })
   run('git', ['commit', '-m', `chore(release): ${version}`], { dryRun })
 }
 

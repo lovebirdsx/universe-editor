@@ -46,6 +46,7 @@
 - [Remote Explorer 单 Targets 树](remote-explorer-merged-targets-tree.md) — 4 view 合一(分组→target→recent 子行)+buildRemoteTree 纯函数；连接双条根因=WSL authority 大小写未归一化，normalizeRemoteAuthority 只在 main 边界收敛
 - [AI Settings 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority hook；协议匹配只回 index 不回秘密
 - [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState+needsInstall 门控 Output；坑=状态栏须回退 in-flight authority（connect 先于 openFolder）
+- [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — 版本空间统一 0.13.0+engines=编辑器版本;不兼容=禁用+通知,市场选版,发布拦截;大坑=非打包 app.getVersion() 回退 Electron 版本,main 一律走 getAppVersion()
 
 ## 性能 / 疑难根因
 

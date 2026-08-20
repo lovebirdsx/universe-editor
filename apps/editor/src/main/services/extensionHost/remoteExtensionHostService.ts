@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
+import { getAppVersion } from '../../appVersion.js'
 import {
   createNamedLogger,
   Disposable,
@@ -78,6 +79,10 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
     if (spec?.disabledIds && spec.disabledIds.length > 0) {
       env.UNIVERSE_DISABLED_EXTENSIONS = spec.disabledIds.join(',')
     }
+    // The editor app version the host checks `engines.universe` against. The
+    // client is the product the user runs, so its version is authoritative for
+    // the remote host too (the deployed server tree is version-matched anyway).
+    env.UNIVERSE_APP_VERSION = getAppVersion()
     // The e2e minimal-extension-set allowlist is an env mechanism, not part of the
     // spec: the local host inherits it via buildChildEnv(process.env), so the
     // remote host must forward it explicitly (its env is otherwise built clean).

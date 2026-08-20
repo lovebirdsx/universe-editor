@@ -13,6 +13,8 @@ import { CURRENT_API_VERSION } from '../lib/sdkVersion.js'
 export interface RunPackageOptions {
   readonly cwd: string
   readonly out?: string
+  /** --force: downgrade the engines.universe coverage error to a warning. */
+  readonly force?: boolean
 }
 
 export interface RunPackageResult {
@@ -49,6 +51,7 @@ export async function runPackage(opts: RunPackageOptions): Promise<RunPackageRes
   const issues = checkManifestForPublish(manifest, {
     extensionDir,
     currentApiVersion: CURRENT_API_VERSION,
+    ...(opts.force ? { force: true } : {}),
   })
   for (const issue of issues) {
     if (issue.level === 'warning') {
@@ -88,19 +91,22 @@ export async function runPackage(opts: RunPackageOptions): Promise<RunPackageRes
 export async function run(argv: string[]): Promise<number> {
   const { values } = parseCommandArgs('package', argv, {
     out: { type: 'string' },
+    force: { type: 'boolean' },
     help: { type: 'boolean' },
   })
   if (values.help) {
-    info('usage: uex package [--out <path>]')
+    info('usage: uex package [--out <path>] [--force]')
     info('')
     info('validate the manifest, run universe:prepublish, and produce')
     info('<publisher>.<name>-<version>.vsix in the extension root (or --out).')
+    info('--force downgrades the engines.universe coverage error to a warning.')
     return 0
   }
   try {
     const { vsixPath } = await runPackage({
       cwd: process.cwd(),
       ...(typeof values.out === 'string' ? { out: values.out } : {}),
+      force: values.force === true,
     })
     info(`created ${vsixPath}`)
     info('next: `uex publish` to upload it, or install it from the editor’s Extensions view')

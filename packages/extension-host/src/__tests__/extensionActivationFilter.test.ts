@@ -20,6 +20,14 @@ function devExt(id: string): IScannedExtension {
   return { ...ext(id, false), isUnderDevelopment: true }
 }
 
+function invalidExt(id: string): IScannedExtension {
+  return {
+    ...ext(id),
+    isValid: false,
+    validationMessage: 'requires universe >=99.0.0, host is 0.13.0',
+  }
+}
+
 describe('computeActiveExtensions', () => {
   it('de-dupes by id, keeping the first occurrence (built-in wins over user)', () => {
     const scanned = [ext('a', true), ext('b', true), ext('a', false)]
@@ -118,6 +126,18 @@ describe('computeActiveExtensions', () => {
     const scanned = [devExt('dev.x'), ext('builtin.y', true)]
     const { active } = computeActiveExtensions(scanned, filter)
     expect(active.map((e) => e.id)).toEqual(['dev.x'])
+  })
+
+  it('drops version-incompatible extensions from active but keeps them deduped', () => {
+    const { deduped, active } = computeActiveExtensions([ext('a'), invalidExt('b'), ext('c')])
+    expect(deduped.map((e) => e.id)).toEqual(['a', 'b', 'c'])
+    expect(active.map((e) => e.id)).toEqual(['a', 'c'])
+  })
+
+  it('a version-incompatible dev extension is also dropped (dev is not exempt)', () => {
+    const scanned = [{ ...invalidExt('x'), isUnderDevelopment: true }, ext('y')]
+    const { active } = computeActiveExtensions(scanned)
+    expect(active.map((e) => e.id)).toEqual(['y'])
   })
 })
 

@@ -11,9 +11,11 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
+import * as nodeFs from 'node:fs'
 import * as os from 'node:os'
 import AdmZip from 'adm-zip'
-import { test, expect } from '../fixtures/electronApp.js'
+import { createColdAppTest } from '@universe-editor/e2e-harness'
+import { APP_ROOT, MAIN_ENTRY, test, expect } from '../fixtures/electronApp.js'
 
 const EXTENSIONS_CONTAINER = 'workbench.view.extensions'
 
@@ -124,6 +126,20 @@ test.describe('@p1 extensions', () => {
       .not.toContain(target)
   })
 
+  test('built-in extensions are never version-incompatible @regression', async ({ workbench }) => {
+    await workbench.waitForRestored()
+
+    const builtins = await workbench.page.evaluate(() => window.__E2E__!.getBuiltinExtensionIds())
+    expect(builtins.length).toBeGreaterThan(0)
+
+    // Guards the dev/e2e app-version fallback: before the fix the host version
+    // collapsed to Electron's own, flagging every built-in incompatible.
+    const incompatible = await workbench.page.evaluate(() =>
+      window.__E2E__!.getVersionIncompatibleExtensionIds(),
+    )
+    expect(incompatible.filter((id) => builtins.includes(id))).toEqual([])
+  })
+
   test('built-ins hidden by default; @builtin lists them with text filtering', async ({
     workbench,
   }) => {
@@ -164,4 +180,70 @@ test.describe('@p1 extensions', () => {
     await searchBox.fill('')
     await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
   })
+})
+
+/**
+ * Version-incompatibility guard: an extension declaring `engines.universe:
+ * '>=99.0.0'` must be auto-disabled at load (not activated, contributions hidden)
+ * and surfaced by the management list — the DisabledByInvalidExtension parity.
+ *
+ * Loaded as a dev extension (`--extension-development-path`) because install-time
+ * `satisfies` would refuse it outright; the dev path still goes through the host
+ * engine check (dev is not exempt).
+ */
+const INCOMPAT_COMMAND_ID = 'e2eIncompat.hello'
+const INCOMPAT_DEV_EXT_ID = 'universe.e2e-incompat'
+
+function makeIncompatibleDevExtensionDir(): string {
+  const dir = nodeFs.realpathSync.native(
+    nodeFs.mkdtempSync(path.join(os.tmpdir(), 'ue2-incompat-')),
+  )
+  nodeFs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'e2e-incompat',
+      publisher: 'universe',
+      version: '1.0.0',
+      engines: { universe: '>=99.0.0' },
+      main: 'dist/extension.js',
+      contributes: { commands: [{ command: INCOMPAT_COMMAND_ID, title: 'E2E Incompat: Hello' }] },
+    }),
+  )
+  nodeFs.mkdirSync(path.join(dir, 'dist'), { recursive: true })
+  nodeFs.writeFileSync(
+    path.join(dir, 'dist', 'extension.js'),
+    'module.exports = { activate() {}, deactivate() {} }',
+  )
+  return dir
+}
+
+const incompatibleDevExtDir = makeIncompatibleDevExtensionDir()
+
+const incompatibleTest = createColdAppTest({
+  appRoot: APP_ROOT,
+  mainEntry: MAIN_ENTRY,
+  extensions: [],
+  extraArgs: [`--extension-development-path=${incompatibleDevExtDir}`],
+})
+
+incompatibleTest.describe('@p1 extensions version incompatibility', () => {
+  incompatibleTest(
+    'auto-disables a version-incompatible extension and hides its contributions @regression',
+    async ({ workbench }) => {
+      await workbench.waitForRestored()
+
+      // The host refuses to activate it, so its contributed command never registers.
+      expect(
+        await workbench.page.evaluate((id) => window.__E2E__!.hasCommand(id), INCOMPAT_COMMAND_ID),
+      ).toBe(false)
+
+      // The management service surfaces it as version-incompatible for the UI list.
+      await expect
+        .poll(
+          () => workbench.page.evaluate(() => window.__E2E__!.getVersionIncompatibleExtensionIds()),
+          { timeout: 10000 },
+        )
+        .toContain(INCOMPAT_DEV_EXT_ID)
+    },
+  )
 })

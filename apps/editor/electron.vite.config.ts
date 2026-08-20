@@ -58,12 +58,14 @@ function jsToTsResolvePlugin(): Plugin {
 // plugins (the preset + externalizeDeps), so declare them literally: electron +
 // every package.json dependency (mirrors externalizeDeps semantics).
 const editorPkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')) as {
+  version: string
   dependencies?: Record<string, string>
 }
 const nodeExternal = ['electron', /^electron\/.+/, ...Object.keys(editorPkg.dependencies ?? {})]
 
 export default defineConfig({
   main: {
+    define: { __APP_VERSION__: JSON.stringify(editorPkg.version) },
     plugins: [
       jsToTsResolvePlugin(),
       mainHmrPlugin(),

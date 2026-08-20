@@ -146,6 +146,21 @@ export interface IRawGalleryQueryResult {
 
 // --- Internal domain model ------------------------------------------------
 
+/** One installable version of a gallery extension (what `pickCompatibleVersion` selects). */
+export interface IGalleryExtensionVersion {
+  readonly version: string
+  readonly vsixUrl: string
+  readonly engineConstraint?: string
+  /** sha256 (hex) of the VSIX, advertised by the marketplace registry. */
+  readonly vsixHash?: string
+  /** Marketplace Ed25519 signature over the raw VSIX bytes (see extension-packaging). */
+  readonly vsixSignature?: {
+    readonly algorithm: string
+    readonly keyId: string
+    readonly value: string
+  }
+}
+
 /** A gallery extension in the client's own shape (protocol details resolved). */
 export interface IGalleryExtension {
   readonly identifier: string
@@ -154,6 +169,8 @@ export interface IGalleryExtension {
   readonly displayName: string
   readonly publisher: string
   readonly publisherDisplayName?: string
+  /** Every installable version, newest first; `versions[0]` mirrors the top-level single-version fields. */
+  readonly versions: IGalleryExtensionVersion[]
   readonly version: string
   readonly description: string
   readonly vsixUrl: string

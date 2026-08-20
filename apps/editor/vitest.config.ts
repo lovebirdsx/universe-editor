@@ -1,6 +1,11 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+
+const editorPkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+) as { version: string }
 
 const monacoStub = fileURLToPath(new URL('./test-stubs/monaco-editor.ts', import.meta.url))
 const workerStub = fileURLToPath(new URL('./test-stubs/monaco-worker.ts', import.meta.url))
@@ -84,6 +89,7 @@ export default defineConfig({
     silent: 'passed-only',
     projects: [
       {
+        define: { __APP_VERSION__: JSON.stringify(editorPkg.version) },
         test: {
           name: 'main',
           environment: 'node',

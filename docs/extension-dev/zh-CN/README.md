@@ -1,6 +1,6 @@
 # Universe Editor 扩展开发
 
-> 面向第三方扩展作者的开发文档：从一个空目录到一个上架市场的扩展，全部内容都在这里。当前以 **API 0.12.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，务必阅读 [API 版本与 `engines.universe`](./versioning.md)）。
+> 面向第三方扩展作者的开发文档：从一个空目录到一个上架市场的扩展，全部内容都在这里。当前以 **API 0.13.0** 为准（0.x 阶段 minor 版本可能携带破坏性变更，务必阅读 [API 版本与 `engines.universe`](./versioning.md)）。
 
 ## 开发者旅程
 

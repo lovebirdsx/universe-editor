@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { app } from 'electron'
+import { getAppVersion } from '../../appVersion.js'
 import { createNamedLogger, type ILogger, ILoggerService } from '@universe-editor/platform'
 import { resolveFromRepo } from '../../repoPaths.js'
 import type {
@@ -32,7 +33,7 @@ const defaultResolvePath: ReleaseNotesPathResolver = () =>
 export class ReleaseNotesMainService implements IReleaseNotesService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _currentVersion = app.getVersion()
+  private readonly _currentVersion = getAppVersion()
   private readonly _logger: ILogger
   private _notes: readonly IReleaseNote[] | undefined
 

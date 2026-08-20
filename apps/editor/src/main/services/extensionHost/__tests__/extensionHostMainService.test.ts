@@ -30,7 +30,12 @@ import type {
 // The service imports `app` from electron for its default resolvers; the tests
 // inject their own, so these stubs are never exercised.
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => '/fake/userData' },
+  app: {
+    isPackaged: false,
+    getVersion: () => '0.13.0',
+    getAppPath: () => '/fake/app',
+    getPath: () => '/fake/userData',
+  },
 }))
 
 class FakeStdStream extends EventEmitter {

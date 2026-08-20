@@ -10,7 +10,7 @@
   "displayName": "TextMate Grammars",
   "description": "Built-in TextMate grammars (VSCode-compatible) for token colorization.",
   "engines": {
-    "universe": ">=0.1.0 <1.0.0"
+    "universe": "^0.13.0"
   },
   "contributes": {
     "grammars": [

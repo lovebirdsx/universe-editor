@@ -1,6 +1,6 @@
 # Context Key 清单
 
-> 写 `menus` / `keybindings` 的 `when` 子句时,可以引用宿主提供的 context key。本页以宿主 API 0.12.0 为准。
+> 写 `menus` / `keybindings` 的 `when` 子句时,可以引用宿主提供的 context key。本页以宿主 API 0.13.0 为准。
 
 ## when 表达式语法
 

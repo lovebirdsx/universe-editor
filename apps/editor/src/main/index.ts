@@ -35,6 +35,7 @@ import {
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { parseFileToOpen } from './cliArgs.js'
 import { resolveFromRepo } from './repoPaths.js'
+import { getAppVersion } from './appVersion.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
@@ -190,7 +191,7 @@ if (environmentService.shouldPrintVersion) {
   // leaving a blank line before our output. Move up one line and clear it.
   if (process.platform === 'win32' && process.stdout.isTTY) process.stdout.write('\x1b[1A\x1b[2K')
   process.stdout.write(
-    environmentService.formatVersion(productIdentity.productName, app.getVersion(), [
+    environmentService.formatVersion(productIdentity.productName, getAppVersion(), [
       `Extension API ${EXTENSION_API_VERSION}`,
       `Electron ${process.versions.electron}`,
       `Node ${process.versions.node}`,
@@ -200,7 +201,7 @@ if (environmentService.shouldPrintVersion) {
 } else if (environmentService.shouldPrintHelp) {
   if (process.platform === 'win32' && process.stdout.isTTY) process.stdout.write('\x1b[1A\x1b[2K')
   process.stdout.write(
-    environmentService.formatHelp(productIdentity.productName, app.getVersion()) + '\n',
+    environmentService.formatHelp(productIdentity.productName, getAppVersion()) + '\n',
   )
   app.exit(0)
 }
@@ -261,7 +262,7 @@ const errorSink = new ErrorSinkMainService(
   {
     sessionDir: logMainService.getSessionDir(),
     sessionId: logMainService.getSessionId(),
-    appVersion: app.getVersion(),
+    appVersion: getAppVersion(),
     piiPaths: [
       app.getPath('userData'),
       homedir(),

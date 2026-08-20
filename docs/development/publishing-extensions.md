@@ -59,7 +59,7 @@ pnpm ext:release -- --dry-run
 
 ## 版本管理
 
-各扩展**独立版本**，各自维护 `package.json` 的 `version`。发布哪个版本就在包内 bump 到哪个版本，`registry.json` 天然支持同一扩展多版本并存（客户端取最高版本）。
+各扩展**独立版本**，各自维护 `package.json` 的 `version`。发布哪个版本就在包内 bump 到哪个版本，`registry.json` 天然支持同一扩展多版本并存（客户端安装/更新时自动选择兼容当前编辑器版本的最新版本）。
 
 ## 单独打包（不发布）
 

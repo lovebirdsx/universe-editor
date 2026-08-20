@@ -4,16 +4,23 @@
 > `vscode.d.ts`）。本文件定义该表面的**版本承诺、协商语义与破坏性变更流程**。
 > 可执行抓手是 `src/__tests__/index.test.ts` 的契约测试——它就是 API 表面的快照。
 
-## 版本即 API 版本
+## 版本即 App 版本（单一版本空间）
 
-包的 `version` 字段（`src/index.ts` 导出的 `version` 常量与之保持一致）即为 API
-版本。扩展在自己的 `package.json` 里用 `engines.universe` 声明所需的兼容区间，宿主
-在扫描阶段用 semver 区间做满足性检查（`extensionScanner.ts` 的 `satisfies`）。
+自 `0.13.0` 起，本包版本与**编辑器 App 版本**（`apps/editor/package.json`）是同一个
+版本空间（对齐 VSCode 的 product version 即 API 版本）：`release.mjs` 在发版时同步
+bump 两处 + `src/index.ts` 导出的 `version` 常量，锁步由 uex 的 drift 测试与发布
+preflight 守护。扩展在自己的 `package.json` 里用 `engines.universe` 声明所需的
+**编辑器版本**兼容区间，宿主在扫描/安装时用运行时版本（`app.getVersion()`，经
+`UNIVERSE_APP_VERSION` 传给扩展宿主）做 semver 满足性检查（`extensionScanner.ts`
+的 `satisfies`）。
+
+> `src/index.ts` 的 `version` 常量是**打包期常量**（本 SDK 编译目标的编辑器版本，
+> 类比 `@types/vscode` 的版本）；扩展运行时读宿主真实版本用 `env.appVersion`。
 
 ```jsonc
 // 扩展的 package.json
 {
-  "engines": { "universe": ">=0.1.0 <1.0.0" }
+  "engines": { "universe": ">=0.13.0 <1.0.0" }
 }
 ```
 
@@ -34,13 +41,16 @@
 
 ## engines.universe 协商语义
 
-- 扩展不写 `engines.universe` → 当前按"不校验"放行（见 `scanExtensions` 的
-  `hostApiVersion` 为 `undefined` 分支）。**建议所有扩展显式声明**。
-- 写了区间但宿主 API 版本不满足 → 该扩展被跳过并记日志，不影响其它扩展。
-- 推荐写法：`">=0.1.0 <1.0.0"`（接受整个 0.x 演进）。**不要用 `^0.1.0`**：0.x 下
-  caret 等价于 `>=0.1.0 <0.2.0`，会把任何 minor bump——哪怕是向后兼容的纯新增——
-  都挡在门外，导致用不到新 API 的扩展被误杀。若某扩展确实依赖某次 minor 引入的新
-  能力，则把下界抬到那次 minor（如 `">=0.2.0 <1.0.0"`）。
+- `engines.universe` 是 manifest schema 的**必填字段**（zod required），缺失即
+  `invalid manifest`，扩展不会被加载。
+- 写了区间但宿主版本不满足 → 该扩展被标记为版本不兼容并**禁用**（扩展面板显示
+  原因 + 一次性通知），不影响其它扩展；市场安装/更新时会自动选择兼容当前版本的
+  最新版本，无兼容版本则明确报错。
+- 推荐写法（第三方扩展）：`">=0.13.0 <1.0.0"`——下界抬到你实际依赖的最低编辑器
+  版本，上界开放整个 0.x 演进。**不要用 `^0.13.0`**：0.x 下 caret 等价于
+  `>=0.13.0 <0.14.0`，会把任何 minor bump——哪怕是向后兼容的纯新增——都挡在门外。
+  （内置扩展例外：它们随 App 同仓发版，用 `^X.Y.0` 精确锁定 minor，由
+  `scripts/check-builtin-extensions-engines.mjs` 守卫。）
 - 破坏性变更在 0.x 下靠"破坏性变更流程"（契约测试快照 + `version` bump + 变更记录）
   显式把关，而非靠 caret 区间兜底。
 
@@ -340,6 +350,13 @@
     扩展侧用 `Uri`/`URI.revive` 恢复）；`when` 可用 `editorLangId` /
     `editorHasSelection` / `editorReadonly` / `resourceScheme` /
     `resourceExtname` 等键。API 导出表面无变化，行为对齐 manifest 声明。
+
+  本版本同时完成**版本空间统一**（2026-08-19）：包版本从此与编辑器 App 版本同一
+  空间（App 从 0.1.71、本包从 0.12.1 跳到共同支配值 0.13.0），`engines.universe`
+  语义从「API 包版本区间」变为「编辑器版本区间」（数值连续，存量下界型区间无需
+  迁移）。此后 App 发版 patch 递增；API 面变更的发版 minor 递增并照常记录在本
+  文件。配套：宿主校验版本改读运行时 `UNIVERSE_APP_VERSION`；版本不兼容的扩展
+  从「静默跳过」改为「禁用 + 通知」；市场安装/更新自动选兼容版本。
 
 ## 激活事件清单（activation events）
 

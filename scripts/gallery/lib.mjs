@@ -67,6 +67,14 @@ export function compareVersions(a, b) {
   return 0
 }
 
+/**
+ * range 语法与 uex 的 UNSUPPORTED_RANGE 同源（packages/uex/src/lib/manifestChecks.ts）。
+ * 客户端 satisfies() 对 `||` 与 hyphen range（`1.2.3 - 2.0.0`）fail-closed（直接拒装），
+ * 发布侧提前拦截避免「上架即废」。scripts/server 只能用 node 内置模块、不能 import
+ * workspace 包，故复制正则——改 uex 那份时两边必须同步。
+ */
+const UNSUPPORTED_RANGE = /\|\||\d\s+-\s+\d/
+
 /** 从 manifest 抽出 registry 需要的市场元数据。publisher 必填（防投毒依赖）。 */
 export function metadataFromManifest(manifest) {
   const publisher = manifest.publisher
@@ -76,6 +84,11 @@ export function metadataFromManifest(manifest) {
   if (!manifest.version) throw new Error(`扩展 ${publisher}.${name} 缺少 version`)
   const engine = manifest.engines?.universe
   if (!engine) throw new Error(`扩展 ${publisher}.${name} 缺少 engines.universe`)
+  if (UNSUPPORTED_RANGE.test(engine)) {
+    throw new Error(
+      `扩展 ${publisher}.${name} 的 engines.universe "${engine}" 用了客户端 fail-closed 的 range 语法（"||" 或 "1.2.3 - 2.0.0" hyphen range）。允许的形式：>=X.Y.Z <A.B.C、^X.Y.Z、~X.Y.Z、精确版本、*`,
+    )
+  }
   return {
     publisher,
     name,

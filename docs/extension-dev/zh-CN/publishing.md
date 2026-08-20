@@ -73,7 +73,8 @@ vsix 的内容是**白名单制**，以下文件进包，其余一律不进：
 
 - **`files` 必填**。没有 `files` 的扩展会被拒包——这是故意的，把 `.env`、密钥、`node_modules` 挡在包外。模板默认 `"files": ["dist", "icon.png"]`。
 - **`publisher` 必填**，且必须等于你 token 的归属 publisher，否则服务器 403。
-- **`engines.universe` 只接受普通范围**，形如 `">=0.12.0 <1.0.0"`；`^` 前缀、`||` 或连字符范围会被拒（宿主同样拒载这类声明，原因见 [版本规则](./versioning.md)）。
+- **`engines.universe` 只接受有限的范围形式**：`>=X.Y.Z <A.B.C`、`^X.Y.Z`、`~X.Y.Z`、精确版本、`*`。`||` 与连字符范围（`1.2.3 - 2.0.0`）会被拒——宿主对这类声明 fail-closed，原因见 [版本规则](./versioning.md)。
+- **`engines.universe` 必须覆盖当前编辑器版本**：`uex package` / `uex publish` 会用 `satisfies` 检查区间是否包含当前编辑器版本，不覆盖则报 error（`engine-coverage`）并阻止打包/发布；故意面向旧编辑器发版时用 `--force` 只把这一条降级为 warning（其余检查不受影响）。
 
 打包前可以用 `npx uex ls` 预览将进包的文件清单，确认没有误带或漏带。
 
@@ -106,6 +107,7 @@ npx uex unpublish acme.my-extension --yes   # 整扩展下架（所有版本）
 2. 校验 manifest 里的 `publisher` **等于 token 的归属 publisher**，不等即 403
 3. 检查版本号是否已存在，存在即 **409**（版本不可变）
 4. 体积超限即 **413**（流式接收，边传边计，超限中断）
+5. 校验 `engines.universe` 的 range 语法——`||` 与连字符范围（`1.2.3 - 2.0.0`）fail-closed 直接拒发，只允许 `>=X.Y.Z <A.B.C`、`^X.Y.Z`、`~X.Y.Z`、精确版本、`*`
 
 所以不用想着手搓请求绕过 `uex` 的检查——服务端会把同一份检查再做一遍。被拒时按报错对照上面的「打包内容要求」逐条核对即可。
 

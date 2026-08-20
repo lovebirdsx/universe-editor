@@ -62,31 +62,36 @@ function buildItems(
     return items
   }
 
-  if (entry.enabled) {
-    items.push({
-      kind: 'item',
-      label: localize('extensions.disable', 'Disable'),
-      run: set(EnablementState.DisabledGlobally),
-    })
-    if (h.hasWorkspace) {
+  // A version-incompatible extension is auto-disabled by the host — the user
+  // cannot enable/disable it, so offer no enablement items (uninstall below
+  // stays available for non-built-ins).
+  if (!entry.isVersionIncompatible) {
+    if (entry.enabled) {
       items.push({
         kind: 'item',
-        label: localize('extensions.disableWorkspace', 'Disable (Workspace)'),
-        run: set(EnablementState.DisabledWorkspace),
+        label: localize('extensions.disable', 'Disable'),
+        run: set(EnablementState.DisabledGlobally),
       })
-    }
-  } else {
-    items.push({
-      kind: 'item',
-      label: localize('extensions.enable', 'Enable'),
-      run: set(EnablementState.EnabledGlobally),
-    })
-    if (h.hasWorkspace) {
+      if (h.hasWorkspace) {
+        items.push({
+          kind: 'item',
+          label: localize('extensions.disableWorkspace', 'Disable (Workspace)'),
+          run: set(EnablementState.DisabledWorkspace),
+        })
+      }
+    } else {
       items.push({
         kind: 'item',
-        label: localize('extensions.enableWorkspace', 'Enable (Workspace)'),
-        run: set(EnablementState.EnabledWorkspace),
+        label: localize('extensions.enable', 'Enable'),
+        run: set(EnablementState.EnabledGlobally),
       })
+      if (h.hasWorkspace) {
+        items.push({
+          kind: 'item',
+          label: localize('extensions.enableWorkspace', 'Enable (Workspace)'),
+          run: set(EnablementState.EnabledWorkspace),
+        })
+      }
     }
   }
 

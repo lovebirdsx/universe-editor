@@ -80,7 +80,7 @@ node scripts/server/server.mjs --root apps/editor/release --gallery-root market-
 
 ### registry.json 格式
 
-服务器唯一读取的市场元数据。**推荐用 [`scripts/gallery`](../../scripts/gallery/README.md) 的 `publish.mjs` 从 `.vsix` 自动生成**（它从包内 `package.json` 抽 `publisher/name/version/displayName/description/categories/engines.universe`，避免手写与包内声明不一致而触发防投毒拒装）。格式：
+服务器唯一读取的市场元数据。**推荐用 [`scripts/gallery`](../../scripts/gallery/README.md) 的 `publish.mjs` 从 `.vsix` 自动生成**（它从包内 `package.json` 抽 `publisher/name/version/displayName/description/categories/engines.universe`，避免手写与包内声明不一致而触发防投毒拒装）；`engines.universe` 的 range 语法 fail-closed——`||` 与连字符范围（`1.2.3 - 2.0.0`）直接拒发，只允许 `>=X.Y.Z <A.B.C`、`^X.Y.Z`、`~X.Y.Z`、精确版本、`*`。格式：
 
 ```jsonc
 {
@@ -363,7 +363,7 @@ Content-Type: application/json
 - 引擎约束从 `properties[]` 里读，key 见[下文约定](#两个必须与后端对齐的约定)。
 - `statistics[]` 里 `install` / `averagerating` / `ratingcount` 用于展示安装量与评分（可选）。
 - 分页总数取 `resultMetadata` 的 `ResultCount → TotalCount`；缺失时客户端回退成本页条目数。
-- 客户端只读每个扩展 `versions[]` 的**第一个**版本作为「最新版」，因此请把最新版放在数组首位（或按请求只返回最新版）。
+- 客户端按 `versions[]` 从新到旧**选第一个兼容当前编辑器版本的版本**（对照每个版本的 `engines.universe` 区间做 satisfies；全不兼容则该扩展不可安装、按钮禁用）。因此仍请把最新版放在数组首位（或按请求只返回最新版）。
 
 `source` 可以是任意可下载的绝对 URL（同源或指向 CDN 均可），客户端下载时会跟随重定向。
 
@@ -395,7 +395,7 @@ Content-Type: application/json
 这两点是客户端硬编码的解析行为，服务器数据要与之匹配：
 
 1. **Target 标识**：客户端在 `filterType: 8` 里固定发 **`Universe.Editor`**。后端做过滤时应认这个值；若你想同时兼容 VSCode 工具链（如用 `vsce` 发布），建议后端**同时认** `Universe.Editor` 和 `Microsoft.VisualStudio.Code`。
-2. **引擎约束 key**：客户端读版本 `properties[]` 时，依次认 **`Universe.Editor.Engine`** 和 **`Microsoft.VisualStudio.Code.Engine`** 两个 key，值形如 `^0.1.0`。填任一个都能被识别；对应扩展 `package.json` 里的 `engines.universe`。
+2. **引擎约束 key**：客户端读版本 `properties[]` 时，依次认 **`Universe.Editor.Engine`** 和 **`Microsoft.VisualStudio.Code.Engine`** 两个 key，值形如 `>=0.13.0 <1.0.0`。填任一个都能被识别；对应扩展 `package.json` 里的 `engines.universe`（0.13.0 起声明的是**编辑器版本**兼容区间，客户端用运行时编辑器版本做 satisfies 选版）。
 
 ## 防投毒：客户端会做的一致性校验
 
@@ -427,7 +427,7 @@ Content-Type: application/json
 | 扩展视图市场栏始终为空 | 确认 `GALLERY_URL` 已配置且合法（`http(s)://`）；查看 `extensionGallery` 日志是否有 `query failed`——市场不可达时客户端**降级为空、不报错** |
 | 能搜到但某条目不出现 | 该版本 `files[]` 缺 VSIX 资产（`...VSIXPackage`），被判为不可安装丢弃 |
 | 点安装报 `does not match the marketplace entry` | VSIX 内 `publisher.name.version` 与市场元数据不一致（见[防投毒](#防投毒客户端会做的一致性校验)） |
-| 引擎版本不兼容装不上 | `properties[]` 的引擎 key 值与扩展实际 `engines.universe` 不符，或 key 名不在客户端认的两个之内 |
+| 引擎版本不兼容装不上 | 客户端按 `versions[]` 从新到旧选第一个 `engines.universe` 兼容当前编辑器的版本，全不兼容则安装报错/按钮禁用；也可能 `properties[]` 缺引擎 key 或 key 名不在客户端认的两个之内 |
 | 配置文件写了却不生效 | 确认写的是 `<userData>/update-config.json` 且字段名为 `galleryUrl`；命令行 / 环境变量会覆盖它 |
 
 日志：市场相关操作记录在名为 **Extension Gallery** 的日志通道（`extensionGallery`），网络失败会以 `warn` 记录，可据此定位服务器端问题。
