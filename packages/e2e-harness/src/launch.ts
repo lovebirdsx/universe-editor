@@ -390,7 +390,35 @@ export const INITIAL_SETTINGS = JSON.stringify(
   null,
   2,
 )
-export const INITIAL_STATE = JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2)
+/** The editor package.json version — the value the release-notes check treats as "current". */
+function readEditorVersion(): string | undefined {
+  try {
+    const { appRoot } = resolveEditorBuild()
+    const parsed = JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')) as {
+      version?: unknown
+    }
+    return typeof parsed.version === 'string' ? parsed.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const SEED_EDITOR_VERSION = readEditorVersion()
+
+export const INITIAL_STATE = JSON.stringify(
+  {
+    'welcome.agentOnboarding.seen': true,
+    // Pin the release-notes "last seen" marker to the running version so the
+    // upgrade "What's New" tab never auto-opens in a fresh e2e instance. That
+    // auto-popup chain is unit-tested (ReleaseNotesContribution.test); e2e only
+    // smokes the manual `workbench.action.showReleaseNotes` command.
+    ...(SEED_EDITOR_VERSION === undefined
+      ? {}
+      : { 'app.releaseNotes.lastVersion': SEED_EDITOR_VERSION }),
+  },
+  null,
+  2,
+)
 
 /**
  * Write the deterministic userData baseline (language pin, manual update,
