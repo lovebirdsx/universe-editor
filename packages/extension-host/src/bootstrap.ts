@@ -53,6 +53,7 @@ import {
   type IMainThreadWindow,
   type IMainThreadStorage,
   type IMainThreadExtensions,
+  type IExtensionUnhandledRejectionDto,
   type StdioTransport,
 } from '@universe-editor/extensions-common'
 import { scanExtensions, scanSingleExtension, type IScannedExtension } from './extensionScanner.js'
@@ -80,8 +81,14 @@ const writeFrame = protectStdout({
   },
 })
 
+// Assigned once the MainThread* channels are wired (end of `main`): the handler
+// is registered at process startup, before the renderer's RPC peer has connected,
+// so rejections landing that early only get the stderr line below.
+let reportUnhandledRejection: ((report: IExtensionUnhandledRejectionDto) => void) | undefined
+
 process.on('unhandledRejection', (reason: unknown) => {
   console.error(`[ext-host] unhandled rejection: ${formatUnknownError(reason)}`)
+  reportUnhandledRejection?.(toUnhandledRejectionReport(reason))
 })
 
 // Without this, an uncaught synchronous throw exits with the stack on stderr but
@@ -480,6 +487,15 @@ async function main(): Promise<void> {
     ),
   )
   console.info('[ext-host] ready')
+  // From here the renderer's MainThreadExtensions channel is live, so push
+  // unhandled rejections up (fire-and-forget event; a dead channel just logs).
+  reportUnhandledRejection = (report) => {
+    try {
+      mainThreadExtensions.$onUnhandledRejection(report)
+    } catch (err) {
+      console.warn(`[ext-host] failed to report unhandled rejection: ${(err as Error).message}`)
+    }
+  }
 }
 
 void main().catch((err: unknown) => {
@@ -489,4 +505,12 @@ void main().catch((err: unknown) => {
 
 function formatUnknownError(error: unknown): string {
   return error instanceof Error ? (error.stack ?? error.message) : String(error)
+}
+
+function toUnhandledRejectionReport(reason: unknown): IExtensionUnhandledRejectionDto {
+  const error = reason instanceof Error ? reason : new Error(String(reason))
+  return {
+    message: error.message || String(reason),
+    ...(error.stack !== undefined ? { stack: error.stack } : {}),
+  }
 }

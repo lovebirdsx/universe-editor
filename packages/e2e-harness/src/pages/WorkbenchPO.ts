@@ -50,6 +50,37 @@ export async function expectNoLeaks(page: Page): Promise<void> {
 }
 
 /**
+ * Teardown gate: fail the test if the extension host pushed any unhandled
+ * rejection during the session. Non-destructive (reads the accumulated list from
+ * the probe), unlike {@link expectNoLeaks}; shared by the fixtures' teardown and
+ * self-launching specs. A window already closed before we can snapshot it is the
+ * expected path for specs whose subject IS closing windows — skip silently.
+ */
+export async function expectNoExtHostUnhandledRejections(page: Page): Promise<void> {
+  if (page.isClosed()) return
+  let rejections: string[]
+  try {
+    rejections = await page.evaluate(() => window.__E2E__?.getExtHostUnhandledRejections() ?? [])
+  } catch (err) {
+    if (isContextTeardownError(err)) {
+      if (page.isClosed()) return
+      console.warn(
+        '[expectNoExtHostUnhandledRejections] execution context destroyed before the snapshot; ' +
+          'skipping the gate.',
+      )
+      return
+    }
+    throw err
+  }
+  expect(
+    rejections,
+    rejections.length > 0
+      ? `Extension host unhandled rejection(s) at teardown:\n${rejections.join('\n')}`
+      : '',
+  ).toEqual([])
+}
+
+/**
  * Recognize the two error-message variants Playwright surfaces for the same
  * mid-evaluate navigation race, so retry guards tolerate both:
  *   - "Execution context was destroyed": the evaluate was dispatched after the
@@ -264,6 +295,14 @@ export class WorkbenchPO {
    */
   async expectNoLeaks(): Promise<void> {
     await expectNoLeaks(this.page)
+  }
+
+  /**
+   * Teardown gate — fail if the extension host pushed any unhandled rejection.
+   * Thin wrapper over the module-level {@link expectNoExtHostUnhandledRejections}.
+   */
+  async expectNoExtHostUnhandledRejections(): Promise<void> {
+    await expectNoExtHostUnhandledRejections(this.page)
   }
 
   /** Number of currently registered SCM source controls. */

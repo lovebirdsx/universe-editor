@@ -30,6 +30,7 @@
 import {
   autorun,
   Disposable,
+  DisposableStore,
   EditorInput,
   IContextKeyService,
   IEditorGroupsService,
@@ -186,10 +187,15 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         lang !== '' && languageFeaturesService.hasReferenceProvider(lang),
       )
     }
+    const languageStore = this._register(new DisposableStore())
     this._register(
       autorun((reader) => {
-        editorService.activeEditor.read(reader)
+        const editor = editorService.activeEditor.read(reader)
         syncLanguageFeatureKeys()
+        languageStore.clear()
+        if (editor instanceof FileEditorInput) {
+          languageStore.add(editor.onDidChangeLanguage(() => syncLanguageFeatureKeys()))
+        }
       }),
     )
     // Provider registrations land asynchronously (LSP spin-up); re-evaluate when

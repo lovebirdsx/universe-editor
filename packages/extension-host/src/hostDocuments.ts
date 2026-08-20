@@ -84,6 +84,47 @@ export class ExtHostDocuments {
     return URI.revive(uri)?.toString() ?? ''
   }
 
+  /**
+   * `onDidOpen` plus backfill: a freshly subscribed listener is also invoked
+   * (on a microtask) once for every document already mirrored at subscription
+   * time. Extensions activated after documents opened (`onStartupFinished`,
+   * `onCommand:` …) would otherwise never hear about them and each one had to
+   * hand-roll a "poll textDocuments after activate()" loop. Delivery stays
+   * exactly-once per (listener, document): documents mirrored after the
+   * snapshot fire through the live emitter only, and a snapshot member closed
+   * or replaced (language change re-open) before delivery is skipped — the
+   * replacement already reached the listener live.
+   */
+  readonly onDidOpenWithBackfill: Event<TextDocument> = (listener, thisArgs, disposables) => {
+    let cancelled = false
+    const subscription = this._onDidOpen.event((doc) => listener.call(thisArgs, doc))
+    const snapshot = [...this._docs.values()]
+    if (snapshot.length > 0) {
+      queueMicrotask(() => {
+        if (cancelled) return
+        for (const doc of snapshot) {
+          if (this._docs.get(this._key(doc.uri)) !== doc) continue
+          try {
+            listener.call(thisArgs, doc)
+          } catch (err) {
+            console.error(
+              `[ext-host] onDidOpenTextDocument backfill listener failed: ${(err as Error).stack ?? String(err)}`,
+            )
+          }
+        }
+      })
+    }
+    const wrapped = {
+      dispose: () => {
+        cancelled = true
+        subscription.dispose()
+      },
+    }
+    if (Array.isArray(disposables)) disposables.push(wrapped)
+    else disposables?.add(wrapped)
+    return wrapped
+  }
+
   all(): readonly TextDocument[] {
     return [...this._docs.values()]
   }

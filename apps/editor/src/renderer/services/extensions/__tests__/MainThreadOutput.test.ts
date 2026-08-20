@@ -117,4 +117,58 @@ describe('MainThreadOutput', () => {
     expect(output.getChannel('Git')).toBeUndefined()
     expect(output.channelNames.get()).toEqual([])
   })
+
+  it('$append stamps each new line and threads the line-start state across appends', async () => {
+    const { OutputService } = await import('../../output/OutputService.js')
+    const storage = {
+      _serviceBrand: undefined,
+      get: vi.fn().mockResolvedValue(undefined),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+    }
+    const output = new OutputService(storage as never)
+    const layout = fakeLayoutService()
+    const views = fakeViewsService()
+    const mt = new MainThreadOutput(output, layout.service, views.service)
+
+    await mt.$registerOutputChannel(0, 'Ext')
+    await mt.$append(0, 'hello')
+    await mt.$append(0, ' world\n')
+    await mt.$append(0, 'next')
+
+    const text = output.getChannel('Ext')?.getText() ?? ''
+    expect(text).toMatch(
+      /^\[\d{2}:\d{2}:\d{2}\.\d{3}\] hello world\n\[\d{2}:\d{2}:\d{2}\.\d{3}\] next$/,
+    )
+  })
+
+  it('$append keeps line-start state independent across handles and resets on clear', async () => {
+    const { OutputService } = await import('../../output/OutputService.js')
+    const storage = {
+      _serviceBrand: undefined,
+      get: vi.fn().mockResolvedValue(undefined),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+    }
+    const output = new OutputService(storage as never)
+    const layout = fakeLayoutService()
+    const views = fakeViewsService()
+    const mt = new MainThreadOutput(output, layout.service, views.service)
+
+    await mt.$registerOutputChannel(0, 'A')
+    await mt.$registerOutputChannel(1, 'B')
+    await mt.$append(0, 'x')
+    await mt.$append(1, 'y')
+
+    expect(output.getChannel('A')?.getText() ?? '').toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] x$/)
+    expect(output.getChannel('B')?.getText() ?? '').toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] y$/)
+
+    await mt.$append(0, 'tail')
+    await mt.$clearOutputChannel(0)
+    await mt.$append(0, 'fresh')
+
+    expect(output.getChannel('A')?.getText() ?? '').toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] fresh$/)
+  })
 })

@@ -47,6 +47,7 @@
 - [AI Settings 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority hook；协议匹配只回 index 不回秘密
 - [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState+needsInstall 门控 Output；坑=状态栏须回退 in-flight authority（connect 先于 openFolder）
 - [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — 版本空间统一 0.13.0+engines=编辑器版本;不兼容=禁用+通知,市场选版,发布拦截;大坑=非打包 app.getVersion() 回退 Electron 版本,main 一律走 getAppVersion()
+- [ext-host 无声失败治理](extension-host-silent-failure-hardening.md) — getActiveTextEditor 激活期立即 undefined 防死锁+onDidOpen 订阅补发+plaintext 语言重扫+rejection 上浮(dev 通知/e2e teardown 门);原则=API getter 永不无限挂起
 - [remote 工作区用户扩展支持](remote-user-extensions-management.md) — ExtensionManagement channel(协议v6)+引擎沉 node-services;本地验签+分片上传远端装;目录单一真相 serverPaths;listBuiltin 不路由
 - [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族(cd /d %USERPROFILE% 前缀,git-bash 拒绝=MSYS 重写 /d/s/c)+install.js 独立entry(鸡生蛋)+WMI Win32_Process.Create 逃 sshd job kill(env 为默认环境);npm11 allow-scripts 虚惊/ripgrep1.18 平台包布局
 

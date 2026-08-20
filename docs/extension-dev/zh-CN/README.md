@@ -37,10 +37,12 @@ npx uex login → npx uex publish          # ⑧ 发布到市场，其他用户�
 |---|---|---|
 | 起步 | [快速上手](./getting-started.md) | 第一次开发扩展，从 create 到 publish 全程实操 |
 | 结构 | [扩展的结构](./extension-anatomy.md) | 想知道 package.json 每个字段的含义、激活生命周期 |
+| 激活时序 | [冷启动激活时序](./activation-timing.md) | 在 `activate()` 里读文档/编辑器、做语言扩展之前**必读** |
 | 贡献点 | [贡献点参考](./contribution-points.md) | 往命令面板/菜单/快捷键/设置里加东西 |
 | 上下文 | [Context Key 清单](./context-keys.md) | 写 menus / keybindings 的 `when` 子句时 |
 | API | [API 概览](./api/README.md) | 查宿主提供哪些能力（逐方法细节看编辑器里的类型提示） |
 | 调试 | [调试扩展](./debugging.md) | 断点不命中、要看日志、attach 配置 |
+| 测试 | [测试扩展](./testing.md) | 写 e2e、排查泄漏门失败、用探针断言 |
 | Webview | [自定义编辑器与 Webview](./webview-guide.md) | 做 PDF 预览这类自定义界面 |
 | 语言特性 | [语言特性](./language-guide.md) | 做补全/跳转/诊断这类语言支持 |
 | 版本 | [API 版本与 `engines.universe`](./versioning.md) | 填 `engines.universe` 前**必读** |

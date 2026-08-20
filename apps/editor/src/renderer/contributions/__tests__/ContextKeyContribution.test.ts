@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ContextKeyService,
   Emitter,
+  IFileService,
   LifecyclePhase,
   LifecycleService,
   observableValue,
   PartId,
+  URI,
   type HostPlatform,
 } from '@universe-editor/platform'
 import { ContextKeyContribution } from '../ContextKeyContribution.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 
 function makeLayoutStub(initial?: Partial<Record<PartId, boolean>>) {
   const visible = observableValue<Readonly<Record<PartId, boolean>>>('layout', {
@@ -26,6 +29,66 @@ function makeLayoutStub(initial?: Partial<Record<PartId, boolean>>) {
 function makeEditorStub() {
   const activeEditor = observableValue<{ id: string } | undefined>('activeEditor', undefined)
   return { activeEditor }
+}
+
+function makeFileEditorStub() {
+  const activeEditor = observableValue<FileEditorInput | undefined>('activeEditor', undefined)
+  return { activeEditor }
+}
+
+function makeFileService(): IFileService {
+  return {
+    _serviceBrand: undefined,
+    async readFile() {
+      return new Uint8Array()
+    },
+    async readFileHead() {
+      return new Uint8Array()
+    },
+    async readFileText() {
+      return ''
+    },
+    async writeFile() {},
+    async exists() {
+      return false
+    },
+    async stat() {
+      throw new Error('not used')
+    },
+    async list() {
+      return []
+    },
+    async createDirectory() {},
+    async delete() {},
+    async rename() {},
+    async copy() {},
+    async listRecursive() {
+      return []
+    },
+  }
+}
+
+interface FakeModel {
+  language: string
+  emitter: Emitter<{ newLanguage: string }>
+  getLanguageId(): string
+  onDidChangeLanguage(cb: (e: { newLanguage: string }) => void): { dispose(): void }
+}
+
+function makeFakeModel(language: string): FakeModel {
+  const emitter = new Emitter<{ newLanguage: string }>()
+  return {
+    language,
+    emitter,
+    getLanguageId() {
+      return this.language
+    },
+    onDidChangeLanguage: (cb) => emitter.event(cb),
+  }
+}
+
+function bindModel(input: FileEditorInput, model: FakeModel): void {
+  ;(input as unknown as { _bindModelLanguage(m: unknown): void })._bindModelLanguage(model)
 }
 
 function makeHostStub(platform: HostPlatform) {
@@ -257,6 +320,59 @@ describe('ContextKeyContribution', () => {
     expect(ctx.get('isInEmbeddedEditor')).toBe(false)
     expect(ctx.get('inReferenceSearchEditor')).toBe(false)
     ctx.dispose()
+  })
+
+  it('editorLangId follows the active FileEditorInput language change', () => {
+    const ctx = new ContextKeyService()
+    const editor = makeFileEditorStub()
+    const input = new FileEditorInput(URI.file('/ws/a.md'), makeFileService())
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    editor.activeEditor.set(input, undefined)
+    expect(ctx.get('editorLangId')).toBe('markdown')
+    const model = makeFakeModel('markdown')
+    bindModel(input, model)
+    model.language = 'python'
+    model.emitter.fire({ newLanguage: 'python' })
+    expect(ctx.get('editorLangId')).toBe('python')
+    ctx.dispose()
+    input.dispose()
+  })
+
+  it('editorLangId stops following a previous input after switching editors', () => {
+    const ctx = new ContextKeyService()
+    const editor = makeFileEditorStub()
+    const first = new FileEditorInput(URI.file('/ws/a.md'), makeFileService())
+    const second = new FileEditorInput(URI.file('/ws/b.json'), makeFileService())
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    editor.activeEditor.set(first, undefined)
+    editor.activeEditor.set(second, undefined)
+    expect(ctx.get('editorLangId')).toBe('json')
+    const model = makeFakeModel('markdown')
+    bindModel(first, model)
+    model.language = 'python'
+    model.emitter.fire({ newLanguage: 'python' })
+    expect(ctx.get('editorLangId')).toBe('json')
+    ctx.dispose()
+    first.dispose()
+    second.dispose()
   })
 
   it('sets workbenchReady once the Ready phase is reached', async () => {

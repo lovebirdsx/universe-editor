@@ -29,7 +29,12 @@ import {
 import { join } from 'node:path'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO, expectNoLeaks, isContextTeardownError } from './pages/WorkbenchPO.js'
+import {
+  WorkbenchPO,
+  expectNoExtHostUnhandledRejections,
+  expectNoLeaks,
+  isContextTeardownError,
+} from './pages/WorkbenchPO.js'
 import {
   closeApp,
   launchAppReady,
@@ -220,6 +225,7 @@ export function createColdAppTest(config: AppFixtureConfig): E2ETest {
       // Teardown gate: fail the test if the session leaked any Disposables. The
       // probe unmounts React first so React subscriptions don't count as leaks.
       // Tolerates a window already torn down by workbench.action.quit.
+      await expectNoExtHostUnhandledRejections(page)
       await expectNoLeaks(page)
     },
     workbench: async ({ page }, use) => {
@@ -426,6 +432,7 @@ export function createSharedAppTest(config: AppFixtureConfig): SharedE2ETest {
         // unmounts React on the shared page; the next test's resetWindow reloads
         // the window (rebuilding the UI), and the worker fixture closes the app
         // after the last test — so every test, including the last, is covered.
+        await expectNoExtHostUnhandledRejections(sharedApp.page)
         await expectNoLeaks(sharedApp.page)
       },
       { auto: true },

@@ -114,7 +114,7 @@ npm run test:e2e       # Playwright e2e（e2e/specs），先自动 build 再跑
 - **单测**面向纯逻辑：模板把命令逻辑抽在 `src/hello.ts`，测试里用 `vi.mock('@universe-editor/extension-api')` 假掉宿主 API 断言 activate 的注册行为，不用起编辑器。
 - **e2e**面向整链路：`test:e2e` 会**冷启动一个只加载本扩展的全新编辑器实例**（把项目目录 junction 进隔离的用户扩展目录，等价 VSCode 的 `--extension-development-path`——不打 vsix、不安装、无宿主重启竞态），通过编辑器内置的 `window.__E2E__` 探针断言命令注册、输出通道、自定义编辑器渲染等。编辑器二进制由环境变量 `UNIVERSE_EDITOR_BIN` 指定（打包版可执行文件，或开发构建的 `out/main/index.js`）；Windows 上未设置时自动探测 `%LOCALAPPDATA%\Programs\Universe Editor\Universe Editor.exe`。
 
-跑一遍摸清两条链路的节奏，之后加功能时顺手补测试即可。
+跑一遍摸清两条链路的节奏，之后加功能时顺手补测试即可。e2e 的两个 teardown 门槛（Disposable 泄漏门、ext-host unhandled rejection 门）与探针方法导览见 [测试扩展](./testing.md)。
 
 ## ⑧ 打包与安装自测
 
@@ -140,6 +140,8 @@ npx uex publish         # 自动先 universe:prepublish（build + package）再�
 
 - 想往菜单/快捷键/设置里加东西 → [贡献点参考](./contribution-points.md)
 - 想知道宿主一共提供哪些 API → [API 概览](./api/README.md)
+- 写 `activate()` 或做语言扩展前 → [冷启动激活时序](./activation-timing.md)
+- 给功能补 e2e / 排查测试失败 → [测试扩展](./testing.md)
 - 做自定义预览界面 → [自定义编辑器与 Webview](./webview-guide.md)
 - 做语言支持 → [语言特性](./language-guide.md)
 - 已有 VSCode 扩展 → [从 VSCode 移植](./migration-from-vscode.md)

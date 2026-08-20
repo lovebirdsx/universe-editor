@@ -850,6 +850,11 @@ export interface E2EProbe {
    * contribution DTOs are identical.
    */
   getExtensionHostGeneration(): number
+  /**
+   * Messages of unhandled rejections the extension host pushed since this
+   * renderer booted. The fixture teardown gate fails the test when non-empty.
+   */
+  getExtHostUnhandledRejections(): string[]
   /** Effective disabled identifiers (global ∪ workspace, workspace overrides applied). */
   getDisabledExtensionIds(): Promise<readonly string[]>
   /**

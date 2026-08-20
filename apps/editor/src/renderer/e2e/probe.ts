@@ -882,6 +882,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return contributions.filter((c) => c.extensionIsUnderDevelopment === true).map((c) => c.id)
     },
     getExtensionHostGeneration: (): number => extensionHostGeneration,
+    getExtHostUnhandledRejections: (): string[] => [
+      ...services.extensionHostClientService.getUnhandledRejections(),
+    ],
     getDisabledExtensionIds: (): Promise<readonly string[]> =>
       services.extensionEnablementService.getEffectiveDisabledIds(),
     getVersionIncompatibleExtensionIds: async (): Promise<readonly string[]> => {

@@ -26,6 +26,15 @@ harness 通过 `UNIVERSE_EDITOR_BIN` 环境变量决定启动哪个编辑器，�
 
 harness 的 minor 版本**跟随编辑器 minor**（契约随编辑器演进）；升级编辑器时请同步升级 harness 与 e2e-contract。
 
+## teardown 门槛
+
+`page` fixture 在每个测试 teardown 自动跑两道门，非空即测试失败：
+
+- **Disposable 泄漏门**：先卸载 React（让 `useEffect` cleanup 跑完），再经 `window.__E2E__.computeTeardownLeakReport()` 快照 Disposable 跟踪器；被跟踪且仍存活、根非 singleton 的 Disposable 报泄漏，报错形如 `N Disposable leak(s) detected at teardown` + renderer 构造点堆栈。最常见的踩坑是测试结束没关的 webview 面板——spec 里打开的面板/编辑器要在结束前关掉（如 `runCommand('workbench.action.closeActiveEditor')`）。堆栈是**构造点不是泄漏点**：它指出 Disposable 在哪 `new`，真正要查的是 spec 里创建了什么没释放。
+- **ext-host unhandled rejection 门**（同机制）：扩展宿主进程出现未处理的 promise rejection 时判失败。
+
+两道门叠加，「测试通过」要求断言正确且扩展没有遗留资源、没有未处理的异步错误。
+
 ## License
 
 Apache-2.0

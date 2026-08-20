@@ -15,6 +15,8 @@
  *  The editor to launch is resolved inside each worker by the harness
  *  (resolveEditorLaunchTarget reads UNIVERSE_EDITOR_BIN from env), so this
  *  runner neither parses nor intercepts that env — it is passed through verbatim.
+ *
+ *  Extra CLI args are forwarded to Playwright as-is: `npm run test:e2e -- --grep "x"` / `... -- specs/foo.spec.ts`.
  *--------------------------------------------------------------------------------------------*/
 
 import { createRequire } from 'node:module'
@@ -53,7 +55,7 @@ if (buildStatus !== 0) {
 
 const status = run(
   process.execPath,
-  [playwrightCli, 'test', '-c', resolve(projectRoot, 'e2e', 'playwright.config.ts')],
+  [playwrightCli, 'test', '-c', resolve(projectRoot, 'e2e', 'playwright.config.ts'), ...process.argv.slice(2)],
   { env: { ...inheritedEnv, PLAYWRIGHT_FORCE_TTY: '0' }, cwd: projectRoot },
 )
 process.exit(status)

@@ -538,6 +538,98 @@ describe('ExtensionService active editor mirror', () => {
 })
 
 /**
+ * `getActiveTextEditor` must never sit on an unresolved promise: the renderer
+ * holds the document-open push until `activate()` returns, so a call made
+ * during activation can only deadlock — it resolves undefined immediately.
+ * Outside activation it waits a short grace for an in-flight mirror push,
+ * then resolves undefined rather than hanging.
+ */
+describe('ExtensionService getActiveTextEditor', () => {
+  const docUri = URI.file('/ws/big.d.ts')
+  const snapshot: IActiveTextEditorDto = {
+    uri: docUri.toJSON() as UriComponents,
+    languageId: 'typescript',
+    version: 3,
+    selections: [{ anchor: { line: 0, character: 0 }, active: { line: 0, character: 0 } }],
+  }
+  const activeEditorImpl: IMainThreadEditor = {
+    $getActiveTextEditor: () => Promise.resolve(snapshot),
+    $applyEdits: () => Promise.resolve(true),
+    $setSelections: () => Promise.resolve(),
+    $createDecorationType: () => Promise.resolve(),
+    $disposeDecorationType: () => Promise.resolve(),
+    $setDecorations: () => Promise.resolve(),
+    $openTextDocument: () => Promise.resolve(),
+    $openUntitledDocument: () => Promise.resolve(Uri.parse('untitled:/Untitled-1').toJSON()),
+    $showTextDocument: () => Promise.resolve(null),
+    $applyWorkspaceEdit: () => Promise.resolve(true),
+  }
+
+  function activeEditorService(ext?: IScannedExtension): ExtensionService {
+    return new ExtensionService(
+      [ext ?? scanned(['*'])],
+      recordingMainThread().impl,
+      noopWindow,
+      noopScm,
+      noopTimeline,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      activeEditorImpl,
+    )
+  }
+
+  it('resolves the editor when the mirror is already open', async () => {
+    const service = activeEditorService()
+    service.acceptDocumentOpen(docUri, 'typescript', 3, 'declare const x: number')
+    const editor = await service.getActiveTextEditor()
+    expect(editor?.document.getText()).toBe('declare const x: number')
+  })
+
+  it('resolves undefined immediately while an activate() is in flight (deadlock guard)', async () => {
+    const gatedMain = join(dir, 'gated.mjs')
+    await writeFile(
+      gatedMain,
+      `export function activate() { return new Promise((resolve) => { globalThis.__releaseActivate = resolve }) }`,
+      'utf8',
+    )
+    const service = activeEditorService({ ...scanned(['*']), mainPath: gatedMain })
+    const activating = service.activateByEvent('*')
+    const started = Date.now()
+    await expect(service.getActiveTextEditor()).resolves.toBeUndefined()
+    expect(Date.now() - started).toBeLessThan(1_500) // no timeout wait, immediate
+    // The gated module lands its release hook only after the async import completes.
+    const g = globalThis as { __releaseActivate?: () => void }
+    while (!g.__releaseActivate) await new Promise((r) => setTimeout(r, 10))
+    g.__releaseActivate()
+    delete g.__releaseActivate
+    await activating
+  })
+
+  it('waits briefly for an in-flight mirror push outside activation', async () => {
+    const service = activeEditorService()
+    const pending = service.getActiveTextEditor()
+    await new Promise((r) => setTimeout(r, 0))
+    service.acceptDocumentOpen(docUri, 'typescript', 3, 'landed')
+    const editor = await pending
+    expect(editor?.document.getText()).toBe('landed')
+  })
+
+  it('resolves undefined instead of hanging when the mirror never lands', async () => {
+    vi.useFakeTimers()
+    try {
+      const service = activeEditorService()
+      const pending = service.getActiveTextEditor()
+      await vi.advanceTimersByTimeAsync(2_100)
+      await expect(pending).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+/**
  * Visible-editors mirror: the renderer pushes the whole per-group set. The
  * getter always reflects the mirrored members of the latest push; the event
  * waits out a short grace for cold (not-yet-mirrored) documents so a layout

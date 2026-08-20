@@ -57,6 +57,7 @@ import {
   type IExtHostWebviews,
   type IExtHostWindow,
   type IExtensionActivationErrorDto,
+  type IExtensionUnhandledRejectionDto,
 } from '@universe-editor/extensions-common'
 import type {
   ExtHostKind,
@@ -133,6 +134,8 @@ export interface HostConnectionDeps {
   readonly ledger: CommandOwnershipLedger
   /** An extension's `activate` threw — surface it (notification + view badge). */
   readonly onActivationError: (error: IExtensionActivationErrorDto) => void
+  /** The host surfaced an unhandled rejection — surface it (dev notification + e2e gate). */
+  readonly onUnhandledRejection: (report: IExtensionUnhandledRejectionDto) => void
 }
 
 export class HostConnection extends Disposable {
@@ -195,7 +198,10 @@ export class HostConnection extends Disposable {
       ProxyChannel.fromService(mainThreadCommands),
     )
 
-    const mainThreadExtensions = new MainThreadExtensions(deps.onActivationError)
+    const mainThreadExtensions = new MainThreadExtensions(
+      deps.onActivationError,
+      deps.onUnhandledRejection,
+    )
     server.registerChannel(
       ExtHostChannels.mainThreadExtensions,
       ProxyChannel.fromService(mainThreadExtensions),

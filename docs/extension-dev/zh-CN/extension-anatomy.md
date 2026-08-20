@@ -116,6 +116,8 @@ my-extension/
 - **Workspace Trust 门控**：工作区未受信任且扩展 `supported: false`（含「有 `main` 未声明」的默认情形）→ **不激活**；事件照常记录。用户授予信任后，宿主**重放**此前已 fire 过的全部激活事件，被门控的扩展随即激活——不需要用户重开文档。`limited` 扩展不受影响、照常激活。**内置扩展与经 `--extension-development-path` 加载的开发中扩展恒豁免**门控。撤销信任则重启扩展宿主，从头计算门控。
 - **关闭与重启**：宿主关闭（或「重启扩展宿主」）时，对每个已激活扩展先调 `deactivate?.()`，再逐个 `dispose` `context.subscriptions`。`deactivate` 是**同步 best-effort**：抛错被吞掉不阻塞其他扩展，返回的 promise **不会被 await**——宿主即将退出，要紧的是 subscriptions 里同步的资源回收（比如 kill 你 spawn 的子进程）。所以请把子进程、文件句柄这类 OS 资源包成 Disposable 推进 `subscriptions`，不要在 `deactivate` 里做异步收尾。
 
+冷启动时「编辑器恢复 → 静态贡献翻译 → 激活事件 → `activate()` → 文档镜像落地」的精确时序，以及在 `activate()` 里等文档 / 编辑器会死锁的致命推论，见 [冷启动激活时序](./activation-timing.md)。
+
 ## ExtensionContext
 
 `activate(context)` 收到的对象（以 API 0.13.0 的类型定义为准）：
@@ -204,6 +206,7 @@ export function activate(context: ExtensionContext) {
 ## 相关阅读
 
 - [API 版本与 `engines.universe`](./versioning.md) — `engines.universe` 的协商语义与 0.x 版本政策
+- [冷启动激活时序](./activation-timing.md) — 激活事件的精确触发时机与 `activate()` 里的文档镜像时序
 - [贡献点参考](./contribution-points.md) — `contributes` 每个分支的逐字段语法
 - [API 概览](./api/README.md) — 宿主提供的运行时能力清单
 - [安全与信任](./security-and-trust.md) — 扩展的权限边界与 Workspace Trust 模型

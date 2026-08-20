@@ -223,6 +223,14 @@ function toSaveDialogDto(options?: SaveDialogOptionsBridge): ISaveDialogOptionsD
  *  a huge file). Past this, the change is dropped rather than fired docless. */
 const ACTIVE_EDITOR_DOC_WAIT_MS = 15_000
 
+/** How long `getActiveTextEditor` may wait for the active document's didOpen.
+ *  Deliberately short: it's a polled getter and a promise that sits unresolved
+ *  is the hardest failure mode to diagnose (callers just hang, no error).
+ *  While an `activate()` is in flight it does not wait at all — the renderer
+ *  holds the document-open push until activation returns, so waiting inside
+ *  activation would deadlock until the timeout. */
+const GET_ACTIVE_EDITOR_DOC_WAIT_MS = 2_000
+
 /** How long a visible-set push may hold its event for stragglers' didOpen
  *  before the layout change is reported with just the mirrored members. A cold
  *  document (first touch activates its language before the open push) mirrors
@@ -336,7 +344,9 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _onDidChangeExtensions = new Emitter<void>()
   readonly onDidChangeExtensions: Event<void> = this._onDidChangeExtensions.event
 
-  readonly onDidOpenTextDocument = this._documents.onDidOpen
+  /** Backfill variant so an extension activated after documents opened still
+   *  hears about them — see {@link ExtHostDocuments.onDidOpenWithBackfill}. */
+  readonly onDidOpenTextDocument = this._documents.onDidOpenWithBackfill
   readonly onDidChangeTextDocument = this._documents.onDidChange
   readonly onDidCloseTextDocument = this._documents.onDidClose
   readonly onWillSaveTextDocument = this._documents.onWillSave
@@ -973,7 +983,22 @@ export class ExtensionService implements IExtensionHostBridge {
   async getActiveTextEditor(): Promise<TextEditor | undefined> {
     const snapshot = await this._editor().$getActiveTextEditor()
     if (!snapshot) return undefined
-    const document = await this._documents.whenOpen(snapshot.uri, ACTIVE_EDITOR_DOC_WAIT_MS)
+    let document = this._documents.get(snapshot.uri)
+    if (!document) {
+      const uri = URI.revive(snapshot.uri)?.toString() ?? '<unknown>'
+      if (this._activation.isActivating) {
+        console.info(
+          `[ext-host] getActiveTextEditor: mirror for ${uri} pending behind an in-flight activate() — resolving undefined (listen to onDidChangeActiveTextEditor / onDidOpenTextDocument and re-fetch)`,
+        )
+        return undefined
+      }
+      document = await this._documents.whenOpen(snapshot.uri, GET_ACTIVE_EDITOR_DOC_WAIT_MS)
+      if (!document) {
+        console.warn(
+          `[ext-host] getActiveTextEditor: mirror for ${uri} did not land within ${GET_ACTIVE_EDITOR_DOC_WAIT_MS}ms — resolving undefined`,
+        )
+      }
+    }
     return document ? this._editorFromSnapshot(snapshot, document) : undefined
   }
 

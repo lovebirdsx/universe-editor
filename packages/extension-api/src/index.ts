@@ -308,7 +308,13 @@ export interface WindowApi {
    */
   showSaveDialog(options?: SaveDialogOptions): Promise<Uri | undefined>
   /** The focused text editor, or undefined when no editor has focus. A snapshot —
-   *  re-fetch after an external change rather than holding the handle long-term. */
+   *  re-fetch after an external change rather than holding the handle long-term.
+   *  Never hangs: when the focused document's mirror has not landed yet (notably
+   *  when called inside `activate()` — the first document push waits for
+   *  activation to return, so waiting here would deadlock), it resolves
+   *  undefined instead of waiting; listen to
+   *  {@link WindowApi.onDidChangeActiveTextEditor} or
+   *  {@link WorkspaceApi.onDidOpenTextDocument} and re-fetch. */
   getActiveTextEditor(): Promise<TextEditor | undefined>
   /** Fires when the focused text editor changes; argument is undefined when focus
    *  leaves all text editors. The editor is a fresh snapshot, as from
@@ -620,6 +626,11 @@ export interface WorkspaceApi {
   readonly fs: FileSystemApi
   /** Documents currently open in the editor, mirrored from the renderer. */
   readonly textDocuments: readonly TextDocument[]
+  /** Fires when a text document opens. Unlike VSCode, a freshly added listener
+   *  is also called (asynchronously, exactly once per document) for every
+   *  document already open at subscription time — an extension activated after
+   *  the workbench restored its editors still sees them, no "poll
+   *  {@link WorkspaceApi.textDocuments} after activate()" boilerplate needed. */
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>

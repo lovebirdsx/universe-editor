@@ -9,13 +9,21 @@
 
 import type {
   IExtensionActivationErrorDto,
+  IExtensionUnhandledRejectionDto,
   IMainThreadExtensions,
 } from '@universe-editor/extensions-common'
 
 export class MainThreadExtensions implements IMainThreadExtensions {
-  constructor(private readonly _onActivationError: (error: IExtensionActivationErrorDto) => void) {}
+  constructor(
+    private readonly _onActivationError: (error: IExtensionActivationErrorDto) => void,
+    private readonly _onUnhandledRejection: (report: IExtensionUnhandledRejectionDto) => void,
+  ) {}
 
   $onActivationError(error: IExtensionActivationErrorDto): void {
     this._onActivationError(error)
+  }
+
+  $onUnhandledRejection(report: IExtensionUnhandledRejectionDto): void {
+    this._onUnhandledRejection(report)
   }
 }

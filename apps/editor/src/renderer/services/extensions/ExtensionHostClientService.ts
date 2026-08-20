@@ -42,6 +42,7 @@ import {
   IViewsService,
   IWorkspaceService,
   IWorkspaceTrustManagementService,
+  PartId,
   REMOTE_SCHEME,
   Severity,
   localize,
@@ -55,6 +56,7 @@ import {
   type IExtHostLanguages,
   type IExtensionDescriptionDto,
   type IExtensionActivationErrorDto,
+  type IExtensionUnhandledRejectionDto,
 } from '@universe-editor/extensions-common'
 import {
   IExtensionHostService,
@@ -95,6 +97,12 @@ export interface IExtensionHostClientService {
    * surface a silently non-functional extension.
    */
   readonly onDidActivationError: Event<IExtensionActivationErrorDto>
+  /**
+   * Messages of unhandled rejections the extension host pushed since this
+   * renderer's service was created. Backs the E2E teardown gate, which fails the
+   * test when this is non-empty.
+   */
+  getUnhandledRejections(): readonly string[]
   /** Activate every extension whose activationEvents match `event`. */
   activateByEvent(event: string): Promise<void>
   /**
@@ -163,6 +171,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     new Emitter<IExtensionActivationErrorDto>(),
   )
   readonly onDidActivationError = this._onDidActivationError.event
+  /** Unhandled-rejection messages pushed by the host, read by the E2E teardown gate. */
+  private readonly _unhandledRejections: string[] = []
   /** Handles we asked to stop (planned restarts) — their exit must not trigger crash handling. */
   private readonly _stopping = new Set<string>()
   private readonly _restartState: RestartState = { windowStart: 0, count: 0 }
@@ -364,6 +374,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
         release: (id) => this._commandOwner.delete(id),
       },
       onActivationError: (error) => this._onActivationErrorReported(error),
+      onUnhandledRejection: (report) => this._onUnhandledRejectionReported(report),
     }
 
     const connection = this._register(new HostConnection('local', handle, workspaceRoot, deps))
@@ -457,6 +468,41 @@ export class ExtensionHostClientService extends Disposable implements IExtension
         { name, error: error.message },
       ),
     })
+  }
+
+  /**
+   * The host surfaced an unhandled rejection. Accumulate the message (the E2E
+   * teardown gate fails the test on any entry), log it on the renderer key path,
+   * and — in dev only — raise a notification that points at the Extension Host
+   * output channel. Release builds stay log-only; E2E relies on the gate instead.
+   */
+  private _onUnhandledRejectionReported(report: IExtensionUnhandledRejectionDto): void {
+    this._unhandledRejections.push(report.message)
+    console.error(`[ext-host] unhandled rejection: ${report.message}`)
+    if (!import.meta.env.DEV) return
+    this._notification.notify({
+      severity: Severity.Error,
+      message: localize(
+        'extHost.unhandledRejection',
+        'The extension host reported an unhandled rejection: {error}',
+        { error: report.message },
+      ),
+      actions: [
+        {
+          label: localize('extHost.unhandledRejection.showLog', 'Show Log'),
+          run: () => {
+            this._views.openViewContainer('workbench.view.output')
+            this._layout.setVisible(PartId.Panel, true)
+            this._layout.getPart(PartId.Panel)?.focus()
+            this._output.setActiveChannel('Extension Host')
+          },
+        },
+      ],
+    })
+  }
+
+  getUnhandledRejections(): readonly string[] {
+    return this._unhandledRejections
   }
 
   async getContributions(): Promise<IExtensionDescriptionDto[]> {

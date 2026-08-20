@@ -115,3 +115,4 @@ sourcemap 缺失或产物过期。确认 `npm run watch` 在跑、`dist/extensio
 
 - [快速上手](./getting-started.md) — 从脚手架到发布的完整流程，本篇的第①②步在那里有上下文
 - [扩展的结构](./extension-anatomy.md) — `package.json` 字段全集（`activationEvents` / `engines.universe` / `files`）
+- [测试扩展](./testing.md) — e2e 泄漏门 / rejection 门与探针断言

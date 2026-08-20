@@ -176,6 +176,16 @@ export interface IExtensionActivationErrorDto {
   readonly stack?: string
 }
 
+/** An unhandled promise rejection in the extension host process. Reported
+ *  host → renderer so a dev-mode notification and the E2E teardown gate can
+ *  surface it instead of it staying a stderr-only log line. */
+export interface IExtensionUnhandledRejectionDto {
+  /** The rejection's `message` (or its string form for a non-Error reason). */
+  readonly message: string
+  /** The rejection's `stack` if any (shown in the detail view). */
+  readonly stack?: string
+}
+
 /**
  * Ext host → exposed to the renderer: activation lifecycle the renderer surfaces
  * to the user. A failed `activate` is isolated (never tears down the host), but
@@ -184,6 +194,8 @@ export interface IExtensionActivationErrorDto {
 export interface IMainThreadExtensions {
   /** An extension's `activate` threw. Provider → renderer push. */
   $onActivationError(error: IExtensionActivationErrorDto): void
+  /** An unhandled promise rejection surfaced in the host. Provider → renderer push. */
+  $onUnhandledRejection(report: IExtensionUnhandledRejectionDto): void
 }
 
 /**

@@ -31,6 +31,7 @@ npm run test:e2e       # Playwright e2e (e2e/specs) against a real editor
 
 `test:e2e` builds the extension and cold-launches a fresh editor with only this
 extension loaded, asserting through the editor's E2E probe (see `e2e/specs/`).
+Pass extra args through to filter or select specs: `npm run test:e2e -- --grep "hello"` or `npm run test:e2e -- specs/foo.spec.ts`.
 The editor binary is auto-detected on Windows (`%LOCALAPPDATA%\Programs\Universe Editor\Universe Editor.exe`);
 set `UNIVERSE_EDITOR_BIN` to point at another build (a packaged executable, or
 `out/main/index.js` for a dev build) to override it.

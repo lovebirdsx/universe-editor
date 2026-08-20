@@ -13,6 +13,7 @@ import {
   Event,
   IpcChannelDisposedError,
   REMOTE_SCHEME,
+  Severity,
   type IAiModelService,
   type ICommandService,
   type IConfigurationChangeEvent,
@@ -75,6 +76,8 @@ const activationCalls: string[] = []
 const configPushes: string[][] = []
 /** `$initializeEnvironment` payloads, in seed order, across all fakes. */
 const environmentSeeds: Record<string, unknown>[] = []
+/** `deps.onUnhandledRejection` captured from the most recent FakeHostConnection. */
+let onUnhandledRejectionCb: ((report: unknown) => void) | undefined
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
 const activatedOnce = new Set<string>()
@@ -118,10 +121,16 @@ vi.mock('../HostConnection.js', () => {
         return Promise.resolve()
       }),
     }
-    constructor(kind: string, handle: string, workspaceRoot?: string) {
+    constructor(
+      kind: string,
+      handle: string,
+      workspaceRoot?: string,
+      deps?: { onUnhandledRejection?: (report: unknown) => void },
+    ) {
       this.kind = kind
       this.handle = handle
       this.workspaceRoot = workspaceRoot
+      onUnhandledRejectionCb = deps?.onUnhandledRejection
     }
     markDead(): void {
       this.dead = true
@@ -174,6 +183,7 @@ function makeServiceWith(
     builtinIds?: string[]
     installedIds?: string[]
     installedRemoteIds?: string[]
+    notification?: INotificationService
   },
   configChange: Event<IConfigurationChangeEvent> = Event.None,
 ) {
@@ -197,7 +207,7 @@ function makeServiceWith(
     host,
     { createChannel: vi.fn().mockReturnValue({ append: vi.fn() }) } as unknown as IOutputService,
     { createLogger: vi.fn().mockReturnValue(nullLogger) } as unknown as ILoggerService,
-    {} as INotificationService,
+    (stubs?.notification ?? {}) as INotificationService,
     {} as IQuickInputService,
     {} as IStatusBarService,
     {} as IDialogService,
@@ -588,6 +598,41 @@ describe('ExtensionHostClientService', () => {
       affectsConfiguration: () => true,
     })
     await vi.waitFor(() => expect(configPushes).toEqual([['editor.fontSize', 'files.exclude']]))
+
+    svc.dispose()
+  })
+
+  it('accumulates host unhandled rejections and notifies in dev', async () => {
+    // Data-flow pin: the host pushes $onUnhandledRejection → the service records
+    // the message (readable by the E2E probe) and, in dev, raises an error
+    // notification. Release/e2e builds skip the notification (gate in the service),
+    // but the accumulated list must always fill.
+    onUnhandledRejectionCb = undefined
+    const host = fakeHost()
+    const notify = vi.fn()
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      { notification: { notify } as unknown as INotificationService },
+    )
+
+    await svc.start()
+    expect(onUnhandledRejectionCb).toBeDefined()
+    expect(svc.getUnhandledRejections()).toEqual([])
+
+    onUnhandledRejectionCb!({ message: 'boom', stack: 'Error: boom\n  at <anonymous>' })
+
+    expect(svc.getUnhandledRejections()).toEqual(['boom'])
+    expect(notify).toHaveBeenCalledTimes(1)
+    const arg = notify.mock.calls[0]?.[0] as {
+      severity?: unknown
+      message?: unknown
+    }
+    expect(arg?.severity).toBe(Severity.Error)
+    expect(String(arg?.message)).toContain('boom')
 
     svc.dispose()
   })

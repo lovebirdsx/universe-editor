@@ -83,7 +83,42 @@ git clone --depth 1 <仓库地址> <临时目录>
 
 ⚠️ 档位为「语义差异」的调用点逐个核对文档改写,不要指望编译器全部报出来(Promise 化的 API 不 await 会静默拿到 Promise 对象)。webview 类插件的本地资源加载务必读 `webview-guide.md`(`asWebviewUri` + `localResourceRoots` 必须覆盖资源目录)。
 
-移植中随时 `npm run build` 收敛类型错误;跑通后按 **`new-extension` 第 5~7 步**继续:e2e(场景 = 门 2 确认的功能清单)、`uex dev` 人肉验收、可选发布。
+源插件用 `import * as vscode from 'vscode'` 时,不要每次手写兼容层——**从本 skill 自带的 `references/vscode-compat-template.js` 起步**(Position/Range/Selection、wrapDoc/wrapEditor、compat_window/workspace/languages、同步配置缓存等都已备好),复制到 `src/` 后按文件头与 `TODO(port):` 标记填充目标扩展专属内容。
+
+移植中随时 `npm run build` 收敛类型错误;跑通后按 **`new-extension` 第 5~7 步**继续:e2e(场景 = 门 2 确认的功能清单)、`uex dev` 人肉验收、可选发布。验收除 e2e 外,**必须翻 ext-host 日志找 `unhandled rejection`**(路径与排查见下方「宿主已知陷阱清单」)——测试全绿 ≠ 无运行时错误。
+
+## 市场类目对照表
+
+`package.json` 的 `categories` 是 VSCode 的市场类目清单(Programming Languages / Data Science / Debuggers …),**直接照抄会被 `uex package` 拒绝**——Universe 有自己固定的合法类目集合。允许清单在 `packages/extension-manifest/src/categories.ts`(`EXTENSION_CATEGORIES`,第 7~15 行),`uex` 发布校验在 `packages/uex/src/lib/manifestChecks.ts`(`checkManifestForPublish` 内 `isExtensionCategory`,第 100~108 行)。
+
+合法类目(共 7 个):`Language Features` / `Content Tools` / `Data / Schema` / `SCM / Git` / `AI` / `Themes` / `Other`(兜底)。
+
+| VSCode 类目 | 映射到 Universe 类目 |
+|---|---|
+| Programming Languages | Language Features |
+| Formatters / Linters | Language Features |
+| Snippets | Language Features |
+| Language Packs | Other(本地化无对应域) |
+| Data Science / Machine Learning | Data / Schema |
+| Visualization | Content Tools |
+| Notebooks | Other(notebooks 域缺失,先回门 2 评估) |
+| SCM Providers | SCM / Git |
+| Themes / Keymaps | Themes |
+| Debuggers | Other(debug 域缺失,先回门 2 评估) |
+| AI / Chat | AI |
+| Extension Packs / Education / Azure / 其它 | Other |
+
+归类规则:语言/格式化/补全类 → `Language Features`;数据与可视化 → `Data / Schema` / `Content Tools`;版本控制 → `SCM / Git`;外观定制 → `Themes`;AI 助手 → `AI`;拿不准或能力域缺失的 → `Other`。rainbow_csv 用 `Language Features` + `Data / Schema` 是合法组合的先例。
+
+## 宿主已知陷阱清单
+
+- **不要在 `activate()` 里 await 首文档 / `getActiveTextEditor()`**:renderer 把文档镜像推送排在 `activate()` 返回之后,等待即死锁。宿主已改进该场景:立即 resolve `undefined` 并打日志,且 `onDidOpenTextDocument` 会对已打开文档补发事件——拿到 `undefined` 时订阅 `onDidOpenTextDocument` / `onDidChangeActiveTextEditor` 再取即可,不必手写轮询样板。
+- **e2e 断言语言别依赖 `getContextKey('editorLangId')`**:宿主已修复该 key 跟随语言变化,但状态栏文案断言仍是更直观、更稳的选择。
+- **菜单命令参数是 JSON 序列化的 `UriComponents`**,用 `Uri.from(...)` 复活,别当 `URI` 实例直接读 `.fsPath`。
+- **根 `"type": "module"` 时,CJS 子目录要放嵌套 `package.json`(`{"type":"commonjs"}`)**,否则 esbuild/node 按 ESM 解析 CJS 源码会静默错乱。
+- **移植后检查 esbuild 配置的 entry 是否还指向脚手架的 `extension.ts`**:否则默默构建脚手架代码、产物无报错,只能靠 bundle 体积异常发现(目标代码根本没进产物)。
+- **测试全绿 ≠ 无运行时错误**:验收必须翻 ext-host 日志找 `unhandled rejection`——`<userData>/logs/<sessionId>/extensionHost.log` 及 renderer 的 "Extension Host" 输出通道。
+- **兼容层直接从本 skill 的 `references/vscode-compat-template.js` 起步**,别每次手写(第 5 步移植执行处已引用)。
 
 ## 常见坑速查
 

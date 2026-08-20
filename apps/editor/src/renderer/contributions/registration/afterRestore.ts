@@ -74,6 +74,7 @@ import { LargeFileOptimizationsContribution } from '../LargeFileOptimizationsCon
 import { TabSwitchPerfContribution } from '../TabSwitchPerfContribution.js'
 import { InteractionPerfContribution } from '../InteractionPerfContribution.js'
 import { TextMateContribution } from '../TextMateContribution.js'
+import { ModelLanguageResyncContribution } from '../ModelLanguageResyncContribution.js'
 import { RemoteStatusContribution } from '../RemoteStatusContribution.js'
 import { RemoteInstallOutputContribution } from '../RemoteInstallOutputContribution.js'
 import { RemoteReconnectionUxContribution } from '../RemoteReconnectionUxContribution.js'
@@ -629,6 +630,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.textMate',
   TextMateContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Cold-start language association race: editors restore (and resolve their
+// language) before extensions contribute `contributes.languages`, so a purely
+// contributed association lands as plaintext. Re-resolve open plaintext models
+// whenever language registrations change (VSCode re-resolves too).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.modelLanguageResync',
+  ModelLanguageResyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 

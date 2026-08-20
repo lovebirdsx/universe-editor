@@ -83,6 +83,14 @@ export class ExtensionActivationService {
     return this._activated.has(id)
   }
 
+  /** Whether any extension's `activate()` is currently in flight. The renderer
+   *  holds document-open pushes until activation returns, so an API that would
+   *  wait for a document mirror during activation is a guaranteed deadlock —
+   *  such waiters consult this to resolve `undefined` immediately instead. */
+  get isActivating(): boolean {
+    return this._activating.size > 0
+  }
+
   /** The exports an extension's `activate` returned; undefined while not activated. */
   getExports(id: string): unknown {
     return this._activated.get(id)?.exports

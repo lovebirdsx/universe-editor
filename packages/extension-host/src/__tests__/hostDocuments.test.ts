@@ -135,3 +135,75 @@ describe('ExtHostDocuments did-save', () => {
     expect(fired).toBe(0)
   })
 })
+
+/**
+ * Open backfill: a new listener also receives every document already mirrored
+ * at subscription time (asynchronously, exactly once per document) — extensions
+ * activated after documents opened would otherwise never hear about them.
+ */
+describe('ExtHostDocuments open backfill', () => {
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  it('delivers already-open documents to a new listener asynchronously', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'typescript', 1, 'pre-existing')
+    const seen: string[] = []
+    docs.onDidOpenWithBackfill((doc) => seen.push(doc.getText()))
+    expect(seen).toEqual([]) // never synchronously during subscribe
+    await tick()
+    expect(seen).toEqual(['pre-existing'])
+  })
+
+  it('delivers a document opened after subscription exactly once (live, no backfill)', async () => {
+    const docs = new ExtHostDocuments()
+    const seen: string[] = []
+    docs.onDidOpenWithBackfill((doc) => seen.push(doc.getText()))
+    docs.acceptOpen(uri, 'typescript', 1, 'live')
+    await tick()
+    expect(seen).toEqual(['live'])
+  })
+
+  it('skips a snapshot member that closed before delivery', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'typescript', 1, 'gone')
+    const seen: string[] = []
+    docs.onDidOpenWithBackfill((doc) => seen.push(doc.getText()))
+    docs.acceptClose(uri)
+    await tick()
+    expect(seen).toEqual([])
+  })
+
+  it('skips a snapshot member replaced by a language re-open (live event already delivered it)', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'plaintext', 1, 'x')
+    const seen: string[] = []
+    docs.onDidOpenWithBackfill((doc) => seen.push(doc.languageId))
+    docs.acceptClose(uri)
+    docs.acceptOpen(uri, 'csv', 1, 'x')
+    await tick()
+    expect(seen).toEqual(['csv'])
+  })
+
+  it('does not backfill a subscription disposed before delivery', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(uri, 'typescript', 1, 'pre-existing')
+    const seen: string[] = []
+    const sub = docs.onDidOpenWithBackfill((doc) => seen.push(doc.getText()))
+    sub.dispose()
+    await tick()
+    expect(seen).toEqual([])
+  })
+
+  it('isolates a throwing backfill listener from the other documents', async () => {
+    const docs = new ExtHostDocuments()
+    docs.acceptOpen(URI.file('/ws/a.txt'), 'plaintext', 1, 'a')
+    docs.acceptOpen(URI.file('/ws/b.txt'), 'plaintext', 1, 'b')
+    const seen: string[] = []
+    docs.onDidOpenWithBackfill((doc) => {
+      seen.push(doc.getText())
+      if (doc.getText() === 'a') throw new Error('boom')
+    })
+    await tick()
+    expect(seen).toEqual(['a', 'b'])
+  })
+})
