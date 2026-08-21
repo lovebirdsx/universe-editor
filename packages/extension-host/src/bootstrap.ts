@@ -59,6 +59,7 @@ import {
 import { scanExtensions, scanSingleExtension, type IScannedExtension } from './extensionScanner.js'
 import { computeActiveExtensions, parseIdSet } from './extensionActivationFilter.js'
 import { ExtensionService } from './extensionService.js'
+import { formatUnknownError, installUnexpectedErrorHandler } from './errorReporter.js'
 import { protectStdout } from './stdoutProtection.js'
 
 // The editor app version `engines.universe` ranges are checked against. The
@@ -85,6 +86,11 @@ const writeFrame = protectStdout({
 // is registered at process startup, before the renderer's RPC peer has connected,
 // so rejections landing that early only get the stderr line below.
 let reportUnhandledRejection: ((report: IExtensionUnhandledRejectionDto) => void) | undefined
+
+// Process-level unexpected-error hook (VSCode's ErrorHandler): every error routed
+// through platform `onUnexpectedError` gets a stderr line now and the serialized
+// RPC push once `main` wires `setReport` below (same late-binding as rejections).
+const unexpectedErrors = installUnexpectedErrorHandler()
 
 process.on('unhandledRejection', (reason: unknown) => {
   console.error(`[ext-host] unhandled rejection: ${formatUnknownError(reason)}`)
@@ -496,16 +502,19 @@ async function main(): Promise<void> {
       console.warn(`[ext-host] failed to report unhandled rejection: ${(err as Error).message}`)
     }
   }
+  unexpectedErrors.setReport((error) => {
+    try {
+      mainThreadExtensions.$onUnexpectedError(error)
+    } catch (err) {
+      console.warn(`[ext-host] failed to report unexpected error: ${(err as Error).message}`)
+    }
+  })
 }
 
 void main().catch((err: unknown) => {
   console.error(`[ext-host] fatal: ${(err as Error).stack ?? String(err)}`)
   process.exit(1)
 })
-
-function formatUnknownError(error: unknown): string {
-  return error instanceof Error ? (error.stack ?? error.message) : String(error)
-}
 
 function toUnhandledRejectionReport(reason: unknown): IExtensionUnhandledRejectionDto {
   const error = reason instanceof Error ? reason : new Error(String(reason))

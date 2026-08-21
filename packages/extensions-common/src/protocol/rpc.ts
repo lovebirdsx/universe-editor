@@ -11,6 +11,7 @@
  * RPC-only surface that never appears in the public extension API.
  */
 import type { CancellationToken } from '@universe-editor/platform'
+import type { SerializedError } from '@universe-editor/platform'
 import type { UriComponents } from '@universe-editor/platform'
 import type {
   CompletionItem,
@@ -196,6 +197,8 @@ export interface IMainThreadExtensions {
   $onActivationError(error: IExtensionActivationErrorDto): void
   /** An unhandled promise rejection surfaced in the host. Provider → renderer push. */
   $onUnhandledRejection(report: IExtensionUnhandledRejectionDto): void
+  /** A process-level unexpected error in the host (VSCode's MainThreadErrors). Provider → renderer push. */
+  $onUnexpectedError(error: SerializedError): void
 }
 
 /**

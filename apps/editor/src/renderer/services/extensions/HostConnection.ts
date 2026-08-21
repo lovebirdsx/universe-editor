@@ -41,6 +41,7 @@ import {
   type IThemeService,
   type IUriIdentityService,
   type IViewsService,
+  type SerializedError,
 } from '@universe-editor/platform'
 import {
   ExtHostChannels,
@@ -136,6 +137,8 @@ export interface HostConnectionDeps {
   readonly onActivationError: (error: IExtensionActivationErrorDto) => void
   /** The host surfaced an unhandled rejection — surface it (dev notification + e2e gate). */
   readonly onUnhandledRejection: (report: IExtensionUnhandledRejectionDto) => void
+  /** The host surfaced a process-level unexpected error — land it in errors.jsonl. */
+  readonly onUnexpectedError: (error: SerializedError) => void
 }
 
 export class HostConnection extends Disposable {
@@ -201,6 +204,7 @@ export class HostConnection extends Disposable {
     const mainThreadExtensions = new MainThreadExtensions(
       deps.onActivationError,
       deps.onUnhandledRejection,
+      deps.onUnexpectedError,
     )
     server.registerChannel(
       ExtHostChannels.mainThreadExtensions,

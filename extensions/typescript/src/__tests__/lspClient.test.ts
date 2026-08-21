@@ -399,6 +399,7 @@ interface AttrInternals {
   _pinnedUris: Set<string>
   _proc: unknown
   _restartTimestamps: number[]
+  _stderrTail: string[]
   _onProcGone(proc: unknown, reason: string): void
 }
 
@@ -531,5 +532,149 @@ describe('LspClient project attribution & keep-alive pin', () => {
     expect(crash?.message).toContain('pinned')
     expect(crash?.message).toMatch(/project≈tsconfig\.json/)
     expect(crash?.message).toContain('file:///ws/a.ts')
+  })
+
+  /** The forensics must reach the host's unexpected-error path (and from there
+   *  errors.jsonl), not just the output channel — a crash report only a user with
+   *  the panel open can see is what made the OOM diagnosis impossible before. */
+  describe('crash forensics reach the host reporter', () => {
+    const KEY = '__universeReportUnexpectedError__'
+    let reported: unknown[]
+
+    beforeEach(() => {
+      reported = []
+      ;(globalThis as Record<string, unknown>)[KEY] = (e: unknown) => reported.push(e)
+    })
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>)[KEY]
+    })
+
+    function crash(stderr: string[] = []): LogLine[] {
+      const { client, internals, logs } = makeAttrClient()
+      const proc = {}
+      internals._proc = proc
+      internals._stderrTail.push(...stderr)
+      internals._restartTimestamps.push(Date.now(), Date.now(), Date.now(), Date.now(), Date.now())
+      internals._onProcGone(proc, 'exit code=134 signal=null')
+      void client
+      return logs
+    }
+
+    it('reports the server-gone forensics as an Error', () => {
+      crash()
+      const gone = reported.find(
+        (e) => e instanceof Error && e.message.includes('server gone'),
+      ) as Error
+      expect(gone).toBeInstanceOf(Error)
+      expect(gone.message).toContain('stderrTail=')
+    })
+
+    it('reports the OOM hint on the out-of-memory signature', () => {
+      crash(['<semantic> exit code: 134'])
+      const oom = reported.filter((e) => e instanceof Error && /out of memory/.test(e.message))
+      expect(oom).toHaveLength(1)
+    })
+
+    it('keeps logging to the output channel when no host reporter is installed', () => {
+      delete (globalThis as Record<string, unknown>)[KEY]
+      const logs = crash()
+      expect(logs.some((l) => l.level === 'error' && l.message.includes('server gone'))).toBe(true)
+      expect(reported).toHaveLength(0)
+    })
+  })
+})
+
+describe('LspClient _request connection-lost retry', () => {
+  interface RequestInternals {
+    _request<T>(conn: unknown, method: string, params: unknown, token?: unknown): Promise<T>
+    _ready(): Promise<unknown>
+    _disposed: boolean
+  }
+
+  const connectionLost = (code: number): Error =>
+    Object.assign(new Error(`Pending response rejected (code ${code})`), { code })
+
+  function makeRequestClient(readyConn: unknown): { internals: RequestInternals } {
+    const client = new LspClient(
+      { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.0.0' },
+      '/ws',
+      () => {},
+    )
+    const internals = client as unknown as RequestInternals
+    internals._ready = async () => readyConn
+    return { internals }
+  }
+
+  it.each([-32097, -32096])(
+    'retries once on the restarted connection when code %d loses the request mid-flight',
+    async (code) => {
+      const ready = { sendRequest: vi.fn(async () => 'real-result') }
+      const { internals } = makeRequestClient(ready)
+      const dead = {
+        sendRequest: vi.fn(async () => {
+          throw connectionLost(code)
+        }),
+      }
+
+      const result = await internals._request(dead, 'textDocument/definition', { uri: 'x' })
+
+      expect(dead.sendRequest).toHaveBeenCalledTimes(1)
+      expect(ready.sendRequest).toHaveBeenCalledTimes(1)
+      expect(ready.sendRequest).toHaveBeenCalledWith('textDocument/definition', { uri: 'x' })
+      expect(result).toBe('real-result')
+    },
+  )
+
+  it('degrades to Canceled when the retry also loses the connection (no third request)', async () => {
+    const ready = {
+      sendRequest: vi.fn(async () => {
+        throw connectionLost(-32097)
+      }),
+    }
+    const { internals } = makeRequestClient(ready)
+    const dead = {
+      sendRequest: vi.fn(async () => {
+        throw connectionLost(-32097)
+      }),
+    }
+
+    await expect(
+      internals._request(dead, 'textDocument/definition', { uri: 'x' }),
+    ).rejects.toMatchObject({ name: 'Canceled', message: 'Canceled' })
+    expect(dead.sendRequest).toHaveBeenCalledTimes(1)
+    expect(ready.sendRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry when the client is disposed; throws Canceled', async () => {
+    const { internals } = makeRequestClient({})
+    internals._disposed = true
+    const dead = {
+      sendRequest: vi.fn(async () => {
+        throw connectionLost(-32097)
+      }),
+    }
+
+    await expect(
+      internals._request(dead, 'textDocument/definition', { uri: 'x' }),
+    ).rejects.toMatchObject({ name: 'Canceled', message: 'Canceled' })
+    expect(dead.sendRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('rethrows a genuine LSP error unchanged, without retrying', async () => {
+    const ready = { sendRequest: vi.fn(async () => 'unused') }
+    const { internals } = makeRequestClient(ready)
+    const boom = new Error('boom')
+    const dead = {
+      sendRequest: vi.fn(async () => {
+        throw boom
+      }),
+    }
+
+    await expect(internals._request(dead, 'textDocument/definition', { uri: 'x' })).rejects.toBe(
+      boom,
+    )
+    expect(dead.sendRequest).toHaveBeenCalledTimes(1)
+    expect(ready.sendRequest).not.toHaveBeenCalled()
   })
 })

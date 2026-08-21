@@ -51,6 +51,20 @@ import type {
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 
+/** Global key the extension host installs for in-process built-in extensions.
+ *  KEEP IN SYNC with `packages/extension-host/src/errorReporter.ts`. */
+const BUILTIN_UNEXPECTED_ERROR_KEY = '__universeReportUnexpectedError__'
+
+/** Route a fatal LSP forensics Error through the host's unexpected-error path so
+ *  it lands in the renderer's errors.jsonl. Absent outside the host (tests,
+ *  probes) it is a no-op — the output-channel log remains the interactive face. */
+function reportUnexpectedError(error: Error): void {
+  const report = (globalThis as Record<string, unknown>)[BUILTIN_UNEXPECTED_ERROR_KEY] as
+    | ((e: unknown) => void)
+    | undefined
+  report?.(error)
+}
+
 export interface PublishDiagnosticsEvent {
   readonly uri: string
   readonly version?: number
@@ -143,6 +157,12 @@ const STDERR_TAIL_LINES = 10
  *  interactivity threshold for error markers. */
 const PULL_DIAGNOSTIC_DEBOUNCE_MS = 400
 
+/** jsonrpc rejects every in-flight request with one of these codes when its
+ *  connection is disposed (-32097 PendingResponseRejected) or goes inactive
+ *  (-32096 ConnectionInactive) mid-request — the signature of a language server
+ *  that died (or restarted) while we awaited an answer, not a real LSP error. */
+const CONNECTION_LOST_CODES: ReadonlySet<number> = new Set([-32097, -32096])
+
 function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
@@ -167,6 +187,14 @@ function guardedWritable(stdin: Writable): Writable {
       stdin.write(chunk, encoding, callback)
     },
   })
+}
+
+/** A `name === 'Canceled'` error — survives the ext-host RPC round-trip and is
+ *  silently dropped by platform's `isCancellationError` on the renderer. */
+function canceledError(): Error {
+  const err = new Error('Canceled')
+  err.name = 'Canceled'
+  return err
 }
 
 interface OpenDoc {
@@ -598,12 +626,38 @@ export class LspClient {
   ): Promise<T> {
     const start = Date.now()
     try {
-      return token
-        ? await conn.sendRequest(method, params, token)
-        : await conn.sendRequest(method, params)
+      try {
+        return await this._sendRequest(conn, method, params, token)
+      } catch (err) {
+        if (!LspClient._isConnectionLost(err)) throw err
+        if (this._disposed || token?.isCancellationRequested) throw canceledError()
+        this._log.info(`connection lost mid-request, retrying ${method} on the restarted server`)
+        try {
+          const next = await this._ready()
+          return await this._sendRequest(next, method, params, token)
+        } catch (retryErr) {
+          throw LspClient._isConnectionLost(retryErr) ? canceledError() : retryErr
+        }
+      }
     } finally {
       this._log.verbose(`${method} ${Date.now() - start}ms`)
     }
+  }
+
+  private async _sendRequest<T>(
+    conn: MessageConnection,
+    method: string,
+    params: unknown,
+    token?: RpcCancellationToken,
+  ): Promise<T> {
+    return token
+      ? await conn.sendRequest(method, params, token)
+      : await conn.sendRequest(method, params)
+  }
+
+  private static _isConnectionLost(err: unknown): boolean {
+    const code = (err as { code?: unknown } | null | undefined)?.code
+    return typeof code === 'number' && CONNECTION_LOST_CODES.has(code)
   }
 
   async provideDefinition(
@@ -1142,16 +1196,16 @@ export class LspClient {
         return `${uri}${tags ? ` (${tags})` : ''} chars=${doc.text().length}`
       })
       .join(', ')
-    this._log.error(
-      `server gone (${reason}); restarts in window=${this._restartTimestamps.length}; openDocs=[${docs}]; stderrTail=${JSON.stringify(this._stderrTail)}`,
-    )
+    const goneMessage = `server gone (${reason}); restarts in window=${this._restartTimestamps.length}; openDocs=[${docs}]; stderrTail=${JSON.stringify(this._stderrTail)}`
+    this._log.error(goneMessage)
+    reportUnexpectedError(new Error(goneMessage))
     // OOM signature: tsserver aborts with 134 (V8 heap limit) and the wrapper CLI
     // reports it on stderr before exiting itself. Surface the actionable fix once.
     const stderrText = this._stderrTail.join('\n')
     if (/exit code: 134|out of memory|allocation failed/i.test(stderrText)) {
-      this._log.error(
-        `tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`,
-      )
+      const oomMessage = `tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`
+      this._log.error(oomMessage)
+      reportUnexpectedError(new Error(oomMessage))
       if (!this._oomNotified) {
         this._oomNotified = true
         this._onServerOOM?.(this._maxTsServerMemoryMb)

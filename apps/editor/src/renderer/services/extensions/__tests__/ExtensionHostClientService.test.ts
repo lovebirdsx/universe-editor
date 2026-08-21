@@ -7,13 +7,17 @@
  *     that a restart racing the initial boot would otherwise drop.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   Event,
   IpcChannelDisposedError,
   REMOTE_SCHEME,
   Severity,
+  CancellationError,
+  setErrorTelemetryHook,
+  setUnexpectedErrorHandler,
+  transformErrorForSerialization,
   type IAiModelService,
   type ICommandService,
   type IConfigurationChangeEvent,
@@ -78,6 +82,8 @@ const configPushes: string[][] = []
 const environmentSeeds: Record<string, unknown>[] = []
 /** `deps.onUnhandledRejection` captured from the most recent FakeHostConnection. */
 let onUnhandledRejectionCb: ((report: unknown) => void) | undefined
+/** `deps.onUnexpectedError` captured from the most recent FakeHostConnection. */
+let onUnexpectedErrorCb: ((error: unknown) => void) | undefined
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
 const activatedOnce = new Set<string>()
@@ -125,12 +131,16 @@ vi.mock('../HostConnection.js', () => {
       kind: string,
       handle: string,
       workspaceRoot?: string,
-      deps?: { onUnhandledRejection?: (report: unknown) => void },
+      deps?: {
+        onUnhandledRejection?: (report: unknown) => void
+        onUnexpectedError?: (error: unknown) => void
+      },
     ) {
       this.kind = kind
       this.handle = handle
       this.workspaceRoot = workspaceRoot
       onUnhandledRejectionCb = deps?.onUnhandledRejection
+      onUnexpectedErrorCb = deps?.onUnexpectedError
     }
     markDead(): void {
       this.dead = true
@@ -633,6 +643,66 @@ describe('ExtensionHostClientService', () => {
     }
     expect(arg?.severity).toBe(Severity.Error)
     expect(String(arg?.message)).toContain('boom')
+
+    svc.dispose()
+  })
+})
+
+describe('ExtensionHostClientService unexpected errors', () => {
+  afterEach(() => {
+    setUnexpectedErrorHandler(() => {})
+    setErrorTelemetryHook(() => {})
+  })
+
+  it('routes host unexpected errors to onUnexpectedError with name/stack preserved', async () => {
+    // Data-flow pin: $onUnexpectedError → transformErrorFromSerialization →
+    // onUnexpectedError (telemetry hook + unexpected-error handler). The revived
+    // Error must keep name/stack so errors.jsonl gets a real stack.
+    onUnexpectedErrorCb = undefined
+    const telemetry = vi.fn()
+    const handler = vi.fn()
+    setErrorTelemetryHook(telemetry)
+    setUnexpectedErrorHandler(handler)
+
+    const host = fakeHost()
+    const svc = makeService(host)
+    await svc.start()
+    expect(onUnexpectedErrorCb).toBeDefined()
+
+    const err = new Error('server gone')
+    err.name = 'ServerGoneError'
+    onUnexpectedErrorCb!(transformErrorForSerialization(err))
+
+    expect(handler).toHaveBeenCalledOnce()
+    const reported = handler.mock.calls[0]?.[0] as Error
+    expect(reported).toBeInstanceOf(Error)
+    expect(reported.name).toBe('ServerGoneError')
+    expect(reported.stack).toBe(err.stack)
+    expect(telemetry).toHaveBeenCalledWith(
+      'unhandledError',
+      expect.objectContaining({ message: 'server gone' }),
+    )
+
+    svc.dispose()
+  })
+
+  it('silently drops Canceled errors without telemetry', async () => {
+    // Guards the lspClient fix: a `Canceled` error must be dropped by the
+    // platform cancellation filter, not land in errors.jsonl.
+    onUnexpectedErrorCb = undefined
+    const telemetry = vi.fn()
+    const handler = vi.fn()
+    setErrorTelemetryHook(telemetry)
+    setUnexpectedErrorHandler(handler)
+
+    const host = fakeHost()
+    const svc = makeService(host)
+    await svc.start()
+
+    onUnexpectedErrorCb!(transformErrorForSerialization(new CancellationError()))
+
+    expect(handler).not.toHaveBeenCalled()
+    expect(telemetry).not.toHaveBeenCalled()
 
     svc.dispose()
   })

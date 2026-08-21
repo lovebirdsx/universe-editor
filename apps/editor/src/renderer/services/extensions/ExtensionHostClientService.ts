@@ -46,8 +46,11 @@ import {
   REMOTE_SCHEME,
   Severity,
   localize,
+  onUnexpectedError,
+  transformErrorFromSerialization,
   type Event,
   type ILogger,
+  type SerializedError,
 } from '@universe-editor/platform'
 import {
   STARTUP_ACTIVATION,
@@ -375,6 +378,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       },
       onActivationError: (error) => this._onActivationErrorReported(error),
       onUnhandledRejection: (report) => this._onUnhandledRejectionReported(report),
+      onUnexpectedError: (error) => this._onUnexpectedErrorReported(error),
     }
 
     const connection = this._register(new HostConnection('local', handle, workspaceRoot, deps))
@@ -499,6 +503,15 @@ export class ExtensionHostClientService extends Disposable implements IExtension
         },
       ],
     })
+  }
+
+  /**
+   * The host surfaced a process-level unexpected error. Rebuild a real Error
+   * (name/stack survive) and hand it to platform `onUnexpectedError`, which lands
+   * it in errors.jsonl via the telemetry hook and drops cancellations.
+   */
+  private _onUnexpectedErrorReported(error: SerializedError): void {
+    onUnexpectedError(transformErrorFromSerialization(error))
   }
 
   getUnhandledRejections(): readonly string[] {

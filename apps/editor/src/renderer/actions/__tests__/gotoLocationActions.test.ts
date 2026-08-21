@@ -195,4 +195,76 @@ describe('gotoLocationActions', () => {
     ).resolves.not.toThrow()
     expect(triggerSpy).not.toHaveBeenCalled()
   })
+
+  function setupStartingProgress(whenSettled: () => Promise<void>) {
+    const services = new ServiceCollection()
+    services.set(IFileService, stubFs() as never)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.ts'))
+    FileEditorRegistry.register(input, { trigger: vi.fn(), focus: vi.fn() } as never)
+    disposables.push({ dispose: () => input.dispose() })
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: input },
+    } as never)
+    services.set(ILanguageFeaturesService, {
+      _serviceBrand: undefined,
+      hasStartingLanguageServer: () => true,
+      whenLanguageServersSettled: whenSettled,
+    } as never)
+    const withProgressSpy = vi.fn((_options: unknown, task: () => Promise<unknown>) => task())
+    services.set(IProgressService, {
+      _serviceBrand: undefined,
+      withProgress: withProgressSpy,
+    } as never)
+    return {
+      withProgressSpy,
+      run: () =>
+        inst.invokeFunction((accessor) => {
+          CommandsRegistry.getCommand('editor.action.revealDefinition')!.handler(accessor)
+        }),
+    }
+  }
+
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+  it('shows at most one progress for rapid navigation while a server is starting', async () => {
+    const revealCtor = gotoLocationActions.find(
+      (c) => new c().desc.id === 'editor.action.revealDefinition',
+    )!
+    disposables.push(registerAction2(revealCtor))
+
+    let resolveSettled: () => void = () => {}
+    const settled = new Promise<void>((r) => (resolveSettled = r))
+    const { run, withProgressSpy } = setupStartingProgress(() => settled)
+
+    run()
+    run()
+    run()
+    expect(withProgressSpy).toHaveBeenCalledTimes(1)
+
+    // After the first progress settles, a later navigation shows a fresh one.
+    resolveSettled()
+    await flush()
+    run()
+    expect(withProgressSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows a fresh progress after the previous one rejects', async () => {
+    const revealCtor = gotoLocationActions.find(
+      (c) => new c().desc.id === 'editor.action.revealDefinition',
+    )!
+    disposables.push(registerAction2(revealCtor))
+
+    const { run, withProgressSpy } = setupStartingProgress(() =>
+      Promise.reject(new Error('server failed')),
+    )
+
+    run()
+    expect(withProgressSpy).toHaveBeenCalledTimes(1)
+    await flush()
+    run()
+    expect(withProgressSpy).toHaveBeenCalledTimes(2)
+  })
 })

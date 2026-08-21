@@ -99,6 +99,10 @@ const NAVIGATION_COMMANDS: readonly NavCommandDef[] = [
   },
 ]
 
+/** In-flight "starting" progress, so concurrent navigation commands share one
+ *  spinner instead of stacking a duplicate per F12 press. */
+let navStartingProgress: Promise<void> | undefined
+
 function runMonacoNavAction(accessor: ServicesAccessor, actionId: string): void {
   const groups = accessor.get(IEditorGroupsService)
   const active = groups.activeGroup.activeEditor
@@ -121,15 +125,21 @@ function runMonacoNavAction(accessor: ServicesAccessor, actionId: string): void 
   // blocked. Surface a status-bar spinner (delayed, so a warm server stays
   // invisible) that clears once every server settles.
   if (!languageFeatures.hasStartingLanguageServer()) return
+  if (navStartingProgress !== undefined) return
 
-  void progress.withProgress(
-    {
-      location: ProgressLocation.Window,
-      title: localize('lsp.starting', 'Starting language service…'),
-      delay: 500,
-    },
-    () => languageFeatures.whenLanguageServersSettled(),
-  )
+  const clear = (): void => {
+    navStartingProgress = undefined
+  }
+  navStartingProgress = progress
+    .withProgress(
+      {
+        location: ProgressLocation.Window,
+        title: localize('lsp.starting', 'Starting language service…'),
+        delay: 500,
+      },
+      () => languageFeatures.whenLanguageServersSettled(),
+    )
+    .then(clear, clear)
 }
 
 function createNavAction(def: NavCommandDef): new () => Action2 {

@@ -12,11 +12,13 @@ import type {
   IExtensionUnhandledRejectionDto,
   IMainThreadExtensions,
 } from '@universe-editor/extensions-common'
+import type { SerializedError } from '@universe-editor/platform'
 
 export class MainThreadExtensions implements IMainThreadExtensions {
   constructor(
     private readonly _onActivationError: (error: IExtensionActivationErrorDto) => void,
     private readonly _onUnhandledRejection: (report: IExtensionUnhandledRejectionDto) => void,
+    private readonly _onUnexpectedError: (error: SerializedError) => void,
   ) {}
 
   $onActivationError(error: IExtensionActivationErrorDto): void {
@@ -25,5 +27,9 @@ export class MainThreadExtensions implements IMainThreadExtensions {
 
   $onUnhandledRejection(report: IExtensionUnhandledRejectionDto): void {
     this._onUnhandledRejection(report)
+  }
+
+  $onUnexpectedError(error: SerializedError): void {
+    this._onUnexpectedError(error)
   }
 }
