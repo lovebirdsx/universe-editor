@@ -7,13 +7,14 @@
  *    (scheme-qualified for remote, so equal host paths stay disambiguated);
  *  - workspaceTitleLabel → the title bar / window title's right segment (clean
  *    path only — the remote identity is carried by the "⇄" marker
- *    (REMOTE_MARKER), not by this segment);
+ *    (REMOTE_MARKER), not by this segment); a Windows remote's canonical
+ *    `/E:/…` path renders in native `E:\…` form;
  *  - workspaceParentLabel → the window title's parent segment (server-side parent
  *    path for remote — the remote identity is already expressed by the "⇄"
  *    marker, so the parent segment must not repeat the authority).
  *--------------------------------------------------------------------------------------------*/
 
-import type { URI } from '@universe-editor/platform'
+import { toDisplayPath, type URI } from '@universe-editor/platform'
 
 /**
  * Remote marker prepended to remote workspace/window entries — the native
@@ -30,7 +31,7 @@ export function workspaceParentLabel(uri: URI): string {
   if (uri.scheme === 'file') {
     return uri.with({ path: parentPath }).fsPath
   }
-  return parentPath || '/'
+  return toDisplayPath(parentPath || '/')
 }
 
 /** Full display path for recent menus/descriptions (scheme-qualified for remote). */
@@ -45,5 +46,5 @@ export function workspaceFullLabel(uri: URI): string {
  */
 export function workspaceTitleLabel(uri: URI): string {
   if (uri.scheme === 'file') return uri.fsPath
-  return uri.path
+  return toDisplayPath(uri.path)
 }

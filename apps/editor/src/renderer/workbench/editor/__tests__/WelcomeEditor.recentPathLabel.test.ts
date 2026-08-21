@@ -21,6 +21,15 @@ describe('recentPathLabel', () => {
     expect(recentPathLabel(folder)).toBe('SSH: devbox · /srv/app')
   })
 
+  it('formats a Windows remote folder path with display separators', () => {
+    const folder = URI.from({
+      scheme: REMOTE_SCHEME,
+      authority: 'winbox',
+      path: '/E:/git_project/foo',
+    })
+    expect(recentPathLabel(folder)).toBe('SSH: winbox · E:\\git_project\\foo')
+  })
+
   it('keeps local folders unchanged', () => {
     const folder = URI.file('/home/xiao/proj')
     expect(recentPathLabel(folder)).toBe(folder.fsPath)

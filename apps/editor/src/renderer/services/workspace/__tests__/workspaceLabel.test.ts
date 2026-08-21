@@ -8,6 +8,12 @@ const REMOTE_FOLDER = URI.from({
   path: '/home/x/proj',
 })
 
+const WINDOWS_REMOTE_FOLDER = URI.from({
+  scheme: 'remote-ssh',
+  authority: 'ssh+10.102.13.131',
+  path: '/E:/git_project/universe-editor.worktrees/task1',
+})
+
 describe('workspaceTitleLabel', () => {
   it('returns the local fsPath for file folders', () => {
     const folder = URI.file('/tmp/myProject')
@@ -16,6 +22,12 @@ describe('workspaceTitleLabel', () => {
 
   it('returns the server-side path for remote folders (no scheme/authority)', () => {
     expect(workspaceTitleLabel(REMOTE_FOLDER)).toBe('/home/x/proj')
+  })
+
+  it('renders a Windows remote path in native drive form', () => {
+    expect(workspaceTitleLabel(WINDOWS_REMOTE_FOLDER)).toBe(
+      'E:\\git_project\\universe-editor.worktrees\\task1',
+    )
   })
 })
 
@@ -37,6 +49,21 @@ describe('workspaceParentLabel', () => {
     })
     expect(workspaceParentLabel(rootFolder)).toBe('/')
   })
+
+  it('renders a Windows remote parent in native drive form', () => {
+    expect(workspaceParentLabel(WINDOWS_REMOTE_FOLDER)).toBe(
+      'E:\\git_project\\universe-editor.worktrees',
+    )
+  })
+
+  it('renders a Windows remote drive root as `E:\\`', () => {
+    const driveRoot = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'ssh+10.102.13.131',
+      path: '/E:/proj',
+    })
+    expect(workspaceParentLabel(driveRoot)).toBe('E:\\')
+  })
 })
 
 describe('workspaceFullLabel', () => {
@@ -47,5 +74,9 @@ describe('workspaceFullLabel', () => {
 
   it('returns the full scheme-qualified URI for remote folders', () => {
     expect(workspaceFullLabel(REMOTE_FOLDER)).toBe(REMOTE_FOLDER.toString())
+  })
+
+  it('keeps the full scheme-qualified URI for a Windows remote folder', () => {
+    expect(workspaceFullLabel(WINDOWS_REMOTE_FOLDER)).toBe(WINDOWS_REMOTE_FOLDER.toString())
   })
 })

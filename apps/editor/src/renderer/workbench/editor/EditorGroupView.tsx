@@ -39,7 +39,9 @@ import {
   localize,
   markAsSingleton,
   observableValue,
+  REMOTE_SCHEME,
   Severity,
+  toDisplayPath,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
@@ -148,6 +150,10 @@ function formatEditorResourceForHover(input: EditorInput): string | undefined {
   if (!resource) return undefined
   if (resource.scheme === 'untitled') {
     return localize('editorTab.tooltip.untitled', 'Unsaved file')
+  }
+  if (resource.scheme === REMOTE_SCHEME) {
+    const path = toDisplayPath(resource.path)
+    return path && path !== input.label ? path : undefined
   }
   if (PATH_LIKE_TOOLTIP_SCHEMES.has(resource.scheme)) {
     const path = resource.fsPath

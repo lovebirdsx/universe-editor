@@ -120,6 +120,19 @@ export function normalizeDriveLetter(p: string): string {
 }
 
 /**
+ * Display-only formatting of a URI-canonical absolute path (`URI.path`): a
+ * Windows drive path (`/e:/a/b`, `/E:`, `/E:/`) renders native (`E:\a\b`,
+ * `E:\`); anything else returns unchanged. Not for path identity — use
+ * `IUriIdentityService`.
+ */
+export function toDisplayPath(path: string): string {
+  if (!/^\/[a-zA-Z]:/.test(path)) return path
+  const drive = path.charAt(1).toUpperCase()
+  const rest = path.slice(2).replace(/\//g, '\\')
+  return rest === ':' ? drive + ':\\' : drive + rest
+}
+
+/**
  * Whether `p` is an absolute path for the given platform. win32 accepts a drive
  * root (`C:/`, `C:\`), a bare rooted path (`/foo`) and UNC (`//host`); other
  * platforms accept only a leading slash. Backslashes are treated as separators.

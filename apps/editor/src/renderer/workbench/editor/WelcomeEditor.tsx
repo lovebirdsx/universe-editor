@@ -16,6 +16,7 @@ import {
   localize,
   markAsSingleton,
   remoteAuthorityLabel,
+  toDisplayPath,
   type URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -28,7 +29,7 @@ const RECENT_LIMIT = 5
 /** Path line for a recent entry: remote folders show `WSL: <distro> · <path>`. */
 export function recentPathLabel(folder: URI): string {
   if (folder.scheme === REMOTE_SCHEME) {
-    return `${remoteAuthorityLabel(folder.authority)} · ${folder.path}`
+    return `${remoteAuthorityLabel(folder.authority)} · ${toDisplayPath(folder.path)}`
   }
   return workspaceFullLabel(folder)
 }

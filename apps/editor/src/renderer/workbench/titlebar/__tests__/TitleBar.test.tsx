@@ -302,6 +302,52 @@ describe('TitleBar — title text', () => {
     expect(titleText()).toBe('/other/foo.txt — /home/user/project')
   })
 
+  it('shows the native drive form for an in-workspace Windows remote file', () => {
+    const folder = URI.parse(
+      'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1',
+    )
+    const workspace: IWorkspace = { folder, name: 'task1' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(
+      FileEditorInput,
+      URI.parse(
+        'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1/src/main.ts',
+      ),
+    )
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe('src/main.ts — E:\\git_project\\universe-editor.worktrees\\task1')
+  })
+
+  it('shows the native drive form for a Windows remote file outside the workspace', () => {
+    const folder = URI.parse(
+      'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1',
+    )
+    const workspace: IWorkspace = { folder, name: 'task1' }
+    const inst = makeContainer(svc, { workspace })
+    const input = inst.createInstance(
+      FileEditorInput,
+      URI.parse('remote-ssh://ssh+10.102.13.131/E:/other/foo.txt'),
+    )
+    svc.activeGroup.openEditor(input)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <TitleBar />
+      </ServicesContext.Provider>,
+    )
+
+    expect(titleText()).toBe(
+      'E:\\other\\foo.txt — E:\\git_project\\universe-editor.worktrees\\task1',
+    )
+  })
+
   it('does not treat a different remote authority as in-workspace', () => {
     const folder = URI.parse('remote-ssh://e2e-local/home/user/project')
     const workspace: IWorkspace = { folder, name: 'project' }

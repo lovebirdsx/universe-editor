@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { URI } from '@universe-editor/platform'
+import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import {
   formatPathForTerminal,
   readDroppedResources,
@@ -116,6 +116,15 @@ describe('resourceDropTransfer', () => {
     it('uses the absolute path when no workspace root is given', () => {
       const file = URI.file('/x/y/a.ts')
       expect(toMentionName(file)).toEqual({ uri: file.toString(), name: file.fsPath })
+    })
+
+    it('renders a remote Windows path outside the workspace with display separators', () => {
+      const file = URI.from({
+        scheme: REMOTE_SCHEME,
+        authority: 'winbox',
+        path: '/E:/outside/foo.ts',
+      })
+      expect(toMentionName(file)).toEqual({ uri: file.toString(), name: 'E:\\outside\\foo.ts' })
     })
   })
 })

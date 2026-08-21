@@ -17,6 +17,7 @@ import {
   pathSeparator,
   relativePath,
   relativePathUnder,
+  toDisplayPath,
 } from '../../base/path.js'
 
 describe('normalizeFsPath', () => {
@@ -254,5 +255,31 @@ describe('expandHomeDir', () => {
   it('does not expand when home is empty', () => {
     expect(expandHomeDir('~/x', '')).toBeUndefined()
     expect(expandHomeDir('~', '')).toBeUndefined()
+  })
+})
+
+describe('toDisplayPath', () => {
+  it('renders Windows drive paths with backslashes and an uppercased drive', () => {
+    expect(toDisplayPath('/E:/a/b')).toBe('E:\\a\\b')
+    expect(toDisplayPath('/e:/a/b')).toBe('E:\\a\\b')
+  })
+
+  it('renders a bare or root-only drive as a backslash root', () => {
+    expect(toDisplayPath('/E:')).toBe('E:\\')
+    expect(toDisplayPath('/E:/')).toBe('E:\\')
+  })
+
+  it('returns POSIX paths unchanged', () => {
+    expect(toDisplayPath('/home/x/proj')).toBe('/home/x/proj')
+    expect(toDisplayPath('/')).toBe('/')
+  })
+
+  it('returns empty and relative paths unchanged', () => {
+    expect(toDisplayPath('')).toBe('')
+    expect(toDisplayPath('a/b')).toBe('a/b')
+  })
+
+  it('does not treat a colon in a later segment as a drive', () => {
+    expect(toDisplayPath('/a/E:/b')).toBe('/a/E:/b')
   })
 })

@@ -109,4 +109,25 @@ describe('buildRemoteTree', () => {
     })
     expect(tree.groups[0]?.targets.map((t) => t.label)).toEqual(['alpha', 'zeta'])
   })
+
+  it('renders Windows remote recent descriptions as display paths', () => {
+    const tree = buildRemoteTree({
+      sshTargets: [{ host: 'winbox', manual: false }],
+      wslDistros: [],
+      connections: [],
+      recents: [
+        { folder: remoteUri('winbox', '/E:/git_project/foo'), name: 'foo', lastOpened: 4 },
+        { folder: remoteUri('winbox', '/E:/foo'), name: 'root', lastOpened: 3 },
+        { folder: remoteUri('winbox', '/home/x/proj'), name: 'posix', lastOpened: 2 },
+        { folder: remoteUri('winbox', '/proj'), name: 'slashroot', lastOpened: 1 },
+      ],
+    })
+    const byLabel = new Map(
+      tree.groups[0]!.targets[0]!.recents.map((r) => [r.label, r.description]),
+    )
+    expect(byLabel.get('foo')).toBe('E:\\git_project')
+    expect(byLabel.get('root')).toBe('E:\\')
+    expect(byLabel.get('posix')).toBe('/home/x')
+    expect(byLabel.get('slashroot')).toBe('/')
+  })
 })

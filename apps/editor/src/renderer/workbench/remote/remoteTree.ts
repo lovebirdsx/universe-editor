@@ -12,6 +12,7 @@ import {
   WSL_AUTHORITY_PREFIX,
   isWslAuthority,
   normalizeRemoteAuthority,
+  toDisplayPath,
   wslAuthorityForDistro,
   type IRecentWorkspace,
   type URI,
@@ -94,7 +95,7 @@ export function buildRemoteTree(input: BuildRemoteTreeInput): RemoteTree {
     const row: RemoteTreeRecent = {
       folder: entry.folder,
       label: entry.name,
-      description: remoteParentPath(entry.folder.path),
+      description: toDisplayPath(remoteParentPath(entry.folder.path)),
       lastOpened: entry.lastOpened,
     }
     const list = recentsByAuthority.get(authority)
