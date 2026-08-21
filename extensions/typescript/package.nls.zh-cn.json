@@ -1,5 +1,15 @@
 {
   "ts.command.restartTsServer.title": "重启 TS 服务器",
   "ts.command.openTsServerLog.title": "打开 TS 服务器日志",
-  "ts.config.tsserver.log.description": "TypeScript 语言服务的日志级别，写入「TypeScript」输出通道。verbose 额外记录服务器 stderr 与每个请求的耗时。重载窗口后生效。"
+  "ts.config.tsserver.log.description": "将 TypeScript 服务器日志写入文件并控制其详细度。此日志可用于诊断 TS 服务器问题，可能包含项目中的文件路径与源代码。verbose 与 requestTime 会同时将「TypeScript」输出通道提升为 verbose。重载窗口后生效。",
+  "ts.config.tsserver.log.off.description": "不将 TypeScript 服务器日志写入文件。",
+  "ts.config.tsserver.log.terse.description": "以 terse 详细度将 TypeScript 服务器日志写入文件。",
+  "ts.config.tsserver.log.normal.description": "以 normal 详细度将 TypeScript 服务器日志写入文件。",
+  "ts.config.tsserver.log.verbose.description": "以 verbose 详细度将 TypeScript 服务器日志写入文件，并将「TypeScript」输出通道提升为 verbose。",
+  "ts.config.tsserver.log.requestTime.description": "以 requestTime 详细度（含每个请求的耗时）将 TypeScript 服务器日志写入文件，并将「TypeScript」输出通道提升为 verbose。",
+  "ts.config.referencesCodeLens.enabled.description": "在 JavaScript 与 TypeScript 文件中启用/禁用 references CodeLens。此 CodeLens 显示类与导出函数的引用数，并允许查看或跳转到它们。",
+  "ts.config.referencesCodeLens.showOnAllFunctions.description": "在 JavaScript 与 TypeScript 文件的所有函数上启用/禁用 references CodeLens。",
+  "ts.config.implementationsCodeLens.enabled.description": "在 TypeScript 文件中启用/禁用 implementations CodeLens。此 CodeLens 显示 TypeScript 接口的实现者。",
+  "ts.config.implementationsCodeLens.showOnInterfaceMethods.description": "在 TypeScript 接口方法上启用/禁用 implementations CodeLens。",
+  "ts.config.implementationsCodeLens.showOnAllClassMethods.description": "在全部 TypeScript 类方法（而非仅抽象方法）上方启用/禁用 implementations CodeLens。"
 }

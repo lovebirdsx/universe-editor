@@ -24,8 +24,20 @@ import {
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { Emitter } from 'vscode-jsonrpc'
-import { LspClient, type LspServerState, type TsServerSpec } from './lspClient.js'
-import { OutputChannelLogger, parseTsLogLevel, type TsLogger } from './logger.js'
+import {
+  LspClient,
+  type CodeLensSettings,
+  type LspServerState,
+  type TsServerSpec,
+} from './lspClient.js'
+import {
+  logVerbosityForSetting,
+  loggerLevelForSetting,
+  OutputChannelLogger,
+  parseTsLogLevel,
+  parseTsServerLogSetting,
+  type TsLogger,
+} from './logger.js'
 import { localize } from './nls.js'
 import { statusBarContent } from './statusIndicator.js'
 
@@ -127,9 +139,11 @@ function resolveServerSpec(log: TsLogger): TsServerSpec | undefined {
   return { kind: 'tsls', cli, tsserver, version }
 }
 
-/** Resolve the log level once at activation: the `typescript.tsserver.log`
- *  setting (VSCode parity), with an env override for dev/e2e sessions where
- *  editing settings isn't practical. */
+/** Resolve the log level once at activation: the `js/ts.tsserver.log` setting
+ *  (VSCode parity, mapped to the plugin channel level), with an env override for
+ *  dev/e2e sessions where editing settings isn't practical. The env override
+ *  accepts the plugin's internal levels (off/error/info/verbose), not the
+ *  VSCode setting values. */
 function applyLogLevel(logger: OutputChannelLogger): void {
   const envLevel = parseTsLogLevel(process.env.UNIVERSE_TS_LOG_LEVEL)
   if (envLevel) {
@@ -137,9 +151,45 @@ function applyLogLevel(logger: OutputChannelLogger): void {
     return
   }
   void workspace
-    .getConfiguration('typescript')
-    .get<string>('tsserver.log', 'info')
-    .then((v) => logger.setLevel(parseTsLogLevel(v) ?? 'info'))
+    .getConfiguration('js/ts')
+    .get<string>('tsserver.log', 'off')
+    .then((v) => logger.setLevel(loggerLevelForSetting(parseTsServerLogSetting(v) ?? 'off')))
+}
+
+/** The tsserver file-log verbosity derived from `js/ts.tsserver.log` (off → no
+ *  file log). Read on every (re)start; `UNIVERSE_TS_LOG_LEVEL` still wins inside
+ *  the client. */
+function readLogVerbosity(): Promise<string | undefined> {
+  return workspace
+    .getConfiguration('js/ts')
+    .get<string>('tsserver.log', 'off')
+    .then((v) => logVerbosityForSetting(parseTsServerLogSetting(v) ?? 'off'))
+}
+
+/** The user-facing CodeLens toggles (js/ts.referencesCodeLens.* /
+ *  implementationsCodeLens.*). Defaults match VSCode (all off). */
+async function readCodeLensSettings(): Promise<CodeLensSettings> {
+  const config = workspace.getConfiguration('js/ts')
+  const [refEnabled, refAllFunctions, implEnabled, implInterface, implAllClass] = await Promise.all(
+    [
+      config.get<boolean>('referencesCodeLens.enabled', false),
+      config.get<boolean>('referencesCodeLens.showOnAllFunctions', false),
+      config.get<boolean>('implementationsCodeLens.enabled', false),
+      config.get<boolean>('implementationsCodeLens.showOnInterfaceMethods', false),
+      config.get<boolean>('implementationsCodeLens.showOnAllClassMethods', false),
+    ],
+  )
+  return {
+    referencesCodeLens: {
+      enabled: refEnabled === true,
+      showOnAllFunctions: refAllFunctions === true,
+    },
+    implementationsCodeLens: {
+      enabled: implEnabled === true,
+      showOnInterfaceMethods: implInterface === true,
+      showOnAllClassMethods: implAllClass === true,
+    },
+  }
 }
 
 export function activate(context: ExtensionContext): void {
@@ -168,7 +218,9 @@ export function activate(context: ExtensionContext): void {
       // Read on every (re)start so a raised cap applies on the next crash-restart
       // without reloading the window. 3072 matches VSCode's default.
       getMaxTsServerMemoryMb: () =>
-        workspace.getConfiguration('typescript').get<number>('tsserver.maxTsServerMemory', 3072),
+        workspace.getConfiguration('js/ts').get<number>('tsserver.maxMemory', 3072),
+      getTsServerLogVerbosity: readLogVerbosity,
+      getCodeLensSettings: readCodeLensSettings,
       logger,
     },
   )
@@ -178,7 +230,7 @@ export function activate(context: ExtensionContext): void {
       .showWarningMessage(
         localize(
           'ts.oom.notification',
-          'The TypeScript language server ran out of memory (limit {limitMb} MB). Raise "typescript.tsserver.maxTsServerMemory" in settings.',
+          'The TypeScript language server ran out of memory (limit {limitMb} MB). Raise "js/ts.tsserver.maxMemory" in settings.',
           { limitMb },
         ),
         openLog,
@@ -211,12 +263,26 @@ export function activate(context: ExtensionContext): void {
   registerProviders(context, client, logger)
   registerDocumentSync(context, client)
 
+  // A CodeLens toggle change re-sends didChangeConfiguration and refreshes
+  // CodeLenses, so the new visibility applies without reloading the window
+  // (other settings, like the log level, still apply on reload).
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration('js/ts.referencesCodeLens') ||
+        e.affectsConfiguration('js/ts.implementationsCodeLens')
+      ) {
+        void client.refreshCodeLensConfiguration()
+      }
+    }),
+  )
+
   // Prewarm: spawn tsserver now (every provider needs it) and pin one seed file
   // per targeted tsconfig so the workspace projects actually load — without an
   // open TS/JS file tsserver has no project and workspace/symbol throws "No
   // Project", and navto only searches the project owning an open file. This makes
   // symbols searchable before the user opens any editor. Which tsconfigs to warm
-  // is driven by `typescript.prewarm.projects` (see resolvePrewarmTargets). The
+  // is driven by `js/ts.prewarm.projects` (see resolvePrewarmTargets). The
   // same tsconfig inventory feeds the client's project attribution (logs and the
   // last-file keep-alive pin).
   void (async () => {
@@ -255,9 +321,7 @@ async function prewarm(
   const root = workspace.rootPath
   if (!root) return
 
-  const configured = await workspace
-    .getConfiguration('typescript')
-    .get<string[]>('prewarm.projects', [])
+  const configured = await workspace.getConfiguration('js/ts').get<string[]>('prewarm.projects', [])
   const targets = resolvePrewarmTargets(allTsconfigs, configured)
 
   for (const tsconfigDir of targets) {

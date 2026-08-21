@@ -3,7 +3,7 @@
  *  `onLanguage:<id>` for each configured language (default typescript + markdown),
  *  awaits the workspace, is a no-op when the setting is [], and re-runs when the
  *  extension host relaunches (onDidChangeContributions). Also verifies the
- *  `typescript.prewarm.projects` setting is registered with an enum of the
+ *  `js/ts.prewarm.projects` setting is registered with an enum of the
  *  workspace's tsconfig paths (for settings.json completion).
  *--------------------------------------------------------------------------------------------*/
 
@@ -83,10 +83,10 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
   return { contribution, activations, onDidChangeContributions, onDidChangeWorkspace }
 }
 
-/** Read the currently-registered `typescript.prewarm.projects` item schema. */
+/** Read the currently-registered `js/ts.prewarm.projects` item schema. */
 function tsProjectsItemSchema(): { type?: unknown; enum?: unknown[] } | undefined {
   for (const node of ConfigurationRegistry.getConfigurationNodes()) {
-    const prop = node.properties['typescript.prewarm.projects']
+    const prop = node.properties['js/ts.prewarm.projects']
     if (prop) return prop.items as { type?: unknown; enum?: unknown[] }
   }
   return undefined
@@ -144,7 +144,7 @@ describe('LanguageServicePrewarmContribution', () => {
     contribution.dispose()
   })
 
-  it('registers typescript.prewarm.projects with an enum of workspace tsconfigs', async () => {
+  it('registers js/ts.prewarm.projects with an enum of workspace tsconfigs', async () => {
     const { contribution } = setup(undefined, ['tsconfig.json', 'packages/app/tsconfig.json'])
     // The schema registration awaits workspace.whenReady + the file search; a
     // macrotask flushes the whole microtask chain deterministically.

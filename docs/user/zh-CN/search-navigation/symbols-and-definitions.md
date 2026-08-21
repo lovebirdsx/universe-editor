@@ -59,11 +59,11 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
   - 打开该项目里的任意一个 `.ts` 文件，编辑器会自动加载它所属的 TS 项目；
   - 或在[设置](../customization/settings.md)里指定要提前预热哪些 TS 项目，见下。
 
-**指定要预热的 TS 项目**：在工作区设置的 `settings.json` 里加上 `typescript.prewarm.projects`，值是这些 `tsconfig.json` 的工作区相对路径列表：
+**指定要预热的 TS 项目**：在工作区设置的 `settings.json` 里加上 `js/ts.prewarm.projects`，值是这些 `tsconfig.json` 的工作区相对路径列表：
 
 ```json
 {
-  'typescript.prewarm.projects': ['packages/core/tsconfig.json', 'apps/web/tsconfig.json']
+  'js/ts.prewarm.projects': ['packages/core/tsconfig.json', 'apps/web/tsconfig.json']
 }
 ```
 
@@ -71,11 +71,11 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
 
 > 提示：这只影响"打开文件前"工作区符号是否就绪；无论是否预热，打开某个 `.ts` 文件后，它所属项目的符号都会正常可搜。
 
-**TypeScript 服务内存上限**：超大项目（例如包含几十 MB 生成的 `.d.ts`）在加载时可能超出 TypeScript 服务默认的 3072 MB 内存上限而崩溃重启——发生时会弹出通知提示。在[设置](../customization/settings.md)里调大 `typescript.tsserver.maxTsServerMemory`（单位 MB）即可：
+**TypeScript 服务内存上限**：超大项目（例如包含几十 MB 生成的 `.d.ts`）在加载时可能超出 TypeScript 服务默认的 3072 MB 内存上限而崩溃重启——发生时会弹出通知提示。在[设置](../customization/settings.md)里调大 `js/ts.tsserver.maxMemory`（单位 MB）即可：
 
 ```json
 {
-  "typescript.tsserver.maxTsServerMemory": 8192
+  "js/ts.tsserver.maxMemory": 8192
 }
 ```
 

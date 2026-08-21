@@ -1,11 +1,17 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for the OutputChannelLogger: level gating (typescript.tsserver.log)
+ *  Tests for the OutputChannelLogger: level gating (js/ts.tsserver.log)
  *  and the VSCode-style `timestamp [level] message` line shape.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
 import type { OutputChannel } from '@universe-editor/extension-api'
-import { OutputChannelLogger, parseTsLogLevel } from '../logger.js'
+import {
+  logVerbosityForSetting,
+  loggerLevelForSetting,
+  OutputChannelLogger,
+  parseTsLogLevel,
+  parseTsServerLogSetting,
+} from '../logger.js'
 
 function fakeChannel(): OutputChannel & { lines: string[]; shown: number } {
   const channel = {
@@ -42,6 +48,41 @@ describe('parseTsLogLevel', () => {
     expect(parseTsLogLevel('')).toBeUndefined()
     expect(parseTsLogLevel(undefined)).toBeUndefined()
     expect(parseTsLogLevel(3)).toBeUndefined()
+  })
+})
+
+describe('js/ts.tsserver.log setting mapping', () => {
+  it('parseTsServerLogSetting accepts the five VSCode setting values', () => {
+    expect(parseTsServerLogSetting('off')).toBe('off')
+    expect(parseTsServerLogSetting('terse')).toBe('terse')
+    expect(parseTsServerLogSetting('normal')).toBe('normal')
+    expect(parseTsServerLogSetting('verbose')).toBe('verbose')
+    expect(parseTsServerLogSetting('requestTime')).toBe('requestTime')
+  })
+
+  it('parseTsServerLogSetting rejects the plugin-internal levels and garbage', () => {
+    expect(parseTsServerLogSetting('error')).toBeUndefined()
+    expect(parseTsServerLogSetting('info')).toBeUndefined()
+    expect(parseTsServerLogSetting('debug')).toBeUndefined()
+    expect(parseTsServerLogSetting('')).toBeUndefined()
+    expect(parseTsServerLogSetting(undefined)).toBeUndefined()
+    expect(parseTsServerLogSetting(3)).toBeUndefined()
+  })
+
+  it('maps each setting to the plugin logger level', () => {
+    expect(loggerLevelForSetting('off')).toBe('info')
+    expect(loggerLevelForSetting('terse')).toBe('info')
+    expect(loggerLevelForSetting('normal')).toBe('info')
+    expect(loggerLevelForSetting('verbose')).toBe('verbose')
+    expect(loggerLevelForSetting('requestTime')).toBe('verbose')
+  })
+
+  it('maps each setting to the tsserver logVerbosity (off → undefined)', () => {
+    expect(logVerbosityForSetting('off')).toBeUndefined()
+    expect(logVerbosityForSetting('terse')).toBe('terse')
+    expect(logVerbosityForSetting('normal')).toBe('normal')
+    expect(logVerbosityForSetting('verbose')).toBe('verbose')
+    expect(logVerbosityForSetting('requestTime')).toBe('requestTime')
   })
 })
 

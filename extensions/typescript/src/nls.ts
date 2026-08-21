@@ -7,7 +7,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'ts.status.error.tooltip': 'TypeScript 语言服务启动失败（{server}）',
   'ts.status.version': '版本',
   'ts.oom.notification':
-    'TypeScript 语言服务内存不足（上限 {limitMb} MB）。请在设置中调大 "typescript.tsserver.maxTsServerMemory"。',
+    'TypeScript 语言服务内存不足（上限 {limitMb} MB）。请在设置中调大 "js/ts.tsserver.maxMemory"。',
   'ts.btn.openLog': '打开 TypeScript 日志',
   'ts.restart.failed': '重启 TypeScript 语言服务失败：{message}',
 }

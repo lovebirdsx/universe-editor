@@ -698,6 +698,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.gear.reset': '重置设置',
   'settings.group.agents': 'Agents',
   'settings.group.ai': 'AI',
+  'settings.js/ts.tsserver.maxMemory':
+    'TypeScript 服务器可用的最大内存（单位 MB）。在大型项目中若 TypeScript 语言服务因内存不足而崩溃（会弹出崩溃通知），可调大此值。服务器（重新）启动时生效。',
+  'settings.js/ts.experimental.useTsgo':
+    '使用实验性的 Go 原生 TypeScript 语言服务器（tsgo），替代内置的 typescript-language-server（驱动 JS tsserver）。该设置在扩展宿主启动时由主进程读取，修改后需重启窗口才生效。',
+  'settings.js/ts.prewarm.projects':
+    '要提前预热的工作区相对 tsconfig 路径，使对应 TypeScript 项目的符号在打开文件前即可搜索。单 tsconfig 项目会自动预热；多 tsconfig 工作区除非列在此处，否则不会预热任何项目。',
   'settings.language.description': '控制界面显示语言。更改后需要重启应用。',
   'settings.nav': '设置分类',
   'settings.noWorkspace': '打开文件夹后才能编辑工作区设置。',

@@ -99,6 +99,9 @@ for (const k of [
 }
 
 await conn.sendNotification('initialized', {})
+// Deliberately enables references CodeLens — unlike the plugin's default
+// (js/ts.referencesCodeLens.enabled=false), the probe must turn it on to verify
+// the CodeLens surface. javascript gets the references part only (VSCode shape).
 await conn.sendNotification('workspace/didChangeConfiguration', {
   settings: {
     typescript: { referencesCodeLens: { enabled: true, showOnAllFunctions: false } },

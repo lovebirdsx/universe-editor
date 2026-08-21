@@ -1,14 +1,19 @@
 /**
  * Leveled logger over the plugin's dedicated "TypeScript" output channel,
  * mirroring VSCode's TS extension (a LogOutputChannel named 'TypeScript'
- * gated by `typescript.tsserver.log`). Routine diagnostics must go here —
+ * gated by `js/ts.tsserver.log`). Routine diagnostics must go here —
  * not console.error, which lands in the shared 'Extension Host' channel and
  * drowns in unrelated host noise.
  */
 import type { OutputChannel } from '@universe-editor/extension-api'
 
-/** Mirrors the `typescript.tsserver.log` setting values (VSCode parity). */
+/** The plugin logger's internal gate level (off/error/info/verbose), fed by
+ *  either the `UNIVERSE_TS_LOG_LEVEL` env override or the js/ts.tsserver.log
+ *  setting via `loggerLevelForSetting`. */
 export type TsLogLevel = 'off' | 'error' | 'info' | 'verbose'
+
+/** The user-facing `js/ts.tsserver.log` values (VSCode parity). */
+export type TsServerLogSetting = 'off' | 'terse' | 'normal' | 'verbose' | 'requestTime'
 
 const LEVEL_PRIORITY: Record<TsLogLevel, number> = {
   off: 0,
@@ -22,6 +27,34 @@ export function parseTsLogLevel(value: unknown): TsLogLevel | undefined {
   return value === 'off' || value === 'error' || value === 'info' || value === 'verbose'
     ? value
     : undefined
+}
+
+/** Narrow an unknown setting value to a `js/ts.tsserver.log` level, or undefined. */
+export function parseTsServerLogSetting(value: unknown): TsServerLogSetting | undefined {
+  return value === 'off' ||
+    value === 'terse' ||
+    value === 'normal' ||
+    value === 'verbose' ||
+    value === 'requestTime'
+    ? value
+    : undefined
+}
+
+/**
+ * Map the `js/ts.tsserver.log` setting to the plugin logger's gate level.
+ * VSCode semantics: the setting drives the TS SERVER's own file log, while the
+ * plugin output channel defaults to info — so `off` (default) only turns off the
+ * server file log and keeps the channel at info, leaving today's default logging
+ * unchanged. `verbose` / `requestTime` additionally raise the channel to verbose.
+ */
+export function loggerLevelForSetting(setting: TsServerLogSetting): TsLogLevel {
+  return setting === 'verbose' || setting === 'requestTime' ? 'verbose' : 'info'
+}
+
+/** Map the setting to tsserver's `logVerbosity`; `off` returns undefined so the
+ *  plugin sends no file-log field (no per-server log file). */
+export function logVerbosityForSetting(setting: TsServerLogSetting): string | undefined {
+  return setting === 'off' ? undefined : setting
 }
 
 /** The logging surface the LSP client depends on (kept tiny for unit tests). */

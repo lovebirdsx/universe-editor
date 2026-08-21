@@ -51,7 +51,7 @@ export interface TsServerPreferenceResult {
  * (`UNIVERSE_TSGO_BIN`) > env (`UNIVERSE_TS_SERVER`) > workspace project
  * settings (`<workspaceRoot>/.universe-editor/settings.json`) > workspace
  * VSCode-compat settings (`<workspaceRoot>/.vscode/settings.json`) > user
- * settings.json (`typescript.server.implementation`, read directly from
+ * settings.json (`js/ts.experimental.useTsgo`, read directly from
  * `settingsDir` — the extension host starts before any renderer-side
  * ConfigurationService exists, and this key is only consumed in main) >
  * default. The workspace layering mirrors the renderer's ConfigurationTarget
@@ -145,7 +145,7 @@ function versionForBinary(binary: string): string | undefined {
   return readPackageVersion(path.resolve(path.dirname(binary), '../package.json'))
 }
 
-/** Workspace config dirs consulted for `typescript.server.implementation`,
+/** Workspace config dirs consulted for `js/ts.experimental.useTsgo`,
  *  highest precedence first — mirrors the renderer's Project and
  *  VSCodeWorkspace layers (`.universe-editor` is read-write, `.vscode` the
  *  read-only VSCode-compat layer). */
@@ -182,7 +182,7 @@ export function defaultTsServerPreference(settingsDir: string): TsServerPreferen
 }
 
 /** Lazily resolve the spec on every call — all settings layers are re-read per
- *  host spawn, so editing `typescript.server.implementation` + restarting the
+ *  host spawn, so editing `js/ts.experimental.useTsgo` + restarting the
  *  window (which relaunches the host) picks the new server, and each window's
  *  workspace gets its own layering. When a logger is given, logs one line per
  *  spawn with the winning source (debugging "the setting didn't take"). */
@@ -202,10 +202,12 @@ export function createTsServerSpecResolver(
   }
 }
 
-/** `typescript.server.implementation` from a settings.json file, or undefined
- *  when absent/unreadable/invalid/not a known value. Parsed as JSONC (comments
- *  + trailing commas) like every other config read in main — the migrated user
- *  settings.json carries a header comment that plain JSON.parse would choke on. */
+/** `js/ts.experimental.useTsgo` from a settings.json file, or undefined when
+ *  absent/unreadable/invalid/not a literal boolean. Parsed as JSONC (comments +
+ *  trailing commas) like every other config read in main — the migrated user
+ *  settings.json carries a header comment that plain JSON.parse would choke on.
+ *  Only `true`/`false` are accepted (true → native/tsgo, false → tsls); any
+ *  other type — e.g. the legacy string `"native"` — is treated as unset. */
 function readServerImplementationSetting(settingsPath: string): TsServerImplementation | undefined {
   try {
     const errors: ParseError[] = []
@@ -215,8 +217,8 @@ function readServerImplementationSetting(settingsPath: string): TsServerImplemen
     if (errors.length > 0 || data === null || typeof data !== 'object' || Array.isArray(data)) {
       return undefined
     }
-    const value = (data as Record<string, unknown>)['typescript.server.implementation']
-    return value === 'native' || value === 'tsls' ? value : undefined
+    const value = (data as Record<string, unknown>)['js/ts.experimental.useTsgo']
+    return value === true ? 'native' : value === false ? 'tsls' : undefined
   } catch {
     return undefined
   }

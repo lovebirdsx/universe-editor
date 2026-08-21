@@ -68,6 +68,12 @@ test.describe('@p1 typescript codelens', () => {
     // would otherwise silence every lens even though the provider works.
     await page.evaluate(() => window.__E2E__!.updateConfigValue('editor.codeLens', true))
 
+    // references CodeLens is off by default (VSCode parity: js/ts.referencesCodeLens.enabled=false);
+    // opt in at Memory scope so this smoke exercises the lens chain.
+    await page.evaluate(() =>
+      window.__E2E__!.updateConfigValue('js/ts.referencesCodeLens.enabled', true),
+    )
+
     await page.evaluate(
       (fsPath) => window.__E2E__!.openFileUri(fsPath),
       launchWorkspace.file('lib.ts'),

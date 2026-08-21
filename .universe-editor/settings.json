@@ -2,11 +2,11 @@
 // Available keys are declared by ConfigurationRegistry.
 {
     // 如需要空闲预热ts项目，可以打开下面的配置，同时在 languageServices.prewarm 中加入 typescript
-    // "typescript.prewarm.projects": [
+    // "js/ts.prewarm.projects": [
     //     "apps/editor/tsconfig.json"
     // ],
 
     // 关掉语言服务预热，本项目通常会开多个window，关闭可以降低开销
     "languageServices.prewarm": [],
-    "typescript.server.implementation": "native"
+    "js/ts.experimental.useTsgo": true
 }

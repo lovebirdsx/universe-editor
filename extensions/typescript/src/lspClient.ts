@@ -138,7 +138,7 @@ const PROJECT_LOADING_TITLE = 'Initializing'
 const MAX_WORKSPACE_SYMBOLS = 256
 
 /** tsserver heap cap, forwarded as `--max-old-space-size` by the language server
- *  (VSCode's `typescript.tsserver.maxTsServerMemory` default). Without it the
+ *  (VSCode's `js/ts.tsserver.maxMemory` default). Without it the
  *  server inherits Node's default heap and a multi-MB d.ts can OOM tsserver.
  *  Overridable via the setting of the same name — a huge generated d.ts plus a
  *  large project can legitimately need more than 3 GB (exit code 134). TSLS-only:
@@ -216,11 +216,39 @@ interface OpenDoc {
   sentGeneration: number
 }
 
+/** User-facing CodeLens toggles (js/ts.referencesCodeLens.* / implementationsCodeLens.*).
+ *  Values are shared by the TS and JS namespaces for references; implementations
+ *  is TypeScript-only. Defaults match VSCode (all off). */
+export interface CodeLensSettings {
+  readonly referencesCodeLens: { enabled: boolean; showOnAllFunctions: boolean }
+  readonly implementationsCodeLens: {
+    enabled: boolean
+    showOnInterfaceMethods: boolean
+    showOnAllClassMethods: boolean
+  }
+}
+
+const DEFAULT_CODE_LENS_SETTINGS: CodeLensSettings = {
+  referencesCodeLens: { enabled: false, showOnAllFunctions: false },
+  implementationsCodeLens: {
+    enabled: false,
+    showOnInterfaceMethods: false,
+    showOnAllClassMethods: false,
+  },
+}
+
 /** Optional knobs for {@link LspClient}. */
 export interface LspClientOptions {
   /** Read on every (re)start so a raised cap applies on the next crash-restart
    *  without reloading the window. TSLS-only (the native binary ignores it). */
   readonly getMaxTsServerMemoryMb?: () => Promise<number>
+  /** tsserver file-log verbosity from the `js/ts.tsserver.log` setting (undefined
+   *  for `off`). Resolved on every (re)start like the memory cap; the
+   *  UNIVERSE_TS_LOG_LEVEL env override still wins inside `_logVerbosity`. */
+  readonly getTsServerLogVerbosity?: () => Promise<string | undefined>
+  /** CodeLens toggles from the js/ts.referencesCodeLens / implementationsCodeLens
+   *  settings. Resolved on every (re)start and re-read on config change. */
+  readonly getCodeLensSettings?: () => Promise<CodeLensSettings>
   /** Timer injection for tests (defaults to global set/clearTimeout). */
   readonly timers?: { set: typeof setTimeout; clear: typeof clearTimeout }
   /** Diagnostic output; defaults to the console fallback (tests/probes). The
@@ -231,6 +259,10 @@ export interface LspClientOptions {
 export class LspClient {
   private _proc: ChildProcessWithoutNullStreams | undefined
   private _conn: MessageConnection | undefined
+  /** Handshake done (`initialized` sent) — a config push before this is dropped
+   *  by the server, so live toggles must wait for it. `_start` re-sends the
+   *  settings right after the handshake, so nothing is lost. */
+  private _initialized = false
   /** In-flight (or resolved) start, making `_ready` idempotent. Resolves only
    *  after the LSP `initialize` handshake completes. */
   private _starting: Promise<void> | undefined
@@ -286,6 +318,13 @@ export class LspClient {
    *  on every (re)start, so raising it takes effect on the next crash-restart. */
   private _maxTsServerMemoryMb = MAX_TSSERVER_MEMORY_MB
   private readonly _getMaxTsServerMemoryMb: (() => Promise<number>) | undefined
+  /** tsserver file-log verbosity last resolved from the setting; undefined means
+   *  no file log (the `off` default). */
+  private _tsServerLogVerbosity: string | undefined
+  private readonly _getTsServerLogVerbosity: (() => Promise<string | undefined>) | undefined
+  /** CodeLens toggles last resolved from the settings; re-read on config change. */
+  private _codeLensSettings: CodeLensSettings = DEFAULT_CODE_LENS_SETTINGS
+  private readonly _getCodeLensSettings: (() => Promise<CodeLensSettings>) | undefined
   private readonly _timers: { set: typeof setTimeout; clear: typeof clearTimeout }
   private readonly _log: TsLogger
 
@@ -321,13 +360,15 @@ export class LspClient {
   ) {
     this._onDiagnostics = onDiagnostics
     this._getMaxTsServerMemoryMb = options.getMaxTsServerMemoryMb
+    this._getTsServerLogVerbosity = options.getTsServerLogVerbosity
+    this._getCodeLensSettings = options.getCodeLensSettings
     this._timers = options.timers ?? { set: setTimeout, clear: clearTimeout }
     this._log = options.logger ?? consoleTsLogger
   }
 
   /** Register the OOM listener: fires when the server died with the V8
    *  out-of-memory signature, so the plugin can point the user at the
-   *  `typescript.tsserver.maxTsServerMemory` setting. */
+   *  `js/ts.tsserver.maxMemory` setting. */
   onServerOOM(listener: (limitMb: number) => void): void {
     this._onServerOOM = listener
   }
@@ -336,6 +377,19 @@ export class LspClient {
    *  provider's `onDidChangeCodeLenses`). */
   onCodeLensRefresh(listener: () => void): void {
     this._onCodeLensRefresh = listener
+  }
+
+  /** Re-read the CodeLens settings and re-send `workspace/didChangeConfiguration`
+   *  plus fire a CodeLens refresh, so a js/ts.* CodeLens toggle change takes
+   *  effect without reloading the window. */
+  async refreshCodeLensConfiguration(): Promise<void> {
+    await this._applyCodeLensSettings()
+    const conn = this._conn
+    // Pre-handshake the server ignores config pushes; `_start` sends the fresh
+    // settings itself right after `initialized`, so skipping here loses nothing.
+    if (!conn || !this._initialized) return
+    this._sendDidChangeConfiguration(conn)
+    this._onCodeLensRefresh?.()
   }
 
   /** The server's current lifecycle state. */
@@ -908,6 +962,14 @@ export class LspClient {
         // keep the previous/default cap
       }
     }
+    if (this._getTsServerLogVerbosity) {
+      try {
+        this._tsServerLogVerbosity = await this._getTsServerLogVerbosity()
+      } catch {
+        // keep the previous/default verbosity
+      }
+    }
+    await this._applyCodeLensSettings()
     const spec = this._spec
     const env = sanitizeEnv(process.env)
     // TSLS is a Node CLI, run under Electron's Node runtime; the native binary
@@ -989,14 +1051,8 @@ export class LspClient {
         this._log.info('server uses pull diagnostics (textDocument/diagnostic)')
       }
       this._notify(conn, 'initialized', {})
-      // Enable references CodeLens (off by default in tsserver). implementations
-      // stays off to match VSCode's default and keep the gutter quiet.
-      this._notify(conn, 'workspace/didChangeConfiguration', {
-        settings: {
-          typescript: { referencesCodeLens: { enabled: true, showOnAllFunctions: false } },
-          javascript: { referencesCodeLens: { enabled: true, showOnAllFunctions: false } },
-        },
-      })
+      this._initialized = true
+      this._sendDidChangeConfiguration(conn)
     } catch (err) {
       if (this._proc !== proc) return // superseded by a concurrent restart
       this._setState('error')
@@ -1091,6 +1147,7 @@ export class LspClient {
   private _initializeParams(): InitializeParams {
     const root = this._workspaceRoot
     const rootUri = root ? URI.file(root).toString() : null
+    const logVerbosity = this._logVerbosity()
     return {
       processId: process.pid,
       rootUri,
@@ -1109,14 +1166,13 @@ export class LspClient {
                 // its isValid check and TLS SILENTLY falls back to the workspace's
                 // own node_modules/typescript instead of our pinned one.
                 path: normalize(this._spec.tsserver),
-                // Dev forensics: with UNIVERSE_TS_LOG_LEVEL=verbose, also turn on
-                // tsserver's own file logging — TLS writes one
+                // tsserver's own file logging: UNIVERSE_TS_LOG_LEVEL=verbose wins
+                // (dev forensics), otherwise the js/ts.tsserver.log setting (off →
+                // no file log). TLS writes one
                 // <workspace>/.log/tsserver-log-*/tsserver.log per spawned server,
                 // the only artifact that records WHICH project loads and why
                 // (the $/progress begin we surface drops projectName/reason).
-                ...(process.env.UNIVERSE_TS_LOG_LEVEL === 'verbose'
-                  ? { logVerbosity: 'verbose' }
-                  : {}),
+                ...(logVerbosity ? { logVerbosity } : {}),
               },
               maxTsServerMemory: this._maxTsServerMemoryMb,
             },
@@ -1203,7 +1259,7 @@ export class LspClient {
     // reports it on stderr before exiting itself. Surface the actionable fix once.
     const stderrText = this._stderrTail.join('\n')
     if (/exit code: 134|out of memory|allocation failed/i.test(stderrText)) {
-      const oomMessage = `tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "typescript.tsserver.maxTsServerMemory" in settings`
+      const oomMessage = `tsserver ran out of memory (cap ${this._maxTsServerMemoryMb} MB) — raise "js/ts.tsserver.maxMemory" in settings`
       this._log.error(oomMessage)
       reportUnexpectedError(new Error(oomMessage))
       if (!this._oomNotified) {
@@ -1229,6 +1285,7 @@ export class LspClient {
     }
     this._conn = undefined
     this._proc = undefined
+    this._initialized = false
     this._starting = undefined
     this._connGeneration++
     this._pullDiagnostics = false
@@ -1252,6 +1309,37 @@ export class LspClient {
     if (this._restartTimestamps.length >= MAX_CRASH_RESTARTS) return false
     this._restartTimestamps.push(now)
     return true
+  }
+
+  /** tsserver file-log verbosity: `UNIVERSE_TS_LOG_LEVEL=verbose` wins (dev
+   *  forensics), otherwise the last resolved js/ts.tsserver.log value (undefined
+   *  for `off`). */
+  private _logVerbosity(): string | undefined {
+    return process.env.UNIVERSE_TS_LOG_LEVEL === 'verbose' ? 'verbose' : this._tsServerLogVerbosity
+  }
+
+  /** Re-resolve the CodeLens toggles from the injected getter. */
+  private async _applyCodeLensSettings(): Promise<void> {
+    if (!this._getCodeLensSettings) return
+    try {
+      this._codeLensSettings = await this._getCodeLensSettings()
+    } catch {
+      // keep the previous/default settings
+    }
+  }
+
+  /** Send the js/ts.* CodeLens settings to tsserver under its own LSP namespaces.
+   *  The `typescript`/`javascript` keys are tsserver's protocol namespaces, not our
+   *  setting keys — only the boolean values come from user config. implementations
+   *  is TS-only, so `javascript` gets just the references part (matching VSCode). */
+  private _sendDidChangeConfiguration(conn: MessageConnection): void {
+    const { referencesCodeLens, implementationsCodeLens } = this._codeLensSettings
+    this._notify(conn, 'workspace/didChangeConfiguration', {
+      settings: {
+        typescript: { referencesCodeLens, implementationsCodeLens },
+        javascript: { referencesCodeLens },
+      },
+    })
   }
 
   /** Fire-and-forget LSP notification; must never surface as an unhandled rejection. */
@@ -1295,7 +1383,10 @@ interface InitializeParams {
   processId: number
   rootUri: string | null
   workspaceFolders: { uri: string; name: string }[] | null
-  initializationOptions?: { tsserver: { path: string }; maxTsServerMemory: number }
+  initializationOptions?: {
+    tsserver: { path: string; logVerbosity?: string }
+    maxTsServerMemory: number
+  }
   capabilities: Record<string, unknown>
 }
 

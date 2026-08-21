@@ -10,7 +10,7 @@
  *  restart re-fires only the startup events, not `onLanguage:*`, so without this
  *  the new host never re-activates the language plugins.
  *
- *  It also owns the `typescript.prewarm.projects` setting. tsserver's navto only
+ *  It also owns the `js/ts.prewarm.projects` setting. tsserver's navto only
  *  searches the project owning an open file, and a monorepo has many tsconfigs;
  *  the TS plugin reads this list to decide which projects to warm. We register it
  *  with an `enum` of the workspace's real tsconfig paths (re-scanned when the
@@ -32,7 +32,6 @@ import {
   type CancellationToken,
 } from '@universe-editor/platform'
 import { languageActivationEvent } from '@universe-editor/extensions-common'
-import { DEFAULT_TS_SERVER_IMPLEMENTATION } from '../../shared/tsServerImplementation.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 
 const DEFAULT_PREWARM_LANGUAGES = ['typescript', 'markdown']
@@ -46,7 +45,7 @@ export class LanguageServicePrewarmContribution
   extends Disposable
   implements IWorkbenchContribution
 {
-  /** The re-registerable `typescript.prewarm.projects` node (its enum tracks the
+  /** The re-registerable `js/ts.prewarm.projects` node (its enum tracks the
    *  workspace's tsconfigs), kept separate from the static `languageServices` node.
    *  A MutableDisposable so each re-register parents the fresh registration under a
    *  singleton root — a plain field would be flagged as a leak by the disposable
@@ -83,42 +82,40 @@ export class LanguageServicePrewarmContribution
       }),
     )
 
-    // Owned here alongside the other typescript.* settings; the TS plugin reads
-    // them on every server (re)start, so raising them applies on the next
+    // Owned here alongside the other js/ts.* settings; the TS plugin reads them
+    // on every server (re)start, so raising them applies on the next
     // crash-restart.
     this._register(
       ConfigurationRegistry.registerConfiguration({
-        id: 'typescript.tsserver',
+        id: 'js/ts.tsserver',
         title: localize('settings.typescript', 'TypeScript'),
         properties: {
-          'typescript.tsserver.maxTsServerMemory': {
+          'js/ts.tsserver.maxMemory': {
             type: 'number',
             default: 3072,
             minimum: 128,
             description: localize(
-              'settings.typescript.tsserver.maxTsServerMemory',
+              'settings.js/ts.tsserver.maxMemory',
               'The maximum amount of memory (in MB) the TypeScript server may use. Raise this if the TypeScript language server crashes with out-of-memory on large projects (a crash notification will point here). Applies when the server (re)starts.',
             ),
           },
-          'typescript.server.implementation': {
-            type: 'string',
-            enum: ['tsls', 'native'],
-            enumDescriptions: [
-              localize(
-                'settings.typescript.server.implementation.tsls',
-                'Vendored typescript-language-server driving the bundled JS tsserver.',
-              ),
-              localize(
-                'settings.typescript.server.implementation.native',
-                'The Go native port (tsgo, dev builds only — currently has no effect in packaged builds).',
-              ),
-            ],
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'js/ts.experimental',
+        title: localize('settings.typescript', 'TypeScript'),
+        properties: {
+          'js/ts.experimental.useTsgo': {
+            type: 'boolean',
             // Shared with the main process's settings.json fallback — changing
             // only this schema default does NOT reach main.
-            default: DEFAULT_TS_SERVER_IMPLEMENTATION,
+            default: false,
             description: localize(
-              'settings.typescript.server.implementation',
-              'Which TypeScript language server to run. Read by the main process when the extension host spawns, so changing it needs a window restart to take effect.',
+              'settings.js/ts.experimental.useTsgo',
+              'Use the experimental Go native TypeScript language server (tsgo) instead of the vendored typescript-language-server. Read by the main process when the extension host spawns, so changing it needs a window restart to take effect.',
             ),
           },
         },
@@ -137,7 +134,7 @@ export class LanguageServicePrewarmContribution
   }
 
   /**
-   * (Re)register `typescript.prewarm.projects` with an `enum` of the workspace's
+   * (Re)register `js/ts.prewarm.projects` with an `enum` of the workspace's
    * real tsconfig paths, so settings.json offers completion and flags typos.
    * Re-registering fires `onDidRegisterConfiguration`, which rebuilds the Monaco
    * settings schema (see JsonSchemaBridgeContribution) — the completion refreshes
@@ -153,15 +150,15 @@ export class LanguageServicePrewarmContribution
     if (this._store.isDisposed || cts.token.isCancellationRequested) return
 
     this._tsProjectsConfig.value = ConfigurationRegistry.registerConfiguration({
-      id: 'typescript.prewarm',
+      id: 'js/ts.prewarm',
       title: localize('settings.typescript', 'TypeScript'),
       properties: {
-        'typescript.prewarm.projects': {
+        'js/ts.prewarm.projects': {
           type: 'array',
           items: tsconfigs.length > 0 ? { type: 'string', enum: tsconfigs } : { type: 'string' },
           default: [],
           description: localize(
-            'settings.typescript.prewarm.projects',
+            'settings.js/ts.prewarm.projects',
             'Workspace-relative tsconfig paths whose TypeScript project is prewarmed so its symbols are searchable before you open a file. A single-tsconfig project is warmed automatically; in a multi-tsconfig workspace nothing is warmed unless listed here.',
           ),
         },

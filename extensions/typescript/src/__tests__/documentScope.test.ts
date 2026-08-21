@@ -190,6 +190,7 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
         h.closeListeners.push(l)
         return { dispose() {} }
       },
+      onDidChangeConfiguration: () => ({ dispose() {} }),
       getConfiguration: () => ({
         get: (_key: string, fallback: unknown) => Promise.resolve(fallback),
       }),

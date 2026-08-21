@@ -221,7 +221,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     env.UNIVERSE_APP_VERSION = getAppVersion()
     // The `typescript` built-in plugin spawns the LSP server itself; hand it the
     // server spec (the only Electron-aware resolution). Default is the vendored
-    // TSLS; `typescript.server.implementation` in workspace (.universe-editor >
+    // TSLS; `js/ts.experimental.useTsgo` in workspace (.universe-editor >
     // .vscode) or user settings.json, UNIVERSE_TS_SERVER=native, or
     // UNIVERSE_TSGO_BIN selects the Go port.
     const tsSpec = this._resolveTsServerSpec(spec?.workspaceRoot)

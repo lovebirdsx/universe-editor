@@ -1,5 +1,15 @@
 {
   "ts.command.restartTsServer.title": "Restart TS Server",
   "ts.command.openTsServerLog.title": "Open TS Server Log",
-  "ts.config.tsserver.log.description": "Logging level of the TypeScript language server, written to the 'TypeScript' output channel. 'verbose' additionally logs server stderr and per-request timings. Applies on window reload."
+  "ts.config.tsserver.log.description": "Enables logging of the TypeScript server to a file and controls its verbosity. This log can be used to diagnose TS Server issues and may contain file paths and source code from your project. 'verbose' and 'requestTime' additionally raise the 'TypeScript' output channel to verbose. Applies on window reload.",
+  "ts.config.tsserver.log.off.description": "Do not log the TypeScript server to a file.",
+  "ts.config.tsserver.log.terse.description": "Log the TypeScript server to a file at terse verbosity.",
+  "ts.config.tsserver.log.normal.description": "Log the TypeScript server to a file at normal verbosity.",
+  "ts.config.tsserver.log.verbose.description": "Log the TypeScript server to a file at verbose verbosity, and raise the 'TypeScript' output channel to verbose.",
+  "ts.config.tsserver.log.requestTime.description": "Log the TypeScript server to a file at requestTime verbosity (per-request timings), and raise the 'TypeScript' output channel to verbose.",
+  "ts.config.referencesCodeLens.enabled.description": "Enable/disable references CodeLens in JavaScript and TypeScript files. This CodeLens shows the number of references for classes and exported functions and allows you to peek or navigate to them.",
+  "ts.config.referencesCodeLens.showOnAllFunctions.description": "Enable/disable references CodeLens on all functions in JavaScript and TypeScript files.",
+  "ts.config.implementationsCodeLens.enabled.description": "Enable/disable implementations CodeLens in TypeScript files. This CodeLens shows the implementers of TypeScript interfaces.",
+  "ts.config.implementationsCodeLens.showOnInterfaceMethods.description": "Enable/disable implementations CodeLens on TypeScript interface methods.",
+  "ts.config.implementationsCodeLens.showOnAllClassMethods.description": "Enable/disable implementations CodeLens above all TypeScript class methods instead of only on abstract methods."
 }

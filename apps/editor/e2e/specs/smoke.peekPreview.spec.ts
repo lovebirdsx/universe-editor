@@ -70,6 +70,11 @@ test.describe('@p1 references peek preview', () => {
     if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
     await workbench.waitForRestored()
     await page.evaluate(() => window.__E2E__!.updateConfigValue('editor.codeLens', true))
+    // references CodeLens defaults to off (VSCode parity) — this spec drives the
+    // peek by clicking one, so opt in explicitly.
+    await page.evaluate(() =>
+      window.__E2E__!.updateConfigValue('js/ts.referencesCodeLens.enabled', true),
+    )
 
     await page.evaluate(
       (fsPath) => window.__E2E__!.openFileUri(fsPath),
