@@ -27,6 +27,7 @@ import {
 } from '../../services/output/OutputModelService.js'
 import { OutputService } from '../../services/output/OutputService.js'
 import {
+  EmitTestErrorLogAction,
   OpenLogsFolderAction,
   RefreshLogOutputAction,
   SetLogLevelAction,
@@ -260,6 +261,27 @@ describe('logActions', () => {
       ConfigurationTarget.User,
     )
     expect(info).toHaveBeenCalledWith('Log level set to Debug')
+  })
+
+  it('EmitTestErrorLogAction writes an error entry through the renderer logger', async () => {
+    disposables.push(registerAction2(EmitTestErrorLogAction))
+    const error = vi.fn()
+    const loggerService = {
+      _serviceBrand: undefined,
+      createLogger: vi.fn(() => ({ ...new NullLogger(), error })),
+      setLevel: vi.fn(),
+      getLevel: vi.fn(() => LogLevel.Info),
+    }
+    const services = new ServiceCollection()
+    services.set(ILoggerService, loggerService as never)
+
+    await runCommand(EmitTestErrorLogAction.ID, services)
+
+    expect(loggerService.createLogger).toHaveBeenCalledWith({ id: 'renderer', name: 'Renderer' })
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      'Test error log entry emitted by workbench.action.emitTestErrorLog',
+    )
   })
 
   it('ShowOutputChannelAction sorts All first and activates the chosen channel', async () => {

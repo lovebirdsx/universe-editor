@@ -440,6 +440,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.editor.closeChange.title': '关闭更改速览',
   'action.editor.openActiveFileChanges.title': '打开活动文件的更改',
   'action.editor.showChange.title': '显示更改',
+  'action.emitTestErrorLog.title': '开发人员：输出测试错误日志',
   'action.extensionApi.getActiveEditorFile': '获取活动编辑器文件',
   'action.extensionApi.getConfiguration': '获取配置',
   'action.extensionApi.openFile': '打开文件',

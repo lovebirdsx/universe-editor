@@ -294,6 +294,7 @@ import {
 import { ShowReleaseNotesAction } from './helpActions.js'
 import {
   ClearOutputAction,
+  EmitTestErrorLogAction,
   OpenActiveLogFileAction,
   OpenLogFileAction,
   OpenLogsFolderAction,
@@ -585,6 +586,7 @@ registerAction2(OpenActiveLogFileAction)
 registerAction2(OpenLogFileAction)
 registerAction2(OpenLogsFolderAction)
 registerAction2(SetLogLevelAction)
+registerAction2(EmitTestErrorLogAction)
 registerAction2(ShowOutputChannelAction)
 registerAction2(ClearOutputAction)
 registerAction2(ToggleOutputAction)

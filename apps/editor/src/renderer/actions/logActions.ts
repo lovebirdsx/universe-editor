@@ -462,3 +462,23 @@ export class SetLogLevelAction extends Action2 {
       .info(`Log level set to ${selected.label}`)
   }
 }
+
+export class EmitTestErrorLogAction extends Action2 {
+  static readonly ID = 'workbench.action.emitTestErrorLog'
+
+  constructor() {
+    super({
+      id: EmitTestErrorLogAction.ID,
+      title: localize2('action.emitTestErrorLog.title', 'Developer: Emit Test Error Log'),
+      category: localize2('command.category.developer', 'Developer'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'renderer', name: 'Renderer' })
+      .error('Test error log entry emitted by workbench.action.emitTestErrorLog')
+  }
+}
