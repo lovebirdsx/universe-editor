@@ -185,7 +185,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     return this._binaryStore.getVersionInfo()
   }
 
-  async prefetch(): Promise<void> {
+  async prefetch(authority?: string): Promise<void> {
+    if (authority !== undefined) {
+      await this._remoteService(authority).prefetch('codex')
+      return
+    }
     await this._binaryStore.prefetch()
   }
 
@@ -200,7 +204,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     return { path: await this._binaryStore.forceDownload(version) }
   }
 
-  async cleanupStaleVersions(): Promise<void> {
+  async cleanupStaleVersions(authority?: string): Promise<void> {
+    if (authority !== undefined) {
+      await this._remoteService(authority).cleanupStaleVersions('codex')
+      return
+    }
     await this._binaryStore.cleanupStaleVersions()
   }
 

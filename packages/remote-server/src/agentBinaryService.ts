@@ -2,11 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Server-side agent-binary channel. Resolves/downloads the native Claude /
  *  Codex binaries onto the remote host by wrapping the shared AgentBinaryStore
- *  (node-services) per agent. The stores are constructed lazily on first resolve
- *  so a fresh daemon never reads a meta file (or touches disk) until a session
- *  actually needs a binary. Progress is throttled per agent before crossing the
- *  TCP tunnel — the store fires per chunk, which is far too chatty for a remote
- *  link (a multi-hundred-MB download is tens of thousands of events).
+ *  (node-services) per agent. The stores are constructed lazily on first use so
+ *  a fresh daemon never reads a meta file (or touches disk) until a session —
+ *  or an explicit prefetch/cleanup — actually needs a binary. Progress is
+ *  throttled per agent before crossing the TCP tunnel — the store fires per
+ *  chunk, which is far too chatty for a remote link (a multi-hundred-MB
+ *  download is tens of thousands of events).
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -69,6 +70,14 @@ export class RemoteAgentBinaryService extends Disposable implements IRemoteAgent
 
   async forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }> {
     return { path: await this._storeFor(agent).forceDownload(version) }
+  }
+
+  async prefetch(agent: AgentBinaryId): Promise<void> {
+    await this._storeFor(agent).prefetch()
+  }
+
+  async cleanupStaleVersions(agent: AgentBinaryId): Promise<void> {
+    await this._storeFor(agent).cleanupStaleVersions()
   }
 
   private _storeFor(agent: AgentBinaryId): AgentBinaryStore {

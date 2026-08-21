@@ -134,7 +134,7 @@ interface CodexAuthStatus {
 - **authority 必须来自 `useRemoteAuthority()`**(`workbench/useRemoteAuthority.ts`,订阅 `onDidChangeWorkspace`)——workspace hydration 是异步的,用 `useMemo` 读 `workspace.current` 会把 authority 冻结成 undefined(启动恢复的 tab 永远读写本地,真实踩坑)。
 - `matchActiveProfile(authority)` 比对**生效端**凭据:gateway 分支读远端 config.toml;apiKey 分支走协议方法 `codexMatchActiveApiKey(candidates)`——把本地档案库候选 key 发去 server 比对、只回 index,**远端 auth.json 的秘密绝不回传**(与 `applyCredential` 同向)。
 - `readProfiles`/`writeProfiles`(档案库)**刻意 editor-local 不路由**;`ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件;`runCodexLogin` 本就开远端终端跑 PATH 上的 `codex login`,无需改动。
-- **CodexBinaryPanel 远程语义**:远端下版本信息/强制下载经 `ICodexBinaryService.getVersionInfo/forceDownload` 的尾部 `authority` 走 `RemoteChannels.AgentBinary` 作用于远端主机;面板隐藏「Binary source」区(远端固定受管下载),进度事件按 `authority` 过滤,authority 切换先清陈旧 versionInfo。
+- **CodexBinaryPanel 远程语义**:远端下版本信息/强制下载经 `ICodexBinaryService.getVersionInfo/forceDownload` 的尾部 `authority` 走 `RemoteChannels.AgentBinary` 作用于远端主机;面板隐藏「Binary source」区(远端固定受管下载),进度事件按 `authority` 过滤,authority 切换先清陈旧 versionInfo。`prefetch`/`cleanupStaleVersions` 同样带尾部 `authority`:空闲维护(`AgentBinaryPrefetchContribution`)在远程工作区下只作用于远端主机、不看本地 `acp.codex.source`,且门控在「已连接」状态上以免后台触发一次用户没要求的 SSH 连接/安装。
 
 ### 🔒 安全约束(刻意决策,勿擅改)
 

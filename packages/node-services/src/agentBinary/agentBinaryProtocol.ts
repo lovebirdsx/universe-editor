@@ -33,4 +33,17 @@ export interface IRemoteAgentBinaryService {
   getVersionInfo(agent: AgentBinaryId): Promise<AgentBinaryVersionInfo>
 
   forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }>
+
+  /**
+   * Background-prefetches the most desirable version (latest when available,
+   * otherwise the bundled/pinned version) into the staging area. Managed
+   * download only — remote callers never resolve system/custom sources.
+   */
+  prefetch(agent: AgentBinaryId): Promise<void>
+
+  /**
+   * Removes stale (non-active) version dirs left by a previous upgrade.
+   * Best-effort; safe to call only at startup/idle.
+   */
+  cleanupStaleVersions(agent: AgentBinaryId): Promise<void>
 }

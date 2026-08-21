@@ -591,7 +591,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.plan.autoExecute.acceptEdits': '接受编辑',
   'settings.acp.plan.autoExecute.default': '手动批准编辑',
   'settings.acp.prefetchBinaries':
-    '在编辑器空闲时后台下载最新 Claude / codex-acp 二进制文件（仅下载模式），这样升级可立即完成。关闭可节省带宽。',
+    '在编辑器空闲时后台下载最新 Claude / codex-acp 二进制文件（仅受管下载），这样升级可立即完成。在远程工作区下会在远端主机上预下载。关闭可节省带宽。',
   'settings.acp.startupTimeoutMs':
     '等待 Agent 响应 `initialize` + `session/new` 的时长（毫秒），超时后放弃。仅在你确认 Agent 启动很快时才调低。',
   'settings.acp.usage.refreshIntervalMs':

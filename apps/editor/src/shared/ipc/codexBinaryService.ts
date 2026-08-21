@@ -99,8 +99,12 @@ export interface ICodexBinaryService {
    * forceDownload() can activate it instantly. No-op when the desired version is
    * already installed or already staged. Never throws — network failures are
    * swallowed so idle prefetch never disrupts the user.
+   *
+   * When `authority` is set, the prefetch runs on that remote host's managed
+   * store (download semantics only — `acp.codex.source` is a local setting and
+   * is not consulted across the tunnel).
    */
-  prefetch(): Promise<void>
+  prefetch(authority?: string): Promise<void>
 
   /**
    * Force-downloads (or activates a prefetched) version into its own per-version
@@ -114,9 +118,11 @@ export interface ICodexBinaryService {
   /**
    * Removes stale (non-active) version trees left behind by a previous upgrade.
    * Safe to call only at startup/idle — mid-session the predecessor binary is
-   * still locked by the running agent. Best-effort; never throws.
+   * still locked by the running agent. Best-effort; never throws. When
+   * `authority` is set, the sweep runs on that remote host's store instead of
+   * the local one.
    */
-  cleanupStaleVersions(): Promise<void>
+  cleanupStaleVersions(authority?: string): Promise<void>
 }
 
 export const ICodexBinaryService = createDecorator<ICodexBinaryService>('codexBinaryService')

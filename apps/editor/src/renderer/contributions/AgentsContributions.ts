@@ -100,7 +100,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: true,
             description: localize(
               'settings.acp.prefetchBinaries',
-              'Download the latest Claude / codex-acp binaries in the background while the editor is idle (download mode only), so upgrading is instant. Disable to save bandwidth.',
+              'Download the latest Claude / codex-acp binaries in the background while the editor is idle (managed download only), so upgrading is instant. In a remote workspace the download happens on that host instead of locally. Disable to save bandwidth.',
             ),
           },
           'acp.claude.source': {

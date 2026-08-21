@@ -706,7 +706,7 @@ describe('RemoteConnectionMainService wsl mode', () => {
         ? {
             type: 'error',
             code: RemoteConnectionErrorCode.VersionMismatch,
-            message: 'protocol version 6 != 5',
+            message: `protocol version ${REMOTE_PROTOCOL_VERSION} != ${REMOTE_PROTOCOL_VERSION - 1}`,
           }
         : { type: 'ok' }
     }

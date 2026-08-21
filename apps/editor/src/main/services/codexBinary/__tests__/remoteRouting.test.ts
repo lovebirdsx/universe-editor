@@ -9,11 +9,12 @@
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, Event, RemoteChannels } from '@universe-editor/platform'
-import type {
-  AgentBinaryId,
-  AgentBinaryRemoteProgressEvent,
-  AgentBinaryVersionInfo,
-  IRemoteAgentBinaryService,
+import {
+  AgentBinaryStore,
+  type AgentBinaryId,
+  type AgentBinaryRemoteProgressEvent,
+  type AgentBinaryVersionInfo,
+  type IRemoteAgentBinaryService,
 } from '@universe-editor/node-services'
 import { CodexBinaryMainService } from '../codexBinaryMainService.js'
 import type { ICodexBinaryProgress } from '../../../../shared/ipc/codexBinaryService.js'
@@ -30,6 +31,8 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   readonly resolves: { agent: AgentBinaryId; allowDownload: boolean }[] = []
   readonly versionInfos: AgentBinaryId[] = []
   readonly forceDownloads: { agent: AgentBinaryId; version: string }[] = []
+  readonly prefetches: AgentBinaryId[] = []
+  readonly cleanups: AgentBinaryId[] = []
 
   async resolve(
     agent: AgentBinaryId,
@@ -52,6 +55,14 @@ class FakeRemoteBinaryService implements IRemoteAgentBinaryService {
   async forceDownload(agent: AgentBinaryId, version: string): Promise<{ readonly path: string }> {
     this.forceDownloads.push({ agent, version })
     return { path: `/remote/${agent}/${version}` }
+  }
+
+  async prefetch(agent: AgentBinaryId): Promise<void> {
+    this.prefetches.push(agent)
+  }
+
+  async cleanupStaleVersions(agent: AgentBinaryId): Promise<void> {
+    this.cleanups.push(agent)
   }
 
   fireProgress(e: AgentBinaryRemoteProgressEvent): void {
@@ -162,6 +173,50 @@ describe('CodexBinaryMainService — remote routing', () => {
       path: '/remote/codex/1.2.3',
     })
     expect(fixture.remote.forceDownloads).toEqual([{ agent: 'codex', version: '1.2.3' }])
+  })
+
+  it('routes prefetch(authority) to the remote channel with the codex agent id', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+
+    await svc.prefetch('host')
+    expect(fixture.remote.prefetches).toEqual(['codex'])
+  })
+
+  it('routes cleanupStaleVersions(authority) to the remote channel with the codex agent id', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+
+    await svc.cleanupStaleVersions('host')
+    expect(fixture.remote.cleanups).toEqual(['codex'])
+  })
+
+  it('prefetch without authority hits the local store and not the remote proxy', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+    const spy = vi.spyOn(AgentBinaryStore.prototype, 'prefetch').mockResolvedValue(undefined)
+    try {
+      await svc.prefetch()
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(fixture.remote.prefetches).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('cleanupStaleVersions without authority hits the local store and not the remote proxy', async () => {
+    const fixture = makeFixture()
+    svc = fixture.svc
+    const spy = vi
+      .spyOn(AgentBinaryStore.prototype, 'cleanupStaleVersions')
+      .mockResolvedValue(undefined)
+    try {
+      await svc.cleanupStaleVersions()
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(fixture.remote.cleanups).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('rejects an authority resolve when no connection service is injected', async () => {

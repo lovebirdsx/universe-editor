@@ -23,6 +23,8 @@ class FakeStore implements IDisposable {
   readonly resolves: boolean[] = []
   versionInfoCalls: number = 0
   readonly forceDownloads: string[] = []
+  prefetchCalls: number = 0
+  cleanupCalls: number = 0
 
   constructor(
     readonly agent: AgentBinaryId,
@@ -47,6 +49,14 @@ class FakeStore implements IDisposable {
   async forceDownload(version: string): Promise<string> {
     this.forceDownloads.push(version)
     return `/fake/${this.agent}/${version}`
+  }
+
+  async prefetch(): Promise<void> {
+    this.prefetchCalls++
+  }
+
+  async cleanupStaleVersions(): Promise<void> {
+    this.cleanupCalls++
   }
 
   fireProgress(p: AgentBinaryProgressEvent): void {
@@ -198,6 +208,32 @@ describe('RemoteAgentBinaryService', () => {
         path: '/fake/claude/1.2.3',
       })
       expect(stores.get('claude')!.forceDownloads).toEqual(['1.2.3'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('prefetch delegates to the per-agent store without touching the other agent', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores)
+    try {
+      await svc.prefetch('claude')
+      expect(stores.get('claude')!.prefetchCalls).toBe(1)
+      expect(stores.get('codex')).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('cleanupStaleVersions delegates to the per-agent store without touching the other agent', async () => {
+    const built: { agent: AgentBinaryId; baseDir: string }[] = []
+    const stores = new Map<AgentBinaryId, FakeStore>()
+    const svc = makeService(built, stores)
+    try {
+      await svc.cleanupStaleVersions('codex')
+      expect(stores.get('codex')!.cleanupCalls).toBe(1)
+      expect(stores.get('claude')).toBeUndefined()
     } finally {
       svc.dispose()
     }

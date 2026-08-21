@@ -244,7 +244,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return this._binaryStore.getVersionInfo()
   }
 
-  async prefetch(): Promise<void> {
+  async prefetch(authority?: string): Promise<void> {
+    if (authority !== undefined) {
+      await this._remoteService(authority).prefetch('claude')
+      return
+    }
     await this._binaryStore.prefetch()
   }
 
@@ -259,7 +263,11 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return { path: await this._binaryStore.forceDownload(version) }
   }
 
-  async cleanupStaleVersions(): Promise<void> {
+  async cleanupStaleVersions(authority?: string): Promise<void> {
+    if (authority !== undefined) {
+      await this._remoteService(authority).cleanupStaleVersions('claude')
+      return
+    }
     await this._binaryStore.cleanupStaleVersions()
   }
 
