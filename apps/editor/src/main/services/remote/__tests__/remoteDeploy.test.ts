@@ -1049,12 +1049,12 @@ describe('RemoteDeployer.createForward', () => {
       return proc as unknown as ChildProcessWithoutNullStreams
     }
 
-    const warnings: string[] = []
+    const messages: string[] = []
     const logger = {
       trace: () => {},
       debug: () => {},
-      info: () => {},
-      warn: (m: string) => warnings.push(m),
+      info: (m: string) => messages.push(m),
+      warn: () => {},
       error: () => {},
       dispose: () => {},
     } as unknown as ILogger
@@ -1063,10 +1063,10 @@ describe('RemoteDeployer.createForward', () => {
     const { stderrSub } = await deployer.createForward('user@host', 5678, logger)
 
     proc!.stderr.emit('data', Buffer.from('boom\n'))
-    expect(warnings).toHaveLength(1)
+    expect(messages.filter((m) => m.includes('boom'))).toHaveLength(1)
 
     stderrSub.dispose()
     proc!.stderr.emit('data', Buffer.from('again\n'))
-    expect(warnings).toHaveLength(1)
+    expect(messages.filter((m) => m.includes('again'))).toHaveLength(0)
   })
 })
