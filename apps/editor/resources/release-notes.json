@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.13.3",
+    "date": "2026-08-21",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "最近工作区列表不再限制20条上限",
+          "内联补全开关持久化到用户配置层"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "codex回放OOM修复，子agent修剪与rawOutput计费"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.2",
     "date": "2026-08-20",
     "groups": [

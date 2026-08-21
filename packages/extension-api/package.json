@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/extension-api",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "Extension API surface for Universe Editor (the Universe equivalent of vscode.d.ts). The package version tracks the editor app version (single version space, like VSCode's product version); extensions declare a compatible editor range via engines.universe.",
   "type": "module",
   "license": "Apache-2.0",
