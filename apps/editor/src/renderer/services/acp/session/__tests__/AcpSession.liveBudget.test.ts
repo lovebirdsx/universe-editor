@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { AcpSession, memoryTrimmedNotice } from '../acpSession.js'
+import { estimateUpdateResidentBytes } from '../acpContentLimits.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
 const LIVE_BUDGET = 2048
@@ -50,6 +51,19 @@ function terminalToolCall(id: string, text: string): SessionUpdate {
 
 function agentTextChunk(text: string): SessionUpdate {
   return { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+}
+
+/** A sub-agent tool call, nested onto `parentId` via the claudeCode meta bag. */
+function childToolCall(parentId: string, id: string, text: string): SessionUpdate {
+  return {
+    sessionUpdate: 'tool_call',
+    toolCallId: id,
+    title: 'execute',
+    kind: 'execute',
+    status: 'in_progress',
+    content: [],
+    _meta: { terminal_output: { data: text }, claudeCode: { parentToolUseId: parentId } },
+  }
 }
 
 describe('AcpSession — live resident budget', () => {
@@ -146,5 +160,49 @@ describe('AcpSession — live resident budget', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]?.memoryTrimmed).toBeUndefined()
     expect(messages[0]?.text).toBe('a'.repeat(500))
+  })
+
+  it('trims sub-agent children so their charged bytes are actually released', () => {
+    // Sub-agent content arrives as its own updates (charged to the budget) but
+    // is retained nested on the parent card. If the trim measured or released
+    // only the parent, the loop would keep re-picking a card it believes it
+    // freed — the tally would never come back under budget.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(terminalToolCall('parent', 'p'.repeat(100)))
+    session.applyUpdate(childToolCall('parent', 'child', 'c'.repeat(800)))
+    session.applyUpdate(terminalToolCall('newest', 'n'.repeat(800)))
+
+    const slot = session.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'parent')
+    expect(slot?.kind).toBe('toolCall')
+    if (slot?.kind !== 'toolCall') throw new Error('expected the parent tool-call slot')
+    expect(slot.call.memoryTrimmed).toBe(true)
+    expect(slot.call.text).toBe('')
+    // The child shell survives (the card still renders) but its heavy text is gone.
+    const child = slot.call.children?.[0]
+    expect(child?.kind).toBe('toolCall')
+    if (child?.kind !== 'toolCall') throw new Error('expected a nested tool-call child')
+    expect(child.call.memoryTrimmed).toBe(true)
+    expect(child.call.text).toBe('')
+
+    const newest = session.toolCalls.get().find((c) => c.id === 'newest')
+    expect(newest?.memoryTrimmed).toBeUndefined()
+    expect(newest?.text).toBe('n'.repeat(800))
+  })
+
+  it('charges the transient rawOutput copy codex ships alongside terminal output', () => {
+    // codex sends a command's output twice: once as _meta.terminal_output (kept)
+    // and again as rawOutput.formatted_output (never read). Both cross the wire,
+    // so an update carrying both must cost more than one carrying only the first.
+    const text = 'x'.repeat(400)
+    const withRawOutput: SessionUpdate = {
+      ...(terminalToolCall('tc', text) as object),
+      rawOutput: { formatted_output: text, exit_code: 0 },
+    } as SessionUpdate
+
+    expect(estimateUpdateResidentBytes(withRawOutput)).toBeGreaterThan(
+      estimateUpdateResidentBytes(terminalToolCall('tc', text)),
+    )
   })
 })

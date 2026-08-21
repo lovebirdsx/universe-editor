@@ -201,11 +201,31 @@ function rawInputBytes(rawInput: unknown): number {
 }
 
 /**
- * Rough resident cost of one SessionUpdate in UTF-16 bytes: sums the string
+ * Transient bytes of a payload the view model never retains. codex ships a
+ * command's whole output twice — once as `_meta.terminal_output*` (which the
+ * card keeps) and again as `rawOutput.formatted_output` (which nothing reads).
+ * The second copy still has to be decoded and held until GC, so charging it
+ * keeps the budget honest about what an update actually costs to ingest;
+ * without it a build-heavy session is undercounted by roughly half.
+ */
+function transientJsonBytes(value: unknown): number {
+  if (value === undefined || value === null) return 0
+  try {
+    const json = JSON.stringify(value)
+    return json === undefined ? 0 : utf16Bytes(json)
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Rough ingestion cost of one SessionUpdate in UTF-16 bytes: sums the string
  * fields that actually land in the view model — chunk text / media data / tool
  * content blocks / diff sides / out-of-band terminal output / raw tool input —
  * plus the derived `text` copy (`blocksToText`) that duplicates text blocks on
- * the card. Metadata-only updates (usage / plan / commands / config) cost 0.
+ * the card, plus the transient `rawOutput` / `locations` payloads that are
+ * decoded on arrival but never retained. Metadata-only updates (usage / plan /
+ * commands / config) cost 0.
  */
 export function estimateUpdateResidentBytes(update: SessionUpdate): number {
   let total = 0
@@ -234,6 +254,9 @@ export function estimateUpdateResidentBytes(update: SessionUpdate): number {
       const terminal = readTerminalOutput(update)
       total += terminal !== undefined ? utf16Bytes(terminal.data) : blockTextBytes
       total += rawInputBytes(update.rawInput)
+      // Not retained, but decoded and held until GC — see transientJsonBytes.
+      total += transientJsonBytes(update.rawOutput)
+      total += transientJsonBytes(update.locations)
       break
     }
     default:

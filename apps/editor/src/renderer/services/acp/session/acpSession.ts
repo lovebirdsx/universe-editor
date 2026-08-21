@@ -215,7 +215,11 @@ function stringBytes(s: string): number {
 }
 
 /** Heavy resident bytes a tool card holds: the `text` copy, its content blocks,
- * and its diff sides — exactly what trimming releases. */
+ * its diff sides, and the same for any sub-agent children — exactly what
+ * trimming releases. Children must be counted: their content arrives as its own
+ * updates (so it is charged to the budget), but it is retained nested on the
+ * parent card, so a measure that skipped it would report 0 for a card still
+ * holding megabytes and the trim loop would give up with the budget overrun. */
 function toolCallHeavyBytes(call: AcpToolCall): number {
   let bytes = stringBytes(call.text)
   for (const b of call.blocks) {
@@ -223,6 +227,10 @@ function toolCallHeavyBytes(call: AcpToolCall): number {
     else if (b.type === 'image' || b.type === 'audio') bytes += stringBytes(b.data)
   }
   for (const d of call.diffs) bytes += stringBytes(d.oldText) + stringBytes(d.newText)
+  for (const child of call.children ?? []) {
+    bytes +=
+      child.kind === 'toolCall' ? toolCallHeavyBytes(child.call) : messageHeavyBytes(child.message)
+  }
   return bytes
 }
 
@@ -238,8 +246,16 @@ function messageHeavyBytes(message: AcpMessage): number {
 
 /** Release a tool card's heavy content, keeping the shell (title / status /
  * kind / locations / children) so the timeline still renders a recognisable
- * card marked `memoryTrimmed`. */
+ * card marked `memoryTrimmed`. Children keep their own shells but are trimmed
+ * too — `toolCallHeavyBytes` counts them, so leaving them intact would report
+ * bytes the trim never actually released. */
 function trimToolCall(call: AcpToolCall): AcpToolCall {
+  const children = call.children?.map(
+    (child): AcpChildItem =>
+      child.kind === 'toolCall'
+        ? { kind: 'toolCall', id: child.id, call: trimToolCall(child.call) }
+        : { kind: 'message', id: child.id, message: trimMessage(child.message) },
+  )
   return {
     id: call.id,
     title: call.title,
@@ -255,7 +271,7 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
     ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
-    ...(call.children !== undefined && call.children.length > 0 ? { children: call.children } : {}),
+    ...(children !== undefined && children.length > 0 ? { children } : {}),
   }
 }
 
@@ -2200,7 +2216,12 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _trimLiveResidentContent(): void {
     let released = 0
-    while (this._liveIngestedBytes > this._liveIngestionBudget) {
+    // Bound the loop by the number of slots: a trim must strictly reduce the
+    // remaining heavy content, but if a future measure/release pair ever
+    // disagreed, an unbounded `while` would spin the main thread instead of
+    // merely overrunning the budget.
+    for (let guard = this._timeline.length + 1; guard > 0; guard--) {
+      if (this._liveIngestedBytes <= this._liveIngestionBudget) break
       const freed = this._trimOldestHeavyItem()
       if (freed === 0) break
       released += freed
@@ -2252,7 +2273,13 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (ti === -1) return
     const slot = this._timeline[ti]
     if (slot === undefined || slot.kind !== 'toolCall') return
-    const children = slot.call.children
+    // Sub-agent children live on the timeline slot, not the lane entry, so they
+    // are carried over — but only when the replacement doesn't already carry its
+    // own. A trim replacement brings trimmed children; re-attaching the slot's
+    // untrimmed ones would undo the release the trim loop just accounted for,
+    // leaving the card heavy while the loop believes it freed those bytes (it
+    // would then keep picking the same card forever).
+    const children = trimmed.children ?? slot.call.children
     const merged =
       children !== undefined && children.length > 0 ? { ...trimmed, children } : trimmed
     this._timeline = [
