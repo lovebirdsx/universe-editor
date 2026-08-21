@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
+  INITIAL_STATE,
   launchElectron,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
@@ -81,6 +82,12 @@ function seedGlobalSession(userDataDir: string, folder: string): void {
   const folderComponents = fsPathToUriComponents(folder)
   const name = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder
   const payload = {
+    // Merge the harness baseline (language pin, release-notes "last seen"
+    // version pin) so the upgrade "What's New" tab never auto-opens in the
+    // test — otherwise it both surfaces in an empty workspace and triggers a
+    // persist that races the workspace swap (the "editors leak across scopes"
+    // flake).
+    ...(JSON.parse(INITIAL_STATE) as Record<string, unknown>),
     'workbench.windowsState': [
       { workspace: { folder: folderComponents, name }, uiState: null, devToolsOpen: false },
     ],

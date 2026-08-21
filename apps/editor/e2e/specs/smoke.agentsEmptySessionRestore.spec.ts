@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
+  INITIAL_STATE,
   launchElectron,
 } from '@universe-editor/e2e-harness'
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
@@ -113,6 +114,7 @@ function seedGlobalSession(userDataDir: string, folder: string): void {
   const folderComponents = fsPathToUriComponents(folder)
   const name = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder
   const payload = {
+    ...(JSON.parse(INITIAL_STATE) as Record<string, unknown>),
     'workbench.windowsState': [
       { workspace: { folder: folderComponents, name }, uiState: null, devToolsOpen: false },
     ],

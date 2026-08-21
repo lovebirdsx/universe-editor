@@ -420,6 +420,13 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 81 — 自启动 spec 手写 state.json 漏掉 release-notes 版本 pin：切 workspace 后 activeEditor 稳定停旧值 / `release-notes:whatsNew`**
+信号：自启动 spec（`launchElectron`/`launchWithState`）测试中途 `openWorkspace` 切到无 seed 的空 workspace 后，`expect.poll(getActiveEditorUri()).toBeFalsy()` 5s 超时，received **稳定停两种值之一**——`file:///.../wsA/a.json`（A 的编辑器泄漏）或 `release-notes:whatsNew`（升级弹窗）；`--repeat-each --workers=4` 本地可复现（10 跑 2 failed + 2 flaky）。CI 报的是 a.json 形态（received 稳定停旧值=被测对象自身没就位，非波动）。
+根因：这些 spec 手写 `state.json`（含 `workbench.windowsState`，恰是 `ReleaseNotesContribution` 的 existing-install marker）却漏了 harness `INITIAL_STATE` 里的 `app.releaseNotes.lastVersion` 版本 pin → `ReleaseNotesContribution._showIfUpgraded()` 在测试期间**异步**打开 "What's New" 标签：① 切到空 workspace B 后直接成为 active（`release-notes:whatsNew` 形态）；② 打开动作触发 `onDidChangeModel`→`_schedulePersist()`（200ms debounce）→ persist 的 `storage.set(a.json)` 与 `openFolder(B)` 走**不同 IPC 通道**（storage vs workspace），CI 负载下 `openFolder` 的 `switchWorkspace` 先落地、迟到的 `set` 把 A 的 state 写进 B 的 backend → 随后 `WorkspaceRestoreContribution._restore()` 读 B 读到 a.json 并 restore（a.json 泄漏形态）。harness 的 `INITIAL_STATE` 早在 de546d8c 就 pin 了版本，但只覆盖走 fixture 的 spec；自启动 spec 手写 state.json 绕过了它。
+修法：自启动 spec 的 `state.json` seed 合并 `...(JSON.parse(INITIAL_STATE) as Record<string, unknown>)`（`INITIAL_STATE` 从 harness 导出，已含 `app.releaseNotes.lastVersion` + `welcome.agentOnboarding.seen`，且放在 payload 首位让 spec 自己的 `workbench.windowsState` 覆盖）。整类扫：grep 全 specs 的 `state.json` 写入点，凡手写 `workbench.windowsState` 而未合并 `INITIAL_STATE` 的自启动 spec 全部一并加固（editorRestore/quickOpenRestart/agentsEmptySessionRestore/viewSizes/viewMove/outputRestore/maximizedSecondarySidebarRestore/layoutPersistence/terminalRestore 共 9 个）。锚：`packages/e2e-harness/src/launch.ts`（`INITIAL_STATE`）；`apps/editor/src/renderer/contributions/ReleaseNotesContribution.ts`（`_showIfUpgraded`）；`apps/editor/src/renderer/contributions/WorkspaceRestoreContribution.ts`（`_restore`）。
+
+---
+
 ## 根治 TODO
 
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。

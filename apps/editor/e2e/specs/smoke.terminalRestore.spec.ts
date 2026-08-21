@@ -21,6 +21,7 @@ import { basename, join } from 'node:path'
 import {
   ENABLED_EXTENSIONS_ENV,
   INITIAL_SETTINGS,
+  INITIAL_STATE,
   launchElectron,
 } from '@universe-editor/e2e-harness'
 import { URI } from '@universe-editor/platform'
@@ -105,6 +106,7 @@ test.describe('@regression terminal restore', () => {
       const workspaceUri = URI.file(workspaceDir)
       const workspaceId = workspaceIdFromUri(workspaceUri.toString())
       const sessionState = {
+        ...(JSON.parse(INITIAL_STATE) as Record<string, unknown>),
         'workbench.windowsState': [
           {
             workspace: { folder: workspaceUri.toJSON(), name: basename(workspaceDir) },
