@@ -343,7 +343,7 @@ function SessionRow({
         </span>
         <span className={styles['sessionRowMeta']}>
           {liveSession !== undefined ? <LiveSessionStatus session={liveSession} /> : null}
-          {relativeTime(entry.lastUsedAt)}
+          <span className={styles['sessionRowTime']}>{relativeTime(entry.lastUsedAt)}</span>
           {liveSession !== undefined ? (
             <LiveSessionModel session={liveSession} />
           ) : historyModelLabel ? (
