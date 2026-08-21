@@ -176,7 +176,6 @@ describe('RemoteStatusContribution', () => {
       stepIndex: 2,
       stepTotal: 4,
       startedAt: Date.now(),
-      needsInstall: true,
     })
 
     expect(entryText()).toContain('SSH: myhost (Step 2/4: Uploading server bundle')
@@ -192,7 +191,6 @@ describe('RemoteStatusContribution', () => {
       stepIndex: 2,
       stepTotal: 4,
       startedAt,
-      needsInstall: true,
     })
 
     expect(entryText()).toContain('· 0s')
@@ -207,7 +205,6 @@ describe('RemoteStatusContribution', () => {
       stepIndex: 4,
       stepTotal: 4,
       startedAt: Date.now(),
-      needsInstall: true,
     })
     expect(entryText()).toContain('Installing server')
 
@@ -224,7 +221,6 @@ describe('RemoteStatusContribution', () => {
       stepIndex: 2,
       stepTotal: 4,
       startedAt: Date.now(),
-      needsInstall: true,
     })
     expect(entryText()).toContain('Step 2/4: Uploading server bundle')
 

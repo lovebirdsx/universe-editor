@@ -40,7 +40,6 @@ export interface RemoteConnectionProgressDto {
   readonly stepIndex: number
   readonly stepTotal: number
   readonly startedAt: number
-  readonly needsInstall: boolean
 }
 
 export const REMOTE_CONNECTION_LOG_CHANNEL_NAME = 'Remote Connection'

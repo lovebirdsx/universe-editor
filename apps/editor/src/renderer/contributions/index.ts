@@ -53,5 +53,4 @@ export { LargeFileOptimizationsContribution } from './LargeFileOptimizationsCont
 export { StartupTimingLogContribution } from './StartupTimingLogContribution.js'
 export { WorkspaceFileListingContribution } from './WorkspaceFileListingContribution.js'
 export { RemoteStatusContribution } from './RemoteStatusContribution.js'
-export { RemoteInstallOutputContribution } from './RemoteInstallOutputContribution.js'
 export { RemoteReconnectionUxContribution } from './RemoteReconnectionUxContribution.js'

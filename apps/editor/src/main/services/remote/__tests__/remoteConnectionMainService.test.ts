@@ -806,12 +806,10 @@ describe('RemoteConnectionMainService wsl mode', () => {
       'installing',
       'starting-daemon',
     ])
-    expect(
-      progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal, s.progress!.needsInstall]),
-    ).toEqual([
-      [1, 3, true],
-      [2, 3, true],
-      [3, 3, true],
+    expect(progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal])).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
     ])
     expect(progress.every((s) => s.state === 'deploying')).toBe(true)
 
@@ -838,7 +836,6 @@ describe('RemoteConnectionMainService wsl mode', () => {
       stepId: 'starting-daemon',
       stepIndex: 1,
       stepTotal: 1,
-      needsInstall: false,
     })
   })
 
@@ -866,13 +863,11 @@ describe('RemoteConnectionMainService wsl mode', () => {
       'installing',
       'starting-daemon',
     ])
-    expect(
-      progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal, s.progress!.needsInstall]),
-    ).toEqual([
-      [1, 4, true],
-      [2, 4, true],
-      [3, 4, true],
-      [4, 4, true],
+    expect(progress.map((s) => [s.progress!.stepIndex, s.progress!.stepTotal])).toEqual([
+      [1, 4],
+      [2, 4],
+      [3, 4],
+      [4, 4],
     ])
   })
 

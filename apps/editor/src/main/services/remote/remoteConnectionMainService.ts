@@ -101,7 +101,6 @@ export interface IRemoteConnectionProgress {
   readonly stepIndex: number
   readonly stepTotal: number
   readonly startedAt: number
-  readonly needsInstall: boolean
 }
 
 export interface IRemoteConnectionStateChange {
@@ -550,7 +549,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
           // bring-up — the second _ensureDaemon sees a not-running/stale daemon
           // and walks the normal repair path.
           repaired = true
-          this._logger.warn(
+          this._logger.info(
             `[remote:${entry.authority}] handshake version mismatch; stopping the remote daemon and re-bringing-up once: ${message}`,
           )
           this._teardownConnection(entry)
@@ -638,7 +637,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     const directSubs = new DisposableStore()
     directSubs.add(
       proc.onStderr((chunk) => {
-        this._logger.warn(`[remote:${entry.authority}] ${decodeDiagnostic(chunk).trim()}`)
+        this._logger.info(`[remote:${entry.authority}] ${decodeDiagnostic(chunk).trim()}`)
       }),
     )
     directSubs.add(proc.onDidExit((exit) => this._onDirectExited(entry, proc, exit)))
@@ -691,10 +690,10 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._logger.info(`[remote:${authority}] checking remote server`)
     let check = await orchestrator.checkRemoteServer(target)
     if (check.state === 'node-missing') {
-      this._logger.warn(
+      this._logger.info(
         `[remote:${authority}] Node.js not found on remote host; installing a private runtime`,
       )
-      this._fireProgress(entry, 'installing-node', 1, 1, true)
+      this._fireProgress(entry, 'installing-node', 1, 1)
       try {
         await orchestrator.provisionNodeRuntime(target, this._logger)
       } catch (err) {
@@ -717,14 +716,14 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
             : versionMismatch
               ? `version ${check.info.serverVersion} != local ${orchestrator.serverVersion}`
               : `bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}`
-          this._logger.warn(`[remote:${authority}] daemon ${reason}; redeploying`)
-          this._fireProgress(entry, 'stopping-old', 1, 4, true)
+          this._logger.info(`[remote:${authority}] daemon ${reason}; redeploying`)
+          this._fireProgress(entry, 'stopping-old', 1, 4)
           await orchestrator.stopRemoteDaemon(target)
-          this._fireProgress(entry, 'uploading', 2, 4, true)
+          this._fireProgress(entry, 'uploading', 2, 4)
           await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
-            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4, true)
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4)
           })
-          this._fireProgress(entry, 'starting-daemon', 4, 4, true)
+          this._fireProgress(entry, 'starting-daemon', 4, 4)
           return this._startDaemonWithRecovery(entry, orchestrator, target)
         }
         this._logger.info(`[remote:${authority}] remote server up-to-date (running)`)
@@ -736,44 +735,44 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
           this._logger.info(
             `[remote:${authority}] deployed bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}; redeploying`,
           )
-          this._fireProgress(entry, 'uploading', 1, 3, true)
+          this._fireProgress(entry, 'uploading', 1, 3)
           await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
-            if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3)
           })
-          this._fireProgress(entry, 'starting-daemon', 3, 3, true)
+          this._fireProgress(entry, 'starting-daemon', 3, 3)
           return this._startDaemonWithRecovery(entry, orchestrator, target)
         }
-        this._fireProgress(entry, 'starting-daemon', 1, 1, false)
+        this._fireProgress(entry, 'starting-daemon', 1, 1)
         return this._startDaemonWithRecovery(entry, orchestrator, target)
       }
       case 'stale': {
         const staleHash = localHash !== undefined && check.deployedBundleHash !== localHash
-        this._logger.warn(
+        this._logger.info(
           `[remote:${authority}] stale daemon detected (protocol/version mismatch); stopping it`,
         )
-        this._fireProgress(entry, 'stopping-old', 1, staleHash ? 4 : 2, true)
+        this._fireProgress(entry, 'stopping-old', 1, staleHash ? 4 : 2)
         await orchestrator.stopRemoteDaemon(target)
         if (staleHash) {
           this._logger.info(
             `[remote:${authority}] deployed bundle hash ${shortHash(check.deployedBundleHash)} != local ${shortHash(localHash)}; redeploying`,
           )
-          this._fireProgress(entry, 'uploading', 2, 4, true)
+          this._fireProgress(entry, 'uploading', 2, 4)
           await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
-            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4, true)
+            if (phase === 'installing') this._fireProgress(entry, 'installing', 3, 4)
           })
-          this._fireProgress(entry, 'starting-daemon', 4, 4, true)
+          this._fireProgress(entry, 'starting-daemon', 4, 4)
         } else {
-          this._fireProgress(entry, 'starting-daemon', 2, 2, true)
+          this._fireProgress(entry, 'starting-daemon', 2, 2)
         }
         return this._startDaemonWithRecovery(entry, orchestrator, target)
       }
       case 'not-deployed': {
         this._logger.info(`[remote:${authority}] not deployed (${check.reason}); deploying`)
-        this._fireProgress(entry, 'uploading', 1, 3, true)
+        this._fireProgress(entry, 'uploading', 1, 3)
         await orchestrator.deployRemoteServer(target, this._logger, (phase) => {
-          if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3, true)
+          if (phase === 'installing') this._fireProgress(entry, 'installing', 2, 3)
         })
-        this._fireProgress(entry, 'starting-daemon', 3, 3, true)
+        this._fireProgress(entry, 'starting-daemon', 3, 3)
         return this._startDaemonWithRecovery(entry, orchestrator, target)
       }
       case 'node-missing': {
@@ -805,7 +804,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!/stale|already running/i.test(message)) throw err
-      this._logger.warn(
+      this._logger.info(
         `[remote:${entry.authority}] start hit a stale/occupied daemon; stopping it and retrying once: ${message}`,
       )
       try {
@@ -1008,7 +1007,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         this._giveUp(entry, err instanceof Error ? err.message : String(err))
         return
       }
-      this._logger.warn(
+      this._logger.info(
         `remote '${entry.authority}' reconnect attempt ${entry.reconnectAttempt} failed: ${err instanceof Error ? err.message : String(err)}`,
       )
       this._scheduleReconnect(entry)
@@ -1029,7 +1028,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     forward.process.dispose()
     if (entry.closedByUser || this._disposed) return
     if (entry.state === 'connected') {
-      this._logger.warn(`[remote:${entry.authority}] ssh forward exited; reconnecting`)
+      this._logger.info(`[remote:${entry.authority}] ssh forward exited; reconnecting`)
       this._onSocketDisconnected(entry)
     }
   }
@@ -1218,12 +1217,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     stepId: RemoteConnectionProgressStep,
     stepIndex: number,
     stepTotal: number,
-    needsInstall: boolean,
   ): void {
     this._onDidChangeState.fire({
       authority: entry.authority,
       state: entry.state,
-      progress: { stepId, stepIndex, stepTotal, startedAt: Date.now(), needsInstall },
+      progress: { stepId, stepIndex, stepTotal, startedAt: Date.now() },
     })
   }
 

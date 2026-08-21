@@ -417,7 +417,7 @@ export async function pickFastestNodeArchiveUrl(
   )
   if (winner)
     logger.info(`[remote] node archive probe winner: ${winner.url} (${winner.elapsedMs}ms)`)
-  else logger.warn('[remote] node archive probe found no reachable source, using fixed order')
+  else logger.info('[remote] node archive probe found no reachable source, using fixed order')
   return winner ? { url: winner.url, probes } : undefined
 }
 
@@ -1080,7 +1080,7 @@ export class RemoteDeployer {
       { logger: log, label: `remote-forward:${authority}` },
     )
     const stderrSub = proc.onStderr((chunk) => {
-      log.warn(`[remote:${authority}] ssh forward: ${decodeDiagnostic(chunk).trim()}`)
+      log.info(`[remote:${authority}] ssh forward: ${decodeDiagnostic(chunk).trim()}`)
     })
     try {
       await waitForPort(localPort)

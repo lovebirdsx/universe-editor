@@ -76,7 +76,6 @@ import { InteractionPerfContribution } from '../InteractionPerfContribution.js'
 import { TextMateContribution } from '../TextMateContribution.js'
 import { ModelLanguageResyncContribution } from '../ModelLanguageResyncContribution.js'
 import { RemoteStatusContribution } from '../RemoteStatusContribution.js'
-import { RemoteInstallOutputContribution } from '../RemoteInstallOutputContribution.js'
 import { RemoteReconnectionUxContribution } from '../RemoteReconnectionUxContribution.js'
 
 // `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
@@ -649,15 +648,6 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.remoteStatus',
   RemoteStatusContribution,
-  WorkbenchPhase.AfterRestore,
-)
-
-// Install bring-up: auto-reveal the "Remote Connection" output channel when a
-// remote connect performs an actual server install, so the install log isn't
-// hidden in the panel. AfterRestore so the output service + panel UI are live.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.remoteInstallOutput',
-  RemoteInstallOutputContribution,
   WorkbenchPhase.AfterRestore,
 )
 
