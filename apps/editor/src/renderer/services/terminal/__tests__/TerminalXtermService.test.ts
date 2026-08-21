@@ -19,7 +19,12 @@ vi.mock('@xterm/xterm', () => {
     options: Record<string, unknown> = {}
     cols = 80
     rows = 24
-    buffer = { active: { viewportY: 0 } }
+    private _buffer = { active: { viewportY: 0 } }
+    bufferAccessCount = 0
+    get buffer() {
+      this.bufferAccessCount++
+      return this._buffer
+    }
     resizeCalls: Array<[number, number]> = []
     refreshCalls: Array<[number, number]> = []
     scrollToLineCalls: number[] = []
@@ -218,6 +223,21 @@ describe('TerminalXtermService', () => {
     expect(term.disposed).toBe(true)
     expect(h.attachDisposed).toBe(true)
     expect(svc.get('t1')).toBeUndefined()
+  })
+
+  it('saveScroll after release does not touch the disposed term buffer', async () => {
+    const h = makeHarness()
+    const svc = await makeService(h)
+    const holder = svc.acquire('t1')
+    const term = holder.term as unknown as { bufferAccessCount: number; disposed: boolean }
+
+    svc.release('t1')
+    expect(term.disposed).toBe(true)
+
+    const accesses = term.bufferAccessCount
+    holder.saveScroll()
+
+    expect(term.bufferAccessCount).toBe(accesses)
   })
 
   it('scheduleFit deduplicates and triggers fit after requestAnimationFrame', async () => {

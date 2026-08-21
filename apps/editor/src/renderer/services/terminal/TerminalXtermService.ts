@@ -301,6 +301,9 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
   }
 
   saveScroll(): void {
+    // Process exit can release the holder before the view unmounts; touching
+    // term.buffer then lazily registers into xterm's disposed store.
+    if (this._store.isDisposed) return
     this._savedScroll = this.term.buffer.active.viewportY
   }
 
