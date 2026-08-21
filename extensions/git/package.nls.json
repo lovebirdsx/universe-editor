@@ -73,5 +73,7 @@
   "git.config.pullSubmoduleUpdate.description": "After a successful pull, automatically run `git submodule update --init --recursive` when the repository contains submodules.",
   "git.config.autofetch.description": "Periodically fetch from the remote so the status bar shows incoming/outgoing commits.",
   "git.config.autofetchPeriod.description": "Interval (in seconds) between automatic fetches when git.autofetch is enabled.",
-  "git.config.timeline.showUncommitted.description": "Show an entry for the uncommitted changes of the file in the timeline view."
+  "git.config.timeline.showUncommitted.description": "Show an entry for the uncommitted changes of the file in the timeline view.",
+  "git.config.autorefresh.description": "Whether to automatically refresh the Source Control view when files change. When disabled, `git status` no longer runs automatically on file changes.",
+  "git.config.statusLimit.description": "Maximum number of changes shown in the Source Control view. When a repository has more changes, only the first N are shown and automatic refresh pauses until the number drops back under the limit."
 }

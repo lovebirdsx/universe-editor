@@ -38,6 +38,15 @@ export interface ISourceControlResourceStateDto {
 export interface ISourceControlFeaturesDto {
   count?: number
   commitTemplate?: string
+  /**
+   * The commit the provider's HEAD currently points to. `null` means the
+   * provider reports no HEAD (empty repo / never set). Consumers can use it to
+   * tell whether any file's HEAD content could have changed: `git show
+   * HEAD:<path>` is fully determined by `(HEAD commit, path)`, so when this
+   * value is unchanged a provider's cached HEAD content is still valid.
+   * Always sent (even `null`) so a transition back to "no HEAD" clears it.
+   */
+  headRevision?: string | null
   acceptInputCommand?: ICommandDto
   /** Commit-bar actions (primary first); drives the split commit button. */
   acceptInputActions?: ICommandDto[]

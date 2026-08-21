@@ -146,6 +146,7 @@ export class HostConnection extends Disposable {
   readonly extensions: IExtHostExtensions
   readonly languages: IExtHostLanguages
   readonly documents: IExtHostDocuments
+  private readonly _mainThreadWindow: MainThreadWindow
   private _dead = false
 
   constructor(
@@ -226,6 +227,7 @@ export class HostConnection extends Disposable {
         extHostWindow,
       ),
     )
+    this._mainThreadWindow = mainThreadWindow
     server.registerChannel(
       ExtHostChannels.mainThreadWindow,
       ProxyChannel.fromService(mainThreadWindow),
@@ -344,6 +346,11 @@ export class HostConnection extends Disposable {
 
   get dead(): boolean {
     return this._dead
+  }
+
+  /** Seed the host's window focus state once at connect, before any activation. */
+  async seedWindowState(): Promise<void> {
+    await this._mainThreadWindow.seedWindowState()
   }
 
   markDead(): void {

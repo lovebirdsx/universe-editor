@@ -73,5 +73,7 @@
   "git.config.pullSubmoduleUpdate.description": "拉取成功后，当仓库包含子模块时自动运行 `git submodule update --init --recursive`。",
   "git.config.autofetch.description": "定期从远程获取，使状态栏显示传入/传出的提交。",
   "git.config.autofetchPeriod.description": "启用 git.autofetch 时自动获取之间的间隔（秒）。",
-  "git.config.timeline.showUncommitted.description": "在时间线视图中显示文件未提交的更改条目。"
+  "git.config.timeline.showUncommitted.description": "在时间线视图中显示文件未提交的更改条目。",
+  "git.config.autorefresh.description": "文件变更时是否自动刷新源代码管理视图。关闭后，文件变更不再自动运行 `git status`。",
+  "git.config.statusLimit.description": "源代码管理视图中显示的更改条数上限。当仓库更改超过该数量时，仅显示前 N 条，并暂停自动刷新，直到条数回落到上限以内。"
 }

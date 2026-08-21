@@ -332,6 +332,9 @@ const extHostWindow: IExtHostWindow = {
   $acceptProgressCanceled: async (handle) => {
     ;(await serviceReady).acceptProgressCanceled(handle)
   },
+  $acceptWindowState: async (state) => {
+    ;(await serviceReady).acceptWindowState(state)
+  },
 }
 const extHostWebviews: IExtHostWebviews = {
   $resolveCustomEditor: async (providerHandle, panelHandle, viewType, uri, diff) => {

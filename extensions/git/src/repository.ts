@@ -38,6 +38,7 @@ import {
   type CommitGenContext,
 } from './commitContext.js'
 import { stagedStates, workingStates } from './repositoryDecoration.js'
+import { debounce, throttle, timeout } from './async.js'
 import { RepositoryWatcher } from './repositoryWatcher.js'
 import { RepositoryWorktrees } from './repositoryWorktrees.js'
 import {
@@ -60,6 +61,13 @@ export {
 
 const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.xlsm', '.csv']
 
+const AUTO_REFRESH_DEBOUNCE_MS = 1000
+const AUTO_REFRESH_COOLDOWN_MS = 5000
+const AUTO_REFRESH_BLUR_MAX_WAIT_MS = 60_000
+const AUTOFETCH_INITIAL_MIN_MS = 3000
+const AUTOFETCH_INITIAL_SPREAD_MS = 5000
+const AUTOFETCH_JITTER = 0.2
+
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
 function isSpreadsheetPath(path: string): boolean {
   const lower = path.toLowerCase()
@@ -80,6 +88,8 @@ export class Repository {
   private _fetching = false
   /** Count of in-flight progress operations; while > 0 the sync item shows a spinner. */
   private _busy = 0
+  /** Count of in-flight non-read-only git operations; gates the watcher refresh chain. */
+  private _operations = 0
   private _busyText: { text: string; kind: 'syncing' | 'spinning' } | undefined
   private _disposed = false
   private _stagedCount = 0
@@ -87,14 +97,38 @@ export class Repository {
   private _branch: string | undefined
   private _ahead = 0
   private _behind = 0
-  private _autofetchTimer: ReturnType<typeof setInterval> | undefined
+  private _autofetchTimer: ReturnType<typeof setTimeout> | undefined
   private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
+  /** Set when the latest `git status` exceeded `git.statusLimit`; gates the watcher chain. */
+  private _isRepositoryHuge = false
+  private readonly _disposedPromise: Promise<void>
+  private _resolveDisposed!: () => void
+  private readonly _idleWaiters = new Set<() => void>()
+  private readonly _updateWhenIdleAndWait = throttle(async () => {
+    // The autorefresh read is cross-process RPC; it runs here, after the debounce,
+    // so a file storm costs at most one round-trip per second instead of per event.
+    const autorefresh = await workspace.getConfiguration('git').get('autorefresh', true)
+    if (!autorefresh) {
+      this._log?.('[git] skip auto-refresh: git.autorefresh is disabled')
+      return
+    }
+    const ok = await this._whenIdleAndFocused()
+    if (!ok) return
+    await this.refresh()
+    await timeout(AUTO_REFRESH_COOLDOWN_MS)
+  })
+  private readonly _eventuallyUpdateWhenIdleAndWait = debounce(() => {
+    void this._updateWhenIdleAndWait().catch((err) => {
+      this._log?.(`[git] auto-refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, AUTO_REFRESH_DEBOUNCE_MS)
 
   constructor(
     readonly root: string,
     private readonly _log?: (msg: string) => void,
     opts: RepositoryOptions = {},
   ) {
+    this._disposedPromise = new Promise<void>((resolve) => (this._resolveDisposed = resolve))
     this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = localize(
       'git.input.placeholder',
@@ -204,11 +238,18 @@ export class Repository {
       return
     }
     const status = parseStatus(res.stdout)
+    const statusLimit = await workspace.getConfiguration('git').get('statusLimit', 10000)
+    const files =
+      status.files.length > statusLimit ? status.files.slice(0, statusLimit) : status.files
+    this._isRepositoryHuge = status.files.length > statusLimit
+    if (this._isRepositoryHuge) {
+      this._log?.(`[git] status limited to ${statusLimit} entries (${status.files.length} total)`)
+    }
     // scm.mergeEditor lives in the provider-neutral scm.* namespace (the core
     // registers it; extensions only read it).
     const mergeEditor = await workspace.getConfiguration('scm').get('mergeEditor', true)
-    const staged = stagedStates(this.root, status.files, mergeEditor)
-    const working = workingStates(this.root, status.files, mergeEditor)
+    const staged = stagedStates(this.root, files, mergeEditor)
+    const working = workingStates(this.root, files, mergeEditor)
     this._staged.resourceStates = staged
     this._working.resourceStates = working
     this._stagedCount = staged.length
@@ -227,6 +268,7 @@ export class Repository {
     this._branch = status.branch
     this._ahead = status.ahead
     this._behind = status.behind
+    this._sc.headRevision = status.headRevision
     this._emitChange()
   }
 
@@ -241,6 +283,15 @@ export class Repository {
     this._busy = Math.max(0, this._busy - 1)
     if (this._busy === 0) this._busyText = undefined
     this._emitChange()
+  }
+
+  private _beginOperation(): void {
+    this._operations++
+  }
+
+  private _endOperation(): void {
+    this._operations = Math.max(0, this._operations - 1)
+    if (this._operations === 0) this._notifyIdle()
   }
 
   get hasStagedChanges(): boolean {
@@ -275,15 +326,20 @@ export class Repository {
       this._log?.(`stage change: no hunk at lines ${startLine}-${endLine}`)
       return false
     }
-    const apply = await gitExec(
-      ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'],
-      this.root,
-      this._log,
-      { input: patch },
-    )
-    if (apply.exitCode !== 0) {
-      await notifyGitFailure('stage change', apply)
-      return false
+    this._beginOperation()
+    try {
+      const apply = await gitExec(
+        ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'],
+        this.root,
+        this._log,
+        { input: patch },
+      )
+      if (apply.exitCode !== 0) {
+        await notifyGitFailure('stage change', apply)
+        return false
+      }
+    } finally {
+      this._endOperation()
     }
     await this.refresh()
     return true
@@ -303,6 +359,7 @@ export class Repository {
   }
 
   async commit(message: string): Promise<boolean> {
+    this._beginOperation()
     this._beginProgress(localize('git.progress.committing', 'Committing…'), 'spinning')
     try {
       const res = await gitExec(['commit', '-m', message], this.root, this._log)
@@ -313,6 +370,7 @@ export class Repository {
       return true
     } finally {
       this._endProgress()
+      this._endOperation()
       await this.refresh()
     }
   }
@@ -323,6 +381,7 @@ export class Repository {
   }
 
   async commitAmend(message: string): Promise<boolean> {
+    this._beginOperation()
     this._beginProgress(localize('git.progress.amendingCommit', 'Amending commit…'), 'spinning')
     try {
       const res = await gitExec(['commit', '--amend', '-m', message], this.root, this._log)
@@ -333,6 +392,7 @@ export class Repository {
       return true
     } finally {
       this._endProgress()
+      this._endOperation()
       await this.refresh()
     }
   }
@@ -350,6 +410,7 @@ export class Repository {
   async sync(): Promise<void> {
     if (this._syncing) return
     this._syncing = true
+    this._beginOperation()
     this._beginProgress(localize('git.progress.syncing', 'Syncing…'), 'syncing')
     try {
       const pull = await gitExec(['pull', '--rebase'], this.root, this._log)
@@ -365,6 +426,7 @@ export class Repository {
     } finally {
       this._syncing = false
       this._endProgress()
+      this._endOperation()
       await this.refresh()
     }
   }
@@ -440,6 +502,7 @@ export class Repository {
   private async _fetchRemote(opts?: FetchOptions): Promise<void> {
     if (this._fetching) return
     this._fetching = true
+    this._beginOperation()
     this._beginProgress(localize('git.progress.fetching', 'Fetching…'), 'spinning')
     try {
       const args = opts?.prune ? ['fetch', '--prune'] : ['fetch']
@@ -450,6 +513,7 @@ export class Repository {
     } finally {
       this._fetching = false
       this._endProgress()
+      this._endOperation()
     }
   }
 
@@ -517,18 +581,27 @@ export class Repository {
       placeHolder: localize('git.pick.branchToDelete', 'Select a branch to delete'),
     })
     if (!branch) return
-    const res = await gitExec(['branch', '-d', branch], this.root, this._log)
-    if (res.exitCode !== 0) {
-      // Not fully merged — offer a force delete.
-      const BTN_DELETE = localize('git.btn.delete', 'Delete')
-      const force = await window.showWarningMessage(
-        localize('git.branch.notFullyMerged', "Branch '{0}' is not fully merged. Delete anyway?", {
-          0: branch,
-        }),
-        BTN_DELETE,
-      )
-      if (force === BTN_DELETE) await this._run(['branch', '-D', branch], 'delete branch')
-      return
+    this._beginOperation()
+    try {
+      const res = await gitExec(['branch', '-d', branch], this.root, this._log)
+      if (res.exitCode !== 0) {
+        // Not fully merged — offer a force delete.
+        const BTN_DELETE = localize('git.btn.delete', 'Delete')
+        const force = await window.showWarningMessage(
+          localize(
+            'git.branch.notFullyMerged',
+            "Branch '{0}' is not fully merged. Delete anyway?",
+            {
+              0: branch,
+            },
+          ),
+          BTN_DELETE,
+        )
+        if (force === BTN_DELETE) await this._run(['branch', '-D', branch], 'delete branch')
+        return
+      }
+    } finally {
+      this._endOperation()
     }
     await this.refresh()
   }
@@ -631,10 +704,15 @@ export class Repository {
     // A folder may hold both tracked and untracked changes; `checkout` restores
     // the former (and harmlessly errors when there's nothing tracked to restore,
     // hence no error surfacing here), `clean -fd` removes the latter.
-    await gitExec(['checkout', '--', path], this.root, this._log)
-    const clean = await gitExec(['clean', '-fd', '--', path], this.root, this._log)
-    if (clean.exitCode !== 0) {
-      await notifyGitFailure('discard', clean)
+    this._beginOperation()
+    try {
+      await gitExec(['checkout', '--', path], this.root, this._log)
+      const clean = await gitExec(['clean', '-fd', '--', path], this.root, this._log)
+      if (clean.exitCode !== 0) {
+        await notifyGitFailure('discard', clean)
+      }
+    } finally {
+      this._endOperation()
     }
     await this.refresh()
   }
@@ -649,11 +727,16 @@ export class Repository {
       BTN_DISCARD_ALL,
     )
     if (confirm !== BTN_DISCARD_ALL) return
-    const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
-    if (checkout.exitCode !== 0) {
-      await notifyGitFailure('discard', checkout)
+    this._beginOperation()
+    try {
+      const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
+      if (checkout.exitCode !== 0) {
+        await notifyGitFailure('discard', checkout)
+      }
+      await gitExec(['clean', '-fd'], this.root, this._log)
+    } finally {
+      this._endOperation()
     }
-    await gitExec(['clean', '-fd'], this.root, this._log)
     await this.refresh()
   }
 
@@ -930,6 +1013,7 @@ export class Repository {
     label: string,
     progress?: { text: string; kind: 'syncing' | 'spinning' },
   ): Promise<boolean> {
+    this._beginOperation()
     if (progress) this._beginProgress(progress.text, progress.kind)
     let ok = false
     try {
@@ -941,6 +1025,7 @@ export class Repository {
       }
     } finally {
       if (progress) this._endProgress()
+      this._endOperation()
       await this.refresh()
     }
     return ok
@@ -1010,21 +1095,105 @@ export class Repository {
     const period = await config.get('autofetchPeriod', 180)
     if (this._disposed) return
     const ms = Math.max(30, period) * 1000
-    // Kick off an initial fetch shortly after startup, then on a fixed interval.
-    // Failures are logged, not toasted, and never left as unhandled rejections.
-    this._autofetchInitial = setTimeout(() => this._runAutofetch(), 3000)
-    this._autofetchTimer = setInterval(() => this._runAutofetch(), ms)
+    // Stagger the first fetch and each subsequent period so many windows/repos
+    // don't all hit the network at once. Failures are logged, not toasted.
+    this._autofetchInitial = setTimeout(
+      () => void this._runAutofetch(ms),
+      AUTOFETCH_INITIAL_MIN_MS + Math.random() * AUTOFETCH_INITIAL_SPREAD_MS,
+    )
   }
 
-  private _runAutofetch(): void {
-    this.fetch({ silent: true }).catch((err) => {
+  /** Run one autofetch cycle (deferring to window focus), then schedule the next. */
+  private async _runAutofetch(ms: number): Promise<void> {
+    try {
+      if (!window.state.focused) {
+        this._log?.('[git] autofetch deferred: window unfocused')
+        await this._nextWindowFocus()
+        if (this._disposed) return
+        this._log?.('[git] autofetch catch-up: window refocused')
+      }
+      await this.fetch({ silent: true })
+    } catch (err) {
       this._log?.(`[git] autofetch failed: ${err instanceof Error ? err.message : String(err)}`)
-    })
+    } finally {
+      if (!this._disposed) {
+        this._autofetchTimer = setTimeout(
+          () => void this._runAutofetch(ms),
+          ms * (1 - AUTOFETCH_JITTER / 2 + Math.random() * AUTOFETCH_JITTER),
+        )
+      }
+    }
   }
 
   private _onWatcherChange(): void {
-    this.refresh().catch((err) => {
-      this._log?.(`[git] refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    this._onFileChange()
+  }
+
+  /**
+   * Watcher-driven entry point: synchronous, zero-RPC short-circuits only. The
+   * autorefresh config read is cross-process RPC, so it lives after the debounce.
+   */
+  private _onFileChange(): void {
+    if (this._disposed) return
+    if (this._isRepositoryHuge) {
+      this._log?.('[git] skip auto-refresh: repository exceeds git.statusLimit')
+      return
+    }
+    if (!this._isOperationsIdle()) {
+      this._log?.('[git] skip auto-refresh: a git operation is in progress')
+      return
+    }
+    this._eventuallyUpdateWhenIdleAndWait()
+  }
+
+  private _isOperationsIdle(): boolean {
+    return this._operations === 0
+  }
+
+  /** Resolve once idle; while busy, wait for the next operation to finish. */
+  private async _whenIdleAndFocused(): Promise<boolean> {
+    while (!this._disposed) {
+      if (!this._isOperationsIdle()) {
+        await this._nextOperationEnd()
+        continue
+      }
+      if (window.state.focused) return true
+      const focused = await this._nextWindowFocus(AUTO_REFRESH_BLUR_MAX_WAIT_MS)
+      if (this._disposed) return false
+      if (focused) return true
+      this._log?.('[git] auto-refresh: window unfocused for too long; refreshing anyway')
+      return true
+    }
+    return false
+  }
+
+  private _nextOperationEnd(): Promise<void> {
+    return new Promise((resolve) => {
+      this._idleWaiters.add(resolve)
+    })
+  }
+
+  private _notifyIdle(): void {
+    for (const waiter of this._idleWaiters) waiter()
+    this._idleWaiters.clear()
+  }
+
+  private _nextWindowFocus(maxWaitMs?: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const done = (focused: boolean) => {
+        if (settled) return
+        settled = true
+        sub.dispose()
+        if (timer !== undefined) clearTimeout(timer)
+        resolve(focused)
+      }
+      const sub = window.onDidChangeWindowState((state) => {
+        if (state.focused) done(true)
+      })
+      if (maxWaitMs !== undefined) timer = setTimeout(() => done(false), maxWaitMs)
+      void this._disposedPromise.then(() => done(false))
     })
   }
 
@@ -1041,9 +1210,13 @@ export class Repository {
 
   dispose(): void {
     this._disposed = true
+    this._resolveDisposed()
+    this._eventuallyUpdateWhenIdleAndWait.cancel()
+    this._updateWhenIdleAndWait.cancel()
+    this._notifyIdle()
     this._watcher.dispose()
     if (this._autofetchInitial) clearTimeout(this._autofetchInitial)
-    if (this._autofetchTimer) clearInterval(this._autofetchTimer)
+    if (this._autofetchTimer) clearTimeout(this._autofetchTimer)
     this._changeListeners.clear()
     this._sc.dispose()
   }

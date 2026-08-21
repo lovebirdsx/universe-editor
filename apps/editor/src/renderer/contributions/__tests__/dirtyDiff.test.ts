@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   computeDirtyDiffRegions,
   computeDirtyDiffRegionsFromLines,
+  computeScmHeadCacheInvalidation,
   toDiffLines,
   trimTrailingEmptyLine,
+  type ScmFileDecorationState,
+  type ScmHeadSnapshot,
+  type ScmProviderHeadState,
 } from '../dirtyDiff.js'
 
 describe('computeDirtyDiffRegions', () => {
@@ -117,5 +121,127 @@ describe('trimTrailingEmptyLine', () => {
     expect(trimTrailingEmptyLine(['a', '', ''])).toEqual(['a', ''])
     expect(trimTrailingEmptyLine([''])).toEqual([])
     expect(trimTrailingEmptyLine([])).toEqual([])
+  })
+})
+
+describe('computeScmHeadCacheInvalidation', () => {
+  const files = (entries: Record<string, string>): ReadonlyMap<string, ScmFileDecorationState> =>
+    new Map(Object.entries(entries).map(([key, letter]) => [key, { letter }]))
+
+  const heads = (
+    entries: ReadonlyArray<[number, string, string | undefined]>,
+  ): ReadonlyMap<number, ScmProviderHeadState> =>
+    new Map(
+      entries.map(([handle, providerId, headRevision]) => [handle, { providerId, headRevision }]),
+    )
+
+  const snap = (
+    f: ReadonlyMap<string, ScmFileDecorationState>,
+    h: ReadonlyMap<number, ScmProviderHeadState>,
+  ): ScmHeadSnapshot => ({ files: f, heads: h })
+
+  // Problem 1 regression: `undoLastCommit` (git reset --soft HEAD~1) moves HEAD
+  // C2 → C1 while the active file F keeps its merged working letter M (it is now
+  // staged M + working M) and G appears as staged. The old file-only heuristic
+  // returned {paths: {G}} and left F stale; with the HEAD commit we must drop the
+  // whole provider, which covers F.
+  it('invalidates the whole provider when its HEAD commit moved (reset --soft case)', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(files({ F: 'M' }), heads([[1, 'git', 'C2']])),
+      snap(files({ F: 'M', G: 'M' }), heads([[1, 'git', 'C1']])),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(['git']), paths: new Set() })
+  })
+
+  it('does not invalidate anything when HEAD is unchanged but a file letter changed', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(files({ F: 'M' }), heads([[1, 'git', 'C2']])),
+      snap(files({ F: 'A' }), heads([[1, 'git', 'C2']])),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(), paths: new Set() })
+  })
+
+  it('does not invalidate anything on an unchanged HEAD and empty file diff', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(files({ F: 'M' }), heads([[1, 'git', 'C2']])),
+      snap(files({ F: 'M' }), heads([[1, 'git', 'C2']])),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(), paths: new Set() })
+  })
+
+  it('treats a provider that starts reporting a HEAD as a move (undefined → hash)', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(files({}), heads([[1, 'git', undefined]])),
+      snap(files({}), heads([[1, 'git', 'C1']])),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(['git']), paths: new Set() })
+  })
+
+  it('treats a provider that stops reporting a HEAD as a move (hash → undefined)', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(files({}), heads([[1, 'git', 'C1']])),
+      snap(files({}), heads([[1, 'git', undefined]])),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(['git']), paths: new Set() })
+  })
+
+  it('invalidates only the provider whose HEAD moved, leaving the other provider cached', () => {
+    const decision = computeScmHeadCacheInvalidation(
+      snap(
+        files({}),
+        heads([
+          [1, 'git', 'C2'],
+          [2, 'perforce', 'x1'],
+        ]),
+      ),
+      snap(
+        files({}),
+        heads([
+          [1, 'git', 'C1'],
+          [2, 'perforce', 'x1'],
+        ]),
+      ),
+    )
+    expect(decision).toEqual({ full: false, providerIds: new Set(['git']), paths: new Set() })
+  })
+
+  // Fallback: a provider that never reports a HEAD revision leaves nothing to
+  // compare, so the old file-status heuristic applies (conservatively).
+  it('falls back to the file heuristic when the provider reports no HEAD', () => {
+    const p4 = heads([[1, 'perforce', undefined]])
+    expect(computeScmHeadCacheInvalidation(snap(files({}), p4), snap(files({}), p4))).toEqual({
+      full: true,
+      providerIds: new Set(),
+      paths: new Set(),
+    })
+    expect(
+      computeScmHeadCacheInvalidation(snap(files({ a: 'M' }), p4), snap(files({ a: 'M' }), p4)),
+    ).toEqual({ full: true, providerIds: new Set(), paths: new Set() })
+  })
+
+  it('falls back to full when a file disappears and the provider reports no HEAD', () => {
+    const p4 = heads([[1, 'perforce', undefined]])
+    expect(
+      computeScmHeadCacheInvalidation(
+        snap(files({ a: 'M', b: 'M' }), p4),
+        snap(files({ b: 'M' }), p4),
+      ),
+    ).toEqual({ full: true, providerIds: new Set(), paths: new Set() })
+  })
+
+  it('falls back to paths for appeared/changed files when the provider reports no HEAD', () => {
+    const p4 = heads([[1, 'perforce', undefined]])
+    expect(
+      computeScmHeadCacheInvalidation(
+        snap(files({ b: 'M' }), p4),
+        snap(files({ a: 'M', b: 'M' }), p4),
+      ),
+    ).toEqual({ full: false, providerIds: new Set(), paths: new Set(['a']) })
+    expect(
+      computeScmHeadCacheInvalidation(
+        snap(files({ a: '?', b: 'M' }), p4),
+        snap(files({ a: 'M', b: 'M' }), p4),
+      ),
+    ).toEqual({ full: false, providerIds: new Set(), paths: new Set(['a']) })
   })
 })

@@ -80,6 +80,13 @@ export interface SourceControl {
   /** Badge count shown on the provider (e.g. number of changes). */
   count: number | undefined
   commitTemplate: string | undefined
+  /**
+   * The commit the provider's HEAD points to, or undefined when there is no
+   * HEAD (empty repo). Setting this lets the editor invalidate its cached HEAD
+   * content exactly when the HEAD actually moved instead of guessing from file
+   * status.
+   */
+  headRevision: string | undefined
   /** Primary action wired to the commit button / accept gesture. */
   acceptInputCommand: Command | undefined
   /**

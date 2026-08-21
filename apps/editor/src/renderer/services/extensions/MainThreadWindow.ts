@@ -25,6 +25,7 @@ import {
   ProgressLocation,
   Severity,
   StatusBarAlignment,
+  toDisposable,
   URI,
   type IConfirmOptions,
   type IDisposable,
@@ -47,6 +48,7 @@ import {
   type IProgressStepDto,
   type ISaveDialogOptionsDto,
 } from '@universe-editor/extensions-common'
+import { isWindowFocused } from '../../workbench/domUtils.js'
 
 function mapSeverity(severity: ExtHostMessageSeverity): Severity {
   return severity === 'error'
@@ -65,6 +67,7 @@ interface ProgressEntry {
 export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   private readonly _entries = this._register(new DisposableMap<number, IStatusBarEntryAccessor>())
   private readonly _progress = new Map<number, ProgressEntry>()
+  private _focused = true
 
   constructor(
     private readonly _notification: INotificationService,
@@ -77,6 +80,33 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     private readonly _extHostWindow: IExtHostWindow,
   ) {
     super()
+    this._focused = this._computeFocused()
+    window.addEventListener('focus', this._onFocusChange)
+    window.addEventListener('blur', this._onFocusChange)
+    document.addEventListener('visibilitychange', this._onFocusChange)
+    this._register(
+      toDisposable(() => {
+        window.removeEventListener('focus', this._onFocusChange)
+        window.removeEventListener('blur', this._onFocusChange)
+        document.removeEventListener('visibilitychange', this._onFocusChange)
+      }),
+    )
+  }
+
+  private readonly _onFocusChange = (): void => {
+    const focused = this._computeFocused()
+    if (focused === this._focused) return
+    this._focused = focused
+    void this._extHostWindow.$acceptWindowState({ focused }).catch(() => undefined)
+  }
+
+  private _computeFocused(): boolean {
+    return isWindowFocused()
+  }
+
+  /** Seed the host's window focus state once at connect, before any activation. */
+  async seedWindowState(): Promise<void> {
+    await this._extHostWindow.$acceptWindowState({ focused: this._focused })
   }
 
   $showMessage(

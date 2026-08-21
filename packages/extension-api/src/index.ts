@@ -259,8 +259,25 @@ export interface OutputChannel extends Disposable {
   show(): void
 }
 
+/** Snapshot of the editor window's focus state. */
+export interface WindowState {
+  /** Whether the editor window currently has focus. False when the window is
+   *  minimized or another application is active. */
+  readonly focused: boolean
+}
+
 /** The `window` namespace: UI surfaced through the host's renderer. */
 export interface WindowApi {
+  /**
+   * Current window focus state, read synchronously. Seeded by the renderer
+   * before any extension activates, so it is correct inside `activate()`.
+   */
+  readonly state: WindowState
+  /**
+   * Fires when the window focus state changes (gained/lost focus, minimized,
+   * hidden). Only fires on a real change — the same value never fires twice.
+   */
+  readonly onDidChangeWindowState: Event<WindowState>
   showInformationMessage(message: string, ...items: string[]): Promise<string | undefined>
   showWarningMessage(message: string, ...items: string[]): Promise<string | undefined>
   showErrorMessage(message: string, ...items: string[]): Promise<string | undefined>
@@ -1474,6 +1491,8 @@ interface IExtensionHostBridge {
   getActiveTextEditor(): Promise<TextEditor | undefined>
   readonly visibleTextEditors: readonly TextEditor[]
   readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
+  readonly windowState: WindowState
+  readonly onDidChangeWindowState: Event<WindowState>
   getWorkspaceRoot(): string | undefined
   isWorkspaceTrusted(): boolean
   readonly onDidGrantWorkspaceTrust: Event<void>
@@ -1724,6 +1743,10 @@ export const window: WindowApi = {
     return bridge().visibleTextEditors
   },
   onDidChangeVisibleTextEditors: (listener) => bridge().onDidChangeVisibleTextEditors(listener),
+  get state() {
+    return bridge().windowState
+  },
+  onDidChangeWindowState: (listener) => bridge().onDidChangeWindowState(listener),
   showTextDocument: (target, options) =>
     bridge().showTextDocument(
       typeof target === 'string' ? target : 'uri' in target ? target.uri : target.toJSON(),

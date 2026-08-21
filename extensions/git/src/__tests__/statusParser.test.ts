@@ -7,19 +7,26 @@ function z(...entries: string[]): string {
 }
 
 describe('parseStatus', () => {
-  it('reads branch name and ahead/behind from headers', () => {
+  it('reads branch name, ahead/behind and HEAD oid from headers', () => {
     const status = parseStatus(
       z('# branch.oid abc123', '# branch.head feature/x', '# branch.ab +3 -1'),
     )
     expect(status.branch).toBe('feature/x')
     expect(status.ahead).toBe(3)
     expect(status.behind).toBe(1)
+    expect(status.headRevision).toBe('abc123')
     expect(status.files).toEqual([])
   })
 
-  it('treats a detached HEAD as no branch', () => {
-    const status = parseStatus(z('# branch.head (detached)'))
+  it('treats a detached HEAD as no branch but still reports its HEAD oid', () => {
+    const status = parseStatus(z('# branch.oid deadbeef', '# branch.head (detached)'))
     expect(status.branch).toBeUndefined()
+    expect(status.headRevision).toBe('deadbeef')
+  })
+
+  it('reports no HEAD revision for an empty repo (`branch.oid (initial)`)', () => {
+    const status = parseStatus(z('# branch.oid (initial)', '# branch.head main'))
+    expect(status.headRevision).toBeUndefined()
   })
 
   it('splits ordinary entries into index (X) and working-tree (Y) status', () => {

@@ -341,13 +341,28 @@ export interface IMainThreadWindow {
 }
 
 /**
+ * Window state the renderer pushes to the host. A plain boolean (JSON-safe);
+ * the renderer seeds it once at connect and pushes again on every real change.
+ */
+export interface IExtHostWindowStateDto {
+  readonly focused: boolean
+}
+
+/**
  * Ext host → exposed to the renderer (host's ChannelServer): window-scoped
- * callbacks the renderer pushes back for `window.*` operations — currently the
- * cancellation of a `withProgress` task's token.
+ * callbacks the renderer pushes back for `window.*` operations — the
+ * cancellation of a `withProgress` task's token and the window focus state.
  */
 export interface IExtHostWindow {
   /** The user cancelled the progress UI for `handle`; the host cancels the task token. */
   $acceptProgressCanceled(handle: number): Promise<void>
+  /**
+   * The window focus state. The renderer seeds the initial value once at connect
+   * (before any activation) and re-pushes on every real change; the host keeps a
+   * local mirror so `window.state` reads synchronously and only fires
+   * `onDidChangeWindowState` when the value actually changed.
+   */
+  $acceptWindowState(state: IExtHostWindowStateDto): Promise<void>
 }
 
 /** A filesystem entry's kind. Mirrors the subset of `IFileStat` extensions need. */

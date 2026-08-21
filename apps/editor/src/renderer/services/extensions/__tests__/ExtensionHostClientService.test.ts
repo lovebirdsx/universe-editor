@@ -145,6 +145,9 @@ vi.mock('../HostConnection.js', () => {
     markDead(): void {
       this.dead = true
     }
+    seedWindowState(): Promise<void> {
+      return Promise.resolve()
+    }
     dispose(): void {
       disposed.push(this.handle)
       // Mirror ChannelClient.dispose: in-flight requests reject with IpcChannelDisposedError.

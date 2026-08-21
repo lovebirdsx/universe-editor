@@ -44,6 +44,8 @@ export interface IScmSourceControlModel {
   readonly inputValue: IObservable<string>
   readonly inputPlaceholder: IObservable<string>
   readonly count: IObservable<number | undefined>
+  /** HEAD commit the provider reports, or undefined when it reports none. */
+  readonly headRevision: IObservable<string | undefined>
   readonly acceptCommand: IObservable<ICommandDto | undefined>
   readonly acceptActions: IObservable<readonly ICommandDto[] | undefined>
   readonly groups: IObservable<readonly IScmGroupModel[]>
@@ -175,6 +177,7 @@ class ScmSourceControlModel implements IScmSourceControlModel {
   readonly inputValue = observableValue<string>('scmInputValue', '')
   readonly inputPlaceholder = observableValue<string>('scmInputPlaceholder', '')
   readonly count = observableValue<number | undefined>('scmCount', undefined)
+  readonly headRevision = observableValue<string | undefined>('scmHeadRevision', undefined)
   readonly acceptCommand = observableValue<ICommandDto | undefined>('scmAcceptCommand', undefined)
   readonly acceptActions = observableValue<readonly ICommandDto[] | undefined>(
     'scmAcceptActions',
@@ -243,6 +246,9 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
     const model = this._byHandle.get(handle)
     if (model) {
       if (features.count !== undefined) model.count.set(features.count, undefined)
+      if (features.headRevision !== undefined) {
+        model.headRevision.set(features.headRevision ?? undefined, undefined)
+      }
       if (features.acceptInputCommand !== undefined) {
         model.acceptCommand.set(features.acceptInputCommand, undefined)
       }

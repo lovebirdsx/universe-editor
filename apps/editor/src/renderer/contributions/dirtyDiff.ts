@@ -128,3 +128,92 @@ export function computeDirtyDiffRegionsFromLines(
   }
   return regions
 }
+
+/** The SCM file decoration fields the HEAD-cache invalidation decision reads. */
+export interface ScmFileDecorationState {
+  readonly letter?: string
+}
+
+/** One source-control instance's HEAD state, keyed by its host handle (unique per repo). */
+export interface ScmProviderHeadState {
+  readonly providerId: string
+  readonly headRevision: string | undefined
+}
+
+/** The SCM state the invalidation decision reads. */
+export interface ScmHeadSnapshot {
+  readonly files: ReadonlyMap<string, ScmFileDecorationState>
+  readonly heads: ReadonlyMap<number, ScmProviderHeadState>
+}
+
+/**
+ * Which HEAD-cache slots a refresh must drop. `full` clears everything;
+ * `providerIds` clears every slot of the given providers; `paths` clears the
+ * given paths across providers. They are not mutually exclusive — apply all.
+ */
+export interface ScmHeadCacheInvalidation {
+  readonly full: boolean
+  readonly providerIds: ReadonlySet<string>
+  readonly paths: ReadonlySet<string>
+}
+
+const EMPTY_PATHS: ReadonlySet<string> = new Set()
+
+/**
+ * Decide which HEAD-cache slots an SCM change must invalidate.
+ *
+ * The invariant this leans on: `git show HEAD:<path>` output is fully determined
+ * by `(HEAD commit, path)`. If a provider's HEAD commit is unchanged, no file's
+ * HEAD content could have changed — no matter how the working tree / index
+ * moved, or whether files appeared / disappeared. So a provider that reports its
+ * HEAD revision needs *no* invalidation while that revision is unchanged, and a
+ * per-provider full invalidation exactly when it moves (commit / reset / merge /
+ * checkout / pull — even when every file's merged status letter stays the same).
+ *
+ * Providers that do not report a HEAD revision (a non-git SCM provider, or a
+ * repo with no commits yet) leave us nothing to compare, so we conservatively
+ * fall back to the file-status heuristic below: without the commit we cannot
+ * tell a HEAD move apart from a working-tree edit, so it over-invalidates rather
+ * than risk a stale diff.
+ */
+export function computeScmHeadCacheInvalidation(
+  prev: ScmHeadSnapshot,
+  next: ScmHeadSnapshot,
+): ScmHeadCacheInvalidation {
+  const providerIds = new Set<string>()
+  let needsFileFallback = false
+
+  const handles = new Set([...prev.heads.keys(), ...next.heads.keys()])
+  for (const handle of handles) {
+    const prevHead = prev.heads.get(handle)
+    const nextHead = next.heads.get(handle)
+    if (prevHead?.headRevision !== nextHead?.headRevision) {
+      const providerId = nextHead?.providerId ?? prevHead?.providerId
+      if (providerId) providerIds.add(providerId)
+    } else if (nextHead?.headRevision === undefined) {
+      needsFileFallback = true
+    }
+  }
+
+  if (!needsFileFallback) return { full: false, providerIds, paths: EMPTY_PATHS }
+
+  // Conservative fallback for providers that never report a HEAD revision.
+  const changed = new Set<string>()
+  let disappeared = false
+  for (const [key, deco] of prev.files) {
+    const cur = next.files.get(key)
+    if (cur === undefined) {
+      disappeared = true
+      changed.add(key)
+    } else if (cur.letter !== deco.letter) {
+      changed.add(key)
+    }
+  }
+  for (const key of next.files.keys()) {
+    if (!prev.files.has(key)) changed.add(key)
+  }
+  if (changed.size === 0 || disappeared) {
+    return { full: true, providerIds, paths: EMPTY_PATHS }
+  }
+  return { full: false, providerIds, paths: changed }
+}

@@ -25,7 +25,6 @@ import {
   type MouseEvent,
 } from 'react'
 import {
-  autorun,
   CommandsRegistry,
   Emitter,
   ICommandService,
@@ -91,6 +90,7 @@ import {
 import { useGraphKeyboardNav } from './useGraphKeyboardNav.js'
 import { useFullCommitMessages } from './useFullCommitMessages.js'
 import { usePersistedGraphSelection } from './usePersistedGraphSelection.js'
+import { useGitGraphAutoRefresh, useGitGraphEditorVisible } from './useGitGraphAutoRefresh.js'
 import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
@@ -367,7 +367,7 @@ const CommitRow = memo(function CommitRow({
   )
 })
 
-export function GitGraphEditor(_props: { input: IEditorInput }) {
+export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
   const notification = useService(INotificationService)
@@ -736,9 +736,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     // A reveal in progress drives its own paging; a mid-flight auto-refresh
     // would clobber the intermediate result and filter out the target.
     if (revealingRef.current) return
-    // The auto-refresh autorun (below) reacts to the SCM provider appearing,
-    // which the git extension does BEFORE registering the git-graph commands —
-    // querying here would warn "command not found" and drop the refresh.
+    // The auto-refresh subscription (useGitGraphAutoRefresh) reacts to the SCM
+    // provider appearing, which the git extension does BEFORE registering the
+    // git-graph commands — querying here would warn "command not found" and drop
+    // the refresh.
     if (!CommandsRegistry.getCommand(GitGraphCommands.getCommits)) return
     const seq = ++fetchSeqRef.current
     void commands
@@ -854,27 +855,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   // Auto-refresh: any git change (commit, checkout, stage, working-tree edit)
   // re-runs the repo's `git status`, which the SCM service mirrors as fresh
-  // resource arrays. Observe those to debounce a background reload.
-  useEffect(() => {
-    let first = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const disposable = autorun((r) => {
-      for (const sc of scm.sourceControls.read(r)) {
-        sc.count.read(r)
-        for (const group of sc.groups.read(r)) group.resources.read(r)
-      }
-      if (first) {
-        first = false
-        return
-      }
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => revalidate(), AUTO_REFRESH_DEBOUNCE)
-    })
-    return () => {
-      disposable.dispose()
-      if (timer) clearTimeout(timer)
-    }
-  }, [scm, revalidate])
+  // resource arrays. Observe those to debounce a background reload — but only
+  // while the graph is visible; a hidden graph marks stale and revalidates once
+  // on re-show instead of paying ~6 git sub-processes per change per window.
+  const visible = useGitGraphEditorVisible(input)
+  useGitGraphAutoRefresh(
+    scm,
+    visible,
+    revalidate,
+    AUTO_REFRESH_DEBOUNCE,
+    logger ? (message) => logger.debug(message) : undefined,
+  )
 
   // Restore scroll position after the body is laid out.
   useLayoutEffect(() => {

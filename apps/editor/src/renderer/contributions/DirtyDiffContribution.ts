@@ -41,7 +41,7 @@ import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
-import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { IScmDecorationsService, scmPathKey } from '../services/scm/ScmDecorationsService.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
@@ -53,9 +53,13 @@ import {
 } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import {
   computeDirtyDiffRegionsFromLines,
+  computeScmHeadCacheInvalidation,
   toDiffLines,
   trimTrailingEmptyLine,
   type DirtyDiffRegion,
+  type ScmHeadCacheInvalidation,
+  type ScmHeadSnapshot,
+  type ScmProviderHeadState,
 } from './dirtyDiff.js'
 
 /** Context key VSCode names `dirtyDiffVisible`; gates the Esc close keybinding. */
@@ -115,6 +119,8 @@ export class DirtyDiffContribution
   /** HEAD content per provider+path slot; null = no HEAD revision (new file). */
   private readonly _headCache = new Map<string, HeadContent | null>()
   private readonly _inflight = new Map<string, Promise<HeadContent | null>>()
+  /** Last SCM snapshot (files + per-provider HEAD revisions), for HEAD-cache invalidation. */
+  private _prevScmSnapshot: ScmHeadSnapshot | undefined
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -143,12 +149,23 @@ export class DirtyDiffContribution
       }),
     )
 
-    // SCM changed (commit / stage / discard) → the HEAD revision may differ now.
+    // SCM changed (a `git status` refresh) → some files' HEAD revision may differ
+    // now. Invalidation is decided per provider from the reported HEAD commit
+    // (computeScmHeadCacheInvalidation). Both the decorations and each provider's
+    // headRevision are observed here so the decision re-runs when either lands:
+    // resourceStates and headRevision are separate wire calls and may arrive a
+    // tick apart (at most a momentary stale diff in between, final state correct).
     this._register(
       autorun((r) => {
-        scmDecorationsService.decorations.read(r)
-        this._headCache.clear()
-        if (this._activePath) this._triggerRefresh()
+        const snapshot = scmDecorationsService.decorations.read(r)
+        const heads = new Map<number, ScmProviderHeadState>()
+        for (const sc of this._scm.sourceControls.read(r)) {
+          heads.set(sc.handle, { providerId: sc.id, headRevision: sc.headRevision.read(r) })
+        }
+        const prev = this._prevScmSnapshot
+        this._prevScmSnapshot = { files: snapshot.files, heads }
+        if (prev === undefined) return
+        this._applyInvalidation(computeScmHeadCacheInvalidation(prev, this._prevScmSnapshot))
       }),
     )
 
@@ -296,6 +313,47 @@ export class DirtyDiffContribution
       path,
       scmViewState.selectedRepo.get(),
     )
+  }
+
+  /** Drop the HEAD-cache slots for the given `scmPathKey`s (across all providers). */
+  private _invalidateHeadCache(paths: ReadonlySet<string>): void {
+    if (paths.size === 0) return
+    for (const key of this._headCache.keys()) {
+      const nl = key.indexOf('\n')
+      if (nl !== -1 && paths.has(scmPathKey(key.slice(nl + 1)))) this._headCache.delete(key)
+    }
+  }
+
+  /** Drop every HEAD-cache slot whose provider matches `providerId` (key prefix). */
+  private _invalidateProviderHeadCache(providerId: string): void {
+    const prefix = `${providerId}\n`
+    for (const key of this._headCache.keys()) {
+      if (key.startsWith(prefix)) this._headCache.delete(key)
+    }
+  }
+
+  private _applyInvalidation(decision: ScmHeadCacheInvalidation): void {
+    if (decision.full) {
+      this._logger.debug('scm changed → full HEAD-cache invalidation')
+      this._headCache.clear()
+      if (this._activePath) this._triggerRefresh()
+      return
+    }
+    let activeAffected = false
+    const activeProvider = this._activePath ? this._resolveProviderId(this._activePath) : undefined
+    for (const providerId of decision.providerIds) {
+      this._logger.debug(`scm HEAD moved → invalidate provider ${providerId}`)
+      this._invalidateProviderHeadCache(providerId)
+      if (activeProvider === providerId) activeAffected = true
+    }
+    if (decision.paths.size > 0) {
+      this._logger.debug(`scm files changed → invalidate ${decision.paths.size} file(s)`)
+      this._invalidateHeadCache(decision.paths)
+      if (this._activePath && decision.paths.has(scmPathKey(this._activePath))) {
+        activeAffected = true
+      }
+    }
+    if (activeAffected && this._activePath) this._triggerRefresh()
   }
 
   private _getHead(path: string): Promise<HeadContent | null> {

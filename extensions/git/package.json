@@ -249,6 +249,16 @@
           "type": "boolean",
           "default": true,
           "description": "%git.config.timeline.showUncommitted.description%"
+        },
+        "git.autorefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "%git.config.autorefresh.description%"
+        },
+        "git.statusLimit": {
+          "type": "number",
+          "default": 10000,
+          "description": "%git.config.statusLimit.description%"
         }
       }
     }

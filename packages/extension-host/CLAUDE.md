@@ -74,7 +74,7 @@
 4. **renderer 侧** `MainThreadXxx.ts` 实现 `IMainThreadXxx`（注入所需 platform 服务）；`HostConnection.ts` 里 `server.registerChannel(ExtHostChannels.mainThreadXxx, ProxyChannel.fromService(...))`（若 host→renderer 方向还要 `client.getChannel` 建 ExtHost proxy）；依赖经 `HostConnectionDeps` 从 `ExtensionHostClientService._connect` 传入，无条件注册（单 host 无按 tier 条件注册）。
 5. 建完 `pnpm --filter @universe-editor/extensions-common --filter @universe-editor/extension-host build`（dev watcher 自动，离开 dev 手动），apps 才看得到新符号。
 
-**已有通道**（`ExtHostChannels`）：commands/window/scm/fs/output/languages/editor/ai/storage/webviews（`extHost*` + `mainThread*` 成对；window 的反向通道 `extHostWindow` 目前只回推 progress 取消）。加能力前先看有没有能复用的。
+**已有通道**（`ExtHostChannels`）：commands/window/scm/fs/output/languages/editor/ai/storage/webviews（`extHost*` + `mainThread*` 成对；window 的反向通道 `extHostWindow` 回推 progress 取消与窗口聚焦状态 `$acceptWindowState`）。加能力前先看有没有能复用的。
 
 ### ⑤ Workspace Trust（隔离在激活期，对照 VSCode）
 

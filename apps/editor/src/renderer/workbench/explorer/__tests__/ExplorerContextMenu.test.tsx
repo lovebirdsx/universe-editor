@@ -48,6 +48,7 @@ function scmModel(id: string, rootUri: string): IScmSourceControlModel {
     inputValue: observableValue('v', ''),
     inputPlaceholder: observableValue('p', ''),
     count: observableValue<number | undefined>('c', undefined),
+    headRevision: observableValue<string | undefined>('h', undefined),
     acceptCommand: observableValue('ac', undefined),
     acceptActions: observableValue('aa', undefined),
     groups: observableValue('g', []),

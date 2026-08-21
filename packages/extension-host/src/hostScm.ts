@@ -127,6 +127,7 @@ export class HostSourceControl implements SourceControl {
   readonly inputBox: HostInputBox
   private _count: number | undefined
   private _commitTemplate: string | undefined
+  private _headRevision: string | undefined
   private _acceptInputCommand: Command | undefined
   private _acceptInputActions: Command[] | undefined
   private readonly _groups = new Set<HostResourceGroup>()
@@ -156,6 +157,14 @@ export class HostSourceControl implements SourceControl {
   }
   set commitTemplate(value: string | undefined) {
     this._commitTemplate = value
+    this._updateFeatures()
+  }
+
+  get headRevision(): string | undefined {
+    return this._headRevision
+  }
+  set headRevision(value: string | undefined) {
+    this._headRevision = value
     this._updateFeatures()
   }
 
@@ -201,6 +210,10 @@ export class HostSourceControl implements SourceControl {
     void this._scm.$updateSourceControl(this._handle, {
       ...(this._count !== undefined ? { count: this._count } : {}),
       ...(this._commitTemplate !== undefined ? { commitTemplate: this._commitTemplate } : {}),
+      // Always send (null when cleared): an omitted key can't clear the
+      // renderer's stale HEAD, so a provider that stops reporting (or empties)
+      // would otherwise leave the renderer believing the old HEAD still stands.
+      headRevision: this._headRevision ?? null,
       ...(this._acceptInputCommand !== undefined
         ? { acceptInputCommand: toCommandDto(this._acceptInputCommand, SCM_COMMAND_WIRE_FIELDS) }
         : {}),

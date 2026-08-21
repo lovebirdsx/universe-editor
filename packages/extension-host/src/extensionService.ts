@@ -81,6 +81,7 @@ import {
   type UriComponents,
   type WebviewOptions,
   type WebviewPanel,
+  type WindowState,
   type WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import {
@@ -93,6 +94,7 @@ import {
   type IFormattingOptionsDto,
   type IExtHostEnvironmentDto,
   type IExtHostFileStatDto,
+  type IExtHostWindowStateDto,
   type IExtensionDescriptionDto,
   type IFileChangeEventDto,
   type IInlayHintDto,
@@ -326,6 +328,11 @@ export class ExtensionService implements IExtensionHostBridge {
   /** Workspace Trust state; seeded via `$initializeWorkspaceTrust`, flipped by a grant. */
   private _trusted = false
   private readonly _onDidGrantWorkspaceTrust = new Emitter<void>()
+
+  /** Window focus state; seeded via `$acceptWindowState` before any activation. */
+  private _windowFocused = true
+  private readonly _onDidChangeWindowState = new Emitter<WindowState>()
+  readonly onDidChangeWindowState: Event<WindowState> = this._onDidChangeWindowState.event
 
   /** `env` namespace data; seeded via `$initializeEnvironment` before activation. */
   private _environment: IExtHostEnvironmentDto = {
@@ -575,6 +582,19 @@ export class ExtensionService implements IExtensionHostBridge {
   /** IExtHostWindow.$acceptProgressCanceled — the user cancelled the progress UI. */
   acceptProgressCanceled(handle: number): void {
     this._progressCancels.get(handle)?.cancel()
+  }
+
+  /** IExtensionHostBridge.windowState — the latest pushed focus-state snapshot. */
+  get windowState(): WindowState {
+    return { focused: this._windowFocused }
+  }
+
+  /** IExtHostWindow.$acceptWindowState — the renderer pushes focus state (seed +
+   *  changes). De-duped: only fires `onDidChangeWindowState` on a real change. */
+  acceptWindowState(state: IExtHostWindowStateDto): void {
+    if (state.focused === this._windowFocused) return
+    this._windowFocused = state.focused
+    this._onDidChangeWindowState.fire({ focused: state.focused })
   }
 
   async showOpenDialog(options?: OpenDialogOptionsBridge): Promise<UriComponents[] | undefined> {

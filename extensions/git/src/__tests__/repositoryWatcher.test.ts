@@ -80,8 +80,6 @@ function workingTreeFactory(
   return () => wt as unknown as FileSystemWatcher
 }
 
-const DEBOUNCE_MS = 400
-
 beforeEach(() => {
   vi.useFakeTimers()
   watchMock.mockReset()
@@ -108,7 +106,7 @@ describe('RepositoryWatcher', () => {
     watcher.dispose()
   })
 
-  it('debounces working-tree create/change/delete into one change', () => {
+  it('forwards working-tree create/change/delete to onChange', () => {
     const wt = makeWorkingTreeWatcher()
     const onChange = vi.fn()
     const watcher = new RepositoryWatcher('/repo', onChange, workingTreeFactory(wt))
@@ -116,8 +114,7 @@ describe('RepositoryWatcher', () => {
     wt.fire('create')
     wt.fire('change')
     wt.fire('delete')
-    vi.advanceTimersByTime(DEBOUNCE_MS)
-    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledTimes(3)
     watcher.dispose()
   })
 
@@ -133,8 +130,7 @@ describe('RepositoryWatcher', () => {
     controller.listener?.('change', 'objects')
     controller.listener?.('change', 'logs')
     controller.listener?.('change', 'index.lock')
-    vi.advanceTimersByTime(DEBOUNCE_MS)
-    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledTimes(2)
     watcher.dispose()
   })
 
@@ -152,7 +148,6 @@ describe('RepositoryWatcher', () => {
     expect(log).toHaveBeenCalled()
     // The injected working-tree watcher still drives changes.
     wt.fire('change')
-    vi.advanceTimersByTime(DEBOUNCE_MS)
     expect(onChange).toHaveBeenCalledTimes(1)
     watcher.dispose()
   })
@@ -182,7 +177,6 @@ describe('RepositoryWatcher', () => {
     watcher.start()
     watcher.dispose()
     wt.fire('change')
-    vi.advanceTimersByTime(DEBOUNCE_MS)
     expect(onChange).not.toHaveBeenCalled()
   })
 })

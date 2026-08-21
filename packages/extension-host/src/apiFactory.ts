@@ -68,6 +68,7 @@ import type {
   WebviewOptions,
   WebviewPanel,
   WillSaveTextDocumentEvent,
+  WindowState,
   WorkspaceEdit,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
@@ -185,6 +186,8 @@ export interface IExtensionHostBridge {
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
   readonly visibleTextEditors: readonly TextEditor[]
   readonly onDidChangeVisibleTextEditors: Event<readonly TextEditor[]>
+  readonly windowState: WindowState
+  readonly onDidChangeWindowState: Event<WindowState>
   createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
   registerCustomEditorProvider(
     viewType: string,

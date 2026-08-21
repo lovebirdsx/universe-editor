@@ -401,6 +401,9 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       machineId: versionInfo.machineId,
       appRoot: versionInfo.appRoot,
     })
+    // Seed the window focus state before any activation so `window.state.focused`
+    // is correct inside extensions' `activate`.
+    await connection.seedWindowState()
     this._logger.info(`extension host connected handle=${handle}`)
   }
 

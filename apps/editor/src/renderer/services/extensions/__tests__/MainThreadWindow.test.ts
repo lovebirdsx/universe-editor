@@ -23,6 +23,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type { IExtHostWindow } from '@universe-editor/extensions-common'
+import { E2E_PROBE_ENABLED_KEY } from '../../../../shared/e2e/contract.js'
 import { MainThreadWindow } from '../MainThreadWindow.js'
 
 function fakeNotification(): {
@@ -69,6 +70,21 @@ function fakeStatusBar(): {
 
 const noopExtHostWindow: IExtHostWindow = {
   $acceptProgressCanceled: () => Promise.resolve(),
+  $acceptWindowState: () => Promise.resolve(),
+}
+
+function fakeExtHostWindow(): {
+  extHostWindow: IExtHostWindow
+  acceptWindowState: ReturnType<typeof vi.fn>
+} {
+  const acceptWindowState = vi.fn().mockResolvedValue(undefined)
+  return {
+    extHostWindow: {
+      $acceptProgressCanceled: () => Promise.resolve(),
+      $acceptWindowState: acceptWindowState,
+    },
+    acceptWindowState,
+  }
 }
 
 function makeWindow(
@@ -266,7 +282,10 @@ describe('MainThreadWindow progress', () => {
     const cancelPush = vi.fn().mockResolvedValue(undefined)
     const mt = makeWindow({
       progress: progress.service,
-      extHostWindow: { $acceptProgressCanceled: cancelPush },
+      extHostWindow: {
+        $acceptProgressCanceled: cancelPush,
+        $acceptWindowState: () => Promise.resolve(),
+      },
     })
     await mt.$startProgress(3, { location: 15, cancellable: true })
     progress.runs[0]!.cancel()
@@ -401,5 +420,72 @@ describe('MainThreadWindow file dialogs', () => {
         ],
       }),
     )
+  })
+})
+
+describe('MainThreadWindow window state', () => {
+  it('seeds the current focus state once on seedWindowState', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+    const mt = makeWindow({ extHostWindow })
+    await mt.seedWindowState()
+    expect(acceptWindowState).toHaveBeenCalledTimes(1)
+    expect(acceptWindowState).toHaveBeenCalledWith({ focused: true })
+  })
+
+  it('pushes not-focused on window blur', () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+    makeWindow({ extHostWindow })
+    acceptWindowState.mockClear()
+    hasFocus.mockReturnValue(false)
+    window.dispatchEvent(new Event('blur'))
+    expect(acceptWindowState).toHaveBeenCalledWith({ focused: false })
+  })
+
+  it('treats a hidden document as not focused even while focused', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+    makeWindow({ extHostWindow })
+    acceptWindowState.mockClear()
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(acceptWindowState).toHaveBeenCalledWith({ focused: false })
+  })
+
+  it('synthesizes focused = hasFocus && not hidden', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+    const mt = makeWindow({ extHostWindow })
+    await mt.seedWindowState()
+    expect(acceptWindowState).toHaveBeenCalledWith({ focused: false })
+
+    acceptWindowState.mockClear()
+    hasFocus.mockReturnValue(true)
+    window.dispatchEvent(new Event('focus'))
+    expect(acceptWindowState).toHaveBeenCalledWith({ focused: true })
+  })
+
+  it('does not push when the synthesized value is unchanged', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+    makeWindow({ extHostWindow })
+    acceptWindowState.mockClear()
+    window.dispatchEvent(new Event('blur'))
+    expect(acceptWindowState).not.toHaveBeenCalled()
+  })
+
+  it('reports focused under E2E even when the document lacks real focus', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    Object.defineProperty(window, E2E_PROBE_ENABLED_KEY, { value: true, configurable: true })
+    try {
+      const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+      const mt = makeWindow({ extHostWindow })
+      await mt.seedWindowState()
+      expect(acceptWindowState).toHaveBeenCalledWith({ focused: true })
+    } finally {
+      Reflect.deleteProperty(window, E2E_PROBE_ENABLED_KEY)
+    }
   })
 })

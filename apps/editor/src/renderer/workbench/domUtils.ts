@@ -3,6 +3,8 @@
  *  Small DOM predicates shared across the workbench keyboard layers.
  *--------------------------------------------------------------------------------------------*/
 
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
+
 /**
  * True when the event target is a native text-entry control (input / textarea /
  * select) or a contenteditable region — i.e. a place where bare character keys
@@ -15,4 +17,16 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   const tag = target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
   return target.isContentEditable
+}
+
+/**
+ * Synthesized window-focus state: the window counts as focused only while the
+ * document actually has focus AND is not hidden (minimized / background tab).
+ * Single source of truth shared by MainThreadWindow and useWindowFocused. Under
+ * E2E the window never grabs real focus (showInactive), so it is treated as
+ * focused — it is the window the user/script is "looking at".
+ */
+export function isWindowFocused(): boolean {
+  if (window[E2E_PROBE_ENABLED_KEY] === true) return true
+  return document.hasFocus() && document.visibilityState !== 'hidden'
 }

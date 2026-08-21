@@ -1,8 +1,10 @@
 /**
- * Filesystem watcher for a repository: a debounced working-tree watch that
+ * Filesystem watcher for a repository: a working-tree watch that
  * drives `git status` refreshes, plus a non-recursive `.git` watch so
- * index/HEAD changes still trigger. Self-contained — owns its timers and
- * watchers and cleans them up on dispose. Split out of repository.ts.
+ * index/HEAD changes still trigger. Events are passed straight through to the
+ * refresh chain's single debounce (see repository.ts) — no extra debounce here.
+ * Self-contained — owns its watchers and cleans them up on dispose. Split out of
+ * repository.ts.
  *
  * Working-tree changes go through the extension API
  * `workspace.createFileSystemWatcher(RelativePattern(root, <all-files-glob>))`:
@@ -28,13 +30,10 @@ import {
 /** Creates the RPC-backed working-tree watcher; injectable for tests. */
 export type CreateFileSystemWatcher = (globPattern: GlobPattern) => FileSystemWatcher
 
-const WATCH_DEBOUNCE_MS = 400
-
 export class RepositoryWatcher {
   private readonly _gitWatchers: FSWatcher[] = []
   private readonly _subscriptions: { dispose(): void }[] = []
   private _workingTreeWatcher: FileSystemWatcher | undefined
-  private _debounce: ReturnType<typeof setTimeout> | undefined
   private _disposed = false
 
   constructor(
@@ -93,16 +92,11 @@ export class RepositoryWatcher {
 
   private _trigger(): void {
     if (this._disposed) return
-    if (this._debounce) clearTimeout(this._debounce)
-    this._debounce = setTimeout(() => {
-      this._debounce = undefined
-      if (!this._disposed) this._onChange()
-    }, WATCH_DEBOUNCE_MS)
+    this._onChange()
   }
 
   dispose(): void {
     this._disposed = true
-    if (this._debounce) clearTimeout(this._debounce)
     for (const sub of this._subscriptions) sub.dispose()
     this._subscriptions.length = 0
     try {
