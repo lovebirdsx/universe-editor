@@ -485,6 +485,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     setConfigOption: () => Promise.resolve(),
     renameTitle: () => {},
     rewindTo: () => Promise.resolve(undefined),
+    requestExtMethod: () => Promise.resolve(undefined),
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
     recoveryState: observableValue('test.recovery', undefined),

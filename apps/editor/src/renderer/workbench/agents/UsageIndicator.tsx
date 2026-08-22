@@ -1,34 +1,173 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  UsageIndicator — compact account-level API usage readout shown in PromptInput's
- *  action row, right of the session timer. Subscribes to IApiUsageService; clicking
- *  opens a popover with detailed breakdown and triggers a manual refresh. Hidden
- *  entirely when usage credentials are not configured.
+ *  UsageIndicator — the usage readout in PromptInput's action row, right of the
+ *  session timer. Which readout it shows depends on how the session's agent is
+ *  authenticated (see `resolveUsageDisplay`):
+ *
+ *   - an official subscription (claude.ai Pro/Max, ChatGPT Plus/Pro) reports
+ *     rate-limit windows, so the collapsed form is the tightest window's used
+ *     percentage — matching what the vendors' own clients show — and the popover
+ *     breaks every window down with a bar and a reset time. Codex additionally
+ *     offers redeeming a rate-limit reset credit from there.
+ *   - the internal API gateway bills in ¥, so claude-code sessions on it keep the
+ *     monthly spend readout.
+ *   - anything else hides the indicator. In particular a Codex session never
+ *     shows the ¥ figure: that number is the Claude gateway account's.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
-import { CircleAlert, Wallet } from 'lucide-react'
-import { localize } from '@universe-editor/platform'
-import { useOptionalService, useObservable } from '../useService.js'
-import { IApiUsageService } from '../../services/usage/ApiUsageService.js'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CircleAlert, Gauge, TimerReset, Wallet } from 'lucide-react'
+import {
+  constObservable,
+  generateUuid,
+  IDialogService,
+  INotificationService,
+  localize,
+  Severity,
+} from '@universe-editor/platform'
+import { useObservable, useOptionalService, useService } from '../useService.js'
+import { IApiUsageService, type UsageState } from '../../services/usage/ApiUsageService.js'
+import {
+  ISubscriptionUsageService,
+  type ResetCreditOutcome,
+} from '../../services/usage/SubscriptionUsageService.js'
+import {
+  pickTightestWindow,
+  resolveUsageDisplay,
+  type SubscriptionUsageSnapshot,
+  type SubscriptionUsageWindow,
+} from '../../services/usage/subscriptionUsage.js'
+import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import type { UsageSnapshot } from '../../../shared/ipc/services.js'
 import styles from './agents.module.css'
+
+/** Stable fallbacks so the hooks below stay unconditional when a service is absent. */
+const NO_SNAPSHOT = constObservable<SubscriptionUsageSnapshot | undefined>(undefined)
+const NO_GATEWAY = constObservable<UsageState>({ kind: 'disabled', reason: 'not-configured' })
+
+/** How often the component re-evaluates staleness while nothing else changes. */
+const STALE_RECHECK_MS = 30_000
 
 function formatCny(raw: number, digits: number = 2): string {
   return (raw / 10000).toFixed(digits)
 }
 
-export function UsageIndicator() {
-  const service = useOptionalService(IApiUsageService)
-  if (!service) return null
-  return <UsageIndicatorInner service={service} />
+function formatPercent(value: number): string {
+  return `${Math.round(value)}%`
 }
 
-function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
-  const state = useObservable(service.state)
-  const [open, setOpen] = useState(false)
+function formatAbsolute(epochMs: number): string {
+  return new Date(epochMs).toLocaleString()
+}
 
-  if (state.kind === 'disabled') return null
+/** "in 3h 20m" / "in 12m" while the window is still open, an absolute time once it is far out. */
+function formatResetsAt(epochMs: number, now: number): string {
+  const deltaMs = epochMs - now
+  if (deltaMs <= 0) return localize('acp.subscriptionUsage.resetsNow', 'resetting now')
+  const minutes = Math.round(deltaMs / 60_000)
+  if (minutes < 1) return localize('acp.subscriptionUsage.resetsNow', 'resetting now')
+  if (minutes < 60) {
+    return localize('acp.subscriptionUsage.resetsInMinutes', 'resets in {minutes}m', { minutes })
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    const rest = minutes % 60
+    return rest === 0
+      ? localize('acp.subscriptionUsage.resetsInHours', 'resets in {hours}h', { hours })
+      : localize('acp.subscriptionUsage.resetsInHoursMinutes', 'resets in {hours}h {minutes}m', {
+          hours,
+          minutes: rest,
+        })
+  }
+  return localize('acp.subscriptionUsage.resetsAt', 'resets {at}', { at: formatAbsolute(epochMs) })
+}
+
+export function UsageIndicator({ session }: { session: IAcpSession }) {
+  const agentId = session.agentId
+  const subscription = useOptionalService(ISubscriptionUsageService)
+  const gateway = useOptionalService(IApiUsageService)
+
+  const snapshotObservable = useMemo(
+    () => subscription?.snapshotFor(agentId) ?? NO_SNAPSHOT,
+    [subscription, agentId],
+  )
+  const snapshot = useObservable(snapshotObservable)
+  const gatewayState = useObservable(gateway?.state ?? NO_GATEWAY)
+
+  const [open, setOpen] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+
+  // Without a live agent connection nothing pushes a new snapshot, so the "is it
+  // still fresh?" answer has to be recomputed on our own clock.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), STALE_RECHECK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    void subscription?.refresh(agentId)
+  }, [subscription, agentId])
+
+  const display = resolveUsageDisplay({
+    agentId,
+    snapshot,
+    gatewayDisabled: gatewayState.kind === 'disabled',
+  })
+
+  if (display === 'hidden') return null
+
+  if (display === 'gateway') {
+    return <GatewayIndicator state={gatewayState} onRefresh={() => gateway?.refresh()} />
+  }
+
+  // `display === 'subscription'` implies a snapshot exists.
+  const usage = snapshot as SubscriptionUsageSnapshot
+  const tightest = pickTightestWindow(usage)
+  const stale = subscription?.isStale(usage, now) === true
+
+  const tooltip = stale
+    ? localize(
+        'acp.subscriptionUsage.indicator.stale',
+        'Subscription usage as of {at} — click for details',
+        { at: formatAbsolute(usage.fetchedAt) },
+      )
+    : localize('acp.subscriptionUsage.indicator', 'Subscription usage — click for details')
+
+  return (
+    <div className={styles['usageWrap']}>
+      <button
+        type="button"
+        className={styles['usageIndicator']}
+        data-state="ok"
+        data-stale={stale ? 'true' : undefined}
+        data-tooltip={tooltip}
+        onClick={() => {
+          if (!open) void subscription?.refresh(agentId, { force: true })
+          setNow(Date.now())
+          setOpen((v) => !v)
+        }}
+        data-testid="acp-usage-indicator"
+      >
+        <Gauge size={13} strokeWidth={1.75} aria-hidden="true" />
+        <span className={styles['usageIndicatorText']}>
+          {tightest === undefined ? '—' : formatPercent(tightest.usedPercent)}
+        </span>
+      </button>
+      {open ? (
+        <SubscriptionUsagePopover
+          agentId={agentId}
+          snapshot={usage}
+          stale={stale}
+          now={now}
+          onDismiss={() => setOpen(false)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function GatewayIndicator({ state, onRefresh }: { state: UsageState; onRefresh: () => void }) {
+  const [open, setOpen] = useState(false)
 
   if (state.kind === 'error') {
     return (
@@ -39,7 +178,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         data-tooltip={localize('acp.usage.error', 'API usage unavailable: {reason}', {
           reason: state.message,
         })}
-        onClick={() => service.refresh()}
+        onClick={onRefresh}
         data-testid="acp-usage-indicator"
       >
         <CircleAlert size={13} strokeWidth={1.75} aria-hidden="true" />
@@ -54,13 +193,17 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         className={styles['usageIndicator']}
         data-state="loading"
         data-tooltip={localize('acp.usage.loading', 'Loading API usage…')}
-        onClick={() => service.refresh()}
+        onClick={onRefresh}
         data-testid="acp-usage-indicator"
       >
         <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
       </button>
     )
   }
+
+  // Unreachable via `resolveUsageDisplay` (it maps 'disabled' to 'hidden'), but
+  // the union still carries the case.
+  if (state.kind !== 'ok') return null
 
   const s = state.snapshot
   return (
@@ -71,7 +214,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
         data-state="ok"
         data-tooltip={localize('acp.usage.indicator', 'API monthly usage — click for breakdown')}
         onClick={() => {
-          if (!open) service.refresh()
+          if (!open) onRefresh()
           setOpen((v) => !v)
         }}
         data-testid="acp-usage-indicator"
@@ -84,13 +227,8 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
   )
 }
 
-function UsagePopover({
-  snapshot: s,
-  onDismiss,
-}: {
-  snapshot: UsageSnapshot
-  onDismiss: () => void
-}) {
+/** Close on an outside click or Escape — shared by both popovers. */
+function useDismissOnOutside(onDismiss: () => void) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -113,6 +251,214 @@ function UsagePopover({
       document.removeEventListener('keydown', handleKey)
     }
   }, [onDismiss])
+
+  return containerRef
+}
+
+function SubscriptionUsagePopover({
+  agentId,
+  snapshot,
+  stale,
+  now,
+  onDismiss,
+}: {
+  agentId: string
+  snapshot: SubscriptionUsageSnapshot
+  stale: boolean
+  now: number
+  onDismiss: () => void
+}) {
+  const containerRef = useDismissOnOutside(onDismiss)
+  const subscription = useService(ISubscriptionUsageService)
+  const dialog = useService(IDialogService)
+  const notification = useService(INotificationService)
+  const [redeeming, setRedeeming] = useState(false)
+
+  const availableCredits = snapshot.resetCredits?.availableCount ?? 0
+
+  const redeem = useCallback(async () => {
+    const result = await dialog.confirm({
+      type: 'warning',
+      message: localize('acp.subscriptionUsage.reset.confirm', 'Redeem a rate-limit reset credit?'),
+      detail: localize(
+        'acp.subscriptionUsage.reset.confirmDetail',
+        'This consumes one of your {count} available credits and cannot be undone.',
+        { count: availableCredits },
+      ),
+      primaryButton: localize('acp.subscriptionUsage.reset.confirmButton', 'Redeem'),
+    })
+    if (!result.confirmed) return
+
+    // One user confirmation = one key. A retry of this same attempt must reuse it,
+    // or the retry burns a second credit.
+    const idempotencyKey = generateUuid()
+    setRedeeming(true)
+    let outcome: ResetCreditOutcome
+    try {
+      outcome = await subscription.consumeResetCredit(agentId, idempotencyKey)
+    } finally {
+      setRedeeming(false)
+    }
+    notification.notify(resetCreditNotification(outcome))
+  }, [agentId, availableCredits, dialog, notification, subscription])
+
+  return (
+    <div
+      ref={containerRef}
+      className={styles['sessionCostPopover']}
+      data-testid="acp-usage-popover"
+      role="dialog"
+      aria-label={localize('acp.subscriptionUsage.popover', 'Subscription usage breakdown')}
+    >
+      <div className={styles['sessionCostHeader']}>
+        <span>
+          {snapshot.planLabel === undefined
+            ? localize('acp.subscriptionUsage.popover.title', 'Subscription usage')
+            : localize('acp.subscriptionUsage.popover.titlePlan', 'Subscription usage · {plan}', {
+                plan: snapshot.planLabel,
+              })}
+        </span>
+      </div>
+
+      {snapshot.windows.length === 0 ? (
+        <div className={styles['sessionCostEmpty']}>
+          {localize('acp.subscriptionUsage.noWindows', 'No rate-limit windows reported.')}
+        </div>
+      ) : (
+        snapshot.windows.map((window) => (
+          <UsageWindowRow key={window.id} window={window} now={now} />
+        ))
+      )}
+
+      {snapshot.extraUsage?.enabled === true ? (
+        <div className={styles['sessionCostFooter']} style={{ marginTop: 6 }}>
+          {snapshot.extraUsage.usedCredits === undefined
+            ? localize('acp.subscriptionUsage.extraUsage', 'Extra usage: on')
+            : localize(
+                'acp.subscriptionUsage.extraUsageSpend',
+                'Extra usage: {used} / {limit} {currency}',
+                {
+                  used: snapshot.extraUsage.usedCredits,
+                  limit: snapshot.extraUsage.monthlyLimit ?? '—',
+                  currency: snapshot.extraUsage.currency ?? '',
+                },
+              )}
+        </div>
+      ) : null}
+
+      {snapshot.resetCredits !== undefined ? (
+        <div className={styles['usageResetRow']}>
+          <span>
+            {localize('acp.subscriptionUsage.resetCredits', 'Reset credits: {count}', {
+              count: availableCredits,
+            })}
+          </span>
+          <button
+            type="button"
+            className={styles['usageResetButton']}
+            disabled={availableCredits <= 0 || redeeming}
+            onClick={() => void redeem()}
+            data-testid="acp-usage-reset-credit"
+          >
+            <TimerReset size={12} strokeWidth={1.75} aria-hidden="true" />
+            {localize('acp.subscriptionUsage.reset.action', 'Reset limit')}
+          </button>
+        </div>
+      ) : null}
+
+      <div className={styles['sessionCostFooter']} data-stale={stale ? 'true' : undefined}>
+        {stale
+          ? localize('acp.subscriptionUsage.staleFooter', 'Data as of {at} (no live session)', {
+              at: formatAbsolute(snapshot.fetchedAt),
+            })
+          : localize('acp.subscriptionUsage.freshFooter', 'Updated {at}', {
+              at: formatAbsolute(snapshot.fetchedAt),
+            })}
+      </div>
+    </div>
+  )
+}
+
+function UsageWindowRow({ window, now }: { window: SubscriptionUsageWindow; now: number }) {
+  return (
+    <div className={styles['usageWindowRow']} data-testid="acp-usage-window">
+      <div className={styles['usageWindowHead']}>
+        <span className={styles['usageWindowLabel']}>{window.label}</span>
+        <span className={styles['sessionCostTotal']}>{formatPercent(window.usedPercent)}</span>
+      </div>
+      <div className={styles['compactionProgress']} style={{ width: '100%', marginLeft: 0 }}>
+        <span
+          className={styles['compactionProgressFill']}
+          style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }}
+        />
+      </div>
+      {window.resetsAt === undefined ? null : (
+        <div className={styles['usageWindowReset']}>{formatResetsAt(window.resetsAt, now)}</div>
+      )}
+    </div>
+  )
+}
+
+function resetCreditNotification(outcome: ResetCreditOutcome): {
+  severity: Severity
+  message: string
+} {
+  switch (outcome) {
+    case 'reset':
+      return {
+        severity: Severity.Info,
+        message: localize('acp.subscriptionUsage.reset.done', 'Rate limit reset.'),
+      }
+    // The credit was already spent on this attempt — treat it as success rather
+    // than tempting the user into a second redemption.
+    case 'alreadyRedeemed':
+      return {
+        severity: Severity.Info,
+        message: localize(
+          'acp.subscriptionUsage.reset.alreadyRedeemed',
+          'That reset credit was already redeemed.',
+        ),
+      }
+    case 'nothingToReset':
+      return {
+        severity: Severity.Info,
+        message: localize(
+          'acp.subscriptionUsage.reset.nothingToReset',
+          'No rate limit is currently hit — nothing to reset.',
+        ),
+      }
+    case 'noCredit':
+      return {
+        severity: Severity.Warning,
+        message: localize(
+          'acp.subscriptionUsage.reset.noCredit',
+          'No reset credit is available on this account.',
+        ),
+      }
+    case 'unavailable':
+      return {
+        severity: Severity.Warning,
+        message: localize(
+          'acp.subscriptionUsage.reset.unavailable',
+          'No live agent session to redeem through — send a message first.',
+        ),
+      }
+    case 'failed':
+      return {
+        severity: Severity.Error,
+        message: localize('acp.subscriptionUsage.reset.failed', 'Failed to redeem the credit.'),
+      }
+  }
+}
+
+function UsagePopover({
+  snapshot: s,
+  onDismiss,
+}: {
+  snapshot: UsageSnapshot
+  onDismiss: () => void
+}) {
+  const containerRef = useDismissOnOutside(onDismiss)
 
   const pct = s.periodLimitCny > 0 ? ((s.periodUsedCny / s.periodLimitCny) * 100).toFixed(1) : '0.0'
 

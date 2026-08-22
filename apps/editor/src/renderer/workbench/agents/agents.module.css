@@ -1227,6 +1227,13 @@
   color: var(--vscode-badge-errorBackground, #a1260d);
 }
 
+/* Cached readout with no live session behind it: keep the number legible but
+   visibly provisional, with the cutoff time in the tooltip. */
+.usageIndicator[data-stale='true'] {
+  opacity: 0.55;
+  font-style: italic;
+}
+
 .usageIndicatorText {
   white-space: nowrap;
 }
@@ -1235,6 +1242,66 @@
   position: relative;
   display: inline-flex;
   flex-shrink: 0;
+}
+
+.usageWindowRow {
+  padding: 4px 0;
+}
+
+.usageWindowHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+
+.usageWindowLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageWindowReset {
+  margin-top: 3px;
+  color: var(--vscode-agent-messageRoleForeground, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.85);
+}
+
+.usageResetRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--vscode-workbench-border, #444);
+}
+
+.usageResetButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-workbench-border, #555);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground, #ccc);
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.usageResetButton:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.usageResetButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sessionCostFooter[data-stale='true'] {
+  font-style: italic;
 }
 
 .compactionChip {

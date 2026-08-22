@@ -721,6 +721,25 @@ export interface IAcpSession {
     messageId: string,
     options?: { dryRun?: boolean; rewindFiles?: boolean },
   ): Promise<RewindFilesResult | undefined>
+  /**
+   * Send a custom ext-method request over this session's existing agent
+   * connection, riding along on whatever the session already has open.
+   *
+   * Returns `undefined` — rather than throwing — when there is no live
+   * connection yet (or it has already been torn down, or the agent has not
+   * issued a session id yet), because callers use this to opportunistically
+   * poll agent-side state: an agent process that is not running is an expected
+   * outcome, not an error. It deliberately does NOT establish a connection; the
+   * pool stops idle agents 30s after the last lease is released and waking one
+   * just to read a status would defeat that.
+   *
+   * The session's agent-side id is added to `params` — every ext-method routed
+   * this way is session-scoped.
+   */
+  requestExtMethod<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<T | undefined>
 }
 
 /**

@@ -2085,6 +2085,29 @@ export class AcpSession extends Disposable implements IAcpSession {
       })
   }
 
+  /**
+   * Ride along on this session's existing connection to call a custom
+   * ext-method. Returns `undefined` when nothing is connected — callers poll
+   * agent-side state opportunistically and a stopped agent process is expected,
+   * not an error. Never opens a connection: the pool reclaims idle agents 30s
+   * after the last lease is released, and waking one to read a status would
+   * undo that.
+   */
+  async requestExtMethod<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T | undefined> {
+    const conn = this._conn
+    if (conn === undefined || conn.conn.signal.aborted) return undefined
+    const sessionIdOnAgent = this.sessionIdOnAgent.get()
+    // Every ext-method we route this way is session-scoped. Sending one without
+    // the agent-side id would make the agent reject it, and a caller that treats
+    // rejection as "this agent can't do it" would draw the wrong conclusion from
+    // what is really just the connecting window.
+    if (sessionIdOnAgent === undefined) return undefined
+    return (await conn.conn.extMethod(method, { sessionId: sessionIdOnAgent, ...params })) as T
+  }
+
   private _maybeDeriveTitleFromPrompt(text: string): void {
     // Resumed sessions carry no title service (factory withTitleService: false)
     // and already have a durable title — deriving from a post-resume prompt

@@ -219,6 +219,10 @@ import { RendererLifecycleService } from './services/lifecycle/RendererLifecycle
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import { ApiUsageService, IApiUsageService } from './services/usage/ApiUsageService.js'
+import {
+  ISubscriptionUsageService,
+  SubscriptionUsageService,
+} from './services/usage/SubscriptionUsageService.js'
 import { TooltipProvider } from '@universe-editor/workbench-ui'
 import { resolveShortcut } from './workbench/titlebar/keybindingFormat.js'
 import '@universe-editor/workbench-ui/tokens.css'
@@ -798,6 +802,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // UsageIndicator in PromptInput subscribes to its observable.
   const apiUsageService = workbenchStore.add(instantiation.createInstance(ApiUsageService))
   services.set(IApiUsageService, apiUsageService)
+
+  // Official-subscription usage (Claude plan windows / Codex rate limits). Reads
+  // over an ACP ext-method on whatever session connection is already open, so it
+  // must come after IAcpSessionService is registered.
+  const subscriptionUsageService = workbenchStore.add(
+    instantiation.createInstance(SubscriptionUsageService),
+  )
+  services.set(ISubscriptionUsageService, subscriptionUsageService)
 
   // Warm the built-in guide-doc cache from disk before contributions run:
   // WorkspaceRestoreContribution deserializes DocEditorInput tabs synchronously

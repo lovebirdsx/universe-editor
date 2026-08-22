@@ -4,7 +4,7 @@
  *
  *  Guards the wire contract between the editor and the REAL agent forks
  *  (vendor/claude-agent-acp, vendor/codex-acp). The editor's ACP SDK version and
- *  each fork's differ on purpose; the five custom ext-methods and their `_meta`
+ *  each fork's differ on purpose; the custom ext-methods and their `_meta`
  *  stamps were previously kept in sync only by "keep both in sync" comments with
  *  no automated check. This spawns each fork's built dist over a real stdio
  *  connection and asserts:
@@ -63,6 +63,8 @@ const distReady = (fork: ForkId): boolean => forkContractEnabled && forkDistExis
 const EXPECTED_METHOD_NAMES = {
   setSessionTitle: 'universe-editor/set_session_title',
   rewindSession: 'universe-editor/rewind_session',
+  subscriptionUsage: 'universe-editor/subscription_usage',
+  consumeResetCredit: 'universe-editor/consume_reset_credit',
   compaction: '_universe/compaction',
   sessionResurrection: '_universe/sessionResurrection',
   livenessPing: '_universe/liveness_ping',
@@ -86,16 +88,20 @@ describe('editor ext-method name table is the single source of truth', () => {
 // OFFLINE (no spawn, no binary), so CI fails the instant a fork drops/renames a
 // method the editor still calls.
 //
-// claude declares five; codex declares the two client->agent request methods it
-// implements (rewind/set_title — it does file rollback client-side and has no
-// compaction / sdkMessage surface) plus the liveness ping notification its
-// stall-watchdog probe forwards. The forks' ask_user_question ext-method is
-// their own fallback asset — the editor no longer calls it (AskUserQuestion now
-// flows over the standard elicitation channel), so it's not asserted here.
+// claude declares the request methods it implements; codex declares the
+// client->agent request methods it implements (rewind/set_title — it does file
+// rollback client-side and has no compaction / sdkMessage surface) plus the
+// liveness ping notification its stall-watchdog probe forwards. Both answer
+// subscription_usage for the usage indicator; only codex can redeem a
+// rate-limit reset credit (claude's plan has no equivalent). The forks'
+// ask_user_question ext-method is their own fallback asset — the editor no
+// longer calls it (AskUserQuestion now flows over the standard elicitation
+// channel), so it's not asserted here.
 const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
   claude: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
     EXPECTED_METHOD_NAMES.rewindSession,
+    EXPECTED_METHOD_NAMES.subscriptionUsage,
     EXPECTED_METHOD_NAMES.compaction,
     EXPECTED_METHOD_NAMES.sessionResurrection,
     EXPECTED_METHOD_NAMES.backgroundActivity,
@@ -106,6 +112,8 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
   codex: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
     EXPECTED_METHOD_NAMES.rewindSession,
+    EXPECTED_METHOD_NAMES.subscriptionUsage,
+    EXPECTED_METHOD_NAMES.consumeResetCredit,
     EXPECTED_METHOD_NAMES.livenessPing,
     // MCP startup outcome notification — flips the editor MCP panel's
     // config-seeded "pending" rows (claude covers this via sdkMessage instead).

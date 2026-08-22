@@ -1,0 +1,275 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  UsageIndicator tests — the gating table rendered:
+ *    - subscription snapshot → tightest window's used percentage
+ *    - claude-code without a snapshot → the gateway's ¥ figure
+ *    - codex without a snapshot → nothing (never the Claude gateway's number)
+ *    - stale snapshot → dimmed, with the cutoff time in the tooltip
+ *    - codex reset credit → confirm dialog, then one outcome toast per branch
+ *--------------------------------------------------------------------------------------------*/
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  IDialogService,
+  INotificationService,
+  InstantiationService,
+  observableValue,
+  ServiceCollection,
+  Severity,
+  type IDialogService as IDialogServiceType,
+  type INotificationService as INotificationServiceType,
+  type ISettableObservable,
+} from '@universe-editor/platform'
+import { UsageIndicator } from '../UsageIndicator.js'
+import { ServicesContext } from '../../useService.js'
+import { IApiUsageService, type UsageState } from '../../../services/usage/ApiUsageService.js'
+import {
+  ISubscriptionUsageService,
+  type ISubscriptionUsageService as ISubscriptionUsageServiceType,
+  type ResetCreditOutcome,
+} from '../../../services/usage/SubscriptionUsageService.js'
+import type { SubscriptionUsageSnapshot } from '../../../services/usage/subscriptionUsage.js'
+import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
+
+afterEach(() => cleanup())
+
+const FETCHED_AT = 1_700_000_000_000
+
+function snapshot(overrides: Partial<SubscriptionUsageSnapshot> = {}): SubscriptionUsageSnapshot {
+  return {
+    agentId: 'codex',
+    planLabel: 'plus',
+    windows: [
+      { id: 'a', label: '5-hour', usedPercent: 12, resetsAt: FETCHED_AT + 3_600_000 },
+      { id: 'b', label: 'Weekly', usedPercent: 76 },
+    ],
+    fetchedAt: FETCHED_AT,
+    ...overrides,
+  }
+}
+
+interface Harness {
+  readonly snapshotObs: ISettableObservable<SubscriptionUsageSnapshot | undefined>
+  readonly refresh: ReturnType<typeof vi.fn>
+  readonly consumeResetCredit: ReturnType<typeof vi.fn>
+  readonly confirm: ReturnType<typeof vi.fn>
+  readonly notify: ReturnType<typeof vi.fn>
+}
+
+function renderIndicator(options: {
+  agentId?: string
+  snapshot?: SubscriptionUsageSnapshot | undefined
+  stale?: boolean
+  gateway?: UsageState
+  confirmed?: boolean
+  outcome?: ResetCreditOutcome
+}): Harness {
+  const snapshotObs = observableValue<SubscriptionUsageSnapshot | undefined>(
+    'snapshot',
+    options.snapshot,
+  )
+  const refresh = vi.fn().mockResolvedValue(undefined)
+  const consumeResetCredit = vi.fn().mockResolvedValue(options.outcome ?? 'reset')
+  const subscription = {
+    _serviceBrand: undefined,
+    snapshotFor: () => snapshotObs,
+    refresh,
+    isStale: () => options.stale === true,
+    consumeResetCredit,
+  } as unknown as ISubscriptionUsageServiceType
+
+  const gatewayState = observableValue<UsageState>(
+    'gateway',
+    options.gateway ?? { kind: 'disabled', reason: 'not-configured' },
+  )
+  const gateway = {
+    _serviceBrand: undefined,
+    state: gatewayState,
+    refresh: vi.fn(),
+  }
+
+  const confirm = vi
+    .fn()
+    .mockResolvedValue({ confirmed: options.confirmed !== false, choice: 'primary' })
+  const notify = vi.fn().mockReturnValue({ close: () => {}, updateMessage: () => {} })
+
+  const services = new ServiceCollection()
+  services.set(ISubscriptionUsageService, subscription)
+  services.set(IApiUsageService, gateway as never)
+  services.set(IDialogService, {
+    _serviceBrand: undefined,
+    confirm,
+    prompt: vi.fn(),
+  } as unknown as IDialogServiceType)
+  services.set(INotificationService, {
+    _serviceBrand: undefined,
+    notify,
+  } as unknown as INotificationServiceType)
+  const inst = new InstantiationService(services)
+
+  const session = { agentId: options.agentId ?? 'codex' } as unknown as IAcpSession
+  render(<UsageIndicator session={session} />, {
+    wrapper: ({ children }) => (
+      <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
+    ),
+  })
+  return { snapshotObs, refresh, consumeResetCredit, confirm, notify }
+}
+
+describe('UsageIndicator — collapsed form', () => {
+  it('shows the tightest window as a percentage', () => {
+    renderIndicator({ snapshot: snapshot() })
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('76%')
+  })
+
+  it('refreshes on mount so a just-opened chat is not showing yesterday', () => {
+    const { refresh } = renderIndicator({ snapshot: snapshot() })
+    expect(refresh).toHaveBeenCalledWith('codex')
+  })
+
+  it('dims a stale reading and puts the cutoff time in the tooltip', () => {
+    renderIndicator({ snapshot: snapshot(), stale: true })
+    const button = screen.getByTestId('acp-usage-indicator')
+    expect(button.getAttribute('data-stale')).toBe('true')
+    expect(button.getAttribute('data-tooltip')).toContain(new Date(FETCHED_AT).toLocaleString())
+  })
+
+  it('falls back to the gateway ¥ figure for claude-code without a snapshot', () => {
+    renderIndicator({
+      agentId: 'claude-code',
+      snapshot: undefined,
+      gateway: {
+        kind: 'ok',
+        snapshot: {
+          date: '2023-11-14',
+          periodBucket: 'week',
+          periodUsedCny: 1_230_000,
+          periodLimitCny: 5_000_000,
+          periodRemainingCny: 3_770_000,
+          requests: 12,
+          rawTokens: 3456,
+          models: [],
+        },
+      } as unknown as UsageState,
+    })
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toContain('¥123')
+  })
+
+  it('never shows the claude gateway figure next to a codex session', () => {
+    renderIndicator({
+      agentId: 'codex',
+      snapshot: undefined,
+      gateway: {
+        kind: 'ok',
+        snapshot: {
+          date: '2023-11-14',
+          periodBucket: 'week',
+          periodUsedCny: 1_230_000,
+          periodLimitCny: 5_000_000,
+          periodRemainingCny: 3_770_000,
+          requests: 12,
+          rawTokens: 3456,
+          models: [],
+        },
+      } as unknown as UsageState,
+    })
+    expect(screen.queryByTestId('acp-usage-indicator')).toBeNull()
+  })
+
+  it('hides itself when neither readout applies', () => {
+    renderIndicator({ agentId: 'claude-code', snapshot: undefined })
+    expect(screen.queryByTestId('acp-usage-indicator')).toBeNull()
+  })
+})
+
+describe('UsageIndicator — popover', () => {
+  it('lists one bar per window and forces a fresh read on open', () => {
+    const { refresh } = renderIndicator({ snapshot: snapshot() })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+
+    expect(screen.getAllByTestId('acp-usage-window')).toHaveLength(2)
+    expect(screen.getByTestId('acp-usage-popover').textContent).toContain('plus')
+    expect(refresh).toHaveBeenCalledWith('codex', { force: true })
+  })
+
+  it('closes on Escape', async () => {
+    renderIndicator({ snapshot: snapshot() })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(screen.queryByTestId('acp-usage-popover')).not.toBeNull()
+
+    // The dismiss listeners are armed inside a rAF so the opening click cannot
+    // immediately close the popover again.
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' })
+    })
+    expect(screen.queryByTestId('acp-usage-popover')).toBeNull()
+  })
+
+  it('offers no reset button when the agent reports no credits at all', () => {
+    renderIndicator({ snapshot: snapshot() })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(screen.queryByTestId('acp-usage-reset-credit')).toBeNull()
+  })
+
+  it('disables the reset button when the balance is zero', () => {
+    renderIndicator({ snapshot: snapshot({ resetCredits: { availableCount: 0 } }) })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(screen.getByTestId<HTMLButtonElement>('acp-usage-reset-credit').disabled).toBe(true)
+  })
+})
+
+describe('UsageIndicator — redeeming a reset credit', () => {
+  function openWithCredits(overrides: Parameters<typeof renderIndicator>[0] = {}): Harness {
+    const harness = renderIndicator({
+      snapshot: snapshot({ resetCredits: { availableCount: 2 } }),
+      ...overrides,
+    })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    return harness
+  }
+
+  it('confirms first — the credit is consumed irreversibly', async () => {
+    const { confirm, consumeResetCredit } = openWithCredits({ confirmed: false })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('acp-usage-reset-credit'))
+    })
+    expect(confirm).toHaveBeenCalled()
+    expect(consumeResetCredit).not.toHaveBeenCalled()
+  })
+
+  it('sends one idempotency key per confirmed attempt', async () => {
+    const { consumeResetCredit, notify } = openWithCredits()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('acp-usage-reset-credit'))
+    })
+    expect(consumeResetCredit).toHaveBeenCalledTimes(1)
+    const [agentId, key] = consumeResetCredit.mock.calls[0] as [string, string]
+    expect(agentId).toBe('codex')
+    expect(key).toMatch(/[0-9a-f-]{36}/)
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: Severity.Info as number }),
+    )
+  })
+
+  it.each([
+    ['reset', Severity.Info],
+    ['alreadyRedeemed', Severity.Info],
+    ['nothingToReset', Severity.Info],
+    ['noCredit', Severity.Warning],
+    ['unavailable', Severity.Warning],
+    ['failed', Severity.Error],
+  ] as ReadonlyArray<readonly [ResetCreditOutcome, Severity]>)(
+    'reports the %s outcome to the user',
+    async (outcome, severity) => {
+      const { notify } = openWithCredits({ outcome })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('acp-usage-reset-credit'))
+      })
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ severity: severity as number }))
+    },
+  )
+})

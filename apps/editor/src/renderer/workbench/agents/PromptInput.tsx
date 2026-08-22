@@ -1438,7 +1438,7 @@ export function PromptInput({
         ) : null}
         <CompactionThresholdChip session={session} />
         <SessionCostIndicator session={session} />
-        <UsageIndicator />
+        <UsageIndicator session={session} />
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton

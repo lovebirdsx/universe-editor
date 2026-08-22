@@ -83,6 +83,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     setConfigOption: vi.fn().mockResolvedValue(undefined) as never,
     renameTitle: () => {},
     rewindTo: vi.fn().mockResolvedValue(undefined) as never,
+    requestExtMethod: vi.fn().mockResolvedValue(undefined) as never,
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
     recoveryState: observableValue('recovery', undefined),

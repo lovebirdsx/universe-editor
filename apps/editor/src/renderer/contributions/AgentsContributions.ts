@@ -266,6 +266,24 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'How often (milliseconds) the API usage indicator below the Agent prompt refreshes. Polling pauses while the window is hidden.',
             ),
           },
+          'acp.subscriptionUsage.refreshIntervalMs': {
+            type: 'number',
+            default: 60000,
+            minimum: 15000,
+            description: localize(
+              'settings.acp.subscriptionUsage.refreshIntervalMs',
+              'How often (milliseconds) the official-subscription usage indicator (Claude plan windows / Codex rate limits) refreshes. Each refresh reaches the running agent process, so this polls far less often than the gateway usage indicator.',
+            ),
+          },
+          'acp.subscriptionUsage.staleAfterMs': {
+            type: 'number',
+            default: 600000,
+            minimum: 60000,
+            description: localize(
+              'settings.acp.subscriptionUsage.staleAfterMs',
+              'How long (milliseconds) a subscription usage reading stays trustworthy. Past this the indicator dims the number and its tooltip shows when the data was read.',
+            ),
+          },
           'acp.sessions.confirmDelete': {
             type: 'boolean',
             default: true,

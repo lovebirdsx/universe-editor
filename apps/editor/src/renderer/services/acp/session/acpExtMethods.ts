@@ -31,6 +31,22 @@ export const ACP_EXT_METHODS = {
   setSessionTitle: 'universe-editor/set_session_title',
   /** client->agent request: rewind a session to a user message (files + history). */
   rewindSession: 'universe-editor/rewind_session',
+  /**
+   * client->agent request: read the official-subscription usage snapshot
+   * (claude.ai OAuth rate-limit windows / ChatGPT plan rate limits). Both forks
+   * implement it and return their vendor-native shape; the editor normalizes.
+   * An agent authenticating with an API key / gateway answers with a payload
+   * that normalizes to "not a subscription", which is a normal outcome — the
+   * indicator then falls back to the gateway spend readout (claude only).
+   */
+  subscriptionUsage: 'universe-editor/subscription_usage',
+  /**
+   * client->agent request: redeem one rate-limit reset credit (codex only —
+   * claude has no equivalent). Params `{ idempotencyKey }`; the backend picks
+   * the next available credit. Retrying a transient failure MUST reuse the same
+   * key, otherwise the retry burns a second credit.
+   */
+  consumeResetCredit: 'universe-editor/consume_reset_credit',
   /** agent->client notification: context-compaction lifecycle (start/success/failed). */
   compaction: '_universe/compaction',
   /** agent->client notification: wedged-session resurrection lifecycle (start/success/failed). */

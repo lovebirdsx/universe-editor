@@ -56,6 +56,7 @@ const rendererDomTests = [
   'src/renderer/services/output/__tests__/OutputModelService.test.ts',
   'src/renderer/services/search/__tests__/saveReplacedFile.test.ts',
   'src/renderer/services/search/__tests__/openEditorSearch.test.ts',
+  'src/renderer/services/usage/__tests__/SubscriptionUsageService.test.ts',
   'src/renderer/workbench/markdown/__tests__/markdownAnchors.test.ts',
 ]
 
