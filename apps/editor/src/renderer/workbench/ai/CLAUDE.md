@@ -4,7 +4,7 @@
 
 ## AI 设置页面（统一 Settings editor，AI + Agents）
 
-设置页是一个**虚拟 editor**（不是 webview、不是 view），对标 VSCode Settings Editor 的「左侧分类导航 + 右侧内容」双栏范式。左侧导航分两组：**AI**（静态分类：模型配置 / 功能模型）+ **Agents**（动态列出 `IAcpAgentRegistry.list()` 的每个 acp agent，选中后渲染该 agent 贡献的设置组件）。本节只讲这个**页面壳**怎么拼起来；底层 AI 模型服务三层架构（platform 契约 / main 实现 / renderer 门面）、加 vendor、密钥红线见 `apps/editor/CLAUDE.md` **套路 I**；Claude/agent 设置内容本体（claudeConfig 服务、认证库、面板）见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
+设置页是一个**虚拟 editor**（不是 webview、不是 view），对标 VSCode Settings Editor 的「左侧分类导航 + 右侧内容」双栏范式。左侧导航分两组：**AI**（静态分类：模型配置 / 功能模型）+ **Agents**（动态列出 `IAcpAgentRegistry.list()` 的每个 acp agent，选中后渲染该 agent 贡献的设置组件）。本节只讲这个**页面壳**怎么拼起来；底层 AI 模型服务三层架构（platform 契约 / main 实现 / renderer 门面）、加协议 provider、密钥明文策略见 `apps/editor/CLAUDE.md` **套路 I**；Claude/agent 设置内容本体（claudeConfig 服务、认证库、面板）见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
 
 > ⚠️ 第一原则：先认领改动落在**哪一层**——① 页面壳（导航/分组/状态/帮助，`AiSettingsEditor.tsx`）② 某个 AI 分类面板（`AiModelsPanel` / `AiFeatureModelsPanel`）③ 某个 agent 的设置组件（经 `agentSettingsRegistry` 贡献，见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)）④ 选模型命令（`actions/*Actions.ts`）⑤ 底层服务（`IAiModelService`，**出本主题**）。
 
@@ -21,14 +21,19 @@ apps/editor/src/renderer/workbench/ai/
                                     agent 项 → getAgentSettingsComponent(id) 渲染贡献组件（自带滚动），无则占位
                               统一持久化：settings.activeItem（值 `ai:<cat>` / `agent:<id>`）+ AI 项 per-item scrollTop
                               顶部 `import '../agentSettings/builtinAgentSettings.js'` 触发 Claude 自注册
-  AiModelsPanel.tsx           AI 分类①「模型配置」：provider group 卡片（baseUrl / apiKey / 模型列表 / 单模型参数）
-                              GroupCard（可折叠，折叠态持久化）+ ModelRow（参数配置展开）
-                              模型过滤框（per-group 持久化）；自定义模型置顶 + ★ 标记
+  AiModelsPanel.tsx           AI 分类①「模型配置」：两段式——Provider 类型段 + Provider 实例段
+                              类型段（协议/内置徽标 + 模型目录 + 费率编辑 + 来源徽标 + 「从网关刷新价格」）
+                              实例段（baseUrl / apiKey 掩码 / 连通性状态点 / 账号额度块 / 网关价目表状态）
+  ProviderTypeCard.tsx        类型卡片：模型目录 + 费率编辑 + 来源徽标 + 「从网关刷新价格」按钮
+  ProviderInstanceCard.tsx    实例卡片：baseUrl / apiKey 掩码 / 连通性状态点（仅「测试连接」时探测）/
+                              账号额度块 / 网关价目表状态 + 模型列表（自定义模型置顶 + ★ 标记）/
+                              单模型参数配置表单 + per-instance 过滤框
+  AddProviderDialog.tsx       加 provider 弹窗：先选类型（可新建类型）→ 填连接 → verify；选已有类型提示会复用其模型与费率
   AiFeatureModelsPanel.tsx    AI 分类②「功能模型」：chat / inline / commit 三行，数据驱动（FEATURES 数组）
                               点击行 → executeCommand 对应 pickModel 命令 → reload
   AiSettingsHelpButton.tsx    AI 分类 header 右上角「?」：点击弹 FocusScopeOverlay + MarkdownView 浮层（agent 项无帮助）
   aiSettingsHelpText.ts       两段帮助 markdown（default 英文；中文在 zh-CN.ts 同 key）
-  AiSettingsEditor.module.css 壳样式（双栏 + navGroupTitle 分组标题 + 卡片 + 功能行 + 帮助浮层 + 空状态），只用 --color-* + tokens.css
+  AiSettingsEditor.module.css 壳样式（双栏 + navGroupTitle 分组标题 + 卡片 + 功能行 + 帮助浮层 + 空状态），颜色用 --vscode-* 变量（运行时注入）+ tokens.css 间距/字号 token
 
 apps/editor/src/renderer/workbench/agentSettings/   ← agent 设置内容本体（见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)）
   agentSettingsRegistry.ts    registerAgentSettings / getAgentSettingsComponent（壳据此渲染 agent 项）
@@ -40,7 +45,7 @@ apps/editor/src/renderer/services/editor/AiSettingsEditorInput.ts
 
 apps/editor/src/renderer/actions/
   aiActions.ts                PickModelAction(ai.pickModel) / ManageModelsAction(ai.manageModels，标题 Open AI & Agent Settings)
-                              / OpenAiSettingsJsonAction / Set·ClearApiKeyAction + pickGroup helper
+                              / OpenAiSettingsJsonAction / Set·ClearApiKeyAction + pickProvider helper
   agentActions.ts             OpenAgentSettingsAction(workbench.action.agent.openSettings)：
                               预置 settings.activeItem=`agent:<defaultAgentId>` 后打开同一 AiSettingsEditorInput（定位到 Agents 区）
   inlineCompletionActions.ts  PickInlineCompletionModelAction(ai.inlineCompletion.pickModel) 等
@@ -69,8 +74,8 @@ const storage = useService(IStorageService)
 |---|---|---|
 | 当前激活项（AI 分类或 agent） | `settings.activeItem`（值 `ai:<cat>` / `agent:<id>`） | GLOBAL |
 | 各 AI 分类滚动位置 | `ai.settings.scroll.ai:<categoryId>` | GLOBAL |
-| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed` | GLOBAL |
-| 各 group 模型过滤文本 | `ai.settings.models.filter.<groupKey>` | GLOBAL |
+| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:types` / `section:instances` / `type:<id>` / `instance:<type>/<name>` | GLOBAL |
+| 各实例模型过滤文本 | `ai.settings.models.filter.<type>/<name>` | GLOBAL |
 | Claude 子分类 / 滚动（agent 项内部自管） | `agent.settings.claude.activeCategory` / `…scroll.<id>` | GLOBAL |
 
 > 全用 GLOBAL（AI/agent 配置与 workspace 无关）。滚动恢复要 `requestAnimationFrame` 等面板渲染后再设 `scrollTop`；切换项前先 flush 旧 AI 项滚动位置（agent 项不在壳里跟踪滚动）。
@@ -108,7 +113,7 @@ const storage = useService(IStorageService)
 - **点击功能行复用命令而非自造 picker**：`AiFeatureModelsPanel` 直接 `executeCommand('ai.pickModel'…)`，确保和状态栏 model picker 完全一致的体验，零重复逻辑。
 - **虚拟 EditorInput 无状态**：`AiSettingsEditorInput` 不存任何东西，页面所有数据 live 读 `IAiModelService` / `IClaudeConfigService`，UI 态（激活项/折叠/滚动/过滤）走 IStorageService。这样多窗口/重开行为一致。
 - **帮助浮层用 FocusScopeOverlay**：自带 focus trap + Esc + restoreFocus；再叠一个透明 backdrop 实现点击外部关闭。内容走共享 `MarkdownView`（不引新依赖）。
-- **样式零硬编码**：只用 `--color-*`（dark 默认 / light 在 `:root[data-theme=light]`，`workbench.css`）+ `tokens.css` 的 spacing/radius/font token，切主题零改动。注意：`ai/AiSettingsEditor.module.css` 用 `--color-*` token，而 `agentSettings/AgentSettingsEditor.module.css`（Claude 面板复用）用 `--ue-*` token，两套并存。
+- **样式零硬编码**：颜色只用 `--vscode-*` 变量（58 处，由 `renderer/services/themes/generateColorThemeCss.ts` 在运行时注入为 `:root` CSS 变量，本 CSS 文件不定义这些变量；文件里仅剩注释里一处 `--color-*` 字样）+ `tokens.css` 的 spacing/radius/font token，切主题零改动。注意：`agentSettings/AgentSettingsEditor.module.css`（Claude/Codex 面板复用）用 `--ue-*` token，两套并存。
 
 ### 易踩坑速记
 
@@ -135,7 +140,7 @@ pnpm e2e          # 涉及编辑器打开/交互时跑；已知多 worker flaky�
 ### 关键参考路径
 
 - `apps/editor/src/renderer/workbench/ai/AiSettingsEditor.tsx` —— 统一双栏壳 + AI_CATEGORIES + Agents 动态组 + 状态持久化
-- `apps/editor/src/renderer/workbench/ai/AiModelsPanel.tsx` —— 模型配置面板（折叠/过滤/置顶/参数）
+- `apps/editor/src/renderer/workbench/ai/AiModelsPanel.tsx` —— 模型配置面板（类型段 + 实例段，折叠/过滤/置顶/参数）
 - `apps/editor/src/renderer/workbench/ai/AiFeatureModelsPanel.tsx` —— 功能→模型（FEATURES 数组）
 - `apps/editor/src/renderer/workbench/ai/AiSettingsHelpButton.tsx` + `aiSettingsHelpText.ts` —— 帮助浮层 + 文案
 - `apps/editor/src/renderer/workbench/ai/AiSettingsEditor.module.css` —— 壳样式（token 化，navGroupTitle 分组标题）

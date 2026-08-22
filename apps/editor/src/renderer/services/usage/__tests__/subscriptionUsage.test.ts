@@ -10,6 +10,7 @@ import {
   pickTightestWindow,
   resolveUsageDisplay,
   toEpochMs,
+  type AccountUsageState,
   type SubscriptionUsageSnapshot,
 } from '../subscriptionUsage.js'
 
@@ -268,5 +269,77 @@ describe('resolveUsageDisplay', () => {
     expect(
       resolveUsageDisplay({ agentId: 'claude-code', snapshot: undefined, gatewayDisabled: true }),
     ).toBe('hidden')
+  })
+
+  describe('account', () => {
+    const account: AccountUsageState = {
+      hasSource: true,
+      usage: { kind: 'balance', remainingUSD: 1, fetchedAt: FETCHED_AT },
+    }
+    const unavailable: AccountUsageState = { hasSource: true }
+    const noSource: AccountUsageState = { hasSource: false }
+
+    it('prefers the account readout over the gateway ¥ figure', () => {
+      expect(
+        resolveUsageDisplay({
+          agentId: 'claude-code',
+          snapshot: undefined,
+          gatewayDisabled: false,
+          account,
+        }),
+      ).toBe('account')
+    })
+
+    it('shows unavailable rather than falling back to the gateway ¥ figure', () => {
+      expect(
+        resolveUsageDisplay({
+          agentId: 'claude-code',
+          snapshot: undefined,
+          gatewayDisabled: false,
+          account: unavailable,
+        }),
+      ).toBe('unavailable')
+    })
+
+    it('shows unavailable even for codex (the account gate precedes the agent gate)', () => {
+      expect(
+        resolveUsageDisplay({
+          agentId: 'codex',
+          snapshot: undefined,
+          gatewayDisabled: false,
+          account: unavailable,
+        }),
+      ).toBe('unavailable')
+    })
+
+    it('prefers the subscription snapshot over the account readout', () => {
+      expect(
+        resolveUsageDisplay({
+          agentId: 'claude-code',
+          snapshot,
+          gatewayDisabled: false,
+          account,
+        }),
+      ).toBe('subscription')
+    })
+
+    it('treats an account without a source the same as no account at all', () => {
+      expect(
+        resolveUsageDisplay({
+          agentId: 'claude-code',
+          snapshot: undefined,
+          gatewayDisabled: false,
+          account: noSource,
+        }),
+      ).toBe('gateway')
+      expect(
+        resolveUsageDisplay({
+          agentId: 'codex',
+          snapshot: undefined,
+          gatewayDisabled: false,
+          account: noSource,
+        }),
+      ).toBe('hidden')
+    })
   })
 })

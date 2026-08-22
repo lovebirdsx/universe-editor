@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CancellationToken } from '../../base/cancellation.js'
 import { AiModelRegistry } from '../../ai/aiModelRegistry.js'
-import type { AiResolvedGroup } from '../../ai/aiModelConfiguration.js'
+import { composeModelId, type AiResolvedProvider } from '../../ai/aiModelConfiguration.js'
 import type { IAiModelProvider } from '../../ai/aiModelProvider.js'
 import type { AiModelMetadata } from '../../ai/aiModelTypes.js'
 import type { AiResponse } from '../../ai/aiModelService.js'
@@ -22,13 +22,18 @@ function model(id: string, vendor: string, family = id): AiModelMetadata {
   }
 }
 
-function group(vendor: string, name = 'default'): AiResolvedGroup {
-  return { vendor, name, getApiKey: () => Promise.resolve(undefined) }
+function instance(overrides: Partial<AiResolvedProvider> = {}): AiResolvedProvider {
+  return { type: 'openai', name: 'default', protocol: 'openai-chat', ...overrides }
 }
 
 function fakeProvider(
   models: AiModelMetadata[],
-  opts: { provideModels?: () => Promise<readonly AiModelMetadata[]> } = {},
+  opts: {
+    provideModels?: (
+      provider: AiResolvedProvider,
+      token: CancellationToken,
+    ) => Promise<readonly AiModelMetadata[]>
+  } = {},
 ): IAiModelProvider {
   return {
     provideModels: opts.provideModels ?? (() => Promise.resolve(models)),
@@ -39,28 +44,37 @@ function fakeProvider(
   }
 }
 
+/** Derives models from a view's declaredModels, so per-bucket filtering is observable. */
+function deriveModels(view: AiResolvedProvider): AiModelMetadata[] {
+  return (view.declaredModels ?? []).map((m) =>
+    model(composeModelId(view.type, view.name, m.id), view.type, m.family ?? m.id),
+  )
+}
+
 describe('AiModelRegistry', () => {
-  it('registers and resolves models across groups', async () => {
+  it('registers and resolves models across instances', async () => {
     const reg = new AiModelRegistry()
-    reg.registerProvider('openai', fakeProvider([model('openai/default/gpt-4o', 'openai')]))
+    reg.registerProvider('openai-chat', fakeProvider([model('openai/default/gpt-4o', 'openai')]))
     reg.registerProvider('ollama', fakeProvider([model('ollama/default/llama3', 'ollama')]))
-    reg.setGroups([group('openai'), group('ollama')])
+    reg.setProviders([instance(), instance({ type: 'ollama', protocol: 'ollama' })])
     const ids = (await reg.getModels(CancellationToken.None)).map((m) => m.id).sort()
     expect(ids).toEqual(['ollama/default/llama3', 'openai/default/gpt-4o'])
     reg.dispose()
   })
 
-  it('returns no models for a group whose vendor has no provider', async () => {
+  it('returns no models for an instance whose protocol has no provider', async () => {
     const reg = new AiModelRegistry()
-    reg.setGroups([group('openai')])
+    reg.setProviders([instance()])
     expect(await reg.getModels(CancellationToken.None)).toEqual([])
     reg.dispose()
   })
 
-  it('rejects duplicate vendor registration', () => {
+  it('rejects duplicate protocol registration', () => {
     const reg = new AiModelRegistry()
-    reg.registerProvider('openai', fakeProvider([]))
-    expect(() => reg.registerProvider('openai', fakeProvider([]))).toThrow(/already registered/)
+    reg.registerProvider('openai-chat', fakeProvider([]))
+    expect(() => reg.registerProvider('openai-chat', fakeProvider([]))).toThrow(
+      /already registered/,
+    )
     reg.dispose()
   })
 
@@ -68,31 +82,31 @@ describe('AiModelRegistry', () => {
     const reg = new AiModelRegistry()
     const changes = vi.fn()
     reg.onDidChangeModels(changes)
-    const d = reg.registerProvider('openai', fakeProvider([]))
+    const d = reg.registerProvider('openai-chat', fakeProvider([]))
     expect(changes).toHaveBeenCalledTimes(1)
     d.dispose()
     expect(changes).toHaveBeenCalledTimes(2)
-    expect(reg.getProvider('openai')).toBeUndefined()
+    expect(reg.getProvider('openai-chat')).toBeUndefined()
     reg.dispose()
   })
 
-  it('caches provideModels and invalidates on setGroups', async () => {
+  it('caches provideModels and invalidates on setProviders', async () => {
     const provideModels = vi.fn(() => Promise.resolve([model('openai/default/gpt-4o', 'openai')]))
     const reg = new AiModelRegistry()
-    reg.registerProvider('openai', fakeProvider([], { provideModels }))
-    reg.setGroups([group('openai')])
+    reg.registerProvider('openai-chat', fakeProvider([], { provideModels }))
+    reg.setProviders([instance()])
 
     await reg.getModels(CancellationToken.None)
     await reg.getModels(CancellationToken.None)
     expect(provideModels).toHaveBeenCalledTimes(1) // cached
 
-    reg.setGroups([group('openai')]) // invalidate
+    reg.setProviders([instance()]) // invalidate
     await reg.getModels(CancellationToken.None)
     expect(provideModels).toHaveBeenCalledTimes(2)
     reg.dispose()
   })
 
-  it('dedups concurrent resolution of the same group', async () => {
+  it('dedups concurrent resolution of the same instance', async () => {
     let resolveFn: (m: readonly AiModelMetadata[]) => void = () => {}
     const provideModels = vi.fn(
       () =>
@@ -101,8 +115,8 @@ describe('AiModelRegistry', () => {
         }),
     )
     const reg = new AiModelRegistry()
-    reg.registerProvider('openai', fakeProvider([], { provideModels }))
-    reg.setGroups([group('openai')])
+    reg.registerProvider('openai-chat', fakeProvider([], { provideModels }))
+    reg.setProviders([instance()])
 
     const p1 = reg.getModels(CancellationToken.None)
     const p2 = reg.getModels(CancellationToken.None)
@@ -115,14 +129,14 @@ describe('AiModelRegistry', () => {
   it('selectModels filters by selector', async () => {
     const reg = new AiModelRegistry()
     reg.registerProvider(
-      'openai',
+      'openai-chat',
       fakeProvider([model('openai/default/gpt-4o', 'openai', 'gpt-4o')]),
     )
     reg.registerProvider(
       'ollama',
       fakeProvider([model('ollama/default/llama3', 'ollama', 'llama3')]),
     )
-    reg.setGroups([group('openai'), group('ollama')])
+    reg.setProviders([instance(), instance({ type: 'ollama', protocol: 'ollama' })])
     expect(await reg.selectModels({ vendor: 'ollama' }, CancellationToken.None)).toEqual([
       'ollama/default/llama3',
     ])
@@ -132,14 +146,14 @@ describe('AiModelRegistry', () => {
     reg.dispose()
   })
 
-  it('resolveModel locates the owning provider and group', async () => {
+  it('resolveModel locates the owning provider and resolved view', async () => {
     const reg = new AiModelRegistry()
     const p = fakeProvider([model('ollama/default/llama3', 'ollama')])
     reg.registerProvider('ollama', p)
-    reg.setGroups([group('ollama')])
+    reg.setProviders([instance({ type: 'ollama', protocol: 'ollama' })])
     const resolved = await reg.resolveModel('ollama/default/llama3', CancellationToken.None)
     expect(resolved?.provider).toBe(p)
-    expect(resolved?.group.name).toBe('default')
+    expect(resolved?.resolved.name).toBe('default')
     expect(await reg.resolveModel('missing', CancellationToken.None)).toBeUndefined()
     reg.dispose()
   })
@@ -153,12 +167,76 @@ describe('AiModelRegistry', () => {
         : Promise.resolve([model('openai/default/gpt-4o', 'openai')])
     })
     const reg = new AiModelRegistry()
-    reg.registerProvider('openai', fakeProvider([], { provideModels }))
-    reg.setGroups([group('openai')])
+    reg.registerProvider('openai-chat', fakeProvider([], { provideModels }))
+    reg.setProviders([instance()])
 
     await expect(reg.getModels(CancellationToken.None)).rejects.toThrow('transient')
     const ids = (await reg.getModels(CancellationToken.None)).map((m) => m.id)
     expect(ids).toEqual(['openai/default/gpt-4o'])
+    reg.dispose()
+  })
+
+  it('buckets declared protocols and resolves to the matching provider', async () => {
+    const openaiProvide = vi.fn((view: AiResolvedProvider) => Promise.resolve(deriveModels(view)))
+    const anthropicProvide = vi.fn((view: AiResolvedProvider) =>
+      Promise.resolve(deriveModels(view)),
+    )
+    const reg = new AiModelRegistry()
+    const openaiProvider = fakeProvider([], { provideModels: openaiProvide })
+    const anthropicProvider = fakeProvider([], { provideModels: anthropicProvide })
+    reg.registerProvider('openai-chat', openaiProvider)
+    reg.registerProvider('anthropic-messages', anthropicProvider)
+    reg.setProviders([
+      instance({
+        declaredModels: [
+          { id: 'gpt', protocol: 'openai-chat' },
+          { id: 'claude', protocol: 'anthropic-messages' },
+        ],
+      }),
+    ])
+    await reg.getModels(CancellationToken.None)
+    expect(openaiProvide).toHaveBeenCalledTimes(1)
+    expect(anthropicProvide).toHaveBeenCalledTimes(1)
+
+    expect((await reg.resolveModel('openai/default/gpt', CancellationToken.None))?.provider).toBe(
+      openaiProvider,
+    )
+    expect(
+      (await reg.resolveModel('openai/default/claude', CancellationToken.None))?.provider,
+    ).toBe(anthropicProvider)
+    reg.dispose()
+  })
+
+  it('routes a model with a baseUrl override into its own bucket', async () => {
+    const provideModels = vi.fn((view: AiResolvedProvider) => Promise.resolve(deriveModels(view)))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider([], { provideModels }))
+    reg.setProviders([
+      instance({ declaredModels: [{ id: 'gpt', baseUrl: 'https://custom.example/v1' }] }),
+    ])
+    const models = await reg.getModels(CancellationToken.None)
+    expect(models.map((m) => m.id)).toEqual(['openai/default/gpt'])
+    expect(provideModels).toHaveBeenCalledTimes(2) // default bucket + override bucket
+    const resolved = await reg.resolveModel('openai/default/gpt', CancellationToken.None)
+    expect(resolved?.resolved.baseUrl).toBe('https://custom.example/v1')
+    reg.dispose()
+  })
+
+  it('produces no models for a bucket whose protocol has no provider', async () => {
+    const provideModels = vi.fn((view: AiResolvedProvider) => Promise.resolve(deriveModels(view)))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider([], { provideModels }))
+    reg.setProviders([
+      instance({
+        declaredModels: [
+          { id: 'gpt', protocol: 'openai-chat' },
+          { id: 'claude', protocol: 'anthropic-messages' },
+        ],
+      }),
+    ])
+    const models = await reg.getModels(CancellationToken.None)
+    expect(models.map((m) => m.id)).toEqual(['openai/default/gpt'])
+    expect(provideModels).toHaveBeenCalledTimes(1)
     reg.dispose()
   })
 })

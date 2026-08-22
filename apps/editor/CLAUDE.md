@@ -330,31 +330,45 @@ Outline 数据由 `IOutlineService` 统一产出（`outline` / `activeSymbol` �
 
 参考：`services/languageFeatures/LanguageFeaturesService.ts`、`OutlineService.ts`、`markdown/markdown*Provider.ts`
 
-## 套路 I：加一个 AI 供应商（provider）
+## 套路 I：加一个 AI provider（协议）
 
-AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelProvider` provider 接口 + `AiModelRegistry`），main 出实现（`AiModelMainService` 持注册表、调度请求、把 provider 流"泵"成 `requestId` 维度的 chunk 事件），renderer 出门面客户端（`AiModelClientService` 把事件重组回干净 `AsyncIterable`）。**消费方只依赖 `IAiModelService`**，拿到 `AsyncIterable` + 可随时取消的 `result`。
+AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelProvider` provider 接口 + `AiModelRegistry` **按协议注册**），main 出实现（`AiModelMainService` 持注册表、读 `aiSettings.json`、把 provider 流"泵"成 `requestId` 维度的 chunk 事件），renderer 出门面客户端（`AiModelClientService` 把事件重组回干净 `AsyncIterable`）。**消费方只依赖 `IAiModelService`**，拿到 `AsyncIterable` + 可随时取消的 `result`。
 
-**对标 VSCode `LanguageModelsService` 的核心概念**（详见 `docs/report/agent-model-configuration.md`）：
-- **Provider Group**：一个 vendor 可有多个**命名 group**（持久化形态 `AiProviderGroup`，运行时形态 `AiResolvedGroup` 带 `baseUrl?` / `declaredModels?` / 闭包 `getApiKey()`）。group 是配置单位，承载 `baseUrl` / 手写 `models[]` / 单模型 `settings`。
-- **模型标识符**：`vendor/group/model` 三段（如 `openai/default/gpt-4o`）。helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`：`composeModelId` / `bareModelName` / `groupKey` / `vendorFromModelId`。
-- **单模型配置**：模型 metadata 可带 `configurationSchema`；用户值存 `group.settings[modelId]`；解析时 `schema 默认 → settings → per-request` 三层合并（在 main `getModelConfiguration` 内完成，下发给 provider 的 `options.modelConfiguration`）。
-- **激活模型**：用户为 chat 与 inline completion 各自选中的 model id，存 main 端 `aiSettings.json` 的 `activeModels.{chat,inlineCompletion}`（与 groups 同文件、单一事实源），经门面 `IAiModelService.get/setActiveModelId`（chat）与 `get/setInlineCompletionModelId` 读写，变更分别由 `onDidChangeActiveModel` / `onDidChangeInlineCompletionModel` 通知；**不进 settings.json**。
+**数据模型：类型（type）/ 实例（instance）两层**（`packages/platform/src/ai/aiModelConfiguration.ts`）：
+- **类型层 `AiProviderType`**：`{ label?, protocol, defaultBaseUrl?, requiresApiKey?, models?, pricing?, pricingSource?, usageSource? }`，承载**协议 + 模型目录 + 费率 + 价格来源**。内置三个 `anthropic`（Messages API）/ `openai`（openai-chat）/ `ollama`，定义在 `src/shared/ai/catalog/index.ts` 的 `BUILTIN_PROVIDER_TYPES`；用户可在 `aiSettings.json` 的 `providerTypes` 里新增或覆盖内置（同 id **整体替换**，不做字段级合并）。
+- **实例层 `AiProviderInstance`**：`{ name, type, label?, baseUrl?, apiKey?, usageSource?, models?, settings? }`，承载**连接 + 密钥 + 账号用量来源**。同类型多实例共享类型的模型表与费率——这正是解决「同一网关 8 个入口要抄 8 遍配置」的关键。
+- **模型 id 三段 `type/instance/model`**：helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`（`composeModelId` / `bareModelName` / `providerKey`（=`type/name`）/ `parseModelRef`）。第一段语义从「内置 vendor 名」变成「用户可定义的网关类型」。
+- **三维正交**：连接是实例级；协议是类型级默认、可被单模型 `protocol` 覆盖（所以一个类型可以是混合协议网关）；目录/费率是类型级（实例 `models` 追加，同 id 实例赢）。协议枚举 `AiWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'ollama'`（`packages/platform/src/ai/aiModelTypes.ts`）。
 
-**配置来源 `aiSettings.json`**（对标 VSCode `chatLanguageModels.json`）：位于 `<configDir>/aiSettings.json`（configDir 默认 = userData），顶层对象 `{ groups: AiProviderGroup[], activeModels?: { chat?, inlineCompletion? } }`，main 直接读文件解析后 `registry.setGroups(...)`，监听文件变更热重载；缺失/空/非对象时合成默认 group（`ollama/default` + `openai/default`）。**renderer 不再推配置**。
+**配置来源 `aiSettings.json`**：位于 `<configDir>/aiSettings.json`（configDir 默认 = userData），顶层 `{ providerTypes?, providers[], activeModels?, agentSettings? }`，main 直接读文件解析后 `registry.setProviders(resolveProviderInstances(providers, types))`，监听文件变更热重载；缺省为空（不再合成默认 group）。`activeModels.{chat,inlineCompletion,commit,sessionTitle}` 存各功能的活跃模型 id，经门面 `get/setActiveModelId`（chat）与 `get/setInlineCompletionModelId` / `get/setCommitModelId` / `get/setSessionTitleModelId` 读写，变更分别由 `onDidChange{ActiveModel,InlineCompletionModel,CommitModel,SessionTitleModel}` 通知；**不进 settings.json**。
 
-**加一个新 vendor（如 openai）= 一个文件 + 一行注册**：
+**加一个新协议 provider = 一个文件 + 一行注册**：
 
-1. 在 `main/services/ai/providers/` 写 `XxxProvider implements IAiModelProvider`，三个方法都吃 group 上下文：`provideModels(group, token)` / `sendRequest(messages, options, group, token)` / `provideTokenCount(modelId, text, group?, token?)`。baseUrl 取 `group.baseUrl ?? 默认`；密钥取 `await group.getApiKey()`；**端点枚举的模型 + `group.declaredModels` 合并**（手写优先）；`sendRequest` 读 `options.modelConfiguration` 映射到请求体。用 `AsyncIterableSource` + `DeferredPromise` 产流，监听 `token.onCancellationRequested` 中止 fetch，HTTP 状态映射到 `AiErrorCode`。参考 `ollamaProvider.ts` / `openAiProvider.ts`。
-2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('xxx', new XxxProvider()))`（**无构造参数**，密钥/baseUrl 都从 group 走）。
-3. 若想给该 vendor 的 `aiSettings.json` 结构提供补全/校验，schema 在 `contributions/AiConfigurationContribution.ts`（`JSONContributionRegistry.registerSchema` + `fileMatch:['**/aiSettings.json']`；`activeModels.{chat,inlineCompletion}` 的 enum 随可用模型动态刷新）。
+1. 在 `main/services/ai/providers/` 写 `XxxProvider implements IAiModelProvider`（`packages/platform/src/ai/aiModelProvider.ts`），三个方法都吃**解析后的实例上下文 `AiResolvedProvider`**（apiKey/baseUrl/declaredModels/typePricing/pricingSource/usageSource 已内联）：`provideModels(provider, token)` / `sendRequest(messages, options, provider, token)` / `provideTokenCount(modelId, text, provider, token)`。baseUrl 取 `provider.baseUrl ?? 默认`；密钥取 `provider.apiKey`；**端点枚举的模型 + `provider.declaredModels` 合并**（手写优先）；`sendRequest` 读 `options.modelConfiguration` 映射到请求体。用 `AsyncIterableSource` + `DeferredPromise` 产流，监听 `token.onCancellationRequested` 中止 fetch，HTTP 状态映射到 `AiErrorCode`。参考 `anthropicMessagesProvider.ts` / `openAiChatProvider.ts` / `ollamaProvider.ts`；`openAiResponsesProvider.ts` 目前是**桩**（只列手写模型并拒绝编辑器请求），仅供 agent 派生用。
+2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('<protocol>', new XxxProvider()))`（**无构造参数**，密钥/baseUrl 都从 `AiResolvedProvider` 走）。
+3. 若想给 `aiSettings.json` 结构提供补全/校验，schema 在 `renderer/contributions/AiConfigurationContribution.ts`（`JSONContributionRegistry.registerSchema` + `schemaFileMatchForUri(UserDataFile.AiSettings)`；`activeModels` 四个 slot 的 enum 随可用模型动态刷新）。
 
-**密钥红线**：API key 只经 `ISecretStorageService`（main 侧 `safeStorage` 加密落盘，键名 `ai.secret.<vendor>.<group>.apiKey`，构造见 `secretKey(vendor, group)`），**绝不进 renderer / settings.json / aiSettings.json / 线协议 DTO**（`getGroups`/`updateGroups` DTO 显式无密钥）；`safeStorage` 不可用时报错，不静默落明文。录入 key 经 `IAiModelService.setApiKey/deleteApiKey/hasApiKey(vendor, group)`（门面方法）→ main 内部读写；命令 `ai.setApiKey` / `ai.clearApiKey`（先 QuickPick 选 group）即走此路。
+**加一个价格 / 用量来源**：远端来源接口在 `packages/platform/src/ai/aiRemoteSources.ts`（`IAiPricingSource.fetchRates` / `IAiAccountUsageSource.fetchUsage` + `AiRemoteSourceRegistry`）。实现放 `main/services/ai/remote/`：`httpJsonPricingSource.ts` / `httpJsonUsageSource.ts`（通用 HTTP JSON，复用纯函数 `shared/ai/parseRemoteJson.ts` 做点路径取值 / 数组或对象两种形态 / unit 换算 / 坏条目跳过），在 `AiModelMainService._registerBuiltInRemoteSources` 注册一行。两条硬约束：**热路径同步读缓存**（renderer 经 `IAiRateMirror` 镜像读本地缓存，绝不挂网络/IPC）、**远端拉取失败静默降级**（返回 `undefined`，`remoteCoordinator` 保留旧缓存，绝不影响真实 AI 请求）。缓存落 `<configDir>/aiRemoteCache.json`（`remoteCache.ts`），双 TTL：费率 24h / 用量 5min。官方订阅额度（claude.ai / ChatGPT）走 ACP agent 的 `subscription_usage` 扩展方法（`renderer/services/usage/subscriptionUsage.ts` 的 `normalizeSubscriptionUsage`），**不经** `IAiAccountUsageSource`。
 
-**已落地 provider**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai`（baseUrl 可指向任何 OpenAI 兼容端点如 LM Studio/vLLM/DeepSeek，`/chat/completions` SSE 流，无 key 时省略 auth 头不报错）。改密钥/配置后由 main 显式 `setGroups` 失效注册表缓存、重新枚举模型并 `fire onDidChangeModels`。
+**会话开销 vs 账号费用（两个概念，绝不互相兜底）**：
+| | 会话开销 | 账号费用 / 额度 |
+|---|---|---|
+| 粒度 | per session | per **实例**（额度跟 key 走） |
+| 性质 | 本地估算：token × 费率 | 上游权威数字 |
+| 来源 | 五级费率链（见下） | `IAiAccountUsageSource` |
+| 查不到 | 显示「—」+ 引导填费率 | 显示「不可用」，绝不用估算值冒充 |
 
-**模型选择 UI**：命令 `ai.pickModel`（状态栏 model picker + QuickPick，输入框右侧 "Manage Models…" 按钮）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。状态栏条目见 `contributions/AiModelStatusContribution.ts`。
+实现：`renderer/services/usage/AccountUsageService.ts`（per-agent 读账号费用）+ `renderer/services/usage/subscriptionUsage.ts` 的 `resolveUsageDisplay`（五态 `'subscription' | 'account' | 'unavailable' | 'gateway' | 'hidden'`，优先级注释就在函数上方）+ `workbench/agents/UsageIndicator.tsx`。
 
-参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiSettingsEditor.tsx`
+**费率解析：五级链，不再猜测兜底**（`src/shared/ai/resolveModelPricing.ts`）：① 模型显式 `pricing` ② 网关价目表（`pricingSource` 读本地缓存）③ 类型级默认 `pricing` ④ 内置目录精确匹配 bare 模型名（`catalog/lookupCatalogPricing`）⑤ `undefined` → UI 显示「费率未知」。**旧的按模型名猜家族、未知模型兜底到固定型号的行为已彻底删除**——「费率未知」是 UI 的一个状态，不是编出来的数字。
+
+**密钥策略（2026-08 变更）**：`ISecretStorageService` 与它所在的 platform secret 模块已整体下线（目录已删除）。API key 现在**明文存在 `aiSettings.json` 实例的 `apiKey` 字段**（用户明确决策：跨机器同步），写文件后 POSIX 上 `chmod 0600`（Windows 跳过）。仍有效的红线：**密钥绝不进日志、绝不进 AI Debug 记录**；UI 一律掩码显示（前 4 后 4，`src/shared/ai/maskKey.ts`）。命令 `ai.setApiKey` / `ai.clearApiKey` id 未变，提示文案已改为「明文存储」。
+
+**已落地 provider（按协议）**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai-chat`（baseUrl 可指向任何 OpenAI 兼容端点，`/chat/completions` SSE 流，无 key 时省略 auth 头）、`anthropic-messages`（`/v1/messages` SSE，system prompt 是顶层字段）、`openai-responses`（桩，仅供 agent 派生）。改密钥/配置后由 main 显式 `setProviders` 失效注册表缓存、重新枚举模型并 `fire onDidChangeModels`。
+
+**模型选择 UI**：命令 `ai.pickModel`（QuickPick，标题栏 AI 快捷设置 `workbench/titlebar/AiTitleBarButton.tsx` 的下拉里各功能行触发）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。
+
+参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiSettingsEditor.tsx`、`renderer/workbench/ai/AiModelsPanel.tsx`
 
 ## 编辑器输入三件套
 

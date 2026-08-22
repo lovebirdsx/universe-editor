@@ -24,7 +24,6 @@ import { join } from 'node:path'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
-import { ISecretStorageService } from '@universe-editor/platform'
 import { IMainStorageService } from '../storage.js'
 import { IEnvironmentMainService } from '../environment/environmentMainService.js'
 import { getAppVersion } from '../appVersion.js'
@@ -90,7 +89,6 @@ import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
 import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
 import { UsageMainService } from './usage/usageMainService.js'
-import { SecretStorageMainService } from './ai/secretStorageMainService.js'
 import { AiModelMainService } from './ai/aiModelMainService.js'
 import { AiDebugRecorder, IAiDebugRecorderService } from './ai/aiDebugRecorder.js'
 import { AiDebugMainService } from './ai/aiDebugService.js'
@@ -257,11 +255,6 @@ registerSingletonFactory(
   IUsageService,
   (acc) =>
     new UsageMainService(undefined, acc.get(ILoggerService), acc.get(IRemoteConnectionService)),
-)
-registerSingletonFactory(
-  ISecretStorageService,
-  (acc) =>
-    new SecretStorageMainService(undefined, acc.get(IMainStorageService), acc.get(ILoggerService)),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(

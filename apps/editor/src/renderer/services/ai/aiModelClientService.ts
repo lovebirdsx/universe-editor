@@ -2,10 +2,11 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renderer-side AI model facade. Wraps the main-process transport proxy: turns
  *  requestId-keyed chunk events back into a clean AsyncIterable (via
- *  AiResponseReassembler) and routes cancellation back to main. Provider groups,
- *  per-model config and the active model selections all live in aiSettings.json
- *  (read/written by main); this client just proxies. Consumers depend only on
- *  IAiModelService.
+ *  AiResponseReassembler) and routes cancellation back to main. Provider
+ *  instances, per-model config and the active model selections all live in
+ *  aiSettings.json (read/written by main); this client just proxies. Consumers
+ *  depend only on IAiModelService. Also implements IAiRateMirror for synchronous
+ *  rate lookups on the cost hot path.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -16,30 +17,36 @@ import {
   generateUuid,
   reviveError,
   toDisposable,
-  type AiGroupVerifyInput,
-  type AiGroupVerifyResult,
+  type AiAccountUsage,
   type AiMessage,
   type AiModelConfiguration,
   type AiModelMetadata,
   type AiModelSelector,
-  type AiProviderGroup,
+  type AiProviderInstance,
+  type AiProviderType,
+  type AiProviderTypeDescriptor,
+  type AiProviderVerifyInput,
+  type AiProviderVerifyResult,
+  type AiRateTable,
+  type AiRateTableSnapshot,
   type AiRequestOptions,
   type AiResponse,
-  type AiVendorDescriptor,
   type CancellationToken,
-  type IAiModelService,
   type Event,
+  type IAiModelService,
 } from '@universe-editor/platform'
 import type {
   AiMessageDto,
   AiMessagePartDto,
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
+import { type IAiRateMirror } from './aiRateMirror.js'
 
-export class AiModelClientService extends Disposable implements IAiModelService {
+export class AiModelClientService extends Disposable implements IAiModelService, IAiRateMirror {
   declare readonly _serviceBrand: undefined
 
   readonly onDidChangeModels: Event<void>
+  readonly onDidChangeRemote: Event<void>
 
   private readonly _onDidChangeActiveModel = this._register(new Emitter<void>())
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
@@ -53,9 +60,12 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   private readonly _onDidChangeSessionTitleModel = this._register(new Emitter<void>())
   readonly onDidChangeSessionTitleModel = this._onDidChangeSessionTitleModel.event
 
+  private readonly _mirror = new Map<string, AiRateTableSnapshot>()
+
   constructor(private readonly _main: IAiModelMainService) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
+    this.onDidChangeRemote = this._main.onDidChangeRemote
     this._register(
       this._main.onDidChangeActiveModel((e) => {
         if (e.kind === 'chat') this._onDidChangeActiveModel.fire()
@@ -64,6 +74,26 @@ export class AiModelClientService extends Disposable implements IAiModelService 
         else this._onDidChangeSessionTitleModel.fire()
       }),
     )
+    this._register(this._main.onDidChangeRemote(() => void this._refreshMirror()))
+    void this._refreshMirror()
+  }
+
+  getRateTablesSync(): readonly AiRateTableSnapshot[] {
+    return [...this._mirror.values()]
+  }
+
+  getRatesSync(providerKey: string): AiRateTable | undefined {
+    return this._mirror.get(providerKey)?.rates
+  }
+
+  private async _refreshMirror(): Promise<void> {
+    try {
+      const tables = await this._main.getRateTables()
+      this._mirror.clear()
+      for (const table of tables) this._mirror.set(table.providerKey, table)
+    } catch {
+      // Best-effort mirror: keep whatever was last cached on failure.
+    }
   }
 
   getModels(): Promise<readonly AiModelMetadata[]> {
@@ -118,32 +148,52 @@ export class AiModelClientService extends Disposable implements IAiModelService 
     return this._main.setModelConfiguration(modelId, config)
   }
 
-  getGroups(): Promise<readonly AiProviderGroup[]> {
-    return this._main.getGroups()
+  getProviders(): Promise<readonly AiProviderInstance[]> {
+    return this._main.getProviders()
   }
 
-  updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
-    return this._main.updateGroups(groups)
+  updateProviders(providers: readonly AiProviderInstance[]): Promise<void> {
+    return this._main.updateProviders(providers)
   }
 
-  getVendors(): Promise<readonly AiVendorDescriptor[]> {
-    return this._main.getVendors()
+  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>> {
+    return this._main.getProviderTypes()
   }
 
-  verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult> {
-    return this._main.verifyGroup(input)
+  updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void> {
+    return this._main.updateProviderTypes(types)
   }
 
-  setApiKey(vendor: string, group: string, key: string): Promise<void> {
-    return this._main.setApiKey(vendor, group, key)
+  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]> {
+    return this._main.getProviderTypeDescriptors()
   }
 
-  deleteApiKey(vendor: string, group: string): Promise<void> {
-    return this._main.deleteApiKey(vendor, group)
+  verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult> {
+    return this._main.verifyProvider(input)
   }
 
-  hasApiKey(vendor: string, group: string): Promise<boolean> {
-    return this._main.hasApiKey(vendor, group)
+  setApiKey(typeId: string, instanceName: string, key: string): Promise<void> {
+    return this._main.setApiKey(typeId, instanceName, key)
+  }
+
+  deleteApiKey(typeId: string, instanceName: string): Promise<void> {
+    return this._main.deleteApiKey(typeId, instanceName)
+  }
+
+  hasApiKey(typeId: string, instanceName: string): Promise<boolean> {
+    return this._main.hasApiKey(typeId, instanceName)
+  }
+
+  getRateTables(): Promise<readonly AiRateTableSnapshot[]> {
+    return this._main.getRateTables()
+  }
+
+  getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined> {
+    return this._main.getAccountUsage(providerKey)
+  }
+
+  refreshRemote(providerKey?: string): Promise<void> {
+    return this._main.refreshRemote(providerKey)
   }
 
   sendRequest(

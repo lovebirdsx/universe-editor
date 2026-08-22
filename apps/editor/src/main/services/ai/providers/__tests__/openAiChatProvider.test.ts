@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for OpenAiProvider — SSE parsing into text/usage chunks, model enumeration
- *  merged with hand-declared models, HTTP error mapping, baseUrl override, and
- *  cancellation. `fetch` is stubbed; no real network is touched. The provider is
- *  now group-based: each call receives an AiResolvedGroup (baseUrl + lazy key).
+ *  Tests for OpenAiChatProvider — SSE parsing into text/usage chunks, model enumeration
+ *  merged with hand-declared models, HTTP error mapping, baseUrl override, cancellation, and
+ *  pricing resolution. `fetch` is stubbed; no real network is touched. Each call receives an
+ *  AiResolvedProvider (flattened config with the apiKey inline).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -16,9 +16,10 @@ import {
   setDisposableTracker,
   type AiMessage,
   type AiCustomModelConfig,
-  type AiResolvedGroup,
+  type AiModelPricing,
+  type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { OpenAiProvider } from '../openAiProvider.js'
+import { OpenAiChatProvider } from '../openAiChatProvider.js'
 
 function streamFromChunks(chunks: readonly string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
@@ -39,18 +40,22 @@ function sseLine(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n`
 }
 
-function makeGroup(opts: {
+function makeProvider(opts: {
   apiKey?: string
   baseUrl?: string
   name?: string
+  type?: string
   models?: readonly AiCustomModelConfig[]
-}): AiResolvedGroup {
+  typePricing?: AiModelPricing
+}): AiResolvedProvider {
   return {
-    vendor: 'openai',
+    type: opts.type ?? 'openai',
     name: opts.name ?? 'default',
+    protocol: 'openai-chat',
     ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+    ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
     ...(opts.models !== undefined ? { declaredModels: opts.models } : {}),
-    getApiKey: () => Promise.resolve(opts.apiKey),
+    ...(opts.typePricing !== undefined ? { typePricing: opts.typePricing } : {}),
   }
 }
 
@@ -62,14 +67,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('OpenAiProvider', () => {
+describe('OpenAiChatProvider', () => {
   it('falls back to declared models when the endpoint is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const group = makeGroup({ models: [{ id: 'qwen3-coder' }] })
-    const models = await provider.provideModels(group, cts.token)
+    const models = await provider.provideModels(
+      makeProvider({ models: [{ id: 'qwen3-coder' }] }),
+      cts.token,
+    )
 
     expect(models.map((m) => m.id)).toEqual(['openai/default/qwen3-coder'])
   })
@@ -80,11 +87,13 @@ describe('OpenAiProvider', () => {
         status: 200,
       }),
     )
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const group = makeGroup({ apiKey: 'sk-test', models: [{ id: 'custom-model' }] })
-    const models = await provider.provideModels(group, cts.token)
+    const models = await provider.provideModels(
+      makeProvider({ apiKey: 'sk-test', models: [{ id: 'custom-model' }] }),
+      cts.token,
+    )
 
     expect(models.map((m) => m.id)).toEqual([
       'openai/default/gpt-4o-mini',
@@ -103,13 +112,84 @@ describe('OpenAiProvider', () => {
         { status: 200 },
       ),
     )
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const group = makeGroup({ apiKey: 'sk-test', name: 'kuro' })
-    const models = await provider.provideModels(group, cts.token)
+    const models = await provider.provideModels(
+      makeProvider({ apiKey: 'sk-test', name: 'kuro' }),
+      cts.token,
+    )
 
     expect(models.map((m) => m.id)).toEqual(['openai/kuro/Kling-O1', 'openai/kuro/gpt-4o'])
+  })
+
+  it('uses provider.type (not a hardcoded vendor) for model ids and metadata.vendor', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'kuro-model' }] }), { status: 200 }),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+
+    const models = await provider.provideModels(
+      makeProvider({ type: 'kuro', name: 'gbl', apiKey: 'sk-test' }),
+      cts.token,
+    )
+
+    expect(models.map((m) => m.id)).toEqual(['kuro/gbl/kuro-model'])
+    expect(models[0]!.vendor).toBe('kuro')
+  })
+
+  it('stamps pricing from a declared model as origin "model"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+    const pricing: AiModelPricing = { input: 1.5, output: 6 }
+
+    const models = await provider.provideModels(
+      makeProvider({ models: [{ id: 'custom', pricing }] }),
+      cts.token,
+    )
+
+    const meta = models.find((m) => m.id === 'openai/default/custom')!
+    expect(meta.pricing).toEqual(pricing)
+    expect(meta.pricingOrigin).toBe('model')
+  })
+
+  it('stamps pricing from the type default as origin "type"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+    const typePricing: AiModelPricing = { input: 3, output: 4 }
+
+    const models = await provider.provideModels(
+      makeProvider({ typePricing, models: [{ id: 'custom' }] }),
+      cts.token,
+    )
+
+    const meta = models.find((m) => m.id === 'openai/default/custom')!
+    expect(meta.pricing).toEqual(typePricing)
+    expect(meta.pricingOrigin).toBe('type')
+  })
+
+  it('stamps pricing from the built-in catalog as origin "catalog"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+
+    const models = await provider.provideModels(
+      makeProvider({ models: [{ id: 'gpt-5.4' }] }),
+      cts.token,
+    )
+
+    const meta = models.find((m) => m.id === 'openai/default/gpt-5.4')!
+    expect(meta.pricingOrigin).toBe('catalog')
+    expect(meta.pricing?.input).toBe(2.5)
   })
 
   it('parses SSE deltas into text chunks and stops at [DONE]', async () => {
@@ -120,13 +200,13 @@ describe('OpenAiProvider', () => {
       'data: [DONE]\n',
     ])
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, { status: 200 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
       userMessages,
       { modelId: 'openai/default/gpt-4o' },
-      makeGroup({ apiKey: 'sk-test' }),
+      makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
     const text = await getTextResponse(response)
@@ -140,13 +220,13 @@ describe('OpenAiProvider', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(streamFromChunks(['data: [DONE]\n']), { status: 200 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
       userMessages,
       { modelId: 'openai/default/gpt-4o' },
-      makeGroup({ apiKey: 'sk-test' }),
+      makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
     await getTextResponse(response)
@@ -161,13 +241,13 @@ describe('OpenAiProvider', () => {
 
   it('maps a 401 response to an Unauthorized AiError', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 401 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
       userMessages,
       { modelId: 'openai/default/gpt-4o' },
-      makeGroup({ apiKey: 'sk-bad' }),
+      makeProvider({ apiKey: 'sk-bad' }),
       cts.token,
     )
 
@@ -180,11 +260,11 @@ describe('OpenAiProvider', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     await provider.provideModels(
-      makeGroup({ apiKey: 'sk-test', baseUrl: 'http://localhost:1234/v1/' }),
+      makeProvider({ apiKey: 'sk-test', baseUrl: 'http://localhost:1234/v1/' }),
       cts.token,
     )
 
@@ -195,7 +275,7 @@ describe('OpenAiProvider', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(streamFromChunks(['data: [DONE]\n']), { status: 200 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
@@ -204,7 +284,7 @@ describe('OpenAiProvider', () => {
         modelId: 'openai/default/gpt-4o',
         modelConfiguration: { temperature: 0.2, reasoningEffort: 'high' },
       },
-      makeGroup({ apiKey: 'sk-test' }),
+      makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
     await getTextResponse(response)
@@ -219,7 +299,7 @@ describe('OpenAiProvider', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(streamFromChunks(['data: [DONE]\n']), { status: 200 }))
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
@@ -235,7 +315,7 @@ describe('OpenAiProvider', () => {
           top_k: 20,
         },
       },
-      makeGroup({ apiKey: 'sk-test' }),
+      makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
     await getTextResponse(response)
@@ -256,13 +336,13 @@ describe('OpenAiProvider', () => {
         signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
       })
     })
-    const provider = new OpenAiProvider()
+    const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
     const response = provider.sendRequest(
       userMessages,
       { modelId: 'openai/default/gpt-4o' },
-      makeGroup({ apiKey: 'sk-test' }),
+      makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
     cts.cancel()
@@ -279,13 +359,13 @@ describe('OpenAiProvider', () => {
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
     try {
-      const provider = new OpenAiProvider()
+      const provider = new OpenAiChatProvider()
       const cts = new CancellationTokenSource()
 
       provider.sendRequest(
         userMessages,
         { modelId: 'openai/default/gpt-4o' },
-        makeGroup({ apiKey: 'sk-test' }),
+        makeProvider({ apiKey: 'sk-test' }),
         cts.token,
       )
       // Let _run reach `await fetch(...)` so the abort store + listener exist.

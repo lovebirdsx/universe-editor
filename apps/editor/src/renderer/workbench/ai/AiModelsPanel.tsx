@@ -1,32 +1,19 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AiModelsPanel — the "Model configuration" category of the AI settings editor.
- *  Manages provider groups (baseUrl / API key / declared models) and per-model
- *  parameters. Reads everything live from IAiModelService; group / baseUrl /
- *  custom-model edits go through updateGroups, API keys through the secret-backed
- *  setApiKey / clearApiKey path (never into aiSettings.json), and per-model
- *  parameters through setModelConfiguration.
- *
- *  Per-group collapse state and the per-card model filter are persisted (GLOBAL
- *  scope) so the page reopens exactly as the user left it.
+ *  Two collapsible sections: provider *types* (protocol / model catalog / rates /
+ *  remote sources) and provider *instances* (connection + credential). Reads
+ *  everything live from IAiModelService; type-layer edits go through
+ *  updateProviderTypes, instance-layer edits through updateProviders, and API
+ *  keys are stored plaintext on the instance (explicit user decision: cross-
+ *  machine sync) — never logged. Per-section / per-card collapse state and the
+ *  per-card model filter are persisted (GLOBAL scope).
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
-import {
-  ChevronDown,
-  ChevronRight,
-  FileJson,
-  KeyRound,
-  Plus,
-  Server,
-  Settings2,
-  Star,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ChevronDown, ChevronRight, FileJson, Plus } from 'lucide-react'
 import {
   bareModelName,
-  groupKey,
   IAiModelService,
   IDialogService,
   IEditorGroupsService,
@@ -39,29 +26,37 @@ import {
   StorageScope,
   UserDataFile,
   localize,
+  providerKey,
   type AiCustomModelConfig,
   type AiModelConfiguration,
   type AiModelMetadata,
-  type AiProviderGroup,
+  type AiModelPricing,
+  type AiProviderInstance,
+  type AiProviderType,
+  type AiProviderTypeDescriptor,
+  type AiRateTableSnapshot,
 } from '@universe-editor/platform'
-import { Badge, Button, Checkbox, IconButton, Input } from '@universe-editor/workbench-ui'
+import { Button } from '@universe-editor/workbench-ui'
 import { useEventSubscription, useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
+import { IAiRateMirror } from '../../services/ai/aiRateMirror.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
+import { ProviderTypeCard } from './ProviderTypeCard.js'
+import { ProviderInstanceCard } from './ProviderInstanceCard.js'
 import styles from './AiSettingsEditor.module.css'
-
-interface GroupState {
-  readonly group: AiProviderGroup
-  readonly hasApiKey: boolean
-  readonly models: readonly AiModelMetadata[]
-}
 
 const COLLAPSED_KEY = 'ai.settings.models.collapsed'
 const filterKey = (key: string): string => `ai.settings.models.filter.${key}`
 
+const SECTION_TYPES = 'section:types'
+const SECTION_INSTANCES = 'section:instances'
+const typeCollapseKey = (typeId: string): string => `type:${typeId}`
+const instanceCollapseKey = (inst: AiProviderInstance): string => `instance:${providerKey(inst)}`
+
 export function AiModelsPanel() {
   const aiModel = useService(IAiModelService)
+  const rateMirror = useService(IAiRateMirror)
   const quickInput = useService(IQuickInputService)
   const dialog = useService(IDialogService)
   const notifications = useService(INotificationService)
@@ -70,9 +65,14 @@ export function AiModelsPanel() {
   const instantiation = useService(IInstantiationService)
   const storage = useService(IStorageService)
 
-  const [groupStates, setGroupStates] = useState<readonly GroupState[]>([])
+  const [types, setTypes] = useState<Readonly<Record<string, AiProviderType>>>({})
+  const [typeDescriptors, setTypeDescriptors] = useState<readonly AiProviderTypeDescriptor[]>([])
+  const [instances, setInstances] = useState<readonly AiProviderInstance[]>([])
+  const [models, setModels] = useState<readonly AiModelMetadata[]>([])
+  const [rateTables, setRateTables] = useState<readonly AiRateTableSnapshot[]>([])
   const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({})
   const [addOpen, setAddOpen] = useState(false)
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -96,109 +96,102 @@ export function AiModelsPanel() {
   )
 
   const reload = useCallback(async () => {
-    const [groups, models] = await Promise.all([aiModel.getGroups(), aiModel.getModels()])
-    const states = await Promise.all(
-      groups.map(async (group): Promise<GroupState> => {
-        const hasApiKey = await aiModel.hasApiKey(group.vendor, group.name)
-        const groupModels = models.filter(
-          (m) => m.vendor === group.vendor && (m.groupName ?? 'default') === group.name,
-        )
-        return { group, hasApiKey, models: groupModels }
-      }),
-    )
-    setGroupStates(states)
-  }, [aiModel])
+    const [nextTypes, nextDescriptors, nextInstances, nextModels] = await Promise.all([
+      aiModel.getProviderTypes(),
+      aiModel.getProviderTypeDescriptors(),
+      aiModel.getProviders(),
+      aiModel.getModels(),
+    ])
+    setTypes(nextTypes)
+    setTypeDescriptors(nextDescriptors)
+    setInstances(nextInstances)
+    setModels(nextModels)
+    setRateTables(rateMirror.getRateTablesSync())
+    setReloadToken((t) => t + 1)
+  }, [aiModel, rateMirror])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  useEventSubscription(() => aiModel.onDidChangeModels(() => void reload()), [aiModel, reload])
+  useEventSubscription(
+    () => [
+      aiModel.onDidChangeModels(() => void reload()),
+      aiModel.onDidChangeRemote(() => void reload()),
+    ],
+    [aiModel, reload],
+  )
 
-  const writeGroups = useCallback(
-    async (next: readonly AiProviderGroup[]) => {
-      await aiModel.updateGroups(next)
+  const descriptorById = useMemo(() => {
+    const map = new Map<string, AiProviderTypeDescriptor>()
+    for (const d of typeDescriptors) map.set(d.id, d)
+    return map
+  }, [typeDescriptors])
+
+  const updateTypesRecord = useCallback(
+    async (next: Readonly<Record<string, AiProviderType>>) => {
+      await aiModel.updateProviderTypes(next)
       await reload()
     },
     [aiModel, reload],
   )
 
-  const replaceGroup = useCallback(
-    async (index: number, build: (group: AiProviderGroup) => AiProviderGroup) => {
-      const next = groupStates.map((s, i) => (i === index ? build(s.group) : s.group))
-      await writeGroups(next)
+  const updateType = useCallback(
+    async (typeId: string, build: (type: AiProviderType) => AiProviderType) => {
+      const type = types[typeId]
+      if (!type) return
+      await updateTypesRecord({ ...types, [typeId]: build(type) })
     },
-    [groupStates, writeGroups],
+    [types, updateTypesRecord],
   )
 
-  const addGroup = useCallback(() => setAddOpen(true), [])
-
-  const removeGroup = useCallback(
-    async (index: number) => {
-      const target = groupStates[index]
-      if (!target) return
-      const { confirmed } = await dialog.confirm({
-        message: localize('aiModels.removeGroup.confirm', 'Remove provider group {group}?', {
-          group: groupKey(target.group),
-        }),
-        primaryButton: localize('aiModels.removeGroup.remove', 'Remove'),
-        type: 'warning',
-      })
-      if (!confirmed) return
-      if (target.hasApiKey) await aiModel.deleteApiKey(target.group.vendor, target.group.name)
-      await writeGroups(groupStates.filter((_, i) => i !== index).map((s) => s.group))
-    },
-    [aiModel, dialog, groupStates, writeGroups],
-  )
-
-  const setApiKey = useCallback(
-    async (group: AiProviderGroup) => {
-      const key = await quickInput.input({
-        prompt: localize(
-          'aiModels.setApiKey.prompt',
-          'Enter the API key for {group} (stored encrypted; never written to aiSettings.json).',
-          { group: groupKey(group) },
-        ),
-        placeholder: 'sk-…',
-        validateInput: (v) =>
-          v.trim().length === 0
-            ? localize('aiModels.setApiKey.empty', 'The API key must not be empty.')
-            : undefined,
-      })
-      const trimmed = key?.trim()
-      if (!trimmed) return
-      await aiModel.setApiKey(group.vendor, group.name, trimmed)
-      await reload()
-      notifications.notify({
-        severity: Severity.Info,
-        message: localize('aiModels.setApiKey.done', 'API key saved for {group}.', {
-          group: groupKey(group),
-        }),
-      })
-    },
-    [aiModel, notifications, quickInput, reload],
-  )
-
-  const clearApiKey = useCallback(
-    async (group: AiProviderGroup) => {
-      const { confirmed } = await dialog.confirm({
-        message: localize('aiModels.clearApiKey.confirm', 'Clear the stored API key for {group}?', {
-          group: groupKey(group),
-        }),
-        primaryButton: localize('aiModels.clearApiKey.clear', 'Clear'),
-        type: 'warning',
-      })
-      if (!confirmed) return
-      await aiModel.deleteApiKey(group.vendor, group.name)
+  const updateInstances = useCallback(
+    async (next: readonly AiProviderInstance[]) => {
+      await aiModel.updateProviders(next)
       await reload()
     },
-    [aiModel, dialog, reload],
+    [aiModel, reload],
   )
 
-  const addCustomModel = useCallback(
-    async (index: number) => {
-      const target = groupStates[index]
-      if (!target) return
+  const replaceInstance = useCallback(
+    async (key: string, build: (inst: AiProviderInstance) => AiProviderInstance) => {
+      const next = instances.map((inst) => (providerKey(inst) === key ? build(inst) : inst))
+      await updateInstances(next)
+    },
+    [instances, updateInstances],
+  )
+
+  // --- provider type mutations -------------------------------------------
+
+  const setTypeBaseUrl = useCallback(
+    async (typeId: string, baseUrl: string) => {
+      await updateType(typeId, (type) => {
+        if (baseUrl) return { ...type, defaultBaseUrl: baseUrl }
+        if (!('defaultBaseUrl' in type)) return type
+        const next = { ...type }
+        delete (next as { defaultBaseUrl?: string }).defaultBaseUrl
+        return next
+      })
+    },
+    [updateType],
+  )
+
+  const setTypeModelPricing = useCallback(
+    async (typeId: string, modelId: string, pricing: AiModelPricing | undefined) => {
+      await updateType(typeId, (type) => {
+        const models = (type.models ?? []).map((m) =>
+          m.id === modelId ? setModelPricing(m, pricing) : m,
+        )
+        return { ...type, models }
+      })
+    },
+    [updateType],
+  )
+
+  const addTypeModel = useCallback(
+    async (typeId: string) => {
+      const type = types[typeId]
+      if (!type) return
       const id = await quickInput.input({
         prompt: localize(
           'aiModels.addModel.id',
@@ -211,24 +204,23 @@ export function AiModelsPanel() {
       })
       const trimmedId = id?.trim()
       if (!trimmedId) return
-      const existing = target.group.models ?? []
-      if (existing.some((m) => m.id === trimmedId)) {
+      if ((type.models ?? []).some((m) => m.id === trimmedId)) {
         notifications.notify({
           severity: Severity.Warning,
           message: localize('aiModels.addModel.exists', 'That model is already declared.'),
         })
         return
       }
-      await replaceGroup(index, (group) => ({ ...group, models: [...existing, { id: trimmedId }] }))
+      await updateType(typeId, (t) => ({
+        ...t,
+        models: [...(t.models ?? []), { id: trimmedId }],
+      }))
     },
-    [groupStates, notifications, quickInput, replaceGroup],
+    [types, quickInput, notifications, updateType],
   )
 
-  const removeCustomModel = useCallback(
-    async (index: number, modelId: string) => {
-      const target = groupStates[index]
-      if (!target) return
-      const bare = bareModelName(modelId, target.group.vendor, target.group.name)
+  const removeTypeModel = useCallback(
+    async (typeId: string, modelId: string) => {
       const { confirmed } = await dialog.confirm({
         message: localize('aiModels.removeModel.confirm', 'Remove model {model}?', {
           model: modelId,
@@ -237,19 +229,184 @@ export function AiModelsPanel() {
         type: 'warning',
       })
       if (!confirmed) return
-      await replaceGroup(index, (group) => {
-        const models = (group.models ?? []).filter((m) => m.id !== bare)
+      await updateType(typeId, (type) => {
+        const models = (type.models ?? []).filter((m) => m.id !== modelId)
+        return { ...type, models }
+      })
+    },
+    [dialog, updateType],
+  )
+
+  const removeType = useCallback(
+    async (typeId: string) => {
+      const bound = instances.filter((i) => i.type === typeId).length
+      if (bound > 0) {
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'aiModels.type.remove.bound',
+            'Cannot remove: {count} provider instance(s) still bind to this type.',
+            { count: bound },
+          ),
+        })
+        return
+      }
+      const { confirmed } = await dialog.confirm({
+        message: localize('aiModels.type.remove.confirm', 'Remove provider type {type}?', {
+          type: typeId,
+        }),
+        primaryButton: localize('aiModels.type.remove.remove', 'Remove'),
+        type: 'warning',
+      })
+      if (!confirmed) return
+      const next = { ...types }
+      delete next[typeId]
+      await updateTypesRecord(next)
+    },
+    [instances, notifications, dialog, types, updateTypesRecord],
+  )
+
+  const refreshTypePrices = useCallback(
+    async (typeId: string) => {
+      const targets = instances.filter((i) => i.type === typeId)
+      console.debug(
+        `aiModels: refresh prices for type ${typeId} across ${targets.length} instance(s)`,
+      )
+      for (const inst of targets) await aiModel.refreshRemote(providerKey(inst))
+      await reload()
+    },
+    [aiModel, instances, reload],
+  )
+
+  // --- provider instance mutations ---------------------------------------
+
+  const setInstanceBaseUrl = useCallback(
+    async (key: string, baseUrl: string) => {
+      await replaceInstance(key, (inst) => {
+        if (baseUrl) return { ...inst, baseUrl }
+        if (!('baseUrl' in inst)) return inst
+        const next = { ...inst }
+        delete (next as { baseUrl?: string }).baseUrl
+        return next
+      })
+    },
+    [replaceInstance],
+  )
+
+  const setInstanceApiKey = useCallback(
+    async (inst: AiProviderInstance) => {
+      const key = await quickInput.input({
+        prompt: localize(
+          'aiModels.apiKey.editPrompt',
+          'Enter the API key for {name} (stored in plaintext in aiSettings.json).',
+          { name: inst.label ?? inst.name },
+        ),
+        value: inst.apiKey ?? '',
+        placeholder: 'sk-…',
+        validateInput: (v) =>
+          v.trim().length === 0
+            ? localize('aiModels.apiKey.empty', 'The API key must not be empty.')
+            : undefined,
+      })
+      const trimmed = key?.trim()
+      if (trimmed === undefined) return
+      await replaceInstance(providerKey(inst), (i) => ({ ...i, apiKey: trimmed }))
+    },
+    [quickInput, replaceInstance],
+  )
+
+  const clearInstanceApiKey = useCallback(
+    async (inst: AiProviderInstance) => {
+      const { confirmed } = await dialog.confirm({
+        message: localize('aiModels.apiKey.clearConfirm', 'Clear the stored API key for {name}?', {
+          name: inst.label ?? inst.name,
+        }),
+        primaryButton: localize('aiModels.apiKey.clearAction', 'Clear'),
+        type: 'warning',
+      })
+      if (!confirmed) return
+      await replaceInstance(providerKey(inst), (i) => {
+        if (!('apiKey' in i)) return i
+        const next = { ...i }
+        delete (next as { apiKey?: string }).apiKey
+        return next
+      })
+    },
+    [dialog, replaceInstance],
+  )
+
+  const removeInstance = useCallback(
+    async (inst: AiProviderInstance) => {
+      const { confirmed } = await dialog.confirm({
+        message: localize('aiModels.instance.remove.confirm', 'Remove provider {name}?', {
+          name: inst.label ?? inst.name,
+        }),
+        primaryButton: localize('aiModels.instance.remove.remove', 'Remove'),
+        type: 'warning',
+      })
+      if (!confirmed) return
+      const next = instances.filter((i) => providerKey(i) !== providerKey(inst))
+      await updateInstances(next)
+    },
+    [dialog, instances, updateInstances],
+  )
+
+  const addInstanceModel = useCallback(
+    async (inst: AiProviderInstance) => {
+      const id = await quickInput.input({
+        prompt: localize(
+          'aiModels.addModel.id',
+          'Model id the endpoint expects (e.g. qwen3-coder)',
+        ),
+        validateInput: (v) =>
+          v.trim().length === 0
+            ? localize('aiModels.addModel.idEmpty', 'Model id must not be empty.')
+            : undefined,
+      })
+      const trimmedId = id?.trim()
+      if (!trimmedId) return
+      const existing = inst.models ?? []
+      if (existing.some((m) => m.id === trimmedId)) {
+        notifications.notify({
+          severity: Severity.Warning,
+          message: localize('aiModels.addModel.exists', 'That model is already declared.'),
+        })
+        return
+      }
+      await replaceInstance(providerKey(inst), (i) => ({
+        ...i,
+        models: [...(i.models ?? []), { id: trimmedId }],
+      }))
+    },
+    [quickInput, notifications, replaceInstance],
+  )
+
+  const removeInstanceModel = useCallback(
+    async (inst: AiProviderInstance, modelId: string) => {
+      const bare = bareModelName(modelId, inst.type, inst.name)
+      const { confirmed } = await dialog.confirm({
+        message: localize('aiModels.removeModel.confirm', 'Remove model {model}?', {
+          model: modelId,
+        }),
+        primaryButton: localize('aiModels.removeModel.remove', 'Remove'),
+        type: 'warning',
+      })
+      if (!confirmed) return
+      await replaceInstance(providerKey(inst), (i) => {
+        const models = (i.models ?? []).filter((m) => m.id !== bare)
         const next: {
           name: string
-          vendor: string
+          type: string
+          label?: string
           baseUrl?: string
+          apiKey?: string
           models?: readonly AiCustomModelConfig[]
           settings?: Readonly<Record<string, AiModelConfiguration>>
-        } = { ...group }
+        } = { ...i }
         if (models.length > 0) next.models = models
         else delete next.models
-        if (group.settings && modelId in group.settings) {
-          const settings = { ...group.settings }
+        if (i.settings && modelId in i.settings) {
+          const settings = { ...i.settings }
           delete settings[modelId]
           if (Object.keys(settings).length > 0) next.settings = settings
           else delete next.settings
@@ -257,23 +414,25 @@ export function AiModelsPanel() {
         return next
       })
     },
-    [dialog, groupStates, replaceGroup],
+    [dialog, replaceInstance],
   )
 
   const openJson = useCallback(async () => {
-    await aiModel.updateGroups(await aiModel.getGroups())
+    await aiModel.updateProviders(await aiModel.getProviders())
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = instantiation.createInstance(FileEditorInput, uri)
     void openInLockAwareGroup(editorGroups, input, { activate: true })
   }, [aiModel, editorGroups, instantiation, userData])
 
+  const typeEntries = useMemo(() => Object.keys(types), [types])
+
   return (
     <div className={styles['panel']}>
       <div className={styles['panelToolbar']}>
-        <Button onClick={() => addGroup()}>
+        <Button onClick={() => setAddOpen(true)}>
           <Plus size={14} strokeWidth={2} className={styles['btnIcon']} />
-          {localize('aiModels.addGroup', 'Add Provider Group')}
+          {localize('aiModels.addProvider', 'Add Provider')}
         </Button>
         <Button variant="ghost" onClick={() => void openJson()}>
           <FileJson size={14} strokeWidth={1.75} className={styles['btnIcon']} />
@@ -281,60 +440,104 @@ export function AiModelsPanel() {
         </Button>
       </div>
 
-      {groupStates.length === 0 ? (
-        <div className={styles['emptyState']}>
-          <Server size={40} strokeWidth={1.25} className={styles['emptyIcon']} />
-          <div className={styles['emptyTitle']}>
-            {localize('aiModels.empty.title', 'No provider groups yet')}
-          </div>
-          <div className={styles['emptyDesc']}>
-            {localize(
-              'aiModels.empty.desc',
-              'Add a provider group to connect an AI service (OpenAI-compatible endpoint, Ollama, …).',
-            )}
-          </div>
-          <Button onClick={() => addGroup()}>
-            <Plus size={14} strokeWidth={2} className={styles['btnIcon']} />
-            {localize('aiModels.addGroup', 'Add Provider Group')}
-          </Button>
-        </div>
-      ) : (
+      <div className={styles['plaintextNotice']}>
+        {localize(
+          'aiModels.plaintextNotice',
+          'API keys are stored in plaintext in aiSettings.json (to sync across machines). Do not commit that file to version control or share it.',
+        )}
+      </div>
+
+      <Section
+        title={localize('aiModels.section.types', 'Provider Types')}
+        collapsed={collapsed[SECTION_TYPES] ?? false}
+        onToggle={() => toggleCollapsed(SECTION_TYPES)}
+      >
         <div className={styles['cards']}>
-          {groupStates.map((state, index) => {
-            const key = groupKey(state.group)
+          {typeEntries.map((typeId) => {
+            const type = types[typeId]
+            if (!type) return null
             return (
-              <GroupCard
-                key={key}
-                state={state}
-                collapsed={collapsed[key] ?? false}
-                onToggleCollapsed={() => toggleCollapsed(key)}
-                storage={storage}
-                onBaseUrlChange={(baseUrl) =>
-                  void replaceGroup(index, (group) => {
-                    const next: AiProviderGroup = { ...group }
-                    if (baseUrl) return { ...next, baseUrl }
-                    if ('baseUrl' in next) delete (next as { baseUrl?: string }).baseUrl
-                    return next
-                  })
+              <ProviderTypeCard
+                key={typeId}
+                typeId={typeId}
+                type={type}
+                builtin={descriptorById.get(typeId)?.builtin ?? false}
+                collapsed={collapsed[typeCollapseKey(typeId)] ?? false}
+                onToggleCollapsed={() => toggleCollapsed(typeCollapseKey(typeId))}
+                canRemove={!(descriptorById.get(typeId)?.builtin ?? false)}
+                onRemove={() => void removeType(typeId)}
+                onBaseUrlChange={(baseUrl) => void setTypeBaseUrl(typeId, baseUrl)}
+                onModelPricingChange={(modelId, pricing) =>
+                  void setTypeModelPricing(typeId, modelId, pricing)
                 }
-                onSetApiKey={() => void setApiKey(state.group)}
-                onClearApiKey={() => void clearApiKey(state.group)}
-                onRemoveGroup={() => void removeGroup(index)}
-                onAddModel={() => void addCustomModel(index)}
-                onRemoveModel={(modelId) => void removeCustomModel(index, modelId)}
-                onConfigure={(modelId, config) =>
-                  aiModel.setModelConfiguration(modelId, config).then(() => reload())
-                }
-                getConfiguration={(modelId) => aiModel.getModelConfiguration(modelId)}
+                onAddModel={() => void addTypeModel(typeId)}
+                onRemoveModel={(modelId) => void removeTypeModel(typeId, modelId)}
+                onRefreshPrices={() => void refreshTypePrices(typeId)}
               />
             )
           })}
         </div>
-      )}
+      </Section>
+
+      <Section
+        title={localize('aiModels.section.instances', 'Provider Instances')}
+        collapsed={collapsed[SECTION_INSTANCES] ?? false}
+        onToggle={() => toggleCollapsed(SECTION_INSTANCES)}
+      >
+        {instances.length === 0 ? (
+          <div className={styles['emptyState']}>
+            <div className={styles['emptyDesc']}>
+              {localize(
+                'aiModels.instances.empty',
+                'No provider instances yet. Add one to connect an AI service.',
+              )}
+            </div>
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus size={14} strokeWidth={2} className={styles['btnIcon']} />
+              {localize('aiModels.addProvider', 'Add Provider')}
+            </Button>
+          </div>
+        ) : (
+          <div className={styles['cards']}>
+            {instances.map((inst) => {
+              const key = providerKey(inst)
+              const instModels = models.filter(
+                (m) => m.vendor === inst.type && m.groupName === inst.name,
+              )
+              return (
+                <ProviderInstanceCard
+                  key={key}
+                  aiModel={aiModel}
+                  instance={inst}
+                  type={types[inst.type]}
+                  models={instModels}
+                  rateTables={rateTables}
+                  reloadToken={reloadToken}
+                  collapsed={collapsed[instanceCollapseKey(inst)] ?? false}
+                  onToggleCollapsed={() => toggleCollapsed(instanceCollapseKey(inst))}
+                  storage={storage}
+                  filterStorageKey={filterKey(key)}
+                  onBaseUrlChange={(baseUrl) => void setInstanceBaseUrl(key, baseUrl)}
+                  onSetApiKey={() => void setInstanceApiKey(inst)}
+                  onClearApiKey={() => void clearInstanceApiKey(inst)}
+                  onRemove={() => void removeInstance(inst)}
+                  onAddModel={() => void addInstanceModel(inst)}
+                  onRemoveModel={(modelId) => void removeInstanceModel(inst, modelId)}
+                  onConfigure={(modelId, config) =>
+                    aiModel.setModelConfiguration(modelId, config).then(() => reload())
+                  }
+                  getConfiguration={(modelId) => aiModel.getModelConfiguration(modelId)}
+                />
+              )
+            })}
+          </div>
+        )}
+      </Section>
 
       {addOpen && (
         <AddProviderDialog
-          existingGroups={groupStates.map((s) => s.group)}
+          existingInstances={instances}
+          existingTypes={types}
           onClose={() => setAddOpen(false)}
           onCreated={() => {
             setAddOpen(false)
@@ -346,341 +549,44 @@ export function AiModelsPanel() {
   )
 }
 
-interface GroupCardProps {
-  readonly state: GroupState
-  readonly collapsed: boolean
-  readonly onToggleCollapsed: () => void
-  readonly storage: IStorageService
-  readonly onBaseUrlChange: (baseUrl: string) => void
-  readonly onSetApiKey: () => void
-  readonly onClearApiKey: () => void
-  readonly onRemoveGroup: () => void
-  readonly onAddModel: () => void
-  readonly onRemoveModel: (modelId: string) => void
-  readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
-  readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
+function setModelPricing(
+  model: AiCustomModelConfig,
+  pricing: AiModelPricing | undefined,
+): AiCustomModelConfig {
+  if (pricing !== undefined) return { ...model, pricing }
+  if (!('pricing' in model)) return model
+  const next = { ...model }
+  delete (next as { pricing?: AiModelPricing }).pricing
+  return next
 }
 
-function GroupCard({
-  state,
+function Section({
+  title,
   collapsed,
-  onToggleCollapsed,
-  storage,
-  onBaseUrlChange,
-  onSetApiKey,
-  onClearApiKey,
-  onRemoveGroup,
-  onAddModel,
-  onRemoveModel,
-  onConfigure,
-  getConfiguration,
-}: GroupCardProps) {
-  const { group, hasApiKey, models } = state
-  const key = groupKey(group)
-  const [baseUrl, setBaseUrl] = useState(group.baseUrl ?? '')
-  const [filter, setFilter] = useState('')
-  const declaredIds = useMemo(() => new Set((group.models ?? []).map((m) => m.id)), [group.models])
-
-  useEffect(() => setBaseUrl(group.baseUrl ?? ''), [group.baseUrl])
-
-  useEffect(() => {
-    let active = true
-    void storage.get<string>(filterKey(key), StorageScope.GLOBAL).then((stored) => {
-      if (active && typeof stored === 'string') setFilter(stored)
-    })
-    return () => {
-      active = false
-    }
-  }, [storage, key])
-
-  const onFilterChange = useCallback(
-    (value: string) => {
-      setFilter(value)
-      void storage.set(filterKey(key), value, StorageScope.GLOBAL)
-    },
-    [storage, key],
-  )
-
-  // Declared (user-added) models float to the top so they stay reachable in long
-  // lists; the relative order within each partition is preserved.
-  const orderedModels = useMemo(() => {
-    const isDeclared = (m: AiModelMetadata) =>
-      declaredIds.has(bareModelName(m.id, group.vendor, group.name))
-    const declared = models.filter(isDeclared)
-    const rest = models.filter((m) => !isDeclared(m))
-    return [...declared, ...rest]
-  }, [models, declaredIds, group.vendor, group.name])
-
-  const filteredModels = useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return orderedModels
-    return orderedModels.filter(
-      (m) =>
-        m.name.toLowerCase().includes(q) ||
-        m.id.toLowerCase().includes(q) ||
-        (m.family?.toLowerCase().includes(q) ?? false),
-    )
-  }, [orderedModels, filter])
-
+  onToggle,
+  children,
+}: {
+  readonly title: string
+  readonly collapsed: boolean
+  readonly onToggle: () => void
+  readonly children: ReactNode
+}) {
   return (
-    <section className={styles['card']}>
+    <section className={styles['section']}>
       <button
         type="button"
-        className={styles['cardHeader']}
+        className={styles['sectionHeader']}
         aria-expanded={!collapsed}
-        onClick={onToggleCollapsed}
+        onClick={onToggle}
       >
         {collapsed ? (
           <ChevronRight size={16} strokeWidth={1.75} className={styles['cardIcon']} />
         ) : (
           <ChevronDown size={16} strokeWidth={1.75} className={styles['cardIcon']} />
         )}
-        <Server size={16} strokeWidth={1.75} className={styles['cardIcon']} />
-        <span className={styles['cardTitle']}>{key}</span>
-        <div className={styles['cardBadges']}>
-          {hasApiKey && (
-            <Badge tone="accent">
-              <KeyRound size={11} strokeWidth={2} className={styles['badgeIcon']} />
-              {localize('aiModels.badge.keyed', 'Key set')}
-            </Badge>
-          )}
-          <Badge>
-            {localize('aiModels.badge.modelCount', '{count} models', { count: models.length })}
-          </Badge>
-        </div>
-        <span className={styles['spacer']} />
-        <span
-          className={styles['cardHeaderAction']}
-          role="button"
-          tabIndex={0}
-          aria-label={localize('aiModels.removeGroup', 'Remove')}
-          data-tooltip={localize('aiModels.removeGroup', 'Remove provider group')}
-          onClick={(e) => {
-            e.stopPropagation()
-            onRemoveGroup()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              e.stopPropagation()
-              onRemoveGroup()
-            }
-          }}
-        >
-          <Trash2 size={15} strokeWidth={1.75} />
-        </span>
+        <span className={styles['sectionTitle']}>{title}</span>
       </button>
-
-      {!collapsed && (
-        <div className={styles['cardBody']}>
-          <div className={styles['field']}>
-            <label className={styles['label']}>{localize('aiModels.baseUrl', 'Base URL')}</label>
-            <Input
-              value={baseUrl}
-              placeholder={localize('aiModels.baseUrl.placeholder', 'Provider default')}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              onBlur={() => {
-                if (baseUrl.trim() !== (group.baseUrl ?? '')) onBaseUrlChange(baseUrl.trim())
-              }}
-            />
-          </div>
-
-          <div className={styles['field']}>
-            <label className={styles['label']}>{localize('aiModels.apiKey', 'API Key')}</label>
-            <div className={styles['apiKeyRow']}>
-              <span className={styles['apiKeyStatus']}>
-                {hasApiKey
-                  ? localize('aiModels.apiKey.set', 'Stored')
-                  : localize('aiModels.apiKey.unset', 'Not set')}
-              </span>
-              <IconButton
-                label={localize('aiModels.apiKey.setBtn', 'Set API key')}
-                onClick={onSetApiKey}
-              >
-                <KeyRound size={15} strokeWidth={1.75} />
-              </IconButton>
-              <IconButton
-                label={localize('aiModels.apiKey.clearBtn', 'Clear API key')}
-                disabled={!hasApiKey}
-                onClick={onClearApiKey}
-              >
-                <X size={15} strokeWidth={1.75} />
-              </IconButton>
-            </div>
-          </div>
-
-          <div className={styles['modelsHeader']}>
-            <span className={styles['label']}>{localize('aiModels.models', 'Models')}</span>
-            <IconButton label={localize('aiModels.addModel', 'Add model')} onClick={onAddModel}>
-              <Plus size={15} strokeWidth={2} />
-            </IconButton>
-          </div>
-
-          {models.length > 0 && (
-            <Input
-              className={styles['modelFilter']}
-              value={filter}
-              placeholder={localize('aiModels.filter.placeholder', 'Filter models…')}
-              onChange={(e) => onFilterChange(e.target.value)}
-            />
-          )}
-
-          {models.length === 0 ? (
-            <div className={styles['noModels']}>
-              {localize('aiModels.noModels', 'No models available (configure baseUrl / API key).')}
-            </div>
-          ) : filteredModels.length === 0 ? (
-            <div className={styles['noModels']}>
-              {localize('aiModels.noMatch', 'No models match the filter.')}
-            </div>
-          ) : (
-            <ul className={styles['modelList']}>
-              {filteredModels.map((model) => (
-                <ModelRow
-                  key={model.id}
-                  model={model}
-                  declared={declaredIds.has(bareModelName(model.id, group.vendor, group.name))}
-                  onRemove={() => onRemoveModel(model.id)}
-                  onConfigure={onConfigure}
-                  getConfiguration={getConfiguration}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      {!collapsed && <div className={styles['sectionBody']}>{children}</div>}
     </section>
-  )
-}
-
-interface ModelRowProps {
-  readonly model: AiModelMetadata
-  readonly declared: boolean
-  readonly onRemove: () => void
-  readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
-  readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
-}
-
-function ModelRow({ model, declared, onRemove, onConfigure, getConfiguration }: ModelRowProps) {
-  const [expanded, setExpanded] = useState(false)
-  const [draft, setDraft] = useState<Record<string, string | number | boolean>>({})
-  const hasSchema = model.configurationSchema && Object.keys(model.configurationSchema).length > 0
-
-  const toggleConfigure = useCallback(async () => {
-    if (!expanded) {
-      const current = await getConfiguration(model.id)
-      setDraft({ ...current })
-    }
-    setExpanded((v) => !v)
-  }, [expanded, getConfiguration, model.id])
-
-  return (
-    <li className={styles['modelRow']}>
-      <div className={styles['modelMain']}>
-        {declared && (
-          <Star
-            size={13}
-            strokeWidth={2}
-            className={styles['declaredIcon']}
-            aria-label={localize('aiModels.declared', 'Custom model')}
-          />
-        )}
-        <span className={styles['modelName']}>{model.name}</span>
-        <span className={styles['modelFamily']}>{model.family}</span>
-        <span className={styles['spacer']} />
-        {hasSchema && (
-          <IconButton
-            label={localize('aiModels.configure', 'Configure model')}
-            active={expanded}
-            onClick={() => void toggleConfigure()}
-          >
-            <Settings2 size={15} strokeWidth={1.75} />
-          </IconButton>
-        )}
-        {declared && (
-          <IconButton label={localize('aiModels.removeModel', 'Remove model')} onClick={onRemove}>
-            <Trash2 size={15} strokeWidth={1.75} />
-          </IconButton>
-        )}
-      </div>
-
-      {expanded && model.configurationSchema && (
-        <div className={styles['configForm']}>
-          {Object.entries(model.configurationSchema).map(([key, prop]) => {
-            const value = draft[key]
-            let control: JSX.Element
-            if (prop.type === 'enum' && prop.enum) {
-              control = (
-                <select
-                  className={styles['control']}
-                  value={String(value ?? '')}
-                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                >
-                  <option value="">{localize('aiModels.config.unset', '(default)')}</option>
-                  {prop.enum.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              )
-            } else if (prop.type === 'boolean') {
-              control = (
-                <Checkbox
-                  checked={Boolean(value)}
-                  onChange={(checked) => setDraft((d) => ({ ...d, [key]: checked }))}
-                />
-              )
-            } else if (prop.type === 'number') {
-              control = (
-                <Input
-                  type="number"
-                  value={value === undefined ? '' : String(value)}
-                  onChange={(e) => {
-                    const n = Number(e.target.value)
-                    setDraft((d) => ({ ...d, [key]: Number.isNaN(n) ? '' : n }))
-                  }}
-                />
-              )
-            } else {
-              control = (
-                <Input
-                  value={value === undefined ? '' : String(value)}
-                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                />
-              )
-            }
-            return (
-              <div key={key} className={styles['configRow']}>
-                <div className={styles['configMeta']}>
-                  <span className={styles['configKey']}>{key}</span>
-                  {prop.description && (
-                    <span className={styles['configDesc']}>{prop.description}</span>
-                  )}
-                </div>
-                <div className={styles['configControl']}>{control}</div>
-              </div>
-            )
-          })}
-          <div className={styles['configActions']}>
-            <Button
-              size="sm"
-              onClick={() => {
-                const cleaned: Record<string, string | number | boolean> = {}
-                for (const [k, v] of Object.entries(draft)) {
-                  if (v !== '' && v !== undefined) cleaned[k] = v
-                }
-                void onConfigure(model.id, cleaned).then(() => setExpanded(false))
-              }}
-            >
-              {localize('aiModels.config.save', 'Save')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setExpanded(false)}>
-              {localize('aiModels.config.cancel', 'Cancel')}
-            </Button>
-          </div>
-        </div>
-      )}
-    </li>
   )
 }

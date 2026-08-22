@@ -12,9 +12,14 @@ import {
   getTextResponse,
   transformErrorForSerialization,
   AiMessageRole,
+  type AiAccountUsage,
   type AiMessage,
   type AiModelConfiguration,
-  type AiProviderGroup,
+  type AiProviderInstance,
+  type AiProviderType,
+  type AiProviderTypeDescriptor,
+  type AiProviderVerifyResult,
+  type AiRateTableSnapshot,
   type IDisposable,
 } from '@universe-editor/platform'
 import { AiModelClientService } from '../aiModelClientService.js'
@@ -33,6 +38,7 @@ class FakeMain implements IAiModelMainService {
   readonly onDidEndRequestEmitter = new Emitter<AiEndEvent>()
   readonly onDidChangeModelsEmitter = new Emitter<void>()
   readonly onDidChangeActiveModelEmitter = new Emitter<AiActiveModelChangeEvent>()
+  readonly onDidChangeRemoteEmitter = new Emitter<void>()
 
   // Wrap the chunk/end events so tests can observe whether the transport
   // subscriptions a request creates get disposed.
@@ -58,10 +64,11 @@ class FakeMain implements IAiModelMainService {
 
   readonly onDidChangeModels = this.onDidChangeModelsEmitter.event
   readonly onDidChangeActiveModel = this.onDidChangeActiveModelEmitter.event
+  readonly onDidChangeRemote = this.onDidChangeRemoteEmitter.event
 
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
-  groups: readonly AiProviderGroup[] = []
+  providers: readonly AiProviderInstance[] = []
   readonly activeModels: {
     chat?: string
     inlineCompletion?: string
@@ -101,17 +108,23 @@ class FakeMain implements IAiModelMainService {
   setModelConfiguration(): Promise<void> {
     return Promise.resolve()
   }
-  getGroups(): Promise<readonly AiProviderGroup[]> {
-    return Promise.resolve(this.groups)
+  getProviders(): Promise<readonly AiProviderInstance[]> {
+    return Promise.resolve(this.providers)
   }
-  updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
-    this.groups = groups
+  updateProviders(providers: readonly AiProviderInstance[]): Promise<void> {
+    this.providers = providers
     return Promise.resolve()
   }
-  getVendors() {
+  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>> {
+    return Promise.resolve({})
+  }
+  updateProviderTypes(): Promise<void> {
+    return Promise.resolve()
+  }
+  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]> {
     return Promise.resolve([])
   }
-  verifyGroup() {
+  verifyProvider(): Promise<AiProviderVerifyResult> {
     return Promise.resolve({ ok: true, modelCount: 0 })
   }
   setApiKey(): Promise<void> {
@@ -122,6 +135,15 @@ class FakeMain implements IAiModelMainService {
   }
   hasApiKey(): Promise<boolean> {
     return Promise.resolve(false)
+  }
+  getRateTables(): Promise<readonly AiRateTableSnapshot[]> {
+    return Promise.resolve([])
+  }
+  getAccountUsage(): Promise<AiAccountUsage | undefined> {
+    return Promise.resolve(undefined)
+  }
+  refreshRemote(): Promise<void> {
+    return Promise.resolve()
   }
 }
 

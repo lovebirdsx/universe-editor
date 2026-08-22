@@ -5,7 +5,8 @@
  *  the cost down by model (sub-agent / Task work is folded into each model's row
  *  by the agent). Cost figures are the agent's own authoritative USD numbers,
  *  converted to CNY via the daily exchange rate; hidden until the agent reports
- *  any cost.
+ *  any usage. When the total cost is missing (the model's rate is unknown), the
+ *  indicator renders "—" instead of pretending the session was free.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef, useState } from 'react'
@@ -22,32 +23,35 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
   const rate = useUsdToCnyRate()
   const [open, setOpen] = useState(false)
 
-  const totalUsd = usage?.cost?.amount
-  if (usage == null || totalUsd == null || totalUsd <= 0) return null
+  // A session that has never reported usage (no tokens yet) shows nothing.
+  if (usage == null) return null
 
   const estimated = usage.costEstimated === true
   const rateValue = rate?.rate ?? FALLBACK_RATE
-  const totalCny = totalUsd * rateValue
+  const totalUsd = usage.cost?.amount
+  const hasCost = totalUsd != null
+  const totalCny = hasCost ? totalUsd * rateValue : undefined
+  const tooltip = !hasCost
+    ? localize(
+        'acp.cost.indicator.unknown',
+        'Rate unknown — set a rate for this model in AI Settings',
+      )
+    : estimated
+      ? localize('acp.cost.indicator.estimated', 'Estimated session cost — click for breakdown')
+      : localize('acp.cost.indicator', 'Session cost — click for breakdown')
 
   return (
     <div className={styles['sessionCostWrap']}>
       <button
         type="button"
         className={styles['usageIndicator']}
-        data-tooltip={
-          estimated
-            ? localize(
-                'acp.cost.indicator.estimated',
-                'Estimated session cost — click for breakdown',
-              )
-            : localize('acp.cost.indicator', 'Session cost — click for breakdown')
-        }
+        data-tooltip={tooltip}
         onClick={() => setOpen((v) => !v)}
         data-testid="acp-session-cost-indicator"
       >
         <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
         <span className={styles['usageIndicatorText']}>
-          {estimated ? '≈' : ''}¥{formatCny(totalCny)}
+          {totalCny != null ? `${estimated ? '≈' : ''}¥${formatCny(totalCny)}` : '—'}
         </span>
       </button>
       {open ? (
@@ -55,7 +59,7 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
           usage={usage}
           rate={rateValue}
           rateSource={rate?.source ?? 'fallback'}
-          totalUsd={totalUsd}
+          totalUsd={hasCost ? totalUsd : undefined}
           totalCny={totalCny}
           estimated={estimated}
           onDismiss={() => setOpen(false)}
@@ -77,8 +81,8 @@ function SessionCostPopover({
   usage: AcpUsage
   rate: number
   rateSource: 'live' | 'fallback'
-  totalUsd: number
-  totalCny: number
+  totalUsd: number | undefined
+  totalCny: number | undefined
   estimated: boolean
   onDismiss: () => void
 }) {
@@ -122,7 +126,7 @@ function SessionCostPopover({
             : localize('acp.cost.title', 'Session Cost')}
         </span>
         <span className={styles['sessionCostTotal']}>
-          {estimated ? '≈' : ''}¥{formatCny(totalCny)}
+          {totalCny != null ? `${estimated ? '≈' : ''}¥${formatCny(totalCny)}` : '—'}
         </span>
       </div>
       {models.length > 0 ? (
@@ -147,15 +151,17 @@ function SessionCostPopover({
         </div>
       )}
       <div className={styles['sessionCostFooter']}>
-        {localize('acp.cost.rate', 'Total {currency} {usd} · rate 1 USD = ¥{rate}{fallback}', {
-          currency,
-          usd: totalUsd.toFixed(4),
-          rate: rate.toFixed(2),
-          fallback:
-            rateSource === 'fallback'
-              ? localize('acp.cost.rateFallback', ' (offline estimate)')
-              : '',
-        })}
+        {totalUsd != null
+          ? localize('acp.cost.rate', 'Total {currency} {usd} · rate 1 USD = ¥{rate}{fallback}', {
+              currency,
+              usd: totalUsd.toFixed(4),
+              rate: rate.toFixed(2),
+              fallback:
+                rateSource === 'fallback'
+                  ? localize('acp.cost.rateFallback', ' (offline estimate)')
+                  : '',
+            })
+          : localize('acp.cost.rateUnknown', 'Total cost unknown (no rate configured)')}
       </div>
       {estimated ? (
         <div className={styles['sessionCostFooter']}>
@@ -178,7 +184,7 @@ function ModelRow({ model, rate }: { model: AcpModelCost; rate: number }) {
       </td>
       <td>{formatTokens(inputTotal)}</td>
       <td>{formatTokens(model.outputTokens)}</td>
-      <td>¥{formatCny(model.costUSD * rate)}</td>
+      <td>{model.costUSD != null ? `¥${formatCny(model.costUSD * rate)}` : '—'}</td>
     </tr>
   )
 }

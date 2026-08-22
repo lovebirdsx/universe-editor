@@ -175,10 +175,10 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// JSON schema for aiSettings.json (provider groups + active model selections,
-// the latter with model-id completion). No API keys — those live in encrypted
-// secret storage. BlockStartup so the schema is registered before the AI client
-// or any aiSettings.json editor reads it.
+// JSON schema for aiSettings.json (provider types / instances + active model
+// selections, the latter with model-id completion). API keys are plaintext on
+// the instance (user decision: cross-machine sync). BlockStartup so the schema
+// is registered before the AI client or any aiSettings.json editor reads it.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.aiConfiguration',
   AiConfigurationContribution,

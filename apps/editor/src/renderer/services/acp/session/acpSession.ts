@@ -9,6 +9,7 @@
 import {
   Disposable,
   autorun,
+  estimateCostUSD,
   generateUuid,
   localize,
   observableValue,
@@ -53,9 +54,9 @@ import {
 } from '../promptContext.js'
 import { composeImageBlocks, type PromptImage } from '../promptImage.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
-import { estimateClaudeCostUSD } from '../../../../shared/ai/claudePricing.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
+import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import {
   LIVE_INGESTION_BUDGET,
   MESSAGE_TEXT_REBUILD_AT,
@@ -781,6 +782,12 @@ export class AcpSession extends Disposable implements IAcpSession {
      * tests can exercise the trim path with tiny payloads.
      */
     private readonly _liveIngestionBudget: number = LIVE_INGESTION_BUDGET,
+    /**
+     * Provider-context resolver for cost estimation. The hot path (every usage
+     * chunk) reads its synchronous cache to complete the three-segment model id
+     * and pick up the gateway rate table. Absent in tests that don't price cost.
+     */
+    private readonly _providerContext?: IAcpSessionProviderContext,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -2616,18 +2623,22 @@ export class AcpSession extends Disposable implements IAcpSession {
       case 'usage_update': {
         const tx = this._batchedTx()
         const prev = this.usage.get()
+        const ctx = this._providerContext?.getProviderContext(this.agentId)
         // Agents that don't report authoritative cost (Codex) estimate it locally
         // from the session-cumulative per-model token counts stamped on every
         // usage_update. Take the latest snapshot — it already folds in every call,
         // so no accumulation.
-        const localCost = this._costStrategy?.fromUsageUpdate((update as { _meta?: unknown })._meta)
+        const localCost = this._costStrategy?.fromUsageUpdate(
+          (update as { _meta?: unknown })._meta,
+          ctx,
+        )
         if (localCost != null) {
           const next: AcpUsage = {
             used: update.used,
             size: update.size,
-            cost: localCost.cost,
             models: localCost.models,
             costEstimated: true,
+            ...(localCost.cost !== undefined ? { cost: localCost.cost } : {}),
           }
           this.usage.set(next, tx)
           if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
@@ -2636,19 +2647,19 @@ export class AcpSession extends Disposable implements IAcpSession {
         const models = extractModelBreakdown(update)
         // The Claude CLI prices cost against its Anthropic-only model catalog —
         // sessions running gateway models (kimi/deepseek/…) get silently billed
-        // at the default flagship rate. Distrust the reported total when any
-        // breakdown row is non-claude and re-price it locally (marked estimated).
+        // at the default flagship rate. Re-price through the provider context;
+        // rows that resolve to no rate keep the CLI's own figure.
         const repriced =
           update.cost != null && models.length > 0
-            ? repriceForeignModelBreakdown(models)
+            ? repriceForeignModelBreakdown(models, ctx)
             : undefined
         if (repriced != null) {
           const next: AcpUsage = {
             used: update.used,
             size: update.size,
-            cost: repriced.cost,
             models: repriced.models,
             costEstimated: true,
+            ...(repriced.cost !== undefined ? { cost: repriced.cost } : {}),
           }
           this.usage.set(next, tx)
           if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
@@ -2750,7 +2761,8 @@ export class AcpSession extends Disposable implements IAcpSession {
    * No-op for agents that report real cost (Claude — no strategy registered).
    */
   private _ingestPromptResponse(response: PromptResponse): void {
-    const estimate = this._costStrategy?.fromPromptResponse(response)
+    const ctx = this._providerContext?.getProviderContext(this.agentId)
+    const estimate = this._costStrategy?.fromPromptResponse(response, ctx)
     if (estimate == null) return
 
     const tx = this._batchedTx()
@@ -2758,9 +2770,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     const next: AcpUsage = {
       used: prev?.used ?? 0,
       size: prev?.size ?? 0,
-      cost: estimate.cost,
       models: estimate.models,
       costEstimated: true,
+      ...(estimate.cost !== undefined ? { cost: estimate.cost } : {}),
     }
     this.usage.set(next, tx)
     const sid = this.sessionIdOnAgent.get()
@@ -2771,15 +2783,24 @@ export class AcpSession extends Disposable implements IAcpSession {
    * Attach a locally-estimated USD cost to a sub-agent tally. The agent never
    * reports a per-sub-agent cost, so we price the tokens against the model's
    * published rates. Codex stats carry no model, so they are not priced here.
-   * Leaves `costUSD` unset when no model is known, so the UI can hide the cost.
+   * Leaves `costUSD` unset when no model is known or no rate resolves, so the UI
+   * can hide the cost instead of showing a guessed number.
    */
   private _priceSubagentStats(stats: AcpSubagentStats): AcpSubagentStats {
     if (stats.model === undefined) return stats
-    const costUSD = estimateClaudeCostUSD(stats.model, {
-      inputTokens: stats.inputTokens,
-      outputTokens: stats.outputTokens,
-      cacheReadTokens: stats.cacheReadTokens,
-      cacheCreateTokens: stats.cacheCreateTokens,
+    const pricing = priceSessionModel(
+      stats.model,
+      this._providerContext?.getProviderContext(this.agentId),
+    ).pricing
+    if (pricing === undefined) {
+      console.debug(`[acp-cost] subagent model rate unknown: ${stats.model}`)
+      return stats
+    }
+    const costUSD = estimateCostUSD(pricing, {
+      input: stats.inputTokens,
+      output: stats.outputTokens,
+      cacheRead: stats.cacheReadTokens,
+      cacheWrite: stats.cacheCreateTokens,
     })
     return { ...stats, costUSD }
   }

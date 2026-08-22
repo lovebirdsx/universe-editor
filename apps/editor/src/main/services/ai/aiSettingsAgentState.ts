@@ -2,20 +2,19 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { parse } from 'jsonc-parser'
+import { join } from 'node:path'
+import type { AiProviderInstance, AiProviderType } from '@universe-editor/platform'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
+import { mutateAiSettingsFile, readAiSettingsRoot } from './aiSettingsFile.js'
 
 const AI_SETTINGS_FILE = 'aiSettings.json'
-const writeQueues = new Map<string, Promise<void>>()
 
 export async function readAiSettingsAgentState<T>(
   configLocation: IConfigLocationService,
   agentId: string,
 ): Promise<T | undefined> {
   const path = await getAiSettingsPath(configLocation)
-  const root = await readRoot(path)
+  const root = await readAiSettingsRoot(path)
   const agents = asRecord(root['agentSettings'])
   return agents?.[agentId] as T | undefined
 }
@@ -26,26 +25,14 @@ export async function updateAiSettingsAgentState<T>(
   update: (current: T | undefined) => T,
 ): Promise<T> {
   const path = await getAiSettingsPath(configLocation)
-  const previous = writeQueues.get(path) ?? Promise.resolve()
-  const operation = previous
-    .catch(() => undefined)
-    .then(async () => {
-      const root = await readRoot(path)
-      const agents = { ...(asRecord(root['agentSettings']) ?? {}) }
-      const next = update(agents[agentId] as T | undefined)
-      agents[agentId] = next
-      root['agentSettings'] = agents
-      await writeRoot(path, root)
-      return next
-    })
-  writeQueues.set(
-    path,
-    operation.then(
-      () => undefined,
-      () => undefined,
-    ),
-  )
-  return operation
+  let next!: T
+  await mutateAiSettingsFile(path, (root) => {
+    const agents = { ...(asRecord(root['agentSettings']) ?? {}) }
+    next = update(agents[agentId] as T | undefined)
+    agents[agentId] = next
+    root['agentSettings'] = agents
+  })
+  return next
 }
 
 async function getAiSettingsPath(configLocation: IConfigLocationService): Promise<string> {
@@ -53,21 +40,21 @@ async function getAiSettingsPath(configLocation: IConfigLocationService): Promis
   return join(dir, AI_SETTINGS_FILE)
 }
 
-async function readRoot(path: string): Promise<Record<string, unknown>> {
-  try {
-    const raw = await readFile(path, 'utf8')
-    const parsed: unknown = parse(raw, [], { allowTrailingComma: true })
-    return asRecord(parsed) ?? {}
-  } catch {
-    return {}
+/** The persisted provider instances + user-defined types backing aiSettings.json. */
+export async function readAiSettingsProviders(configLocation: IConfigLocationService): Promise<{
+  providers: readonly AiProviderInstance[]
+  providerTypes: Readonly<Record<string, AiProviderType>>
+}> {
+  const path = await getAiSettingsPath(configLocation)
+  const root = await readAiSettingsRoot(path)
+  const providers = Array.isArray(root['providers'])
+    ? (root['providers'] as readonly AiProviderInstance[])
+    : []
+  const providerTypes = asRecord(root['providerTypes']) ?? {}
+  return {
+    providers,
+    providerTypes: providerTypes as Readonly<Record<string, AiProviderType>>,
   }
-}
-
-async function writeRoot(path: string, root: Record<string, unknown>): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.tmp`
-  await writeFile(tmp, `${JSON.stringify(root, null, 2)}\n`, 'utf8')
-  await rename(tmp, path)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

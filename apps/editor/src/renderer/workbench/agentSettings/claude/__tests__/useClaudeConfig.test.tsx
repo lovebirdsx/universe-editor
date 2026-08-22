@@ -3,7 +3,8 @@
  *  useClaudeConfig.saveProfile: editing the in-use credential profile (e.g.
  *  rotating its key) must push the new values into settings.json immediately —
  *  previously the old key stayed in effect until the profile was switched away
- *  and back.
+ *  and back. Gateway profiles now reference a provider instance; applying one
+ *  derives the env from that provider.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,9 +12,13 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import {
   Event,
+  IAiModelService,
+  INotificationService,
   InstantiationService,
   IStorageService,
   ServiceCollection,
+  type AiProviderInstance,
+  type AiProviderType,
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import {
@@ -40,6 +45,28 @@ function makeStorage(): IStorageServiceType {
     },
     onDidChangeWorkspaceScope: Event.None,
   }
+}
+
+function makeAiService(
+  providers: readonly AiProviderInstance[],
+  types: Readonly<Record<string, AiProviderType>>,
+): IAiModelService {
+  return {
+    _serviceBrand: undefined,
+    async getProviders() {
+      return providers
+    },
+    async getProviderTypes() {
+      return types
+    },
+  } as unknown as IAiModelService
+}
+
+function makeNotificationService(): INotificationService {
+  return {
+    _serviceBrand: undefined,
+    notify: () => ({ dispose: () => {}, update: () => {} }),
+  } as unknown as INotificationService
 }
 
 function makeClaudeService(initial: {
@@ -91,15 +118,31 @@ function makeClaudeService(initial: {
   }
 }
 
-function setup(service: IClaudeConfigService) {
+function setup(
+  service: IClaudeConfigService,
+  providers: readonly AiProviderInstance[] = [],
+  types: Readonly<Record<string, AiProviderType>> = {},
+) {
   const services = new ServiceCollection()
   services.set(IClaudeConfigService, service)
   services.set(IStorageService, makeStorage())
+  services.set(IAiModelService, makeAiService(providers, types))
+  services.set(INotificationService, makeNotificationService())
   const instantiation = new InstantiationService(services)
   const wrapper = ({ children }: { children: ReactNode }) => (
     <ServicesContext.Provider value={instantiation}>{children}</ServicesContext.Provider>
   )
   return renderHook(() => useClaudeConfig(), { wrapper })
+}
+
+const GATEWAY_PROVIDER: AiProviderInstance = {
+  name: 'gw',
+  type: 'anthropic',
+  apiKey: 'tok-1',
+  baseUrl: 'https://gw.example.com',
+}
+const GATEWAY_TYPES: Readonly<Record<string, AiProviderType>> = {
+  anthropic: { protocol: 'anthropic-messages' },
 }
 
 describe('useClaudeConfig.saveProfile', () => {
@@ -126,12 +169,12 @@ describe('useClaudeConfig.saveProfile', () => {
     expect(result.current.settings.env?.['ANTHROPIC_API_KEY']).toBe('sk-ant-new')
   })
 
-  it('re-applies a gateway profile, replacing the token and base URL', async () => {
+  it('re-applies a gateway profile, writing its derived token + base URL', async () => {
     const { service } = makeClaudeService({
       settings: {
         model: 'kimi-k3',
         env: {
-          ANTHROPIC_AUTH_TOKEN: 'tok-old',
+          ANTHROPIC_AUTH_TOKEN: 'tok-1',
           ANTHROPIC_BASE_URL: 'https://gw.example.com',
         },
       },
@@ -140,13 +183,12 @@ describe('useClaudeConfig.saveProfile', () => {
           id: 'g1',
           label: 'Gateway',
           kind: 'gateway',
-          authToken: 'tok-old',
-          baseUrl: 'https://gw.example.com',
+          providerRef: 'anthropic/gw',
           model: 'kimi-k3',
         },
       ],
     })
-    const { result } = setup(service)
+    const { result } = setup(service, [GATEWAY_PROVIDER], GATEWAY_TYPES)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     await act(async () => {
@@ -154,13 +196,13 @@ describe('useClaudeConfig.saveProfile', () => {
         id: 'g1',
         label: 'Gateway',
         kind: 'gateway',
-        authToken: 'tok-new',
-        baseUrl: 'https://gw.example.com',
+        providerRef: 'anthropic/gw',
         model: 'kimi-k3',
       })
     })
 
-    expect(result.current.settings.env?.['ANTHROPIC_AUTH_TOKEN']).toBe('tok-new')
+    expect(result.current.settings.env?.['ANTHROPIC_AUTH_TOKEN']).toBe('tok-1')
+    expect(result.current.settings.env?.['ANTHROPIC_BASE_URL']).toBe('https://gw.example.com')
     expect(result.current.settings.env?.['ANTHROPIC_API_KEY']).toBeUndefined()
   })
 

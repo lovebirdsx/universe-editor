@@ -429,8 +429,8 @@ export interface AcpModelCost {
   readonly outputTokens: number
   readonly cacheReadTokens: number
   readonly cacheCreateTokens: number
-  /** Session-cumulative cost in USD for this model, as reported by the agent. */
-  readonly costUSD: number
+  /** Session-cumulative cost in USD for this model. Absent when the rate is unknown. */
+  readonly costUSD?: number
 }
 
 /** Context-window usage reported by the agent via `usage_update`. */

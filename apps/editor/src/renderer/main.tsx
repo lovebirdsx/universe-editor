@@ -86,6 +86,7 @@ import { IRemoteStatusService } from '../shared/ipc/remoteStatusService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { IDocsService } from '../shared/ipc/docsService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
+import { IAiRateMirror } from './services/ai/aiRateMirror.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -452,6 +453,7 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   const aiModelService = workbenchStore.add(new AiModelClientService(aiModelMainProxy))
   services.set(IAiModelService, aiModelService)
+  services.set(IAiRateMirror, aiModelService)
 
   // AI debug recorder/replay service (main-side). Backs the AI Debug side panel.
   services.set(

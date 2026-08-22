@@ -20,7 +20,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 
 #### Renderer — Claude 专属（agentSettings/claude/）
 - `claude/ClaudeAgentSettings.tsx` — Claude 设置根组件。持有 `useClaudeConfig()`，三分类子导航（auth/model/env，`CATEGORIES` 数组），滚动位置 + 激活分类经 `IStorageService` 持久化（`agent.settings.claude.activeCategory`、`agent.settings.claude.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`。**
-- `claude/AuthenticationPanel.tsx` — 认证页。两块：`CredentialLibrary`（已存凭据档案列表 + 新增表单）与 `LoginForm`（OAuth 登录状态 + 登录按钮）。算激活态：`isProfileActive` / `isLoginActive`（由 env + auth 状态推导，不是 UI 展开态）；`mask()` 脱敏显示。
+- `claude/AuthenticationPanel.tsx` — 认证页。两块：`CredentialLibrary`（已存凭据档案列表 + 新增表单）与 `LoginForm`（OAuth 登录状态 + 登录按钮）。**gateway 档案不再内联 baseUrl+key，改为 `providerRef`（`type/name`）引用 AI 设置里的 provider 实例**，下拉控件是共享组件 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生预览经 `shared/ai/providerDerivation.ts` 的 `deriveClaudeEnv`。算激活态：`isProfileActive` / `isLoginActive`（由 env + auth 状态推导，不是 UI 展开态）；`mask()` 脱敏显示。
 - `claude/ModelThinkingPanel.tsx` — 模型 / 语言 / 思考开关 / effort / availableModels，绑 settings.json。
 - `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器，隐藏 `AUTH_ENV_KEYS`（认证类 env 归 AuthenticationPanel 管）。
 - `claude/useClaudeConfig.ts` — Claude 配置 hook。聚合 settings/authStatus/profiles 的读取与 patch/save/delete/apply。`applyProfile` 把某档案注入 settings.json 的 env（互斥清掉另一种凭据，见下）。常量 `API_KEY`/`AUTH_TOKEN`/`BASE_URL`。
@@ -46,7 +46,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 |---|---|---|---|
 | `~/.claude/settings.json` | 编辑器 + CLI 共享 | agent/SDK/CLI | **当前生效**配置：model、env（含激活的凭据）、思考开关等 |
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
-| `<configDir>/aiSettings.json` 的 `agentSettings.claude.authentication` | **仅编辑器** | 仅编辑器 | 凭据**档案库**（多套 apiKey / token+url 候选），不是生效配置 |
+| `<configDir>/aiSettings.json` 的 `agentSettings.claude.authentication` | **仅编辑器** | 仅编辑器 | 凭据**档案库**（多套 apiKey / gateway 引用 `providerRef` 候选），不是生效配置 |
 | renderer `IStorageService` 全局键 `agentSettings.claude.credentialDraft` | **仅编辑器** | 仅编辑器 | 认证面板未保存的表单草稿（UI 状态，不进配置文件） |
 
 - **settings.json = 当前生效菜；profiles.json = 候选菜单。** 「使用某档案」= 把它注入 settings.json 的 env。
@@ -58,7 +58,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 
 `applyProfile` 据此**互斥注入**（保证只有一种凭据生效）：
 - `apiKey` 档案 → `{API_KEY: 值, AUTH_TOKEN: null, BASE_URL: null}`
-- `gateway` 档案 → `{AUTH_TOKEN: 值, BASE_URL: 值, API_KEY: null}`
+- `gateway` 档案 → `{AUTH_TOKEN: 值, BASE_URL: 值, API_KEY: null}`——这两个值不再内联在档案里，而是由 `providerRef` 引用的 provider 实例经 `deriveClaudeEnv`（`shared/ai/providerDerivation.ts`）派生（实例 apiKey → `ANTHROPIC_AUTH_TOKEN`，实例/类型 baseUrl → `ANTHROPIC_BASE_URL`）。
 
 `isLoginActive` 仅当 env 里既无 token 也无 apiKey（即没有更高优先级凭据覆盖）时为真。
 
@@ -72,7 +72,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 
 ### 🔒 安全约束（刻意决策，勿擅改）
 
-1. **凭据明文落盘是用户明确选择**：apiKey/token/baseUrl 明文写进 `settings.json`（与 CLI 共享）和 `aiSettings.json` 的 Claude 认证区，**刻意**不用加密 SecretStorage。项目 CLAUDE.md「AI provider 密钥必须走 ISecretStorageService、绝不进 settings.json」那条**只针对 AI provider 特性，不适用本 Claude 配置共享特性**。
+1. **凭据明文落盘是用户明确选择**：apiKey 档案的 key 明文写进 `aiSettings.json` 的 Claude 认证区；gateway 档案只存 `providerRef`（不内联 baseUrl/key），应用时才把派生的 `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` 写进 `settings.json`（与 CLI 共享）。**刻意**不用加密 SecretStorage。项目 CLAUDE.md 里 AI provider 密钥已改为**明文存 aiSettings.json 实例 `apiKey`**（见套路 I），本 Claude 配置共享特性与之同源。
 2. **`readAuthStatus()` 绝不回传 OAuth token**：只回 `{loggedIn, expired, subscriptionType?, expiresAt?}`。有测试断言 token 不泄漏，改 readAuthStatus 时务必保住该测试。
 
 ### 常见任务 → 改哪里
@@ -81,7 +81,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 - **给 claudeConfig 加一个跨进程方法**：只改契约 + main 实现两个文件（5 处接线不动）。
 - **再加一个 acp agent 的设置页（如 codex）**：新建 `agentSettings/codex/CodexAgentSettings.tsx`，末行 `registerAgentSettings('codex', CodexAgentSettings)`；在 `builtinAgentSettings.ts` 加一行 `import './codex/CodexAgentSettings.js'`。**壳零改动**——只要该 agent 在 `IAcpAgentRegistry.list()` 里，就会自动出现在 Settings 的 Agents 组。Codex 的设置页已存在，其凭据模型（双文件 config.toml/auth.json、resolved_mode 优先级、双维度 auth 状态、fs.watch 实时刷新）与 Claude 不同，见 [`../codex/CLAUDE.md`](../codex/CLAUDE.md)。
 - **加一个凭据种类**：扩 `ClaudeCredentialKind`，改 `applyProfile` 的互斥注入逻辑 + `ProfileForm` 表单 + `isProfileActive`。
-- **接入第三方模型（Kimi/GPT 等）**：无需新代码——`gateway` profile 已可带 `model`/`smallFastModel` 预设（一个凭据=一套「网关+模型」，`applyProfile` 时连同 `settings.model` + `env.ANTHROPIC_SMALL_FAST_MODEL` 一起注入；`isProfileActive` 把 model 纳入比对）。Claude Code 只说 Anthropic 协议：Kimi 有原生兼容端点直连，GPT 需 LiteLLM/claude-code-router 代理转协议。用户文档见 `docs/user/zh-CN/ai-agent/models-and-cost.md`。
+- **接入第三方模型（Kimi/GPT 等）**：无需新代码——先在 AI 设置里建一个 `anthropic-messages` 协议的 provider 实例（baseUrl+key），`gateway` 档案通过 `providerRef` 引用它；档案还可带 `model`/`smallFastModel` 预设（`applyProfile` 时连同 `settings.model` + `env.ANTHROPIC_SMALL_FAST_MODEL` 一起注入；`isProfileActive` 把 model 纳入比对）。Claude Code 只说 Anthropic 协议：Kimi 有原生兼容端点直连，GPT 需 LiteLLM/claude-code-router 代理转协议。用户文档见 `docs/user/zh-CN/ai-agent/models-and-cost.md`。
 
 ### 易踩坑速记
 

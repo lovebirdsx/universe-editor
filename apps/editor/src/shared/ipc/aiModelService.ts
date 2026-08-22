@@ -8,21 +8,29 @@
  *  DTO note: AiMessagePart.image carries a Uint8Array in-process; over IPC it is
  *  encoded as base64 (`AiMessagePartDto`). The renderer client converts at the
  *  boundary, analogous to the project's "URI must be revived after IPC" rule.
+ *
+ *  Secret note: provider DTOs now carry a plaintext apiKey (`AiProviderInstance.apiKey`).
+ *  This is an explicit user decision — keys sync across machines in aiSettings.json
+ *  rather than staying in per-device encrypted storage. Logs and AI Debug records
+ *  still never contain the key.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
 import type {
+  AiAccountUsage,
   AiActiveModelKind,
-  AiGroupVerifyInput,
-  AiGroupVerifyResult,
   AiMessageRole,
   AiModelConfiguration,
   AiModelMetadata,
   AiModelSelector,
-  AiProviderGroup,
+  AiProviderInstance,
+  AiProviderType,
+  AiProviderTypeDescriptor,
+  AiProviderVerifyInput,
+  AiProviderVerifyResult,
+  AiRateTableSnapshot,
   AiRequestOptions,
   AiResponseChunk,
-  AiVendorDescriptor,
   Event,
   SerializedError,
 } from '@universe-editor/platform'
@@ -56,8 +64,9 @@ export interface AiActiveModelChangeEvent {
 
 /**
  * Transport-level main service. `on*` properties are bridged to `listen` by
- * ProxyChannel; everything else is a `call`. Provider groups & per-model config
- * are read by main directly from aiSettings.json — no renderer push.
+ * ProxyChannel; everything else is a `call`. Provider instances, per-model config
+ * and the active model selections are read by main directly from aiSettings.json —
+ * no renderer push.
  */
 export interface IAiModelMainService {
   readonly _serviceBrand: undefined
@@ -66,6 +75,7 @@ export interface IAiModelMainService {
   readonly onDidEndRequest: Event<AiEndEvent>
   readonly onDidChangeModels: Event<void>
   readonly onDidChangeActiveModel: Event<AiActiveModelChangeEvent>
+  readonly onDidChangeRemote: Event<void>
 
   getModels(): Promise<readonly AiModelMetadata[]>
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
@@ -90,22 +100,34 @@ export interface IAiModelMainService {
   /** Persist per-model configuration into aiSettings.json (defaults dropped). */
   setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** The persisted provider groups (secret-free) backing aiSettings.json. */
-  getGroups(): Promise<readonly AiProviderGroup[]>
-  /** Replace the persisted provider groups (rewrites aiSettings.json; no secrets). */
-  updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
+  /** The persisted provider instances backing aiSettings.json. */
+  getProviders(): Promise<readonly AiProviderInstance[]>
+  /** Replace the persisted provider instances (rewrites aiSettings.json). */
+  updateProviders(providers: readonly AiProviderInstance[]): Promise<void>
 
-  /** Vendors a user can pick when adding a provider group. */
-  getVendors(): Promise<readonly AiVendorDescriptor[]>
-  /** Probe a candidate group against its endpoint without persisting anything. */
-  verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult>
+  /** All provider types: built-in merged with the user-defined layer in aiSettings.json. */
+  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>>
+  /** Replace only the user-defined provider-type layer (built-in-identical entries are dropped). */
+  updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void>
 
-  /** Store a group's API key in encrypted secret storage (plaintext stays in main). */
-  setApiKey(vendor: string, group: string, key: string): Promise<void>
-  /** Remove a group's stored API key. */
-  deleteApiKey(vendor: string, group: string): Promise<void>
-  /** Whether a group currently has an API key stored. */
-  hasApiKey(vendor: string, group: string): Promise<boolean>
+  /** Provider types a user can pick when adding an instance (all merged types, registered or not). */
+  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]>
+  /** Probe a candidate instance against its endpoint without persisting anything. */
+  verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult>
+
+  /** Store an instance's plaintext apiKey (user decision: cross-machine sync); never logged. */
+  setApiKey(typeId: string, instanceName: string, key: string): Promise<void>
+  /** Remove an instance's stored apiKey. */
+  deleteApiKey(typeId: string, instanceName: string): Promise<void>
+  /** Whether an instance currently has an apiKey stored. */
+  hasApiKey(typeId: string, instanceName: string): Promise<boolean>
+
+  /** Latest rate tables by provider (`type/instance`), for the renderer's synchronous mirror. */
+  getRateTables(): Promise<readonly AiRateTableSnapshot[]>
+  /** Authoritative account-level usage for a provider; undefined means unavailable. */
+  getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined>
+  /** Refresh remote sources (rates + usage). Omit `providerKey` to refresh all. */
+  refreshRemote(providerKey?: string): Promise<void>
 }
 
 export const IAiModelMainService = createDecorator<IAiModelMainService>('aiModelMainService')

@@ -16,7 +16,14 @@
 
 import { useCallback, useState } from 'react'
 import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } from 'lucide-react'
-import { localize, INotificationService, Severity } from '@universe-editor/platform'
+import {
+  INotificationService,
+  Severity,
+  localize,
+  resolveModelBaseUrl,
+  type AiProviderInstance,
+  type AiProviderType,
+} from '@universe-editor/platform'
 import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import {
@@ -24,18 +31,23 @@ import {
   type CodexCredentialDraft,
   type CodexCredentialProfile,
 } from '../../../../shared/ipc/codexConfigService.js'
+import {
+  deriveCodexProvider,
+  resolveProviderRef,
+} from '../../../../shared/ai/providerDerivation.js'
+import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import { runCodexLogin } from './codexLogin.js'
 import { ConfigFileLink, getSiblingConfigPath } from '../ConfigFileLink.js'
 import { ConnectivityDot } from '../ConnectivityDot.js'
+import { useProviderRegistry } from '../useProviderRegistry.js'
+import {
+  DerivationError,
+  GatewayProviderPicker,
+  missingProviderPiece,
+  type ResolvedProvider,
+} from '../GatewayProviderPicker.js'
 import styles from '../AgentSettingsEditor.module.css'
-
-/** Show only a hint of a secret: first 4 + last 2 characters. */
-function mask(secret: string | undefined): string {
-  if (!secret) return ''
-  if (secret.length <= 8) return '••••'
-  return `${secret.slice(0, 4)}…${secret.slice(-2)}`
-}
 
 /** Renderer-side stable id; crypto.randomUUID is available in the renderer. */
 function newId(): string {
@@ -75,6 +87,7 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
 
 function CredentialLibrary({ config }: { config: UseCodexConfig }) {
   const notification = useService(INotificationService)
+  const { providers, types } = useProviderRegistry()
   const {
     profiles,
     activeProfileId,
@@ -130,6 +143,8 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
             <ProfileForm
               key={profile.id}
               draft={credentialDraft}
+              providers={providers}
+              types={types}
               onChange={(draft) => void saveCredentialDraft(draft)}
               onSave={async (p) => {
                 await saveProfile(p)
@@ -142,6 +157,8 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
               key={profile.id}
               profile={profile}
               authority={authority}
+              providers={providers}
+              types={types}
               active={isActive(profile)}
               onUse={() => void apply(profile)}
               onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
@@ -154,6 +171,8 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
       {adding ? (
         <ProfileForm
           draft={credentialDraft!}
+          providers={providers}
+          types={types}
           onChange={(draft) => void saveCredentialDraft(draft)}
           onSave={async (p) => {
             await saveProfile(p)
@@ -176,6 +195,8 @@ function CredentialLibrary({ config }: { config: UseCodexConfig }) {
 function ProfileRow({
   profile,
   authority,
+  providers,
+  types,
   active,
   onUse,
   onEdit,
@@ -183,6 +204,8 @@ function ProfileRow({
 }: {
   profile: CodexCredentialProfile
   authority: string | undefined
+  providers: readonly AiProviderInstance[]
+  types: Readonly<Record<string, AiProviderType>>
   active: boolean
   onUse: () => void
   onEdit: () => void
@@ -194,14 +217,22 @@ function ProfileRow({
     (url: string) => configService.checkGatewayConnectivity(url, authority),
     [configService, authority],
   )
+  const ref = profile.kind === 'gateway' ? profile.providerRef : undefined
+  const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
+  const gatewayBaseUrl =
+    resolved !== undefined
+      ? resolveModelBaseUrl(undefined, resolved.instance.baseUrl, resolved.type.defaultBaseUrl)
+      : undefined
   const detail =
     profile.kind === 'apiKey'
-      ? mask(profile.apiKey)
-      : `${profile.baseUrl ?? ''} · ${mask(profile.apiKey)}`
+      ? maskKey(profile.apiKey ?? '')
+      : resolved !== undefined
+        ? (resolved.instance.label ?? resolved.instance.name)
+        : (ref ?? '')
   return (
     <div className={styles['profileRow']}>
       <ConnectivityDot
-        baseUrl={profile.kind === 'gateway' ? profile.baseUrl : undefined}
+        baseUrl={profile.kind === 'gateway' ? gatewayBaseUrl : undefined}
         probe={probe}
       />
       <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
@@ -235,19 +266,22 @@ function ProfileRow({
 
 function ProfileForm({
   draft,
+  providers,
+  types,
   onChange,
   onSave,
   onCancel,
 }: {
   draft: CodexCredentialDraft
+  providers: readonly AiProviderInstance[]
+  types: Readonly<Record<string, AiProviderType>>
   onChange: (draft: CodexCredentialDraft) => void
   onSave: (profile: CodexCredentialProfile) => Promise<void>
   onCancel: () => void
 }) {
   const valid =
     draft.label.trim() !== '' &&
-    draft.apiKey.trim() !== '' &&
-    (draft.kind === 'apiKey' || draft.baseUrl.trim() !== '')
+    (draft.kind === 'apiKey' ? draft.apiKey.trim() !== '' : draft.providerRef.trim() !== '')
 
   const save = useCallback(async () => {
     const base = {
@@ -258,7 +292,7 @@ function ProfileForm({
     const profile: CodexCredentialProfile =
       draft.kind === 'apiKey'
         ? { ...base, apiKey: draft.apiKey.trim() }
-        : { ...base, apiKey: draft.apiKey.trim(), baseUrl: draft.baseUrl.trim() }
+        : { ...base, providerRef: draft.providerRef.trim() }
     await onSave(profile)
   }, [draft, onSave])
 
@@ -301,24 +335,32 @@ function ProfileForm({
 
       {draft.kind === 'gateway' && (
         <div className={styles['field']}>
-          <label className={styles['label']}>{'config.toml openai_base_url'}</label>
-          <Input
-            value={draft.baseUrl}
-            placeholder="https://your-gateway.example.com/v1"
-            onChange={(e) => onChange({ ...draft, baseUrl: e.target.value })}
-          />
+          <label className={styles['label']}>
+            {localize('codexSettings.auth.form.provider', 'Provider instance')}
+          </label>
+          <GatewayProviderPicker
+            providers={providers}
+            types={types}
+            protocol="openai-responses"
+            value={draft.providerRef}
+            onChange={(ref) => onChange({ ...draft, providerRef: ref })}
+          >
+            {(resolved) => <CodexDerivationPreview resolved={resolved} />}
+          </GatewayProviderPicker>
         </div>
       )}
 
-      <div className={styles['field']}>
-        <label className={styles['label']}>{'auth.json OPENAI_API_KEY'}</label>
-        <Input
-          type="password"
-          value={draft.apiKey}
-          placeholder="sk-…"
-          onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
-        />
-      </div>
+      {draft.kind === 'apiKey' && (
+        <div className={styles['field']}>
+          <label className={styles['label']}>{'auth.json OPENAI_API_KEY'}</label>
+          <Input
+            type="password"
+            value={draft.apiKey}
+            placeholder="sk-…"
+            onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
+          />
+        </div>
+      )}
 
       <div className={styles['toolbar']}>
         <Button disabled={!valid} onClick={() => void save()}>
@@ -332,11 +374,35 @@ function ProfileForm({
   )
 }
 
+function CodexDerivationPreview({ resolved }: { readonly resolved: ResolvedProvider | undefined }) {
+  if (resolved === undefined) return null
+  const missing = missingProviderPiece(resolved.instance, resolved.type)
+  if (missing !== undefined) return <DerivationError missing={missing} />
+  const derived = deriveCodexProvider(resolved.instance, resolved.type)
+  if (derived === undefined) return null
+  return (
+    <div className={styles['derivePreview']} data-testid="derivePreview">
+      <div className={styles['deriveRow']}>
+        <span className={styles['deriveKey']}>name</span>
+        <span className={styles['deriveValue']}>{derived.providerName}</span>
+      </div>
+      <div className={styles['deriveRow']}>
+        <span className={styles['deriveKey']}>base_url</span>
+        <span className={styles['deriveValue']}>{derived.baseUrl}</span>
+      </div>
+      <div className={styles['deriveRow']}>
+        <span className={styles['deriveKey']}>experimental_bearer_token</span>
+        <span className={styles['deriveValue']}>{maskKey(derived.apiKey)}</span>
+      </div>
+    </div>
+  )
+}
+
 const EMPTY_DRAFT: CodexCredentialDraft = {
   kind: 'apiKey',
   label: '',
   apiKey: '',
-  baseUrl: '',
+  providerRef: '',
 }
 
 function profileToDraft(profile: CodexCredentialProfile): CodexCredentialDraft {
@@ -345,7 +411,7 @@ function profileToDraft(profile: CodexCredentialProfile): CodexCredentialDraft {
     kind: profile.kind,
     label: profile.label,
     apiKey: profile.apiKey ?? '',
-    baseUrl: profile.baseUrl ?? '',
+    providerRef: profile.providerRef ?? '',
   }
 }
 

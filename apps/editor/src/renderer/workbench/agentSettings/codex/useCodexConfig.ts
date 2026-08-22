@@ -12,15 +12,27 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { IStorageService, StorageScope } from '@universe-editor/platform'
+import {
+  IAiModelService,
+  INotificationService,
+  IStorageService,
+  Severity,
+  StorageScope,
+  localize,
+} from '@universe-editor/platform'
 import {
   ICodexConfigService,
   type CodexAuthStatus,
   type CodexCredentialDraft,
+  type CodexCredentialIntent,
   type CodexCredentialProfile,
   type CodexSettings,
   type CodexSettingsPatch,
 } from '../../../../shared/ipc/codexConfigService.js'
+import {
+  deriveCodexProvider,
+  resolveProviderRef,
+} from '../../../../shared/ai/providerDerivation.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 
@@ -59,6 +71,8 @@ const CREDENTIAL_DRAFT_KEY = 'agentSettings.codex.credentialDraft'
 
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
+  const ai = useService<IAiModelService>(IAiModelService)
+  const notification = useService(INotificationService)
   const storage = useService(IStorageService)
   // Remote workspace: configure the remote `~/.codex`; local leaves authority
   // undefined so main routes to the local store.
@@ -149,26 +163,33 @@ export function useCodexConfig(): UseCodexConfig {
   const applyProfile = useCallback(
     async (profile: CodexCredentialProfile) => {
       // One atomic main-process step keeps auth.json + config.toml consistent.
-      const status =
-        profile.kind === 'gateway'
-          ? await service.applyCredential(
-              {
-                kind: 'gateway',
-                baseUrl: profile.baseUrl ?? '',
-                apiKey: profile.apiKey ?? '',
-                providerName: profile.label,
-              },
-              authority,
-            )
-          : await service.applyCredential(
-              { kind: 'apiKey', apiKey: profile.apiKey ?? '' },
-              authority,
-            )
+      let intent: CodexCredentialIntent
+      if (profile.kind === 'gateway') {
+        const ref = profile.providerRef
+        const [providers, types] = await Promise.all([ai.getProviders(), ai.getProviderTypes()])
+        const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
+        const derived =
+          resolved !== undefined ? deriveCodexProvider(resolved.instance, resolved.type) : undefined
+        if (derived === undefined) {
+          notification.notify({
+            severity: Severity.Error,
+            message: localize(
+              'codexSettings.auth.applyGatewayError',
+              'This gateway credential could not be applied — its provider is missing a base URL or API key.',
+            ),
+          })
+          return
+        }
+        intent = { kind: 'gateway', ...derived }
+      } else {
+        intent = { kind: 'apiKey', apiKey: profile.apiKey ?? '' }
+      }
+      const status = await service.applyCredential(intent, authority)
       setSettings(await service.read(authority))
       setAuthStatus(status)
       setActiveProfileId(await service.matchActiveProfile(authority))
     },
-    [service, authority],
+    [service, authority, ai, notification],
   )
 
   const saveProfile = useCallback(

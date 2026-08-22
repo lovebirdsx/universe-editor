@@ -10,6 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '@universe-editor/platform'
+import type { AiAccountUsage } from '@universe-editor/platform'
 
 /** One rate-limit window (a 5-hour bucket, a weekly bucket, a per-model bucket…). */
 export interface SubscriptionUsageWindow {
@@ -52,7 +53,21 @@ export interface SubscriptionUsageSnapshot {
 }
 
 /** Which readout the indicator should render for a session. */
-export type UsageDisplayKind = 'subscription' | 'gateway' | 'hidden'
+export type UsageDisplayKind = 'subscription' | 'account' | 'unavailable' | 'gateway' | 'hidden'
+
+/**
+ * Account-level usage for the provider *instance* an agent is bound to. This is
+ * the authoritative upstream number (`AiAccountUsage`), keyed per instance — the
+ * opposite of `SubscriptionUsageSnapshot`, which is a local estimate of the
+ * official subscription. It lives here (not in `AccountUsageService.ts`) so the
+ * pure `resolveUsageDisplay` below never depends on the service layer.
+ */
+export interface AccountUsageState {
+  /** The bound instance declares an account usage source. */
+  readonly hasSource: boolean
+  /** Authoritative number; `undefined` while `hasSource` is true means "unavailable". */
+  readonly usage?: AiAccountUsage
+}
 
 /**
  * Agents whose account-level gateway spend (`IApiUsageService`, i.e. the
@@ -346,11 +361,15 @@ export function isStale(
 /**
  * The gating table: which readout a session's indicator shows.
  *
- * ```
- * any agent  : subscription snapshot available        → 'subscription'
- * claude-code: no snapshot, gateway spend not disabled → 'gateway'   (¥)
- * everything else                                      → 'hidden'
- * ```
+ * Priority order is the semantics:
+ *  1. Official-subscription snapshot → `'subscription'` (authoritative, wins).
+ *  2. Account usage declared AND an authoritative number fetched → `'account'`.
+ *  3. Account usage declared but the number is missing → `'unavailable'`. This
+ *     must NOT fall through to the gateway ¥ figure below — that figure belongs
+ *     to a different account (the legacy hard-coded proxy), so substituting it
+ *     for a declared-but-unreachable provider would misattribute the spend.
+ *  4. The gateway ¥ figure is only meaningful for claude-code, else `'hidden'`.
+ *  5. Gateway spend disabled → `'hidden'`, otherwise `'gateway'`.
  *
  * The Codex row is the fix for the pre-existing bug: the indicator used to be a
  * global singleton rendered in every prompt box, so a Codex session displayed
@@ -360,8 +379,12 @@ export function resolveUsageDisplay(input: {
   readonly agentId: string
   readonly snapshot: SubscriptionUsageSnapshot | undefined
   readonly gatewayDisabled: boolean
+  readonly account?: AccountUsageState | undefined
 }): UsageDisplayKind {
   if (input.snapshot !== undefined) return 'subscription'
+  if (input.account?.hasSource === true) {
+    return input.account.usage !== undefined ? 'account' : 'unavailable'
+  }
   if (!GATEWAY_SPEND_AGENT_IDS.has(input.agentId)) return 'hidden'
   return input.gatewayDisabled ? 'hidden' : 'gateway'
 }

@@ -7,7 +7,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { IStorageService, StorageScope } from '@universe-editor/platform'
+import {
+  IAiModelService,
+  INotificationService,
+  IStorageService,
+  Severity,
+  StorageScope,
+  localize,
+} from '@universe-editor/platform'
 import {
   IClaudeConfigService,
   type ClaudeAuthStatus,
@@ -16,6 +23,7 @@ import {
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
+import { deriveClaudeEnv, resolveProviderRef } from '../../../../shared/ai/providerDerivation.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { isProfileActive } from './credentialMatch.js'
@@ -53,6 +61,8 @@ const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 
 export function useClaudeConfig(): UseClaudeConfig {
   const service = useService<IClaudeConfigService>(IClaudeConfigService)
+  const ai = useService<IAiModelService>(IAiModelService)
+  const notification = useService(INotificationService)
   const storage = useService(IStorageService)
   // Remote workspace: configure the remote `~/.claude`; local: leave authority
   // undefined so main routes to the local store.
@@ -132,20 +142,36 @@ export function useClaudeConfig(): UseClaudeConfig {
         })
         return
       }
-      // gateway: inject token + url, plus the bundled model preset when present.
-      // A blank model field means "don't touch the current model" (null skips it).
+      // gateway: resolve the provider instance, then inject the derived token +
+      // base URL (plus the bundled model preset when present). A blank model
+      // field means "don't touch the current model" (null skips it).
+      const ref = profile.providerRef
+      const [providers, types] = await Promise.all([ai.getProviders(), ai.getProviderTypes()])
+      const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
+      const derived =
+        resolved !== undefined ? deriveClaudeEnv(resolved.instance, resolved.type) : undefined
+      if (derived === undefined) {
+        notification.notify({
+          severity: Severity.Error,
+          message: localize(
+            'agentSettings.auth.applyGatewayError',
+            'This gateway credential could not be applied — its provider is missing a base URL or API key.',
+          ),
+        })
+        return
+      }
       const model = profile.model?.trim() ? profile.model.trim() : undefined
       await patch({
         ...(model !== undefined ? { model } : {}),
         env: {
-          [AUTH_TOKEN]: profile.authToken ?? '',
-          [BASE_URL]: profile.baseUrl ?? '',
+          [AUTH_TOKEN]: derived.authToken,
+          [BASE_URL]: derived.baseUrl,
           [API_KEY]: null,
           [SMALL_FAST_MODEL]: profile.smallFastModel?.trim() ? profile.smallFastModel.trim() : null,
         },
       })
     },
-    [patch],
+    [patch, ai, notification],
   )
 
   const saveProfile = useCallback(
@@ -160,14 +186,21 @@ export function useClaudeConfig(): UseClaudeConfig {
       // values into settings.json too, or the agent keeps using the old key
       // until the profile is switched away and back.
       const currentSettings = await service.read(authority)
+      const [providers, types] = await Promise.all([ai.getProviders(), ai.getProviderTypes()])
       const wasActive =
         previous !== undefined &&
-        isProfileActive(previous, currentSettings.env ?? {}, currentSettings.model)
+        isProfileActive(
+          previous,
+          currentSettings.env ?? {},
+          currentSettings.model,
+          providers,
+          types,
+        )
       await service.writeProfiles(next)
       setProfiles(next)
       if (wasActive) await applyProfile(profile)
     },
-    [service, applyProfile, authority],
+    [service, applyProfile, authority, ai],
   )
 
   const deleteProfile = useCallback(

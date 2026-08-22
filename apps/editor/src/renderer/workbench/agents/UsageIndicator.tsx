@@ -16,7 +16,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleAlert, Gauge, TimerReset, Wallet } from 'lucide-react'
+import { CircleAlert, Gauge, RefreshCw, TimerReset, Wallet } from 'lucide-react'
 import {
   constObservable,
   generateUuid,
@@ -24,6 +24,7 @@ import {
   INotificationService,
   localize,
   Severity,
+  type AiAccountUsage,
 } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IApiUsageService, type UsageState } from '../../services/usage/ApiUsageService.js'
@@ -31,9 +32,11 @@ import {
   ISubscriptionUsageService,
   type ResetCreditOutcome,
 } from '../../services/usage/SubscriptionUsageService.js'
+import { IAccountUsageService } from '../../services/usage/AccountUsageService.js'
 import {
   pickTightestWindow,
   resolveUsageDisplay,
+  type AccountUsageState,
   type SubscriptionUsageSnapshot,
   type SubscriptionUsageWindow,
 } from '../../services/usage/subscriptionUsage.js'
@@ -44,6 +47,7 @@ import styles from './agents.module.css'
 /** Stable fallbacks so the hooks below stay unconditional when a service is absent. */
 const NO_SNAPSHOT = constObservable<SubscriptionUsageSnapshot | undefined>(undefined)
 const NO_GATEWAY = constObservable<UsageState>({ kind: 'disabled', reason: 'not-configured' })
+const NO_ACCOUNT = constObservable<AccountUsageState>({ hasSource: false })
 
 /** How often the component re-evaluates staleness while nothing else changes. */
 const STALE_RECHECK_MS = 30_000
@@ -58,6 +62,36 @@ function formatPercent(value: number): string {
 
 function formatAbsolute(epochMs: number): string {
   return new Date(epochMs).toLocaleString()
+}
+
+function accountSymbol(usage: AiAccountUsage): string {
+  return usage.currency === 'CNY' ? '¥' : '$'
+}
+
+function accountMoney(value: number, usage: AiAccountUsage): string {
+  return `${accountSymbol(usage)}${value.toFixed(2)}`
+}
+
+/** The single collapsed figure: remaining when reported, else used (over limit). */
+function accountPrimaryLabel(usage: AiAccountUsage): string {
+  if (usage.remainingUSD !== undefined) return accountMoney(usage.remainingUSD, usage)
+  if (usage.usedUSD !== undefined) {
+    return usage.limitUSD !== undefined
+      ? `${accountMoney(usage.usedUSD, usage)} / ${accountMoney(usage.limitUSD, usage)}`
+      : accountMoney(usage.usedUSD, usage)
+  }
+  return '—'
+}
+
+function accountKindLabel(usage: AiAccountUsage): string {
+  switch (usage.kind) {
+    case 'quota':
+      return localize('acp.accountUsage.kind.quota', 'Quota')
+    case 'balance':
+      return localize('acp.accountUsage.kind.balance', 'Balance')
+    case 'subscription':
+      return localize('acp.accountUsage.kind.subscription', 'Subscription')
+  }
 }
 
 /** "in 3h 20m" / "in 12m" while the window is still open, an absolute time once it is far out. */
@@ -86,6 +120,7 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   const agentId = session.agentId
   const subscription = useOptionalService(ISubscriptionUsageService)
   const gateway = useOptionalService(IApiUsageService)
+  const account = useOptionalService(IAccountUsageService)
 
   const snapshotObservable = useMemo(
     () => subscription?.snapshotFor(agentId) ?? NO_SNAPSHOT,
@@ -93,6 +128,12 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   )
   const snapshot = useObservable(snapshotObservable)
   const gatewayState = useObservable(gateway?.state ?? NO_GATEWAY)
+
+  const accountObservable = useMemo(
+    () => account?.stateFor(agentId) ?? NO_ACCOUNT,
+    [account, agentId],
+  )
+  const accountState = useObservable(accountObservable)
 
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -106,18 +147,34 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
 
   useEffect(() => {
     void subscription?.refresh(agentId)
-  }, [subscription, agentId])
+    void account?.refresh(agentId)
+  }, [subscription, account, agentId])
 
   const display = resolveUsageDisplay({
     agentId,
     snapshot,
     gatewayDisabled: gatewayState.kind === 'disabled',
+    account: accountState,
   })
 
   if (display === 'hidden') return null
 
   if (display === 'gateway') {
     return <GatewayIndicator state={gatewayState} onRefresh={() => gateway?.refresh()} />
+  }
+
+  if (display === 'account' || display === 'unavailable') {
+    const forceRefresh = () => void account?.refresh(agentId, { force: true })
+    if (display === 'account' && accountState.usage !== undefined) {
+      return (
+        <AccountIndicator
+          agentId={agentId}
+          usage={accountState.usage}
+          onForceRefresh={forceRefresh}
+        />
+      )
+    }
+    return <UnavailableIndicator onForceRefresh={forceRefresh} />
   }
 
   // `display === 'subscription'` implies a snapshot exists.
@@ -253,6 +310,146 @@ function useDismissOnOutside(onDismiss: () => void) {
   }, [onDismiss])
 
   return containerRef
+}
+
+function AccountIndicator({
+  agentId,
+  usage,
+  onForceRefresh,
+}: {
+  agentId: string
+  usage: AiAccountUsage
+  onForceRefresh: () => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className={styles['usageWrap']}>
+      <button
+        type="button"
+        className={styles['usageIndicator']}
+        data-state="ok"
+        data-tooltip={localize('acp.accountUsage.indicator', 'Account usage — click for details')}
+        onClick={() => {
+          if (!open) onForceRefresh()
+          setOpen((v) => !v)
+        }}
+        data-testid="acp-usage-indicator"
+      >
+        <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
+        <span className={styles['usageIndicatorText']}>{accountPrimaryLabel(usage)}</span>
+      </button>
+      {open ? (
+        <AccountUsagePopover agentId={agentId} usage={usage} onDismiss={() => setOpen(false)} />
+      ) : null}
+    </div>
+  )
+}
+
+function UnavailableIndicator({ onForceRefresh }: { onForceRefresh: () => void }) {
+  return (
+    <button
+      type="button"
+      className={styles['usageIndicator']}
+      data-state="unavailable"
+      data-tooltip={localize(
+        'acp.accountUsage.unavailable.tooltip',
+        'This provider declares an account usage source, but the authoritative number is not available right now. Local estimates are never shown here.',
+      )}
+      onClick={onForceRefresh}
+      data-testid="acp-usage-indicator"
+    >
+      <CircleAlert size={13} strokeWidth={1.75} aria-hidden="true" />
+      <span className={styles['usageIndicatorText']}>
+        {localize('acp.accountUsage.unavailable', 'Unavailable')}
+      </span>
+    </button>
+  )
+}
+
+function AccountUsagePopover({
+  agentId,
+  usage,
+  onDismiss,
+}: {
+  agentId: string
+  usage: AiAccountUsage
+  onDismiss: () => void
+}) {
+  const containerRef = useDismissOnOutside(onDismiss)
+  const account = useService(IAccountUsageService)
+  const [refreshing, setRefreshing] = useState(false)
+  const now = Date.now()
+
+  const refreshNow = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await account.refresh(agentId, { force: true })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [account, agentId])
+
+  return (
+    <div
+      ref={containerRef}
+      className={styles['sessionCostPopover']}
+      data-testid="acp-usage-popover"
+      role="dialog"
+      aria-label={localize('acp.accountUsage.popover', 'Account usage')}
+    >
+      <div className={styles['sessionCostHeader']}>
+        <span>{accountKindLabel(usage)}</span>
+        <span className={styles['sessionCostTotal']}>{accountPrimaryLabel(usage)}</span>
+      </div>
+
+      {usage.usedUSD !== undefined ? (
+        <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
+          {localize('acp.accountUsage.used', 'Used: {amount}', {
+            amount: accountMoney(usage.usedUSD, usage),
+          })}
+        </div>
+      ) : null}
+      {usage.limitUSD !== undefined ? (
+        <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
+          {localize('acp.accountUsage.limit', 'Limit: {amount}', {
+            amount: accountMoney(usage.limitUSD, usage),
+          })}
+        </div>
+      ) : null}
+      {usage.remainingUSD !== undefined ? (
+        <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
+          {localize('acp.accountUsage.remaining', 'Remaining: {amount}', {
+            amount: accountMoney(usage.remainingUSD, usage),
+          })}
+        </div>
+      ) : null}
+
+      {usage.windows !== undefined && usage.windows.length > 0
+        ? usage.windows.map((window) => (
+            <UsageWindowRow key={window.id} window={window} now={now} />
+          ))
+        : null}
+
+      <div className={styles['usageResetRow']}>
+        <span>
+          {localize('acp.accountUsage.fetchedAt', 'Updated {at}', {
+            at: formatAbsolute(usage.fetchedAt),
+          })}
+        </span>
+        <button
+          type="button"
+          className={styles['usageResetButton']}
+          disabled={refreshing}
+          onClick={() => void refreshNow()}
+          data-testid="acp-account-refresh"
+        >
+          <RefreshCw size={12} strokeWidth={1.75} aria-hidden="true" />
+          {localize('acp.accountUsage.refresh', 'Refresh')}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function SubscriptionUsagePopover({

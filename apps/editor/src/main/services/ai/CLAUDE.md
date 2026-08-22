@@ -6,12 +6,12 @@
 
 把每次「直接 provider 路径」的 AI 调用（行内补全 / 会话标题 / commit message / 扩展 AI）以**利于人为阅读**的方式记录下来：实时人类可读流（Output 面板 + 落盘 log）、结构化 JSONL（grep/分析）、侧栏调试面板；并支持用记录的响应**离线 mock 回放**（不调真实模型，无 key 也能复现 UI 流式行为）。**始终开启**，靠复用 logs 的 session 目录清理自动回收磁盘。
 
-> ⚠️ 第一原则：先认领改动落在**哪一层**——① 记录采集（`AiDebugRecorder` + `AiModelMainService` 挂钩）② 记录形态（platform `aiDebugTypes.ts`）③ 跨进程服务（`IAiDebugService` / `AiDebugMainService`）④ 面板 UI（`AiDebugView.tsx`）⑤ purpose 标注（4 处调用点）。底层 AI 模型服务三层架构 / 加 vendor / 密钥红线见 `apps/editor/CLAUDE.md` **套路 I**——别在这找。
+> ⚠️ 第一原则：先认领改动落在**哪一层**——① 记录采集（`AiDebugRecorder` + `AiModelMainService` 挂钩）② 记录形态（platform `aiDebugTypes.ts`）③ 跨进程服务（`IAiDebugService` / `AiDebugMainService`）④ 面板 UI（`AiDebugView.tsx`）⑤ purpose 标注（4 处调用点）。底层 AI 模型服务三层架构 / 加协议 provider / 密钥明文策略见 `apps/editor/CLAUDE.md` **套路 I（加一个 AI provider（协议））**——别在这找。
 
 ### 核心事实（务必先懂）
 
 - **唯一收口点 = `AiModelMainService`**。所有 4 条消费路径都经 renderer `AiModelClientService.sendRequest` → IPC `startRequest` 汇入这里，所以**记录挂钩只在这一个类**，不在每个调用点。
-- **记录天然无 API key**：`AiRequestOptions` 不含密钥（key 只在 provider 内经 `group.getApiKey()` 经 `ISecretStorageService` 取）。记录的是 options（去掉 modelId/purpose/debugLabel）+ prompt + response，绝无密钥。
+- **记录天然无 API key**：key 只在 `AiResolvedProvider.apiKey`（`sendRequest` 的第三参，provider 只把它塞进 HTTP 头），根本不在 `AiRequestOptions` 里；recorder 的 `begin` 只存 options（去掉 modelId/purpose/debugLabel）+ prompt + response，绝无密钥。
 - **purpose 靠一个字段穿透**：`AiRequestOptions.purpose`（platform `aiModelTypes.ts`）本身是 IPC 传输类型，每条路径原样透传 options 到 `startRequest`。给某调用打标签 = 在调用点 options 里加 `purpose`，自动到达 recorder，**无需改 IPC DTO**。
 - **回放不碰 provider**：`AiDebugMainService` 自己把记录的历史 chunk 重新 fire 成 replayId 维度的事件，不经 `AiModelMainService`、不发网络。DI 单向：`aiModel → recorder`；`aiDebugService → recorder`（**recorder 不反向依赖 aiModel**，回放自包含在 aiDebugService 内）。
 
@@ -149,5 +149,5 @@ pnpm --filter @universe-editor/ai e2e
 - `apps/editor/src/renderer/workbench/aiDebug/AiDebugView.tsx` —— 侧栏面板
 - `packages/platform/src/ai/aiDebugTypes.ts` / `aiModelTypes.ts` —— 记录形态 + purpose 载体
 - `extensions/ai/e2e/specs/aiDebug.spec.ts` + `apps/editor/src/renderer/e2e/probe.ts` + `apps/editor/src/shared/e2e/contract.ts` —— E2E 端到端
-- 相关：`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加 vendor）、套路 C/B（跨进程服务/View 注册）、本文件「AI 设置页面」一节（AI 设置页面）、本文件「内联补全」一节（ghost-text 续写）、本文件「NES 编辑建议」一节（NES 光标外编辑预测，purpose `next-edit-suggestion`）
+- 相关：`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加协议 provider）、套路 C/B（跨进程服务/View 注册）、本文件「AI 设置页面」一节（AI 设置页面）、本文件「内联补全」一节（ghost-text 续写）、本文件「NES 编辑建议」一节（NES 光标外编辑预测，purpose `next-edit-suggestion`）
 

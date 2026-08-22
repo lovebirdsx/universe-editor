@@ -1,12 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AddProviderDialog — a focus-trapped modal for adding a provider group. The user
- *  picks a vendor (from the registered providers), names the group, sets an
- *  optional baseUrl / API key, and the dialog auto-probes the endpoint for
- *  validity. The non-secret part of the draft (vendor / name / baseUrl) is
- *  persisted so a half-finished entry survives a close; the API key is NEVER
- *  persisted to storage — it only travels to main for the probe and, on create,
- *  into encrypted secret storage.
+ *  AddProviderDialog — a focus-trapped modal for adding a provider *instance*.
+ *  Three steps in one dialog: pick a provider type (existing descriptor or
+ *  create a new type inline), fill the connection (name / label / baseUrl /
+ *  apiKey), and verify. Picking an existing type reuses that type's model
+ *  catalog and rates, so the dialog never asks for models/rates again. The
+ *  non-secret part of the draft (type / name / baseUrl) is persisted; the API
+ *  key is NEVER persisted to storage — it only travels to main for the probe
+ *  and, on create, into the instance's plaintext apiKey (written via
+ *  updateProviders, not setApiKey).
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -16,18 +18,28 @@ import {
   IStorageService,
   StorageScope,
   localize,
-  type AiProviderGroup,
-  type AiVendorDescriptor,
+  type AiProviderInstance,
+  type AiProviderType,
+  type AiProviderTypeDescriptor,
+  type AiWireProtocol,
 } from '@universe-editor/platform'
-import { Button, FocusScopeOverlay, Input, Spinner } from '@universe-editor/workbench-ui'
+import { Button, Checkbox, FocusScopeOverlay, Input, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import styles from './AiSettingsEditor.module.css'
 
 const DRAFT_KEY = 'ai.settings.addProvider.draft'
 const VERIFY_DEBOUNCE_MS = 600
+const NEW_TYPE = '__new__'
+
+const PROTOCOLS: readonly AiWireProtocol[] = [
+  'openai-chat',
+  'openai-responses',
+  'anthropic-messages',
+  'ollama',
+]
 
 interface Draft {
-  readonly vendor: string
+  readonly type: string
   readonly name: string
   readonly baseUrl: string
 }
@@ -39,39 +51,57 @@ type VerifyState =
   | { readonly kind: 'fail'; readonly error: string }
 
 interface AddProviderDialogProps {
-  readonly existingGroups: readonly AiProviderGroup[]
+  readonly existingInstances: readonly AiProviderInstance[]
+  readonly existingTypes: Readonly<Record<string, AiProviderType>>
   readonly onClose: () => void
   readonly onCreated: () => void
 }
 
-export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddProviderDialogProps) {
+export function AddProviderDialog({
+  existingInstances,
+  existingTypes,
+  onClose,
+  onCreated,
+}: AddProviderDialogProps) {
   const aiModel = useService(IAiModelService)
   const storage = useService(IStorageService)
 
-  const [vendors, setVendors] = useState<readonly AiVendorDescriptor[]>([])
-  const [vendor, setVendor] = useState('')
+  const [descriptors, setDescriptors] = useState<readonly AiProviderTypeDescriptor[]>([])
+  const [selectedTypeId, setSelectedTypeId] = useState('')
   const [name, setName] = useState('default')
+  const [label, setLabel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' })
   const [creating, setCreating] = useState(false)
 
+  // New-type form fields (shown only when "＋ New type…" is selected).
+  const [newTypeId, setNewTypeId] = useState('')
+  const [newTypeLabel, setNewTypeLabel] = useState('')
+  const [newTypeProtocol, setNewTypeProtocol] = useState<AiWireProtocol>('openai-chat')
+  const [newTypeBaseUrl, setNewTypeBaseUrl] = useState('')
+  const [newTypeRequiresApiKey, setNewTypeRequiresApiKey] = useState(false)
+
   const draftRestored = useRef(false)
   const verifyToken = useRef(0)
 
-  // Load the vendor list, then overlay the persisted (key-free) draft.
+  const creatingNewType = selectedTypeId === NEW_TYPE
+
+  // Load descriptors, then overlay the persisted (key-free) draft.
   useEffect(() => {
     let active = true
     void (async () => {
       const [list, draft] = await Promise.all([
-        aiModel.getVendors(),
+        aiModel.getProviderTypeDescriptors(),
         storage.get<Draft>(DRAFT_KEY, StorageScope.GLOBAL),
       ])
       if (!active) return
-      setVendors(list)
-      const restoredVendor =
-        draft && list.some((v) => v.vendor === draft.vendor) ? draft.vendor : ''
-      setVendor(restoredVendor || list[0]?.vendor || '')
+      setDescriptors(list)
+      const restoredType =
+        draft && (list.some((d) => d.id === draft.type) || draft.type === NEW_TYPE)
+          ? draft.type
+          : ''
+      setSelectedTypeId(restoredType || list[0]?.id || '')
       if (draft) {
         setName(draft.name)
         setBaseUrl(draft.baseUrl)
@@ -86,10 +116,25 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
   // Persist the key-free draft as the user edits (after the initial restore).
   useEffect(() => {
     if (!draftRestored.current) return
-    void storage.set(DRAFT_KEY, { vendor, name, baseUrl } satisfies Draft, StorageScope.GLOBAL)
-  }, [storage, vendor, name, baseUrl])
+    void storage.set(
+      DRAFT_KEY,
+      { type: selectedTypeId, name, baseUrl } satisfies Draft,
+      StorageScope.GLOBAL,
+    )
+  }, [storage, selectedTypeId, name, baseUrl])
 
-  const selectedVendor = useMemo(() => vendors.find((v) => v.vendor === vendor), [vendors, vendor])
+  const selectedType = useMemo(
+    () => (creatingNewType ? undefined : existingTypes[selectedTypeId]),
+    [creatingNewType, existingTypes, selectedTypeId],
+  )
+
+  const effectiveTypeId = creatingNewType ? newTypeId.trim() : selectedTypeId
+  const effectiveProtocol: AiWireProtocol = creatingNewType
+    ? newTypeProtocol
+    : (selectedType?.protocol ?? 'openai-chat')
+  const effectiveDefaultBaseUrl = creatingNewType
+    ? newTypeBaseUrl.trim() || undefined
+    : selectedType?.defaultBaseUrl
 
   const trimmedName = name.trim()
   const nameError = useMemo(() => {
@@ -97,18 +142,37 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
       return localize('aiModels.addProvider.nameEmpty', 'Name is required.')
     if (trimmedName.includes('/'))
       return localize('aiModels.addProvider.nameSlash', "Name must not contain '/'.")
-    if (existingGroups.some((g) => g.vendor === vendor && g.name === trimmedName))
-      return localize('aiModels.addProvider.exists', 'That provider group already exists.')
+    if (
+      !creatingNewType &&
+      existingInstances.some((i) => i.type === effectiveTypeId && i.name === trimmedName)
+    )
+      return localize(
+        'aiModels.addProvider.nameExists',
+        'That provider already exists for this type.',
+      )
     return undefined
-  }, [trimmedName, existingGroups, vendor])
+  }, [trimmedName, existingInstances, effectiveTypeId, creatingNewType])
+
+  const newTypeIdTrimmed = newTypeId.trim()
+  const newTypeError = useMemo(() => {
+    if (!creatingNewType) return undefined
+    if (newTypeIdTrimmed.length === 0)
+      return localize('aiModels.addProvider.newType.idEmpty', 'Type id must not be empty.')
+    if (newTypeIdTrimmed.includes('/'))
+      return localize('aiModels.addProvider.newType.idSlash', "Type id must not contain '/'.")
+    if (newTypeIdTrimmed in existingTypes)
+      return localize('aiModels.addProvider.newType.idExists', 'That type id already exists.')
+    return undefined
+  }, [creatingNewType, newTypeIdTrimmed, existingTypes])
 
   const runVerify = useCallback(async () => {
-    if (!vendor) return
+    if (!effectiveTypeId) return
     const token = ++verifyToken.current
     setVerify({ kind: 'verifying' })
-    const result = await aiModel.verifyGroup({
-      vendor,
+    const result = await aiModel.verifyProvider({
+      type: effectiveTypeId,
       name: trimmedName || 'default',
+      protocol: effectiveProtocol,
       ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
     })
@@ -122,63 +186,186 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
               result.error ?? localize('aiModels.addProvider.verifyFail', 'Verification failed.'),
           },
     )
-  }, [aiModel, vendor, trimmedName, baseUrl, apiKey])
+  }, [aiModel, effectiveTypeId, trimmedName, effectiveProtocol, baseUrl, apiKey])
 
   // Auto-probe when the connection-relevant fields settle — but only once the
   // baseUrl is a complete URL. Empty or half-typed values would otherwise spam
   // pointless probes / failures; the manual "Verify" button still works for
-  // vendors that rely on their default endpoint.
+  // types that rely on their default endpoint.
   useEffect(() => {
-    if (!draftRestored.current || !vendor) return
+    if (!draftRestored.current || !effectiveTypeId) return
     if (!isCompleteUrl(baseUrl.trim())) return
     const timer = setTimeout(() => void runVerify(), VERIFY_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [vendor, baseUrl, apiKey, runVerify])
+  }, [effectiveTypeId, baseUrl, apiKey, runVerify])
+
+  // Switching type / entering new-type mode resets the probe.
+  useEffect(() => {
+    setVerify({ kind: 'idle' })
+  }, [selectedTypeId, newTypeId, newTypeProtocol])
 
   const create = useCallback(async () => {
-    if (nameError || !vendor) return
+    if (nameError || newTypeError || !effectiveTypeId) return
     setCreating(true)
     try {
-      const group: AiProviderGroup = {
-        vendor,
+      const instance: AiProviderInstance = {
+        type: effectiveTypeId,
         name: trimmedName,
+        ...(label.trim() ? { label: label.trim() } : {}),
         ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       }
-      await aiModel.updateGroups([...existingGroups, group])
-      if (apiKey.trim()) await aiModel.setApiKey(vendor, trimmedName, apiKey.trim())
+      if (creatingNewType) {
+        const newType: AiProviderType = {
+          protocol: newTypeProtocol,
+          requiresApiKey: newTypeRequiresApiKey,
+          ...(newTypeLabel.trim() ? { label: newTypeLabel.trim() } : {}),
+          ...(newTypeBaseUrl.trim() ? { defaultBaseUrl: newTypeBaseUrl.trim() } : {}),
+        }
+        await aiModel.updateProviderTypes({ ...existingTypes, [effectiveTypeId]: newType })
+      }
+      await aiModel.updateProviders([...existingInstances, instance])
       await storage.remove(DRAFT_KEY, StorageScope.GLOBAL)
       onCreated()
     } finally {
       setCreating(false)
     }
-  }, [aiModel, apiKey, baseUrl, existingGroups, nameError, onCreated, storage, trimmedName, vendor])
+  }, [
+    aiModel,
+    apiKey,
+    baseUrl,
+    creatingNewType,
+    effectiveTypeId,
+    existingInstances,
+    existingTypes,
+    label,
+    nameError,
+    newTypeBaseUrl,
+    newTypeError,
+    newTypeLabel,
+    newTypeProtocol,
+    newTypeRequiresApiKey,
+    onCreated,
+    storage,
+    trimmedName,
+  ])
+
+  const reuseCount = selectedType?.models?.length ?? 0
 
   return (
     <FocusScopeOverlay visible onEscape={onClose}>
       <div className={styles['dialogBackdrop']} onClick={onClose} />
       <div className={styles['dialog']} role="dialog" aria-modal="true">
         <h2 className={styles['dialogTitle']}>
-          {localize('aiModels.addProvider.title', 'Add Provider Group')}
+          {localize('aiModels.addProvider.title', 'Add Provider')}
         </h2>
 
         <div className={styles['dialogBody']}>
           <div className={styles['field']}>
             <label className={styles['label']}>
-              {localize('aiModels.addProvider.vendor', 'Vendor')}
+              {localize('aiModels.addProvider.type', 'Provider type')}
             </label>
             <select
               className={styles['control']}
-              value={vendor}
-              aria-label={localize('aiModels.addProvider.vendor', 'Vendor')}
-              onChange={(e) => setVendor(e.target.value)}
+              value={selectedTypeId}
+              aria-label={localize('aiModels.addProvider.type', 'Provider type')}
+              onChange={(e) => setSelectedTypeId(e.target.value)}
             >
-              {vendors.map((v) => (
-                <option key={v.vendor} value={v.vendor}>
-                  {v.label}
+              {descriptors.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label} · {d.protocol}
+                  {d.builtin
+                    ? localize('aiModels.addProvider.builtin', ' (built-in)')
+                    : localize('aiModels.addProvider.custom', ' (custom)')}
                 </option>
               ))}
+              <option value={NEW_TYPE}>
+                {localize('aiModels.addProvider.newType', '＋ New type…')}
+              </option>
             </select>
           </div>
+
+          {!creatingNewType && selectedType && (
+            <div className={styles['reuseHint']}>
+              {localize(
+                'aiModels.addProvider.reuse',
+                'Will reuse the {count} models and rates of {type}.',
+                { count: reuseCount, type: selectedType.label ?? selectedTypeId },
+              )}
+            </div>
+          )}
+
+          {creatingNewType && (
+            <>
+              <div className={styles['field']}>
+                <label className={styles['label']}>
+                  {localize('aiModels.addProvider.newType.id', 'Type id')}
+                </label>
+                <Input
+                  value={newTypeId}
+                  invalid={newTypeIdTrimmed.length > 0 && newTypeError !== undefined}
+                  placeholder="my-gateway"
+                  onChange={(e) => setNewTypeId(e.target.value)}
+                />
+                {newTypeIdTrimmed.length > 0 && newTypeError && (
+                  <span className={styles['dialogFieldError']}>{newTypeError}</span>
+                )}
+              </div>
+
+              <div className={styles['field']}>
+                <label className={styles['label']}>
+                  {localize('aiModels.addProvider.newType.label', 'Label')}
+                </label>
+                <Input
+                  value={newTypeLabel}
+                  placeholder={localize(
+                    'aiModels.addProvider.newType.labelPlaceholder',
+                    'Display name',
+                  )}
+                  onChange={(e) => setNewTypeLabel(e.target.value)}
+                />
+              </div>
+
+              <div className={styles['field']}>
+                <label className={styles['label']}>
+                  {localize('aiModels.addProvider.newType.protocol', 'Protocol')}
+                </label>
+                <select
+                  className={styles['control']}
+                  value={newTypeProtocol}
+                  aria-label={localize('aiModels.addProvider.newType.protocol', 'Protocol')}
+                  onChange={(e) => setNewTypeProtocol(e.target.value as AiWireProtocol)}
+                >
+                  {PROTOCOLS.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className={styles['field']}>
+                <label className={styles['label']}>
+                  {localize('aiModels.addProvider.newType.baseUrl', 'Default base URL')}
+                </label>
+                <Input
+                  value={newTypeBaseUrl}
+                  placeholder="https://…"
+                  onChange={(e) => setNewTypeBaseUrl(e.target.value)}
+                />
+              </div>
+
+              <label className={styles['checkboxRow']}>
+                <Checkbox
+                  checked={newTypeRequiresApiKey}
+                  onChange={(checked) => setNewTypeRequiresApiKey(checked)}
+                />
+                <span>
+                  {localize('aiModels.addProvider.newType.requiresApiKey', 'Requires API key')}
+                </span>
+              </label>
+            </>
+          )}
 
           <div className={styles['field']}>
             <label className={styles['label']}>
@@ -197,12 +384,23 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
 
           <div className={styles['field']}>
             <label className={styles['label']}>
+              {localize('aiModels.addProvider.label', 'Label (optional)')}
+            </label>
+            <Input
+              value={label}
+              placeholder={localize('aiModels.addProvider.labelPlaceholder', 'Friendly name')}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+
+          <div className={styles['field']}>
+            <label className={styles['label']}>
               {localize('aiModels.addProvider.baseUrl', 'Base URL')}
             </label>
             <Input
               value={baseUrl}
               placeholder={
-                selectedVendor?.defaultBaseUrl ??
+                effectiveDefaultBaseUrl ??
                 localize('aiModels.baseUrl.placeholder', 'Provider default')
               }
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -222,7 +420,12 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
           </div>
 
           <div className={styles['verifyRow']}>
-            <Button variant="ghost" size="sm" disabled={!vendor} onClick={() => void runVerify()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!effectiveTypeId}
+              onClick={() => void runVerify()}
+            >
               {localize('aiModels.addProvider.verify', 'Verify')}
             </Button>
             <VerifyStatus state={verify} />
@@ -236,7 +439,7 @@ export function AddProviderDialog({ existingGroups, onClose, onCreated }: AddPro
           <Button
             variant="primary"
             busy={creating}
-            disabled={nameError !== undefined}
+            disabled={nameError !== undefined || newTypeError !== undefined}
             onClick={() => void create()}
           >
             {localize('aiModels.addProvider.create', 'Create')}

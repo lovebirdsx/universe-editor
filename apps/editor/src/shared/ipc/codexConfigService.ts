@@ -50,10 +50,10 @@ export interface CodexCredentialProfile {
   id: string
   label: string
   kind: CodexCredentialKind
-  /** Present for both kinds — the OpenAI (or compatible) API key. */
+  /** Present when `kind === 'apiKey'` — the OpenAI (or compatible) API key. */
   apiKey?: string
-  /** Present when `kind === 'gateway'` — the compatible endpoint base URL. */
-  baseUrl?: string
+  /** Present when `kind === 'gateway'`: `type/name` of a provider instance. */
+  providerRef?: string
 }
 
 /**
@@ -65,7 +65,7 @@ export interface CodexCredentialDraft {
   kind: CodexCredentialKind
   label: string
   apiKey: string
-  baseUrl: string
+  providerRef: string
 }
 
 export interface ICodexConfigService {

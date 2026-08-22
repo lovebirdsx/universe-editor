@@ -1,14 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AI-related Action2 definitions: pick the active model, open the model manager
- *  / aiSettings.json, and store / clear a provider group's API key. Keys are handed
- *  to the AI model service, which persists them in encrypted secret storage in
- *  main — they never land in aiSettings.json or the renderer's state.
+ *  / aiSettings.json, and store / clear a provider instance's API key. Keys are
+ *  handed to the AI model service, which persists them on the instance in
+ *  aiSettings.json (user decision: cross-machine sync) — never logged.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Action2,
-  groupKey,
   IAiModelService,
   IDialogService,
   IEditorGroupsService,
@@ -20,7 +19,8 @@ import {
   UserDataFile,
   localize,
   localize2,
-  type AiProviderGroup,
+  providerKey,
+  type AiProviderInstance,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -112,7 +112,7 @@ export class OpenAiSettingsJsonAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
 
     // Materialize the file (seeds defaults when missing) so it opens with content.
-    await aiModel.updateGroups(await aiModel.getGroups())
+    await aiModel.updateProviders(await aiModel.getProviders())
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = inst.createInstance(FileEditorInput, uri)
@@ -135,14 +135,14 @@ export class SetApiKeyAction extends Action2 {
     const aiModel = accessor.get(IAiModelService)
     const notification = accessor.get(INotificationService)
 
-    const group = await pickGroup(quickInput, await aiModel.getGroups())
-    if (!group) return
+    const provider = await pickProvider(quickInput, await aiModel.getProviders())
+    if (!provider) return
 
     const key = await quickInput.input({
       prompt: localize(
         'ai.setApiKey.prompt',
-        'Enter the API key for {group} (stored encrypted; never written to aiSettings.json).',
-        { group: groupKey(group) },
+        'Enter the API key for {provider}. Stored in plain text in aiSettings.json (kept in sync across machines).',
+        { provider: providerKey(provider) },
       ),
       placeholder: 'sk-…',
       validateInput: (value) =>
@@ -153,11 +153,11 @@ export class SetApiKeyAction extends Action2 {
     const trimmed = key?.trim()
     if (!trimmed) return
 
-    await aiModel.setApiKey(group.vendor, group.name, trimmed)
+    await aiModel.setApiKey(provider.type, provider.name, trimmed)
     notification.notify({
       severity: Severity.Info,
-      message: localize('ai.setApiKey.done', 'API key saved for {group}.', {
-        group: groupKey(group),
+      message: localize('ai.setApiKey.done', 'API key saved for {provider}.', {
+        provider: providerKey(provider),
       }),
     })
   }
@@ -179,53 +179,53 @@ export class ClearApiKeyAction extends Action2 {
     const notification = accessor.get(INotificationService)
     const quickInput = accessor.get(IQuickInputService)
 
-    const group = await pickGroup(quickInput, await aiModel.getGroups())
-    if (!group) return
+    const provider = await pickProvider(quickInput, await aiModel.getProviders())
+    if (!provider) return
 
-    if (!(await aiModel.hasApiKey(group.vendor, group.name))) {
+    if (!(await aiModel.hasApiKey(provider.type, provider.name))) {
       notification.notify({
         severity: Severity.Info,
-        message: localize('ai.clearApiKey.none', 'No API key is stored for {group}.', {
-          group: groupKey(group),
+        message: localize('ai.clearApiKey.none', 'No API key is stored for {provider}.', {
+          provider: providerKey(provider),
         }),
       })
       return
     }
 
     const { confirmed } = await dialog.confirm({
-      message: localize('ai.clearApiKey.confirm', 'Clear the stored API key for {group}?', {
-        group: groupKey(group),
+      message: localize('ai.clearApiKey.confirm', 'Clear the stored API key for {provider}?', {
+        provider: providerKey(provider),
       }),
       primaryButton: localize('ai.clearApiKey.clear', 'Clear'),
       type: 'warning',
     })
     if (!confirmed) return
 
-    await aiModel.deleteApiKey(group.vendor, group.name)
+    await aiModel.deleteApiKey(provider.type, provider.name)
     notification.notify({
       severity: Severity.Info,
-      message: localize('ai.clearApiKey.done', 'API key cleared for {group}.', {
-        group: groupKey(group),
+      message: localize('ai.clearApiKey.done', 'API key cleared for {provider}.', {
+        provider: providerKey(provider),
       }),
     })
   }
 }
 
-async function pickGroup(
+async function pickProvider(
   quickInput: IQuickInputService,
-  groups: readonly AiProviderGroup[],
-): Promise<AiProviderGroup | undefined> {
-  if (groups.length === 0) return undefined
-  if (groups.length === 1) return groups[0]
-  const items = groups.map((g) => ({
-    id: groupKey(g),
-    label: groupKey(g),
-    ...(g.baseUrl !== undefined ? { description: g.baseUrl } : {}),
+  providers: readonly AiProviderInstance[],
+): Promise<AiProviderInstance | undefined> {
+  if (providers.length === 0) return undefined
+  if (providers.length === 1) return providers[0]
+  const items = providers.map((p) => ({
+    id: providerKey(p),
+    label: providerKey(p),
+    ...(p.baseUrl !== undefined ? { description: p.baseUrl } : {}),
   }))
   const picked = await quickInput.pick(items, {
-    id: 'ai.pickGroup',
-    placeholder: localize('ai.pickGroup.placeholder', 'Select a provider group'),
+    id: 'ai.pickProvider',
+    placeholder: localize('ai.pickProvider.placeholder', 'Select a provider'),
   })
   if (!picked) return undefined
-  return groups.find((g) => groupKey(g) === picked.id)
+  return providers.find((p) => providerKey(p) === picked.id)
 }

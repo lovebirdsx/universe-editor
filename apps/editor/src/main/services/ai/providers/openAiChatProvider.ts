@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  OpenAI provider — talks to the OpenAI Chat Completions API or any OpenAI-compatible
- *  endpoint (LM Studio, vLLM, DeepSeek, Together, …) via a configurable baseUrl.
- *  Models come from GET /models; chat streams Server-Sent Events from
- *  POST /chat/completions. The API key is read from encrypted secret storage and
- *  used only here in main; it never reaches the renderer or settings.json.
+ *  OpenAI Chat Completions provider — speaks the `openai-chat` wire protocol, against
+ *  api.openai.com or any OpenAI-compatible endpoint (LM Studio, vLLM, DeepSeek, …) via a
+ *  configurable baseUrl. One instance may serve several provider types (openai, kuro, …),
+ *  so the type segment of model ids comes from the resolved provider, never a constant.
+ *  Models come from GET /models; chat streams Server-Sent Events from POST /chat/completions.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -22,7 +22,7 @@ import {
   type AiMessage,
   type AiModelConfigSchema,
   type AiRequestOptions,
-  type AiResolvedGroup,
+  type AiResolvedProvider,
   type AiResponse,
   type AiRequestResult,
   type AiModelMetadata,
@@ -32,8 +32,8 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
+import { resolveModelPricing } from '../../../../shared/ai/resolveModelPricing.js'
 
-const VENDOR = 'openai'
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 // OpenAI exposes per-model context windows only out-of-band; use a safe default.
 const DEFAULT_MAX_TOKENS = 8192
@@ -98,16 +98,16 @@ interface OpenAiChatStreamChunk {
   readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number }
 }
 
-export class OpenAiProvider implements IAiModelProvider {
+export class OpenAiChatProvider implements IAiModelProvider {
   async provideModels(
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
   ): Promise<readonly AiModelMetadata[]> {
-    const apiKey = await group.getApiKey()
+    const apiKey = provider.apiKey
     const signals = new DisposableStore()
     let res: Response | undefined
     try {
-      res = await fetch(`${baseUrl(group)}/models`, {
+      res = await fetch(`${baseUrl(provider)}/models`, {
         headers: authHeaders(apiKey),
         signal: toAbortSignal(token, signals),
       })
@@ -120,7 +120,7 @@ export class OpenAiProvider implements IAiModelProvider {
     const enumerated =
       res && res.ok ? (((await res.json()) as { data?: OpenAiModelEntry[] }).data ?? []) : []
     return mergeModels(
-      group,
+      provider,
       enumerated.map((entry) => entry.id),
     )
   }
@@ -128,7 +128,7 @@ export class OpenAiProvider implements IAiModelProvider {
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
   ): AiResponse {
     const source = new AsyncIterableSource<AiResponseChunk>()
@@ -136,14 +136,14 @@ export class OpenAiProvider implements IAiModelProvider {
     // A consumer may read only `stream`; keep result from surfacing unhandled.
     result.p.catch(() => undefined)
 
-    void this._run(messages, options, group, token, source, result)
+    void this._run(messages, options, provider, token, source, result)
     return { stream: source.asyncIterable, result: result.p }
   }
 
   private async _run(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
     source: AsyncIterableSource<AiResponseChunk>,
     result: DeferredPromise<AiRequestResult>,
@@ -151,15 +151,19 @@ export class OpenAiProvider implements IAiModelProvider {
     let usage: { inputTokens: number; outputTokens: number } | undefined
     const signals = new DisposableStore()
     try {
-      const apiKey = await group.getApiKey()
+      const apiKey = provider.apiKey
 
       const res = await retryWithBackoff(
         () =>
-          fetch(`${baseUrl(group)}/chat/completions`, {
+          fetch(`${baseUrl(provider)}/chat/completions`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', ...authHeaders(apiKey) },
             body: JSON.stringify(
-              buildChatBody(bareModelName(options.modelId, VENDOR, group.name), messages, options),
+              buildChatBody(
+                bareModelName(options.modelId, provider.type, provider.name),
+                messages,
+                options,
+              ),
             ),
             signal: toAbortSignal(token, signals),
           }),
@@ -200,8 +204,8 @@ export class OpenAiProvider implements IAiModelProvider {
   }
 }
 
-function baseUrl(group: AiResolvedGroup): string {
-  return (group.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
+function baseUrl(provider: AiResolvedProvider): string {
+  return (provider.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
 }
 
 function authHeaders(apiKey: string | undefined): Record<string, string> {
@@ -209,17 +213,17 @@ function authHeaders(apiKey: string | undefined): Record<string, string> {
 }
 
 /** Endpoint-enumerated ids + hand-declared models (declared wins on id clash). */
-function mergeModels(group: AiResolvedGroup, ids: readonly string[]): AiModelMetadata[] {
-  const declared = new Map((group.declaredModels ?? []).map((m) => [m.id, m]))
+function mergeModels(provider: AiResolvedProvider, ids: readonly string[]): AiModelMetadata[] {
+  const declared = new Map((provider.declaredModels ?? []).map((m) => [m.id, m]))
   const seen = new Set<string>()
   const out: AiModelMetadata[] = []
   for (const id of ids) {
     if (declared.has(id) || seen.has(id)) continue
     seen.add(id)
-    out.push(toMetadata(group, id))
+    out.push(toMetadata(provider, id))
   }
-  for (const config of group.declaredModels ?? []) {
-    out.push(declaredMetadata(group, config))
+  for (const config of provider.declaredModels ?? []) {
+    out.push(declaredMetadata(provider, config))
   }
   return out
 }
@@ -265,32 +269,47 @@ function roleToString(role: AiMessageRole): string {
   }
 }
 
-function toMetadata(group: AiResolvedGroup, id: string): AiModelMetadata {
+function toMetadata(provider: AiResolvedProvider, id: string): AiModelMetadata {
+  const modelId = composeModelId(provider.type, provider.name, id)
+  const resolved = resolveModelPricing({ modelId, typePricing: provider.typePricing })
   return {
-    id: composeModelId(VENDOR, group.name, id),
-    vendor: VENDOR,
-    groupName: group.name,
+    id: modelId,
+    vendor: provider.type,
+    groupName: provider.name,
     name: id,
     family: id,
     maxInputTokens: DEFAULT_MAX_TOKENS,
     maxOutputTokens: DEFAULT_MAX_TOKENS,
     capabilities: { streaming: true },
     configurationSchema: baseSchema(),
+    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
+    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 
-function declaredMetadata(group: AiResolvedGroup, config: AiCustomModelConfig): AiModelMetadata {
+function declaredMetadata(
+  provider: AiResolvedProvider,
+  config: AiCustomModelConfig,
+): AiModelMetadata {
+  const modelId = composeModelId(provider.type, provider.name, config.id)
   const schema = buildModelConfigSchema(config, baseSchema())
+  const resolved = resolveModelPricing({
+    modelId,
+    model: config,
+    typePricing: provider.typePricing,
+  })
   return {
-    id: composeModelId(VENDOR, group.name, config.id),
-    vendor: VENDOR,
-    groupName: group.name,
+    id: modelId,
+    vendor: provider.type,
+    groupName: provider.name,
     name: config.name ?? config.id,
     family: config.family ?? config.id,
     maxInputTokens: config.maxInputTokens ?? DEFAULT_MAX_TOKENS,
     maxOutputTokens: config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
     capabilities: config.capabilities ?? { streaming: true },
     ...(schema ? { configurationSchema: schema } : {}),
+    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
+    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 

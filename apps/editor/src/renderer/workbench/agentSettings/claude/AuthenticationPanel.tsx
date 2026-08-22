@@ -17,7 +17,14 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } from 'lucide-react'
-import { localize, INotificationService, Severity } from '@universe-editor/platform'
+import {
+  INotificationService,
+  Severity,
+  localize,
+  resolveModelBaseUrl,
+  type AiProviderInstance,
+  type AiProviderType,
+} from '@universe-editor/platform'
 import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import {
@@ -26,11 +33,20 @@ import {
   type ClaudeCredentialDraft,
   type ClaudeCredentialProfile,
 } from '../../../../shared/ipc/claudeConfigService.js'
+import { resolveProviderRef, deriveClaudeEnv } from '../../../../shared/ai/providerDerivation.js'
+import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import { isProfileActive } from './credentialMatch.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
 import { ConnectivityDot } from '../ConnectivityDot.js'
+import { useProviderRegistry } from '../useProviderRegistry.js'
+import {
+  DerivationError,
+  GatewayProviderPicker,
+  missingProviderPiece,
+  type ResolvedProvider,
+} from '../GatewayProviderPicker.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 const API_KEY = 'ANTHROPIC_API_KEY'
@@ -41,13 +57,6 @@ const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
 /** Whether the OAuth login is the credential the agent will currently use. */
 function isLoginActive(env: Record<string, string>, auth: ClaudeAuthStatus): boolean {
   return !env[API_KEY] && !env[AUTH_TOKEN] && !env[BASE_URL] && auth.loggedIn && !auth.expired
-}
-
-/** Show only a hint of a secret: first 4 + last 2 characters. */
-function mask(secret: string | undefined): string {
-  if (!secret) return ''
-  if (secret.length <= 8) return '••••'
-  return `${secret.slice(0, 4)}…${secret.slice(-2)}`
 }
 
 /** Renderer-side stable id; crypto.randomUUID is available in the renderer. */
@@ -97,6 +106,7 @@ function CredentialLibrary({
   model: string | undefined
 }) {
   const notification = useService(INotificationService)
+  const { providers, types } = useProviderRegistry()
   const {
     profiles,
     credentialDraft,
@@ -142,6 +152,8 @@ function CredentialLibrary({
             <ProfileForm
               key={profile.id}
               draft={credentialDraft}
+              providers={providers}
+              types={types}
               onChange={(draft) => void saveCredentialDraft(draft)}
               onSave={async (p) => {
                 await saveProfile(p)
@@ -154,7 +166,9 @@ function CredentialLibrary({
               key={profile.id}
               profile={profile}
               authority={authority}
-              active={isProfileActive(profile, env, model)}
+              providers={providers}
+              types={types}
+              active={isProfileActive(profile, env, model, providers, types)}
               onUse={() => void apply(profile)}
               onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
               onDelete={() => void deleteProfile(profile.id)}
@@ -166,6 +180,8 @@ function CredentialLibrary({
       {adding ? (
         <ProfileForm
           draft={credentialDraft!}
+          providers={providers}
+          types={types}
           onChange={(draft) => void saveCredentialDraft(draft)}
           onSave={async (p) => {
             await saveProfile(p)
@@ -188,6 +204,8 @@ function CredentialLibrary({
 function ProfileRow({
   profile,
   authority,
+  providers,
+  types,
   active,
   onUse,
   onEdit,
@@ -195,6 +213,8 @@ function ProfileRow({
 }: {
   profile: ClaudeCredentialProfile
   authority: string | undefined
+  providers: readonly AiProviderInstance[]
+  types: Readonly<Record<string, AiProviderType>>
   active: boolean
   onUse: () => void
   onEdit: () => void
@@ -206,14 +226,27 @@ function ProfileRow({
     (url: string) => configService.checkGatewayConnectivity(url, authority),
     [configService, authority],
   )
+  const ref = profile.kind === 'gateway' ? profile.providerRef : undefined
+  const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
+  const gatewayBaseUrl =
+    resolved !== undefined
+      ? resolveModelBaseUrl(undefined, resolved.instance.baseUrl, resolved.type.defaultBaseUrl)
+      : undefined
   const detail =
     profile.kind === 'apiKey'
-      ? mask(profile.apiKey)
-      : [profile.baseUrl ?? '', profile.model, mask(profile.authToken)].filter((s) => s).join(' · ')
+      ? maskKey(profile.apiKey ?? '')
+      : [
+          resolved !== undefined
+            ? (resolved.instance.label ?? resolved.instance.name)
+            : (ref ?? ''),
+          profile.model,
+        ]
+          .filter((s) => s)
+          .join(' · ')
   return (
     <div className={styles['profileRow']}>
       <ConnectivityDot
-        baseUrl={profile.kind === 'gateway' ? profile.baseUrl : undefined}
+        baseUrl={profile.kind === 'gateway' ? gatewayBaseUrl : undefined}
         probe={probe}
       />
       <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
@@ -247,20 +280,22 @@ function ProfileRow({
 
 function ProfileForm({
   draft,
+  providers,
+  types,
   onChange,
   onSave,
   onCancel,
 }: {
   draft: ClaudeCredentialDraft
+  providers: readonly AiProviderInstance[]
+  types: Readonly<Record<string, AiProviderType>>
   onChange: (draft: ClaudeCredentialDraft) => void
   onSave: (profile: ClaudeCredentialProfile) => Promise<void>
   onCancel: () => void
 }) {
   const valid =
     draft.label.trim() !== '' &&
-    (draft.kind === 'apiKey'
-      ? draft.apiKey.trim() !== ''
-      : draft.authToken.trim() !== '' && draft.baseUrl.trim() !== '')
+    (draft.kind === 'apiKey' ? draft.apiKey.trim() !== '' : draft.providerRef.trim() !== '')
 
   const save = useCallback(async () => {
     const base = {
@@ -272,7 +307,7 @@ function ProfileForm({
     if (draft.kind === 'apiKey') {
       profile = { ...base, apiKey: draft.apiKey.trim() }
     } else {
-      profile = { ...base, authToken: draft.authToken.trim(), baseUrl: draft.baseUrl.trim() }
+      profile = { ...base, providerRef: draft.providerRef.trim() }
       if (draft.model.trim()) profile.model = draft.model.trim()
       if (draft.smallFastModel.trim()) profile.smallFastModel = draft.smallFastModel.trim()
     }
@@ -329,21 +364,18 @@ function ProfileForm({
       ) : (
         <>
           <div className={styles['field']}>
-            <label className={styles['label']}>{`env.${BASE_URL}`}</label>
-            <Input
-              value={draft.baseUrl}
-              placeholder="https://your-gateway.example.com"
-              onChange={(e) => onChange({ ...draft, baseUrl: e.target.value })}
-            />
-          </div>
-          <div className={styles['field']}>
-            <label className={styles['label']}>{`env.${AUTH_TOKEN}`}</label>
-            <Input
-              type="password"
-              value={draft.authToken}
-              placeholder="sk-…"
-              onChange={(e) => onChange({ ...draft, authToken: e.target.value })}
-            />
+            <label className={styles['label']}>
+              {localize('agentSettings.auth.form.provider', 'Provider instance')}
+            </label>
+            <GatewayProviderPicker
+              providers={providers}
+              types={types}
+              protocol="anthropic-messages"
+              value={draft.providerRef}
+              onChange={(ref) => onChange({ ...draft, providerRef: ref })}
+            >
+              {(resolved) => <ClaudeDerivationPreview resolved={resolved} />}
+            </GatewayProviderPicker>
           </div>
           <div className={styles['field']}>
             <label className={styles['label']}>
@@ -390,12 +422,35 @@ function ProfileForm({
   )
 }
 
+function ClaudeDerivationPreview({
+  resolved,
+}: {
+  readonly resolved: ResolvedProvider | undefined
+}) {
+  if (resolved === undefined) return null
+  const missing = missingProviderPiece(resolved.instance, resolved.type)
+  if (missing !== undefined) return <DerivationError missing={missing} />
+  const derived = deriveClaudeEnv(resolved.instance, resolved.type)
+  if (derived === undefined) return null
+  return (
+    <div className={styles['derivePreview']} data-testid="derivePreview">
+      <div className={styles['deriveRow']}>
+        <span className={styles['deriveKey']}>{BASE_URL}</span>
+        <span className={styles['deriveValue']}>{derived.baseUrl}</span>
+      </div>
+      <div className={styles['deriveRow']}>
+        <span className={styles['deriveKey']}>{AUTH_TOKEN}</span>
+        <span className={styles['deriveValue']}>{maskKey(derived.authToken)}</span>
+      </div>
+    </div>
+  )
+}
+
 const EMPTY_DRAFT: ClaudeCredentialDraft = {
   kind: 'apiKey',
   label: '',
   apiKey: '',
-  authToken: '',
-  baseUrl: '',
+  providerRef: '',
   model: '',
   smallFastModel: '',
 }
@@ -406,8 +461,7 @@ function profileToDraft(profile: ClaudeCredentialProfile): ClaudeCredentialDraft
     kind: profile.kind,
     label: profile.label,
     apiKey: profile.apiKey ?? '',
-    authToken: profile.authToken ?? '',
-    baseUrl: profile.baseUrl ?? '',
+    providerRef: profile.providerRef ?? '',
     model: profile.model ?? '',
     smallFastModel: profile.smallFastModel ?? '',
   }

@@ -21,6 +21,8 @@ import {
   Emitter,
   ILoggerService,
   RemoteChannels,
+  type AiProviderInstance,
+  type AiProviderType,
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
@@ -42,7 +44,13 @@ import type {
   ICodexConfigService,
 } from '../../../shared/ipc/codexConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
-import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+import { BUILTIN_PROVIDER_TYPES } from '../../../shared/ai/catalog/index.js'
+import { deriveCodexProvider, resolveProviderRef } from '../../../shared/ai/providerDerivation.js'
+import {
+  readAiSettingsAgentState,
+  readAiSettingsProviders,
+  updateAiSettingsAgentState,
+} from '../ai/aiSettingsAgentState.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 interface CodexAgentSettingsState {
@@ -160,7 +168,9 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     if (profiles.length === 0) return undefined
 
     // Gateway mode: the provider block carries both the URL and the key, so
-    // same-URL profiles are told apart by their bearer token.
+    // same-URL profiles are told apart by their bearer token. Gateway profiles
+    // now reference a provider instance; resolve that reference to derive the
+    // credential it would have written, then compare against the on-disk block.
     const settings = await this.read(authority)
     if (settings['model_provider'] === GATEWAY_PROVIDER_ID) {
       const providers = settings['model_providers']
@@ -177,9 +187,15 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
       if (typeof baseUrl !== 'string' || typeof token !== 'string' || token === '') {
         return undefined
       }
-      const match = profiles.find(
-        (p) => p.kind === 'gateway' && p.baseUrl === baseUrl && p.apiKey === token,
-      )
+      const { providers: instances, providerTypes } = await this._readProviderData()
+      const types = { ...BUILTIN_PROVIDER_TYPES, ...providerTypes }
+      const match = profiles.find((p) => {
+        if (p.kind !== 'gateway' || p.providerRef === undefined) return false
+        const resolved = resolveProviderRef(p.providerRef, instances, types)
+        if (resolved === undefined) return false
+        const derived = deriveCodexProvider(resolved.instance, resolved.type)
+        return derived !== undefined && derived.baseUrl === baseUrl && derived.apiKey === token
+      })
       this._logger.info(`active profile match: ${match?.id ?? 'none'} (gateway ${baseUrl})`)
       return match?.id
     }
@@ -231,6 +247,14 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
 
   private _profilesPath(): string {
     return join(dirname(this._configPath), '.universe-editor', 'credential-profiles.json')
+  }
+
+  private async _readProviderData(): Promise<{
+    providers: readonly AiProviderInstance[]
+    providerTypes: Readonly<Record<string, AiProviderType>>
+  }> {
+    if (this._configLocation) return readAiSettingsProviders(this._configLocation)
+    return { providers: [], providerTypes: {} }
   }
 
   private _remoteService(authority: string): IRemoteAgentConfigService {

@@ -17,11 +17,13 @@ import type {
   AiResponseChunk,
 } from './aiModelTypes.js'
 import type {
-  AiProviderGroup,
-  AiVendorDescriptor,
-  AiGroupVerifyInput,
-  AiGroupVerifyResult,
+  AiProviderInstance,
+  AiProviderType,
+  AiProviderTypeDescriptor,
+  AiProviderVerifyInput,
+  AiProviderVerifyResult,
 } from './aiModelConfiguration.js'
+import type { AiAccountUsage, AiRateTable } from './aiRemoteSources.js'
 
 /** Mirrors VSCode's ILanguageModelChatResponse: stream + final result split. */
 export interface AiResponse {
@@ -33,6 +35,14 @@ export interface AiResponse {
 
 export interface AiRequestResult {
   readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+}
+
+/** Mirror of one provider's remote rate table, kept for synchronous lookups. */
+export interface AiRateTableSnapshot {
+  /** `type/instance`. */
+  readonly providerKey: string
+  readonly rates: AiRateTable
+  readonly fetchedAt: number
 }
 
 export interface IAiModelService {
@@ -52,6 +62,9 @@ export interface IAiModelService {
 
   /** Fires when the active session-title model selection changes (persisted in aiSettings.json). */
   readonly onDidChangeSessionTitleModel: Event<void>
+
+  /** Fires when remote sources (rates / usage) change. */
+  readonly onDidChangeRemote: Event<void>
 
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
@@ -98,22 +111,34 @@ export interface IAiModelService {
   /** Persist per-model configuration; values equal to the schema default are dropped. */
   setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** The persisted provider groups (secret-free) backing aiSettings.json. */
-  getGroups(): Promise<readonly AiProviderGroup[]>
-  /** Replace the persisted provider groups (rewrites aiSettings.json; no secrets). */
-  updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
+  /** The persisted provider instances (secret-free) backing aiSettings.json. */
+  getProviders(): Promise<readonly AiProviderInstance[]>
+  /** Replace the persisted provider instances (rewrites aiSettings.json; no secrets). */
+  updateProviders(providers: readonly AiProviderInstance[]): Promise<void>
 
-  /** Vendors a user can pick when adding a provider group (registered providers + endpoint defaults). */
-  getVendors(): Promise<readonly AiVendorDescriptor[]>
-  /** Probe a candidate group against its endpoint without persisting anything. */
-  verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult>
+  /** All provider types (built-in merged with the user-defined layer in aiSettings.json). */
+  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>>
+  /** Replace only the user-defined provider-type layer in aiSettings.json. */
+  updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void>
 
-  /** Store a group's API key in encrypted secret storage (plaintext stays in main). */
-  setApiKey(vendor: string, group: string, key: string): Promise<void>
-  /** Remove a group's stored API key. */
-  deleteApiKey(vendor: string, group: string): Promise<void>
-  /** Whether a group currently has an API key stored. */
-  hasApiKey(vendor: string, group: string): Promise<boolean>
+  /** Provider types a user can pick when adding an instance (registered protocols + endpoint defaults). */
+  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]>
+  /** Probe a candidate instance against its endpoint without persisting anything. */
+  verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult>
+
+  /** Store an instance's plaintext apiKey (user's explicit decision: cross-machine sync); never logged. */
+  setApiKey(typeId: string, instanceName: string, key: string): Promise<void>
+  /** Remove an instance's stored apiKey. */
+  deleteApiKey(typeId: string, instanceName: string): Promise<void>
+  /** Whether an instance currently has an apiKey stored. */
+  hasApiKey(typeId: string, instanceName: string): Promise<boolean>
+
+  /** Latest rate tables by provider (`type/instance`), for synchronous lookups on the renderer mirror. */
+  getRateTables(): Promise<readonly AiRateTableSnapshot[]>
+  /** Authoritative account-level usage for a provider; undefined means unavailable (never estimated). */
+  getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined>
+  /** Refresh remote sources (rates + usage). Omit `providerKey` to refresh all. */
+  refreshRemote(providerKey?: string): Promise<void>
 }
 
 export const IAiModelService = createDecorator<IAiModelService>('aiModelService')

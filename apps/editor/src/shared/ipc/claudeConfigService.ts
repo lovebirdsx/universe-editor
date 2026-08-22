@@ -49,10 +49,8 @@ export interface ClaudeCredentialProfile {
   kind: ClaudeCredentialKind
   /** Present when `kind === 'apiKey'`. */
   apiKey?: string
-  /** Present when `kind === 'gateway'`. */
-  authToken?: string
-  /** Present when `kind === 'gateway'`. */
-  baseUrl?: string
+  /** Present when `kind === 'gateway'`: `type/name` of a provider instance. */
+  providerRef?: string
   /**
    * Optional model preset bundled with a `gateway` profile. A custom gateway
    * (Kimi's Anthropic-compatible endpoint, a LiteLLM proxy fronting GPT, …)
@@ -74,8 +72,7 @@ export interface ClaudeCredentialDraft {
   kind: ClaudeCredentialKind
   label: string
   apiKey: string
-  authToken: string
-  baseUrl: string
+  providerRef: string
   model: string
   smallFastModel: string
 }

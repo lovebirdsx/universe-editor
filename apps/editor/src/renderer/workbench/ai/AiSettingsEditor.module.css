@@ -548,3 +548,172 @@
   font-style: italic;
   color: var(--vscode-editor-mutedForeground);
 }
+
+/* -- two-section models panel -------------------------------------------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sectionTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  padding: var(--spacing-3) 0 var(--spacing-2);
+}
+
+.cardToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.plaintextNotice {
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+  font-size: var(--font-size-sm);
+  color: var(--vscode-editor-mutedForeground);
+  line-height: var(--line-height-normal);
+}
+
+.plainValue {
+  font-size: var(--font-size-base);
+}
+
+/* -- provider type card: model catalog + pricing ------------------------- */
+
+.pricingEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin-top: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-5);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+}
+
+.pricingHint {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.pricingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--spacing-4);
+}
+
+.pricingField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* -- provider instance card: connectivity / rates / usage ---------------- */
+
+.statusDot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.statusIdle {
+  background: var(--vscode-editor-mutedForeground);
+  opacity: 0.5;
+}
+
+.statusOk {
+  background: var(--vscode-success-foreground, #89d185);
+}
+
+.statusFail {
+  background: var(--vscode-errorForeground, #f48771);
+}
+
+.statusDotWrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.ratesLine {
+  font-size: var(--font-size-base);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.usageBlock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+.usageStat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.usageStatLabel {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.usageStatValue {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.usageFetchedAt {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.usageUnavailable {
+  font-size: var(--font-size-base);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+/* -- add-provider dialog -------------------------------------------------- */
+
+.reuseHint {
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+  font-size: var(--font-size-sm);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}

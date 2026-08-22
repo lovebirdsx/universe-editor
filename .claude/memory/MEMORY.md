@@ -13,7 +13,8 @@
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — 引用=decoration 追踪 by-range 药丸，含空格 label 安全，提交读 range 不分词
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — IUriIdentityService 单一入口+ResourceMap；MonacoModelKey/SCM 键为刻意独立身份域
 - [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 必须覆写 id 否则 tab 去重；matches 只比 id；打开文件走 resolver
-- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面；密钥 safeStorage 红线；加 vendor 见套路 I
+- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面（已按类型/实例两层重构）；密钥改明文存 aiSettings.json（红线=不进日志/Debug）；加 provider 见套路 I
+- [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率五级链不再猜家族兜底(未知即未知);会话开销与账号费用两概念绝不互相兜底(unavailable 不回落到别的账号数字)
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
 - [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 注册页+服务端发布签名已落地（2026-08-10 修订决策2）；发布闭环 register→login→publish→可装已通；uex 待用户手动发 npm
 - [extension-api 0.9→0.12 API 面补全](extension-api-09-surface-expansion.md) — parity 计划 P1-P4 全落地；bump 版本常量已生成物化+publish 耦合拦截，示例仓库 check-sdk-drift 兜底；事件推兴趣订阅+防抖

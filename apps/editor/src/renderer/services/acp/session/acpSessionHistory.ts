@@ -111,7 +111,7 @@ export interface AcpSessionHistoryEntry {
       readonly outputTokens: number
       readonly cacheReadTokens: number
       readonly cacheCreateTokens: number
-      readonly costUSD: number
+      readonly costUSD?: number
     }>
     /** True when cost/models are locally estimated (Codex) rather than agent-reported. */
     readonly costEstimated?: boolean

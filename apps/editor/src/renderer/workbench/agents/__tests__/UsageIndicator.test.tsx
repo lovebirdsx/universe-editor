@@ -17,6 +17,7 @@ import {
   observableValue,
   ServiceCollection,
   Severity,
+  type AiAccountUsage,
   type IDialogService as IDialogServiceType,
   type INotificationService as INotificationServiceType,
   type ISettableObservable,
@@ -29,7 +30,11 @@ import {
   type ISubscriptionUsageService as ISubscriptionUsageServiceType,
   type ResetCreditOutcome,
 } from '../../../services/usage/SubscriptionUsageService.js'
-import type { SubscriptionUsageSnapshot } from '../../../services/usage/subscriptionUsage.js'
+import { IAccountUsageService } from '../../../services/usage/AccountUsageService.js'
+import type {
+  AccountUsageState,
+  SubscriptionUsageSnapshot,
+} from '../../../services/usage/subscriptionUsage.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
 
 afterEach(() => cleanup())
@@ -52,6 +57,7 @@ function snapshot(overrides: Partial<SubscriptionUsageSnapshot> = {}): Subscript
 interface Harness {
   readonly snapshotObs: ISettableObservable<SubscriptionUsageSnapshot | undefined>
   readonly refresh: ReturnType<typeof vi.fn>
+  readonly accountRefresh: ReturnType<typeof vi.fn>
   readonly consumeResetCredit: ReturnType<typeof vi.fn>
   readonly confirm: ReturnType<typeof vi.fn>
   readonly notify: ReturnType<typeof vi.fn>
@@ -62,6 +68,7 @@ function renderIndicator(options: {
   snapshot?: SubscriptionUsageSnapshot | undefined
   stale?: boolean
   gateway?: UsageState
+  account?: AccountUsageState
   confirmed?: boolean
   outcome?: ResetCreditOutcome
 }): Harness {
@@ -89,6 +96,17 @@ function renderIndicator(options: {
     refresh: vi.fn(),
   }
 
+  const accountObs = observableValue<AccountUsageState>(
+    'account',
+    options.account ?? { hasSource: false },
+  )
+  const accountRefresh = vi.fn().mockResolvedValue(undefined)
+  const account = {
+    _serviceBrand: undefined,
+    stateFor: () => accountObs,
+    refresh: accountRefresh,
+  }
+
   const confirm = vi
     .fn()
     .mockResolvedValue({ confirmed: options.confirmed !== false, choice: 'primary' })
@@ -97,6 +115,7 @@ function renderIndicator(options: {
   const services = new ServiceCollection()
   services.set(ISubscriptionUsageService, subscription)
   services.set(IApiUsageService, gateway as never)
+  services.set(IAccountUsageService, account as never)
   services.set(IDialogService, {
     _serviceBrand: undefined,
     confirm,
@@ -114,7 +133,7 @@ function renderIndicator(options: {
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
   })
-  return { snapshotObs, refresh, consumeResetCredit, confirm, notify }
+  return { snapshotObs, refresh, accountRefresh, consumeResetCredit, confirm, notify }
 }
 
 describe('UsageIndicator — collapsed form', () => {
@@ -272,4 +291,62 @@ describe('UsageIndicator — redeeming a reset credit', () => {
       expect(notify).toHaveBeenCalledWith(expect.objectContaining({ severity: severity as number }))
     },
   )
+})
+
+describe('UsageIndicator — account usage', () => {
+  const accountUsage: AiAccountUsage = {
+    kind: 'balance',
+    remainingUSD: 12.5,
+    fetchedAt: FETCHED_AT,
+  }
+
+  it('shows the remaining balance for a declared account source', () => {
+    renderIndicator({
+      agentId: 'codex',
+      snapshot: undefined,
+      account: { hasSource: true, usage: accountUsage },
+    })
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('$12.50')
+  })
+
+  it('shows used over limit when remaining is not reported', () => {
+    renderIndicator({
+      agentId: 'codex',
+      snapshot: undefined,
+      account: {
+        hasSource: true,
+        usage: { kind: 'quota', usedUSD: 3, limitUSD: 50, fetchedAt: FETCHED_AT },
+      },
+    })
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('$3.00 / $50.00')
+  })
+
+  it('renders ¥ for a CNY account', () => {
+    renderIndicator({
+      agentId: 'codex',
+      snapshot: undefined,
+      account: {
+        hasSource: true,
+        usage: { kind: 'balance', remainingUSD: 7, currency: 'CNY', fetchedAt: FETCHED_AT },
+      },
+    })
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('¥7.00')
+  })
+
+  it('renders the unavailable readout when the source is declared but empty', () => {
+    renderIndicator({ agentId: 'codex', snapshot: undefined, account: { hasSource: true } })
+    const button = screen.getByTestId('acp-usage-indicator')
+    expect(button.getAttribute('data-state')).toBe('unavailable')
+    expect(button.textContent).toContain('Unavailable')
+  })
+
+  it('forces a refresh when the unavailable readout is clicked', () => {
+    const { accountRefresh } = renderIndicator({
+      agentId: 'codex',
+      snapshot: undefined,
+      account: { hasSource: true },
+    })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(accountRefresh).toHaveBeenCalledWith('codex', { force: true })
+  })
 })

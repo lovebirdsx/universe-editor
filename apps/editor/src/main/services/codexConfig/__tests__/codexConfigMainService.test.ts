@@ -441,45 +441,38 @@ describe('CodexConfigMainService', () => {
   })
 
   describe('matchActiveProfile', () => {
+    /** Swap `svc` for a configLocation-backed instance whose aiSettings.json holds the given providers. */
+    async function useGatewayProviders(providers: unknown[]): Promise<void> {
+      const configDir = join(dir, 'editor-settings')
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(join(configDir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
+      svc.dispose()
+      svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
+    }
+
     it('distinguishes same-URL gateway profiles by their bearer token', async () => {
       // Regression: matching "In use" on base_url alone marked every profile
       // sharing the URL. The key (which never crosses the IPC boundary) decides.
+      await useGatewayProviders([
+        { name: 'kuro-a', type: 'openai', apiKey: 'kuro-b2', baseUrl: 'http://gw:9080/' },
+        { name: 'kuro-b', type: 'openai', apiKey: 'kuro-5a', baseUrl: 'http://gw:9080/' },
+      ])
       await svc.writeProfiles([
-        {
-          id: 'mine',
-          label: 'mine',
-          kind: 'gateway',
-          apiKey: 'kuro-b2',
-          baseUrl: 'http://gw:9080/',
-        },
-        {
-          id: 'mine-work',
-          label: 'mine-work',
-          kind: 'gateway',
-          apiKey: 'kuro-5a',
-          baseUrl: 'http://gw:9080/',
-        },
+        { id: 'mine', label: 'mine', kind: 'gateway', providerRef: 'openai/kuro-a' },
+        { id: 'mine-work', label: 'mine-work', kind: 'gateway', providerRef: 'openai/kuro-b' },
       ])
       await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-5a' })
       expect(await svc.matchActiveProfile()).toBe('mine-work')
     })
 
     it('follows the applied key when switching between same-URL profiles', async () => {
+      await useGatewayProviders([
+        { name: 'kuro-a', type: 'openai', apiKey: 'kuro-b2', baseUrl: 'http://gw:9080/' },
+        { name: 'kuro-b', type: 'openai', apiKey: 'kuro-5a', baseUrl: 'http://gw:9080/' },
+      ])
       await svc.writeProfiles([
-        {
-          id: 'mine',
-          label: 'mine',
-          kind: 'gateway',
-          apiKey: 'kuro-b2',
-          baseUrl: 'http://gw:9080/',
-        },
-        {
-          id: 'mine-work',
-          label: 'mine-work',
-          kind: 'gateway',
-          apiKey: 'kuro-5a',
-          baseUrl: 'http://gw:9080/',
-        },
+        { id: 'mine', label: 'mine', kind: 'gateway', providerRef: 'openai/kuro-a' },
+        { id: 'mine-work', label: 'mine-work', kind: 'gateway', providerRef: 'openai/kuro-b' },
       ])
       await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-5a' })
       await svc.applyCredential({ kind: 'gateway', baseUrl: 'http://gw:9080/', apiKey: 'kuro-b2' })
@@ -538,8 +531,7 @@ describe('CodexConfigMainService', () => {
           id: 'b',
           label: 'Compatible gateway',
           kind: 'gateway' as const,
-          apiKey: 'sk-2',
-          baseUrl: 'https://gw/v1',
+          providerRef: 'openai/gw',
         },
       ]
       await svc.writeProfiles(profiles)
@@ -626,10 +618,12 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
   async function makeRemoteService(remote: FakeRemoteAgentConfigService): Promise<{
     svc: CodexConfigMainService
     proxyCalls: Array<{ authority: string; channel: string }>
+    configDir: string
   }> {
     const dir = await fs.mkdtemp(join(tmpdir(), 'codex-config-remote-'))
     dirs.push(dir)
     const proxyCalls: Array<{ authority: string; channel: string }> = []
+    const configDir = join(dir, 'editor-settings')
     const conn: IRemoteConnection = {
       authority: 'host',
       env: REMOTE_ENV,
@@ -660,11 +654,11 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
     const svc = new CodexConfigMainService(
       join(dir, 'config.toml'),
       undefined,
-      configLocation(join(dir, 'editor-settings')),
+      configLocation(configDir),
       connService,
     )
     svcs.push(svc)
-    return { svc, proxyCalls }
+    return { svc, proxyCalls, configDir }
   }
 
   it('matches a remote gateway profile by baseUrl + bearer token', async () => {
@@ -678,22 +672,21 @@ describe('CodexConfigMainService — remote matchActiveProfile', () => {
         },
       },
     }
-    const { svc } = await makeRemoteService(remote)
+    const { svc, configDir } = await makeRemoteService(remote)
+    await fs.mkdir(configDir, { recursive: true })
+    await fs.writeFile(
+      join(configDir, 'aiSettings.json'),
+      JSON.stringify({
+        providers: [
+          { name: 'kuro-a', type: 'openai', apiKey: 'kuro-b2', baseUrl: 'http://gw:9080/' },
+          { name: 'kuro-b', type: 'openai', apiKey: 'kuro-5a', baseUrl: 'http://gw:9080/' },
+        ],
+      }),
+      'utf8',
+    )
     await svc.writeProfiles([
-      {
-        id: 'mine',
-        label: 'mine',
-        kind: 'gateway',
-        apiKey: 'kuro-b2',
-        baseUrl: 'http://gw:9080/',
-      },
-      {
-        id: 'mine-work',
-        label: 'mine-work',
-        kind: 'gateway',
-        apiKey: 'kuro-5a',
-        baseUrl: 'http://gw:9080/',
-      },
+      { id: 'mine', label: 'mine', kind: 'gateway', providerRef: 'openai/kuro-a' },
+      { id: 'mine-work', label: 'mine-work', kind: 'gateway', providerRef: 'openai/kuro-b' },
     ])
     expect(await svc.matchActiveProfile('host')).toBe('mine-work')
   })

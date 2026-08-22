@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Ollama provider — talks to a local Ollama server (no API key needed, ideal for
- *  end-to-end verification). Models come from /api/tags; chat streams NDJSON from
- *  /api/chat. Translates the standard request/response shapes to/from Ollama's.
+ *  Ollama provider — speaks the `ollama` wire protocol against a local Ollama server
+ *  (no API key needed, ideal for end-to-end verification). Models come from /api/tags;
+ *  chat streams NDJSON from /api/chat. Translates the standard request/response shapes
+ *  to/from Ollama's.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -18,7 +19,7 @@ import {
   type AiCustomModelConfig,
   type AiMessage,
   type AiRequestOptions,
-  type AiResolvedGroup,
+  type AiResolvedProvider,
   type AiResponse,
   type AiRequestResult,
   type AiModelMetadata,
@@ -28,8 +29,8 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
+import { resolveModelPricing } from '../../../../shared/ai/resolveModelPricing.js'
 
-const VENDOR = 'ollama'
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 // Ollama exposes no per-model token window via the API; use a conservative default.
 const DEFAULT_MAX_TOKENS = 4096
@@ -48,13 +49,13 @@ interface OllamaChatStreamLine {
 
 export class OllamaProvider implements IAiModelProvider {
   async provideModels(
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
   ): Promise<readonly AiModelMetadata[]> {
     const signals = new DisposableStore()
     let res: Response | undefined
     try {
-      res = await fetch(`${baseUrl(group)}/api/tags`, { signal: toAbortSignal(token, signals) })
+      res = await fetch(`${baseUrl(provider)}/api/tags`, { signal: toAbortSignal(token, signals) })
     } catch {
       // Server not running / unreachable — fall back to declared models only.
       res = undefined
@@ -64,7 +65,7 @@ export class OllamaProvider implements IAiModelProvider {
     const enumerated =
       res && res.ok ? (((await res.json()) as { models?: OllamaTag[] }).models ?? []) : []
     return mergeModels(
-      group,
+      provider,
       enumerated.map((tag) => tag.name),
     )
   }
@@ -72,7 +73,7 @@ export class OllamaProvider implements IAiModelProvider {
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
   ): AiResponse {
     const source = new AsyncIterableSource<AiResponseChunk>()
@@ -80,14 +81,14 @@ export class OllamaProvider implements IAiModelProvider {
     // A consumer may read only `stream`; keep result from surfacing unhandled.
     result.p.catch(() => undefined)
 
-    void this._run(messages, options, group, token, source, result)
+    void this._run(messages, options, provider, token, source, result)
     return { stream: source.asyncIterable, result: result.p }
   }
 
   private async _run(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    group: AiResolvedGroup,
+    provider: AiResolvedProvider,
     token: CancellationToken,
     source: AsyncIterableSource<AiResponseChunk>,
     result: DeferredPromise<AiRequestResult>,
@@ -97,11 +98,15 @@ export class OllamaProvider implements IAiModelProvider {
     try {
       const res = await retryWithBackoff(
         () =>
-          fetch(`${baseUrl(group)}/api/chat`, {
+          fetch(`${baseUrl(provider)}/api/chat`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(
-              buildChatBody(bareModelName(options.modelId, VENDOR, group.name), messages, options),
+              buildChatBody(
+                bareModelName(options.modelId, provider.type, provider.name),
+                messages,
+                options,
+              ),
             ),
             signal: toAbortSignal(token, signals),
           }),
@@ -143,22 +148,22 @@ export class OllamaProvider implements IAiModelProvider {
   }
 }
 
-function baseUrl(group: AiResolvedGroup): string {
-  return (group.baseUrl?.replace(/\/+$/, '') || DEFAULT_BASE_URL).replace(/\/+$/, '')
+function baseUrl(provider: AiResolvedProvider): string {
+  return (provider.baseUrl?.replace(/\/+$/, '') || DEFAULT_BASE_URL).replace(/\/+$/, '')
 }
 
 /** Endpoint-enumerated names + hand-declared models (declared wins on id clash). */
-function mergeModels(group: AiResolvedGroup, names: readonly string[]): AiModelMetadata[] {
-  const declared = new Map((group.declaredModels ?? []).map((m) => [m.id, m]))
+function mergeModels(provider: AiResolvedProvider, names: readonly string[]): AiModelMetadata[] {
+  const declared = new Map((provider.declaredModels ?? []).map((m) => [m.id, m]))
   const seen = new Set<string>()
   const out: AiModelMetadata[] = []
   for (const name of names) {
     if (declared.has(name) || seen.has(name)) continue
     seen.add(name)
-    out.push(toMetadata(group, name))
+    out.push(toMetadata(provider, name))
   }
-  for (const config of group.declaredModels ?? []) {
-    out.push(declaredMetadata(group, config))
+  for (const config of provider.declaredModels ?? []) {
+    out.push(declaredMetadata(provider, config))
   }
   return out
 }
@@ -198,29 +203,44 @@ function roleToString(role: AiMessageRole): string {
   }
 }
 
-function toMetadata(group: AiResolvedGroup, name: string): AiModelMetadata {
+function toMetadata(provider: AiResolvedProvider, name: string): AiModelMetadata {
+  const modelId = composeModelId(provider.type, provider.name, name)
+  const resolved = resolveModelPricing({ modelId, typePricing: provider.typePricing })
   return {
-    id: composeModelId(VENDOR, group.name, name),
-    vendor: VENDOR,
-    groupName: group.name,
+    id: modelId,
+    vendor: provider.type,
+    groupName: provider.name,
     name,
     family: name.split(':')[0] ?? name,
     maxInputTokens: DEFAULT_MAX_TOKENS,
     maxOutputTokens: DEFAULT_MAX_TOKENS,
     capabilities: { streaming: true },
+    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
+    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 
-function declaredMetadata(group: AiResolvedGroup, config: AiCustomModelConfig): AiModelMetadata {
+function declaredMetadata(
+  provider: AiResolvedProvider,
+  config: AiCustomModelConfig,
+): AiModelMetadata {
+  const modelId = composeModelId(provider.type, provider.name, config.id)
+  const resolved = resolveModelPricing({
+    modelId,
+    model: config,
+    typePricing: provider.typePricing,
+  })
   return {
-    id: composeModelId(VENDOR, group.name, config.id),
-    vendor: VENDOR,
-    groupName: group.name,
+    id: modelId,
+    vendor: provider.type,
+    groupName: provider.name,
     name: config.name ?? config.id,
     family: config.family ?? config.id.split(':')[0] ?? config.id,
     maxInputTokens: config.maxInputTokens ?? DEFAULT_MAX_TOKENS,
     maxOutputTokens: config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
     capabilities: config.capabilities ?? { streaming: true },
+    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
+    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 

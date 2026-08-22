@@ -1,4 +1,6 @@
 export * from './aiModelTypes.js'
+export * from './aiModelPricing.js'
+export * from './aiRemoteSources.js'
 export * from './aiDebugTypes.js'
 export * from './aiModelConfiguration.js'
 export * from './aiModelService.js'

@@ -19,11 +19,11 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 
 #### Renderer — Codex 专属(agentSettings/codex/)
 - `codex/CodexAgentSettings.tsx` — 根组件。持有单个 `useCodexConfig()`,四分类子导航(`CATEGORIES`:auth/model/safety/advanced),激活分类 + 滚动位置经 `IStorageService` 持久化(`agent.settings.codex.activeCategory`、`agent.settings.codex.scroll.<id>`)。**末行 `registerAgentSettings('codex', CodexAgentSettings)`。** 仅 `config.loaded` 后渲染面板。
-- `codex/CodexAuthenticationPanel.tsx` — 认证页,**最复杂**。两块:`CredentialLibrary`(API key / gateway 档案库 + 新增表单)与 `LoginForm`(ChatGPT 登录状态 + 登录按钮)。**判定"真正 In Use"靠两个条件叠加**:① `authStatus`(auth.json 解析出谁是凭据)② config.toml 顶层 `model_provider` 是否为空(`builtinActive = model_provider===''`)。因为 ChatGPT/API key 都走内置 `openai` provider,**只有 `model_provider` 为空时才真生效**;一旦它指向 `codex-gateway`/`kuro` 之类自定义 provider,auth.json 里的登录被绕过。所以:`chatgptActive = authStatus.active==='chatgpt' && builtinActive`;gateway 档案的 `isActive = gatewayActive(model_provider==='codex-gateway') && base_url 匹配`;API key 档案 `isActive = apiKeyActive && builtinActive`。`authStatus.chatgpt` 只要 token 在盘上就一直显示 "Signed in";`overridden = signedIn && !chatgptActive`(登录了但被 API key 或 gateway 顶掉)时显示 "a saved credential is currently taking precedence." + "Use this login"(调 `switchToChatgptLogin`)。**踩坑历史**:早先只看 `authStatus.active` 忽略 `model_provider`,导致 ChatGPT 登录后即便 gateway 在顶层生效也误显 "In Use"(两处徽章同时亮)。
+- `codex/CodexAuthenticationPanel.tsx` — 认证页,**最复杂**。两块:`CredentialLibrary`(API key / gateway 档案库 + 新增表单)与 `LoginForm`(ChatGPT 登录状态 + 登录按钮)。**gateway 档案改 `providerRef`(`type/name`) 引用 AI 设置的 provider 实例,下拉用共享组件 `../GatewayProviderPicker.js`(`protocol="openai-responses"`),派生经 `shared/ai/providerDerivation.ts` 的 `deriveCodexProvider`。****判定"真正 In Use"靠两个条件叠加**:① `authStatus`(auth.json 解析出谁是凭据)② config.toml 顶层 `model_provider` 是否为空(`builtinActive = model_provider===''`)。因为 ChatGPT/API key 都走内置 `openai` provider,**只有 `model_provider` 为空时才真生效**;一旦它指向 `codex-gateway`/`kuro` 之类自定义 provider,auth.json 里的登录被绕过。所以:`chatgptActive = authStatus.active==='chatgpt' && builtinActive`;gateway 档案的 `isActive = gatewayActive(model_provider==='codex-gateway') && base_url 匹配`;API key 档案 `isActive = apiKeyActive && builtinActive`。`authStatus.chatgpt` 只要 token 在盘上就一直显示 "Signed in";`overridden = signedIn && !chatgptActive`(登录了但被 API key 或 gateway 顶掉)时显示 "a saved credential is currently taking precedence." + "Use this login"(调 `switchToChatgptLogin`)。**踩坑历史**:早先只看 `authStatus.active` 忽略 `model_provider`,导致 ChatGPT 登录后即便 gateway 在顶层生效也误显 "In Use"(两处徽章同时亮)。
 - `codex/CodexModelPanel.tsx` — model / model_provider(free-text,blur 提交) / model_reasoning_effort(select 即时写),绑 config.toml。
 - `codex/CodexSafetyPanel.tsx` — `approval_policy` + `sandbox_mode` 两个 select,绑 config.toml。
 - `codex/CodexAdvancedPanel.tsx` — `cli_auth_credentials_store` 选择 + `hide_agent_reasoning` 开关 + 自由标量键编辑器。隐藏其他面板管的键(model/approval/sandbox/base URL),只编标量(嵌套表如 `[model_providers.*]` 留给原始文件)。
-- `codex/useCodexConfig.ts` — 配置 hook。聚合 settings/authStatus/profiles 读取与 patch/save/delete/`applyProfile`/`switchToChatgptLogin`。**所有凭据切换统一走 `service.applyCredential(intent)`**(见下「三种登录方案」):`applyProfile` 据档案 kind 发 `{kind:'gateway',baseUrl,apiKey,providerName}` 或 `{kind:'apiKey',apiKey}`;`switchToChatgptLogin` 发 `{kind:'chatgpt'}`。**没有** `setApiKey`/`ensureCodexGatewayProvider`/`BASE_URL` 常量了(均被 `applyCredential` 取代)。**订阅 `onDidChangeAuth`** 实现 auth.json 落盘后实时刷新登录状态。
+- `codex/useCodexConfig.ts` — 配置 hook。聚合 settings/authStatus/profiles 读取与 patch/save/delete/`applyProfile`/`switchToChatgptLogin`。**所有凭据切换统一走 `service.applyCredential(intent)`**(见下「三种登录方案」):`applyProfile` 据档案 kind 发 `{kind:'gateway',baseUrl,apiKey,providerName}`(gateway 的 baseUrl/apiKey 由 `providerRef` 经 `deriveCodexProvider` 派生,providerName=实例 label/name) 或 `{kind:'apiKey',apiKey}`;`switchToChatgptLogin` 发 `{kind:'chatgpt'}`。**没有** `setApiKey`/`ensureCodexGatewayProvider`/`BASE_URL` 常量了(均被 `applyCredential` 取代)。**订阅 `onDidChangeAuth`** 实现 auth.json 落盘后实时刷新登录状态。
 - `codex/codexLogin.ts` — `runCodexLogin()` 开集成终端跑 **`codex login`**(系统 PATH 的官方 codex CLI)。**注意:不是 codex-acp**——我们为 agent 下载的 `codex-acp` adapter 没有 `login` 子命令,OAuth 归官方 `codex` CLI。
 
 #### 跨进程服务三层
@@ -49,10 +49,10 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 |---|---|---|---|
 | `config.toml` | 编辑器 + CLI 共享 | agent/CLI | model / reasoning / approval / sandbox / 顶层 `model_provider` / `[model_providers.*]` 等。smol-toml 解析,**就地编辑保留未管理键** |
 | `auth.json` | `codex login`(ChatGPT) / 编辑器(API key) | agent/CLI | JSON。可**同时**含 `OPENAI_API_KEY` + `tokens`(ChatGPT OAuth 块)+ `auth_mode` 字段 |
-| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway **档案库**(候选),不是生效配置 |
+| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway 引用 `providerRef` **档案库**(候选),不是生效配置 |
 | renderer `IStorageService` 全局键 `agentSettings.codex.credentialDraft` | **仅编辑器** | 仅编辑器 | 认证面板未保存的表单草稿(UI 状态,不进配置文件) |
 
-- **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json**。
+- **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json**。gateway 块的 `base_url` / `experimental_bearer_token` 由档案的 `providerRef` 经 `deriveCodexProvider` 派生,不再内联在档案里。
 - **ChatGPT 登录不是 profile**:它是 `codex login` 管的单一共享登录,与档案库平行。
 - `patch` 里把某键设 `null` = 删除该键(清除残留 `openai_base_url` 的唯一办法)。
 - **编辑器只靠改这两个文件控制 codex**:绝不调 ACP `authenticate`、绝不注入 `MODEL_PROVIDER`/`CODEX_CONFIG` 环境变量(那些只被 codex-acp 的 `index.ts` 读;编辑器不设)。
@@ -67,7 +67,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 
 **最关键的解析规则**:ChatGPT 与 API Key **都走内置 `openai` provider**,而内置 `openai` **仅在 config.toml 顶层 `model_provider` 为空/未设时才生效**。一旦 `model_provider` 指向某自定义 provider(如 `codex-gateway`/`kuro`),auth.json 里的登录就被绕过——即便 `auth_mode`/resolved 仍报 chatgpt/apikey 也没用(这就是"误显 In Use"的根因)。
 
-**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.kuro]`):
+**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.kuro]`)。下方 TOML 块由档案的 `providerRef` 引用经 `deriveCodexProvider`(派生 base_url/key/name)后落盘:
 ```toml
 model_provider = "codex-gateway"
 [model_providers.codex-gateway]
@@ -138,7 +138,7 @@ interface CodexAuthStatus {
 
 ### 🔒 安全约束(刻意决策,勿擅改)
 
-1. **凭据明文落盘是用户明确选择**:apiKey/baseUrl 明文写进 `config.toml`/`auth.json`(与 CLI 共享)和 `aiSettings.json` 的 Codex 认证区,**刻意**不用加密 SecretStorage。项目 CLAUDE.md「AI provider 密钥必须走 ISecretStorageService、绝不进 settings.json」那条**只针对 AI provider 特性,不适用本 Codex/Claude 配置共享特性**。
+1. **凭据明文落盘是用户明确选择**:apiKey 档案的 key 明文写进 `aiSettings.json` 的 Codex 认证区;gateway 档案只存 `providerRef`(不内联 baseUrl/key),应用时才把派生的 baseUrl + `experimental_bearer_token` 写进 `config.toml`(与 CLI 共享),官方 API key 走 `auth.json`。**刻意**不用加密 SecretStorage。项目 CLAUDE.md 里 AI provider 密钥已改为**明文存 aiSettings.json 实例 `apiKey`**(见套路 I),与本 Codex/Claude 配置共享特性同源。
 2. **`readAuthStatus()` 绝不回传 token / API key 值**:只回 `{active, chatgpt?:{expired,planType?,expiresAt?}, hasApiKey}`。有测试("never returns the credentials themselves")断言 token / key 不泄漏到序列化结果里,改 readAuthStatus 时务必保住该测试。
 
 ### 常见任务 → 改哪里

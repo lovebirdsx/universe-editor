@@ -9,27 +9,30 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { PromptResponse } from '@agentclientprotocol/sdk'
-import {
-  extractCodexModelUsage,
-  extractCodexTurnUsage,
-} from '../../../../shared/ai/codexPricing.js'
+import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../../shared/ai/codexUsage.js'
 import { estimateCodexCost, type SessionCostEstimate } from './acpSessionCost.js'
+import type { SessionProviderContext } from './acpSessionProviderContext.js'
 
 /**
  * Locally estimates a session's cost when the agent reports none. Both hooks
  * return the same estimate shape; `undefined` means "nothing to price" and the
  * session falls back to the agent's own (authoritative or carried-forward) cost.
+ * `ctx` is the session's provider context (agentId-resolved); absent it degrades
+ * to the built-in catalog.
  */
 export interface AcpAgentCostStrategy {
   /** Estimate from a `usage_update`'s `_meta` (session-cumulative per-model tokens). */
-  fromUsageUpdate(meta: unknown): SessionCostEstimate | undefined
+  fromUsageUpdate(meta: unknown, ctx?: SessionProviderContext): SessionCostEstimate | undefined
   /** Estimate from a turn-final `PromptResponse` (confirms the final total). */
-  fromPromptResponse(response: PromptResponse): SessionCostEstimate | undefined
+  fromPromptResponse(
+    response: PromptResponse,
+    ctx?: SessionProviderContext,
+  ): SessionCostEstimate | undefined
 }
 
 const CODEX_COST_STRATEGY: AcpAgentCostStrategy = {
-  fromUsageUpdate: (meta) => estimateCodexCost(extractCodexModelUsage(meta)),
-  fromPromptResponse: (response) => estimateCodexCost(extractCodexTurnUsage(response)),
+  fromUsageUpdate: (meta, ctx) => estimateCodexCost(extractCodexModelUsage(meta), ctx),
+  fromPromptResponse: (response, ctx) => estimateCodexCost(extractCodexTurnUsage(response), ctx),
 }
 
 const STRATEGIES: Readonly<Record<string, AcpAgentCostStrategy>> = {

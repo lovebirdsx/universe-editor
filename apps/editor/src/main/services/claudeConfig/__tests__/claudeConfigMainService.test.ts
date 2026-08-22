@@ -227,8 +227,7 @@ describe('ClaudeConfigMainService', () => {
           id: 'b',
           label: 'Work gateway',
           kind: 'gateway' as const,
-          authToken: 'tok',
-          baseUrl: 'https://gw',
+          providerRef: 'anthropic/gw',
         },
       ]
       await svc.writeProfiles(profiles)

@@ -5,13 +5,18 @@
  *  chat business fields, keeping an extensible skeleton.
  *--------------------------------------------------------------------------------------------*/
 
+import type { AiModelPricing, AiPricingOrigin } from './aiModelPricing.js'
+
+/** Wire protocol a model speaks. Decoupled from the provider type / vendor. */
+export type AiWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'ollama'
+
 /** Self-describing model metadata, so consumers can pick a model by capability. */
 export interface AiModelMetadata {
-  /** Globally unique id, three-segment `vendor/group/model`, e.g. 'openai/default/gpt-4o'. */
+  /** Globally unique id, three-segment `type/instance/model`, e.g. 'anthropic/default/claude-sonnet'. */
   readonly id: string
-  /** Registration key / namespace, e.g. 'openai'. */
+  /** Provider type id (first segment of the model id), e.g. 'anthropic' / 'kuro'. */
   readonly vendor: string
-  /** Provider group this model belongs to, e.g. 'default'. */
+  /** Provider instance this model belongs to, e.g. 'default'. */
   readonly groupName?: string
   /** Display name. */
   readonly name: string
@@ -23,6 +28,11 @@ export interface AiModelMetadata {
   readonly capabilities: AiModelCapabilities
   /** Per-model configurable parameters, surfaced in the picker / management UI. */
   readonly configurationSchema?: AiModelConfigSchema
+  /** Wire protocol this model actually speaks; stamped uniformly by the registry. */
+  readonly protocol?: AiWireProtocol
+  /** Effective rate for this model, resolved through the pricing chain. */
+  readonly pricing?: AiModelPricing
+  readonly pricingOrigin?: AiPricingOrigin
 }
 
 /**

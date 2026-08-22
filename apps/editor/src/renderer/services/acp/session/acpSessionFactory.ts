@@ -26,6 +26,7 @@ import {
   IAcpMessageAttachmentStore,
   NULL_ACP_MESSAGE_ATTACHMENT_STORE,
 } from './acpMessageAttachmentStore.js'
+import { IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 
 export interface IAcpSessionCreateOptions {
   readonly id: string
@@ -84,6 +85,8 @@ export class AcpSessionFactory implements IAcpSessionFactory {
     @IAcpCompactionStatsService private readonly _compactionStats: IAcpCompactionStatsService,
     @IAcpMessageAttachmentStore
     private readonly _messageAttachments?: IAcpMessageAttachmentStore,
+    @IAcpSessionProviderContext
+    private readonly _providerContext?: IAcpSessionProviderContext,
   ) {}
 
   get messageAttachments(): IAcpMessageAttachmentStore {
@@ -106,6 +109,9 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       this._compactionStats,
       this.messageAttachments,
       opts.suppressConfigDefaults ?? false,
+      undefined,
+      undefined,
+      this._providerContext,
     )
   }
 }

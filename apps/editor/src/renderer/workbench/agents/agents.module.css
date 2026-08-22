@@ -1227,6 +1227,11 @@
   color: var(--vscode-badge-errorBackground, #a1260d);
 }
 
+/* Declared an account usage source but the authoritative number is missing. */
+.usageIndicator[data-state='unavailable'] {
+  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+}
+
 /* Cached readout with no live session behind it: keep the number legible but
    visibly provisional, with the cutoff time in the tooltip. */
 .usageIndicator[data-stale='true'] {

@@ -3,8 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { repriceForeignModelBreakdown } from '../acpSessionCost.js'
+import { estimateCodexCost, repriceForeignModelBreakdown } from '../acpSessionCost.js'
 import type { AcpModelCost } from '../acpSessionModel.js'
+import type { CodexModelUsage } from '../../../../../shared/ai/codexUsage.js'
 
 function row(partial: Partial<AcpModelCost> & { model: string }): AcpModelCost {
   return {
@@ -17,21 +18,28 @@ function row(partial: Partial<AcpModelCost> & { model: string }): AcpModelCost {
   }
 }
 
-describe('repriceForeignModelBreakdown', () => {
-  it('returns undefined for pure-claude breakdowns (CLI cost stays authoritative)', () => {
-    expect(
-      repriceForeignModelBreakdown([
-        row({ model: 'claude-opus-4-20250514', costUSD: 0.42 }),
-        row({ model: 'claude-sonnet-5[1m]', costUSD: 0.1 }),
-      ]),
-    ).toBeUndefined()
-  })
+function codexUsage(model: string, partial?: Partial<CodexModelUsage>): CodexModelUsage {
+  return {
+    model,
+    inputTokens: 0,
+    cachedReadTokens: 0,
+    outputTokens: 0,
+    ...partial,
+  }
+}
 
+describe('repriceForeignModelBreakdown', () => {
   it('returns undefined for an empty breakdown', () => {
     expect(repriceForeignModelBreakdown([])).toBeUndefined()
   })
 
-  it('re-prices a deepseek row from token counts and marks the total estimated', () => {
+  it('returns undefined when no row resolves a rate (CLI cost stays authoritative)', () => {
+    expect(
+      repriceForeignModelBreakdown([row({ model: 'totally-unknown-model', costUSD: 0.42 })]),
+    ).toBeUndefined()
+  })
+
+  it('re-prices a deepseek row from token counts via the built-in catalog', () => {
     const result = repriceForeignModelBreakdown([
       row({
         model: 'deepseek-v4-flash[1m]',
@@ -41,39 +49,80 @@ describe('repriceForeignModelBreakdown', () => {
         costUSD: 9.99, // inflated by the CLI's flagship-tier fallback
       }),
     ])
-    // ¥1 in / ¥0.2 cacheRead / ¥2 out per M, converted at 7.2:
-    // (1e6·1 + 5e5·0.2 + 1e5·2) / 7.2 / 1e6
-    const expected = 1.3 / 7.2
+    // deepseek-v4-flash (CNY): input 1 / cacheRead 0.2 / output 2 per M, at 7.2.
+    const expected = (1_000_000 * 1 + 500_000 * 0.2 + 100_000 * 2) / 7.2 / 1e6
     expect(result).toBeDefined()
-    expect(result!.cost.amount).toBeCloseTo(expected, 10)
-    expect(result!.cost.currency).toBe('USD')
+    expect(result!.cost).toEqual({ amount: expected, currency: 'USD' })
     expect(result!.models).toHaveLength(1)
     expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
-    expect(result!.models[0]!.model).toBe('deepseek-v4-flash[1m]')
   })
 
-  it('re-prices unknown gateway ids at the deepseek-pro fallback tier', () => {
+  it('mixes an Anthropic row (CLI figure kept) with a re-priced foreign row', () => {
     const result = repriceForeignModelBreakdown([
-      row({ model: 'deepseek-v5', inputTokens: 1_000_000, costUSD: 50 }),
+      row({ model: 'claude-sonnet-5', inputTokens: 1_000_000, costUSD: 0.42 }),
+      row({ model: 'kimi-k2.6', inputTokens: 1_000_000, costUSD: 30 }),
     ])
-    // ¥12 in per M at 7.2
-    expect(result!.cost.amount).toBeCloseTo(12 / 7.2, 10)
-  })
-
-  it('keeps the CLI figure for claude rows in a mixed breakdown and re-aggregates', () => {
-    const result = repriceForeignModelBreakdown([
-      row({ model: 'claude-sonnet-5', costUSD: 0.42 }),
-      row({
-        model: 'kimi-k3',
-        inputTokens: 1_000_000,
-        outputTokens: 100_000,
-        costUSD: 30,
-      }),
-    ])
-    // kimi-k3: (1e6·20 + 1e5·100) / 7.2 / 1e6 = 30/7.2
-    const kimiCost = 30 / 7.2
+    // kimi-k2.6 (CNY): input 6.5 per M at 7.2. The claude row keeps the CLI figure.
+    const kimiCost = 6.5 / 7.2
     expect(result!.models[0]!.costUSD).toBe(0.42)
     expect(result!.models[1]!.costUSD).toBeCloseTo(kimiCost, 10)
-    expect(result!.cost.amount).toBeCloseTo(0.42 + kimiCost, 10)
+    expect(result!.cost!.amount).toBeCloseTo(0.42 + kimiCost, 10)
+  })
+
+  it('leaves a pure-Anthropic breakdown alone — the CLI cost stays authoritative', () => {
+    expect(
+      repriceForeignModelBreakdown([
+        row({ model: 'claude-opus-4-20250514', inputTokens: 1_000_000, costUSD: 0.42 }),
+      ]),
+    ).toBeUndefined()
+  })
+
+  it('lets a user-configured rate override the CLI figure for an Anthropic model', () => {
+    const result = repriceForeignModelBreakdown(
+      [row({ model: 'claude-opus-4', inputTokens: 1_000_000, costUSD: 0.42 })],
+      {
+        key: 'anthropic/gw',
+        type: 'anthropic',
+        name: 'gw',
+        gatewayRates: { 'claude-opus-4': { input: 1, output: 2 } },
+      },
+    )
+    expect(result!.models[0]!.costUSD).toBeCloseTo(1, 10)
+    expect(result!.cost!.amount).toBeCloseTo(1, 10)
+  })
+})
+
+describe('estimateCodexCost', () => {
+  it('returns undefined for an empty usage snapshot', () => {
+    expect(estimateCodexCost([])).toBeUndefined()
+  })
+
+  it('leaves costUSD undefined and totals nothing when the model rate is unknown', () => {
+    const result = estimateCodexCost([
+      codexUsage('unknown-model', { inputTokens: 1_000_000, outputTokens: 100_000 }),
+    ])
+    expect(result).toBeDefined()
+    expect(result!.cost).toBeUndefined()
+    expect(result!.models).toHaveLength(1)
+    expect(result!.models[0]!.costUSD).toBeUndefined()
+  })
+
+  it('prices a known model through the built-in catalog', () => {
+    const result = estimateCodexCost([
+      codexUsage('gpt-5.4', { inputTokens: 1_000_000, outputTokens: 100_000 }),
+    ])
+    // gpt-5.4: input 2.5 / output 15 per M → 2.5 + 1.5 = 4.
+    expect(result!.cost).toEqual({ amount: 4, currency: 'USD' })
+    expect(result!.models[0]!.costUSD).toBeCloseTo(4, 10)
+  })
+
+  it('only accumulates rows with a resolvable rate', () => {
+    const result = estimateCodexCost([
+      codexUsage('gpt-5.4', { inputTokens: 1_000_000, outputTokens: 100_000 }),
+      codexUsage('unknown-model', { inputTokens: 500_000 }),
+    ])
+    expect(result!.cost).toEqual({ amount: 4, currency: 'USD' })
+    expect(result!.models).toHaveLength(2)
+    expect(result!.models[1]!.costUSD).toBeUndefined()
   })
 })
