@@ -48,10 +48,19 @@ export interface AiProviderVerifyInput {
   readonly apiKey?: string
 }
 
+/**
+ * Number of probed model ids carried back over IPC. A model list is a discovery
+ * aid, not a payload to stream in full — aggregator gateways serve thousands.
+ */
+export const PROBE_MODEL_CAP = 500
+
 /** Outcome of probing a candidate entry against its endpoint. */
 export interface AiProviderVerifyResult {
   readonly ok: boolean
+  /** Total the endpoint reported, even when {@link modelIds} is capped. */
   readonly modelCount: number
+  /** Ids enumerated from the endpoint, capped at {@link PROBE_MODEL_CAP}. */
+  readonly modelIds?: readonly string[]
   readonly error?: string
 }
 

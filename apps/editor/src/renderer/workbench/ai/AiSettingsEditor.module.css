@@ -327,11 +327,6 @@
   width: 100%;
 }
 
-.declaredIcon {
-  flex: 0 0 auto;
-  color: var(--vscode-badge-warningBackground, #d7ba7d);
-}
-
 .cardIcon {
   flex: 0 0 auto;
   opacity: 0.85;
@@ -583,39 +578,6 @@
   line-height: var(--line-height-normal);
 }
 
-.plainValue {
-  font-size: var(--font-size-base);
-}
-
-/* -- provider type card: model catalog + pricing ------------------------- */
-
-.pricingEditor {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  margin-top: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-5);
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background);
-}
-
-.pricingHint {
-  font-size: var(--font-size-xs);
-  color: var(--vscode-editor-mutedForeground);
-}
-
-.pricingGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: var(--spacing-4);
-}
-
-.pricingField {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
 /* -- provider instance card: connectivity / rates / usage ---------------- */
 
 .statusDot {
@@ -688,20 +650,6 @@
 
 /* -- add-provider dialog -------------------------------------------------- */
 
-.reuseHint {
-  padding: var(--spacing-3) var(--spacing-4);
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background);
-  font-size: var(--font-size-sm);
-  color: var(--vscode-editor-mutedForeground);
-}
-
-.checkboxRow {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
 /* -- provider entry card: issues / protocol map / legacy banner ---------- */
 
 .cardIssue {
@@ -728,12 +676,6 @@
   font-weight: var(--font-weight-medium);
 }
 
-.discoverBadge {
-  font-size: var(--font-size-xs);
-  font-style: italic;
-  color: var(--vscode-editor-mutedForeground);
-}
-
 .agentOnlyBadge {
   font-size: var(--font-size-xs);
   color: var(--vscode-editor-mutedForeground);
@@ -750,4 +692,261 @@
   font-size: var(--font-size-base);
   color: var(--vscode-editor-foreground);
   line-height: var(--line-height-normal);
+}
+
+/* -- provider card: inline save feedback / inheritance -------------------- */
+
+.fieldHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.savedIndicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-success-foreground, #89d185);
+}
+
+.inheritNote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.fieldError {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* -- provider card: issues with a remedy ---------------------------------- */
+
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-5);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+}
+
+.issueRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  align-items: flex-start;
+}
+
+.issueHint {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+  line-height: var(--line-height-normal);
+}
+
+/* -- protocol map editor -------------------------------------------------- */
+
+.protocolBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-sm);
+}
+
+.protocolHeaderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.protocolName {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.protocolMode {
+  min-width: 180px;
+}
+
+.protocolHint {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+  line-height: var(--line-height-normal);
+}
+
+.protocolActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.modelWire {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.refEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  width: 100%;
+  padding: var(--spacing-4);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+}
+
+/* -- probe dialog --------------------------------------------------------- */
+
+.probeBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.probeDialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  padding: var(--spacing-5) var(--spacing-6);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: var(--shadow-lg);
+}
+
+.probeHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.probeStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-base);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.probeError {
+  font-size: var(--font-size-base);
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.probeNote {
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+  line-height: var(--line-height-normal);
+}
+
+.probeToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.probeList {
+  flex: 1 1 auto;
+  min-height: 160px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.probeRow {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+}
+
+.probeFooter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.probeCount {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+/* -- http-json remote source form ----------------------------------------- */
+
+.httpJsonForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+}
+
+.httpJsonAdvanced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding-left: var(--spacing-4);
+  border-left: 2px solid var(--vscode-workbench-border);
+}
+
+.rawJsonOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 62;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.rawJsonDialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: min(520px, 90vw);
+  padding: var(--spacing-5) var(--spacing-6);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: var(--shadow-lg);
+}
+
+.rawJsonEditor {
+  min-height: 220px;
+  padding: var(--spacing-3);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  color: var(--vscode-input-foreground);
+  resize: vertical;
+}
+
+.rawJsonError {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-errorForeground, #f48771);
 }

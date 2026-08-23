@@ -1883,6 +1883,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         family: m.family,
         maxInputTokens: m.maxInputTokens,
         maxOutputTokens: m.maxOutputTokens,
+        ...(m.pricing !== undefined
+          ? {
+              pricing: {
+                input: m.pricing.input,
+                output: m.pricing.output,
+                ...(m.pricing.currency !== undefined ? { currency: m.pricing.currency } : {}),
+              },
+            }
+          : {}),
+        ...(m.pricingOrigin !== undefined ? { pricingOrigin: m.pricingOrigin } : {}),
       }))
     },
     aiGetProviderIssues: async () => {

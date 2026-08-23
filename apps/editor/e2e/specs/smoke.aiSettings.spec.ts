@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  AI settings smoke (P1).
  *
- *  Covers the four things the single-layer `providers[]` refactor can silently
- *  get wrong:
+ *  Covers what the single-layer `providers[]` refactor and its visual editor can
+ *  silently get wrong:
  *    - a non-empty `protocolMap` is stamped straight into metadata (no network),
  *      even with a baseUrl that points nowhere
  *    - model ids are three-segment `providerId/protocol/channelModel`, and the
@@ -10,6 +10,12 @@
  *    - `extends` inherits the parent's protocolMap, and an unknown `extends`
  *      surfaces as a visible provider issue (never silently dropped)
  *    - per-model config persists into the top-level `modelSettings` section
+ *    - the object model-ref form `{ id, ref }` the declaration editor writes
+ *      keeps the wire name in the id while reading metadata from the knowledge
+ *      base — the whole point of a renamed gateway model
+ *    - a declared `pricingSource` produces a real rate, and its absence produces
+ *      no rate at all rather than a cross-provider guess
+ *    - a `defaultProtocol` outside the protocol map is reported but not fatal
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/sharedApp.js'
@@ -174,6 +180,158 @@ test.describe('@p1 ai settings', () => {
       // Clear the per-model config too: updateProviders([]) leaves modelSettings
       // in place, so the shared worker instance would otherwise keep a stale key.
       await page.evaluate((mid) => window.__E2E__!.aiSetModelConfiguration(mid, {}), modelId)
+      await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
+    }
+  })
+
+  // The object ref is what the model-declaration editor writes when a gateway
+  // renames a known model: the wire name stays the id (and the third id segment),
+  // while `ref` decides where the metadata comes from.
+  test('an object model ref reads metadata from ref and keeps the wire name as the id', async ({
+    page,
+  }) => {
+    try {
+      await page.evaluate(
+        ({ id, baseUrl }) =>
+          window.__E2E__!.aiSetProviders([
+            {
+              id,
+              baseUrl,
+              protocolMap: {
+                'anthropic-messages': [{ id: 'house-sonnet', ref: 'claude-sonnet-5' }],
+              },
+            },
+          ]),
+        { id: PARENT_ID, baseUrl: UNREACHABLE_URL },
+      )
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              window.__E2E__!.aiGetModels().then((models) => {
+                const hit = models.find((m) => m.providerId === id)
+                return hit === undefined
+                  ? null
+                  : {
+                      id: hit.id,
+                      channelModel: hit.channelModel,
+                      family: hit.family,
+                      maxInputTokens: hit.maxInputTokens,
+                    }
+              }),
+            PARENT_ID,
+          ),
+        )
+        .toEqual({
+          id: `${PARENT_ID}/anthropic-messages/house-sonnet`,
+          channelModel: 'house-sonnet',
+          family: 'claude-sonnet',
+          maxInputTokens: 200000,
+        })
+    } finally {
+      await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
+    }
+  })
+
+  // The catalog source is a pure table lookup, so this asserts offline. It also
+  // pins the deliberate asymmetry: no declared source means no rate at all, and
+  // a catalog lookup keys on the wire name — a renamed model resolves nothing.
+  test('a catalog pricing source produces a rate, and no source produces none', async ({
+    page,
+  }) => {
+    const PRICED_ID = 'e2e-aisettings-priced'
+    try {
+      await page.evaluate(
+        ({ priced, plain, baseUrl }) =>
+          window.__E2E__!.aiSetProviders([
+            {
+              id: priced,
+              baseUrl,
+              protocolMap: {
+                'anthropic-messages': [
+                  'claude-sonnet-5',
+                  { id: 'house-sonnet', ref: 'claude-sonnet-5' },
+                ],
+              },
+              pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+            },
+            { id: plain, baseUrl, protocolMap: { 'anthropic-messages': ['claude-sonnet-5'] } },
+          ]),
+        { priced: PRICED_ID, plain: PARENT_ID, baseUrl: UNREACHABLE_URL },
+      )
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            ({ priced, plain }) =>
+              window.__E2E__!.aiGetModels().then((models) => {
+                const rate = (id: string) => {
+                  const hit = models.find((m) => m.id === id)
+                  return hit === undefined ? 'absent' : (hit.pricingOrigin ?? 'none')
+                }
+                return {
+                  catalogHit: rate(`${priced}/anthropic-messages/claude-sonnet-5`),
+                  renamed: rate(`${priced}/anthropic-messages/house-sonnet`),
+                  noSource: rate(`${plain}/anthropic-messages/claude-sonnet-5`),
+                }
+              }),
+            { priced: PRICED_ID, plain: PARENT_ID },
+          ),
+        )
+        .toEqual({ catalogHit: 'catalog', renamed: 'none', noSource: 'none' })
+
+      const priced = await page.evaluate(
+        (id) => window.__E2E__!.aiGetModels().then((ms) => ms.find((m) => m.id === id)),
+        `${PRICED_ID}/anthropic-messages/claude-sonnet-5`,
+      )
+      expect(priced?.pricing).toMatchObject({ input: 3, output: 15 })
+    } finally {
+      await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
+    }
+  })
+
+  test('a defaultProtocol outside the protocol map is reported but not fatal', async ({ page }) => {
+    try {
+      await page.evaluate(
+        ({ id, baseUrl }) =>
+          window.__E2E__!.aiSetProviders([
+            {
+              id,
+              baseUrl,
+              defaultProtocol: 'ollama',
+              protocolMap: { 'openai-chat': ['m-a'] },
+            },
+          ]),
+        { id: PARENT_ID, baseUrl: UNREACHABLE_URL },
+      )
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              window.__E2E__!.aiGetProviderIssues().then((issues) => {
+                const hit = issues.find(
+                  (i) => i.providerId === id && i.reason === 'unknown-default-protocol',
+                )
+                return hit === undefined ? null : hit.fatal
+              }),
+            PARENT_ID,
+          ),
+        )
+        .toBe(false)
+
+      // Non-fatal means the provider still serves its declared models.
+      expect(
+        await page.evaluate(
+          (id) =>
+            window
+              .__E2E__!.aiGetModels()
+              .then((models) => models.filter((m) => m.providerId === id).map((m) => m.id)),
+          PARENT_ID,
+        ),
+      ).toEqual([`${PARENT_ID}/openai-chat/m-a`])
+    } finally {
       await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
     }
   })

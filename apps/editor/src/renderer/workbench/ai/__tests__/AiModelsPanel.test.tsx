@@ -69,6 +69,7 @@ class FakeAiModelService {
   getProviders = vi.fn(async () => this.providers)
   getModels = vi.fn(async () => this.models)
   getProviderIssues = vi.fn(async () => this.issues)
+  getModelKnowledge = vi.fn(async () => ({}))
   isLegacySettingsFormat = vi.fn(async () => this.legacy)
   updateProviders = vi.fn(async (providers: readonly AiProviderEntry[]) => {
     this.providers = [...providers]
@@ -80,6 +81,10 @@ class FakeAiModelService {
   getModelConfiguration = vi.fn(async (): Promise<AiModelConfiguration> => ({}))
   verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 2 }))
   getAccountUsage = vi.fn(async (providerId: string) => this.usages.get(providerId))
+
+  fireModelsChanged(): void {
+    this._onDidChangeModels.fire()
+  }
 }
 
 class FakeStorage {
@@ -156,7 +161,7 @@ describe('AiModelsPanel', () => {
     await flushEffects()
 
     const card = entryCard('kuro')
-    fireEvent.click(within(card).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Remove provider' }))
     await flushEffects()
 
     expect(aiModel.updateProviders).toHaveBeenCalledWith([])
@@ -235,5 +240,122 @@ describe('AiModelsPanel', () => {
     await flushEffects()
 
     expect(screen.getByText('Rate unknown')).toBeTruthy()
+  })
+
+  it('writes a field through on blur and flags it as saved', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const input = within(entryCard('kuro')).getByLabelText('Label')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'Kuro Global' } })
+    fireEvent.blur(input)
+    await flushEffects()
+
+    expect(aiModel.updateProviders).toHaveBeenCalledWith([
+      { ...KURO_PROVIDER, label: 'Kuro Global' },
+    ])
+    expect(screen.getByTestId('ai-provider-saved')).toBeTruthy()
+  })
+
+  it('clearing a field deletes the key rather than writing an empty string', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const input = within(entryCard('kuro')).getByLabelText('Label')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '  ' } })
+    fireEvent.blur(input)
+    await flushEffects()
+
+    const written = aiModel.updateProviders.mock.calls[0]?.[0]
+    expect(written).toBeTruthy()
+    expect(Object.keys(written![0] as object)).not.toContain('label')
+  })
+
+  it('a hot reload of aiSettings.json does not overwrite a focused input', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const input = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Label')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'half-typed' } })
+
+    aiModel.providers = [{ ...KURO_PROVIDER, label: 'Changed On Disk' }]
+    aiModel.fireModelsChanged()
+    await flushEffects()
+
+    expect(input.value).toBe('half-typed')
+  })
+
+  it('duplicates a provider under a free id', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    fireEvent.click(within(entryCard('kuro')).getByRole('button', { name: 'Duplicate provider' }))
+    await flushEffects()
+
+    expect(aiModel.updateProviders).toHaveBeenCalledWith([
+      KURO_PROVIDER,
+      { ...KURO_PROVIDER, id: 'kuro-copy' },
+    ])
+  })
+
+  // updateProviders replaces the whole array, so a second commit issued while the
+  // first is still in flight must not start from the pre-first-write snapshot.
+  // Tabbing from one field straight into another is exactly that timing.
+  it('a second field edit committed mid-flight does not undo the first', async () => {
+    const other: AiProviderEntry = { id: 'other', label: 'Other', baseUrl: 'https://other.example' }
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER, other]
+    aiModel.models = [KURO_MODEL]
+
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const original = aiModel.updateProviders
+    let gated = true
+    aiModel.updateProviders = vi.fn(async (providers: readonly AiProviderEntry[]) => {
+      if (gated) {
+        gated = false
+        await gate
+      }
+      await original(providers)
+    })
+
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const first = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Label')
+    fireEvent.focus(first)
+    fireEvent.change(first, { target: { value: 'Kuro Renamed' } })
+    fireEvent.blur(first)
+
+    const second = within(entryCard('other')).getByLabelText<HTMLInputElement>('Label')
+    fireEvent.focus(second)
+    fireEvent.change(second, { target: { value: 'Other Renamed' } })
+    fireEvent.blur(second)
+
+    release?.()
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.providers).toEqual([
+      { ...KURO_PROVIDER, label: 'Kuro Renamed' },
+      { ...other, label: 'Other Renamed' },
+    ])
   })
 })

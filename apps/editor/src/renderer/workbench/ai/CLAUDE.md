@@ -22,11 +22,28 @@ apps/editor/src/renderer/workbench/ai/
                               统一持久化：settings.activeItem（值 `ai:<cat>` / `agent:<id>`）+ AI 项 per-item scrollTop
                               顶部 `import '../agentSettings/builtinAgentSettings.js'` 触发 Claude 自注册
   AiModelsPanel.tsx           AI 分类①「模型配置」：单层 Provider 入口列表（每个 gateway 端点一条）
-                              入口卡（label / baseUrl / apiKey 掩码 / 默认协议 / extends 徽标 / 价格来源 + 刷新 / 账号额度 /
-                              protocolMap 各协议模型区 / 问题徽标）；顶部旧格式 banner + 「添加提供方」
-  ProviderEntryCard.tsx       入口卡片：连接/密钥/协议映射/模型区（discover 徽标 + Agent-only 徽标 + 费率未知态）/
-                              问题徽标 / 「测试连接」（verifyProvider）
-  AddProviderDialog.tsx       加 provider 弹窗：单层表单（id / label / baseUrl / apiKey / defaultProtocol）→ updateProviders
+                              顶部旧格式 banner + 「添加提供方」；`replaceProviderAt(index, patch)` 是唯一写入口
+                              （按 index 不按 id——手写文件可能重复 id，改一张卡不能连带改另一张）
+                              **所有写盘串行化**：updateProviders 是全量替换，故写入基于 `providersRef.current`
+                              而非渲染态，并经 `enqueueWrite` 排队（含 setApiKey/deleteApiKey——main 侧同样是
+                              读改写）。逐字段即时保存下，Tab 换字段会让两次提交重叠，用渲染快照必丢改动
+  ProviderEntryCard.tsx       入口卡**壳**：header(badges/ConnectivityDot/Duplicate/Remove) + 折叠 + section 编排；
+                              连通性结果存 IStorageService（`ai.settings.connectivity.<id>`，5 分钟 TTL）
+  providerCard/               卡片内部的可编辑分区（9 个字段全覆盖，统一「即时保存 + 内联反馈」范式）
+    useProviderField.ts       `patchField`(空值即删 key) / `useProviderField`(写盘 + 盖「已保存」戳) /
+                              `useEditableText`(草稿在聚焦期不被 aiSettings.json 热重载覆盖)
+    SavedIndicator.tsx        字段级「已保存」内联反馈（按 field 名匹配 stamp）
+    IssuesSection.tsx         8 种 issue 徽章 + 「如何修复」引导；`issueReasonLabel` 从这里导出
+    ConnectionFields.tsx      Label / Base URL / API Key（内联编辑）+ `InheritanceNote`（继承 vs 覆盖标注）
+    ExtendsField.tsx          extends 下拉（候选排除自己与后代）+ 写盘前用 resolveProviderEntries 预跑拦截
+    ProtocolsSection.tsx      **重头戏**：protocolMap 三态编辑（未声明 / `[]` discover / 非空静态清单）+
+                              协议增删 + 固化 + 探测 + 行内 ModelRow（含 configurationSchema 齿轮、RateBadge）
+    ProbeModelsDialog.tsx     探测结果勾选弹窗（VirtualList + filter，默认只勾前 50，>200 提示改回 discover）
+    ModelRefEditor.tsx        单条 ref 高级编辑（wire name / knowledge ref / capabilities 只能收窄）
+    RemoteSourceFields.tsx    pricingSource / usageSource 编辑（None / catalog+vendor / http-json 表单 +
+                              raw JSON 逃生舱）+ 刷新 + AccountUsageBlock
+  AddProviderDialog.tsx       加 provider 弹窗：模板选择器（预填 label/baseUrl/protocolMap/pricingSource，
+                              **永不填 id 与 apiKey**）+ 单层表单 → updateProviders
   AiFeatureModelsPanel.tsx    AI 分类②「功能模型」：chat / inline / commit 三行，数据驱动（FEATURES 数组）
                               点击行 → executeCommand 对应 pickModel 命令 → reload
   AiSettingsHelpButton.tsx    AI 分类 header 右上角「?」：点击弹 FocusScopeOverlay + MarkdownView 浮层（agent 项无帮助）
@@ -54,6 +71,7 @@ apps/editor/src/shared/i18n/messages/zh-CN.ts   所有 ai.* / aiModels.* / aiFea
 ```
 
 input→组件注册两处（套路见 apps/editor/CLAUDE.md「编辑器输入」）：
+
 - `workbench/editor/EditorArea.tsx`：`editorComponentMap.set('aiSettings', AiSettingsEditor)`
 - `contributions/BuiltInEditorProvidersContribution.ts`：注册 typeId / componentKey / deserialize
 
@@ -82,6 +100,7 @@ const storage = useService(IStorageService)
 机制：`localize(key, defaultMessage, vars?)`，运行时 `messages[key] ?? fallbackMessages[key] ?? defaultMessage`（实现 `packages/platform/src/nls/nls.ts`）。
 
 铁律：
+
 1. **`defaultMessage` 永远写英文**（它是 fallback）。**绝不**把中文写进 default——否则英文环境显示中文。
 2. 中文翻译加到 `apps/editor/src/shared/i18n/messages/zh-CN.ts`（同 key）。en-US **不用加**（命中失败回落 default 英文即可）。
 3. 帮助 markdown 这类长文本：default（英文）在 `aiSettingsHelpText.ts` 用数组 `.join('\n')`；中文在 zh-CN.ts 同 key 也用 `.join('\n')`。
@@ -94,7 +113,10 @@ const storage = useService(IStorageService)
 
 - **加一个 AI 分类**：`AiSettingsEditor.tsx` 的 `AI_CATEGORIES` 加一项（id / lucide icon / label(localize) / panel 组件 / help 函数）；新建 `XxxPanel.tsx`（用 `styles['panel']` 容器）；`aiSettingsHelpText.ts` 加一段 help（英文）+ zh-CN.ts 补中文。AI 分类是**静态数组**，不做 DI 注册表（数量少，避免过度设计）。
 - **加一个 agent 的设置页**（如 codex）：**不动壳**——agent 项由 `registry.list()` 自动出现在 Agents 组。只需新建 `agentSettings/<agent>/XxxAgentSettings.tsx`（末行 `registerAgentSettings('<id>', Comp)`）+ 在 `agentSettings/builtinAgentSettings.ts` 加一行 import。详见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
-- **某 AI 分类面板加控件**：优先用 workbench-ui 原子件（`Button`/`IconButton`/`Input`/`Checkbox`/`Badge`）+ `styles` 里 token 化样式；按钮尽量图标化（`IconButton` + lucide，必带 `label`）。
+- **某 AI 分类面板加控件**：优先用 workbench-ui 原子件（`Button`/`IconButton`/`Input`/`Checkbox`/`Badge`/`Select`）+ `styles` 里 token 化样式；按钮尽量图标化（`IconButton` + lucide，必带 `label`）。**别再写原生 `<select>`**——`Select` 是自渲染浮层（触发器 `role="combobox"`、选项 `role="option"`），测试里 `fireEvent.change` 对它无效，要点开再点选项。
+- **改 protocolMap / 模型声明编辑**：`providerCard/ProtocolsSection.tsx`（三态与协议增删）+ `providerCard/ModelRefEditor.tsx`（单条 ref）；纯函数（三态语法、ref 字符串↔对象归一化、探测结果回填 `mergeProbedSelection`）在 `shared/ai/protocolMapEdit.ts`，继承链遍历与「探测该拨哪个地址」的 `effectiveConnection` 在 `shared/ai/providerInheritance.ts`——**这两个文件是可单测的边界，逻辑优先往那儿放**。
+- **动到「验证 / 探测端点」**：连接信息一律走 `effectiveConnection(provider, allProviders)`，不要直接读 `provider.baseUrl/apiKey`——纯继承条目自身两者皆空，拨出去必失败。它返回的是**祖先的明文密钥**，只可用于发往 main 建连，**绝不能渲染**。
+- **加一条 provider 模板**：`shared/ai/providerTemplates.ts` 加一项；官方端点的 baseUrl 必须与 `shared/ai/officialEndpoints.ts` 对齐（`providerTemplates.test.ts` pin 住了这个一致性）。
 - **加一个功能→模型项**：`AiFeatureModelsPanel.tsx` 的 `FEATURES` 数组加一项（icon / label / desc / command / read）；该功能的 pickModel 命令需已存在（否则先按 actions 套路加）。
 - **改选模型 QuickPick 外观**（分组/勾选/描述）：只改 `aiModelPickItems.ts` 的 `buildModelPickItems`，三个 picker 同步生效。
 - **加持久化状态**：起一个 `ai.settings.*` 的 GLOBAL key，按上面套路读写 + restoredRef 守卫。
@@ -146,4 +168,3 @@ pnpm e2e          # 涉及编辑器打开/交互时跑；已知多 worker flaky�
 - `apps/editor/src/renderer/actions/{aiActions,agentActions,inlineCompletionActions,commitMessageActions}.ts` —— 入口命令 + 选模型命令
 - `apps/editor/src/shared/i18n/messages/zh-CN.ts` —— 中文翻译
 - 相关：[`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)（Claude/agent 设置内容本体）、`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加 vendor）、`packages/platform/src/nls/nls.ts`（localize 机制）
-

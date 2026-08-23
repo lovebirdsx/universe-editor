@@ -30,6 +30,7 @@ import {
   localize,
   mergeModelKnowledge,
   parseModelRef,
+  PROBE_MODEL_CAP,
   resolveProviderEntries,
   transformErrorForSerialization,
   type AiAccountUsage,
@@ -293,7 +294,11 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
           ),
         }
       }
-      return { ok: true, modelCount: models.length }
+      return {
+        ok: true,
+        modelCount: models.length,
+        modelIds: models.length > PROBE_MODEL_CAP ? models.slice(0, PROBE_MODEL_CAP) : models,
+      }
     } catch (err) {
       return { ok: false, modelCount: 0, error: err instanceof Error ? err.message : String(err) }
     }

@@ -44,6 +44,14 @@ async function flushEffects(): Promise<void> {
   await act(async () => {})
 }
 
+/** Select is a self-rendered listbox, not a native <select> — drive it by clicking. */
+async function pickOption(selectLabel: string, optionName: string | RegExp): Promise<void> {
+  fireEvent.click(screen.getByRole('combobox', { name: selectLabel }))
+  await flushEffects()
+  fireEvent.click(screen.getByRole('option', { name: optionName }))
+  await flushEffects()
+}
+
 function renderDialog(
   aiModel: FakeDialogAiModel,
   {
@@ -102,8 +110,7 @@ describe('AddProviderDialog', () => {
     await flushEffects()
 
     fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'claude-gw' } })
-    fireEvent.click(screen.getByRole('combobox', { name: 'Default protocol' }))
-    fireEvent.click(screen.getByRole('option', { name: 'anthropic-messages' }))
+    await pickOption('Default protocol', 'anthropic-messages')
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await flushEffects()
 
@@ -114,6 +121,41 @@ describe('AddProviderDialog', () => {
         protocolMap: { 'anthropic-messages': [] },
       },
     ])
+  })
+
+  it('a template seeds label, baseUrl, protocol map and pricing source', async () => {
+    const aiModel = new FakeDialogAiModel()
+    renderDialog(aiModel)
+    await flushEffects()
+
+    await pickOption('Template', /Anthropic \(official\)/)
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'claude' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await flushEffects()
+
+    expect(aiModel.updateProviders).toHaveBeenCalledWith([
+      {
+        id: 'claude',
+        label: 'Anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        defaultProtocol: 'anthropic-messages',
+        protocolMap: { 'anthropic-messages': [] },
+        pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+      },
+    ])
+  })
+
+  it('a template never fills in the id or the API key', async () => {
+    const aiModel = new FakeDialogAiModel()
+    renderDialog(aiModel)
+    await flushEffects()
+
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'mine' } })
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-secret' } })
+    await pickOption('Template', /OpenAI \(official\)/)
+
+    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('mine')
+    expect((screen.getByPlaceholderText('sk-…') as HTMLInputElement).value).toBe('sk-secret')
   })
 
   it('rejects a duplicate provider id', async () => {
@@ -159,7 +201,11 @@ describe('AddProviderDialog — persisted draft', () => {
 
   it('restores a well-formed draft', async () => {
     const storage = new FakeStorage()
-    await storage.set(DRAFT_KEY, { id: 'kuro', baseUrl: 'https://kuro.example' })
+    await storage.set(DRAFT_KEY, {
+      id: 'kuro',
+      baseUrl: 'https://kuro.example',
+      template: 'custom',
+    })
     renderDialog(new FakeDialogAiModel(), { storage })
     await flushEffects()
 
@@ -167,5 +213,30 @@ describe('AddProviderDialog — persisted draft', () => {
     expect((screen.getByPlaceholderText('https://…') as HTMLInputElement).value).toBe(
       'https://kuro.example',
     )
+  })
+
+  // The key gained a `template` field; a draft without one predates the template
+  // picker and is taken all-or-nothing like every other shape change.
+  it('ignores a draft written before the template picker existed', async () => {
+    const storage = new FakeStorage()
+    await storage.set(DRAFT_KEY, { id: 'kuro', baseUrl: 'https://kuro.example' })
+    renderDialog(new FakeDialogAiModel(), { storage })
+    await flushEffects()
+
+    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('')
+  })
+
+  it('never persists the API key to storage', async () => {
+    const storage = new FakeStorage()
+    renderDialog(new FakeDialogAiModel(), { storage })
+    await flushEffects()
+
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-secret' } })
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+    await flushEffects()
+
+    const written = JSON.stringify(await storage.get(DRAFT_KEY))
+    expect(written).toContain('kuro')
+    expect(written).not.toContain('sk-secret')
   })
 })

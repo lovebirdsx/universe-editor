@@ -156,6 +156,10 @@ export interface E2EAiModelInfo {
   readonly family: string
   readonly maxInputTokens: number
   readonly maxOutputTokens: number
+  /** Per-million-token rate, present only when the provider declares a pricing source. */
+  readonly pricing?: { readonly input: number; readonly output: number; readonly currency?: string }
+  /** Which kind of source produced {@link pricing}: the built-in catalog or a gateway table. */
+  readonly pricingOrigin?: string
 }
 
 /** One provider-configuration problem surfaced while resolving `providers[]`. */
@@ -166,12 +170,35 @@ export interface E2EAiProviderIssue {
   readonly detail?: string
 }
 
-/** A single-layer provider entry to persist into aiSettings.json (mirrors AiProviderEntry). */
+/** A single-layer provider entry to persist into aiSettings.json (mirrors AiProviderEntry).
+ * A `protocolMap` value is either a bare wire name or the object form the
+ * model-declaration editor writes when the wire name and knowledge-base key differ.
+ */
 export interface E2EAiProviderEntry {
   readonly id: string
   readonly extends?: string
+  readonly label?: string
   readonly baseUrl?: string
-  readonly protocolMap?: Readonly<Record<string, readonly string[]>>
+  readonly apiKey?: string
+  readonly defaultProtocol?: string
+  readonly protocolMap?: Readonly<Record<string, readonly E2EAiProtocolModelRef[]>>
+  readonly pricingSource?: E2EAiRemoteSourceSpec
+  readonly usageSource?: E2EAiRemoteSourceSpec
+}
+
+export type E2EAiProtocolModelRef =
+  | string
+  | {
+      /** Wire name the endpoint expects. */
+      readonly id?: string
+      /** Knowledge-base key metadata is read from. */
+      readonly ref?: string
+      readonly capabilities?: Readonly<Record<string, boolean>>
+    }
+
+export interface E2EAiRemoteSourceSpec {
+  readonly id: string
+  readonly options?: Readonly<Record<string, unknown>>
 }
 
 export interface E2EStartupPhase {

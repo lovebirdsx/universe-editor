@@ -10,24 +10,23 @@
  *  shown on the affected cards rather than silently swallowed.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FileJson, Plus, TriangleAlert } from 'lucide-react'
 import {
   IAiModelService,
   IDialogService,
   IEditorGroupsService,
   IInstantiationService,
-  IQuickInputService,
   IStorageService,
   IUserDataFilesService,
   StorageScope,
   UserDataFile,
   localize,
+  type AiModelKnowledge,
   type AiModelMetadata,
   type AiProviderEntry,
   type AiProviderIssue,
   type AiRateTableSnapshot,
-  type AiWireProtocol,
 } from '@universe-editor/platform'
 import { Button } from '@universe-editor/workbench-ui'
 import { useEventSubscription, useService } from '../useService.js'
@@ -36,6 +35,7 @@ import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup
 import { IAiRateMirror } from '../../services/ai/aiRateMirror.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
 import { ProviderEntryCard, issueReasonLabel } from './ProviderEntryCard.js'
+import type { ProviderPatch } from './providerCard/useProviderField.js'
 import styles from './AiSettingsEditor.module.css'
 
 const COLLAPSED_KEY = 'ai.settings.models.collapsed'
@@ -47,7 +47,6 @@ const providerCollapseKey = (id: string): string => `provider:${id}`
 export function AiModelsPanel() {
   const aiModel = useService(IAiModelService)
   const rateMirror = useService(IAiRateMirror)
-  const quickInput = useService(IQuickInputService)
   const dialog = useService(IDialogService)
   const userData = useService(IUserDataFilesService)
   const editorGroups = useService(IEditorGroupsService)
@@ -57,11 +56,28 @@ export function AiModelsPanel() {
   const [providers, setProviders] = useState<readonly AiProviderEntry[]>([])
   const [models, setModels] = useState<readonly AiModelMetadata[]>([])
   const [issues, setIssues] = useState<readonly AiProviderIssue[]>([])
+  const [knowledge, setKnowledge] = useState<Readonly<Record<string, AiModelKnowledge>>>({})
   const [legacy, setLegacy] = useState(false)
   const [rateTables, setRateTables] = useState<readonly AiRateTableSnapshot[]>([])
   const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({})
   const [addOpen, setAddOpen] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
+
+  /**
+   * `updateProviders` replaces the whole array, so every write must start from
+   * the newest one. Render state is too old for that: with per-field immediate
+   * saves, a second commit can be issued while the first is still in flight to
+   * main, and a stale snapshot would silently undo it. The ref carries the value
+   * across that window, and the chain keeps writes from interleaving at all.
+   */
+  const providersRef = useRef<readonly AiProviderEntry[]>([])
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve())
+
+  const enqueueWrite = useCallback((run: () => Promise<void>): Promise<void> => {
+    const next = writeChain.current.then(run, run)
+    writeChain.current = next.catch(() => undefined)
+    return next
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -85,16 +101,19 @@ export function AiModelsPanel() {
   )
 
   const reload = useCallback(async () => {
-    const [nextProviders, nextModels, nextIssues, nextLegacy] = await Promise.all([
+    const [nextProviders, nextModels, nextIssues, nextLegacy, nextKnowledge] = await Promise.all([
       aiModel.getProviders(),
       aiModel.getModels(),
       aiModel.getProviderIssues(),
       aiModel.isLegacySettingsFormat(),
+      aiModel.getModelKnowledge(),
     ])
+    providersRef.current = nextProviders
     setProviders(nextProviders)
     setModels(nextModels)
     setIssues(nextIssues)
     setLegacy(nextLegacy)
+    setKnowledge(nextKnowledge)
     setRateTables(rateMirror.getRateTablesSync())
     setReloadToken((t) => t + 1)
   }, [aiModel, rateMirror])
@@ -130,80 +149,33 @@ export function AiModelsPanel() {
 
   const updateProviders = useCallback(
     async (next: readonly AiProviderEntry[]) => {
+      providersRef.current = next
       await aiModel.updateProviders(next)
       await reload()
     },
     [aiModel, reload],
   )
 
-  const replaceProvider = useCallback(
-    async (id: string, build: (provider: AiProviderEntry) => AiProviderEntry) => {
-      const next = providers.map((p) => (p.id === id ? build(p) : p))
-      await updateProviders(next)
-    },
-    [providers, updateProviders],
-  )
-
-  const setProviderLabel = useCallback(
-    async (id: string, label: string) => {
-      await replaceProvider(id, (p) => {
-        if (label) return { ...p, label }
-        if (!('label' in p)) return p
-        const next = { ...p }
-        delete (next as { label?: string }).label
-        return next
-      })
-    },
-    [replaceProvider],
-  )
-
-  const setProviderBaseUrl = useCallback(
-    async (id: string, baseUrl: string) => {
-      await replaceProvider(id, (p) => {
-        if (baseUrl) return { ...p, baseUrl }
-        if (!('baseUrl' in p)) return p
-        const next = { ...p }
-        delete (next as { baseUrl?: string }).baseUrl
-        return next
-      })
-    },
-    [replaceProvider],
-  )
-
-  const setProviderDefaultProtocol = useCallback(
-    async (id: string, protocol: AiWireProtocol | undefined) => {
-      await replaceProvider(id, (p) => {
-        if (protocol !== undefined) return { ...p, defaultProtocol: protocol }
-        if (!('defaultProtocol' in p)) return p
-        const next = { ...p }
-        delete (next as { defaultProtocol?: AiWireProtocol }).defaultProtocol
-        return next
-      })
-    },
-    [replaceProvider],
+  // Indexed, not keyed by id: a hand-edited file can repeat an id, and editing
+  // one of the two cards must not rewrite both.
+  const replaceProviderAt = useCallback(
+    (index: number, build: ProviderPatch) =>
+      enqueueWrite(async () => {
+        await updateProviders(providersRef.current.map((p, i) => (i === index ? build(p) : p)))
+      }),
+    [enqueueWrite, updateProviders],
   )
 
   const setProviderApiKey = useCallback(
-    async (provider: AiProviderEntry) => {
-      const key = await quickInput.input({
-        prompt: localize(
-          'aiModels.apiKey.editPrompt',
-          'Enter the API key for {name} (stored in plaintext in aiSettings.json).',
-          { name: provider.label ?? provider.id },
-        ),
-        value: provider.apiKey ?? '',
-        placeholder: 'sk-…',
-        validateInput: (v) =>
-          v.trim().length === 0
-            ? localize('aiModels.apiKey.empty', 'The API key must not be empty.')
-            : undefined,
-      })
-      const trimmed = key?.trim()
-      if (trimmed === undefined) return
-      await aiModel.setApiKey(provider.id, trimmed)
-      await reload()
-    },
-    [quickInput, aiModel, reload],
+    (provider: AiProviderEntry, key: string) =>
+      // Same queue as the entry writes: main resolves setApiKey against its own
+      // last-loaded providers, so letting it overlap an in-flight updateProviders
+      // would drop whichever field the other one carried.
+      enqueueWrite(async () => {
+        await aiModel.setApiKey(provider.id, key)
+        await reload()
+      }),
+    [aiModel, enqueueWrite, reload],
   )
 
   const clearProviderApiKey = useCallback(
@@ -216,14 +188,18 @@ export function AiModelsPanel() {
         type: 'warning',
       })
       if (!confirmed) return
-      await aiModel.deleteApiKey(provider.id)
-      await reload()
+      await enqueueWrite(async () => {
+        await aiModel.deleteApiKey(provider.id)
+        await reload()
+      })
     },
-    [dialog, aiModel, reload],
+    [dialog, aiModel, enqueueWrite, reload],
   )
 
   const removeProvider = useCallback(
-    async (provider: AiProviderEntry) => {
+    async (index: number) => {
+      const provider = providers[index]
+      if (provider === undefined) return
       const { confirmed } = await dialog.confirm({
         message: localize('aiModels.entry.remove.confirm', 'Remove provider {name}?', {
           name: provider.label ?? provider.id,
@@ -232,9 +208,30 @@ export function AiModelsPanel() {
         type: 'warning',
       })
       if (!confirmed) return
-      await updateProviders(providers.filter((p) => p.id !== provider.id))
+      await enqueueWrite(async () => {
+        await updateProviders(providersRef.current.filter((_, i) => i !== index))
+      })
     },
-    [dialog, providers, updateProviders],
+    [dialog, enqueueWrite, providers, updateProviders],
+  )
+
+  const duplicateProvider = useCallback(
+    (index: number) =>
+      enqueueWrite(async () => {
+        const current = providersRef.current
+        const source = current[index]
+        if (source === undefined) return
+        const taken = new Set(current.map((p) => p.id))
+        let id = `${source.id}-copy`
+        for (let n = 2; taken.has(id); n++) id = `${source.id}-copy-${n}`
+        console.debug('aiModels: duplicate provider', { from: source.id, to: id })
+        await updateProviders([
+          ...current.slice(0, index + 1),
+          { ...source, id },
+          ...current.slice(index + 1),
+        ])
+      }),
+    [enqueueWrite, updateProviders],
   )
 
   const refreshProviderPrices = useCallback(
@@ -246,12 +243,12 @@ export function AiModelsPanel() {
   )
 
   const openJson = useCallback(async () => {
-    await aiModel.updateProviders(await aiModel.getProviders())
+    await enqueueWrite(() => aiModel.updateProviders(providersRef.current))
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = instantiation.createInstance(FileEditorInput, uri)
     void openInLockAwareGroup(editorGroups, input, { activate: true })
-  }, [aiModel, editorGroups, instantiation, userData])
+  }, [aiModel, editorGroups, enqueueWrite, instantiation, userData])
 
   return (
     <div className={styles['panel']}>
@@ -335,24 +332,24 @@ export function AiModelsPanel() {
                 // is visible — so the key cannot be the id alone.
                 key={`${provider.id}#${index}`}
                 aiModel={aiModel}
+                dialog={dialog}
                 provider={provider}
+                allProviders={providers}
                 models={models.filter((m) => m.providerId === provider.id)}
                 issues={issuesByProvider.get(provider.id) ?? []}
                 rateTables={rateTables}
+                knowledge={knowledge}
                 reloadToken={reloadToken}
                 collapsed={collapsed[providerCollapseKey(provider.id)] ?? false}
                 onToggleCollapsed={() => toggleCollapsed(providerCollapseKey(provider.id))}
                 storage={storage}
                 filterStorageKey={filterKey(provider.id)}
-                onLabelChange={(label) => void setProviderLabel(provider.id, label)}
-                onBaseUrlChange={(baseUrl) => void setProviderBaseUrl(provider.id, baseUrl)}
-                onDefaultProtocolChange={(protocol) =>
-                  void setProviderDefaultProtocol(provider.id, protocol)
-                }
-                onSetApiKey={() => void setProviderApiKey(provider)}
-                onClearApiKey={() => void clearProviderApiKey(provider)}
-                onRemove={() => void removeProvider(provider)}
-                onRefreshPrices={() => void refreshProviderPrices(provider.id)}
+                updateEntry={(build) => replaceProviderAt(index, build)}
+                onSetApiKey={(key) => setProviderApiKey(provider, key)}
+                onClearApiKey={() => clearProviderApiKey(provider)}
+                onRemove={() => void removeProvider(index)}
+                onDuplicate={() => void duplicateProvider(index)}
+                onRefreshRemote={() => refreshProviderPrices(provider.id)}
                 onConfigure={(modelId, config) =>
                   aiModel.setModelConfiguration(modelId, config).then(() => reload())
                 }
