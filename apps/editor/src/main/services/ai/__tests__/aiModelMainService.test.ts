@@ -111,6 +111,21 @@ function fakeProvider(opts: {
   }
 }
 
+/** A provider whose listModels only settles when its token is cancelled. */
+function hangingListModels(started: DeferredPromise<CancellationToken>): IAiModelProvider {
+  return {
+    listModels: (_runtime, token: CancellationToken) =>
+      new Promise<readonly string[]>((resolve) => {
+        started.complete(token)
+        token.onCancellationRequested(() => resolve([]))
+      }),
+    sendRequest: () => {
+      throw new Error('unused')
+    },
+    provideTokenCount: () => Promise.resolve(0),
+  }
+}
+
 /** Overwrite the registry's provider for a protocol with a test fake. */
 function addProvider(
   service: AiModelMainService,
@@ -508,17 +523,7 @@ describe('AiModelMainService', () => {
   it('cancels a metadata request whose provider never responds (no leak on a hung endpoint)', async () => {
     const service = makeService([{ id: 'fake', protocolMap: { ollama: [] } }])
     const tokenStarted = new DeferredPromise<CancellationToken>()
-    addProvider(service, FAKE_PROTOCOL, {
-      listModels: (_runtime, token: CancellationToken) =>
-        new Promise<readonly string[]>((resolve) => {
-          tokenStarted.complete(token)
-          token.onCancellationRequested(() => resolve([]))
-        }),
-      sendRequest: () => {
-        throw new Error('unused')
-      },
-      provideTokenCount: () => Promise.resolve(0),
-    })
+    addProvider(service, FAKE_PROTOCOL, hangingListModels(tokenStarted))
 
     // Drain _ready (a real fs read) under real timers before faking the clock,
     // so the deadline timer is the only thing the fake clock has to advance.
@@ -537,6 +542,22 @@ describe('AiModelMainService', () => {
       vi.useRealTimers()
       service.dispose()
     }
+  })
+
+  it('cancels in-flight metadata requests on dispose (shutdown beats the deadline)', async () => {
+    const service = makeService([{ id: 'fake', protocolMap: { ollama: [] } }])
+    const tokenStarted = new DeferredPromise<CancellationToken>()
+    addProvider(service, FAKE_PROTOCOL, hangingListModels(tokenStarted))
+
+    const modelsPromise = service.getModels()
+    const token = await tokenStarted.p
+    expect(token.isCancellationRequested).toBe(false)
+
+    // Quitting must tear the provider's abort pipeline down synchronously — the
+    // 10s deadline never gets a chance to fire during shutdown.
+    service.dispose()
+    expect(token.isCancellationRequested).toBe(true)
+    await expect(modelsPromise).resolves.toEqual([])
   })
 
   it('flattens extends so a child inherits the parent protocolMap', async () => {

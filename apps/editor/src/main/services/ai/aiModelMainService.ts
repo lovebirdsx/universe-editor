@@ -130,6 +130,8 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
 
   private readonly _inflight = new Map<string, CancellationTokenSource>()
+  /** One-shot metadata calls in flight; cancelled on dispose so their fetches abort. */
+  private readonly _metadataRequests = new Set<CancellationTokenSource>()
   private _providers: readonly AiProviderEntry[] = []
   private _knowledge: Readonly<Record<string, AiModelKnowledge>> = BUILTIN_MODEL_KNOWLEDGE
   private _resolvedProviders: readonly AiResolvedProvider[] = []
@@ -534,10 +536,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   private async _withTimeoutToken<T>(fn: (token: CancellationToken) => Promise<T>): Promise<T> {
     const cts = new CancellationTokenSource()
     const timer = setTimeout(() => cts.cancel(), METADATA_REQUEST_TIMEOUT_MS)
+    this._metadataRequests.add(cts)
     try {
       return await fn(cts.token)
     } finally {
       clearTimeout(timer)
+      this._metadataRequests.delete(cts)
       cts.dispose()
     }
   }
@@ -568,6 +572,15 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       cts.dispose()
     }
     this._inflight.clear()
+    // Metadata calls (model enumeration / token counting) can still be waiting on
+    // a fetch that will never answer. Cancelling tears down each provider's abort
+    // pipeline synchronously (see toAbortSignal); their own `finally` would only
+    // run a microtask later — after the process-exit leak check.
+    for (const cts of this._metadataRequests) {
+      cts.cancel()
+      cts.dispose()
+    }
+    this._metadataRequests.clear()
     super.dispose()
   }
 }
