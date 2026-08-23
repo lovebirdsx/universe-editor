@@ -1,76 +1,47 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure derivation of the per-CLI credential shapes from a provider *instance*.
- *  The Claude / Codex credential libraries now reference a provider via
- *  `providerRef` (`type/name`) instead of inlining a base URL + key; these
- *  functions resolve that reference and flatten the instance + type into what
- *  each CLI actually consumes. No DI, no IO — shared by renderer and main.
+ *  Pure derivation of the per-CLI credential shapes from a single-layer resolved
+ *  provider. No DI, no IO — shared by renderer and main.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  providerKey,
-  resolveModelBaseUrl,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiWireProtocol,
-} from '@universe-editor/platform'
+import type { AiResolvedProvider } from '@universe-editor/platform'
+import { isOfficialEndpoint } from './officialEndpoints.js'
 
-/** Resolve a `type/name` providerRef to its instance + type; either missing → undefined. */
-export function resolveProviderRef(
-  ref: string,
-  providers: readonly AiProviderInstance[],
-  types: Readonly<Record<string, AiProviderType>>,
-): { instance: AiProviderInstance; type: AiProviderType } | undefined {
-  const instance = providers.find((p) => providerKey(p) === ref)
-  if (instance === undefined) return undefined
-  const type = types[instance.type]
-  if (type === undefined) return undefined
-  return { instance, type }
-}
+export type ClaudeAuthEnv =
+  | { readonly kind: 'apiKey'; readonly apiKey: string }
+  | { readonly kind: 'gateway'; readonly authToken: string; readonly baseUrl: string }
 
-/**
- * Whether an instance can serve `protocol`: its type's default protocol, or a
- * model-level `protocol` override on the type's / instance's `models[]` (the
- * two-layer model allows a mixed-protocol gateway).
- */
-export function providerSupportsProtocol(
-  instance: AiProviderInstance,
-  type: AiProviderType | undefined,
-  protocol: AiWireProtocol,
-): boolean {
-  if (type === undefined) return false
-  if (type.protocol === protocol) return true
-  for (const model of type.models ?? []) {
-    if (model.protocol === protocol) return true
-  }
-  for (const model of instance.models ?? []) {
-    if (model.protocol === protocol) return true
-  }
-  return false
-}
-
-/** Claude Code's env injection (`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`). */
-export function deriveClaudeEnv(
-  instance: AiProviderInstance,
-  type: AiProviderType,
-): { authToken: string; baseUrl: string } | undefined {
-  const key = instance.apiKey
+/** Official endpoint → ANTHROPIC_API_KEY; gateway → ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL. */
+export function deriveClaudeAuth(
+  provider: AiResolvedProvider | undefined,
+): ClaudeAuthEnv | undefined {
+  if (provider === undefined) return undefined
+  const key = provider.apiKey
   if (key === undefined || key.trim() === '') return undefined
-  const baseUrl = resolveModelBaseUrl(undefined, instance.baseUrl, type.defaultBaseUrl)
+  if (isOfficialEndpoint('anthropic-messages', provider.baseUrl)) {
+    return { kind: 'apiKey', apiKey: key }
+  }
+  const baseUrl = provider.baseUrl
   if (baseUrl === undefined || baseUrl.trim() === '') return undefined
-  return { authToken: key, baseUrl }
+  return { kind: 'gateway', authToken: key, baseUrl }
 }
 
-/** Codex's gateway intent (kind omitted — the caller adds it). */
-export function deriveCodexProvider(
-  instance: AiProviderInstance,
-  type: AiProviderType,
+/** Codex's gateway intent, derived from the single-layer resolved provider. */
+export function deriveCodexGateway(
+  provider: AiResolvedProvider | undefined,
 ): { baseUrl: string; apiKey: string; providerName: string } | undefined {
-  const key = instance.apiKey
+  if (provider === undefined) return undefined
+  const key = provider.apiKey
   if (key === undefined || key.trim() === '') return undefined
-  const baseUrl = resolveModelBaseUrl(undefined, instance.baseUrl, type.defaultBaseUrl)
+  const baseUrl = provider.baseUrl
   if (baseUrl === undefined || baseUrl.trim() === '') return undefined
-  // `providerName` is the display `name` of the `[model_providers.codex-gateway]`
-  // block, not its key — keep it human-readable.
-  return { baseUrl, apiKey: key, providerName: (instance.label ?? instance.name).trim() }
+  return { baseUrl, apiKey: key, providerName: (provider.label ?? provider.id).trim() }
+}
+
+export function findProviderById(
+  providers: readonly AiResolvedProvider[],
+  id: string | undefined,
+): AiResolvedProvider | undefined {
+  if (id === undefined) return undefined
+  return providers.find((p) => p.id === id)
 }

@@ -28,7 +28,7 @@ function userMessage(text: string): AiMessage {
 }
 
 const opts = (over?: Partial<AiRequestOptions>): AiRequestOptions => ({
-  modelId: 'openai/default/gpt-4o',
+  modelId: 'openai/openai-chat/gpt-4o',
   ...over,
 })
 
@@ -71,9 +71,21 @@ describe('AiDebugRecorder', () => {
     const full = recorder.getRecord(list[0]!.id)
     expect(full?.responseText).toBe('Hello')
     expect(full?.messages[0]).toEqual({ role: AiMessageRole.User, text: 'hello' })
-    expect(full?.modelId).toBe('openai/default/gpt-4o')
-    expect(full?.vendor).toBe('openai')
-    expect(full?.groupName).toBe('default')
+    expect(full?.modelId).toBe('openai/openai-chat/gpt-4o')
+    expect(full?.providerId).toBe('openai')
+    expect(full?.protocol).toBe('openai-chat')
+  })
+
+  it('leaves the ref fields off a model id that is not a well-formed three-segment ref', () => {
+    const { recorder } = makeRecorder()
+    track(recorder)
+    recorder.begin('r1', [userMessage('hi')], { modelId: 'gpt-4o' })
+    recorder.finish('r1')
+
+    const full = recorder.getRecord(recorder.listRecords()[0]!.id)
+    expect(full?.modelId).toBe('gpt-4o')
+    expect(full?.providerId).toBeUndefined()
+    expect(full?.protocol).toBeUndefined()
   })
 
   it('classifies an error as error status', () => {
@@ -155,7 +167,7 @@ describe('AiDebugRecorder', () => {
     expect(lines).toHaveLength(1)
     const parsed = JSON.parse(lines[0]!) as Record<string, unknown>
     expect(parsed.responseText).toBe('answer')
-    expect(parsed.modelId).toBe('openai/default/gpt-4o')
+    expect(parsed.modelId).toBe('openai/openai-chat/gpt-4o')
     expect(JSON.stringify(parsed).toLowerCase()).not.toContain('apikey')
     expect(JSON.stringify(parsed)).not.toContain('secret-api')
   })

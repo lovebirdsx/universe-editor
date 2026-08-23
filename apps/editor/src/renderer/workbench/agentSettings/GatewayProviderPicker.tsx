@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  GatewayProviderPicker — the shared "select a provider instance" control used
- *  by the Claude and Codex gateway credential forms. It lists the instances
- *  that can serve the agent's protocol (including via a model-level `protocol`
- *  override), offers a connectivity dot + "Test" probe (only on an explicit
- *  click, never from render), and delegates the derived-preview rendering to the
- *  caller via a render prop. A saved-but-now-incompatible selection stays
- *  visible in the dropdown with a warning rather than disappearing.
+ *  GatewayProviderPicker — the shared "which provider serves this agent" control
+ *  used by the Claude and Codex authentication panels. It lists the resolved
+ *  provider entries that declare the agent's protocol, prepends the
+ *  `@subscription` option (the agent's official login), offers a connectivity dot
+ *  + "Test" probe (only on an explicit click, never from render), and delegates
+ *  the derived-preview rendering to the caller via a render prop. A
+ *  saved-but-now-incompatible selection stays visible with a warning rather than
+ *  disappearing.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
@@ -14,34 +15,30 @@ import {
   IAiModelService,
   ICommandService,
   localize,
-  providerKey,
-  resolveModelBaseUrl,
-  type AiProviderInstance,
-  type AiProviderType,
+  type AiResolvedProvider,
   type AiWireProtocol,
 } from '@universe-editor/platform'
 import { Button, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
-import {
-  providerSupportsProtocol,
-  resolveProviderRef,
-} from '../../../shared/ai/providerDerivation.js'
+import { findProviderById } from '../../../shared/ai/providerDerivation.js'
+import { isOfficialEndpoint } from '../../../shared/ai/officialEndpoints.js'
+import { AGENT_SUBSCRIPTION_AUTH } from '../../../shared/ipc/claudeConfigService.js'
 import { ManageModelsAction } from '../../actions/aiActions.js'
 import styles from './AgentSettingsEditor.module.css'
 
-export interface ResolvedProvider {
-  readonly instance: AiProviderInstance
-  readonly type: AiProviderType
-}
-
 /** Which credential piece prevents the CLI derivation, if any. */
 export function missingProviderPiece(
-  instance: AiProviderInstance,
-  type: AiProviderType,
+  provider: AiResolvedProvider,
+  protocol: AiWireProtocol,
 ): 'apiKey' | 'baseUrl' | undefined {
-  if (instance.apiKey === undefined || instance.apiKey.trim() === '') return 'apiKey'
-  const baseUrl = resolveModelBaseUrl(undefined, instance.baseUrl, type.defaultBaseUrl)
-  if (baseUrl === undefined || baseUrl.trim() === '') return 'baseUrl'
+  if (provider.apiKey === undefined || provider.apiKey.trim() === '') return 'apiKey'
+  // Claude's official endpoint needs only the key; gateways (and Codex, which has
+  // no "official provider" mode — that is the ChatGPT subscription) need a URL.
+  const keyOnly =
+    protocol === 'anthropic-messages' && isOfficialEndpoint(protocol, provider.baseUrl)
+  if (!keyOnly && (provider.baseUrl === undefined || provider.baseUrl.trim() === '')) {
+    return 'baseUrl'
+  }
   return undefined
 }
 
@@ -53,44 +50,44 @@ type VerifyState =
 
 export function GatewayProviderPicker({
   providers,
-  types,
   protocol,
   value,
   onChange,
+  subscriptionLabel,
   children,
 }: {
-  readonly providers: readonly AiProviderInstance[]
-  readonly types: Readonly<Record<string, AiProviderType>>
+  readonly providers: readonly AiResolvedProvider[]
   readonly protocol: AiWireProtocol
+  /** Provider id, `@subscription`, or '' (unset). */
   readonly value: string
-  readonly onChange: (ref: string) => void
-  readonly children: (resolved: ResolvedProvider | undefined) => ReactNode
+  readonly onChange: (value: string) => void
+  readonly subscriptionLabel: string
+  readonly children: (resolved: AiResolvedProvider | undefined) => ReactNode
 }) {
   const aiModel = useService(IAiModelService)
   const commands = useService(ICommandService)
   const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' })
 
   const selectable = useMemo(
-    () => providers.filter((p) => providerSupportsProtocol(p, types[p.type], protocol)),
-    [providers, types, protocol],
+    () => providers.filter((p) => p.protocols.some((pr) => pr.protocol === protocol)),
+    [providers, protocol],
   )
 
-  // Resolve the saved ref against the full list — a selected instance that has
+  // Resolve the saved id against the full list — a selected provider that has
   // since become incompatible must stay visible, not vanish from the UI.
   const resolved = useMemo(
-    () => (value ? resolveProviderRef(value, providers, types) : undefined),
-    [value, providers, types],
+    () =>
+      value && value !== AGENT_SUBSCRIPTION_AUTH ? findProviderById(providers, value) : undefined,
+    [value, providers],
   )
 
   const incompatible = useMemo(() => {
     if (resolved === undefined) return undefined
-    return providerSupportsProtocol(resolved.instance, resolved.type, protocol)
-      ? undefined
-      : resolved
+    return resolved.protocols.some((pr) => pr.protocol === protocol) ? undefined : resolved
   }, [resolved, protocol])
 
   const options = useMemo(
-    () => (incompatible ? [...selectable, incompatible.instance] : selectable),
+    () => (incompatible ? [...selectable, incompatible] : selectable),
     [selectable, incompatible],
   )
 
@@ -100,16 +97,13 @@ export function GatewayProviderPicker({
 
   const test = useCallback(() => {
     if (!resolved) return
-    const { instance, type } = resolved
-    const baseUrl = resolveModelBaseUrl(undefined, instance.baseUrl, type.defaultBaseUrl)
     setVerify({ kind: 'checking' })
     void aiModel
       .verifyProvider({
-        type: instance.type,
-        name: instance.name,
-        protocol: type.protocol,
-        ...(baseUrl !== undefined ? { baseUrl } : {}),
-        ...(instance.apiKey !== undefined ? { apiKey: instance.apiKey } : {}),
+        id: resolved.id,
+        protocol,
+        ...(resolved.baseUrl !== undefined ? { baseUrl: resolved.baseUrl } : {}),
+        ...(resolved.apiKey !== undefined ? { apiKey: resolved.apiKey } : {}),
       })
       .then((result) => {
         setVerify(
@@ -123,7 +117,7 @@ export function GatewayProviderPicker({
               },
         )
       })
-  }, [resolved, aiModel])
+  }, [resolved, aiModel, protocol])
 
   if (providers.length === 0) {
     return (
@@ -131,7 +125,7 @@ export function GatewayProviderPicker({
         <div className={styles['desc']}>
           {localize(
             'agentSettings.auth.provider.none',
-            'No provider instances with a compatible protocol yet. Add one in the AI settings, then select it here.',
+            'No provider entries with a compatible protocol yet. Add one in the AI settings, then select it here.',
           )}
         </div>
         <Button
@@ -151,7 +145,7 @@ export function GatewayProviderPicker({
         <div className={styles['desc']}>
           {localize(
             'agentSettings.auth.provider.noneCompatible',
-            'You have {count} provider instance(s), but none declares the {protocol} protocol. Adjust a type protocol or add a model with this protocol in the AI settings.',
+            'You have {count} provider entry(s), but none declares the {protocol} protocol. Add a model with this protocol in the AI settings.',
             { count: providers.length, protocol },
           )}
         </div>
@@ -177,13 +171,12 @@ export function GatewayProviderPicker({
           <option value="">
             {localize('agentSettings.auth.form.provider.none', 'Select a provider…')}
           </option>
+          <option value={AGENT_SUBSCRIPTION_AUTH}>{subscriptionLabel}</option>
           {options.map((p) => {
-            const key = providerKey(p)
-            const isIncompatible =
-              incompatible !== undefined && key === providerKey(incompatible.instance)
+            const isIncompatible = incompatible !== undefined && p.id === incompatible.id
             return (
-              <option key={key} value={key}>
-                {p.label ?? p.name}
+              <option key={p.id} value={p.id}>
+                {p.label ?? p.id}
                 {isIncompatible
                   ? ` (${localize('agentSettings.auth.provider.incompatibleOption', 'incompatible')})`
                   : ''}
@@ -206,7 +199,7 @@ export function GatewayProviderPicker({
         <div className={styles['deriveError']}>
           {localize(
             'agentSettings.auth.provider.incompatible',
-            'This provider instance does not declare the {protocol} protocol. Adjust its type protocol or add a model with this protocol in the AI settings.',
+            'This provider entry does not declare the {protocol} protocol. Add a model with this protocol in the AI settings.',
             { protocol },
           )}
         </div>
@@ -223,11 +216,11 @@ export function DerivationError({ missing }: { readonly missing: 'apiKey' | 'bas
     missing === 'apiKey'
       ? localize(
           'agentSettings.auth.provider.missingApiKey',
-          'This provider has no API key. Set it in the AI settings (Model configuration → Provider Instances).',
+          'This provider has no API key. Set it in the AI settings (Model configuration → Providers).',
         )
       : localize(
           'agentSettings.auth.provider.missingBaseUrl',
-          'This provider has no base URL. Set it in the AI settings (Model configuration → Provider Instances).',
+          'This provider has no base URL. Set it in the AI settings (Model configuration → Providers).',
         )
   return <div className={styles['deriveError']}>{message}</div>
 }

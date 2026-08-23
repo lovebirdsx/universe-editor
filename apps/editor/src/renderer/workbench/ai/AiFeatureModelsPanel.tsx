@@ -125,7 +125,7 @@ export function AiFeatureModelsPanel() {
         {FEATURES.map((feature) => {
           const model = findModel(models, selected[feature.id])
           const Icon = feature.icon
-          const source = model ? `${model.vendor}/${model.groupName ?? 'default'}` : undefined
+          const source = model ? model.providerId : undefined
           return (
             <li key={feature.id}>
               <button

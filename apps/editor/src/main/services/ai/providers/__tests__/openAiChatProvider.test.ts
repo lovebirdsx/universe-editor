@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for OpenAiChatProvider — SSE parsing into text/usage chunks, model enumeration
- *  merged with hand-declared models, HTTP error mapping, baseUrl override, cancellation, and
- *  pricing resolution. `fetch` is stubbed; no real network is touched. Each call receives an
- *  AiResolvedProvider (flattened config with the apiKey inline).
+ *  (listModels), HTTP error mapping, baseUrl override, cancellation, and per-model config
+ *  mapping. `fetch` is stubbed; no real network is touched. Each call receives an
+ *  AiProviderRuntime (provider id + protocol + inline apiKey/baseUrl).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -15,9 +15,8 @@ import {
   getTextResponse,
   setDisposableTracker,
   type AiMessage,
-  type AiCustomModelConfig,
-  type AiModelPricing,
-  type AiResolvedProvider,
+  type AiProviderRuntime,
+  type AiWireProtocol,
 } from '@universe-editor/platform'
 import { OpenAiChatProvider } from '../openAiChatProvider.js'
 
@@ -40,22 +39,12 @@ function sseLine(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n`
 }
 
-function makeProvider(opts: {
-  apiKey?: string
-  baseUrl?: string
-  name?: string
-  type?: string
-  models?: readonly AiCustomModelConfig[]
-  typePricing?: AiModelPricing
-}): AiResolvedProvider {
+function makeProvider(opts: { apiKey?: string; baseUrl?: string; id?: string }): AiProviderRuntime {
   return {
-    type: opts.type ?? 'openai',
-    name: opts.name ?? 'default',
-    protocol: 'openai-chat',
+    id: opts.id ?? 'openai',
+    protocol: 'openai-chat' as AiWireProtocol,
     ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
     ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-    ...(opts.models !== undefined ? { declaredModels: opts.models } : {}),
-    ...(opts.typePricing !== undefined ? { typePricing: opts.typePricing } : {}),
   }
 }
 
@@ -63,25 +52,14 @@ const userMessages: readonly AiMessage[] = [
   { role: AiMessageRole.User, content: [{ type: 'text', value: 'hi' }] },
 ]
 
+const MODEL_ID = 'openai/openai-chat/gpt-4o'
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('OpenAiChatProvider', () => {
-  it('falls back to declared models when the endpoint is unreachable', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
-    const provider = new OpenAiChatProvider()
-    const cts = new CancellationTokenSource()
-
-    const models = await provider.provideModels(
-      makeProvider({ models: [{ id: 'qwen3-coder' }] }),
-      cts.token,
-    )
-
-    expect(models.map((m) => m.id)).toEqual(['openai/default/qwen3-coder'])
-  })
-
-  it('lists models with three-segment ids and merges declared models', async () => {
+  it('listModels returns the endpoint-enumerated ids as a string array', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: [{ id: 'gpt-4o-mini' }, { id: 'gpt-4o' }] }), {
         status: 200,
@@ -90,106 +68,29 @@ describe('OpenAiChatProvider', () => {
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.provideModels(
-      makeProvider({ apiKey: 'sk-test', models: [{ id: 'custom-model' }] }),
-      cts.token,
-    )
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
 
-    expect(models.map((m) => m.id)).toEqual([
-      'openai/default/gpt-4o-mini',
-      'openai/default/gpt-4o',
-      'openai/default/custom-model',
-    ])
-    expect(models[0]!.vendor).toBe('openai')
-    expect(models[0]!.groupName).toBe('default')
-    expect(models[0]!.name).toBe('gpt-4o-mini')
+    expect(models).toEqual(['gpt-4o-mini', 'gpt-4o'])
   })
 
-  it('deduplicates ids the endpoint enumerates more than once', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({ data: [{ id: 'Kling-O1' }, { id: 'Kling-O1' }, { id: 'gpt-4o' }] }),
-        { status: 200 },
-      ),
-    )
+  it('listModels returns an empty list when the endpoint is unreachable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.provideModels(
-      makeProvider({ apiKey: 'sk-test', name: 'kuro' }),
-      cts.token,
-    )
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
 
-    expect(models.map((m) => m.id)).toEqual(['openai/kuro/Kling-O1', 'openai/kuro/gpt-4o'])
+    expect(models).toEqual([])
   })
 
-  it('uses provider.type (not a hardcoded vendor) for model ids and metadata.vendor', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: [{ id: 'kuro-model' }] }), { status: 200 }),
-    )
+  it('listModels returns an empty list on a non-2xx response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 401 }))
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.provideModels(
-      makeProvider({ type: 'kuro', name: 'gbl', apiKey: 'sk-test' }),
-      cts.token,
-    )
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-bad' }), cts.token)
 
-    expect(models.map((m) => m.id)).toEqual(['kuro/gbl/kuro-model'])
-    expect(models[0]!.vendor).toBe('kuro')
-  })
-
-  it('stamps pricing from a declared model as origin "model"', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), { status: 200 }),
-    )
-    const provider = new OpenAiChatProvider()
-    const cts = new CancellationTokenSource()
-    const pricing: AiModelPricing = { input: 1.5, output: 6 }
-
-    const models = await provider.provideModels(
-      makeProvider({ models: [{ id: 'custom', pricing }] }),
-      cts.token,
-    )
-
-    const meta = models.find((m) => m.id === 'openai/default/custom')!
-    expect(meta.pricing).toEqual(pricing)
-    expect(meta.pricingOrigin).toBe('model')
-  })
-
-  it('stamps pricing from the type default as origin "type"', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), { status: 200 }),
-    )
-    const provider = new OpenAiChatProvider()
-    const cts = new CancellationTokenSource()
-    const typePricing: AiModelPricing = { input: 3, output: 4 }
-
-    const models = await provider.provideModels(
-      makeProvider({ typePricing, models: [{ id: 'custom' }] }),
-      cts.token,
-    )
-
-    const meta = models.find((m) => m.id === 'openai/default/custom')!
-    expect(meta.pricing).toEqual(typePricing)
-    expect(meta.pricingOrigin).toBe('type')
-  })
-
-  it('stamps pricing from the built-in catalog as origin "catalog"', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), { status: 200 }),
-    )
-    const provider = new OpenAiChatProvider()
-    const cts = new CancellationTokenSource()
-
-    const models = await provider.provideModels(
-      makeProvider({ models: [{ id: 'gpt-5.4' }] }),
-      cts.token,
-    )
-
-    const meta = models.find((m) => m.id === 'openai/default/gpt-5.4')!
-    expect(meta.pricingOrigin).toBe('catalog')
-    expect(meta.pricing?.input).toBe(2.5)
+    expect(models).toEqual([])
   })
 
   it('parses SSE deltas into text chunks and stops at [DONE]', async () => {
@@ -205,7 +106,7 @@ describe('OpenAiChatProvider', () => {
 
     const response = provider.sendRequest(
       userMessages,
-      { modelId: 'openai/default/gpt-4o' },
+      { modelId: MODEL_ID },
       makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
@@ -225,7 +126,7 @@ describe('OpenAiChatProvider', () => {
 
     const response = provider.sendRequest(
       userMessages,
-      { modelId: 'openai/default/gpt-4o' },
+      { modelId: MODEL_ID },
       makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
@@ -246,7 +147,7 @@ describe('OpenAiChatProvider', () => {
 
     const response = provider.sendRequest(
       userMessages,
-      { modelId: 'openai/default/gpt-4o' },
+      { modelId: MODEL_ID },
       makeProvider({ apiKey: 'sk-bad' }),
       cts.token,
     )
@@ -263,7 +164,7 @@ describe('OpenAiChatProvider', () => {
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    await provider.provideModels(
+    await provider.listModels(
       makeProvider({ apiKey: 'sk-test', baseUrl: 'http://localhost:1234/v1/' }),
       cts.token,
     )
@@ -281,7 +182,7 @@ describe('OpenAiChatProvider', () => {
     const response = provider.sendRequest(
       userMessages,
       {
-        modelId: 'openai/default/gpt-4o',
+        modelId: MODEL_ID,
         modelConfiguration: { temperature: 0.2, reasoningEffort: 'high' },
       },
       makeProvider({ apiKey: 'sk-test' }),
@@ -305,7 +206,7 @@ describe('OpenAiChatProvider', () => {
     const response = provider.sendRequest(
       userMessages,
       {
-        modelId: 'openai/default/gpt-4o',
+        modelId: MODEL_ID,
         modelConfiguration: {
           topP: 0.9,
           frequencyPenalty: 0.5,
@@ -341,7 +242,7 @@ describe('OpenAiChatProvider', () => {
 
     const response = provider.sendRequest(
       userMessages,
-      { modelId: 'openai/default/gpt-4o' },
+      { modelId: MODEL_ID },
       makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )
@@ -364,7 +265,7 @@ describe('OpenAiChatProvider', () => {
 
       provider.sendRequest(
         userMessages,
-        { modelId: 'openai/default/gpt-4o' },
+        { modelId: MODEL_ID },
         makeProvider({ apiKey: 'sk-test' }),
         cts.token,
       )

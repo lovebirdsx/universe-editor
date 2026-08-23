@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Copyright (c) Universe Editor Authors.
  *  Tests for services/usage/AccountUsageService.ts.
  *
  *  The load-bearing rules this file guards:
@@ -10,8 +10,7 @@
  *   2. The cold-start race: `getProviderContext` answers `undefined` while the
  *      provider context is still resolving, and only `onDidChangeContext` tells
  *      this service to re-read. Without that re-read the indicator would stay
- *      stuck at `hasSource: false` (misattributing a claude-code session to the
- *      legacy gateway ¥ figure, or hiding codex entirely).
+ *      stuck at `hasSource: false`.
  *--------------------------------------------------------------------------------------------*/
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,22 +19,13 @@ import {
   LogLevel,
   NullLogger,
   type AiAccountUsage,
-  type AiProviderInstance,
-  type AiProviderType,
   type Event,
   type IAiModelService,
   type ILogger,
   type ILoggerService,
 } from '@universe-editor/platform'
 import { AccountUsageService } from '../AccountUsageService.js'
-import {
-  AcpSessionProviderContext,
-  type IAcpSessionProviderContext,
-  type SessionProviderContext,
-} from '../../acp/session/acpSessionProviderContext.js'
-import type { IAiRateMirror } from '../../ai/aiRateMirror.js'
-import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
-import type { ICodexConfigService } from '../../../../shared/ipc/codexConfigService.js'
+import type { IAcpSessionProviderContext } from '../../acp/session/acpSessionProviderContext.js'
 
 const FETCHED_AT = 1_700_000_000_000
 
@@ -73,14 +63,8 @@ describe('AccountUsageService', () => {
     )
   }
 
-  function ctx(partial?: Partial<SessionProviderContext>): SessionProviderContext {
-    return {
-      key: 'anthropic/gw',
-      type: 'anthropic',
-      name: 'gw',
-      usageSource: { id: 'http-json' },
-      ...partial,
-    }
+  function ctx(partial?: Record<string, unknown>): { providerId: string; usageSource?: unknown } {
+    return { providerId: 'anthropic-gw', usageSource: { id: 'http-json' }, ...partial }
   }
 
   beforeEach(() => {
@@ -98,7 +82,7 @@ describe('AccountUsageService', () => {
   it('serves { hasSource: false } synchronously on a cold cache and refreshes in the background', () => {
     const service = createService()
     expect(service.stateFor('codex').get()).toEqual({ hasSource: false })
-    expect(getAccountUsage).toHaveBeenCalledWith('anthropic/gw')
+    expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     service.dispose()
   })
 
@@ -112,11 +96,7 @@ describe('AccountUsageService', () => {
   })
 
   it('reports hasSource false when the context declares no usage source', async () => {
-    providerContext.getProviderContext.mockReturnValue({
-      key: 'anthropic/gw',
-      type: 'anthropic',
-      name: 'gw',
-    })
+    providerContext.getProviderContext.mockReturnValue({ providerId: 'anthropic-gw' })
     const service = createService()
     await service.refresh('codex')
     expect(service.stateFor('codex').get()).toEqual({ hasSource: false })
@@ -127,7 +107,7 @@ describe('AccountUsageService', () => {
   it('lands the authoritative number when the source answers', async () => {
     const service = createService()
     await service.refresh('codex')
-    expect(getAccountUsage).toHaveBeenCalledWith('anthropic/gw')
+    expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     expect(service.stateFor('codex').get()).toEqual({ hasSource: true, usage: usage() })
     service.dispose()
   })
@@ -146,20 +126,20 @@ describe('AccountUsageService', () => {
     service.dispose()
   })
 
-  it('drops the previous instance number when the binding switches and the new source fails', async () => {
+  it('drops the previous provider number when the binding switches and the new source fails', async () => {
     const service = createService()
     // Warm the observable once so stateFor never re-enters refresh mid-test.
     const observable = service.stateFor('codex')
     await service.refresh('codex')
 
-    // Bind to instance A and land its authoritative number.
-    providerContext.getProviderContext.mockReturnValue(ctx({ key: 'anthropic/A', name: 'A' }))
+    // Bind to provider A and land its authoritative number.
+    providerContext.getProviderContext.mockReturnValue(ctx({ providerId: 'anthropic-A' }))
     getAccountUsage.mockResolvedValueOnce(usage())
     await service.refresh('codex')
     expect(observable.get().usage).toEqual(usage())
 
-    // Re-bind to instance B; B's source answers undefined (unavailable).
-    providerContext.getProviderContext.mockReturnValue(ctx({ key: 'anthropic/B', name: 'B' }))
+    // Re-bind to provider B; B's source answers undefined (unavailable).
+    providerContext.getProviderContext.mockReturnValue(ctx({ providerId: 'anthropic-B' }))
     getAccountUsage.mockResolvedValueOnce(undefined)
     await service.refresh('codex')
 
@@ -197,8 +177,8 @@ describe('AccountUsageService', () => {
   it('forces an upstream re-fetch before reading when force is set', async () => {
     const service = createService()
     await service.refresh('codex', { force: true })
-    expect(refreshRemote).toHaveBeenCalledWith('anthropic/gw')
-    expect(getAccountUsage).toHaveBeenCalledWith('anthropic/gw')
+    expect(refreshRemote).toHaveBeenCalledWith('anthropic-gw')
+    expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     service.dispose()
   })
 
@@ -220,7 +200,7 @@ describe('AccountUsageService', () => {
     await Promise.all([first, forced])
 
     expect(refreshRemote).toHaveBeenCalledTimes(1)
-    expect(refreshRemote).toHaveBeenCalledWith('anthropic/gw')
+    expect(refreshRemote).toHaveBeenCalledWith('anthropic-gw')
     expect(getAccountUsage).toHaveBeenCalledTimes(2)
     service.dispose()
   })
@@ -232,83 +212,44 @@ describe('AccountUsageService', () => {
 
     contextChanged.fire()
 
-    expect(getAccountUsage).toHaveBeenCalledWith('anthropic/gw')
+    expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     service.dispose()
   })
 })
 
 describe('AccountUsageService — cold-start race', () => {
   it('recovers from hasSource:false once the provider context resolves', async () => {
-    let resolveProviders: ((value: readonly AiProviderInstance[]) => void) | undefined
-    let resolveTypes: ((value: Readonly<Record<string, AiProviderType>>) => void) | undefined
-
+    const contextChanged = new Emitter<void>()
+    let resolved = false
+    const providerContext = {
+      onDidChangeContext: contextChanged.event,
+      getProviderContext: vi.fn(() =>
+        resolved ? { providerId: 'anthropic-gw', usageSource: { id: 'http-json' } } : undefined,
+      ),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IAcpSessionProviderContext
     const aiModel = {
-      onDidChangeModels: new Emitter<void>().event,
-      onDidChangeRemote: new Emitter<void>().event,
-      getProviders: vi.fn(
-        () =>
-          new Promise<readonly AiProviderInstance[]>((resolve) => {
-            resolveProviders = resolve
-          }),
-      ),
-      getProviderTypes: vi.fn(
-        () =>
-          new Promise<Readonly<Record<string, AiProviderType>>>((resolve) => {
-            resolveTypes = resolve
-          }),
-      ),
       getAccountUsage: vi.fn().mockResolvedValue(usage()),
       refreshRemote: vi.fn().mockResolvedValue(undefined),
     } as unknown as IAiModelService
-
-    const rateMirror = {
-      _serviceBrand: undefined,
-      getRateTablesSync: () => [],
-      getRatesSync: () => undefined,
-    } as unknown as IAiRateMirror
-
-    const claudeConfig = {
-      readProfiles: vi.fn().mockResolvedValue([]),
-      read: vi.fn().mockResolvedValue({}),
-    } as unknown as IClaudeConfigService
-
-    const codexConfig = {
-      onDidChangeAuth: new Emitter<void>().event,
-      readProfiles: vi
-        .fn()
-        .mockResolvedValue([
-          { id: 'p1', label: 'gw', kind: 'gateway', providerRef: 'anthropic/gw' },
-        ]),
-      matchActiveProfile: vi.fn().mockResolvedValue('p1'),
-      read: vi.fn().mockResolvedValue({}),
-    } as unknown as ICodexConfigService
-
-    const providerContext = new AcpSessionProviderContext(
-      aiModel,
-      rateMirror,
-      claudeConfig,
-      codexConfig,
-      new StubLoggerService(),
-    )
     const service = new AccountUsageService(providerContext, aiModel, new StubLoggerService())
 
     // Cold cache: the synchronous answer is hasSource:false while the provider
-    // context is still awaiting getProviders / getProviderTypes.
+    // context is still resolving.
     const state = service.stateFor('codex')
     expect(state.get()).toEqual({ hasSource: false })
 
-    // Let the provider resolution complete — codex now resolves to an instance
-    // with a usageSource.
-    resolveProviders?.([{ name: 'gw', type: 'anthropic' }])
-    resolveTypes?.({
-      anthropic: { protocol: 'anthropic-messages', usageSource: { id: 'http-json' } },
-    })
-    await providerContext.refresh()
+    // Let the cold background refresh (which answered hasSource:false) fully
+    // settle first — in production onDidChangeContext fires from an async
+    // resolution, never in the same turn as the cold read.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    // onDidChangeContext re-drove the account read, landing the authoritative number.
+    // The provider context resolves and fires onDidChangeContext, re-driving the
+    // account read to land the authoritative number.
+    resolved = true
+    contextChanged.fire()
+
     await vi.waitFor(() => expect(state.get()).toEqual({ hasSource: true, usage: usage() }))
-
     service.dispose()
-    providerContext.dispose()
   })
 })

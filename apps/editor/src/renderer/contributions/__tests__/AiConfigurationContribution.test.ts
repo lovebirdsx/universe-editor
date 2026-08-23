@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
  *  AiConfigurationContribution schema tests — the top level is
- *  `additionalProperties: false`, so a stale `groups`-only schema would flag
- *  every real `providerTypes` / `providers` key in aiSettings.json. These tests
- *  assert the new two-layer shape and validate a realistic aiSettings.json
- *  object against the built schema.
+ *  `additionalProperties: false`, so a stale two-layer schema would flag every
+ *  real `models` / `providers` / `modelSettings` key in aiSettings.json. These
+ *  tests assert the new single-layer shape (knowledge base / provider entries /
+ *  top-level modelSettings / single-string agent authentication) and validate a
+ *  realistic aiSettings.json object against the built schema.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -60,77 +61,79 @@ function validate(schema: IJSONSchema, value: unknown, path: string): string[] {
   return errors
 }
 
-const MODEL_IDS = ['kuro/gbl/claude-sonnet-4.5', 'myOpenai/edge/gpt-5.4']
+const MODEL_IDS = ['kuro-gbl/anthropic-messages/deepseek-v4-pro', 'kuro-gbl/openai-chat/glm5.3']
 
 const SAMPLE_SETTINGS = {
-  providerTypes: {
-    kuro: {
-      label: 'Kuro',
-      protocol: 'anthropic-messages',
-      pricingSource: { id: 'http-json', options: { path: '/v1/pricing', auth: true } },
-      usageSource: {
-        id: 'http-json',
-        options: { path: '/api/user/self', fields: { used: 'used_quota', limit: 'quota' } },
-      },
-    },
-    myOpenai: {
-      protocol: 'openai-responses',
-      defaultBaseUrl: 'https://gw.example.com/v1',
-      requiresApiKey: true,
-      models: [
-        {
-          id: 'gpt-5.4',
-          protocol: 'openai-responses',
-          pricing: { currency: 'USD', input: 1.25, output: 10, cacheRead: 0.25 },
-        },
-      ],
+  models: {
+    'deepseek-v4-pro': {
+      name: 'DeepSeek V4 Pro',
+      vendor: 'deepseek',
+      nativeProtocol: 'openai-chat',
+      maxInputTokens: 128000,
+      maxOutputTokens: 32000,
+      capabilities: { streaming: true, vision: true },
+      supportsReasoningEffort: ['low'],
+      parameters: { temperature: { type: 'number' } },
     },
   },
   providers: [
     {
-      name: 'gbl',
-      type: 'kuro',
-      label: 'Kuro GBL',
-      baseUrl: 'https://kuro.example.com',
-      apiKey: 'sk-kuro-abc123',
-      usageSource: { id: 'http-json', options: {} },
-      settings: { 'kuro/gbl/claude-sonnet-4.5': { temperature: 0.7 } },
+      id: 'kuro',
+      label: 'Kuro 聚合网关',
+      baseUrl: 'https://api.kuro.example/v1',
+      apiKey: 'key-xxxx',
+      defaultProtocol: 'openai-chat',
+      protocolMap: {
+        'openai-chat': ['deepseek-v4-pro', 'glm5.3'],
+        'anthropic-messages': [
+          'deepseek-v4-pro',
+          {
+            id: 'anthropic/claude-opus-4-8',
+            ref: 'claude-opus-4-8',
+            capabilities: { promptCaching: false },
+          },
+        ],
+      },
+      pricingSource: { id: 'http-json', options: { path: '/v1/pricing', currency: 'CNY' } },
+      usageSource: { id: 'http-json', options: { path: '/v1/quota' } },
     },
+    { id: 'kuro-gbl', extends: 'kuro', baseUrl: 'http://10.0.1.0:9080/v1', apiKey: 'kr-...' },
   ],
+  modelSettings: { 'kuro-gbl/anthropic-messages/deepseek-v4-pro': { temperature: 0.3 } },
   activeModels: {
-    chat: 'kuro/gbl/claude-sonnet-4.5',
-    inlineCompletion: 'myOpenai/edge/gpt-5.4',
+    chat: 'kuro-gbl/anthropic-messages/deepseek-v4-pro',
+    inlineCompletion: 'kuro-gbl/openai-chat/glm5.3',
   },
-  agentSettings: { claude: { authentication: {} } },
+  agentSettings: {
+    claude: { authentication: 'kuro-gbl', model: 'deepseek-v4-pro' },
+    codex: { authentication: '@subscription' },
+  },
 }
 
 describe('AiConfigurationContribution.buildSchema', () => {
-  it('declares all four top-level properties (providerTypes / providers / activeModels / agentSettings)', () => {
+  it('declares all five top-level properties (models / providers / modelSettings / activeModels / agentSettings)', () => {
     const schema = buildSchema([])
     expect(Object.keys(schema.properties ?? {})).toEqual([
-      'providerTypes',
+      'models',
       'providers',
+      'modelSettings',
       'activeModels',
       'agentSettings',
     ])
   })
 
-  it('requires name and type on provider instances', () => {
+  it('requires id on provider entries', () => {
     const providers = buildSchema([]).properties?.providers
     expect(providers?.type).toBe('array')
     const items = providers && providers.type === 'array' ? providers.items : undefined
-    expect(items?.required).toEqual(['name', 'type'])
+    expect(items?.required).toEqual(['id'])
   })
 
-  it('lists the four wire protocols as the type protocol enum', () => {
-    const providerTypes = buildSchema([]).properties?.providerTypes
-    expect(providerTypes?.additionalProperties).toBeTruthy()
-    const typeSchema =
-      providerTypes && typeof providerTypes.additionalProperties === 'object'
-        ? providerTypes.additionalProperties
-        : undefined
-    expect(typeSchema?.required).toEqual(['protocol'])
-    expect(typeSchema?.properties?.protocol?.enum).toEqual([
+  it('lists the four wire protocols as the defaultProtocol enum', () => {
+    const items = buildSchema([]).properties?.providers
+    const entry = items && items.type === 'array' ? items.items : undefined
+    const props = entry && entry.type === 'object' ? entry.properties : undefined
+    expect(props?.defaultProtocol?.enum).toEqual([
       'openai-chat',
       'openai-responses',
       'anthropic-messages',
@@ -138,35 +141,31 @@ describe('AiConfigurationContribution.buildSchema', () => {
     ])
   })
 
-  it('extends the model schema with protocol / baseUrl / pricing', () => {
+  it('models the knowledge-base entry with capabilities and the parameters field', () => {
+    const models = buildSchema([]).properties?.models
+    const knowledge =
+      models && typeof models.additionalProperties === 'object'
+        ? models.additionalProperties
+        : undefined
+    expect(knowledge?.properties?.capabilities?.properties?.promptCaching?.type).toBe('boolean')
+    expect(knowledge?.properties?.parameters?.type).toBe('object')
+  })
+
+  it('declares a remote source schema (required id) on provider entries', () => {
     const items = buildSchema([]).properties?.providers
-    const instanceSchema = items && items.type === 'array' ? items.items : undefined
-    const modelSchema = instanceSchema?.properties?.models
-    const modelItems = modelSchema && modelSchema.type === 'array' ? modelSchema.items : undefined
-    expect(modelItems?.properties?.protocol?.enum).toContain('openai-responses')
-    expect(modelItems?.properties?.baseUrl?.type).toBe('string')
-    expect(modelItems?.properties?.pricing?.required).toEqual(['input', 'output'])
+    const entry = items && items.type === 'array' ? items.items : undefined
+    const props = entry && entry.type === 'object' ? entry.properties : undefined
+    expect(props?.pricingSource?.required).toEqual(['id'])
+    expect(props?.usageSource?.required).toEqual(['id'])
   })
 
-  it('declares a pricing schema (USD/CNY currency, required input/output)', () => {
-    const providerTypes = buildSchema([]).properties?.providerTypes
-    const typeSchema =
-      providerTypes && typeof providerTypes.additionalProperties === 'object'
-        ? providerTypes.additionalProperties
+  it('declares agent authentication as a single string', () => {
+    const agentSettings = buildSchema([]).properties?.agentSettings
+    const agent =
+      agentSettings && typeof agentSettings.additionalProperties === 'object'
+        ? agentSettings.additionalProperties
         : undefined
-    const pricing = typeSchema?.properties?.pricing
-    expect(pricing?.required).toEqual(['input', 'output'])
-    expect(pricing?.properties?.currency?.enum).toEqual(['USD', 'CNY'])
-  })
-
-  it('declares a remote source schema (required id)', () => {
-    const providerTypes = buildSchema([]).properties?.providerTypes
-    const typeSchema =
-      providerTypes && typeof providerTypes.additionalProperties === 'object'
-        ? providerTypes.additionalProperties
-        : undefined
-    expect(typeSchema?.properties?.pricingSource?.required).toEqual(['id'])
-    expect(typeSchema?.properties?.usageSource?.required).toEqual(['id'])
+    expect(agent?.properties?.authentication?.type).toBe('string')
   })
 
   it('validates a realistic aiSettings.json object with no errors', () => {
@@ -174,9 +173,11 @@ describe('AiConfigurationContribution.buildSchema', () => {
     expect(errors).toEqual([])
   })
 
-  it('flags the old groups shape (regression guard for the additionalProperties:false top level)', () => {
-    const errors = validate(buildSchema([]), { groups: [] }, '$')
-    expect(errors).toContain(`$: unexpected property 'groups'`)
+  it('flags the retired two-layer shapes (regression guard for the additionalProperties:false top level)', () => {
+    const groups = validate(buildSchema([]), { groups: [] }, '$')
+    expect(groups).toContain(`$: unexpected property 'groups'`)
+    const types = validate(buildSchema([]), { providerTypes: {} }, '$')
+    expect(types).toContain(`$: unexpected property 'providerTypes'`)
   })
 
   it('omits the activeModels enum when no models are known', () => {

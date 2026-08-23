@@ -145,6 +145,35 @@ export interface E2EAiDebugRecord {
   readonly responsePreview: string
 }
 
+/** One resolved AI model as reported by the model service (three-segment id + metadata). */
+export interface E2EAiModelInfo {
+  readonly id: string
+  readonly providerId: string
+  readonly protocol: string
+  readonly channelModel: string
+  readonly vendor?: string
+  readonly name: string
+  readonly family: string
+  readonly maxInputTokens: number
+  readonly maxOutputTokens: number
+}
+
+/** One provider-configuration problem surfaced while resolving `providers[]`. */
+export interface E2EAiProviderIssue {
+  readonly providerId: string
+  readonly reason: string
+  readonly fatal: boolean
+  readonly detail?: string
+}
+
+/** A single-layer provider entry to persist into aiSettings.json (mirrors AiProviderEntry). */
+export interface E2EAiProviderEntry {
+  readonly id: string
+  readonly extends?: string
+  readonly baseUrl?: string
+  readonly protocolMap?: Readonly<Record<string, readonly string[]>>
+}
+
 export interface E2EStartupPhase {
   readonly label: string
   readonly from: string
@@ -1231,6 +1260,22 @@ export interface E2EProbe {
    * replay ends. Returns undefined when the record id is unknown.
    */
   replayAiDebugRecord(id: string): Promise<string | undefined>
+  // -- AI model settings probe ---------------------------------------------
+  /** Replace the persisted provider entries (rewrites aiSettings.json). */
+  aiSetProviders(entries: readonly E2EAiProviderEntry[]): Promise<void>
+  /** Resolved models across every provider (three-segment id + metadata). */
+  aiGetModels(): Promise<readonly E2EAiModelInfo[]>
+  /** Configuration problems found while resolving `providers[]`. */
+  aiGetProviderIssues(): Promise<readonly E2EAiProviderIssue[]>
+  /** Persist per-model configuration into aiSettings.json `modelSettings` (defaults dropped). */
+  aiSetModelConfiguration(
+    modelId: string,
+    config: Readonly<Record<string, string | number | boolean>>,
+  ): Promise<void>
+  /** Resolved per-model configuration (schema default → user settings). */
+  aiGetModelConfiguration(
+    modelId: string,
+  ): Promise<Readonly<Record<string, string | number | boolean>>>
   /**
    * Aggregated startup timeline (main + renderer perf marks). Backs the @perf
    * spec that records startup phase durations as a CI artifact for regression

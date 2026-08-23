@@ -116,16 +116,14 @@ describe('ClaudeConfigMainService', () => {
     expect(entries).toEqual(['settings.json'])
   })
 
-  it('stores profiles in aiSettings.json', async () => {
+  it('stores the agent settings (authentication / model / smallFastModel) in aiSettings.json', async () => {
     const configDir = join(dir, 'editor-settings')
     svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-    await svc.writeProfiles([{ id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-ant-work' }])
+    await svc.writeAgentSettings({ authentication: 'gw', model: 'kimi-k3' })
 
-    expect(await svc.readProfiles()).toEqual([
-      { id: 'work', label: 'Work', kind: 'apiKey', apiKey: 'sk-ant-work' },
-    ])
+    expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw', model: 'kimi-k3' })
     const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-    expect(stored.agentSettings.claude.authentication.profiles).toHaveLength(1)
+    expect(stored.agentSettings.claude).toEqual({ authentication: 'gw', model: 'kimi-k3' })
   })
 
   describe('readAuthStatus', () => {
@@ -207,42 +205,23 @@ describe('ClaudeConfigMainService', () => {
     })
   })
 
-  describe('credential profiles', () => {
-    const profilesPath = () => join(dir, '.universe-editor', 'credential-profiles.json')
-
-    it('returns [] when the library file is absent', async () => {
-      expect(await svc.readProfiles()).toEqual([])
+  describe('agent settings', () => {
+    it('returns {} when aiSettings.json is absent', async () => {
+      const configDir = join(dir, 'editor-settings')
+      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+      expect(await svc.readAgentSettings()).toEqual({})
     })
 
-    it('returns [] when the library file is malformed JSON', async () => {
-      await fs.mkdir(join(dir, '.universe-editor'), { recursive: true })
-      await fs.writeFile(profilesPath(), '{ not json', 'utf8')
-      expect(await svc.readProfiles()).toEqual([])
-    })
-
-    it('writes and reads back profiles (creating the dir)', async () => {
-      const profiles = [
-        { id: 'a', label: 'Personal', kind: 'apiKey' as const, apiKey: 'sk-1' },
-        {
-          id: 'b',
-          label: 'Work gateway',
-          kind: 'gateway' as const,
-          providerRef: 'anthropic/gw',
-        },
-      ]
-      await svc.writeProfiles(profiles)
-      expect(await svc.readProfiles()).toEqual(profiles)
-    })
-
-    it('writes the library atomically (no leftover temp file)', async () => {
-      await svc.writeProfiles([{ id: 'a', label: 'x', kind: 'apiKey', apiKey: 'sk-1' }])
-      const entries = await fs.readdir(join(dir, '.universe-editor'))
-      expect(entries).toEqual(['credential-profiles.json'])
-    })
-
-    it('keeps the library separate from settings.json', async () => {
-      await svc.writeProfiles([{ id: 'a', label: 'x', kind: 'apiKey', apiKey: 'sk-1' }])
-      expect(await svc.read()).toEqual({})
+    it('drops legacy non-string fields when reading', async () => {
+      const configDir = join(dir, 'editor-settings')
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        join(configDir, 'aiSettings.json'),
+        JSON.stringify({ agentSettings: { claude: { authentication: 'gw', model: 42 } } }),
+        'utf8',
+      )
+      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+      expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
     })
   })
 })

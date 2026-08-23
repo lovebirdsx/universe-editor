@@ -2,17 +2,16 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-side Claude config service. The file-store core (settings.json +
  *  .credentials.json) lives in node-services (ClaudeConfigStore); this class adds
- *  the local/remote split and the editor-local credential library.
+ *  the local/remote split and the editor-local agent settings (authentication /
+ *  model / smallFastModel stored in aiSettings.json).
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local ClaudeConfigStore (zero behavior change). The
- *  credential library (readProfiles/writeProfiles) is always editor-local; the
- *  gateway probe runs from the effective host — the remote network when an
+ *  agent settings (readAgentSettings/writeAgentSettings) are always editor-local;
+ *  the gateway probe runs from the effective host — the remote network when an
  *  authority is given, the local host otherwise.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises as fs } from 'node:fs'
-import { join, dirname } from 'node:path'
 import {
   createNamedLogger,
   Disposable,
@@ -24,12 +23,11 @@ import {
   ClaudeConfigStore,
   defaultClaudeSettingsPath,
   probeGatewayConnectivity,
-  writeFileAtomic,
   type IRemoteAgentConfigService,
 } from '@universe-editor/node-services'
 import type {
+  ClaudeAgentSettings,
   ClaudeAuthStatus,
-  ClaudeCredentialProfile,
   ClaudeSettings,
   ClaudeSettingsPatch,
   IClaudeConfigService,
@@ -37,12 +35,6 @@ import type {
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
-
-interface ClaudeAgentSettingsState {
-  authentication?: {
-    profiles?: ClaudeCredentialProfile[]
-  }
-}
 
 export class ClaudeConfigMainService extends Disposable implements IClaudeConfigService {
   declare readonly _serviceBrand: undefined
@@ -89,6 +81,25 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return this._local.readAuthStatus()
   }
 
+  async readAgentSettings(): Promise<ClaudeAgentSettings> {
+    if (!this._configLocation) return {}
+    const state = await readAiSettingsAgentState<ClaudeAgentSettings>(
+      this._configLocation,
+      'claude',
+    )
+    return sanitizeClaudeAgentSettings(state)
+  }
+
+  async writeAgentSettings(settings: ClaudeAgentSettings): Promise<void> {
+    if (!this._configLocation) return
+    await updateAiSettingsAgentState<ClaudeAgentSettings>(
+      this._configLocation,
+      'claude',
+      (current) => mergeClaudeAgentSettings(current, settings),
+    )
+    this._logger.info('wrote Claude agent settings to aiSettings.json')
+  }
+
   async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
     const reachable = authority
       ? await this._remoteService(authority).checkGatewayConnectivity(baseUrl)
@@ -100,63 +111,6 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return reachable
   }
 
-  async readProfiles(): Promise<ClaudeCredentialProfile[]> {
-    if (this._configLocation) {
-      const state = await readAiSettingsAgentState<ClaudeAgentSettingsState>(
-        this._configLocation,
-        'claude',
-      )
-      const profiles = state?.authentication?.profiles
-      if (Array.isArray(profiles)) return profiles
-      const legacyProfiles = await this._readLegacyProfiles()
-      if (legacyProfiles.length > 0) await this.writeProfiles(legacyProfiles)
-      return legacyProfiles
-    }
-    return this._readLegacyProfiles()
-  }
-
-  async writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void> {
-    if (this._configLocation) {
-      await updateAiSettingsAgentState<ClaudeAgentSettingsState>(
-        this._configLocation,
-        'claude',
-        (current) => ({
-          ...current,
-          authentication: { ...current?.authentication, profiles },
-        }),
-      )
-      this._logger.info(`wrote ${profiles.length} Claude credential profile(s) to aiSettings.json`)
-      return
-    }
-    const path = this._profilesPath()
-    await writeFileAtomic(path, `${JSON.stringify({ profiles }, null, 2)}\n`)
-    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
-  }
-
-  private async _readLegacyProfiles(): Promise<ClaudeCredentialProfile[]> {
-    const path = this._profilesPath()
-    let raw: string
-    try {
-      raw = await fs.readFile(path, 'utf8')
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this._logger.warn(`readProfiles failed: ${(err as Error).message}`)
-      }
-      return []
-    }
-    try {
-      const parsed = JSON.parse(raw) as { profiles?: unknown }
-      return Array.isArray(parsed.profiles) ? (parsed.profiles as ClaudeCredentialProfile[]) : []
-    } catch {
-      this._logger.warn(`credential-profiles.json is not valid JSON at ${path}`)
-      return []
-    }
-  }
-
-  private _profilesPath(): string {
-    return join(dirname(this._settingsPath), '.universe-editor', 'credential-profiles.json')
-  }
-
   private _remoteService(authority: string): IRemoteAgentConfigService {
     if (!this._connections) {
       throw new Error('claudeConfig: remote connection service not available')
@@ -166,4 +120,32 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
       RemoteChannels.AgentConfig,
     )
   }
+}
+
+/** Keep only string fields, dropping any legacy shape left in aiSettings.json. */
+function sanitizeClaudeAgentSettings(state: ClaudeAgentSettings | undefined): ClaudeAgentSettings {
+  const out: ClaudeAgentSettings = {}
+  if (typeof state?.authentication === 'string' && state.authentication !== '') {
+    out.authentication = state.authentication
+  }
+  if (typeof state?.model === 'string' && state.model !== '') out.model = state.model
+  if (typeof state?.smallFastModel === 'string' && state.smallFastModel !== '') {
+    out.smallFastModel = state.smallFastModel
+  }
+  return out
+}
+
+function mergeClaudeAgentSettings(
+  current: ClaudeAgentSettings | undefined,
+  next: ClaudeAgentSettings,
+): ClaudeAgentSettings {
+  const out = sanitizeClaudeAgentSettings(current)
+  const nextClean = sanitizeClaudeAgentSettings(next)
+  delete out.authentication
+  delete out.model
+  delete out.smallFastModel
+  if (nextClean.authentication !== undefined) out.authentication = nextClean.authentication
+  if (nextClean.model !== undefined) out.model = nextClean.model
+  if (nextClean.smallFastModel !== undefined) out.smallFastModel = nextClean.smallFastModel
+  return out
 }

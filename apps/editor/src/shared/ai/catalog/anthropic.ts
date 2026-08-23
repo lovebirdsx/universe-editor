@@ -4,7 +4,7 @@
  *  exact bare model id — no family guessing and no default tier.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AiCustomModelConfig, AiModelPricing, AiRateTable } from '@universe-editor/platform'
+import type { AiModelKnowledge, AiModelPricing, AiRateTable } from '@universe-editor/platform'
 
 const FABLE_PRICING: AiModelPricing = { input: 10, cacheWrite: 12.5, cacheRead: 1, output: 50 }
 const OPUS_PRICING: AiModelPricing = { input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25 }
@@ -23,41 +23,42 @@ export const ANTHROPIC_CATALOG: AiRateTable = {
   'claude-3-5-haiku-20241022': HAIKU_PRICING,
 }
 
-export const ANTHROPIC_MODELS: readonly AiCustomModelConfig[] = [
-  {
-    id: 'claude-fable-5',
+// Rates are a (channel, model) function, never intrinsic model knowledge.
+export const ANTHROPIC_MODEL_KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
+  'claude-fable-5': {
     name: 'Claude Fable 5',
     family: 'claude-fable',
+    vendor: 'anthropic',
+    nativeProtocol: 'anthropic-messages',
     maxInputTokens: 200000,
     maxOutputTokens: 64000,
     capabilities: { streaming: true, vision: true },
-    pricing: FABLE_PRICING,
   },
-  {
-    id: 'claude-opus-4-8',
+  'claude-opus-4-8': {
     name: 'Claude Opus 4.8',
     family: 'claude-opus',
+    vendor: 'anthropic',
+    nativeProtocol: 'anthropic-messages',
     maxInputTokens: 200000,
     maxOutputTokens: 64000,
     capabilities: { streaming: true, vision: true },
-    pricing: OPUS_PRICING,
   },
-  {
-    id: 'claude-sonnet-5',
+  'claude-sonnet-5': {
     name: 'Claude Sonnet 5',
     family: 'claude-sonnet',
+    vendor: 'anthropic',
+    nativeProtocol: 'anthropic-messages',
     maxInputTokens: 200000,
     maxOutputTokens: 64000,
     capabilities: { streaming: true, vision: true },
-    pricing: SONNET_PRICING,
   },
-  {
-    id: 'claude-haiku-4-5',
+  'claude-haiku-4-5': {
     name: 'Claude Haiku 4.5',
     family: 'claude-haiku',
+    vendor: 'anthropic',
+    nativeProtocol: 'anthropic-messages',
     maxInputTokens: 200000,
     maxOutputTokens: 64000,
     capabilities: { streaming: true, vision: true },
-    pricing: HAIKU_PRICING,
   },
-]
+}

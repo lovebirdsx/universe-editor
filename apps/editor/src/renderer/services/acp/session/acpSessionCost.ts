@@ -6,12 +6,14 @@
  *  prices it against an Anthropic-only catalog — sessions running gateway models
  *  (kimi/deepseek/…) get inflated figures and are re-priced locally instead.
  *
- *  Both estimators resolve a bare model id through `priceSessionModel` (the
- *  five-level chain: declared model → gateway table → type default → built-in
- *  catalog). A row that resolves to no rate contributes no cost — its `costUSD`
- *  stays `undefined` so the UI renders "—" rather than "free", and a total with
- *  no priced rows carries no cost. Pure + vendor-specific, kept out of the main
- *  session class so the cost-estimation logic can be unit-tested in isolation.
+ *  Both estimators resolve a bare model id through `priceSessionModel`, which
+ *  only consults the pricing source the session's own provider declared — there
+ *  is no cross-provider fallback, so a session with no provider attribution (or
+ *  a provider with no `pricingSource`) resolves no rate at all. A row that
+ *  resolves to no rate contributes no cost — its `costUSD` stays `undefined` so
+ *  the UI renders "—" rather than "free", and a total with no priced rows
+ *  carries no cost. Pure + vendor-specific, kept out of the main session class
+ *  so the cost-estimation logic can be unit-tested in isolation.
  *--------------------------------------------------------------------------------------------*/
 
 import { estimateCostUSD } from '@universe-editor/platform'
@@ -78,12 +80,15 @@ export function estimateCodexCost(
  * sessions.
  *
  * Per-row judgement (exact catalog membership, no family guessing):
- *  - a rate the user or their gateway configured (`model` / `gateway` / `type`)
- *    always wins — it describes this deployment better than any catalog;
+ *  - a rate the user's gateway published (`origin === 'gateway'`) always wins —
+ *    it describes this deployment better than any catalog;
  *  - otherwise an Anthropic official model keeps the CLI's figure, which is
- *    authoritative for the models the CLI actually knows;
- *  - otherwise (a foreign gateway model) our catalog rate replaces the CLI's
- *    inflated one, or the row goes unpriced when nothing resolves.
+ *    authoritative for the models the CLI actually knows (and for a provider on
+ *    the `catalog` source that is the very same table);
+ *  - otherwise (a foreign gateway model whose provider declared a catalog
+ *    vendor) that catalog rate replaces the CLI's inflated one;
+ *  - with no rate resolvable at all the CLI figure stays — it is the only number
+ *    there is, and inventing one across providers is exactly what we removed.
  *
  * Returns undefined when no row changed — the CLI total stays authoritative.
  */
@@ -97,8 +102,7 @@ export function repriceForeignModelBreakdown(
   let repriced = false
   for (const m of models) {
     const { pricing, origin } = priceSessionModel(m.model, ctx)
-    const configured = origin === 'model' || origin === 'gateway' || origin === 'type'
-    const trustCli = !configured && isAnthropicCatalogModel(m.model)
+    const trustCli = origin !== 'gateway' && isAnthropicCatalogModel(m.model)
     if (pricing !== undefined && !trustCli) {
       const costUSD = estimateCostUSD(pricing, {
         input: m.inputTokens,

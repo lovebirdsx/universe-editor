@@ -3,31 +3,27 @@
  *  Provider contract: one implementation per wire protocol. A provider
  *  translates a standardized request into that protocol's HTTP API and its
  *  response back into standard chunks. It knows nothing about the registry,
- *  cache, or IPC.
+ *  cache, model knowledge, or IPC.
  *--------------------------------------------------------------------------------------------*/
 
 import type { CancellationToken } from '../base/cancellation.js'
-import type { AiResolvedProvider } from './aiModelConfiguration.js'
+import type { AiProviderRuntime } from './aiProviderEntry.js'
 import type { AiResponse } from './aiModelService.js'
-import type { AiMessage, AiModelMetadata, AiRequestOptions } from './aiModelTypes.js'
+import type { AiMessage, AiRequestOptions } from './aiModelTypes.js'
 
 export interface IAiModelProvider {
   /**
-   * Which models this instance currently offers. May depend on a configured API
-   * key — return an empty list when no key is available. Endpoint-enumerated
-   * models are merged with the instance's hand-declared `declaredModels`. A
-   * single instance may hold models across several protocols: each protocol's
-   * provider receives only the declaredModels already filtered to its protocol
-   * (see the registry's per-protocol bucket view).
+   * Enumerate the wire model names this endpoint currently offers. Only called
+   * for a protocol the user declared as `[]` (discover from endpoint); when the
+   * entry lists models explicitly, the registry uses that list verbatim and this
+   * is never called. Returns an empty list when the endpoint needs a key it does
+   * not have. Metadata is the registry's job, not the provider's.
    */
-  provideModels(
-    provider: AiResolvedProvider,
-    token: CancellationToken,
-  ): Promise<readonly AiModelMetadata[]>
+  listModels(provider: AiProviderRuntime, token: CancellationToken): Promise<readonly string[]>
 
   /**
    * Execute one request against `provider`. The provider:
-   *  - reads the instance's apiKey / baseUrl
+   *  - reads the entry's apiKey / baseUrl
    *  - translates AiMessage[] into the protocol HTTP body
    *  - translates the streamed response back into AiResponseChunk, yielding each
    *  - listens to `token.onCancellationRequested` to abort the network request
@@ -35,14 +31,14 @@ export interface IAiModelProvider {
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
   ): AiResponse
 
   provideTokenCount(
     modelId: string,
     text: string,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
   ): Promise<number>
 }

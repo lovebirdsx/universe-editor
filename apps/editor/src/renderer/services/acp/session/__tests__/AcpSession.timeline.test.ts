@@ -74,6 +74,7 @@ import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
 import type { IAcpMessageAttachmentStore } from '../acpMessageAttachmentStore.js'
+import type { IAcpSessionProviderContext } from '../acpSessionProviderContext.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
@@ -239,6 +240,28 @@ function makeAgentDefaults(): AcpAgentDefaultsService {
   )
 }
 
+function nullProviderContext(): IAcpSessionProviderContext {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeContext: Event.None,
+    getProviderContext: () => undefined,
+    refresh: async () => {},
+  }
+}
+
+function anthropicProviderContext(): IAcpSessionProviderContext {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeContext: Event.None,
+    getProviderContext: () => ({
+      providerId: 'anthropic',
+      protocol: 'anthropic-messages',
+      pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+    }),
+    refresh: async () => {},
+  }
+}
+
 interface StubAgentOptions {
   promptHangs?: boolean
   agentCapabilities?: Record<string, unknown>
@@ -348,12 +371,27 @@ function makeService(
   client: FakeAcpClientService,
   config?: IConfigurationService,
   changeTracker: StubSessionChangeTracker = new StubSessionChangeTracker(),
+  providerContext: IAcpSessionProviderContext = nullProviderContext(),
 ): AcpSessionService {
   const notification = new StubNotificationService()
   const telemetry = new NoopTelemetryService() as ITelemetryService
   const history = makeHistory()
   const agentDefaults = makeAgentDefaults()
   const messageAttachments = new InMemoryMessageAttachments()
+  const sessionFactory = new AcpSessionFactory(
+    telemetry,
+    history,
+    agentDefaults,
+    changeTracker,
+    new StubSessionTitleService(),
+    new AcpCompactionStatsService(
+      new FakeStorage(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    ),
+    messageAttachments,
+    providerContext,
+  )
   const service = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
@@ -369,19 +407,7 @@ function makeService(
     new StubConfigOptionsCache(),
     FAKE_URI_IDENTITY,
     new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
-    new AcpSessionFactory(
-      telemetry,
-      history,
-      agentDefaults,
-      changeTracker,
-      new StubSessionTitleService(),
-      new AcpCompactionStatsService(
-        new FakeStorage(),
-        new NoopTelemetryService(),
-        new StubLoggerService(),
-      ),
-      messageAttachments,
-    ),
+    sessionFactory,
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
@@ -1897,7 +1923,7 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
     // Hanging prompt so the turn stays 'running' and a mid-stream sentinel
     // (`[error]`) can be appended while a chunk batch is still pending.
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
-    svc = makeService(client)
+    svc = makeService(client, undefined, new StubSessionChangeTracker(), anthropicProviderContext())
   })
 
   afterEach(() => {

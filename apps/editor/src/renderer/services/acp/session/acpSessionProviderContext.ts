@@ -1,84 +1,78 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Maps an ACP session to the provider *instance* its credentials are currently
- *  bound to, so session-cost estimation can complete the three-segment model id
- *  and pick up the gateway rate table. The hot path (every usage chunk) reads a
- *  synchronous cache; resolution itself is async and runs on construction and
- *  whenever provider / rate / auth state changes.
+ *  Maps an ACP session to the provider entry its credentials are currently bound
+ *  to, so session-cost estimation can resolve a bare model id against that
+ *  provider's pricing source (and pick up the gateway rate table). The hot path
+ *  (every usage chunk) reads a synchronous cache; resolution itself is async and
+ *  runs on construction and whenever provider / rate / auth state changes.
  *
- *  Resolution order per agent:
- *   1. The active gateway credential profile (claude via `isProfileActive`;
- *      codex via the main-side `matchActiveProfile`).
- *   2. Reverse-lookup: the base URL the CLI has on disk → the instance whose
- *      resolved base URL matches.
- *   3. Nothing → `undefined` (the cost falls back to the built-in catalog only).
+ *  Resolution per agent reads `agentSettings.<agent>.authentication` directly —
+ *  a provider id, or `@subscription` (the official subscription login, which has
+ *  no provider attribution and prices against the subscription quota instead).
+ *  No base-URL reverse lookup: two providers sharing a base URL would be
+ *  indistinguishable that way.
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  composeModelId,
   createDecorator,
   createNamedLogger,
   Disposable,
   Emitter,
   ILoggerService,
   InstantiationType,
-  providerKey,
   registerSingleton,
-  resolveModelBaseUrl,
-  resolveProviderInstances,
-  type AiCustomModelConfig,
-  type AiModelPricing,
-  type AiProviderInstance,
-  type AiProviderType,
+  resolveProviderEntries,
   type AiRateTable,
   type AiRemoteSourceSpec,
+  type AiResolvedProvider,
+  type AiWireProtocol,
   type Event,
-  IAiModelService,
   type ILogger,
+  IAiModelService,
 } from '@universe-editor/platform'
-import {
-  resolveModelPricing,
-  type ResolvedModelPricing,
-} from '../../../../shared/ai/resolveModelPricing.js'
-import { resolveProviderRef } from '../../../../shared/ai/providerDerivation.js'
-import { isProfileActive } from '../../../workbench/agentSettings/claude/credentialMatch.js'
+import { resolveModelPricing } from '../../../../shared/ai/resolveProviderPricing.js'
+import { findProviderById } from '../../../../shared/ai/providerDerivation.js'
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
-import { ICodexConfigService } from '../../../../shared/ipc/codexConfigService.js'
+import {
+  AGENT_SUBSCRIPTION_AUTH,
+  ICodexConfigService,
+} from '../../../../shared/ipc/codexConfigService.js'
 import { IAiRateMirror } from '../../ai/aiRateMirror.js'
 
 const CLAUDE_AGENT_ID = 'claude-code'
 const CODEX_AGENT_ID = 'codex'
-const CLAUDE_BASE_URL_KEY = 'ANTHROPIC_BASE_URL'
-const CODEX_GATEWAY_PROVIDER_ID = 'codex-gateway'
+
+const CLAUDE_PROTOCOL: AiWireProtocol = 'anthropic-messages'
+const CODEX_PROTOCOL: AiWireProtocol = 'openai-responses'
 
 /** Provider context a cost estimate uses to resolve a bare model id to a rate. */
 export interface SessionProviderContext {
-  /** Stable provider-instance key (`type/name`), for account-usage lookups. */
-  readonly key: string
-  readonly type: string
-  readonly name: string
-  readonly typePricing?: AiModelPricing
-  readonly declaredModels?: readonly AiCustomModelConfig[]
+  /** Stable provider id (first segment of every model id it serves). */
+  readonly providerId: string
+  /** The agent's wire protocol — the protocolMap bucket its models come from. */
+  readonly protocol: AiWireProtocol
+  /** The provider's declared pricing source (no source → rate unknown, never guessed). */
+  readonly pricingSource?: AiRemoteSourceSpec
   readonly gatewayRates?: AiRateTable
   readonly usageSource?: AiRemoteSourceSpec
 }
 
+type ResolvedModelPricing = ReturnType<typeof resolveModelPricing>
+
 /**
- * Resolve a bare model name through the pricing chain with (or without) a
- * provider context. Without a context the model id stays bare and only the
- * built-in catalog is consulted. Pure — unit-tested in isolation.
+ * Resolve a bare model name against a provider context. Without a context there
+ * is no pricing source, so the rate is unknown — never a cross-vendor fallback.
+ * Pure — unit-tested in isolation.
  */
 export function priceSessionModel(
   bareModel: string,
   ctx: SessionProviderContext | undefined,
 ): ResolvedModelPricing {
-  if (ctx === undefined) return resolveModelPricing({ modelId: bareModel })
-  const declared = ctx.declaredModels?.find((m) => m.id === bareModel)
+  if (ctx === undefined) return resolveModelPricing({ bareModel })
   return resolveModelPricing({
-    modelId: composeModelId(ctx.type, ctx.name, bareModel),
-    ...(declared !== undefined ? { model: declared } : {}),
+    bareModel,
+    ...(ctx.pricingSource !== undefined ? { pricingSource: ctx.pricingSource } : {}),
     ...(ctx.gatewayRates !== undefined ? { gatewayRates: ctx.gatewayRates } : {}),
-    ...(ctx.typePricing !== undefined ? { typePricing: ctx.typePricing } : {}),
   })
 }
 
@@ -117,10 +111,10 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
       id: 'acpSessionProviderContext',
       name: 'ACP Provider Context',
     })
-    // Provider instance/type changes and rate-mirror refreshes both feed the
-    // cached context. Claude config has no change event (applying a profile
-    // writes settings.json silently), so claude re-resolves opportunistically
-    // on these events and via the cold-cache trigger in getProviderContext.
+    // Provider changes and rate-mirror refreshes both feed the cached context.
+    // Claude config has no change event (applying auth writes settings.json
+    // silently), so claude re-resolves opportunistically on these events and via
+    // the cold-cache trigger in getProviderContext.
     this._register(this._aiModel.onDidChangeModels(() => void this.refresh()))
     this._register(this._aiModel.onDidChangeRemote(() => void this.refresh()))
     this._register(this._codexConfig.onDidChangeAuth(() => void this.refresh()))
@@ -142,20 +136,20 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
   }
 
   private async _doRefresh(): Promise<void> {
-    let providers: readonly AiProviderInstance[]
-    let types: Readonly<Record<string, AiProviderType>>
+    let providers: readonly AiResolvedProvider[]
     try {
-      ;[providers, types] = await Promise.all([
+      const [entries, knowledge] = await Promise.all([
         this._aiModel.getProviders(),
-        this._aiModel.getProviderTypes(),
+        this._aiModel.getModelKnowledge(),
       ])
+      providers = resolveProviderEntries(entries, knowledge).providers
     } catch (err) {
       this._logger.warn(`provider context refresh failed: ${(err as Error).message}`)
       return
     }
     const next = new Map<string, SessionProviderContext | undefined>()
     for (const agentId of [CLAUDE_AGENT_ID, CODEX_AGENT_ID]) {
-      next.set(agentId, await this._resolveAgent(agentId, providers, types))
+      next.set(agentId, await this._resolveAgent(agentId, providers))
     }
     this._cache.clear()
     for (const [key, value] of next) this._cache.set(key, value)
@@ -165,107 +159,45 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
 
   private async _resolveAgent(
     agentId: string,
-    providers: readonly AiProviderInstance[],
-    types: Readonly<Record<string, AiProviderType>>,
+    providers: readonly AiResolvedProvider[],
   ): Promise<SessionProviderContext | undefined> {
-    const ref =
+    const providerId =
       agentId === CLAUDE_AGENT_ID
-        ? await this._resolveClaudeRef(providers, types)
+        ? await this._resolveClaudeRef()
         : agentId === CODEX_AGENT_ID
-          ? await this._resolveCodexRef(providers, types)
+          ? await this._resolveCodexRef()
           : undefined
-    if (ref === undefined) {
+    if (providerId === undefined) {
       this._logger.debug(`no gateway provider context for ${agentId}`)
       return undefined
     }
-    const resolved = resolveProviderRef(ref, providers, types)
-    if (resolved === undefined) return undefined
-    const flat = resolveProviderInstances([resolved.instance], types)[0]
-    const key = providerKey(resolved.instance)
-    const gatewayRates = this._rateMirror.getRatesSync(key)
+    const provider = findProviderById(providers, providerId)
+    if (provider === undefined) return undefined
+    const gatewayRates = this._rateMirror.getRatesSync(providerId)
     return {
-      key,
-      type: resolved.instance.type,
-      name: resolved.instance.name,
-      ...(flat?.typePricing !== undefined ? { typePricing: flat.typePricing } : {}),
-      ...(flat?.declaredModels !== undefined ? { declaredModels: flat.declaredModels } : {}),
-      ...(flat?.usageSource !== undefined ? { usageSource: flat.usageSource } : {}),
+      providerId,
+      protocol: agentId === CLAUDE_AGENT_ID ? CLAUDE_PROTOCOL : CODEX_PROTOCOL,
+      ...(provider.pricingSource !== undefined ? { pricingSource: provider.pricingSource } : {}),
+      ...(provider.usageSource !== undefined ? { usageSource: provider.usageSource } : {}),
       ...(gatewayRates !== undefined ? { gatewayRates } : {}),
     }
   }
 
-  private async _resolveClaudeRef(
-    providers: readonly AiProviderInstance[],
-    types: Readonly<Record<string, AiProviderType>>,
-  ): Promise<string | undefined> {
-    const [profiles, settings] = await Promise.all([
-      this._claudeConfig.readProfiles(),
-      this._claudeConfig.read(),
-    ])
-    const env = settings.env ?? {}
-    for (const profile of profiles) {
-      if (profile.kind !== 'gateway') continue
-      if (isProfileActive(profile, env, settings.model, providers, types)) {
-        return profile.providerRef
-      }
+  private async _resolveClaudeRef(): Promise<string | undefined> {
+    const authentication = (await this._claudeConfig.readAgentSettings()).authentication
+    if (authentication === undefined || authentication === AGENT_SUBSCRIPTION_AUTH) {
+      return undefined
     }
-    const baseUrl = env[CLAUDE_BASE_URL_KEY]
-    if (baseUrl !== undefined && baseUrl !== '') {
-      return findProviderRefByBaseUrl(baseUrl, providers, types)
-    }
-    return undefined
+    return authentication
   }
 
-  private async _resolveCodexRef(
-    providers: readonly AiProviderInstance[],
-    types: Readonly<Record<string, AiProviderType>>,
-  ): Promise<string | undefined> {
-    const [profiles, activeId] = await Promise.all([
-      this._codexConfig.readProfiles(),
-      this._codexConfig.matchActiveProfile(),
-    ])
-    if (activeId !== undefined) {
-      const profile = profiles.find((p) => p.id === activeId)
-      if (
-        profile !== undefined &&
-        profile.kind === 'gateway' &&
-        profile.providerRef !== undefined
-      ) {
-        return profile.providerRef
-      }
+  private async _resolveCodexRef(): Promise<string | undefined> {
+    const authentication = (await this._codexConfig.readAgentSettings()).authentication
+    if (authentication === undefined || authentication === AGENT_SUBSCRIPTION_AUTH) {
+      return undefined
     }
-    const settings = await this._codexConfig.read()
-    const allProviders = settings['model_providers']
-    const gateway =
-      allProviders && typeof allProviders === 'object'
-        ? (allProviders as Record<string, unknown>)[CODEX_GATEWAY_PROVIDER_ID]
-        : undefined
-    const baseUrl =
-      gateway && typeof gateway === 'object'
-        ? (gateway as Record<string, unknown>)['base_url']
-        : undefined
-    if (typeof baseUrl === 'string' && baseUrl !== '') {
-      return findProviderRefByBaseUrl(baseUrl, providers, types)
-    }
-    return undefined
+    return authentication
   }
-}
-
-function findProviderRefByBaseUrl(
-  baseUrl: string,
-  providers: readonly AiProviderInstance[],
-  types: Readonly<Record<string, AiProviderType>>,
-): string | undefined {
-  const needle = baseUrl.trim().replace(/\/+$/, '')
-  for (const instance of providers) {
-    const type = types[instance.type]
-    if (type === undefined) continue
-    const resolved = resolveModelBaseUrl(undefined, instance.baseUrl, type.defaultBaseUrl)
-    if (resolved !== undefined && resolved.trim().replace(/\/+$/, '') === needle) {
-      return providerKey(instance)
-    }
-  }
-  return undefined
 }
 
 registerSingleton(IAcpSessionProviderContext, AcpSessionProviderContext, InstantiationType.Delayed)

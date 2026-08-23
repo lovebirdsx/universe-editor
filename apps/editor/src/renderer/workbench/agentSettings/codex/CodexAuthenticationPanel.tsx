@@ -2,56 +2,50 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  CodexAuthenticationPanel — the "Authentication" category. Two parts:
  *
- *   1. Saved credentials — a library of API-key / gateway profiles kept in the
- *      editor's own store. Applying a profile writes its API key into
- *      `~/.codex/auth.json` (OPENAI_API_KEY) and, for gateway profiles, the
- *      matching `openai_base_url` into config.toml.
+ *   1. Authentication — the single selection that decides which credential the
+ *      agent uses: a provider entry (a self-contained `[model_providers.codex-gateway]`
+ *      block + `model_provider = "codex-gateway"`), or `@subscription` (the shared
+ *      ChatGPT login via auth.json). The model pick is structured from the
+ *      selected provider's candidates.
  *
  *   2. Log in with ChatGPT — the single shared OAuth login (`codex login`, run via
  *      the official Codex CLI), stored in `~/.codex/auth.json`. Shows live status.
  *
- *  The credential currently *active* (an API key in auth.json, or the ChatGPT
- *  login when no key is set) is marked "In use".
+ *  `activeAuth.drift` (from `resolveActiveAuth`) surfaces when the on-disk files
+ *  no longer match the declared selection — e.g. the user hand-edited config.toml.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useState } from 'react'
-import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { CheckCircle2, CircleAlert } from 'lucide-react'
 import {
   INotificationService,
   Severity,
   localize,
-  resolveModelBaseUrl,
-  type AiProviderInstance,
-  type AiProviderType,
+  type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
+import { Button, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
-import {
-  ICodexConfigService,
-  type CodexCredentialDraft,
-  type CodexCredentialProfile,
-} from '../../../../shared/ipc/codexConfigService.js'
-import {
-  deriveCodexProvider,
-  resolveProviderRef,
-} from '../../../../shared/ai/providerDerivation.js'
+import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
+import { deriveCodexGateway } from '../../../../shared/ai/providerDerivation.js'
 import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import { runCodexLogin } from './codexLogin.js'
 import { ConfigFileLink, getSiblingConfigPath } from '../ConfigFileLink.js'
-import { ConnectivityDot } from '../ConnectivityDot.js'
 import { useProviderRegistry } from '../useProviderRegistry.js'
 import {
   DerivationError,
   GatewayProviderPicker,
   missingProviderPiece,
-  type ResolvedProvider,
 } from '../GatewayProviderPicker.js'
 import styles from '../AgentSettingsEditor.module.css'
 
-/** Renderer-side stable id; crypto.randomUUID is available in the renderer. */
-function newId(): string {
-  return crypto.randomUUID()
+const CODEX_PROTOCOL = 'openai-responses' as const
+
+/** Model candidates a resolved provider declares under the agent's protocol. */
+function candidateModels(provider: AiResolvedProvider | undefined): readonly string[] {
+  const p = provider?.protocols.find((pr) => pr.protocol === CODEX_PROTOCOL)
+  if (p === undefined || p.discover || p.models.length === 0) return []
+  return p.models.map((m) => m.channelModel)
 }
 
 export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig }) {
@@ -60,7 +54,7 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
 
   return (
     <div className={styles['panel']}>
-      <CredentialLibrary config={config} />
+      <AuthenticationSection config={config} />
 
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>
@@ -85,300 +79,120 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
   )
 }
 
-function CredentialLibrary({ config }: { config: UseCodexConfig }) {
-  const notification = useService(INotificationService)
-  const { providers, types } = useProviderRegistry()
-  const {
-    profiles,
-    activeProfileId,
-    credentialDraft,
-    authority,
-    applyProfile,
-    saveProfile,
-    deleteProfile,
-    saveCredentialDraft,
-  } = config
-  const adding = credentialDraft !== undefined && credentialDraft.editingProfileId === undefined
+function AuthenticationSection({ config }: { config: UseCodexConfig }) {
+  const { agentSettings, activeAuth, applyAuthentication, setModel } = config
+  const { providers } = useProviderRegistry()
+  const authentication = agentSettings.authentication
 
-  // Which profile is "in use" is decided in the main process
-  // (ICodexConfigService.matchActiveProfile): it compares the secrets that never
-  // cross the IPC boundary, so two gateway profiles sharing one base URL are
-  // told apart by their keys — matching on the URL alone marked both.
-  const isActive = useCallback(
-    (profile: CodexCredentialProfile): boolean => profile.id === activeProfileId,
-    [activeProfileId],
+  const resolved = useMemo(
+    () =>
+      authentication && authentication !== AGENT_SUBSCRIPTION_AUTH
+        ? providers.find((p) => p.id === authentication)
+        : undefined,
+    [authentication, providers],
+  )
+  const candidates = useMemo(() => candidateModels(resolved), [resolved])
+  const currentModel = agentSettings.model
+  const modelOptions = useMemo(
+    () =>
+      currentModel && !candidates.includes(currentModel)
+        ? [currentModel, ...candidates]
+        : candidates,
+    [candidates, currentModel],
   )
 
-  const apply = useCallback(
-    async (profile: CodexCredentialProfile) => {
-      await applyProfile(profile)
-      notification.notify({
-        severity: Severity.Info,
-        message: localize('codexSettings.auth.applied', 'Now using “{label}”.', {
-          label: profile.label,
-        }),
-      })
+  const onAuthChange = useCallback(
+    async (value: string) => {
+      const next = value === '' ? undefined : value
+      await applyAuthentication(next)
+      if (next && next !== AGENT_SUBSCRIPTION_AUTH) {
+        const nextCandidates = candidateModels(providers.find((p) => p.id === next))
+        if (currentModel && !nextCandidates.includes(currentModel)) await setModel(undefined)
+      }
     },
-    [applyProfile, notification],
+    [applyAuthentication, setModel, providers, currentModel],
   )
 
   return (
     <section className={styles['section']}>
       <h2 className={styles['sectionTitle']}>
-        {localize('codexSettings.auth.library', 'Saved credentials')}
+        {localize('codexSettings.auth.title', 'Authentication')}
       </h2>
 
-      {profiles.length === 0 && !adding && (
-        <div className={styles['desc']}>
-          {localize(
-            'codexSettings.auth.library.empty',
-            'No saved credentials yet. Add an OpenAI API key or a compatible gateway (key + base URL), then switch between them anytime.',
+      <div className={styles['field']}>
+        <label className={styles['label']}>
+          {localize('codexSettings.auth.form.provider', 'Provider')}
+        </label>
+        <GatewayProviderPicker
+          providers={providers}
+          protocol={CODEX_PROTOCOL}
+          value={authentication ?? ''}
+          onChange={(value) => void onAuthChange(value)}
+          subscriptionLabel={localize(
+            'codexSettings.auth.subscription',
+            'Use ChatGPT subscription login',
           )}
-        </div>
-      )}
-
-      <div className={styles['profileList']}>
-        {profiles.map((profile) =>
-          credentialDraft?.editingProfileId === profile.id ? (
-            <ProfileForm
-              key={profile.id}
-              draft={credentialDraft}
-              providers={providers}
-              types={types}
-              onChange={(draft) => void saveCredentialDraft(draft)}
-              onSave={async (p) => {
-                await saveProfile(p)
-                await saveCredentialDraft(undefined)
-              }}
-              onCancel={() => void saveCredentialDraft(undefined)}
-            />
-          ) : (
-            <ProfileRow
-              key={profile.id}
-              profile={profile}
-              authority={authority}
-              providers={providers}
-              types={types}
-              active={isActive(profile)}
-              onUse={() => void apply(profile)}
-              onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
-              onDelete={() => void deleteProfile(profile.id)}
-            />
-          ),
-        )}
+        >
+          {(selected) =>
+            selected === undefined ? (
+              <div className={styles['desc']}>
+                {localize(
+                  'codexSettings.auth.subscription.desc',
+                  'Uses the shared ChatGPT login below — the built-in openai provider runs on the OAuth tokens.',
+                )}
+              </div>
+            ) : (
+              <>
+                <CodexDerivationPreview resolved={selected} />
+                <div className={styles['field']}>
+                  <label className={styles['label']}>
+                    {localize('codexSettings.auth.form.model', 'Model')}
+                  </label>
+                  {modelOptions.length > 0 ? (
+                    <select
+                      className={styles['providerSelect']}
+                      value={currentModel ?? ''}
+                      onChange={(e) => void setModel(e.target.value || undefined)}
+                    >
+                      <option value="">
+                        {localize('codexSettings.auth.form.model.none', 'Use default')}
+                      </option>
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      value={currentModel ?? ''}
+                      placeholder="gpt-5.5"
+                      onChange={(e) => void setModel(e.target.value || undefined)}
+                    />
+                  )}
+                </div>
+              </>
+            )
+          }
+        </GatewayProviderPicker>
       </div>
 
-      {adding ? (
-        <ProfileForm
-          draft={credentialDraft!}
-          providers={providers}
-          types={types}
-          onChange={(draft) => void saveCredentialDraft(draft)}
-          onSave={async (p) => {
-            await saveProfile(p)
-            await saveCredentialDraft(undefined)
-          }}
-          onCancel={() => void saveCredentialDraft(undefined)}
-        />
-      ) : (
-        <div className={styles['toolbar']}>
-          <Button variant="ghost" onClick={() => void saveCredentialDraft(EMPTY_DRAFT)}>
-            <Plus size={14} strokeWidth={2} />
-            {localize('codexSettings.auth.library.add', 'Add credential')}
-          </Button>
+      {activeAuth.drift && (
+        <div className={styles['deriveError']}>
+          {localize(
+            'codexSettings.auth.drift',
+            'The on-disk config.toml / auth.json no longer matches this selection (it may have been changed externally). Re-select it to re-apply the credential.',
+          )}
         </div>
       )}
     </section>
   )
 }
 
-function ProfileRow({
-  profile,
-  authority,
-  providers,
-  types,
-  active,
-  onUse,
-  onEdit,
-  onDelete,
-}: {
-  profile: CodexCredentialProfile
-  authority: string | undefined
-  providers: readonly AiProviderInstance[]
-  types: Readonly<Record<string, AiProviderType>>
-  active: boolean
-  onUse: () => void
-  onEdit: () => void
-  onDelete: () => void
-}) {
-  const Icon = profile.kind === 'apiKey' ? KeyRound : Network
-  const configService = useService<ICodexConfigService>(ICodexConfigService)
-  const probe = useCallback(
-    (url: string) => configService.checkGatewayConnectivity(url, authority),
-    [configService, authority],
-  )
-  const ref = profile.kind === 'gateway' ? profile.providerRef : undefined
-  const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
-  const gatewayBaseUrl =
-    resolved !== undefined
-      ? resolveModelBaseUrl(undefined, resolved.instance.baseUrl, resolved.type.defaultBaseUrl)
-      : undefined
-  const detail =
-    profile.kind === 'apiKey'
-      ? maskKey(profile.apiKey ?? '')
-      : resolved !== undefined
-        ? (resolved.instance.label ?? resolved.instance.name)
-        : (ref ?? '')
-  return (
-    <div className={styles['profileRow']}>
-      <ConnectivityDot
-        baseUrl={profile.kind === 'gateway' ? gatewayBaseUrl : undefined}
-        probe={probe}
-      />
-      <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
-      <div className={styles['profileBody']}>
-        <div className={styles['radioTitleRow']}>
-          <span className={styles['radioTitle']}>{profile.label}</span>
-          {active && (
-            <span className={styles['activeBadge']}>
-              {localize('codexSettings.auth.inUse', 'In use')}
-            </span>
-          )}
-        </div>
-        <span className={styles['profileDetail']}>{detail}</span>
-      </div>
-      <div className={styles['profileActions']}>
-        {!active && (
-          <Button variant="ghost" onClick={onUse}>
-            {localize('codexSettings.auth.use', 'Use')}
-          </Button>
-        )}
-        <IconButton label={localize('codexSettings.auth.edit', 'Edit')} onClick={onEdit}>
-          <Pencil size={14} strokeWidth={1.75} />
-        </IconButton>
-        <IconButton label={localize('codexSettings.auth.delete', 'Delete')} onClick={onDelete}>
-          <Trash2 size={14} strokeWidth={1.75} />
-        </IconButton>
-      </div>
-    </div>
-  )
-}
-
-function ProfileForm({
-  draft,
-  providers,
-  types,
-  onChange,
-  onSave,
-  onCancel,
-}: {
-  draft: CodexCredentialDraft
-  providers: readonly AiProviderInstance[]
-  types: Readonly<Record<string, AiProviderType>>
-  onChange: (draft: CodexCredentialDraft) => void
-  onSave: (profile: CodexCredentialProfile) => Promise<void>
-  onCancel: () => void
-}) {
-  const valid =
-    draft.label.trim() !== '' &&
-    (draft.kind === 'apiKey' ? draft.apiKey.trim() !== '' : draft.providerRef.trim() !== '')
-
-  const save = useCallback(async () => {
-    const base = {
-      id: draft.editingProfileId ?? newId(),
-      label: draft.label.trim(),
-      kind: draft.kind,
-    }
-    const profile: CodexCredentialProfile =
-      draft.kind === 'apiKey'
-        ? { ...base, apiKey: draft.apiKey.trim() }
-        : { ...base, providerRef: draft.providerRef.trim() }
-    await onSave(profile)
-  }, [draft, onSave])
-
-  return (
-    <div className={styles['profileForm']}>
-      <div className={styles['field']}>
-        <label className={styles['label']}>
-          {localize('codexSettings.auth.form.kind', 'Type')}
-        </label>
-        <div className={styles['toolbar']}>
-          <button
-            type="button"
-            className={`${styles['choice']} ${draft.kind === 'apiKey' ? styles['choiceActive'] : ''}`}
-            onClick={() => onChange({ ...draft, kind: 'apiKey' })}
-          >
-            <KeyRound size={14} strokeWidth={1.75} />
-            {localize('codexSettings.auth.apiKey', 'OpenAI API key')}
-          </button>
-          <button
-            type="button"
-            className={`${styles['choice']} ${draft.kind === 'gateway' ? styles['choiceActive'] : ''}`}
-            onClick={() => onChange({ ...draft, kind: 'gateway' })}
-          >
-            <Network size={14} strokeWidth={1.75} />
-            {localize('codexSettings.auth.gateway', 'Compatible gateway (key + URL)')}
-          </button>
-        </div>
-      </div>
-
-      <div className={styles['field']}>
-        <label className={styles['label']}>
-          {localize('codexSettings.auth.form.label', 'Name')}
-        </label>
-        <Input
-          value={draft.label}
-          placeholder={localize('codexSettings.auth.form.label.ph', 'e.g. Personal, Work gateway')}
-          onChange={(e) => onChange({ ...draft, label: e.target.value })}
-        />
-      </div>
-
-      {draft.kind === 'gateway' && (
-        <div className={styles['field']}>
-          <label className={styles['label']}>
-            {localize('codexSettings.auth.form.provider', 'Provider instance')}
-          </label>
-          <GatewayProviderPicker
-            providers={providers}
-            types={types}
-            protocol="openai-responses"
-            value={draft.providerRef}
-            onChange={(ref) => onChange({ ...draft, providerRef: ref })}
-          >
-            {(resolved) => <CodexDerivationPreview resolved={resolved} />}
-          </GatewayProviderPicker>
-        </div>
-      )}
-
-      {draft.kind === 'apiKey' && (
-        <div className={styles['field']}>
-          <label className={styles['label']}>{'auth.json OPENAI_API_KEY'}</label>
-          <Input
-            type="password"
-            value={draft.apiKey}
-            placeholder="sk-…"
-            onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
-          />
-        </div>
-      )}
-
-      <div className={styles['toolbar']}>
-        <Button disabled={!valid} onClick={() => void save()}>
-          {localize('codexSettings.auth.save', 'Save')}
-        </Button>
-        <Button variant="ghost" onClick={onCancel}>
-          {localize('codexSettings.auth.cancel', 'Cancel')}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function CodexDerivationPreview({ resolved }: { readonly resolved: ResolvedProvider | undefined }) {
-  if (resolved === undefined) return null
-  const missing = missingProviderPiece(resolved.instance, resolved.type)
+function CodexDerivationPreview({ resolved }: { readonly resolved: AiResolvedProvider }) {
+  const missing = missingProviderPiece(resolved, CODEX_PROTOCOL)
   if (missing !== undefined) return <DerivationError missing={missing} />
-  const derived = deriveCodexProvider(resolved.instance, resolved.type)
+  const derived = deriveCodexGateway(resolved)
   if (derived === undefined) return null
   return (
     <div className={styles['derivePreview']} data-testid="derivePreview">
@@ -398,37 +212,15 @@ function CodexDerivationPreview({ resolved }: { readonly resolved: ResolvedProvi
   )
 }
 
-const EMPTY_DRAFT: CodexCredentialDraft = {
-  kind: 'apiKey',
-  label: '',
-  apiKey: '',
-  providerRef: '',
-}
-
-function profileToDraft(profile: CodexCredentialProfile): CodexCredentialDraft {
-  return {
-    editingProfileId: profile.id,
-    kind: profile.kind,
-    label: profile.label,
-    apiKey: profile.apiKey ?? '',
-    providerRef: profile.providerRef ?? '',
-  }
-}
-
 function LoginForm({ config }: { config: UseCodexConfig }) {
   const notification = useService(INotificationService)
   const login = runCodexLogin()
-  const { authStatus, settings, reloadAuthStatus, switchToChatgptLogin } = config
+  const { authStatus, activeAuth, reloadAuthStatus, applyAuthentication } = config
   const chatgpt = authStatus.chatgpt
   const signedIn = !!chatgpt && !chatgpt.expired
-  // ChatGPT only actually runs when the built-in `openai` provider is selected,
-  // i.e. config.toml's `model_provider` is empty. A custom provider (e.g.
-  // `codex-gateway`) overrides it even while auth.json still reports `chatgpt`.
-  const builtinActive =
-    typeof settings.model_provider !== 'string' || settings.model_provider === ''
-  const chatgptActive = authStatus.active === 'chatgpt' && builtinActive
-  // A valid ChatGPT login that is not actually in use (an API key or a custom
-  // provider currently takes precedence) — offer a one-click "Use this login".
+  // ChatGPT is actually in effect only when resolveActiveAuth reports the
+  // subscription kind (a gateway provider overrides it even while signed in).
+  const chatgptActive = activeAuth.kind === 'subscription'
   const overridden = signedIn && !chatgptActive
   const [refreshing, setRefreshing] = useState(false)
 
@@ -456,27 +248,25 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
   const doLogin = useCallback(async () => {
     await login()
     // The login runs in a terminal and rewrites ~/.codex/auth.json with a
-    // ChatGPT token block. The disk watch refreshes status automatically; we
-    // also tear down any lingering gateway provider once a fresh ChatGPT login
-    // takes effect, so it is actually used instead of the custom provider.
+    // ChatGPT token block. Once a fresh login takes effect, switch the selection
+    // to it so it is actually used instead of a lingering gateway provider.
     setTimeout(() => {
       void (async () => {
         const status = await reloadAuthStatus()
         if (status.chatgpt && !status.chatgpt.expired) {
-          await config.switchToChatgptLogin()
+          await applyAuthentication(AGENT_SUBSCRIPTION_AUTH)
         }
       })()
     }, 4000)
-  }, [login, reloadAuthStatus, config])
+  }, [login, reloadAuthStatus, applyAuthentication])
 
   const setAsCurrent = useCallback(async () => {
-    // Clear the API key AND the custom endpoint so the ChatGPT login takes over.
-    await switchToChatgptLogin()
+    await applyAuthentication(AGENT_SUBSCRIPTION_AUTH)
     notification.notify({
       severity: Severity.Info,
       message: localize('codexSettings.auth.login.activated', 'Now using your ChatGPT login.'),
     })
-  }, [switchToChatgptLogin, notification])
+  }, [applyAuthentication, notification])
 
   return (
     <div className={styles['authForm']}>
@@ -523,7 +313,7 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
         <div className={styles['desc']}>
           {localize(
             'codexSettings.auth.login.overridden',
-            'You are signed in, but a saved credential is currently taking precedence.',
+            'You are signed in, but a provider credential is currently taking precedence.',
           )}
         </div>
       )}

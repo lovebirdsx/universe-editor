@@ -1,9 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  On-disk cache for remote AI rate tables and account usage, keyed by provider
- *  key (`type/instance`). Pure storage with a dual TTL; it never touches the
- *  network and never throws — a missing / corrupt / wrong-version file is simply
- *  treated as empty. Writes are debounced and atomic (temp + rename).
+ *  id. Pure storage with a dual TTL; it never touches the network and never
+ *  throws — a missing / corrupt / wrong-version file is simply treated as empty
+ *  (a v1 file, keyed by the retired `type/instance`, is discarded: rates re-pull
+ *  within the 24h TTL and are not worth migrating). Writes are debounced and
+ *  atomic (temp + rename).
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -29,9 +31,9 @@ export interface CachedRates {
   readonly rates: AiRateTable
 }
 
-/** On-disk shape. Keyed by providerKey (`type/instance`). */
+/** On-disk shape. Keyed by provider id. */
 interface AiRemoteCacheFile {
-  readonly version: 1
+  readonly version: 2
   readonly rates?: Readonly<Record<string, CachedRates>>
   readonly usage?: Readonly<Record<string, AiAccountUsage>>
 }
@@ -63,38 +65,38 @@ export class AiRemoteCache {
     return this._loadPromise
   }
 
-  getRates(providerKey: string): CachedRates | undefined {
-    return this._rates.get(providerKey)
+  getRates(providerId: string): CachedRates | undefined {
+    return this._rates.get(providerId)
   }
 
-  getUsage(providerKey: string): AiAccountUsage | undefined {
-    return this._usage.get(providerKey)
+  getUsage(providerId: string): AiAccountUsage | undefined {
+    return this._usage.get(providerId)
   }
 
   /** Every cached rate table, for the renderer's synchronous mirror. */
   allRates(): readonly {
-    readonly providerKey: string
+    readonly providerId: string
     readonly rates: AiRateTable
     readonly fetchedAt: number
   }[] {
-    return [...this._rates.entries()].map(([providerKey, cached]) => ({
-      providerKey,
+    return [...this._rates.entries()].map(([providerId, cached]) => ({
+      providerId,
       rates: cached.rates,
       fetchedAt: cached.fetchedAt,
     }))
   }
 
-  setRates(providerKey: string, rates: AiRateTable, fetchedAt?: number): void {
-    this._rates.set(providerKey, { fetchedAt: fetchedAt ?? Date.now(), rates })
+  setRates(providerId: string, rates: AiRateTable, fetchedAt?: number): void {
+    this._rates.set(providerId, { fetchedAt: fetchedAt ?? Date.now(), rates })
   }
 
-  setUsage(providerKey: string, usage: AiAccountUsage): void {
-    this._usage.set(providerKey, usage)
+  setUsage(providerId: string, usage: AiAccountUsage): void {
+    this._usage.set(providerId, usage)
   }
 
   /** Drop entries whose provider no longer exists, so the file cannot grow forever. */
-  prune(liveProviderKeys: readonly string[]): void {
-    const live = new Set(liveProviderKeys)
+  prune(liveProviderIds: readonly string[]): void {
+    const live = new Set(liveProviderIds)
     for (const key of this._rates.keys()) {
       if (!live.has(key)) this._rates.delete(key)
     }
@@ -103,14 +105,14 @@ export class AiRemoteCache {
     }
   }
 
-  isRatesStale(providerKey: string, now?: number): boolean {
-    const cached = this._rates.get(providerKey)
+  isRatesStale(providerId: string, now?: number): boolean {
+    const cached = this._rates.get(providerId)
     if (cached === undefined) return true
     return (now ?? Date.now()) - cached.fetchedAt >= RATES_TTL_MS
   }
 
-  isUsageStale(providerKey: string, now?: number): boolean {
-    const cached = this._usage.get(providerKey)
+  isUsageStale(providerId: string, now?: number): boolean {
+    const cached = this._usage.get(providerId)
     if (cached === undefined) return true
     return (now ?? Date.now()) - cached.fetchedAt >= USAGE_TTL_MS
   }
@@ -152,7 +154,7 @@ export class AiRemoteCache {
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return
     const file = parsed as Record<string, unknown>
-    if (file.version !== 1) return
+    if (file.version !== 2) return
 
     const rates = file.rates
     if (rates !== null && typeof rates === 'object' && !Array.isArray(rates)) {
@@ -178,7 +180,7 @@ export class AiRemoteCache {
       return
     }
     const file: AiRemoteCacheFile = {
-      version: 1,
+      version: 2,
       ...(this._rates.size > 0 ? { rates: Object.fromEntries(this._rates) } : {}),
       ...(this._usage.size > 0 ? { usage: Object.fromEntries(this._usage) } : {}),
     }

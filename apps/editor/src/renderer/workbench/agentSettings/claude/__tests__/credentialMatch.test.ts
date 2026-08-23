@@ -1,113 +1,62 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  isProfileActive: pure match between a credential profile and the env block
- *  currently injected into ~/.claude/settings.json. A gateway profile references
- *  a provider instance, so its match is decided by deriving the instance's env.
+ *  isClaudeAuthActive: pure comparison between a persisted `authentication`
+ *  selection and the env block currently injected into ~/.claude/settings.json.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { AiProviderInstance, AiProviderType } from '@universe-editor/platform'
-import type { ClaudeCredentialProfile } from '../../../../../shared/ipc/claudeConfigService.js'
-import { isProfileActive } from '../credentialMatch.js'
+import type { AiResolvedProvider } from '@universe-editor/platform'
+import { AGENT_SUBSCRIPTION_AUTH } from '../../../../../shared/ipc/claudeConfigService.js'
+import { isClaudeAuthActive } from '../credentialMatch.js'
 
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
 
-const NO_PROVIDERS: readonly AiProviderInstance[] = []
-const NO_TYPES: Readonly<Record<string, AiProviderType>> = {}
-
-const gatewayProvider: AiProviderInstance = {
-  name: 'gw',
-  type: 'anthropic',
-  apiKey: 'tok-1',
-  baseUrl: 'https://gw.example.com',
-}
-const gatewayTypes: Readonly<Record<string, AiProviderType>> = {
-  anthropic: { protocol: 'anthropic-messages' },
+function provider(partial: Partial<AiResolvedProvider> & { id: string }): AiResolvedProvider {
+  return {
+    defaultProtocol: 'anthropic-messages',
+    protocols: [{ protocol: 'anthropic-messages', models: [], discover: true }],
+    ...partial,
+  }
 }
 
-describe('isProfileActive', () => {
-  it('matches an apiKey profile only when the env key is identical', () => {
-    const profile: ClaudeCredentialProfile = {
-      id: 'p1',
-      label: 'Personal',
-      kind: 'apiKey',
-      apiKey: 'sk-ant-old',
-    }
-    expect(
-      isProfileActive(profile, { [API_KEY]: 'sk-ant-old' }, undefined, NO_PROVIDERS, NO_TYPES),
-    ).toBe(true)
-    expect(
-      isProfileActive(profile, { [API_KEY]: 'sk-ant-new' }, undefined, NO_PROVIDERS, NO_TYPES),
-    ).toBe(false)
-    expect(isProfileActive(profile, {}, undefined, NO_PROVIDERS, NO_TYPES)).toBe(false)
-  })
+const OFFICIAL = provider({ id: 'anthropic', apiKey: 'sk-ant-official' })
+const GATEWAY = provider({ id: 'gw', apiKey: 'tok-1', baseUrl: 'https://gw.example.com' })
+const NO_PROVIDERS: readonly AiResolvedProvider[] = []
 
-  it('does not match an apiKey profile while a token / base URL overrides it', () => {
-    const profile: ClaudeCredentialProfile = {
-      id: 'p1',
-      label: 'Personal',
-      kind: 'apiKey',
-      apiKey: 'sk-ant-old',
-    }
-    const env = { [API_KEY]: 'sk-ant-old', [AUTH_TOKEN]: 'tok' }
-    expect(isProfileActive(profile, env, undefined, NO_PROVIDERS, NO_TYPES)).toBe(false)
-  })
-
-  it('matches a gateway profile on the derived token + base URL', () => {
-    const profile: ClaudeCredentialProfile = {
-      id: 'g1',
-      label: 'Gateway',
-      kind: 'gateway',
-      providerRef: 'anthropic/gw',
-    }
-    const env = { [AUTH_TOKEN]: 'tok-1', [BASE_URL]: 'https://gw.example.com' }
-    expect(isProfileActive(profile, env, undefined, [gatewayProvider], gatewayTypes)).toBe(true)
-    expect(
-      isProfileActive(
-        profile,
-        { ...env, [AUTH_TOKEN]: 'tok-2' },
-        undefined,
-        [gatewayProvider],
-        gatewayTypes,
-      ),
-    ).toBe(false)
-    expect(
-      isProfileActive(
-        profile,
-        { ...env, [BASE_URL]: 'https://other.example.com' },
-        undefined,
-        [gatewayProvider],
-        gatewayTypes,
-      ),
-    ).toBe(false)
-  })
-
-  it('requires settings.model to match when the gateway profile pins a model', () => {
-    const profile: ClaudeCredentialProfile = {
-      id: 'g1',
-      label: 'Gateway',
-      kind: 'gateway',
-      providerRef: 'anthropic/gw',
-      model: 'kimi-k3',
-    }
-    const env = { [AUTH_TOKEN]: 'tok-1', [BASE_URL]: 'https://gw.example.com' }
-    expect(isProfileActive(profile, env, 'kimi-k3', [gatewayProvider], gatewayTypes)).toBe(true)
-    expect(isProfileActive(profile, env, 'claude-opus', [gatewayProvider], gatewayTypes)).toBe(
+describe('isClaudeAuthActive', () => {
+  it('treats an unset or @subscription selection as active only with no credential env', () => {
+    expect(isClaudeAuthActive(undefined, {}, NO_PROVIDERS)).toBe(true)
+    expect(isClaudeAuthActive(AGENT_SUBSCRIPTION_AUTH, {}, NO_PROVIDERS)).toBe(true)
+    expect(isClaudeAuthActive(undefined, { [API_KEY]: 'sk-1' }, NO_PROVIDERS)).toBe(false)
+    expect(isClaudeAuthActive(AGENT_SUBSCRIPTION_AUTH, { [AUTH_TOKEN]: 'tok' }, NO_PROVIDERS)).toBe(
       false,
     )
-    expect(isProfileActive(profile, env, undefined, [gatewayProvider], gatewayTypes)).toBe(false)
   })
 
-  it('is not active when the gateway ref cannot be resolved', () => {
-    const profile: ClaudeCredentialProfile = {
-      id: 'g1',
-      label: 'Gateway',
-      kind: 'gateway',
-      providerRef: 'anthropic/missing',
-    }
+  it('matches an official-endpoint provider only when the env key is identical', () => {
+    expect(isClaudeAuthActive('anthropic', { [API_KEY]: 'sk-ant-official' }, [OFFICIAL])).toBe(true)
+    expect(isClaudeAuthActive('anthropic', { [API_KEY]: 'sk-ant-other' }, [OFFICIAL])).toBe(false)
+    expect(isClaudeAuthActive('anthropic', {}, [OFFICIAL])).toBe(false)
+  })
+
+  it('does not match an official provider while a token / base URL overrides it', () => {
+    const env = { [API_KEY]: 'sk-ant-official', [AUTH_TOKEN]: 'tok' }
+    expect(isClaudeAuthActive('anthropic', env, [OFFICIAL])).toBe(false)
+  })
+
+  it('matches a gateway provider on the derived token + base URL', () => {
     const env = { [AUTH_TOKEN]: 'tok-1', [BASE_URL]: 'https://gw.example.com' }
-    expect(isProfileActive(profile, env, undefined, [gatewayProvider], gatewayTypes)).toBe(false)
+    expect(isClaudeAuthActive('gw', env, [GATEWAY])).toBe(true)
+    expect(isClaudeAuthActive('gw', { ...env, [AUTH_TOKEN]: 'tok-2' }, [GATEWAY])).toBe(false)
+    expect(
+      isClaudeAuthActive('gw', { ...env, [BASE_URL]: 'https://other.example.com' }, [GATEWAY]),
+    ).toBe(false)
+  })
+
+  it('is not active when the provider id cannot be resolved', () => {
+    const env = { [AUTH_TOKEN]: 'tok-1', [BASE_URL]: 'https://gw.example.com' }
+    expect(isClaudeAuthActive('missing', env, [GATEWAY])).toBe(false)
   })
 })

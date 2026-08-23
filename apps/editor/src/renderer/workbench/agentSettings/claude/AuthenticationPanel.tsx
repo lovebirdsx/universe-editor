@@ -2,75 +2,69 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AuthenticationPanel — the "Authentication" category. Two parts:
  *
- *   1. Saved credentials — a library of API-key / gateway profiles kept in the
- *      editor's own store (`aiSettings.json`). The user
- *      *applies* a profile to inject it into `~/.claude/settings.json` (the file
- *      the CLI + agent read). Switching credentials no longer destroys the others
- *      — they stay in the library.
+ *   1. Authentication — the single selection that decides which credential the
+ *      agent uses: a provider entry (injected as `ANTHROPIC_API_KEY` for the
+ *      official endpoint, or `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` for a
+ *      gateway), or `@subscription` (the shared Claude OAuth login). The model /
+ *      fast-model picks are structured from the selected provider's candidates.
  *
  *   2. Log in with Claude — the single shared OAuth login (`claude auth login`),
- *      stored in `~/.claude/.credentials.json`. Not a profile; shows live status.
- *
- *  The credential that is *currently active* (matching settings.json env, or the
- *  OAuth login when no env credential is set) is marked "In use".
+ *      stored in `~/.claude/.credentials.json`. Shows live status; "Use this
+ *      login" switches the selection to `@subscription`.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useState } from 'react'
-import { CheckCircle2, CircleAlert, KeyRound, Network, Pencil, Plus, Trash2 } from 'lucide-react'
+import { CheckCircle2, CircleAlert } from 'lucide-react'
 import {
   INotificationService,
   Severity,
   localize,
-  resolveModelBaseUrl,
-  type AiProviderInstance,
-  type AiProviderType,
+  type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
+import { Button, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
-import {
-  IClaudeConfigService,
-  type ClaudeAuthStatus,
-  type ClaudeCredentialDraft,
-  type ClaudeCredentialProfile,
-} from '../../../../shared/ipc/claudeConfigService.js'
-import { resolveProviderRef, deriveClaudeEnv } from '../../../../shared/ai/providerDerivation.js'
+import type { ClaudeAuthStatus } from '../../../../shared/ipc/claudeConfigService.js'
+import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
+import { deriveClaudeAuth } from '../../../../shared/ai/providerDerivation.js'
 import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
-import { isProfileActive } from './credentialMatch.js'
+import { isClaudeAuthActive } from './credentialMatch.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
-import { ConnectivityDot } from '../ConnectivityDot.js'
 import { useProviderRegistry } from '../useProviderRegistry.js'
 import {
   DerivationError,
   GatewayProviderPicker,
   missingProviderPiece,
-  type ResolvedProvider,
 } from '../GatewayProviderPicker.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
-const SMALL_FAST_MODEL = 'ANTHROPIC_SMALL_FAST_MODEL'
+
+const CLAUDE_PROTOCOL = 'anthropic-messages' as const
 
 /** Whether the OAuth login is the credential the agent will currently use. */
 function isLoginActive(env: Record<string, string>, auth: ClaudeAuthStatus): boolean {
   return !env[API_KEY] && !env[AUTH_TOKEN] && !env[BASE_URL] && auth.loggedIn && !auth.expired
 }
 
-/** Renderer-side stable id; crypto.randomUUID is available in the renderer. */
-function newId(): string {
-  return crypto.randomUUID()
+/** Model candidates a resolved provider declares under the agent's protocol. */
+function candidateModels(provider: AiResolvedProvider | undefined): readonly string[] {
+  const p = provider?.protocols.find((pr) => pr.protocol === CLAUDE_PROTOCOL)
+  if (p === undefined || p.discover || p.models.length === 0) return []
+  return p.models.map((m) => m.channelModel)
 }
 
 export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
-  const { settings, authStatus, configPath, authority } = config
+  const { settings, authStatus, configPath, authority, agentSettings } = config
   const env = useMemo(() => settings.env ?? {}, [settings.env])
+  const { providers } = useProviderRegistry()
 
   return (
     <div className={styles['panel']}>
-      <CredentialLibrary config={config} env={env} model={settings.model} />
+      <AuthenticationSection config={config} env={env} providers={providers} />
 
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>
@@ -79,9 +73,12 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
         <LoginForm
           authStatus={authStatus}
           authority={authority}
-          isActive={isLoginActive(env, authStatus)}
+          isActive={
+            agentSettings.authentication === AGENT_SUBSCRIPTION_AUTH ||
+            isLoginActive(env, authStatus)
+          }
           hasEnvCredential={!!env[API_KEY] || !!env[AUTH_TOKEN] || !!env[BASE_URL]}
-          patch={config.patch}
+          onUseLogin={() => void config.applyAuthentication(AGENT_SUBSCRIPTION_AUTH)}
           reloadAuthStatus={config.reloadAuthStatus}
         />
       </section>
@@ -96,342 +93,217 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
   )
 }
 
-function CredentialLibrary({
+function AuthenticationSection({
   config,
   env,
-  model,
+  providers,
 }: {
   config: UseClaudeConfig
   env: Record<string, string>
-  model: string | undefined
+  providers: readonly AiResolvedProvider[]
 }) {
-  const notification = useService(INotificationService)
-  const { providers, types } = useProviderRegistry()
-  const {
-    profiles,
-    credentialDraft,
-    authority,
-    applyProfile,
-    saveProfile,
-    deleteProfile,
-    saveCredentialDraft,
-  } = config
-  const adding = credentialDraft !== undefined && credentialDraft.editingProfileId === undefined
+  const { agentSettings, applyAuthentication, setModel, setSmallFastModel } = config
+  const authentication = agentSettings.authentication
 
-  const apply = useCallback(
-    async (profile: ClaudeCredentialProfile) => {
-      await applyProfile(profile)
-      notification.notify({
-        severity: Severity.Info,
-        message: localize('agentSettings.auth.applied', 'Now using “{label}”.', {
-          label: profile.label,
-        }),
-      })
+  const resolved = useMemo(
+    () =>
+      authentication && authentication !== AGENT_SUBSCRIPTION_AUTH
+        ? providers.find((p) => p.id === authentication)
+        : undefined,
+    [authentication, providers],
+  )
+  const candidates = useMemo(() => candidateModels(resolved), [resolved])
+  const currentModel = agentSettings.model
+  const currentFast = agentSettings.smallFastModel
+  // A structured pick whose current value is not offered by the new provider
+  // must still be visible as an option, not vanish while a stale value persists.
+  const modelOptions = useMemo(
+    () =>
+      currentModel && !candidates.includes(currentModel)
+        ? [currentModel, ...candidates]
+        : candidates,
+    [candidates, currentModel],
+  )
+  const fastOptions = useMemo(
+    () =>
+      currentFast && !candidates.includes(currentFast) ? [currentFast, ...candidates] : candidates,
+    [candidates, currentFast],
+  )
+
+  const onAuthChange = useCallback(
+    async (value: string) => {
+      const next = value === '' ? undefined : value
+      await applyAuthentication(next)
+      // Validate-and-clear: a provider switch invalidates model picks the new
+      // provider does not serve.
+      if (next && next !== AGENT_SUBSCRIPTION_AUTH) {
+        const nextProvider = providers.find((p) => p.id === next)
+        const nextCandidates = candidateModels(nextProvider)
+        if (currentModel && !nextCandidates.includes(currentModel)) await setModel(undefined)
+        if (currentFast && !nextCandidates.includes(currentFast)) await setSmallFastModel(undefined)
+      }
     },
-    [applyProfile, notification],
+    [applyAuthentication, setModel, setSmallFastModel, providers, currentModel, currentFast],
+  )
+
+  const inUse = useMemo(
+    () => isClaudeAuthActive(authentication, env, providers),
+    [authentication, env, providers],
   )
 
   return (
     <section className={styles['section']}>
       <h2 className={styles['sectionTitle']}>
-        {localize('agentSettings.auth.library', 'Saved credentials')}
+        {localize('agentSettings.auth.title', 'Authentication')}
       </h2>
 
-      {profiles.length === 0 && !adding && (
-        <div className={styles['desc']}>
-          {localize(
-            'agentSettings.auth.library.empty',
-            'No saved credentials yet. Add an API key or a gateway token + URL, then switch between them anytime.',
+      <div className={styles['field']}>
+        <label className={styles['label']}>
+          {localize('agentSettings.auth.form.provider', 'Provider')}
+        </label>
+        <GatewayProviderPicker
+          providers={providers}
+          protocol={CLAUDE_PROTOCOL}
+          value={authentication ?? ''}
+          onChange={(value) => void onAuthChange(value)}
+          subscriptionLabel={localize(
+            'agentSettings.auth.subscription',
+            'Use Claude subscription login',
           )}
-        </div>
-      )}
-
-      <div className={styles['profileList']}>
-        {profiles.map((profile) =>
-          credentialDraft?.editingProfileId === profile.id ? (
-            <ProfileForm
-              key={profile.id}
-              draft={credentialDraft}
-              providers={providers}
-              types={types}
-              onChange={(draft) => void saveCredentialDraft(draft)}
-              onSave={async (p) => {
-                await saveProfile(p)
-                await saveCredentialDraft(undefined)
-              }}
-              onCancel={() => void saveCredentialDraft(undefined)}
-            />
-          ) : (
-            <ProfileRow
-              key={profile.id}
-              profile={profile}
-              authority={authority}
-              providers={providers}
-              types={types}
-              active={isProfileActive(profile, env, model, providers, types)}
-              onUse={() => void apply(profile)}
-              onEdit={() => void saveCredentialDraft(profileToDraft(profile))}
-              onDelete={() => void deleteProfile(profile.id)}
-            />
-          ),
-        )}
+        >
+          {(selected) =>
+            selected === undefined ? (
+              authentication === AGENT_SUBSCRIPTION_AUTH ? (
+                <div className={styles['desc']}>
+                  {localize(
+                    'agentSettings.auth.subscription.desc',
+                    'Uses the shared Claude OAuth login below — no credential env is written.',
+                  )}
+                </div>
+              ) : (
+                <div className={styles['desc']}>
+                  {localize(
+                    'agentSettings.auth.none.desc',
+                    'No provider selected — the Claude OAuth login (below) is used when available.',
+                  )}
+                </div>
+              )
+            ) : (
+              <>
+                <ClaudeDerivationPreview resolved={selected} />
+                <ModelPicks
+                  model={currentModel}
+                  fast={currentFast}
+                  modelOptions={modelOptions}
+                  fastOptions={fastOptions}
+                  onModel={(m) => void setModel(m || undefined)}
+                  onFast={(m) => void setSmallFastModel(m || undefined)}
+                />
+              </>
+            )
+          }
+        </GatewayProviderPicker>
       </div>
 
-      {adding ? (
-        <ProfileForm
-          draft={credentialDraft!}
-          providers={providers}
-          types={types}
-          onChange={(draft) => void saveCredentialDraft(draft)}
-          onSave={async (p) => {
-            await saveProfile(p)
-            await saveCredentialDraft(undefined)
-          }}
-          onCancel={() => void saveCredentialDraft(undefined)}
-        />
-      ) : (
-        <div className={styles['toolbar']}>
-          <Button variant="ghost" onClick={() => void saveCredentialDraft(EMPTY_DRAFT)}>
-            <Plus size={14} strokeWidth={2} />
-            {localize('agentSettings.auth.library.add', 'Add credential')}
-          </Button>
+      {inUse && authentication !== AGENT_SUBSCRIPTION_AUTH && authentication !== undefined && (
+        <div className={styles['desc']}>
+          <span className={styles['activeBadge']}>
+            {localize('agentSettings.auth.inUse', 'In use')}
+          </span>
         </div>
       )}
     </section>
   )
 }
 
-function ProfileRow({
-  profile,
-  authority,
-  providers,
-  types,
-  active,
-  onUse,
-  onEdit,
-  onDelete,
+function ModelPicks({
+  model,
+  fast,
+  modelOptions,
+  fastOptions,
+  onModel,
+  onFast,
 }: {
-  profile: ClaudeCredentialProfile
-  authority: string | undefined
-  providers: readonly AiProviderInstance[]
-  types: Readonly<Record<string, AiProviderType>>
-  active: boolean
-  onUse: () => void
-  onEdit: () => void
-  onDelete: () => void
+  model: string | undefined
+  fast: string | undefined
+  modelOptions: readonly string[]
+  fastOptions: readonly string[]
+  onModel: (value: string) => void
+  onFast: (value: string) => void
 }) {
-  const Icon = profile.kind === 'apiKey' ? KeyRound : Network
-  const configService = useService<IClaudeConfigService>(IClaudeConfigService)
-  const probe = useCallback(
-    (url: string) => configService.checkGatewayConnectivity(url, authority),
-    [configService, authority],
-  )
-  const ref = profile.kind === 'gateway' ? profile.providerRef : undefined
-  const resolved = ref !== undefined ? resolveProviderRef(ref, providers, types) : undefined
-  const gatewayBaseUrl =
-    resolved !== undefined
-      ? resolveModelBaseUrl(undefined, resolved.instance.baseUrl, resolved.type.defaultBaseUrl)
-      : undefined
-  const detail =
-    profile.kind === 'apiKey'
-      ? maskKey(profile.apiKey ?? '')
-      : [
-          resolved !== undefined
-            ? (resolved.instance.label ?? resolved.instance.name)
-            : (ref ?? ''),
-          profile.model,
-        ]
-          .filter((s) => s)
-          .join(' · ')
   return (
-    <div className={styles['profileRow']}>
-      <ConnectivityDot
-        baseUrl={profile.kind === 'gateway' ? gatewayBaseUrl : undefined}
-        probe={probe}
-      />
-      <Icon size={16} strokeWidth={1.75} className={styles['navIcon']} />
-      <div className={styles['profileBody']}>
-        <div className={styles['radioTitleRow']}>
-          <span className={styles['radioTitle']}>{profile.label}</span>
-          {active && (
-            <span className={styles['activeBadge']}>
-              {localize('agentSettings.auth.inUse', 'In use')}
-            </span>
-          )}
-        </div>
-        <span className={styles['profileDetail']}>{detail}</span>
-      </div>
-      <div className={styles['profileActions']}>
-        {!active && (
-          <Button variant="ghost" onClick={onUse}>
-            {localize('agentSettings.auth.use', 'Use')}
-          </Button>
-        )}
-        <IconButton label={localize('agentSettings.auth.edit', 'Edit')} onClick={onEdit}>
-          <Pencil size={14} strokeWidth={1.75} />
-        </IconButton>
-        <IconButton label={localize('agentSettings.auth.delete', 'Delete')} onClick={onDelete}>
-          <Trash2 size={14} strokeWidth={1.75} />
-        </IconButton>
-      </div>
-    </div>
-  )
-}
-
-function ProfileForm({
-  draft,
-  providers,
-  types,
-  onChange,
-  onSave,
-  onCancel,
-}: {
-  draft: ClaudeCredentialDraft
-  providers: readonly AiProviderInstance[]
-  types: Readonly<Record<string, AiProviderType>>
-  onChange: (draft: ClaudeCredentialDraft) => void
-  onSave: (profile: ClaudeCredentialProfile) => Promise<void>
-  onCancel: () => void
-}) {
-  const valid =
-    draft.label.trim() !== '' &&
-    (draft.kind === 'apiKey' ? draft.apiKey.trim() !== '' : draft.providerRef.trim() !== '')
-
-  const save = useCallback(async () => {
-    const base = {
-      id: draft.editingProfileId ?? newId(),
-      label: draft.label.trim(),
-      kind: draft.kind,
-    }
-    let profile: ClaudeCredentialProfile
-    if (draft.kind === 'apiKey') {
-      profile = { ...base, apiKey: draft.apiKey.trim() }
-    } else {
-      profile = { ...base, providerRef: draft.providerRef.trim() }
-      if (draft.model.trim()) profile.model = draft.model.trim()
-      if (draft.smallFastModel.trim()) profile.smallFastModel = draft.smallFastModel.trim()
-    }
-    await onSave(profile)
-  }, [draft, onSave])
-
-  return (
-    <div className={styles['profileForm']}>
+    <>
       <div className={styles['field']}>
         <label className={styles['label']}>
-          {localize('agentSettings.auth.form.kind', 'Type')}
+          {localize('agentSettings.auth.form.model', 'Model')}
         </label>
-        <div className={styles['toolbar']}>
-          <button
-            type="button"
-            className={`${styles['choice']} ${draft.kind === 'apiKey' ? styles['choiceActive'] : ''}`}
-            onClick={() => onChange({ ...draft, kind: 'apiKey' })}
+        {modelOptions.length > 0 ? (
+          <select
+            className={styles['providerSelect']}
+            value={model ?? ''}
+            onChange={(e) => onModel(e.target.value)}
           >
-            <KeyRound size={14} strokeWidth={1.75} />
-            {localize('agentSettings.auth.apiKey', 'Anthropic API key')}
-          </button>
-          <button
-            type="button"
-            className={`${styles['choice']} ${draft.kind === 'gateway' ? styles['choiceActive'] : ''}`}
-            onClick={() => onChange({ ...draft, kind: 'gateway' })}
-          >
-            <Network size={14} strokeWidth={1.75} />
-            {localize('agentSettings.auth.gateway', 'Custom gateway / Auth token')}
-          </button>
-        </div>
-      </div>
-
-      <div className={styles['field']}>
-        <label className={styles['label']}>
-          {localize('agentSettings.auth.form.label', 'Name')}
-        </label>
-        <Input
-          value={draft.label}
-          placeholder={localize('agentSettings.auth.form.label.ph', 'e.g. Personal, Work gateway')}
-          onChange={(e) => onChange({ ...draft, label: e.target.value })}
-        />
-      </div>
-
-      {draft.kind === 'apiKey' ? (
-        <div className={styles['field']}>
-          <label className={styles['label']}>{`env.${API_KEY}`}</label>
+            <option value="">
+              {localize('agentSettings.auth.form.model.none', 'Use default')}
+            </option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        ) : (
           <Input
-            type="password"
-            value={draft.apiKey}
-            placeholder="sk-ant-…"
-            onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
+            value={model ?? ''}
+            placeholder="claude-opus-4-8"
+            onChange={(e) => onModel(e.target.value)}
           />
-        </div>
-      ) : (
-        <>
-          <div className={styles['field']}>
-            <label className={styles['label']}>
-              {localize('agentSettings.auth.form.provider', 'Provider instance')}
-            </label>
-            <GatewayProviderPicker
-              providers={providers}
-              types={types}
-              protocol="anthropic-messages"
-              value={draft.providerRef}
-              onChange={(ref) => onChange({ ...draft, providerRef: ref })}
-            >
-              {(resolved) => <ClaudeDerivationPreview resolved={resolved} />}
-            </GatewayProviderPicker>
-          </div>
-          <div className={styles['field']}>
-            <label className={styles['label']}>
-              {localize('agentSettings.auth.form.model', 'Model')}
-            </label>
-            <div className={styles['desc']}>
-              {localize(
-                'agentSettings.auth.form.model.desc',
-                'Model to request from this gateway (e.g. kimi-k3). Applied to Settings.model when you use this credential. Leave empty to keep the current model.',
-              )}
-            </div>
-            <Input
-              value={draft.model}
-              placeholder="kimi-k3"
-              onChange={(e) => onChange({ ...draft, model: e.target.value })}
-            />
-          </div>
-          <div className={styles['field']}>
-            <label className={styles['label']}>{`env.${SMALL_FAST_MODEL}`}</label>
-            <div className={styles['desc']}>
-              {localize(
-                'agentSettings.auth.form.smallFastModel.desc',
-                'Optional fast/background model this gateway serves. Leave empty to unset it.',
-              )}
-            </div>
-            <Input
-              value={draft.smallFastModel}
-              placeholder="kimi-k3-mini"
-              onChange={(e) => onChange({ ...draft, smallFastModel: e.target.value })}
-            />
-          </div>
-        </>
-      )}
-
-      <div className={styles['toolbar']}>
-        <Button disabled={!valid} onClick={() => void save()}>
-          {localize('agentSettings.auth.save', 'Save')}
-        </Button>
-        <Button variant="ghost" onClick={onCancel}>
-          {localize('agentSettings.auth.cancel', 'Cancel')}
-        </Button>
+        )}
       </div>
-    </div>
+      <div className={styles['field']}>
+        <label className={styles['label']}>{`env.ANTHROPIC_SMALL_FAST_MODEL`}</label>
+        {fastOptions.length > 0 ? (
+          <select
+            className={styles['providerSelect']}
+            value={fast ?? ''}
+            onChange={(e) => onFast(e.target.value)}
+          >
+            <option value="">
+              {localize('agentSettings.auth.form.smallFastModel.none', 'Unset')}
+            </option>
+            {fastOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Input
+            value={fast ?? ''}
+            placeholder="claude-haiku-4-5"
+            onChange={(e) => onFast(e.target.value)}
+          />
+        )}
+      </div>
+    </>
   )
 }
 
-function ClaudeDerivationPreview({
-  resolved,
-}: {
-  readonly resolved: ResolvedProvider | undefined
-}) {
-  if (resolved === undefined) return null
-  const missing = missingProviderPiece(resolved.instance, resolved.type)
+function ClaudeDerivationPreview({ resolved }: { readonly resolved: AiResolvedProvider }) {
+  const missing = missingProviderPiece(resolved, CLAUDE_PROTOCOL)
   if (missing !== undefined) return <DerivationError missing={missing} />
-  const derived = deriveClaudeEnv(resolved.instance, resolved.type)
+  const derived = deriveClaudeAuth(resolved)
   if (derived === undefined) return null
+  if (derived.kind === 'apiKey') {
+    return (
+      <div className={styles['derivePreview']} data-testid="derivePreview">
+        <div className={styles['deriveRow']}>
+          <span className={styles['deriveKey']}>{API_KEY}</span>
+          <span className={styles['deriveValue']}>{maskKey(derived.apiKey)}</span>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className={styles['derivePreview']} data-testid="derivePreview">
       <div className={styles['deriveRow']}>
@@ -446,40 +318,19 @@ function ClaudeDerivationPreview({
   )
 }
 
-const EMPTY_DRAFT: ClaudeCredentialDraft = {
-  kind: 'apiKey',
-  label: '',
-  apiKey: '',
-  providerRef: '',
-  model: '',
-  smallFastModel: '',
-}
-
-function profileToDraft(profile: ClaudeCredentialProfile): ClaudeCredentialDraft {
-  return {
-    editingProfileId: profile.id,
-    kind: profile.kind,
-    label: profile.label,
-    apiKey: profile.apiKey ?? '',
-    providerRef: profile.providerRef ?? '',
-    model: profile.model ?? '',
-    smallFastModel: profile.smallFastModel ?? '',
-  }
-}
-
 function LoginForm({
   authStatus,
   authority,
   isActive,
   hasEnvCredential,
-  patch,
+  onUseLogin,
   reloadAuthStatus,
 }: {
   authStatus: ClaudeAuthStatus
   authority: string | undefined
   isActive: boolean
   hasEnvCredential: boolean
-  patch: UseClaudeConfig['patch']
+  onUseLogin: () => void
   reloadAuthStatus: UseClaudeConfig['reloadAuthStatus']
 }) {
   const notification = useService(INotificationService)
@@ -516,15 +367,13 @@ function LoginForm({
     }
   }, [reloadAuthStatus, notification])
 
-  const setAsCurrent = useCallback(async () => {
-    // Hand control back to the OAuth login by clearing the env credentials that
-    // would otherwise take precedence. The saved profiles are untouched.
-    await patch({ env: { [API_KEY]: null, [AUTH_TOKEN]: null, [BASE_URL]: null } })
+  const setAsCurrent = useCallback(() => {
+    onUseLogin()
     notification.notify({
       severity: Severity.Info,
       message: localize('agentSettings.auth.login.activated', 'Now using your Claude login.'),
     })
-  }, [patch, notification])
+  }, [onUseLogin, notification])
 
   return (
     <div className={styles['authForm']}>
@@ -571,7 +420,7 @@ function LoginForm({
         <div className={styles['desc']}>
           {localize(
             'agentSettings.auth.login.overridden',
-            'You are signed in, but a saved credential is currently taking precedence.',
+            'You are signed in, but a provider credential is currently taking precedence.',
           )}
         </div>
       )}
@@ -597,8 +446,8 @@ function LoginForm({
         <Button variant="ghost" onClick={() => void doLogin('console')}>
           {localize('agentSettings.auth.login.console', 'Log in with Anthropic Console')}
         </Button>
-        {authStatus.loggedIn && !authStatus.expired && hasEnvCredential && (
-          <Button variant="ghost" onClick={() => void setAsCurrent()}>
+        {authStatus.loggedIn && !authStatus.expired && (
+          <Button variant="ghost" onClick={setAsCurrent}>
             {localize('agentSettings.auth.login.setCurrent', 'Use this login')}
           </Button>
         )}

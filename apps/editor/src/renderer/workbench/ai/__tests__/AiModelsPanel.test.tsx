@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  AiModelsPanel tests — the two-section (provider types / provider instances)
- *  rewrite: both sections render, type-level model pricing writes through
- *  updateProviderTypes, instance removal writes through updateProviders, the
- *  account-usage block honours the "authoritative source only" contract (hidden
- *  without a usageSource, "Unavailable" when the source yields nothing), and the
- *  connectivity dot only probes on an explicit "Test connection" click.
+ *  AiModelsPanel tests — the single-layer providers rewrite: entries render,
+ *  removal writes through updateProviders, the account-usage block honours the
+ *  "authoritative source only" contract (hidden without a usageSource,
+ *  "Unavailable" when the source yields nothing), the connectivity dot only
+ *  probes on an explicit "Test connection" click, the legacy-format banner shows
+ *  when aiSettings.json is still two-layer, provider issues are surfaced visibly,
+ *  and a provider without a pricing source shows "Rate unknown" on its models.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -25,9 +26,8 @@ import {
   type AiAccountUsage,
   type AiModelConfiguration,
   type AiModelMetadata,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiProviderTypeDescriptor,
+  type AiProviderEntry,
+  type AiProviderIssue,
 } from '@universe-editor/platform'
 import { IAiRateMirror } from '../../../services/ai/aiRateMirror.js'
 import { AiModelsPanel } from '../AiModelsPanel.js'
@@ -35,33 +35,51 @@ import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
 
+const KURO_MODEL: AiModelMetadata = {
+  id: 'kuro/anthropic-messages/qwen3-coder',
+  providerId: 'kuro',
+  protocol: 'anthropic-messages',
+  channelModel: 'qwen3-coder',
+  name: 'Qwen3 Coder',
+  family: 'qwen3',
+  maxInputTokens: 1000,
+  maxOutputTokens: 1000,
+  capabilities: { streaming: true },
+}
+
+const KURO_PROVIDER: AiProviderEntry = {
+  id: 'kuro',
+  label: 'Kuro',
+  baseUrl: 'https://kuro.example',
+  protocolMap: { 'anthropic-messages': ['qwen3-coder'] },
+}
+
 class FakeAiModelService {
   private readonly _onDidChangeModels = new Emitter<void>()
   private readonly _onDidChangeRemote = new Emitter<void>()
   readonly onDidChangeModels = this._onDidChangeModels.event
   readonly onDidChangeRemote = this._onDidChangeRemote.event
 
-  types: Readonly<Record<string, AiProviderType>> = {}
-  descriptors: readonly AiProviderTypeDescriptor[] = []
-  instances: readonly AiProviderInstance[] = []
+  providers: readonly AiProviderEntry[] = []
   models: readonly AiModelMetadata[] = []
+  issues: readonly AiProviderIssue[] = []
+  legacy = false
   usages = new Map<string, AiAccountUsage | undefined>()
 
-  getProviderTypes = vi.fn(async () => this.types)
-  getProviderTypeDescriptors = vi.fn(async () => this.descriptors)
-  getProviders = vi.fn(async () => this.instances)
+  getProviders = vi.fn(async () => this.providers)
   getModels = vi.fn(async () => this.models)
-  updateProviderTypes = vi.fn(async (types: Readonly<Record<string, AiProviderType>>) => {
-    this.types = { ...types }
-  })
-  updateProviders = vi.fn(async (providers: readonly AiProviderInstance[]) => {
-    this.instances = [...providers]
+  getProviderIssues = vi.fn(async () => this.issues)
+  isLegacySettingsFormat = vi.fn(async () => this.legacy)
+  updateProviders = vi.fn(async (providers: readonly AiProviderEntry[]) => {
+    this.providers = [...providers]
   })
   refreshRemote = vi.fn(async () => {})
+  setApiKey = vi.fn(async () => {})
+  deleteApiKey = vi.fn(async () => {})
   setModelConfiguration = vi.fn(async () => {})
   getModelConfiguration = vi.fn(async (): Promise<AiModelConfiguration> => ({}))
   verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 2 }))
-  getAccountUsage = vi.fn(async (key: string) => this.usages.get(key))
+  getAccountUsage = vi.fn(async (providerId: string) => this.usages.get(providerId))
 }
 
 class FakeStorage {
@@ -110,94 +128,34 @@ function renderPanel(aiModel: FakeAiModelService, confirmResult = { confirmed: t
   return { ...utils, aiModel }
 }
 
-function typeCard(id: string): HTMLElement {
-  const el = [...screen.getAllByTestId('ai-type-card')].find(
-    (n) => n.getAttribute('data-type-id') === id,
+function entryCard(id: string): HTMLElement {
+  const el = [...screen.getAllByTestId('ai-provider-entry-card')].find(
+    (n) => n.getAttribute('data-provider-id') === id,
   )
-  expect(el, `type card ${id}`).toBeTruthy()
+  expect(el, `provider entry card ${id}`).toBeTruthy()
   return el!
-}
-
-function instanceCard(key: string): HTMLElement {
-  const el = [...screen.getAllByTestId('ai-instance-card')].find(
-    (n) => n.getAttribute('data-provider-key') === key,
-  )
-  expect(el, `instance card ${key}`).toBeTruthy()
-  return el!
-}
-
-const ANTHROPIC_TYPE: AiProviderType = {
-  label: 'Anthropic',
-  protocol: 'anthropic-messages',
-  requiresApiKey: true,
-  models: [{ id: 'claude-sonnet-4.5', pricing: { input: 3, output: 15 } }],
-}
-const ANTHROPIC_DESCRIPTOR: AiProviderTypeDescriptor = {
-  id: 'anthropic',
-  label: 'Anthropic',
-  protocol: 'anthropic-messages',
-  requiresApiKey: true,
-  builtin: true,
-}
-const KURO_TYPE: AiProviderType = {
-  label: 'Kuro',
-  protocol: 'anthropic-messages',
-  models: [{ id: 'qwen3-coder' }],
-}
-const KURO_DESCRIPTOR: AiProviderTypeDescriptor = {
-  id: 'kuro',
-  label: 'Kuro',
-  protocol: 'anthropic-messages',
-  requiresApiKey: true,
-  builtin: false,
 }
 
 describe('AiModelsPanel', () => {
-  it('renders both the provider-types and provider-instances sections', async () => {
+  it('renders the providers section with an entry card per provider', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.types = { anthropic: ANTHROPIC_TYPE }
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    aiModel.instances = [{ name: 'default', type: 'anthropic' }]
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    expect(screen.getByText('Provider Types')).toBeTruthy()
-    expect(screen.getByText('Provider Instances')).toBeTruthy()
-    expect(typeCard('anthropic')).toBeTruthy()
-    expect(instanceCard('anthropic/default')).toBeTruthy()
+    expect(screen.getByText('Providers')).toBeTruthy()
+    expect(entryCard('kuro')).toBeTruthy()
   })
 
-  it('edits a type-level model rate and writes the override through updateProviderTypes', async () => {
+  it('removes a provider through updateProviders', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.types = { kuro: KURO_TYPE }
-    aiModel.descriptors = [KURO_DESCRIPTOR]
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    const card = typeCard('kuro')
-    fireEvent.click(within(card).getByRole('button', { name: 'Fill in rate' }))
-
-    const spins = within(card).getAllByRole('spinbutton')
-    expect(spins.length).toBe(4)
-    fireEvent.change(spins[0]!, { target: { value: '3' } })
-    fireEvent.change(spins[1]!, { target: { value: '15' } })
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
-    await flushEffects()
-
-    expect(aiModel.updateProviderTypes).toHaveBeenCalledTimes(1)
-    const arg = aiModel.updateProviderTypes.mock.calls[0]![0]
-    expect(arg.kuro?.models?.[0]?.pricing).toEqual({ currency: 'USD', input: 3, output: 15 })
-  })
-
-  it('removes an instance through updateProviders', async () => {
-    const aiModel = new FakeAiModelService()
-    aiModel.types = { anthropic: ANTHROPIC_TYPE }
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    aiModel.instances = [{ name: 'default', type: 'anthropic' }]
-    renderPanel(aiModel)
-    await flushEffects()
-
-    const card = instanceCard('anthropic/default')
+    const card = entryCard('kuro')
     fireEvent.click(within(card).getByRole('button', { name: 'Remove' }))
     await flushEffects()
 
@@ -206,9 +164,8 @@ describe('AiModelsPanel', () => {
 
   it('hides the account-usage block entirely when no usageSource is declared', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.types = { anthropic: ANTHROPIC_TYPE }
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    aiModel.instances = [{ name: 'default', type: 'anthropic' }]
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
@@ -219,23 +176,21 @@ describe('AiModelsPanel', () => {
 
   it('shows "Unavailable" when a usageSource is declared but no authoritative value exists', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.types = { anthropic: ANTHROPIC_TYPE }
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    aiModel.instances = [{ name: 'default', type: 'anthropic', usageSource: { id: 'http-json' } }]
-    aiModel.usages.set('anthropic/default', undefined)
+    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [KURO_MODEL]
+    aiModel.usages.set('kuro', undefined)
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(screen.getByText('Unavailable')).toBeTruthy()
-    expect(aiModel.getAccountUsage).toHaveBeenCalledWith('anthropic/default')
+    expect(aiModel.getAccountUsage).toHaveBeenCalledWith('kuro')
   })
 
   it('only calls verifyProvider on an explicit "Test connection" click, not on render', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.types = { anthropic: ANTHROPIC_TYPE }
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    aiModel.instances = [{ name: 'default', type: 'anthropic' }]
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
@@ -246,9 +201,39 @@ describe('AiModelsPanel', () => {
 
     expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
     expect(aiModel.verifyProvider).toHaveBeenCalledWith({
-      type: 'anthropic',
-      name: 'default',
+      id: 'kuro',
       protocol: 'anthropic-messages',
+      baseUrl: 'https://kuro.example',
     })
+  })
+
+  it('shows the legacy-format banner when aiSettings.json is still two-layer', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.legacy = true
+    renderPanel(aiModel)
+    await flushEffects()
+
+    expect(screen.getByTestId('ai-legacy-banner')).toBeTruthy()
+  })
+
+  it('surfaces provider issues visibly on the affected card', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    aiModel.issues = [{ providerId: 'kuro', reason: 'no-protocol', fatal: true }]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    expect(screen.getByText('No protocol declared')).toBeTruthy()
+  })
+
+  it('shows "Rate unknown" on models of a provider without a pricing source', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+
+    expect(screen.getByText('Rate unknown')).toBeTruthy()
   })
 })

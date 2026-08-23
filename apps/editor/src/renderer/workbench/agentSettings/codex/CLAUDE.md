@@ -15,21 +15,22 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 #### Renderer — 贡献注册(与 Claude 共用)
 - `agentSettings/agentSettingsRegistry.ts` — `registerAgentSettings(agentId, component)` / `getAgentSettingsComponent(agentId)`。
 - `agentSettings/builtinAgentSettings.ts` — 副作用聚合 hub,已有 `import './codex/CodexAgentSettings.js'`。
-- `agentSettings/AgentSettingsEditor.module.css` — 面板共用样式(`agentBody`/`subNav`/`subBody`/`navItem`/认证库/状态行),`--ue-*` token。Claude / Codex 共用。
+- `agentSettings/AgentSettingsEditor.module.css` — 面板共用样式(`agentBody`/`subNav`/`subBody`/`navItem`/认证表单/状态行),`--ue-*` token。Claude / Codex 共用。
 
 #### Renderer — Codex 专属(agentSettings/codex/)
-- `codex/CodexAgentSettings.tsx` — 根组件。持有单个 `useCodexConfig()`,四分类子导航(`CATEGORIES`:auth/model/safety/advanced),激活分类 + 滚动位置经 `IStorageService` 持久化(`agent.settings.codex.activeCategory`、`agent.settings.codex.scroll.<id>`)。**末行 `registerAgentSettings('codex', CodexAgentSettings)`。** 仅 `config.loaded` 后渲染面板。
-- `codex/CodexAuthenticationPanel.tsx` — 认证页,**最复杂**。两块:`CredentialLibrary`(API key / gateway 档案库 + 新增表单)与 `LoginForm`(ChatGPT 登录状态 + 登录按钮)。**gateway 档案改 `providerRef`(`type/name`) 引用 AI 设置的 provider 实例,下拉用共享组件 `../GatewayProviderPicker.js`(`protocol="openai-responses"`),派生经 `shared/ai/providerDerivation.ts` 的 `deriveCodexProvider`。****判定"真正 In Use"靠两个条件叠加**:① `authStatus`(auth.json 解析出谁是凭据)② config.toml 顶层 `model_provider` 是否为空(`builtinActive = model_provider===''`)。因为 ChatGPT/API key 都走内置 `openai` provider,**只有 `model_provider` 为空时才真生效**;一旦它指向 `codex-gateway`/`kuro` 之类自定义 provider,auth.json 里的登录被绕过。所以:`chatgptActive = authStatus.active==='chatgpt' && builtinActive`;gateway 档案的 `isActive = gatewayActive(model_provider==='codex-gateway') && base_url 匹配`;API key 档案 `isActive = apiKeyActive && builtinActive`。`authStatus.chatgpt` 只要 token 在盘上就一直显示 "Signed in";`overridden = signedIn && !chatgptActive`(登录了但被 API key 或 gateway 顶掉)时显示 "a saved credential is currently taking precedence." + "Use this login"(调 `switchToChatgptLogin`)。**踩坑历史**:早先只看 `authStatus.active` 忽略 `model_provider`,导致 ChatGPT 登录后即便 gateway 在顶层生效也误显 "In Use"(两处徽章同时亮)。
+- `codex/CodexAgentSettings.tsx` — 根组件。持有单个 `useCodexConfig()`,五分类子导航(`CATEGORIES`:auth/model/safety/advanced/binary),激活分类 + 滚动位置经 `IStorageService` 持久化(`agent.settings.codex.activeCategory`、`agent.settings.codex.scroll.<id>`)。**末行 `registerAgentSettings('codex', CodexAgentSettings)`。** 仅 `config.loaded` 后渲染面板。
+- `codex/CodexAuthenticationPanel.tsx` — 认证页,**最复杂**。两块:`AuthenticationSection`(单一认证选择:选一个 provider 条目或 `@subscription` + model 下拉)与 `LoginForm`(ChatGPT 登录状态 + 登录按钮)。认证选择是**单个 provider id 字符串**(存 `aiSettings.json` 的 `agentSettings.codex.authentication`),下拉用共享组件 `../GatewayProviderPicker.js`(`protocol="openai-responses"`),派生经 `shared/ai/providerDerivation.ts` 的 `deriveCodexGateway`。**判定"真正 In Use"走 main 的 `resolveActiveAuth`(见下同名一节)**:`activeAuth.kind==='subscription'` = ChatGPT 登录生效,`kind==='provider'` = gateway 生效,`drift` = 盘上 config.toml/auth.json 与声明选择不一致(面板显示 drift 警告)。`signedIn = !!chatgpt && !chatgpt.expired`(token 过期走 "Login expired" 分支,不显示 "Signed in");`overridden = signedIn && !chatgptActive`(登录了但被 gateway 顶掉——当前面板没有官方 API key 入口)时显示 "a saved credential is currently taking precedence." + "Use this login"。
 - `codex/CodexModelPanel.tsx` — model / model_provider(free-text,blur 提交) / model_reasoning_effort(select 即时写),绑 config.toml。
 - `codex/CodexSafetyPanel.tsx` — `approval_policy` + `sandbox_mode` 两个 select,绑 config.toml。
 - `codex/CodexAdvancedPanel.tsx` — `cli_auth_credentials_store` 选择 + `hide_agent_reasoning` 开关 + 自由标量键编辑器。隐藏其他面板管的键(model/approval/sandbox/base URL),只编标量(嵌套表如 `[model_providers.*]` 留给原始文件)。
-- `codex/useCodexConfig.ts` — 配置 hook。聚合 settings/authStatus/profiles 读取与 patch/save/delete/`applyProfile`/`switchToChatgptLogin`。**所有凭据切换统一走 `service.applyCredential(intent)`**(见下「三种登录方案」):`applyProfile` 据档案 kind 发 `{kind:'gateway',baseUrl,apiKey,providerName}`(gateway 的 baseUrl/apiKey 由 `providerRef` 经 `deriveCodexProvider` 派生,providerName=实例 label/name) 或 `{kind:'apiKey',apiKey}`;`switchToChatgptLogin` 发 `{kind:'chatgpt'}`。**没有** `setApiKey`/`ensureCodexGatewayProvider`/`BASE_URL` 常量了(均被 `applyCredential` 取代)。**订阅 `onDidChangeAuth`** 实现 auth.json 落盘后实时刷新登录状态。
+- `codex/useCodexConfig.ts` — 配置 hook。聚合 settings/authStatus/agentSettings/activeAuth 读取与 patch。**所有凭据切换统一走 `service.applyCredential(intent)`**(见下「三种登录方案」):`applyAuthentication` 据认证选择发 `{kind:'gateway',baseUrl,apiKey,providerName}`(gateway 的 baseUrl/apiKey/providerName 由选中的 provider 条目经 `deriveCodexGateway` 派生) 或 `{kind:'chatgpt'}`(选 `@subscription`);`setModel` **同时**写 `agentSettings.codex.model`(`writeAgentSettings`)与 config.toml 的 `model`(`patch`)。**没有** `setApiKey`/`ensureCodexGatewayProvider`/`BASE_URL` 常量了(均被 `applyCredential` 取代)。`activeAuth` 来自 `resolveActiveAuth`(drift 检测)。**订阅 `onDidChangeAuth`** 实现 auth.json 落盘后实时刷新登录状态。
 - `codex/codexLogin.ts` — `runCodexLogin()` 开集成终端跑 **`codex login`**(系统 PATH 的官方 codex CLI)。**注意:不是 codex-acp**——我们为 agent 下载的 `codex-acp` adapter 没有 `login` 子命令,OAuth 归官方 `codex` CLI。
 
 #### 跨进程服务三层
-- `shared/ipc/codexConfigService.ts` — **wire 契约**。`ICodexConfigService` 装饰器 + 全部类型(`CodexSettings`(含 `model_provider` / `model_providers?: Record<string,unknown>`)/`CodexSettingsPatch`/`CodexAuthStatus`/`CodexCredentialKind`/`CodexCredentialProfile`/**`CodexCredentialIntent`** + 枚举 `CodexReasoningEffort`/`CodexApprovalPolicy`/`CodexSandboxMode`/`CodexCredentialStore`)。方法:`read`/`patch`/`configPath`/`readAuthStatus`/**`applyCredential(intent)`**/`readProfiles`/`writeProfiles`/`checkGatewayConnectivity` + 事件 `onDidChangeAuth`。`CodexCredentialIntent` 是判别联合:`{kind:'gateway',baseUrl,apiKey,providerName?}` | `{kind:'apiKey',apiKey}` | `{kind:'chatgpt'}`。
-- `main/services/codexConfig/codexConfigMainService.ts` — **main 实现**。`extends Disposable`。原子写(mkdir -p + temp + rename),读容错(缺失/损坏返回空)。核心是 `applyCredential` + 内部纯函数 `reconcileGatewayProvider(current, intent)`(见下「三种登录方案」)。构造里 `_startAuthWatch()`,`override dispose()` 关 watcher。
-- `main/services/codexConfig/__tests__/codexConfigMainService.test.ts` — readAuthStatus(含共存 + 优先级用例)+ `applyCredential`(gateway 自包含 provider 写入 / chatgpt-token 保留 / 残留 base_url 清理 / 保留用户手写 provider 如 `[model_providers.kuro]`)+ profiles + `onDidChangeAuth` 事件。共 31 个用例。
+- `shared/ipc/codexConfigService.ts` — **wire 契约**。`ICodexConfigService` 装饰器 + 全部类型(`CodexSettings`(含 `model_provider` / `model_providers?: Record<string,unknown>`)/`CodexSettingsPatch`/`CodexAuthStatus`/**`CodexCredentialIntent`** + 枚举 `CodexReasoningEffort`/`CodexApprovalPolicy`/`CodexSandboxMode`/`CodexCredentialStore`;编辑器侧 `CodexAgentSettings`/`CodexActiveAuth`)。方法:`read`/`patch`/`configPath`/`readAuthStatus`/**`applyCredential(intent)`**/`readAgentSettings`/`writeAgentSettings`/`resolveActiveAuth`/`checkGatewayConnectivity` + 事件 `onDidChangeAuth`。`CodexCredentialIntent` 是判别联合:`{kind:'gateway',baseUrl,apiKey,providerName?}` | `{kind:'apiKey',apiKey}` | `{kind:'chatgpt'}`。
+- `main/services/codexConfig/codexConfigMainService.ts` — **main 服务**。`extends Disposable`。职责是**按 authority 路由**(本地 → `CodexConfigStore`,远端 → `RemoteChannels.AgentConfig`)+ agent settings 读写 + `resolveActiveAuth`(纯函数 `computeCodexActiveAuth`/`computeDrift`/`matchingProviderId` 就在本文件)。
+- `packages/node-services/src/agentConfig/{codexConfigStore.ts,types.ts}` — **文件存储层**(main 与 remote server 共享)。`CodexAuthStatus`/`CodexCredentialIntent` 的类型定义、原子写(mkdir -p + temp + rename)、读容错(缺失/损坏返回空)、`applyCredential` + 内部纯函数 `reconcileGatewayProvider(current, intent)`(见下「三种登录方案」)、`_startAuthWatch()` 与 `dispose()` 关 watcher，**全在这里**,不在 main 服务文件里。
+- `main/services/codexConfig/__tests__/codexConfigMainService.test.ts` — readAuthStatus(含共存 + 优先级 + "never returns the credentials themselves")+ `applyCredential`(gateway 自包含 provider 写入 / chatgpt-token 保留 / 残留 base_url 清理 / 保留用户手写 provider 如 `[model_providers.kuro]`)+ agent settings + `onDidChangeAuth` 事件;文件末尾另有一个 `CodexConfigMainService — remote resolveActiveAuth` describe 覆盖远端路由下的 drift 判定。
 
 ### codexConfig 服务接线(6 处,加方法时无需动)
 
@@ -41,7 +42,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 5. `renderer/ipc/registerProxyServices.ts` — `ProxyChannel.toService<ICodexConfigService>(...)`(**Codex 在这里注册,不在 renderer/main.tsx**——与 Claude 不同)
 6. (事件无需额外接线:`ProxyChannel` 自动代理 `onDidChange*` 命名的 Emitter)
 
-### 两个配置文件 + 一个档案库的语义(关键)
+### 两个配置文件 + 编辑器认证选择的语义(关键)
 
 `$CODEX_HOME`(默认 `~/.codex`)下:
 
@@ -49,11 +50,10 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 |---|---|---|---|
 | `config.toml` | 编辑器 + CLI 共享 | agent/CLI | model / reasoning / approval / sandbox / 顶层 `model_provider` / `[model_providers.*]` 等。smol-toml 解析,**就地编辑保留未管理键** |
 | `auth.json` | `codex login`(ChatGPT) / 编辑器(API key) | agent/CLI | JSON。可**同时**含 `OPENAI_API_KEY` + `tokens`(ChatGPT OAuth 块)+ `auth_mode` 字段 |
-| `<configDir>/aiSettings.json` 的 `agentSettings.codex.authentication` | **仅编辑器** | 仅编辑器 | API key / gateway 引用 `providerRef` **档案库**(候选),不是生效配置 |
-| renderer `IStorageService` 全局键 `agentSettings.codex.credentialDraft` | **仅编辑器** | 仅编辑器 | 认证面板未保存的表单草稿(UI 状态,不进配置文件) |
+| `<configDir>/aiSettings.json` 的 `agentSettings.codex` | **仅编辑器** | 仅编辑器 | 认证选择(单个 provider id 或 `@subscription`)+ model,不是生效配置 |
 
-- **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json**。gateway 块的 `base_url` / `experimental_bearer_token` 由档案的 `providerRef` 经 `deriveCodexProvider` 派生,不再内联在档案里。
-- **ChatGPT 登录不是 profile**:它是 `codex login` 管的单一共享登录,与档案库平行。
+- **三种登录方案落地到不同位置**(见下「三种登录方案」):ChatGPT/官方 API key → auth.json + 顶层 `model_provider` 留空;gateway → 自包含写进 `[model_providers.codex-gateway]` + 顶层 `model_provider='codex-gateway'`,**不碰 auth.json 里的 ChatGPT token 块**(它仍会删掉 `OPENAI_API_KEY` 并相应调整 `auth_mode`)。gateway 块的 `base_url` / `experimental_bearer_token` 由选中的 provider 条目经 `deriveCodexGateway` 派生,不再内联在配置里。
+- **ChatGPT 登录不是 provider 条目**:它是 `codex login` 管的单一共享登录,与认证选择平行。
 - `patch` 里把某键设 `null` = 删除该键(清除残留 `openai_base_url` 的唯一办法)。
 - **编辑器只靠改这两个文件控制 codex**:绝不调 ACP `authenticate`、绝不注入 `MODEL_PROVIDER`/`CODEX_CONFIG` 环境变量(那些只被 codex-acp 的 `index.ts` 读;编辑器不设)。
 
@@ -65,13 +65,15 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 | 官方 OpenAI API Key | `auth.json` 的 `OPENAI_API_KEY` + `auth_mode:"apikey"` | 内置 `openai` | key 作 Bearer 发往 api.openai.com |
 | 自定义 gateway(kurogames) | provider 自己的 `experimental_bearer_token` | 独立命名的 provider | 与 OpenAI auth 无关 |
 
+> 表格是 **main 层契约(`CodexCredentialIntent` 三 kind)支持的机制**。当前面板只提供其中两条:`AuthenticationSection` 选 provider 条目(gateway)或 `@subscription`(ChatGPT),**没有官方 OpenAI API Key 的输入框**——`{kind:'apiKey'}` 是保留能力,renderer 从不发它。
+
 **最关键的解析规则**:ChatGPT 与 API Key **都走内置 `openai` provider**,而内置 `openai` **仅在 config.toml 顶层 `model_provider` 为空/未设时才生效**。一旦 `model_provider` 指向某自定义 provider(如 `codex-gateway`/`kuro`),auth.json 里的登录就被绕过——即便 `auth_mode`/resolved 仍报 chatgpt/apikey 也没用(这就是"误显 In Use"的根因)。
 
-**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.kuro]`)。下方 TOML 块由档案的 `providerRef` 引用经 `deriveCodexProvider`(派生 base_url/key/name)后落盘:
+**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.kuro]`)。下方 TOML 块由选中的 provider 条目经 `deriveCodexGateway`(派生 base_url/key/name)后落盘:
 ```toml
 model_provider = "codex-gateway"
 [model_providers.codex-gateway]
-name = "..."                          # = profile.label
+name = "..."                          # = provider.label
 base_url = "https://..."
 wire_api = "responses"
 supports_websockets = false           # 关掉 wss 探测,避免 403
@@ -104,7 +106,9 @@ experimental_bearer_token = "sk-..."  # key 直接落 config.toml(用户明确�
 
 `applyCredential` 据此锁定 mode:写 key 时 `auth_mode='apikey'`;切 chatgpt 时清 key、若 token 还在则 `auth_mode='chatgpt'` 否则删 mode。
 
-### 双维度 CodexAuthStatus + builtinActive(为何能共存,以及"真正 In Use"怎么判)
+### "真正 In Use" 怎么判：main 的 resolveActiveAuth（renderer 不要自己推）
+
+`CodexAuthStatus` 是**两个独立维度**，只反映 auth.json：
 
 ```ts
 interface CodexAuthStatus {
@@ -114,15 +118,26 @@ interface CodexAuthStatus {
 }
 ```
 
-**为何不是单一 `method`**:Codex 的 auth.json 本就让 token 块和 API key 共存。早先用单一 active 方式上报,导致"应用 API key"看起来像把 ChatGPT 登录**登出**了(其实 token 还在盘上)。改成两个独立维度后,API key 生效时面板仍显示 "Signed in",与 Claude 的共存行为一致。改 `readAuthStatus` 时务必保住"两维度"语义。
+**为何不是单一 `method`**:Codex 的 auth.json 本就让 token 块和 API key 共存。早先用单一 active 方式上报,导致"应用 API key"看起来像把 ChatGPT 登录**登出**了(其实 token 还在盘上)。改成两个独立维度后,API key 生效时面板仍显示 "Signed in",与 Claude 的共存行为一致。改 `readAuthStatus` 时务必保住这两个维度的语义。
 
-**但 `authStatus` 不足以判"真正 In Use"**——因为它只反映 auth.json,看不到 config.toml 顶层 `model_provider` 的覆盖。面板必须叠加 `builtinActive = (model_provider==='' )`:
-- `chatgptActive = authStatus.active==='chatgpt' && builtinActive`
-- API key 档案 `isActive = apiKeyActive && builtinActive`
-- gateway 档案 `isActive = (model_provider==='codex-gateway') && base_url 匹配`
-- `overridden = signedIn && !chatgptActive` → 显示 "Use this login"
+**但 `authStatus` 不足以判"真正 In Use"**——它看不到 config.toml 顶层 `model_provider` 的覆盖，也不知道盘上那个 gateway 对应编辑器里的哪个 provider 条目。所以判定**整体收口到 main** 的 `resolveActiveAuth(authority?)`（纯函数 `computeCodexActiveAuth`，`main/services/codexConfig/codexConfigMainService.ts`），只回三个字段：
 
-漏掉 `builtinActive` 就会在 gateway 顶层生效时仍把 ChatGPT 误显 "In Use"(两处徽章同时亮)——这是真实踩过的坑。
+```ts
+interface CodexActiveAuth {
+  kind: 'subscription' | 'provider' | 'none'
+  providerId?: string   // kind==='provider' 且盘上 gateway 能反查到某条目时
+  drift: boolean        // 盘上生效态与声明的 authentication 不一致
+}
+```
+
+判定顺序：
+1. `model_provider === 'codex-gateway'` → `kind:'provider'`；再用 `deriveCodexGateway` 逐个派生本地 provider 条目，`baseUrl` + `experimental_bearer_token` 全等才回 `providerId`（用户手写的 gateway 匹配不上 → `kind` 仍是 `'provider'` 但 `providerId` 缺席）。
+2. 否则 `builtinActive`（`model_provider` 为空/未设）**且** `authStatus.active==='chatgpt'` → `kind:'subscription'`。
+3. 其余 → `'none'`。
+
+`computeDrift` 三分支：声明为空 = 编辑器不管 codex 认证，只有「盘上有编辑器不认识的 gateway」才算 drift；声明 `@subscription` 要求 `kind==='subscription'`；声明某 provider id 要求 `kind==='provider'` 且 `providerId` 相等。
+
+**踩坑历史**：早先 renderer 自己叠 `builtinActive`，漏掉它就会在 gateway 顶层生效时把 ChatGPT 误显 "In Use"（两处徽章同时亮）。现在 `builtinActive` 只是上面第 2 步里的一个局部条件——**面板消费 `activeAuth.kind` / `.drift` 即可，不要再在 renderer 里重建这套推理**。远端场景同理：main 读远端两个文件做比对，**秘密绝不回传**。
 
 ### auth.json 实时刷新(为何登录后无需手动 refresh)
 
@@ -130,36 +145,36 @@ interface CodexAuthStatus {
 
 ### Remote 工作区路由(2026-08)
 
-远端工作区下面板操作**远端主机**的 `~/.codex`:契约方法带尾部可选 `authority`(`read`/`patch`/`configPath`/`readAuthStatus`/`applyCredential`/`matchActiveProfile`/`checkGatewayConnectivity`),main 按 authority 经 `RemoteChannels.AgentConfig` 转发(协议在 `packages/node-services/src/agentConfig/agentConfigService.ts`,改协议须 bump `REMOTE_PROTOCOL_VERSION`)。要点:
+远端工作区下面板操作**远端主机**的 `~/.codex`:契约方法带尾部可选 `authority`(`read`/`patch`/`configPath`/`readAuthStatus`/`applyCredential`/`resolveActiveAuth`/`checkGatewayConnectivity`),main 按 authority 经 `RemoteChannels.AgentConfig` 转发(协议在 `packages/node-services/src/agentConfig/agentConfigService.ts`,改协议须 bump `REMOTE_PROTOCOL_VERSION`)。要点:
 - **authority 必须来自 `useRemoteAuthority()`**(`workbench/useRemoteAuthority.ts`,订阅 `onDidChangeWorkspace`)——workspace hydration 是异步的,用 `useMemo` 读 `workspace.current` 会把 authority 冻结成 undefined(启动恢复的 tab 永远读写本地,真实踩坑)。
-- `matchActiveProfile(authority)` 比对**生效端**凭据:gateway 分支读远端 config.toml;apiKey 分支走协议方法 `codexMatchActiveApiKey(candidates)`——把本地档案库候选 key 发去 server 比对、只回 index,**远端 auth.json 的秘密绝不回传**(与 `applyCredential` 同向)。
-- `readProfiles`/`writeProfiles`(档案库)**刻意 editor-local 不路由**;`ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件;`runCodexLogin` 本就开远端终端跑 PATH 上的 `codex login`,无需改动。
+- `resolveActiveAuth(authority)` 比对**生效端**凭据:main 读远端 config.toml / auth.json(经 `read(authority)` / `readAuthStatus(authority)`),与本地 provider 条目派生的 baseUrl/key 比对、只回 `{kind, providerId?, drift}`(见 `computeCodexActiveAuth`),**远端 auth.json 的秘密绝不回传**(与 `applyCredential` 同向)。
+- `readAgentSettings`/`writeAgentSettings`(认证选择)**刻意 editor-local 不路由**;`ConfigFileLink` 传 `authority` 后用 `remoteFsPathToUri` 打开远端文件;`runCodexLogin` 本就开远端终端跑 PATH 上的 `codex login`,无需改动。
 - **CodexBinaryPanel 远程语义**:远端下版本信息/强制下载经 `ICodexBinaryService.getVersionInfo/forceDownload` 的尾部 `authority` 走 `RemoteChannels.AgentBinary` 作用于远端主机;面板隐藏「Binary source」区(远端固定受管下载),进度事件按 `authority` 过滤,authority 切换先清陈旧 versionInfo。`prefetch`/`cleanupStaleVersions` 同样带尾部 `authority`:空闲维护(`AgentBinaryPrefetchContribution`)在远程工作区下只作用于远端主机、不看本地 `acp.codex.source`,且门控在「已连接」状态上以免后台触发一次用户没要求的 SSH 连接/安装。
 
 ### 🔒 安全约束(刻意决策,勿擅改)
 
-1. **凭据明文落盘是用户明确选择**:apiKey 档案的 key 明文写进 `aiSettings.json` 的 Codex 认证区;gateway 档案只存 `providerRef`(不内联 baseUrl/key),应用时才把派生的 baseUrl + `experimental_bearer_token` 写进 `config.toml`(与 CLI 共享),官方 API key 走 `auth.json`。**刻意**不用加密 SecretStorage。项目 CLAUDE.md 里 AI provider 密钥已改为**明文存 aiSettings.json 实例 `apiKey`**(见套路 I),与本 Codex/Claude 配置共享特性同源。
+1. **凭据明文落盘是用户明确选择**:provider 条目的 key 明文写进 `aiSettings.json` 的 `providers[]`(见套路 I);认证选择只存 provider id(不内联 baseUrl/key),应用时才把派生的 baseUrl + `experimental_bearer_token` 写进 `config.toml`(与 CLI 共享),官方 API key 走 `auth.json`。**刻意**不用加密 SecretStorage。
 2. **`readAuthStatus()` 绝不回传 token / API key 值**:只回 `{active, chatgpt?:{expired,planType?,expiresAt?}, hasApiKey}`。有测试("never returns the credentials themselves")断言 token / key 不泄漏到序列化结果里,改 readAuthStatus 时务必保住该测试。
 
 ### 常见任务 → 改哪里
 
 - **给 Codex 加一个 config.toml 设置项**:定字段进 `CodexSettings`(契约)→ 选对应面板(model 类→CodexModelPanel、审批/沙箱→CodexSafetyPanel、其它标量→CodexAdvancedPanel 自动出现在自由编辑器,或给它一个专属控件),经 `useCodexConfig().patch` 落盘(`null` 删键)。main 实现的 `read`/`patch` 是通用 TOML 合并,**通常无需改**。
 - **给 codexConfig 加跨进程方法/事件**:只改契约 + main 实现两个文件(6 处接线不动;`onDidChange*` 事件自动透传)。
-- **改认证逻辑**:先想清楚它落在哪个登录方案 + 内部 `resolved_mode` 哪一步。动 `applyCredential`/`reconcileGatewayProvider` 必须同时维护 `auth_mode` 与顶层 `model_provider`(否则共存语义 / In-Use 判定崩)。动 `readAuthStatus` 必须保住双维度 + no-token-leak 测试。
-- **加一个凭据种类**:扩 `CodexCredentialKind` + `CodexCredentialIntent`,改 `applyCredential`/`reconcileGatewayProvider`(它怎么落到 auth.json + config.toml)+ `CredentialLibrary` 表单 + 激活态判定(记得叠加 `builtinActive`/`model_provider`)。
+- **改认证逻辑**:先想清楚它落在哪个登录方案 + 内部 `resolved_mode` 哪一步。动 `applyCredential`/`reconcileGatewayProvider`(在 node-services 的 `codexConfigStore.ts`)必须同时维护 `auth_mode` 与顶层 `model_provider`(否则共存语义 / In-Use 判定崩)。动 `readAuthStatus` 必须保住 `active`+`chatgpt` 两个维度 + no-token-leak 测试。
+- **加一种认证来源**:扩 `CodexCredentialIntent`,改 `applyCredential`/`reconcileGatewayProvider`(它怎么落到 auth.json + config.toml)+ `AuthenticationSection`/`GatewayProviderPicker` + 激活态判定(改 main 的 `computeCodexActiveAuth`,**不要**在 renderer 里加判断)。
 - **再加一个 acp agent 的设置页**:新建 `agentSettings/<id>/<X>AgentSettings.tsx`,末行 `registerAgentSettings('<id>', ...)`;`builtinAgentSettings.ts` 加一行 import。壳零改动。
 
 ### 易踩坑速记
 
 - **Codex ≠ Claude 的几处差异**:① renderer proxy 注册在 `registerProxyServices.ts`(Claude 在 main.tsx);② 登录走系统 PATH 的 `codex` CLI(Claude 走自己下载的二进制);③ 单文件 auth.json 共存两种凭据(Claude 是 `.credentials.json` + `settings.json` 两文件天然分离)。
 - **gateway 必须自包含**:key 写 `experimental_bearer_token`、`supports_websockets=false`、顶层 `model_provider` 指向它。**绝不**用顶层 `openai_base_url`(会把 ChatGPT token 发去 gateway → `access token could not be refreshed`)、**绝不**用 `requires_openai_auth`、**绝不**改 auth.json。
-- **"In Use" 判定必须叠加顶层 `model_provider`**:光看 `authStatus.active` 会误显——ChatGPT/API key 仅在 `model_provider` 为空时才真生效。
+- **"In Use" 判定走 main 的 `resolveActiveAuth`**:光看 `authStatus.active` 会误显——ChatGPT/API key 仅在顶层 `model_provider` 为空时才真生效。这个叠加已收口进 `computeCodexActiveAuth`,面板消费 `activeAuth.kind`/`.drift` 即可,**不要**在 renderer 里再推一遍。
 - `useService` 来自 `renderer/workbench/useService.ts`(面板里 `../../useService.js`),**不是** `@universe-editor/workbench-ui`。
 - workbench-ui 的 `IconButton`:`label: string` 属性 + `children` 放图标(无 `icon`/`ariaLabel` props)。
 - ESM:相对导入带 `.js` 后缀(即使源是 `.ts`)。`codex/` 比外壳深一层,到 shared 是 `../../../../shared/...`。
 - 状态持久化套路:`IStorageService` + `restoredRef` 守卫防覆盖 + `requestAnimationFrame` 恢复滚动。
 - NLS:`localize(key, '英文默认值', vars?)`,默认值必须英文;新增 key 补 `shared/i18n/messages/zh-CN.ts`(当前多内联文案)。
-- react-hooks/rules-of-hooks:hook-library 方法**不要**用 `use` 前缀(否则在 `useCallback` 里调会被判成"在回调里调 Hook")。这就是 `switchToChatgptLogin` 不叫 `useChatgptLogin` 的原因。
+- react-hooks/rules-of-hooks:hook-library 方法**不要**用 `use` 前缀(否则在 `useCallback` 里调会被判成"在回调里调 Hook")。这就是 `applyAuthentication` 不叫 `useAuthentication` 的原因。
 - `fs.watch` 必须监听**目录**而非文件,否则 codex 的原子写(rename)会丢事件。
 - 测试里验事件:`new Promise(resolve => sub = onDidChangeAuth(...))` + 先 sleep 50ms 让 watcher 挂上再写文件 + `Promise.race` 加超时。
 

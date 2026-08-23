@@ -717,3 +717,53 @@
   align-items: center;
   gap: var(--spacing-3);
 }
+
+/* -- provider entry card: issues / protocol map / legacy banner ---------- */
+
+.cardIssue {
+  border-color: var(--vscode-errorForeground, #f48771);
+}
+
+.issueBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: 2px var(--spacing-3);
+  border: 1px solid var(--vscode-errorForeground, #f48771);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.protocolHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.discoverBadge {
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.agentOnlyBadge {
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.legacyBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--vscode-warning-border, #d7ba7d);
+  border-radius: var(--radius-md);
+  background: var(--vscode-warning-background, rgba(215, 186, 125, 0.12));
+  font-size: var(--font-size-base);
+  color: var(--vscode-editor-foreground);
+  line-height: var(--line-height-normal);
+}

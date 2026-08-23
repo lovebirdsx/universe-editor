@@ -26,6 +26,7 @@ import {
   type AiResponseChunk,
   type ILogger,
   ILoggerService,
+  parseModelRef,
   type SerializedError,
 } from '@universe-editor/platform'
 import { ILogMainService, type LogMainService } from '../log/logMainService.js'
@@ -44,8 +45,8 @@ interface MutableRecord {
   readonly purpose?: AiRequestOptions['purpose']
   readonly debugLabel?: string
   readonly modelId: string
-  readonly vendor: string
-  readonly groupName?: string
+  readonly providerId?: string
+  readonly protocol?: string
   readonly startedAt: number
   readonly messages: readonly AiDebugMessage[]
   readonly options: Omit<AiRequestOptions, 'modelId' | 'purpose' | 'debugLabel'>
@@ -87,15 +88,14 @@ export class AiDebugRecorder extends Disposable {
   begin(requestId: string, messages: readonly AiMessage[], options: AiRequestOptions): void {
     if (!this._enabled) return
     const { modelId, purpose, debugLabel, ...rest } = options
-    const ref = parseModelId(modelId)
+    const ref = parseModelRef(modelId)
     const record: MutableRecord = {
       id: generateUuid(),
       requestId,
       ...(purpose !== undefined ? { purpose } : {}),
       ...(debugLabel !== undefined ? { debugLabel } : {}),
       modelId,
-      vendor: ref.vendor,
-      ...(ref.group !== undefined ? { groupName: ref.group } : {}),
+      ...(ref !== undefined ? { providerId: ref.providerId, protocol: ref.protocol } : {}),
       startedAt: Date.now(),
       messages: messages.map(toDebugMessage),
       options: rest,
@@ -133,8 +133,8 @@ export class AiDebugRecorder extends Disposable {
       ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
       ...(record.debugLabel !== undefined ? { debugLabel: record.debugLabel } : {}),
       modelId: record.modelId,
-      vendor: record.vendor,
-      ...(record.groupName !== undefined ? { groupName: record.groupName } : {}),
+      ...(record.providerId !== undefined ? { providerId: record.providerId } : {}),
+      ...(record.protocol !== undefined ? { protocol: record.protocol } : {}),
       startedAt: record.startedAt,
       endedAt,
       durationMs,
@@ -226,10 +226,4 @@ function roleLabel(role: number): string {
 function isCanceled(error: SerializedError): boolean {
   const code = (error as { code?: unknown }).code
   return code === 'canceled' || error.name === 'Canceled' || error.name === 'AbortError'
-}
-
-function parseModelId(modelId: string): { vendor: string; group?: string } {
-  const parts = modelId.split('/')
-  if (parts.length >= 2 && parts[0] && parts[1]) return { vendor: parts[0], group: parts[1] }
-  return { vendor: parts[0] ?? modelId }
 }

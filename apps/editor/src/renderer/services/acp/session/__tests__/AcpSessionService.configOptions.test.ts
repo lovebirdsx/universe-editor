@@ -11,6 +11,7 @@ import {
   autorun,
   ConfigurationService,
   Emitter,
+  Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -63,6 +64,8 @@ import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
+import { NULL_ACP_MESSAGE_ATTACHMENT_STORE } from '../acpMessageAttachmentStore.js'
+import type { IAcpSessionProviderContext } from '../acpSessionProviderContext.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
@@ -393,7 +396,32 @@ class FakeAcpClientService implements IAcpClientService {
   }
 }
 
-function buildService(opts: FakeAcpClientOptions = {}): {
+function nullProviderContext(): IAcpSessionProviderContext {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeContext: Event.None,
+    getProviderContext: () => undefined,
+    refresh: async () => {},
+  }
+}
+
+function deepseekProviderContext(): IAcpSessionProviderContext {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeContext: Event.None,
+    getProviderContext: () => ({
+      providerId: 'deepseek',
+      protocol: 'anthropic-messages',
+      pricingSource: { id: 'catalog', options: { vendor: 'deepseek' } },
+    }),
+    refresh: async () => {},
+  }
+}
+
+function buildService(
+  opts: FakeAcpClientOptions = {},
+  providerContext: IAcpSessionProviderContext = nullProviderContext(),
+): {
   svc: AcpSessionService
   client: FakeAcpClientService
   history: AcpSessionHistoryService
@@ -445,6 +473,8 @@ function buildService(opts: FakeAcpClientOptions = {}): {
         new NoopTelemetryService(),
         new StubLoggerService(),
       ),
+      NULL_ACP_MESSAGE_ATTACHMENT_STORE,
+      providerContext,
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
@@ -610,7 +640,7 @@ describe('AcpSessionService — session/update fan-out', () => {
   let client: FakeAcpClientService
 
   beforeEach(() => {
-    const built = buildService()
+    const built = buildService({}, deepseekProviderContext())
     svc = built.svc
     client = built.client
   })
@@ -758,7 +788,7 @@ describe('AcpSessionService — session/update fan-out', () => {
         _meta: {
           '_universe/modelBreakdown': [
             {
-              model: 'deepseek-v4-flash[1m]',
+              model: 'deepseek-v4-flash',
               inputTokens: 1_000_000,
               outputTokens: 100_000,
               cacheReadTokens: 500_000,

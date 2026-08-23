@@ -3,59 +3,65 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import type { AiModelPricing } from '@universe-editor/platform'
+import type { AiModelPricing, AiRemoteSourceSpec } from '@universe-editor/platform'
 import { priceSessionModel, type SessionProviderContext } from '../acpSessionProviderContext.js'
 
 const GATEWAY_PRICING: AiModelPricing = { input: 3, output: 4 }
-const DECLARED_PRICING: AiModelPricing = { input: 7, output: 8 }
-const TYPE_PRICING: AiModelPricing = { input: 5, output: 6 }
+
+const CATALOG_ANTHROPIC: AiRemoteSourceSpec = { id: 'catalog', options: { vendor: 'anthropic' } }
+const CATALOG_UNKNOWN_VENDOR: AiRemoteSourceSpec = { id: 'catalog', options: { vendor: 'acme' } }
+const GATEWAY_SOURCE: AiRemoteSourceSpec = { id: 'https://rates.example.com/pricing.json' }
 
 function ctx(partial?: Partial<SessionProviderContext>): SessionProviderContext {
-  return { key: 'anthropic/gw', type: 'anthropic', name: 'gw', ...partial }
+  return { providerId: 'gw', protocol: 'anthropic-messages', ...partial }
 }
 
 describe('priceSessionModel', () => {
-  it('resolves through the built-in catalog when there is no provider context', () => {
-    const result = priceSessionModel('claude-sonnet-5', undefined)
-    expect(result.origin).toBe('catalog')
-    expect(result.pricing?.input).toBe(3)
-  })
-
-  it('returns {} for an unknown model with no context', () => {
+  it('is unknown when there is no provider context — never a cross-vendor fallback', () => {
+    expect(priceSessionModel('claude-sonnet-5', undefined)).toEqual({})
     expect(priceSessionModel('made-up-model', undefined)).toEqual({})
   })
 
-  it('prefers the gateway rate table when the context has one', () => {
+  it('resolves through the declared catalog source against its vendor', () => {
+    const result = priceSessionModel('claude-sonnet-5', ctx({ pricingSource: CATALOG_ANTHROPIC }))
+    expect(result.origin).toBe('catalog')
+    expect(result.pricing?.input).toBe(3)
+    expect(result.pricing?.output).toBe(15)
+  })
+
+  it('returns {} for a catalog source with an unknown vendor', () => {
+    expect(
+      priceSessionModel('claude-sonnet-5', ctx({ pricingSource: CATALOG_UNKNOWN_VENDOR })),
+    ).toEqual({})
+  })
+
+  it('returns {} for a catalog source whose vendor lacks the model', () => {
+    expect(priceSessionModel('made-up-model', ctx({ pricingSource: CATALOG_ANTHROPIC }))).toEqual(
+      {},
+    )
+  })
+
+  it('resolves a gateway source through the gateway rate table', () => {
     const result = priceSessionModel(
       'kimi-k3',
-      ctx({ gatewayRates: { 'kimi-k3': GATEWAY_PRICING } }),
+      ctx({ pricingSource: GATEWAY_SOURCE, gatewayRates: { 'kimi-k3': GATEWAY_PRICING } }),
     )
     expect(result).toEqual({ pricing: GATEWAY_PRICING, origin: 'gateway' })
   })
 
-  it('prefers a hand-declared model over the gateway table', () => {
-    const result = priceSessionModel(
-      'kimi-k3',
-      ctx({
-        declaredModels: [{ id: 'kimi-k3', pricing: DECLARED_PRICING }],
-        gatewayRates: { 'kimi-k3': GATEWAY_PRICING },
-      }),
-    )
-    expect(result).toEqual({ pricing: DECLARED_PRICING, origin: 'model' })
+  it('returns {} when the gateway table lacks the model', () => {
+    expect(
+      priceSessionModel('made-up-model', ctx({ pricingSource: GATEWAY_SOURCE, gatewayRates: {} })),
+    ).toEqual({})
   })
 
-  it('falls back to the type default when the gateway table has no entry', () => {
-    const result = priceSessionModel('kimi-k3', ctx({ typePricing: TYPE_PRICING }))
-    expect(result).toEqual({ pricing: TYPE_PRICING, origin: 'type' })
+  it('returns {} when a gateway source has no mirrored rate table', () => {
+    expect(priceSessionModel('kimi-k3', ctx({ pricingSource: GATEWAY_SOURCE }))).toEqual({})
   })
 
-  it('falls back to the built-in catalog for a model the gateway table lacks', () => {
-    const result = priceSessionModel('claude-sonnet-5', ctx({ gatewayRates: {} }))
-    expect(result.origin).toBe('catalog')
-    expect(result.pricing?.input).toBe(3)
-  })
-
-  it('returns {} when nothing matches', () => {
-    expect(priceSessionModel('made-up-model', ctx({ gatewayRates: {} }))).toEqual({})
+  it('ignores a gateway rate table when no pricing source is declared', () => {
+    expect(
+      priceSessionModel('kimi-k3', ctx({ gatewayRates: { 'kimi-k3': GATEWAY_PRICING } })),
+    ).toEqual({})
   })
 })

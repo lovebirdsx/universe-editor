@@ -7,17 +7,32 @@
 
 import type { AiModelPricing, AiPricingOrigin } from './aiModelPricing.js'
 
-/** Wire protocol a model speaks. Decoupled from the provider type / vendor. */
-export type AiWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'ollama'
+export const AI_WIRE_PROTOCOLS = [
+  'openai-chat',
+  'openai-responses',
+  'anthropic-messages',
+  'ollama',
+] as const
+
+/** Wire protocol a model is reached through. A gateway may translate one model into several. */
+export type AiWireProtocol = (typeof AI_WIRE_PROTOCOLS)[number]
+
+export function isAiWireProtocol(value: string): value is AiWireProtocol {
+  return (AI_WIRE_PROTOCOLS as readonly string[]).includes(value)
+}
 
 /** Self-describing model metadata, so consumers can pick a model by capability. */
 export interface AiModelMetadata {
-  /** Globally unique id, three-segment `type/instance/model`, e.g. 'anthropic/default/claude-sonnet'. */
+  /** Globally unique id, three-segment `providerId/protocol/channelModel`. */
   readonly id: string
-  /** Provider type id (first segment of the model id), e.g. 'anthropic' / 'kuro'. */
-  readonly vendor: string
-  /** Provider instance this model belongs to, e.g. 'default'. */
-  readonly groupName?: string
+  /** Provider entry serving this model (first segment of the id). */
+  readonly providerId: string
+  /** Protocol this model is reached through (second segment of the id). */
+  readonly protocol: AiWireProtocol
+  /** Wire name the endpoint expects (third segment of the id). */
+  readonly channelModel: string
+  /** Real vendor from the knowledge base, e.g. 'anthropic'. Undefined for an unknown model. */
+  readonly vendor?: string
   /** Display name. */
   readonly name: string
   /** Family groups versions of the same model, e.g. 'gpt-4o'. */
@@ -28,11 +43,17 @@ export interface AiModelMetadata {
   readonly capabilities: AiModelCapabilities
   /** Per-model configurable parameters, surfaced in the picker / management UI. */
   readonly configurationSchema?: AiModelConfigSchema
-  /** Wire protocol this model actually speaks; stamped uniformly by the registry. */
-  readonly protocol?: AiWireProtocol
-  /** Effective rate for this model, resolved through the pricing chain. */
+  /** Effective rate, resolved from the provider's declared pricingSource only. */
   readonly pricing?: AiModelPricing
   readonly pricingOrigin?: AiPricingOrigin
+}
+
+/**
+ * `openai-responses` is an agent-only stub: it is listed in the management UI so
+ * the user can see what a provider offers, but the editor must never call it.
+ */
+export function isEditorSelectable(model: { readonly protocol: AiWireProtocol }): boolean {
+  return model.protocol !== 'openai-responses'
 }
 
 /**
@@ -57,6 +78,8 @@ export type AiModelConfiguration = Readonly<Record<string, string | number | boo
 export interface AiModelCapabilities {
   readonly streaming: boolean
   readonly vision?: boolean
+  /** Prompt caching. Lost when a gateway translates the model into another protocol. */
+  readonly promptCaching?: boolean
   /** Reserved; tool calling is not implemented this iteration. */
   readonly toolCalling?: boolean
 }

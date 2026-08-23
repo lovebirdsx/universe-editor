@@ -1,17 +1,19 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ProviderInstanceCard — one provider *instance* (a gateway entry: connection +
- *  credential). Header shows the type badge, the plaintext-apiKey badge and a
- *  connectivity status dot; the body has an editable baseUrl, a masked API key
- *  (show/hide + edit + clear), the authoritative account-usage block, a gateway
- *  price-table status line and the instance's models (declared models float to
- *  the top with a star, each with an optional per-model configuration form).
+ *  ProviderEntryCard — one single-layer provider entry (a gateway endpoint:
+ *  connection + credential + protocol map). Header shows the id, an `extends`
+ *  badge when present, the plaintext-apiKey badge and any configuration issues;
+ *  the body edits label / baseUrl / apiKey (masked) / defaultProtocol, shows the
+ *  pricing source + gateway price-table status + authoritative account usage, and
+ *  lists the models grouped per protocol. An empty protocol array is rendered as
+ *  "discover from endpoint"; a provider without a pricing source shows "Rate
+ *  unknown" on its models rather than a fabricated number.
  *
  *  The connectivity dot only probes on an explicit "Test connection" click — it
  *  never fires network requests from render or polling. Account usage is a cache
- *  read (getAccountUsage) and is hidden entirely unless the instance/type
- *  declares a usageSource; when a source is declared but no authoritative value
- *  can be fetched it renders "Unavailable" rather than a local estimate.
+ *  read (getAccountUsage) and is hidden entirely unless the entry declares a
+ *  usageSource; when a source is declared but no authoritative value can be
+ *  fetched it renders "Unavailable" rather than a local estimate.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
@@ -22,28 +24,29 @@ import {
   EyeOff,
   KeyRound,
   Pencil,
-  Plus,
+  RefreshCw,
   Server,
   Settings2,
-  Star,
   Trash2,
   X,
 } from 'lucide-react'
 import {
-  bareModelName,
+  AI_WIRE_PROTOCOLS,
   localize,
-  providerKey,
   StorageScope,
   type AiAccountUsage,
   type AiModelConfiguration,
   type AiModelMetadata,
-  type AiProviderInstance,
-  type AiProviderType,
+  type AiModelPricing,
+  type AiProviderEntry,
+  type AiProviderIssue,
   type AiRateTableSnapshot,
+  type AiWireProtocol,
   type IAiModelService,
   type IStorageService,
 } from '@universe-editor/platform'
 import { Badge, Button, Checkbox, IconButton, Input, Spinner } from '@universe-editor/workbench-ui'
+import { maskKey } from '../../../shared/ai/maskKey.js'
 import styles from './AiSettingsEditor.module.css'
 
 type ConnectState =
@@ -52,54 +55,57 @@ type ConnectState =
   | { readonly kind: 'ok'; readonly modelCount: number }
   | { readonly kind: 'fail'; readonly error: string }
 
-interface ProviderInstanceCardProps {
+interface ProviderEntryCardProps {
   readonly aiModel: IAiModelService
-  readonly instance: AiProviderInstance
-  readonly type: AiProviderType | undefined
+  readonly provider: AiProviderEntry
   readonly models: readonly AiModelMetadata[]
+  readonly issues: readonly AiProviderIssue[]
   readonly rateTables: readonly AiRateTableSnapshot[]
   readonly reloadToken: number
   readonly collapsed: boolean
   readonly onToggleCollapsed: () => void
   readonly storage: IStorageService
   readonly filterStorageKey: string
+  readonly onLabelChange: (label: string) => void
   readonly onBaseUrlChange: (baseUrl: string) => void
+  readonly onDefaultProtocolChange: (protocol: AiWireProtocol | undefined) => void
   readonly onSetApiKey: () => void
   readonly onClearApiKey: () => void
   readonly onRemove: () => void
-  readonly onAddModel: () => void
-  readonly onRemoveModel: (modelId: string) => void
+  readonly onRefreshPrices: () => void
   readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
   readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
 }
 
-export function ProviderInstanceCard({
+export function ProviderEntryCard({
   aiModel,
-  instance,
-  type,
+  provider,
   models,
+  issues,
   rateTables,
   reloadToken,
   collapsed,
   onToggleCollapsed,
   storage,
   filterStorageKey,
+  onLabelChange,
   onBaseUrlChange,
+  onDefaultProtocolChange,
   onSetApiKey,
   onClearApiKey,
   onRemove,
-  onAddModel,
-  onRemoveModel,
+  onRefreshPrices,
   onConfigure,
   getConfiguration,
-}: ProviderInstanceCardProps) {
-  const key = providerKey(instance)
-  const hasApiKey = instance.apiKey !== undefined && instance.apiKey !== ''
-  const [baseUrl, setBaseUrl] = useState(instance.baseUrl ?? '')
+}: ProviderEntryCardProps) {
+  const hasApiKey = provider.apiKey !== undefined && provider.apiKey !== ''
+  const [label, setLabel] = useState(provider.label ?? '')
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl ?? '')
   const [connect, setConnect] = useState<ConnectState>({ kind: 'idle' })
   const [filter, setFilter] = useState('')
 
-  useEffect(() => setBaseUrl(instance.baseUrl ?? ''), [instance.baseUrl])
+  useEffect(() => setLabel(provider.label ?? ''), [provider.label])
+  useEffect(() => setBaseUrl(provider.baseUrl ?? ''), [provider.baseUrl])
 
   useEffect(() => {
     let active = true
@@ -119,19 +125,24 @@ export function ProviderInstanceCard({
     [storage, filterStorageKey],
   )
 
+  const protocols = useMemo(
+    () => (Object.keys(provider.protocolMap ?? {}) as AiWireProtocol[]).sort(),
+    [provider.protocolMap],
+  )
+  const effectiveProtocol = provider.defaultProtocol ?? protocols[0]
+  const hasPricingSource = provider.pricingSource !== undefined
+
   const runVerify = useCallback(async () => {
-    if (!type) return
+    if (effectiveProtocol === undefined) return
     setConnect({ kind: 'checking' })
-    const effectiveBaseUrl = instance.baseUrl ?? type.defaultBaseUrl
     const result = await aiModel.verifyProvider({
-      type: instance.type,
-      name: instance.name,
-      protocol: type.protocol,
-      ...(effectiveBaseUrl !== undefined ? { baseUrl: effectiveBaseUrl } : {}),
-      ...(instance.apiKey !== undefined ? { apiKey: instance.apiKey } : {}),
+      id: provider.id,
+      protocol: effectiveProtocol,
+      ...(provider.baseUrl !== undefined ? { baseUrl: provider.baseUrl } : {}),
+      ...(provider.apiKey !== undefined ? { apiKey: provider.apiKey } : {}),
     })
     console.debug('aiModels: verify', {
-      provider: providerKey(instance),
+      provider: provider.id,
       ok: result.ok,
       modelCount: result.modelCount,
     })
@@ -143,36 +154,27 @@ export function ProviderInstanceCard({
             error: result.error ?? localize('aiModels.instance.status.fail', 'Connection failed.'),
           },
     )
-  }, [aiModel, instance, type])
-
-  const declaredIds = useMemo(
-    () => new Set((instance.models ?? []).map((m) => m.id)),
-    [instance.models],
-  )
-
-  const orderedModels = useMemo(() => {
-    const isDeclared = (m: AiModelMetadata) =>
-      declaredIds.has(bareModelName(m.id, instance.type, instance.name))
-    const declared = models.filter(isDeclared)
-    const rest = models.filter((m) => !isDeclared(m))
-    return [...declared, ...rest]
-  }, [models, declaredIds, instance.type, instance.name])
+  }, [aiModel, provider.id, provider.baseUrl, provider.apiKey, effectiveProtocol])
 
   const filteredModels = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    if (!q) return orderedModels
-    return orderedModels.filter(
+    if (!q) return models
+    return models.filter(
       (m) =>
         m.name.toLowerCase().includes(q) ||
         m.id.toLowerCase().includes(q) ||
         (m.family?.toLowerCase().includes(q) ?? false),
     )
-  }, [orderedModels, filter])
+  }, [models, filter])
 
-  const snapshot = rateTables.find((t) => t.providerKey === key)
+  const snapshot = rateTables.find((t) => t.providerId === provider.id)
 
   return (
-    <section className={styles['card']} data-testid="ai-instance-card" data-provider-key={key}>
+    <section
+      className={`${styles['card']}${issues.length > 0 ? ` ${styles['cardIssue']}` : ''}`}
+      data-testid="ai-provider-entry-card"
+      data-provider-id={provider.id}
+    >
       <button
         type="button"
         className={styles['cardHeader']}
@@ -185,9 +187,14 @@ export function ProviderInstanceCard({
           <ChevronDown size={16} strokeWidth={1.75} className={styles['cardIcon']} />
         )}
         <Server size={16} strokeWidth={1.75} className={styles['cardIcon']} />
-        <span className={styles['cardTitle']}>{instance.label ?? instance.name}</span>
+        <span className={styles['cardTitle']}>{provider.label ?? provider.id}</span>
         <div className={styles['cardBadges']}>
-          <Badge tone="accent">{instance.type}</Badge>
+          <Badge tone="accent">{provider.id}</Badge>
+          {provider.extends !== undefined && (
+            <Badge>
+              {localize('aiModels.entry.extends', 'extends {id}', { id: provider.extends })}
+            </Badge>
+          )}
           {hasApiKey && (
             <Badge tone="accent">
               <KeyRound size={11} strokeWidth={2} className={styles['badgeIcon']} />
@@ -224,12 +231,27 @@ export function ProviderInstanceCard({
 
       {!collapsed && (
         <div className={styles['cardBody']}>
+          {issues.length > 0 && (
+            <div className={styles['cardToolbar']}>
+              {issues.map((issue) => (
+                <span
+                  key={issue.reason}
+                  className={styles['issueBadge']}
+                  data-tooltip={issue.detail}
+                >
+                  {issueReasonLabel(issue.reason)}
+                  {issue.detail ? ` (${issue.detail})` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className={styles['cardToolbar']}>
             <Button
               size="sm"
               variant="ghost"
               busy={connect.kind === 'checking'}
-              disabled={type === undefined}
+              disabled={effectiveProtocol === undefined}
               onClick={() => void runVerify()}
             >
               {localize('aiModels.instance.test', 'Test connection')}
@@ -237,52 +259,97 @@ export function ProviderInstanceCard({
           </div>
 
           <div className={styles['field']}>
+            <label className={styles['label']}>{localize('aiModels.entry.label', 'Label')}</label>
+            <Input
+              value={label}
+              placeholder={localize('aiModels.entry.labelPlaceholder', 'Display name')}
+              onChange={(e) => setLabel(e.target.value)}
+              onBlur={() => {
+                if (label.trim() !== (provider.label ?? '')) onLabelChange(label.trim())
+              }}
+            />
+          </div>
+
+          <div className={styles['field']}>
             <label className={styles['label']}>{localize('aiModels.baseUrl', 'Base URL')}</label>
             <Input
               value={baseUrl}
-              placeholder={
-                type?.defaultBaseUrl ?? localize('aiModels.baseUrl.placeholder', 'Provider default')
-              }
+              placeholder={localize('aiModels.baseUrl.placeholder', 'Provider default')}
               onChange={(e) => setBaseUrl(e.target.value)}
               onBlur={() => {
-                if (baseUrl.trim() !== (instance.baseUrl ?? '')) onBaseUrlChange(baseUrl.trim())
+                if (baseUrl.trim() !== (provider.baseUrl ?? '')) onBaseUrlChange(baseUrl.trim())
               }}
             />
           </div>
 
           <ApiKeyField
-            apiKey={instance.apiKey}
+            apiKey={provider.apiKey}
             onSetApiKey={onSetApiKey}
             onClearApiKey={onClearApiKey}
           />
 
-          <AccountUsageBlock
-            aiModel={aiModel}
-            instance={instance}
-            type={type}
-            reloadToken={reloadToken}
-          />
+          <div className={styles['field']}>
+            <label className={styles['label']}>
+              {localize('aiModels.entry.defaultProtocol', 'Default protocol')}
+            </label>
+            <select
+              className={styles['control']}
+              value={provider.defaultProtocol ?? ''}
+              aria-label={localize('aiModels.entry.defaultProtocol', 'Default protocol')}
+              onChange={(e) =>
+                onDefaultProtocolChange(
+                  e.target.value === '' ? undefined : (e.target.value as AiWireProtocol),
+                )
+              }
+            >
+              <option value="">
+                {localize('aiModels.entry.defaultProtocol.first', 'First protocol')}
+              </option>
+              {AI_WIRE_PROTOCOLS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className={styles['field']}>
-            <span className={styles['label']}>
-              {localize('aiModels.rates.title', 'Gateway price table')}
-            </span>
+            <div className={styles['modelsHeader']}>
+              <span className={styles['label']}>
+                {localize('aiModels.pricingSource', 'Pricing source')}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!hasPricingSource}
+                onClick={onRefreshPrices}
+              >
+                <RefreshCw size={14} strokeWidth={1.75} className={styles['btnIcon']} />
+                {localize('aiModels.refreshPrices', 'Refresh prices')}
+              </Button>
+            </div>
             <span className={styles['ratesLine']}>
-              {snapshot
-                ? localize('aiModels.rates.line', '{count} models · updated {time}', {
-                    count: Object.keys(snapshot.rates).length,
-                    time: formatTime(snapshot.fetchedAt),
-                  })
-                : localize('aiModels.rates.none', 'No gateway price table fetched.')}
+              {hasPricingSource
+                ? snapshot
+                  ? localize('aiModels.rates.line', '{count} models · updated {time}', {
+                      count: Object.keys(snapshot.rates).length,
+                      time: formatTime(snapshot.fetchedAt),
+                    })
+                  : localize(
+                      'aiModels.pricingSource.value',
+                      '{source} · no price table fetched yet.',
+                      {
+                        source: provider.pricingSource.id,
+                      },
+                    )
+                : localize(
+                    'aiModels.pricingSource.none',
+                    'No pricing source — rates are shown as unknown, not estimated.',
+                  )}
             </span>
           </div>
 
-          <div className={styles['modelsHeader']}>
-            <span className={styles['label']}>{localize('aiModels.models', 'Models')}</span>
-            <IconButton label={localize('aiModels.addModel', 'Add model')} onClick={onAddModel}>
-              <Plus size={15} strokeWidth={2} />
-            </IconButton>
-          </div>
+          <AccountUsageBlock aiModel={aiModel} provider={provider} reloadToken={reloadToken} />
 
           {models.length > 0 && (
             <Input
@@ -293,22 +360,86 @@ export function ProviderInstanceCard({
             />
           )}
 
-          {models.length === 0 ? (
+          <ProtocolSections
+            provider={provider}
+            models={filteredModels}
+            onConfigure={onConfigure}
+            getConfiguration={getConfiguration}
+          />
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ProtocolSections({
+  provider,
+  models,
+  onConfigure,
+  getConfiguration,
+}: {
+  readonly provider: AiProviderEntry
+  readonly models: readonly AiModelMetadata[]
+  readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
+  readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
+}) {
+  const discover = useMemo(() => {
+    const set = new Set<string>()
+    for (const [protocol, refs] of Object.entries(provider.protocolMap ?? {})) {
+      if (refs !== undefined && refs.length === 0) set.add(protocol)
+    }
+    return set
+  }, [provider.protocolMap])
+
+  const sections = useMemo(() => {
+    const byProtocol = new Map<string, AiModelMetadata[]>()
+    for (const m of models) {
+      const list = byProtocol.get(m.protocol) ?? []
+      list.push(m)
+      byProtocol.set(m.protocol, list)
+    }
+    for (const protocol of Object.keys(provider.protocolMap ?? {})) {
+      if (!byProtocol.has(protocol)) byProtocol.set(protocol, [])
+    }
+    return [...byProtocol.entries()]
+      .map(([protocol, list]) => ({
+        protocol: protocol as AiWireProtocol,
+        discover: discover.has(protocol),
+        models: list,
+      }))
+      .sort((a, b) => a.protocol.localeCompare(b.protocol))
+  }, [models, provider.protocolMap, discover])
+
+  if (sections.length === 0) {
+    return (
+      <div className={styles['noModels']}>
+        {localize('aiModels.noModels', 'No models available (configure baseUrl / API key).')}
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles['modelList']}>
+      {sections.map((section) => (
+        <div key={section.protocol}>
+          <div className={styles['protocolHeader']}>
+            {section.protocol}
+            {section.discover && (
+              <span className={styles['discoverBadge']}>
+                {localize('aiModels.entry.discover', 'discover from endpoint')}
+              </span>
+            )}
+          </div>
+          {section.models.length === 0 ? (
             <div className={styles['noModels']}>
-              {localize('aiModels.noModels', 'No models available (configure baseUrl / API key).')}
-            </div>
-          ) : filteredModels.length === 0 ? (
-            <div className={styles['noModels']}>
-              {localize('aiModels.noMatch', 'No models match the filter.')}
+              {localize('aiModels.entry.noModels', 'No models resolved for this protocol.')}
             </div>
           ) : (
             <ul className={styles['modelList']}>
-              {filteredModels.map((model) => (
-                <InstanceModelRow
+              {section.models.map((model) => (
+                <EntryModelRow
                   key={model.id}
                   model={model}
-                  declared={declaredIds.has(bareModelName(model.id, instance.type, instance.name))}
-                  onRemove={() => onRemoveModel(model.id)}
                   onConfigure={onConfigure}
                   getConfiguration={getConfiguration}
                 />
@@ -316,9 +447,30 @@ export function ProviderInstanceCard({
             </ul>
           )}
         </div>
-      )}
-    </section>
+      ))}
+    </div>
   )
+}
+
+export function issueReasonLabel(reason: AiProviderIssue['reason']): string {
+  switch (reason) {
+    case 'malformed-entry':
+      return localize('aiModels.issue.malformedEntry', 'Malformed entry (no string id)')
+    case 'invalid-id':
+      return localize('aiModels.issue.invalidId', "Invalid id (empty, or contains '/')")
+    case 'duplicate-id':
+      return localize('aiModels.issue.duplicateId', 'Duplicate id')
+    case 'unknown-extends':
+      return localize('aiModels.issue.unknownExtends', 'Unknown extends target')
+    case 'extends-cycle':
+      return localize('aiModels.issue.extendsCycle', 'Extends cycle')
+    case 'extends-depth':
+      return localize('aiModels.issue.extendsDepth', 'Extends chain too deep')
+    case 'no-protocol':
+      return localize('aiModels.issue.noProtocol', 'No protocol declared')
+    case 'unknown-default-protocol':
+      return localize('aiModels.issue.unknownDefaultProtocol', 'Unknown default protocol')
+  }
 }
 
 function ConnectivityDot({ state }: { readonly state: ConnectState }) {
@@ -408,36 +560,27 @@ function ApiKeyField({
   )
 }
 
-/** Mask a key: first 4 + last 4 with fixed dots; short keys hide entirely. */
-function maskKey(key: string): string {
-  if (key.length <= 8) return '•'.repeat(8)
-  return `${key.slice(0, 4)}••••••••••${key.slice(-4)}`
-}
-
 function AccountUsageBlock({
   aiModel,
-  instance,
-  type,
+  provider,
   reloadToken,
 }: {
   readonly aiModel: IAiModelService
-  readonly instance: AiProviderInstance
-  readonly type: AiProviderType | undefined
+  readonly provider: AiProviderEntry
   readonly reloadToken: number
 }) {
-  const key = providerKey(instance)
-  const declaresUsage = (instance.usageSource ?? type?.usageSource) !== undefined
+  const declaresUsage = provider.usageSource !== undefined
   const [usage, setUsage] = useState<AiAccountUsage | undefined>(undefined)
   const [loaded, setLoaded] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
     setLoaded(false)
-    const next = await aiModel.getAccountUsage(key)
-    if (next === undefined) console.debug('aiModels: account usage unavailable', key)
+    const next = await aiModel.getAccountUsage(provider.id)
+    if (next === undefined) console.debug('aiModels: account usage unavailable', provider.id)
     setUsage(next)
     setLoaded(true)
-  }, [aiModel, key])
+  }, [aiModel, provider.id])
 
   useEffect(() => {
     if (!declaresUsage) return
@@ -449,7 +592,7 @@ function AccountUsageBlock({
   const refresh = async () => {
     setRefreshing(true)
     try {
-      await aiModel.refreshRemote(key)
+      await aiModel.refreshRemote(provider.id)
       await load()
     } finally {
       setRefreshing(false)
@@ -543,21 +686,13 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString()
 }
 
-interface InstanceModelRowProps {
+interface EntryModelRowProps {
   readonly model: AiModelMetadata
-  readonly declared: boolean
-  readonly onRemove: () => void
   readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
   readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
 }
 
-function InstanceModelRow({
-  model,
-  declared,
-  onRemove,
-  onConfigure,
-  getConfiguration,
-}: InstanceModelRowProps) {
+function EntryModelRow({ model, onConfigure, getConfiguration }: EntryModelRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [draft, setDraft] = useState<Record<string, string | number | boolean>>({})
   const hasSchema = model.configurationSchema && Object.keys(model.configurationSchema).length > 0
@@ -573,16 +708,14 @@ function InstanceModelRow({
   return (
     <li className={styles['modelRow']}>
       <div className={styles['modelMain']}>
-        {declared && (
-          <Star
-            size={13}
-            strokeWidth={2}
-            className={styles['declaredIcon']}
-            aria-label={localize('aiModels.declared', 'Custom model')}
-          />
-        )}
         <span className={styles['modelName']}>{model.name}</span>
         <span className={styles['modelFamily']}>{model.family}</span>
+        <RateBadge model={model} />
+        {model.protocol === 'openai-responses' && (
+          <span className={styles['agentOnlyBadge']}>
+            {localize('aiModels.entry.agentOnly', 'Agent-only')}
+          </span>
+        )}
         <span className={styles['spacer']} />
         {hasSchema && (
           <IconButton
@@ -591,11 +724,6 @@ function InstanceModelRow({
             onClick={() => void toggleConfigure()}
           >
             <Settings2 size={15} strokeWidth={1.75} />
-          </IconButton>
-        )}
-        {declared && (
-          <IconButton label={localize('aiModels.removeModel', 'Remove model')} onClick={onRemove}>
-            <Trash2 size={15} strokeWidth={1.75} />
           </IconButton>
         )}
       </div>
@@ -679,4 +807,25 @@ function InstanceModelRow({
       )}
     </li>
   )
+}
+
+function RateBadge({ model }: { readonly model: AiModelMetadata }) {
+  if (model.pricing !== undefined) {
+    return <Badge tone="accent">{formatPricing(model.pricing)}</Badge>
+  }
+  return (
+    <Badge
+      data-tooltip={localize(
+        'aiModels.rate.unknownTooltip',
+        'No pricing source is configured for this provider (or this model is not in it).',
+      )}
+    >
+      {localize('aiModels.rate.unknown', 'Rate unknown')}
+    </Badge>
+  )
+}
+
+function formatPricing(pricing: AiModelPricing): string {
+  const symbol = pricing.currency === 'CNY' ? '¥' : '$'
+  return `${symbol}${pricing.input} / ${symbol}${pricing.output}`
 }

@@ -32,8 +32,9 @@ export interface AiDebugRecord {
   readonly purpose?: AiRequestPurpose
   readonly debugLabel?: string
   readonly modelId: string
-  readonly vendor: string
-  readonly groupName?: string
+  /** First two segments of `modelId`, absent when it is not a well-formed model ref. */
+  readonly providerId?: string
+  readonly protocol?: string
   readonly startedAt: number
   readonly endedAt?: number
   readonly durationMs?: number

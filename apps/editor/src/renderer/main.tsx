@@ -893,6 +893,7 @@ async function bootstrapWorkbench(): Promise<void> {
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),
     treeViewsService: instantiation.invokeFunction((a) => a.get(ITreeViewsService)),
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,
+    aiModelService,
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     interactionPerfService,
     explorerTreeService,

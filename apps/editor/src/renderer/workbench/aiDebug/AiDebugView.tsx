@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   localize,
+  parseModelRef,
   type AiDebugRecord,
   type AiDebugRecordSummary,
   type AiResponseChunk,
@@ -250,8 +251,7 @@ function chunkText(chunk: AiResponseChunk): string {
 }
 
 function bareModel(modelId: string): string {
-  const parts = modelId.split('/')
-  return parts[parts.length - 1] ?? modelId
+  return parseModelRef(modelId)?.channelModel ?? modelId
 }
 
 function roleLabel(role: number): string {

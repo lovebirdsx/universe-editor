@@ -2,9 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  OpenAI Chat Completions provider — speaks the `openai-chat` wire protocol, against
  *  api.openai.com or any OpenAI-compatible endpoint (LM Studio, vLLM, DeepSeek, …) via a
- *  configurable baseUrl. One instance may serve several provider types (openai, kuro, …),
- *  so the type segment of model ids comes from the resolved provider, never a constant.
- *  Models come from GET /models; chat streams Server-Sent Events from POST /chat/completions.
+ *  configurable baseUrl. The provider id segment of model ids comes from the runtime,
+ *  never a constant. Models come from GET /models; chat streams Server-Sent Events from
+ *  POST /chat/completions.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -13,70 +13,22 @@ import {
   AiMessageRole,
   AsyncIterableSource,
   bareModelName,
-  buildModelConfigSchema,
   CancellationError,
-  composeModelId,
   DeferredPromise,
   DisposableStore,
-  type AiCustomModelConfig,
   type AiMessage,
-  type AiModelConfigSchema,
   type AiRequestOptions,
-  type AiResolvedProvider,
+  type AiProviderRuntime,
   type AiResponse,
   type AiRequestResult,
-  type AiModelMetadata,
   type AiResponseChunk,
   type CancellationToken,
   type IAiModelProvider,
   localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
-import { resolveModelPricing } from '../../../../shared/ai/resolveModelPricing.js'
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
-// OpenAI exposes per-model context windows only out-of-band; use a safe default.
-const DEFAULT_MAX_TOKENS = 8192
-
-/** Tunable request parameters shared by every OpenAI-compatible model. */
-function baseSchema(): AiModelConfigSchema {
-  return {
-    temperature: {
-      type: 'number',
-      description: localize('ai.modelSettings.temperature', 'Sampling temperature (0–2).'),
-      group: 'navigation',
-    },
-    maxTokens: {
-      type: 'number',
-      description: localize('ai.modelSettings.maxTokens', 'Maximum tokens to generate.'),
-    },
-    topP: {
-      type: 'number',
-      description: localize('ai.modelSettings.topP', 'Nucleus sampling probability (0–1).'),
-    },
-    frequencyPenalty: {
-      type: 'number',
-      description: localize(
-        'ai.modelSettings.frequencyPenalty',
-        'Penalize tokens by their existing frequency (−2 to 2).',
-      ),
-    },
-    presencePenalty: {
-      type: 'number',
-      description: localize(
-        'ai.modelSettings.presencePenalty',
-        'Penalize tokens that have already appeared (−2 to 2).',
-      ),
-    },
-    seed: {
-      type: 'number',
-      description: localize(
-        'ai.modelSettings.seed',
-        'Seed for (best-effort) deterministic sampling.',
-      ),
-    },
-  }
-}
 
 /** Maps camelCase config keys to the snake_case fields the OpenAI API expects. */
 const PARAM_TO_BODY: Readonly<Record<string, string>> = {
@@ -99,10 +51,10 @@ interface OpenAiChatStreamChunk {
 }
 
 export class OpenAiChatProvider implements IAiModelProvider {
-  async provideModels(
-    provider: AiResolvedProvider,
+  async listModels(
+    provider: AiProviderRuntime,
     token: CancellationToken,
-  ): Promise<readonly AiModelMetadata[]> {
+  ): Promise<readonly string[]> {
     const apiKey = provider.apiKey
     const signals = new DisposableStore()
     let res: Response | undefined
@@ -112,23 +64,21 @@ export class OpenAiChatProvider implements IAiModelProvider {
         signal: toAbortSignal(token, signals),
       })
     } catch {
-      // Endpoint unreachable — fall back to declared models only.
+      // Endpoint unreachable — nothing to enumerate.
       res = undefined
     } finally {
       signals.dispose()
     }
-    const enumerated =
-      res && res.ok ? (((await res.json()) as { data?: OpenAiModelEntry[] }).data ?? []) : []
-    return mergeModels(
-      provider,
-      enumerated.map((entry) => entry.id),
+    if (!res || !res.ok) return []
+    return (((await res.json()) as { data?: OpenAiModelEntry[] }).data ?? []).map(
+      (entry) => entry.id,
     )
   }
 
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
   ): AiResponse {
     const source = new AsyncIterableSource<AiResponseChunk>()
@@ -143,7 +93,7 @@ export class OpenAiChatProvider implements IAiModelProvider {
   private async _run(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
     source: AsyncIterableSource<AiResponseChunk>,
     result: DeferredPromise<AiRequestResult>,
@@ -160,7 +110,7 @@ export class OpenAiChatProvider implements IAiModelProvider {
             headers: { 'content-type': 'application/json', ...authHeaders(apiKey) },
             body: JSON.stringify(
               buildChatBody(
-                bareModelName(options.modelId, provider.type, provider.name),
+                bareModelName(options.modelId, provider.id, provider.protocol),
                 messages,
                 options,
               ),
@@ -204,28 +154,12 @@ export class OpenAiChatProvider implements IAiModelProvider {
   }
 }
 
-function baseUrl(provider: AiResolvedProvider): string {
+function baseUrl(provider: AiProviderRuntime): string {
   return (provider.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
 }
 
 function authHeaders(apiKey: string | undefined): Record<string, string> {
   return apiKey ? { authorization: `Bearer ${apiKey}` } : {}
-}
-
-/** Endpoint-enumerated ids + hand-declared models (declared wins on id clash). */
-function mergeModels(provider: AiResolvedProvider, ids: readonly string[]): AiModelMetadata[] {
-  const declared = new Map((provider.declaredModels ?? []).map((m) => [m.id, m]))
-  const seen = new Set<string>()
-  const out: AiModelMetadata[] = []
-  for (const id of ids) {
-    if (declared.has(id) || seen.has(id)) continue
-    seen.add(id)
-    out.push(toMetadata(provider, id))
-  }
-  for (const config of provider.declaredModels ?? []) {
-    out.push(declaredMetadata(provider, config))
-  }
-  return out
 }
 
 function buildChatBody(
@@ -246,8 +180,8 @@ function buildChatBody(
     })),
   }
   // Per-model configuration first, then per-request options override it. Known
-  // keys map to their snake_case body field; any other key (a hand-declared
-  // model's custom parameter) is passed through under its own name.
+  // keys map to their snake_case body field; any other key is passed through
+  // under its own name.
   const cfg = options.modelConfiguration ?? {}
   for (const [key, value] of Object.entries(cfg)) {
     body[PARAM_TO_BODY[key] ?? key] = value
@@ -266,50 +200,6 @@ function roleToString(role: AiMessageRole): string {
       return 'assistant'
     default:
       return 'user'
-  }
-}
-
-function toMetadata(provider: AiResolvedProvider, id: string): AiModelMetadata {
-  const modelId = composeModelId(provider.type, provider.name, id)
-  const resolved = resolveModelPricing({ modelId, typePricing: provider.typePricing })
-  return {
-    id: modelId,
-    vendor: provider.type,
-    groupName: provider.name,
-    name: id,
-    family: id,
-    maxInputTokens: DEFAULT_MAX_TOKENS,
-    maxOutputTokens: DEFAULT_MAX_TOKENS,
-    capabilities: { streaming: true },
-    configurationSchema: baseSchema(),
-    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
-    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
-  }
-}
-
-function declaredMetadata(
-  provider: AiResolvedProvider,
-  config: AiCustomModelConfig,
-): AiModelMetadata {
-  const modelId = composeModelId(provider.type, provider.name, config.id)
-  const schema = buildModelConfigSchema(config, baseSchema())
-  const resolved = resolveModelPricing({
-    modelId,
-    model: config,
-    typePricing: provider.typePricing,
-  })
-  return {
-    id: modelId,
-    vendor: provider.type,
-    groupName: provider.name,
-    name: config.name ?? config.id,
-    family: config.family ?? config.id,
-    maxInputTokens: config.maxInputTokens ?? DEFAULT_MAX_TOKENS,
-    maxOutputTokens: config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
-    capabilities: config.capabilities ?? { streaming: true },
-    ...(schema ? { configurationSchema: schema } : {}),
-    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
-    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 

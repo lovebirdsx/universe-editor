@@ -5,6 +5,8 @@
  *  renderer reads a synchronous mirror instead). Refresh only happens on an
  *  explicit provider-set change, a manual UI refresh, or a stale cache after
  *  startup; failures keep the previous cache and never surface as errors.
+ *  A `sync` source (the built-in catalog) is a pure table lookup — it is skipped
+ *  by the fetch/cache machinery entirely.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -12,9 +14,9 @@ import {
   Disposable,
   Emitter,
   NullLogger,
-  providerKey,
   type AiAccountUsage,
   type AiRateTable,
+  type AiRateTableSnapshot,
   type AiRemoteSourceRegistry,
   type AiRemoteSourceSpec,
   type AiResolvedProvider,
@@ -57,55 +59,57 @@ export class AiRemoteCoordinator extends Disposable {
    */
   setProviders(providers: readonly AiResolvedProvider[]): void {
     this._providers.clear()
-    for (const provider of providers) this._providers.set(providerKey(provider), provider)
-    const keys = [...this._providers.keys()]
-    void this._reconcile(keys).catch(() => undefined)
+    for (const provider of providers) this._providers.set(provider.id, provider)
+    const ids = [...this._providers.keys()]
+    void this._reconcile(ids).catch(() => undefined)
   }
 
-  /** Refresh one provider (by key) or all of them. Awaits completion; used by the UI's manual refresh. */
-  async refresh(providerKey?: string): Promise<void> {
+  /** Refresh one provider (by id) or all of them. Awaits completion; used by the UI's manual refresh. */
+  async refresh(providerId?: string): Promise<void> {
     await this._cache.load()
-    const keys = providerKey !== undefined ? [providerKey] : [...this._providers.keys()]
-    await this._refreshKeys(keys)
+    const ids = providerId !== undefined ? [providerId] : [...this._providers.keys()]
+    await this._refreshIds(ids)
   }
 
-  getRates(key: string): AiRateTable | undefined {
-    return this._cache.getRates(key)?.rates
+  getRates(providerId: string): AiRateTable | undefined {
+    return this._cache.getRates(providerId)?.rates
   }
 
-  getUsage(key: string): AiAccountUsage | undefined {
-    return this._cache.getUsage(key)
+  getUsage(providerId: string): AiAccountUsage | undefined {
+    return this._cache.getUsage(providerId)
   }
 
-  allRateSnapshots(): readonly {
-    readonly providerKey: string
-    readonly rates: AiRateTable
-    readonly fetchedAt: number
-  }[] {
+  allRateSnapshots(): readonly AiRateTableSnapshot[] {
     return this._cache.allRates()
   }
 
-  private async _reconcile(liveKeys: readonly string[]): Promise<void> {
+  private async _reconcile(liveIds: readonly string[]): Promise<void> {
     await this._cache.load()
-    this._cache.prune(liveKeys)
+    this._cache.prune(liveIds)
     await this._cache.flush()
     await this._refreshStale()
   }
 
   private async _refreshStale(): Promise<void> {
-    const keys: string[] = []
-    for (const [key, provider] of this._providers) {
-      const needsRates = provider.pricingSource !== undefined && this._cache.isRatesStale(key)
-      const needsUsage = provider.usageSource !== undefined && this._cache.isUsageStale(key)
-      if (needsRates || needsUsage) keys.push(key)
+    const ids: string[] = []
+    for (const [id, provider] of this._providers) {
+      const needsRates =
+        provider.pricingSource !== undefined &&
+        !this._isSyncPricing(provider.pricingSource) &&
+        this._cache.isRatesStale(id)
+      const needsUsage =
+        provider.usageSource !== undefined &&
+        !this._isSyncUsage(provider.usageSource) &&
+        this._cache.isUsageStale(id)
+      if (needsRates || needsUsage) ids.push(id)
     }
-    if (keys.length === 0) return
-    await this._refreshKeys(keys)
+    if (ids.length === 0) return
+    await this._refreshIds(ids)
   }
 
-  private async _refreshKeys(keys: readonly string[]): Promise<void> {
+  private async _refreshIds(ids: readonly string[]): Promise<void> {
     let wrote = false
-    const results = await Promise.allSettled(keys.map((key) => this._refreshKey(key)))
+    const results = await Promise.allSettled(ids.map((id) => this._refreshId(id)))
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) wrote = true
     }
@@ -113,41 +117,51 @@ export class AiRemoteCoordinator extends Disposable {
     if (wrote) this._onDidChange.fire()
   }
 
-  /** Concurrent callers for the same key share one in-flight refresh. */
-  private _refreshKey(key: string): Promise<boolean> {
-    const existing = this._pending.get(key)
+  /** Concurrent callers for the same id share one in-flight refresh. */
+  private _refreshId(id: string): Promise<boolean> {
+    const existing = this._pending.get(id)
     if (existing !== undefined) return existing
-    const task = this._doRefreshKey(key).finally(() => {
-      this._pending.delete(key)
+    const task = this._doRefreshId(id).finally(() => {
+      this._pending.delete(id)
     })
-    this._pending.set(key, task)
+    this._pending.set(id, task)
     return task
   }
 
-  private async _doRefreshKey(key: string): Promise<boolean> {
-    const provider = this._providers.get(key)
+  private async _doRefreshId(id: string): Promise<boolean> {
+    const provider = this._providers.get(id)
     if (provider === undefined) return false
     const tasks: Promise<boolean>[] = []
-    if (provider.pricingSource !== undefined) {
+    if (provider.pricingSource !== undefined && !this._isSyncPricing(provider.pricingSource)) {
       tasks.push(
         this._fetchRates(
-          key,
+          id,
           toFetchContext(provider, provider.pricingSource),
           provider.pricingSource,
         ),
       )
     }
-    if (provider.usageSource !== undefined) {
+    if (provider.usageSource !== undefined && !this._isSyncUsage(provider.usageSource)) {
       tasks.push(
-        this._fetchUsage(key, toFetchContext(provider, provider.usageSource), provider.usageSource),
+        this._fetchUsage(id, toFetchContext(provider, provider.usageSource), provider.usageSource),
       )
     }
     const results = await Promise.allSettled(tasks)
     return results.some((r) => r.status === 'fulfilled' && r.value === true)
   }
 
+  private _isSyncPricing(spec: AiRemoteSourceSpec): boolean {
+    const source = this._registry.getPricingSource(spec.id)
+    return source !== undefined && (source as { readonly sync?: boolean }).sync === true
+  }
+
+  private _isSyncUsage(spec: AiRemoteSourceSpec): boolean {
+    const source = this._registry.getUsageSource(spec.id)
+    return source !== undefined && (source as { readonly sync?: boolean }).sync === true
+  }
+
   private async _fetchRates(
-    key: string,
+    id: string,
     ctx: AiSourceFetchContext,
     spec: AiRemoteSourceSpec,
   ): Promise<boolean> {
@@ -161,17 +175,17 @@ export class AiRemoteCoordinator extends Disposable {
       rates = await this._withTimeout((token) => source.fetchRates(ctx, token))
     } catch (err) {
       this._logger.warn(
-        `ai remote pricing '${spec.id}' failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+        `ai remote pricing '${spec.id}' failed for ${id}: ${err instanceof Error ? err.message : String(err)}`,
       )
       return false
     }
     if (rates === undefined) return false
-    this._cache.setRates(key, rates)
+    this._cache.setRates(id, rates)
     return true
   }
 
   private async _fetchUsage(
-    key: string,
+    id: string,
     ctx: AiSourceFetchContext,
     spec: AiRemoteSourceSpec,
   ): Promise<boolean> {
@@ -185,12 +199,12 @@ export class AiRemoteCoordinator extends Disposable {
       usage = await this._withTimeout((token) => source.fetchUsage(ctx, token))
     } catch (err) {
       this._logger.warn(
-        `ai remote usage '${spec.id}' failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+        `ai remote usage '${spec.id}' failed for ${id}: ${err instanceof Error ? err.message : String(err)}`,
       )
       return false
     }
     if (usage === undefined) return false
-    this._cache.setUsage(key, usage)
+    this._cache.setUsage(id, usage)
     return true
   }
 
@@ -223,8 +237,8 @@ function toFetchContext(
   spec: AiRemoteSourceSpec,
 ): AiSourceFetchContext {
   return {
-    typeId: provider.type,
-    instanceName: provider.name,
+    typeId: provider.id,
+    instanceName: provider.id,
     ...(provider.baseUrl !== undefined ? { baseUrl: provider.baseUrl } : {}),
     ...(provider.apiKey !== undefined ? { apiKey: provider.apiKey } : {}),
     ...(spec.options !== undefined ? { options: spec.options } : {}),

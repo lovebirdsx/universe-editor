@@ -1,63 +1,38 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  useClaudeConfig.saveProfile: editing the in-use credential profile (e.g.
- *  rotating its key) must push the new values into settings.json immediately —
- *  previously the old key stayed in effect until the profile was switched away
- *  and back. Gateway profiles now reference a provider instance; applying one
- *  derives the env from that provider.
+ *  useClaudeConfig: applyAuthentication injects the derived credential env (or
+ *  clears it for `@subscription`) and persists the selection; setModel /
+ *  setSmallFastModel write settings.json alongside their persisted picks.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import {
-  Event,
   IAiModelService,
   INotificationService,
   InstantiationService,
-  IStorageService,
   ServiceCollection,
-  type AiProviderInstance,
-  type AiProviderType,
-  type IStorageService as IStorageServiceType,
+  type AiProviderEntry,
 } from '@universe-editor/platform'
 import {
+  AGENT_SUBSCRIPTION_AUTH,
   IClaudeConfigService,
-  type ClaudeCredentialProfile,
+  type ClaudeAgentSettings,
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../../shared/ipc/claudeConfigService.js'
 import { ServicesContext } from '../../../useService.js'
 import { useClaudeConfig } from '../useClaudeConfig.js'
 
-function makeStorage(): IStorageServiceType {
-  const data = new Map<string, unknown>()
-  return {
-    _serviceBrand: undefined,
-    async get<T>(key: string): Promise<T | undefined> {
-      return data.get(key) as T | undefined
-    },
-    async set(key: string, value: unknown) {
-      data.set(key, value)
-    },
-    async remove(key: string) {
-      data.delete(key)
-    },
-    onDidChangeWorkspaceScope: Event.None,
-  }
-}
-
-function makeAiService(
-  providers: readonly AiProviderInstance[],
-  types: Readonly<Record<string, AiProviderType>>,
-): IAiModelService {
+function makeAiService(entries: readonly AiProviderEntry[]): IAiModelService {
   return {
     _serviceBrand: undefined,
     async getProviders() {
-      return providers
+      return entries
     },
-    async getProviderTypes() {
-      return types
+    async getModelKnowledge() {
+      return {}
     },
   } as unknown as IAiModelService
 }
@@ -71,11 +46,12 @@ function makeNotificationService(): INotificationService {
 
 function makeClaudeService(initial: {
   settings: ClaudeSettings
-  profiles: ClaudeCredentialProfile[]
+  agentSettings: ClaudeAgentSettings
 }) {
   let settings = initial.settings
-  let profiles = initial.profiles
+  let agentSettings = initial.agentSettings
   const patchCalls: ClaudeSettingsPatch[] = []
+  const writeCalls: ClaudeAgentSettings[] = []
   const service = {
     _serviceBrand: undefined,
     async read(): Promise<ClaudeSettings> {
@@ -85,13 +61,15 @@ function makeClaudeService(initial: {
       patchCalls.push(p)
       let next = { ...settings }
       if (typeof p.model === 'string') next = { ...next, model: p.model }
+      else if (p.model === null) delete next.model
       if (p.env) {
         const env = { ...(next.env ?? {}) }
         for (const [key, value] of Object.entries(p.env)) {
           if (value === null) delete env[key]
           else env[key] = value
         }
-        next = { ...next, env }
+        if (Object.keys(env).length > 0) next = { ...next, env }
+        else delete next.env
       }
       settings = next
     },
@@ -101,32 +79,24 @@ function makeClaudeService(initial: {
     async readAuthStatus() {
       return { loggedIn: false, expired: false }
     },
-    async readProfiles(): Promise<ClaudeCredentialProfile[]> {
-      return profiles
+    async readAgentSettings(): Promise<ClaudeAgentSettings> {
+      return agentSettings
     },
-    async writeProfiles(next: ClaudeCredentialProfile[]): Promise<void> {
-      profiles = next
+    async writeAgentSettings(next: ClaudeAgentSettings): Promise<void> {
+      writeCalls.push(next)
+      agentSettings = next
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
     },
   } as unknown as IClaudeConfigService
-  return {
-    service,
-    patchCalls,
-    getSettings: () => settings,
-  }
+  return { service, patchCalls, writeCalls, getSettings: () => settings }
 }
 
-function setup(
-  service: IClaudeConfigService,
-  providers: readonly AiProviderInstance[] = [],
-  types: Readonly<Record<string, AiProviderType>> = {},
-) {
+function setup(service: IClaudeConfigService, entries: readonly AiProviderEntry[] = []) {
   const services = new ServiceCollection()
   services.set(IClaudeConfigService, service)
-  services.set(IStorageService, makeStorage())
-  services.set(IAiModelService, makeAiService(providers, types))
+  services.set(IAiModelService, makeAiService(entries))
   services.set(INotificationService, makeNotificationService())
   const instantiation = new InstantiationService(services)
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -135,120 +105,97 @@ function setup(
   return renderHook(() => useClaudeConfig(), { wrapper })
 }
 
-const GATEWAY_PROVIDER: AiProviderInstance = {
-  name: 'gw',
-  type: 'anthropic',
+const GATEWAY_ENTRY: AiProviderEntry = {
+  id: 'gw',
   apiKey: 'tok-1',
   baseUrl: 'https://gw.example.com',
+  protocolMap: { 'anthropic-messages': [] },
 }
-const GATEWAY_TYPES: Readonly<Record<string, AiProviderType>> = {
-  anthropic: { protocol: 'anthropic-messages' },
+const OFFICIAL_ENTRY: AiProviderEntry = {
+  id: 'anthropic',
+  apiKey: 'sk-ant-official',
+  protocolMap: { 'anthropic-messages': [] },
 }
 
-describe('useClaudeConfig.saveProfile', () => {
+describe('useClaudeConfig', () => {
   afterEach(() => cleanup())
 
-  it('re-applies the profile into settings.json when the in-use credential is edited', async () => {
-    const { service, patchCalls } = makeClaudeService({
-      settings: { env: { ANTHROPIC_API_KEY: 'sk-ant-old' } },
-      profiles: [{ id: 'p1', label: 'Personal', kind: 'apiKey', apiKey: 'sk-ant-old' }],
+  it('injects a gateway credential and persists the selection', async () => {
+    const { service, patchCalls, writeCalls } = makeClaudeService({
+      settings: {},
+      agentSettings: {},
+    })
+    const { result } = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.applyAuthentication('gw')
+    })
+
+    expect(writeCalls).toEqual([{ authentication: 'gw' }])
+    expect(result.current.settings.env).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'tok-1',
+      ANTHROPIC_BASE_URL: 'https://gw.example.com',
+    })
+    expect(patchCalls.some((p) => p.env?.['ANTHROPIC_API_KEY'] === null)).toBe(true)
+  })
+
+  it('injects the official API key for an official-endpoint provider', async () => {
+    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { result } = setup(service, [OFFICIAL_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.applyAuthentication('anthropic')
+    })
+
+    expect(result.current.settings.env).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-official' })
+  })
+
+  it('clears the credential env for @subscription', async () => {
+    const { service, writeCalls } = makeClaudeService({
+      settings: { env: { ANTHROPIC_AUTH_TOKEN: 'tok-1', ANTHROPIC_BASE_URL: 'https://x' } },
+      agentSettings: { authentication: 'gw' },
+    })
+    const { result } = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.applyAuthentication(AGENT_SUBSCRIPTION_AUTH)
+    })
+
+    expect(writeCalls).toEqual([{ authentication: AGENT_SUBSCRIPTION_AUTH }])
+    expect(result.current.settings.env).toBeUndefined()
+  })
+
+  it('writes settings.model and persists the model pick', async () => {
+    const { service, writeCalls } = makeClaudeService({
+      settings: {},
+      agentSettings: { authentication: 'gw' },
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     await act(async () => {
-      await result.current.saveProfile({
-        id: 'p1',
-        label: 'Personal',
-        kind: 'apiKey',
-        apiKey: 'sk-ant-new',
-      })
+      await result.current.setModel('kimi-k3')
     })
 
-    expect(patchCalls).toHaveLength(1)
-    expect(result.current.settings.env?.['ANTHROPIC_API_KEY']).toBe('sk-ant-new')
+    expect(writeCalls).toEqual([{ authentication: 'gw', model: 'kimi-k3' }])
+    expect(result.current.settings.model).toBe('kimi-k3')
   })
 
-  it('re-applies a gateway profile, writing its derived token + base URL', async () => {
+  it('writes the fast-model env and persists the pick', async () => {
     const { service } = makeClaudeService({
-      settings: {
-        model: 'kimi-k3',
-        env: {
-          ANTHROPIC_AUTH_TOKEN: 'tok-1',
-          ANTHROPIC_BASE_URL: 'https://gw.example.com',
-        },
-      },
-      profiles: [
-        {
-          id: 'g1',
-          label: 'Gateway',
-          kind: 'gateway',
-          providerRef: 'anthropic/gw',
-          model: 'kimi-k3',
-        },
-      ],
-    })
-    const { result } = setup(service, [GATEWAY_PROVIDER], GATEWAY_TYPES)
-    await waitFor(() => expect(result.current.loaded).toBe(true))
-
-    await act(async () => {
-      await result.current.saveProfile({
-        id: 'g1',
-        label: 'Gateway',
-        kind: 'gateway',
-        providerRef: 'anthropic/gw',
-        model: 'kimi-k3',
-      })
-    })
-
-    expect(result.current.settings.env?.['ANTHROPIC_AUTH_TOKEN']).toBe('tok-1')
-    expect(result.current.settings.env?.['ANTHROPIC_BASE_URL']).toBe('https://gw.example.com')
-    expect(result.current.settings.env?.['ANTHROPIC_API_KEY']).toBeUndefined()
-  })
-
-  it('does not touch settings.json when a non-active profile is edited', async () => {
-    const { service, patchCalls } = makeClaudeService({
-      settings: { env: { ANTHROPIC_API_KEY: 'sk-ant-active' } },
-      profiles: [
-        { id: 'p1', label: 'Active', kind: 'apiKey', apiKey: 'sk-ant-active' },
-        { id: 'p2', label: 'Spare', kind: 'apiKey', apiKey: 'sk-ant-spare' },
-      ],
+      settings: {},
+      agentSettings: { authentication: 'gw' },
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     await act(async () => {
-      await result.current.saveProfile({
-        id: 'p2',
-        label: 'Spare',
-        kind: 'apiKey',
-        apiKey: 'sk-ant-rotated',
-      })
+      await result.current.setSmallFastModel('kimi-k3-mini')
     })
 
-    expect(patchCalls).toHaveLength(0)
-    expect(result.current.settings.env?.['ANTHROPIC_API_KEY']).toBe('sk-ant-active')
-    expect(result.current.profiles.find((p) => p.id === 'p2')?.apiKey).toBe('sk-ant-rotated')
-  })
-
-  it('does not re-apply when adding a brand-new profile', async () => {
-    const { service, patchCalls } = makeClaudeService({
-      settings: { env: { ANTHROPIC_API_KEY: 'sk-ant-active' } },
-      profiles: [{ id: 'p1', label: 'Active', kind: 'apiKey', apiKey: 'sk-ant-active' }],
-    })
-    const { result } = setup(service)
-    await waitFor(() => expect(result.current.loaded).toBe(true))
-
-    await act(async () => {
-      await result.current.saveProfile({
-        id: 'p-new',
-        label: 'New',
-        kind: 'apiKey',
-        apiKey: 'sk-ant-new',
-      })
-    })
-
-    expect(patchCalls).toHaveLength(0)
-    expect(result.current.profiles).toHaveLength(2)
+    expect(result.current.settings.env?.['ANTHROPIC_SMALL_FAST_MODEL']).toBe('kimi-k3-mini')
   })
 })

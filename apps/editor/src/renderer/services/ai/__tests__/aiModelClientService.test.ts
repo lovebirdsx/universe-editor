@@ -15,9 +15,9 @@ import {
   type AiAccountUsage,
   type AiMessage,
   type AiModelConfiguration,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiProviderTypeDescriptor,
+  type AiModelKnowledge,
+  type AiProviderEntry,
+  type AiProviderIssue,
   type AiProviderVerifyResult,
   type AiRateTableSnapshot,
   type IDisposable,
@@ -68,7 +68,7 @@ class FakeMain implements IAiModelMainService {
 
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
-  providers: readonly AiProviderInstance[] = []
+  providers: readonly AiProviderEntry[] = []
   readonly activeModels: {
     chat?: string
     inlineCompletion?: string
@@ -108,21 +108,21 @@ class FakeMain implements IAiModelMainService {
   setModelConfiguration(): Promise<void> {
     return Promise.resolve()
   }
-  getProviders(): Promise<readonly AiProviderInstance[]> {
+  getProviders(): Promise<readonly AiProviderEntry[]> {
     return Promise.resolve(this.providers)
   }
-  updateProviders(providers: readonly AiProviderInstance[]): Promise<void> {
+  updateProviders(providers: readonly AiProviderEntry[]): Promise<void> {
     this.providers = providers
     return Promise.resolve()
   }
-  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>> {
+  getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
     return Promise.resolve({})
   }
-  updateProviderTypes(): Promise<void> {
-    return Promise.resolve()
-  }
-  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]> {
+  getProviderIssues(): Promise<readonly AiProviderIssue[]> {
     return Promise.resolve([])
+  }
+  isLegacySettingsFormat(): Promise<boolean> {
+    return Promise.resolve(false)
   }
   verifyProvider(): Promise<AiProviderVerifyResult> {
     return Promise.resolve({ ok: true, modelCount: 0 })

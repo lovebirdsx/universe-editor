@@ -244,45 +244,6 @@
   text-decoration: underline;
 }
 
-.profileList {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.profileRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--ue-input-border, rgba(128, 128, 128, 0.25));
-  border-radius: 6px;
-}
-
-.profileBody {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.profileDetail {
-  font-size: 11px;
-  opacity: 0.6;
-  font-family: var(--ue-monospace-font, monospace);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profileActions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
 .connDot {
   width: 8px;
   height: 8px;
@@ -314,15 +275,6 @@
   50% {
     opacity: 0.6;
   }
-}
-
-.profileForm {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  border: 1px dashed var(--ue-input-border, rgba(128, 128, 128, 0.35));
-  border-radius: 6px;
 }
 
 .choice {

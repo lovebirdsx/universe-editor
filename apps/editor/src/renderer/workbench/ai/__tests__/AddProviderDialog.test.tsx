@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  AddProviderDialog tests — the "pick a type first" flow: selecting an existing
- *  type reuses its models/rates (no model/rate form, reuse hint shown), the
- *  "new type" branch writes the type before the instance, and duplicate names
- *  within a type are rejected.
+ *  AddProviderDialog tests — the single-layer entry flow: no type branch, one
+ *  entry is one gateway endpoint. Creates an entry through updateProviders,
+ *  rejects a duplicate id, and rejects an id containing '/'.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,20 +13,18 @@ import {
   IStorageService,
   InstantiationService,
   ServiceCollection,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiProviderTypeDescriptor,
+  type AiProviderEntry,
 } from '@universe-editor/platform'
 import { AddProviderDialog } from '../AddProviderDialog.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
 
+/** Mirrors the dialog's own private constant — kept in sync by hand, not exported for tests. */
+const DRAFT_KEY = 'ai.settings.addProvider.draft'
+
 class FakeDialogAiModel {
-  descriptors: readonly AiProviderTypeDescriptor[] = []
-  getProviderTypeDescriptors = vi.fn(async () => this.descriptors)
   verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 1 }))
-  updateProviderTypes = vi.fn(async () => {})
   updateProviders = vi.fn(async () => {})
 }
 
@@ -50,21 +47,17 @@ async function flushEffects(): Promise<void> {
 function renderDialog(
   aiModel: FakeDialogAiModel,
   {
-    existingInstances = [],
-    existingTypes = {},
-  }: {
-    existingInstances?: readonly AiProviderInstance[]
-    existingTypes?: Readonly<Record<string, AiProviderType>>
-  } = {},
+    existingProviders = [],
+    storage = new FakeStorage(),
+  }: { existingProviders?: readonly AiProviderEntry[]; storage?: FakeStorage } = {},
 ) {
   const services = new ServiceCollection()
   services.set(IAiModelService, aiModel as unknown as IAiModelService)
-  services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
+  services.set(IStorageService, storage as unknown as IStorageService)
   const inst = new InstantiationService(services)
   const utils = render(
     <AddProviderDialog
-      existingInstances={existingInstances}
-      existingTypes={existingTypes}
+      existingProviders={existingProviders}
       onClose={vi.fn()}
       onCreated={vi.fn()}
     />,
@@ -77,75 +70,103 @@ function renderDialog(
   return { ...utils, aiModel }
 }
 
-const ANTHROPIC_DESCRIPTOR: AiProviderTypeDescriptor = {
-  id: 'anthropic',
-  label: 'Anthropic',
-  protocol: 'anthropic-messages',
-  requiresApiKey: true,
-  builtin: true,
-}
-const KURO_DESCRIPTOR: AiProviderTypeDescriptor = {
-  id: 'kuro',
-  label: 'Kuro',
-  protocol: 'anthropic-messages',
-  requiresApiKey: true,
-  builtin: false,
-}
-
 describe('AddProviderDialog', () => {
-  it('reuses an existing type: no model/rate form and the reuse hint is shown', async () => {
+  it('creates a single-layer provider entry through updateProviders', async () => {
     const aiModel = new FakeDialogAiModel()
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR, KURO_DESCRIPTOR]
-    const kuro: AiProviderType = {
-      label: 'Kuro',
-      protocol: 'anthropic-messages',
-      models: [{ id: 'm1' }, { id: 'm2' }],
-    }
-    renderDialog(aiModel, { existingTypes: { kuro } })
-    await flushEffects()
-
-    const select = screen.getByLabelText('Provider type') as HTMLSelectElement
-    expect(select.value).toBe('anthropic')
-    fireEvent.change(select, { target: { value: 'kuro' } })
-
-    expect(screen.getByText('Will reuse the 2 models and rates of Kuro.')).toBeTruthy()
-    expect(screen.queryByText('per 1M tokens')).toBeNull()
-    expect(screen.queryByLabelText('Protocol')).toBeNull()
-  })
-
-  it('writes the new type before the instance in the "new type" branch', async () => {
-    const aiModel = new FakeDialogAiModel()
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
     renderDialog(aiModel)
     await flushEffects()
 
-    fireEvent.change(screen.getByLabelText('Provider type'), { target: { value: '__new__' } })
     fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…'), {
+      target: { value: 'https://kuro.example' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await flushEffects()
 
-    expect(aiModel.updateProviderTypes).toHaveBeenCalledTimes(1)
     expect(aiModel.updateProviders).toHaveBeenCalledTimes(1)
-    expect(aiModel.updateProviderTypes.mock.invocationCallOrder[0]).toBeLessThan(
-      aiModel.updateProviders.mock.invocationCallOrder[0]!,
-    )
-    expect(aiModel.updateProviderTypes).toHaveBeenCalledWith({
-      kuro: expect.objectContaining({ protocol: 'openai-chat' }),
-    })
-    expect(aiModel.updateProviders).toHaveBeenCalledWith([{ type: 'kuro', name: 'default' }])
+    expect(aiModel.updateProviders).toHaveBeenCalledWith([
+      {
+        id: 'kuro',
+        baseUrl: 'https://kuro.example',
+        defaultProtocol: 'openai-chat',
+        protocolMap: { 'openai-chat': [] },
+      },
+    ])
   })
 
-  it('rejects a duplicate instance name within the selected type', async () => {
+  // Without a protocolMap the entry resolves to a fatal `no-protocol` issue and
+  // vanishes from the list the moment it is created.
+  it('seeds the chosen protocol with a discover list so the entry actually resolves', async () => {
     const aiModel = new FakeDialogAiModel()
-    aiModel.descriptors = [ANTHROPIC_DESCRIPTOR]
-    renderDialog(aiModel, {
-      existingInstances: [{ name: 'default', type: 'anthropic' }],
-    })
+    renderDialog(aiModel)
     await flushEffects()
 
-    expect(screen.getByText('That provider already exists for this type.')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'claude-gw' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Default protocol' }), {
+      target: { value: 'anthropic-messages' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await flushEffects()
+
+    expect(aiModel.updateProviders).toHaveBeenCalledWith([
+      {
+        id: 'claude-gw',
+        defaultProtocol: 'anthropic-messages',
+        protocolMap: { 'anthropic-messages': [] },
+      },
+    ])
+  })
+
+  it('rejects a duplicate provider id', async () => {
+    const aiModel = new FakeDialogAiModel()
+    renderDialog(aiModel, { existingProviders: [{ id: 'kuro' }] })
+    await flushEffects()
+
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+
+    expect(screen.getByText('That provider id already exists.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(
       true,
+    )
+  })
+
+  it("rejects a provider id containing '/'", async () => {
+    const aiModel = new FakeDialogAiModel()
+    renderDialog(aiModel)
+    await flushEffects()
+
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'ku/ro' } })
+
+    expect(screen.getByText("Provider id must not contain '/'.")).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+  })
+})
+
+describe('AddProviderDialog — persisted draft', () => {
+  // This key outlived an earlier { vendor, name, baseUrl } draft shape. Reading
+  // `.id` off one of those yielded undefined, and the next render died on
+  // `id.trim()` — a white screen for anyone who had opened the old dialog once.
+  it('ignores a draft left behind by an older dialog shape', async () => {
+    const storage = new FakeStorage()
+    await storage.set(DRAFT_KEY, { vendor: 'openai', name: 'default', baseUrl: 'https://old' })
+    renderDialog(new FakeDialogAiModel(), { storage })
+    await flushEffects()
+
+    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('')
+    expect((screen.getByPlaceholderText('https://…') as HTMLInputElement).value).toBe('')
+  })
+
+  it('restores a well-formed draft', async () => {
+    const storage = new FakeStorage()
+    await storage.set(DRAFT_KEY, { id: 'kuro', baseUrl: 'https://kuro.example' })
+    renderDialog(new FakeDialogAiModel(), { storage })
+    await flushEffects()
+
+    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('kuro')
+    expect((screen.getByPlaceholderText('https://…') as HTMLInputElement).value).toBe(
+      'https://kuro.example',
     )
   })
 })

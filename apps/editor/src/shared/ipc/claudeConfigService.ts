@@ -9,7 +9,7 @@
  *  ClaudeAuthStatus / ClaudeEffortLevel) live in @universe-editor/node-services
  *  so the local main and a remote server operate on the same types; this module
  *  re-exports them for renderer/main import stability and adds the editor-local
- *  credential library + service contract.
+ *  agent settings (which provider / model the editor applies) + service contract.
  *
  *  Only the main process (or the remote server) touches the user's home
  *  directory; the renderer drives the visual settings panel entirely through
@@ -32,49 +32,26 @@ import type {
 } from '@universe-editor/node-services'
 
 /**
- * A saved credential profile in the editor's own library
- * (`aiSettings.json` under `agentSettings.claude`). This library
- * is the editor's "menu" of credentials; it is NOT read by the CLI/agent. The
- * user *applies* a profile to make it the active one in `settings.json`, which
- * is the file the CLI/agent actually read.
- *
- * `login` (OAuth) is deliberately not a profile — it is a single shared login.
- * Profiles only cover the two env-based credential shapes.
+ * The special `authentication` value meaning "use this agent's official
+ * subscription login" — Claude OAuth (`claude auth login`) / Codex ChatGPT
+ * login (`codex login`) — instead of a configured provider entry.
  */
-export type ClaudeCredentialKind = 'apiKey' | 'gateway'
-
-export interface ClaudeCredentialProfile {
-  id: string
-  label: string
-  kind: ClaudeCredentialKind
-  /** Present when `kind === 'apiKey'`. */
-  apiKey?: string
-  /** Present when `kind === 'gateway'`: `type/name` of a provider instance. */
-  providerRef?: string
-  /**
-   * Optional model preset bundled with a `gateway` profile. A custom gateway
-   * (Kimi's Anthropic-compatible endpoint, a LiteLLM proxy fronting GPT, …)
-   * serves a different model catalog than Anthropic, so the model to request is
-   * really part of the credential. When set, applying the profile also writes
-   * `settings.model`; clearing it leaves the current model untouched.
-   */
-  model?: string
-  /** Optional fast/background model for a `gateway` profile (`ANTHROPIC_SMALL_FAST_MODEL`). */
-  smallFastModel?: string
-}
+export const AGENT_SUBSCRIPTION_AUTH = '@subscription'
 
 /**
- * An unfinished credential form, retained when the settings page is left.
- * Persisted by the renderer in IStorageService (UI state, not configuration).
+ * Editor-local Claude agent state (`aiSettings.json` under `agentSettings.claude`).
+ * `authentication` is a single provider id, the {@link AGENT_SUBSCRIPTION_AUTH}
+ * sentinel, or absent. `model` / `smallFastModel` are the user's bare model picks,
+ * applied to `settings.json` alongside the credential. The CLI/agent never read
+ * this block — it is the editor's own menu.
  */
-export interface ClaudeCredentialDraft {
-  editingProfileId?: string
-  kind: ClaudeCredentialKind
-  label: string
-  apiKey: string
-  providerRef: string
-  model: string
-  smallFastModel: string
+export interface ClaudeAgentSettings {
+  /** Provider id serving `anthropic-messages`, `@subscription`, or absent. */
+  authentication?: string
+  /** Bare model requested from the provider (written to `settings.model` on apply). */
+  model?: string
+  /** Bare fast/background model (`ANTHROPIC_SMALL_FAST_MODEL` on apply). */
+  smallFastModel?: string
 }
 
 export interface IClaudeConfigService {
@@ -101,14 +78,10 @@ export interface IClaudeConfigService {
    * Never returns the tokens themselves. `authority` selects a remote host.
    */
   readAuthStatus(authority?: string): Promise<ClaudeAuthStatus>
-  /**
-   * Read the editor's saved credential library from aiSettings.json. Returns `[]`
-   * when absent or malformed. This library is separate from `settings.json` and
-   * is always editor-local (never routed).
-   */
-  readProfiles(): Promise<ClaudeCredentialProfile[]>
-  /** Replace the saved credential library in aiSettings.json (atomic merge). */
-  writeProfiles(profiles: ClaudeCredentialProfile[]): Promise<void>
+  /** Read the editor's saved Claude agent state from aiSettings.json (always editor-local). */
+  readAgentSettings(): Promise<ClaudeAgentSettings>
+  /** Replace the saved Claude agent state in aiSettings.json (atomic merge; editor-local). */
+  writeAgentSettings(settings: ClaudeAgentSettings): Promise<void>
   /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network

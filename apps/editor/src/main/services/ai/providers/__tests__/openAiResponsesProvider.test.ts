@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for OpenAiResponsesProvider — the stub lists only declared models (never touching
- *  the network) and rejects every request with ConfigurationRequired on both stream and result.
+ *  Tests for OpenAiResponsesProvider — the stub enumerates no models (never touching the
+ *  network) and rejects every request with ConfigurationRequired on both stream and result.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,23 +10,16 @@ import {
   CancellationTokenSource,
   getTextResponse,
   type AiMessage,
-  type AiCustomModelConfig,
-  type AiResolvedProvider,
+  type AiProviderRuntime,
+  type AiWireProtocol,
 } from '@universe-editor/platform'
 import { OpenAiResponsesProvider } from '../openAiResponsesProvider.js'
 
-function makeProvider(opts: {
-  apiKey?: string
-  name?: string
-  type?: string
-  models?: readonly AiCustomModelConfig[]
-}): AiResolvedProvider {
+function makeProvider(opts: { apiKey?: string; id?: string }): AiProviderRuntime {
   return {
-    type: opts.type ?? 'openai',
-    name: opts.name ?? 'default',
-    protocol: 'openai-responses',
+    id: opts.id ?? 'openai',
+    protocol: 'openai-responses' as AiWireProtocol,
     ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-    ...(opts.models !== undefined ? { declaredModels: opts.models } : {}),
   }
 }
 
@@ -39,20 +32,16 @@ afterEach(() => {
 })
 
 describe('OpenAiResponsesProvider', () => {
-  it('lists only declared models without touching the network', async () => {
+  it('listModels returns an empty list without touching the network', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const provider = new OpenAiResponsesProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.provideModels(
-      makeProvider({ models: [{ id: 'gpt-5.4', pricing: { input: 2.5, output: 15 } }] }),
-      cts.token,
-    )
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
 
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(models.map((m) => m.id)).toEqual(['openai/default/gpt-5.4'])
-    expect(models[0]!.pricingOrigin).toBe('model')
+    expect(models).toEqual([])
   })
 
   it('rejects both stream and result with ConfigurationRequired', async () => {
@@ -62,7 +51,7 @@ describe('OpenAiResponsesProvider', () => {
 
     const response = provider.sendRequest(
       userMessages,
-      { modelId: 'openai/default/gpt-5.4' },
+      { modelId: 'openai/openai-responses/gpt-5.4' },
       makeProvider({ apiKey: 'sk-test' }),
       cts.token,
     )

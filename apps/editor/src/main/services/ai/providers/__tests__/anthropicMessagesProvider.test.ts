@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AnthropicMessagesProvider — SSE text/usage reassembly, system-prompt hoisting,
- *  same-role merging, usage-bucket summation, HTTP error mapping, cancellation, and the
- *  required `max_tokens` fallback. `fetch` is stubbed; no real network is touched.
+ *  same-role merging, usage-bucket summation, HTTP error mapping, cancellation, model
+ *  enumeration (listModels), and the required `max_tokens` fallback. `fetch` is stubbed;
+ *  no real network is touched.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -12,8 +13,8 @@ import {
   CancellationTokenSource,
   getTextResponse,
   type AiMessage,
-  type AiCustomModelConfig,
-  type AiResolvedProvider,
+  type AiProviderRuntime,
+  type AiWireProtocol,
 } from '@universe-editor/platform'
 import { AnthropicMessagesProvider } from '../anthropicMessagesProvider.js'
 
@@ -37,20 +38,12 @@ function sse(obj: Record<string, unknown>): string {
   return `event: ${String(obj.type ?? 'message_start')}\ndata: ${JSON.stringify(obj)}\n`
 }
 
-function makeProvider(opts: {
-  apiKey?: string
-  baseUrl?: string
-  name?: string
-  type?: string
-  models?: readonly AiCustomModelConfig[]
-}): AiResolvedProvider {
+function makeProvider(opts: { apiKey?: string; baseUrl?: string; id?: string }): AiProviderRuntime {
   return {
-    type: opts.type ?? 'anthropic',
-    name: opts.name ?? 'default',
-    protocol: 'anthropic-messages',
+    id: opts.id ?? 'anthropic',
+    protocol: 'anthropic-messages' as AiWireProtocol,
     ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
     ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-    ...(opts.models !== undefined ? { declaredModels: opts.models } : {}),
   }
 }
 
@@ -58,7 +51,7 @@ const userMessages: readonly AiMessage[] = [
   { role: AiMessageRole.User, content: [{ type: 'text', value: 'hi' }] },
 ]
 
-const MODEL_ID = 'anthropic/default/claude-sonnet-5'
+const MODEL_ID = 'anthropic/anthropic-messages/claude-sonnet-5'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -228,19 +221,34 @@ describe('AnthropicMessagesProvider', () => {
     await expect(response.result).rejects.toBeInstanceOf(CancellationError)
   })
 
-  it('falls back to declared models when the endpoint is unreachable', async () => {
+  it('listModels returns the endpoint-enumerated ids as a string array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ data: [{ id: 'claude-sonnet-5' }, { id: 'claude-opus-4-8' }] }),
+            { status: 200 },
+          ),
+        ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
+
+    expect(models).toEqual(['claude-sonnet-5', 'claude-opus-4-8'])
+  })
+
+  it('listModels returns an empty list when the endpoint is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     const provider = new AnthropicMessagesProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.provideModels(
-      makeProvider({ models: [{ id: 'claude-sonnet-5' }] }),
-      cts.token,
-    )
+    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
 
-    expect(models.map((m) => m.id)).toEqual(['anthropic/default/claude-sonnet-5'])
-    expect(models[0]!.maxInputTokens).toBe(200000)
-    expect(models[0]!.maxOutputTokens).toBe(64000)
+    expect(models).toEqual([])
   })
 
   it('always sends max_tokens with options > modelConfiguration > 4096 precedence', async () => {

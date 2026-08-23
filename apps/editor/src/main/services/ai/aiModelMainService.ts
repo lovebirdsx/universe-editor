@@ -1,18 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Main-process AI model facade: reads provider instances + types from
- *  <configDir>/aiSettings.json, resolves them into runtime providers (apiKey
- *  inline, by user decision), feeds them to the registry, schedules requests, and
+ *  Main-process AI model facade: reads the single-layer `providers[]` from
+ *  <configDir>/aiSettings.json, flattens `extends` and applies the model knowledge
+ *  base via resolveProviderEntries, feeds the registry, schedules requests, and
  *  pumps each provider stream into requestId-keyed chunk events. Per-model
- *  configuration (schema default → user settings → per-request options) is resolved
- *  here and handed to the provider. Remote rate/usage sources are coordinated here
- *  (off the hot path) and exposed to the renderer as a synchronous mirror.
+ *  configuration (schema default → user settings → per-request options) lives at the
+ *  top-level `modelSettings` and is resolved here. Remote rate/usage sources are
+ *  coordinated here (off the hot path) and exposed to the renderer as a synchronous
+ *  mirror; each model's rate comes only from its provider's declared pricingSource.
  *--------------------------------------------------------------------------------------------*/
 
 import { type FSWatcher, watch as fsWatch } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { safeStorage } from 'electron'
 import {
   AiError,
   AiErrorCode,
@@ -28,30 +28,30 @@ import {
   ILoggerService,
   isCancellationError,
   localize,
+  mergeModelKnowledge,
   parseModelRef,
-  providerKey,
-  resolveProviderInstances,
+  resolveProviderEntries,
   transformErrorForSerialization,
   type AiAccountUsage,
   type AiActiveModelKind,
   type AiActiveModels,
-  type AiCustomModelConfig,
   type AiMessage,
   type AiMessagePart,
   type AiModelConfiguration,
   type AiModelConfigSchema,
+  type AiModelKnowledge,
   type AiModelMetadata,
   type AiModelSelector,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiProviderTypeDescriptor,
+  type AiProviderEntry,
+  type AiProviderIssue,
+  type AiProviderRuntime,
   type AiProviderVerifyInput,
   type AiProviderVerifyResult,
   type AiRateTableSnapshot,
-  type AiRemoteSourceSpec,
   type AiRequestOptions,
   type AiResolvedProvider,
   type AiResponse,
+  type AiSettingsFile,
 } from '@universe-editor/platform'
 import { type ParseError, parse } from 'jsonc-parser'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
@@ -62,22 +62,21 @@ import type {
   AiMessageDto,
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
-import { BUILTIN_PROVIDER_TYPES } from '../../../shared/ai/catalog/index.js'
-import { resolveModelPricing } from '../../../shared/ai/resolveModelPricing.js'
-import { IMainStorageService, type Storage } from '../../storage.js'
+import { BUILTIN_MODEL_KNOWLEDGE } from '../../../shared/ai/catalog/modelKnowledge.js'
+import { resolveModelPricing } from '../../../shared/ai/resolveProviderPricing.js'
 import { OllamaProvider } from './providers/ollamaProvider.js'
 import { OpenAiChatProvider } from './providers/openAiChatProvider.js'
 import { AnthropicMessagesProvider } from './providers/anthropicMessagesProvider.js'
 import { OpenAiResponsesProvider } from './providers/openAiResponsesProvider.js'
 import { HttpJsonPricingSource } from './remote/httpJsonPricingSource.js'
 import { HttpJsonUsageSource } from './remote/httpJsonUsageSource.js'
+import { CatalogPricingSource } from './remote/catalogPricingSource.js'
 import { AiRemoteCache } from './remote/remoteCache.js'
 import { AiRemoteCoordinator } from './remote/remoteCoordinator.js'
 import { AiDebugRecorder, IAiDebugRecorderService } from './aiDebugRecorder.js'
-import { mutateAiSettingsFile, writeAiSettingsFile } from './aiSettingsFile.js'
+import { mutateAiSettingsFile } from './aiSettingsFile.js'
 
 const AI_SETTINGS_FILE = 'aiSettings.json'
-const SECRET_STORAGE_KEY = 'secrets'
 
 /**
  * Upper bound for one-shot metadata calls (model enumeration, token counting,
@@ -87,38 +86,24 @@ const SECRET_STORAGE_KEY = 'secrets'
  */
 const METADATA_REQUEST_TIMEOUT_MS = 10_000
 
-/** Minimal slice of Electron's safeStorage so tests can stub decryption. */
-export interface SafeStorageLike {
-  isEncryptionAvailable(): boolean
-  decryptString(ciphertext: Buffer): string
+/** Mutable working copy of a provider entry, used when editing the persisted file. */
+type MutableEntry = {
+  -readonly [K in keyof AiProviderEntry]: AiProviderEntry[K]
 }
 
-/** Mutable working copy of an instance, used when editing the persisted file. */
-interface MutableInstance {
-  name: string
-  type: string
-  label?: string
-  baseUrl?: string
-  apiKey?: string
-  usageSource?: AiRemoteSourceSpec
-  models?: readonly AiCustomModelConfig[]
-  settings?: Record<string, AiModelConfiguration>
-}
-
-/** Typed + raw shape of a parsed aiSettings.json (raw kept for migration). */
+/** Typed + legacy-flag result of parsing an aiSettings.json. */
 interface ParsedSettings {
-  providers: AiProviderInstance[]
-  providerTypes: Record<string, AiProviderType>
-  activeModels: AiActiveModels
-  file: Record<string, unknown>
+  readonly file: AiSettingsFile
+  readonly legacyDetected: boolean
+  /** Entries too malformed to become an `AiProviderEntry` at all. */
+  readonly malformed: readonly AiProviderIssue[]
 }
 
 /** Fields `_writeSettings` should change; absent fields preserve what is on disk. */
 interface SettingsWrite {
-  readonly providers?: readonly AiProviderInstance[]
-  readonly providerTypes?: Readonly<Record<string, AiProviderType>>
+  readonly providers?: readonly AiProviderEntry[]
+  readonly modelSettings?: Readonly<Record<string, AiModelConfiguration>>
   readonly activeModels?: AiActiveModels
-  readonly agentSettings?: Record<string, unknown>
 }
 
 export class AiModelMainService extends Disposable implements IAiModelMainService {
@@ -145,9 +130,13 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
 
   private readonly _inflight = new Map<string, CancellationTokenSource>()
-  private _providers: readonly AiProviderInstance[] = []
-  private _userTypes: Readonly<Record<string, AiProviderType>> = {}
+  private _providers: readonly AiProviderEntry[] = []
+  private _knowledge: Readonly<Record<string, AiModelKnowledge>> = BUILTIN_MODEL_KNOWLEDGE
+  private _resolvedProviders: readonly AiResolvedProvider[] = []
+  private _modelSettings: Readonly<Record<string, AiModelConfiguration>> = {}
   private _activeModels: AiActiveModels = {}
+  private _issues: readonly AiProviderIssue[] = []
+  private _legacyDetected = false
   private readonly _ready: Promise<void>
 
   private _watcher: FSWatcher | undefined
@@ -159,8 +148,6 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     @IConfigLocationService configLocation: IConfigLocationService,
     @ILoggerService loggerService?: ILoggerService,
     @IAiDebugRecorderService private readonly _recorder?: AiDebugRecorder,
-    @IMainStorageService private readonly _storage?: Storage,
-    private readonly _safeStorage: SafeStorageLike = safeStorage,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'aiModel', name: 'AI Model' })
@@ -200,22 +187,16 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       this._remoteRegistry.registerPricingSource(new HttpJsonPricingSource(this._logger)),
     )
     this._register(this._remoteRegistry.registerUsageSource(new HttpJsonUsageSource(this._logger)))
-  }
-
-  /**
-   * Built-in types merged under the user-defined layer. A user entry with the
-   * same id replaces the built-in entry wholesale (no field-level merge) — simple
-   * and predictable.
-   */
-  private _mergedTypes(): Readonly<Record<string, AiProviderType>> {
-    return { ...BUILTIN_PROVIDER_TYPES, ...this._userTypes }
+    this._register(
+      this._remoteRegistry.registerPricingSource(new CatalogPricingSource(this._logger)),
+    )
   }
 
   async getModels(): Promise<readonly AiModelMetadata[]> {
     await this._ready
     return this._withTimeoutToken(async (token) => {
       const models = await this._registry.getModels(token)
-      return this._withGatewayPricing(models)
+      return this._withPricing(models)
     })
   }
 
@@ -229,92 +210,59 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     return this._withTimeoutToken(async (token) => {
       const resolved = await this._registry.resolveModel(modelId, token)
       if (!resolved) throw missingProviderError(modelId)
-      return resolved.provider.provideTokenCount(modelId, text, resolved.resolved, token)
+      return resolved.provider.provideTokenCount(modelId, text, resolved.runtime, token)
     })
   }
 
   async getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {
     await this._ready
-    const ref = parseModelRef(modelId)
-    const instance = ref
-      ? this._providers.find((p) => p.type === ref.type && p.name === ref.instance)
-      : undefined
-    const userSettings = instance?.settings?.[modelId] ?? {}
     const schema = await this._schemaFor(modelId)
-    return mergeModelConfig(schema, userSettings)
+    return mergeModelConfig(schema, this._modelSettings[modelId] ?? {})
   }
 
   async setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void> {
     await this._ready
-    const ref = parseModelRef(modelId)
-    if (!ref) return
     const schema = await this._schemaFor(modelId)
     const cleaned = dropDefaults(config, schema)
 
-    const providers = this._providers.map(cloneInstance)
-    let idx = providers.findIndex((p) => p.type === ref.type && p.name === ref.instance)
-    if (idx === -1) {
-      providers.push({ name: ref.instance, type: ref.type })
-      idx = providers.length - 1
-    }
-    const instance = providers[idx]!
-    const settings: Record<string, AiModelConfiguration> = { ...(instance.settings ?? {}) }
-    if (Object.keys(cleaned).length === 0) delete settings[modelId]
-    else settings[modelId] = cleaned
-    if (Object.keys(settings).length === 0) delete instance.settings
-    else instance.settings = settings
+    const next: Record<string, AiModelConfiguration> = { ...this._modelSettings }
+    if (Object.keys(cleaned).length === 0) delete next[modelId]
+    else next[modelId] = cleaned
 
-    await this._writeSettings({ providers })
+    await this._writeSettings({ modelSettings: next })
     await this._reload()
   }
 
-  async getProviders(): Promise<readonly AiProviderInstance[]> {
+  async getProviders(): Promise<readonly AiProviderEntry[]> {
     await this._ready
     return this._providers
   }
 
-  async updateProviders(providers: readonly AiProviderInstance[]): Promise<void> {
+  async updateProviders(providers: readonly AiProviderEntry[]): Promise<void> {
     await this._ready
     await this._writeSettings({ providers })
     await this._reload()
   }
 
-  async getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>> {
+  async getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
     await this._ready
-    return this._mergedTypes()
+    return this._knowledge
   }
 
-  async updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void> {
+  async getProviderIssues(): Promise<readonly AiProviderIssue[]> {
     await this._ready
-    // Keep the persisted layer minimal: a type identical to its built-in stays
-    // builtin (not written), everything else lands in `providerTypes`.
-    const userLayer: Record<string, AiProviderType> = {}
-    for (const [id, type] of Object.entries(types)) {
-      const builtin = BUILTIN_PROVIDER_TYPES[id]
-      if (builtin !== undefined && JSON.stringify(builtin) === JSON.stringify(type)) continue
-      userLayer[id] = type
-    }
-    await this._writeSettings({ providerTypes: userLayer })
-    await this._reload()
+    return this._issues
   }
 
-  async getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]> {
+  async isLegacySettingsFormat(): Promise<boolean> {
     await this._ready
-    const merged = this._mergedTypes()
-    return Object.entries(merged).map(([id, type]) => ({
-      id,
-      label: type.label ?? id,
-      protocol: type.protocol,
-      ...(type.defaultBaseUrl !== undefined ? { defaultBaseUrl: type.defaultBaseUrl } : {}),
-      requiresApiKey: type.requiresApiKey ?? false,
-      builtin: !(id in this._userTypes),
-    }))
+    return this._legacyDetected
   }
 
   async verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult> {
     await this._ready
-    const provider = this._registry.getProvider(input.protocol)
-    if (!provider) {
+    const impl = this._registry.getProvider(input.protocol)
+    if (!impl) {
       return {
         ok: false,
         modelCount: 0,
@@ -323,19 +271,16 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
         }),
       }
     }
-    // A throwaway resolved provider: the probed key is read from the input only
-    // and never written to aiSettings.json.
-    const resolved: AiResolvedProvider = {
-      type: input.type,
-      name: input.name,
+    // A throwaway runtime: the probed key is read from the input only and never
+    // written to aiSettings.json.
+    const runtime: AiProviderRuntime = {
+      id: input.id,
       protocol: input.protocol,
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.apiKey !== undefined ? { apiKey: input.apiKey } : {}),
     }
     try {
-      const models = await this._withTimeoutToken((token) =>
-        provider.provideModels(resolved, token),
-      )
+      const models = await this._withTimeoutToken((token) => impl.listModels(runtime, token))
       if (models.length === 0) {
         return {
           ok: false,
@@ -352,34 +297,29 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     }
   }
 
-  async setApiKey(typeId: string, instanceName: string, key: string): Promise<void> {
+  async setApiKey(providerId: string, key: string): Promise<void> {
     await this._ready
-    const providers = this._providers.map(cloneInstance)
-    let idx = providers.findIndex((p) => p.type === typeId && p.name === instanceName)
-    if (idx === -1) {
-      providers.push({ name: instanceName, type: typeId })
-      idx = providers.length - 1
-    }
-    providers[idx]!.apiKey = key
+    const providers = this._providers.map(cloneEntry)
+    const entry = providers.find((p) => p.id === providerId)
+    if (entry === undefined) return
+    entry.apiKey = key
     await this._writeSettings({ providers })
     await this._reload()
   }
 
-  async deleteApiKey(typeId: string, instanceName: string): Promise<void> {
+  async deleteApiKey(providerId: string): Promise<void> {
     await this._ready
-    const idx = this._providers.findIndex((p) => p.type === typeId && p.name === instanceName)
-    if (idx === -1 || this._providers[idx]!.apiKey === undefined) return
-    const providers = this._providers.map(cloneInstance)
-    delete providers[idx]!.apiKey
+    const providers = this._providers.map(cloneEntry)
+    const entry = providers.find((p) => p.id === providerId)
+    if (entry === undefined || entry.apiKey === undefined) return
+    delete entry.apiKey
     await this._writeSettings({ providers })
     await this._reload()
   }
 
-  async hasApiKey(typeId: string, instanceName: string): Promise<boolean> {
+  async hasApiKey(providerId: string): Promise<boolean> {
     await this._ready
-    return this._providers.some(
-      (p) => p.type === typeId && p.name === instanceName && p.apiKey !== undefined,
-    )
+    return this._providers.some((p) => p.id === providerId && p.apiKey !== undefined)
   }
 
   async getRateTables(): Promise<readonly AiRateTableSnapshot[]> {
@@ -387,14 +327,14 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     return this._remoteCoordinator.allRateSnapshots()
   }
 
-  async getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined> {
+  async getAccountUsage(providerId: string): Promise<AiAccountUsage | undefined> {
     await this._ready
-    return this._remoteCoordinator.getUsage(providerKey)
+    return this._remoteCoordinator.getUsage(providerId)
   }
 
-  async refreshRemote(providerKey?: string): Promise<void> {
+  async refreshRemote(providerId?: string): Promise<void> {
     await this._ready
-    await this._remoteCoordinator.refresh(providerKey)
+    await this._remoteCoordinator.refresh(providerId)
   }
 
   async startRequest(
@@ -420,7 +360,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       const merged: AiRequestOptions = { ...options, modelConfiguration }
       this._pumpResponse(
         requestId,
-        resolved.provider.sendRequest(domainMessages, merged, resolved.resolved, cts.token),
+        resolved.provider.sendRequest(domainMessages, merged, resolved.runtime, cts.token),
       )
     } catch (err) {
       this._endRequestWithError(requestId, err)
@@ -470,35 +410,64 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       text = ''
     }
     const parsed = parseSettings(text)
-    await this._migrateOnce(parsed, path)
-    this._userTypes = parsed.providerTypes
-    this._providers = parsed.providers
-    this._activeModels = parsed.activeModels
-    const resolved = resolveProviderInstances(this._providers, this._mergedTypes())
-    this._registry.setProviders(resolved)
-    this._remoteCoordinator.setProviders(resolved)
+    this._legacyDetected = parsed.legacyDetected
+    if (parsed.legacyDetected) {
+      // The retired two-layer format is never rewritten — the user rebuilds by hand.
+      this._logger.warn(
+        'ai settings: legacy two-layer format detected; configuration ignored (rebuild manually)',
+      )
+      this._providers = []
+      this._knowledge = BUILTIN_MODEL_KNOWLEDGE
+      this._resolvedProviders = []
+      this._modelSettings = {}
+      this._activeModels = {}
+      this._issues = []
+      this._registry.setProviders([], this._knowledge)
+      this._remoteCoordinator.setProviders([])
+      return
+    }
+
+    this._knowledge = mergeModelKnowledge(BUILTIN_MODEL_KNOWLEDGE, parsed.file.models)
+    this._providers = parsed.file.providers
+    this._modelSettings = parsed.file.modelSettings ?? {}
+    this._activeModels = parsed.file.activeModels ?? {}
+
+    const resolved = resolveProviderEntries(this._providers, this._knowledge)
+    this._resolvedProviders = resolved.providers
+    this._issues = [...parsed.malformed, ...resolved.issues]
+    for (const issue of this._issues) {
+      this._logger.warn(
+        `ai settings: provider '${issue.providerId}' ${issue.reason}${
+          issue.detail !== undefined ? ` (${issue.detail})` : ''
+        }`,
+      )
+    }
+    this._logger.info(
+      `ai settings: ${resolved.providers.length} provider(s) resolved from ${this._providers.length} entry(ies), ${this._issues.length} issue(s)`,
+    )
+    this._registry.setProviders(resolved.providers, this._knowledge)
+    this._remoteCoordinator.setProviders(resolved.providers)
   }
 
   private async _writeSettings(write: SettingsWrite): Promise<void> {
     const { dir } = await this._configLocation.getInfo()
     const path = join(dir, AI_SETTINGS_FILE)
     this._suppressUntil = Date.now() + 500
-    // Credential libraries and agent-authentication forms share this file; the
-    // read-modify-write below is serialized with them by aiSettingsFile.
+    // The agent-authentication helpers share this file; the read-modify-write
+    // below is serialized with them by aiSettingsFile.
     await mutateAiSettingsFile(
       path,
       (root) => {
         if (write.providers !== undefined) root['providers'] = write.providers
-        if (write.providerTypes !== undefined) {
-          if (Object.keys(write.providerTypes).length > 0)
-            root['providerTypes'] = write.providerTypes
-          else delete root['providerTypes']
+        if (write.modelSettings !== undefined) {
+          if (Object.keys(write.modelSettings).length > 0)
+            root['modelSettings'] = write.modelSettings
+          else delete root['modelSettings']
         }
         if (write.activeModels !== undefined) {
           if (hasAnyActive(write.activeModels)) root['activeModels'] = write.activeModels
           else delete root['activeModels']
         }
-        if (write.agentSettings !== undefined) root['agentSettings'] = write.agentSettings
       },
       (error) => {
         this._logger.warn(`ai settings: chmod 0600 failed: ${error.message}`)
@@ -506,223 +475,24 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     )
   }
 
-  private async _writeFile(path: string, file: Record<string, unknown>): Promise<void> {
-    await writeAiSettingsFile(path, file, (error) => {
-      this._logger.warn(`ai settings: chmod 0600 failed: ${error.message}`)
-    })
-  }
-
-  /**
-   * Idempotent one-time migration of legacy aiSettings.json / secret-storage
-   * shapes. Detects old shapes by their structure (presence of `groups`, gateway
-   * profiles without `providerRef`, leftover `ai.secret.*` keys) — never by a
-   * version marker. Rewrites the file once when anything changed.
-   */
-  private async _migrateOnce(parsed: ParsedSettings, path: string): Promise<void> {
-    let migrated = false
-
-    if (Array.isArray(parsed.file['groups'])) {
-      const { providers, providerTypes } = migrateLegacyGroups(parsed.file['groups'])
-      if (providers.length > 0) {
-        parsed.providers.push(...providers)
-        for (const [id, type] of Object.entries(providerTypes)) parsed.providerTypes[id] = type
-        this._logger.info(`ai migration: migrated ${providers.length} legacy provider group(s)`)
-      }
-      delete parsed.file['groups']
-      migrated = true
-    }
-
-    // Phase 1: decrypt secrets and fill providers in memory only. The persisted
-    // cleanup of ai.secret.* is deferred until the rewritten file is durably on
-    // disk (below), so a failed write never destroys the plaintext before it is
-    // saved and the migration can be retried on the next start.
-    const cleanedSecrets = await this._migrateSecrets(parsed.providers)
-    if (cleanedSecrets !== undefined) migrated = true
-    if (this._migrateGatewayProfiles(parsed.file, parsed.providers)) migrated = true
-
-    if (!migrated) return
-
-    parsed.file['providers'] = parsed.providers
-    if (Object.keys(parsed.providerTypes).length > 0)
-      parsed.file['providerTypes'] = parsed.providerTypes
-    else delete parsed.file['providerTypes']
-    await this._writeFile(path, parsed.file)
-
-    // Phase 2: only now that the plaintext apiKeys are on disk, drop the
-    // ai.secret.* keys from storage. If this final cleanup fails the keys are
-    // simply re-migrated (idempotently) on the next start.
-    if (cleanedSecrets !== undefined && this._storage !== undefined) {
-      await this._storage.set(SECRET_STORAGE_KEY, cleanedSecrets)
-    }
-  }
-
-  private async _migrateSecrets(
-    providers: AiProviderInstance[],
-  ): Promise<Record<string, string> | undefined> {
-    if (this._storage === undefined) return undefined
-    let map: Record<string, string> | undefined
-    try {
-      map = await this._storage.get<Record<string, string>>(SECRET_STORAGE_KEY)
-    } catch {
-      return undefined
-    }
-    if (!map || typeof map !== 'object' || Array.isArray(map)) return undefined
-    // Build the post-cleanup map without mutating the value `storage.get` handed
-    // us (which may be a live reference), so the deferred `storage.set` below is
-    // the only thing that actually removes a key.
-    const next: Record<string, string> = {}
-    let removed = false
-    for (const [key, encoded] of Object.entries(map)) {
-      const ref = parseSecretKey(key)
-      if (ref === undefined) {
-        next[key] = encoded
-        continue
-      }
-      if (typeof encoded !== 'string') {
-        next[key] = encoded
-        continue
-      }
-      let plaintext: string
-      try {
-        if (!this._safeStorage.isEncryptionAvailable()) {
-          this._logger.warn(`ai migration: skipped secret '${key}' — OS encryption unavailable`)
-          next[key] = encoded
-          continue
-        }
-        plaintext = this._safeStorage.decryptString(Buffer.from(encoded, 'base64'))
-      } catch {
-        this._logger.warn(`ai migration: failed to decrypt secret '${key}' — left in place`)
-        next[key] = encoded
-        continue
-      }
-      const idx = providers.findIndex((p) => p.type === ref.type && p.name === ref.name)
-      if (idx === -1) {
-        this._logger.warn(
-          `ai migration: no instance ${ref.type}/${ref.name} for secret — left in place`,
-        )
-        next[key] = encoded
-        continue
-      }
-      providers[idx] = { ...providers[idx]!, apiKey: plaintext }
-      removed = true
-      this._logger.info(`ai migration: migrated secret → ${ref.type}/${ref.name} apiKey`)
-    }
-    return removed ? next : undefined
-  }
-
-  private _migrateGatewayProfiles(
-    file: Record<string, unknown>,
-    providers: AiProviderInstance[],
-  ): boolean {
-    const agents = asRecord(file['agentSettings'])
-    if (agents === undefined) return false
-    let migrated = false
-    for (const [agentId, typeId] of [
-      ['claude', 'anthropic'],
-      ['codex', 'openai'],
-    ] as const) {
-      const agent = asRecord(agents[agentId])
-      if (agent === undefined) continue
-      const auth = asRecord(agent['authentication'])
-      if (auth === undefined) continue
-      if (!Array.isArray(auth['profiles'])) continue
-      const next: unknown[] = []
-      let changed = false
-      for (const raw of auth['profiles'] as readonly unknown[]) {
-        const profile = asRecord(raw)
-        if (
-          profile === undefined ||
-          profile['kind'] !== 'gateway' ||
-          profile['providerRef'] !== undefined
-        ) {
-          next.push(raw)
-          continue
-        }
-        const result = this._migrateGatewayProfile(profile, typeId, providers)
-        if (result === undefined) {
-          this._logger.warn(
-            `ai migration: ${agentId} gateway profile missing baseUrl/key — left as-is`,
-          )
-          next.push(raw)
-        } else {
-          next.push(result)
-          changed = true
-        }
-      }
-      if (changed) {
-        auth['profiles'] = next
-        migrated = true
-      }
-    }
-    return migrated
-  }
-
-  private _migrateGatewayProfile(
-    profile: Record<string, unknown>,
-    typeId: string,
-    providers: AiProviderInstance[],
-  ): Record<string, unknown> | undefined {
-    const baseUrl = profile['baseUrl']
-    const key = typeId === 'anthropic' ? profile['authToken'] : profile['apiKey']
-    if (
-      typeof baseUrl !== 'string' ||
-      baseUrl.trim() === '' ||
-      typeof key !== 'string' ||
-      key.trim() === ''
-    ) {
-      return undefined
-    }
-    const label =
-      typeof profile['label'] === 'string'
-        ? profile['label']
-        : typeof profile['id'] === 'string'
-          ? profile['id']
-          : 'gateway'
-    const used = new Set(providers.map((p) => providerKey(p)))
-    const name = uniqueInstanceName(slugify(label), used, typeId)
-    providers.push({ name, type: typeId, baseUrl, apiKey: key })
-    this._logger.info(`ai migration: gateway profile '${label}' → provider ${typeId}/${name}`)
-    const result: Record<string, unknown> = { kind: 'gateway', providerRef: `${typeId}/${name}` }
-    if (profile['id'] !== undefined) result['id'] = profile['id']
-    if (profile['label'] !== undefined) result['label'] = profile['label']
-    if (profile['model'] !== undefined) result['model'] = profile['model']
-    if (profile['smallFastModel'] !== undefined)
-      result['smallFastModel'] = profile['smallFastModel']
-    return result
-  }
-
-  private _withGatewayPricing(models: readonly AiModelMetadata[]): readonly AiModelMetadata[] {
+  /** Stamp each model with its provider-declared pricingSource — never another provider's rate. */
+  private _withPricing(models: readonly AiModelMetadata[]): readonly AiModelMetadata[] {
     return models.map((m) => {
-      const ref = parseModelRef(m.id)
-      if (!ref) return m
-      const gatewayRates = this._remoteCoordinator.getRates(
-        providerKey({ type: ref.type, name: ref.instance }),
-      )
-      const type = this._mergedTypes()[ref.type]
-      const model = this._declaredModel(ref.type, ref.instance, ref.model)
+      const provider = this._resolvedProviders.find((p) => p.id === m.providerId)
+      if (provider === undefined || provider.pricingSource === undefined) return m
+      const gatewayRates = this._remoteCoordinator.getRates(provider.id)
       const resolved = resolveModelPricing({
-        modelId: m.id,
-        ...(model !== undefined ? { model } : {}),
+        bareModel: m.channelModel,
+        pricingSource: provider.pricingSource,
         ...(gatewayRates !== undefined ? { gatewayRates } : {}),
-        ...(type?.pricing !== undefined ? { typePricing: type.pricing } : {}),
       })
-      // Only gateway-level hits are new information here — the provider already
-      // resolved model/type/catalog. Guard on the origin so a model-level pricing
-      // can never be downgraded by the gateway table.
-      if (resolved.origin !== 'gateway' || resolved.pricing === undefined) return m
-      return { ...m, pricing: resolved.pricing, pricingOrigin: 'gateway' }
+      if (resolved.pricing === undefined) return m
+      return {
+        ...m,
+        pricing: resolved.pricing,
+        ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
+      }
     })
-  }
-
-  private _declaredModel(
-    typeId: string,
-    instanceName: string,
-    bareModel: string,
-  ): AiCustomModelConfig | undefined {
-    const instance = this._providers.find((p) => p.type === typeId && p.name === instanceName)
-    const fromInstance = instance?.models?.find((m) => m.id === bareModel)
-    if (fromInstance !== undefined) return fromInstance
-    return this._mergedTypes()[typeId]?.models?.find((m) => m.id === bareModel)
   }
 
   private _setupWatcher(dir: string): void {
@@ -802,79 +572,19 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   }
 }
 
-/** Legacy secret-storage key holding a provider's API key: `ai.secret.<type>.<name>.apiKey`. */
-function parseSecretKey(key: string): { type: string; name: string } | undefined {
-  const prefix = 'ai.secret.'
-  if (!key.startsWith(prefix) || !key.endsWith('.apiKey')) return undefined
-  const middle = key.slice(prefix.length, -'.apiKey'.length)
-  const dot = middle.indexOf('.')
-  if (dot <= 0) return undefined
-  const type = middle.slice(0, dot)
-  const name = middle.slice(dot + 1)
-  if (type === '' || name === '') return undefined
-  return { type, name }
-}
-
-/** Migrate legacy `groups[]` into `providers[]` + a synthesized `providerTypes` layer. */
-function migrateLegacyGroups(raw: unknown): {
-  providers: AiProviderInstance[]
-  providerTypes: Record<string, AiProviderType>
-} {
-  const providers: AiProviderInstance[] = []
-  const providerTypes: Record<string, AiProviderType> = {}
-  if (!Array.isArray(raw)) return { providers, providerTypes }
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const g = item as Record<string, unknown>
-    const name = g['name']
-    const vendor = g['vendor']
-    if (typeof name !== 'string' || typeof vendor !== 'string') continue
-    const baseUrl = typeof g['baseUrl'] === 'string' ? g['baseUrl'] : undefined
-    const models = Array.isArray(g['models'])
-      ? (g['models'] as readonly AiCustomModelConfig[])
-      : undefined
-    const settings =
-      g['settings'] && typeof g['settings'] === 'object' && !Array.isArray(g['settings'])
-        ? (g['settings'] as Record<string, AiModelConfiguration>)
-        : undefined
-    if (vendor === 'openai' || vendor === 'ollama') {
-      providers.push({
-        name,
-        type: vendor,
-        ...(baseUrl !== undefined ? { baseUrl } : {}),
-        ...(models !== undefined ? { models } : {}),
-        ...(settings !== undefined ? { settings } : {}),
-      })
-    } else {
-      providerTypes[vendor] = {
-        protocol: 'openai-chat',
-        ...(baseUrl !== undefined ? { defaultBaseUrl: baseUrl } : {}),
-        requiresApiKey: true,
-        ...(models !== undefined ? { models } : {}),
-      }
-      providers.push({
-        name,
-        type: vendor,
-        ...(settings !== undefined ? { settings } : {}),
-      })
-    }
-  }
-  return { providers, providerTypes }
-}
-
 function missingProviderError(modelId: string): AiError {
   const ref = parseModelRef(modelId)
   if (ref !== undefined) {
     return new AiError(
       AiErrorCode.ProviderUnavailable,
-      `AI provider type '${ref.type}' is not available for model '${modelId}'.`,
+      `AI provider '${ref.providerId}' is not available for model '${modelId}'.`,
     )
   }
   return new AiError(AiErrorCode.ModelNotFound, `No AI model provider found for '${modelId}'.`)
 }
 
 function parseSettings(text: string): ParsedSettings {
-  const empty: ParsedSettings = { providers: [], providerTypes: {}, activeModels: {}, file: {} }
+  const empty: ParsedSettings = { file: { providers: [] }, legacyDetected: false, malformed: [] }
   if (text.trim() === '') return empty
   const errors: ParseError[] = []
   const parsed: unknown = parse(text, errors, { allowTrailingComma: true })
@@ -882,43 +592,71 @@ function parseSettings(text: string): ParsedSettings {
     return empty
   }
   const file = parsed as Record<string, unknown>
+  if (isLegacyFile(file)) {
+    return { file: { providers: [] }, legacyDetected: true, malformed: [] }
+  }
+  const models = parseKnowledge(file['models'])
+  const modelSettings = parseModelSettings(file['modelSettings'])
+  const agentSettings = asRecord(file['agentSettings'])
+  const providers = parseProviders(file['providers'])
   return {
-    providers: parseProviders(file['providers']),
-    providerTypes: parseProviderTypes(file['providerTypes']),
-    activeModels: parseActiveModels(file['activeModels']),
-    file,
+    file: {
+      ...(models !== undefined ? { models } : {}),
+      providers: providers.entries,
+      ...(modelSettings !== undefined ? { modelSettings } : {}),
+      activeModels: parseActiveModels(file['activeModels']),
+      ...(agentSettings !== undefined ? { agentSettings } : {}),
+    },
+    legacyDetected: false,
+    malformed: providers.malformed,
   }
 }
 
-function parseProviders(raw: unknown): AiProviderInstance[] {
-  const out: AiProviderInstance[] = []
-  if (!Array.isArray(raw)) return out
-  for (const item of raw) {
-    if (
-      item &&
-      typeof item === 'object' &&
-      typeof (item as { name?: unknown }).name === 'string' &&
-      typeof (item as { type?: unknown }).type === 'string'
-    ) {
-      out.push(item as AiProviderInstance)
-    }
+/** The retired two-layer format: a `providerTypes` key, a `groups` key, or any `providers[].type`. */
+function isLegacyFile(file: Record<string, unknown>): boolean {
+  if ('providerTypes' in file) return true
+  if ('groups' in file) return true
+  const providers = file['providers']
+  if (Array.isArray(providers)) {
+    return providers.some(
+      (p) => p !== null && typeof p === 'object' && 'type' in (p as Record<string, unknown>),
+    )
   }
-  return out
+  return false
 }
 
-function parseProviderTypes(raw: unknown): Record<string, AiProviderType> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const out: Record<string, AiProviderType> = {}
-  for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
-    if (
-      entry &&
-      typeof entry === 'object' &&
-      typeof (entry as { protocol?: unknown }).protocol === 'string'
-    ) {
-      out[id] = entry as AiProviderType
+function parseProviders(raw: unknown): {
+  entries: AiProviderEntry[]
+  malformed: AiProviderIssue[]
+} {
+  const entries: AiProviderEntry[] = []
+  const malformed: AiProviderIssue[] = []
+  if (!Array.isArray(raw)) return { entries, malformed }
+  for (const [index, item] of raw.entries()) {
+    if (item && typeof item === 'object' && typeof (item as { id?: unknown }).id === 'string') {
+      entries.push(item as AiProviderEntry)
+      continue
     }
+    // A typo'd or non-object element would otherwise vanish with no feedback at all.
+    malformed.push({
+      providerId: `providers[${index}]`,
+      reason: 'malformed-entry',
+      fatal: true,
+    })
   }
-  return out
+  return { entries, malformed }
+}
+
+function parseKnowledge(raw: unknown): Readonly<Record<string, AiModelKnowledge>> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  return raw as Readonly<Record<string, AiModelKnowledge>>
+}
+
+function parseModelSettings(
+  raw: unknown,
+): Readonly<Record<string, AiModelConfiguration>> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  return raw as Readonly<Record<string, AiModelConfiguration>>
 }
 
 function parseActiveModels(raw: unknown): AiActiveModels {
@@ -945,32 +683,14 @@ function hasAnyActive(active: AiActiveModels): boolean {
   )
 }
 
-function cloneInstance(p: AiProviderInstance): MutableInstance {
-  return { ...p, ...(p.settings !== undefined ? { settings: { ...p.settings } } : {}) }
+function cloneEntry(p: AiProviderEntry): MutableEntry {
+  return { ...p }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
-}
-
-function slugify(label: string): string {
-  const slug = label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || 'gateway'
-}
-
-function uniqueInstanceName(base: string, used: Set<string>, typeId: string): string {
-  let candidate = base
-  let suffix = 2
-  while (used.has(`${typeId}/${candidate}`)) {
-    candidate = `${base}-${suffix}`
-    suffix++
-  }
-  return candidate
 }
 
 /** Schema default values overlaid by the user's stored settings. */

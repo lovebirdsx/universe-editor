@@ -13,27 +13,21 @@ import {
   AsyncIterableSource,
   bareModelName,
   CancellationError,
-  composeModelId,
   DeferredPromise,
   DisposableStore,
-  type AiCustomModelConfig,
   type AiMessage,
   type AiRequestOptions,
-  type AiResolvedProvider,
+  type AiProviderRuntime,
   type AiResponse,
   type AiRequestResult,
-  type AiModelMetadata,
   type AiResponseChunk,
   type CancellationToken,
   type IAiModelProvider,
   localize,
 } from '@universe-editor/platform'
 import { retryWithBackoff, toAbortSignal } from './retry.js'
-import { resolveModelPricing } from '../../../../shared/ai/resolveModelPricing.js'
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
-// Ollama exposes no per-model token window via the API; use a conservative default.
-const DEFAULT_MAX_TOKENS = 4096
 
 interface OllamaTag {
   readonly name: string
@@ -48,32 +42,28 @@ interface OllamaChatStreamLine {
 }
 
 export class OllamaProvider implements IAiModelProvider {
-  async provideModels(
-    provider: AiResolvedProvider,
+  async listModels(
+    provider: AiProviderRuntime,
     token: CancellationToken,
-  ): Promise<readonly AiModelMetadata[]> {
+  ): Promise<readonly string[]> {
     const signals = new DisposableStore()
     let res: Response | undefined
     try {
       res = await fetch(`${baseUrl(provider)}/api/tags`, { signal: toAbortSignal(token, signals) })
     } catch {
-      // Server not running / unreachable — fall back to declared models only.
+      // Server not running / unreachable — nothing to enumerate.
       res = undefined
     } finally {
       signals.dispose()
     }
-    const enumerated =
-      res && res.ok ? (((await res.json()) as { models?: OllamaTag[] }).models ?? []) : []
-    return mergeModels(
-      provider,
-      enumerated.map((tag) => tag.name),
-    )
+    if (!res || !res.ok) return []
+    return (((await res.json()) as { models?: OllamaTag[] }).models ?? []).map((tag) => tag.name)
   }
 
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
   ): AiResponse {
     const source = new AsyncIterableSource<AiResponseChunk>()
@@ -88,7 +78,7 @@ export class OllamaProvider implements IAiModelProvider {
   private async _run(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
-    provider: AiResolvedProvider,
+    provider: AiProviderRuntime,
     token: CancellationToken,
     source: AsyncIterableSource<AiResponseChunk>,
     result: DeferredPromise<AiRequestResult>,
@@ -103,7 +93,7 @@ export class OllamaProvider implements IAiModelProvider {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(
               buildChatBody(
-                bareModelName(options.modelId, provider.type, provider.name),
+                bareModelName(options.modelId, provider.id, provider.protocol),
                 messages,
                 options,
               ),
@@ -148,24 +138,8 @@ export class OllamaProvider implements IAiModelProvider {
   }
 }
 
-function baseUrl(provider: AiResolvedProvider): string {
+function baseUrl(provider: AiProviderRuntime): string {
   return (provider.baseUrl?.replace(/\/+$/, '') || DEFAULT_BASE_URL).replace(/\/+$/, '')
-}
-
-/** Endpoint-enumerated names + hand-declared models (declared wins on id clash). */
-function mergeModels(provider: AiResolvedProvider, names: readonly string[]): AiModelMetadata[] {
-  const declared = new Map((provider.declaredModels ?? []).map((m) => [m.id, m]))
-  const seen = new Set<string>()
-  const out: AiModelMetadata[] = []
-  for (const name of names) {
-    if (declared.has(name) || seen.has(name)) continue
-    seen.add(name)
-    out.push(toMetadata(provider, name))
-  }
-  for (const config of provider.declaredModels ?? []) {
-    out.push(declaredMetadata(provider, config))
-  }
-  return out
 }
 
 function buildChatBody(
@@ -200,47 +174,6 @@ function roleToString(role: AiMessageRole): string {
       return 'assistant'
     default:
       return 'user'
-  }
-}
-
-function toMetadata(provider: AiResolvedProvider, name: string): AiModelMetadata {
-  const modelId = composeModelId(provider.type, provider.name, name)
-  const resolved = resolveModelPricing({ modelId, typePricing: provider.typePricing })
-  return {
-    id: modelId,
-    vendor: provider.type,
-    groupName: provider.name,
-    name,
-    family: name.split(':')[0] ?? name,
-    maxInputTokens: DEFAULT_MAX_TOKENS,
-    maxOutputTokens: DEFAULT_MAX_TOKENS,
-    capabilities: { streaming: true },
-    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
-    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
-  }
-}
-
-function declaredMetadata(
-  provider: AiResolvedProvider,
-  config: AiCustomModelConfig,
-): AiModelMetadata {
-  const modelId = composeModelId(provider.type, provider.name, config.id)
-  const resolved = resolveModelPricing({
-    modelId,
-    model: config,
-    typePricing: provider.typePricing,
-  })
-  return {
-    id: modelId,
-    vendor: provider.type,
-    groupName: provider.name,
-    name: config.name ?? config.id,
-    family: config.family ?? config.id.split(':')[0] ?? config.id,
-    maxInputTokens: config.maxInputTokens ?? DEFAULT_MAX_TOKENS,
-    maxOutputTokens: config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
-    capabilities: config.capabilities ?? { streaming: true },
-    ...(resolved.pricing !== undefined ? { pricing: resolved.pricing } : {}),
-    ...(resolved.origin !== undefined ? { pricingOrigin: resolved.origin } : {}),
   }
 }
 

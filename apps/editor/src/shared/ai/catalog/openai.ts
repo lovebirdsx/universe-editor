@@ -6,7 +6,7 @@
  *  the input rate, and codex never reports cache-write tokens anyway).
  *--------------------------------------------------------------------------------------------*/
 
-import type { AiCustomModelConfig, AiModelPricing, AiRateTable } from '@universe-editor/platform'
+import type { AiModelKnowledge, AiModelPricing, AiRateTable } from '@universe-editor/platform'
 
 const GPT_5_2_PRICING: AiModelPricing = { input: 1.75, output: 14, cacheRead: 0.175 }
 const GPT_5_3_PRICING: AiModelPricing = { input: 1.75, output: 14, cacheRead: 0.175 }
@@ -35,34 +35,35 @@ export const OPENAI_CATALOG: AiRateTable = {
   'gpt-5.6-terra': GPT_5_6_TERRA_PRICING,
 }
 
-export const OPENAI_MODELS: readonly AiCustomModelConfig[] = [
-  {
-    id: 'gpt-5.4',
+// Rates are a (channel, model) function, never intrinsic model knowledge.
+export const OPENAI_MODEL_KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
+  'gpt-5.4': {
     name: 'GPT-5.4',
     family: 'gpt-5.4',
+    vendor: 'openai',
+    nativeProtocol: 'openai-chat',
     maxInputTokens: 400000,
     maxOutputTokens: 128000,
     capabilities: { streaming: true, vision: true },
     supportsReasoningEffort: ['low', 'medium', 'high'],
-    pricing: GPT_5_4_PRICING,
   },
-  {
-    id: 'gpt-5.4-mini',
+  'gpt-5.4-mini': {
     name: 'GPT-5.4 Mini',
     family: 'gpt-5.4-mini',
+    vendor: 'openai',
+    nativeProtocol: 'openai-chat',
     maxInputTokens: 400000,
     maxOutputTokens: 128000,
     capabilities: { streaming: true, vision: true },
-    pricing: GPT_5_4_MINI_PRICING,
   },
-  {
-    id: 'gpt-5.5',
+  'gpt-5.5': {
     name: 'GPT-5.5',
     family: 'gpt-5.5',
+    vendor: 'openai',
+    nativeProtocol: 'openai-chat',
     maxInputTokens: 400000,
     maxOutputTokens: 128000,
     capabilities: { streaming: true, vision: true },
     supportsReasoningEffort: ['low', 'medium', 'high'],
-    pricing: GPT_5_5_PRICING,
   },
-]
+}

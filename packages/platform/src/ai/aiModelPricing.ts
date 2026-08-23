@@ -25,8 +25,12 @@ export interface AiTokenTally {
   readonly cacheWrite?: number
 }
 
-/** Which level of the resolution chain produced a rate. */
-export type AiPricingOrigin = 'model' | 'gateway' | 'type' | 'catalog'
+/**
+ * Where a rate came from. Only two, because a rate is always a function of
+ * (channel, model): the provider's own `pricingSource` decides, and there is no
+ * cross-provider fallback — an unpriced model is unknown, not guessed.
+ */
+export type AiPricingOrigin = 'catalog' | 'gateway'
 
 export const CNY_PER_USD = 7.2
 

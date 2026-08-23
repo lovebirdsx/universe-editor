@@ -31,7 +31,10 @@ import { InlineCompletionService, sanitizeCompletion } from '../InlineCompletion
 import type { IRecentEdit, IRecentEditsTracker } from '../RecentEditsTracker.js'
 
 const MODEL: AiModelMetadata = {
-  id: 'openai/default/m',
+  id: 'openai/openai-chat/m',
+  providerId: 'openai',
+  protocol: 'openai-chat',
+  channelModel: 'm',
   vendor: 'openai',
   name: 'm',
   family: 'm',

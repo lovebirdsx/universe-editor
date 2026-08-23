@@ -20,6 +20,8 @@ Codex 三种登录方案，必须互不耦合：
 
 **正确做法**：gateway 建模为**自包含 provider**（对齐用户手写的 `[model_providers.kuro]`）：`experimental_bearer_token` 携带 key、`supports_websockets=false`（防 wss 探测）、`model_provider` 指向它，**绝不**碰 `auth.json`、`openai_base_url`、`requires_openai_auth`。
 
-**实现**：`CodexConfigMainService.applyCredential(intent)` 单一原子入口（`{kind:'gateway'|'apiKey'|'chatgpt'}`），同时改 auth.json + config.toml。替代了旧的 `setApiKey` + `ensureCodexGatewayProvider`。renderer 经 `useCodexConfig` 的 `applyProfile`/`switchToChatgptLogin` 调用。acpClientService 不再做预启动 reconcile。"In use" 判定：gateway 看 `model_provider==='codex-gateway'`+base_url，apiKey 看 `authStatus.active==='apiKey' && !gatewayActive`。
+**实现**：`applyCredential(intent)` 是单一原子入口（`{kind:'gateway'|'apiKey'|'chatgpt'}`），一次写齐 auth.json + config.toml，实现在 `packages/node-services/src/agentConfig/codexConfigStore.ts`（含纯函数 `reconcileGatewayProvider`）；`CodexConfigMainService` 只按 authority 路由。替代了旧的 `setApiKey` + `ensureCodexGatewayProvider`；acpClientService 不再做预启动 reconcile。renderer 侧统一入口是 `useCodexConfig().applyAuthentication(authentication)`——`@subscription` 发 `{kind:'chatgpt'}`，provider id 经 `deriveCodexGateway` 派生后发 `{kind:'gateway',…}`（当前面板**没有官方 API key 入口**，`{kind:'apiKey'}` 只是契约保留）。
+
+**"In use" 判定收口到 main**：`resolveActiveAuth(authority?)` → `CodexActiveAuth { kind:'subscription'|'provider'|'none', providerId?, drift }`（纯函数 `computeCodexActiveAuth`）。gateway 生效看 `model_provider==='codex-gateway'` 并用 `deriveCodexGateway` 比对 baseUrl+token 反查 `providerId`；ChatGPT 生效要求 `authStatus.active==='chatgpt'` **且** `model_provider` 为空（旧的 `builtinActive` 降级成这个纯函数里的一个条件，既不是 renderer 的职责，也不在 `CodexAuthStatus` 类型里）。`drift` = 盘上实际生效与 `agentSettings.codex.authentication` 声明不一致。红线：**远端 auth.json 的秘密绝不回传**，只回这三个字段。
 
 相关：[[ai-service-foundation-progress]]

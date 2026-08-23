@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  IAccountUsageService — per-provider-instance account usage. The number is
  *  authoritative upstream data (quota / balance / subscription), read through
- *  `IAiModelService.getAccountUsage(providerKey)`; unlike the subscription
+ *  `IAiModelService.getAccountUsage(providerId)`; unlike the subscription
  *  snapshot it is never estimated locally, so a declared source that fails to
  *  answer is surfaced as "unavailable", never a made-up figure.
  *
@@ -127,10 +127,10 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
     let usage: AiAccountUsage | undefined
     try {
       // `force` bypasses main's TTL cache by re-fetching the source first.
-      if (force) await this._aiModel.refreshRemote(ctx.key)
-      usage = await this._aiModel.getAccountUsage(ctx.key)
+      if (force) await this._aiModel.refreshRemote(ctx.providerId)
+      usage = await this._aiModel.getAccountUsage(ctx.providerId)
       this._logger.debug(
-        `account usage for ${agentId} (${ctx.key}): ${usage === undefined ? 'unavailable' : usage.kind}`,
+        `account usage for ${agentId} (${ctx.providerId}): ${usage === undefined ? 'unavailable' : usage.kind}`,
       )
     } catch (error) {
       this._logger.warn(`account usage fetch failed for ${agentId}: ${String(error)}`)
@@ -140,9 +140,9 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
     // instance (transient failure); a re-binding whose source fails to answer
     // must surface as unavailable, never the previous instance's figure.
     if (usage !== undefined) {
-      this._lastKey.set(agentId, ctx.key)
+      this._lastKey.set(agentId, ctx.providerId)
       observable.set({ hasSource: true, usage }, undefined)
-    } else if (previous !== undefined && previousKey === ctx.key) {
+    } else if (previous !== undefined && previousKey === ctx.providerId) {
       observable.set({ hasSource: true, usage: previous }, undefined)
     } else {
       observable.set({ hasSource: true }, undefined)

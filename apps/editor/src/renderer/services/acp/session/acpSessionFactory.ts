@@ -77,6 +77,16 @@ export class AcpSessionFactory implements IAcpSessionFactory {
     messageAttachments: IAcpMessageAttachmentStore,
   )
   constructor(
+    telemetry: ITelemetryService,
+    history: IAcpSessionHistoryService,
+    agentDefaults: IAcpAgentDefaultsService,
+    changeTracker: ISessionChangeTrackerService,
+    titleService: IAcpSessionTitleService,
+    compactionStats: IAcpCompactionStatsService,
+    messageAttachments: IAcpMessageAttachmentStore,
+    providerContext: IAcpSessionProviderContext,
+  )
+  constructor(
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,

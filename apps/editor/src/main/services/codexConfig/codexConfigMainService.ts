@@ -2,27 +2,29 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-side Codex config service. The file-store core (config.toml + auth.json,
  *  `applyCredential`, auth watch) lives in node-services (CodexConfigStore); this
- *  class adds the local/remote split and the editor-local credential library.
+ *  class adds the local/remote split, the editor-local agent settings, and
+ *  `resolveActiveAuth` (drift detection between the editor's declared
+ *  `authentication` and what is actually in effect on disk).
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local CodexConfigStore (zero behavior change). The
- *  credential library (readProfiles/writeProfiles) is always editor-local;
- *  `matchActiveProfile` compares the *effective* host's credential (the authority's
- *  remote config, or the local host) against that library, and the gateway probe
- *  runs from the effective host. `onDidChangeAuth` fires on a local auth change OR
- *  a remote authority's auth change.
+ *  agent settings (readAgentSettings/writeAgentSettings) are always editor-local;
+ *  `resolveActiveAuth` compares the *effective* host's credential (the authority's
+ *  remote config, or the local host) against the editor's declared authentication,
+ *  and the gateway probe runs from the effective host. `onDidChangeAuth` fires on a
+ *  local auth change OR a remote authority's auth change.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises as fs } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
 import {
   createNamedLogger,
   Disposable,
   Emitter,
   ILoggerService,
   RemoteChannels,
-  type AiProviderInstance,
-  type AiProviderType,
+  resolveProviderEntries,
+  type AiProviderEntry,
+  type AiResolvedProvider,
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
@@ -31,33 +33,24 @@ import {
   GATEWAY_PROVIDER_ID,
   defaultCodexConfigPath,
   probeGatewayConnectivity,
-  resolveCodexAuthMode,
-  writeFileAtomic,
   type IRemoteAgentConfigService,
 } from '@universe-editor/node-services'
 import type {
+  CodexActiveAuth,
+  CodexAgentSettings,
   CodexAuthStatus,
   CodexCredentialIntent,
-  CodexCredentialProfile,
   CodexSettings,
   CodexSettingsPatch,
   ICodexConfigService,
 } from '../../../shared/ipc/codexConfigService.js'
+import { AGENT_SUBSCRIPTION_AUTH } from '../../../shared/ipc/claudeConfigService.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
-import { BUILTIN_PROVIDER_TYPES } from '../../../shared/ai/catalog/index.js'
-import { deriveCodexProvider, resolveProviderRef } from '../../../shared/ai/providerDerivation.js'
-import {
-  readAiSettingsAgentState,
-  readAiSettingsProviders,
-  updateAiSettingsAgentState,
-} from '../ai/aiSettingsAgentState.js'
+import { deriveCodexGateway } from '../../../shared/ai/providerDerivation.js'
+import { BUILTIN_MODEL_KNOWLEDGE } from '../../../shared/ai/catalog/modelKnowledge.js'
+import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+import { readAiSettingsRoot } from '../ai/aiSettingsFile.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
-
-interface CodexAgentSettingsState {
-  authentication?: {
-    profiles?: CodexCredentialProfile[]
-  }
-}
 
 export class CodexConfigMainService extends Disposable implements ICodexConfigService {
   declare readonly _serviceBrand: undefined
@@ -119,6 +112,30 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return this._local.readAuthStatus()
   }
 
+  async readAgentSettings(): Promise<CodexAgentSettings> {
+    if (!this._configLocation) return {}
+    const state = await readAiSettingsAgentState<CodexAgentSettings>(this._configLocation, 'codex')
+    return sanitizeCodexAgentSettings(state)
+  }
+
+  async writeAgentSettings(settings: CodexAgentSettings): Promise<void> {
+    if (!this._configLocation) return
+    await updateAiSettingsAgentState<CodexAgentSettings>(this._configLocation, 'codex', (current) =>
+      mergeCodexAgentSettings(current, settings),
+    )
+    this._logger.info('wrote Codex agent settings to aiSettings.json')
+  }
+
+  async resolveActiveAuth(authority?: string): Promise<CodexActiveAuth> {
+    const [agentSettings, settings, authStatus, providers] = await Promise.all([
+      this.readAgentSettings(),
+      this.read(authority),
+      this.readAuthStatus(authority),
+      this._readResolvedProviders(),
+    ])
+    return computeCodexActiveAuth(agentSettings.authentication, settings, authStatus, providers)
+  }
+
   async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
     const reachable = authority
       ? await this._remoteService(authority).checkGatewayConnectivity(baseUrl)
@@ -130,131 +147,13 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return reachable
   }
 
-  async readProfiles(): Promise<CodexCredentialProfile[]> {
-    if (this._configLocation) {
-      const state = await readAiSettingsAgentState<CodexAgentSettingsState>(
-        this._configLocation,
-        'codex',
-      )
-      const profiles = state?.authentication?.profiles
-      if (Array.isArray(profiles)) return profiles
-      const legacyProfiles = await this._readLegacyProfiles()
-      if (legacyProfiles.length > 0) await this.writeProfiles(legacyProfiles)
-      return legacyProfiles
-    }
-    return this._readLegacyProfiles()
-  }
-
-  async writeProfiles(profiles: CodexCredentialProfile[]): Promise<void> {
-    if (this._configLocation) {
-      await updateAiSettingsAgentState<CodexAgentSettingsState>(
-        this._configLocation,
-        'codex',
-        (current) => ({
-          ...current,
-          authentication: { ...current?.authentication, profiles },
-        }),
-      )
-      this._logger.info(`wrote ${profiles.length} Codex credential profile(s) to aiSettings.json`)
-      return
-    }
-    const path = this._profilesPath()
-    await writeFileAtomic(path, `${JSON.stringify({ profiles }, null, 2)}\n`)
-    this._logger.info(`wrote ${profiles.length} credential profile(s) to ${path}`)
-  }
-
-  async matchActiveProfile(authority?: string): Promise<string | undefined> {
-    const profiles = await this.readProfiles()
-    if (profiles.length === 0) return undefined
-
-    // Gateway mode: the provider block carries both the URL and the key, so
-    // same-URL profiles are told apart by their bearer token. Gateway profiles
-    // now reference a provider instance; resolve that reference to derive the
-    // credential it would have written, then compare against the on-disk block.
-    const settings = await this.read(authority)
-    if (settings['model_provider'] === GATEWAY_PROVIDER_ID) {
-      const providers = settings['model_providers']
-      const gw =
-        providers && typeof providers === 'object'
-          ? (providers as Record<string, unknown>)[GATEWAY_PROVIDER_ID]
-          : undefined
-      const baseUrl =
-        gw && typeof gw === 'object' ? (gw as Record<string, unknown>)['base_url'] : undefined
-      const token =
-        gw && typeof gw === 'object'
-          ? (gw as Record<string, unknown>)['experimental_bearer_token']
-          : undefined
-      if (typeof baseUrl !== 'string' || typeof token !== 'string' || token === '') {
-        return undefined
-      }
-      const { providers: instances, providerTypes } = await this._readProviderData()
-      const types = { ...BUILTIN_PROVIDER_TYPES, ...providerTypes }
-      const match = profiles.find((p) => {
-        if (p.kind !== 'gateway' || p.providerRef === undefined) return false
-        const resolved = resolveProviderRef(p.providerRef, instances, types)
-        if (resolved === undefined) return false
-        const derived = deriveCodexProvider(resolved.instance, resolved.type)
-        return derived !== undefined && derived.baseUrl === baseUrl && derived.apiKey === token
-      })
-      this._logger.info(`active profile match: ${match?.id ?? 'none'} (gateway ${baseUrl})`)
-      return match?.id
-    }
-
-    // Built-in openai provider: an API-key profile matches only when its key is
-    // the one in the effective host's auth.json; a ChatGPT login matches no
-    // profile. Remote matching narrows to the editor's saved apiKey candidates and
-    // only an index travels back — the remote auth.json never crosses the wire.
-    if (authority) {
-      const apiKeyProfiles = profiles.filter(
-        (p) => p.kind === 'apiKey' && typeof p.apiKey === 'string' && p.apiKey !== '',
-      )
-      if (apiKeyProfiles.length === 0) return undefined
-      const idx = await this._remoteService(authority).codexMatchActiveApiKey(
-        apiKeyProfiles.map((p) => p.apiKey as string),
-      )
-      this._logger.info(
-        `active profile match: ${idx >= 0 ? apiKeyProfiles[idx]?.id : 'none'} (remote apiKey)`,
-      )
-      return idx >= 0 ? apiKeyProfiles[idx]?.id : undefined
-    }
-
-    const auth = await this._local.readAuthRaw()
-    if (!auth || resolveCodexAuthMode(auth) !== 'apiKey') return undefined
-    const match = profiles.find((p) => p.kind === 'apiKey' && p.apiKey === auth['OPENAI_API_KEY'])
-    this._logger.info(`active profile match: ${match?.id ?? 'none'} (apiKey)`)
-    return match?.id
-  }
-
-  private async _readLegacyProfiles(): Promise<CodexCredentialProfile[]> {
-    const path = this._profilesPath()
-    let raw: string
-    try {
-      raw = await fs.readFile(path, 'utf8')
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this._logger.warn(`readProfiles failed: ${(err as Error).message}`)
-      }
-      return []
-    }
-    try {
-      const parsed = JSON.parse(raw) as { profiles?: unknown }
-      return Array.isArray(parsed.profiles) ? (parsed.profiles as CodexCredentialProfile[]) : []
-    } catch {
-      this._logger.warn(`credential-profiles.json is not valid JSON at ${path}`)
-      return []
-    }
-  }
-
-  private _profilesPath(): string {
-    return join(dirname(this._configPath), '.universe-editor', 'credential-profiles.json')
-  }
-
-  private async _readProviderData(): Promise<{
-    providers: readonly AiProviderInstance[]
-    providerTypes: Readonly<Record<string, AiProviderType>>
-  }> {
-    if (this._configLocation) return readAiSettingsProviders(this._configLocation)
-    return { providers: [], providerTypes: {} }
+  private async _readResolvedProviders(): Promise<readonly AiResolvedProvider[]> {
+    if (!this._configLocation) return []
+    const { dir } = await this._configLocation.getInfo()
+    const root = await readAiSettingsRoot(join(dir, 'aiSettings.json'))
+    const raw = root['providers']
+    const entries: readonly AiProviderEntry[] = Array.isArray(raw) ? raw : []
+    return resolveProviderEntries(entries, BUILTIN_MODEL_KNOWLEDGE).providers
   }
 
   private _remoteService(authority: string): IRemoteAgentConfigService {
@@ -271,4 +170,95 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     }
     return service
   }
+}
+
+/**
+ * Pure drift detection. `declared` is the editor's `authentication` string
+ * (provider id, `@subscription`, or absent); `kind` / `providerId` describe what
+ * is actually in effect on the effective host. `drift` is true when they disagree.
+ */
+export function computeCodexActiveAuth(
+  declared: string | undefined,
+  settings: CodexSettings,
+  authStatus: CodexAuthStatus,
+  providers: readonly AiResolvedProvider[],
+): CodexActiveAuth {
+  const modelProvider = settings['model_provider']
+  if (modelProvider === GATEWAY_PROVIDER_ID) {
+    const block = gatewayBlock(settings)
+    const baseUrl = block?.['base_url']
+    const token = block?.['experimental_bearer_token']
+    const providerId =
+      typeof baseUrl === 'string' && typeof token === 'string' && token !== ''
+        ? matchingProviderId(providers, baseUrl, token)
+        : undefined
+    return {
+      kind: 'provider',
+      ...(providerId !== undefined ? { providerId } : {}),
+      drift: computeDrift(declared, 'provider', providerId),
+    }
+  }
+
+  // Built-in `openai` provider: ChatGPT login only counts when `model_provider`
+  // is empty (a custom provider would bypass auth.json).
+  const builtinActive = typeof modelProvider !== 'string' || modelProvider === ''
+  const kind = authStatus.active === 'chatgpt' && builtinActive ? 'subscription' : 'none'
+  return { kind, drift: computeDrift(declared, kind, undefined) }
+}
+
+function computeDrift(
+  declared: string | undefined,
+  kind: 'subscription' | 'provider' | 'none',
+  providerId: string | undefined,
+): boolean {
+  if (declared === undefined || declared === '') {
+    // The editor isn't managing codex auth: only a hand-written gateway on disk
+    // that the editor doesn't own is a mismatch worth surfacing.
+    return kind === 'provider'
+  }
+  if (declared === AGENT_SUBSCRIPTION_AUTH) return kind !== 'subscription'
+  return kind !== 'provider' || providerId !== declared
+}
+
+function gatewayBlock(settings: CodexSettings): Record<string, unknown> | undefined {
+  const providers = settings['model_providers']
+  if (!providers || typeof providers !== 'object') return undefined
+  const block = (providers as Record<string, unknown>)[GATEWAY_PROVIDER_ID]
+  return block && typeof block === 'object' ? (block as Record<string, unknown>) : undefined
+}
+
+function matchingProviderId(
+  providers: readonly AiResolvedProvider[],
+  baseUrl: string,
+  token: string,
+): string | undefined {
+  for (const provider of providers) {
+    const derived = deriveCodexGateway(provider)
+    if (derived !== undefined && derived.baseUrl === baseUrl && derived.apiKey === token) {
+      return provider.id
+    }
+  }
+  return undefined
+}
+
+function sanitizeCodexAgentSettings(state: CodexAgentSettings | undefined): CodexAgentSettings {
+  const out: CodexAgentSettings = {}
+  if (typeof state?.authentication === 'string' && state.authentication !== '') {
+    out.authentication = state.authentication
+  }
+  if (typeof state?.model === 'string' && state.model !== '') out.model = state.model
+  return out
+}
+
+function mergeCodexAgentSettings(
+  current: CodexAgentSettings | undefined,
+  next: CodexAgentSettings,
+): CodexAgentSettings {
+  const out = sanitizeCodexAgentSettings(current)
+  delete out.authentication
+  delete out.model
+  const nextClean = sanitizeCodexAgentSettings(next)
+  if (nextClean.authentication !== undefined) out.authentication = nextClean.authentication
+  if (nextClean.model !== undefined) out.model = nextClean.model
+  return out
 }

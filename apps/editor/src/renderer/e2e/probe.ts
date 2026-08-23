@@ -22,6 +22,8 @@ import {
   StorageScope,
   URI,
   onUnexpectedError,
+  type AiProviderEntry,
+  type IAiModelService,
   type ICommandService,
   type IConfigurationService,
   type IContextKeyService,
@@ -134,6 +136,7 @@ export interface E2EProbeServices {
   readonly timelineService: ITimelineService
   readonly treeViewsService: ITreeViewsService
   readonly aiDebugService: IAiDebugService
+  readonly aiModelService: IAiModelService
   readonly timerService: ITimerService
   readonly interactionPerfService: IInteractionPerfService
   readonly explorerTreeService: ExplorerTreeService
@@ -1866,6 +1869,34 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           if (ended.has(rid)) finish(rid)
         })
       }),
+    aiSetProviders: (entries) =>
+      services.aiModelService.updateProviders(entries as unknown as readonly AiProviderEntry[]),
+    aiGetModels: async () => {
+      const models = await services.aiModelService.getModels()
+      return models.map((m) => ({
+        id: m.id,
+        providerId: m.providerId,
+        protocol: m.protocol,
+        channelModel: m.channelModel,
+        ...(m.vendor !== undefined ? { vendor: m.vendor } : {}),
+        name: m.name,
+        family: m.family,
+        maxInputTokens: m.maxInputTokens,
+        maxOutputTokens: m.maxOutputTokens,
+      }))
+    },
+    aiGetProviderIssues: async () => {
+      const issues = await services.aiModelService.getProviderIssues()
+      return issues.map((i) => ({
+        providerId: i.providerId,
+        reason: i.reason,
+        fatal: i.fatal,
+        ...(i.detail !== undefined ? { detail: i.detail } : {}),
+      }))
+    },
+    aiSetModelConfiguration: (modelId, config) =>
+      services.aiModelService.setModelConfiguration(modelId, config),
+    aiGetModelConfiguration: (modelId) => services.aiModelService.getModelConfiguration(modelId),
     getStartupMetrics: async () => {
       const m = await services.timerService.getStartupMetrics()
       return {

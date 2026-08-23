@@ -10,8 +10,8 @@
  *
  *  The file-store data shapes live in @universe-editor/node-services so the local
  *  main and a remote server operate on the same types; this module re-exports them
- *  and adds the editor-local credential library + service contract. Only auth
- *  *status* crosses a process boundary — never the tokens.
+ *  and adds the editor-local agent settings + drift detection. Only auth *status*
+ *  crosses a process boundary — never the tokens.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
@@ -33,39 +33,34 @@ import type {
   CodexSettings,
   CodexSettingsPatch,
 } from '@universe-editor/node-services'
+import { AGENT_SUBSCRIPTION_AUTH } from './claudeConfigService.js'
+
+export { AGENT_SUBSCRIPTION_AUTH }
 
 /**
- * A saved credential profile in the editor's own library
- * (`aiSettings.json` under `agentSettings.codex`). The user *applies* a
- * profile to make it the active credential via `applyCredential`: an API-key
- * profile writes `OPENAI_API_KEY` into `auth.json`; a gateway profile writes a
- * self-contained `[model_providers.codex-gateway]` into `config.toml`.
- *
- * ChatGPT login (OAuth) is deliberately not a profile — it is a single shared
- * login managed by `codex login`.
+ * Editor-local Codex agent state (`aiSettings.json` under `agentSettings.codex`).
+ * `authentication` is a single provider id (a gateway), the
+ * {@link AGENT_SUBSCRIPTION_AUTH} sentinel (ChatGPT login), or absent.
  */
-export type CodexCredentialKind = 'apiKey' | 'gateway'
-
-export interface CodexCredentialProfile {
-  id: string
-  label: string
-  kind: CodexCredentialKind
-  /** Present when `kind === 'apiKey'` — the OpenAI (or compatible) API key. */
-  apiKey?: string
-  /** Present when `kind === 'gateway'`: `type/name` of a provider instance. */
-  providerRef?: string
+export interface CodexAgentSettings {
+  /** Gateway provider id, `@subscription`, or absent. */
+  authentication?: string
+  /** Bare model requested (written to config.toml `model` on apply). */
+  model?: string
 }
 
 /**
- * An unfinished credential form, retained when the settings page is left.
- * Persisted by the renderer in IStorageService (UI state, not configuration).
+ * What the effective host currently runs as codex auth, relative to the editor's
+ * declared `authentication`. `drift` is true when the on-disk config.toml /
+ * auth.json disagrees with the declared value (the user hand-edited them).
  */
-export interface CodexCredentialDraft {
-  editingProfileId?: string
-  kind: CodexCredentialKind
-  label: string
-  apiKey: string
-  providerRef: string
+export interface CodexActiveAuth {
+  /** `subscription` = ChatGPT login in effect; `provider` = a gateway provider. */
+  kind: 'subscription' | 'provider' | 'none'
+  /** The provider id matching the on-disk gateway, when `kind === 'provider'`. */
+  providerId?: string
+  /** On-disk state disagrees with the editor's declared `authentication`. */
+  drift: boolean
 }
 
 export interface ICodexConfigService {
@@ -105,22 +100,17 @@ export interface ICodexConfigService {
    * Never returns the credentials themselves. `authority` selects a remote host.
    */
   readAuthStatus(authority?: string): Promise<CodexAuthStatus>
+  /** Read the editor's saved Codex agent state from aiSettings.json (always editor-local). */
+  readAgentSettings(): Promise<CodexAgentSettings>
+  /** Replace the saved Codex agent state in aiSettings.json (atomic merge; editor-local). */
+  writeAgentSettings(settings: CodexAgentSettings): Promise<void>
   /**
-   * Read the editor's saved credential library from aiSettings.json. Returns `[]`
-   * when absent or malformed. This library is separate from auth.json /
-   * config.toml and is always editor-local (never routed).
+   * Drift detection: which auth is currently in effect on the effective host
+   * (the `authority` remote host, or local when absent) versus the editor's
+   * declared `authentication`. `drift` is true when they disagree. Computed in
+   * the main process so the comparison can see the gateway token.
    */
-  readProfiles(): Promise<CodexCredentialProfile[]>
-  /** Replace the saved credential library in aiSettings.json (atomic merge). */
-  writeProfiles(profiles: CodexCredentialProfile[]): Promise<void>
-  /**
-   * Which saved profile (by id) matches the credential currently in effect, or
-   * `undefined` when none does. Computed in the main process so the comparison
-   * can see the secrets that never cross the boundary. Compares the *effective*
-   * host's credential — the `authority` remote host, or the local host when
-   * absent — against the editor-local library.
-   */
-  matchActiveProfile(authority?: string): Promise<string | undefined>
+  resolveActiveAuth(authority?: string): Promise<CodexActiveAuth>
   /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network

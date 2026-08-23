@@ -9,7 +9,7 @@
  *  encoded as base64 (`AiMessagePartDto`). The renderer client converts at the
  *  boundary, analogous to the project's "URI must be revived after IPC" rule.
  *
- *  Secret note: provider DTOs now carry a plaintext apiKey (`AiProviderInstance.apiKey`).
+ *  Secret note: provider DTOs carry a plaintext apiKey (`AiProviderEntry.apiKey`).
  *  This is an explicit user decision — keys sync across machines in aiSettings.json
  *  rather than staying in per-device encrypted storage. Logs and AI Debug records
  *  still never contain the key.
@@ -21,11 +21,11 @@ import type {
   AiActiveModelKind,
   AiMessageRole,
   AiModelConfiguration,
+  AiModelKnowledge,
   AiModelMetadata,
   AiModelSelector,
-  AiProviderInstance,
-  AiProviderType,
-  AiProviderTypeDescriptor,
+  AiProviderEntry,
+  AiProviderIssue,
   AiProviderVerifyInput,
   AiProviderVerifyResult,
   AiRateTableSnapshot,
@@ -100,34 +100,34 @@ export interface IAiModelMainService {
   /** Persist per-model configuration into aiSettings.json (defaults dropped). */
   setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** The persisted provider instances backing aiSettings.json. */
-  getProviders(): Promise<readonly AiProviderInstance[]>
-  /** Replace the persisted provider instances (rewrites aiSettings.json). */
-  updateProviders(providers: readonly AiProviderInstance[]): Promise<void>
+  /** The persisted provider entries backing aiSettings.json (apiKey inline). */
+  getProviders(): Promise<readonly AiProviderEntry[]>
+  /** Replace the persisted provider entries (rewrites aiSettings.json). */
+  updateProviders(providers: readonly AiProviderEntry[]): Promise<void>
 
-  /** All provider types: built-in merged with the user-defined layer in aiSettings.json. */
-  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>>
-  /** Replace only the user-defined provider-type layer (built-in-identical entries are dropped). */
-  updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void>
+  /** Effective model knowledge base: built-in merged with the user layer. */
+  getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>>
+  /** Configuration problems found while resolving `providers[]`. */
+  getProviderIssues(): Promise<readonly AiProviderIssue[]>
+  /** Whether aiSettings.json is still in the retired two-layer format and was ignored. */
+  isLegacySettingsFormat(): Promise<boolean>
 
-  /** Provider types a user can pick when adding an instance (all merged types, registered or not). */
-  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]>
-  /** Probe a candidate instance against its endpoint without persisting anything. */
+  /** Probe a candidate entry against its endpoint without persisting anything. */
   verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult>
 
-  /** Store an instance's plaintext apiKey (user decision: cross-machine sync); never logged. */
-  setApiKey(typeId: string, instanceName: string, key: string): Promise<void>
-  /** Remove an instance's stored apiKey. */
-  deleteApiKey(typeId: string, instanceName: string): Promise<void>
-  /** Whether an instance currently has an apiKey stored. */
-  hasApiKey(typeId: string, instanceName: string): Promise<boolean>
+  /** Store an entry's plaintext apiKey (user decision: cross-machine sync); never logged. */
+  setApiKey(providerId: string, key: string): Promise<void>
+  /** Remove an entry's stored apiKey. */
+  deleteApiKey(providerId: string): Promise<void>
+  /** Whether an entry currently has an apiKey stored. */
+  hasApiKey(providerId: string): Promise<boolean>
 
-  /** Latest rate tables by provider (`type/instance`), for the renderer's synchronous mirror. */
+  /** Latest rate tables by provider id, for the renderer's synchronous mirror. */
   getRateTables(): Promise<readonly AiRateTableSnapshot[]>
   /** Authoritative account-level usage for a provider; undefined means unavailable. */
-  getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined>
-  /** Refresh remote sources (rates + usage). Omit `providerKey` to refresh all. */
-  refreshRemote(providerKey?: string): Promise<void>
+  getAccountUsage(providerId: string): Promise<AiAccountUsage | undefined>
+  /** Refresh remote sources (rates + usage). Omit `providerId` to refresh all. */
+  refreshRemote(providerId?: string): Promise<void>
 }
 
 export const IAiModelMainService = createDecorator<IAiModelMainService>('aiModelMainService')

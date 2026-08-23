@@ -1,16 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Registers the JSON schema for aiSettings.json (the AI configuration file:
- *  provider types / instances + active model selections), so editing it gets
- *  completion + validation in Monaco. The `activeModels.{chat,inlineCompletion}`
- *  enums are rebuilt from the currently-available models whenever that set
- *  changes. API keys ARE part of this file as plaintext (user decision:
+ *  model knowledge base / provider entries / per-model settings / active model
+ *  selections / agent settings), so editing it gets completion + validation in
+ *  Monaco. The `activeModels.{chat,inlineCompletion,commit,sessionTitle}` enums
+ *  are rebuilt from the currently-available editor-selectable models whenever
+ *  that set changes. API keys ARE part of this file as plaintext (user decision:
  *  cross-machine sync) — they must never be logged.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Disposable,
   IAiModelService,
+  isEditorSelectable,
   type IDisposable,
   IUserDataFilesService,
   IWorkbenchContribution,
@@ -29,23 +31,17 @@ const WIRE_PROTOCOLS = ['openai-chat', 'openai-responses', 'anthropic-messages',
 const PROTOCOL_SCHEMA: IJSONSchema = {
   type: 'string',
   enum: [...WIRE_PROTOCOLS],
-  description: 'Wire protocol this type (or model) speaks.',
+  description: 'Wire protocol a model is reached through.',
 }
 
-const PRICING_SCHEMA: IJSONSchema = {
+const CAPABILITIES_SCHEMA: IJSONSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['input', 'output'],
   properties: {
-    currency: {
-      type: 'string',
-      enum: ['USD', 'CNY'],
-      description: 'Currency the rates are expressed in.',
-    },
-    input: { type: 'number', description: 'Input price per 1M tokens.' },
-    output: { type: 'number', description: 'Output price per 1M tokens.' },
-    cacheRead: { type: 'number', description: 'Cache-read price per 1M tokens.' },
-    cacheWrite: { type: 'number', description: 'Cache-write price per 1M tokens.' },
+    streaming: { type: 'boolean' },
+    vision: { type: 'boolean' },
+    toolCalling: { type: 'boolean' },
+    promptCaching: { type: 'boolean' },
   },
 }
 
@@ -56,112 +52,109 @@ const REMOTE_SOURCE_SCHEMA: IJSONSchema = {
   properties: {
     id: {
       type: 'string',
-      description: 'Registered remote source id, e.g. "http-json".',
+      description: 'Registered remote source id, e.g. "http-json" or "catalog".',
     },
     options: {
       type: 'object',
-      description: 'Source-specific configuration.',
+      description:
+        'Source-specific configuration. "catalog" requires { "vendor": "..." } naming the official price list; without it no rate resolves.',
       additionalProperties: true,
     },
   },
 }
 
-const MODEL_SCHEMA: IJSONSchema = {
+/** `models` knowledge-base entry: intrinsic metadata, deliberately pricing-free. */
+const MODEL_KNOWLEDGE_SCHEMA: IJSONSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id'],
   properties: {
-    id: { type: 'string', description: 'Bare model id the endpoint expects, e.g. "qwen3-coder".' },
     name: { type: 'string', description: 'Display name.' },
     family: { type: 'string', description: 'Model family, e.g. "gpt-4o".' },
+    vendor: { type: 'string', description: "Real vendor, e.g. 'anthropic'." },
+    nativeProtocol: {
+      ...PROTOCOL_SCHEMA,
+      description: "Protocol this model speaks on its own vendor's endpoint.",
+    },
     maxInputTokens: { type: 'number', description: 'Maximum input context size, in tokens.' },
     maxOutputTokens: { type: 'number', description: 'Maximum number of tokens to generate.' },
-    capabilities: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        streaming: { type: 'boolean' },
-        vision: { type: 'boolean' },
-        toolCalling: { type: 'boolean' },
-      },
-    },
+    capabilities: CAPABILITIES_SCHEMA,
     supportsReasoningEffort: {
       type: 'array',
       items: { type: 'string' },
       description: 'Reasoning-effort levels this model accepts (drives a reasoningEffort setting).',
     },
-    protocol: {
-      ...PROTOCOL_SCHEMA,
-      description: 'Overrides the type protocol for this single model.',
+    parameters: {
+      type: 'object',
+      description: 'Per-model configurable parameters surfaced in the picker / management UI.',
+      additionalProperties: true,
     },
-    baseUrl: {
-      type: 'string',
-      description: "Overrides the instance's / type's baseUrl for this single model.",
-    },
-    pricing: PRICING_SCHEMA,
   },
 }
 
-const PROVIDER_TYPE_SCHEMA: IJSONSchema = {
+/** A `protocolMap` element: bare wire name, or an override (rename / capability shrink). */
+const PROTOCOL_MODEL_REF_SCHEMA: IJSONSchema = {
+  anyOf: [
+    { type: 'string', description: 'Bare wire name; defaults to the knowledge-base key.' },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'Wire name this channel expects. Defaults to `ref`.' },
+        ref: { type: 'string', description: 'Knowledge-base key. Defaults to `id`.' },
+        name: { type: 'string' },
+        family: { type: 'string' },
+        vendor: { type: 'string' },
+        nativeProtocol: PROTOCOL_SCHEMA,
+        maxInputTokens: { type: 'number' },
+        maxOutputTokens: { type: 'number' },
+        capabilities: CAPABILITIES_SCHEMA,
+        supportsReasoningEffort: { type: 'array', items: { type: 'string' } },
+        parameters: { type: 'object', additionalProperties: true },
+      },
+    },
+  ],
+}
+
+const PROTOCOL_MAP_SCHEMA: IJSONSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['protocol'],
+  description:
+    'Which models each wire protocol exposes. An empty array means "discover from the endpoint".',
   properties: {
-    label: { type: 'string', description: 'Display name.' },
-    protocol: PROTOCOL_SCHEMA,
-    defaultBaseUrl: {
-      type: 'string',
-      description: 'Default endpoint used when an instance declares no baseUrl.',
-    },
-    requiresApiKey: {
-      type: 'boolean',
-      description: 'Whether instances of this type require an API key.',
-    },
-    models: {
-      type: 'array',
-      description: 'Model catalog shared by every instance of this type.',
-      items: MODEL_SCHEMA,
-    },
-    pricing: PRICING_SCHEMA,
-    pricingSource: REMOTE_SOURCE_SCHEMA,
-    usageSource: REMOTE_SOURCE_SCHEMA,
+    'openai-chat': { type: 'array', items: PROTOCOL_MODEL_REF_SCHEMA },
+    'openai-responses': { type: 'array', items: PROTOCOL_MODEL_REF_SCHEMA },
+    'anthropic-messages': { type: 'array', items: PROTOCOL_MODEL_REF_SCHEMA },
+    ollama: { type: 'array', items: PROTOCOL_MODEL_REF_SCHEMA },
   },
 }
 
-const PROVIDER_INSTANCE_SCHEMA: IJSONSchema = {
+const PROVIDER_ENTRY_SCHEMA: IJSONSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'type'],
+  required: ['id'],
   properties: {
-    name: {
+    id: {
       type: 'string',
-      description: "Instance name, unique within a type (must not contain '/').",
+      description: "Unique id; also the first segment of every model id. Must not contain '/'.",
     },
-    type: {
+    extends: {
       type: 'string',
-      description: 'Provider type id this instance binds to, e.g. "anthropic".',
+      description: 'Inherit from another entry (alternate access point of the same gateway).',
     },
     label: { type: 'string', description: 'Display name.' },
-    baseUrl: {
-      type: 'string',
-      description: "Endpoint override; falls back to the type's default.",
-    },
+    baseUrl: { type: 'string', description: 'Gateway endpoint.' },
     apiKey: {
       type: 'string',
       description:
         'Plaintext API key, stored in this file by explicit user decision (cross-machine sync). Never logged.',
     },
+    defaultProtocol: {
+      ...PROTOCOL_SCHEMA,
+      description: 'Protocol the editor uses when the caller does not pick one.',
+    },
+    protocolMap: PROTOCOL_MAP_SCHEMA,
+    pricingSource: REMOTE_SOURCE_SCHEMA,
     usageSource: REMOTE_SOURCE_SCHEMA,
-    models: {
-      type: 'array',
-      description: 'Extra models only this instance offers; merged after the type catalog.',
-      items: MODEL_SCHEMA,
-    },
-    settings: {
-      type: 'object',
-      description: 'Per-model configuration, keyed by full model id (type/instance/model).',
-      additionalProperties: { type: 'object' },
-    },
   },
 }
 
@@ -178,15 +171,22 @@ export function buildSchema(modelIds: readonly string[]): IJSONSchema {
     type: 'object',
     additionalProperties: false,
     properties: {
-      providerTypes: {
+      models: {
         type: 'object',
-        description: 'User-defined / overridden provider types, keyed by type id.',
-        additionalProperties: PROVIDER_TYPE_SCHEMA,
+        description:
+          'Model knowledge base, keyed by logical model id. Merged over the built-in one.',
+        additionalProperties: MODEL_KNOWLEDGE_SCHEMA,
       },
       providers: {
         type: 'array',
-        description: 'Provider instances (connection + credential) backing the available models.',
-        items: PROVIDER_INSTANCE_SCHEMA,
+        description: 'Provider entries (gateway endpoints) backing the available models.',
+        items: PROVIDER_ENTRY_SCHEMA,
+      },
+      modelSettings: {
+        type: 'object',
+        description:
+          'Per-model configuration, keyed by full model id (providerId/protocol/channelModel).',
+        additionalProperties: { type: 'object' },
       },
       activeModels: {
         type: 'object',
@@ -210,8 +210,19 @@ export function buildSchema(modelIds: readonly string[]): IJSONSchema {
       },
       agentSettings: {
         type: 'object',
-        description: 'Editor-managed settings for ACP agents, including saved credentials.',
-        additionalProperties: true,
+        description:
+          'Editor-managed settings for ACP agents (authentication choice, model overrides).',
+        additionalProperties: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            authentication: {
+              type: 'string',
+              description:
+                'Provider id whose credential this agent uses, or the special value "@subscription".',
+            },
+          },
+        },
       },
     },
   }
@@ -240,7 +251,7 @@ export class AiConfigurationContribution extends Disposable implements IWorkbenc
       return
     }
     const fileMatch = schemaFileMatchForUri(components)
-    const ids = (await this._aiModel.getModels()).map((m) => m.id)
+    const ids = (await this._aiModel.getModels()).filter(isEditorSelectable).map((m) => m.id)
     this._schema.value = JSONContributionRegistry.registerSchema({
       uri: AI_SETTINGS_SCHEMA_URI,
       fileMatch: [fileMatch],

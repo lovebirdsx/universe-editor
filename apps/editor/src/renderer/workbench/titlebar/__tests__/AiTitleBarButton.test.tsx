@@ -25,8 +25,28 @@ import { ServicesContext } from '../../useService.js'
 afterEach(() => cleanup())
 
 const MODELS: AiModelMetadata[] = [
-  { id: 'm1', name: 'Model One', vendor: 'openai', groupName: 'default' } as AiModelMetadata,
-  { id: 'm2', name: 'Model Two', vendor: 'ollama', groupName: 'default' } as AiModelMetadata,
+  {
+    id: 'kuro/openai-chat/m1',
+    providerId: 'kuro',
+    protocol: 'openai-chat',
+    channelModel: 'm1',
+    name: 'Model One',
+    family: 'one',
+    maxInputTokens: 1000,
+    maxOutputTokens: 1000,
+    capabilities: { streaming: true },
+  },
+  {
+    id: 'ollama/ollama/m2',
+    providerId: 'ollama',
+    protocol: 'ollama',
+    channelModel: 'm2',
+    name: 'Model Two',
+    family: 'two',
+    maxInputTokens: 1000,
+    maxOutputTokens: 1000,
+    capabilities: { streaming: true },
+  },
 ]
 
 function makeAi() {
@@ -38,7 +58,7 @@ function makeAi() {
     onDidChangeCommitModel: new Emitter<void>().event,
     onDidChangeSessionTitleModel: new Emitter<void>().event,
     getModels: vi.fn().mockResolvedValue(MODELS),
-    getActiveModelId: vi.fn().mockResolvedValue('m1'),
+    getActiveModelId: vi.fn().mockResolvedValue(MODELS[0]!.id),
     getInlineCompletionModelId: vi.fn().mockResolvedValue(undefined),
     getCommitModelId: vi.fn().mockResolvedValue(undefined),
     getSessionTitleModelId: vi.fn().mockResolvedValue(undefined),

@@ -13,7 +13,7 @@ export interface IAiRateMirror {
 
   /** Synchronously readable mirror of main's rate tables, kept fresh via onDidChangeRemote. */
   getRateTablesSync(): readonly AiRateTableSnapshot[]
-  getRatesSync(providerKey: string): AiRateTable | undefined
+  getRatesSync(providerId: string): AiRateTable | undefined
 }
 
 export const IAiRateMirror = createDecorator<IAiRateMirror>('aiRateMirror')

@@ -2,11 +2,11 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renderer-side AI model facade. Wraps the main-process transport proxy: turns
  *  requestId-keyed chunk events back into a clean AsyncIterable (via
- *  AiResponseReassembler) and routes cancellation back to main. Provider
- *  instances, per-model config and the active model selections all live in
- *  aiSettings.json (read/written by main); this client just proxies. Consumers
- *  depend only on IAiModelService. Also implements IAiRateMirror for synchronous
- *  rate lookups on the cost hot path.
+ *  AiResponseReassembler) and routes cancellation back to main. Provider entries,
+ *  per-model config and the active model selections all live in aiSettings.json
+ *  (read/written by main); this client just proxies. Consumers depend only on
+ *  IAiModelService. Also implements IAiRateMirror for synchronous rate lookups on
+ *  the cost hot path.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -20,11 +20,11 @@ import {
   type AiAccountUsage,
   type AiMessage,
   type AiModelConfiguration,
+  type AiModelKnowledge,
   type AiModelMetadata,
   type AiModelSelector,
-  type AiProviderInstance,
-  type AiProviderType,
-  type AiProviderTypeDescriptor,
+  type AiProviderEntry,
+  type AiProviderIssue,
   type AiProviderVerifyInput,
   type AiProviderVerifyResult,
   type AiRateTable,
@@ -82,15 +82,15 @@ export class AiModelClientService extends Disposable implements IAiModelService,
     return [...this._mirror.values()]
   }
 
-  getRatesSync(providerKey: string): AiRateTable | undefined {
-    return this._mirror.get(providerKey)?.rates
+  getRatesSync(providerId: string): AiRateTable | undefined {
+    return this._mirror.get(providerId)?.rates
   }
 
   private async _refreshMirror(): Promise<void> {
     try {
       const tables = await this._main.getRateTables()
       this._mirror.clear()
-      for (const table of tables) this._mirror.set(table.providerKey, table)
+      for (const table of tables) this._mirror.set(table.providerId, table)
     } catch {
       // Best-effort mirror: keep whatever was last cached on failure.
     }
@@ -148,52 +148,52 @@ export class AiModelClientService extends Disposable implements IAiModelService,
     return this._main.setModelConfiguration(modelId, config)
   }
 
-  getProviders(): Promise<readonly AiProviderInstance[]> {
+  getProviders(): Promise<readonly AiProviderEntry[]> {
     return this._main.getProviders()
   }
 
-  updateProviders(providers: readonly AiProviderInstance[]): Promise<void> {
+  updateProviders(providers: readonly AiProviderEntry[]): Promise<void> {
     return this._main.updateProviders(providers)
   }
 
-  getProviderTypes(): Promise<Readonly<Record<string, AiProviderType>>> {
-    return this._main.getProviderTypes()
+  getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
+    return this._main.getModelKnowledge()
   }
 
-  updateProviderTypes(types: Readonly<Record<string, AiProviderType>>): Promise<void> {
-    return this._main.updateProviderTypes(types)
+  getProviderIssues(): Promise<readonly AiProviderIssue[]> {
+    return this._main.getProviderIssues()
   }
 
-  getProviderTypeDescriptors(): Promise<readonly AiProviderTypeDescriptor[]> {
-    return this._main.getProviderTypeDescriptors()
+  isLegacySettingsFormat(): Promise<boolean> {
+    return this._main.isLegacySettingsFormat()
   }
 
   verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult> {
     return this._main.verifyProvider(input)
   }
 
-  setApiKey(typeId: string, instanceName: string, key: string): Promise<void> {
-    return this._main.setApiKey(typeId, instanceName, key)
+  setApiKey(providerId: string, key: string): Promise<void> {
+    return this._main.setApiKey(providerId, key)
   }
 
-  deleteApiKey(typeId: string, instanceName: string): Promise<void> {
-    return this._main.deleteApiKey(typeId, instanceName)
+  deleteApiKey(providerId: string): Promise<void> {
+    return this._main.deleteApiKey(providerId)
   }
 
-  hasApiKey(typeId: string, instanceName: string): Promise<boolean> {
-    return this._main.hasApiKey(typeId, instanceName)
+  hasApiKey(providerId: string): Promise<boolean> {
+    return this._main.hasApiKey(providerId)
   }
 
   getRateTables(): Promise<readonly AiRateTableSnapshot[]> {
     return this._main.getRateTables()
   }
 
-  getAccountUsage(providerKey: string): Promise<AiAccountUsage | undefined> {
-    return this._main.getAccountUsage(providerKey)
+  getAccountUsage(providerId: string): Promise<AiAccountUsage | undefined> {
+    return this._main.getAccountUsage(providerId)
   }
 
-  refreshRemote(providerKey?: string): Promise<void> {
-    return this._main.refreshRemote(providerKey)
+  refreshRemote(providerId?: string): Promise<void> {
+    return this._main.refreshRemote(providerId)
   }
 
   sendRequest(

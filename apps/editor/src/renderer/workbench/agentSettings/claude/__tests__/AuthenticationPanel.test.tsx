@@ -1,11 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  AuthenticationPanel tests — the gateway credential form now uses a provider
- *  picker with a derived-preview, a click-only connectivity probe, and a
- *  guidance state when no compatible provider exists. These cover: the derived
- *  env preview renders with a masked token (never the full key), verifyProvider
- *  only fires on an explicit "Test" click, and the empty state shows guidance
- *  instead of an empty dropdown.
+ *  AuthenticationPanel tests — the provider picker renders a derived env preview
+ *  with a masked token (never the full key), probes connectivity only on an
+ *  explicit "Test" click, and shows guidance when no compatible provider exists.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -19,11 +16,9 @@ import {
   IViewsService,
   InstantiationService,
   ServiceCollection,
-  type AiProviderInstance,
-  type AiProviderType,
+  type AiProviderEntry,
 } from '@universe-editor/platform'
 import { IClaudeBinaryService } from '../../../../../shared/ipc/claudeBinaryService.js'
-import type { ClaudeCredentialDraft } from '../../../../../shared/ipc/claudeConfigService.js'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
 import { ServicesContext } from '../../../useService.js'
 import { AuthenticationPanel } from '../AuthenticationPanel.js'
@@ -31,53 +26,42 @@ import type { UseClaudeConfig } from '../useClaudeConfig.js'
 
 afterEach(() => cleanup())
 
-const GW_INSTANCE: AiProviderInstance = {
-  name: 'gw',
-  type: 'anthropic',
+const GW_ENTRY: AiProviderEntry = {
+  id: 'gw',
   apiKey: 'sk-ant-secret-key-123',
   baseUrl: 'https://gw.example.com',
+  protocolMap: { 'anthropic-messages': [] },
 }
-const GW_TYPES: Readonly<Record<string, AiProviderType>> = {
-  anthropic: { protocol: 'anthropic-messages' },
-}
-
-const GATEWAY_DRAFT: ClaudeCredentialDraft = {
-  kind: 'gateway',
-  label: 'Work gateway',
-  apiKey: '',
-  providerRef: 'anthropic/gw',
-  model: '',
-  smallFastModel: '',
+const OPENAI_ENTRY: AiProviderEntry = {
+  id: 'gw-openai',
+  apiKey: 'sk-x',
+  baseUrl: 'https://gw.example.com',
+  protocolMap: { 'openai-chat': [] },
 }
 
-function makeConfig(draft: ClaudeCredentialDraft | undefined): UseClaudeConfig {
+function makeConfig(authentication: string | undefined): UseClaudeConfig {
   return {
     settings: { env: {} },
     loaded: true,
     configPath: '',
     authority: undefined,
     authStatus: { loggedIn: false, expired: false },
-    profiles: [],
-    credentialDraft: draft,
+    agentSettings: authentication === undefined ? {} : { authentication },
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     reloadAuthStatus: vi.fn(async () => ({ loggedIn: false, expired: false })),
-    saveProfile: vi.fn(async () => {}),
-    deleteProfile: vi.fn(async () => {}),
-    saveCredentialDraft: vi.fn(async () => {}),
-    applyProfile: vi.fn(async () => {}),
+    applyAuthentication: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
+    setSmallFastModel: vi.fn(async () => {}),
   }
 }
 
-function makeAiModel(
-  providers: readonly AiProviderInstance[],
-  types: Readonly<Record<string, AiProviderType>>,
-) {
+function makeAiModel(entries: readonly AiProviderEntry[]) {
   const verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 2 }))
   const aiModel = {
     verifyProvider,
-    getProviders: vi.fn(async () => providers),
-    getProviderTypes: vi.fn(async () => types),
+    getProviders: vi.fn(async () => entries),
+    getModelKnowledge: vi.fn(async () => ({})),
   }
   return { aiModel, verifyProvider }
 }
@@ -108,10 +92,10 @@ async function flushEffects(): Promise<void> {
   await act(async () => {})
 }
 
-describe('AuthenticationPanel gateway form', () => {
+describe('AuthenticationPanel provider picker', () => {
   it('renders the derived env preview with a masked token, never the full key', async () => {
-    const { aiModel } = makeAiModel([GW_INSTANCE], GW_TYPES)
-    renderPanel(makeConfig(GATEWAY_DRAFT), aiModel)
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig('gw'), aiModel)
     await flushEffects()
     await flushEffects()
 
@@ -122,8 +106,8 @@ describe('AuthenticationPanel gateway form', () => {
   })
 
   it('only calls verifyProvider on an explicit Test click, not on render', async () => {
-    const { aiModel, verifyProvider } = makeAiModel([GW_INSTANCE], GW_TYPES)
-    renderPanel(makeConfig(GATEWAY_DRAFT), aiModel)
+    const { aiModel, verifyProvider } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig('gw'), aiModel)
     await flushEffects()
     await flushEffects()
 
@@ -134,30 +118,27 @@ describe('AuthenticationPanel gateway form', () => {
 
     expect(verifyProvider).toHaveBeenCalledTimes(1)
     expect(verifyProvider).toHaveBeenCalledWith({
-      type: 'anthropic',
-      name: 'gw',
+      id: 'gw',
       protocol: 'anthropic-messages',
       baseUrl: 'https://gw.example.com',
       apiKey: 'sk-ant-secret-key-123',
     })
   })
 
-  it('shows guidance instead of an empty dropdown when no compatible provider exists', async () => {
-    const { aiModel } = makeAiModel([], {})
-    renderPanel(makeConfig(GATEWAY_DRAFT), aiModel)
+  it('shows guidance instead of an empty dropdown when no provider exists', async () => {
+    const { aiModel } = makeAiModel([])
+    renderPanel(makeConfig('gw'), aiModel)
     await flushEffects()
     await flushEffects()
 
-    expect(screen.getByText(/No provider instances/)).toBeTruthy()
+    expect(screen.getByText(/No provider entries/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add a provider…' })).toBeTruthy()
     expect(screen.queryByRole('combobox')).toBeNull()
   })
 
   it('shows the adjust-protocol guidance when providers exist but none is compatible', async () => {
-    const { aiModel } = makeAiModel([{ name: 'gw', type: 'openai' }], {
-      openai: { protocol: 'openai-chat' },
-    })
-    renderPanel(makeConfig({ ...GATEWAY_DRAFT, providerRef: '' }), aiModel)
+    const { aiModel } = makeAiModel([OPENAI_ENTRY])
+    renderPanel(makeConfig(undefined), aiModel)
     await flushEffects()
     await flushEffects()
 
@@ -166,12 +147,9 @@ describe('AuthenticationPanel gateway form', () => {
     expect(screen.queryByRole('combobox')).toBeNull()
   })
 
-  it('keeps a saved-but-incompatible providerRef visible with a warning', async () => {
-    const { aiModel } = makeAiModel(
-      [{ name: 'gw', type: 'openai', apiKey: 'sk-x', baseUrl: 'https://gw.example.com' }],
-      { openai: { protocol: 'openai-chat' } },
-    )
-    renderPanel(makeConfig({ ...GATEWAY_DRAFT, providerRef: 'openai/gw' }), aiModel)
+  it('keeps a saved-but-incompatible selection visible with a warning', async () => {
+    const { aiModel } = makeAiModel([OPENAI_ENTRY])
+    renderPanel(makeConfig('gw-openai'), aiModel)
     await flushEffects()
     await flushEffects()
 

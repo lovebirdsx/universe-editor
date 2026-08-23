@@ -19,8 +19,7 @@ import {
   UserDataFile,
   localize,
   localize2,
-  providerKey,
-  type AiProviderInstance,
+  type AiProviderEntry,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -142,7 +141,7 @@ export class SetApiKeyAction extends Action2 {
       prompt: localize(
         'ai.setApiKey.prompt',
         'Enter the API key for {provider}. Stored in plain text in aiSettings.json (kept in sync across machines).',
-        { provider: providerKey(provider) },
+        { provider: provider.label ?? provider.id },
       ),
       placeholder: 'sk-…',
       validateInput: (value) =>
@@ -153,11 +152,11 @@ export class SetApiKeyAction extends Action2 {
     const trimmed = key?.trim()
     if (!trimmed) return
 
-    await aiModel.setApiKey(provider.type, provider.name, trimmed)
+    await aiModel.setApiKey(provider.id, trimmed)
     notification.notify({
       severity: Severity.Info,
       message: localize('ai.setApiKey.done', 'API key saved for {provider}.', {
-        provider: providerKey(provider),
+        provider: provider.label ?? provider.id,
       }),
     })
   }
@@ -182,11 +181,11 @@ export class ClearApiKeyAction extends Action2 {
     const provider = await pickProvider(quickInput, await aiModel.getProviders())
     if (!provider) return
 
-    if (!(await aiModel.hasApiKey(provider.type, provider.name))) {
+    if (!(await aiModel.hasApiKey(provider.id))) {
       notification.notify({
         severity: Severity.Info,
         message: localize('ai.clearApiKey.none', 'No API key is stored for {provider}.', {
-          provider: providerKey(provider),
+          provider: provider.label ?? provider.id,
         }),
       })
       return
@@ -194,18 +193,18 @@ export class ClearApiKeyAction extends Action2 {
 
     const { confirmed } = await dialog.confirm({
       message: localize('ai.clearApiKey.confirm', 'Clear the stored API key for {provider}?', {
-        provider: providerKey(provider),
+        provider: provider.label ?? provider.id,
       }),
       primaryButton: localize('ai.clearApiKey.clear', 'Clear'),
       type: 'warning',
     })
     if (!confirmed) return
 
-    await aiModel.deleteApiKey(provider.type, provider.name)
+    await aiModel.deleteApiKey(provider.id)
     notification.notify({
       severity: Severity.Info,
       message: localize('ai.clearApiKey.done', 'API key cleared for {provider}.', {
-        provider: providerKey(provider),
+        provider: provider.label ?? provider.id,
       }),
     })
   }
@@ -213,13 +212,13 @@ export class ClearApiKeyAction extends Action2 {
 
 async function pickProvider(
   quickInput: IQuickInputService,
-  providers: readonly AiProviderInstance[],
-): Promise<AiProviderInstance | undefined> {
+  providers: readonly AiProviderEntry[],
+): Promise<AiProviderEntry | undefined> {
   if (providers.length === 0) return undefined
   if (providers.length === 1) return providers[0]
   const items = providers.map((p) => ({
-    id: providerKey(p),
-    label: providerKey(p),
+    id: p.id,
+    label: p.label ?? p.id,
     ...(p.baseUrl !== undefined ? { description: p.baseUrl } : {}),
   }))
   const picked = await quickInput.pick(items, {
@@ -227,5 +226,5 @@ async function pickProvider(
     placeholder: localize('ai.pickProvider.placeholder', 'Select a provider'),
   })
   if (!picked) return undefined
-  return providers.find((p) => providerKey(p) === picked.id)
+  return providers.find((p) => p.id === picked.id)
 }

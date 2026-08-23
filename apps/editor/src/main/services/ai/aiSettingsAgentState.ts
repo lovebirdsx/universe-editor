@@ -1,9 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Generic per-agent state helpers. The provider list itself is read through
+ *  IAiModelMainService.getProviders(); this module only owns the opaque
+ *  `agentSettings.<agentId>` slice of aiSettings.json.
  *--------------------------------------------------------------------------------------------*/
 
 import { join } from 'node:path'
-import type { AiProviderInstance, AiProviderType } from '@universe-editor/platform'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import { mutateAiSettingsFile, readAiSettingsRoot } from './aiSettingsFile.js'
 
@@ -38,23 +40,6 @@ export async function updateAiSettingsAgentState<T>(
 async function getAiSettingsPath(configLocation: IConfigLocationService): Promise<string> {
   const { dir } = await configLocation.getInfo()
   return join(dir, AI_SETTINGS_FILE)
-}
-
-/** The persisted provider instances + user-defined types backing aiSettings.json. */
-export async function readAiSettingsProviders(configLocation: IConfigLocationService): Promise<{
-  providers: readonly AiProviderInstance[]
-  providerTypes: Readonly<Record<string, AiProviderType>>
-}> {
-  const path = await getAiSettingsPath(configLocation)
-  const root = await readAiSettingsRoot(path)
-  const providers = Array.isArray(root['providers'])
-    ? (root['providers'] as readonly AiProviderInstance[])
-    : []
-  const providerTypes = asRecord(root['providerTypes']) ?? {}
-  return {
-    providers,
-    providerTypes: providerTypes as Readonly<Record<string, AiProviderType>>,
-  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
