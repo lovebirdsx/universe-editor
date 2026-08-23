@@ -69,3 +69,12 @@
 .item[data-active='true'] {
   background: var(--vscode-list-activeSelectionBackground, #094771);
 }
+
+.item[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.item[aria-disabled='true']:hover {
+  background: transparent;
+}

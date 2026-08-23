@@ -55,4 +55,43 @@ describe('Select', () => {
     fireEvent.click(trigger)
     expect(screen.getByRole('option').textContent).toContain('detail about A')
   })
+
+  it('marks the popup as a top layer so a react-aria focus trap lets focus in', () => {
+    render(<Select value="" options={OPTIONS} onChange={() => {}} data-testid="sel" />)
+    fireEvent.click(screen.getByTestId('sel'))
+    expect(document.querySelector('[data-react-aria-top-layer]')).toBeTruthy()
+  })
+
+  describe('disabled options', () => {
+    const WITH_DISABLED = [
+      { value: 'a', label: 'a' },
+      { value: 'mid', label: 'mid', disabled: true },
+      { value: 'b', label: 'b' },
+    ] as const
+
+    it('renders aria-disabled', () => {
+      render(<Select value="a" options={WITH_DISABLED} onChange={() => {}} data-testid="sel" />)
+      fireEvent.click(screen.getByTestId('sel'))
+      expect(screen.getByRole('option', { name: 'mid' }).getAttribute('aria-disabled')).toBe('true')
+    })
+
+    it('does not select on click and keeps the popup open', () => {
+      const onChange = vi.fn()
+      render(<Select value="a" options={WITH_DISABLED} onChange={onChange} data-testid="sel" />)
+      fireEvent.click(screen.getByTestId('sel'))
+      fireEvent.click(screen.getByRole('option', { name: 'mid' }))
+      expect(onChange).not.toHaveBeenCalled()
+      expect(screen.queryByRole('option', { name: 'mid' })).toBeTruthy()
+    })
+
+    it('is skipped by keyboard navigation', () => {
+      render(<Select value="a" options={WITH_DISABLED} onChange={() => {}} data-testid="sel" />)
+      // ArrowDown on the trigger opens the popup with 'a' active; the next one
+      // must land on 'b', not on the disabled 'mid' in between.
+      fireEvent.keyDown(screen.getByTestId('sel'), { key: 'ArrowDown' })
+      fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowDown' })
+      expect(screen.getByRole('option', { name: 'mid' }).getAttribute('data-active')).toBe('false')
+      expect(screen.getByRole('option', { name: 'b' }).getAttribute('data-active')).toBe('true')
+    })
+  })
 })

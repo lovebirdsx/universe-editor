@@ -456,22 +456,6 @@
   min-width: 160px;
 }
 
-.control {
-  width: 100%;
-  height: 26px;
-  padding: 0 var(--spacing-4);
-  border: 1px solid var(--vscode-input-border);
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  font-size: var(--font-size-base);
-  outline: none;
-}
-
-.control:focus {
-  border-color: var(--vscode-focusBorder);
-}
-
 .configActions {
   display: flex;
   justify-content: flex-end;

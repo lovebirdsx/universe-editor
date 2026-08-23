@@ -154,6 +154,8 @@ describe('AuthenticationPanel provider picker', () => {
     await flushEffects()
 
     expect(screen.getByRole('combobox')).toBeTruthy()
+    // The themed Select only renders its options while the popup is open.
+    fireEvent.click(screen.getByRole('combobox'))
     expect(screen.getByRole('option', { name: /incompatible/ })).toBeTruthy()
     expect(screen.getByText(/does not declare the anthropic-messages protocol/)).toBeTruthy()
   })

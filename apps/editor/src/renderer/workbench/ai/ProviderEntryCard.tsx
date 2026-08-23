@@ -45,7 +45,15 @@ import {
   type IAiModelService,
   type IStorageService,
 } from '@universe-editor/platform'
-import { Badge, Button, Checkbox, IconButton, Input, Spinner } from '@universe-editor/workbench-ui'
+import {
+  Badge,
+  Button,
+  Checkbox,
+  IconButton,
+  Input,
+  Select,
+  Spinner,
+} from '@universe-editor/workbench-ui'
 import { maskKey } from '../../../shared/ai/maskKey.js'
 import styles from './AiSettingsEditor.module.css'
 
@@ -292,25 +300,18 @@ export function ProviderEntryCard({
             <label className={styles['label']}>
               {localize('aiModels.entry.defaultProtocol', 'Default protocol')}
             </label>
-            <select
-              className={styles['control']}
+            <Select<AiWireProtocol | ''>
               value={provider.defaultProtocol ?? ''}
               aria-label={localize('aiModels.entry.defaultProtocol', 'Default protocol')}
-              onChange={(e) =>
-                onDefaultProtocolChange(
-                  e.target.value === '' ? undefined : (e.target.value as AiWireProtocol),
-                )
-              }
-            >
-              <option value="">
-                {localize('aiModels.entry.defaultProtocol.first', 'First protocol')}
-              </option>
-              {AI_WIRE_PROTOCOLS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+              options={[
+                {
+                  value: '',
+                  label: localize('aiModels.entry.defaultProtocol.first', 'First protocol'),
+                },
+                ...AI_WIRE_PROTOCOLS.map((p) => ({ value: p, label: p })),
+              ]}
+              onChange={(v) => onDefaultProtocolChange(v === '' ? undefined : v)}
+            />
           </div>
 
           <div className={styles['field']}>
@@ -735,18 +736,14 @@ function EntryModelRow({ model, onConfigure, getConfiguration }: EntryModelRowPr
             let control: JSX.Element
             if (prop.type === 'enum' && prop.enum) {
               control = (
-                <select
-                  className={styles['control']}
+                <Select
                   value={String(value ?? '')}
-                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                >
-                  <option value="">{localize('aiModels.config.unset', '(default)')}</option>
-                  {prop.enum.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: localize('aiModels.config.unset', '(default)') },
+                    ...prop.enum.map((opt) => ({ value: opt, label: opt })),
+                  ]}
+                  onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))}
+                />
               )
             } else if (prop.type === 'boolean') {
               control = (

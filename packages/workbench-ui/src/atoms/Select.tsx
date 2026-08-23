@@ -36,6 +36,8 @@ export interface SelectOption<T extends string> {
   readonly triggerLabel?: ReactNode
   /** Text used for typeahead matching; falls back to `value`. */
   readonly text?: string
+  /** Rendered greyed out, skipped by keyboard navigation, not selectable. */
+  readonly disabled?: boolean
 }
 
 export interface SelectProps<T extends string> {
@@ -89,6 +91,8 @@ export function Select<T extends string>({
   const labelsRef = useRef<Array<string>>(options.map((o) => o.text ?? o.value))
   labelsRef.current = options.map((o) => o.text ?? o.value)
 
+  const disabledIndices = options.flatMap((o, i) => (o.disabled ? [i] : []))
+
   const click = useClick(context, { enabled: !disabled })
   const dismiss = useDismiss(context)
   const role = useRole(context, { role: 'listbox' })
@@ -98,6 +102,7 @@ export function Select<T extends string>({
     selectedIndex: selectedIndex >= 0 ? selectedIndex : null,
     onNavigate: setActiveIndex,
     loop: true,
+    ...(disabledIndices.length > 0 ? { disabledIndices } : {}),
   })
   const typeahead = useTypeahead(context, {
     listRef: labelsRef,
@@ -116,7 +121,7 @@ export function Select<T extends string>({
 
   const select = (index: number) => {
     const opt = options[index]
-    if (!opt) return
+    if (!opt || opt.disabled) return
     onChange(opt.value)
     setOpen(false)
   }
@@ -156,6 +161,9 @@ export function Select<T extends string>({
               ref={refs.setFloating}
               className={styles['popover']}
               style={floatingStyles}
+              // react-aria's FocusScope `contain` (FocusScopeOverlay) would yank
+              // focus back out of this body-level portal without this marker.
+              data-react-aria-top-layer=""
               {...getFloatingProps()}
             >
               {options.map((opt, index) => {
@@ -166,6 +174,7 @@ export function Select<T extends string>({
                     key={opt.value}
                     role="option"
                     aria-selected={isSelected}
+                    aria-disabled={opt.disabled || undefined}
                     data-active={active}
                     tabIndex={active ? 0 : -1}
                     ref={(node) => {

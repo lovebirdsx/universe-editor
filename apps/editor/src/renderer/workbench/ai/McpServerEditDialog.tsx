@@ -18,6 +18,7 @@ import {
   FocusScopeOverlay,
   IconButton,
   Input,
+  Select,
 } from '@universe-editor/workbench-ui'
 import { mcpServerPairs } from '../../services/acp/acpMcpServers.js'
 import shellStyles from './AiSettingsEditor.module.css'
@@ -138,18 +139,20 @@ export function McpServerEditDialog({ target, onClose, onSave }: McpServerEditDi
             <label className={shellStyles['label']}>
               {localize('aiMcp.dialog.scope', 'Save to')}
             </label>
-            <select
-              className={shellStyles['control']}
+            <Select<McpServerScope>
               value={scope}
               aria-label={localize('aiMcp.dialog.scope', 'Save to')}
               disabled={target.mode === 'edit'}
-              onChange={(e) => setScope(e.target.value as McpServerScope)}
-            >
-              <option value="user">{localize('aiMcp.scope.user', 'User (global)')}</option>
-              <option value="workspace" disabled={!target.workspaceAvailable}>
-                {localize('aiMcp.scope.workspace', 'Workspace')}
-              </option>
-            </select>
+              options={[
+                { value: 'user', label: localize('aiMcp.scope.user', 'User (global)') },
+                {
+                  value: 'workspace',
+                  label: localize('aiMcp.scope.workspace', 'Workspace'),
+                  disabled: !target.workspaceAvailable,
+                },
+              ]}
+              onChange={setScope}
+            />
           </div>
 
           <div className={shellStyles['field']}>
@@ -169,16 +172,16 @@ export function McpServerEditDialog({ target, onClose, onSave }: McpServerEditDi
 
           <div className={shellStyles['field']}>
             <label className={shellStyles['label']}>{localize('aiMcp.dialog.type', 'Type')}</label>
-            <select
-              className={shellStyles['control']}
+            <Select<'stdio' | 'http' | 'sse'>
               value={type}
               aria-label={localize('aiMcp.dialog.type', 'Type')}
-              onChange={(e) => setType(e.target.value as 'stdio' | 'http' | 'sse')}
-            >
-              <option value="stdio">stdio</option>
-              <option value="http">http</option>
-              <option value="sse">sse</option>
-            </select>
+              options={[
+                { value: 'stdio', label: 'stdio' },
+                { value: 'http', label: 'http' },
+                { value: 'sse', label: 'sse' },
+              ]}
+              onChange={setType}
+            />
           </div>
 
           {type === 'stdio' ? (

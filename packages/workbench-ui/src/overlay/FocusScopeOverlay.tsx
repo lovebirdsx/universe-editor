@@ -24,7 +24,19 @@ export function FocusScopeOverlay({ visible, onEscape, children }: FocusScopeOve
   useEffect(() => {
     if (!visible || !onEscape) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onEscape()
+      if (e.key !== 'Escape') return
+      // Floating UI popups (Select, ContextMenu…) render in a body-level portal
+      // outside this scope and register their own document listener after ours,
+      // so Escape aimed at an open popup must not also close the overlay. A
+      // mouse-opened popup leaves focus on its trigger, which floating-ui marks
+      // with aria-controls pointing at the portalled popup.
+      const target = e.target as Element | null
+      if (target?.closest?.('[data-floating-ui-portal]')) return
+      const controls = target?.getAttribute?.('aria-controls')
+      if (controls && document.getElementById(controls)?.closest('[data-floating-ui-portal]')) {
+        return
+      }
+      onEscape()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)

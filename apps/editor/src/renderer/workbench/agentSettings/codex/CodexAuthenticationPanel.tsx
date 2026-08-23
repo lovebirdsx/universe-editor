@@ -23,7 +23,7 @@ import {
   localize,
   type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { Button, Input } from '@universe-editor/workbench-ui'
+import { Button, Input, Select } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
 import { deriveCodexGateway } from '../../../../shared/ai/providerDerivation.js'
@@ -149,20 +149,17 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
                     {localize('codexSettings.auth.form.model', 'Model')}
                   </label>
                   {modelOptions.length > 0 ? (
-                    <select
-                      className={styles['providerSelect']}
+                    <Select
                       value={currentModel ?? ''}
-                      onChange={(e) => void setModel(e.target.value || undefined)}
-                    >
-                      <option value="">
-                        {localize('codexSettings.auth.form.model.none', 'Use default')}
-                      </option>
-                      {modelOptions.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        {
+                          value: '',
+                          label: localize('codexSettings.auth.form.model.none', 'Use default'),
+                        },
+                        ...modelOptions.map((m) => ({ value: m, label: m })),
+                      ]}
+                      onChange={(v) => void setModel(v || undefined)}
+                    />
                   ) : (
                     <Input
                       value={currentModel ?? ''}

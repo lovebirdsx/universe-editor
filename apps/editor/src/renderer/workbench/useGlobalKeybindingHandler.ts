@@ -87,6 +87,14 @@ function isInsideRendererDialog(target: EventTarget | null): boolean {
   return false
 }
 
+// Floating UI popups (Select dropdowns, context menus) move focus into a
+// body-level portal and run their own dismiss/navigation handlers on bubble.
+// Claiming a key here would stop it before their handlers see it — Escape in
+// particular, which a native <select> popup used to get from the browser.
+function isInsideFloatingPopup(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('[data-floating-ui-portal]') !== null
+}
+
 interface PendingChord {
   key: string
   entry: IDisposable
@@ -214,6 +222,18 @@ export function useGlobalKeybindingHandler(): void {
             formatGuardStop(
               toDiagnostics(e, buildKeyString(e)),
               'focus is inside a modal dialog (dialog owns its keys)',
+            ),
+          )
+        }
+        return
+      }
+
+      if (isInsideFloatingPopup(e.target)) {
+        if (dbg) {
+          keyboardDebugService.append(
+            formatGuardStop(
+              toDiagnostics(e, buildKeyString(e)),
+              'focus is inside a floating popup (the popup owns its keys)',
             ),
           )
         }

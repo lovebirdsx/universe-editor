@@ -50,6 +50,7 @@ const { refs, floatingStyles } = useFloating({
 
 ## 关键约束
 
+- **Floating UI 浮层放进 `FocusScopeOverlay` 有隐性契约**：浮层经 `FloatingPortal` 渲染到 `document.body`，在 `FocusScope contain` 的子树之外，键盘打开时被移进浮层的焦点会被 react-aria 拽回去——所以浮层根节点必须带 `data-react-aria-top-layer`（react-aria 官方逃生口，见其 `isElementInChildScope`；`Select` 已带）。另一半：`FocusScopeOverlay` 的 document 级 Escape 监听先于 floating-ui `useDismiss` 注册，会在关浮层时连带关掉整个 overlay——已在 `FocusScopeOverlay` 侧按「事件源在 `[data-floating-ui-portal]` 内」或「事件源的 `aria-controls` 指向 portal 内元素」（鼠标打开时焦点仍在触发器上，靠后者兜住）放行。新写浮层组件照 `Select` 抄这两点。宿主侧还有第三环（editor 的 `useGlobalKeybindingHandler`：document capture 命中全局键位就 `preventDefault + stopPropagation`，会让 Escape 根本到不了浮层——已按 `[data-floating-ui-portal]` 内的 target 放行，同 `isInsideRendererDialog` 的先例）。
 - **组件内自建 `TreeModel` 必须用 `useOwnedTreeModel(() => new TreeModel(...))`**：裸 `useRef`/`useMemo` 持有 + `useEffect` cleanup 里 `dispose()` 的写法在 React StrictMode 下会被「卸载演练」dispose 掉并在重挂载时复用 dead 实例（Emitter 不再 fire，`refresh()` 成 no-op），导致树永远不再更新——**dev-only，production build 不复现**（StrictMode 双挂载只在 dev 生效）。TreeModel 由 DI service 持有时不受此影响。
 - **无 Electron 依赖**：不 import `electron` / `@electron/...`
 - **不依赖 platform DI**：通过 props 接收服务实例，不用 `@IFooService` 装饰器

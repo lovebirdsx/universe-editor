@@ -20,7 +20,7 @@ import {
   type AiProviderEntry,
   type AiWireProtocol,
 } from '@universe-editor/platform'
-import { Button, FocusScopeOverlay, Input, Spinner } from '@universe-editor/workbench-ui'
+import { Button, FocusScopeOverlay, Input, Select, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import styles from './AiSettingsEditor.module.css'
 
@@ -242,18 +242,12 @@ export function AddProviderDialog({
             <label className={styles['label']}>
               {localize('aiModels.addProvider.protocol', 'Default protocol')}
             </label>
-            <select
-              className={styles['control']}
+            <Select<AiWireProtocol>
               value={protocol}
               aria-label={localize('aiModels.addProvider.protocol', 'Default protocol')}
-              onChange={(e) => setProtocol(e.target.value as AiWireProtocol)}
-            >
-              {PROTOCOLS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+              options={PROTOCOLS.map((p) => ({ value: p, label: p }))}
+              onChange={setProtocol}
+            />
           </div>
 
           <div className={styles['verifyRow']}>

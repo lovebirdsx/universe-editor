@@ -102,9 +102,8 @@ describe('AddProviderDialog', () => {
     await flushEffects()
 
     fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'claude-gw' } })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Default protocol' }), {
-      target: { value: 'anthropic-messages' },
-    })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Default protocol' }))
+    fireEvent.click(screen.getByRole('option', { name: 'anthropic-messages' }))
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await flushEffects()
 

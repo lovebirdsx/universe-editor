@@ -21,7 +21,7 @@ import {
   localize,
   type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { Button, Input } from '@universe-editor/workbench-ui'
+import { Button, Input, Select } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import type { ClaudeAuthStatus } from '../../../../shared/ipc/claudeConfigService.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
@@ -238,20 +238,17 @@ function ModelPicks({
           {localize('agentSettings.auth.form.model', 'Model')}
         </label>
         {modelOptions.length > 0 ? (
-          <select
-            className={styles['providerSelect']}
+          <Select
             value={model ?? ''}
-            onChange={(e) => onModel(e.target.value)}
-          >
-            <option value="">
-              {localize('agentSettings.auth.form.model.none', 'Use default')}
-            </option>
-            {modelOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+            options={[
+              {
+                value: '',
+                label: localize('agentSettings.auth.form.model.none', 'Use default'),
+              },
+              ...modelOptions.map((m) => ({ value: m, label: m })),
+            ]}
+            onChange={onModel}
+          />
         ) : (
           <Input
             value={model ?? ''}
@@ -263,20 +260,17 @@ function ModelPicks({
       <div className={styles['field']}>
         <label className={styles['label']}>{`env.ANTHROPIC_SMALL_FAST_MODEL`}</label>
         {fastOptions.length > 0 ? (
-          <select
-            className={styles['providerSelect']}
+          <Select
             value={fast ?? ''}
-            onChange={(e) => onFast(e.target.value)}
-          >
-            <option value="">
-              {localize('agentSettings.auth.form.smallFastModel.none', 'Unset')}
-            </option>
-            {fastOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+            options={[
+              {
+                value: '',
+                label: localize('agentSettings.auth.form.smallFastModel.none', 'Unset'),
+              },
+              ...fastOptions.map((m) => ({ value: m, label: m })),
+            ]}
+            onChange={onFast}
+          />
         ) : (
           <Input
             value={fast ?? ''}

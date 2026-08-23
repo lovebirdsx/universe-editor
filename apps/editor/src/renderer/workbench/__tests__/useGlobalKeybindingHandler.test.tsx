@@ -420,6 +420,26 @@ describe('useGlobalKeybindingHandler — ESC always fires globally', () => {
 
     expect(executeCommand).toHaveBeenCalledWith('test.focusEditor')
   })
+
+  // …but not when the key is aimed at an open floating-ui popup (a themed
+  // Select dropdown, a context menu). Those move focus into a body-level
+  // portal and dismiss themselves on bubble — claiming Escape here would
+  // strand the popup open, which a native <select> never did.
+  it('leaves Escape alone when the target is inside a floating-ui portal', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('escape', 'test.focusEditor')
+    mountHost(instantiation)
+
+    const portal = document.createElement('div')
+    portal.setAttribute('data-floating-ui-portal', '')
+    const option = document.createElement('div')
+    option.setAttribute('role', 'option')
+    portal.appendChild(option)
+    document.body.appendChild(portal)
+    dispatch({ key: 'Escape', from: option })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ import {
   type AiResolvedProvider,
   type AiWireProtocol,
 } from '@universe-editor/platform'
-import { Button, Spinner } from '@universe-editor/workbench-ui'
+import { Button, Select, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { findProviderById } from '../../../shared/ai/providerDerivation.js'
 import { isOfficialEndpoint } from '../../../shared/ai/officialEndpoints.js'
@@ -89,6 +89,29 @@ export function GatewayProviderPicker({
   const options = useMemo(
     () => (incompatible ? [...selectable, incompatible] : selectable),
     [selectable, incompatible],
+  )
+
+  const selectOptions = useMemo(
+    () => [
+      {
+        value: '',
+        label: localize('agentSettings.auth.form.provider.none', 'Select a provider…'),
+      },
+      { value: AGENT_SUBSCRIPTION_AUTH, label: subscriptionLabel },
+      ...options.map((p) => {
+        const name = p.label ?? p.id
+        const isIncompatible = incompatible !== undefined && p.id === incompatible.id
+        return {
+          value: p.id,
+          label: isIncompatible
+            ? `${name} (${localize('agentSettings.auth.provider.incompatibleOption', 'incompatible')})`
+            : name,
+          // Typeahead should match the provider name, not the warning suffix.
+          text: name,
+        }
+      }),
+    ],
+    [options, incompatible, subscriptionLabel],
   )
 
   useEffect(() => {
@@ -163,27 +186,12 @@ export function GatewayProviderPicker({
   return (
     <>
       <div className={styles['providerPickerRow']}>
-        <select
+        <Select
           className={styles['providerSelect']}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">
-            {localize('agentSettings.auth.form.provider.none', 'Select a provider…')}
-          </option>
-          <option value={AGENT_SUBSCRIPTION_AUTH}>{subscriptionLabel}</option>
-          {options.map((p) => {
-            const isIncompatible = incompatible !== undefined && p.id === incompatible.id
-            return (
-              <option key={p.id} value={p.id}>
-                {p.label ?? p.id}
-                {isIncompatible
-                  ? ` (${localize('agentSettings.auth.provider.incompatibleOption', 'incompatible')})`
-                  : ''}
-              </option>
-            )
-          })}
-        </select>
+          options={selectOptions}
+          onChange={onChange}
+        />
         <VerifyDot state={verify} />
         <Button
           size="sm"
