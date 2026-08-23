@@ -68,6 +68,11 @@ export interface ITerminalNewSpec {
   readonly env?: Record<string, string>
   readonly cwd?: UriComponents
   readonly target?: TerminalTarget
+  /**
+   * One-shot command terminal (e.g. `claude auth login`): never persisted, so a
+   * restore does not silently re-run the command on every window open.
+   */
+  readonly transient?: boolean
 }
 
 export interface ITerminalExitEvent {
@@ -160,6 +165,7 @@ interface TermSpec {
   args?: readonly string[]
   name?: string
   env?: Record<string, string>
+  transient?: boolean
 }
 
 interface IPersistedTerminalEntry {
@@ -498,6 +504,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         ...(args !== undefined && args.length > 0 ? { args } : {}),
         ...(name !== undefined ? { name } : {}),
         ...(env !== undefined ? { env } : {}),
+        ...(spec?.transient ? { transient: true } : {}),
       })
       this._setAllTerminals([...this._terminals.get(), info])
       return info.id
@@ -696,7 +703,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     }
     const toEntry = (id: string): IPersistedTerminalEntry | null => {
       const spec = this._specs.get(id)
-      if (!spec) return null
+      if (!spec || spec.transient) return null
       return {
         shell: spec.shell,
         ...(spec.cwd ? { cwd: spec.cwd } : {}),

@@ -11,6 +11,10 @@
  *  and requires the `&` call operator — and means a spawn failure surfaces in the
  *  visible terminal instead of being swallowed by the shell.
  *
+ *  That spec is marked `transient` so it never reaches the persisted panel state:
+ *  a restored terminal re-runs its argv, which would silently reopen the OAuth
+ *  page on every window that reopens the workspace.
+ *
  *  In a remote workspace the local binary path is meaningless: the terminal opens
  *  on the remote host already, so we run the `claude` CLI from its PATH there
  *  instead of resolving a local binary.
@@ -102,6 +106,7 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
         target: 'panel',
         shell: binPath,
         shellArgs: ['auth', 'login', flag],
+        transient: true,
       })
       if (!id) {
         notification.notify({

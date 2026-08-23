@@ -542,6 +542,31 @@ describe('TerminalManagerService', () => {
       expect(restored.created[0]!.spec.env).toEqual({ TERM: 'xterm' })
     })
 
+    it('a transient terminal is never persisted (one-shot login command must not replay)', async () => {
+      const store = new Map<string, unknown>()
+      const win = makeHarness('/work', undefined, store, { platform: 'win32' })
+      win.setProfiles([pwsh])
+      await win.manager.newTerminal({ target: 'panel' })
+      await win.manager.newTerminal({
+        target: 'panel',
+        shell: 'C:\\bin\\claude.exe',
+        shellArgs: ['auth', 'login', '--claudeai'],
+        transient: true,
+      })
+      await win.manager.save()
+
+      const raw = store.get('terminal.panelState') as {
+        groups: Array<{ terminals: Array<{ shell: string }> }>
+      }
+      const shells = raw.groups.flatMap((g) => g.terminals.map((t) => t.shell))
+      expect(shells).toEqual([pwsh.path])
+
+      const restored = makeHarness('/work', undefined, store, { platform: 'win32' })
+      restored.setProfiles([pwsh])
+      await restored.manager.load()
+      expect(restored.created.map((c) => c.info.shell)).toEqual([pwsh.path])
+    })
+
     it('remote workspace routes profile detection to the remote host via the folder URI', async () => {
       const remote = makeHarness('/remote/ws', undefined, undefined, {
         platform: 'win32',
