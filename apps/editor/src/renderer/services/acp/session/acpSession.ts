@@ -2649,25 +2649,44 @@ export class AcpSession extends Disposable implements IAcpSession {
         // sessions running gateway models (kimi/deepseek/…) get silently billed
         // at the default flagship rate. Re-price through the provider context;
         // rows that resolve to no rate keep the CLI's own figure.
-        const repriced =
-          update.cost != null && models.length > 0
-            ? repriceForeignModelBreakdown(models, ctx)
-            : undefined
+        // Not gated on `update.cost`: mid-turn breakdowns carry token counts
+        // without a cost (only the turn-final `result` knows the CLI figure),
+        // and pricing them locally is what makes the readout advance during a
+        // turn instead of freezing until it ends.
+        const repriced = models.length > 0 ? repriceForeignModelBreakdown(models, ctx) : undefined
         if (repriced != null) {
+          // A mid-turn breakdown is `base ⊕ overlay` and only ever grows, so a
+          // figure BELOW the last one means the agent's base is missing rather
+          // than that the session got cheaper — the ledger lives in the fork's
+          // per-session consumer, so after a reconnect or an agent restart the
+          // first recovered turn reports only its own tokens. Freezing the
+          // amount there (token detail still advances) beats dropping the wallet
+          // from ¥50 to pennies until that turn ends. Turn-final updates carry
+          // `cost` and always replace, so an authoritative correction — a rewind
+          // truncating the transcript included — still lands.
+          const midturn = update.cost == null
+          const prevAmount = prev?.cost?.amount
+          const regressed =
+            midturn &&
+            repriced.cost !== undefined &&
+            prevAmount !== undefined &&
+            repriced.cost.amount < prevAmount
+          const cost = regressed ? prev?.cost : repriced.cost
           const next: AcpUsage = {
             used: update.used,
             size: update.size,
             models: repriced.models,
             costEstimated: true,
-            ...(repriced.cost !== undefined ? { cost: repriced.cost } : {}),
+            ...(cost !== undefined ? { cost } : {}),
           }
           this.usage.set(next, tx)
           if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
           break
         }
-        // `cost` / `models` only ride on the turn-final usage_update (derived
-        // from the SDK `result` message). Mid-stream updates emitted while a
-        // turn runs carry only used/size, so carry the last known cost forward
+        // Reached when no row re-priced — either the update carries no
+        // breakdown at all, or none of its models resolves a rate (an official
+        // subscription session has no local rate table). Only the turn-final
+        // usage_update carries `cost`, so carry the last known one forward
         // instead of replacing it — otherwise the cost readout flickers off for
         // the whole duration of every running turn.
         const cost =

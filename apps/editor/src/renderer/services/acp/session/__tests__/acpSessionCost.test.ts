@@ -19,6 +19,12 @@ function row(partial: Partial<AcpModelCost> & { model: string }): AcpModelCost {
   }
 }
 
+/** A mid-turn row: token counts with no CLI cost figure at all. */
+function midturnRow(partial: Partial<AcpModelCost> & { model: string }): AcpModelCost {
+  const { costUSD: _ignored, ...rest } = row(partial)
+  return rest
+}
+
 function codexUsage(model: string, partial?: Partial<CodexModelUsage>): CodexModelUsage {
   return {
     model,
@@ -190,6 +196,61 @@ describe('repriceForeignModelBreakdown', () => {
       },
     )
     expect(result!.models[0]!.costUSD).toBeCloseTo(2, 10)
+  })
+  // Mid-turn rows carry token counts with no costUSD (only the turn-final
+  // `result` knows the CLI figure). They must be priced locally whenever a rate
+  // resolves — that is what makes the readout advance during a running turn.
+  it('prices a mid-turn Anthropic row locally when the CLI reported no cost', () => {
+    const result = repriceForeignModelBreakdown(
+      [midturnRow({ model: 'claude-sonnet-5', inputTokens: 1_000_000 })],
+      {
+        providerId: 'official',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+      },
+    )
+    expect(result).toBeDefined()
+    expect(result!.models[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('leaves a mid-turn row unpriced when the session has no rate table', () => {
+    // Official subscription sessions resolve no provider context at all: the
+    // honest answer is "—", never a guessed catalog price.
+    expect(
+      repriceForeignModelBreakdown([
+        midturnRow({ model: 'claude-sonnet-5', inputTokens: 1_000_000 }),
+      ]),
+    ).toBeUndefined()
+  })
+
+  it('prices a mid-turn gateway row from the gateway table', () => {
+    const result = repriceForeignModelBreakdown(
+      [midturnRow({ model: 'deepseek-v4-pro[1m]', inputTokens: 1_000_000 })],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+        cnyPerUsd: 6.74,
+      },
+    )
+    expect(result!.models[0]!.costUSD).toBeCloseTo(9 / 6.74, 10)
+  })
+
+  it('keeps a CLI figure on one row while pricing a mid-turn row on another', () => {
+    const result = repriceForeignModelBreakdown(
+      [
+        row({ model: 'claude-sonnet-5', inputTokens: 1_000_000, costUSD: 0.42 }),
+        midturnRow({ model: 'claude-haiku-4-5', inputTokens: 1_000_000 }),
+      ],
+      {
+        providerId: 'official',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+      },
+    )
+    expect(result!.models[0]!.costUSD).toBe(0.42)
+    expect(result!.models[1]!.costUSD).toBeGreaterThan(0)
   })
 })
 

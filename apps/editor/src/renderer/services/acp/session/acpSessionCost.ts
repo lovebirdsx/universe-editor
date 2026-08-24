@@ -84,6 +84,9 @@ export function estimateCodexCost(
  * sessions.
  *
  * Per-row judgement (exact catalog membership, no family guessing):
+ *  - a row with no CLI figure at all is never trusted — that is how mid-turn
+ *    snapshots arrive (only the terminal `result` reports `costUSD`), so it is
+ *    priced locally when a rate resolves and left at "—" when none does;
  *  - a rate the user's gateway published (`origin === 'gateway'`) always wins —
  *    it describes this deployment better than any catalog;
  *  - otherwise an Anthropic official model keeps the CLI's figure, which is
@@ -106,7 +109,7 @@ export function repriceForeignModelBreakdown(
   let repriced = false
   for (const m of models) {
     const { pricing, origin } = priceSessionModel(m.model, ctx)
-    const trustCli = origin !== 'gateway' && isAnthropicCatalogModel(m.model)
+    const trustCli = m.costUSD != null && origin !== 'gateway' && isAnthropicCatalogModel(m.model)
     if (pricing !== undefined && !trustCli) {
       const costUSD = estimateCostUSD(
         pricing,

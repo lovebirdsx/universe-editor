@@ -17,6 +17,12 @@ import type { AcpModelCost, AcpSubagentStats } from './acpSessionModel.js'
  * Read the per-model cost breakdown our agent fork stamps onto `usage_update`
  * via `_meta._universe/modelBreakdown`. Values are session-cumulative and
  * already fold in sub-agent (Task) work. Returns [] when absent or malformed.
+ *
+ * `costUSD` stays **absent** when the fork reported none, which is how mid-turn
+ * rows arrive — only the terminal `result` knows the CLI's own figure, so those
+ * rows are priced locally downstream. Absent is therefore "unknown", distinct
+ * from a reported `0`; the token buckets keep defaulting to 0 because the fork
+ * always reports them.
  */
 export function extractModelBreakdown(update: {
   _meta?: Record<string, unknown> | null | undefined
@@ -28,13 +34,14 @@ export function extractModelBreakdown(update: {
     if (item == null || typeof item !== 'object') continue
     const r = item as Record<string, unknown>
     if (typeof r['model'] !== 'string') continue
+    const costUSD = r['costUSD']
     out.push({
       model: r['model'],
       inputTokens: numberOr(r['inputTokens']),
       outputTokens: numberOr(r['outputTokens']),
       cacheReadTokens: numberOr(r['cacheReadTokens']),
       cacheCreateTokens: numberOr(r['cacheCreateTokens']),
-      costUSD: numberOr(r['costUSD']),
+      ...(typeof costUSD === 'number' && Number.isFinite(costUSD) ? { costUSD } : {}),
     })
   }
   return out

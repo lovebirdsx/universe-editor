@@ -1,12 +1,84 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for the `_meta` readers in acpSessionUpdateMeta — focused on the
- *  sub-agent stats parser (readSubagentStats).
+ *  sub-agent stats parser (readSubagentStats) and the per-model cost breakdown.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
-import { readFileChanges, readSubagentStats } from '../acpSessionUpdateMeta.js'
+import {
+  extractModelBreakdown,
+  readFileChanges,
+  readSubagentStats,
+} from '../acpSessionUpdateMeta.js'
+
+describe('extractModelBreakdown', () => {
+  function breakdown(row: Record<string, unknown>) {
+    return extractModelBreakdown({ _meta: { '_universe/modelBreakdown': [row] } })
+  }
+
+  it('returns [] when the meta bag is absent or malformed', () => {
+    expect(extractModelBreakdown({})).toEqual([])
+    expect(extractModelBreakdown({ _meta: {} })).toEqual([])
+    expect(extractModelBreakdown({ _meta: { '_universe/modelBreakdown': 'nope' } })).toEqual([])
+  })
+
+  it('parses a turn-final row with its authoritative cost', () => {
+    expect(
+      breakdown({
+        model: 'claude-opus-5',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheCreateTokens: 100,
+        costUSD: 0.42,
+      }),
+    ).toEqual([
+      {
+        model: 'claude-opus-5',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheCreateTokens: 100,
+        costUSD: 0.42,
+      },
+    ])
+  })
+
+  // Mid-turn rows omit costUSD: only the terminal `result` reports one. Absent
+  // has to stay absent (= unknown, priced locally) rather than collapse to 0,
+  // or the popover would claim every running turn was free.
+  it('leaves costUSD undefined when the fork reported none', () => {
+    const [row] = breakdown({ model: 'deepseek-v4-pro', inputTokens: 1000 })
+    expect(row).toEqual({
+      model: 'deepseek-v4-pro',
+      inputTokens: 1000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    })
+    expect(row).not.toHaveProperty('costUSD')
+  })
+
+  it('keeps a reported zero cost distinct from an absent one', () => {
+    expect(breakdown({ model: 'claude-opus-5', costUSD: 0 })[0]?.costUSD).toBe(0)
+  })
+
+  it('drops a non-finite or non-numeric cost', () => {
+    expect(breakdown({ model: 'claude-opus-5', costUSD: 'free' })[0]).not.toHaveProperty('costUSD')
+    expect(breakdown({ model: 'claude-opus-5', costUSD: Number.NaN })[0]).not.toHaveProperty(
+      'costUSD',
+    )
+  })
+
+  it('skips rows with no model id', () => {
+    expect(
+      extractModelBreakdown({
+        _meta: { '_universe/modelBreakdown': [{ inputTokens: 10 }, null, { model: 'ok' }] },
+      }),
+    ).toHaveLength(1)
+  })
+})
 
 describe('readSubagentStats', () => {
   it('parses a full sub-agent tally', () => {
