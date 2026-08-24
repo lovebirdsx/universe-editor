@@ -99,7 +99,7 @@ export function GatewayProviderPicker({
       },
       { value: AGENT_SUBSCRIPTION_AUTH, label: subscriptionLabel },
       ...options.map((p) => {
-        const name = p.label ?? p.id
+        const name = p.id
         const isIncompatible = incompatible !== undefined && p.id === incompatible.id
         return {
           value: p.id,

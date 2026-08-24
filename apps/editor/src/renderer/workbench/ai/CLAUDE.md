@@ -28,13 +28,16 @@ apps/editor/src/renderer/workbench/ai/
                               而非渲染态，并经 `enqueueWrite` 排队（含 setApiKey/deleteApiKey——main 侧同样是
                               读改写）。逐字段即时保存下，Tab 换字段会让两次提交重叠，用渲染快照必丢改动
   ProviderEntryCard.tsx       入口卡**壳**：header(badges/ConnectivityDot/Duplicate/Remove) + 折叠 + section 编排；
-                              连通性结果存 IStorageService（`ai.settings.connectivity.<id>`，5 分钟 TTL）
-  providerCard/               卡片内部的可编辑分区（9 个字段全覆盖，统一「即时保存 + 内联反馈」范式）
+                              连通性**自动探测**（useAutoVerify）：挂载读 IStorageService 缓存（`ai.settings.connectivity.<id>`，
+                              5 分钟 TTL）、缺失/过期即探测；连接字段变更防抖重测；无手动按钮
+  providerCard/               卡片内部的可编辑分区（8 个字段全覆盖，统一「即时保存 + 内联反馈」范式）
     useProviderField.ts       `patchField`(空值即删 key) / `useProviderField`(写盘 + 盖「已保存」戳) /
                               `useEditableText`(草稿在聚焦期不被 aiSettings.json 热重载覆盖)
+    useAutoVerify.ts          卡片连通性自动探测：挂载恢复缓存（5 分钟 TTL）+ 缺失/过期自动 verify +
+                              连接字段指纹变化 600ms 防抖重测（绕过 TTL）+ token 竞态防护；不可测保持「未测试」
     SavedIndicator.tsx        字段级「已保存」内联反馈（按 field 名匹配 stamp）
     IssuesSection.tsx         8 种 issue 徽章 + 「如何修复」引导；`issueReasonLabel` 从这里导出
-    ConnectionFields.tsx      Label / Base URL / API Key（内联编辑）+ `InheritanceNote`（继承 vs 覆盖标注）
+    ConnectionFields.tsx      Base URL / API Key（内联编辑）+ `InheritanceNote`（继承 vs 覆盖标注）
     ExtendsField.tsx          extends 下拉（候选排除自己与后代）+ 写盘前用 resolveProviderEntries 预跑拦截
     ProtocolsSection.tsx      **重头戏**：protocolMap 三态编辑（未声明 / `[]` discover / 非空静态清单）+
                               协议增删 + 固化 + 探测 + 行内 ModelRow（含 configurationSchema 齿轮、RateBadge）
@@ -42,7 +45,7 @@ apps/editor/src/renderer/workbench/ai/
     ModelRefEditor.tsx        单条 ref 高级编辑（wire name / knowledge ref / capabilities 只能收窄）
     RemoteSourceFields.tsx    pricingSource / usageSource 编辑（None / catalog+vendor / http-json 表单 +
                               raw JSON 逃生舱）+ 刷新 + AccountUsageBlock
-  AddProviderDialog.tsx       加 provider 弹窗：模板选择器（预填 label/baseUrl/protocolMap/pricingSource，
+  AddProviderDialog.tsx       加 provider 弹窗：模板选择器（预填 baseUrl/protocolMap/pricingSource，
                               **永不填 id 与 apiKey**）+ 单层表单 → updateProviders
   AiFeatureModelsPanel.tsx    AI 分类②「功能模型」：chat / inline / commit 三行，数据驱动（FEATURES 数组）
                               点击行 → executeCommand 对应 pickModel 命令 → reload
@@ -115,7 +118,7 @@ const storage = useService(IStorageService)
 - **加一个 agent 的设置页**（如 codex）：**不动壳**——agent 项由 `registry.list()` 自动出现在 Agents 组。只需新建 `agentSettings/<agent>/XxxAgentSettings.tsx`（末行 `registerAgentSettings('<id>', Comp)`）+ 在 `agentSettings/builtinAgentSettings.ts` 加一行 import。详见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
 - **某 AI 分类面板加控件**：优先用 workbench-ui 原子件（`Button`/`IconButton`/`Input`/`Checkbox`/`Badge`/`Select`）+ `styles` 里 token 化样式；按钮尽量图标化（`IconButton` + lucide，必带 `label`）。**别再写原生 `<select>`**——`Select` 是自渲染浮层（触发器 `role="combobox"`、选项 `role="option"`），测试里 `fireEvent.change` 对它无效，要点开再点选项。
 - **改 protocolMap / 模型声明编辑**：`providerCard/ProtocolsSection.tsx`（三态与协议增删）+ `providerCard/ModelRefEditor.tsx`（单条 ref）；纯函数（三态语法、ref 字符串↔对象归一化、探测结果回填 `mergeProbedSelection`）在 `shared/ai/protocolMapEdit.ts`，继承链遍历与「探测该拨哪个地址」的 `effectiveConnection` 在 `shared/ai/providerInheritance.ts`——**这两个文件是可单测的边界，逻辑优先往那儿放**。
-- **动到「验证 / 探测端点」**：连接信息一律走 `effectiveConnection(provider, allProviders)`，不要直接读 `provider.baseUrl/apiKey`——纯继承条目自身两者皆空，拨出去必失败。它返回的是**祖先的明文密钥**，只可用于发往 main 建连，**绝不能渲染**。
+- **动到「连通性探测 / 探测端点」**：连接信息一律走 `effectiveConnection(provider, allProviders)`，不要直接读 `provider.baseUrl/apiKey`——纯继承条目自身两者皆空，拨出去必失败。它返回的是**祖先的明文密钥**，只可用于发往 main 建连，**绝不能渲染**。
 - **加一条 provider 模板**：`shared/ai/providerTemplates.ts` 加一项；官方端点的 baseUrl 必须与 `shared/ai/officialEndpoints.ts` 对齐（`providerTemplates.test.ts` pin 住了这个一致性）。
 - **加一个功能→模型项**：`AiFeatureModelsPanel.tsx` 的 `FEATURES` 数组加一项（icon / label / desc / command / read）；该功能的 pickModel 命令需已存在（否则先按 actions 套路加）。
 - **改选模型 QuickPick 外观**（分组/勾选/描述）：只改 `aiModelPickItems.ts` 的 `buildModelPickItems`，三个 picker 同步生效。

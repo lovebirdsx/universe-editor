@@ -1332,8 +1332,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- AI: model configuration panel ---
   'aiModels.addProvider': '添加提供方',
-  'aiModels.plaintextNotice':
-    'API 密钥以明文保存在 aiSettings.json（便于跨机器同步），请勿将该文件提交到版本库或分享。',
   'aiModels.badge.keyed': '已配密钥',
   'aiModels.badge.modelCount': '{count} 个模型',
   'aiModels.baseUrl': 'Base URL',
@@ -1349,7 +1347,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // pricing
 
   // provider instance card
-  'aiModels.instance.test': '测试连接',
   'aiModels.instance.remove.remove': '移除',
   'aiModels.instance.status.idle': '未探测',
   'aiModels.instance.status.checking': '探测中…',
@@ -1383,8 +1380,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.legacy.banner':
     'aiSettings.json 仍是旧的两层格式，已被忽略。请按新格式手工重建（密钥可从旧文件复制）。',
   'aiModels.entry.extends': '继承自 {id}',
-  'aiModels.entry.label': '标签',
-  'aiModels.entry.labelPlaceholder': '显示名称',
   'aiModels.entry.defaultProtocol': '默认协议',
   'aiModels.entry.defaultProtocol.first': '首个协议',
   'aiModels.entry.noModels': '该协议下没有解析出的模型。',
@@ -1412,8 +1407,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.addProvider.idSlash': "提供方 id 不能包含 '/'。",
   'aiModels.addProvider.idExists': '该提供方 id 已存在。',
   'aiModels.addProvider.protocol': '默认协议',
-  'aiModels.addProvider.label': '标签（可选）',
-  'aiModels.addProvider.labelPlaceholder': '友好名称',
   'aiModels.addProvider.baseUrl': 'Base URL',
   'aiModels.addProvider.apiKey': 'API 密钥（可选）',
   'aiModels.addProvider.verify': '验证',
@@ -1578,9 +1571,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '配置分为两层：',
     '',
     '- **提供方类型**：协议、共享的模型目录与费率。在此修改费率会作用于该类型的所有实例。',
-    '- **提供方实例**：每个入口一个——base URL 与明文 API 密钥。同类型的实例共享其模型与费率。',
-    '',
-    '**API 密钥以明文保存在 `aiSettings.json`**（便于跨机器同步）——请勿将该文件提交到版本库或分享。',
+    '- **提供方实例**：每个入口一个——base URL 与 API 密钥。同类型的实例共享其模型与费率。',
     '',
     '端点枚举出的模型与你手写声明的模型合并展示，手写优先并置顶。部分模型可在 **配置** 中调整参数（如 temperature）。',
     '',

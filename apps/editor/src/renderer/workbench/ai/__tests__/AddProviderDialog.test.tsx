@@ -123,7 +123,7 @@ describe('AddProviderDialog', () => {
     ])
   })
 
-  it('a template seeds label, baseUrl, protocol map and pricing source', async () => {
+  it('a template seeds baseUrl, protocol map and pricing source', async () => {
     const aiModel = new FakeDialogAiModel()
     renderDialog(aiModel)
     await flushEffects()
@@ -136,7 +136,6 @@ describe('AddProviderDialog', () => {
     expect(aiModel.updateProviders).toHaveBeenCalledWith([
       {
         id: 'claude',
-        label: 'Anthropic',
         baseUrl: 'https://api.anthropic.com',
         defaultProtocol: 'anthropic-messages',
         protocolMap: { 'anthropic-messages': [] },

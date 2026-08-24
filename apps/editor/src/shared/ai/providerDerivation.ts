@@ -35,7 +35,7 @@ export function deriveCodexGateway(
   if (key === undefined || key.trim() === '') return undefined
   const baseUrl = provider.baseUrl
   if (baseUrl === undefined || baseUrl.trim() === '') return undefined
-  return { baseUrl, apiKey: key, providerName: (provider.label ?? provider.id).trim() }
+  return { baseUrl, apiKey: key, providerName: provider.id.trim() }
 }
 
 export function findProviderById(

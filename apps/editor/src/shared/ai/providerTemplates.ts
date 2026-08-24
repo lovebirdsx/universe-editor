@@ -22,7 +22,6 @@ export const PROVIDER_TEMPLATES: readonly AiProviderTemplate[] = [
     label: 'OpenAI (official)',
     description: 'api.openai.com — GPT family, official rates',
     entry: {
-      label: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       defaultProtocol: 'openai-chat',
       protocolMap: { 'openai-chat': [], 'openai-responses': [] },
@@ -34,7 +33,6 @@ export const PROVIDER_TEMPLATES: readonly AiProviderTemplate[] = [
     label: 'Anthropic (official)',
     description: 'api.anthropic.com — Claude family, official rates',
     entry: {
-      label: 'Anthropic',
       baseUrl: 'https://api.anthropic.com',
       defaultProtocol: 'anthropic-messages',
       protocolMap: { 'anthropic-messages': [] },
@@ -46,7 +44,6 @@ export const PROVIDER_TEMPLATES: readonly AiProviderTemplate[] = [
     label: 'DeepSeek',
     description: 'api.deepseek.com — DeepSeek family, official rates',
     entry: {
-      label: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com/v1',
       defaultProtocol: 'openai-chat',
       protocolMap: { 'openai-chat': [] },
@@ -58,7 +55,6 @@ export const PROVIDER_TEMPLATES: readonly AiProviderTemplate[] = [
     label: 'Ollama (local)',
     description: 'localhost:11434 — local models, no API key needed',
     entry: {
-      label: 'Ollama',
       baseUrl: 'http://localhost:11434',
       defaultProtocol: 'ollama',
       protocolMap: { ollama: [] },

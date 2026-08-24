@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AddProviderDialog — a focus-trapped modal for adding a single-layer provider
- *  *entry* (id / label / baseUrl / apiKey / default protocol). A template picker
- *  at the top seeds label / baseUrl / protocolMap / pricingSource from a known
+ *  *entry* (id / baseUrl / apiKey / default protocol). A template picker
+ *  at the top seeds baseUrl / protocolMap / pricingSource from a known
  *  endpoint so the user does not have to know the catalog-vendor wiring by heart.
  *  The non-secret part of the draft (id / baseUrl / template) is persisted;
  *  the API key is NEVER persisted to storage — it only travels to main for the
@@ -83,7 +83,6 @@ export function AddProviderDialog({
 
   const [templateId, setTemplateId] = useState('custom')
   const [id, setId] = useState('')
-  const [label, setLabel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [apiKeyRevealed, setApiKeyRevealed] = useState(false)
@@ -105,10 +104,10 @@ export function AddProviderDialog({
       if (!active) return
       const draft = readDraft(raw)
       if (draft) {
-        // Template first: it seeds label/baseUrl/protocol, and the draft's own
+        // Template first: it seeds baseUrl/protocol, and the draft's own
         // values must win over those seeds, not the other way round.
         const tpl = PROVIDER_TEMPLATES.find((t) => t.id === draft.template)
-        if (tpl) applyTemplate(tpl, setLabel, setBaseUrl, setProtocol)
+        if (tpl) applyTemplate(tpl, setBaseUrl, setProtocol)
         setTemplateId(draft.template)
         setId(draft.id)
         setBaseUrl(draft.baseUrl)
@@ -176,7 +175,7 @@ export function AddProviderDialog({
     setTemplateId(newTemplateId)
     const tpl = PROVIDER_TEMPLATES.find((t) => t.id === newTemplateId)
     if (!tpl) return
-    applyTemplate(tpl, setLabel, setBaseUrl, setProtocol)
+    applyTemplate(tpl, setBaseUrl, setProtocol)
     console.debug('aiModels: template selected', { templateId: newTemplateId })
   }, [])
 
@@ -197,7 +196,6 @@ export function AddProviderDialog({
 
       const entry: AiProviderEntry = {
         id: trimmedId,
-        ...(label.trim() ? { label: label.trim() } : {}),
         ...(baseUrlTrimmed ? { baseUrl: baseUrlTrimmed } : {}),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         defaultProtocol: protocol,
@@ -225,7 +223,6 @@ export function AddProviderDialog({
     baseUrlTrimmed,
     existingProviders,
     idError,
-    label,
     onCreated,
     protocol,
     selectedTemplate,
@@ -284,17 +281,6 @@ export function AddProviderDialog({
             {trimmedId.length > 0 && idError && (
               <span className={styles['dialogFieldError']}>{idError}</span>
             )}
-          </div>
-
-          <div className={styles['field']}>
-            <label className={styles['label']}>
-              {localize('aiModels.addProvider.label', 'Label (optional)')}
-            </label>
-            <Input
-              value={label}
-              placeholder={localize('aiModels.addProvider.labelPlaceholder', 'Friendly name')}
-              onChange={(e) => setLabel(e.target.value)}
-            />
           </div>
 
           <div className={styles['field']}>
@@ -386,11 +372,9 @@ export function AddProviderDialog({
 
 function applyTemplate(
   tpl: AiProviderTemplate,
-  setLabel: (v: string) => void,
   setBaseUrl: (v: string) => void,
   setProtocol: (v: AiWireProtocol) => void,
 ) {
-  setLabel(tpl.entry.label ?? '')
   setBaseUrl(tpl.entry.baseUrl ?? '')
   setProtocol(tpl.entry.defaultProtocol ?? 'openai-chat')
 }

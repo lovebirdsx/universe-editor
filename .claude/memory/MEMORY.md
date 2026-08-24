@@ -14,7 +14,7 @@
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — IUriIdentityService 单一入口+ResourceMap；MonacoModelKey/SCM 键为刻意独立身份域
 - [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 必须覆写 id 否则 tab 去重；matches 只比 id；打开文件走 resolver
 - [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面（已按单层 providers[] 重构）；密钥改明文存 aiSettings.json（红线=不进日志/Debug）；加 provider 见套路 I
-- [AI Providers 可视化编辑](ai-providers-visual-editing.md) — 9 字段全图形入口；三教训=全量替换写 API 须串行化+基于 ref 快照(含 main 侧 setApiKey)、探测/验证走 effectiveConnection、勾选弹窗回填只答它展示过的
+- [AI Providers 可视化编辑](ai-providers-visual-editing.md) — label 已删回退 id、Test connection→自动探测(useAutoVerify)；教训=全量替换写 API 须串行化、探测走 effectiveConnection、弹窗回填语义、自动探测触发用指纹非 reloadToken、防抖重测 token 失效须在变更检测时非探测启动时
 - [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率单一来源=provider 自己的 pricingSource(未声明即未知,绝不跨 provider 套官方价);会话开销与账号费用两概念绝不互相兜底(unavailable 不回落到别的账号数字)
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
 - [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 注册页+服务端发布签名已落地（2026-08-10 修订决策2）；发布闭环 register→login→publish→可装已通；uex 待用户手动发 npm

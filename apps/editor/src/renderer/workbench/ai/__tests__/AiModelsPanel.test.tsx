@@ -3,10 +3,11 @@
  *  AiModelsPanel tests — the single-layer providers rewrite: entries render,
  *  removal writes through updateProviders, the account-usage block honours the
  *  "authoritative source only" contract (hidden without a usageSource,
- *  "Unavailable" when the source yields nothing), the connectivity dot only
- *  probes on an explicit "Test connection" click, the legacy-format banner shows
- *  when aiSettings.json is still two-layer, provider issues are surfaced visibly,
- *  and a provider without a pricing source shows "Rate unknown" on its models.
+ *  "Unavailable" when the source yields nothing), the connectivity dot probes
+ *  automatically on mount and re-probes on connection edits (no manual button),
+ *  the legacy-format banner shows when aiSettings.json is still two-layer,
+ *  provider issues are surfaced visibly, and a provider without a pricing
+ *  source shows "Rate unknown" on its models.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -49,7 +50,6 @@ const KURO_MODEL: AiModelMetadata = {
 
 const KURO_PROVIDER: AiProviderEntry = {
   id: 'kuro',
-  label: 'Kuro',
   baseUrl: 'https://kuro.example',
   protocolMap: { 'anthropic-messages': ['qwen3-coder'] },
 }
@@ -90,6 +90,9 @@ class FakeAiModelService {
 class FakeStorage {
   private readonly map = new Map<string, unknown>()
   readonly onDidChangeWorkspaceScope = Event.None
+  constructor(initial?: Readonly<Record<string, unknown>>) {
+    for (const [key, value] of Object.entries(initial ?? {})) this.map.set(key, value)
+  }
   get = vi.fn(async (key: string) => this.map.get(key))
   set = vi.fn(async (key: string, value: unknown) => {
     this.map.set(key, value)
@@ -108,11 +111,15 @@ async function flushEffects(): Promise<void> {
   await act(async () => {})
 }
 
-function renderPanel(aiModel: FakeAiModelService, confirmResult = { confirmed: true }) {
+function renderPanel(
+  aiModel: FakeAiModelService,
+  confirmResult = { confirmed: true },
+  storageInitial?: Readonly<Record<string, unknown>>,
+) {
   const services = new ServiceCollection()
   services.set(IAiModelService, aiModel as unknown as IAiModelService)
   services.set(IAiRateMirror, rateMirrorStub)
-  services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
+  services.set(IStorageService, new FakeStorage(storageInitial) as unknown as IStorageService)
   services.set(IQuickInputService, {
     input: vi.fn(async () => undefined),
   } as unknown as IQuickInputService)
@@ -139,6 +146,15 @@ function entryCard(id: string): HTMLElement {
   )
   expect(el, `provider entry card ${id}`).toBeTruthy()
   return el!
+}
+
+/** The connectivity dot on a card, or null when the card has none. */
+function connectivityDot(id: string): HTMLElement | null {
+  return entryCard(id).querySelector('[data-status]')
+}
+
+function expectDotStatus(id: string, status: string): void {
+  expect(connectivityDot(id)?.getAttribute('data-status')).toBe(status)
 }
 
 describe('AiModelsPanel', () => {
@@ -192,16 +208,12 @@ describe('AiModelsPanel', () => {
     expect(aiModel.getAccountUsage).toHaveBeenCalledWith('kuro')
   })
 
-  it('only calls verifyProvider on an explicit "Test connection" click, not on render', async () => {
+  it('probes a testable provider automatically on mount, without a manual button', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [KURO_PROVIDER]
     aiModel.models = [KURO_MODEL]
     renderPanel(aiModel)
     await flushEffects()
-
-    expect(aiModel.verifyProvider).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
     await flushEffects()
 
     expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
@@ -210,6 +222,271 @@ describe('AiModelsPanel', () => {
       protocol: 'anthropic-messages',
       baseUrl: 'https://kuro.example',
     })
+    expectDotStatus('kuro', 'ok')
+    expect(screen.queryByRole('button', { name: 'Test connection' })).toBeNull()
+  })
+
+  it('skips the auto-probe when there is no effective base URL', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [{ id: 'kuro', protocolMap: { 'anthropic-messages': ['qwen3-coder'] } }]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.verifyProvider).not.toHaveBeenCalled()
+    expectDotStatus('kuro', 'idle')
+  })
+
+  it('shows a fresh cached result without probing again', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel, undefined, {
+      'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() },
+    })
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.verifyProvider).not.toHaveBeenCalled()
+    expectDotStatus('kuro', 'ok')
+  })
+
+  it('probes when the cached result is stale', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel, undefined, {
+      'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() - 6 * 60 * 1000 },
+    })
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+  })
+
+  it('a model-list reload does not re-probe', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+    expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+
+    aiModel.fireModelsChanged()
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+  })
+
+  it('editing the base URL re-probes after the debounce', async () => {
+    vi.useFakeTimers()
+    try {
+      const aiModel = new FakeAiModelService()
+      aiModel.providers = [KURO_PROVIDER]
+      aiModel.models = [KURO_MODEL]
+      renderPanel(aiModel)
+      await flushEffects()
+      await flushEffects()
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+
+      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.blur(input)
+      await flushEffects()
+      await flushEffects()
+
+      await act(() => vi.advanceTimersByTimeAsync(600))
+      await flushEffects()
+
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(2)
+      expect(aiModel.verifyProvider).toHaveBeenLastCalledWith({
+        id: 'kuro',
+        protocol: 'anthropic-messages',
+        baseUrl: 'https://kuro2.example',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('consecutive edits collapse into a single re-probe with the final value', async () => {
+    vi.useFakeTimers()
+    try {
+      const aiModel = new FakeAiModelService()
+      aiModel.providers = [KURO_PROVIDER]
+      aiModel.models = [KURO_MODEL]
+      renderPanel(aiModel)
+      await flushEffects()
+      await flushEffects()
+
+      const first = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(first)
+      fireEvent.change(first, { target: { value: 'https://kuro2.example' } })
+      fireEvent.blur(first)
+      await flushEffects()
+      await flushEffects()
+
+      const second = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(second)
+      fireEvent.change(second, { target: { value: 'https://kuro3.example' } })
+      fireEvent.blur(second)
+      await flushEffects()
+      await flushEffects()
+
+      await act(() => vi.advanceTimersByTimeAsync(600))
+      await flushEffects()
+
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(2)
+      expect(aiModel.verifyProvider).toHaveBeenLastCalledWith({
+        id: 'kuro',
+        protocol: 'anthropic-messages',
+        baseUrl: 'https://kuro3.example',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a stale in-flight result does not override a newer one', async () => {
+    vi.useFakeTimers()
+    try {
+      const aiModel = new FakeAiModelService()
+      aiModel.providers = [KURO_PROVIDER]
+      aiModel.models = [KURO_MODEL]
+      const gates: Array<(result: { ok: boolean; modelCount: number; error?: string }) => void> = []
+      aiModel.verifyProvider = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            gates.push(resolve)
+          }),
+      )
+
+      renderPanel(aiModel)
+      await flushEffects()
+      await flushEffects()
+      expect(gates).toHaveLength(1)
+
+      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.blur(input)
+      await flushEffects()
+      await flushEffects()
+      await act(() => vi.advanceTimersByTimeAsync(600))
+      await flushEffects()
+      expect(gates).toHaveLength(2)
+
+      // The newer probe finishes first with a good result; the stale mount
+      // probe must not paint over it afterwards.
+      gates[1]?.({ ok: true, modelCount: 5 })
+      await flushEffects()
+      expectDotStatus('kuro', 'ok')
+
+      gates[0]?.({ ok: false, modelCount: 0, error: 'stale failure' })
+      await flushEffects()
+
+      expectDotStatus('kuro', 'ok')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('editing a connection field re-probes even with a fresh cached result', async () => {
+    vi.useFakeTimers()
+    try {
+      const aiModel = new FakeAiModelService()
+      aiModel.providers = [KURO_PROVIDER]
+      aiModel.models = [KURO_MODEL]
+      renderPanel(aiModel, undefined, {
+        'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() },
+      })
+      await flushEffects()
+      await flushEffects()
+      expect(aiModel.verifyProvider).not.toHaveBeenCalled()
+      expectDotStatus('kuro', 'ok')
+
+      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.blur(input)
+      await flushEffects()
+      await flushEffects()
+      await act(() => vi.advanceTimersByTimeAsync(600))
+      await flushEffects()
+
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+      expect(aiModel.verifyProvider).toHaveBeenCalledWith({
+        id: 'kuro',
+        protocol: 'anthropic-messages',
+        baseUrl: 'https://kuro2.example',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clearing the base URL invalidates an in-flight probe immediately', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    const gates: Array<(result: { ok: boolean; modelCount: number; error?: string }) => void> = []
+    aiModel.verifyProvider = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          gates.push(resolve)
+        }),
+    )
+
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+    expect(gates).toHaveLength(1)
+    expectDotStatus('kuro', 'checking')
+
+    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '  ' } })
+    fireEvent.blur(input)
+    await flushEffects()
+    await flushEffects()
+    expectDotStatus('kuro', 'idle')
+
+    gates[0]?.({ ok: true, modelCount: 3 })
+    await flushEffects()
+
+    expectDotStatus('kuro', 'idle')
+  })
+
+  it('clearing the base URL falls back to "not tested" without probing', async () => {
+    vi.useFakeTimers()
+    try {
+      const aiModel = new FakeAiModelService()
+      aiModel.providers = [KURO_PROVIDER]
+      aiModel.models = [KURO_MODEL]
+      renderPanel(aiModel)
+      await flushEffects()
+      await flushEffects()
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+      expectDotStatus('kuro', 'ok')
+
+      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: '  ' } })
+      fireEvent.blur(input)
+      await flushEffects()
+      await flushEffects()
+      await act(() => vi.advanceTimersByTimeAsync(600))
+      await flushEffects()
+
+      expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
+      expectDotStatus('kuro', 'idle')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows the legacy-format banner when aiSettings.json is still two-layer', async () => {
@@ -249,14 +526,14 @@ describe('AiModelsPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText('Label')
+    const input = within(entryCard('kuro')).getByLabelText('Base URL')
     fireEvent.focus(input)
-    fireEvent.change(input, { target: { value: 'Kuro Global' } })
+    fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
     fireEvent.blur(input)
     await flushEffects()
 
     expect(aiModel.updateProviders).toHaveBeenCalledWith([
-      { ...KURO_PROVIDER, label: 'Kuro Global' },
+      { ...KURO_PROVIDER, baseUrl: 'https://kuro2.example' },
     ])
     expect(screen.getByTestId('ai-provider-saved')).toBeTruthy()
   })
@@ -268,7 +545,7 @@ describe('AiModelsPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText('Label')
+    const input = within(entryCard('kuro')).getByLabelText('Base URL')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '  ' } })
     fireEvent.blur(input)
@@ -276,7 +553,7 @@ describe('AiModelsPanel', () => {
 
     const written = aiModel.updateProviders.mock.calls[0]?.[0]
     expect(written).toBeTruthy()
-    expect(Object.keys(written![0] as object)).not.toContain('label')
+    expect(Object.keys(written![0] as object)).not.toContain('baseUrl')
   })
 
   it('a hot reload of aiSettings.json does not overwrite a focused input', async () => {
@@ -286,11 +563,11 @@ describe('AiModelsPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Label')
+    const input = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Base URL')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: 'half-typed' } })
 
-    aiModel.providers = [{ ...KURO_PROVIDER, label: 'Changed On Disk' }]
+    aiModel.providers = [{ ...KURO_PROVIDER, baseUrl: 'https://changed.example' }]
     aiModel.fireModelsChanged()
     await flushEffects()
 
@@ -317,7 +594,7 @@ describe('AiModelsPanel', () => {
   // first is still in flight must not start from the pre-first-write snapshot.
   // Tabbing from one field straight into another is exactly that timing.
   it('a second field edit committed mid-flight does not undo the first', async () => {
-    const other: AiProviderEntry = { id: 'other', label: 'Other', baseUrl: 'https://other.example' }
+    const other: AiProviderEntry = { id: 'other', baseUrl: 'https://other.example' }
     const aiModel = new FakeAiModelService()
     aiModel.providers = [KURO_PROVIDER, other]
     aiModel.models = [KURO_MODEL]
@@ -339,14 +616,14 @@ describe('AiModelsPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const first = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Label')
+    const first = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Base URL')
     fireEvent.focus(first)
-    fireEvent.change(first, { target: { value: 'Kuro Renamed' } })
+    fireEvent.change(first, { target: { value: 'https://kuro2.example' } })
     fireEvent.blur(first)
 
-    const second = within(entryCard('other')).getByLabelText<HTMLInputElement>('Label')
+    const second = within(entryCard('other')).getByLabelText<HTMLInputElement>('Base URL')
     fireEvent.focus(second)
-    fireEvent.change(second, { target: { value: 'Other Renamed' } })
+    fireEvent.change(second, { target: { value: 'https://other2.example' } })
     fireEvent.blur(second)
 
     release?.()
@@ -354,8 +631,8 @@ describe('AiModelsPanel', () => {
     await flushEffects()
 
     expect(aiModel.providers).toEqual([
-      { ...KURO_PROVIDER, label: 'Kuro Renamed' },
-      { ...other, label: 'Other Renamed' },
+      { ...KURO_PROVIDER, baseUrl: 'https://kuro2.example' },
+      { ...other, baseUrl: 'https://other2.example' },
     ])
   })
 })

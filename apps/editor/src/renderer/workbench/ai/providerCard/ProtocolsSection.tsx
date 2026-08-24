@@ -145,7 +145,7 @@ export function ProtocolsSection({
           message: localize(
             'aiModels.protocol.removeLastConfirm',
             'Remove the last protocol from {name}? The provider will serve no models until another protocol is added.',
-            { name: provider.label ?? provider.id },
+            { name: provider.id },
           ),
           primaryButton: localize('aiModels.protocol.remove', 'Remove'),
           type: 'warning',
@@ -154,7 +154,7 @@ export function ProtocolsSection({
       }
       commit(removeProtocol(effective, protocol))
     },
-    [commit, declared.length, dialog, effective, provider.id, provider.label],
+    [commit, declared.length, dialog, effective, provider.id],
   )
 
   const setMode = useCallback(

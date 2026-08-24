@@ -182,7 +182,7 @@ export function AiModelsPanel() {
     async (provider: AiProviderEntry) => {
       const { confirmed } = await dialog.confirm({
         message: localize('aiModels.apiKey.clearConfirm', 'Clear the stored API key for {name}?', {
-          name: provider.label ?? provider.id,
+          name: provider.id,
         }),
         primaryButton: localize('aiModels.apiKey.clearAction', 'Clear'),
         type: 'warning',
@@ -202,7 +202,7 @@ export function AiModelsPanel() {
       if (provider === undefined) return
       const { confirmed } = await dialog.confirm({
         message: localize('aiModels.entry.remove.confirm', 'Remove provider {name}?', {
-          name: provider.label ?? provider.id,
+          name: provider.id,
         }),
         primaryButton: localize('aiModels.entry.remove.remove', 'Remove'),
         type: 'warning',
@@ -261,13 +261,6 @@ export function AiModelsPanel() {
           <FileJson size={14} strokeWidth={1.75} className={styles['btnIcon']} />
           {localize('aiSettings.openJson', 'Open aiSettings.json')}
         </Button>
-      </div>
-
-      <div className={styles['plaintextNotice']}>
-        {localize(
-          'aiModels.plaintextNotice',
-          'API keys are stored in plaintext in aiSettings.json (to sync across machines). Do not commit that file to version control or share it.',
-        )}
       </div>
 
       {legacy && (

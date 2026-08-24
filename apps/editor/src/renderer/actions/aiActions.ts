@@ -141,7 +141,7 @@ export class SetApiKeyAction extends Action2 {
       prompt: localize(
         'ai.setApiKey.prompt',
         'Enter the API key for {provider}. Stored in plain text in aiSettings.json (kept in sync across machines).',
-        { provider: provider.label ?? provider.id },
+        { provider: provider.id },
       ),
       placeholder: 'sk-…',
       validateInput: (value) =>
@@ -156,7 +156,7 @@ export class SetApiKeyAction extends Action2 {
     notification.notify({
       severity: Severity.Info,
       message: localize('ai.setApiKey.done', 'API key saved for {provider}.', {
-        provider: provider.label ?? provider.id,
+        provider: provider.id,
       }),
     })
   }
@@ -185,7 +185,7 @@ export class ClearApiKeyAction extends Action2 {
       notification.notify({
         severity: Severity.Info,
         message: localize('ai.clearApiKey.none', 'No API key is stored for {provider}.', {
-          provider: provider.label ?? provider.id,
+          provider: provider.id,
         }),
       })
       return
@@ -193,7 +193,7 @@ export class ClearApiKeyAction extends Action2 {
 
     const { confirmed } = await dialog.confirm({
       message: localize('ai.clearApiKey.confirm', 'Clear the stored API key for {provider}?', {
-        provider: provider.label ?? provider.id,
+        provider: provider.id,
       }),
       primaryButton: localize('ai.clearApiKey.clear', 'Clear'),
       type: 'warning',
@@ -204,7 +204,7 @@ export class ClearApiKeyAction extends Action2 {
     notification.notify({
       severity: Severity.Info,
       message: localize('ai.clearApiKey.done', 'API key cleared for {provider}.', {
-        provider: provider.label ?? provider.id,
+        provider: provider.id,
       }),
     })
   }
@@ -218,7 +218,7 @@ async function pickProvider(
   if (providers.length === 1) return providers[0]
   const items = providers.map((p) => ({
     id: p.id,
-    label: p.label ?? p.id,
+    label: p.id,
     ...(p.baseUrl !== undefined ? { description: p.baseUrl } : {}),
   }))
   const picked = await quickInput.pick(items, {

@@ -27,7 +27,6 @@ describe('ApplicationServices type', () => {
       releaseNotes: {} as ApplicationServices['releaseNotes'],
       docs: {} as ApplicationServices['docs'],
       performance: {} as ApplicationServices['performance'],
-      usage: {} as ApplicationServices['usage'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
       configLocation: {} as ApplicationServices['configLocation'],
       aiModel: {} as ApplicationServices['aiModel'],
@@ -44,7 +43,7 @@ describe('ApplicationServices type', () => {
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
     }
-    expect(Object.keys(svc)).toHaveLength(35)
+    expect(Object.keys(svc)).toHaveLength(34)
   })
 })
 

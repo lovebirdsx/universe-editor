@@ -10,13 +10,13 @@
  *  written. There is no card-level dirty state and no Save button, because a
  *  provider entry is a bag of independent settings, not a form.
  *
- *  The connectivity dot never probes on its own: it shows the last explicit
- *  "Test connection" result, cached for a few minutes so switching categories
- *  does not throw the answer away, and falls back to "not tested" rather than
- *  implying a stale success is current.
+ *  The connectivity dot probes on its own: on mount it restores the cached
+ *  answer (5 minute TTL) and probes when missing or stale; editing a
+ *  connection-relevant field re-probes after a debounce. Entries that cannot
+ *  be tested (no effective protocol or base URL) stay at "not tested".
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Copy, KeyRound, Server, Trash2, X } from 'lucide-react'
 import {
   AI_WIRE_PROTOCOLS,
@@ -33,36 +33,18 @@ import {
   type IDialogService,
   type IStorageService,
 } from '@universe-editor/platform'
-import { Badge, Button, IconButton, Input, Select, Spinner } from '@universe-editor/workbench-ui'
-import { declaredProtocols } from '../../../shared/ai/protocolMapEdit.js'
-import { effectiveConnection, findInherited } from '../../../shared/ai/providerInheritance.js'
+import { Badge, IconButton, Input, Select, Spinner } from '@universe-editor/workbench-ui'
 import { ConnectionFields } from './providerCard/ConnectionFields.js'
 import { ExtendsField } from './providerCard/ExtendsField.js'
 import { IssuesSection } from './providerCard/IssuesSection.js'
 import { ProtocolsSection } from './providerCard/ProtocolsSection.js'
 import { RemoteSourceFields } from './providerCard/RemoteSourceFields.js'
 import { SavedIndicator } from './providerCard/SavedIndicator.js'
+import { useAutoVerify, type ConnectState } from './providerCard/useAutoVerify.js'
 import { useProviderField, type ProviderPatch } from './providerCard/useProviderField.js'
 import styles from './AiSettingsEditor.module.css'
 
 export { issueReasonLabel } from './providerCard/IssuesSection.js'
-
-/** How long a "Test connection" answer is still worth showing. */
-const CONNECTIVITY_TTL_MS = 5 * 60 * 1000
-const connectivityKey = (id: string): string => `ai.settings.connectivity.${id}`
-
-interface StoredConnectivity {
-  readonly ok: boolean
-  readonly modelCount: number
-  readonly error?: string
-  readonly at: number
-}
-
-type ConnectState =
-  | { readonly kind: 'idle' }
-  | { readonly kind: 'checking' }
-  | { readonly kind: 'ok'; readonly modelCount: number }
-  | { readonly kind: 'fail'; readonly error: string }
 
 interface ProviderEntryCardProps {
   readonly aiModel: IAiModelService
@@ -112,14 +94,10 @@ export function ProviderEntryCard({
   getConfiguration,
 }: ProviderEntryCardProps) {
   const { setField, stamp, saved } = useProviderField(updateEntry)
-  const [connect, setConnect] = useState<ConnectState>({ kind: 'idle' })
+  const { connect } = useAutoVerify(aiModel, provider, allProviders, storage)
   const [filter, setFilter] = useState('')
 
   const hasApiKey = provider.apiKey !== undefined && provider.apiKey !== ''
-  const inheritedMap = findInherited(provider, allProviders, 'protocolMap')
-  const effectiveMap = provider.protocolMap ?? inheritedMap?.value
-  const protocols = useMemo(() => declaredProtocols(effectiveMap), [effectiveMap])
-  const effectiveProtocol = provider.defaultProtocol ?? protocols[0]
 
   useEffect(() => {
     let active = true
@@ -131,23 +109,6 @@ export function ProviderEntryCard({
     }
   }, [storage, filterStorageKey])
 
-  useEffect(() => {
-    let active = true
-    void storage
-      .get<StoredConnectivity>(connectivityKey(provider.id), StorageScope.GLOBAL)
-      .then((stored) => {
-        if (!active || !stored || Date.now() - stored.at > CONNECTIVITY_TTL_MS) return
-        setConnect(
-          stored.ok
-            ? { kind: 'ok', modelCount: stored.modelCount }
-            : { kind: 'fail', error: stored.error ?? '' },
-        )
-      })
-    return () => {
-      active = false
-    }
-  }, [storage, provider.id])
-
   const onFilterChange = useCallback(
     (value: string) => {
       setFilter(value)
@@ -155,33 +116,6 @@ export function ProviderEntryCard({
     },
     [storage, filterStorageKey],
   )
-
-  const runVerify = useCallback(async () => {
-    if (effectiveProtocol === undefined) return
-    setConnect({ kind: 'checking' })
-    // Dial what the resolver would dial, not just what this entry declares: a
-    // purely inheriting entry keeps its address and key on an ancestor.
-    const connection = effectiveConnection(provider, allProviders)
-    const result = await aiModel.verifyProvider({
-      id: provider.id,
-      protocol: effectiveProtocol,
-      ...connection,
-    })
-    console.debug('aiModels: verify', {
-      provider: provider.id,
-      ok: result.ok,
-      modelCount: result.modelCount,
-    })
-    const error = result.error ?? localize('aiModels.instance.status.fail', 'Connection failed.')
-    setConnect(result.ok ? { kind: 'ok', modelCount: result.modelCount } : { kind: 'fail', error })
-    const stored: StoredConnectivity = {
-      ok: result.ok,
-      modelCount: result.modelCount,
-      ...(result.ok ? {} : { error }),
-      at: Date.now(),
-    }
-    void storage.set(connectivityKey(provider.id), stored, StorageScope.GLOBAL)
-  }, [aiModel, provider, allProviders, effectiveProtocol, storage])
 
   return (
     <section
@@ -201,7 +135,7 @@ export function ProviderEntryCard({
           <ChevronDown size={16} strokeWidth={1.75} className={styles['cardIcon']} />
         )}
         <Server size={16} strokeWidth={1.75} className={styles['cardIcon']} />
-        <span className={styles['cardTitle']}>{provider.label ?? provider.id}</span>
+        <span className={styles['cardTitle']}>{provider.id}</span>
         <div className={styles['cardBadges']}>
           <Badge tone="accent">{provider.id}</Badge>
           {provider.extends !== undefined && (
@@ -242,23 +176,10 @@ export function ProviderEntryCard({
             onClearExtends={() => void setField('extends', undefined)}
           />
 
-          <div className={styles['cardToolbar']}>
-            <Button
-              size="sm"
-              variant="ghost"
-              busy={connect.kind === 'checking'}
-              disabled={effectiveProtocol === undefined}
-              onClick={() => void runVerify()}
-            >
-              {localize('aiModels.instance.test', 'Test connection')}
-            </Button>
-          </div>
-
           <ConnectionFields
             provider={provider}
             allProviders={allProviders}
             saved={saved}
-            onLabelChange={(label) => void setField('label', label)}
             onBaseUrlChange={(baseUrl) => void setField('baseUrl', baseUrl)}
             onSetApiKey={(key) => void onSetApiKey(key).then(() => stamp('apiKey'))}
             onClearApiKey={() => void onClearApiKey().then(() => stamp('apiKey'))}
@@ -387,6 +308,7 @@ function ConnectivityDot({ state }: { readonly state: ConnectState }) {
       <span
         className={styles['statusDotWrap']}
         data-tooltip={localize('aiModels.instance.status.checking', 'Checking…')}
+        data-status="checking"
       >
         <Spinner size={11} />
       </span>

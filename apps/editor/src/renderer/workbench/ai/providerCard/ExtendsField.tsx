@@ -34,7 +34,6 @@ import styles from '../AiSettingsEditor.module.css'
 
 /** Fields an ancestor can supply. `id` is never inherited. */
 const INHERITABLE = [
-  'label',
   'baseUrl',
   'apiKey',
   'defaultProtocol',

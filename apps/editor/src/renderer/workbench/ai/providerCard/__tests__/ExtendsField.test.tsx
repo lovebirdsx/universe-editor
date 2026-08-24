@@ -121,7 +121,6 @@ describe('ExtendsField', () => {
     const leaf: AiProviderEntry = {
       id: 'leaf',
       extends: 'root',
-      label: 'mine',
       baseUrl: 'https://mine.example',
       apiKey: 'sk-x',
       defaultProtocol: 'openai-chat',

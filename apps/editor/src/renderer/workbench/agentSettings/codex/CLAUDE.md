@@ -73,7 +73,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 ```toml
 model_provider = "codex-gateway"
 [model_providers.codex-gateway]
-name = "..."                          # = provider.label
+name = "..."                          # = provider.id
 base_url = "https://..."
 wire_api = "responses"
 supports_websockets = false           # 关掉 wss 探测,避免 403

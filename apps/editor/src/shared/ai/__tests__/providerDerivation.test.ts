@@ -50,16 +50,12 @@ describe('deriveClaudeAuth', () => {
 })
 
 describe('deriveCodexGateway', () => {
-  it('derives baseUrl + key + the display providerName from the label', () => {
-    expect(deriveCodexGateway(provider({ label: 'Kimi Gateway', baseUrl: 'https://gw' }))).toEqual({
+  it('derives baseUrl + key + the provider id as the display providerName', () => {
+    expect(deriveCodexGateway(provider({ baseUrl: 'https://gw' }))).toEqual({
       baseUrl: 'https://gw',
       apiKey: 'sk-1',
-      providerName: 'Kimi Gateway',
+      providerName: 'gw',
     })
-  })
-
-  it('falls back to the provider id for the display providerName', () => {
-    expect(deriveCodexGateway(provider({ baseUrl: 'https://gw' }))?.providerName).toBe('gw')
   })
 
   it('returns undefined when the key or baseUrl is missing', () => {

@@ -562,22 +562,6 @@
   padding: var(--spacing-3) 0 var(--spacing-2);
 }
 
-.cardToolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
-.plaintextNotice {
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--vscode-workbench-border);
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background);
-  font-size: var(--font-size-sm);
-  color: var(--vscode-editor-mutedForeground);
-  line-height: var(--line-height-normal);
-}
-
 /* -- provider instance card: connectivity / rates / usage ---------------- */
 
 .statusDot {

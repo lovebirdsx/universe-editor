@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ConnectionFields — label / baseUrl / apiKey, the three values that decide what
+ *  ConnectionFields — baseUrl / apiKey, the two values that decide what
  *  endpoint this entry talks to. Each one commits on blur or Enter and reverts on
  *  Escape; a hot reload of aiSettings.json cannot clobber a focused input.
  *
- *  Any of the three may come from an ancestor via `extends`, and an empty box
+ *  Either may come from an ancestor via `extends`, and an empty box
  *  that silently inherits is the most confusing state this page can be in — so a
  *  field that is not set locally shows the inherited value and where it came from,
  *  and a field that is set shows that it overrides one, with a way back.
@@ -25,7 +25,6 @@ interface ConnectionFieldsProps {
   readonly provider: AiProviderEntry
   readonly allProviders: readonly AiProviderEntry[]
   readonly saved: SavedStamp | undefined
-  readonly onLabelChange: (label: string) => void
   readonly onBaseUrlChange: (baseUrl: string) => void
   readonly onSetApiKey: (key: string) => void
   readonly onClearApiKey: () => void
@@ -35,32 +34,17 @@ export function ConnectionFields({
   provider,
   allProviders,
   saved,
-  onLabelChange,
   onBaseUrlChange,
   onSetApiKey,
   onClearApiKey,
 }: ConnectionFieldsProps) {
-  const label = useEditableText(provider.label, onLabelChange)
   const baseUrl = useEditableText(provider.baseUrl, onBaseUrlChange)
 
-  const inheritedLabel = findInherited(provider, allProviders, 'label')
   const inheritedBaseUrl = findInherited(provider, allProviders, 'baseUrl')
   const inheritedKey = findInherited(provider, allProviders, 'apiKey')
 
   return (
     <>
-      <TextField
-        name="label"
-        title={localize('aiModels.entry.label', 'Label')}
-        placeholder={
-          inheritedLabel?.value ?? localize('aiModels.entry.labelPlaceholder', 'Display name')
-        }
-        edit={label}
-        saved={saved}
-        own={provider.label !== undefined}
-        inheritedFrom={inheritedLabel?.from}
-        onRevert={() => onLabelChange('')}
-      />
       <TextField
         name="baseUrl"
         title={localize('aiModels.baseUrl', 'Base URL')}

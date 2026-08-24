@@ -52,7 +52,6 @@ export interface AiProviderEntry {
   readonly id: string
   /** Inherit from another entry. For alternate access points of the same gateway. */
   readonly extends?: string
-  readonly label?: string
   readonly baseUrl?: string
   /** Plaintext, by explicit user decision (cross-machine sync). Never logged. */
   readonly apiKey?: string
@@ -83,7 +82,6 @@ export interface AiResolvedProtocol {
 /** Runtime form handed to the registry and providers: extends flattened, apiKey inline. */
 export interface AiResolvedProvider {
   readonly id: string
-  readonly label?: string
   readonly baseUrl?: string
   readonly apiKey?: string
   readonly defaultProtocol: AiWireProtocol
@@ -228,7 +226,6 @@ function flattenExtends(
   for (let i = chain.length - 1; i >= 0; i--) {
     const layer = chain[i]
     if (layer === undefined) continue
-    if (layer.label !== undefined) merged.label = layer.label
     if (layer.baseUrl !== undefined) merged.baseUrl = layer.baseUrl
     if (layer.apiKey !== undefined) merged.apiKey = layer.apiKey
     if (layer.defaultProtocol !== undefined) merged.defaultProtocol = layer.defaultProtocol
@@ -276,7 +273,6 @@ function resolveOne(
 
   return {
     id: entry.id,
-    ...(entry.label !== undefined ? { label: entry.label } : {}),
     ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
     ...(entry.apiKey !== undefined ? { apiKey: entry.apiKey } : {}),
     defaultProtocol,

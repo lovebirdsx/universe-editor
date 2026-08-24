@@ -146,7 +146,6 @@ describe('resolveProviderEntries — protocolMap', () => {
 
 describe('resolveProviderEntries — extends', () => {
   const base = entry('kuro', {
-    label: 'Kuro',
     baseUrl: 'https://api.kuro.example/v1',
     apiKey: 'base-key',
     defaultProtocol: 'openai-chat',
@@ -164,7 +163,6 @@ describe('resolveProviderEntries — extends', () => {
     const gbl = providers.find((p) => p.id === 'kuro-gbl')
     expect(gbl?.baseUrl).toBe('http://10.0.1.0:9080/v1')
     expect(gbl?.apiKey).toBe('base-key')
-    expect(gbl?.label).toBe('Kuro')
     expect(gbl?.defaultProtocol).toBe('openai-chat')
     expect(gbl?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
     expect(gbl?.pricingSource).toEqual({ id: 'http-json' })
@@ -185,7 +183,7 @@ describe('resolveProviderEntries — extends', () => {
     const { providers, issues } = resolveProviderEntries(
       [
         base,
-        entry('mid', { extends: 'kuro', apiKey: 'mid-key', label: 'Mid' }),
+        entry('mid', { extends: 'kuro', apiKey: 'mid-key' }),
         entry('leaf', { extends: 'mid', apiKey: 'leaf-key' }),
       ],
       KNOWLEDGE,
@@ -194,7 +192,6 @@ describe('resolveProviderEntries — extends', () => {
     expect(issues).toEqual([])
     const leaf = providers.find((p) => p.id === 'leaf')
     expect(leaf?.apiKey).toBe('leaf-key')
-    expect(leaf?.label).toBe('Mid')
     expect(leaf?.baseUrl).toBe('https://api.kuro.example/v1')
   })
 

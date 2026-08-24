@@ -141,7 +141,6 @@ const PROVIDER_ENTRY_SCHEMA: IJSONSchema = {
       type: 'string',
       description: 'Inherit from another entry (alternate access point of the same gateway).',
     },
-    label: { type: 'string', description: 'Display name.' },
     baseUrl: { type: 'string', description: 'Gateway endpoint.' },
     apiKey: {
       type: 'string',

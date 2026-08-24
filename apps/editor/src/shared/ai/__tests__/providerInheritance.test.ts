@@ -44,15 +44,15 @@ describe('computeExtendsCandidates', () => {
 
 describe('findInherited', () => {
   const providers: readonly AiProviderEntry[] = [
-    { id: 'root', baseUrl: 'https://root.example', label: 'Root' },
-    { id: 'mid', extends: 'root', label: 'Mid' },
+    { id: 'root', baseUrl: 'https://root.example', defaultProtocol: 'openai-chat' },
+    { id: 'mid', extends: 'root', defaultProtocol: 'ollama' },
     { id: 'leaf', extends: 'mid' },
   ]
 
   it('reports the nearest ancestor that declares the field', () => {
-    expect(findInherited(providers[2]!, providers, 'label')).toEqual({
+    expect(findInherited(providers[2]!, providers, 'defaultProtocol')).toEqual({
       from: 'mid',
-      value: 'Mid',
+      value: 'ollama',
     })
   })
 

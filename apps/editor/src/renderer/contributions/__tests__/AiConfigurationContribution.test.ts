@@ -79,7 +79,6 @@ const SAMPLE_SETTINGS = {
   providers: [
     {
       id: 'kuro',
-      label: 'Kuro 聚合网关',
       baseUrl: 'https://api.kuro.example/v1',
       apiKey: 'key-xxxx',
       defaultProtocol: 'openai-chat',
