@@ -39,7 +39,6 @@ export const ServiceChannels = {
   ExtensionGallery: 'extensionGallery',
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
-  Usage: 'usage',
   AiModel: 'aiModel',
   AiDebug: 'aiDebug',
   RemoteSchema: 'remoteSchema',

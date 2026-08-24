@@ -31,7 +31,6 @@ import {
   IIssueReporterService,
   IPerformanceMarksService,
   IPingService,
-  IUsageService,
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
@@ -96,7 +95,6 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IWindowsService, channel: ServiceChannels.Window },
   { id: IPerformanceMarksService, channel: ServiceChannels.Performance },
   { id: ISessionSwitcherService, channel: ServiceChannels.SessionSwitcher },
-  { id: IUsageService, channel: ServiceChannels.Usage },
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
   { id: IResourceAccessService, channel: ServiceChannels.ResourceAccess },
   { id: IRemoteStatusService, channel: ServiceChannels.RemoteStatus },

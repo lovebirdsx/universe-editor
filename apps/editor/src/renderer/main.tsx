@@ -219,7 +219,6 @@ import {
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
-import { ApiUsageService, IApiUsageService } from './services/usage/ApiUsageService.js'
 import {
   ISubscriptionUsageService,
   SubscriptionUsageService,
@@ -798,12 +797,6 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(ExtensionsWorkbenchService),
   )
   services.set(IExtensionsWorkbenchService, extensionsWorkbenchService)
-
-  // API usage indicator: single owner of the account-level usage snapshot +
-  // polling loop. Created here so its proxy + config deps are available; the
-  // UsageIndicator in PromptInput subscribes to its observable.
-  const apiUsageService = workbenchStore.add(instantiation.createInstance(ApiUsageService))
-  services.set(IApiUsageService, apiUsageService)
 
   // Official-subscription usage (Claude plan windows / Codex rate limits). Reads
   // over an ACP ext-method on whatever session connection is already open, so it

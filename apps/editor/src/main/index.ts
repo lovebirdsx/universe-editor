@@ -64,7 +64,6 @@ import {
   IExchangeRateService,
   IPingService,
   IPerformanceMarksService,
-  IUsageService,
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
@@ -507,7 +506,6 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       releaseNotes: accessor.get(IReleaseNotesService),
       docs: accessor.get(IDocsService),
       performance: accessor.get(IPerformanceMarksService),
-      usage: accessor.get(IUsageService),
       aiModel: accessor.get(IAiModelMainService),
       aiDebug: accessor.get(IAiDebugService),
       remoteSchema: accessor.get(IRemoteSchemaService),

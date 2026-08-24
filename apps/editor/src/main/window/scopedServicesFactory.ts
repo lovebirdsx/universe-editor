@@ -21,7 +21,6 @@ import type {
   IPingService,
   IDisposableLeakService,
   IIssueReporterService,
-  IUsageService,
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import type { ITextSearchMainService } from '@universe-editor/platform'
@@ -83,7 +82,6 @@ export interface ApplicationServices {
   readonly releaseNotes: IReleaseNotesService
   readonly docs: IDocsService
   readonly performance: IPerformanceMarksService
-  readonly usage: IUsageService
   readonly aiModel: IAiModelMainService
   readonly aiDebug: IAiDebugService
   readonly remoteSchema: IRemoteSchemaService

@@ -9,10 +9,9 @@
  *     percentage — matching what the vendors' own clients show — and the popover
  *     breaks every window down with a bar and a reset time. Codex additionally
  *     offers redeeming a rate-limit reset credit from there.
- *   - the internal API gateway bills in ¥, so claude-code sessions on it keep the
- *     monthly spend readout.
- *   - anything else hides the indicator. In particular a Codex session never
- *     shows the ¥ figure: that number is the Claude gateway account's.
+ *   - a provider-declared account usage source shows the authoritative account
+ *     number (quota / balance / subscription).
+ *   - anything else hides the indicator.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -27,7 +26,6 @@ import {
   type AiAccountUsage,
 } from '@universe-editor/platform'
 import { useObservable, useOptionalService, useService } from '../useService.js'
-import { IApiUsageService, type UsageState } from '../../services/usage/ApiUsageService.js'
 import {
   ISubscriptionUsageService,
   type ResetCreditOutcome,
@@ -41,20 +39,14 @@ import {
   type SubscriptionUsageWindow,
 } from '../../services/usage/subscriptionUsage.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
-import type { UsageSnapshot } from '../../../shared/ipc/services.js'
 import styles from './agents.module.css'
 
 /** Stable fallbacks so the hooks below stay unconditional when a service is absent. */
 const NO_SNAPSHOT = constObservable<SubscriptionUsageSnapshot | undefined>(undefined)
-const NO_GATEWAY = constObservable<UsageState>({ kind: 'disabled', reason: 'not-configured' })
 const NO_ACCOUNT = constObservable<AccountUsageState>({ hasSource: false })
 
 /** How often the component re-evaluates staleness while nothing else changes. */
 const STALE_RECHECK_MS = 30_000
-
-function formatCny(raw: number, digits: number = 2): string {
-  return (raw / 10000).toFixed(digits)
-}
 
 function formatPercent(value: number): string {
   return `${Math.round(value)}%`
@@ -119,7 +111,6 @@ function formatResetsAt(epochMs: number, now: number): string {
 export function UsageIndicator({ session }: { session: IAcpSession }) {
   const agentId = session.agentId
   const subscription = useOptionalService(ISubscriptionUsageService)
-  const gateway = useOptionalService(IApiUsageService)
   const account = useOptionalService(IAccountUsageService)
 
   const snapshotObservable = useMemo(
@@ -127,7 +118,6 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
     [subscription, agentId],
   )
   const snapshot = useObservable(snapshotObservable)
-  const gatewayState = useObservable(gateway?.state ?? NO_GATEWAY)
 
   const accountObservable = useMemo(
     () => account?.stateFor(agentId) ?? NO_ACCOUNT,
@@ -151,17 +141,11 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   }, [subscription, account, agentId])
 
   const display = resolveUsageDisplay({
-    agentId,
     snapshot,
-    gatewayDisabled: gatewayState.kind === 'disabled',
     account: accountState,
   })
 
   if (display === 'hidden') return null
-
-  if (display === 'gateway') {
-    return <GatewayIndicator state={gatewayState} onRefresh={() => gateway?.refresh()} />
-  }
 
   if (display === 'account' || display === 'unavailable') {
     const forceRefresh = () => void account?.refresh(agentId, { force: true })
@@ -219,67 +203,6 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
           onDismiss={() => setOpen(false)}
         />
       ) : null}
-    </div>
-  )
-}
-
-function GatewayIndicator({ state, onRefresh }: { state: UsageState; onRefresh: () => void }) {
-  const [open, setOpen] = useState(false)
-
-  if (state.kind === 'error') {
-    return (
-      <button
-        type="button"
-        className={styles['usageIndicator']}
-        data-state="error"
-        data-tooltip={localize('acp.usage.error', 'API usage unavailable: {reason}', {
-          reason: state.message,
-        })}
-        onClick={onRefresh}
-        data-testid="acp-usage-indicator"
-      >
-        <CircleAlert size={13} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    )
-  }
-
-  if (state.kind === 'loading') {
-    return (
-      <button
-        type="button"
-        className={styles['usageIndicator']}
-        data-state="loading"
-        data-tooltip={localize('acp.usage.loading', 'Loading API usage…')}
-        onClick={onRefresh}
-        data-testid="acp-usage-indicator"
-      >
-        <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    )
-  }
-
-  // Unreachable via `resolveUsageDisplay` (it maps 'disabled' to 'hidden'), but
-  // the union still carries the case.
-  if (state.kind !== 'ok') return null
-
-  const s = state.snapshot
-  return (
-    <div className={styles['usageWrap']}>
-      <button
-        type="button"
-        className={styles['usageIndicator']}
-        data-state="ok"
-        data-tooltip={localize('acp.usage.indicator', 'API monthly usage — click for breakdown')}
-        onClick={() => {
-          if (!open) onRefresh()
-          setOpen((v) => !v)
-        }}
-        data-testid="acp-usage-indicator"
-      >
-        <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['usageIndicatorText']}>¥{formatCny(s.periodUsedCny, 0)}</span>
-      </button>
-      {open ? <UsagePopover snapshot={s} onDismiss={() => setOpen(false)} /> : null}
     </div>
   )
 }
@@ -646,80 +569,4 @@ function resetCreditNotification(outcome: ResetCreditOutcome): {
         message: localize('acp.subscriptionUsage.reset.failed', 'Failed to redeem the credit.'),
       }
   }
-}
-
-function UsagePopover({
-  snapshot: s,
-  onDismiss,
-}: {
-  snapshot: UsageSnapshot
-  onDismiss: () => void
-}) {
-  const containerRef = useDismissOnOutside(onDismiss)
-
-  const pct = s.periodLimitCny > 0 ? ((s.periodUsedCny / s.periodLimitCny) * 100).toFixed(1) : '0.0'
-
-  return (
-    <div
-      ref={containerRef}
-      className={styles['sessionCostPopover']}
-      data-testid="acp-usage-popover"
-      role="dialog"
-      aria-label={localize('acp.usage.popover', 'API weekly usage breakdown')}
-    >
-      <div className={styles['sessionCostHeader']}>
-        <span>
-          {localize('acp.usage.popover.title', 'API Weekly Usage ({date})', { date: s.date })}
-        </span>
-        <span className={styles['sessionCostTotal']}>¥{formatCny(s.periodUsedCny, 0)}</span>
-      </div>
-      <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
-        {localize('acp.usage.period', 'Period: {period}', { period: s.periodBucket })}
-      </div>
-      <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
-        {localize('acp.usage.usedTotal', 'Used: ¥{used} / Total: ¥{total}  ({pct}%)', {
-          used: formatCny(s.periodUsedCny),
-          total: formatCny(s.periodLimitCny),
-          pct,
-        })}
-      </div>
-      <div className={styles['sessionCostFooter']} style={{ marginTop: 0, borderTop: 'none' }}>
-        {localize('acp.usage.remaining', 'Remaining: ¥{remaining}', {
-          remaining: formatCny(s.periodRemainingCny),
-        })}
-      </div>
-      {s.models.length > 0 ? (
-        <table className={styles['sessionCostTable']} style={{ marginTop: 6 }}>
-          <thead>
-            <tr>
-              <th>{localize('acp.usage.col.model', 'Model')}</th>
-              <th>{localize('acp.usage.col.requests', 'Requests')}</th>
-              <th>{localize('acp.usage.col.cost', 'Cost')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {s.models.map((m) => (
-              <tr key={m.model}>
-                <td className={styles['sessionCostModelName']} data-tooltip={m.model}>
-                  {m.model}
-                </td>
-                <td>{m.requests}</td>
-                <td>¥{formatCny(m.costCny)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <div className={styles['sessionCostEmpty']}>
-          {localize('acp.usage.noBreakdown', 'No per-model breakdown available.')}
-        </div>
-      )}
-      <div className={styles['sessionCostFooter']}>
-        {localize('acp.usage.totals', 'Week total: {requests} req · {tokens} tokens', {
-          requests: s.requests,
-          tokens: s.rawTokens.toLocaleString(),
-        })}
-      </div>
-    </div>
-  )
 }

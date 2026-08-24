@@ -35,7 +35,6 @@ import {
   IIssueReporterService,
   IPerformanceMarksService,
   IPingService,
-  IUsageService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
@@ -88,7 +87,6 @@ import { DocsMainService } from './docs/docsMainService.js'
 import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
 import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
-import { UsageMainService } from './usage/usageMainService.js'
 import { AiModelMainService } from './ai/aiModelMainService.js'
 import { AiDebugRecorder, IAiDebugRecorderService } from './ai/aiDebugRecorder.js'
 import { AiDebugMainService } from './ai/aiDebugService.js'
@@ -250,11 +248,6 @@ registerSingleton(
 registerSingleton(
   IConfigLocationService,
   new SyncDescriptor<IConfigLocationService>(ConfigLocationMainService, [], false),
-)
-registerSingletonFactory(
-  IUsageService,
-  (acc) =>
-    new UsageMainService(undefined, acc.get(ILoggerService), acc.get(IRemoteConnectionService)),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(

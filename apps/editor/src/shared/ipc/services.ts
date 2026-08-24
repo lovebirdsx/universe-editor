@@ -167,27 +167,6 @@ export interface IPerformanceMarksService {
 export const IPerformanceMarksService =
   createDecorator<IPerformanceMarksService>('performanceMarksService')
 
-// -------- API Usage (main reads ~/.claude/settings.json + queries provider) --------
-// The usage data shapes (UsageSnapshot / UsageModelUsage / UsageResult) live in
-// @universe-editor/node-services so the local main and a remote server operate on
-// the same types; re-exported here for renderer/main import stability (see
-// claudeConfigService.ts for the same pattern).
-
-export type { UsageModelUsage, UsageResult, UsageSnapshot } from '@universe-editor/node-services'
-import type { UsageResult } from '@universe-editor/node-services'
-
-export interface IUsageService {
-  readonly _serviceBrand: undefined
-  /**
-   * Fetch today's account-level API usage. `authority` selects a remote host —
-   * the settings file is read and the provider queried from that host's network;
-   * absent → the local host.
-   */
-  getUsage(authority?: string): Promise<UsageResult>
-}
-
-export const IUsageService = createDecorator<IUsageService>('usageService')
-
 // -------- Exchange Rate (main fetches USD→CNY rate, caches to disk) --------
 
 export interface ExchangeRateResult {

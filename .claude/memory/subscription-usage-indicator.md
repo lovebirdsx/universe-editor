@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-`UsageIndicator`（ACP 输入框右下角）按会话 agent 的认证形态三分：官方订阅 → 最紧窗口已用百分比 + 弹窗窗口条（Codex 另有「重置限额」消耗一张 reset credit）；claude-code 走内部网关 → 保留 ¥ 月度开销；其余隐藏。**Codex 会话永远不显示 ¥**（那是 Claude 网关 account 级数据，原先全局单例的既存 bug）。
+`UsageIndicator`（ACP 输入框右下角）按会话 agent 的认证形态三分：官方订阅 → 最紧窗口已用百分比 + 弹窗窗口条（Codex 另有「重置限额」消耗一张 reset credit）；provider 声明账号用量来源 → 权威账号数字（quota/balance/subscription，拉不到显示「不可用」，绝不用估算值冒充）；其余隐藏。2026-08 网关 ¥ 月度开销链路（`claudeUsage.ts` / `IUsageService` / `ApiUsageService`）已整体删除。
 
 数据只走 ACP ext-method（`universe-editor/subscription_usage` / `universe-editor/consume_reset_credit`），两个 fork 只做 sanitize、归一化在 renderer 纯函数（避免两 fork 各写一份漂移）。
 

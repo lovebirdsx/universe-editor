@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  UsageIndicator tests — the gating table rendered:
  *    - subscription snapshot → tightest window's used percentage
- *    - claude-code without a snapshot → the gateway's ¥ figure
- *    - codex without a snapshot → nothing (never the Claude gateway's number)
+ *    - account usage → the provider-declared account number
+ *    - neither → nothing
  *    - stale snapshot → dimmed, with the cutoff time in the tooltip
  *    - codex reset credit → confirm dialog, then one outcome toast per branch
  *--------------------------------------------------------------------------------------------*/
@@ -24,7 +24,6 @@ import {
 } from '@universe-editor/platform'
 import { UsageIndicator } from '../UsageIndicator.js'
 import { ServicesContext } from '../../useService.js'
-import { IApiUsageService, type UsageState } from '../../../services/usage/ApiUsageService.js'
 import {
   ISubscriptionUsageService,
   type ISubscriptionUsageService as ISubscriptionUsageServiceType,
@@ -67,7 +66,6 @@ function renderIndicator(options: {
   agentId?: string
   snapshot?: SubscriptionUsageSnapshot | undefined
   stale?: boolean
-  gateway?: UsageState
   account?: AccountUsageState
   confirmed?: boolean
   outcome?: ResetCreditOutcome
@@ -85,16 +83,6 @@ function renderIndicator(options: {
     isStale: () => options.stale === true,
     consumeResetCredit,
   } as unknown as ISubscriptionUsageServiceType
-
-  const gatewayState = observableValue<UsageState>(
-    'gateway',
-    options.gateway ?? { kind: 'disabled', reason: 'not-configured' },
-  )
-  const gateway = {
-    _serviceBrand: undefined,
-    state: gatewayState,
-    refresh: vi.fn(),
-  }
 
   const accountObs = observableValue<AccountUsageState>(
     'account',
@@ -114,7 +102,6 @@ function renderIndicator(options: {
 
   const services = new ServiceCollection()
   services.set(ISubscriptionUsageService, subscription)
-  services.set(IApiUsageService, gateway as never)
   services.set(IAccountUsageService, account as never)
   services.set(IDialogService, {
     _serviceBrand: undefined,
@@ -152,48 +139,6 @@ describe('UsageIndicator — collapsed form', () => {
     const button = screen.getByTestId('acp-usage-indicator')
     expect(button.getAttribute('data-stale')).toBe('true')
     expect(button.getAttribute('data-tooltip')).toContain(new Date(FETCHED_AT).toLocaleString())
-  })
-
-  it('falls back to the gateway ¥ figure for claude-code without a snapshot', () => {
-    renderIndicator({
-      agentId: 'claude-code',
-      snapshot: undefined,
-      gateway: {
-        kind: 'ok',
-        snapshot: {
-          date: '2023-11-14',
-          periodBucket: 'week',
-          periodUsedCny: 1_230_000,
-          periodLimitCny: 5_000_000,
-          periodRemainingCny: 3_770_000,
-          requests: 12,
-          rawTokens: 3456,
-          models: [],
-        },
-      } as unknown as UsageState,
-    })
-    expect(screen.getByTestId('acp-usage-indicator').textContent).toContain('¥123')
-  })
-
-  it('never shows the claude gateway figure next to a codex session', () => {
-    renderIndicator({
-      agentId: 'codex',
-      snapshot: undefined,
-      gateway: {
-        kind: 'ok',
-        snapshot: {
-          date: '2023-11-14',
-          periodBucket: 'week',
-          periodUsedCny: 1_230_000,
-          periodLimitCny: 5_000_000,
-          periodRemainingCny: 3_770_000,
-          requests: 12,
-          rawTokens: 3456,
-          models: [],
-        },
-      } as unknown as UsageState,
-    })
-    expect(screen.queryByTestId('acp-usage-indicator')).toBeNull()
   })
 
   it('hides itself when neither readout applies', () => {

@@ -53,7 +53,7 @@ export interface SubscriptionUsageSnapshot {
 }
 
 /** Which readout the indicator should render for a session. */
-export type UsageDisplayKind = 'subscription' | 'account' | 'unavailable' | 'gateway' | 'hidden'
+export type UsageDisplayKind = 'subscription' | 'account' | 'unavailable' | 'hidden'
 
 /**
  * Account-level usage for the provider *instance* an agent is bound to. This is
@@ -68,14 +68,6 @@ export interface AccountUsageState {
   /** Authoritative number; `undefined` while `hasSource` is true means "unavailable". */
   readonly usage?: AiAccountUsage
 }
-
-/**
- * Agents whose account-level gateway spend (`IApiUsageService`, i.e. the
- * `ANTHROPIC_BASE_URL` proxy's monthly ¥ figure) is a meaningful fallback.
- * Deliberately Claude-only: that readout is the Claude gateway account's, so
- * showing it next to a Codex session was simply wrong (the bug this fixes).
- */
-const GATEWAY_SPEND_AGENT_IDS: ReadonlySet<string> = new Set(['claude-code'])
 
 /**
  * Numbers below this are seconds-since-epoch, above are milliseconds. 1e11 ms is
@@ -364,27 +356,16 @@ export function isStale(
  * Priority order is the semantics:
  *  1. Official-subscription snapshot → `'subscription'` (authoritative, wins).
  *  2. Account usage declared AND an authoritative number fetched → `'account'`.
- *  3. Account usage declared but the number is missing → `'unavailable'`. This
- *     must NOT fall through to the gateway ¥ figure below — that figure belongs
- *     to a different account (the legacy hard-coded proxy), so substituting it
- *     for a declared-but-unreachable provider would misattribute the spend.
- *  4. The gateway ¥ figure is only meaningful for claude-code, else `'hidden'`.
- *  5. Gateway spend disabled → `'hidden'`, otherwise `'gateway'`.
- *
- * The Codex row is the fix for the pre-existing bug: the indicator used to be a
- * global singleton rendered in every prompt box, so a Codex session displayed
- * the Claude gateway's ¥ figure.
+ *  3. Account usage declared but the number is missing → `'unavailable'`.
+ *  4. Anything else → `'hidden'`.
  */
 export function resolveUsageDisplay(input: {
-  readonly agentId: string
   readonly snapshot: SubscriptionUsageSnapshot | undefined
-  readonly gatewayDisabled: boolean
   readonly account?: AccountUsageState | undefined
 }): UsageDisplayKind {
   if (input.snapshot !== undefined) return 'subscription'
   if (input.account?.hasSource === true) {
     return input.account.usage !== undefined ? 'account' : 'unavailable'
   }
-  if (!GATEWAY_SPEND_AGENT_IDS.has(input.agentId)) return 'hidden'
-  return input.gatewayDisabled ? 'hidden' : 'gateway'
+  return 'hidden'
 }

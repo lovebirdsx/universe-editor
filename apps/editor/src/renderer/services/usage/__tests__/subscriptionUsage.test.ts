@@ -245,30 +245,11 @@ describe('resolveUsageDisplay', () => {
   }
 
   it('shows the subscription readout whenever a snapshot exists', () => {
-    for (const agentId of ['claude-code', 'codex', 'custom']) {
-      expect(resolveUsageDisplay({ agentId, snapshot, gatewayDisabled: false })).toBe(
-        'subscription',
-      )
-      expect(resolveUsageDisplay({ agentId, snapshot, gatewayDisabled: true })).toBe('subscription')
-    }
+    expect(resolveUsageDisplay({ snapshot })).toBe('subscription')
   })
 
-  it('falls back to the gateway spend figure only for claude-code', () => {
-    expect(
-      resolveUsageDisplay({ agentId: 'claude-code', snapshot: undefined, gatewayDisabled: false }),
-    ).toBe('gateway')
-  })
-
-  it('never shows the claude gateway ¥ figure next to a codex session', () => {
-    expect(
-      resolveUsageDisplay({ agentId: 'codex', snapshot: undefined, gatewayDisabled: false }),
-    ).toBe('hidden')
-  })
-
-  it('hides the indicator when the gateway has no credentials', () => {
-    expect(
-      resolveUsageDisplay({ agentId: 'claude-code', snapshot: undefined, gatewayDisabled: true }),
-    ).toBe('hidden')
+  it('hides the indicator when neither readout applies', () => {
+    expect(resolveUsageDisplay({ snapshot: undefined })).toBe('hidden')
   })
 
   describe('account', () => {
@@ -279,34 +260,19 @@ describe('resolveUsageDisplay', () => {
     const unavailable: AccountUsageState = { hasSource: true }
     const noSource: AccountUsageState = { hasSource: false }
 
-    it('prefers the account readout over the gateway ¥ figure', () => {
+    it('shows the account readout when a source is declared', () => {
       expect(
         resolveUsageDisplay({
-          agentId: 'claude-code',
           snapshot: undefined,
-          gatewayDisabled: false,
           account,
         }),
       ).toBe('account')
     })
 
-    it('shows unavailable rather than falling back to the gateway ¥ figure', () => {
+    it('shows unavailable rather than hiding when the number is missing', () => {
       expect(
         resolveUsageDisplay({
-          agentId: 'claude-code',
           snapshot: undefined,
-          gatewayDisabled: false,
-          account: unavailable,
-        }),
-      ).toBe('unavailable')
-    })
-
-    it('shows unavailable even for codex (the account gate precedes the agent gate)', () => {
-      expect(
-        resolveUsageDisplay({
-          agentId: 'codex',
-          snapshot: undefined,
-          gatewayDisabled: false,
           account: unavailable,
         }),
       ).toBe('unavailable')
@@ -315,9 +281,7 @@ describe('resolveUsageDisplay', () => {
     it('prefers the subscription snapshot over the account readout', () => {
       expect(
         resolveUsageDisplay({
-          agentId: 'claude-code',
           snapshot,
-          gatewayDisabled: false,
           account,
         }),
       ).toBe('subscription')
@@ -326,17 +290,7 @@ describe('resolveUsageDisplay', () => {
     it('treats an account without a source the same as no account at all', () => {
       expect(
         resolveUsageDisplay({
-          agentId: 'claude-code',
           snapshot: undefined,
-          gatewayDisabled: false,
-          account: noSource,
-        }),
-      ).toBe('gateway')
-      expect(
-        resolveUsageDisplay({
-          agentId: 'codex',
-          snapshot: undefined,
-          gatewayDisabled: false,
           account: noSource,
         }),
       ).toBe('hidden')

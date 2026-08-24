@@ -20,7 +20,6 @@ import type {
   CodexCredentialIntent,
   CodexSettings,
   CodexSettingsPatch,
-  UsageResult,
 } from './types.js'
 
 export interface IRemoteAgentConfigService {
@@ -34,12 +33,6 @@ export interface IRemoteAgentConfigService {
   claudePatch(patch: ClaudeSettingsPatch): Promise<void>
   claudeConfigPath(): Promise<string>
   claudeReadAuthStatus(): Promise<ClaudeAuthStatus>
-  /**
-   * Fetch today's Claude API usage from the remote host — reads the remote
-   * `~/.claude/settings.json` and queries the provider from the remote network,
-   * so a remote workspace reports the remote account's usage.
-   */
-  claudeFetchUsage(): Promise<UsageResult>
 
   // -- Codex (`~/.codex/config.toml` + `auth.json`) --
   codexRead(): Promise<CodexSettings>

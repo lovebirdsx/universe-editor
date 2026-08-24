@@ -360,7 +360,7 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 | 来源 | 该 provider 的 `pricingSource` | `IAiAccountUsageSource` |
 | 查不到 | 显示「—」+ 引导填费率 | 显示「不可用」，绝不用估算值冒充 |
 
-实现：`renderer/services/usage/AccountUsageService.ts`（per-agent 读账号费用）+ `renderer/services/usage/subscriptionUsage.ts` 的 `resolveUsageDisplay`（五态 `'subscription' | 'account' | 'unavailable' | 'gateway' | 'hidden'`，优先级注释就在函数上方）+ `workbench/agents/UsageIndicator.tsx`。
+实现：`renderer/services/usage/AccountUsageService.ts`（per-agent 读账号费用）+ `renderer/services/usage/subscriptionUsage.ts` 的 `resolveUsageDisplay`（四态 `'subscription' | 'account' | 'unavailable' | 'hidden'`，优先级注释就在函数上方）+ `workbench/agents/UsageIndicator.tsx`。
 
 **费率解析：单一来源，绝不兜底**（`src/shared/ai/resolveProviderPricing.ts` 的 `resolveModelPricing`）：费率只由该 provider 的 `pricingSource` 决定——`catalog`（`options.vendor` 查内置官方价目表 `OFFICIAL_CATALOGS`）或 `http-json`（读网关价目表缓存）。**未声明 pricingSource 就是「费率未知」，绝不跨 provider 兜底套官方价**（中转网关有折扣/加价/换币种，套官方价直接记错账）——「费率未知」是 UI 的一个状态，不是编出来的数字。`AiPricingOrigin = 'catalog' | 'gateway'`（`aiModelPricing.ts`）。
 
