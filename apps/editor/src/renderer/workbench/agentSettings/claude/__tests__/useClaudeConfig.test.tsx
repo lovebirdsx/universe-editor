@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useClaudeConfig: applyAuthentication injects the derived credential env (or
  *  clears it for `@subscription`) and persists the selection; setModel /
- *  setSmallFastModel write settings.json alongside their persisted picks.
+ *  setSubagentModel write settings.json alongside their persisted picks.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -184,7 +184,7 @@ describe('useClaudeConfig', () => {
     expect(result.current.settings.model).toBe('kimi-k3')
   })
 
-  it('writes the fast-model env and persists the pick', async () => {
+  it('writes the sub-agent model env and persists the pick', async () => {
     const { service } = makeClaudeService({
       settings: {},
       agentSettings: { authentication: 'gw' },
@@ -193,9 +193,143 @@ describe('useClaudeConfig', () => {
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
     await act(async () => {
-      await result.current.setSmallFastModel('kimi-k3-mini')
+      await result.current.setSubagentModel('kimi-k3-mini')
     })
 
-    expect(result.current.settings.env?.['ANTHROPIC_SMALL_FAST_MODEL']).toBe('kimi-k3-mini')
+    expect(result.current.settings.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('kimi-k3-mini')
+  })
+
+  it('setModelOneM appends [1m] and toggling off drops it from both stores', async () => {
+    const { service, writeCalls } = makeClaudeService({
+      settings: {},
+      agentSettings: { authentication: 'gw', model: 'kimi-k3' },
+    })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.setModelOneM(true)
+    })
+    expect(result.current.settings.model).toBe('kimi-k3[1m]')
+    expect(writeCalls[writeCalls.length - 1]!.model1m).toBe(true)
+
+    await act(async () => {
+      await result.current.setModelOneM(false)
+    })
+    expect(result.current.settings.model).toBe('kimi-k3')
+    expect('model1m' in writeCalls[writeCalls.length - 1]!).toBe(false)
+  })
+
+  it('keeps an already-[1m] model id intact and drops the stale 1m flag', async () => {
+    const { service, writeCalls } = makeClaudeService({
+      settings: {},
+      agentSettings: { model: 'a', model1m: true },
+    })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.setModel('claude-opus-5[1m]')
+    })
+
+    expect(result.current.settings.model).toBe('claude-opus-5[1m]')
+    const last = writeCalls[writeCalls.length - 1]!
+    expect('model1m' in last).toBe(false)
+    expect(last.model).toBe('claude-opus-5[1m]')
+  })
+
+  it('each setter patches only the one related key, leaving the rest untouched', async () => {
+    const { service, patchCalls } = makeClaudeService({
+      settings: {
+        model: 'old',
+        language: 'zh',
+        env: { ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_BASE_URL: 'https://gw', FOO: 'bar' },
+      },
+      agentSettings: {},
+    })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.setModel('kimi-k3')
+    })
+    const modelPatch = patchCalls[patchCalls.length - 1]!
+    expect(Object.keys(modelPatch)).toEqual(['model'])
+    expect(result.current.settings.model).toBe('kimi-k3')
+    expect(result.current.settings.language).toBe('zh')
+    expect(result.current.settings.env).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'tok',
+      ANTHROPIC_BASE_URL: 'https://gw',
+      FOO: 'bar',
+    })
+
+    await act(async () => {
+      await result.current.setSubagentModel('kimi-k3-mini')
+    })
+    const subPatch = patchCalls[patchCalls.length - 1]!
+    expect(subPatch).toEqual({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3-mini' } })
+    expect(Object.keys(subPatch.env!)).toEqual(['CLAUDE_CODE_SUBAGENT_MODEL'])
+    expect(result.current.settings.model).toBe('kimi-k3')
+    expect(result.current.settings.env).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'tok',
+      ANTHROPIC_BASE_URL: 'https://gw',
+      FOO: 'bar',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3-mini',
+    })
+
+    await act(async () => {
+      await result.current.setSubagentModel(undefined)
+    })
+    const clearPatch = patchCalls[patchCalls.length - 1]!
+    expect(clearPatch).toEqual({ env: { CLAUDE_CODE_SUBAGENT_MODEL: null } })
+    expect(result.current.settings.env).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'tok',
+      ANTHROPIC_BASE_URL: 'https://gw',
+      FOO: 'bar',
+    })
+  })
+
+  it('setSubagentModelOneM appends [1m] to the sub-agent model env', async () => {
+    const { service } = makeClaudeService({
+      settings: {},
+      agentSettings: { subagentModel: 'kimi-k3' },
+    })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.setSubagentModelOneM(true)
+    })
+
+    expect(result.current.settings.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('kimi-k3[1m]')
+  })
+
+  // The agent-settings block is persisted wholesale, so a second writer that
+  // started from the same pre-write snapshot would drop the first one's field.
+  it('serializes concurrent writers instead of dropping the earlier field', async () => {
+    const { service, writeCalls } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { result } = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      // Fire both without awaiting the first, exactly as the panel's handlers do.
+      await Promise.all([result.current.applyAuthentication('gw'), result.current.setModel('kimi')])
+    })
+
+    expect(writeCalls.at(-1)).toEqual({ authentication: 'gw', model: 'kimi' })
+    expect(result.current.agentSettings).toEqual({ authentication: 'gw', model: 'kimi' })
+  })
+
+  it('lets a 1m toggle fired alongside a model pick see the settled pick', async () => {
+    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await Promise.all([result.current.setModel('kimi-k3'), result.current.setModelOneM(true)])
+    })
+
+    expect(result.current.settings.model).toBe('kimi-k3[1m]')
+    expect(result.current.agentSettings).toEqual({ model: 'kimi-k3', model1m: true })
   })
 })

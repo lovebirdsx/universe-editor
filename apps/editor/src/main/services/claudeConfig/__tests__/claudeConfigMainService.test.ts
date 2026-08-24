@@ -116,14 +116,26 @@ describe('ClaudeConfigMainService', () => {
     expect(entries).toEqual(['settings.json'])
   })
 
-  it('stores the agent settings (authentication / model / smallFastModel) in aiSettings.json', async () => {
+  it('stores the agent settings (authentication / model / subagentModel) in aiSettings.json', async () => {
     const configDir = join(dir, 'editor-settings')
     svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-    await svc.writeAgentSettings({ authentication: 'gw', model: 'kimi-k3' })
+    await svc.writeAgentSettings({
+      authentication: 'gw',
+      model: 'kimi-k3',
+      subagentModel: 'kimi-k3-mini',
+    })
 
-    expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw', model: 'kimi-k3' })
+    expect(await svc.readAgentSettings()).toEqual({
+      authentication: 'gw',
+      model: 'kimi-k3',
+      subagentModel: 'kimi-k3-mini',
+    })
     const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-    expect(stored.agentSettings.claude).toEqual({ authentication: 'gw', model: 'kimi-k3' })
+    expect(stored.agentSettings.claude).toEqual({
+      authentication: 'gw',
+      model: 'kimi-k3',
+      subagentModel: 'kimi-k3-mini',
+    })
   })
 
   describe('readAuthStatus', () => {
@@ -222,6 +234,58 @@ describe('ClaudeConfigMainService', () => {
       )
       svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
       expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
+    })
+
+    it('persists model1m: true but drops subagentModel1m: false', async () => {
+      const configDir = join(dir, 'editor-settings')
+      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+      await svc.writeAgentSettings({
+        authentication: 'gw',
+        model: 'kimi-k3',
+        model1m: true,
+        subagentModel: 'mini',
+        subagentModel1m: false,
+      })
+
+      expect(await svc.readAgentSettings()).toEqual({
+        authentication: 'gw',
+        model: 'kimi-k3',
+        model1m: true,
+        subagentModel: 'mini',
+      })
+      const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
+      expect(stored.agentSettings.claude).toEqual({
+        authentication: 'gw',
+        model: 'kimi-k3',
+        model1m: true,
+        subagentModel: 'mini',
+      })
+      expect('subagentModel1m' in stored.agentSettings.claude).toBe(false)
+    })
+
+    it('replaces the whole agent block while preserving other top-level keys and agents', async () => {
+      const configDir = join(dir, 'editor-settings')
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        join(configDir, 'aiSettings.json'),
+        JSON.stringify({
+          providers: [{ id: 'gw' }],
+          agentSettings: {
+            claude: { authentication: 'gw', model: 'opus' },
+            codex: { model: 'gpt-5' },
+          },
+        }),
+        'utf8',
+      )
+      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+
+      await svc.writeAgentSettings({ authentication: 'gw' })
+      expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
+
+      const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
+      expect(stored.providers).toEqual([{ id: 'gw' }])
+      expect(stored.agentSettings.codex).toEqual({ model: 'gpt-5' })
+      expect(stored.agentSettings.claude).toEqual({ authentication: 'gw' })
     })
   })
 })

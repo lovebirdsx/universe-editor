@@ -6,7 +6,9 @@
  *  (vendor index.ts), so these reach the SDK process.
  *
  *  Auth-related env keys (ANTHROPIC_API_KEY / AUTH_TOKEN / BASE_URL) are owned by
- *  the Authentication panel and hidden here to avoid two sources of truth.
+ *  the Authentication panel and hidden here to avoid two sources of truth;
+ *  `CLAUDE_CODE_SUBAGENT_MODEL` is likewise owned by that panel (the sub-agent
+ *  model pick) and hidden here.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -28,6 +30,7 @@ const CUSTOM_MODEL_ENV_KEYS = new Set([
 
 const AUTO_COMPACT_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 const PROMPT_CACHING_KEY = 'ENABLE_PROMPT_CACHING_1H'
+const SUBAGENT_MODEL_KEY = 'CLAUDE_CODE_SUBAGENT_MODEL'
 
 export function AdvancedEnvPanel({ config }: { config: UseClaudeConfig }) {
   const { settings, patch } = config
@@ -46,7 +49,8 @@ export function AdvancedEnvPanel({ config }: { config: UseClaudeConfig }) {
       !AUTH_ENV_KEYS.has(k) &&
       !CUSTOM_MODEL_ENV_KEYS.has(k) &&
       k !== AUTO_COMPACT_KEY &&
-      k !== PROMPT_CACHING_KEY,
+      k !== PROMPT_CACHING_KEY &&
+      k !== SUBAGENT_MODEL_KEY,
   )
 
   return (

@@ -39,20 +39,28 @@ const OPENAI_ENTRY: AiProviderEntry = {
   protocolMap: { 'openai-chat': [] },
 }
 
-function makeConfig(authentication: string | undefined): UseClaudeConfig {
+function makeConfig(
+  authentication: string | undefined,
+  agentSettings: Partial<UseClaudeConfig['agentSettings']> = {},
+): UseClaudeConfig {
   return {
     settings: { env: {} },
     loaded: true,
     configPath: '',
     authority: undefined,
     authStatus: { loggedIn: false, expired: false },
-    agentSettings: authentication === undefined ? {} : { authentication },
+    agentSettings: {
+      ...(authentication === undefined ? {} : { authentication }),
+      ...agentSettings,
+    },
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     reloadAuthStatus: vi.fn(async () => ({ loggedIn: false, expired: false })),
     applyAuthentication: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
-    setSmallFastModel: vi.fn(async () => {}),
+    setModelOneM: vi.fn(async () => {}),
+    setSubagentModel: vi.fn(async () => {}),
+    setSubagentModelOneM: vi.fn(async () => {}),
   }
 }
 
@@ -158,5 +166,27 @@ describe('AuthenticationPanel provider picker', () => {
     fireEvent.click(screen.getByRole('combobox'))
     expect(screen.getByRole('option', { name: /incompatible/ })).toBeTruthy()
     expect(screen.getByText(/does not declare the anthropic-messages protocol/)).toBeTruthy()
+  })
+
+  it('renders the 1m checkbox for a plain model and toggles it on', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    const config = makeConfig('gw', { model: 'deepseek-v4-pro' })
+    renderPanel(config, aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    const checkbox = screen.getByTestId('model-1m')
+    expect(checkbox).toBeTruthy()
+    fireEvent.click(checkbox)
+    expect(config.setModelOneM).toHaveBeenCalledWith(true)
+  })
+
+  it('hides the 1m checkbox when the model id already carries [1m]', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig('gw', { model: 'claude-opus-5[1m]' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(screen.queryByTestId('model-1m')).toBeNull()
   })
 })

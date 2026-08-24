@@ -41,17 +41,24 @@ export const AGENT_SUBSCRIPTION_AUTH = '@subscription'
 /**
  * Editor-local Claude agent state (`aiSettings.json` under `agentSettings.claude`).
  * `authentication` is a single provider id, the {@link AGENT_SUBSCRIPTION_AUTH}
- * sentinel, or absent. `model` / `smallFastModel` are the user's bare model picks,
- * applied to `settings.json` alongside the credential. The CLI/agent never read
- * this block — it is the editor's own menu.
+ * sentinel, or absent. `model` / `subagentModel` are the user's model picks,
+ * normally bare — an id whose own name carries `[1m]` is stored verbatim and
+ * hides the toggle. Each is paired with a `1m` toggle, and only the composed
+ * value (`settings.model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`) is written into
+ * `settings.json` on apply. The CLI/agent never read this block — it is the
+ * editor's own menu.
  */
 export interface ClaudeAgentSettings {
   /** Provider id serving `anthropic-messages`, `@subscription`, or absent. */
   authentication?: string
   /** Bare model requested from the provider (written to `settings.model` on apply). */
   model?: string
-  /** Bare fast/background model (`ANTHROPIC_SMALL_FAST_MODEL` on apply). */
-  smallFastModel?: string
+  /** Append `[1m]` to `model` when composing `settings.model`. */
+  model1m?: boolean
+  /** Bare sub-agent model (`env.CLAUDE_CODE_SUBAGENT_MODEL` on apply). */
+  subagentModel?: string
+  /** Append `[1m]` to `subagentModel` when composing the env value. */
+  subagentModel1m?: boolean
 }
 
 export interface IClaudeConfigService {

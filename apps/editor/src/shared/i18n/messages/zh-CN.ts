@@ -2018,12 +2018,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.form.label': '名称',
   'agentSettings.auth.form.label.ph': '例如 Personal、Work gateway',
   'agentSettings.auth.form.model': '模型',
-  'agentSettings.auth.form.model.desc':
-    '向该网关请求的模型（例如 kimi-k3）。使用此凭据时会一并写入 Settings.model。留空则保持当前模型。',
+  'agentSettings.auth.form.model.none': '使用默认',
+  'agentSettings.auth.form.oneM.tip':
+    '请求 100 万 token 上下文变体 —— 写入 settings.json 的模型 id 会追加 [1m]。',
   'agentSettings.auth.form.provider': 'Provider 实例',
   'agentSettings.auth.form.provider.none': '选择一个 provider…',
-  'agentSettings.auth.form.smallFastModel.desc':
-    '该网关提供的可选快速 / 后台模型。留空则清除该项。',
+  'agentSettings.auth.form.subagentModel.none': '未设置',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
   'agentSettings.auth.inUse': '使用中',
   'agentSettings.connectivity.checking': '正在检测连通性…',

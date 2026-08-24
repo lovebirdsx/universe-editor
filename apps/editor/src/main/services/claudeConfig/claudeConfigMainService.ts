@@ -3,7 +3,7 @@
  *  Main-side Claude config service. The file-store core (settings.json +
  *  .credentials.json) lives in node-services (ClaudeConfigStore); this class adds
  *  the local/remote split and the editor-local agent settings (authentication /
- *  model / smallFastModel stored in aiSettings.json).
+ *  model / subagentModel with their `[1m]` toggles, stored in aiSettings.json).
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local ClaudeConfigStore (zero behavior change). The
@@ -92,10 +92,8 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
 
   async writeAgentSettings(settings: ClaudeAgentSettings): Promise<void> {
     if (!this._configLocation) return
-    await updateAiSettingsAgentState<ClaudeAgentSettings>(
-      this._configLocation,
-      'claude',
-      (current) => mergeClaudeAgentSettings(current, settings),
+    await updateAiSettingsAgentState<ClaudeAgentSettings>(this._configLocation, 'claude', () =>
+      sanitizeClaudeAgentSettings(settings),
     )
     this._logger.info('wrote Claude agent settings to aiSettings.json')
   }
@@ -122,30 +120,21 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   }
 }
 
-/** Keep only string fields, dropping any legacy shape left in aiSettings.json. */
+/**
+ * Keep only known fields, dropping any legacy shape left in aiSettings.json.
+ * Writing is whole-block replace (the renderer always sends a full snapshot),
+ * so this doubles as the write-side narrowing.
+ */
 function sanitizeClaudeAgentSettings(state: ClaudeAgentSettings | undefined): ClaudeAgentSettings {
   const out: ClaudeAgentSettings = {}
   if (typeof state?.authentication === 'string' && state.authentication !== '') {
     out.authentication = state.authentication
   }
   if (typeof state?.model === 'string' && state.model !== '') out.model = state.model
-  if (typeof state?.smallFastModel === 'string' && state.smallFastModel !== '') {
-    out.smallFastModel = state.smallFastModel
+  if (typeof state?.subagentModel === 'string' && state.subagentModel !== '') {
+    out.subagentModel = state.subagentModel
   }
-  return out
-}
-
-function mergeClaudeAgentSettings(
-  current: ClaudeAgentSettings | undefined,
-  next: ClaudeAgentSettings,
-): ClaudeAgentSettings {
-  const out = sanitizeClaudeAgentSettings(current)
-  const nextClean = sanitizeClaudeAgentSettings(next)
-  delete out.authentication
-  delete out.model
-  delete out.smallFastModel
-  if (nextClean.authentication !== undefined) out.authentication = nextClean.authentication
-  if (nextClean.model !== undefined) out.model = nextClean.model
-  if (nextClean.smallFastModel !== undefined) out.smallFastModel = nextClean.smallFastModel
+  if (state?.model1m === true) out.model1m = true
+  if (state?.subagentModel1m === true) out.subagentModel1m = true
   return out
 }

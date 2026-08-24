@@ -153,6 +153,23 @@
   width: 200px;
 }
 
+.modelRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modelControl {
+  flex: 1;
+  min-width: 0;
+}
+
+.oneMHint {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 .radioGroup {
   display: flex;
   flex-direction: column;

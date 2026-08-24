@@ -6,7 +6,8 @@
  *      agent uses: a provider entry (injected as `ANTHROPIC_API_KEY` for the
  *      official endpoint, or `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` for a
  *      gateway), or `@subscription` (the shared Claude OAuth login). The model /
- *      fast-model picks are structured from the selected provider's candidates.
+ *      sub-agent model picks (each with an optional `[1m]` lane) are structured
+ *      from the selected provider's candidates.
  *
  *   2. Log in with Claude — the single shared OAuth login (`claude auth login`),
  *      stored in `~/.claude/.credentials.json`. Shows live status; "Use this
@@ -21,7 +22,7 @@ import {
   localize,
   type AiResolvedProvider,
 } from '@universe-editor/platform'
-import { Button, Input, Select } from '@universe-editor/workbench-ui'
+import { Button, Checkbox, Input, Select } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import type { ClaudeAuthStatus } from '../../../../shared/ipc/claudeConfigService.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
@@ -29,6 +30,7 @@ import { deriveClaudeAuth } from '../../../../shared/ai/providerDerivation.js'
 import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import { isClaudeAuthActive } from './credentialMatch.js'
+import { hasOneM } from './modelOneM.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
 import { useProviderRegistry } from '../useProviderRegistry.js'
@@ -102,7 +104,14 @@ function AuthenticationSection({
   env: Record<string, string>
   providers: readonly AiResolvedProvider[]
 }) {
-  const { agentSettings, applyAuthentication, setModel, setSmallFastModel } = config
+  const {
+    agentSettings,
+    applyAuthentication,
+    setModel,
+    setModelOneM,
+    setSubagentModel,
+    setSubagentModelOneM,
+  } = config
   const authentication = agentSettings.authentication
 
   const resolved = useMemo(
@@ -114,7 +123,9 @@ function AuthenticationSection({
   )
   const candidates = useMemo(() => candidateModels(resolved), [resolved])
   const currentModel = agentSettings.model
-  const currentFast = agentSettings.smallFastModel
+  const currentSubagent = agentSettings.subagentModel
+  const modelOneM = agentSettings.model1m === true
+  const subagentOneM = agentSettings.subagentModel1m === true
   // A structured pick whose current value is not offered by the new provider
   // must still be visible as an option, not vanish while a stale value persists.
   const modelOptions = useMemo(
@@ -124,26 +135,19 @@ function AuthenticationSection({
         : candidates,
     [candidates, currentModel],
   )
-  const fastOptions = useMemo(
+  const subagentOptions = useMemo(
     () =>
-      currentFast && !candidates.includes(currentFast) ? [currentFast, ...candidates] : candidates,
-    [candidates, currentFast],
+      currentSubagent && !candidates.includes(currentSubagent)
+        ? [currentSubagent, ...candidates]
+        : candidates,
+    [candidates, currentSubagent],
   )
 
   const onAuthChange = useCallback(
-    async (value: string) => {
-      const next = value === '' ? undefined : value
-      await applyAuthentication(next)
-      // Validate-and-clear: a provider switch invalidates model picks the new
-      // provider does not serve.
-      if (next && next !== AGENT_SUBSCRIPTION_AUTH) {
-        const nextProvider = providers.find((p) => p.id === next)
-        const nextCandidates = candidateModels(nextProvider)
-        if (currentModel && !nextCandidates.includes(currentModel)) await setModel(undefined)
-        if (currentFast && !nextCandidates.includes(currentFast)) await setSmallFastModel(undefined)
-      }
+    (value: string) => {
+      void applyAuthentication(value === '' ? undefined : value)
     },
-    [applyAuthentication, setModel, setSmallFastModel, providers, currentModel, currentFast],
+    [applyAuthentication],
   )
 
   const inUse = useMemo(
@@ -193,11 +197,15 @@ function AuthenticationSection({
                 <ClaudeDerivationPreview resolved={selected} />
                 <ModelPicks
                   model={currentModel}
-                  fast={currentFast}
+                  modelOneM={modelOneM}
+                  subagent={currentSubagent}
+                  subagentOneM={subagentOneM}
                   modelOptions={modelOptions}
-                  fastOptions={fastOptions}
+                  subagentOptions={subagentOptions}
                   onModel={(m) => void setModel(m || undefined)}
-                  onFast={(m) => void setSmallFastModel(m || undefined)}
+                  onModelOneM={(v) => void setModelOneM(v)}
+                  onSubagent={(m) => void setSubagentModel(m || undefined)}
+                  onSubagentOneM={(v) => void setSubagentModelOneM(v)}
                 />
               </>
             )
@@ -218,68 +226,123 @@ function AuthenticationSection({
 
 function ModelPicks({
   model,
-  fast,
+  modelOneM,
+  subagent,
+  subagentOneM,
   modelOptions,
-  fastOptions,
+  subagentOptions,
   onModel,
-  onFast,
+  onModelOneM,
+  onSubagent,
+  onSubagentOneM,
 }: {
   model: string | undefined
-  fast: string | undefined
+  modelOneM: boolean
+  subagent: string | undefined
+  subagentOneM: boolean
   modelOptions: readonly string[]
-  fastOptions: readonly string[]
+  subagentOptions: readonly string[]
   onModel: (value: string) => void
-  onFast: (value: string) => void
+  onModelOneM: (enabled: boolean) => void
+  onSubagent: (value: string) => void
+  onSubagentOneM: (enabled: boolean) => void
 }) {
   return (
     <>
-      <div className={styles['field']}>
-        <label className={styles['label']}>
-          {localize('agentSettings.auth.form.model', 'Model')}
-        </label>
-        {modelOptions.length > 0 ? (
-          <Select
-            value={model ?? ''}
-            options={[
-              {
-                value: '',
-                label: localize('agentSettings.auth.form.model.none', 'Use default'),
-              },
-              ...modelOptions.map((m) => ({ value: m, label: m })),
-            ]}
-            onChange={onModel}
-          />
-        ) : (
-          <Input
-            value={model ?? ''}
-            placeholder="claude-opus-4-8"
-            onChange={(e) => onModel(e.target.value)}
-          />
-        )}
-      </div>
-      <div className={styles['field']}>
-        <label className={styles['label']}>{`env.ANTHROPIC_SMALL_FAST_MODEL`}</label>
-        {fastOptions.length > 0 ? (
-          <Select
-            value={fast ?? ''}
-            options={[
-              {
-                value: '',
-                label: localize('agentSettings.auth.form.smallFastModel.none', 'Unset'),
-              },
-              ...fastOptions.map((m) => ({ value: m, label: m })),
-            ]}
-            onChange={onFast}
-          />
-        ) : (
-          <Input
-            value={fast ?? ''}
-            placeholder="claude-haiku-4-5"
-            onChange={(e) => onFast(e.target.value)}
-          />
-        )}
-      </div>
+      <ModelPickRow
+        label={localize('agentSettings.auth.form.model', 'Model')}
+        value={model ?? ''}
+        options={modelOptions}
+        emptyLabel={localize('agentSettings.auth.form.model.none', 'Use default')}
+        placeholder="claude-opus-4-8"
+        oneM={modelOneM}
+        testIdPrefix="model"
+        onValue={onModel}
+        onOneM={onModelOneM}
+      />
+      <ModelPickRow
+        label={localize('agentSettings.auth.form.subagentModel', 'Sub Agent Model')}
+        hint="env.CLAUDE_CODE_SUBAGENT_MODEL"
+        value={subagent ?? ''}
+        options={subagentOptions}
+        emptyLabel={localize('agentSettings.auth.form.subagentModel.none', 'Unset')}
+        placeholder="claude-sonnet-4-6"
+        oneM={subagentOneM}
+        testIdPrefix="subagentModel"
+        onValue={onSubagent}
+        onOneM={onSubagentOneM}
+      />
     </>
+  )
+}
+
+function ModelPickRow({
+  label,
+  hint,
+  value,
+  options,
+  emptyLabel,
+  placeholder,
+  oneM,
+  testIdPrefix,
+  onValue,
+  onOneM,
+}: {
+  label: string
+  hint?: string
+  value: string
+  options: readonly string[]
+  emptyLabel: string
+  placeholder: string
+  oneM: boolean
+  testIdPrefix: string
+  onValue: (value: string) => void
+  onOneM: (enabled: boolean) => void
+}) {
+  // A bare, empty, or already-suffixed id has no `[1m]` lane to toggle.
+  const showOneM = value.trim() !== '' && !hasOneM(value)
+  return (
+    <div className={styles['field']}>
+      <label className={styles['label']}>{label}</label>
+      {hint !== undefined && <span className={styles['desc']}>{hint}</span>}
+      <div className={styles['modelRow']}>
+        {options.length > 0 ? (
+          <Select
+            className={styles['modelControl']}
+            value={value}
+            options={[
+              { value: '', label: emptyLabel },
+              ...options.map((m) => ({ value: m, label: m })),
+            ]}
+            onChange={onValue}
+          />
+        ) : (
+          <Input
+            className={styles['modelControl']}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => onValue(e.target.value)}
+          />
+        )}
+        {showOneM && (
+          <span
+            className={styles['oneMHint']}
+            data-tooltip={localize(
+              'agentSettings.auth.form.oneM.tip',
+              'Request the 1M-token context variant — appends [1m] to the model id written to settings.json.',
+            )}
+          >
+            <Checkbox
+              checked={oneM}
+              onChange={onOneM}
+              label="1m"
+              aria-label="1m"
+              data-testid={`${testIdPrefix}-1m`}
+            />
+          </span>
+        )}
+      </div>
+    </div>
   )
 }
 
