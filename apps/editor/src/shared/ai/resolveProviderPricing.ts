@@ -15,6 +15,14 @@
  *  therefore resolves nothing — that is the honest answer here, because the
  *  session-cost path never sees a `ref` and would otherwise show "—" while the
  *  picker showed a rate. Such a channel should declare its own rate source.
+ *
+ *  The wire name may carry a trailing context/effort hint (`deepseek-v4-pro[1m]`,
+ *  the spelling the agent reports usage under). Lookup tries the exact name first
+ *  and only then the name with that hint stripped: a table pricing the 1M lane
+ *  separately keeps winning on its own key, and one keyed by the bare name still
+ *  applies. Nothing else is normalized — gateway keys are copied verbatim from
+ *  remote JSON (lower-casing would miss a capitalized key) and catalog tables key
+ *  off date snapshots, which are part of the id there.
  *--------------------------------------------------------------------------------------------*/
 
 import type {
@@ -23,7 +31,13 @@ import type {
   AiRateTable,
   AiRemoteSourceSpec,
 } from '@universe-editor/platform'
+import { stripTrailingBracketSuffix } from './catalog/index.js'
 import { OFFICIAL_CATALOGS, readCatalogVendor } from './catalog/modelKnowledge.js'
+
+function lookupRate(table: AiRateTable | undefined, wireName: string): AiModelPricing | undefined {
+  if (table === undefined) return undefined
+  return table[wireName] ?? table[stripTrailingBracketSuffix(wireName)]
+}
 
 export function resolveModelPricing(input: {
   readonly bareModel: string
@@ -36,10 +50,10 @@ export function resolveModelPricing(input: {
   if (source.id === 'catalog') {
     const vendor = readCatalogVendor(source.options)
     const table = vendor === undefined ? undefined : OFFICIAL_CATALOGS[vendor]
-    const pricing = table?.[input.bareModel]
+    const pricing = lookupRate(table, input.bareModel)
     return pricing === undefined ? {} : { pricing, origin: 'catalog' }
   }
 
-  const pricing = input.gatewayRates?.[input.bareModel]
+  const pricing = lookupRate(input.gatewayRates, input.bareModel)
   return pricing === undefined ? {} : { pricing, origin: 'gateway' }
 }

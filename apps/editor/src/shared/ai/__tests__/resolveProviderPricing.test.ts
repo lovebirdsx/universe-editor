@@ -81,6 +81,15 @@ describe('resolveModelPricing — catalog source', () => {
       }),
     ).toEqual({})
   })
+
+  it('strips a trailing context hint to reach the bare catalog entry', () => {
+    const result = resolveModelPricing({
+      bareModel: 'deepseek-v4-flash[1m]',
+      pricingSource: { id: 'catalog', options: { vendor: 'deepseek' } },
+    })
+    expect(result.origin).toBe('catalog')
+    expect(result.pricing?.input).toBe(1)
+  })
 })
 
 describe('resolveModelPricing — gateway source', () => {
@@ -110,5 +119,57 @@ describe('resolveModelPricing — gateway source', () => {
         pricingSource: { id: 'http-json' },
       }),
     ).toEqual({})
+  })
+})
+
+// The agent reports usage under the model id it ran with, context hint and all
+// (`deepseek-v4-pro[1m]`), while a gateway table is normally keyed by the bare
+// name. An exact-only lookup missed, and the session fell back to the CLI's
+// Anthropic-tier guess — off by more than 4x against the gateway's own rate.
+describe('resolveModelPricing — trailing context hints', () => {
+  const LANE: AiRateTable = {
+    'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+    'deepseek-v4-pro[1m]': { currency: 'CNY', input: 18, output: 54, cacheRead: 0.6 },
+  }
+
+  it('prefers an exact lane entry over the bare name', () => {
+    const result = resolveModelPricing({
+      bareModel: 'deepseek-v4-pro[1m]',
+      pricingSource: { id: 'http-json' },
+      gatewayRates: LANE,
+    })
+    expect(result).toEqual({ pricing: LANE['deepseek-v4-pro[1m]'], origin: 'gateway' })
+  })
+
+  it('falls back to the bare name when the table prices no separate lane', () => {
+    const bareOnly: AiRateTable = { 'deepseek-v4-pro': LANE['deepseek-v4-pro']! }
+    const result = resolveModelPricing({
+      bareModel: 'deepseek-v4-pro[1m]',
+      pricingSource: { id: 'http-json' },
+      gatewayRates: bareOnly,
+    })
+    expect(result).toEqual({ pricing: bareOnly['deepseek-v4-pro'], origin: 'gateway' })
+  })
+
+  // Gateway keys are copied verbatim out of remote JSON, so lower-casing the
+  // lookup would newly miss a capitalized key. The fallback strips the hint only.
+  it('does not lower-case the key while stripping the hint', () => {
+    expect(
+      resolveModelPricing({
+        bareModel: 'deepseek-v4-pro[1m]',
+        pricingSource: { id: 'http-json' },
+        gatewayRates: { 'DeepSeek-V4-Pro': { input: 9, output: 27 } },
+      }),
+    ).toEqual({})
+  })
+
+  // Date snapshots are part of the id in the catalog tables, so they survive.
+  it('keeps a trailing date snapshot when stripping the hint', () => {
+    const result = resolveModelPricing({
+      bareModel: 'claude-opus-4-20250514[1m]',
+      pricingSource: { id: 'http-json' },
+      gatewayRates: { 'claude-opus-4-20250514': { input: 7, output: 8 } },
+    })
+    expect(result).toEqual({ pricing: { input: 7, output: 8 }, origin: 'gateway' })
   })
 })

@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Wallet } from 'lucide-react'
-import { localize } from '@universe-editor/platform'
+import { CNY_PER_USD, localize } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import type { AcpModelCost, AcpUsage } from '../../services/acp/session/acpSession.js'
@@ -189,8 +189,8 @@ function ModelRow({ model, rate }: { model: AcpModelCost; rate: number }) {
   )
 }
 
-/** Default rate used only before the async rate arrives; main owns the real fallback. */
-const FALLBACK_RATE = 7.2
+/** Used only before the async rate arrives; the same constant pricing divides by. */
+const FALLBACK_RATE = CNY_PER_USD
 
 export function formatCny(value: number): string {
   // Codex estimates for cheap models (e.g. mini, cache-heavy turns) land in the

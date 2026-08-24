@@ -2788,20 +2788,22 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _priceSubagentStats(stats: AcpSubagentStats): AcpSubagentStats {
     if (stats.model === undefined) return stats
-    const pricing = priceSessionModel(
-      stats.model,
-      this._providerContext?.getProviderContext(this.agentId),
-    ).pricing
+    const ctx = this._providerContext?.getProviderContext(this.agentId)
+    const pricing = priceSessionModel(stats.model, ctx).pricing
     if (pricing === undefined) {
       console.debug(`[acp-cost] subagent model rate unknown: ${stats.model}`)
       return stats
     }
-    const costUSD = estimateCostUSD(pricing, {
-      input: stats.inputTokens,
-      output: stats.outputTokens,
-      cacheRead: stats.cacheReadTokens,
-      cacheWrite: stats.cacheCreateTokens,
-    })
+    const costUSD = estimateCostUSD(
+      pricing,
+      {
+        input: stats.inputTokens,
+        output: stats.outputTokens,
+        cacheRead: stats.cacheReadTokens,
+        cacheWrite: stats.cacheCreateTokens,
+      },
+      ctx?.cnyPerUsd,
+    )
     return { ...stats, costUSD }
   }
 

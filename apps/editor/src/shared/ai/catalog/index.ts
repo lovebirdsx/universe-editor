@@ -9,15 +9,22 @@
 import { ANTHROPIC_CATALOG } from './anthropic.js'
 
 /**
+ * Drop a trailing context/effort hint (`[1m]` / `[high]`) and nothing else — no
+ * casing, no date snapshots. Rate lookups need exactly this much: the hint marks
+ * a lane of the same model, so a table keyed by the bare name still applies, while
+ * a table that prices the lane separately must keep winning on the exact key.
+ */
+export function stripTrailingBracketSuffix(id: string): string {
+  return id.replace(/\[[^\]]*\]$/, '')
+}
+
+/**
  * Strip lossless, non-identity suffixes from a model id: casing, whitespace,
  * context/effort hints (`[1m]` / `[high]`) and trailing date snapshots. The
  * remaining id is still the same model — this is not family guessing.
  */
 export function normalizeCatalogModelId(id: string): string {
-  return id
-    .trim()
-    .toLowerCase()
-    .replace(/\[[^\]]*\]$/, '')
+  return stripTrailingBracketSuffix(id.trim().toLowerCase())
     .replace(/-\d{4}-\d{2}-\d{2}$/, '')
     .replace(/-\d{8}$/, '')
 }

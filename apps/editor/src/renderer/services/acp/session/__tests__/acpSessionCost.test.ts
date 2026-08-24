@@ -115,6 +115,82 @@ describe('repriceForeignModelBreakdown', () => {
     )
     expect(result).toBeUndefined()
   })
+
+  // The agent reports usage under `deepseek-v4-pro[1m]` while the gateway prices
+  // the bare name. An exact-only lookup missed and the CLI's Anthropic-tier guess
+  // survived — the figure users saw was over 4x the gateway's own charge.
+  it('re-prices a lane-suffixed model against the bare gateway entry', () => {
+    const result = repriceForeignModelBreakdown(
+      [
+        row({
+          model: 'deepseek-v4-pro[1m]',
+          inputTokens: 1_000_000,
+          cacheReadTokens: 500_000,
+          outputTokens: 100_000,
+          costUSD: 9.99, // the CLI's inflated flagship-tier figure
+        }),
+      ],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: {
+          'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+        },
+      },
+    )
+    const expected = (1_000_000 * 9 + 500_000 * 0.2997 + 100_000 * 27) / 7.2 / 1e6
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
+    expect(result!.cost!.amount).toBeCloseTo(expected, 10)
+  })
+
+  // A CNY-priced gateway is normalized to USD here and converted back to CNY by
+  // the UI. Both directions have to use the same rate or the figure skews.
+  it('normalizes a CNY gateway rate with the live rate from the context', () => {
+    const result = repriceForeignModelBreakdown(
+      [row({ model: 'deepseek-v4-pro', inputTokens: 1_000_000, costUSD: 9.99 })],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+        cnyPerUsd: 6.74,
+      },
+    )
+    expect(result!.models[0]!.costUSD).toBeCloseTo(9 / 6.74, 10)
+  })
+
+  // A lane-suffixed Anthropic model on a `catalog` provider keeps the CLI figure:
+  // stripping the hint resolves the standard tier, but `origin === 'catalog'` means
+  // trustCli still holds, so the CLI's own lane pricing (1M is 2x) is not clobbered.
+  it('keeps the CLI figure for a lane-suffixed Anthropic model on a catalog source', () => {
+    expect(
+      repriceForeignModelBreakdown(
+        [row({ model: 'claude-sonnet-5[1m]', inputTokens: 1_000_000, costUSD: 6 })],
+        {
+          providerId: 'official',
+          protocol: 'anthropic-messages',
+          pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
+        },
+      ),
+    ).toBeUndefined()
+  })
+
+  // On a reselling gateway the published rate wins even via the stripped-hint
+  // fallback: the gateway is what actually bills, and its table describes this
+  // deployment better than the CLI's Anthropic-tier arithmetic.
+  it('lets a reselling gateway rate win for a lane-suffixed Anthropic model', () => {
+    const result = repriceForeignModelBreakdown(
+      [row({ model: 'claude-sonnet-5[1m]', inputTokens: 1_000_000, costUSD: 6 })],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: { 'claude-sonnet-5': { input: 2, output: 10 } },
+      },
+    )
+    expect(result!.models[0]!.costUSD).toBeCloseTo(2, 10)
+  })
 })
 
 describe('estimateCodexCost', () => {
@@ -173,5 +249,16 @@ describe('estimateCodexCost', () => {
     expect(result!.cost).toBeUndefined()
     expect(result!.models).toHaveLength(1)
     expect(result!.models[0]!.costUSD).toBeUndefined()
+  })
+
+  it('normalizes a CNY rate with the live rate from the context', () => {
+    const result = estimateCodexCost([codexUsage('deepseek-v4-pro', { inputTokens: 1_000_000 })], {
+      providerId: 'gw',
+      protocol: 'openai-responses',
+      pricingSource: { id: 'http-json', options: {} },
+      gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+      cnyPerUsd: 6.74,
+    })
+    expect(result!.models[0]!.costUSD).toBeCloseTo(9 / 6.74, 10)
   })
 })

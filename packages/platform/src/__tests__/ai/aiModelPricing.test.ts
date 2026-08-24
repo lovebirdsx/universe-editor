@@ -30,6 +30,19 @@ describe('estimateCostUSD', () => {
       estimateCostUSD({ currency: 'CNY', input: CNY_PER_USD, output: CNY_PER_USD }, tally),
     ).toBe(2)
   })
+
+  it('normalizes CNY with a caller-supplied live rate', () => {
+    const tally = { input: 1e6, output: 0 }
+    expect(estimateCostUSD({ currency: 'CNY', input: 9, output: 27 }, tally, 6.74)).toBeCloseTo(
+      9 / 6.74,
+      10,
+    )
+  })
+
+  it('ignores the rate for USD pricing', () => {
+    const tally = { input: 1e6, output: 0 }
+    expect(estimateCostUSD({ input: 9, output: 27 }, tally, 6.74)).toBe(9)
+  })
 })
 
 describe('isSamePricing', () => {

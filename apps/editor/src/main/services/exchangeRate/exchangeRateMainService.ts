@@ -10,6 +10,7 @@ import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
+  CNY_PER_USD,
   Disposable,
   type ILogger,
   ILoggerService,
@@ -30,7 +31,8 @@ interface ErApiResponse {
 /** Skip the network when the cached rate is younger than this. */
 const TTL_MS = 24 * 60 * 60 * 1000
 const RATE_URL = 'https://open.er-api.com/v6/latest/USD'
-const FALLBACK_RATE = 7.2
+/** Same constant the pricing layer divides CNY rates by, so both ends agree offline. */
+const FALLBACK_RATE = CNY_PER_USD
 
 export class ExchangeRateMainService extends Disposable implements IExchangeRateService {
   declare readonly _serviceBrand: undefined

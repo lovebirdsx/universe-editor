@@ -7,7 +7,10 @@
 
 export type AiCurrency = 'USD' | 'CNY'
 
-/** Per-1M-token rates. Missing cacheWrite is billed at the input rate. */
+/**
+ * Per-1M-token rates. Missing cacheWrite is billed at the input rate — a gateway
+ * that discounts cache writes has to publish the field to get credit for it.
+ */
 export interface AiModelPricing {
   /** Defaults to USD when absent. */
   readonly currency?: AiCurrency
@@ -32,10 +35,21 @@ export interface AiTokenTally {
  */
 export type AiPricingOrigin = 'catalog' | 'gateway'
 
+/** Offline fallback, shared with the exchange-rate service so both ends agree. */
 export const CNY_PER_USD = 7.2
 
-/** Cost in USD across the four buckets. CNY rates are normalized to USD. */
-export function estimateCostUSD(pricing: AiModelPricing, tally: AiTokenTally): number {
+/**
+ * Cost in USD across the four buckets. CNY rates are normalized to USD.
+ *
+ * Pass the live rate as `cnyPerUsd` whenever one is at hand: the UI converts the
+ * returned USD back to CNY with the live rate, so a CNY-priced gateway billed at
+ * the constant here would come out skewed by the ratio between the two.
+ */
+export function estimateCostUSD(
+  pricing: AiModelPricing,
+  tally: AiTokenTally,
+  cnyPerUsd = CNY_PER_USD,
+): number {
   const input = pricing.input
   const cacheRead = pricing.cacheRead ?? input
   const cacheWrite = pricing.cacheWrite ?? input
@@ -45,7 +59,7 @@ export function estimateCostUSD(pricing: AiModelPricing, tally: AiTokenTally): n
       (tally.cacheRead ?? 0) * cacheRead +
       (tally.cacheWrite ?? 0) * cacheWrite) /
     1e6
-  return pricing.currency === 'CNY' ? usd / CNY_PER_USD : usd
+  return pricing.currency === 'CNY' ? usd / cnyPerUsd : usd
 }
 
 /** Field-by-field equality, used to detect whether the user overrode a default rate. */

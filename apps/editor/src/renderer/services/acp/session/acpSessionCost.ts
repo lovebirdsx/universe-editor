@@ -47,11 +47,15 @@ export function estimateCodexCost(
     const pricing = priceSessionModel(u.model, ctx).pricing
     const costUSD =
       pricing !== undefined
-        ? estimateCostUSD(pricing, {
-            input: u.inputTokens,
-            output: u.outputTokens,
-            cacheRead: u.cachedReadTokens,
-          })
+        ? estimateCostUSD(
+            pricing,
+            {
+              input: u.inputTokens,
+              output: u.outputTokens,
+              cacheRead: u.cachedReadTokens,
+            },
+            ctx?.cnyPerUsd,
+          )
         : undefined
     if (costUSD !== undefined) {
       totalUsd += costUSD
@@ -104,12 +108,16 @@ export function repriceForeignModelBreakdown(
     const { pricing, origin } = priceSessionModel(m.model, ctx)
     const trustCli = origin !== 'gateway' && isAnthropicCatalogModel(m.model)
     if (pricing !== undefined && !trustCli) {
-      const costUSD = estimateCostUSD(pricing, {
-        input: m.inputTokens,
-        output: m.outputTokens,
-        cacheRead: m.cacheReadTokens,
-        cacheWrite: m.cacheCreateTokens,
-      })
+      const costUSD = estimateCostUSD(
+        pricing,
+        {
+          input: m.inputTokens,
+          output: m.outputTokens,
+          cacheRead: m.cacheReadTokens,
+          cacheWrite: m.cacheCreateTokens,
+        },
+        ctx?.cnyPerUsd,
+      )
       totalUsd += costUSD
       repriced = true
       out.push({ ...m, costUSD })

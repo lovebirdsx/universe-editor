@@ -418,6 +418,24 @@ function deepseekProviderContext(): IAcpSessionProviderContext {
   }
 }
 
+/** A CNY-priced gateway table keyed by the bare name, plus a live exchange rate. */
+function gatewayProviderContext(): IAcpSessionProviderContext {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeContext: Event.None,
+    getProviderContext: () => ({
+      providerId: 'kuro',
+      protocol: 'anthropic-messages',
+      pricingSource: { id: 'http-json', options: {} },
+      gatewayRates: {
+        'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+      },
+      cnyPerUsd: 6.74,
+    }),
+    refresh: async () => {},
+  }
+}
+
 function buildService(
   opts: FakeAcpClientOptions = {},
   providerContext: IAcpSessionProviderContext = nullProviderContext(),
@@ -843,6 +861,48 @@ describe('AcpSessionService — session/update fan-out', () => {
     expect(u?.costEstimated).toBeUndefined()
     expect(u?.cost).toEqual({ amount: 0.45, currency: 'USD' })
     expect(u?.models?.[0]?.costUSD).toBe(0.42)
+  })
+
+  // End-to-end guard for the real-world miss: the agent reports usage under
+  // `deepseek-v4-pro[1m]` (the `[1m]` comes from the model1m setting) while the
+  // gateway prices the bare name. The exact-only lookup used to miss, leaving the
+  // CLI's Anthropic-tier guess in place — over 4x the gateway's actual charge.
+  it('re-prices a lane-suffixed gateway model against the bare rate table', async () => {
+    const built = buildService({}, gatewayProviderContext())
+    const gwSvc = built.svc
+    try {
+      const s = await gwSvc.createSession()
+      await s.whenConnected()
+      built.client.connected[0]!.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'usage_update',
+          used: 1800,
+          size: 1_000_000,
+          cost: { amount: 9.99, currency: 'USD' },
+          _meta: {
+            '_universe/modelBreakdown': [
+              {
+                model: 'deepseek-v4-pro[1m]',
+                inputTokens: 1_000_000,
+                outputTokens: 100_000,
+                cacheReadTokens: 500_000,
+                cacheCreateTokens: 0,
+                costUSD: 9.99,
+              },
+            ],
+          },
+        },
+      } as never)
+      // Priced in CNY, normalized with the live 6.74 rate the context carries.
+      const expected = (1_000_000 * 9 + 500_000 * 0.2997 + 100_000 * 27) / 6.74 / 1e6
+      const u = s.usage.get()
+      expect(u?.costEstimated).toBe(true)
+      expect(u?.cost?.amount).toBeCloseTo(expected, 10)
+      expect(u?.models?.[0]?.costUSD).toBeCloseTo(expected, 10)
+    } finally {
+      gwSvc.dispose()
+    }
   })
 
   it('applies config_option_update verbatim and replaces prior values', async () => {

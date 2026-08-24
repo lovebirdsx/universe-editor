@@ -37,6 +37,8 @@ import {
   AGENT_SUBSCRIPTION_AUTH,
   ICodexConfigService,
 } from '../../../../shared/ipc/codexConfigService.js'
+import { IExchangeRateService } from '../../../../shared/ipc/services.js'
+import { usdToCnyRate } from '../../usage/usdToCnyRate.js'
 import { IAiRateMirror } from '../../ai/aiRateMirror.js'
 
 const CLAUDE_AGENT_ID = 'claude-code'
@@ -55,6 +57,12 @@ export interface SessionProviderContext {
   readonly pricingSource?: AiRemoteSourceSpec
   readonly gatewayRates?: AiRateTable
   readonly usageSource?: AiRemoteSourceSpec
+  /**
+   * Live USD→CNY rate used to normalize CNY-priced gateway rates. Absent → the
+   * `CNY_PER_USD` constant. The UI converts the resulting USD back to CNY with
+   * the same live rate, so both directions have to agree or the figure skews.
+   */
+  readonly cnyPerUsd?: number
 }
 
 type ResolvedModelPricing = ReturnType<typeof resolveModelPricing>
@@ -104,6 +112,7 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
     @IAiRateMirror private readonly _rateMirror: IAiRateMirror,
     @IClaudeConfigService private readonly _claudeConfig: IClaudeConfigService,
     @ICodexConfigService private readonly _codexConfig: ICodexConfigService,
+    @IExchangeRateService private readonly _exchangeRate: IExchangeRateService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -148,8 +157,9 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
       return
     }
     const next = new Map<string, SessionProviderContext | undefined>()
+    const cnyPerUsd = await this._resolveCnyPerUsd()
     for (const agentId of [CLAUDE_AGENT_ID, CODEX_AGENT_ID]) {
-      next.set(agentId, await this._resolveAgent(agentId, providers))
+      next.set(agentId, await this._resolveAgent(agentId, providers, cnyPerUsd))
     }
     this._cache.clear()
     for (const [key, value] of next) this._cache.set(key, value)
@@ -157,9 +167,25 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
     this._onDidChangeContext.fire()
   }
 
+  /**
+   * Live USD→CNY rate, or undefined to let the pricing default apply. Shares the
+   * memoized promise with the cost indicators (`usage/usdToCnyRate.ts`) so the
+   * normalize-into-USD and display-back-to-CNY directions cannot drift apart.
+   */
+  private async _resolveCnyPerUsd(): Promise<number | undefined> {
+    try {
+      const { rate } = await usdToCnyRate(this._exchangeRate)
+      return Number.isFinite(rate) && rate > 0 ? rate : undefined
+    } catch (err) {
+      this._logger.warn(`exchange rate unavailable, pricing falls back: ${(err as Error).message}`)
+      return undefined
+    }
+  }
+
   private async _resolveAgent(
     agentId: string,
     providers: readonly AiResolvedProvider[],
+    cnyPerUsd: number | undefined,
   ): Promise<SessionProviderContext | undefined> {
     const providerId =
       agentId === CLAUDE_AGENT_ID
@@ -180,6 +206,7 @@ export class AcpSessionProviderContext extends Disposable implements IAcpSession
       ...(provider.pricingSource !== undefined ? { pricingSource: provider.pricingSource } : {}),
       ...(provider.usageSource !== undefined ? { usageSource: provider.usageSource } : {}),
       ...(gatewayRates !== undefined ? { gatewayRates } : {}),
+      ...(cnyPerUsd !== undefined ? { cnyPerUsd } : {}),
     }
   }
 

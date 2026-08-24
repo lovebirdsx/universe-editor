@@ -64,4 +64,12 @@ describe('priceSessionModel', () => {
       priceSessionModel('kimi-k3', ctx({ gatewayRates: { 'kimi-k3': GATEWAY_PRICING } })),
     ).toEqual({})
   })
+
+  it('passes a lane-suffixed wire name through to the bare gateway entry', () => {
+    const result = priceSessionModel(
+      'kimi-k3[1m]',
+      ctx({ pricingSource: GATEWAY_SOURCE, gatewayRates: { 'kimi-k3': GATEWAY_PRICING } }),
+    )
+    expect(result).toEqual({ pricing: GATEWAY_PRICING, origin: 'gateway' })
+  })
 })
