@@ -43,7 +43,7 @@
 }
 
 .popover {
-  z-index: var(--z-popover);
+  z-index: var(--z-dropdown);
   overflow-y: auto;
   padding: var(--spacing-1);
   background: var(--vscode-dropdown-background, #2f2f35);

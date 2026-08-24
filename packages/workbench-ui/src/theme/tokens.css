@@ -47,6 +47,9 @@
   /* Overlay z-index */
   --z-popover: 1000;
   --z-dialog: 1100;
+  /* Select popover renders to document.body, so it must outrank the modal
+     dialog whose trigger it anchors to — otherwise it gets painted underneath. */
+  --z-dropdown: 1150;
   --z-toast: 1200;
   /* Tooltips sit above every anchored surface (AnchoredSurface uses 9999). */
   --z-tooltip: 10000;
