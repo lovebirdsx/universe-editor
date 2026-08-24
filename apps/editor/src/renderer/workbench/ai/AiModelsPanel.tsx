@@ -22,6 +22,7 @@ import {
   StorageScope,
   UserDataFile,
   localize,
+  type AiAccountUsage,
   type AiModelKnowledge,
   type AiModelMetadata,
   type AiProviderEntry,
@@ -33,8 +34,10 @@ import { useEventSubscription, useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
 import { IAiRateMirror } from '../../services/ai/aiRateMirror.js'
+import { effectiveUsageSource } from '../../../shared/ai/providerInheritance.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
-import { ProviderEntryCard, issueReasonLabel } from './ProviderEntryCard.js'
+import { ProviderEntryCard, issueReasonLabel, type CardSectionId } from './ProviderEntryCard.js'
+import type { UsageState } from './providerCard/usageState.js'
 import type { ProviderPatch } from './providerCard/useProviderField.js'
 import styles from './AiSettingsEditor.module.css'
 
@@ -43,6 +46,8 @@ const filterKey = (key: string): string => `ai.settings.models.filter.${key}`
 
 const SECTION_PROVIDERS = 'section:providers'
 const providerCollapseKey = (id: string): string => `provider:${id}`
+const sectionCollapseKey = (id: string, section: CardSectionId): string =>
+  `provider:${id}:${section}`
 
 export function AiModelsPanel() {
   const aiModel = useService(IAiModelService)
@@ -60,6 +65,7 @@ export function AiModelsPanel() {
   const [legacy, setLegacy] = useState(false)
   const [rateTables, setRateTables] = useState<readonly AiRateTableSnapshot[]>([])
   const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({})
+  const [usages, setUsages] = useState<ReadonlyMap<string, AiAccountUsage | undefined>>(new Map())
   const [addOpen, setAddOpen] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
 
@@ -89,10 +95,17 @@ export function AiModelsPanel() {
     }
   }, [storage])
 
+  /**
+   * `defaultCollapsed` is not decoration: storage holds only the keys the user has
+   * actually toggled, so a section that starts collapsed would otherwise read
+   * `undefined`, flip to `true`, and stay collapsed — a first click that visibly
+   * does nothing. Toggling the *effective* value keeps the stored model sparse (no
+   * pre-seeded defaults, no migration) while every default behaves.
+   */
   const toggleCollapsed = useCallback(
-    (key: string) => {
+    (key: string, defaultCollapsed: boolean) => {
       setCollapsed((prev) => {
-        const next = { ...prev, [key]: !prev[key] }
+        const next = { ...prev, [key]: !(prev[key] ?? defaultCollapsed) }
         void storage.set(COLLAPSED_KEY, next, StorageScope.GLOBAL)
         return next
       })
@@ -128,6 +141,58 @@ export function AiModelsPanel() {
       aiModel.onDidChangeRemote(() => void reload()),
     ],
     [aiModel, reload],
+  )
+
+  /**
+   * Account usage is fetched here rather than in the cards, for two reasons: the
+   * header badge must show a number even while the card body is collapsed and
+   * unmounted, and every trigger that invalidates usage (add/remove, source edit,
+   * extends change, aiSettings.json reload, refreshRemote) already lands on
+   * `reload`. `getAccountUsage` is a cache read in main with no network of its
+   * own, so asking for every provider at once is cheap.
+   *
+   * The id list follows the *effective* source: main flattens `extends` before it
+   * fetches and caches under the child's own id, so an entry that only inherits a
+   * `usageSource` does have a number — skipping it was why those cards showed
+   * nothing at all.
+   */
+  useEffect(() => {
+    let active = true
+    const ids = providers
+      .filter((p) => effectiveUsageSource(p, providers) !== undefined)
+      .map((p) => p.id)
+    void Promise.allSettled(
+      ids.map(async (id) => [id, await aiModel.getAccountUsage(id)] as const),
+    ).then((results) => {
+      if (!active) return
+      // Whole-Map replacement: entries removed since the fetch started drop out
+      // instead of lingering as stale numbers. A rejected read is recorded as
+      // `undefined` — "we asked and got nothing" reads as Unavailable, whereas
+      // leaving the key out would spin forever on a state that is already settled.
+      const next = new Map<string, AiAccountUsage | undefined>()
+      for (const [i, r] of results.entries()) {
+        const id = ids[i]
+        if (id === undefined) continue
+        if (r.status === 'fulfilled') next.set(id, r.value[1])
+        else {
+          console.debug('aiModels: account usage read failed', { provider: id, error: r.reason })
+          next.set(id, undefined)
+        }
+      }
+      setUsages(next)
+    })
+    return () => {
+      active = false
+    }
+  }, [aiModel, providers, reloadToken])
+
+  const usageStateFor = useCallback(
+    (provider: AiProviderEntry): UsageState => {
+      if (effectiveUsageSource(provider, providers) === undefined) return { kind: 'none' }
+      if (!usages.has(provider.id)) return { kind: 'loading' }
+      return { kind: 'ready', value: usages.get(provider.id) }
+    },
+    [providers, usages],
   )
 
   const issuesByProvider = useMemo(() => {
@@ -301,7 +366,7 @@ export function AiModelsPanel() {
       <Section
         title={localize('aiModels.section.providers', 'Providers')}
         collapsed={collapsed[SECTION_PROVIDERS] ?? false}
-        onToggle={() => toggleCollapsed(SECTION_PROVIDERS)}
+        onToggle={() => toggleCollapsed(SECTION_PROVIDERS, false)}
       >
         {providers.length === 0 ? (
           <div className={styles['emptyState']}>
@@ -332,9 +397,15 @@ export function AiModelsPanel() {
                 issues={issuesByProvider.get(provider.id) ?? []}
                 rateTables={rateTables}
                 knowledge={knowledge}
-                reloadToken={reloadToken}
+                usage={usageStateFor(provider)}
                 collapsed={collapsed[providerCollapseKey(provider.id)] ?? false}
-                onToggleCollapsed={() => toggleCollapsed(providerCollapseKey(provider.id))}
+                onToggleCollapsed={() => toggleCollapsed(providerCollapseKey(provider.id), false)}
+                isSectionCollapsed={(section, defaultCollapsed) =>
+                  collapsed[sectionCollapseKey(provider.id, section)] ?? defaultCollapsed
+                }
+                onToggleSection={(section, defaultCollapsed) =>
+                  toggleCollapsed(sectionCollapseKey(provider.id, section), defaultCollapsed)
+                }
                 storage={storage}
                 filterStorageKey={filterKey(provider.id)}
                 updateEntry={(build) => replaceProviderAt(index, build)}

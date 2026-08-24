@@ -27,10 +27,19 @@ apps/editor/src/renderer/workbench/ai/
                               **所有写盘串行化**：updateProviders 是全量替换，故写入基于 `providersRef.current`
                               而非渲染态，并经 `enqueueWrite` 排队（含 setApiKey/deleteApiKey——main 侧同样是
                               读改写）。逐字段即时保存下，Tab 换字段会让两次提交重叠，用渲染快照必丢改动
-  ProviderEntryCard.tsx       入口卡**壳**：header(badges/ConnectivityDot/Duplicate/Remove) + 折叠 + section 编排；
+                              **账号用量在此批量拉**（按 effectiveUsageSource 过滤 id → Promise.allSettled →
+                              整张 Map 全量替换 → 折算成 UsageState 下传）：徽标在卡片折叠时也要显示，而卡片
+                              折叠时 body 不挂载；且所有该重拉的触发源都已收敛到 reload()
+  ProviderEntryCard.tsx       入口卡**壳**：header(badges/用量徽标/ConnectivityDot/Duplicate/Remove) + 折叠 +
+                              三个 CardSection 编排（价格来源/用量来源/协议与模型）；
                               连通性**自动探测**（useAutoVerify）：挂载读 IStorageService 缓存（`ai.settings.connectivity.<id>`，
                               5 分钟 TTL）、缺失/过期即探测；连接字段变更防抖重测；无手动按钮
   providerCard/               卡片内部的可编辑分区（8 个字段全覆盖，统一「即时保存 + 内联反馈」范式）
+    SettingRow.tsx            紧凑行（label 左固定列宽 / 控件右 + note 下方）；窄卡片经 @container 回退成上下两行
+    CardSection.tsx           带摘要的二级折叠区（标题+摘要常显 + header 右侧 actions 位），受控、折叠态由面板持久化
+                              **不复用 workbench-ui 的 CollapsibleSlot**：它硬编码 ACP testid、标题/摘要二选一、无 actions 位
+    usageState.ts             UsageState 三态（none / loading / ready+可能 undefined）——loading 与
+                              「拉到了但没值」必须分开，后者要显示「不可用」而不是永远转圈
     useProviderField.ts       `patchField`(空值即删 key) / `useProviderField`(写盘 + 盖「已保存」戳) /
                               `useEditableText`(草稿在聚焦期不被 aiSettings.json 热重载覆盖)
     useAutoVerify.ts          卡片连通性自动探测：挂载恢复缓存（5 分钟 TTL）+ 缺失/过期自动 verify +
@@ -41,10 +50,13 @@ apps/editor/src/renderer/workbench/ai/
     ExtendsField.tsx          extends 下拉（候选排除自己与后代）+ 写盘前用 resolveProviderEntries 预跑拦截
     ProtocolsSection.tsx      **重头戏**：protocolMap 三态编辑（未声明 / `[]` discover / 非空静态清单）+
                               协议增删 + 固化 + 探测 + 行内 ModelRow（含 configurationSchema 齿轮、RateBadge）
+                              标题与 SavedIndicator 由外层 CardSection 持有，本组件只渲染 body
     ProbeModelsDialog.tsx     探测结果勾选弹窗（VirtualList + filter，默认只勾前 50，>200 提示改回 discover）
     ModelRefEditor.tsx        单条 ref 高级编辑（wire name / knowledge ref / capabilities 只能收窄）
-    RemoteSourceFields.tsx    pricingSource / usageSource 编辑（None / catalog+vendor / http-json 表单 +
-                              raw JSON 逃生舱）+ 刷新 + AccountUsageBlock
+    RemoteSourceFields.tsx    pricingSource / usageSource 两个 CardSection（默认折叠，摘要带路径/币种/模型数）：
+                              None / catalog+vendor / http-json 表单 + raw JSON 逃生舱 + 刷新 + 用量明细行
+                              **渲染一律跟 effective source（自身或祖先），写盘一律只 patch 自身字段**——
+                              main 展平 extends 后按子条目 id 缓存，只读自身值会把已有数据显示成「无」
   AddProviderDialog.tsx       加 provider 弹窗：模板选择器（预填 baseUrl/protocolMap/pricingSource，
                               **永不填 id 与 apiKey**）+ 单层表单 → updateProviders
   AiFeatureModelsPanel.tsx    AI 分类②「功能模型」：chat / inline / commit 三行，数据驱动（FEATURES 数组）
@@ -93,7 +105,7 @@ const storage = useService(IStorageService)
 |---|---|---|
 | 当前激活项（AI 分类或 agent） | `settings.activeItem`（值 `ai:<cat>` / `agent:<id>`） | GLOBAL |
 | 各 AI 分类滚动位置 | `ai.settings.scroll.ai:<categoryId>` | GLOBAL |
-| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:providers` / `provider:<id>` | GLOBAL |
+| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:providers` / `provider:<id>` / `provider:<id>:pricing` / `:usage` / `:protocols` | GLOBAL |
 | Claude 子分类 / 滚动（agent 项内部自管） | `agent.settings.claude.activeCategory` / `…scroll.<id>` | GLOBAL |
 
 > 全用 GLOBAL（AI/agent 配置与 workspace 无关）。滚动恢复要 `requestAnimationFrame` 等面板渲染后再设 `scrollTop`；切换项前先 flush 旧 AI 项滚动位置（agent 项不在壳里跟踪滚动）。
@@ -142,12 +154,12 @@ const storage = useService(IStorageService)
 1. **中文写进 localize default**（最常见）：default 必须英文，中文去 zh-CN.ts。见上「NLS 约定」。
 2. **`exactOptionalPropertyTypes` 下传 `styles['x']` 给可选 string prop 会报 TS2375**：`styles[...]` 类型是 `string | undefined`。给只接受 `string` 的 prop（如 `MarkdownView.className`）要 `styles['x'] ?? ''`。
 3. **滚动恢复设早了不生效**：面板内容异步渲染，`scrollTop` 要在 `requestAnimationFrame` 里设；切分类前先把旧分类的 scrollTop flush 掉。
-4. **折叠态是一个整体 Record 存一个 key**，不是每 group 一个 key——读写时整体覆盖。
+4. **折叠态是一个整体 Record 存一个 key**，不是每 group 一个 key——读写时整体覆盖。storage 里**只有用户点过的 key**，所以 `toggleCollapsed(key, defaultCollapsed)` 必须对「有效值」取反（`!(prev[key] ?? defaultCollapsed)`）：对默认折叠的区，用 `!prev[key]` 会把 undefined 翻成 true（仍折叠），表现为**首次点击没反应**。
+5. **卡内区域的默认折叠态在 `ProviderEntryCard` 传入**（pricing/usage=折叠，protocols=展开），读写两侧必须传同一个默认值。
+6. **渲染继承字段要用 effective 值，写盘只写自身值**：main 展平 `extends` 后按子条目自己的 id 缓存费率/用量，UI 拿到的却是未展平的原始条目。只读 `provider.usageSource` 会把「已有数据」显示成「无」（这就是曾经的 bug）。收敛函数在 `shared/ai/providerInheritance.ts` 的 `effectiveRemoteSource` 系列。
 5. **加了 localize key 忘了补 zh-CN**：英文环境正常、中文环境回落英文，静默不报错。改完用 `rg` 比对一遍。
 6. **input→组件注册漏一处**：`EditorArea.tsx`（`editorComponentMap.set('aiSettings', …)`）+ `BuiltInEditorProvidersContribution.ts` 两处都要有 'aiSettings'，否则页面开不出。（合并后只剩 'aiSettings' 一个 key，'agentSettings' 已删）
-7. **改 agent 项渲染分支别忘 Claude 自注册**：壳顶部 `import '../agentSettings/builtinAgentSettings.js'` 是 Claude 设置组件注册的唯一触发点，删了它 Agents 区会全是占位。
-
-### 验证
+7. **改 agent 项渲染分支别忘 Claude 自注册**：壳顶部 `import '../agentSettings/builtinAgentSettings.js'` 是 Claude 设置组件注册的唯一触发点，删了它 Agents 区会全是占位。### 验证
 
 ```bash
 pnpm check        # lint + typecheck + test，仅看错误

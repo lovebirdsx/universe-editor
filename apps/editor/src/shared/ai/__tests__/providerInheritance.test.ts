@@ -11,6 +11,9 @@ import type { AiProviderEntry } from '@universe-editor/platform'
 import {
   computeExtendsCandidates,
   effectiveConnection,
+  effectivePricingSource,
+  effectiveRemoteSource,
+  effectiveUsageSource,
   findInherited,
 } from '../providerInheritance.js'
 
@@ -107,5 +110,76 @@ describe('effectiveConnection', () => {
     const result = effectiveConnection({ id: 'lonely' }, [{ id: 'lonely' }])
     expect(result).toEqual({})
     expect('apiKey' in result).toBe(false)
+  })
+})
+
+describe('effectiveRemoteSource', () => {
+  const chain: readonly AiProviderEntry[] = [
+    { id: 'root', usageSource: { id: 'http-json', options: { path: '/root/usage' } } },
+    { id: 'mid', extends: 'root', pricingSource: { id: 'catalog', options: { vendor: 'openai' } } },
+    { id: 'leaf', extends: 'mid' },
+  ]
+
+  it('marks an entry own source as not inherited, attributed to itself', () => {
+    expect(effectiveRemoteSource(chain[1]!, chain, 'pricingSource')).toEqual({
+      value: { id: 'catalog', options: { vendor: 'openai' } },
+      from: 'mid',
+      inherited: false,
+    })
+  })
+
+  it('resolves a purely inheriting entry to the nearest declaring ancestor', () => {
+    // The bug this function exists for: `leaf` declares no usageSource, yet main
+    // has already fetched usage under the id `leaf`.
+    expect(effectiveRemoteSource(chain[2]!, chain, 'usageSource')).toEqual({
+      value: { id: 'http-json', options: { path: '/root/usage' } },
+      from: 'root',
+      inherited: true,
+    })
+  })
+
+  it('walks past an ancestor that declares only the other source field', () => {
+    expect(effectiveRemoteSource(chain[2]!, chain, 'pricingSource')).toEqual({
+      value: { id: 'catalog', options: { vendor: 'openai' } },
+      from: 'mid',
+      inherited: true,
+    })
+  })
+
+  it('prefers an own declaration over an inherited one', () => {
+    const own: AiProviderEntry = {
+      id: 'own',
+      extends: 'root',
+      usageSource: { id: 'http-json', options: { path: '/own/usage' } },
+    }
+    expect(effectiveRemoteSource(own, [...chain, own], 'usageSource')).toEqual({
+      value: { id: 'http-json', options: { path: '/own/usage' } },
+      from: 'own',
+      inherited: false,
+    })
+  })
+
+  it('returns undefined when nothing in the chain declares the field', () => {
+    expect(effectiveRemoteSource(chain[1]!, chain, 'usageSource')).toBeDefined()
+    expect(
+      effectiveRemoteSource({ id: 'lonely' }, [{ id: 'lonely' }], 'usageSource'),
+    ).toBeUndefined()
+  })
+
+  it('terminates on a cycle instead of hanging', () => {
+    const looped: readonly AiProviderEntry[] = [
+      { id: 'a', extends: 'b' },
+      { id: 'b', extends: 'a' },
+    ]
+    expect(effectiveRemoteSource(looped[0]!, looped, 'usageSource')).toBeUndefined()
+  })
+
+  it('exposes field-bound wrappers that agree with the generic form', () => {
+    expect(effectiveUsageSource(chain[2]!, chain)).toEqual(
+      effectiveRemoteSource(chain[2]!, chain, 'usageSource'),
+    )
+    expect(effectivePricingSource(chain[2]!, chain)).toEqual(
+      effectiveRemoteSource(chain[2]!, chain, 'pricingSource'),
+    )
   })
 })

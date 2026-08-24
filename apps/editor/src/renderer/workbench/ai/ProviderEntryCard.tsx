@@ -16,7 +16,7 @@
  *  be tested (no effective protocol or base URL) stay at "not tested".
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Copy, KeyRound, Server, Trash2, X } from 'lucide-react'
 import {
   AI_WIRE_PROTOCOLS,
@@ -34,14 +34,20 @@ import {
   type IStorageService,
 } from '@universe-editor/platform'
 import { Badge, IconButton, Input, Select, Spinner } from '@universe-editor/workbench-ui'
+import { effectiveProtocolMap } from '../../../shared/ai/providerInheritance.js'
+import { declaredProtocols } from '../../../shared/ai/protocolMapEdit.js'
+import { formatUsageBadge, formatUsageTooltip } from '../../../shared/ai/usageFormat.js'
+import { CardSection } from './providerCard/CardSection.js'
 import { ConnectionFields } from './providerCard/ConnectionFields.js'
 import { ExtendsField } from './providerCard/ExtendsField.js'
 import { IssuesSection } from './providerCard/IssuesSection.js'
 import { ProtocolsSection } from './providerCard/ProtocolsSection.js'
 import { RemoteSourceFields } from './providerCard/RemoteSourceFields.js'
 import { SavedIndicator } from './providerCard/SavedIndicator.js'
+import { SettingRow } from './providerCard/SettingRow.js'
 import { useAutoVerify, type ConnectState } from './providerCard/useAutoVerify.js'
 import { useProviderField, type ProviderPatch } from './providerCard/useProviderField.js'
+import type { UsageState } from './providerCard/usageState.js'
 import styles from './AiSettingsEditor.module.css'
 
 export { issueReasonLabel } from './providerCard/IssuesSection.js'
@@ -55,9 +61,13 @@ interface ProviderEntryCardProps {
   readonly issues: readonly AiProviderIssue[]
   readonly rateTables: readonly AiRateTableSnapshot[]
   readonly knowledge: Readonly<Record<string, AiModelKnowledge>>
-  readonly reloadToken: number
+  /** Account usage, already fetched by the panel so the badge survives collapse. */
+  readonly usage: UsageState
   readonly collapsed: boolean
   readonly onToggleCollapsed: () => void
+  /** True when the section is collapsed; keyed per provider by the panel. */
+  readonly isSectionCollapsed: (section: CardSectionId, defaultCollapsed: boolean) => boolean
+  readonly onToggleSection: (section: CardSectionId, defaultCollapsed: boolean) => void
   readonly storage: IStorageService
   readonly filterStorageKey: string
   readonly updateEntry: (build: ProviderPatch) => Promise<void>
@@ -70,6 +80,8 @@ interface ProviderEntryCardProps {
   readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
 }
 
+export type CardSectionId = 'pricing' | 'usage' | 'protocols'
+
 export function ProviderEntryCard({
   aiModel,
   dialog,
@@ -79,9 +91,11 @@ export function ProviderEntryCard({
   issues,
   rateTables,
   knowledge,
-  reloadToken,
+  usage,
   collapsed,
   onToggleCollapsed,
+  isSectionCollapsed,
+  onToggleSection,
   storage,
   filterStorageKey,
   updateEntry,
@@ -98,6 +112,11 @@ export function ProviderEntryCard({
   const [filter, setFilter] = useState('')
 
   const hasApiKey = provider.apiKey !== undefined && provider.apiKey !== ''
+
+  const protocolCount = useMemo(
+    () => declaredProtocols(effectiveProtocolMap(provider, allProviders)).length,
+    [provider, allProviders],
+  )
 
   useEffect(() => {
     let active = true
@@ -137,7 +156,6 @@ export function ProviderEntryCard({
         <Server size={16} strokeWidth={1.75} className={styles['cardIcon']} />
         <span className={styles['cardTitle']}>{provider.id}</span>
         <div className={styles['cardBadges']}>
-          <Badge tone="accent">{provider.id}</Badge>
           {provider.extends !== undefined && (
             <Badge>
               {localize('aiModels.entry.extends', 'extends {id}', { id: provider.extends })}
@@ -149,6 +167,7 @@ export function ProviderEntryCard({
               {localize('aiModels.badge.keyed', 'Key set')}
             </Badge>
           )}
+          <UsageBadge usage={usage} />
           <Badge>
             {localize('aiModels.badge.modelCount', '{count} models', { count: models.length })}
           </Badge>
@@ -185,27 +204,28 @@ export function ProviderEntryCard({
             onClearApiKey={() => void onClearApiKey().then(() => stamp('apiKey'))}
           />
 
-          <div className={styles['field']}>
-            <div className={styles['fieldHeader']}>
-              <label className={styles['label']}>
-                {localize('aiModels.entry.defaultProtocol', 'Default protocol')}
-              </label>
-              <SavedIndicator saved={saved} field="defaultProtocol" />
-            </div>
-            <Select<AiWireProtocol | ''>
-              value={provider.defaultProtocol ?? ''}
-              aria-label={localize('aiModels.entry.defaultProtocol', 'Default protocol')}
-              data-testid="ai-default-protocol"
-              options={[
-                {
-                  value: '',
-                  label: localize('aiModels.entry.defaultProtocol.first', 'First protocol'),
-                },
-                ...AI_WIRE_PROTOCOLS.map((p) => ({ value: p, label: p })),
-              ]}
-              onChange={(next) => void setField('defaultProtocol', next === '' ? undefined : next)}
-            />
-          </div>
+          <SettingRow
+            label={localize('aiModels.entry.defaultProtocol', 'Default protocol')}
+            saved={saved}
+            field="defaultProtocol"
+            control={
+              <Select<AiWireProtocol | ''>
+                value={provider.defaultProtocol ?? ''}
+                aria-label={localize('aiModels.entry.defaultProtocol', 'Default protocol')}
+                data-testid="ai-default-protocol"
+                options={[
+                  {
+                    value: '',
+                    label: localize('aiModels.entry.defaultProtocol.first', 'First protocol'),
+                  },
+                  ...AI_WIRE_PROTOCOLS.map((p) => ({ value: p, label: p })),
+                ]}
+                onChange={(next) =>
+                  void setField('defaultProtocol', next === '' ? undefined : next)
+                }
+              />
+            }
+          />
 
           <ExtendsField
             provider={provider}
@@ -216,51 +236,95 @@ export function ProviderEntryCard({
           />
 
           <RemoteSourceFields
-            aiModel={aiModel}
             provider={provider}
             allProviders={allProviders}
             rateTables={rateTables}
-            reloadToken={reloadToken}
+            usage={usage}
             saved={saved}
+            pricingCollapsed={isSectionCollapsed('pricing', true)}
+            usageCollapsed={isSectionCollapsed('usage', true)}
+            onTogglePricing={() => onToggleSection('pricing', true)}
+            onToggleUsage={() => onToggleSection('usage', true)}
             onPricingSourceChange={(spec) => void setField('pricingSource', spec)}
             onUsageSourceChange={(spec) => void setField('usageSource', spec)}
             onRefreshRemote={onRefreshRemote}
           />
 
-          <div className={styles['filterRow']}>
-            <Input
-              className={styles['modelFilter']}
-              value={filter}
-              placeholder={localize('aiModels.filter.placeholder', 'Filter models…')}
-              aria-label={localize('aiModels.filter.placeholder', 'Filter models…')}
-              onChange={(e) => onFilterChange(e.target.value)}
-            />
-            {filter !== '' && (
-              <IconButton
-                label={localize('aiModels.filter.clear', 'Clear model filter')}
-                onClick={() => onFilterChange('')}
-              >
-                <X size={14} strokeWidth={1.75} />
-              </IconButton>
-            )}
-          </div>
+          <CardSection
+            testId="ai-protocols-card-section"
+            title={localize('aiModels.protocols.title', 'Protocols & models')}
+            summary={localize('aiModels.protocols.summary', '{count} protocols · {models} models', {
+              count: protocolCount,
+              models: models.length,
+            })}
+            collapsed={isSectionCollapsed('protocols', false)}
+            onToggle={() => onToggleSection('protocols', false)}
+            actions={<SavedIndicator saved={saved} field="protocolMap" />}
+          >
+            <div className={styles['filterRow']}>
+              <Input
+                className={styles['modelFilter']}
+                value={filter}
+                placeholder={localize('aiModels.filter.placeholder', 'Filter models…')}
+                aria-label={localize('aiModels.filter.placeholder', 'Filter models…')}
+                onChange={(e) => onFilterChange(e.target.value)}
+              />
+              {filter !== '' && (
+                <IconButton
+                  label={localize('aiModels.filter.clear', 'Clear model filter')}
+                  onClick={() => onFilterChange('')}
+                >
+                  <X size={14} strokeWidth={1.75} />
+                </IconButton>
+              )}
+            </div>
 
-          <ProtocolsSection
-            aiModel={aiModel}
-            dialog={dialog}
-            provider={provider}
-            allProviders={allProviders}
-            models={models}
-            knowledge={knowledge}
-            filter={filter}
-            saved={saved}
-            onChange={(map) => void setField('protocolMap', map)}
-            onConfigure={onConfigure}
-            getConfiguration={getConfiguration}
-          />
+            <ProtocolsSection
+              aiModel={aiModel}
+              dialog={dialog}
+              provider={provider}
+              allProviders={allProviders}
+              models={models}
+              knowledge={knowledge}
+              filter={filter}
+              onChange={(map) => void setField('protocolMap', map)}
+              onConfigure={onConfigure}
+              getConfiguration={getConfiguration}
+            />
+          </CardSection>
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * The account-usage number in short form, next to the other header badges. It has
+ * to distinguish "still fetching" from "fetched and the gateway reported nothing":
+ * the second is a real answer and must not sit under a spinner forever.
+ */
+function UsageBadge({ usage }: { readonly usage: UsageState }) {
+  if (usage.kind === 'none') return null
+  if (usage.kind === 'loading') {
+    return (
+      <Badge>
+        <Spinner size={11} />
+      </Badge>
+    )
+  }
+  if (usage.value === undefined) {
+    return (
+      <Badge>
+        <span data-tooltip={localize('aiModels.usage.unavailable', 'Unavailable')}>
+          {localize('aiModels.usage.unavailable', 'Unavailable')}
+        </span>
+      </Badge>
+    )
+  }
+  return (
+    <Badge tone="accent">
+      <span data-tooltip={formatUsageTooltip(usage.value)}>{formatUsageBadge(usage.value)}</span>
+    </Badge>
   )
 }
 

@@ -89,7 +89,6 @@ function renderSection({
       models={models}
       knowledge={knowledge}
       filter=""
-      saved={undefined}
       onChange={onChange}
       onConfigure={vi.fn(async (_id: string, _c: AiModelConfiguration) => {})}
       getConfiguration={vi.fn(async (_id: string) => ({}))}

@@ -28,7 +28,7 @@ import {
   findInherited,
 } from '../../../../shared/ai/providerInheritance.js'
 import { issueReasonLabel } from './IssuesSection.js'
-import { SavedIndicator } from './SavedIndicator.js'
+import { SettingRow } from './SettingRow.js'
 import type { SavedStamp } from './useProviderField.js'
 import styles from '../AiSettingsEditor.module.css'
 
@@ -103,42 +103,48 @@ export function ExtendsField({
   )
 
   return (
-    <div className={styles['field']} data-testid="ai-extends-field">
-      <div className={styles['fieldHeader']}>
-        <label className={styles['label']}>{localize('aiModels.extends', 'Inherit from')}</label>
-        <SavedIndicator saved={saved} field="extends" />
-      </div>
-      <Select
-        value={provider.extends ?? ''}
-        aria-label={localize('aiModels.extends', 'Inherit from')}
-        data-testid="ai-extends-select"
-        options={[
-          { value: '', label: localize('aiModels.extends.none', 'Nothing (standalone entry)') },
-          ...candidates.map((id) => ({ value: id, label: id })),
-        ]}
-        invalid={error !== undefined}
-        onChange={pick}
-      />
-      {error !== undefined && (
-        <span className={styles['fieldError']} data-testid="ai-extends-error">
-          {localize('aiModels.extends.rejected', 'Not applied: {reason}', { reason: error })}
-        </span>
-      )}
-      <span className={styles['inheritNote']}>
-        {provider.extends === undefined
-          ? localize(
-              'aiModels.extends.hint',
-              'Use this for a second access point of the same gateway — the protocol map is replaced wholesale, other fields are overridden one by one.',
-            )
-          : inheritedFields.length === 0
-            ? localize(
-                'aiModels.extends.nothingInherited',
-                'Every field is set locally, so nothing is currently inherited.',
-              )
-            : localize('aiModels.extends.summary', 'Inheriting {fields}', {
-                fields: inheritedFields.map((f) => `${f.field} (${f.from})`).join(', '),
-              })}
-      </span>
-    </div>
+    <SettingRow
+      testId="ai-extends-field"
+      label={localize('aiModels.extends', 'Inherit from')}
+      saved={saved}
+      field="extends"
+      control={
+        <Select
+          value={provider.extends ?? ''}
+          aria-label={localize('aiModels.extends', 'Inherit from')}
+          data-testid="ai-extends-select"
+          options={[
+            { value: '', label: localize('aiModels.extends.none', 'Nothing (standalone entry)') },
+            ...candidates.map((id) => ({ value: id, label: id })),
+          ]}
+          invalid={error !== undefined}
+          onChange={pick}
+        />
+      }
+      note={
+        <>
+          {error !== undefined && (
+            <span className={styles['fieldError']} data-testid="ai-extends-error">
+              {localize('aiModels.extends.rejected', 'Not applied: {reason}', { reason: error })}
+            </span>
+          )}
+          <span className={styles['inheritNote']}>
+            {provider.extends === undefined
+              ? localize(
+                  'aiModels.extends.hint',
+                  'Use this for a second access point of the same gateway — the protocol map is replaced wholesale, other fields are overridden one by one.',
+                )
+              : inheritedFields.length === 0
+                ? localize(
+                    'aiModels.extends.nothingInherited',
+                    'Every field is set locally, so nothing is currently inherited.',
+                  )
+                : localize('aiModels.extends.summary', 'Inheriting {fields}', {
+                    fields: inheritedFields.map((f) => `${f.field} (${f.from})`).join(', '),
+                  })}
+          </span>
+        </>
+      }
+    />
   )
 }

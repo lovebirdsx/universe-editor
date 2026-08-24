@@ -9,7 +9,7 @@
  *  is a state the UI must render, not a state it may hang on.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AiProviderEntry } from '@universe-editor/platform'
+import type { AiProtocolMap, AiProviderEntry, AiRemoteSourceSpec } from '@universe-editor/platform'
 
 export interface InheritedValue<T> {
   /** Id of the nearest ancestor that declares the field. */
@@ -85,4 +85,61 @@ export function effectiveConnection(
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }
+}
+
+export interface EffectiveSource {
+  /** The spec that is actually in force — the entry's own, or the nearest ancestor's. */
+  readonly value: AiRemoteSourceSpec
+  /** Id of the entry that declares it. */
+  readonly from: string
+  /** True when the entry declares nothing of its own and the value came from `from`. */
+  readonly inherited: boolean
+}
+
+/**
+ * Which remote source a card must render, as opposed to which one it stores.
+ * main resolves `extends` before it fetches (`flattenExtends` copies both source
+ * fields down) and caches per resolved entry, so a purely inheriting entry *does*
+ * have prices and usage of its own id. Reading only `entry[field]` would show
+ * "None" over data that exists — the state this function exists to prevent.
+ *
+ * `inherited` is what separates rendering from writing: the form and the refresh
+ * button follow the effective value, while every write still patches the entry's
+ * own field so an edit never silently materializes an ancestor's config.
+ */
+export function effectiveRemoteSource(
+  entry: AiProviderEntry,
+  all: readonly AiProviderEntry[],
+  field: 'pricingSource' | 'usageSource',
+): EffectiveSource | undefined {
+  const own = entry[field]
+  if (own !== undefined) return { value: own, from: entry.id, inherited: false }
+  const found = findInherited(entry, all, field)
+  return found === undefined ? undefined : { value: found.value, from: found.from, inherited: true }
+}
+
+export function effectivePricingSource(
+  entry: AiProviderEntry,
+  all: readonly AiProviderEntry[],
+): EffectiveSource | undefined {
+  return effectiveRemoteSource(entry, all, 'pricingSource')
+}
+
+export function effectiveUsageSource(
+  entry: AiProviderEntry,
+  all: readonly AiProviderEntry[],
+): EffectiveSource | undefined {
+  return effectiveRemoteSource(entry, all, 'usageSource')
+}
+
+/**
+ * The protocol map in force. Unlike the scalar fields this one is replaced
+ * wholesale rather than merged, so "effective" is simply the nearest declaration.
+ * Returns `{}` when nothing declares one — a provider that serves no models.
+ */
+export function effectiveProtocolMap(
+  entry: AiProviderEntry,
+  all: readonly AiProviderEntry[],
+): AiProtocolMap {
+  return entry.protocolMap ?? findInherited(entry, all, 'protocolMap')?.value ?? {}
 }

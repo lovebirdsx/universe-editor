@@ -6,19 +6,22 @@
  *  and the raw-JSON escape hatch, which must refuse to persist unparseable
  *  text rather than write a corrupt spec.
  *
- *  The component renders pricing and usage as two sibling sections with no
- *  testid of their own, so the http-json forms inside them are told apart by
- *  DOM order (pricing first, usage second) via getAllByRole.
+ *  Also pinned: what an entry that only *inherits* a source renders. main flattens
+ *  `extends` before it fetches, so those entries have prices and usage of their own
+ *  id — showing them "None" hid data that existed. The component must follow the
+ *  effective source when rendering while still writing only the entry's own field.
+ *
+ *  The two sections are collapsible and controlled, so the harness below owns the
+ *  collapse state and starts expanded unless a test says otherwise. Pricing renders
+ *  before usage, which is how the http-json forms inside them are told apart.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type {
-  AiProviderEntry,
-  AiRemoteSourceSpec,
-  IAiModelService,
-} from '@universe-editor/platform'
+import { useState } from 'react'
+import type { AiProviderEntry, AiRemoteSourceSpec } from '@universe-editor/platform'
 import { RemoteSourceFields } from '../RemoteSourceFields.js'
+import type { UsageState } from '../usageState.js'
 
 afterEach(() => cleanup())
 
@@ -41,28 +44,45 @@ interface Rendered {
   readonly onUsageSourceChange: ReturnType<
     typeof vi.fn<(spec: AiRemoteSourceSpec | undefined) => void>
   >
+  readonly onRefreshRemote: ReturnType<typeof vi.fn<() => Promise<void>>>
 }
 
-function renderFields(provider: AiProviderEntry): Rendered {
+interface RenderOptions {
+  readonly all?: readonly AiProviderEntry[]
+  readonly usage?: UsageState
+  /** Both sections start collapsed, as they do in the real panel. */
+  readonly startCollapsed?: boolean
+}
+
+function renderFields(provider: AiProviderEntry, options: RenderOptions = {}): Rendered {
   const onPricingSourceChange = vi.fn<(spec: AiRemoteSourceSpec | undefined) => void>()
   const onUsageSourceChange = vi.fn<(spec: AiRemoteSourceSpec | undefined) => void>()
-  const aiModel = {
-    getAccountUsage: vi.fn(async () => undefined),
-  } as unknown as IAiModelService
-  render(
-    <RemoteSourceFields
-      aiModel={aiModel}
-      provider={provider}
-      allProviders={[provider]}
-      rateTables={[]}
-      reloadToken={0}
-      saved={undefined}
-      onPricingSourceChange={onPricingSourceChange}
-      onUsageSourceChange={onUsageSourceChange}
-      onRefreshRemote={vi.fn(async () => {})}
-    />,
-  )
-  return { onPricingSourceChange, onUsageSourceChange }
+  const onRefreshRemote = vi.fn<() => Promise<void>>(async () => {})
+  const startCollapsed = options.startCollapsed ?? false
+
+  function Harness() {
+    const [pricingCollapsed, setPricingCollapsed] = useState(startCollapsed)
+    const [usageCollapsed, setUsageCollapsed] = useState(startCollapsed)
+    return (
+      <RemoteSourceFields
+        provider={provider}
+        allProviders={options.all ?? [provider]}
+        rateTables={[]}
+        usage={options.usage ?? { kind: 'none' }}
+        saved={undefined}
+        pricingCollapsed={pricingCollapsed}
+        usageCollapsed={usageCollapsed}
+        onTogglePricing={() => setPricingCollapsed((v) => !v)}
+        onToggleUsage={() => setUsageCollapsed((v) => !v)}
+        onPricingSourceChange={onPricingSourceChange}
+        onUsageSourceChange={onUsageSourceChange}
+        onRefreshRemote={onRefreshRemote}
+      />
+    )
+  }
+
+  render(<Harness />)
+  return { onPricingSourceChange, onUsageSourceChange, onRefreshRemote }
 }
 
 describe('RemoteSourceFields — pricing source', () => {
@@ -138,6 +158,139 @@ describe('RemoteSourceFields — usage source', () => {
 
     await pickOption('Account usage source', 'None')
     expect(onUsageSourceChange).toHaveBeenCalledWith(undefined)
+  })
+
+  it('renders "Unavailable" for a fetched-but-empty usage rather than a spinner', async () => {
+    const provider: AiProviderEntry = {
+      id: 'p',
+      protocolMap: { 'openai-chat': [] },
+      usageSource: { id: 'http-json' },
+    }
+    renderFields(provider, { usage: { kind: 'ready', value: undefined } })
+    await flushEffects()
+
+    expect(screen.getByText('Unavailable')).toBeTruthy()
+  })
+})
+
+describe('RemoteSourceFields — inherited sources', () => {
+  const root: AiProviderEntry = {
+    id: 'root',
+    baseUrl: 'https://gw.example',
+    pricingSource: { id: 'http-json', options: { path: '/v1/pricing' } },
+    usageSource: { id: 'http-json', options: { path: '/api/user/self' } },
+  }
+  const leaf: AiProviderEntry = { id: 'leaf', extends: 'root' }
+
+  it('shows the ancestor usage source instead of None, and its form', async () => {
+    renderFields(leaf, { all: [root, leaf], usage: { kind: 'ready', value: undefined } })
+    await flushEffects()
+
+    expect(screen.getByRole('combobox', { name: 'Account usage source' }).textContent).toContain(
+      'HTTP JSON',
+    )
+    // The effective form is reachable: two http-json forms (pricing + usage) each
+    // render a Path field.
+    expect(screen.getAllByRole('textbox', { name: 'Path' }).length).toBe(2)
+    expect(screen.getAllByText(/Inherited from root/).length).toBeGreaterThan(0)
+  })
+
+  it('enables Refresh usage on a purely inheriting entry', async () => {
+    renderFields(leaf, { all: [root, leaf] })
+    await flushEffects()
+
+    const refresh = screen.getByRole('button', { name: /Refresh usage/ })
+    expect(refresh.hasAttribute('disabled')).toBe(false)
+  })
+
+  it('enables Refresh prices and does not claim "No pricing source"', async () => {
+    renderFields(leaf, { all: [root, leaf] })
+    await flushEffects()
+
+    expect(screen.getByRole('button', { name: /Refresh prices/ }).hasAttribute('disabled')).toBe(
+      false,
+    )
+    expect(screen.queryByText(/No pricing source/)).toBeNull()
+  })
+
+  it('labels the empty option "Inherit from root" so picking it is not a no-op surprise', async () => {
+    renderFields(leaf, { all: [root, leaf] })
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Account usage source' }))
+    await flushEffects()
+    expect(screen.getByRole('option', { name: 'Inherit from root' })).toBeTruthy()
+  })
+
+  it('labels the empty option by the ancestor even when the entry overrides it', async () => {
+    // Clearing an override restores the parent's value, so offering "None" here
+    // would describe the opposite of what happens.
+    const override: AiProviderEntry = {
+      id: 'leaf',
+      extends: 'root',
+      usageSource: { id: 'http-json', options: { path: '/own' } },
+    }
+    renderFields(override, { all: [root, override] })
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Account usage source' }))
+    await flushEffects()
+    expect(screen.getByRole('option', { name: 'Inherit from root' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'None' })).toBeNull()
+  })
+
+  it('reverting an inherited source still writes the entry’s own field', async () => {
+    const { onUsageSourceChange } = renderFields(leaf, { all: [root, leaf] })
+    await flushEffects()
+
+    await pickOption('Account usage source', 'Inherit from root')
+    expect(onUsageSourceChange).toHaveBeenCalledWith(undefined)
+  })
+})
+
+describe('RemoteSourceFields — collapsing', () => {
+  const provider: AiProviderEntry = {
+    id: 'p',
+    protocolMap: { 'openai-chat': [] },
+    usageSource: { id: 'http-json', options: { path: '/api/user/self' } },
+  }
+
+  it('collapsed sections hide the form but keep the summary readable', async () => {
+    renderFields(provider, { startCollapsed: true })
+    await flushEffects()
+
+    expect(screen.queryByRole('combobox', { name: 'Account usage source' })).toBeNull()
+    expect(screen.getByText(/HTTP JSON · \/api\/user\/self/)).toBeTruthy()
+  })
+
+  it('localizes the usage kind in the summary instead of echoing the raw option', async () => {
+    renderFields(
+      {
+        id: 'p',
+        usageSource: { id: 'http-json', options: { path: '/u', kind: 'balance' } },
+      },
+      { startCollapsed: true },
+    )
+    await flushEffects()
+
+    expect(screen.getByText(/HTTP JSON · \/u · Balance/)).toBeTruthy()
+  })
+
+  it('echoes an unknown source id rather than calling it HTTP JSON', async () => {
+    renderFields({ id: 'p', pricingSource: { id: 'some-custom-source' } }, { startCollapsed: true })
+    await flushEffects()
+
+    expect(screen.getByText('some-custom-source')).toBeTruthy()
+  })
+
+  it('the toggle expands the section', async () => {
+    renderFields(provider, { startCollapsed: true })
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Account usage source' }))
+    await flushEffects()
+
+    expect(screen.getByRole('combobox', { name: 'Account usage source' })).toBeTruthy()
   })
 })
 

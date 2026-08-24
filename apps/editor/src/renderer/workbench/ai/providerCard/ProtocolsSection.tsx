@@ -49,8 +49,6 @@ import { effectiveConnection, findInherited } from '../../../../shared/ai/provid
 import { InheritanceNote } from './ConnectionFields.js'
 import { ModelRefEditor } from './ModelRefEditor.js'
 import { ProbeModelsDialog } from './ProbeModelsDialog.js'
-import { SavedIndicator } from './SavedIndicator.js'
-import type { SavedStamp } from './useProviderField.js'
 import styles from '../AiSettingsEditor.module.css'
 
 type ProtocolMode = 'discover' | 'static'
@@ -64,7 +62,6 @@ interface ProtocolsSectionProps {
   readonly models: readonly AiModelMetadata[]
   readonly knowledge: Readonly<Record<string, AiModelKnowledge>>
   readonly filter: string
-  readonly saved: SavedStamp | undefined
   readonly onChange: (map: AiProtocolMap | undefined) => void
   readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
   readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
@@ -78,7 +75,6 @@ export function ProtocolsSection({
   models,
   knowledge,
   filter,
-  saved,
   onChange,
   onConfigure,
   getConfiguration,
@@ -239,12 +235,6 @@ export function ProtocolsSection({
 
   return (
     <div className={styles['field']} data-testid="ai-protocols-section">
-      <div className={styles['fieldHeader']}>
-        <label className={styles['label']}>
-          {localize('aiModels.protocols.title', 'Protocols & models')}
-        </label>
-        <SavedIndicator saved={saved} field="protocolMap" />
-      </div>
       <InheritanceNote
         own={provider.protocolMap !== undefined}
         inheritedFrom={inherited?.from}

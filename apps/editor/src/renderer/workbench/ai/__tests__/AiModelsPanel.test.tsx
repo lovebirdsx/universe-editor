@@ -119,7 +119,8 @@ function renderPanel(
   const services = new ServiceCollection()
   services.set(IAiModelService, aiModel as unknown as IAiModelService)
   services.set(IAiRateMirror, rateMirrorStub)
-  services.set(IStorageService, new FakeStorage(storageInitial) as unknown as IStorageService)
+  const storage = new FakeStorage(storageInitial)
+  services.set(IStorageService, storage as unknown as IStorageService)
   services.set(IQuickInputService, {
     input: vi.fn(async () => undefined),
   } as unknown as IQuickInputService)
@@ -137,7 +138,7 @@ function renderPanel(
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
   })
-  return { ...utils, aiModel }
+  return { ...utils, aiModel, storage }
 }
 
 function entryCard(id: string): HTMLElement {
@@ -146,6 +147,16 @@ function entryCard(id: string): HTMLElement {
   )
   expect(el, `provider entry card ${id}`).toBeTruthy()
   return el!
+}
+
+/**
+ * The account-usage header badge, or null when the card shows none. It carries a
+ * tooltip and lives among the other badges, so it is found by that attribute
+ * rather than by its text — the text is the thing under test.
+ */
+function usageBadge(id: string): HTMLElement | null {
+  const badges = entryCard(id).querySelector('[class*="cardBadges"]')
+  return badges?.querySelector<HTMLElement>('[data-tooltip]') ?? null
 }
 
 /** The connectivity dot on a card, or null when the card has none. */
@@ -183,7 +194,7 @@ describe('AiModelsPanel', () => {
     expect(aiModel.updateProviders).toHaveBeenCalledWith([])
   })
 
-  it('hides the account-usage block entirely when no usageSource is declared', async () => {
+  it('shows no usage badge and fetches nothing when no usageSource is declared', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [KURO_PROVIDER]
     aiModel.models = [KURO_MODEL]
@@ -192,10 +203,11 @@ describe('AiModelsPanel', () => {
     await flushEffects()
 
     expect(screen.queryByText('Account usage')).toBeNull()
+    expect(usageBadge('kuro')).toBeNull()
     expect(aiModel.getAccountUsage).not.toHaveBeenCalled()
   })
 
-  it('shows "Unavailable" when a usageSource is declared but no authoritative value exists', async () => {
+  it('shows "Unavailable" in the header badge when the source yields no authoritative value', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
     aiModel.models = [KURO_MODEL]
@@ -204,8 +216,134 @@ describe('AiModelsPanel', () => {
     await flushEffects()
     await flushEffects()
 
-    expect(screen.getByText('Unavailable')).toBeTruthy()
+    expect(usageBadge('kuro')?.textContent).toBe('Unavailable')
     expect(aiModel.getAccountUsage).toHaveBeenCalledWith('kuro')
+  })
+
+  it('shows the used / limit pair in the header badge', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [KURO_MODEL]
+    aiModel.usages.set('kuro', {
+      kind: 'quota',
+      usedUSD: 0.09,
+      limitUSD: 3000,
+      currency: 'CNY',
+      fetchedAt: 1,
+    })
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(usageBadge('kuro')?.textContent).toBe('¥0.09 / ¥3,000')
+  })
+
+  it('keeps the usage badge visible while the card body is collapsed', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [KURO_MODEL]
+    aiModel.usages.set('kuro', { kind: 'balance', remainingUSD: 29.91, fetchedAt: 1 })
+    renderPanel(
+      aiModel,
+      { confirmed: true },
+      {
+        'ai.settings.models.collapsed': { 'provider:kuro': true },
+      },
+    )
+    await flushEffects()
+    await flushEffects()
+
+    // The body is gone, so the detail row cannot be the source of the number.
+    expect(screen.queryByText('Account usage')).toBeNull()
+    expect(usageBadge('kuro')?.textContent).toBe('$29.91')
+  })
+
+  it('fetches usage for an entry that only inherits its usageSource', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [
+      { id: 'root', baseUrl: 'https://gw.example', usageSource: { id: 'http-json' } },
+      { id: 'leaf', extends: 'root' },
+    ]
+    aiModel.usages.set('leaf', { kind: 'quota', usedUSD: 1, limitUSD: 10, fetchedAt: 1 })
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    // main flattens `extends` before it fetches and caches under the child id, so
+    // the inheriting entry has a number of its own — not asking for it was the bug.
+    expect(aiModel.getAccountUsage).toHaveBeenCalledWith('leaf')
+    expect(usageBadge('leaf')?.textContent).toBe('$1 / $10')
+  })
+
+  it('reports a failed usage read as Unavailable rather than spinning forever', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [KURO_MODEL]
+    aiModel.getAccountUsage.mockRejectedValue(new Error('channel closed'))
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(usageBadge('kuro')?.textContent).toBe('Unavailable')
+  })
+
+  it('asks only for providers with an effective usage source', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [
+      { ...KURO_PROVIDER, usageSource: { id: 'http-json' } },
+      { id: 'plain', baseUrl: 'https://plain.example' },
+    ]
+    renderPanel(aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.getAccountUsage.mock.calls.map(([id]) => id)).toEqual(['kuro'])
+  })
+
+  it('persists a card section collapse under its own key', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    const { storage } = renderPanel(aiModel)
+    await flushEffects()
+
+    // Pricing starts collapsed, so one click must expand it — a stored `true`
+    // here would be the "click does nothing" bug.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Pricing source' }))
+    await flushEffects()
+
+    expect(storage.set).toHaveBeenCalledWith(
+      'ai.settings.models.collapsed',
+      expect.objectContaining({ 'provider:kuro:pricing': false }),
+      expect.anything(),
+    )
+    expect(screen.getByRole('combobox', { name: 'Pricing source' })).toBeTruthy()
+  })
+
+  it('refreshing usage goes through refreshRemote and re-reads the cache', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [KURO_MODEL]
+    aiModel.usages.set('kuro', undefined)
+    renderPanel(
+      aiModel,
+      { confirmed: true },
+      {
+        'ai.settings.models.collapsed': { 'provider:kuro:usage': false },
+      },
+    )
+    await flushEffects()
+    await flushEffects()
+    const before = aiModel.getAccountUsage.mock.calls.length
+
+    aiModel.usages.set('kuro', { kind: 'quota', usedUSD: 2, limitUSD: 10, fetchedAt: 2 })
+    fireEvent.click(screen.getByRole('button', { name: /Refresh usage/ }))
+    await flushEffects()
+    await flushEffects()
+
+    expect(aiModel.refreshRemote).toHaveBeenCalledWith('kuro')
+    expect(aiModel.getAccountUsage.mock.calls.length).toBeGreaterThan(before)
+    expect(usageBadge('kuro')?.textContent).toBe('$2 / $10')
   })
 
   it('probes a testable provider automatically on mount, without a manual button', async () => {

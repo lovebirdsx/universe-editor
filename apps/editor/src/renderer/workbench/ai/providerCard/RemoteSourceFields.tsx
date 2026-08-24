@@ -12,12 +12,21 @@
  *  more exotic (custom headers, nested field maps) stays reachable through the
  *  raw-JSON editor so the form does not grow a control per corner case.
  *
+ *  Both sections collapse, because these are settings you fill in once and then
+ *  only read: collapsed, the summary line is what tells you how the source is
+ *  configured. What the sections render follows the *effective* source — the
+ *  entry's own or an ancestor's — since main flattens `extends` before it fetches
+ *  and caches under this entry's own id. What they *write* is always the entry's
+ *  own field, so opening an inherited form and changing one option materializes
+ *  the whole spec locally rather than editing the ancestor.
+ *
  *  Every edit commits on blur / selection and writes through the parent's
- *  callbacks — this component holds no persistence of its own. The only direct
- *  service call is the account-usage read, mirroring the rest of the card.
+ *  callbacks — this component holds no persistence and reads no service; account
+ *  usage arrives as already-fetched props, because the header badge shows it even
+ *  while the card body is collapsed and unmounted.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useState, type JSX, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import {
   localize,
@@ -25,7 +34,6 @@ import {
   type AiProviderEntry,
   type AiRateTableSnapshot,
   type AiRemoteSourceSpec,
-  type IAiModelService,
 } from '@universe-editor/platform'
 import {
   Badge,
@@ -37,33 +45,43 @@ import {
   Toggle,
 } from '@universe-editor/workbench-ui'
 import { OFFICIAL_CATALOGS } from '../../../../shared/ai/catalog/modelKnowledge.js'
-import { findInherited } from '../../../../shared/ai/providerInheritance.js'
+import { effectiveRemoteSource, findInherited } from '../../../../shared/ai/providerInheritance.js'
+import { formatCurrency, formatTime, usageKindLabel } from '../../../../shared/ai/usageFormat.js'
+import { CardSection } from './CardSection.js'
 import { InheritanceNote } from './ConnectionFields.js'
 import { SavedIndicator } from './SavedIndicator.js'
+import { SettingRow } from './SettingRow.js'
+import type { UsageState } from './usageState.js'
 import type { SavedStamp } from './useProviderField.js'
 import styles from '../AiSettingsEditor.module.css'
 
 type SourceKind = 'pricing' | 'usage'
 
 export interface RemoteSourceFieldsProps {
-  readonly aiModel: IAiModelService
   readonly provider: AiProviderEntry
   readonly allProviders: readonly AiProviderEntry[]
   readonly rateTables: readonly AiRateTableSnapshot[]
-  readonly reloadToken: number
+  readonly usage: UsageState
   readonly saved: SavedStamp | undefined
+  readonly pricingCollapsed: boolean
+  readonly usageCollapsed: boolean
+  readonly onTogglePricing: () => void
+  readonly onToggleUsage: () => void
   readonly onPricingSourceChange: (spec: AiRemoteSourceSpec | undefined) => void
   readonly onUsageSourceChange: (spec: AiRemoteSourceSpec | undefined) => void
   readonly onRefreshRemote: () => Promise<void>
 }
 
 export function RemoteSourceFields({
-  aiModel,
   provider,
   allProviders,
   rateTables,
-  reloadToken,
+  usage,
   saved,
+  pricingCollapsed,
+  usageCollapsed,
+  onTogglePricing,
+  onToggleUsage,
   onPricingSourceChange,
   onUsageSourceChange,
   onRefreshRemote,
@@ -75,20 +93,46 @@ export function RemoteSourceFields({
         allProviders={allProviders}
         rateTables={rateTables}
         saved={saved}
+        collapsed={pricingCollapsed}
+        onToggle={onTogglePricing}
         onChange={onPricingSourceChange}
         onRefresh={onRefreshRemote}
       />
       <UsageSourceSection
-        aiModel={aiModel}
         provider={provider}
         allProviders={allProviders}
-        reloadToken={reloadToken}
+        usage={usage}
         saved={saved}
+        collapsed={usageCollapsed}
+        onToggle={onToggleUsage}
         onChange={onUsageSourceChange}
         onRefresh={onRefreshRemote}
       />
     </>
   )
+}
+
+/**
+ * The empty option means "store nothing of my own", which is not the same as
+ * having no source: if any ancestor declares one, clearing falls back to it. So
+ * the label follows whether that ancestor *exists*, not whether we are currently
+ * inheriting — otherwise an entry that overrides its parent offers "None", and
+ * picking it visibly restores the parent's value instead.
+ */
+function noneOptionLabel(fallbackFrom: string | undefined): string {
+  return fallbackFrom === undefined
+    ? localize('aiModels.source.none.option', 'None')
+    : localize('aiModels.source.inheritOption', 'Inherit from {id}', { id: fallbackFrom })
+}
+
+/** Shared trailing note: whether this section's value is local or borrowed. */
+function sourceInheritanceNote(
+  effective: { readonly from: string; readonly inherited: boolean } | undefined,
+  own: boolean,
+  onRevert: () => void,
+): ReactNode {
+  const inheritedFrom = effective?.inherited === true ? effective.from : undefined
+  return <InheritanceNote own={own} inheritedFrom={inheritedFrom} onRevert={onRevert} />
 }
 
 /* ------------------------------------------------------------------ pricing */
@@ -98,6 +142,8 @@ function PricingSourceSection({
   allProviders,
   rateTables,
   saved,
+  collapsed,
+  onToggle,
   onChange,
   onRefresh,
 }: {
@@ -105,12 +151,22 @@ function PricingSourceSection({
   readonly allProviders: readonly AiProviderEntry[]
   readonly rateTables: readonly AiRateTableSnapshot[]
   readonly saved: SavedStamp | undefined
+  readonly collapsed: boolean
+  readonly onToggle: () => void
   readonly onChange: (spec: AiRemoteSourceSpec | undefined) => void
   readonly onRefresh: () => Promise<void>
 }) {
-  const spec = provider.pricingSource
-  const inherited = findInherited(provider, allProviders, 'pricingSource')
+  const effective = useMemo(
+    () => effectiveRemoteSource(provider, allProviders, 'pricingSource'),
+    [provider, allProviders],
+  )
+  const ancestor = useMemo(
+    () => findInherited(provider, allProviders, 'pricingSource')?.from,
+    [provider, allProviders],
+  )
+  const spec = effective?.value
   const snapshot = rateTables.find((t) => t.providerId === provider.id)
+  const [refreshing, setRefreshing] = useState(false)
 
   const onSourceIdChange = useCallback(
     (id: string) => {
@@ -127,65 +183,136 @@ function PricingSourceSection({
     [onChange, provider.id],
   )
 
+  const refresh = async () => {
+    setRefreshing(true)
+    try {
+      await onRefresh()
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  const ratesLine =
+    spec !== undefined
+      ? snapshot
+        ? localize('aiModels.rates.line', '{count} models · updated {time}', {
+            count: Object.keys(snapshot.rates).length,
+            time: formatTime(snapshot.fetchedAt),
+          })
+        : localize('aiModels.pricingSource.value', '{source} · no price table fetched yet.', {
+            source: spec.id,
+          })
+      : localize(
+          'aiModels.pricingSource.none',
+          'No pricing source — rates are shown as unknown, not estimated.',
+        )
+
   return (
-    <div className={styles['field']} data-testid="ai-pricing-source">
-      <div className={styles['fieldHeader']}>
-        <div className={styles['modelsHeader']}>
-          <span className={styles['label']}>
-            {localize('aiModels.pricingSource.title', 'Pricing source')}
-          </span>
+    <CardSection
+      testId="ai-pricing-source"
+      title={localize('aiModels.pricingSource.title', 'Pricing source')}
+      summary={pricingSummary(
+        spec,
+        snapshot,
+        effective?.inherited === true ? effective.from : undefined,
+      )}
+      collapsed={collapsed}
+      onToggle={onToggle}
+      actions={
+        <>
           <SavedIndicator saved={saved} field="pricingSource" />
-          <span className={styles['spacer']} />
           <Button
             size="sm"
             variant="ghost"
+            busy={refreshing}
             disabled={spec === undefined}
-            onClick={() => void onRefresh()}
+            onClick={() => void refresh()}
           >
             <RefreshCw size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
             {localize('aiModels.pricingSource.refresh', 'Refresh prices')}
           </Button>
-        </div>
-      </div>
-      <Select
-        value={spec?.id ?? ''}
-        aria-label={localize('aiModels.pricingSource.title', 'Pricing source')}
-        options={[
-          { value: '', label: localize('aiModels.pricingSource.none.option', 'None') },
-          {
-            value: 'catalog',
-            label: localize('aiModels.pricingSource.catalog', 'Catalog (built-in)'),
-          },
-          { value: 'http-json', label: localize('aiModels.pricingSource.httpJson', 'HTTP JSON') },
-        ]}
-        onChange={onSourceIdChange}
+        </>
+      }
+    >
+      <SettingRow
+        label={localize('aiModels.pricingSource.title', 'Pricing source')}
+        control={
+          <Select
+            value={spec?.id ?? ''}
+            aria-label={localize('aiModels.pricingSource.title', 'Pricing source')}
+            options={[
+              {
+                value: '',
+                label: noneOptionLabel(ancestor),
+              },
+              {
+                value: 'catalog',
+                label: localize('aiModels.pricingSource.catalog', 'Catalog (built-in)'),
+              },
+              {
+                value: 'http-json',
+                label: localize('aiModels.pricingSource.httpJson', 'HTTP JSON'),
+              },
+            ]}
+            onChange={onSourceIdChange}
+          />
+        }
+        note={
+          <>
+            <span className={styles['ratesLine']}>{ratesLine}</span>
+            {sourceInheritanceNote(effective, provider.pricingSource !== undefined, () =>
+              onChange(undefined),
+            )}
+          </>
+        }
       />
       {spec?.id === 'catalog' && <CatalogVendorField spec={spec} onChange={onChange} />}
       {spec?.id === 'http-json' && (
         <HttpJsonOptionsForm kind="pricing" spec={spec} onChange={onChange} />
       )}
-      <span className={styles['ratesLine']}>
-        {spec !== undefined
-          ? snapshot
-            ? localize('aiModels.rates.line', '{count} models · updated {time}', {
-                count: Object.keys(snapshot.rates).length,
-                time: formatTime(snapshot.fetchedAt),
-              })
-            : localize('aiModels.pricingSource.value', '{source} · no price table fetched yet.', {
-                source: spec.id,
-              })
-          : localize(
-              'aiModels.pricingSource.none',
-              'No pricing source — rates are shown as unknown, not estimated.',
-            )}
-      </span>
-      <InheritanceNote
-        own={spec !== undefined}
-        inheritedFrom={inherited?.from}
-        onRevert={() => onChange(undefined)}
-      />
-    </div>
+    </CardSection>
   )
+}
+
+function pricingSummary(
+  spec: AiRemoteSourceSpec | undefined,
+  snapshot: AiRateTableSnapshot | undefined,
+  inheritedFrom: string | undefined,
+): string {
+  if (spec === undefined) return localize('aiModels.source.summary.none', 'None')
+  const parts: string[] = []
+  if (spec.id === 'catalog') {
+    const vendor = readOptionString(spec.options ?? {}, 'vendor')
+    parts.push(
+      localize('aiModels.pricingSource.summary.catalog', 'Catalog · {vendor}', {
+        vendor: vendor === '' ? '—' : vendor,
+      }),
+    )
+  } else if (spec.id === 'http-json') {
+    const path = readOptionString(spec.options ?? {}, 'path')
+    parts.push(
+      localize('aiModels.pricingSource.summary.httpJson', 'HTTP JSON · {path}', {
+        path: path === '' ? '—' : path,
+      }),
+    )
+    const currency = readOptionString(spec.options ?? {}, 'currency')
+    if (currency !== '') parts.push(currency)
+  } else {
+    // A hand-edited file can name a source no registry knows. Echo the id rather
+    // than assuming the last kind we happen to check for.
+    parts.push(spec.id)
+  }
+  if (snapshot !== undefined) {
+    parts.push(
+      localize('aiModels.source.summary.rates', '{count} models', {
+        count: Object.keys(snapshot.rates).length,
+      }),
+    )
+  }
+  if (inheritedFrom !== undefined) {
+    parts.push(localize('aiModels.inherit.from', 'Inherited from {id}', { id: inheritedFrom }))
+  }
+  return parts.join(' · ')
 }
 
 function CatalogVendorField({
@@ -200,47 +327,59 @@ function CatalogVendorField({
   const vendor = typeof rawVendor === 'string' && rawVendor !== '' ? rawVendor : (vendors[0] ?? '')
 
   return (
-    <div className={styles['field']}>
-      <label className={styles['label']}>
-        {localize('aiModels.pricingSource.catalog.vendor', 'Vendor')}
-      </label>
-      <Select
-        value={vendor}
-        aria-label={localize('aiModels.pricingSource.catalog.vendor', 'Vendor')}
-        options={vendors.map((v) => ({ value: v, label: v }))}
-        onChange={(next) => onChange({ id: 'catalog', options: { vendor: next } })}
-      />
-      <span className={styles['ratesLine']}>
-        {localize(
-          'aiModels.pricingSource.catalog.note',
-          'Rates are looked up by the wire model name, so a renamed channel model will not match the official catalog.',
-        )}
-      </span>
-    </div>
+    <SettingRow
+      label={localize('aiModels.pricingSource.catalog.vendor', 'Vendor')}
+      control={
+        <Select
+          value={vendor}
+          aria-label={localize('aiModels.pricingSource.catalog.vendor', 'Vendor')}
+          options={vendors.map((v) => ({ value: v, label: v }))}
+          onChange={(next) => onChange({ id: 'catalog', options: { vendor: next } })}
+        />
+      }
+      note={
+        <span className={styles['ratesLine']}>
+          {localize(
+            'aiModels.pricingSource.catalog.note',
+            'Rates are looked up by the wire model name, so a renamed channel model will not match the official catalog.',
+          )}
+        </span>
+      }
+    />
   )
 }
 
 /* -------------------------------------------------------------------- usage */
 
 function UsageSourceSection({
-  aiModel,
   provider,
   allProviders,
-  reloadToken,
+  usage,
   saved,
+  collapsed,
+  onToggle,
   onChange,
   onRefresh,
 }: {
-  readonly aiModel: IAiModelService
   readonly provider: AiProviderEntry
   readonly allProviders: readonly AiProviderEntry[]
-  readonly reloadToken: number
+  readonly usage: UsageState
   readonly saved: SavedStamp | undefined
+  readonly collapsed: boolean
+  readonly onToggle: () => void
   readonly onChange: (spec: AiRemoteSourceSpec | undefined) => void
   readonly onRefresh: () => Promise<void>
 }) {
-  const spec = provider.usageSource
-  const inherited = findInherited(provider, allProviders, 'usageSource')
+  const effective = useMemo(
+    () => effectiveRemoteSource(provider, allProviders, 'usageSource'),
+    [provider, allProviders],
+  )
+  const ancestor = useMemo(
+    () => findInherited(provider, allProviders, 'usageSource')?.from,
+    [provider, allProviders],
+  )
+  const spec = effective?.value
+  const [refreshing, setRefreshing] = useState(false)
 
   const onSourceIdChange = useCallback(
     (id: string) => {
@@ -251,106 +390,121 @@ function UsageSourceSection({
     [onChange, provider.id],
   )
 
-  return (
-    <div className={styles['field']} data-testid="ai-usage-source">
-      <div className={styles['fieldHeader']}>
-        <div className={styles['modelsHeader']}>
-          <span className={styles['label']}>
-            {localize('aiModels.usageSource.title', 'Account usage source')}
-          </span>
-          <SavedIndicator saved={saved} field="usageSource" />
-        </div>
-      </div>
-      <Select
-        value={spec?.id ?? ''}
-        aria-label={localize('aiModels.usageSource.title', 'Account usage source')}
-        options={[
-          { value: '', label: localize('aiModels.usageSource.none.option', 'None') },
-          { value: 'http-json', label: localize('aiModels.usageSource.httpJson', 'HTTP JSON') },
-        ]}
-        onChange={onSourceIdChange}
-      />
-      {spec?.id === 'http-json' && (
-        <HttpJsonOptionsForm kind="usage" spec={spec} onChange={onChange} />
-      )}
-      <InheritanceNote
-        own={spec !== undefined}
-        inheritedFrom={inherited?.from}
-        onRevert={() => onChange(undefined)}
-      />
-      {spec !== undefined && (
-        <AccountUsageBlock
-          aiModel={aiModel}
-          provider={provider}
-          reloadToken={reloadToken}
-          onRefresh={onRefresh}
-        />
-      )}
-    </div>
-  )
-}
-
-function AccountUsageBlock({
-  aiModel,
-  provider,
-  reloadToken,
-  onRefresh,
-}: {
-  readonly aiModel: IAiModelService
-  readonly provider: AiProviderEntry
-  readonly reloadToken: number
-  readonly onRefresh: () => Promise<void>
-}) {
-  const [usage, setUsage] = useState<AiAccountUsage | undefined>(undefined)
-  const [loaded, setLoaded] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-
-  const load = useCallback(async () => {
-    setLoaded(false)
-    const next = await aiModel.getAccountUsage(provider.id)
-    if (next === undefined) console.debug('aiModels: account usage unavailable', provider.id)
-    setUsage(next)
-    setLoaded(true)
-  }, [aiModel, provider.id])
-
-  useEffect(() => {
-    void load()
-  }, [load, reloadToken])
-
   const refresh = async () => {
     setRefreshing(true)
     try {
       await onRefresh()
-      await load()
     } finally {
       setRefreshing(false)
     }
   }
 
   return (
-    <div className={styles['field']}>
-      <div className={styles['modelsHeader']}>
-        <span className={styles['label']}>{localize('aiModels.usage.title', 'Account usage')}</span>
-        <Button size="sm" variant="ghost" busy={refreshing} onClick={() => void refresh()}>
-          {localize('aiModels.usage.refresh', 'Refresh usage')}
-        </Button>
-      </div>
-      {!loaded ? (
-        <Spinner size={13} />
-      ) : usage === undefined ? (
-        <span
-          className={styles['usageUnavailable']}
-          data-tooltip={localize(
-            'aiModels.usage.unavailableTooltip',
-            'A usage source is configured but no authoritative value could be fetched; no local estimate is shown in its place.',
-          )}
-        >
-          {localize('aiModels.usage.unavailable', 'Unavailable')}
-        </span>
-      ) : (
-        <UsageSummary usage={usage} />
+    <CardSection
+      testId="ai-usage-source"
+      title={localize('aiModels.usageSource.title', 'Account usage source')}
+      summary={usageSummary(spec, effective?.inherited === true ? effective.from : undefined)}
+      collapsed={collapsed}
+      onToggle={onToggle}
+      actions={
+        <>
+          <SavedIndicator saved={saved} field="usageSource" />
+          <Button
+            size="sm"
+            variant="ghost"
+            busy={refreshing}
+            disabled={spec === undefined}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
+            {localize('aiModels.usage.refresh', 'Refresh usage')}
+          </Button>
+        </>
+      }
+    >
+      <SettingRow
+        label={localize('aiModels.usageSource.title', 'Account usage source')}
+        control={
+          <Select
+            value={spec?.id ?? ''}
+            aria-label={localize('aiModels.usageSource.title', 'Account usage source')}
+            options={[
+              {
+                value: '',
+                label: noneOptionLabel(ancestor),
+              },
+              { value: 'http-json', label: localize('aiModels.usageSource.httpJson', 'HTTP JSON') },
+            ]}
+            onChange={onSourceIdChange}
+          />
+        }
+        note={sourceInheritanceNote(effective, provider.usageSource !== undefined, () =>
+          onChange(undefined),
+        )}
+      />
+      {spec?.id === 'http-json' && (
+        <HttpJsonOptionsForm kind="usage" spec={spec} onChange={onChange} />
       )}
-    </div>
+      {spec !== undefined && <AccountUsageBlock usage={usage} />}
+    </CardSection>
+  )
+}
+
+function usageSummary(
+  spec: AiRemoteSourceSpec | undefined,
+  inheritedFrom: string | undefined,
+): string {
+  if (spec === undefined) return localize('aiModels.source.summary.none', 'None')
+  const parts: string[] = []
+  if (spec.id === 'http-json') {
+    const path = readOptionString(spec.options ?? {}, 'path')
+    parts.push(
+      localize('aiModels.usageSource.summary.httpJson', 'HTTP JSON · {path}', {
+        path: path === '' ? '—' : path,
+      }),
+    )
+  } else {
+    parts.push(spec.id)
+  }
+  const kind = readOptionString(spec.options ?? {}, 'kind')
+  if (isUsageKind(kind)) parts.push(usageKindLabel(kind))
+  if (inheritedFrom !== undefined) {
+    parts.push(localize('aiModels.inherit.from', 'Inherited from {id}', { id: inheritedFrom }))
+  }
+  return parts.join(' · ')
+}
+
+function isUsageKind(value: string): value is AiAccountUsage['kind'] {
+  return value === 'quota' || value === 'balance' || value === 'subscription'
+}
+
+/**
+ * The detail view of a number the header already shows in short form. Purely
+ * presentational: the fetch lives in the panel so the badge survives a collapsed
+ * card.
+ */
+function AccountUsageBlock({ usage }: { readonly usage: UsageState }) {
+  return (
+    <SettingRow
+      label={localize('aiModels.usage.title', 'Account usage')}
+      control={
+        usage.kind === 'loading' || usage.kind === 'none' ? (
+          <Spinner size={13} />
+        ) : usage.value === undefined ? (
+          <span
+            className={styles['usageUnavailable']}
+            data-tooltip={localize(
+              'aiModels.usage.unavailableTooltip',
+              'A usage source is configured but no authoritative value could be fetched; no local estimate is shown in its place.',
+            )}
+          >
+            {localize('aiModels.usage.unavailable', 'Unavailable')}
+          </span>
+        ) : (
+          <UsageSummary usage={usage.value} />
+        )
+      }
+    />
   )
 }
 
@@ -391,27 +545,6 @@ function UsageSummary({ usage }: { readonly usage: AiAccountUsage }) {
       </span>
     </div>
   )
-}
-
-function usageKindLabel(kind: AiAccountUsage['kind']): string {
-  switch (kind) {
-    case 'quota':
-      return localize('aiModels.usage.kind.quota', 'Quota')
-    case 'balance':
-      return localize('aiModels.usage.kind.balance', 'Balance')
-    case 'subscription':
-      return localize('aiModels.usage.kind.subscription', 'Subscription')
-  }
-}
-
-function formatCurrency(value: number, currency: string): string {
-  return `${currency === 'CNY' ? '¥' : '$'}${value.toLocaleString(undefined, {
-    maximumFractionDigits: 2,
-  })}`
-}
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleString()
 }
 
 /* ------------------------------------------------------- http-json options */
@@ -633,11 +766,9 @@ function OptionTextField({
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
   return (
-    <div className={styles['configRow']}>
-      <div className={styles['configMeta']}>
-        <span className={styles['configKey']}>{label}</span>
-      </div>
-      <div className={styles['configControl']}>
+    <SettingRow
+      label={label}
+      control={
         <Input
           value={draft}
           placeholder={placeholder}
@@ -648,8 +779,8 @@ function OptionTextField({
             if (trimmed !== value) onCommit(trimmed === '' ? undefined : trimmed)
           }}
         />
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -667,11 +798,9 @@ function OptionNumberField({
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
   return (
-    <div className={styles['configRow']}>
-      <div className={styles['configMeta']}>
-        <span className={styles['configKey']}>{label}</span>
-      </div>
-      <div className={styles['configControl']}>
+    <SettingRow
+      label={label}
+      control={
         <Input
           type="number"
           value={draft}
@@ -693,8 +822,8 @@ function OptionNumberField({
             onCommit(n)
           }}
         />
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -710,14 +839,10 @@ function OptionSelectField<T extends string>({
   readonly onCommit: (value: T) => void
 }) {
   return (
-    <div className={styles['configRow']}>
-      <div className={styles['configMeta']}>
-        <span className={styles['configKey']}>{label}</span>
-      </div>
-      <div className={styles['configControl']}>
-        <Select value={value} options={options} aria-label={label} onChange={onCommit} />
-      </div>
-    </div>
+    <SettingRow
+      label={label}
+      control={<Select value={value} options={options} aria-label={label} onChange={onCommit} />}
+    />
   )
 }
 

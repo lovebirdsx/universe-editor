@@ -316,6 +316,10 @@
   flex-direction: column;
   gap: var(--spacing-5);
   padding: 0 var(--spacing-6) var(--spacing-5);
+
+  /* Rows below collapse to a stacked layout on the card's own width, not the
+     viewport's — the settings panel is resizable independently of the window. */
+  container-type: inline-size;
 }
 
 .btnIcon {
@@ -678,12 +682,88 @@
   line-height: var(--line-height-normal);
 }
 
-/* -- provider card: inline save feedback / inheritance -------------------- */
+/* -- compact setting rows (label left / control right) -------------------- */
 
-.fieldHeader {
+.settingRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-2) var(--spacing-6);
+}
+
+.settingRowLabel {
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
+  min-height: 24px;
+}
+
+.settingRowControl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+@container (max-width: 520px) {
+  .settingRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* -- collapsible section inside a provider card --------------------------- */
+
+.cardSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.cardSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.cardSectionToggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+  padding: var(--spacing-2) 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cardSectionTitle {
+  flex: 0 0 auto;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.cardSectionSummary {
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cardSectionActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.cardSectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
 }
 
 .savedIndicator {

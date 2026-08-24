@@ -17,7 +17,7 @@ import { localize, type AiProviderEntry } from '@universe-editor/platform'
 import { Button, IconButton, Input } from '@universe-editor/workbench-ui'
 import { maskKey } from '../../../../shared/ai/maskKey.js'
 import { findInherited } from '../../../../shared/ai/providerInheritance.js'
-import { SavedIndicator } from './SavedIndicator.js'
+import { SettingRow } from './SettingRow.js'
 import { useEditableText, type SavedStamp } from './useProviderField.js'
 import styles from '../AiSettingsEditor.module.css'
 
@@ -60,6 +60,7 @@ export function ConnectionFields({
       <ApiKeyField
         apiKey={provider.apiKey}
         inheritedFrom={inheritedKey?.from}
+        saved={saved}
         onSetApiKey={onSetApiKey}
         onClearApiKey={onClearApiKey}
       />
@@ -87,22 +88,23 @@ function TextField({
   readonly onRevert: () => void
 }) {
   return (
-    <div className={styles['field']}>
-      <div className={styles['fieldHeader']}>
-        <label className={styles['label']}>{title}</label>
-        <SavedIndicator saved={saved} field={name} />
-      </div>
-      <Input
-        value={edit.value}
-        placeholder={placeholder}
-        aria-label={title}
-        onChange={(e) => edit.onChange(e.target.value)}
-        onFocus={edit.onFocus}
-        onBlur={edit.onBlur}
-        onKeyDown={edit.onKeyDown}
-      />
-      <InheritanceNote own={own} inheritedFrom={inheritedFrom} onRevert={onRevert} />
-    </div>
+    <SettingRow
+      label={title}
+      saved={saved}
+      field={name}
+      control={
+        <Input
+          value={edit.value}
+          placeholder={placeholder}
+          aria-label={title}
+          onChange={(e) => edit.onChange(e.target.value)}
+          onFocus={edit.onFocus}
+          onBlur={edit.onBlur}
+          onKeyDown={edit.onKeyDown}
+        />
+      }
+      note={<InheritanceNote own={own} inheritedFrom={inheritedFrom} onRevert={onRevert} />}
+    />
   )
 }
 
@@ -139,11 +141,13 @@ export function InheritanceNote({
 function ApiKeyField({
   apiKey,
   inheritedFrom,
+  saved,
   onSetApiKey,
   onClearApiKey,
 }: {
   readonly apiKey: string | undefined
   readonly inheritedFrom: string | undefined
+  readonly saved: SavedStamp | undefined
   readonly onSetApiKey: (key: string) => void
   readonly onClearApiKey: () => void
 }) {
@@ -159,101 +163,105 @@ function ApiKeyField({
   }, [apiKey, draft, onSetApiKey])
 
   return (
-    <div className={styles['field']}>
-      <label className={styles['label']}>{localize('aiModels.apiKey', 'API Key')}</label>
-      {editing ? (
-        <div className={styles['apiKeyRow']}>
-          <Input
-            autoFocus
-            type={revealed ? 'text' : 'password'}
-            value={draft}
-            placeholder={
-              inheritedFrom !== undefined
-                ? localize(
-                    'aiModels.apiKey.overridePlaceholder',
-                    'Inherited from {id} — enter a key to override',
-                    { id: inheritedFrom },
-                  )
-                : 'sk-…'
-            }
-            aria-label={localize('aiModels.apiKey', 'API Key')}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commit()
-              else if (e.key === 'Escape') setDraft(undefined)
-            }}
-          />
-          <IconButton
-            label={
-              revealed
-                ? localize('aiModels.apiKey.hide', 'Hide API key')
-                : localize('aiModels.apiKey.show', 'Show API key')
-            }
-            onClick={() => setRevealed((v) => !v)}
-          >
-            {revealed ? (
-              <EyeOff size={15} strokeWidth={1.75} />
-            ) : (
-              <Eye size={15} strokeWidth={1.75} />
-            )}
-          </IconButton>
-          <Button size="sm" onClick={commit}>
-            {localize('aiModels.apiKey.save', 'Save')}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDraft(undefined)}>
-            {localize('aiModels.apiKey.cancel', 'Cancel')}
-          </Button>
-        </div>
-      ) : (
-        <div className={styles['apiKeyRow']}>
-          <span className={styles['apiKeyStatus']}>
-            {has ? (
-              revealed ? (
-                apiKey
+    <SettingRow
+      label={localize('aiModels.apiKey', 'API Key')}
+      saved={saved}
+      field="apiKey"
+      control={
+        editing ? (
+          <div className={styles['apiKeyRow']}>
+            <Input
+              autoFocus
+              type={revealed ? 'text' : 'password'}
+              value={draft}
+              placeholder={
+                inheritedFrom !== undefined
+                  ? localize(
+                      'aiModels.apiKey.overridePlaceholder',
+                      'Inherited from {id} — enter a key to override',
+                      { id: inheritedFrom },
+                    )
+                  : 'sk-…'
+              }
+              aria-label={localize('aiModels.apiKey', 'API Key')}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commit()
+                else if (e.key === 'Escape') setDraft(undefined)
+              }}
+            />
+            <IconButton
+              label={
+                revealed
+                  ? localize('aiModels.apiKey.hide', 'Hide API key')
+                  : localize('aiModels.apiKey.show', 'Show API key')
+              }
+              onClick={() => setRevealed((v) => !v)}
+            >
+              {revealed ? (
+                <EyeOff size={15} strokeWidth={1.75} />
               ) : (
-                maskKey(apiKey)
-              )
-            ) : inheritedFrom !== undefined ? (
-              <span className={styles['inheritNote']}>
-                <KeyRound size={12} strokeWidth={2} />
-                {localize('aiModels.apiKey.inherited', 'Inherited from {id}', {
-                  id: inheritedFrom,
-                })}
-              </span>
-            ) : (
-              localize('aiModels.apiKey.unset', 'Not set')
-            )}
-          </span>
-          <IconButton
-            label={
-              revealed
-                ? localize('aiModels.apiKey.hide', 'Hide API key')
-                : localize('aiModels.apiKey.show', 'Show API key')
-            }
-            disabled={!has}
-            onClick={() => setRevealed((v) => !v)}
-          >
-            {revealed ? (
-              <EyeOff size={15} strokeWidth={1.75} />
-            ) : (
-              <Eye size={15} strokeWidth={1.75} />
-            )}
-          </IconButton>
-          <IconButton
-            label={localize('aiModels.apiKey.edit', 'Edit API key')}
-            onClick={() => setDraft(apiKey ?? '')}
-          >
-            <Pencil size={15} strokeWidth={1.75} />
-          </IconButton>
-          <IconButton
-            label={localize('aiModels.apiKey.clearBtn', 'Clear API key')}
-            disabled={!has}
-            onClick={onClearApiKey}
-          >
-            <X size={15} strokeWidth={1.75} />
-          </IconButton>
-        </div>
-      )}
-    </div>
+                <Eye size={15} strokeWidth={1.75} />
+              )}
+            </IconButton>
+            <Button size="sm" onClick={commit}>
+              {localize('aiModels.apiKey.save', 'Save')}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setDraft(undefined)}>
+              {localize('aiModels.apiKey.cancel', 'Cancel')}
+            </Button>
+          </div>
+        ) : (
+          <div className={styles['apiKeyRow']}>
+            <span className={styles['apiKeyStatus']}>
+              {has ? (
+                revealed ? (
+                  apiKey
+                ) : (
+                  maskKey(apiKey)
+                )
+              ) : inheritedFrom !== undefined ? (
+                <span className={styles['inheritNote']}>
+                  <KeyRound size={12} strokeWidth={2} />
+                  {localize('aiModels.apiKey.inherited', 'Inherited from {id}', {
+                    id: inheritedFrom,
+                  })}
+                </span>
+              ) : (
+                localize('aiModels.apiKey.unset', 'Not set')
+              )}
+            </span>
+            <IconButton
+              label={
+                revealed
+                  ? localize('aiModels.apiKey.hide', 'Hide API key')
+                  : localize('aiModels.apiKey.show', 'Show API key')
+              }
+              disabled={!has}
+              onClick={() => setRevealed((v) => !v)}
+            >
+              {revealed ? (
+                <EyeOff size={15} strokeWidth={1.75} />
+              ) : (
+                <Eye size={15} strokeWidth={1.75} />
+              )}
+            </IconButton>
+            <IconButton
+              label={localize('aiModels.apiKey.edit', 'Edit API key')}
+              onClick={() => setDraft(apiKey ?? '')}
+            >
+              <Pencil size={15} strokeWidth={1.75} />
+            </IconButton>
+            <IconButton
+              label={localize('aiModels.apiKey.clearBtn', 'Clear API key')}
+              disabled={!has}
+              onClick={onClearApiKey}
+            >
+              <X size={15} strokeWidth={1.75} />
+            </IconButton>
+          </div>
+        )
+      }
+    />
   )
 }
