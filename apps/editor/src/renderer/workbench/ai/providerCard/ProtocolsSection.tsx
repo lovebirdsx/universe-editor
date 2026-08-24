@@ -19,7 +19,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useState, type JSX, type ReactNode } from 'react'
-import { Pencil, Pin, Plus, Search, Settings2, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Pin,
+  Plus,
+  Search,
+  Settings2,
+  Trash2,
+  X,
+} from 'lucide-react'
 import {
   AI_WIRE_PROTOCOLS,
   composeModelId,
@@ -44,6 +54,7 @@ import {
   refWireName,
   removeProtocol,
   setProtocolRefs,
+  staticFirstProtocols,
 } from '../../../../shared/ai/protocolMapEdit.js'
 import { effectiveConnection, findInherited } from '../../../../shared/ai/providerInheritance.js'
 import { InheritanceNote } from './ConnectionFields.js'
@@ -65,6 +76,9 @@ interface ProtocolsSectionProps {
   readonly onChange: (map: AiProtocolMap | undefined) => void
   readonly onConfigure: (modelId: string, config: AiModelConfiguration) => Promise<void>
   readonly getConfiguration: (modelId: string) => Promise<AiModelConfiguration>
+  /** True when this protocol block is collapsed; keyed per provider+protocol by the panel. */
+  readonly isCollapsed: (protocol: AiWireProtocol) => boolean
+  readonly onToggleCollapsed: (protocol: AiWireProtocol) => void
 }
 
 export function ProtocolsSection({
@@ -78,6 +92,8 @@ export function ProtocolsSection({
   onChange,
   onConfigure,
   getConfiguration,
+  isCollapsed,
+  onToggleCollapsed,
 }: ProtocolsSectionProps) {
   const inherited = useMemo(
     () => findInherited(provider, allProviders, 'protocolMap'),
@@ -90,6 +106,9 @@ export function ProtocolsSection({
     [provider.protocolMap, inherited],
   )
   const declared = useMemo(() => declaredProtocols(effective), [effective])
+  // Display-only: static lists first, discover entries below — `declared`
+  // keeps its own order for the last-protocol gate and the add picker.
+  const ordered = useMemo(() => staticFirstProtocols(effective), [effective])
   const [probing, setProbing] = useState<AiWireProtocol | undefined>(undefined)
   const [adding, setAdding] = useState<AiWireProtocol | undefined>(undefined)
   const [addDraft, setAddDraft] = useState('')
@@ -249,10 +268,12 @@ export function ProtocolsSection({
           )}
         </div>
       ) : (
-        declared.map((protocol) => {
+        ordered.map((protocol) => {
           const refs = effective[protocol] ?? []
           const mode: ProtocolMode = refs.length === 0 ? 'discover' : 'static'
           const resolved = modelsByProtocol.get(protocol) ?? []
+          const collapsed = isCollapsed(protocol)
+          const summaryCount = mode === 'discover' ? resolved.length : refs.length
           return (
             <div
               key={protocol}
@@ -260,13 +281,35 @@ export function ProtocolsSection({
               data-testid={`ai-protocol-${protocol}`}
             >
               <div className={styles['protocolHeaderRow']}>
-                <span className={styles['protocolName']}>{protocol}</span>
-                {protocol === 'openai-responses' && (
-                  <span className={styles['agentOnlyBadge']}>
-                    {localize('aiModels.entry.agentOnly', 'Agent-only')}
-                  </span>
-                )}
-                <span className={styles['spacer']} />
+                <button
+                  type="button"
+                  className={styles['protocolToggle']}
+                  data-testid={`ai-protocol-toggle-${protocol}`}
+                  aria-expanded={!collapsed}
+                  aria-label={localize('aiModels.protocol.toggle', 'Toggle {protocol} models', {
+                    protocol,
+                  })}
+                  onClick={() => onToggleCollapsed(protocol)}
+                >
+                  {collapsed ? (
+                    <ChevronRight size={14} strokeWidth={1.75} className={styles['cardIcon']} />
+                  ) : (
+                    <ChevronDown size={14} strokeWidth={1.75} className={styles['cardIcon']} />
+                  )}
+                  <span className={styles['protocolName']}>{protocol}</span>
+                  {protocol === 'openai-responses' && (
+                    <span className={styles['agentOnlyBadge']}>
+                      {localize('aiModels.entry.agentOnly', 'Agent-only')}
+                    </span>
+                  )}
+                  {summaryCount > 0 && (
+                    <span className={styles['protocolSummary']}>
+                      {localize('aiModels.protocol.modelCount', '{count} models', {
+                        count: summaryCount,
+                      })}
+                    </span>
+                  )}
+                </button>
                 <Select
                   className={styles['protocolMode'] ?? ''}
                   value={mode}
@@ -294,104 +337,108 @@ export function ProtocolsSection({
                 </IconButton>
               </div>
 
-              {mode === 'discover' ? (
-                <>
-                  <div className={styles['protocolHint']}>
-                    {localize(
-                      'aiModels.protocol.discover.hint',
-                      'The endpoint is asked for its model list every launch. Pin it to keep working offline and to review changes.',
-                    )}
-                  </div>
-                  <ModelList>
-                    {resolved
-                      .filter((m) => matches(m.channelModel, m.name, m.family, query))
-                      .map((model) => (
-                        <ModelRow
-                          key={model.id}
-                          wireName={model.channelModel}
-                          model={model}
-                          onConfigure={onConfigure}
-                          getConfiguration={getConfiguration}
-                        />
-                      ))}
-                  </ModelList>
-                  {resolved.length === 0 && (
-                    <div className={styles['noModels']}>
-                      {localize('aiModels.entry.noModels', 'No models resolved for this protocol.')}
+              {!collapsed &&
+                (mode === 'discover' ? (
+                  <>
+                    <div className={styles['protocolHint']}>
+                      {localize(
+                        'aiModels.protocol.discover.hint',
+                        'The endpoint is asked for its model list every launch. Pin it to keep working offline and to review changes.',
+                      )}
                     </div>
-                  )}
-                  <div className={styles['protocolActions']}>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={resolved.length === 0}
-                      onClick={() => pinDiscovered(protocol)}
-                    >
-                      <Pin size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
-                      {localize('aiModels.protocol.pin', 'Pin {count} models to a static list', {
-                        count: resolved.length,
-                      })}
-                    </Button>
-                    {addModelControl(protocol, refs)}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <ModelList>
-                    {refs.map((ref, index) => {
-                      const wire = refWireName(ref)
-                      const key = refKnowledgeKey(ref)
-                      const model = models.find(
-                        (m) => m.id === composeModelId(provider.id, protocol, wire),
-                      )
-                      const rowId = `${protocol}#${index}`
-                      if (!matches(wire, model?.name, model?.family, query)) return null
-                      if (editing === rowId) {
-                        return (
-                          <li key={rowId} className={styles['modelRow']}>
-                            <ModelRefEditor
-                              value={ref}
-                              knowledge={knowledge}
-                              onCancel={() => setEditing(undefined)}
-                              onCommit={(next) => {
-                                setEditing(undefined)
-                                setRefs(
-                                  protocol,
-                                  refs.map((r, i) => (i === index ? next : r)),
-                                )
-                              }}
-                            />
-                          </li>
+                    <ModelList>
+                      {resolved
+                        .filter((m) => matches(m.channelModel, m.name, m.family, query))
+                        .map((model) => (
+                          <ModelRow
+                            key={model.id}
+                            wireName={model.channelModel}
+                            model={model}
+                            onConfigure={onConfigure}
+                            getConfiguration={getConfiguration}
+                          />
+                        ))}
+                    </ModelList>
+                    {resolved.length === 0 && (
+                      <div className={styles['noModels']}>
+                        {localize(
+                          'aiModels.entry.noModels',
+                          'No models resolved for this protocol.',
+                        )}
+                      </div>
+                    )}
+                    <div className={styles['protocolActions']}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={resolved.length === 0}
+                        onClick={() => pinDiscovered(protocol)}
+                      >
+                        <Pin size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
+                        {localize('aiModels.protocol.pin', 'Pin {count} models to a static list', {
+                          count: resolved.length,
+                        })}
+                      </Button>
+                      {addModelControl(protocol, refs)}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <ModelList>
+                      {refs.map((ref, index) => {
+                        const wire = refWireName(ref)
+                        const key = refKnowledgeKey(ref)
+                        const model = models.find(
+                          (m) => m.id === composeModelId(provider.id, protocol, wire),
                         )
-                      }
-                      return (
-                        <ModelRow
-                          key={rowId}
-                          wireName={wire}
-                          knowledgeRef={key !== wire ? key : undefined}
-                          model={model}
-                          onEdit={() => setEditing(rowId)}
-                          onRemove={() =>
-                            setRefs(
-                              protocol,
-                              refs.filter((_, i) => i !== index),
-                            )
-                          }
-                          onConfigure={onConfigure}
-                          getConfiguration={getConfiguration}
-                        />
-                      )
-                    })}
-                  </ModelList>
-                  <div className={styles['protocolActions']}>
-                    {addModelControl(protocol, refs)}
-                    <Button size="sm" variant="ghost" onClick={() => setProbing(protocol)}>
-                      <Search size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
-                      {localize('aiModels.protocol.probe', 'Probe endpoint…')}
-                    </Button>
-                  </div>
-                </>
-              )}
+                        const rowId = `${protocol}#${index}`
+                        if (!matches(wire, model?.name, model?.family, query)) return null
+                        if (editing === rowId) {
+                          return (
+                            <li key={rowId} className={styles['modelRow']}>
+                              <ModelRefEditor
+                                value={ref}
+                                knowledge={knowledge}
+                                onCancel={() => setEditing(undefined)}
+                                onCommit={(next) => {
+                                  setEditing(undefined)
+                                  setRefs(
+                                    protocol,
+                                    refs.map((r, i) => (i === index ? next : r)),
+                                  )
+                                }}
+                              />
+                            </li>
+                          )
+                        }
+                        return (
+                          <ModelRow
+                            key={rowId}
+                            wireName={wire}
+                            knowledgeRef={key !== wire ? key : undefined}
+                            model={model}
+                            onEdit={() => setEditing(rowId)}
+                            onRemove={() =>
+                              setRefs(
+                                protocol,
+                                refs.filter((_, i) => i !== index),
+                              )
+                            }
+                            onConfigure={onConfigure}
+                            getConfiguration={getConfiguration}
+                          />
+                        )
+                      })}
+                    </ModelList>
+                    <div className={styles['protocolActions']}>
+                      {addModelControl(protocol, refs)}
+                      <Button size="sm" variant="ghost" onClick={() => setProbing(protocol)}>
+                        <Search size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
+                        {localize('aiModels.protocol.probe', 'Probe endpoint…')}
+                      </Button>
+                    </div>
+                  </>
+                ))}
             </div>
           )
         })

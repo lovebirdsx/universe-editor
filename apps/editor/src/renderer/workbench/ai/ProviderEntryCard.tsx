@@ -68,6 +68,9 @@ interface ProviderEntryCardProps {
   /** True when the section is collapsed; keyed per provider by the panel. */
   readonly isSectionCollapsed: (section: CardSectionId, defaultCollapsed: boolean) => boolean
   readonly onToggleSection: (section: CardSectionId, defaultCollapsed: boolean) => void
+  /** True when the given protocol block is collapsed; keyed per provider+protocol by the panel. */
+  readonly isProtocolCollapsed: (protocol: AiWireProtocol) => boolean
+  readonly onToggleProtocol: (protocol: AiWireProtocol) => void
   readonly storage: IStorageService
   readonly filterStorageKey: string
   readonly updateEntry: (build: ProviderPatch) => Promise<void>
@@ -96,6 +99,8 @@ export function ProviderEntryCard({
   onToggleCollapsed,
   isSectionCollapsed,
   onToggleSection,
+  isProtocolCollapsed,
+  onToggleProtocol,
   storage,
   filterStorageKey,
   updateEntry,
@@ -290,6 +295,8 @@ export function ProviderEntryCard({
               onChange={(map) => void setField('protocolMap', map)}
               onConfigure={onConfigure}
               getConfiguration={getConfiguration}
+              isCollapsed={isProtocolCollapsed}
+              onToggleCollapsed={onToggleProtocol}
             />
           </CardSection>
         </div>

@@ -48,6 +48,8 @@ const SECTION_PROVIDERS = 'section:providers'
 const providerCollapseKey = (id: string): string => `provider:${id}`
 const sectionCollapseKey = (id: string, section: CardSectionId): string =>
   `provider:${id}:${section}`
+const protocolCollapseKey = (id: string, protocol: string): string =>
+  `provider:${id}:protocol:${protocol}`
 
 export function AiModelsPanel() {
   const aiModel = useService(IAiModelService)
@@ -405,6 +407,12 @@ export function AiModelsPanel() {
                 }
                 onToggleSection={(section, defaultCollapsed) =>
                   toggleCollapsed(sectionCollapseKey(provider.id, section), defaultCollapsed)
+                }
+                isProtocolCollapsed={(protocol) =>
+                  collapsed[protocolCollapseKey(provider.id, protocol)] ?? false
+                }
+                onToggleProtocol={(protocol) =>
+                  toggleCollapsed(protocolCollapseKey(provider.id, protocol), false)
                 }
                 storage={storage}
                 filterStorageKey={filterKey(provider.id)}

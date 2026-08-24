@@ -665,8 +665,10 @@
 }
 
 .agentOnlyBadge {
+  flex: 0 0 auto;
   font-size: var(--font-size-xs);
   color: var(--vscode-editor-mutedForeground);
+  white-space: nowrap;
 }
 
 .legacyBanner {
@@ -834,9 +836,35 @@
   gap: var(--spacing-3);
 }
 
+.protocolToggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-1) 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.protocolSummary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .protocolName {
+  flex: 0 0 auto;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
+  white-space: nowrap;
 }
 
 .protocolMode {

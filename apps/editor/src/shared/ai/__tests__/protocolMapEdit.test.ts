@@ -18,6 +18,7 @@ import {
   refWireName,
   removeProtocol,
   setProtocolRefs,
+  staticFirstProtocols,
 } from '../protocolMapEdit.js'
 
 describe('protocolMapEdit — protocol states', () => {
@@ -35,6 +36,45 @@ describe('protocolMapEdit — protocol states', () => {
     const map: AiProtocolMap = { ollama: [], 'anthropic-messages': [] }
     expect(declaredProtocols(map)).toEqual(['anthropic-messages', 'ollama'])
     expect(declaredProtocols(undefined)).toEqual([])
+  })
+})
+
+describe('protocolMapEdit — render order', () => {
+  it('puts static lists before discover entries, keeping sorted order within each group', () => {
+    const map: AiProtocolMap = {
+      'openai-chat': [],
+      ollama: ['llama3'],
+      'anthropic-messages': ['claude-sonnet'],
+      'openai-responses': [],
+    }
+    expect(staticFirstProtocols(map)).toEqual([
+      'anthropic-messages',
+      'ollama',
+      'openai-chat',
+      'openai-responses',
+    ])
+  })
+
+  it('matches declaredProtocols when every protocol shares one mode', () => {
+    expect(staticFirstProtocols({ ollama: ['a'], 'anthropic-messages': ['b'] })).toEqual([
+      'anthropic-messages',
+      'ollama',
+    ])
+    expect(staticFirstProtocols({ ollama: [], 'openai-chat': [] })).toEqual([
+      'ollama',
+      'openai-chat',
+    ])
+  })
+
+  it('returns an empty list for undefined or an empty map', () => {
+    expect(staticFirstProtocols(undefined)).toEqual([])
+    expect(staticFirstProtocols({})).toEqual([])
+  })
+
+  it('does not mutate the input map', () => {
+    const map: AiProtocolMap = { ollama: [], 'openai-chat': ['gpt-4o'] }
+    staticFirstProtocols(map)
+    expect(map).toEqual({ ollama: [], 'openai-chat': ['gpt-4o'] })
   })
 })
 

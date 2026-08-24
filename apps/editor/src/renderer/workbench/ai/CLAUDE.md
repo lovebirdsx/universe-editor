@@ -49,7 +49,9 @@ apps/editor/src/renderer/workbench/ai/
     ConnectionFields.tsx      Base URL / API Key（内联编辑）+ `InheritanceNote`（继承 vs 覆盖标注）
     ExtendsField.tsx          extends 下拉（候选排除自己与后代）+ 写盘前用 resolveProviderEntries 预跑拦截
     ProtocolsSection.tsx      **重头戏**：protocolMap 三态编辑（未声明 / `[]` discover / 非空静态清单）+
-                              协议增删 + 固化 + 探测 + 行内 ModelRow（含 configurationSchema 齿轮、RateBadge）
+                              协议增删 + 固化 + 探测 + 行内 ModelRow（含 configurationSchema 齿轮、RateBadge）；
+                              块级折叠（协议名区域为 toggle，折叠态走面板持久化）；渲染按 static 优先排序
+                              （`staticFirstProtocols`，仅显示层，`declaredProtocols` 基础序不动）
                               标题与 SavedIndicator 由外层 CardSection 持有，本组件只渲染 body
     ProbeModelsDialog.tsx     探测结果勾选弹窗（VirtualList + filter，默认只勾前 50，>200 提示改回 discover）
     ModelRefEditor.tsx        单条 ref 高级编辑（wire name / knowledge ref / capabilities 只能收窄）
@@ -105,7 +107,7 @@ const storage = useService(IStorageService)
 |---|---|---|
 | 当前激活项（AI 分类或 agent） | `settings.activeItem`（值 `ai:<cat>` / `agent:<id>`） | GLOBAL |
 | 各 AI 分类滚动位置 | `ai.settings.scroll.ai:<categoryId>` | GLOBAL |
-| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:providers` / `provider:<id>` / `provider:<id>:pricing` / `:usage` / `:protocols` | GLOBAL |
+| group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:providers` / `provider:<id>` / `provider:<id>:pricing` / `:usage` / `:protocols` / `provider:<id>:protocol:<协议>`（协议块级折叠） | GLOBAL |
 | Claude 子分类 / 滚动（agent 项内部自管） | `agent.settings.claude.activeCategory` / `…scroll.<id>` | GLOBAL |
 
 > 全用 GLOBAL（AI/agent 配置与 workspace 无关）。滚动恢复要 `requestAnimationFrame` 等面板渲染后再设 `scrollTop`；切换项前先 flush 旧 AI 项滚动位置（agent 项不在壳里跟踪滚动）。

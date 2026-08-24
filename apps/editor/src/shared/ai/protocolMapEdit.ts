@@ -85,6 +85,21 @@ export function declaredProtocols(map: AiProtocolMap | undefined): readonly AiWi
   return (Object.keys(map ?? {}) as AiWireProtocol[]).sort()
 }
 
+/**
+ * Render order for the protocol blocks: explicit static lists first, then
+ * "discover from endpoint" (`[]`) entries, each group in `declaredProtocols`
+ * order. Display-only — `declaredProtocols` keeps its own order, which
+ * `useAutoVerify` relies on for the default-protocol fallback.
+ */
+export function staticFirstProtocols(map: AiProtocolMap | undefined): readonly AiWireProtocol[] {
+  const declared = declaredProtocols(map)
+  const refs = map ?? {}
+  return [
+    ...declared.filter((p) => (refs[p] ?? []).length > 0),
+    ...declared.filter((p) => (refs[p] ?? []).length === 0),
+  ]
+}
+
 export function setProtocolRefs(
   map: AiProtocolMap | undefined,
   protocol: AiWireProtocol,

@@ -15,6 +15,7 @@ import type {
   AiModelMetadata,
   AiProtocolMap,
   AiProviderEntry,
+  AiWireProtocol,
   IAiModelService,
   IDialogService,
 } from '@universe-editor/platform'
@@ -61,6 +62,8 @@ function renderSection({
   knowledge = {},
   confirmResult = { confirmed: true, choice: 'primary' as const },
   probeIds = [],
+  isCollapsed = () => false,
+  onToggleCollapsed = vi.fn<(protocol: AiWireProtocol) => void>(),
 }: {
   readonly provider: AiProviderEntry
   readonly allProviders?: readonly AiProviderEntry[]
@@ -69,6 +72,8 @@ function renderSection({
   readonly confirmResult?: { confirmed: boolean; choice: 'primary' | 'secondary' | 'cancel' }
   /** What the endpoint reports when ProbeModelsDialog mounts. */
   readonly probeIds?: readonly string[]
+  readonly isCollapsed?: (protocol: AiWireProtocol) => boolean
+  readonly onToggleCollapsed?: (protocol: AiWireProtocol) => void
 }): Rendered {
   const onChange = vi.fn<(map: AiProtocolMap | undefined) => void>()
   const dialog = { confirm: vi.fn(async () => confirmResult) }
@@ -92,6 +97,8 @@ function renderSection({
       onChange={onChange}
       onConfigure={vi.fn(async (_id: string, _c: AiModelConfiguration) => {})}
       getConfiguration={vi.fn(async (_id: string) => ({}))}
+      isCollapsed={isCollapsed}
+      onToggleCollapsed={onToggleCollapsed}
     />,
   )
   return { onChange, dialog, verifyProvider }
@@ -274,5 +281,67 @@ describe('ProtocolsSection', () => {
       baseUrl: 'https://gw.example/v1',
       apiKey: 'sk-parent',
     })
+  })
+
+  it('renders static-list blocks before discover blocks', async () => {
+    const provider: AiProviderEntry = {
+      id: 'p',
+      protocolMap: {
+        'openai-chat': [],
+        ollama: ['llama3'],
+        'anthropic-messages': ['claude-sonnet'],
+      },
+    }
+    renderSection({ provider })
+    await flushEffects()
+
+    const order = (testId: string): number => {
+      const el = screen.getByTestId(testId)
+      if (el.parentElement === null) throw new Error('expected a parent element')
+      return Array.prototype.indexOf.call(el.parentElement.children, el)
+    }
+    const anthropic = order('ai-protocol-anthropic-messages')
+    const ollama = order('ai-protocol-ollama')
+    const openai = order('ai-protocol-openai-chat')
+    // Static group first (both alphabetically ordered), discover last.
+    expect(anthropic).toBeLessThan(ollama)
+    expect(ollama).toBeLessThan(openai)
+  })
+
+  it('a collapsed block keeps its header and hides the list', async () => {
+    const provider: AiProviderEntry = { id: 'p', protocolMap: { 'openai-chat': ['gpt-4o'] } }
+    renderSection({ provider, isCollapsed: () => true })
+    await flushEffects()
+
+    const block = screen.getByTestId('ai-protocol-openai-chat')
+    expect(within(block).queryByRole('button', { name: 'Add model' })).toBeNull()
+    expect(within(block).getByRole('combobox', { name: 'Model list mode' })).toBeTruthy()
+    const toggle = within(block).getByRole('button', { name: 'Toggle openai-chat models' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('clicking the toggle reports the protocol to collapse', async () => {
+    const provider: AiProviderEntry = { id: 'p', protocolMap: { 'openai-chat': ['gpt-4o'] } }
+    const onToggleCollapsed = vi.fn<(protocol: AiWireProtocol) => void>()
+    renderSection({ provider, onToggleCollapsed })
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle openai-chat models' }))
+    expect(onToggleCollapsed).toHaveBeenCalledWith('openai-chat')
+  })
+
+  it('mode and remove controls do not toggle the block', async () => {
+    const provider: AiProviderEntry = { id: 'p', protocolMap: { 'openai-chat': ['gpt-4o'] } }
+    const onToggleCollapsed = vi.fn<(protocol: AiWireProtocol) => void>()
+    renderSection({ provider, onToggleCollapsed })
+    await flushEffects()
+
+    // Same value as the current mode — no probe dialog, no write.
+    await pickOption('Model list mode', 'Static list')
+    const block = screen.getByTestId('ai-protocol-openai-chat')
+    fireEvent.click(within(block).getByRole('button', { name: /Remove protocol openai-chat/ }))
+    await flushEffects()
+
+    expect(onToggleCollapsed).not.toHaveBeenCalled()
   })
 })

@@ -1501,6 +1501,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.protocol.addModel.placeholder': '线上模型名…',
   'aiModels.protocol.removeLabel': '移除协议 {protocol}',
   'aiModels.protocol.remove': '移除',
+  'aiModels.protocol.toggle': '折叠/展开 {protocol} 模型',
+  'aiModels.protocol.modelCount': '{count} 个模型',
   'aiModels.protocol.removeLastConfirm':
     '移除 {name} 的最后一个协议？在添加新协议之前，该提供方将不提供任何模型。',
   'aiModels.model.viaRef': '→ {ref}',
