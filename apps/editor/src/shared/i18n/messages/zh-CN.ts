@@ -1698,6 +1698,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.reloading':
     'MCP 服务器配置已变更——正在重启会话以应用。这会使模型提示缓存失效，下一轮对话可能变慢。',
   'acp.mcp.reloadFailed': '重启会话失败：{message}',
+  'acp.modelContextWindowUnknown':
+    '模型“{model}”的上下文窗口未知，当前按默认值管理，可能不准确。请在 aiSettings.json 的 models 下为它配置 maxInputTokens（命令：AI: Open Settings JSON）。',
   'acp.switchMode.keepPlanning': '已继续规划',
   'acp.switchMode.feedbackLabel': '你的反馈',
   'acp.toolCall.searchTitle': '搜索“{pattern}”',

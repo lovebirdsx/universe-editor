@@ -7,10 +7,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
+import type { AcpModelCandidate } from '../../acpModelCandidates.js'
 
 export interface StubAcpModelCandidateOptions {
   /** Models returned for every agent; default []. */
   readonly models?: readonly string[]
+  /** Known context window per model id; models absent from it carry none. */
+  readonly contextWindows?: Readonly<Record<string, number>>
   /** When true, extraModelsForAgent rejects — exercises the best-effort guard. */
   readonly reject?: boolean
 }
@@ -20,9 +23,12 @@ export function stubAcpModelCandidateService(
 ): IAcpModelCandidateService {
   return {
     _serviceBrand: undefined,
-    async extraModelsForAgent(_agentId: string): Promise<readonly string[]> {
+    async extraModelsForAgent(_agentId: string): Promise<readonly AcpModelCandidate[]> {
       if (opts.reject === true) throw new Error('stub candidate service failure')
-      return opts.models ?? []
+      return (opts.models ?? []).map((id) => {
+        const contextWindow = opts.contextWindows?.[id]
+        return contextWindow !== undefined ? { id, contextWindow } : { id }
+      })
     },
   }
 }

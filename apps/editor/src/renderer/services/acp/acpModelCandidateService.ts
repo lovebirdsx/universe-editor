@@ -33,18 +33,19 @@ import { ICodexConfigService } from '../../../shared/ipc/codexConfigService.js'
 import {
   CLAUDE_AGENT_PROTOCOL,
   CODEX_AGENT_PROTOCOL,
-  extraModelsForAgentSettings,
+  extraModelCandidatesForAgentSettings,
+  type AcpModelCandidate,
 } from './acpModelCandidates.js'
 
 export interface IAcpModelCandidateService {
   readonly _serviceBrand: undefined
   /**
-   * Model ids to advertise as extra candidates for a session of `agentId`.
-   * Empty for agents with no editor-side credential model (user-defined agents),
-   * and empty when no provider is selected (the agent then runs on its official
-   * subscription, whose own catalogue is already correct).
+   * Model candidates (id + known context window) to advertise for a session of
+   * `agentId`. Empty for agents with no editor-side credential model (user-defined
+   * agents), and empty when no provider is selected (the agent then runs on its
+   * official subscription, whose own catalogue is already correct).
    */
-  extraModelsForAgent(agentId: string): Promise<readonly string[]>
+  extraModelsForAgent(agentId: string): Promise<readonly AcpModelCandidate[]>
 }
 
 export const IAcpModelCandidateService = createDecorator<IAcpModelCandidateService>(
@@ -60,7 +61,7 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
     @ICodexConfigService private readonly _codex: ICodexConfigService,
   ) {}
 
-  async extraModelsForAgent(agentId: string): Promise<readonly string[]> {
+  async extraModelsForAgent(agentId: string): Promise<readonly AcpModelCandidate[]> {
     if (agentId === 'claude-code') {
       const [agentSettings, settings] = await Promise.all([
         this._claude.readAgentSettings(),
@@ -80,9 +81,9 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
     authentication: string | undefined,
     protocol: AiWireProtocol,
     pick: string | undefined,
-  ): Promise<readonly string[]> {
+  ): Promise<readonly AcpModelCandidate[]> {
     const provider = await this._findProvider(authentication)
-    return extraModelsForAgentSettings(pick, provider, protocol)
+    return extraModelCandidatesForAgentSettings(pick, provider, protocol)
   }
 
   /** The resolved provider the agent authenticates with, or undefined for

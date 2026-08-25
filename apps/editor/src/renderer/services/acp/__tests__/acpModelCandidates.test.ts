@@ -4,12 +4,14 @@ import {
   CLAUDE_AGENT_PROTOCOL,
   MAX_EXTRA_MODELS,
   candidateModelsForProtocol,
-  extraModelsForAgentSettings,
+  candidateModelCandidatesForProtocol,
+  contextWindowFor,
+  extraModelCandidatesForAgentSettings,
 } from '../acpModelCandidates.js'
 
 function provider(
   models: readonly string[],
-  opts: { discover?: boolean; protocol?: string } = {},
+  opts: { discover?: boolean; protocol?: string; windows?: Record<string, number> } = {},
 ): AiResolvedProvider {
   return {
     id: 'gw',
@@ -18,10 +20,23 @@ function provider(
       {
         protocol: (opts.protocol ?? 'anthropic-messages') as AiResolvedProvider['defaultProtocol'],
         discover: opts.discover === true,
-        models: models.map((m) => ({ channelModel: m, ref: m, knowledge: {} })),
+        models: models.map((m) => ({
+          channelModel: m,
+          ref: m,
+          knowledge: opts.windows?.[m] !== undefined ? { maxInputTokens: opts.windows[m] } : {},
+        })),
       },
     ],
   }
+}
+
+/** Id-only view of the candidate list — the shape most of these cases assert on. */
+function ids(
+  pick: string | undefined,
+  p: AiResolvedProvider | undefined,
+  protocol = CLAUDE_AGENT_PROTOCOL,
+): readonly string[] {
+  return extraModelCandidatesForAgentSettings(pick, p, protocol).map((c) => c.id)
 }
 
 describe('candidateModelsForProtocol', () => {
@@ -52,46 +67,103 @@ describe('candidateModelsForProtocol', () => {
   })
 })
 
-describe('extraModelsForAgentSettings', () => {
+describe('extraModelCandidatesForAgentSettings (id ordering)', () => {
   it('carries the effective pick verbatim so the fork exact-matches the 1m lane', () => {
-    expect(
-      extraModelsForAgentSettings('deepseek-pro-v4[1m]', undefined, CLAUDE_AGENT_PROTOCOL),
-    ).toEqual(['deepseek-pro-v4[1m]'])
+    expect(ids('deepseek-pro-v4[1m]', undefined)).toEqual(['deepseek-pro-v4[1m]'])
   })
 
   it('emits a bare pick as-is', () => {
-    expect(extraModelsForAgentSettings('kimi-k3', undefined, CLAUDE_AGENT_PROTOCOL)).toEqual([
-      'kimi-k3',
-    ])
+    expect(ids('kimi-k3', undefined)).toEqual(['kimi-k3'])
   })
 
   it('merges provider candidates after the pick and dedupes', () => {
-    expect(
-      extraModelsForAgentSettings('b', provider(['a', 'b', 'c']), CLAUDE_AGENT_PROTOCOL),
-    ).toEqual(['b', 'a', 'c'])
+    expect(ids('b', provider(['a', 'b', 'c']))).toEqual(['b', 'a', 'c'])
   })
 
   it('returns provider candidates alone when no pick is set', () => {
-    expect(
-      extraModelsForAgentSettings(undefined, provider(['a', 'b']), CLAUDE_AGENT_PROTOCOL),
-    ).toEqual(['a', 'b'])
+    expect(ids(undefined, provider(['a', 'b']))).toEqual(['a', 'b'])
   })
 
   it('ignores a blank pick', () => {
-    expect(extraModelsForAgentSettings('   ', undefined, CLAUDE_AGENT_PROTOCOL)).toEqual([])
+    expect(ids('   ', undefined)).toEqual([])
   })
 
   it('trims candidate ids', () => {
-    expect(extraModelsForAgentSettings(' a ', provider([' b ']), CLAUDE_AGENT_PROTOCOL)).toEqual([
-      'a',
-      'b',
-    ])
+    expect(ids(' a ', provider([' b ']))).toEqual(['a', 'b'])
   })
 
   it('caps the payload but never at the expense of the user pick', () => {
     const many = Array.from({ length: MAX_EXTRA_MODELS + 10 }, (_, i) => `m${i}`)
-    const out = extraModelsForAgentSettings('mine[1m]', provider(many), CLAUDE_AGENT_PROTOCOL)
+    const out = ids('mine[1m]', provider(many))
     expect(out.length).toBe(MAX_EXTRA_MODELS)
     expect(out[0]).toBe('mine[1m]')
+  })
+})
+
+describe('candidateModelCandidatesForProtocol', () => {
+  it('carries the declared context window when knowledge has one', () => {
+    expect(
+      candidateModelCandidatesForProtocol(
+        provider(['a', 'b'], { windows: { a: 128000 } }),
+        CLAUDE_AGENT_PROTOCOL,
+      ),
+    ).toEqual([{ id: 'a', contextWindow: 128000 }, { id: 'b' }])
+  })
+
+  it('omits the window when knowledge has none', () => {
+    expect(candidateModelCandidatesForProtocol(provider(['a']), CLAUDE_AGENT_PROTOCOL)).toEqual([
+      { id: 'a' },
+    ])
+  })
+})
+
+describe('extraModelCandidatesForAgentSettings', () => {
+  it('resolves the pick own window from the provider declaration', () => {
+    expect(
+      extraModelCandidatesForAgentSettings(
+        'b',
+        provider(['a', 'b'], { windows: { a: 100, b: 200 } }),
+        CLAUDE_AGENT_PROTOCOL,
+      ),
+    ).toEqual([
+      { id: 'b', contextWindow: 200 },
+      { id: 'a', contextWindow: 100 },
+    ])
+  })
+
+  it('leaves the pick window undefined when the provider does not declare it', () => {
+    expect(
+      extraModelCandidatesForAgentSettings('kimi-k3', undefined, CLAUDE_AGENT_PROTOCOL),
+    ).toEqual([{ id: 'kimi-k3' }])
+  })
+})
+
+describe('contextWindowFor', () => {
+  it('prefers the named model own window', () => {
+    const candidates = [
+      { id: 'a', contextWindow: 100 },
+      { id: 'b', contextWindow: 200 },
+    ]
+    expect(contextWindowFor(candidates, 'b')).toBe(200)
+  })
+
+  it('uses the pick window when no model is named', () => {
+    expect(contextWindowFor([{ id: 'a', contextWindow: 100 }, { id: 'b' }], undefined)).toBe(100)
+    expect(contextWindowFor([{ id: 'a', contextWindow: 100 }], '  ')).toBe(100)
+  })
+
+  it('never substitutes another model window for a named one', () => {
+    const candidates = [{ id: 'a', contextWindow: 100 }, { id: 'b' }]
+    // 'b' declares none and 'missing' is not a candidate at all (the remembered
+    // model of a session opened under a provider the user has since switched
+    // away from). Injecting 'a's 100 for either would mismanage the context.
+    expect(contextWindowFor(candidates, 'b')).toBeUndefined()
+    expect(contextWindowFor(candidates, 'missing')).toBeUndefined()
+  })
+
+  it('returns undefined when nothing is known', () => {
+    expect(contextWindowFor([{ id: 'a' }], 'a')).toBeUndefined()
+    expect(contextWindowFor([], 'a')).toBeUndefined()
+    expect(contextWindowFor([], undefined)).toBeUndefined()
   })
 })

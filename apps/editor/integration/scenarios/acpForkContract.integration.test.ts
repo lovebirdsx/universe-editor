@@ -134,6 +134,10 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.mcpServerStatus,
     'universe-editor/capabilities',
     'extraModels',
+    // Codex-only sibling of extraModels: the resolved context window for the
+    // current model, injected per-session so a gateway model absent from
+    // codex's registry is not managed on its 272K fallback.
+    'modelContextWindow',
   ],
 }
 

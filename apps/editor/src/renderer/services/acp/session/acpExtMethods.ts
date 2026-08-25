@@ -117,6 +117,18 @@ export const ACP_META_KEYS = {
    * picker are unaffected.
    */
   extraModels: 'extraModels',
+  /**
+   * session/new + session/load + session/resume top-level _meta carrying the
+   * context window (in tokens) the editor resolved for the CURRENT model — a
+   * single number, not a map. Only the codex fork reads it: it overrides codex's
+   * built-in fallback (272K) for a gateway model whose id is absent from codex's
+   * registry, so the model's context is managed at its true size and the per-turn
+   * "metadata not found" warning stops mattering. Injected per-session (via
+   * thread config, not config.toml) to avoid breaking auto-compaction token
+   * counting. The editor pre-resolves a single value because the fork cannot know
+   * the active model id at config-assembly time. The claude fork ignores this key.
+   */
+  modelContextWindow: 'modelContextWindow',
   /** usage_update _meta carrying the per-model cost breakdown. */
   modelBreakdown: '_universe/modelBreakdown',
   /** tool_call_update _meta carrying per-sub-agent token tally. */

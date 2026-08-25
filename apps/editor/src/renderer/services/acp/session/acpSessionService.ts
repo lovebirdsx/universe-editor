@@ -88,6 +88,7 @@ import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
 import { IAcpModelCandidateService } from '../acpModelCandidateService.js'
+import { contextWindowFor, type AcpModelCandidate } from '../acpModelCandidates.js'
 import {
   effectiveEntryAuthority,
   IAcpSessionHistoryService,
@@ -408,9 +409,11 @@ const EMIT_INIT_SDK_MESSAGE_META = {
  */
 function buildResumeMeta(
   entry: AcpSessionHistoryEntry | undefined,
-  extraModels: readonly string[],
+  candidates: readonly AcpModelCandidate[],
 ): Record<string, unknown> {
   const resumeModel = entry?.configOptions?.['model']
+  const extraModels = candidates.map((c) => c.id)
+  const contextWindow = contextWindowFor(candidates, resumeModel)
   return {
     claudeCode: {
       ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
@@ -420,6 +423,7 @@ function buildResumeMeta(
     // extra candidates must ride along or gateway models vanish from the
     // dropdown (and set_config_option rejects values outside its options).
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
+    ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
   }
 }
 
@@ -429,10 +433,32 @@ function buildResumeMeta(
  * top-level (not under `claudeCode`) — both forks read it, and appending is
  * their concern, not the native CLI's.
  */
-function buildNewSessionMeta(extraModels: readonly string[]): Record<string, unknown> {
+function buildNewSessionMeta(candidates: readonly AcpModelCandidate[]): Record<string, unknown> {
+  const extraModels = candidates.map((c) => c.id)
+  // A new session names no model — the fork runs whatever its config file picks,
+  // which is candidates[0]. Same resolution as resume, just without a name.
+  const contextWindow = contextWindowFor(candidates, undefined)
   return {
     ...EMIT_INIT_SDK_MESSAGE_META,
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
+    ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
+  }
+}
+
+/**
+ * `_meta` for session/fork: the model candidates and the resolved window only.
+ * Deliberately NOT the resume meta — the claudeCode block there tunes the native
+ * CLI's raw-message stream for a load, and fork has never asked for it.
+ */
+function buildForkMeta(
+  entry: AcpSessionHistoryEntry,
+  candidates: readonly AcpModelCandidate[],
+): Record<string, unknown> {
+  const extraModels = candidates.map((c) => c.id)
+  const contextWindow = contextWindowFor(candidates, entry.configOptions?.['model'])
+  return {
+    ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
+    ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
   }
 }
 
@@ -472,6 +498,12 @@ export class AcpSessionService
 
   /** Session ids (agent-issued) with an MCP reload currently in flight. */
   private readonly _mcpReloadingSessions = new Set<string>()
+
+  /**
+   * `agentId\0modelId` pairs already warned about a missing context window, so
+   * the notice appears once per model rather than on every reconnect.
+   */
+  private readonly _missingWindowWarned = new Set<string>()
 
   /**
    * Consented url-mode elicitations awaiting the agent's `elicitation/complete`,
@@ -782,18 +814,53 @@ export class AcpSessionService
   }
 
   /**
-   * Extra model ids to advertise in the handshake `_meta` for `agentId`.
-   * Best-effort: candidate resolution failing must never block session
-   * creation/resume, so every failure collapses to an empty list (and the
-   * `extraModels` key is omitted from `_meta` entirely).
+   * Extra model candidates (id + known context window) to advertise in the
+   * handshake `_meta` for `agentId`. Best-effort: candidate resolution failing
+   * must never block session creation/resume, so every failure collapses to an
+   * empty list (and the `extraModels` / `modelContextWindow` keys are omitted
+   * from `_meta` entirely).
    */
-  private async _extraModelsFor(agentId: string): Promise<readonly string[]> {
+  private async _extraModelsFor(agentId: string): Promise<readonly AcpModelCandidate[]> {
     try {
       return await this._modelCandidates.extraModelsForAgent(agentId)
     } catch (err) {
       this._logger.warn(`extraModelsForAgent failed: ${(err as Error).message}`)
       return []
     }
+  }
+
+  /**
+   * Warn once per (agent, model) when a codex gateway model has no known context
+   * window: codex then manages it on its 272K fallback, which may be wrong. The
+   * warning lives here (not in the fork, which would re-emit it every turn) and
+   * points the user at aiSettings.json where they can declare `maxInputTokens`.
+   *
+   * The model judged is the one the session will actually run — the remembered
+   * `resumeModel` when there is one, else the pick. Matching `contextWindowFor`,
+   * a remembered model absent from the candidates counts as unknown (we inject
+   * nothing for it), so the user hears about the very case that needs fixing.
+   */
+  private _maybeWarnMissingContextWindow(
+    agentId: string,
+    candidates: readonly AcpModelCandidate[],
+    resumeModel: string | undefined,
+  ): void {
+    if (agentId !== 'codex') return
+    const model = resumeModel ?? candidates[0]?.id
+    if (model === undefined) return
+    if (contextWindowFor(candidates, model) !== undefined) return
+    const dedupeKey = `${agentId}\0${model}`
+    if (this._missingWindowWarned.has(dedupeKey)) return
+    this._missingWindowWarned.add(dedupeKey)
+    this._notification.notify({
+      severity: Severity.Warning,
+      sticky: true,
+      message: localize(
+        'acp.modelContextWindowUnknown',
+        'The context window for "{model}" is unknown, so it runs on a default that may be wrong. Set "maxInputTokens" for it under "models" in aiSettings.json (command: AI: Open Settings JSON).',
+        { model },
+      ),
+    })
   }
 
   /**
@@ -842,6 +909,7 @@ export class AcpSessionService
       )
       this._warnDroppedMcpServers(agentName, dropped)
       const extraModels = await this._extraModelsFor(resolvedAgentId)
+      this._maybeWarnMissingContextWindow(resolvedAgentId, extraModels, undefined)
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
@@ -1148,6 +1216,11 @@ export class AcpSessionService
       const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
       if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
       const extraModels = await this._extraModelsFor(entry.agentId)
+      this._maybeWarnMissingContextWindow(
+        entry.agentId,
+        extraModels,
+        entry.configOptions?.['model'],
+      )
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
@@ -1308,6 +1381,11 @@ export class AcpSessionService
             )
             this._warnDroppedMcpServers(agentName, dropped)
             const extraModels = await this._extraModelsFor(session.agentId)
+            this._maybeWarnMissingContextWindow(
+              session.agentId,
+              extraModels,
+              rebuild ? undefined : entry?.configOptions?.['model'],
+            )
             const agentDirs = await this._builtinAgentDirs(authority)
             let rebuiltSessionId: string | undefined
             // The SDK types these as `T | null` (absent bag), so keep the null
@@ -1867,9 +1945,16 @@ export class AcpSessionService
           cwd: cwd ?? '',
           mcpServers: kept,
           ...(await this._builtinAgentDirs(effectiveAuthority)),
-          // Ask the fork to truncate at this user turn (回退 point) instead of the
-          // session tip. Unknown/absent id → the agent forks from the tip.
-          ...(messageId !== undefined ? { _meta: { rewindTo: messageId } } : {}),
+          _meta: {
+            // Fork assembles a fresh thread config, so the candidates + window
+            // must ride along exactly as they do on new/load — otherwise the
+            // forked thread runs its first turn on codex's 272K fallback until
+            // the resume below re-injects them.
+            ...buildForkMeta(entry, await this._extraModelsFor(entry.agentId)),
+            // Ask the fork to truncate at this user turn (回退 point) instead of the
+            // session tip. Unknown/absent id → the agent forks from the tip.
+            ...(messageId !== undefined ? { rewindTo: messageId } : {}),
+          },
         }),
         timeoutMs,
         'ACP session/fork',

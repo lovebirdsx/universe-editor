@@ -31,23 +31,42 @@ export const CODEX_AGENT_PROTOCOL: AiWireProtocol = 'openai-responses'
 export const MAX_EXTRA_MODELS = 64
 
 /**
- * Model candidates a resolved provider declares under one protocol. Mirrors the
- * AI-settings dropdown: a `discover` protocol (declared `[]`) contributes
- * nothing, because availability then comes from the endpoint rather than the
- * file and we have no list to forward.
+ * One candidate model the editor advertises to an agent fork. `contextWindow` is
+ * the model's known input-token window (`knowledge.maxInputTokens`) when the AI
+ * settings declare it, and undefined otherwise — codex uses it to override its
+ * built-in fallback so a gateway model's context is managed correctly.
  */
+export interface AcpModelCandidate {
+  readonly id: string
+  readonly contextWindow?: number
+}
+
+/**
+ * Candidate models a resolved provider declares under one protocol, each with
+ * its known context window. Mirrors the AI-settings dropdown: a `discover`
+ * protocol (declared `[]`) contributes nothing, because availability then comes
+ * from the endpoint rather than the file and we have no list to forward.
+ */
+export function candidateModelCandidatesForProtocol(
+  provider: AiResolvedProvider | undefined,
+  protocol: AiWireProtocol,
+): readonly AcpModelCandidate[] {
+  const p = provider?.protocols.find((pr) => pr.protocol === protocol)
+  if (p === undefined || p.discover || p.models.length === 0) return []
+  return p.models.map((m) => candidate(m.channelModel, m.knowledge.maxInputTokens))
+}
+
+/** Model ids a resolved provider declares under one protocol (id-only projection). */
 export function candidateModelsForProtocol(
   provider: AiResolvedProvider | undefined,
   protocol: AiWireProtocol,
 ): readonly string[] {
-  const p = provider?.protocols.find((pr) => pr.protocol === protocol)
-  if (p === undefined || p.discover || p.models.length === 0) return []
-  return p.models.map((m) => m.channelModel)
+  return candidateModelCandidatesForProtocol(provider, protocol).map((c) => c.id)
 }
 
 /**
  * The full candidate list for one agent: the user's own model, then every model
- * the selected provider declares.
+ * the selected provider declares, each carrying its known context window.
  *
  * `pick` is the EFFECTIVE id from the agent's own config file (`settings.model` /
  * config.toml `model`) — the exact string the fork will resolve. Carrying it
@@ -59,22 +78,54 @@ export function candidateModelsForProtocol(
  * It also goes first so it survives truncation: the user may have switched
  * providers since, and a value the provider no longer offers must still be
  * selectable (same reason the settings dropdown pins an unlisted current value).
+ * The pick's own window is resolved from the provider's declaration when present.
  */
-export function extraModelsForAgentSettings(
+export function extraModelCandidatesForAgentSettings(
   pick: string | undefined,
   provider: AiResolvedProvider | undefined,
   protocol: AiWireProtocol,
-): readonly string[] {
-  const out: string[] = []
+): readonly AcpModelCandidate[] {
+  const declared = candidateModelCandidatesForProtocol(provider, protocol)
+  const out: AcpModelCandidate[] = []
   const seen = new Set<string>()
-  const add = (id: string | undefined): void => {
-    const trimmed = id?.trim()
+  const add = (c: AcpModelCandidate): void => {
+    const trimmed = c.id.trim()
     if (!trimmed || seen.has(trimmed) || out.length >= MAX_EXTRA_MODELS) return
     seen.add(trimmed)
-    out.push(trimmed)
+    out.push(candidate(trimmed, c.contextWindow))
   }
 
-  add(pick)
-  for (const m of candidateModelsForProtocol(provider, protocol)) add(m)
+  const trimmedPick = pick?.trim()
+  if (trimmedPick) {
+    const declaredPick = declared.find((c) => c.id === trimmedPick)
+    add(declaredPick ?? candidate(trimmedPick, undefined))
+  }
+  for (const c of declared) add(c)
   return out
+}
+
+/**
+ * The context window to inject for the model this session will actually run:
+ * `modelId`'s own declared window, or — when the session names no model, so the
+ * agent runs whatever its config file picks — the pick's (`candidates[0]`).
+ *
+ * A named model we cannot resolve a window for yields undefined rather than the
+ * pick's window: NEVER hand codex one model's window for another. The remembered
+ * model of an older session commonly isn't among the current candidates (the user
+ * has since switched providers), and injecting the pick's number there would
+ * silently mismanage the context — auto-compaction firing at half the real window,
+ * or prompts overflowing past it. Undefined leaves codex on its own documented
+ * fallback and lets the caller prompt the user to declare `maxInputTokens`.
+ */
+export function contextWindowFor(
+  candidates: readonly AcpModelCandidate[],
+  modelId: string | undefined,
+): number | undefined {
+  const trimmed = modelId?.trim()
+  if (!trimmed) return candidates[0]?.contextWindow
+  return candidates.find((c) => c.id === trimmed)?.contextWindow
+}
+
+function candidate(id: string, contextWindow: number | undefined): AcpModelCandidate {
+  return contextWindow !== undefined ? { id, contextWindow } : { id }
 }

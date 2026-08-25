@@ -1788,4 +1788,65 @@ describe('AcpSessionService — extra model candidates on resume', () => {
       claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
     })
   })
+
+  it('stamps the remembered model own context window onto session/load _meta', async () => {
+    const built = buildService(
+      { loadSessionResult: {} },
+      undefined,
+      stubAcpModelCandidateService({
+        models: ['gw/resume-a', 'gw/resume-b'],
+        contextWindows: { 'gw/resume-a': 128000, 'gw/resume-b': 64000 },
+      }),
+    )
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-3', title: 'gw' })
+    // The remembered model wins over candidates[0] — a resumed session must be
+    // managed at the window of the model it actually runs.
+    built.history.setHistoryConfigOption('gw-resume-3', 'model', 'gw/resume-b')
+    await svc.resumeSession('gw-resume-3')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls[0]?._meta).toMatchObject({ modelContextWindow: 64000 })
+  })
+
+  it('omits modelContextWindow from session/load _meta when no candidate declares one', async () => {
+    const built = buildService(
+      { loadSessionResult: {} },
+      undefined,
+      stubAcpModelCandidateService({ models: ['gw/resume-a'] }),
+    )
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-4', title: 'gw' })
+    await svc.resumeSession('gw-resume-4')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls[0]?._meta).not.toHaveProperty('modelContextWindow')
+  })
+
+  it('injects nothing when the remembered model is no longer a candidate', async () => {
+    const built = buildService(
+      { loadSessionResult: {} },
+      undefined,
+      stubAcpModelCandidateService({
+        models: ['gw/resume-a'],
+        contextWindows: { 'gw/resume-a': 128000 },
+      }),
+    )
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-5', title: 'gw' })
+    // The session remembers a model from a provider the user has since switched
+    // away from. Stamping the current pick's 128000 would manage a possibly-1M
+    // model on 128K (or a 64K one on 128K) — codex's own fallback is safer.
+    built.history.setHistoryConfigOption('gw-resume-5', 'model', 'gw/gone')
+    await svc.resumeSession('gw-resume-5')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls[0]?._meta).not.toHaveProperty('modelContextWindow')
+  })
 })

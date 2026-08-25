@@ -4850,9 +4850,9 @@ describe('AcpSessionService extra model candidates injection', () => {
   function makeService(
     client: FakeAcpClientService,
     candidates: IAcpModelCandidateService,
+    notification: StubNotificationService = new StubNotificationService(),
   ): AcpSessionService {
     const history = makeHistory()
-    const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
     const agentDefaults = makeAgentDefaults()
     return new AcpSessionService(
@@ -4927,6 +4927,88 @@ describe('AcpSessionService extra model candidates injection', () => {
       expect(client.connected[0]!.agent.newSessionCalls[0]!._meta).not.toHaveProperty('extraModels')
     } finally {
       svc.dispose()
+    }
+  })
+
+  it('stamps the current pick context window onto session/new _meta', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        contextWindows: { 'gw/one': 128000, 'gw/two': 64000 },
+      }),
+    )
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      // candidates[0] is the effective pick, so its window is the injected one.
+      expect(meta?.modelContextWindow).toBe(128000)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('omits modelContextWindow when no candidate declares one', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubAcpModelCandidateService({ models: EXTRA_MODELS }))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      expect(meta).not.toHaveProperty('modelContextWindow')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('warns once when a codex model has no known context window', async () => {
+    const client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      await (await svc.createSession('codex')).whenConnected()
+      const warnings = notification.captured.filter((n) => n.message.includes('gw/one'))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]!.message).toContain('maxInputTokens')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not warn when the codex model window is known, nor for other agents', async () => {
+    const client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, contextWindows: { 'gw/one': 128000 } }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      expect(notification.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+
+    const client2 = new FakeAcpClientService()
+    const notification2 = new StubNotificationService()
+    const svc2 = makeService(
+      client2,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS }),
+      notification2,
+    )
+    try {
+      await (await svc2.createSession('claude-code')).whenConnected()
+      expect(notification2.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
+    } finally {
+      svc2.dispose()
     }
   })
 })
