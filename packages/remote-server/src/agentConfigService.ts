@@ -4,7 +4,9 @@
  *  the shared IRemoteAgentConfigService on top of the Electron-free Claude/Codex
  *  file stores, so the local editor's settings panels configure the remote host's
  *  `~/.claude` / `~/.codex` (never touching local credentials). The codex
- *  `auth.json` watch is re-surfaced as `onDidChangeCodexAuth` over the channel.
+ *  `auth.json`/`config.toml` watch and the claude `settings.json`/
+ *  `.credentials.json` watch are re-surfaced as `onDidChangeCodexAuth` /
+ *  `onDidChangeClaudeConfig` over the channel.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -46,16 +48,23 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   private readonly _onDidChangeCodexAuth = this._register(new Emitter<void>())
   readonly onDidChangeCodexAuth: Event<void> = this._onDidChangeCodexAuth.event
 
+  private readonly _onDidChangeClaudeConfig = this._register(new Emitter<void>())
+  readonly onDidChangeClaudeConfig: Event<void> = this._onDidChangeClaudeConfig.event
+
   constructor(
     logger?: { createLogger(channel: ILogChannel): ILogger },
     options: RemoteAgentConfigServiceOptions = {},
   ) {
     super()
     this._logger = logger
-    this._claude = new ClaudeConfigStore({
-      ...(options.claudeConfigPath !== undefined ? { settingsPath: options.claudeConfigPath } : {}),
-      ...(logger !== undefined ? { logger } : {}),
-    })
+    this._claude = this._register(
+      new ClaudeConfigStore({
+        ...(options.claudeConfigPath !== undefined
+          ? { settingsPath: options.claudeConfigPath }
+          : {}),
+        ...(logger !== undefined ? { logger } : {}),
+      }),
+    )
     this._codex = this._register(
       new CodexConfigStore({
         ...(options.codexConfigPath !== undefined ? { configPath: options.codexConfigPath } : {}),
@@ -63,6 +72,15 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
       }),
     )
     this._register(this._codex.onDidChangeAuth(() => this._onDidChangeCodexAuth.fire()))
+    this._register(this._claude.onDidChangeConfig(() => this._onDidChangeClaudeConfig.fire()))
+  }
+
+  /** Whether each store's watch is armed. For tests to await arming without sleeping. */
+  get watchingClaude(): boolean {
+    return this._claude.watching
+  }
+  get watchingCodex(): boolean {
+    return this._codex.watching
   }
 
   claudeRead(): Promise<ClaudeSettings> {

@@ -211,6 +211,8 @@ export function buildSchema(modelIds: readonly string[]): IJSONSchema {
         type: 'object',
         description:
           'Editor-managed settings for ACP agents (authentication choice, model overrides).',
+        deprecationMessage:
+          'This block is no longer read. Agent authentication is resolved from each agent’s own config files — it is safe to delete.',
         additionalProperties: {
           type: 'object',
           additionalProperties: true,

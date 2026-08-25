@@ -8,8 +8,8 @@
  *  The file-store data shapes (ClaudeSettings / ClaudeSettingsPatch /
  *  ClaudeAuthStatus / ClaudeEffortLevel) live in @universe-editor/node-services
  *  so the local main and a remote server operate on the same types; this module
- *  re-exports them for renderer/main import stability and adds the editor-local
- *  agent settings (which provider / model the editor applies) + service contract.
+ *  re-exports them for renderer/main import stability and adds the service
+ *  contract.
  *
  *  Only the main process (or the remote server) touches the user's home
  *  directory; the renderer drives the visual settings panel entirely through
@@ -18,6 +18,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
+import type { Event } from '@universe-editor/platform'
+import type { AgentActiveAuth } from '../ai/agentActiveAuth.js'
 
 export type {
   ClaudeAuthStatus,
@@ -32,33 +34,22 @@ import type {
 } from '@universe-editor/node-services'
 
 /**
- * The special `authentication` value meaning "use this agent's official
- * subscription login" — Claude OAuth (`claude auth login`) / Codex ChatGPT
- * login (`codex login`) — instead of a configured provider entry.
+ * The UI value meaning "use this agent's official subscription login" — Claude
+ * OAuth (`claude auth login`) / Codex ChatGPT login (`codex login`) — instead of a
+ * configured provider entry. It is a menu value only: nothing persists it, since
+ * the agent's own config files say which credential is live.
  */
 export const AGENT_SUBSCRIPTION_AUTH = '@subscription'
 
-/**
- * Editor-local Claude agent state (`aiSettings.json` under `agentSettings.claude`).
- * `authentication` is a single provider id, the {@link AGENT_SUBSCRIPTION_AUTH}
- * sentinel, or absent. The CLI/agent never read this block — it is the editor's
- * own menu.
- *
- * The model picks are deliberately NOT here. They live only as their effective
- * value in `settings.json` (`model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`), which is
- * what the agent actually reads; the `[1m]` checkbox is derived from that string's
- * suffix rather than stored. Mirroring the picks here used to drift: this block is
- * written wholesale, so a panel holding a stale snapshot would rewrite a pick it
- * never touched while `settings.json` kept the real value — the UI then
- * highlighted one model while the process ran another.
- */
-export interface ClaudeAgentSettings {
-  /** Provider id serving `anthropic-messages`, `@subscription`, or absent. */
-  authentication?: string
-}
-
 export interface IClaudeConfigService {
   readonly _serviceBrand: undefined
+  /**
+   * Fires when `settings.json` or `.credentials.json` changes on disk (the CLI's
+   * `claude auth login`, another window, or a hand edit) — on either the local
+   * host or any remote authority. Lets the panel and the cost attribution refresh
+   * live instead of trusting a stale snapshot.
+   */
+  readonly onDidChangeConfig: Event<void>
   /**
    * Read the merged settings file. Returns `{}` when the file is absent.
    * `authority` selects a remote host; absent → the local host.
@@ -81,10 +72,13 @@ export interface IClaudeConfigService {
    * Never returns the tokens themselves. `authority` selects a remote host.
    */
   readAuthStatus(authority?: string): Promise<ClaudeAuthStatus>
-  /** Read the editor's saved Claude agent state from aiSettings.json (always editor-local). */
-  readAgentSettings(): Promise<ClaudeAgentSettings>
-  /** Replace the saved Claude agent state in aiSettings.json (atomic merge; editor-local). */
-  writeAgentSettings(settings: ClaudeAgentSettings): Promise<void>
+  /**
+   * Which credential is actually in effect on the effective host — reverse-looked
+   * up from that host's `settings.json` / `.credentials.json` against the
+   * configured provider entries. Computed in the main process so the comparison
+   * can see the gateway token. `authority` selects a remote host; absent → local.
+   */
+  resolveActiveAuth(authority?: string): Promise<AgentActiveAuth>
   /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network

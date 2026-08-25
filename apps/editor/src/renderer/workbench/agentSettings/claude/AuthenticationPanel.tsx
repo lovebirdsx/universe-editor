@@ -2,16 +2,18 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AuthenticationPanel — the "Authentication" category. Two parts:
  *
- *   1. Authentication — the single selection that decides which credential the
- *      agent uses: a provider entry (injected as `ANTHROPIC_API_KEY` for the
- *      official endpoint, or `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` for a
- *      gateway), or `@subscription` (the shared Claude OAuth login). The model /
- *      sub-agent model picks (each with an optional `[1m]` lane) are structured
- *      from the selected provider's candidates.
+ *   1. Authentication — the picker mirrors which credential is actually in
+ *      effect, reverse-looked up from disk (`activeAuth`): a provider entry
+ *      (injected as `ANTHROPIC_API_KEY` for the official endpoint, or
+ *      `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` for a gateway), or
+ *      `@subscription` (the shared Claude OAuth login). The model / sub-agent
+ *      model picks (each with an optional `[1m]` lane) are structured from the
+ *      selected provider's candidates. A gateway credential that matches no
+ *      provider entry is shown as an unattributed external credential.
  *
  *   2. Log in with Claude — the single shared OAuth login (`claude auth login`),
  *      stored in `~/.claude/.credentials.json`. Shows live status; "Use this
- *      login" switches the selection to `@subscription`.
+ *      login" switches the credential to `@subscription`.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useState } from 'react'
@@ -29,7 +31,6 @@ import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigServ
 import { deriveClaudeAuth } from '../../../../shared/ai/providerDerivation.js'
 import { maskKey } from '../../../../shared/ai/maskKey.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
-import { isClaudeAuthActive } from './credentialMatch.js'
 import { hasOneM } from '../../../services/acp/modelOneM.js'
 import { runClaudeLogin } from './claudeLogin.js'
 import { ConfigFileLink } from '../ConfigFileLink.js'
@@ -46,11 +47,6 @@ const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
 const BASE_URL = 'ANTHROPIC_BASE_URL'
 
 const CLAUDE_PROTOCOL = 'anthropic-messages' as const
-
-/** Whether the OAuth login is the credential the agent will currently use. */
-function isLoginActive(env: Record<string, string>, auth: ClaudeAuthStatus): boolean {
-  return !env[API_KEY] && !env[AUTH_TOKEN] && !env[BASE_URL] && auth.loggedIn && !auth.expired
-}
 
 /** Model candidates a resolved provider declares under the agent's protocol. */
 function candidateModels(provider: AiResolvedProvider | undefined): readonly string[] {
@@ -72,13 +68,11 @@ function pinCurrent(candidates: readonly string[], current: string): readonly st
 }
 
 export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
-  const { settings, authStatus, configPath, authority, agentSettings } = config
-  const env = useMemo(() => settings.env ?? {}, [settings.env])
-  const { providers } = useProviderRegistry()
+  const { authStatus, configPath, authority, activeAuth } = config
 
   return (
     <div className={styles['panel']}>
-      <AuthenticationSection config={config} env={env} providers={providers} />
+      <AuthenticationSection config={config} />
 
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>
@@ -87,11 +81,7 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
         <LoginForm
           authStatus={authStatus}
           authority={authority}
-          isActive={
-            agentSettings.authentication === AGENT_SUBSCRIPTION_AUTH ||
-            isLoginActive(env, authStatus)
-          }
-          hasEnvCredential={!!env[API_KEY] || !!env[AUTH_TOKEN] || !!env[BASE_URL]}
+          isActive={activeAuth.kind === 'subscription'}
           onUseLogin={() => void config.applyAuthentication(AGENT_SUBSCRIPTION_AUTH)}
           reloadAuthStatus={config.reloadAuthStatus}
         />
@@ -107,17 +97,9 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
   )
 }
 
-function AuthenticationSection({
-  config,
-  env,
-  providers,
-}: {
-  config: UseClaudeConfig
-  env: Record<string, string>
-  providers: readonly AiResolvedProvider[]
-}) {
+function AuthenticationSection({ config }: { config: UseClaudeConfig }) {
   const {
-    agentSettings,
+    activeAuth,
     settings,
     subagentModelEnv,
     applyAuthentication,
@@ -126,7 +108,20 @@ function AuthenticationSection({
     setSubagentModel,
     setSubagentModelOneM,
   } = config
-  const authentication = agentSettings.authentication
+  const { providers } = useProviderRegistry()
+  // The picker mirrors the credential actually in effect on disk — the entry it
+  // matches, or the subscription login. A gateway credential matching no entry
+  // is an external credential and stays unselected.
+  const authentication = useMemo(
+    () =>
+      activeAuth.kind === 'provider' && activeAuth.providerId !== undefined
+        ? activeAuth.providerId
+        : activeAuth.kind === 'subscription'
+          ? AGENT_SUBSCRIPTION_AUTH
+          : undefined,
+    [activeAuth],
+  )
+  const external = activeAuth.kind === 'provider' && activeAuth.providerId === undefined
 
   const resolved = useMemo(
     () =>
@@ -158,11 +153,6 @@ function AuthenticationSection({
     [applyAuthentication],
   )
 
-  const inUse = useMemo(
-    () => isClaudeAuthActive(authentication, env, providers),
-    [authentication, env, providers],
-  )
-
   return (
     <section className={styles['section']}>
       <h2 className={styles['sectionTitle']}>
@@ -192,7 +182,7 @@ function AuthenticationSection({
                     'Uses the shared Claude OAuth login below — no credential env is written.',
                   )}
                 </div>
-              ) : (
+              ) : external ? null : (
                 <div className={styles['desc']}>
                   {localize(
                     'agentSettings.auth.none.desc',
@@ -219,11 +209,12 @@ function AuthenticationSection({
         </GatewayProviderPicker>
       </div>
 
-      {inUse && authentication !== AGENT_SUBSCRIPTION_AUTH && authentication !== undefined && (
+      {external && (
         <div className={styles['desc']}>
-          <span className={styles['activeBadge']}>
-            {localize('agentSettings.auth.inUse', 'In use')}
-          </span>
+          {localize(
+            'agentSettings.auth.externalCredential',
+            'A credential configured outside the editor is currently in effect, so its cost cannot be attributed.',
+          )}
         </div>
       )}
     </section>
@@ -381,20 +372,22 @@ function LoginForm({
   authStatus,
   authority,
   isActive,
-  hasEnvCredential,
   onUseLogin,
   reloadAuthStatus,
 }: {
   authStatus: ClaudeAuthStatus
   authority: string | undefined
   isActive: boolean
-  hasEnvCredential: boolean
   onUseLogin: () => void
   reloadAuthStatus: UseClaudeConfig['reloadAuthStatus']
 }) {
   const notification = useService(INotificationService)
   const login = runClaudeLogin()
   const [refreshing, setRefreshing] = useState(false)
+  const signedIn = authStatus.loggedIn && !authStatus.expired
+  // Signed in but not the credential in effect ⇒ a provider credential is
+  // taking precedence; offer to switch the login back to active.
+  const overridden = signedIn && !isActive
 
   const doLogin = useCallback(
     async (kind: 'claudeai' | 'console') => {
@@ -458,11 +451,6 @@ function LoginForm({
             {localize('agentSettings.auth.login.signedOut', 'Not signed in')}
           </span>
         )}
-        {isActive && (
-          <span className={styles['activeBadge']}>
-            {localize('agentSettings.auth.inUse', 'In use')}
-          </span>
-        )}
         <button
           type="button"
           className={styles['linkButton']}
@@ -475,7 +463,7 @@ function LoginForm({
         </button>
       </div>
 
-      {authStatus.loggedIn && !authStatus.expired && hasEnvCredential && (
+      {overridden && (
         <div className={styles['desc']}>
           {localize(
             'agentSettings.auth.login.overridden',
@@ -505,7 +493,7 @@ function LoginForm({
         <Button variant="ghost" onClick={() => void doLogin('console')}>
           {localize('agentSettings.auth.login.console', 'Log in with Anthropic Console')}
         </Button>
-        {authStatus.loggedIn && !authStatus.expired && (
+        {overridden && (
           <Button variant="ghost" onClick={setAsCurrent}>
             {localize('agentSettings.auth.login.setCurrent', 'Use this login')}
           </Button>

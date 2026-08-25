@@ -839,6 +839,11 @@ export class AcpSession extends Disposable implements IAcpSession {
      * and pick up the gateway rate table. Absent in tests that don't price cost.
      */
     private readonly _providerContext?: IAcpSessionProviderContext,
+    /**
+     * Host this session's agent runs on (remote-ssh authority; undefined =
+     * local). Cost attribution is per host — see IAcpSession.authority.
+     */
+    readonly authority: string | undefined = undefined,
   ) {
     super()
     this._costStrategy = getAgentCostStrategy(agentId)
@@ -2878,7 +2883,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       case 'usage_update': {
         const tx = this._batchedTx()
         const prev = this.usage.get()
-        const ctx = this._providerContext?.getProviderContext(this.agentId)
+        const ctx = this._providerContext?.getProviderContext(this.agentId, this.authority)
         // Agents that don't report authoritative cost (Codex) estimate it locally
         // from the session-cumulative per-model token counts stamped on every
         // usage_update. Take the latest snapshot — it already folds in every call,
@@ -3055,7 +3060,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    * No-op for agents that report real cost (Claude — no strategy registered).
    */
   private _ingestPromptResponse(response: PromptResponse): void {
-    const ctx = this._providerContext?.getProviderContext(this.agentId)
+    const ctx = this._providerContext?.getProviderContext(this.agentId, this.authority)
     const estimate = this._costStrategy?.fromPromptResponse(response, ctx)
     if (estimate == null) return
 
@@ -3082,7 +3087,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _priceSubagentStats(stats: AcpSubagentStats): AcpSubagentStats {
     if (stats.model === undefined) return stats
-    const ctx = this._providerContext?.getProviderContext(this.agentId)
+    const ctx = this._providerContext?.getProviderContext(this.agentId, this.authority)
     const pricing = priceSessionModel(stats.model, ctx).pricing
     if (pricing === undefined) {
       console.debug(`[acp-cost] subagent model rate unknown: ${stats.model}`)

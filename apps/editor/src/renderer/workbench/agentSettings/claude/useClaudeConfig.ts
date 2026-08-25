@@ -5,14 +5,11 @@
  *  refreshes local state. All panels in the Agent settings editor share this so
  *  edits stay consistent with the on-disk file the agent + CLI also read.
  *
- *  Two stores, one direction each:
- *   - `settings.json` — the effective config the agent reads, and the ONLY home of
- *     the model picks. `setModel` / `setSubagentModel` (+ their `1m` variants)
- *     write the composed id straight there, and the panel reads it back from
- *     `settings.model` / `subagentModelEnv`. Nothing is mirrored, so the UI cannot
- *     disagree with what the process runs.
- *   - `aiSettings.json`'s `agentSettings.claude` — the credential selection only.
- *     `applyAuthentication` persists it and writes the matching credential env.
+ *  The on-disk file is the single source of truth: the model picks live in
+ *  `settings.json` (`setModel` / `setSubagentModel` write the composed id
+ *  straight there), and the credential in effect is reverse-looked up from disk
+ *  (`activeAuth` from `resolveActiveAuth`) — the editor keeps no declared mirror,
+ *  so the UI cannot disagree with what the process runs.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -27,11 +24,11 @@ import {
 import {
   AGENT_SUBSCRIPTION_AUTH,
   IClaudeConfigService,
-  type ClaudeAgentSettings,
   type ClaudeAuthStatus,
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
+import type { AgentActiveAuth } from '../../../../shared/ai/agentActiveAuth.js'
 import { deriveClaudeAuth, findProviderById } from '../../../../shared/ai/providerDerivation.js'
 import { stripOneM, withOneM } from '../../../services/acp/modelOneM.js'
 import { useService } from '../../useService.js'
@@ -44,13 +41,14 @@ export interface UseClaudeConfig {
   /** Remote-ssh authority when the workspace folder is remote; undefined for local. */
   readonly authority: string | undefined
   readonly authStatus: ClaudeAuthStatus
-  readonly agentSettings: ClaudeAgentSettings
+  /** Which credential is actually in effect, reverse-looked up from disk. */
+  readonly activeAuth: AgentActiveAuth
   /** Effective `env.CLAUDE_CODE_SUBAGENT_MODEL`, the sub-agent model in effect. */
   readonly subagentModelEnv: string | undefined
   patch(patch: ClaudeSettingsPatch): Promise<void>
   reload(): Promise<void>
   reloadAuthStatus(): Promise<ClaudeAuthStatus>
-  /** Persist the provider/`@subscription` selection and inject/clear the matching env. */
+  /** Inject/clear the matching credential env (the effective provider is read back from disk). */
   applyAuthentication(authentication: string | undefined): Promise<void>
   /** Write `settings.model` verbatim (undefined/empty clears it). */
   setModel(model: string | undefined): Promise<void>
@@ -63,6 +61,7 @@ export interface UseClaudeConfig {
 }
 
 const LOGGED_OUT: ClaudeAuthStatus = { loggedIn: false, expired: false }
+const NO_ACTIVE_AUTH: AgentActiveAuth = { kind: 'none' }
 
 const API_KEY = 'ANTHROPIC_API_KEY'
 const AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN'
@@ -80,21 +79,19 @@ export function useClaudeConfig(): UseClaudeConfig {
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
   const [authStatus, setAuthStatus] = useState<ClaudeAuthStatus>(LOGGED_OUT)
-  const [agentSettings, setAgentSettings] = useState<ClaudeAgentSettings>({})
-  const agentSettingsRef = useRef<ClaudeAgentSettings>({})
+  const [activeAuth, setActiveAuth] = useState<AgentActiveAuth>(NO_ACTIVE_AUTH)
 
   const loadAll = useCallback(async () => {
-    const [next, path, status, stored] = await Promise.all([
+    const [next, path, status, auth] = await Promise.all([
       service.read(authority),
       service.configPath(authority),
       service.readAuthStatus(authority),
-      service.readAgentSettings(),
+      service.resolveActiveAuth(authority),
     ])
     setSettings(next)
     setConfigPath(path)
     setAuthStatus(status)
-    setAgentSettings(stored)
-    agentSettingsRef.current = stored
+    setActiveAuth(auth)
     setLoaded(true)
   }, [service, authority])
 
@@ -109,22 +106,38 @@ export function useClaudeConfig(): UseClaudeConfig {
   useEffect(() => {
     let active = true
     void (async () => {
-      const [next, path, status, stored] = await Promise.all([
+      const [next, path, status, auth] = await Promise.all([
         service.read(authority),
         service.configPath(authority),
         service.readAuthStatus(authority),
-        service.readAgentSettings(),
+        service.resolveActiveAuth(authority),
       ])
       if (!active) return
       setSettings(next)
       setConfigPath(path)
       setAuthStatus(status)
-      setAgentSettings(stored)
-      agentSettingsRef.current = stored
+      setActiveAuth(auth)
       setLoaded(true)
     })()
+    // Refresh live when settings.json / .credentials.json changes on disk (the
+    // CLI's `claude auth login`, another window, or a hand edit) instead of
+    // trusting a stale snapshot.
+    const sub = service.onDidChangeConfig(() => {
+      void (async () => {
+        const [next, status, auth] = await Promise.all([
+          service.read(authority),
+          service.readAuthStatus(authority),
+          service.resolveActiveAuth(authority),
+        ])
+        if (!active) return
+        setSettings(next)
+        setAuthStatus(status)
+        setActiveAuth(auth)
+      })()
+    })
     return () => {
       active = false
+      sub.dispose()
     }
   }, [service, authority])
 
@@ -134,15 +147,6 @@ export function useClaudeConfig(): UseClaudeConfig {
       setSettings(await service.read(authority))
     },
     [service, authority],
-  )
-
-  const writeAgentSettings = useCallback(
-    async (next: ClaudeAgentSettings) => {
-      await service.writeAgentSettings(next)
-      agentSettingsRef.current = next
-      setAgentSettings(next)
-    },
-    [service],
   )
 
   // Every writer here is a read-modify-write across an IPC round-trip, so two
@@ -165,13 +169,9 @@ export function useClaudeConfig(): UseClaudeConfig {
   const applyAuthentication = useCallback(
     (authentication: string | undefined) =>
       serialize(async () => {
-        const next: ClaudeAgentSettings = { ...agentSettingsRef.current }
-        if (authentication) next.authentication = authentication
-        else delete next.authentication
-        await writeAgentSettings(next)
-
         if (!authentication || authentication === AGENT_SUBSCRIPTION_AUTH) {
           await patch({ env: { [API_KEY]: null, [AUTH_TOKEN]: null, [BASE_URL]: null } })
+          setActiveAuth(await service.resolveActiveAuth(authority))
           return
         }
         const providers = await resolveProviders()
@@ -193,8 +193,9 @@ export function useClaudeConfig(): UseClaudeConfig {
             env: { [AUTH_TOKEN]: derived.authToken, [BASE_URL]: derived.baseUrl, [API_KEY]: null },
           })
         }
+        setActiveAuth(await service.resolveActiveAuth(authority))
       }),
-    [serialize, writeAgentSettings, patch, resolveProviders, notification],
+    [serialize, patch, resolveProviders, notification, service, authority],
   )
 
   /**
@@ -252,7 +253,7 @@ export function useClaudeConfig(): UseClaudeConfig {
     configPath,
     authority,
     authStatus,
-    agentSettings,
+    activeAuth,
     subagentModelEnv,
     patch,
     reload,

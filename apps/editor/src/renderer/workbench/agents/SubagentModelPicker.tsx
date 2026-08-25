@@ -23,7 +23,6 @@ import { useMemo, useRef, useState, type HTMLAttributes } from 'react'
 import { ChevronDown, Users } from 'lucide-react'
 import { INotificationService, Severity, localize } from '@universe-editor/platform'
 import { AnchoredSurface } from '@universe-editor/workbench-ui'
-import { AGENT_SUBSCRIPTION_AUTH } from '../../../shared/ipc/claudeConfigService.js'
 import {
   candidateModelsForProtocol,
   CLAUDE_AGENT_PROTOCOL,
@@ -112,7 +111,7 @@ export function SubagentModelPicker({
 
 /** Surface-free pick content; renders inside any host (picker surface, overflow menu). */
 export function SubagentModelPanel({ session }: { session: IAcpSession }) {
-  const { agentSettings, subagentModelEnv, setSubagentModel } = useClaudeConfig()
+  const { activeAuth, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
   const notifications = useService(INotificationService)
   // Silent until the user actually changes the value, so the picker stays
@@ -120,12 +119,14 @@ export function SubagentModelPanel({ session }: { session: IAcpSession }) {
   const [changed, setChanged] = useState(false)
   const pendingWrite = useRef<Promise<void> | undefined>(undefined)
 
+  // Candidates come from the provider whose credential is actually in effect on
+  // disk, not a separately stored selection that could disagree with it.
   const provider = useMemo(
     () =>
-      agentSettings.authentication && agentSettings.authentication !== AGENT_SUBSCRIPTION_AUTH
-        ? providers.find((p) => p.id === agentSettings.authentication)
+      activeAuth.kind === 'provider' && activeAuth.providerId !== undefined
+        ? providers.find((p) => p.id === activeAuth.providerId)
         : undefined,
-    [agentSettings.authentication, providers],
+    [activeAuth, providers],
   )
   const candidates = useMemo(
     () => candidateModelsForProtocol(provider, CLAUDE_AGENT_PROTOCOL),

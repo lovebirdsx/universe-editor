@@ -12,10 +12,17 @@
  *  malformed file by returning empty rather than throwing.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises as fs } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { promises as fs, watch, type FSWatcher } from 'node:fs'
+import { join, dirname, basename } from 'node:path'
 import { homedir } from 'node:os'
-import { createNamedLogger, type ILogChannel, type ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  Disposable,
+  Emitter,
+  type Event,
+  type ILogChannel,
+  type ILogger,
+} from '@universe-editor/platform'
 import type { ClaudeAuthStatus, ClaudeSettings, ClaudeSettingsPatch } from './types.js'
 import { writeFileAtomic } from './atomicFile.js'
 
@@ -30,13 +37,69 @@ export interface ClaudeConfigStoreOptions {
   readonly logger?: { createLogger(channel: ILogChannel): ILogger }
 }
 
-export class ClaudeConfigStore {
+export class ClaudeConfigStore extends Disposable {
   private readonly _logger: ILogger
   private readonly _settingsPath: string
 
+  private readonly _onDidChangeConfig = this._register(new Emitter<void>())
+  readonly onDidChangeConfig: Event<void> = this._onDidChangeConfig.event
+
+  private _configWatcher: FSWatcher | undefined
+  private _configDebounce: ReturnType<typeof setTimeout> | undefined
+  private _disposed = false
+
   constructor(options: ClaudeConfigStoreOptions = {}) {
+    super()
     this._settingsPath = options.settingsPath ?? defaultClaudeSettingsPath()
     this._logger = createNamedLogger(options.logger, { id: 'claudeConfig', name: 'Claude Config' })
+    this._startConfigWatch()
+  }
+
+  /** Whether the directory watch is attached. For tests to await arming without sleeping. */
+  get watching(): boolean {
+    return this._configWatcher !== undefined
+  }
+
+  /**
+   * Watch the directory holding settings.json and .credentials.json (dir-level
+   * because the CLI writes atomically via temp file + rename, which a file-level
+   * watch would miss). Debounced so a rename's create/delete pair fires once,
+   * and filtered to the two files — `~/.claude` also holds high-churn state.
+   */
+  private _startConfigWatch(): void {
+    const dir = dirname(this._settingsPath)
+    const watchedFiles = new Set([basename(this._settingsPath), '.credentials.json'])
+    void fs.mkdir(dir, { recursive: true }).then(
+      () => {
+        // dispose() can land while the mkdir is in flight; attaching then would
+        // leak a watcher nothing closes.
+        if (this._disposed) return
+        try {
+          this._configWatcher = watch(dir, (_event, filename) => {
+            if (filename && !watchedFiles.has(basename(filename.toString()))) return
+            if (this._configDebounce) clearTimeout(this._configDebounce)
+            this._configDebounce = setTimeout(() => {
+              this._logger.info('claude config changed; notifying')
+              this._onDidChangeConfig.fire()
+            }, 150)
+          })
+          this._configWatcher.on('error', (err) =>
+            this._logger.warn(`config watcher error: ${err.message}`),
+          )
+        } catch (err) {
+          this._logger.warn(`config watch failed: ${(err as Error).message}`)
+        }
+      },
+      (err) => this._logger.warn(`config watch mkdir failed: ${(err as Error).message}`),
+    )
+  }
+
+  override dispose(): void {
+    this._disposed = true
+    if (this._configDebounce) clearTimeout(this._configDebounce)
+    this._configWatcher?.close()
+    this._configWatcher = undefined
+    super.dispose()
   }
 
   async read(): Promise<ClaudeSettings> {

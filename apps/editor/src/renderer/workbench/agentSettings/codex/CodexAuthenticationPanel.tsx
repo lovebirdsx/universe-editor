@@ -2,17 +2,17 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  CodexAuthenticationPanel — the "Authentication" category. Two parts:
  *
- *   1. Authentication — the single selection that decides which credential the
- *      agent uses: a provider entry (a self-contained `[model_providers.codex-gateway]`
- *      block + `model_provider = "codex-gateway"`), or `@subscription` (the shared
+ *   1. Authentication — the picker mirrors which credential is actually in
+ *      effect, reverse-looked up from disk (`activeAuth`): a provider entry (a
+ *      self-contained `[model_providers.codex-gateway]` block +
+ *      `model_provider = "codex-gateway"`), or `@subscription` (the shared
  *      ChatGPT login via auth.json). The model pick is structured from the
- *      selected provider's candidates.
+ *      selected provider's candidates and reads config.toml `model`. A gateway
+ *      credential matching no provider entry is shown as an unattributed
+ *      external credential.
  *
  *   2. Log in with ChatGPT — the single shared OAuth login (`codex login`, run via
  *      the official Codex CLI), stored in `~/.codex/auth.json`. Shows live status.
- *
- *  `activeAuth.drift` (from `resolveActiveAuth`) surfaces when the on-disk files
- *  no longer match the declared selection — e.g. the user hand-edited config.toml.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useState } from 'react'
@@ -48,6 +48,16 @@ function candidateModels(provider: AiResolvedProvider | undefined): readonly str
   return p.models.map((m) => m.channelModel)
 }
 
+/**
+ * The option list: the provider's candidates, with `current` pinned on top when
+ * it isn't among them — the id actually in effect on disk must stay visible and
+ * selected instead of vanishing.
+ */
+function pinCurrent(candidates: readonly string[], current: string): readonly string[] {
+  if (current === '' || candidates.includes(current)) return candidates
+  return [current, ...candidates]
+}
+
 export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig }) {
   const { configPath, authority } = config
   const authPath = configPath ? getSiblingConfigPath(configPath, 'auth.json') : undefined
@@ -80,9 +90,21 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
 }
 
 function AuthenticationSection({ config }: { config: UseCodexConfig }) {
-  const { agentSettings, activeAuth, applyAuthentication, setModel } = config
+  const { activeAuth, settings, applyAuthentication, setModel } = config
   const { providers } = useProviderRegistry()
-  const authentication = agentSettings.authentication
+  // The picker mirrors the credential actually in effect on disk — the entry it
+  // matches, or the subscription login. A gateway credential matching no entry
+  // is an external credential and stays unselected.
+  const authentication = useMemo(
+    () =>
+      activeAuth.kind === 'provider' && activeAuth.providerId !== undefined
+        ? activeAuth.providerId
+        : activeAuth.kind === 'subscription'
+          ? AGENT_SUBSCRIPTION_AUTH
+          : undefined,
+    [activeAuth],
+  )
+  const external = activeAuth.kind === 'provider' && activeAuth.providerId === undefined
 
   const resolved = useMemo(
     () =>
@@ -92,12 +114,11 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
     [authentication, providers],
   )
   const candidates = useMemo(() => candidateModels(resolved), [resolved])
-  const currentModel = agentSettings.model
+  // The row shows the EFFECTIVE id from config.toml — the exact string the
+  // agent reads; a value the provider no longer offers stays pinned on top.
+  const currentModel = settings.model ?? ''
   const modelOptions = useMemo(
-    () =>
-      currentModel && !candidates.includes(currentModel)
-        ? [currentModel, ...candidates]
-        : candidates,
+    () => pinCurrent(candidates, currentModel),
     [candidates, currentModel],
   )
 
@@ -135,12 +156,14 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
         >
           {(selected) =>
             selected === undefined ? (
-              <div className={styles['desc']}>
-                {localize(
-                  'codexSettings.auth.subscription.desc',
-                  'Uses the shared ChatGPT login below — the built-in openai provider runs on the OAuth tokens.',
-                )}
-              </div>
+              external ? null : (
+                <div className={styles['desc']}>
+                  {localize(
+                    'codexSettings.auth.subscription.desc',
+                    'Uses the shared ChatGPT login below — the built-in openai provider runs on the OAuth tokens.',
+                  )}
+                </div>
+              )
             ) : (
               <>
                 <CodexDerivationPreview resolved={selected} />
@@ -150,7 +173,7 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
                   </label>
                   {modelOptions.length > 0 ? (
                     <Select
-                      value={currentModel ?? ''}
+                      value={currentModel}
                       options={[
                         {
                           value: '',
@@ -162,7 +185,7 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
                     />
                   ) : (
                     <Input
-                      value={currentModel ?? ''}
+                      value={currentModel}
                       placeholder="gpt-5.5"
                       onChange={(e) => void setModel(e.target.value || undefined)}
                     />
@@ -174,11 +197,11 @@ function AuthenticationSection({ config }: { config: UseCodexConfig }) {
         </GatewayProviderPicker>
       </div>
 
-      {activeAuth.drift && (
-        <div className={styles['deriveError']}>
+      {external && (
+        <div className={styles['desc']}>
           {localize(
-            'codexSettings.auth.drift',
-            'The on-disk config.toml / auth.json no longer matches this selection (it may have been changed externally). Re-select it to re-apply the credential.',
+            'codexSettings.auth.externalCredential',
+            'A credential configured outside the editor is currently in effect, so its cost cannot be attributed.',
           )}
         </div>
       )}
@@ -287,11 +310,6 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
         {!chatgpt && (
           <span className={styles['statusMuted']}>
             {localize('codexSettings.auth.login.signedOut', 'Not signed in')}
-          </span>
-        )}
-        {chatgptActive && (
-          <span className={styles['activeBadge']}>
-            {localize('codexSettings.auth.inUse', 'In use')}
           </span>
         )}
         <button

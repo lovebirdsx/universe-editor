@@ -2,9 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ISubscriptionUsageService — owns the official-subscription usage snapshots
  *  (Claude's claude.ai plan windows, Codex's ChatGPT plan rate limits), keyed by
- *  agent id.
+ *  agent id **and the host the agent runs on**.
  *
- *  Two rules shape the design:
+ *  Three rules shape the design:
  *   1. Only the agent process can answer, so the data is read over an ACP
  *      ext-method on a session's EXISTING connection. This service never calls
  *      `IAcpClientService.connect()` — the pool stops an idle agent 30s after the
@@ -14,6 +14,10 @@
  *   2. Polling is slow (60s, vs the gateway readout's 10s) because every round
  *      trip reaches an agent child process. The claude fork already had to delete
  *      a per-turn `getContextUsage()` call for exactly this reason.
+ *   3. The plan belongs to the account logged in **on that host**. One window can
+ *      hold a session on the local host's claude.ai login and another on a remote
+ *      host's, so every key — snapshots, in-flight round trips, "unsupported"
+ *      verdicts and the persisted cache — carries the session's authority.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -23,7 +27,6 @@ import {
   IConfigurationService,
   ILoggerService,
   IStorageService,
-  IWorkspaceService,
   observableValue,
   StorageScope,
   type ILogger,
@@ -32,7 +35,6 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../acp/session/acpSessionService.js'
 import { ACP_EXT_METHODS } from '../acp/session/acpExtMethods.js'
-import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import {
   isStale as isSnapshotStale,
   normalizeSubscriptionUsage,
@@ -53,34 +55,42 @@ export type ResetCreditOutcome =
 export interface ISubscriptionUsageService {
   readonly _serviceBrand: undefined
   /**
-   * Latest snapshot for `agentId` — stable observable identity across calls, so
-   * React components can subscribe directly. `undefined` until one has been read
-   * (or restored from the previous run).
+   * Latest snapshot for `agentId` on `authority` (undefined = the local host) —
+   * stable observable identity across calls, so React components can subscribe
+   * directly. `undefined` until one has been read (or restored from the previous
+   * run).
    */
-  snapshotFor(agentId: string): IObservable<SubscriptionUsageSnapshot | undefined>
+  snapshotFor(
+    agentId: string,
+    authority?: string,
+  ): IObservable<SubscriptionUsageSnapshot | undefined>
   /**
-   * Read a fresh snapshot from a live session of `agentId`. Concurrent calls for
-   * the same agent share one round trip. A no-op when the agent has already
-   * answered "not a subscription" unless `force` is set (the user opening the
-   * popover is a good reason to re-ask).
+   * Read a fresh snapshot from a live session of `agentId` on `authority`.
+   * Concurrent calls for the same pair share one round trip. A no-op when that
+   * host's account has already answered "not a subscription" unless `force` is set
+   * (the user opening the popover is a good reason to re-ask).
    */
-  refresh(agentId: string, options?: { force?: boolean }): Promise<void>
+  refresh(agentId: string, authority?: string, options?: { force?: boolean }): Promise<void>
   /** Whether a snapshot is past the configured freshness window, or its windows rolled over. */
   isStale(snapshot: SubscriptionUsageSnapshot | undefined, now?: number): boolean
   /**
-   * Redeem the next available rate-limit reset credit (codex). `idempotencyKey`
-   * identifies ONE user-confirmed attempt: retrying a transient failure must
-   * reuse the same key, or the retry burns a second credit. `alreadyRedeemed`
-   * therefore counts as success.
+   * Redeem the next available rate-limit reset credit (codex) on `authority`'s
+   * account. `idempotencyKey` identifies ONE user-confirmed attempt: retrying a
+   * transient failure must reuse the same key, or the retry burns a second credit.
+   * `alreadyRedeemed` therefore counts as success.
    */
-  consumeResetCredit(agentId: string, idempotencyKey: string): Promise<ResetCreditOutcome>
+  consumeResetCredit(
+    agentId: string,
+    authority: string | undefined,
+    idempotencyKey: string,
+  ): Promise<ResetCreditOutcome>
 }
 
 export const ISubscriptionUsageService = createDecorator<ISubscriptionUsageService>(
   'subscriptionUsageService',
 )
 
-const STORAGE_KEY_PREFIX = 'acp.subscriptionUsage'
+const STORAGE_KEY = 'acp.subscriptionUsage'
 const STALE_AFTER_KEY = 'acp.subscriptionUsage.staleAfterMs'
 const REFRESH_INTERVAL_KEY = 'acp.subscriptionUsage.refreshIntervalMs'
 const DEFAULT_STALE_AFTER_MS = 10 * 60_000
@@ -94,7 +104,16 @@ const RESET_CREDIT_OUTCOMES: ReadonlySet<string> = new Set([
   'alreadyRedeemed',
 ])
 
+/**
+ * On-disk shape. Keys are `usageKey(agentId, authority)`; entries written before
+ * per-host partitioning are bare agent ids, restored into the local slot.
+ */
 type PersistedSnapshots = Record<string, SubscriptionUsageSnapshot>
+
+/** Snapshot key. `\0` cannot occur in an agent id or an authority. */
+function usageKey(agentId: string, authority: string | undefined): string {
+  return `${agentId}\0${authority ?? ''}`
+}
 
 export class SubscriptionUsageService extends Disposable implements ISubscriptionUsageService {
   declare readonly _serviceBrand: undefined
@@ -105,9 +124,9 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   >()
   private readonly _inflight = new Map<string, Promise<void>>()
   /**
-   * Agents that answered "no subscription readout here" — polled no further.
-   * The verdict belongs to the ACCOUNT that answered, not to the agent, so it is
-   * dropped again whenever a new session appears (see the autorun below).
+   * Agent+host pairs that answered "no subscription readout here" — polled no
+   * further. The verdict belongs to the ACCOUNT that answered, not to the agent,
+   * so it is dropped again whenever a new session appears (see the autorun below).
    */
   private readonly _unsupported = new Set<string>()
   /** Session ids already accounted for, so a new one is recognizable. */
@@ -115,13 +134,12 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   private readonly _logger: ILogger
 
   private _intervalTimer: ReturnType<typeof setInterval> | undefined
-  private _restored: Promise<void>
+  private readonly _restored: Promise<void>
 
   constructor(
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IConfigurationService private readonly _configuration: IConfigurationService,
     @IStorageService private readonly _storage: IStorageService,
-    @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -150,17 +168,9 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       }),
     )
 
-    // Switching local ↔ remote changes which host's account answers, so the
-    // cached snapshots belong to a different bucket entirely — drop everything
-    // (including the "unsupported" verdicts) and re-read from the new bucket.
-    this._register(
-      this._workspace.onDidChangeWorkspace(() => {
-        this._unsupported.clear()
-        for (const observable of this._snapshots.values()) observable.set(undefined, undefined)
-        this._restored = this._restore()
-        void this._restored.then(() => this._tick())
-      }),
-    )
+    // Switching local ↔ remote needs no reset: every snapshot and verdict is
+    // already filed under the host that produced it, so the new workspace's
+    // sessions read their own host's slots and the old ones simply go unread.
 
     // A "not a subscription" verdict is only true for the account that answered
     // it. Someone who logs in to claude.ai / ChatGPT gets a fresh agent process,
@@ -172,16 +182,17 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       autorun((reader) => {
         const sessions = this._sessions.sessions.read(reader)
         const live = new Set<string>()
-        const reprobe = new Set<string>()
+        const reprobe = new Map<string, { agentId: string; authority: string | undefined }>()
         for (const session of sessions) {
           live.add(session.id)
-          if (!this._seenSessionIds.has(session.id) && this._unsupported.delete(session.agentId)) {
-            reprobe.add(session.agentId)
+          const key = usageKey(session.agentId, session.authority)
+          if (!this._seenSessionIds.has(session.id) && this._unsupported.delete(key)) {
+            reprobe.set(key, { agentId: session.agentId, authority: session.authority })
           }
         }
         // Closed sessions drop out, keeping this bounded by the live set.
         this._seenSessionIds = live
-        for (const agentId of reprobe) void this.refresh(agentId)
+        for (const { agentId, authority } of reprobe.values()) void this.refresh(agentId, authority)
       }),
     )
 
@@ -189,35 +200,44 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     this._restartPolling()
   }
 
-  snapshotFor(agentId: string): IObservable<SubscriptionUsageSnapshot | undefined> {
-    return this._observableFor(agentId)
+  snapshotFor(
+    agentId: string,
+    authority?: string,
+  ): IObservable<SubscriptionUsageSnapshot | undefined> {
+    return this._observableFor(usageKey(agentId, authority))
   }
 
   isStale(snapshot: SubscriptionUsageSnapshot | undefined, now = Date.now()): boolean {
     return isSnapshotStale(snapshot, now, this._staleAfterMs())
   }
 
-  async refresh(agentId: string, options?: { force?: boolean }): Promise<void> {
-    if (options?.force === true) this._unsupported.delete(agentId)
-    else if (this._unsupported.has(agentId)) return
+  async refresh(agentId: string, authority?: string, options?: { force?: boolean }): Promise<void> {
+    const key = usageKey(agentId, authority)
+    if (options?.force === true) this._unsupported.delete(key)
+    else if (this._unsupported.has(key)) return
 
-    const pending = this._inflight.get(agentId)
+    const pending = this._inflight.get(key)
     if (pending !== undefined) return pending
 
-    const run = this._fetch(agentId).finally(() => {
-      this._inflight.delete(agentId)
+    const run = this._fetch(agentId, authority).finally(() => {
+      this._inflight.delete(key)
     })
-    this._inflight.set(agentId, run)
+    this._inflight.set(key, run)
     return run
   }
 
-  async consumeResetCredit(agentId: string, idempotencyKey: string): Promise<ResetCreditOutcome> {
-    const session = this._liveSessionFor(agentId)
+  async consumeResetCredit(
+    agentId: string,
+    authority: string | undefined,
+    idempotencyKey: string,
+  ): Promise<ResetCreditOutcome> {
+    const session = this._liveSessionFor(agentId, authority)
     if (session === undefined) return 'unavailable'
     // Redeeming is an explicit click, so unlike the polling path above it is
     // worth waking a session the idle reaper put to sleep — `requestExtMethod`
     // never opens a connection and would just report 'unavailable'.
     if ((await session.ensureAwake()) !== 'ready') return 'unavailable'
+    const where = authority ?? 'local'
     try {
       const raw = await session.requestExtMethod<Record<string, unknown>>(
         ACP_EXT_METHODS.consumeResetCredit,
@@ -225,15 +245,15 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       )
       if (raw === undefined) return 'unavailable'
       const outcome = raw['outcome']
-      this._logger.info(`consumeResetCredit(${agentId}) -> ${String(outcome)}`)
+      this._logger.info(`consumeResetCredit(${agentId}@${where}) -> ${String(outcome)}`)
       if (typeof outcome === 'string' && RESET_CREDIT_OUTCOMES.has(outcome)) {
         // The window may have moved; re-read so the UI reflects the redemption.
-        void this.refresh(agentId, { force: true })
+        void this.refresh(agentId, authority, { force: true })
         return outcome as ResetCreditOutcome
       }
       return 'failed'
     } catch (error) {
-      this._logger.error(`consumeResetCredit(${agentId}) failed: ${String(error)}`)
+      this._logger.error(`consumeResetCredit(${agentId}@${where}) failed: ${String(error)}`)
       return 'failed'
     }
   }
@@ -243,35 +263,23 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     super.dispose()
   }
 
-  private _observableFor(
-    agentId: string,
-  ): ISettableObservable<SubscriptionUsageSnapshot | undefined> {
-    let observable = this._snapshots.get(agentId)
+  private _observableFor(key: string): ISettableObservable<SubscriptionUsageSnapshot | undefined> {
+    let observable = this._snapshots.get(key)
     if (observable === undefined) {
       observable = observableValue<SubscriptionUsageSnapshot | undefined>(
-        `subscriptionUsage:${agentId}`,
+        `subscriptionUsage:${key}`,
         undefined,
       )
-      this._snapshots.set(agentId, observable)
+      this._snapshots.set(key, observable)
     }
     return observable
   }
 
-  private _storageKey(): string {
-    const authority = currentRemoteAuthority(this._workspace.current)
-    // The account answering is the agent host's, so a remote window must not
-    // read the local window's cache (or vice versa).
-    return authority === undefined ? STORAGE_KEY_PREFIX : `${STORAGE_KEY_PREFIX}.${authority}`
-  }
-
   private async _restore(): Promise<void> {
     try {
-      const stored = await this._storage.get<PersistedSnapshots>(
-        this._storageKey(),
-        StorageScope.GLOBAL,
-      )
+      const stored = await this._storage.get<PersistedSnapshots>(STORAGE_KEY, StorageScope.GLOBAL)
       if (stored === undefined || stored === null || typeof stored !== 'object') return
-      for (const [agentId, snapshot] of Object.entries(stored)) {
+      for (const [storedKey, snapshot] of Object.entries(stored)) {
         if (snapshot === null || typeof snapshot !== 'object') continue
         if (!Array.isArray(snapshot.windows) || typeof snapshot.fetchedAt !== 'number') continue
         // A truncated write or an older shape would otherwise reach the UI as
@@ -284,8 +292,11 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
         ) {
           continue
         }
+        // A bare agent id predates per-host partitioning — those runs could only
+        // have read the local host, so seed the local slot.
+        const key = storedKey.includes('\0') ? storedKey : usageKey(storedKey, undefined)
         // Only seed an empty slot: a snapshot read this session is authoritative.
-        const observable = this._observableFor(agentId)
+        const observable = this._observableFor(key)
         if (observable.get() === undefined) observable.set(snapshot, undefined)
       }
     } catch (error) {
@@ -295,12 +306,12 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
 
   private async _persist(): Promise<void> {
     const payload: PersistedSnapshots = {}
-    for (const [agentId, observable] of this._snapshots) {
+    for (const [key, observable] of this._snapshots) {
       const snapshot = observable.get()
-      if (snapshot !== undefined) payload[agentId] = snapshot
+      if (snapshot !== undefined) payload[key] = snapshot
     }
     try {
-      await this._storage.set(this._storageKey(), payload, StorageScope.GLOBAL)
+      await this._storage.set(STORAGE_KEY, payload, StorageScope.GLOBAL)
     } catch (error) {
       this._logger.warn(`failed to persist snapshots: ${String(error)}`)
     }
@@ -329,30 +340,46 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     }
   }
 
-  /** Refresh every agent that currently has a live session — never wake a stopped one. */
+  /**
+   * Refresh every agent+host pair that currently has a live session — never wake
+   * a stopped one, and never ask one host's agent about the other's account.
+   */
   private async _tick(): Promise<void> {
-    const agentIds = new Set(this._sessions.sessions.get().map((session) => session.agentId))
-    await Promise.all([...agentIds].map((agentId) => this.refresh(agentId)))
+    const targets = new Map<string, { agentId: string; authority: string | undefined }>()
+    for (const session of this._sessions.sessions.get()) {
+      targets.set(usageKey(session.agentId, session.authority), {
+        agentId: session.agentId,
+        authority: session.authority,
+      })
+    }
+    await Promise.all(
+      [...targets.values()].map(({ agentId, authority }) => this.refresh(agentId, authority)),
+    )
   }
 
   /**
-   * Ride along on any live session of `agentId`. `requestExtMethod` answers
-   * `undefined` when there is no connection, which is the "keep the cached
-   * snapshot, let the UI mark it stale" path — not an error.
+   * Ride along on any live session of `agentId` **on that host**.
+   * `requestExtMethod` answers `undefined` when there is no connection, which is
+   * the "keep the cached snapshot, let the UI mark it stale" path — not an error.
    *
    * Read-only foreign previews are skipped: they can never wake (spawning
    * against another worktree is exactly what they exist to avoid), so handing
    * one to the redeem path would make it look permanently unavailable while a
    * perfectly wakeable session sat later in the list.
    */
-  private _liveSessionFor(agentId: string): IAcpSession | undefined {
+  private _liveSessionFor(agentId: string, authority: string | undefined): IAcpSession | undefined {
     return this._sessions.sessions
       .get()
-      .find((session) => session.agentId === agentId && !session.readOnly)
+      .find(
+        (session) =>
+          session.agentId === agentId && session.authority === authority && !session.readOnly,
+      )
   }
 
-  private async _fetch(agentId: string): Promise<void> {
-    const session = this._liveSessionFor(agentId)
+  private async _fetch(agentId: string, authority: string | undefined): Promise<void> {
+    const key = usageKey(agentId, authority)
+    const where = authority ?? 'local'
+    const session = this._liveSessionFor(agentId, authority)
     if (session === undefined) return
     let raw: unknown
     try {
@@ -360,25 +387,27 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     } catch (error) {
       // methodNotFound from an agent that doesn't implement it, or a transient
       // failure. Either way stop polling it; the popover can force a re-ask.
-      this._unsupported.add(agentId)
-      this._logger.info(`subscription usage unavailable for ${agentId}: ${String(error)}`)
+      this._unsupported.add(key)
+      this._logger.info(`subscription usage unavailable for ${agentId}@${where}: ${String(error)}`)
       return
     }
     if (raw === undefined) return
 
     const snapshot = normalizeSubscriptionUsage(agentId, raw, Date.now())
     if (snapshot === undefined) {
-      this._unsupported.add(agentId)
-      this._logger.info(`${agentId} reports no subscription usage (gateway / API key session)`)
+      this._unsupported.add(key)
+      this._logger.info(
+        `${agentId}@${where} reports no subscription usage (gateway / API key session)`,
+      )
       // A previously-cached snapshot is no longer true for this account.
-      this._observableFor(agentId).set(undefined, undefined)
+      this._observableFor(key).set(undefined, undefined)
       void this._persist()
       return
     }
     this._logger.trace(
-      `${agentId} usage: ${snapshot.windows.map((w) => `${w.id}=${w.usedPercent}%`).join(' ')}`,
+      `${agentId}@${where} usage: ${snapshot.windows.map((w) => `${w.id}=${w.usedPercent}%`).join(' ')}`,
     )
-    this._observableFor(agentId).set(snapshot, undefined)
+    this._observableFor(key).set(snapshot, undefined)
     void this._persist()
   }
 }

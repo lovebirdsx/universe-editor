@@ -1,8 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  CodexAuthenticationPanel tests — the provider picker renders a derived TOML
- *  preview with a masked key (never the full key), probes connectivity only on an
- *  explicit "Test" click, and shows guidance when no compatible provider exists.
+ *  CodexAuthenticationPanel tests — the provider picker mirrors the credential
+ *  in effect on disk (`activeAuth`), renders a derived TOML preview with a
+ *  masked key (never the full key), probes connectivity only on an explicit
+ *  "Test" click, shows guidance when no compatible provider exists, pins a
+ *  stale effective model on top, and surfaces an unattributed external
+ *  credential.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +20,7 @@ import {
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
 import type { CodexAuthStatus } from '../../../../../shared/ipc/codexConfigService.js'
+import type { AgentActiveAuth } from '../../../../../shared/ai/agentActiveAuth.js'
 import { ServicesContext } from '../../../useService.js'
 import { CodexAuthenticationPanel } from '../CodexAuthenticationPanel.js'
 import type { UseCodexConfig } from '../useCodexConfig.js'
@@ -29,16 +33,24 @@ const GW_ENTRY: AiProviderEntry = {
   baseUrl: 'https://gw.example.com/v1',
   protocolMap: { 'openai-responses': [] },
 }
+const GW_ENTRY_WITH_MODELS: AiProviderEntry = {
+  id: 'edge',
+  apiKey: 'sk-codex-secret-key-456',
+  baseUrl: 'https://gw.example.com/v1',
+  protocolMap: { 'openai-responses': ['gpt-5.5', 'gpt-5.5-mini'] },
+}
 
-function makeConfig(authentication: string | undefined): UseCodexConfig {
+function makeConfig(
+  activeAuth: AgentActiveAuth,
+  settings: UseCodexConfig['settings'] = {},
+): UseCodexConfig {
   return {
-    settings: { model_provider: '' },
+    settings,
     loaded: true,
     configPath: '',
     authority: undefined,
     authStatus: { active: 'none', hasApiKey: false },
-    agentSettings: authentication === undefined ? {} : { authentication },
-    activeAuth: { kind: 'none', drift: false },
+    activeAuth,
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     reloadAuthStatus: vi.fn(
@@ -85,7 +97,7 @@ async function flushEffects(): Promise<void> {
 describe('CodexAuthenticationPanel provider picker', () => {
   it('renders the derived TOML preview with a masked key, never the full key', async () => {
     const { aiModel } = makeAiModel([GW_ENTRY])
-    renderPanel(makeConfig('edge'), aiModel)
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'edge' }), aiModel)
     await flushEffects()
     await flushEffects()
 
@@ -98,7 +110,7 @@ describe('CodexAuthenticationPanel provider picker', () => {
 
   it('only calls verifyProvider on an explicit Test click, not on render', async () => {
     const { aiModel, verifyProvider } = makeAiModel([GW_ENTRY])
-    renderPanel(makeConfig('edge'), aiModel)
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'edge' }), aiModel)
     await flushEffects()
     await flushEffects()
 
@@ -118,12 +130,46 @@ describe('CodexAuthenticationPanel provider picker', () => {
 
   it('shows guidance instead of an empty dropdown when no compatible provider exists', async () => {
     const { aiModel } = makeAiModel([])
-    renderPanel(makeConfig('edge'), aiModel)
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'edge' }), aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(screen.getByText(/No provider entries/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add a provider…' })).toBeTruthy()
     expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
+  it('derives the subscription selection from the subscription active auth', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig({ kind: 'subscription' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(screen.getByText('Use ChatGPT subscription login')).toBeTruthy()
+    expect(screen.getByText(/Uses the shared ChatGPT login below/)).toBeTruthy()
+  })
+
+  it('shows the external credential hint when the credential in effect matches no entry', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig({ kind: 'provider' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    expect(screen.getByText(/credential configured outside the editor/)).toBeTruthy()
+  })
+
+  // The row shows the effective config.toml model; a value the provider no
+  // longer offers must stay pinned on top instead of vanishing.
+  it('pins a stale effective model on top of the candidates', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY_WITH_MODELS])
+    renderPanel(
+      makeConfig({ kind: 'provider', providerId: 'edge' }, { model: 'stale-model' }),
+      aiModel,
+    )
+    await flushEffects()
+    await flushEffects()
+
+    // The pinned value is the Select trigger's current option.
+    expect(screen.getByText('stale-model')).toBeTruthy()
   })
 })

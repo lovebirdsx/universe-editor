@@ -64,6 +64,8 @@ interface Harness {
 
 function renderIndicator(options: {
   agentId?: string
+  /** Host the session's agent runs on — credentials, and so usage, are per host. */
+  authority?: string
   snapshot?: SubscriptionUsageSnapshot | undefined
   stale?: boolean
   account?: AccountUsageState
@@ -114,7 +116,10 @@ function renderIndicator(options: {
   } as unknown as INotificationServiceType)
   const inst = new InstantiationService(services)
 
-  const session = { agentId: options.agentId ?? 'codex' } as unknown as IAcpSession
+  const session = {
+    agentId: options.agentId ?? 'codex',
+    authority: options.authority,
+  } as unknown as IAcpSession
   render(<UsageIndicator session={session} />, {
     wrapper: ({ children }) => (
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -131,7 +136,18 @@ describe('UsageIndicator — collapsed form', () => {
 
   it('refreshes on mount so a just-opened chat is not showing yesterday', () => {
     const { refresh } = renderIndicator({ snapshot: snapshot() })
-    expect(refresh).toHaveBeenCalledWith('codex')
+    expect(refresh).toHaveBeenCalledWith('codex', undefined)
+  })
+
+  it("asks about the session's own host, not the window's", () => {
+    // A remote session bills against the remote host's credentials; passing the
+    // window's authority (or none) would read the wrong account's quota.
+    const { refresh, accountRefresh } = renderIndicator({
+      snapshot: snapshot(),
+      authority: 'ssh-remote+box',
+    })
+    expect(refresh).toHaveBeenCalledWith('codex', 'ssh-remote+box')
+    expect(accountRefresh).toHaveBeenCalledWith('codex', 'ssh-remote+box')
   })
 
   it('dims a stale reading and puts the cutoff time in the tooltip', () => {
@@ -154,7 +170,7 @@ describe('UsageIndicator — popover', () => {
 
     expect(screen.getAllByTestId('acp-usage-window')).toHaveLength(2)
     expect(screen.getByTestId('acp-usage-popover').textContent).toContain('plus')
-    expect(refresh).toHaveBeenCalledWith('codex', { force: true })
+    expect(refresh).toHaveBeenCalledWith('codex', undefined, { force: true })
   })
 
   it('closes on Escape', async () => {
@@ -211,8 +227,13 @@ describe('UsageIndicator — redeeming a reset credit', () => {
       fireEvent.click(screen.getByTestId('acp-usage-reset-credit'))
     })
     expect(consumeResetCredit).toHaveBeenCalledTimes(1)
-    const [agentId, key] = consumeResetCredit.mock.calls[0] as [string, string]
+    const [agentId, authority, key] = consumeResetCredit.mock.calls[0] as [
+      string,
+      string | undefined,
+      string,
+    ]
     expect(agentId).toBe('codex')
+    expect(authority).toBeUndefined()
     expect(key).toMatch(/[0-9a-f-]{36}/)
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ severity: Severity.Info as number }),
@@ -292,6 +313,6 @@ describe('UsageIndicator — account usage', () => {
       account: { hasSource: true },
     })
     fireEvent.click(screen.getByTestId('acp-usage-indicator'))
-    expect(accountRefresh).toHaveBeenCalledWith('codex', { force: true })
+    expect(accountRefresh).toHaveBeenCalledWith('codex', undefined, { force: true })
   })
 })

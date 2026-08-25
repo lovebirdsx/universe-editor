@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for CodexConfigMainService — TOML read fallbacks, merge/delete patch
  *  semantics, preservation of unmanaged keys, auth.json status derivation
- *  (ChatGPT vs API key, expiry, plan), and the separate credential library.
+ *  (ChatGPT vs API key, expiry, plan), the separate credential library, and
+ *  `resolveActiveAuth` reverse-lookup against the configured provider entries.
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
@@ -107,16 +108,6 @@ describe('CodexConfigMainService', () => {
     await svc.patch({ model: 'gpt-5.5' })
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['config.toml'])
-  })
-
-  it('stores the agent settings (authentication / model) in aiSettings.json', async () => {
-    const configDir = join(dir, 'editor-settings')
-    svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
-    await svc.writeAgentSettings({ authentication: 'gw', model: 'gpt-5.5' })
-
-    expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw', model: 'gpt-5.5' })
-    const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-    expect(stored.agentSettings.codex).toEqual({ authentication: 'gw', model: 'gpt-5.5' })
   })
 
   describe('applyCredential', () => {
@@ -452,16 +443,11 @@ describe('CodexConfigMainService', () => {
       )
     }
 
-    /** Swap `svc` for a configLocation-backed instance whose aiSettings.json holds the given providers + selection. */
-    async function useAiSettings(providers: unknown[], authentication?: string): Promise<void> {
+    /** Swap `svc` for a configLocation-backed instance whose aiSettings.json holds the given providers. */
+    async function useAiSettings(providers: unknown[]): Promise<void> {
       const configDir = join(dir, 'editor-settings')
       await fs.mkdir(configDir, { recursive: true })
-      const agentSettings = authentication === undefined ? {} : { codex: { authentication } }
-      await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({ providers, agentSettings }),
-        'utf8',
-      )
+      await fs.writeFile(join(configDir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
       svc.dispose()
       svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
     }
@@ -482,91 +468,47 @@ describe('CodexConfigMainService', () => {
     ]
 
     it('reports the matching provider when a gateway is in effect', async () => {
-      await useAiSettings(gatewayProviders, 'kuro-b')
+      await useAiSettings(gatewayProviders)
       await writeToml(
         'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
       )
-      expect(await svc.resolveActiveAuth()).toEqual({
-        kind: 'provider',
-        providerId: 'kuro-b',
-        drift: false,
-      })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'kuro-b' })
     })
 
     it('distinguishes same-URL providers by their bearer token', async () => {
-      await useAiSettings(gatewayProviders, 'kuro-b')
+      await useAiSettings(gatewayProviders)
       await writeToml(
         'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
       )
       expect((await svc.resolveActiveAuth()).providerId).toBe('kuro-b')
     })
 
-    it('flags drift when the on-disk gateway matches a different provider', async () => {
-      await useAiSettings(gatewayProviders, 'kuro-a')
+    it('resolves a hand-written model_provider name to its matching provider', async () => {
+      await useAiSettings(gatewayProviders)
+      await writeToml(
+        'model_provider = "kuro"\n[model_providers.kuro]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
+      )
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'kuro-b' })
+    })
+
+    it('leaves a hand-written gateway that matches no entry unattributed', async () => {
+      await useAiSettings([])
       await writeToml(
         'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
       )
-      expect(await svc.resolveActiveAuth()).toEqual({
-        kind: 'provider',
-        providerId: 'kuro-b',
-        drift: true,
-      })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider' })
     })
 
-    it('flags drift for a hand-written gateway the editor did not select', async () => {
-      await useAiSettings([], undefined)
-      await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
-      )
-      expect(await svc.resolveActiveAuth()).toEqual({
-        kind: 'provider',
-        providerId: undefined,
-        drift: true,
-      })
-    })
-
-    it('reports the ChatGPT subscription when it is in effect and selected', async () => {
-      await useAiSettings([], '@subscription')
+    it('reports the ChatGPT subscription when it is in effect', async () => {
+      await useAiSettings([])
       await writeChatgpt()
-      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'subscription', drift: false })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'subscription' })
     })
 
     it('reports none when the ChatGPT login is not active', async () => {
-      await useAiSettings([], undefined)
+      await useAiSettings([])
       await writeToml('model = "gpt-5.5"\n')
-      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'none', drift: false })
-    })
-
-    it('flags drift when @subscription is selected but a gateway is in effect', async () => {
-      await useAiSettings(gatewayProviders, '@subscription')
-      await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
-      )
-      expect(await svc.resolveActiveAuth()).toEqual({
-        kind: 'provider',
-        providerId: 'kuro-b',
-        drift: true,
-      })
-    })
-  })
-
-  describe('agent settings', () => {
-    it('returns {} when aiSettings.json is absent', async () => {
-      const configDir = join(dir, 'editor-settings')
-      svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
-      expect(await svc.readAgentSettings()).toEqual({})
-    })
-
-    it('drops legacy non-string fields when reading', async () => {
-      const configDir = join(dir, 'editor-settings')
-      await fs.mkdir(configDir, { recursive: true })
-      await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({ agentSettings: { codex: { authentication: 'gw', model: 42 } } }),
-        'utf8',
-      )
-      svc = new CodexConfigMainService(configPath, undefined, configLocation(configDir))
-      expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'none' })
     })
   })
 })
@@ -600,6 +542,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       this.authSubscriptions++
       return this._authEmitter.event(listener, thisArgs, disposables)
     }
+    readonly onDidChangeClaudeConfig: Event<void> = Event.None
     codexSettings: CodexSettings = {}
     codexAuthStatus: CodexAuthStatus = { active: 'none', hasApiKey: false }
 
@@ -684,18 +627,9 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     return { svc, proxyCalls, configDir }
   }
 
-  async function writeLocalProviders(
-    configDir: string,
-    providers: unknown[],
-    authentication?: string,
-  ): Promise<void> {
+  async function writeLocalProviders(configDir: string, providers: unknown[]): Promise<void> {
     await fs.mkdir(configDir, { recursive: true })
-    const agentSettings = authentication === undefined ? {} : { codex: { authentication } }
-    await fs.writeFile(
-      join(configDir, 'aiSettings.json'),
-      JSON.stringify({ providers, agentSettings }),
-      'utf8',
-    )
+    await fs.writeFile(join(configDir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
   }
 
   const gatewayProviders = [
@@ -725,32 +659,8 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       },
     }
     const { svc, configDir } = await makeRemoteService(remote)
-    await writeLocalProviders(configDir, gatewayProviders, 'kuro-b')
-    expect(await svc.resolveActiveAuth('host')).toEqual({
-      kind: 'provider',
-      providerId: 'kuro-b',
-      drift: false,
-    })
-  })
-
-  it('flags drift when a remote gateway does not match the selection', async () => {
-    const remote = new FakeRemoteAgentConfigService()
-    remote.codexSettings = {
-      model_provider: 'codex-gateway',
-      model_providers: {
-        'codex-gateway': {
-          base_url: 'http://gw:9080/',
-          experimental_bearer_token: 'kuro-5a',
-        },
-      },
-    }
-    const { svc, configDir } = await makeRemoteService(remote)
-    await writeLocalProviders(configDir, gatewayProviders, 'kuro-a')
-    expect(await svc.resolveActiveAuth('host')).toEqual({
-      kind: 'provider',
-      providerId: 'kuro-b',
-      drift: true,
-    })
+    await writeLocalProviders(configDir, gatewayProviders)
+    expect(await svc.resolveActiveAuth('host')).toEqual({ kind: 'provider', providerId: 'kuro-b' })
   })
 
   it('resolves a remote ChatGPT login to the subscription kind', async () => {
@@ -758,8 +668,8 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     remote.codexSettings = {}
     remote.codexAuthStatus = { active: 'chatgpt', hasApiKey: false }
     const { svc, configDir } = await makeRemoteService(remote)
-    await writeLocalProviders(configDir, [], '@subscription')
-    expect(await svc.resolveActiveAuth('host')).toEqual({ kind: 'subscription', drift: false })
+    await writeLocalProviders(configDir, [])
+    expect(await svc.resolveActiveAuth('host')).toEqual({ kind: 'subscription' })
   })
 
   it('subscribes to remote codex auth changes exactly once per authority', async () => {

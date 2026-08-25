@@ -35,8 +35,12 @@ import type { URI } from '../base/uri.js'
 import type { IFileService } from '../files/fileService.js'
 import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherProtocol.js'
 
-/** Bumped on any incompatible change to the framing, handshake or DTOs below. */
-export const REMOTE_PROTOCOL_VERSION = 7
+/**
+ * Bumped on any incompatible change to the framing, handshake or DTOs below.
+ * v7 → v8: the agentConfig channel gains the claude `onDidChangeClaudeConfig`
+ * event — clients on older protocol versions do not know the event name.
+ */
+export const REMOTE_PROTOCOL_VERSION = 8
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

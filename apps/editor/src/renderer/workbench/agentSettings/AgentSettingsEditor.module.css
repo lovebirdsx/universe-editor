@@ -209,20 +209,6 @@
   gap: 8px;
 }
 
-.activeBadge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 6px;
-  height: 16px;
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ue-button-foreground, #fff);
-  background: var(--ue-button-background, rgba(0, 120, 215, 0.9));
-}
-
 .statusRow {
   display: flex;
   align-items: center;

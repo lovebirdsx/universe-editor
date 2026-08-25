@@ -76,6 +76,7 @@ export class CodexConfigStore extends Disposable {
 
   private _authWatcher: FSWatcher | undefined
   private _authDebounce: ReturnType<typeof setTimeout> | undefined
+  private _disposed = false
 
   constructor(options: CodexConfigStoreOptions = {}) {
     super()
@@ -84,43 +85,52 @@ export class CodexConfigStore extends Disposable {
     this._startAuthWatch()
   }
 
+  /** Whether the directory watch is attached. For tests to await arming without sleeping. */
+  get watching(): boolean {
+    return this._authWatcher !== undefined
+  }
+
   /**
-   * Watch the directory that holds auth.json (watching the dir survives the
-   * temp-file + rename codex login uses to write atomically). Debounced so a
-   * rename's create/delete pair fires once.
+   * Watch the directory that holds auth.json and config.toml (watching the dir
+   * survives the temp-file + rename codex login / the store's own atomic writes
+   * use; a rename's create/delete pair would otherwise be missed by a file-level
+   * watch). Debounced so each write fires once. Filtered to just the two files
+   * — `~/.codex` also holds high-churn dirs like sessions/rollouts that must
+   * not trigger this.
    */
   private _startAuthWatch(): void {
     const dir = dirname(this._authPath())
-    const authFile = basename(this._authPath())
-    try {
-      void fs.mkdir(dir, { recursive: true }).then(
-        () => {
-          try {
-            this._authWatcher = watch(dir, (_event, filename) => {
-              if (filename && basename(filename.toString()) !== authFile) return
-              if (this._authDebounce) clearTimeout(this._authDebounce)
-              this._authDebounce = setTimeout(() => {
-                this._logger.info('auth.json changed; notifying')
-                this._onDidChangeAuth.fire()
-              }, 150)
-            })
-            this._authWatcher.on('error', (err) =>
-              this._logger.warn(`auth watcher error: ${err.message}`),
-            )
-          } catch (err) {
-            this._logger.warn(`auth watch failed: ${(err as Error).message}`)
-          }
-        },
-        (err) => this._logger.warn(`auth watch mkdir failed: ${(err as Error).message}`),
-      )
-    } catch (err) {
-      this._logger.warn(`auth watch setup failed: ${(err as Error).message}`)
-    }
+    const watchedFiles = new Set([basename(this._authPath()), basename(this._configPath)])
+    void fs.mkdir(dir, { recursive: true }).then(
+      () => {
+        // dispose() can land while the mkdir is in flight; attaching then would
+        // leak a watcher nothing closes.
+        if (this._disposed) return
+        try {
+          this._authWatcher = watch(dir, (_event, filename) => {
+            if (filename && !watchedFiles.has(basename(filename.toString()))) return
+            if (this._authDebounce) clearTimeout(this._authDebounce)
+            this._authDebounce = setTimeout(() => {
+              this._logger.info('codex auth.json/config.toml changed; notifying')
+              this._onDidChangeAuth.fire()
+            }, 150)
+          })
+          this._authWatcher.on('error', (err) =>
+            this._logger.warn(`auth watcher error: ${err.message}`),
+          )
+        } catch (err) {
+          this._logger.warn(`auth watch failed: ${(err as Error).message}`)
+        }
+      },
+      (err) => this._logger.warn(`auth watch mkdir failed: ${(err as Error).message}`),
+    )
   }
 
   override dispose(): void {
+    this._disposed = true
     if (this._authDebounce) clearTimeout(this._authDebounce)
     this._authWatcher?.close()
+    this._authWatcher = undefined
     super.dispose()
   }
 

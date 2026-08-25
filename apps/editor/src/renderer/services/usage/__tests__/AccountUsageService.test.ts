@@ -176,7 +176,7 @@ describe('AccountUsageService', () => {
 
   it('forces an upstream re-fetch before reading when force is set', async () => {
     const service = createService()
-    await service.refresh('codex', { force: true })
+    await service.refresh('codex', undefined, { force: true })
     expect(refreshRemote).toHaveBeenCalledWith('anthropic-gw')
     expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     service.dispose()
@@ -195,7 +195,7 @@ describe('AccountUsageService', () => {
     const service = createService()
 
     const first = service.refresh('codex')
-    const forced = service.refresh('codex', { force: true })
+    const forced = service.refresh('codex', undefined, { force: true })
     resolveFirst?.(usage())
     await Promise.all([first, forced])
 
@@ -214,6 +214,55 @@ describe('AccountUsageService', () => {
 
     expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
     service.dispose()
+  })
+
+  describe('per-host partitioning', () => {
+    // The same agent authenticates from whatever config files live on the host it
+    // runs on. A local subscription and a remote gateway are two bindings, and one
+    // window can hold a session of each.
+    it('keeps the local and remote states of one agent apart', async () => {
+      providerContext.getProviderContext.mockImplementation(
+        (_agentId: string, authority?: string) =>
+          authority === 'ssh-remote+box'
+            ? ctx({ providerId: 'remote-gw' })
+            : ctx({ providerId: 'local-gw' }),
+      )
+      getAccountUsage.mockImplementation(async (providerId: string) =>
+        providerId === 'remote-gw' ? usage('quota') : usage('balance'),
+      )
+      const service = createService()
+
+      await service.refresh('codex')
+      await service.refresh('codex', 'ssh-remote+box')
+
+      expect(service.stateFor('codex').get().usage?.kind).toBe('balance')
+      expect(service.stateFor('codex', 'ssh-remote+box').get().usage?.kind).toBe('quota')
+      service.dispose()
+    })
+
+    it('does not share one in-flight round trip across hosts', async () => {
+      const service = createService()
+      await Promise.all([service.refresh('codex'), service.refresh('codex', 'ssh-remote+box')])
+      expect(getAccountUsage).toHaveBeenCalledTimes(2)
+      service.dispose()
+    })
+
+    it('re-resolves every known host on onDidChangeContext, with its own authority', async () => {
+      const service = createService()
+      await service.refresh('codex')
+      await service.refresh('codex', 'ssh-remote+box')
+      providerContext.getProviderContext.mockClear()
+
+      contextChanged.fire()
+
+      expect(providerContext.getProviderContext.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['codex', undefined],
+          ['codex', 'ssh-remote+box'],
+        ]),
+      )
+      service.dispose()
+    })
   })
 })
 

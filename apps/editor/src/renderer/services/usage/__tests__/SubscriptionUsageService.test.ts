@@ -11,19 +11,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
-  Event,
   LogLevel,
   NullLogger,
   observableValue,
   StorageScope,
-  URI,
   type ILogger,
   type ILoggerService,
   type IConfigurationChangeEvent,
   type IConfigurationService,
   type IStorageService,
-  type IWorkspace,
-  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { SubscriptionUsageService } from '../SubscriptionUsageService.js'
 import { ACP_EXT_METHODS } from '../../acp/session/acpExtMethods.js'
@@ -47,23 +43,6 @@ class FakeStorage implements IStorageService {
   }
   async remove(key: string, scope = StorageScope.GLOBAL): Promise<void> {
     this.buckets.get(scope)!.delete(key)
-  }
-}
-
-class FakeWorkspaceService implements IWorkspaceService {
-  declare readonly _serviceBrand: undefined
-  readonly recent = []
-  readonly onDidChangeRecent = Event.None
-  private readonly _onDidChangeWorkspace = new Emitter<IWorkspace | null>()
-  readonly onDidChangeWorkspace = this._onDidChangeWorkspace.event
-  readonly whenReady: Promise<void> = Promise.resolve()
-  current: IWorkspace | null = { folder: URI.file('/work'), name: 'work' }
-  async openFolder(): Promise<void> {}
-  async closeFolder(): Promise<void> {}
-  async clearRecent(): Promise<void> {}
-  async removeRecent(): Promise<void> {}
-  fireChange(): void {
-    this._onDidChangeWorkspace.fire(this.current)
   }
 }
 
@@ -93,11 +72,13 @@ function fakeSession(
   agentId: string,
   requestExtMethod: IAcpSession['requestExtMethod'],
   id: string = agentId,
+  authority: string | undefined = undefined,
   awake: Awaited<ReturnType<IAcpSession['ensureAwake']>> = 'ready',
 ): IAcpSession & { ensureAwake: ReturnType<typeof vi.fn> } {
   return {
     id,
     agentId,
+    authority,
     requestExtMethod,
     ensureAwake: vi.fn().mockResolvedValue(awake),
   } as unknown as IAcpSession & { ensureAwake: ReturnType<typeof vi.fn> }
@@ -115,7 +96,6 @@ function claudeUsage(utilization: number): Record<string, unknown> {
 
 describe('SubscriptionUsageService', () => {
   let storage: FakeStorage
-  let workspace: FakeWorkspaceService
   let configuration: FakeConfiguration
   let sessions: ReturnType<typeof observableValue<readonly IAcpSession[]>>
   /** Every session the service could possibly reach, plus a connect spy it must not use. */
@@ -126,14 +106,12 @@ describe('SubscriptionUsageService', () => {
       sessionService,
       configuration as unknown as IConfigurationService,
       storage,
-      workspace,
       new StubLoggerService(),
     )
   }
 
   beforeEach(() => {
     storage = new FakeStorage()
-    workspace = new FakeWorkspaceService()
     configuration = new FakeConfiguration()
     sessions = observableValue<readonly IAcpSession[]>('sessions', [])
     sessionService = { sessions, connect: vi.fn() } as unknown as IAcpSessionService & {
@@ -183,7 +161,7 @@ describe('SubscriptionUsageService', () => {
     const cached = service.snapshotFor('claude-code').get()
 
     sessions.set([], undefined)
-    await service.refresh('claude-code', { force: true })
+    await service.refresh('claude-code', undefined, { force: true })
 
     expect(service.snapshotFor('claude-code').get()).toBe(cached)
     expect(requestExtMethod).toHaveBeenCalledTimes(1)
@@ -197,7 +175,7 @@ describe('SubscriptionUsageService', () => {
     await service.refresh('claude-code')
 
     requestExtMethod.mockResolvedValue(undefined)
-    await service.refresh('claude-code', { force: true })
+    await service.refresh('claude-code', undefined, { force: true })
 
     expect(service.snapshotFor('claude-code').get()?.windows[0]?.usedPercent).toBe(55)
     service.dispose()
@@ -214,7 +192,7 @@ describe('SubscriptionUsageService', () => {
     await service.refresh('claude-code')
     expect(requestExtMethod).toHaveBeenCalledTimes(1)
 
-    await service.refresh('claude-code', { force: true })
+    await service.refresh('claude-code', undefined, { force: true })
     expect(requestExtMethod).toHaveBeenCalledTimes(2)
     service.dispose()
   })
@@ -249,7 +227,7 @@ describe('SubscriptionUsageService', () => {
     expect(service.snapshotFor('claude-code').get()).toBeDefined()
 
     requestExtMethod.mockResolvedValue({ vendor: 'claude', supported: false })
-    await service.refresh('claude-code', { force: true })
+    await service.refresh('claude-code', undefined, { force: true })
     expect(service.snapshotFor('claude-code').get()).toBeUndefined()
     service.dispose()
   })
@@ -298,13 +276,107 @@ describe('SubscriptionUsageService', () => {
     service.dispose()
   })
 
+  describe('per-host partitioning', () => {
+    // The plan belongs to the account logged in on the host the agent runs on. A
+    // local claude.ai login and a remote one are two accounts, and one window can
+    // hold a session against each.
+    const REMOTE = 'ssh-remote+box'
+
+    it('asks each host its own session and keeps the two snapshots apart', async () => {
+      const local = vi.fn().mockResolvedValue(claudeUsage(11))
+      const remote = vi.fn().mockResolvedValue(claudeUsage(77))
+      sessions.set(
+        [
+          fakeSession('claude-code', local, 'local-session'),
+          fakeSession('claude-code', remote, 'remote-session', REMOTE),
+        ],
+        undefined,
+      )
+
+      const service = createService()
+      await service.refresh('claude-code')
+      await service.refresh('claude-code', REMOTE)
+
+      expect(local).toHaveBeenCalledWith(ACP_EXT_METHODS.subscriptionUsage)
+      expect(remote).toHaveBeenCalledWith(ACP_EXT_METHODS.subscriptionUsage)
+      expect(service.snapshotFor('claude-code').get()?.windows[0]?.usedPercent).toBe(11)
+      expect(service.snapshotFor('claude-code', REMOTE).get()?.windows[0]?.usedPercent).toBe(77)
+      service.dispose()
+    })
+
+    it('does not let one host’s "no subscription" verdict silence the other', async () => {
+      const local = vi
+        .fn()
+        .mockResolvedValue({ vendor: 'claude', supported: true, rateLimitsAvailable: false })
+      const remote = vi.fn().mockResolvedValue(claudeUsage(42))
+      sessions.set(
+        [
+          fakeSession('claude-code', local, 'local-session'),
+          fakeSession('claude-code', remote, 'remote-session', REMOTE),
+        ],
+        undefined,
+      )
+
+      const service = createService()
+      await service.refresh('claude-code')
+      await service.refresh('claude-code', REMOTE)
+      // The constructor's own tick already asked both hosts; count only from here,
+      // where the local verdict is on record and the remote one is not.
+      local.mockClear()
+      remote.mockClear()
+      await service.refresh('claude-code')
+      await service.refresh('claude-code', REMOTE)
+
+      expect(local).not.toHaveBeenCalled()
+      expect(remote).toHaveBeenCalledTimes(1)
+      expect(service.snapshotFor('claude-code', REMOTE).get()?.windows[0]?.usedPercent).toBe(42)
+      service.dispose()
+    })
+
+    it('redeems a reset credit on the host that owns the quota', async () => {
+      const local = vi.fn().mockResolvedValue({ outcome: 'noCredit' })
+      const remote = vi.fn().mockResolvedValue({ outcome: 'reset' })
+      sessions.set(
+        [
+          fakeSession('codex', local, 'local-session'),
+          fakeSession('codex', remote, 'remote-session', REMOTE),
+        ],
+        undefined,
+      )
+
+      const service = createService()
+      expect(await service.consumeResetCredit('codex', REMOTE, 'key-1')).toBe('reset')
+      expect(remote).toHaveBeenCalledWith(ACP_EXT_METHODS.consumeResetCredit, {
+        idempotencyKey: 'key-1',
+      })
+      expect(local).not.toHaveBeenCalledWith(ACP_EXT_METHODS.consumeResetCredit, expect.anything())
+      service.dispose()
+    })
+
+    it('restores a pre-partitioning cache entry into the local slot', async () => {
+      // Older runs keyed the payload by bare agent id and could only ever have
+      // read the local host.
+      storage.buckets.get(StorageScope.GLOBAL)!.set(STORAGE_KEY, {
+        'claude-code': { windows: [{ id: 'five_hour', usedPercent: 33 }], fetchedAt: 1 },
+      })
+
+      const service = createService()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(service.snapshotFor('claude-code').get()?.windows[0]?.usedPercent).toBe(33)
+      expect(service.snapshotFor('claude-code', REMOTE).get()).toBeUndefined()
+      service.dispose()
+    })
+  })
+
   describe('consumeResetCredit', () => {
     it('forwards the caller-supplied idempotency key verbatim', async () => {
       const requestExtMethod = vi.fn().mockResolvedValue({ outcome: 'reset' })
       sessions.set([fakeSession('codex', requestExtMethod)], undefined)
       const service = createService()
 
-      const outcome = await service.consumeResetCredit('codex', 'key-1')
+      const outcome = await service.consumeResetCredit('codex', undefined, 'key-1')
 
       expect(outcome).toBe('reset')
       expect(requestExtMethod).toHaveBeenCalledWith(ACP_EXT_METHODS.consumeResetCredit, {
@@ -315,7 +387,7 @@ describe('SubscriptionUsageService', () => {
 
     it('reports "unavailable" rather than connecting when no session is live', async () => {
       const service = createService()
-      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('unavailable')
+      expect(await service.consumeResetCredit('codex', undefined, 'key-1')).toBe('unavailable')
       expect(sessionService.connect).not.toHaveBeenCalled()
       service.dispose()
     })
@@ -324,7 +396,7 @@ describe('SubscriptionUsageService', () => {
       const requestExtMethod = vi.fn().mockRejectedValue(new Error('boom'))
       sessions.set([fakeSession('codex', requestExtMethod)], undefined)
       const service = createService()
-      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('failed')
+      expect(await service.consumeResetCredit('codex', undefined, 'key-1')).toBe('failed')
       service.dispose()
     })
 
@@ -332,7 +404,7 @@ describe('SubscriptionUsageService', () => {
       const requestExtMethod = vi.fn().mockResolvedValue({ outcome: 'whatever' })
       sessions.set([fakeSession('codex', requestExtMethod)], undefined)
       const service = createService()
-      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('failed')
+      expect(await service.consumeResetCredit('codex', undefined, 'key-1')).toBe('failed')
       service.dispose()
     })
 
@@ -342,7 +414,7 @@ describe('SubscriptionUsageService', () => {
       sessions.set([session], undefined)
       const service = createService()
 
-      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('reset')
+      expect(await service.consumeResetCredit('codex', undefined, 'key-1')).toBe('reset')
       // The wake has to precede the round trip: requestExtMethod never opens a
       // connection, so on a stopped agent it would just answer 'unavailable'.
       expect(session.ensureAwake).toHaveBeenCalledTimes(1)
@@ -351,10 +423,13 @@ describe('SubscriptionUsageService', () => {
 
     it('reports "unavailable" without redeeming when the wake fails', async () => {
       const requestExtMethod = vi.fn().mockResolvedValue({ outcome: 'reset' })
-      sessions.set([fakeSession('codex', requestExtMethod, 'codex', 'failed')], undefined)
+      sessions.set(
+        [fakeSession('codex', requestExtMethod, 'codex', undefined, 'failed')],
+        undefined,
+      )
       const service = createService()
 
-      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('unavailable')
+      expect(await service.consumeResetCredit('codex', undefined, 'key-1')).toBe('unavailable')
       // 'failed' would claim the credit was burned; the round trip never left.
       // (The same session also serves the usage poll, so assert on the method
       // rather than on the spy having no calls at all.)

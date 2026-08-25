@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Single-writer funnel for aiSettings.json. Two writers — AiModelMainService and
- *  the module-level aiSettingsAgentState helpers — mutate this one file, so every
+ *  Single-writer funnel for aiSettings.json. The only writer is AiModelMainService
+ *  (readers like aiSettingsProviders read through readAiSettingsRoot), so every
  *  read-modify-write and whole-file write goes through one per-path serial queue.
  *  The atomic write uses a unique tmp name (pid alone is not enough — two writers
  *  in one process collide), renames into place, and chmods 0600 on POSIX so

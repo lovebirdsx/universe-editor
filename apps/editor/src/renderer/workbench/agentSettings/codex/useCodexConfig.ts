@@ -5,15 +5,14 @@
  *  and refreshes local state. All panels in the Codex settings share this so edits
  *  stay consistent with the on-disk files the agent + CLI also read.
  *
- *  The editor's own selection (which provider / `@subscription` to use, plus the
- *  model pick) lives in aiSettings.json's `agentSettings.codex` block.
- *  `applyAuthentication` persists it and drives the matching `applyCredential`
- *  intent (a self-contained gateway, or the ChatGPT login). `activeAuth` is the
- *  drift-detection result from `resolveActiveAuth` — what is actually in effect on
- *  disk versus the declared selection.
+ *  The on-disk files are the single source of truth: `applyAuthentication` drives
+ *  the matching `applyCredential` intent (a self-contained gateway, or the
+ *  ChatGPT login) and the model pick writes config.toml `model`; `activeAuth` is
+ *  reverse-looked up from disk via `resolveActiveAuth` — what is actually in
+ *  effect, with no declared selection left to drift from it.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   IAiModelService,
   INotificationService,
@@ -24,13 +23,12 @@ import {
 } from '@universe-editor/platform'
 import {
   ICodexConfigService,
-  type CodexActiveAuth,
-  type CodexAgentSettings,
   type CodexAuthStatus,
   type CodexSettings,
   type CodexSettingsPatch,
 } from '../../../../shared/ipc/codexConfigService.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../../shared/ipc/claudeConfigService.js'
+import type { AgentActiveAuth } from '../../../../shared/ai/agentActiveAuth.js'
 import { deriveCodexGateway, findProviderById } from '../../../../shared/ai/providerDerivation.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
@@ -42,20 +40,19 @@ export interface UseCodexConfig {
   /** Remote-ssh authority when the workspace folder is remote; undefined for local. */
   readonly authority: string | undefined
   readonly authStatus: CodexAuthStatus
-  readonly agentSettings: CodexAgentSettings
-  /** Drift-detection: what is in effect on disk versus the declared selection. */
-  readonly activeAuth: CodexActiveAuth
+  /** Which credential is actually in effect, reverse-looked up from disk. */
+  readonly activeAuth: AgentActiveAuth
   patch(patch: CodexSettingsPatch): Promise<void>
   reload(): Promise<void>
   reloadAuthStatus(): Promise<CodexAuthStatus>
-  /** Persist the provider/`@subscription` selection and apply the matching credential. */
+  /** Apply the matching credential (the effective provider is read back from disk). */
   applyAuthentication(authentication: string | undefined): Promise<void>
-  /** Persist the model pick and write config.toml `model` (undefined clears it). */
+  /** Write config.toml `model` (undefined clears it). */
   setModel(model: string | undefined): Promise<void>
 }
 
 const LOGGED_OUT: CodexAuthStatus = { active: 'none', hasApiKey: false }
-const NO_ACTIVE_AUTH: CodexActiveAuth = { kind: 'none', drift: false }
+const NO_ACTIVE_AUTH: AgentActiveAuth = { kind: 'none' }
 
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
@@ -68,24 +65,19 @@ export function useCodexConfig(): UseCodexConfig {
   const [loaded, setLoaded] = useState(false)
   const [configPath, setConfigPath] = useState('')
   const [authStatus, setAuthStatus] = useState<CodexAuthStatus>(LOGGED_OUT)
-  const [agentSettings, setAgentSettings] = useState<CodexAgentSettings>({})
-  const [activeAuth, setActiveAuth] = useState<CodexActiveAuth>(NO_ACTIVE_AUTH)
-  const agentSettingsRef = useRef<CodexAgentSettings>({})
+  const [activeAuth, setActiveAuth] = useState<AgentActiveAuth>(NO_ACTIVE_AUTH)
 
   const loadAll = useCallback(async () => {
-    const [next, path, status, stored, active] = await Promise.all([
+    const [next, path, status, auth] = await Promise.all([
       service.read(authority),
       service.configPath(authority),
       service.readAuthStatus(authority),
-      service.readAgentSettings(),
       service.resolveActiveAuth(authority),
     ])
     setSettings(next)
     setConfigPath(path)
     setAuthStatus(status)
-    setAgentSettings(stored)
-    agentSettingsRef.current = stored
-    setActiveAuth(active)
+    setActiveAuth(auth)
     setLoaded(true)
   }, [service, authority])
 
@@ -100,31 +92,31 @@ export function useCodexConfig(): UseCodexConfig {
   useEffect(() => {
     let active = true
     void (async () => {
-      const [next, path, status, stored, auth] = await Promise.all([
+      const [next, path, status, auth] = await Promise.all([
         service.read(authority),
         service.configPath(authority),
         service.readAuthStatus(authority),
-        service.readAgentSettings(),
         service.resolveActiveAuth(authority),
       ])
       if (!active) return
       setSettings(next)
       setConfigPath(path)
       setAuthStatus(status)
-      setAgentSettings(stored)
-      agentSettingsRef.current = stored
       setActiveAuth(auth)
       setLoaded(true)
     })()
-    // Refresh login status + drift live when auth.json / config.toml changes on
-    // disk (e.g. once the browser OAuth flow from `codex login` completes).
+    // Refresh live when auth.json / config.toml changes on disk (e.g. once the
+    // browser OAuth flow from `codex login` completes) — the watch now also
+    // covers config.toml, so the settings snapshot must refresh too.
     const sub = service.onDidChangeAuth(() => {
       void (async () => {
-        const [status, auth] = await Promise.all([
+        const [next, status, auth] = await Promise.all([
+          service.read(authority),
           service.readAuthStatus(authority),
           service.resolveActiveAuth(authority),
         ])
         if (!active) return
+        setSettings(next)
         setAuthStatus(status)
         setActiveAuth(auth)
       })()
@@ -143,15 +135,6 @@ export function useCodexConfig(): UseCodexConfig {
     [service, authority],
   )
 
-  const writeAgentSettings = useCallback(
-    async (next: CodexAgentSettings) => {
-      await service.writeAgentSettings(next)
-      agentSettingsRef.current = next
-      setAgentSettings(next)
-    },
-    [service],
-  )
-
   const resolveProviders = useCallback(async (): Promise<readonly AiResolvedProvider[]> => {
     const [entries, knowledge] = await Promise.all([ai.getProviders(), ai.getModelKnowledge()])
     return resolveProviderEntries(entries, knowledge).providers
@@ -159,11 +142,6 @@ export function useCodexConfig(): UseCodexConfig {
 
   const applyAuthentication = useCallback(
     async (authentication: string | undefined) => {
-      const next: CodexAgentSettings = { ...agentSettingsRef.current }
-      if (authentication) next.authentication = authentication
-      else delete next.authentication
-      await writeAgentSettings(next)
-
       if (!authentication || authentication === AGENT_SUBSCRIPTION_AUTH) {
         // Clear the API key + gateway so the ChatGPT login takes over.
         const status = await service.applyCredential({ kind: 'chatgpt' }, authority)
@@ -187,18 +165,14 @@ export function useCodexConfig(): UseCodexConfig {
       setSettings(await service.read(authority))
       setActiveAuth(await service.resolveActiveAuth(authority))
     },
-    [service, authority, writeAgentSettings, resolveProviders, notification],
+    [service, authority, resolveProviders, notification],
   )
 
   const setModel = useCallback(
     async (model: string | undefined) => {
-      const next: CodexAgentSettings = { ...agentSettingsRef.current }
-      if (model) next.model = model
-      else delete next.model
-      await writeAgentSettings(next)
       await patch(model !== undefined ? { model } : { model: null })
     },
-    [writeAgentSettings, patch],
+    [patch],
   )
 
   return {
@@ -207,7 +181,6 @@ export function useCodexConfig(): UseCodexConfig {
     configPath,
     authority,
     authStatus,
-    agentSettings,
     activeAuth,
     patch,
     reload,

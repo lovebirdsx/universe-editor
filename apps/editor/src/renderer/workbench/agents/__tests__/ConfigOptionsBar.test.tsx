@@ -83,10 +83,10 @@ const stubClaudeConfigService = {
   async readAuthStatus() {
     return { loggedIn: false, expired: false }
   },
-  async readAgentSettings() {
-    return {}
+  onDidChangeConfig: Event.None,
+  async resolveActiveAuth() {
+    return { kind: 'none' as const }
   },
-  async writeAgentSettings() {},
   async checkGatewayConnectivity() {
     return true
   },
@@ -147,6 +147,7 @@ function makeSession(
   return {
     id: 's1',
     agentId: opts.agentId ?? 'fake',
+    authority: undefined,
     readOnly: false,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',

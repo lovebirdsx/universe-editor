@@ -46,6 +46,12 @@ export interface IAcpSessionCreateOptions {
    * must NOT regenerate (and overwrite) it, so they pass `false`.
    */
   readonly withTitleService?: boolean
+  /**
+   * Host the agent process runs on (remote-ssh authority; undefined = local).
+   * Threaded through so cost attribution reads that host's credentials — see
+   * IAcpSession.authority.
+   */
+  readonly authority?: string
 }
 
 export interface IAcpSessionFactory {
@@ -122,6 +128,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       undefined,
       undefined,
       this._providerContext,
+      opts.authority,
     )
   }
 }

@@ -2,23 +2,25 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-side Claude config service. The file-store core (settings.json +
  *  .credentials.json) lives in node-services (ClaudeConfigStore); this class adds
- *  the local/remote split and the editor-local agent settings (the credential
- *  selection, stored in aiSettings.json). The model picks are NOT stored here —
- *  they live only as their effective value in settings.json; see
- *  ClaudeAgentSettings for why.
+ *  the local/remote split. `resolveActiveAuth` reverse-looks the credential
+ *  actually in effect on the effective host — read from that host's own
+ *  settings.json / .credentials.json — against the configured provider entries;
+ *  the editor keeps no declared mirror, so there is no drift to detect.
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local ClaudeConfigStore (zero behavior change). The
- *  agent settings (readAgentSettings/writeAgentSettings) are always editor-local;
- *  the gateway probe runs from the effective host — the remote network when an
- *  authority is given, the local host otherwise.
+ *  gateway probe runs from the effective host — the remote network when an
+ *  authority is given, the local host otherwise. `onDidChangeConfig` covers both
+ *  the local store's directory watch and every remote authority seen.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createNamedLogger,
   Disposable,
+  Emitter,
   ILoggerService,
   RemoteChannels,
+  type Event,
   type ILogger,
 } from '@universe-editor/platform'
 import {
@@ -28,14 +30,15 @@ import {
   type IRemoteAgentConfigService,
 } from '@universe-editor/node-services'
 import type {
-  ClaudeAgentSettings,
   ClaudeAuthStatus,
   ClaudeSettings,
   ClaudeSettingsPatch,
   IClaudeConfigService,
 } from '../../../shared/ipc/claudeConfigService.js'
+import { resolveClaudeActiveAuth } from '../../../shared/ai/agentActiveAuth.js'
+import type { AgentActiveAuth } from '../../../shared/ai/agentActiveAuth.js'
 import type { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
-import { readAiSettingsAgentState, updateAiSettingsAgentState } from '../ai/aiSettingsAgentState.js'
+import { readResolvedProviders } from '../ai/aiSettingsProviders.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 export class ClaudeConfigMainService extends Disposable implements IClaudeConfigService {
@@ -44,6 +47,10 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
   private readonly _logger: ILogger
   private readonly _local: ClaudeConfigStore
   private readonly _settingsPath: string
+  private readonly _remoteConfigSubscribed = new Set<string>()
+
+  private readonly _onDidChangeConfig = this._register(new Emitter<void>())
+  readonly onDidChangeConfig: Event<void> = this._onDidChangeConfig.event
 
   constructor(
     settingsPath: string = defaultClaudeSettingsPath(),
@@ -54,10 +61,15 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     super()
     this._settingsPath = settingsPath
     this._logger = createNamedLogger(loggerService, { id: 'claudeConfig', name: 'Claude Config' })
-    this._local = new ClaudeConfigStore({
-      settingsPath: this._settingsPath,
-      ...(loggerService !== undefined ? { logger: loggerService } : {}),
-    })
+    // The store's constructor starts a directory fs.watch; registering it makes
+    // disposal tear the watcher down with the service.
+    this._local = this._register(
+      new ClaudeConfigStore({
+        settingsPath: this._settingsPath,
+        ...(loggerService !== undefined ? { logger: loggerService } : {}),
+      }),
+    )
+    this._register(this._local.onDidChangeConfig(() => this._onDidChangeConfig.fire()))
   }
 
   async read(authority?: string): Promise<ClaudeSettings> {
@@ -83,21 +95,13 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return this._local.readAuthStatus()
   }
 
-  async readAgentSettings(): Promise<ClaudeAgentSettings> {
-    if (!this._configLocation) return {}
-    const state = await readAiSettingsAgentState<ClaudeAgentSettings>(
-      this._configLocation,
-      'claude',
-    )
-    return sanitizeClaudeAgentSettings(state)
-  }
-
-  async writeAgentSettings(settings: ClaudeAgentSettings): Promise<void> {
-    if (!this._configLocation) return
-    await updateAiSettingsAgentState<ClaudeAgentSettings>(this._configLocation, 'claude', () =>
-      sanitizeClaudeAgentSettings(settings),
-    )
-    this._logger.info('wrote Claude agent settings to aiSettings.json')
+  async resolveActiveAuth(authority?: string): Promise<AgentActiveAuth> {
+    const [settings, authStatus, providers] = await Promise.all([
+      this.read(authority),
+      this.readAuthStatus(authority),
+      readResolvedProviders(this._configLocation),
+    ])
+    return resolveClaudeActiveAuth(settings, authStatus, providers)
   }
 
   async checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean> {
@@ -115,26 +119,14 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     if (!this._connections) {
       throw new Error('claudeConfig: remote connection service not available')
     }
-    return this._connections.getServiceProxy<IRemoteAgentConfigService>(
+    const service = this._connections.getServiceProxy<IRemoteAgentConfigService>(
       authority,
       RemoteChannels.AgentConfig,
     )
+    if (!this._remoteConfigSubscribed.has(authority)) {
+      this._remoteConfigSubscribed.add(authority)
+      this._register(service.onDidChangeClaudeConfig(() => this._onDidChangeConfig.fire()))
+    }
+    return service
   }
-}
-
-/**
- * Keep only known fields, dropping any legacy shape left in aiSettings.json —
- * including the `model` / `model1m` / `subagentModel` / `subagentModel1m` mirrors
- * this block used to carry. Those are gone on purpose: `settings.json` holds the
- * effective value and is the only source of truth, so a leftover mirror must be
- * dropped rather than migrated (migrating would resurrect the drift). Writing is
- * whole-block replace (the renderer always sends a full snapshot), so this
- * doubles as the write-side narrowing.
- */
-function sanitizeClaudeAgentSettings(state: ClaudeAgentSettings | undefined): ClaudeAgentSettings {
-  const out: ClaudeAgentSettings = {}
-  if (typeof state?.authentication === 'string' && state.authentication !== '') {
-    out.authentication = state.authentication
-  }
-  return out
 }

@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for ClaudeConfigMainService — read fallbacks, deep-merge patch
- *  semantics, env key-by-key merge + delete, and preservation of unmanaged keys.
+ *  semantics, env key-by-key merge + delete, preservation of unmanaged keys, and
+ *  `resolveActiveAuth` reverse-lookup against the configured provider entries.
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
@@ -9,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  Emitter,
   Event,
   REMOTE_PROTOCOL_VERSION,
   RemoteChannels,
@@ -46,6 +48,7 @@ describe('ClaudeConfigMainService', () => {
   })
 
   afterEach(async () => {
+    svc.dispose()
     await fs.rm(dir, { recursive: true, force: true })
   })
 
@@ -113,16 +116,6 @@ describe('ClaudeConfigMainService', () => {
     await svc.patch({ model: 'opus' })
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['settings.json'])
-  })
-
-  it('stores the agent settings (authentication only) in aiSettings.json', async () => {
-    const configDir = join(dir, 'editor-settings')
-    svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-    await svc.writeAgentSettings({ authentication: 'gw' })
-
-    expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
-    const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-    expect(stored.agentSettings.claude).toEqual({ authentication: 'gw' })
   })
 
   describe('readAuthStatus', () => {
@@ -204,92 +197,55 @@ describe('ClaudeConfigMainService', () => {
     })
   })
 
-  describe('agent settings', () => {
-    it('returns {} when aiSettings.json is absent', async () => {
-      const configDir = join(dir, 'editor-settings')
-      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-      expect(await svc.readAgentSettings()).toEqual({})
-    })
+  describe('resolveActiveAuth', () => {
+    const credPath = () => join(dir, '.credentials.json')
 
-    // The picks used to be mirrored here alongside `authentication`; they now
-    // live only as their effective value in settings.json. Legacy mirrors are
-    // dropped on read (not migrated) so a stale copy can never be mistaken for
-    // the value the agent actually runs.
-    it('drops legacy model mirrors and non-string fields when reading', async () => {
+    /** Swap `svc` for a configLocation-backed instance whose aiSettings.json holds the given providers. */
+    async function useAiSettings(providers: unknown[]): Promise<void> {
       const configDir = join(dir, 'editor-settings')
       await fs.mkdir(configDir, { recursive: true })
-      await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({
-          agentSettings: {
-            claude: {
-              authentication: 'gw',
-              model: 'deepseek-v4-pro',
-              model1m: true,
-              subagentModel: 'deepseek-v4-pro',
-              subagentModel1m: false,
-            },
-          },
-        }),
-        'utf8',
-      )
+      await fs.writeFile(join(configDir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
+      svc.dispose()
       svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-      expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
+    }
+
+    const gatewayProviders = [
+      {
+        id: 'gw-a',
+        apiKey: 'gw-tok-a',
+        baseUrl: 'http://gw:9080/',
+        protocolMap: { 'anthropic-messages': [] },
+      },
+    ]
+
+    it('reports the matching provider when a gateway env is in effect', async () => {
+      await useAiSettings(gatewayProviders)
+      await writeRaw({
+        env: { ANTHROPIC_AUTH_TOKEN: 'gw-tok-a', ANTHROPIC_BASE_URL: 'http://gw:9080/' },
+      })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'gw-a' })
     })
 
-    it('drops a non-string authentication value', async () => {
-      const configDir = join(dir, 'editor-settings')
-      await fs.mkdir(configDir, { recursive: true })
+    it('reports the subscription when OAuth is logged in and the env is clean', async () => {
+      await useAiSettings([])
+      const expiresAt = Date.now() + 60_000
       await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({ agentSettings: { claude: { authentication: 42 } } }),
+        credPath(),
+        JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-x', expiresAt } }),
         'utf8',
       )
-      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-      expect(await svc.readAgentSettings()).toEqual({})
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'subscription' })
     })
 
-    it('purges legacy model mirrors on the next write', async () => {
-      const configDir = join(dir, 'editor-settings')
-      await fs.mkdir(configDir, { recursive: true })
-      await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({
-          agentSettings: { claude: { authentication: 'gw', model: 'stale', model1m: true } },
-        }),
-        'utf8',
-      )
-      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-
-      await svc.writeAgentSettings({ authentication: 'gw2' })
-
-      const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-      expect(stored.agentSettings.claude).toEqual({ authentication: 'gw2' })
-    })
-
-    it('replaces the whole agent block while preserving other top-level keys and agents', async () => {
-      const configDir = join(dir, 'editor-settings')
-      await fs.mkdir(configDir, { recursive: true })
-      await fs.writeFile(
-        join(configDir, 'aiSettings.json'),
-        JSON.stringify({
-          providers: [{ id: 'gw' }],
-          agentSettings: {
-            claude: { authentication: 'gw', model: 'opus' },
-            codex: { model: 'gpt-5' },
-          },
-        }),
-        'utf8',
-      )
-      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-
-      await svc.writeAgentSettings({ authentication: 'gw' })
-      expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
-
-      const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-      expect(stored.providers).toEqual([{ id: 'gw' }])
-      expect(stored.agentSettings.codex).toEqual({ model: 'gpt-5' })
-      expect(stored.agentSettings.claude).toEqual({ authentication: 'gw' })
+    it('leaves a hand-written gateway token that matches no entry unattributed', async () => {
+      await useAiSettings(gatewayProviders)
+      await writeRaw({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: 'hand-written',
+          ANTHROPIC_BASE_URL: 'http://unmanaged.example.com/v1',
+        },
+      })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider' })
     })
   })
 })
@@ -318,6 +274,12 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
   class FakeRemoteAgentConfigService implements IRemoteAgentConfigService {
     declare readonly _serviceBrand: undefined
     readonly onDidChangeCodexAuth: Event<void> = Event.None
+    private readonly _configEmitter = new Emitter<void>()
+    configSubscriptions = 0
+    readonly onDidChangeClaudeConfig: Event<void> = (listener, thisArgs?, disposables?) => {
+      this.configSubscriptions++
+      return this._configEmitter.event(listener, thisArgs, disposables)
+    }
     probeResult = true
     probeCalls = 0
 
@@ -430,5 +392,6 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
       { authority: 'host', channel: RemoteChannels.AgentConfig },
       { authority: 'host', channel: RemoteChannels.AgentConfig },
     ])
+    expect(remote.configSubscriptions).toBe(1)
   })
 })

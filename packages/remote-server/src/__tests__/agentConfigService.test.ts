@@ -8,7 +8,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RemoteAgentConfigService } from '../agentConfigService.js'
 
 const tempRoots: string[] = []
@@ -26,6 +26,8 @@ async function makeService(): Promise<{ svc: RemoteAgentConfigService; dir: stri
   tempRoots.push(dir)
   const svc = new RemoteAgentConfigService(undefined, {
     codexConfigPath: join(dir, 'config.toml'),
+    // Pin claude at the temp dir too, or its watch would attach to the real ~/.claude.
+    claudeConfigPath: join(dir, 'claude', 'settings.json'),
   })
   return { svc, dir }
 }
@@ -59,6 +61,32 @@ describe('RemoteAgentConfigService.codexMatchActiveApiKey', () => {
   it('returns -1 when auth.json is absent', async () => {
     const { svc } = await makeService()
     await expect(svc.codexMatchActiveApiKey(['sk-1'])).resolves.toBe(-1)
+    svc.dispose()
+  })
+})
+
+describe('RemoteAgentConfigService config change events', () => {
+  it('forwards the claude store config watch over the channel', async () => {
+    const { svc, dir } = await makeService()
+    let fired = 0
+    svc.onDidChangeClaudeConfig(() => {
+      fired++
+    })
+    await vi.waitFor(() => expect(svc.watchingClaude).toBe(true))
+    await writeFile(join(dir, 'claude', 'settings.json'), JSON.stringify({ model: 'opus' }), 'utf8')
+    await vi.waitFor(() => expect(fired).toBeGreaterThan(0), { timeout: 3000 })
+    svc.dispose()
+  })
+
+  it('forwards the codex store auth watch over the channel', async () => {
+    const { svc, dir } = await makeService()
+    let fired = 0
+    svc.onDidChangeCodexAuth(() => {
+      fired++
+    })
+    await vi.waitFor(() => expect(svc.watchingCodex).toBe(true))
+    await writeFile(join(dir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'sk-1' }), 'utf8')
+    await vi.waitFor(() => expect(fired).toBeGreaterThan(0), { timeout: 3000 })
     svc.dispose()
   })
 })

@@ -28,6 +28,9 @@ export interface IRemoteAgentConfigService {
   /** Fires when the remote codex `auth.json` changes on disk. */
   readonly onDidChangeCodexAuth: Event<void>
 
+  /** Fires when the remote claude `settings.json` or `.credentials.json` changes on disk. */
+  readonly onDidChangeClaudeConfig: Event<void>
+
   // -- Claude (`~/.claude/settings.json`) --
   claudeRead(): Promise<ClaudeSettings>
   claudePatch(patch: ClaudeSettingsPatch): Promise<void>

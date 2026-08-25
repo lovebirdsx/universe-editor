@@ -751,6 +751,7 @@ export class AcpSessionService
       title,
       collapseMode: initialCollapseMode,
       withTitleService: true,
+      ...(authority !== undefined ? { authority } : {}),
       ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
     })
     this._register(session)
@@ -821,9 +822,12 @@ export class AcpSessionService
    * empty list (and the `extraModels` / `modelContextWindow` keys are omitted
    * from `_meta` entirely).
    */
-  private async _extraModelsFor(agentId: string): Promise<readonly AcpModelCandidate[]> {
+  private async _extraModelsFor(
+    agentId: string,
+    authority: string | undefined,
+  ): Promise<readonly AcpModelCandidate[]> {
     try {
-      return await this._modelCandidates.extraModelsForAgent(agentId)
+      return await this._modelCandidates.extraModelsForAgent(agentId, authority)
     } catch (err) {
       this._logger.warn(`extraModelsForAgent failed: ${(err as Error).message}`)
       return []
@@ -909,7 +913,7 @@ export class AcpSessionService
         initResult.agentCapabilities?.mcpCapabilities,
       )
       this._warnDroppedMcpServers(agentName, dropped)
-      const extraModels = await this._extraModelsFor(resolvedAgentId)
+      const extraModels = await this._extraModelsFor(resolvedAgentId, authority)
       this._maybeWarnMissingContextWindow(resolvedAgentId, extraModels, undefined)
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
@@ -1178,6 +1182,9 @@ export class AcpSessionService
         // placeholder, so the first turn should derive/generate the real one.
         withTitleService: options.withTitleService === true,
         readOnly,
+        // A read-only preview or a resumed remote session runs on the entry's
+        // host, which need not be this window's — cost must follow the entry.
+        ...(effectiveAuthority !== undefined ? { authority: effectiveAuthority } : {}),
         // AI Fix sessions keep their defaults-write isolation across restarts.
         ...(entry.aiFix === true ? { suppressConfigDefaults: true } : {}),
       })
@@ -1227,7 +1234,7 @@ export class AcpSessionService
       this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
       const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
       if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
-      const extraModels = await this._extraModelsFor(entry.agentId)
+      const extraModels = await this._extraModelsFor(entry.agentId, effectiveAuthority)
       this._maybeWarnMissingContextWindow(
         entry.agentId,
         extraModels,
@@ -1410,7 +1417,7 @@ export class AcpSessionService
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
-            const extraModels = await this._extraModelsFor(session.agentId)
+            const extraModels = await this._extraModelsFor(session.agentId, authority)
             this._maybeWarnMissingContextWindow(
               session.agentId,
               extraModels,
@@ -1986,7 +1993,7 @@ export class AcpSessionService
             // must ride along exactly as they do on new/load — otherwise the
             // forked thread runs its first turn on codex's 272K fallback until
             // the resume below re-injects them.
-            ...buildForkMeta(entry, await this._extraModelsFor(entry.agentId)),
+            ...buildForkMeta(entry, await this._extraModelsFor(entry.agentId, effectiveAuthority)),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
             // session tip. Unknown/absent id → the agent forks from the tip.
             ...(messageId !== undefined ? { rewindTo: messageId } : {}),

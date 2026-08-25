@@ -1,15 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useCodexConfig: applyAuthentication drives the matching applyCredential
- *  intent (self-contained gateway, or ChatGPT login) and persists the selection;
- *  setModel writes config.toml alongside the persisted pick.
+ *  intent (self-contained gateway, or ChatGPT login); setModel writes
+ *  config.toml. activeAuth is re-read from disk, and onDidChangeAuth also
+ *  refreshes the settings snapshot (the watch covers config.toml too).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import {
-  Event,
+  Emitter,
   IAiModelService,
   INotificationService,
   InstantiationService,
@@ -18,14 +19,13 @@ import {
 } from '@universe-editor/platform'
 import {
   ICodexConfigService,
-  type CodexActiveAuth,
-  type CodexAgentSettings,
   type CodexAuthStatus,
   type CodexCredentialIntent,
   type CodexSettings,
   type CodexSettingsPatch,
 } from '../../../../../shared/ipc/codexConfigService.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../../../shared/ipc/claudeConfigService.js'
+import type { AgentActiveAuth } from '../../../../../shared/ai/agentActiveAuth.js'
 import { ServicesContext } from '../../../useService.js'
 import { useCodexConfig } from '../useCodexConfig.js'
 
@@ -50,32 +50,31 @@ function makeNotificationService(): INotificationService {
 
 const LOGGED_OUT: CodexAuthStatus = { active: 'none', hasApiKey: false }
 
-function makeCodexService(initial: {
-  agentSettings: CodexAgentSettings
-  activeAuth: CodexActiveAuth
-}) {
-  let agentSettings = initial.agentSettings
+function makeCodexService(initial: { activeAuth: AgentActiveAuth }) {
+  let settings: CodexSettings = {}
   let activeAuth = initial.activeAuth
   const intents: CodexCredentialIntent[] = []
-  const writeCalls: CodexAgentSettings[] = []
   const patchCalls: CodexSettingsPatch[] = []
+  const onDidChangeAuth = new Emitter<void>()
   const service = {
     _serviceBrand: undefined,
-    onDidChangeAuth: Event.None,
+    onDidChangeAuth: onDidChangeAuth.event,
     async read(): Promise<CodexSettings> {
-      return {}
+      return settings
     },
     async patch(p: CodexSettingsPatch): Promise<void> {
       patchCalls.push(p)
+      if (typeof p.model === 'string') settings = { ...settings, model: p.model }
+      else if (p.model === null) delete settings.model
     },
     async applyCredential(intent: CodexCredentialIntent): Promise<CodexAuthStatus> {
       intents.push(intent)
       if (intent.kind === 'gateway') {
-        activeAuth = { kind: 'provider', providerId: 'gw', drift: false }
+        activeAuth = { kind: 'provider', providerId: 'gw' }
       } else if (intent.kind === 'chatgpt') {
-        activeAuth = { kind: 'subscription', drift: false }
+        activeAuth = { kind: 'subscription' }
       } else {
-        activeAuth = { kind: 'none', drift: false }
+        activeAuth = { kind: 'none' }
       }
       return LOGGED_OUT
     },
@@ -85,21 +84,25 @@ function makeCodexService(initial: {
     async readAuthStatus(): Promise<CodexAuthStatus> {
       return LOGGED_OUT
     },
-    async readAgentSettings(): Promise<CodexAgentSettings> {
-      return agentSettings
-    },
-    async writeAgentSettings(next: CodexAgentSettings): Promise<void> {
-      writeCalls.push(next)
-      agentSettings = next
-    },
-    async resolveActiveAuth(): Promise<CodexActiveAuth> {
+    async resolveActiveAuth(): Promise<AgentActiveAuth> {
       return activeAuth
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
     },
   } as unknown as ICodexConfigService
-  return { service, intents, writeCalls, patchCalls }
+  return {
+    service,
+    intents,
+    patchCalls,
+    onDidChangeAuth,
+    setOnDisk: (next: CodexSettings) => {
+      settings = next
+    },
+    setActiveAuthOnDisk: (next: AgentActiveAuth) => {
+      activeAuth = next
+    },
+  }
 }
 
 function setup(service: ICodexConfigService, entries: readonly AiProviderEntry[] = []) {
@@ -124,11 +127,8 @@ const GATEWAY_ENTRY: AiProviderEntry = {
 describe('useCodexConfig', () => {
   afterEach(() => cleanup())
 
-  it('applies a self-contained gateway and persists the selection', async () => {
-    const { service, intents, writeCalls } = makeCodexService({
-      agentSettings: {},
-      activeAuth: { kind: 'none', drift: false },
-    })
+  it('applies a self-contained gateway and reflects the provider as the active auth', async () => {
+    const { service, intents } = makeCodexService({ activeAuth: { kind: 'none' } })
     const { result } = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -136,17 +136,15 @@ describe('useCodexConfig', () => {
       await result.current.applyAuthentication('gw')
     })
 
-    expect(writeCalls).toEqual([{ authentication: 'gw' }])
     expect(intents).toEqual([
       { kind: 'gateway', baseUrl: 'https://gw.example.com', apiKey: 'tok-1', providerName: 'gw' },
     ])
-    expect(result.current.activeAuth.kind).toBe('provider')
+    expect(result.current.activeAuth).toEqual({ kind: 'provider', providerId: 'gw' })
   })
 
   it('switches to the ChatGPT login for @subscription', async () => {
-    const { service, intents, writeCalls } = makeCodexService({
-      agentSettings: { authentication: 'gw' },
-      activeAuth: { kind: 'provider', providerId: 'gw', drift: false },
+    const { service, intents } = makeCodexService({
+      activeAuth: { kind: 'provider', providerId: 'gw' },
     })
     const { result } = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -155,15 +153,13 @@ describe('useCodexConfig', () => {
       await result.current.applyAuthentication(AGENT_SUBSCRIPTION_AUTH)
     })
 
-    expect(writeCalls).toEqual([{ authentication: AGENT_SUBSCRIPTION_AUTH }])
     expect(intents).toEqual([{ kind: 'chatgpt' }])
-    expect(result.current.activeAuth.kind).toBe('subscription')
+    expect(result.current.activeAuth).toEqual({ kind: 'subscription' })
   })
 
-  it('writes config.toml model and persists the pick', async () => {
-    const { service, patchCalls, writeCalls } = makeCodexService({
-      agentSettings: { authentication: 'gw' },
-      activeAuth: { kind: 'provider', providerId: 'gw', drift: false },
+  it('writes config.toml model', async () => {
+    const { service, patchCalls } = makeCodexService({
+      activeAuth: { kind: 'provider', providerId: 'gw' },
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -172,7 +168,41 @@ describe('useCodexConfig', () => {
       await result.current.setModel('gpt-5.5')
     })
 
-    expect(writeCalls).toEqual([{ authentication: 'gw', model: 'gpt-5.5' }])
     expect(patchCalls).toEqual([{ model: 'gpt-5.5' }])
+    expect(result.current.settings.model).toBe('gpt-5.5')
+  })
+
+  it('clears config.toml model when the pick is unset', async () => {
+    const { service, patchCalls } = makeCodexService({
+      activeAuth: { kind: 'provider', providerId: 'gw' },
+    })
+    const { result } = setup(service)
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await result.current.setModel(undefined)
+    })
+
+    expect(patchCalls).toEqual([{ model: null }])
+    expect(result.current.settings.model).toBeUndefined()
+  })
+
+  it('rereads settings AND active auth when config.toml / auth.json change on disk', async () => {
+    // The watch covers both files, so one event has to refresh all three reads —
+    // a `codex login` in the CLI changes the credential without touching model.
+    const { service, onDidChangeAuth, setOnDisk, setActiveAuthOnDisk } = makeCodexService({
+      activeAuth: { kind: 'none' },
+    })
+    const { result } = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    setOnDisk({ model: 'gpt-5.5' })
+    setActiveAuthOnDisk({ kind: 'provider', providerId: 'gw' })
+    await act(async () => {
+      onDidChangeAuth.fire()
+    })
+
+    await waitFor(() => expect(result.current.settings.model).toBe('gpt-5.5'))
+    expect(result.current.activeAuth).toEqual({ kind: 'provider', providerId: 'gw' })
   })
 })

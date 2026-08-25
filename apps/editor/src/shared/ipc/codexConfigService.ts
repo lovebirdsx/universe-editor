@@ -10,12 +10,13 @@
  *
  *  The file-store data shapes live in @universe-editor/node-services so the local
  *  main and a remote server operate on the same types; this module re-exports them
- *  and adds the editor-local agent settings + drift detection. Only auth *status*
- *  crosses a process boundary — never the tokens.
+ *  and adds the service contract. Only auth *status* crosses a process boundary —
+ *  never the tokens.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
 import type { Event } from '@universe-editor/platform'
+import type { AgentActiveAuth } from '../ai/agentActiveAuth.js'
 
 export type {
   CodexApprovalPolicy,
@@ -37,38 +38,13 @@ import { AGENT_SUBSCRIPTION_AUTH } from './claudeConfigService.js'
 
 export { AGENT_SUBSCRIPTION_AUTH }
 
-/**
- * Editor-local Codex agent state (`aiSettings.json` under `agentSettings.codex`).
- * `authentication` is a single provider id (a gateway), the
- * {@link AGENT_SUBSCRIPTION_AUTH} sentinel (ChatGPT login), or absent.
- */
-export interface CodexAgentSettings {
-  /** Gateway provider id, `@subscription`, or absent. */
-  authentication?: string
-  /** Bare model requested (written to config.toml `model` on apply). */
-  model?: string
-}
-
-/**
- * What the effective host currently runs as codex auth, relative to the editor's
- * declared `authentication`. `drift` is true when the on-disk config.toml /
- * auth.json disagrees with the declared value (the user hand-edited them).
- */
-export interface CodexActiveAuth {
-  /** `subscription` = ChatGPT login in effect; `provider` = a gateway provider. */
-  kind: 'subscription' | 'provider' | 'none'
-  /** The provider id matching the on-disk gateway, when `kind === 'provider'`. */
-  providerId?: string
-  /** On-disk state disagrees with the editor's declared `authentication`. */
-  drift: boolean
-}
-
 export interface ICodexConfigService {
   readonly _serviceBrand: undefined
   /**
-   * Fires when `auth.json` changes on disk (e.g. after `codex login` writes its
-   * token block, or another window edits credentials) — on either the local host
-   * or any remote authority. Lets the panel refresh its login status live.
+   * Fires when `auth.json` or `config.toml` changes on disk (e.g. after
+   * `codex login` writes its token block, or another window edits credentials) —
+   * on either the local host or any remote authority. Lets the panel refresh its
+   * login status live.
    */
   readonly onDidChangeAuth: Event<void>
   /**
@@ -100,17 +76,13 @@ export interface ICodexConfigService {
    * Never returns the credentials themselves. `authority` selects a remote host.
    */
   readAuthStatus(authority?: string): Promise<CodexAuthStatus>
-  /** Read the editor's saved Codex agent state from aiSettings.json (always editor-local). */
-  readAgentSettings(): Promise<CodexAgentSettings>
-  /** Replace the saved Codex agent state in aiSettings.json (atomic merge; editor-local). */
-  writeAgentSettings(settings: CodexAgentSettings): Promise<void>
   /**
-   * Drift detection: which auth is currently in effect on the effective host
-   * (the `authority` remote host, or local when absent) versus the editor's
-   * declared `authentication`. `drift` is true when they disagree. Computed in
-   * the main process so the comparison can see the gateway token.
+   * Which credential is actually in effect on the effective host — reverse-looked
+   * up from that host's config.toml / auth.json against the configured provider
+   * entries. Computed in the main process so the comparison can see the gateway
+   * token. `authority` selects a remote host; absent → the local host.
    */
-  resolveActiveAuth(authority?: string): Promise<CodexActiveAuth>
+  resolveActiveAuth(authority?: string): Promise<AgentActiveAuth>
   /**
    * Probe a gateway `baseUrl` over HTTP. Resolves `true` when the server answers
    * with any status (a 401/404 still proves reachability); `false` on network

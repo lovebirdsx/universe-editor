@@ -1,14 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useClaudeConfig: applyAuthentication injects the derived credential env (or
- *  clears it for `@subscription`) and persists the selection; the model picks live
- *  ONLY in settings.json, so nothing can mirror them out of sync.
+ *  clears it for `@subscription`) and re-reads the effective auth from disk; the
+ *  model picks live ONLY in settings.json, so nothing can mirror them out of
+ *  sync. onDidChangeConfig refreshes settings / auth status / active auth live.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import {
+  Emitter,
   IAiModelService,
   INotificationService,
   InstantiationService,
@@ -18,10 +20,11 @@ import {
 import {
   AGENT_SUBSCRIPTION_AUTH,
   IClaudeConfigService,
-  type ClaudeAgentSettings,
+  type ClaudeAuthStatus,
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../../shared/ipc/claudeConfigService.js'
+import type { AgentActiveAuth } from '../../../../../shared/ai/agentActiveAuth.js'
 import { ServicesContext } from '../../../useService.js'
 import { useClaudeConfig } from '../useClaudeConfig.js'
 
@@ -44,16 +47,13 @@ function makeNotificationService(): INotificationService {
   } as unknown as INotificationService
 }
 
-function makeClaudeService(initial: {
-  settings: ClaudeSettings
-  agentSettings: ClaudeAgentSettings
-}) {
+function makeClaudeService(initial: { settings: ClaudeSettings }) {
   let settings = initial.settings
-  let agentSettings = initial.agentSettings
   const patchCalls: ClaudeSettingsPatch[] = []
-  const writeCalls: ClaudeAgentSettings[] = []
+  const onDidChangeConfig = new Emitter<void>()
   const service = {
     _serviceBrand: undefined,
+    onDidChangeConfig: onDidChangeConfig.event,
     async read(): Promise<ClaudeSettings> {
       return settings
     },
@@ -76,21 +76,30 @@ function makeClaudeService(initial: {
     async configPath(): Promise<string> {
       return '/home/u/.claude/settings.json'
     },
-    async readAuthStatus() {
+    async readAuthStatus(): Promise<ClaudeAuthStatus> {
       return { loggedIn: false, expired: false }
     },
-    async readAgentSettings(): Promise<ClaudeAgentSettings> {
-      return agentSettings
-    },
-    async writeAgentSettings(next: ClaudeAgentSettings): Promise<void> {
-      writeCalls.push(next)
-      agentSettings = next
+    async resolveActiveAuth(): Promise<AgentActiveAuth> {
+      const env = settings.env ?? {}
+      if (env['ANTHROPIC_AUTH_TOKEN'] && env['ANTHROPIC_BASE_URL']) {
+        return { kind: 'provider', providerId: 'gw' }
+      }
+      if (env['ANTHROPIC_API_KEY']) return { kind: 'provider', providerId: 'anthropic' }
+      return { kind: 'none' }
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
     },
   } as unknown as IClaudeConfigService
-  return { service, patchCalls, writeCalls, getSettings: () => settings }
+  return {
+    service,
+    patchCalls,
+    onDidChangeConfig,
+    getSettings: () => settings,
+    setOnDisk: (next: ClaudeSettings) => {
+      settings = next
+    },
+  }
 }
 
 function setup(service: IClaudeConfigService, entries: readonly AiProviderEntry[] = []) {
@@ -120,11 +129,8 @@ const OFFICIAL_ENTRY: AiProviderEntry = {
 describe('useClaudeConfig', () => {
   afterEach(() => cleanup())
 
-  it('injects a gateway credential and persists the selection', async () => {
-    const { service, patchCalls, writeCalls } = makeClaudeService({
-      settings: {},
-      agentSettings: {},
-    })
+  it('injects a gateway credential and reflects the provider as the active auth', async () => {
+    const { service, patchCalls } = makeClaudeService({ settings: {} })
     const { result } = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -132,16 +138,16 @@ describe('useClaudeConfig', () => {
       await result.current.applyAuthentication('gw')
     })
 
-    expect(writeCalls).toEqual([{ authentication: 'gw' }])
     expect(result.current.settings.env).toEqual({
       ANTHROPIC_AUTH_TOKEN: 'tok-1',
       ANTHROPIC_BASE_URL: 'https://gw.example.com',
     })
     expect(patchCalls.some((p) => p.env?.['ANTHROPIC_API_KEY'] === null)).toBe(true)
+    expect(result.current.activeAuth).toEqual({ kind: 'provider', providerId: 'gw' })
   })
 
   it('injects the official API key for an official-endpoint provider', async () => {
-    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { service } = makeClaudeService({ settings: {} })
     const { result } = setup(service, [OFFICIAL_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -150,12 +156,12 @@ describe('useClaudeConfig', () => {
     })
 
     expect(result.current.settings.env).toEqual({ ANTHROPIC_API_KEY: 'sk-ant-official' })
+    expect(result.current.activeAuth).toEqual({ kind: 'provider', providerId: 'anthropic' })
   })
 
   it('clears the credential env for @subscription', async () => {
-    const { service, writeCalls } = makeClaudeService({
+    const { service } = makeClaudeService({
       settings: { env: { ANTHROPIC_AUTH_TOKEN: 'tok-1', ANTHROPIC_BASE_URL: 'https://x' } },
-      agentSettings: { authentication: 'gw' },
     })
     const { result } = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -164,14 +170,13 @@ describe('useClaudeConfig', () => {
       await result.current.applyAuthentication(AGENT_SUBSCRIPTION_AUTH)
     })
 
-    expect(writeCalls).toEqual([{ authentication: AGENT_SUBSCRIPTION_AUTH }])
     expect(result.current.settings.env).toBeUndefined()
+    expect(result.current.activeAuth).toEqual({ kind: 'none' })
   })
 
-  it('writes settings.model without touching the agent-settings block', async () => {
-    const { service, writeCalls } = makeClaudeService({
-      settings: {},
-      agentSettings: { authentication: 'gw' },
+  it('writes settings.model without touching the credential env', async () => {
+    const { service, patchCalls } = makeClaudeService({
+      settings: { env: { ANTHROPIC_AUTH_TOKEN: 'tok-1', ANTHROPIC_BASE_URL: 'https://gw' } },
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -181,14 +186,15 @@ describe('useClaudeConfig', () => {
     })
 
     expect(result.current.settings.model).toBe('kimi-k3')
-    expect(writeCalls).toEqual([])
+    expect(patchCalls.at(-1)).toEqual({ model: 'kimi-k3' })
+    expect(result.current.settings.env).toEqual({
+      ANTHROPIC_AUTH_TOKEN: 'tok-1',
+      ANTHROPIC_BASE_URL: 'https://gw',
+    })
   })
 
   it('writes the sub-agent model env and exposes it as the effective value', async () => {
-    const { service } = makeClaudeService({
-      settings: {},
-      agentSettings: { authentication: 'gw' },
-    })
+    const { service } = makeClaudeService({ settings: {} })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -201,10 +207,7 @@ describe('useClaudeConfig', () => {
   })
 
   it('setModelOneM appends [1m] and toggling off drops it again', async () => {
-    const { service } = makeClaudeService({
-      settings: { model: 'kimi-k3' },
-      agentSettings: { authentication: 'gw' },
-    })
+    const { service } = makeClaudeService({ settings: { model: 'kimi-k3' } })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -220,7 +223,7 @@ describe('useClaudeConfig', () => {
   })
 
   it('keeps an already-[1m] model id intact', async () => {
-    const { service } = makeClaudeService({ settings: { model: 'a' }, agentSettings: {} })
+    const { service } = makeClaudeService({ settings: { model: 'a' } })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -243,7 +246,6 @@ describe('useClaudeConfig', () => {
         language: 'zh',
         env: { ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_BASE_URL: 'https://gw', FOO: 'bar' },
       },
-      agentSettings: {},
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -290,7 +292,6 @@ describe('useClaudeConfig', () => {
   it('setSubagentModelOneM appends [1m] to the sub-agent model env', async () => {
     const { service } = makeClaudeService({
       settings: { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3' } },
-      agentSettings: {},
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -302,10 +303,8 @@ describe('useClaudeConfig', () => {
     expect(result.current.settings.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('kimi-k3[1m]')
   })
 
-  // The agent-settings block is persisted wholesale, so a second writer that
-  // started from the same pre-write snapshot would drop the first one's field.
-  it('serializes concurrent writers instead of dropping the earlier field', async () => {
-    const { service, writeCalls } = makeClaudeService({ settings: {}, agentSettings: {} })
+  it('serializes concurrent writers so the later credential write wins', async () => {
+    const { service } = makeClaudeService({ settings: {} })
     const { result } = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -317,12 +316,12 @@ describe('useClaudeConfig', () => {
       ])
     })
 
-    expect(writeCalls.at(-1)).toEqual({ authentication: AGENT_SUBSCRIPTION_AUTH })
-    expect(result.current.agentSettings).toEqual({ authentication: AGENT_SUBSCRIPTION_AUTH })
+    expect(result.current.settings.env).toBeUndefined()
+    expect(result.current.activeAuth).toEqual({ kind: 'none' })
   })
 
   it('lets a 1m toggle fired alongside a model pick see the settled pick', async () => {
-    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { service } = makeClaudeService({ settings: {} })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -335,12 +334,11 @@ describe('useClaudeConfig', () => {
 
   // Regression: the reported bug. The Model popover and the settings panel each
   // mount their own hook instance and each read disk once at mount, so the second
-  // one holds a snapshot taken before the first one wrote. When the picks were
-  // mirrored into the wholesale-replaced agent-settings block, that stale writer
-  // rewrote the sub-agent model it never touched — the UI then highlighted one
-  // model while the spawned sub-agents ran another.
+  // one holds a snapshot taken before the first one wrote. Because every writer
+  // patches only its own key, that stale instance cannot revert the sub-agent
+  // model it never touched.
   it('a stale second instance cannot revert the effective sub-agent model', async () => {
-    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const { service } = makeClaudeService({ settings: {} })
     const first = setup(service, [GATEWAY_ENTRY])
     const second = setup(service, [GATEWAY_ENTRY])
     await waitFor(() => expect(first.result.current.loaded).toBe(true))
@@ -358,5 +356,22 @@ describe('useClaudeConfig', () => {
 
     const onDisk = await service.read()
     expect(onDisk.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('deepseek-v4-pro')
+  })
+
+  it('refreshes settings and active auth when the config file changes on disk', async () => {
+    const { service, onDidChangeConfig, setOnDisk } = makeClaudeService({ settings: {} })
+    const { result } = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    // The CLI wrote a gateway credential externally — the hook must pick it up.
+    setOnDisk({
+      env: { ANTHROPIC_AUTH_TOKEN: 'tok-1', ANTHROPIC_BASE_URL: 'https://gw.example.com' },
+    })
+    await act(async () => {
+      onDidChangeConfig.fire()
+    })
+
+    await waitFor(() => expect(result.current.settings.env?.['ANTHROPIC_AUTH_TOKEN']).toBe('tok-1'))
+    expect(result.current.activeAuth).toEqual({ kind: 'provider', providerId: 'gw' })
   })
 })

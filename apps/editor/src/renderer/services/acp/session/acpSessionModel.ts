@@ -500,6 +500,15 @@ export interface IAcpSession {
   readonly id: string
   readonly agentId: string
   /**
+   * The remote-ssh authority this session's agent process runs on; undefined for
+   * a local session. Credentials, and therefore cost attribution, are per host:
+   * the same agent can run on a local subscription in one session and a remote
+   * gateway in another, and one window can hold both (a read-only preview of
+   * another worktree, or a fork of a remote entry). It comes from the session's
+   * own origin rather than the window's, which is why it lives here.
+   */
+  readonly authority: string | undefined
+  /**
    * True for a read-only preview session: spawned to replay (`session/load`) a
    * session that belongs to a different worktree so its history can be viewed in
    * this window, without allowing any prompt / config mutation (those would have

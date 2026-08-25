@@ -7,8 +7,9 @@
  *  restart ordering (requestProcessRestart only after the write has resolved).
  *
  *  The current value is seeded through `settings.env.CLAUDE_CODE_SUBAGENT_MODEL` —
- *  the effective value the spawned process reads — because that is the only place
- *  the pick lives.
+ *  the effective value the spawned process reads — and the candidates come from
+ *  the provider whose credential is in effect on disk (`activeAuth`), because
+ *  those are the only places the pick lives.
  *
  *  Plus a direct-render test of `SubagentModelPanel` (the surface-free content)
  *  proving it works without the picker's AnchoredSurface shell.
@@ -18,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import {
+  Event,
   IAiModelService,
   INotificationService,
   InstantiationService,
@@ -27,10 +29,10 @@ import {
 } from '@universe-editor/platform'
 import {
   IClaudeConfigService,
-  type ClaudeAgentSettings,
   type ClaudeSettings,
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
+import type { AgentActiveAuth } from '../../../../shared/ai/agentActiveAuth.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
 import { SubagentModelPanel, SubagentModelPicker } from '../SubagentModelPicker.js'
 import { ServicesContext } from '../../useService.js'
@@ -46,14 +48,14 @@ const GW_ENTRY: AiProviderEntry = {
   protocolMap: { 'anthropic-messages': ['claude-sonnet-4-6', 'deepseek-pro-v4'] },
 }
 
-function makeClaudeService(opts: { agentSettings: ClaudeAgentSettings; subagentModel?: string }) {
+function makeClaudeService(opts: { activeAuth: AgentActiveAuth; subagentModel?: string }) {
   let settings: ClaudeSettings =
     opts.subagentModel !== undefined ? { env: { [SUBAGENT_MODEL]: opts.subagentModel } } : {}
-  const stored = { ...opts.agentSettings }
   const patches: ClaudeSettingsPatch[] = []
   const pending: Array<{ resolve: () => void; reject: (err: Error) => void }> = []
   const service = {
     _serviceBrand: undefined,
+    onDidChangeConfig: Event.None,
     async read(): Promise<ClaudeSettings> {
       return settings
     },
@@ -80,11 +82,8 @@ function makeClaudeService(opts: { agentSettings: ClaudeAgentSettings; subagentM
     async readAuthStatus() {
       return { loggedIn: false, expired: false }
     },
-    async readAgentSettings(): Promise<ClaudeAgentSettings> {
-      return stored
-    },
-    async writeAgentSettings(): Promise<void> {
-      throw new Error('the picker must not write the agent-settings block')
+    async resolveActiveAuth(): Promise<AgentActiveAuth> {
+      return opts.activeAuth
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
@@ -123,14 +122,14 @@ function makeServices(
 }
 
 function setup(opts: {
-  agentSettings: ClaudeAgentSettings
+  activeAuth: AgentActiveAuth
   subagentModel?: string
   entries?: readonly AiProviderEntry[]
   restart?: () => void
   notify?: (n: unknown) => void
 }) {
   const claude = makeClaudeService({
-    agentSettings: opts.agentSettings,
+    activeAuth: opts.activeAuth,
     ...(opts.subagentModel !== undefined ? { subagentModel: opts.subagentModel } : {}),
   })
   const session = {
@@ -177,7 +176,7 @@ async function pick(label: string) {
 
 describe('SubagentModelPicker', () => {
   it('renders the inherit row plus the selected provider candidates', async () => {
-    setup({ agentSettings: { authentication: 'gw' } })
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
     openPicker()
     // A candidate row proves the provider registry AND the claude agent
     // settings have both loaded; before that only the inherit row renders.
@@ -193,7 +192,7 @@ describe('SubagentModelPicker', () => {
   })
 
   it('marks the row matching the effective env value as selected', async () => {
-    setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'deepseek-pro-v4' })
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' }, subagentModel: 'deepseek-pro-v4' })
     openPicker()
     await waitFor(() =>
       expect(
@@ -206,7 +205,7 @@ describe('SubagentModelPicker', () => {
   })
 
   it('picks a candidate by patching the sub-agent model env', async () => {
-    const { claude, session } = setup({ agentSettings: { authentication: 'gw' } })
+    const { claude, session } = setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
     openPicker()
     await waitFor(() =>
       expect(
@@ -224,7 +223,7 @@ describe('SubagentModelPicker', () => {
 
   it('picking the inherit row clears the env key', async () => {
     const { claude } = setup({
-      agentSettings: { authentication: 'gw' },
+      activeAuth: { kind: 'provider', providerId: 'gw' },
       subagentModel: 'claude-sonnet-4-6',
     })
     openPicker()
@@ -244,7 +243,7 @@ describe('SubagentModelPicker', () => {
   })
 
   it('keeps a stale current value as a pinned top option', async () => {
-    setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'old-stale-model' })
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' }, subagentModel: 'old-stale-model' })
     openPicker()
     await waitFor(() =>
       expect(
@@ -265,7 +264,7 @@ describe('SubagentModelPicker', () => {
   })
 
   it('stays silent until a change, then shows the restart hint', async () => {
-    setup({ agentSettings: { authentication: 'gw' } })
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
     openPicker()
     await waitFor(() =>
       expect(
@@ -282,7 +281,7 @@ describe('SubagentModelPicker', () => {
 
   it('does not mark the picker as changed when picking the already-current value', async () => {
     const { claude } = setup({
-      agentSettings: { authentication: 'gw' },
+      activeAuth: { kind: 'provider', providerId: 'gw' },
       subagentModel: 'claude-sonnet-4-6',
     })
     openPicker()
@@ -300,7 +299,7 @@ describe('SubagentModelPicker', () => {
 
   it('requests the process restart only after the pick write has resolved', async () => {
     const restart = vi.fn()
-    const { claude } = setup({ agentSettings: { authentication: 'gw' }, restart })
+    const { claude } = setup({ activeAuth: { kind: 'provider', providerId: 'gw' }, restart })
     openPicker()
     await waitFor(() =>
       expect(
@@ -328,7 +327,7 @@ describe('SubagentModelPicker', () => {
     const restart = vi.fn()
     const notify = vi.fn()
     const { claude } = setup({
-      agentSettings: { authentication: 'gw' },
+      activeAuth: { kind: 'provider', providerId: 'gw' },
       restart,
       notify,
     })
@@ -360,7 +359,7 @@ describe('SubagentModelPicker', () => {
   it('clears the restart hint once the restart has been requested', async () => {
     // The value is live on the restarted process from here on, so leaving the
     // "takes effect next session · restart now" row up would be a lie.
-    const { claude } = setup({ agentSettings: { authentication: 'gw' } })
+    const { claude } = setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
     openPicker()
     await waitFor(() =>
       expect(
@@ -386,7 +385,7 @@ describe('SubagentModelPicker', () => {
     const unhandled = vi.fn()
     process.on('unhandledRejection', unhandled)
     try {
-      const { claude } = setup({ agentSettings: { authentication: 'gw' } })
+      const { claude } = setup({ activeAuth: { kind: 'provider', providerId: 'gw' } })
       openPicker()
       await waitFor(() =>
         expect(
@@ -411,7 +410,7 @@ describe('SubagentModelPicker', () => {
 
 describe('SubagentModelPanel (direct render)', () => {
   it('renders rows and picks without any floating-surface shell', async () => {
-    const claude = makeClaudeService({ agentSettings: { authentication: 'gw' } })
+    const claude = makeClaudeService({ activeAuth: { kind: 'provider', providerId: 'gw' } })
     const session = { requestProcessRestart: vi.fn() } as unknown as IAcpSession
     const instantiation = new InstantiationService(makeServices(claude, {}))
     render(

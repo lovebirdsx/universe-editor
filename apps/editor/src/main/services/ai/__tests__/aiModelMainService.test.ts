@@ -33,7 +33,6 @@ import {
 import { AiDebugRecorder } from '../aiDebugRecorder.js'
 import { AiModelMainService } from '../aiModelMainService.js'
 import { AiRemoteCache } from '../remote/remoteCache.js'
-import { updateAiSettingsAgentState } from '../aiSettingsAgentState.js'
 import { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
 import type { LogMainService } from '../../log/logMainService.js'
 import type {
@@ -808,35 +807,6 @@ describe('AiModelMainService', () => {
     await service.setActiveModel('chat', 'openai/openai-chat/x')
     const mode = statSync(join(dir, 'aiSettings.json')).mode & 0o777
     expect(mode).toBe(0o600)
-    service.dispose()
-  })
-
-  it('agent-state writes keep aiSettings.json at 0600', async () => {
-    if (process.platform === 'win32') return
-    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
-    writeFileSync(join(dir, 'aiSettings.json'), JSON.stringify({ providers: [] }), 'utf8')
-    await updateAiSettingsAgentState(makeConfigLocation(dir), 'claude', () => ({
-      authentication: 'kuro-gbl',
-    }))
-    const mode = statSync(join(dir, 'aiSettings.json')).mode & 0o777
-    expect(mode).toBe(0o600)
-  })
-
-  it('serializes concurrent model and agent writes without losing either update', async () => {
-    const { service, dir } = makeServiceFromFile(
-      JSON.stringify({
-        providers: [{ id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } }],
-      }),
-    )
-    await Promise.all([
-      service.setActiveModel('chat', 'openai/openai-chat/x'),
-      updateAiSettingsAgentState(makeConfigLocation(dir), 'claude', () => ({
-        authentication: 'kuro-gbl',
-      })),
-    ])
-    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
-    expect(onDisk.activeModels.chat).toBe('openai/openai-chat/x')
-    expect(onDisk.agentSettings.claude.authentication).toBe('kuro-gbl')
     service.dispose()
   })
 

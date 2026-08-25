@@ -110,18 +110,21 @@ function formatResetsAt(epochMs: number, now: number): string {
 
 export function UsageIndicator({ session }: { session: IAcpSession }) {
   const agentId = session.agentId
+  // Credentials — and so both the plan and the account behind them — belong to
+  // the host this session's agent runs on, not to the window.
+  const authority = session.authority
   const subscription = useOptionalService(ISubscriptionUsageService)
   const account = useOptionalService(IAccountUsageService)
 
   const snapshotObservable = useMemo(
-    () => subscription?.snapshotFor(agentId) ?? NO_SNAPSHOT,
-    [subscription, agentId],
+    () => subscription?.snapshotFor(agentId, authority) ?? NO_SNAPSHOT,
+    [subscription, agentId, authority],
   )
   const snapshot = useObservable(snapshotObservable)
 
   const accountObservable = useMemo(
-    () => account?.stateFor(agentId) ?? NO_ACCOUNT,
-    [account, agentId],
+    () => account?.stateFor(agentId, authority) ?? NO_ACCOUNT,
+    [account, agentId, authority],
   )
   const accountState = useObservable(accountObservable)
 
@@ -136,9 +139,9 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   }, [])
 
   useEffect(() => {
-    void subscription?.refresh(agentId)
-    void account?.refresh(agentId)
-  }, [subscription, account, agentId])
+    void subscription?.refresh(agentId, authority)
+    void account?.refresh(agentId, authority)
+  }, [subscription, account, agentId, authority])
 
   const display = resolveUsageDisplay({
     snapshot,
@@ -148,11 +151,12 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   if (display === 'hidden') return null
 
   if (display === 'account' || display === 'unavailable') {
-    const forceRefresh = () => void account?.refresh(agentId, { force: true })
+    const forceRefresh = () => void account?.refresh(agentId, authority, { force: true })
     if (display === 'account' && accountState.usage !== undefined) {
       return (
         <AccountIndicator
           agentId={agentId}
+          authority={authority}
           usage={accountState.usage}
           onForceRefresh={forceRefresh}
         />
@@ -183,7 +187,7 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
         data-stale={stale ? 'true' : undefined}
         data-tooltip={tooltip}
         onClick={() => {
-          if (!open) void subscription?.refresh(agentId, { force: true })
+          if (!open) void subscription?.refresh(agentId, authority, { force: true })
           setNow(Date.now())
           setOpen((v) => !v)
         }}
@@ -197,6 +201,7 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
       {open ? (
         <SubscriptionUsagePopover
           agentId={agentId}
+          authority={authority}
           snapshot={usage}
           stale={stale}
           now={now}
@@ -237,10 +242,12 @@ function useDismissOnOutside(onDismiss: () => void) {
 
 function AccountIndicator({
   agentId,
+  authority,
   usage,
   onForceRefresh,
 }: {
   agentId: string
+  authority: string | undefined
   usage: AiAccountUsage
   onForceRefresh: () => void
 }) {
@@ -263,7 +270,12 @@ function AccountIndicator({
         <span className={styles['usageIndicatorText']}>{accountPrimaryLabel(usage)}</span>
       </button>
       {open ? (
-        <AccountUsagePopover agentId={agentId} usage={usage} onDismiss={() => setOpen(false)} />
+        <AccountUsagePopover
+          agentId={agentId}
+          authority={authority}
+          usage={usage}
+          onDismiss={() => setOpen(false)}
+        />
       ) : null}
     </div>
   )
@@ -292,10 +304,12 @@ function UnavailableIndicator({ onForceRefresh }: { onForceRefresh: () => void }
 
 function AccountUsagePopover({
   agentId,
+  authority,
   usage,
   onDismiss,
 }: {
   agentId: string
+  authority: string | undefined
   usage: AiAccountUsage
   onDismiss: () => void
 }) {
@@ -307,11 +321,11 @@ function AccountUsagePopover({
   const refreshNow = useCallback(async () => {
     setRefreshing(true)
     try {
-      await account.refresh(agentId, { force: true })
+      await account.refresh(agentId, authority, { force: true })
     } finally {
       setRefreshing(false)
     }
-  }, [account, agentId])
+  }, [account, agentId, authority])
 
   return (
     <div
@@ -377,12 +391,14 @@ function AccountUsagePopover({
 
 function SubscriptionUsagePopover({
   agentId,
+  authority,
   snapshot,
   stale,
   now,
   onDismiss,
 }: {
   agentId: string
+  authority: string | undefined
   snapshot: SubscriptionUsageSnapshot
   stale: boolean
   now: number
@@ -415,12 +431,12 @@ function SubscriptionUsagePopover({
     setRedeeming(true)
     let outcome: ResetCreditOutcome
     try {
-      outcome = await subscription.consumeResetCredit(agentId, idempotencyKey)
+      outcome = await subscription.consumeResetCredit(agentId, authority, idempotencyKey)
     } finally {
       setRedeeming(false)
     }
     notification.notify(resetCreditNotification(outcome))
-  }, [agentId, availableCredits, dialog, notification, subscription])
+  }, [agentId, authority, availableCredits, dialog, notification, subscription])
 
   return (
     <div

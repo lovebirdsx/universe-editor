@@ -2017,7 +2017,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.alwaysThinking': '始终启用思考',
   'agentSettings.alwaysThinking.desc': '关闭时会禁用思考（Settings.alwaysThinkingEnabled）。',
   'agentSettings.auth.apiKey': 'Anthropic API 密钥',
-  'agentSettings.auth.applied': '当前正在使用"{label}"。',
   'agentSettings.auth.applyGatewayError':
     '无法应用此网关凭据 — 其 provider 缺少 base URL 或 API 密钥。',
   'agentSettings.auth.cancel': '取消',
@@ -2034,7 +2033,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.form.provider.none': '选择一个 provider…',
   'agentSettings.auth.form.subagentModel.none': '未设置',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
-  'agentSettings.auth.inUse': '使用中',
+  'agentSettings.auth.externalCredential': '当前生效的是在编辑器之外配置的凭据，其费用无法归属。',
   'agentSettings.connectivity.checking': '正在检测连通性…',
   'agentSettings.connectivity.fail': '网关不可达',
   'agentSettings.connectivity.ok': '网关可连通',
@@ -2224,7 +2223,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexSettings.approval.desc':
     'config.toml `approval_policy` - Codex 在运行命令前何时暂停询问。交互式工作使用 "on-request"，无人值守运行使用 "never"。',
   'codexSettings.auth.apiKey': 'OpenAI API 密钥',
-  'codexSettings.auth.applied': '当前正在使用"{label}"。',
   'codexSettings.auth.applyGatewayError':
     '无法应用此网关凭据 — 其 provider 缺少 base URL 或 API 密钥。',
   'codexSettings.auth.cancel': '取消',
@@ -2235,7 +2233,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'codexSettings.auth.form.label.ph': '例如 Personal、Work gateway',
   'codexSettings.auth.form.provider': 'Provider 实例',
   'codexSettings.auth.gateway': '兼容网关（密钥 + URL）',
-  'codexSettings.auth.inUse': '使用中',
+  'codexSettings.auth.externalCredential': '当前生效的是在编辑器之外配置的凭据，其费用无法归属。',
   'codexSettings.auth.library': '已保存凭据',
   'codexSettings.auth.library.add': '添加凭据',
   'codexSettings.auth.library.empty':

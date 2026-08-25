@@ -20,7 +20,7 @@ function makeConfig(env: Record<string, string>): UseClaudeConfig {
     configPath: '',
     authority: undefined,
     authStatus: { loggedIn: false, expired: false },
-    agentSettings: {},
+    activeAuth: { kind: 'none' },
     subagentModelEnv: env['CLAUDE_CODE_SUBAGENT_MODEL'],
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
