@@ -58,6 +58,13 @@ interface ProviderEntryCardProps {
   readonly provider: AiProviderEntry
   readonly allProviders: readonly AiProviderEntry[]
   readonly models: readonly AiModelMetadata[]
+  /**
+   * True while the panel's background model enumeration is still in flight.
+   * Discover-mode blocks must not flash "0 models / none resolved" during that
+   * window — the endpoint simply hasn't answered yet. Static-only entries don't
+   * consult the network, so for them this is ignored.
+   */
+  readonly modelsLoading: boolean
   readonly issues: readonly AiProviderIssue[]
   readonly rateTables: readonly AiRateTableSnapshot[]
   readonly knowledge: Readonly<Record<string, AiModelKnowledge>>
@@ -91,6 +98,7 @@ export function ProviderEntryCard({
   provider,
   allProviders,
   models,
+  modelsLoading,
   issues,
   rateTables,
   knowledge,
@@ -122,6 +130,15 @@ export function ProviderEntryCard({
     () => declaredProtocols(effectiveProtocolMap(provider, allProviders)).length,
     [provider, allProviders],
   )
+
+  // "Fetching" replaces the misleading zero only when the entry can actually
+  // consult the network: a discover block's count comes from /v1/models, while
+  // static refs resolve from the local file and have nothing to wait for.
+  const hasDiscover = useMemo(() => {
+    const map = effectiveProtocolMap(provider, allProviders)
+    return declaredProtocols(map).some((p) => (map[p] ?? []).length === 0)
+  }, [provider, allProviders])
+  const modelsPending = modelsLoading && hasDiscover && models.length === 0
 
   useEffect(() => {
     let active = true
@@ -174,7 +191,14 @@ export function ProviderEntryCard({
           )}
           <UsageBadge usage={usage} />
           <Badge>
-            {localize('aiModels.badge.modelCount', '{count} models', { count: models.length })}
+            {modelsPending ? (
+              <>
+                <Spinner size={11} />
+                {localize('aiModels.badge.modelsLoading', 'Fetching models…')}
+              </>
+            ) : (
+              localize('aiModels.badge.modelCount', '{count} models', { count: models.length })
+            )}
           </Badge>
         </div>
         <span className={styles['spacer']} />
@@ -258,10 +282,16 @@ export function ProviderEntryCard({
           <CardSection
             testId="ai-protocols-card-section"
             title={localize('aiModels.protocols.title', 'Protocols & models')}
-            summary={localize('aiModels.protocols.summary', '{count} protocols · {models} models', {
-              count: protocolCount,
-              models: models.length,
-            })}
+            summary={
+              modelsPending
+                ? localize('aiModels.protocols.summaryLoading', '{count} protocols · fetching…', {
+                    count: protocolCount,
+                  })
+                : localize('aiModels.protocols.summary', '{count} protocols · {models} models', {
+                    count: protocolCount,
+                    models: models.length,
+                  })
+            }
             collapsed={isSectionCollapsed('protocols', false)}
             onToggle={() => onToggleSection('protocols', false)}
             actions={<SavedIndicator saved={saved} field="protocolMap" />}
@@ -290,6 +320,7 @@ export function ProviderEntryCard({
               provider={provider}
               allProviders={allProviders}
               models={models}
+              modelsLoading={modelsLoading}
               knowledge={knowledge}
               filter={filter}
               onChange={(map) => void setField('protocolMap', map)}

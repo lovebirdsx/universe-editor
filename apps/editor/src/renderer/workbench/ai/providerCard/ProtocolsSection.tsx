@@ -71,6 +71,11 @@ interface ProtocolsSectionProps {
   readonly allProviders: readonly AiProviderEntry[]
   /** Every resolved model of this provider, unfiltered. */
   readonly models: readonly AiModelMetadata[]
+  /**
+   * True while the background endpoint enumeration is in flight. Discover blocks
+   * show "fetching" instead of "none resolved" then; static blocks ignore it.
+   */
+  readonly modelsLoading: boolean
   readonly knowledge: Readonly<Record<string, AiModelKnowledge>>
   readonly filter: string
   readonly onChange: (map: AiProtocolMap | undefined) => void
@@ -87,6 +92,7 @@ export function ProtocolsSection({
   provider,
   allProviders,
   models,
+  modelsLoading,
   knowledge,
   filter,
   onChange,
@@ -361,10 +367,15 @@ export function ProtocolsSection({
                     </ModelList>
                     {resolved.length === 0 && (
                       <div className={styles['noModels']}>
-                        {localize(
-                          'aiModels.entry.noModels',
-                          'No models resolved for this protocol.',
-                        )}
+                        {modelsLoading
+                          ? localize(
+                              'aiModels.protocol.discover.loading',
+                              'Fetching the model list from the endpoint…',
+                            )
+                          : localize(
+                              'aiModels.entry.noModels',
+                              'No models resolved for this protocol.',
+                            )}
                       </div>
                     )}
                     <div className={styles['protocolActions']}>
@@ -375,9 +386,13 @@ export function ProtocolsSection({
                         onClick={() => pinDiscovered(protocol)}
                       >
                         <Pin size={14} strokeWidth={1.75} className={styles['btnIcon'] ?? ''} />
-                        {localize('aiModels.protocol.pin', 'Pin {count} models to a static list', {
-                          count: resolved.length,
-                        })}
+                        {resolved.length === 0 && modelsLoading
+                          ? localize('aiModels.protocol.pin.loading', 'Pin models to a static list')
+                          : localize(
+                              'aiModels.protocol.pin',
+                              'Pin {count} models to a static list',
+                              { count: resolved.length },
+                            )}
                       </Button>
                       {addModelControl(protocol, refs)}
                     </div>

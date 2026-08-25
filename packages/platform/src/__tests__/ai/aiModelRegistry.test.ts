@@ -229,7 +229,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     reg.dispose()
   })
 
-  it('caches enumeration and invalidates on setProviders', async () => {
+  it('caches enumeration and re-enumerates when a model-affecting field changes', async () => {
     const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
@@ -239,9 +239,153 @@ describe('AiModelRegistry — provider lifecycle', () => {
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(1)
 
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('kuro', [discovering('openai-chat')], { apiKey: 'sk-live' })])
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(2)
+    reg.dispose()
+  })
+
+  it('keeps the cached enumeration across a reload of presentation-only fields', async () => {
+    const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(1)
+
+    // pricingSource / usageSource do not touch what the provider serves.
+    reg.setProviders([
+      provider('kuro', [discovering('openai-chat')], {
+        pricingSource: { id: 'catalog' },
+        usageSource: { id: 'http-json', options: { url: 'https://example.test/usage' } },
+      }),
+    ])
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(1)
+    reg.dispose()
+  })
+
+  it('re-enumerates when baseUrl or apiKey changes', async () => {
+    const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.setProviders([
+      provider('kuro', [discovering('openai-chat')], {
+        baseUrl: 'https://a.test/v1',
+        apiKey: 'sk-1',
+      }),
+    ])
+
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(1)
+
+    reg.setProviders([
+      provider('kuro', [discovering('openai-chat')], {
+        baseUrl: 'https://b.test/v1',
+        apiKey: 'sk-1',
+      }),
+    ])
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(2)
+
+    reg.setProviders([
+      provider('kuro', [discovering('openai-chat')], {
+        baseUrl: 'https://b.test/v1',
+        apiKey: 'sk-2',
+      }),
+    ])
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(3)
+    reg.dispose()
+  })
+
+  it('re-enumerates when the protocol map changes', async () => {
+    const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.registerProvider('anthropic-messages', fakeProvider())
+    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(1)
+
+    reg.setProviders([
+      provider('kuro', [
+        discovering('openai-chat'),
+        declared('anthropic-messages', ['claude-opus-4-8']),
+      ]),
+    ])
+    await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(2)
+    reg.dispose()
+  })
+
+  it('re-enumerates discovered models when the knowledge base changes', async () => {
+    const listModels = vi.fn(() => Promise.resolve(['o4']))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.setProviders([provider('kuro', [discovering('openai-chat')])], {
+      o4: { name: 'Omni 4' },
+    })
+
+    const [first] = await reg.getModels(CancellationToken.None)
+    expect(first?.name).toBe('Omni 4')
+    expect(listModels).toHaveBeenCalledTimes(1)
+
+    reg.setProviders([provider('kuro', [discovering('openai-chat')])], {
+      o4: { name: 'Omni 4 Pro' },
+    })
+    const [second] = await reg.getModels(CancellationToken.None)
+    expect(listModels).toHaveBeenCalledTimes(2)
+    expect(second?.name).toBe('Omni 4 Pro')
+    reg.dispose()
+  })
+
+  it('rebuilds declared metadata when the knowledge base changes, without hitting the network', async () => {
+    const listModels = vi.fn(() => Promise.resolve(['should-not-be-asked']))
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.setProviders(
+      [
+        {
+          id: 'kuro',
+          defaultProtocol: 'openai-chat' as const,
+          protocols: [
+            {
+              protocol: 'openai-chat' as const,
+              discover: false as const,
+              models: [{ channelModel: 'o4', ref: 'o4', knowledge: { name: 'Omni 4' } }],
+            },
+          ],
+        },
+      ],
+      { o4: { name: 'Omni 4' } },
+    )
+
+    const [first] = await reg.getModels(CancellationToken.None)
+    expect(first?.name).toBe('Omni 4')
+
+    reg.setProviders(
+      [
+        {
+          id: 'kuro',
+          defaultProtocol: 'openai-chat' as const,
+          protocols: [
+            {
+              protocol: 'openai-chat' as const,
+              discover: false as const,
+              models: [{ channelModel: 'o4', ref: 'o4', knowledge: { name: 'Omni 4 Pro' } }],
+            },
+          ],
+        },
+      ],
+      { o4: { name: 'Omni 4 Pro' } },
+    )
+
+    const [second] = await reg.getModels(CancellationToken.None)
+    expect(second?.name).toBe('Omni 4 Pro')
+    expect(listModels).not.toHaveBeenCalled()
     reg.dispose()
   })
 

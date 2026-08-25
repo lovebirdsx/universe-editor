@@ -96,7 +96,11 @@ describe('barrel coverage', () => {
   const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 
   // Intentionally-internal files (used by siblings, never part of the public API).
-  const INTERNAL = new Set(['command/contextKeyParser.ts', 'command/contextKeyScanner.ts'])
+  const INTERNAL = new Set([
+    'command/contextKeyParser.ts',
+    'command/contextKeyScanner.ts',
+    'ai/aiModelFingerprint.ts',
+  ])
 
   // `base/observable` exposes its own hand-curated public barrel (observable/index.ts);
   // its internals are not expected to be individually re-exported.

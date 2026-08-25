@@ -29,7 +29,7 @@ import {
   type AiProviderIssue,
   type AiRateTableSnapshot,
 } from '@universe-editor/platform'
-import { Button } from '@universe-editor/workbench-ui'
+import { Button, Spinner } from '@universe-editor/workbench-ui'
 import { useEventSubscription, useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
@@ -70,6 +70,13 @@ export function AiModelsPanel() {
   const [usages, setUsages] = useState<ReadonlyMap<string, AiAccountUsage | undefined>>(new Map())
   const [addOpen, setAddOpen] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
+  const [loaded, setLoaded] = useState(false)
+  /**
+   * True while a model enumeration is in flight. Cards use it to say "asking the
+   * endpoint" instead of flashing "0 models / none resolved" before the answer
+   * lands — a hung /v1/models can hold this for the full request timeout.
+   */
+  const [modelsLoading, setModelsLoading] = useState(true)
 
   /**
    * `updateProviders` replaces the whole array, so every write must start from
@@ -80,12 +87,34 @@ export function AiModelsPanel() {
    */
   const providersRef = useRef<readonly AiProviderEntry[]>([])
   const writeChain = useRef<Promise<unknown>>(Promise.resolve())
+  /** Monotonic guard so a stale model enumeration can never paint over a newer one. */
+  const modelsTokenRef = useRef(0)
+  /** Set on unmount; async reload continuations skip setState once it flips. */
+  const disposedRef = useRef(false)
+  /** Bumped by every snapshot replacement so a stale getProviders can't clobber it. */
+  const writeSeqRef = useRef(0)
 
   const enqueueWrite = useCallback((run: () => Promise<void>): Promise<void> => {
     const next = writeChain.current.then(run, run)
     writeChain.current = next.catch(() => undefined)
     return next
   }, [])
+
+  useEffect(() => {
+    disposedRef.current = false
+    return () => {
+      disposedRef.current = true
+    }
+  }, [])
+
+  // An enumeration still in flight on unmount must not paint (or leak the
+  // component instance via a late setState).
+  useEffect(
+    () => () => {
+      modelsTokenRef.current++
+    },
+    [],
+  )
 
   useEffect(() => {
     let active = true
@@ -115,22 +144,58 @@ export function AiModelsPanel() {
     [storage],
   )
 
+  /**
+   * Fast main-memory reads land immediately so the provider list isn't held
+   * hostage by a discover provider whose /v1/models enumeration is slow to
+   * answer. `getModels` is that enumeration (it can block up to
+   * METADATA_REQUEST_TIMEOUT_MS for a hung endpoint); it runs in the background
+   * and paints only the model counts. A stale enumeration result is dropped via
+   * `modelsTokenRef` so a newer reload always wins.
+   */
   const reload = useCallback(async () => {
-    const [nextProviders, nextModels, nextIssues, nextLegacy, nextKnowledge] = await Promise.all([
-      aiModel.getProviders(),
-      aiModel.getModels(),
-      aiModel.getProviderIssues(),
-      aiModel.isLegacySettingsFormat(),
-      aiModel.getModelKnowledge(),
-    ])
-    providersRef.current = nextProviders
-    setProviders(nextProviders)
-    setModels(nextModels)
-    setIssues(nextIssues)
-    setLegacy(nextLegacy)
-    setKnowledge(nextKnowledge)
-    setRateTables(rateMirror.getRateTablesSync())
-    setReloadToken((t) => t + 1)
+    const version = writeSeqRef.current
+    try {
+      const [nextProviders, nextIssues, nextLegacy, nextKnowledge] = await Promise.all([
+        aiModel.getProviders(),
+        aiModel.getProviderIssues(),
+        aiModel.isLegacySettingsFormat(),
+        aiModel.getModelKnowledge(),
+      ])
+      if (disposedRef.current) return
+      if (version === writeSeqRef.current) {
+        providersRef.current = nextProviders
+        setProviders(nextProviders)
+      }
+      setIssues(nextIssues)
+      setLegacy(nextLegacy)
+      setKnowledge(nextKnowledge)
+      setRateTables(rateMirror.getRateTablesSync())
+      setReloadToken((t) => t + 1)
+    } catch (error) {
+      console.debug('aiModels: reload fast reads failed', error)
+    } finally {
+      // The list is "loaded" once the fast reads settle — a hung enumeration must
+      // never leave the panel spinning at the loading placeholder forever.
+      if (!disposedRef.current) setLoaded(true)
+    }
+
+    const token = ++modelsTokenRef.current
+    setModelsLoading(true)
+    const settle = () => {
+      // A stale answer must not clear the flag: a newer enumeration is in flight.
+      if (!disposedRef.current && token === modelsTokenRef.current) setModelsLoading(false)
+    }
+    void aiModel
+      .getModels()
+      .then((nextModels) => {
+        if (disposedRef.current || token !== modelsTokenRef.current) return
+        setModels(nextModels)
+        setModelsLoading(false)
+      })
+      .catch((error) => {
+        console.debug('aiModels: model enumeration failed', error)
+        settle()
+      })
   }, [aiModel, rateMirror])
 
   useEffect(() => {
@@ -217,6 +282,7 @@ export function AiModelsPanel() {
   const updateProviders = useCallback(
     async (next: readonly AiProviderEntry[]) => {
       providersRef.current = next
+      writeSeqRef.current++
       await aiModel.updateProviders(next)
       await reload()
     },
@@ -370,7 +436,14 @@ export function AiModelsPanel() {
         collapsed={collapsed[SECTION_PROVIDERS] ?? false}
         onToggle={() => toggleCollapsed(SECTION_PROVIDERS, false)}
       >
-        {providers.length === 0 ? (
+        {!loaded ? (
+          <div className={styles['emptyState']} data-testid="ai-providers-loading">
+            <Spinner size={20} />
+            <div className={styles['emptyDesc']}>
+              {localize('aiModels.providers.loading', 'Loading providers…')}
+            </div>
+          </div>
+        ) : providers.length === 0 ? (
           <div className={styles['emptyState']}>
             <div className={styles['emptyDesc']}>
               {localize(
@@ -396,6 +469,7 @@ export function AiModelsPanel() {
                 provider={provider}
                 allProviders={providers}
                 models={models.filter((m) => m.providerId === provider.id)}
+                modelsLoading={modelsLoading}
                 issues={issuesByProvider.get(provider.id) ?? []}
                 rateTables={rateTables}
                 knowledge={knowledge}

@@ -773,4 +773,127 @@ describe('AiModelsPanel', () => {
       { ...other, baseUrl: 'https://other2.example' },
     ])
   })
+
+  it('renders providers while getModels hangs instead of flashing the empty state', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    // A discover provider whose /v1/models endpoint never answers would keep the
+    // old Promise.all pending forever; the fast provider reads must land anyway.
+    aiModel.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
+    renderPanel(aiModel)
+    await flushEffects()
+
+    expect(screen.queryByText('No providers yet. Add one to connect an AI service.')).toBeNull()
+    expect(entryCard('kuro')).toBeTruthy()
+  })
+
+  it('flags a field edit as saved while getModels is still hanging', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    aiModel.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+    fireEvent.blur(input)
+    await flushEffects()
+
+    // The write resolves against main memory; the "Saved" stamp must not wait for
+    // the background model enumeration to finish.
+    expect(screen.getByTestId('ai-provider-saved')).toBeTruthy()
+  })
+
+  it('a discover card shows fetching copy instead of "No models resolved" while getModels hangs', async () => {
+    const aiModel = new FakeAiModelService()
+    // Empty refs = discover mode: the protocol is declared, the list comes from
+    // the endpoint — exactly the case that can hang on /v1/models.
+    aiModel.providers = [
+      { id: 'kuro', baseUrl: 'https://kuro.example', protocolMap: { 'anthropic-messages': [] } },
+    ]
+    aiModel.models = []
+    // A discover provider whose /v1/models endpoint never answers: the card must
+    // not tell the user "none resolved" (or "0 models") before the answer lands.
+    aiModel.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
+    renderPanel(aiModel)
+    await flushEffects()
+
+    const card = entryCard('kuro')
+    expect(screen.queryByText('No models resolved for this protocol.')).toBeNull()
+    expect(within(card).queryByText('0 models')).toBeNull()
+    // The discover block says the enumeration is in flight; the Pin button stays
+    // disabled without quoting a fabricated zero.
+    expect(screen.getByText('Fetching the model list from the endpoint…')).toBeTruthy()
+    expect(within(card).getByText('Fetching models…')).toBeTruthy()
+    expect(within(card).queryByText('Pin 0 models to a static list')).toBeNull()
+    expect(
+      within(card).getByRole('button', { name: 'Pin models to a static list' }),
+    ).toHaveProperty('disabled', true)
+  })
+
+  it('shows "No models resolved for this protocol." only after the enumeration answers empty', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [
+      { id: 'kuro', baseUrl: 'https://kuro.example', protocolMap: { 'anthropic-messages': [] } },
+    ]
+    aiModel.models = []
+    const gates: Array<(result: AiModelMetadata[]) => void> = []
+    aiModel.getModels = vi.fn(
+      () =>
+        new Promise<AiModelMetadata[]>((resolve) => {
+          gates.push(resolve)
+        }),
+    )
+    renderPanel(aiModel)
+    await flushEffects()
+
+    expect(screen.queryByText('No models resolved for this protocol.')).toBeNull()
+
+    gates[0]?.([])
+    await flushEffects()
+
+    expect(screen.getByText('No models resolved for this protocol.')).toBeTruthy()
+    expect(within(entryCard('kuro')).getByText('0 models')).toBeTruthy()
+    expect(screen.queryByText('Fetching the model list from the endpoint…')).toBeNull()
+  })
+
+  it('a stale getModels result does not overwrite a newer reload', async () => {
+    const aiModel = new FakeAiModelService()
+    aiModel.providers = [KURO_PROVIDER]
+    aiModel.models = [KURO_MODEL]
+    const gates: Array<(result: AiModelMetadata[]) => void> = []
+    aiModel.getModels = vi.fn(
+      () =>
+        new Promise<AiModelMetadata[]>((resolve) => {
+          gates.push(resolve)
+        }),
+    )
+
+    renderPanel(aiModel)
+    await flushEffects()
+    expect(gates).toHaveLength(1)
+
+    aiModel.fireModelsChanged()
+    await flushEffects()
+    expect(gates).toHaveLength(2)
+
+    // The newer enumeration resolves first with two models…
+    const plus = {
+      ...KURO_MODEL,
+      id: 'kuro/anthropic-messages/qwen3-coder-plus',
+      channelModel: 'qwen3-coder-plus',
+      name: 'Qwen3 Coder Plus',
+    } as const
+    gates[1]?.([plus, KURO_MODEL])
+    await flushEffects()
+    expect(screen.getByText('2 models')).toBeTruthy()
+
+    // …then the stale mount enumeration resolves with one model; it must not win.
+    gates[0]?.([KURO_MODEL])
+    await flushEffects()
+    expect(screen.getByText('2 models')).toBeTruthy()
+  })
 })

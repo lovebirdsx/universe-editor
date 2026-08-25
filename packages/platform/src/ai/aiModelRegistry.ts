@@ -19,6 +19,10 @@ import {
   type AiResolvedProtocolModel,
   type AiResolvedProvider,
 } from './aiProviderEntry.js'
+import {
+  computeKnowledgeFingerprint,
+  computeProviderModelFingerprint,
+} from './aiModelFingerprint.js'
 import type { IAiModelProvider } from './aiModelProvider.js'
 import type { AiModelMetadata, AiModelSelector, AiWireProtocol } from './aiModelTypes.js'
 
@@ -33,7 +37,10 @@ const PROTOCOL_TOKEN_DEFAULTS: Readonly<
 }
 
 interface Entry {
-  readonly provider: AiResolvedProvider
+  /** Mutated in place when a reload keeps this entry: the newest resolved provider. */
+  provider: AiResolvedProvider
+  /** Content fingerprint the cached models were resolved against. */
+  readonly modelFingerprint: string
   /** Resolved models for this entry, or undefined when not yet resolved. */
   models: readonly AiModelMetadata[] | undefined
   /** model id → the protocol provider + runtime view that produced it. */
@@ -44,8 +51,9 @@ interface Entry {
 
 export class AiModelRegistry extends Disposable {
   private readonly _providers = new Map<AiWireProtocol, IAiModelProvider>()
-  private readonly _entries = new Map<string, Entry>()
+  private _entries = new Map<string, Entry>()
   private _knowledge: Readonly<Record<string, AiModelKnowledge>> = {}
+  private _knowledgeFingerprint = computeKnowledgeFingerprint({})
 
   private readonly _onDidChangeModels = this._register(new Emitter<void>())
   readonly onDidChangeModels: Event<void> = this._onDidChangeModels.event
@@ -73,19 +81,37 @@ export class AiModelRegistry extends Disposable {
   }
 
   /**
-   * Replace the active entry set, invalidating all cached model lists (a change
-   * is typically a config or key change, both of which require re-enumeration).
-   * Always fires onDidChangeModels.
+   * Replace the active entry set, keeping each provider's cached model list when
+   * its model-affecting fields are unchanged (see aiModelFingerprint) — a reload
+   * of an unrelated field such as pricingSource should not trigger another
+   * network enumeration. Declared entries carry their knowledge inline, so a
+   * knowledge-base change shifts their fingerprint on its own; discovered
+   * entries merge the base at enumeration time, which is why a knowledge change
+   * additionally invalidates every entry. Always fires onDidChangeModels.
    */
   setProviders(
     providers: readonly AiResolvedProvider[],
     knowledge?: Readonly<Record<string, AiModelKnowledge>>,
   ): void {
-    this._entries.clear()
-    if (knowledge !== undefined) this._knowledge = knowledge
-    for (const provider of providers) {
-      this._entries.set(provider.id, freshEntry(provider))
+    let knowledgeChanged = false
+    if (knowledge !== undefined) {
+      const fingerprint = computeKnowledgeFingerprint(knowledge)
+      knowledgeChanged = fingerprint !== this._knowledgeFingerprint
+      this._knowledge = knowledge
+      this._knowledgeFingerprint = fingerprint
     }
+
+    const next = new Map<string, Entry>()
+    for (const provider of providers) {
+      const fingerprint = computeProviderModelFingerprint(provider)
+      // Duplicate ids keep the long-standing "last one wins" Map semantics:
+      // the candidate to reuse is whichever entry the map currently holds.
+      const old = knowledgeChanged
+        ? undefined
+        : (next.get(provider.id) ?? this._entries.get(provider.id))
+      next.set(provider.id, reuseEntry(old, provider, fingerprint))
+    }
+    this._entries = next
     this._onDidChangeModels.fire()
   }
 
@@ -192,8 +218,27 @@ export class AiModelRegistry extends Disposable {
   }
 }
 
-function freshEntry(provider: AiResolvedProvider): Entry {
-  return { provider, models: undefined, byModelId: new Map(), pending: undefined }
+/**
+ * Carry the cached resolution over when the entry still serves the same models:
+ * mutating the old entry in place keeps an in-flight `pending` promise valid
+ * (its commit check matches by identity).
+ */
+function reuseEntry(
+  old: Entry | undefined,
+  provider: AiResolvedProvider,
+  fingerprint: string,
+): Entry {
+  if (old !== undefined && old.modelFingerprint === fingerprint) {
+    old.provider = provider
+    return old
+  }
+  return {
+    provider,
+    modelFingerprint: fingerprint,
+    models: undefined,
+    byModelId: new Map(),
+    pending: undefined,
+  }
 }
 
 function toMetadata(

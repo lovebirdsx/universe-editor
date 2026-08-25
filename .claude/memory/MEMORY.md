@@ -56,6 +56,7 @@
 
 ## 性能 / 疑难根因
 
+- [AI provider 面板保存慢/列表闪空](ai-panel-getmodels-blocking-latency.md) — 根因=getModels 在线枚举(discover 端点黑洞等满 10s)被绑进 reload 的 Promise.all；修=快读先落地+枚举后台化+loading 三态贯穿到叶子+registry 按内容指纹保留缓存(knowledge 变化须全量失效)；去 await reload 须补 writeSeq 守卫
 - [大文件十连修](largefile-reveal-dirtydiff-vscode-parity.md) — reveal 事件化/行级 diff/增量同步/tsserver OOM 化/IPC 分片/DTO 去 text/切tab看门狗
 - [allotment 重挂载空窗口期](allotment-remount-empty-splitview-window.md) — 重挂载 viewItems 空至 RO tick；sizes 守卫只用当前实例报告值
 - [sessionChanges 无界增长 OOM](sessionchanges-unbounded-growth-main-oom-abort.md) — tracker 预算+有界日志+64MB 写入兜底

@@ -92,6 +92,7 @@ function renderSection({
       provider={provider}
       allProviders={allProviders}
       models={models}
+      modelsLoading={false}
       knowledge={knowledge}
       filter=""
       onChange={onChange}

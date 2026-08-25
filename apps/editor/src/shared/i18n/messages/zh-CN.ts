@@ -1334,6 +1334,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.addProvider': '添加提供方',
   'aiModels.badge.keyed': '已配密钥',
   'aiModels.badge.modelCount': '{count} 个模型',
+  'aiModels.badge.modelsLoading': '正在获取模型…',
   'aiModels.baseUrl': 'Base URL',
   'aiModels.baseUrl.placeholder': '提供方默认',
   'aiModels.filter.placeholder': '过滤模型…',
@@ -1377,6 +1378,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // provider entry card
   'aiModels.section.providers': '提供方',
   'aiModels.providers.empty': '尚无提供方。添加一个以接入 AI 服务。',
+  'aiModels.providers.loading': '加载提供方…',
   'aiModels.legacy.banner':
     'aiSettings.json 仍是旧的两层格式，已被忽略。请按新格式手工重建（密钥可从旧文件复制）。',
   'aiModels.entry.extends': '继承自 {id}',
@@ -1494,7 +1496,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.protocol.static': '静态清单',
   'aiModels.protocol.discover.hint':
     '每次启动都会向端点索取模型清单。固化后可离线使用，也便于复核变化。',
+  'aiModels.protocol.discover.loading': '正在向端点获取模型清单…',
   'aiModels.protocol.pin': '固化 {count} 个模型为静态清单',
+  'aiModels.protocol.pin.loading': '固化模型为静态清单',
   'aiModels.protocol.probe': '探测端点…',
   'aiModels.protocol.add': '添加协议',
   'aiModels.protocol.addModel': '添加模型',
@@ -1529,6 +1533,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.source.summary.none': '无',
   'aiModels.source.summary.rates': '{count} 个模型',
   'aiModels.protocols.summary': '{count} 个协议 · {models} 个模型',
+  'aiModels.protocols.summaryLoading': '{count} 个协议 · 获取中…',
   'aiModels.usage.badge.noValues': '未上报数值',
   'aiModels.cardSection.toggle': '折叠/展开 {title}',
   'aiModels.httpJson.path': '路径',
