@@ -22,7 +22,9 @@ import {
 import {
   AcpSessionHistoryService,
   FIRST_PROMPT_MAX_LENGTH,
+  collectSideTaskDescendants,
   effectiveEntryAuthority,
+  type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
 
 class FakeStorage implements IStorageService {
@@ -2469,5 +2471,51 @@ describe('effectiveEntryAuthority', () => {
 
   it('returns undefined when the current authority is absent', () => {
     expect(effectiveEntryAuthority({ cwd: '/w' }, '/w', undefined, eq)).toBeUndefined()
+  })
+})
+
+describe('collectSideTaskDescendants', () => {
+  const row = (id: string, sideTaskOf?: string): AcpSessionHistoryEntry => ({
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+  })
+
+  it('returns just the root when it has no children', () => {
+    expect(collectSideTaskDescendants([row('root', 'parent')], 'root')).toEqual(['root'])
+  })
+
+  it('walks a linear chain root first', () => {
+    const entries = [row('b', 'a'), row('a', 'root'), row('root', 'parent')]
+    expect(collectSideTaskDescendants(entries, 'root')).toEqual(['root', 'a', 'b'])
+  })
+
+  it('collects every sibling and grandchild exactly once', () => {
+    const entries = [
+      row('root', 'parent'),
+      row('a', 'root'),
+      row('b', 'root'),
+      row('c', 'a'),
+      row('d', 'b'),
+    ]
+    const ids = collectSideTaskDescendants(entries, 'root')
+    expect([...ids].sort()).toEqual(['a', 'b', 'c', 'd', 'root'])
+    expect(ids[0]).toBe('root')
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('terminates on a malformed parent cycle without repeating an id', () => {
+    const entries = [row('a', 'b'), row('b', 'a')]
+    const ids = collectSideTaskDescendants(entries, 'a')
+    expect([...ids].sort()).toEqual(['a', 'b'])
+  })
+
+  it('ignores regular (non side task) rows', () => {
+    const entries = [row('root', 'parent'), row('plain'), row('other')]
+    expect(collectSideTaskDescendants(entries, 'root')).toEqual(['root'])
   })
 })

@@ -462,6 +462,37 @@ export function effectiveEntryAuthority(
   return undefined
 }
 
+/** Collect a side task together with every descendant reachable through the
+ *  `sideTaskOf` chain (a side task can itself be forked into further side
+ *  tasks), root first. Deleting only the clicked row would orphan its children:
+ *  they are hidden from the session list, and their only entry point — the
+ *  parent chat's SideTasksBar — disappears with the parent. `visited` makes a
+ *  malformed parent cycle in persisted rows terminate. */
+export function collectSideTaskDescendants(
+  entries: readonly AcpSessionHistoryEntry[],
+  rootId: string,
+): string[] {
+  const childrenByParent = new Map<string, string[]>()
+  for (const entry of entries) {
+    if (entry.sideTaskOf === undefined) continue
+    const siblings = childrenByParent.get(entry.sideTaskOf)
+    if (siblings) siblings.push(entry.id)
+    else childrenByParent.set(entry.sideTaskOf, [entry.id])
+  }
+  const collected: string[] = []
+  const visited = new Set<string>()
+  const pending = [rootId]
+  while (pending.length > 0) {
+    const id = pending.pop()!
+    if (visited.has(id)) continue
+    visited.add(id)
+    collected.push(id)
+    const children = childrenByParent.get(id)
+    if (children) pending.push(...children)
+  }
+  return collected
+}
+
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
   'acpSessionHistoryService',
 )

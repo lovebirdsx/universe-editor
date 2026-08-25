@@ -2246,6 +2246,32 @@
   font-size: calc(var(--agent-font-size, 12px) - 1px);
 }
 
+/* The delete button is a sibling of the row button (never nested — that would be
+   invalid HTML and would cost the row its keyboard activation); the li is its
+   positioning anchor and hover scope. */
+.sideTasksItem {
+  position: relative;
+}
+
+.sideTaskDelete {
+  composes: sessionDelete;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.sideTasksItem:hover .sideTaskDelete,
+.sideTasksItem:focus-within .sideTaskDelete {
+  visibility: visible;
+}
+
+.sideTasksItem:hover .sideTaskDelete {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.sideTaskDelete:hover {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
 /* Floating quote chip in the side-task chat — same top-right slot the parent's
    SideTasksBar occupies (the two never co-render: a chat is either the parent
    or the side task), marking the child as a side task without layout cost. */
