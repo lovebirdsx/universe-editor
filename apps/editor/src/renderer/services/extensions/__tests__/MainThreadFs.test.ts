@@ -7,6 +7,7 @@ import {
 import {
   CancellationTokenSource,
   NullLogger,
+  REMOTE_SCHEME,
   URI,
   relativePathUnder,
   type HostPlatform,
@@ -14,10 +15,19 @@ import {
   type IFileSearchQuery,
   type IFileSearchService,
   type IFileService,
+  type IFileStat,
   type ILogger,
 } from '@universe-editor/platform'
 import { MainThreadFs } from '../MainThreadFs.js'
-import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
+import {
+  AcpPathPolicy,
+  type AcpPathPolicyEnv,
+  type IAcpPathPolicy,
+} from '../../acp/acpPathPolicy.js'
+import type {
+  IRemoteStatusService,
+  RemoteEnvironmentDto,
+} from '../../../../shared/ipc/remoteStatusService.js'
 
 const allowPolicy: IAcpPathPolicy = {
   _serviceBrand: undefined,
@@ -31,9 +41,62 @@ function fakeFiles(overrides: Partial<IFileService>): IFileService {
   return overrides as IFileService
 }
 
+/** A plain-file `IFileStat`; only type/size/mtime reach the wire shape. */
+function fileStat(overrides: Partial<IFileStat> = {}): IFileStat {
+  return {
+    resource: undefined as never,
+    isFile: true,
+    isDirectory: false,
+    size: 0,
+    mtime: 0,
+    ...overrides,
+  }
+}
+
 const noSearch: IFileSearchService = {
   _serviceBrand: undefined,
   search: () => Promise.reject(new Error('unexpected search call')),
+}
+
+/** A remote host environment DTO; only `os`/`homeDir` drive the path policy. */
+function remoteEnvDto(overrides: Partial<RemoteEnvironmentDto> = {}): RemoteEnvironmentDto {
+  return {
+    os: 'linux',
+    arch: 'x64',
+    homeDir: '/home/user',
+    tmpDir: '/tmp',
+    pathCaseSensitive: true,
+    serverVersion: '1.0.0',
+    ...overrides,
+  }
+}
+
+/** `getEnvironment` stub; `env: null` mimics "authority not connected". */
+function fakeRemoteStatus(
+  env: RemoteEnvironmentDto | null = null,
+  impl?: () => Promise<RemoteEnvironmentDto | null>,
+): IRemoteStatusService & { calls: () => number } {
+  const getEnvironment = vi.fn(impl ?? (() => Promise.resolve(env)))
+  return {
+    _serviceBrand: undefined,
+    getEnvironment,
+    calls: () => getEnvironment.mock.calls.length,
+  } as unknown as IRemoteStatusService & { calls: () => number }
+}
+
+/** Records every `check` call so tests can assert the policy env we pass. */
+function recordingPolicy(): IAcpPathPolicy & {
+  calls: () => Array<{ cwd: string; target: string; env: AcpPathPolicyEnv | undefined }>
+} {
+  const calls: Array<{ cwd: string; target: string; env: AcpPathPolicyEnv | undefined }> = []
+  return {
+    _serviceBrand: undefined,
+    check: (cwd, target, env) => {
+      calls.push({ cwd, target, env })
+      return { ok: true, normalized: target }
+    },
+    calls: () => calls,
+  }
 }
 
 function makeFs(
@@ -44,8 +107,20 @@ function makeFs(
   defaultExcludes: () => readonly string[] = () => [],
   logger: ILogger = new NullLogger(),
   platform: HostPlatform = 'linux',
+  authority: string | undefined = undefined,
+  remoteStatus: IRemoteStatusService = fakeRemoteStatus(null),
 ): MainThreadFs {
-  return new MainThreadFs(cwd, policy, files, fileSearch, defaultExcludes, logger, platform)
+  return new MainThreadFs(
+    cwd,
+    authority,
+    policy,
+    files,
+    fileSearch,
+    defaultExcludes,
+    logger,
+    platform,
+    remoteStatus,
+  )
 }
 
 describe('MainThreadFs', () => {
@@ -70,13 +145,7 @@ describe('MainThreadFs', () => {
       allowPolicy,
       fakeFiles({
         stat: () =>
-          Promise.resolve({
-            resource: undefined as never,
-            isFile: false,
-            isDirectory: true,
-            size: 42,
-            mtime: 100,
-          }),
+          Promise.resolve(fileStat({ isFile: false, isDirectory: true, size: 42, mtime: 100 })),
         list: () =>
           Promise.resolve([
             { name: 'sub', isFile: false, isDirectory: true },
@@ -574,4 +643,427 @@ describe('MainThreadFs', () => {
       expect(warn.mock.calls[0]?.[0]).toMatch(/maxResults/)
     })
   })
+
+  /**
+   * A remote workspace hosts the extension host on the remote server, and the
+   * `workspace.fs` wire carries bare path strings — which the host↔renderer codec
+   * never transforms (only $mid-stamped UriComponents get translated). So the
+   * paths arriving here are the *remote* host's native paths and must resolve to
+   * `remote-ssh:` resources; `URI.file` would send them to the client's own disk.
+   */
+  describe('remote workspace', () => {
+    const authority = 'ssh+devbox'
+    const remoteUri = (path: string): URI => URI.from({ scheme: REMOTE_SCHEME, authority, path })
+
+    it('routes gated reads to the remote authority instead of the local disk', async () => {
+      const stat = vi.fn((_resource: URI) => Promise.resolve(fileStat({ size: 3, mtime: 1 })))
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({ stat }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'win32', // a Windows client talking to a POSIX remote
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      await fs.$stat('/home/user/repo/docs/x.md')
+      expect(stat).toHaveBeenCalledTimes(1)
+      const resource = stat.mock.calls[0]?.[0] as unknown as URI
+      expect(resource.scheme).toBe(REMOTE_SCHEME)
+      expect(resource.authority).toBe(authority)
+      expect(resource.path).toBe('/home/user/repo/docs/x.md')
+    })
+
+    it('routes rename and copy endpoints to the remote authority', async () => {
+      const rename = vi.fn(() => Promise.resolve())
+      const copy = vi.fn(() => Promise.resolve())
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({ rename, copy }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      await fs.$rename('/home/user/repo/a.ts', '/home/user/repo/b.ts', false)
+      await fs.$copy('/home/user/repo/a.ts', '/home/user/repo/c.ts', true)
+      for (const spy of [rename, copy]) {
+        for (const arg of (spy.mock.calls[0] as unknown as URI[]).slice(0, 2)) {
+          expect(arg.scheme).toBe(REMOTE_SCHEME)
+          expect(arg.authority).toBe(authority)
+        }
+      }
+    })
+
+    it("passes the remote host's platform and home to the path policy", async () => {
+      const policy = recordingPolicy()
+      const fs = makeFs(
+        '/home/user/repo',
+        policy,
+        fakeFiles({ stat: () => Promise.resolve(fileStat()) }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/xiao' })),
+      )
+      await fs.$stat('/home/user/repo/a.md')
+      const call = policy.calls()[0]
+      expect(call?.cwd).toBe('/home/user/repo')
+      expect(call?.env).toEqual({ platform: 'linux', home: '/home/xiao' })
+    })
+
+    it('leaves the policy env unset for a local workspace', async () => {
+      const policy = recordingPolicy()
+      const fs = makeFs('/repo', policy, fakeFiles({ stat: () => Promise.resolve(fileStat()) }))
+      await fs.$stat('/repo/a.md')
+      const call = policy.calls()[0]
+      expect(call?.env).toBeUndefined()
+    })
+
+    it('resolves the remote environment once per connection', async () => {
+      const remoteStatus = fakeRemoteStatus(remoteEnvDto())
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({ readFile: () => Promise.resolve(new Uint8Array([1])) }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'linux',
+        authority,
+        remoteStatus,
+      )
+      await fs.$readFile('/home/user/repo/a.md')
+      await fs.$readFile('/home/user/repo/b.md')
+      expect((remoteStatus as unknown as { calls: () => number }).calls()).toBe(1)
+    })
+
+    it('degrades to POSIX facts when the remote environment is unavailable', async () => {
+      const policy = recordingPolicy()
+      const fs = makeFs(
+        '/home/user/repo',
+        policy,
+        fakeFiles({ stat: () => Promise.resolve(fileStat()) }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'win32',
+        authority,
+        fakeRemoteStatus(null, () => Promise.reject(new Error('not connected'))),
+      )
+      await fs.$stat('/home/user/repo/a.md')
+      expect(policy.calls()[0]?.env).toEqual({ platform: 'linux', home: '/' })
+    })
+
+    it('retries the environment after a degrade so a reconnect restores the guards', async () => {
+      // The host survives transparent reconnects, and an authority mid-reconnect
+      // reports no environment. Memoizing that answer would leave the remote
+      // sensitive-prefix probes blind for the rest of the connection's life.
+      let connected = false
+      const policy = recordingPolicy()
+      const remoteStatus = fakeRemoteStatus(null, () =>
+        Promise.resolve(connected ? remoteEnvDto({ homeDir: '/home/xiao' }) : null),
+      )
+      const fs = makeFs(
+        '/home/user/repo',
+        policy,
+        fakeFiles({ stat: () => Promise.resolve(fileStat()) }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'linux',
+        authority,
+        remoteStatus,
+      )
+      await fs.$stat('/home/user/repo/a.md')
+      expect(policy.calls()[0]?.env).toEqual({ platform: 'linux', home: '/' })
+
+      connected = true
+      await fs.$stat('/home/user/repo/b.md')
+      expect(policy.calls()[1]?.env).toEqual({ platform: 'linux', home: '/home/xiao' })
+      // …and the healed answer is memoized again.
+      await fs.$stat('/home/user/repo/c.md')
+      expect((remoteStatus as unknown as { calls: () => number }).calls()).toBe(2)
+    })
+
+    it('keeps the real-path defense in depth on a remote host', async () => {
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({
+          realpath: () => Promise.resolve(remoteUri('/home/user/secret/.ssh/id_rsa')),
+          readFile: () => Promise.resolve(new Uint8Array()),
+        }),
+        noSearch,
+        () => [],
+        new NullLogger(),
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      await expect(fs.$readFile('/home/user/repo/link')).rejects.toThrow(/denied \(real path\)/)
+    })
+
+    it('roots the enumeration at the remote workspace, not a local path', async () => {
+      const roots: URI[] = []
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: (query: IFileSearchQuery) => {
+          roots.push(query.root)
+          const complete: IFileSearchComplete = {
+            results: [
+              {
+                resource: remoteUri('/home/user/repo/src/a.ts'),
+                // The remote search channel reports server-native fs paths, which
+                // are exactly what the remote-hosted extension expects back.
+                fsPath: '/home/user/repo/src/a.ts',
+                relativePath: 'src/a.ts',
+                basename: 'a.ts',
+                score: 0,
+              },
+            ],
+            limitHit: false,
+            filesWalked: 1,
+            directoriesWalked: 1,
+            durationMs: 0,
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({}),
+        search,
+        () => [],
+        new NullLogger(),
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      expect(await fs.$findFiles('**/*.ts', null, null)).toEqual(['/home/user/repo/src/a.ts'])
+      expect(roots[0]?.scheme).toBe(REMOTE_SCHEME)
+      expect(roots[0]?.authority).toBe(authority)
+      expect(roots[0]?.path).toBe('/home/user/repo')
+    })
+
+    it('accepts a RelativePattern base that arrived in the remote URI space', async () => {
+      // The host sends `file:` bases; the codec translates them to remote-ssh
+      // before they reach us, so rejecting non-`file:` bases would break every
+      // remote RelativePattern search.
+      const roots: URI[] = []
+      const search: IFileSearchService = {
+        _serviceBrand: undefined,
+        search: (query: IFileSearchQuery) => {
+          roots.push(query.root)
+          const complete: IFileSearchComplete = {
+            results: [],
+            limitHit: false,
+            filesWalked: 0,
+            directoriesWalked: 0,
+            durationMs: 0,
+          }
+          return Promise.resolve(complete)
+        },
+      }
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const fs = makeFs(
+        '/home/user/repo',
+        allowPolicy,
+        fakeFiles({}),
+        search,
+        () => [],
+        logger,
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      const include: IRelativePatternDto = {
+        base: remoteUri('/home/user/repo/src').toJSON(),
+        pattern: '*.ts',
+      }
+      await fs.$findFiles(include, null, null)
+      expect(warn).not.toHaveBeenCalled()
+      expect(roots[0]?.scheme).toBe(REMOTE_SCHEME)
+      expect(roots[0]?.path).toBe('/home/user/repo/src')
+    })
+
+    it('still rejects a remote RelativePattern base outside the workspace', async () => {
+      const search = fakeSearchRecorder()
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const fs = makeFs(
+        '/home/user/repo',
+        new AcpPathPolicy({ platform: 'win32', home: 'C:/Users/client' }),
+        fakeFiles({}),
+        search,
+        () => [],
+        logger,
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto()),
+      )
+      await expect(
+        fs.$findFiles({ base: remoteUri('/home/other').toJSON(), pattern: '*.ts' }, null, null),
+      ).resolves.toEqual([])
+      expect(search.ran()).toBe(false)
+      expect(warn).toHaveBeenCalledTimes(1)
+    })
+
+    it("compares containment with the remote host's case-sensitivity, not the client's", async () => {
+      // A POSIX remote browsed from Windows. The policy here is permissive on
+      // purpose so the only thing under test is the containment re-check in
+      // _resolveRelativePatternBase: with the client's case-insensitive rules
+      // `/home/Xiao/repo/src` folds into the root `/home/xiao/repo` and gets
+      // enumerated; the remote's own `linux` facts keep it out.
+      const search = fakeSearchRecorder()
+      const warn = vi.fn()
+      const logger = { ...new NullLogger(), warn } as unknown as ILogger
+      const fs = makeFs(
+        '/home/xiao/repo',
+        allowPolicy,
+        fakeFiles({}),
+        search,
+        () => [],
+        logger,
+        'win32',
+        authority,
+        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/xiao' })),
+      )
+      await expect(
+        fs.$findFiles(
+          { base: remoteUri('/home/Xiao/repo/src').toJSON(), pattern: '*.ts' },
+          null,
+          null,
+        ),
+      ).resolves.toEqual([])
+      expect(search.ran()).toBe(false)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toMatch(/escapes the workspace folder/)
+    })
+
+    describe('Windows remote host', () => {
+      // A remote-ssh URI encodes a drive letter with a leading slash (`/C:/…`),
+      // so the workspace root arrives as `/C:/Users/x` while the host reports
+      // native `C:\Users\x\…`. relativePathUnder compares drive letters with an
+      // anchored regex that never matches the `/C:` form — without normalizing
+      // the containment base, every gated read on a Windows remote is denied.
+      const winAuthority = 'ssh+winbox'
+      const realPolicy = new AcpPathPolicy({ platform: 'win32', home: 'C:/Users/client' })
+      const winEnv = remoteEnvDto({
+        os: 'win32',
+        homeDir: 'C:/Users/remote',
+        pathCaseSensitive: false,
+      })
+
+      it('allows a native Windows path under the remote workspace root', async () => {
+        const stat = vi.fn((_resource: URI) => Promise.resolve(fileStat({ size: 1, mtime: 1 })))
+        const fs = makeFs(
+          '/C:/Users/x/repo',
+          realPolicy,
+          fakeFiles({ stat }),
+          noSearch,
+          () => [],
+          new NullLogger(),
+          'win32',
+          winAuthority,
+          fakeRemoteStatus(winEnv),
+        )
+        await fs.$stat('C:\\Users\\x\\repo\\docs\\a.md')
+        const resource = stat.mock.calls[0]?.[0] as unknown as URI
+        expect(resource.scheme).toBe(REMOTE_SCHEME)
+        expect(resource.authority).toBe(winAuthority)
+        expect(resource.path).toBe('/C:/Users/x/repo/docs/a.md')
+      })
+
+      it("denies a path outside the remote workspace and the remote host's own secrets", async () => {
+        const fs = makeFs(
+          '/C:/Users/x/repo',
+          realPolicy,
+          fakeFiles({ stat: () => Promise.resolve(fileStat({ size: 1, mtime: 1 })) }),
+          noSearch,
+          () => [],
+          new NullLogger(),
+          'win32',
+          winAuthority,
+          fakeRemoteStatus(winEnv),
+        )
+        await expect(fs.$stat('C:\\Users\\other\\a.md')).rejects.toThrow(/escapes workspace root/)
+      })
+
+      it("guards the remote host's sensitive prefixes, not the client's", async () => {
+        // The remote home is `C:/Users/remote`; a client-home policy would let
+        // the remote host's own `.ssh` through.
+        const fs = makeFs(
+          '/C:/Users/remote',
+          realPolicy,
+          fakeFiles({ readFile: () => Promise.resolve(new Uint8Array()) }),
+          noSearch,
+          () => [],
+          new NullLogger(),
+          'win32',
+          winAuthority,
+          fakeRemoteStatus(winEnv),
+        )
+        await expect(fs.$readFile('C:\\Users\\remote\\.ssh\\id_rsa')).rejects.toThrow(/denied/)
+      })
+
+      it('roots the enumeration at the drive-form remote path', async () => {
+        const roots: URI[] = []
+        const search: IFileSearchService = {
+          _serviceBrand: undefined,
+          search: (query: IFileSearchQuery) => {
+            roots.push(query.root)
+            return Promise.resolve({
+              results: [],
+              limitHit: false,
+              filesWalked: 0,
+              directoriesWalked: 0,
+              durationMs: 0,
+            } satisfies IFileSearchComplete)
+          },
+        }
+        const fs = makeFs(
+          '/C:/Users/x/repo',
+          realPolicy,
+          fakeFiles({}),
+          search,
+          () => [],
+          new NullLogger(),
+          'win32',
+          winAuthority,
+          fakeRemoteStatus(winEnv),
+        )
+        await fs.$findFiles('**/*.ts', null, null)
+        expect(roots[0]?.path).toBe('/C:/Users/x/repo')
+      })
+    })
+  })
 })
+
+/** Minimal search stub that only records whether the engine ever ran. */
+function fakeSearchRecorder(): IFileSearchService & { ran: () => boolean } {
+  let ran = false
+  return {
+    _serviceBrand: undefined,
+    search: () => {
+      ran = true
+      return Promise.resolve({
+        results: [],
+        limitHit: false,
+        filesWalked: 0,
+        directoriesWalked: 0,
+        durationMs: 0,
+      } satisfies IFileSearchComplete)
+    },
+    ran: () => ran,
+  }
+}

@@ -26,7 +26,7 @@ import {
   Severity,
   StatusBarAlignment,
   toDisposable,
-  URI,
+  fsPathToWorkspaceUri,
   type IConfirmOptions,
   type IDisposable,
   type IProgress,
@@ -78,6 +78,12 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     private readonly _progressService: IProgressService,
     private readonly _fileDialogs: IFileDialogService,
     private readonly _extHostWindow: IExtHostWindow,
+    /**
+     * Remote authority this host is pinned to; undefined for a local workspace.
+     * Dialog default locations arrive as bare path strings on the host's own
+     * filesystem, so they need the authority re-attached (see `$showOpenDialog`).
+     */
+    private readonly _authority: string | undefined,
   ) {
     super()
     this._focused = this._computeFocused()
@@ -257,10 +263,14 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
             })),
           }
         : {}),
-      ...(options.defaultUri !== undefined ? { defaultUri: URI.file(options.defaultUri) } : {}),
+      ...(options.defaultUri !== undefined
+        ? { defaultUri: fsPathToWorkspaceUri(options.defaultUri, this._authority) }
+        : {}),
       ...(options.openLabel !== undefined ? { openLabel: options.openLabel } : {}),
     })
-    // 本机路径：文件对话框返回本地 file: URI，扩展 API 的路径字符串即其 fsPath。
+    // Host-side paths: the dialog returns resources in the workspace's own URI
+    // space (file: locally, remote-ssh: remotely) and `.fsPath` yields the path
+    // as that host names it — which is what the extension API hands back.
     return picked?.map((uri) => uri.fsPath)
   }
 
@@ -269,7 +279,9 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       title: options.title ?? '',
       canSelectFiles: true,
       canSelectFolders: false,
-      ...(options.defaultUri !== undefined ? { defaultUri: URI.file(options.defaultUri) } : {}),
+      ...(options.defaultUri !== undefined
+        ? { defaultUri: fsPathToWorkspaceUri(options.defaultUri, this._authority) }
+        : {}),
       ...(options.saveLabel !== undefined ? { openLabel: options.saveLabel } : {}),
       ...(options.filters !== undefined
         ? {
@@ -280,7 +292,8 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
           }
         : {}),
     })
-    // 本机路径：保存对话框返回本地 file: URI。
+    // Host-side path: the save dialog returns a resource in the workspace's own
+    // URI space; `.fsPath` names it as the host does.
     return picked?.fsPath
   }
 

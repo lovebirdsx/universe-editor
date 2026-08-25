@@ -14,7 +14,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  REMOTE_SCHEME,
   URI,
+  fsPathToWorkspaceUri,
+  normalizePlatform,
   relativePathUnder,
   type CancellationToken,
   type HostPlatform,
@@ -32,22 +35,46 @@ import {
   type IMainThreadFs,
   type IRelativePatternDto,
 } from '@universe-editor/extensions-common'
-import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import type { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
+import type { AcpPathPolicyEnv, IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 
 /** Upper bound for the `rg --files` enumeration behind `workspace.findFiles`;
  *  the include-glob filter and the caller's `maxResults` apply on top. */
 const FIND_FILES_ENUMERATION_CAP = 100_000
 
+/** Path-policy facts for a remote host we couldn't interrogate. Supported remote
+ *  targets are POSIX, and a `/` home makes the sensitive-prefix probes fall away
+ *  rather than deny real paths (SimpleFileDialog degrades the same way). */
+const FALLBACK_REMOTE_ENV: AcpPathPolicyEnv = { platform: 'linux', home: '/' }
+
 export class MainThreadFs implements IMainThreadFs {
-  // workspace.fs 是本地文件系统桥：`_cwd` 为工作区根路径字符串，所有 `.fsPath`
-  // 都作用于 file: URI（含 `IFileSearchMatch.fsPath` 这一本机路径 DTO 字段），
-  // 不随远端工作区变化。
+  // `workspace.fs` spans two URI spaces: a local workspace resolves paths to
+  // `file:`, a remote one to `remote-ssh://<authority>`. The wire carries *bare
+  // path strings*, which the host↔renderer codec never transforms (it only
+  // translates $mid-stamped UriComponents) — so a remote host's paths arrive as
+  // that host's own native paths and must be re-attached to `_authority` here.
+  // Resolving them with `URI.file` would send every read to the client's disk.
   /** Lazily resolved, symlink-followed form of `_cwd` (see `_getCanonicalCwd`). */
   private _canonicalCwd: Promise<string | undefined> | undefined
+  /** Memoized remote path-policy env; see `_getRemoteEnv`. */
+  private _remoteEnv: Promise<AcpPathPolicyEnv | undefined> | undefined
+  /** Whether the last env lookup degraded — keeps the retry loop's warn to one. */
+  private _remoteEnvDegraded = false
+  /**
+   * The containment base handed to the policy, in the host's *native* path form.
+   * On a Windows remote `_cwd` is the URI's leading-slash drive form (`/C:/x`)
+   * while the host reports native `C:\x` — and `relativePathUnder` compares drive
+   * letters with an anchored regex that never matches `/C:`, so the two forms
+   * would deny every gated read. `.fsPath` folds both to `C:/x`; identity for
+   * local workspaces and POSIX remotes.
+   */
+  private readonly _policyCwd: string | undefined
 
   constructor(
     /** Workspace root used as the policy's containment boundary. */
     private readonly _cwd: string | undefined,
+    /** Remote authority this host is pinned to; undefined for a local workspace. */
+    private readonly _authority: string | undefined,
     private readonly _policy: IAcpPathPolicy,
     private readonly _files: IFileService,
     private readonly _fileSearch: IFileSearchService,
@@ -55,17 +82,81 @@ export class MainThreadFs implements IMainThreadFs {
     private readonly _defaultExcludes: () => readonly string[],
     private readonly _logger: ILogger,
     private readonly _platform: HostPlatform,
-  ) {}
+    private readonly _remoteStatus: IRemoteStatusService,
+  ) {
+    this._policyCwd =
+      _cwd !== undefined && _authority !== undefined
+        ? fsPathToWorkspaceUri(_cwd, _authority).fsPath
+        : _cwd
+  }
+
+  /**
+   * The containment base, or a thrown error when no folder is open. Every gated
+   * entry point needs both the base and that check, so they share one accessor.
+   */
+  private _requirePolicyCwd(operation: string): string {
+    if (this._policyCwd === undefined) {
+      throw new Error(`${operation} requires an open workspace folder`)
+    }
+    return this._policyCwd
+  }
+
+  /** The workspace root as a resource: `file:` locally, `remote-ssh:` remotely. */
+  private _rootUri(): URI {
+    return fsPathToWorkspaceUri(this._requirePolicyCwd('workspace.fs'), this._authority)
+  }
+
+  /**
+   * The remote host's path-policy environment (platform + home), so the
+   * sensitive-prefix and case-sensitivity checks apply to the *remote*
+   * filesystem. Without it a remote `~/.ssh/id_rsa` sails past a probe built
+   * from the client's home. Undefined for a local workspace — the policy then
+   * uses its own local env.
+   *
+   * Only a *successful* lookup is memoized. An authority mid-reconnect reports
+   * no environment, and the host survives transparent reconnects — caching that
+   * answer would leave the remote sensitive-prefix probes blind for the rest of
+   * the connection's life.
+   */
+  private _getRemoteEnv(): Promise<AcpPathPolicyEnv | undefined> {
+    if (this._authority === undefined) return Promise.resolve(undefined)
+    if (!this._remoteEnv) {
+      const pending: Promise<AcpPathPolicyEnv> = this._remoteStatus
+        .getEnvironment(this._authority)
+        .then((env) =>
+          env ? { platform: normalizePlatform(env.os), home: env.homeDir } : undefined,
+        )
+        .catch(() => undefined)
+        .then((env) => {
+          if (env) {
+            this._remoteEnvDegraded = false
+            return env
+          }
+          if (this._remoteEnv === pending) this._remoteEnv = undefined
+          if (!this._remoteEnvDegraded) {
+            this._remoteEnvDegraded = true
+            this._logger.warn(
+              `workspace.fs: remote environment for ${this._authority} unavailable, ` +
+                `path policy degrading to POSIX facts (will retry)`,
+            )
+          }
+          return FALLBACK_REMOTE_ENV
+        })
+      this._remoteEnv = pending
+    }
+    return this._remoteEnv
+  }
 
   private async _guard(path: string): Promise<URI> {
-    if (this._cwd === undefined) {
-      throw new Error('workspace.fs requires an open workspace folder')
-    }
-    const decision = this._policy.check(this._cwd, path)
+    const decision = this._policy.check(
+      this._requirePolicyCwd('workspace.fs'),
+      path,
+      await this._getRemoteEnv(),
+    )
     if (!decision.ok) {
       throw new Error(`workspace.fs denied: ${decision.reason}`)
     }
-    const uri = URI.file(decision.normalized)
+    const uri = fsPathToWorkspaceUri(decision.normalized, this._authority)
     await this._guardRealpath(uri)
     return uri
   }
@@ -93,7 +184,11 @@ export class MainThreadFs implements IMainThreadFs {
     // real target to a non-canonical cwd would spuriously read as "escapes
     // workspace root" and deny every gated read of an unopened file.
     const canonicalCwd = await this._getCanonicalCwd()
-    const decision = this._policy.check(canonicalCwd ?? (this._cwd as string), real.fsPath)
+    const decision = this._policy.check(
+      canonicalCwd ?? this._requirePolicyCwd('workspace.fs'),
+      real.fsPath,
+      await this._getRemoteEnv(),
+    )
     if (!decision.ok) {
       throw new Error(`workspace.fs denied (real path): ${decision.reason}`)
     }
@@ -108,11 +203,11 @@ export class MainThreadFs implements IMainThreadFs {
   private _getCanonicalCwd(): Promise<string | undefined> {
     if (this._canonicalCwd) return this._canonicalCwd
     this._canonicalCwd = (async () => {
-      if (this._cwd === undefined || !this._files.realpath) return this._cwd
+      if (this._cwd === undefined || !this._files.realpath) return this._policyCwd
       try {
-        return (await this._files.realpath(URI.file(this._cwd))).fsPath
+        return (await this._files.realpath(this._rootUri())).fsPath
       } catch {
-        return this._cwd
+        return this._policyCwd
       }
     })()
     return this._canonicalCwd
@@ -176,10 +271,14 @@ export class MainThreadFs implements IMainThreadFs {
     if (this._cwd === undefined) {
       throw new Error('workspace.findFiles requires an open workspace folder')
     }
+    // Containment comparisons below must use the *host's* case-sensitivity, not
+    // the client's: a POSIX remote browsed from Windows would otherwise fold
+    // `/home/Xiao/evil` into `/home/xiao/repo` and let it through.
+    const platform = (await this._getRemoteEnv())?.platform ?? this._platform
     let includeBase: URI | undefined
     if (typeof include !== 'string') {
       try {
-        includeBase = await this._resolveRelativePatternBase(include.base)
+        includeBase = await this._resolveRelativePatternBase(include.base, platform)
       } catch (err) {
         // VSCode resolves an unusable RelativePattern to an empty result list
         // rather than surfacing an RPC error to the extension; the policy guard
@@ -192,11 +291,13 @@ export class MainThreadFs implements IMainThreadFs {
       exclude === null
         ? [...this._defaultExcludes()]
         : exclude.flatMap((entry) =>
-            typeof entry === 'string' ? [entry] : this._foldExcludeForEngine(entry, includeBase),
+            typeof entry === 'string'
+              ? [entry]
+              : this._foldExcludeForEngine(entry, includeBase, platform),
           )
     const complete = await this._fileSearch.search(
       {
-        root: includeBase ?? URI.file(this._cwd),
+        root: includeBase ?? this._rootUri(),
         pattern: '',
         matchAll: true,
         excludes: engineExcludes,
@@ -227,22 +328,33 @@ export class MainThreadFs implements IMainThreadFs {
    * symlink-followed real path is then re-checked for containment and becomes
    * the search root — so a base whose real target escapes the workspace is
    * rejected rather than silently walked.
+   *
+   * A remote host sends `file:` bases, but the codec translates them to
+   * `remote-ssh:` before they reach us — so both schemes are legitimate here,
+   * and `_guard` re-attaches the current authority either way.
    */
-  private async _resolveRelativePatternBase(baseDto: IRelativePatternDto['base']): Promise<URI> {
+  private async _resolveRelativePatternBase(
+    baseDto: IRelativePatternDto['base'],
+    platform: HostPlatform,
+  ): Promise<URI> {
     const uri = URI.revive(baseDto)
     if (!uri) {
       throw new Error('workspace.findFiles: RelativePattern base is not a valid URI')
     }
-    if (uri.scheme !== 'file') {
+    if (uri.scheme !== 'file' && uri.scheme !== REMOTE_SCHEME) {
       throw new Error(
-        `workspace.findFiles: RelativePattern base must be a file: URI (got ${uri.scheme})`,
+        `workspace.findFiles: RelativePattern base must be a file: or ${REMOTE_SCHEME}: URI (got ${uri.scheme})`,
       )
     }
-    await this._guard(uri.fsPath)
-    const root = this._files.realpath ? await this._files.realpath(uri) : uri
+    const guarded = await this._guard(uri.fsPath)
+    const root = this._files.realpath ? await this._files.realpath(guarded) : guarded
     const canonicalCwd = await this._getCanonicalCwd()
     if (
-      relativePathUnder(canonicalCwd ?? (this._cwd as string), root.fsPath, this._platform) === null
+      relativePathUnder(
+        canonicalCwd ?? this._requirePolicyCwd('workspace.findFiles'),
+        root.fsPath,
+        platform,
+      ) === null
     ) {
       throw new Error('workspace.findFiles: RelativePattern base escapes the workspace folder')
     }
@@ -258,11 +370,12 @@ export class MainThreadFs implements IMainThreadFs {
   private _foldExcludeForEngine(
     entry: IRelativePatternDto,
     includeBase: URI | undefined,
+    platform: HostPlatform,
   ): string[] {
     const baseUri = URI.revive(entry.base)
     if (!baseUri) return []
-    const root = (includeBase ?? URI.file(this._cwd as string)).fsPath
-    const prefix = relativePathUnder(root, baseUri.fsPath, this._platform)
+    const root = (includeBase ?? this._rootUri()).fsPath
+    const prefix = relativePathUnder(root, baseUri.fsPath, platform)
     if (prefix === null) return []
     const pattern = normalizeExtensionGlobPattern(entry.pattern)
     if (pattern === '') return []

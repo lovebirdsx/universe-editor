@@ -21,6 +21,7 @@ import {
   type IStatusBarEntry,
   type IStatusBarEntryAccessor,
   URI,
+  REMOTE_SCHEME,
 } from '@universe-editor/platform'
 import type { IExtHostWindow } from '@universe-editor/extensions-common'
 import { E2E_PROBE_ENABLED_KEY } from '../../../../shared/e2e/contract.js'
@@ -97,6 +98,7 @@ function makeWindow(
     progress: IProgressService
     fileDialogs: IFileDialogService
     extHostWindow: IExtHostWindow
+    authority: string
   }> = {},
 ): MainThreadWindow {
   return new MainThreadWindow(
@@ -108,6 +110,7 @@ function makeWindow(
     overrides.progress ?? ({} as IProgressService),
     overrides.fileDialogs ?? ({} as IFileDialogService),
     overrides.extHostWindow ?? noopExtHostWindow,
+    overrides.authority,
   )
 }
 
@@ -418,6 +421,37 @@ describe('MainThreadWindow file dialogs', () => {
           { name: 'Images', extensions: ['png', 'jpg'] },
           { name: 'All Files', extensions: ['*'] },
         ],
+      }),
+    )
+  })
+
+  // The host sends `defaultUri` as a bare path on its own filesystem. Under a
+  // remote workspace that is the remote host's path, so resolving it with
+  // `URI.file` would point the dialog at the client's disk (and force the native
+  // dialog, which can't browse a remote host at all).
+  it('re-attaches the remote authority to the dialog default location', async () => {
+    const authority = 'ssh+devbox'
+    const picked = URI.from({
+      scheme: REMOTE_SCHEME,
+      authority,
+      path: '/home/user/repo/a.ts',
+    })
+    const dialogs = fakeFileDialogs([picked], picked)
+    const mt = makeWindow({ fileDialogs: dialogs.service, authority })
+
+    await expect(
+      mt.$showOpenDialog({ title: 'Open', defaultUri: '/home/user/repo', canSelectFiles: true }),
+    ).resolves.toEqual(['/home/user/repo/a.ts'])
+    expect(dialogs.showOpenDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultUri: expect.objectContaining({ scheme: REMOTE_SCHEME, authority }),
+      }),
+    )
+
+    await mt.$showSaveDialog({ defaultUri: '/home/user/repo/out.txt' })
+    expect(dialogs.showSaveDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultUri: expect.objectContaining({ scheme: REMOTE_SCHEME, authority }),
       }),
     )
   })

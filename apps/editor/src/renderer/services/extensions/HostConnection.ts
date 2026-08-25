@@ -64,6 +64,7 @@ import type {
   ExtHostKind,
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
+import type { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../exclude/ExcludeService.js'
 import type { IOutOfWorkspaceWatchService } from '../files/outOfWorkspaceWatchService.js'
@@ -101,6 +102,12 @@ export interface HostConnectionDeps {
   /** Aggregated non-recursive watches for single-file watcher targets outside the workspace. */
   readonly outOfWorkspaceWatch: IOutOfWorkspaceWatchService
   readonly pathPolicy: IAcpPathPolicy
+  /**
+   * Resolves a remote host's OS/home so the path policy guards the *remote*
+   * filesystem's sensitive prefixes and case-sensitivity rather than the
+   * client's (remote workspaces only).
+   */
+  readonly remoteStatus: IRemoteStatusService
   readonly commandService: ICommandService
   /** Backs `env.openExternal` (external URLs → OS browser, files → editor). */
   readonly opener: IOpenerService
@@ -152,8 +159,19 @@ export class HostConnection extends Disposable {
   constructor(
     readonly kind: ExtHostKind,
     readonly handle: string,
-    /** Workspace folder this host was pinned to at spawn (fsPath), if any. */
+    /**
+     * Workspace folder this host was pinned to at spawn, in the host's own path
+     * space: `fsPath` locally, the `remote-ssh` URI path remotely (which on a
+     * Windows remote is the leading-slash drive form `/C:/…`).
+     */
     readonly workspaceRoot: string | undefined,
+    /**
+     * Remote authority this host was pinned to at spawn; undefined for a local
+     * workspace. Pinned per connection alongside `workspaceRoot` — a workspace
+     * swap tears this connection down and builds a fresh one, so the two can
+     * never drift apart.
+     */
+    readonly authority: string | undefined,
     deps: HostConnectionDeps,
   ) {
     super()
@@ -225,6 +243,7 @@ export class HostConnection extends Disposable {
         deps.progress,
         deps.fileDialogs,
         extHostWindow,
+        authority,
       ),
     )
     this._mainThreadWindow = mainThreadWindow
@@ -295,12 +314,14 @@ export class HostConnection extends Disposable {
 
     const mainThreadFs = new MainThreadFs(
       workspaceRoot,
+      authority,
       deps.pathPolicy,
       deps.files,
       deps.fileSearch,
       () => deps.exclude.getSearchExcludeGlobs(),
       deps.logger,
       deps.platform,
+      deps.remoteStatus,
     )
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
 

@@ -50,6 +50,7 @@ import {
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
 import type { IExtensionManagementService } from '../../../../shared/ipc/extensionManagementService.js'
+import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IExcludeService } from '../../exclude/ExcludeService.js'
@@ -86,6 +87,8 @@ let onUnhandledRejectionCb: ((report: unknown) => void) | undefined
 let onUnexpectedErrorCb: ((error: unknown) => void) | undefined
 /** Handle whose first `$activateByEvent` stays pending until released (or disposed). */
 let holdActivationFor: string | undefined
+/** Every FakeHostConnection built, in construction order. */
+const connections: Array<{ workspaceRoot: string | undefined; authority: string | undefined }> = []
 const activatedOnce = new Set<string>()
 const pendingActivations = new Map<string, { resolve: () => void; reject: (e: Error) => void }>()
 
@@ -100,6 +103,7 @@ vi.mock('../HostConnection.js', () => {
     readonly kind: string
     readonly handle: string
     readonly workspaceRoot: string | undefined
+    readonly authority: string | undefined
     dead = false
     commands = {
       $executeContributedCommand: vi.fn().mockImplementation(() => Promise.resolve(this.handle)),
@@ -131,6 +135,7 @@ vi.mock('../HostConnection.js', () => {
       kind: string,
       handle: string,
       workspaceRoot?: string,
+      authority?: string,
       deps?: {
         onUnhandledRejection?: (report: unknown) => void
         onUnexpectedError?: (error: unknown) => void
@@ -139,6 +144,8 @@ vi.mock('../HostConnection.js', () => {
       this.kind = kind
       this.handle = handle
       this.workspaceRoot = workspaceRoot
+      this.authority = authority
+      connections.push({ workspaceRoot, authority })
       onUnhandledRejectionCb = deps?.onUnhandledRejection
       onUnexpectedErrorCb = deps?.onUnexpectedError
     }
@@ -182,7 +189,9 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
 
 /** Mutable workspace state a test flips before firing the change event. */
 interface WorkspaceState {
-  current: { folder: { fsPath: string; scheme?: string; authority?: string } } | undefined
+  current:
+    | { folder: { fsPath: string; path?: string; scheme?: string; authority?: string } }
+    | undefined
 }
 
 function makeServiceWith(
@@ -291,6 +300,9 @@ function makeServiceWith(
     {} as IExcludeService,
     {} as IFileWatcherService,
     {} as IOutOfWorkspaceWatchService,
+    {
+      getEnvironment: vi.fn().mockResolvedValue(null),
+    } as unknown as IRemoteStatusService,
   )
 }
 
@@ -361,6 +373,7 @@ describe('ExtensionHostClientService', () => {
     // a remote-disabled extension must be reachable from UNIVERSE_DISABLED_EXTENSIONS
     // — but a local-only id must stay out (the host never scans it).
     const host = fakeHost()
+    connections.length = 0
     const svc = makeServiceWith(
       host,
       vi.fn(),
@@ -368,7 +381,7 @@ describe('ExtensionHostClientService', () => {
       Event.None,
       {
         current: {
-          folder: { fsPath: '/remote', scheme: REMOTE_SCHEME, authority: 'host' },
+          folder: { fsPath: '/remote', path: '/remote', scheme: REMOTE_SCHEME, authority: 'host' },
         },
       },
       {
@@ -382,6 +395,66 @@ describe('ExtensionHostClientService', () => {
     await svc.start()
     const spec = vi.mocked(host.start).mock.calls[0]?.[0]
     expect(spec?.disabledIds).toEqual(['remote.disabled'])
+    expect(spec?.authority).toBe('host')
+    // The connection carries both pins: `workspace.fs` paths arrive as the remote
+    // host's own paths and are only routable once re-attached to this authority.
+    expect(spec?.workspaceRoot).toBe('/remote')
+    expect(connections.at(-1)).toEqual({ workspaceRoot: '/remote', authority: 'host' })
+
+    svc.dispose()
+  })
+
+  it('re-pins the host when the workspace swaps to a different remote at the same path', async () => {
+    // Two remotes can expose the same path; without comparing the authority the
+    // live host stays pinned to the old one and every workspace.fs read routes
+    // to the wrong machine.
+    const host = fakeHost()
+    connections.length = 0
+    const workspaceChange = new Emitter<void>()
+    const ws: WorkspaceState = {
+      current: {
+        folder: { fsPath: '/repo', path: '/repo', scheme: REMOTE_SCHEME, authority: 'box-a' },
+      },
+    }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
+
+    await svc.start()
+    expect(connections).toHaveLength(1)
+
+    ws.current = {
+      folder: { fsPath: '/repo', path: '/repo', scheme: REMOTE_SCHEME, authority: 'box-b' },
+    }
+    workspaceChange.fire()
+    await vi.waitFor(() => expect(connections).toHaveLength(2))
+    expect(connections.at(-1)).toEqual({ workspaceRoot: '/repo', authority: 'box-b' })
+
+    svc.dispose()
+  })
+
+  it('skips the re-pin restart when the same remote fires a redundant workspace event', async () => {
+    // Mirrors the boot-time event: comparing the URI-path pin against `fsPath`
+    // would never match on a Windows remote (`/C:/x` vs `C:/x`) and would kill +
+    // respawn the host (and tsserver) on every workspace event.
+    const host = fakeHost()
+    connections.length = 0
+    const workspaceChange = new Emitter<void>()
+    const ws: WorkspaceState = {
+      current: {
+        folder: {
+          fsPath: 'C:/Users/x/repo',
+          path: '/C:/Users/x/repo',
+          scheme: REMOTE_SCHEME,
+          authority: 'winbox',
+        },
+      },
+    }
+    const svc = makeServiceWith(host, vi.fn(), workspaceChange.event, Event.None, ws)
+
+    await svc.start()
+    workspaceChange.fire()
+    await Promise.resolve()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(connections).toHaveLength(1)
 
     svc.dispose()
   })

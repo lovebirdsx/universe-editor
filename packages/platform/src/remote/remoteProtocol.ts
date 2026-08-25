@@ -28,6 +28,12 @@
  *     path string (not a URI): the renderer injects it verbatim as an env var
  *     (CLAUDE_CODE_EXECUTABLE / CODEX_PATH) into a process spawned on that same
  *     remote host, so no URI transform is needed or applied.
+ *   - the extension-host RPC contracts `IMainThreadFs` (every `$`-method takes a
+ *     path) and `IMainThreadWindow.defaultUri` carry bare host-native path
+ *     strings. A remote workspace runs its host on the remote server, so those
+ *     are the *server's* paths; the renderer reattaches the workspace authority
+ *     via `fsPathToWorkspaceUri` before touching IFileService. Resolving them
+ *     with `URI.file` would read the client's own disk.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'

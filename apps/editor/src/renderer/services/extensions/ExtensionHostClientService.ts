@@ -51,6 +51,7 @@ import {
   type Event,
   type ILogger,
   type SerializedError,
+  type URI,
 } from '@universe-editor/platform'
 import {
   STARTUP_ACTIVATION,
@@ -67,6 +68,7 @@ import {
   type ExtHostStartSpec,
 } from '../../../shared/ipc/extensionHostService.js'
 import { IExtensionManagementService } from '../../../shared/ipc/extensionManagementService.js'
+import { IRemoteStatusService } from '../../../shared/ipc/remoteStatusService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
@@ -140,6 +142,22 @@ const EXTENSION_SESSION_ID = crypto.randomUUID()
 interface RestartState {
   windowStart: number
   count: number
+}
+
+/**
+ * What a host connection is pinned to. A remote workspace hosts the extension
+ * host on the remote server, so the root is the POSIX `remote-ssh` URI path (the
+ * daemon resolves it to the server's native form) and the authority decides
+ * which server every `workspace.fs` path resolves against. Both must be compared
+ * to decide whether a live host still matches the current workspace: two remotes
+ * can expose the same path (`/home/user/repo`), and mixing the URI-path form with
+ * `fsPath` would never match on a Windows remote (`/C:/x` vs `C:/x`).
+ */
+function hostPin(folder: URI | undefined): { root: string | undefined; authority?: string } {
+  if (folder === undefined) return { root: undefined }
+  return folder.scheme === REMOTE_SCHEME
+    ? { root: folder.path, authority: folder.authority }
+    : { root: folder.fsPath }
 }
 
 export class ExtensionHostClientService extends Disposable implements IExtensionHostClientService {
@@ -230,6 +248,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IFileWatcherService private readonly _fileWatcher: IFileWatcherService,
     @IOutOfWorkspaceWatchService
     private readonly _outOfWorkspaceWatch: IOutOfWorkspaceWatchService,
+    @IRemoteStatusService private readonly _remoteStatus: IRemoteStatusService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -319,9 +338,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // A remote workspace hosts the extension host on the remote server: pass the
     // POSIX `remote-ssh` path (the daemon resolves it to the server's native form)
     // plus the authority so the main facade routes the start through the tunnel.
-    const isRemote = folder !== undefined && folder.scheme === REMOTE_SCHEME
-    setWireUriRemoteAuthority(isRemote && folder ? folder.authority : undefined)
-    const workspaceRoot = isRemote && folder ? folder.path : folder?.fsPath
+    const { root: workspaceRoot, authority } = hostPin(folder)
+    setWireUriRemoteAuthority(authority)
     // Single local host: filter the scan by the effective disabled set (global +
     // workspace) across both built-in and external extensions.
     const disabledIds = await this._disabledIds()
@@ -331,7 +349,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     const spec: ExtHostStartSpec = {
       locale: getCurrentLocale(),
       ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
-      ...(isRemote && folder ? { authority: folder.authority } : {}),
+      ...(authority !== undefined ? { authority } : {}),
       ...(includeUser ? {} : { userExtensionsDir: '' }),
       ...(disabledIds.length > 0 ? { disabledIds } : {}),
     }
@@ -350,6 +368,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       fileWatcher: this._fileWatcher,
       outOfWorkspaceWatch: this._outOfWorkspaceWatch,
       pathPolicy: this._pathPolicy,
+      remoteStatus: this._remoteStatus,
       commandService: this._commandService,
       opener: this._opener,
       progress: this._progressService,
@@ -381,7 +400,9 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       onUnexpectedError: (error) => this._onUnexpectedErrorReported(error),
     }
 
-    const connection = this._register(new HostConnection('local', handle, workspaceRoot, deps))
+    const connection = this._register(
+      new HostConnection('local', handle, workspaceRoot, authority, deps),
+    )
     this._byHandle.set(handle, connection)
     this._conn = connection
     // Seed Workspace Trust before any activation so `workspace.isTrusted` is
@@ -715,7 +736,11 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     // workspace — e.g. the app was launched with the folder as a positional arg,
     // so the first host spawned with it and the boot-time workspace event is a
     // no-op. Restarting anyway would needlessly kill + respawn tsserver.
-    if (this._conn && this._conn.workspaceRoot !== this._workspace.current?.folder.fsPath) {
+    const pin = hostPin(this._workspace.current?.folder)
+    if (
+      this._conn &&
+      (this._conn.workspaceRoot !== pin.root || this._conn.authority !== pin.authority)
+    ) {
       await this._restart('workspace')
     }
   }

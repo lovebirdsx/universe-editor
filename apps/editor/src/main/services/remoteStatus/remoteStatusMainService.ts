@@ -12,6 +12,7 @@ import {
   Emitter,
   ILoggerService,
   createNamedLogger,
+  normalizeRemoteAuthority,
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
@@ -101,9 +102,13 @@ export class RemoteStatusMainService extends Disposable implements IRemoteStatus
   }
 
   async getEnvironment(authority: string): Promise<RemoteEnvironmentDto | null> {
-    if (this._states.get(authority)?.state !== 'connected') return null
+    // `_states` is keyed by the normalized authority (the connection manager
+    // normalizes before it fires), so normalize the lookup too — a caller passing
+    // an unnormalized form would otherwise read as "not connected".
+    const key = normalizeRemoteAuthority(authority)
+    if (this._states.get(key)?.state !== 'connected') return null
     try {
-      const connection = await this._remote.getConnection(authority)
+      const connection = await this._remote.getConnection(key)
       return toEnvironmentDto(connection.env)
     } catch {
       // Connection dropped between the state check and the read — treat as not connected.
