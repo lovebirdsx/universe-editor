@@ -330,6 +330,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (!model || model.isDisposed()) continue
       try {
         const text = await this._fileService.readFileText(uri)
+        // Re-check after the await: closing the preview releases the model
+        // inside this window, and editing a disposed model throws.
+        if (model.isDisposed()) continue
         applyMinimalTextEdit(model, text)
       } catch (err) {
         this._logger.warn(`preview reconcile failed ${key}`, err)
@@ -381,6 +384,11 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
             // Gone from disk — the deletion path closes it; nothing to refresh.
             continue
           }
+          // Re-check after the await: closing the tab releases the shared model
+          // inside this window, and both reads below would throw on a disposed
+          // one. A disposed model means no editor still holds this URI (the
+          // registry is refcounted), so there is nothing left to mirror into.
+          if (model?.isDisposed()) continue
           const content = splitLeadingBom(diskText)
           if (model && !inputs[0]!.isDirty && model.getValue() !== content.text) {
             applyMinimalTextEdit(model, content.text)

@@ -348,6 +348,8 @@ const MIN_CONTAINER_WIDTH = 360
 const ITEM_FONT = 13 // .item font-size
 const INPUT_FONT = 14 // .input font-size
 
+const EMPTY_SELECTED_ITEMS: readonly IQuickPickItem[] = []
+
 let sharedMeasureCanvas: HTMLCanvasElement | undefined
 function measureText(text: string, fontSize: number, fontFamily: string): number {
   if (typeof document === 'undefined') return 0
@@ -388,7 +390,12 @@ export function QuickPickPanel({
   const filterExternally = state.filterExternally === true
   const autoFocusFirstItem = state.autoFocusFirstItem !== false
   const canSelectMany = state.canSelectMany === true
-  const selectedItems = state.selectedItems ?? []
+  // Memoized so the no-selection case keeps one array identity: a fresh `[]`
+  // every render would invalidate `checkedIds` and `toggleChecked` below.
+  const selectedItems = useMemo(
+    () => state.selectedItems ?? EMPTY_SELECTED_ITEMS,
+    [state.selectedItems],
+  )
   const checkedIds = useMemo(() => new Set(selectedItems.map((i) => i.id)), [selectedItems])
   const onSelectionChange = state.onSelectionChange
   const toggleChecked = useCallback(

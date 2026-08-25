@@ -292,7 +292,10 @@ export class FileEditorInput extends EditorInput {
       this._backupContent = content.text
       this._savedAlternativeVersionId = undefined
       this._lastKnownMtime = stat.mtime
-      if (model) {
+      // `model` was peeked before the confirm dialog; the editor can be closed
+      // while it is up, which releases the buffer. Editing a disposed model
+      // throws, and with no live buffer left the input is simply clean.
+      if (model && !model.isDisposed()) {
         applyMinimalTextEdit(model, content.text)
         this.markModelClean(model)
       } else {

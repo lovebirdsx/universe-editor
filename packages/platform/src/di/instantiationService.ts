@@ -13,6 +13,7 @@ import {
   dispose,
   isDisposable,
   markAsSingleton,
+  setParentOfDisposable,
   toDisposable,
 } from '../base/lifecycle.js'
 import { LinkedList } from '../base/linkedList.js'
@@ -322,6 +323,10 @@ export class InstantiationService implements IInstantiationService {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       listener: Parameters<Event<any>>
       disposable: IDisposable | undefined
+      // The wrapper handed back to the subscriber. It is the disposable the
+      // caller's own store owns, so it is the right leak-tracking parent for
+      // the real subscription created later at materialization time.
+      wrapper: IDisposable | undefined
     }
     const earlyListeners = new Map<string, LinkedList<EarlyListenerData>>()
 
@@ -335,6 +340,14 @@ export class InstantiationService implements IInstantiationService {
         if (typeof candidate === 'function') {
           for (const value of values) {
             value.disposable = candidate.apply(result, value.listener)
+            // Without a parent this subscription's leak-tracking root is
+            // itself, so a subscriber that correctly owns the wrapper still
+            // gets reported as leaking. Parent it to the wrapper rather than to
+            // `result` — the latter is markAsSingleton'd, which would exempt
+            // every re-attached subscription from leak detection entirely.
+            if (value.disposable && value.wrapper) {
+              setParentOfDisposable(value.disposable, value.wrapper)
+            }
           }
         }
       }
@@ -370,14 +383,28 @@ export class InstantiationService implements IInstantiationService {
                 return (idle.value as any)[key](callback, thisArg, disposables)
               }
               const entry: EarlyListenerData = {
-                listener: [callback, thisArg, disposables],
+                listener: [callback, thisArg],
                 disposable: undefined,
+                wrapper: undefined,
               }
               const rm = list!.push(entry)
-              return toDisposable(() => {
+              const wrapper = toDisposable(() => {
                 rm()
                 entry.disposable?.dispose()
               })
+              entry.wrapper = wrapper
+              // Honour the third argument the same way Emitter.event does. The
+              // wrapper is the caller's single ownership handle (the real
+              // subscription hangs off it), so registering it here means
+              // disposing the store before materialization also cancels the
+              // pending re-attachment instead of subscribing into a store that
+              // is already gone.
+              if (disposables instanceof DisposableStore) {
+                disposables.add(wrapper)
+              } else if (Array.isArray(disposables)) {
+                disposables.push(wrapper)
+              }
+              return wrapper
             }
             return event
           }

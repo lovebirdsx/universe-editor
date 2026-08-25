@@ -698,11 +698,28 @@ jobs:
     timeout-minutes: 60
     env:
       ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      # The runner has 4 cores but turbo defaults to 10 concurrent tasks, so the
+      # build fans out ~10 tsgo.exe at once. Observed failure: three tsgo spawned
+      # within 2s and one died at -1073741502 (0xC0000142 STATUS_DLL_INIT_FAILED)
+      # before it even echoed its command — the process never started work. This
+      # is turbo's own scheduling knob, NOT a task-consumed variable, so it must
+      # stay out of turbo.json's task `env` arrays (that would change cache keys).
+      # Scope: this covers the turbo phase only (runtime:stage → ext:build, where
+      # the observed failure was). The `pnpm --filter "...editor..." build` phase
+      # of package:win schedules itself, and is covered by the retry below.
+      TURBO_CONCURRENCY: 2
 
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+
+      # Same Defender contention as the e2e job, different victim: real-time scan
+      # of freshly written build output locks DLLs while the next native compiler
+      # process is initializing.
+      - name: Exclude workspace from Defender (native build DLL init failures)
+        shell: powershell
+        run: Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
 
       - uses: pnpm/action-setup@v4.4.0
 
@@ -735,7 +752,18 @@ jobs:
           path: vendor/codex-acp/node_modules
           key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
 
+      # Split into attempt + retry so a transient 0xC0000142 (a native compiler
+      # dying during DLL init, before doing any work) does not red the whole run.
+      # A genuine compile error simply fails both attempts and still fails the
+      # job — nothing is swallowed. `continue-on-error` only covers attempt 1, and
+      # the `outcome == 'failure'` condition means a cancelled job skips attempt 2.
       - name: Build Windows release artifacts
+        id: package-win
+        continue-on-error: true
+        run: pnpm --filter @universe-editor/editor package:win
+
+      - name: Build Windows release artifacts (retry)
+        if: steps.package-win.outcome == 'failure'
         run: pnpm --filter @universe-editor/editor package:win
 
       - name: Upload Windows release artifacts

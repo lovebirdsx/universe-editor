@@ -6,6 +6,14 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Emitter, Event } from '../../base/event.js'
+import {
+  DisposableStore,
+  DisposableTracker,
+  dispose,
+  markAsSingleton,
+  setDisposableTracker,
+  type IDisposable,
+} from '../../base/lifecycle.js'
 import { SyncDescriptor } from '../../di/descriptors.js'
 import { createDecorator, IInstantiationService } from '../../di/instantiation.js'
 import { InstantiationService } from '../../di/instantiationService.js'
@@ -176,5 +184,81 @@ describe('InstantiationService: lazy services', () => {
     expect(ctorCalls).toBe(0)
     expect(c.value).toBe(42)
     expect(ctorCalls).toBe(1)
+  })
+})
+
+describe('InstantiationService: lazy services and leak tracking', () => {
+  function withTracker(fn: (tracker: DisposableTracker) => void): void {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      fn(tracker)
+    } finally {
+      setDisposableTracker(null)
+    }
+  }
+
+  it('re-attached early listener roots through the subscriber-owned wrapper', () => {
+    withTracker((tracker) => {
+      const inst = makeService(true)
+      const counter = inst.invokeFunction((a) => a.get(ICounter))
+      // Stands in for a long-lived owner (a contribution's `this._store`).
+      const store = markAsSingleton(new DisposableStore())
+      store.add(counter.onDidChange(() => {}))
+      expect(ctorCalls).toBe(0)
+
+      // Materialize: the early listener is re-attached to the real emitter.
+      counter.inc()
+      expect(ctorCalls).toBe(1)
+      // The real subscription must root through the wrapper the store owns,
+      // otherwise it reports as a leak even though nothing leaked.
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+
+      store.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    })
+  })
+
+  it('a DisposableStore passed as the third argument owns the early subscription', () => {
+    withTracker((tracker) => {
+      const inst = makeService(true)
+      const counter = inst.invokeFunction((a) => a.get(ICounter))
+      const store = markAsSingleton(new DisposableStore())
+      counter.onDidChange(() => {}, undefined, store)
+
+      counter.inc()
+      expect(ctorCalls).toBe(1)
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+
+      store.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    })
+  })
+
+  it('disposing the store before materialization stops the listener firing', () => {
+    const inst = makeService(true)
+    const counter = inst.invokeFunction((a) => a.get(ICounter))
+    const received: number[] = []
+    const store = new DisposableStore()
+    counter.onDidChange((v) => received.push(v), undefined, store)
+    store.dispose()
+
+    counter.inc()
+    expect(received).toEqual([])
+  })
+
+  it('an array passed as the third argument collects the early subscription', () => {
+    const inst = makeService(true)
+    const counter = inst.invokeFunction((a) => a.get(ICounter))
+    const received: number[] = []
+    const bucket: IDisposable[] = []
+    counter.onDidChange((v) => received.push(v), undefined, bucket)
+    expect(bucket).toHaveLength(1)
+
+    counter.inc()
+    expect(received).toEqual([1])
+    dispose(bucket)
+    counter.inc()
+    expect(received).toEqual([1])
   })
 })

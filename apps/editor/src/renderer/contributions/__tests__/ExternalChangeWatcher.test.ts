@@ -789,6 +789,118 @@ describe('ExternalChangeWatcher', () => {
     expect(source.checks).toHaveLength(1)
   })
 
+  // Regression (flaky e2e pageerror "Model is disposed!"): the fs event handler
+  // is fire-and-forget, so `await readFileText` opens a window in which the user
+  // can close the tab and release the shared buffer. The model reference peeked
+  // before the await must be re-checked after it — touching a disposed model
+  // throws, and in the renderer that surfaces as an uncaught error.
+  it('does not touch a diff model disposed during the disk read', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const diff = new DiffEditorInput(
+      uri,
+      'head',
+      'old-working',
+      undefined,
+      undefined,
+      true,
+      fileServiceStub,
+    )
+    const groups = makeGroups([diff])
+    let disposed = false
+    let touchesAfterDispose = 0
+    const model = {
+      getValue: () => {
+        // Mirrors monaco: reading a disposed model throws BugIndicatingError.
+        if (disposed) {
+          touchesAfterDispose++
+          throw new Error('Model is disposed!')
+        }
+        return 'old-working'
+      },
+      setValue: () => {
+        if (disposed) touchesAfterDispose++
+      },
+      isDisposed: () => disposed,
+    }
+    liveModels.set(uri.toString(), model)
+    markCleanCalls.length = 0
+    const watcher = new FakeWatcher()
+    const fileService = {
+      _serviceBrand: undefined,
+      async stat(resource: URI) {
+        return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+      },
+      async readFileText() {
+        // The tab closes while the read is in flight.
+        disposed = true
+        return 'head'
+      },
+    } as unknown as IFileServiceType
+    new ExternalChangeWatcher(
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
+      groups,
+      makeDialog(),
+      fileService,
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: uri }])
+    await flush()
+    expect(touchesAfterDispose).toBe(0)
+    expect(markCleanCalls).not.toContain(model)
+    liveModels.delete(uri.toString())
+  })
+
+  it('does not touch a preview model disposed during the disk read', async () => {
+    const sourceUri = URI.file('/ws/note.md')
+    let disposed = false
+    let touchesAfterDispose = 0
+    liveModels.set(sourceUri.toString(), {
+      getValue: () => {
+        if (disposed) {
+          touchesAfterDispose++
+          throw new Error('Model is disposed!')
+        }
+        return '# old'
+      },
+      setValue: () => {
+        if (disposed) touchesAfterDispose++
+      },
+      isDisposed: () => disposed,
+    })
+    const preview = new MarkdownPreviewInput(sourceUri)
+    const groups = makeGroups([preview])
+    const watcher = new FakeWatcher()
+    const fileService = {
+      _serviceBrand: undefined,
+      async stat(resource: URI) {
+        return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+      },
+      async readFileText() {
+        disposed = true
+        return '# new'
+      },
+    } as unknown as IFileServiceType
+    new ExternalChangeWatcher(
+      watcher,
+      makeOutOfWorkspaceWatch(watcher),
+      groups,
+      makeDialog(),
+      fileService,
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: sourceUri }])
+    await flush()
+    expect(touchesAfterDispose).toBe(0)
+    liveModels.delete(sourceUri.toString())
+  })
+
   // The preview's source must join the out-of-workspace watch set, or an
   // out-of-workspace pure preview never receives change events at all.
   it('watches a pure preview source out of workspace', async () => {
