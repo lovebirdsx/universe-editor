@@ -11,12 +11,18 @@
 import {
   AiMessageRole,
   CancellationTokenSource,
+  ICommandService,
   IAiModelService,
   ILoggerService,
+  INotificationService,
+  IStorageService,
   InstantiationType,
+  Severity,
+  StorageScope,
   createDecorator,
   createNamedLogger,
   getTextResponse,
+  localize,
   registerSingleton,
   type CancellationToken,
   type ILogger,
@@ -51,6 +57,7 @@ export const IAcpSessionTitleService =
 
 const MAX_INPUT_CHARS = 2000
 const MAX_TITLE_CHARS = 60
+const NO_MODEL_HINT_KEY = 'acp.sessionTitle.noModelHintShown'
 
 const SYSTEM_PROMPT = [
   'You generate a concise title for a coding-assistant conversation.',
@@ -70,6 +77,9 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
   constructor(
     @IAiModelService private readonly _aiModel: IAiModelService,
     @ILoggerService loggerService: ILoggerService,
+    @INotificationService private readonly _notification: INotificationService,
+    @IStorageService private readonly _storage: IStorageService,
+    @ICommandService private readonly _commands: ICommandService,
   ) {
     this._logger = createNamedLogger(loggerService, {
       id: 'acp.sessionTitle',
@@ -127,6 +137,7 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
     const chosen = await this._aiModel.getSessionTitleModelId()
     if (!chosen) {
       this._logger.debug('no session-title model configured; skipping title generation')
+      await this._maybeShowNoModelHint()
       return undefined
     }
     const models = await this._aiModel.getModels()
@@ -137,6 +148,35 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
       return undefined
     }
     return chosen
+  }
+
+  /**
+   * One-time nudge to pick a session-title model. The flag is written before
+   * notifying so re-armed concurrent calls cannot double-toast.
+   */
+  private async _maybeShowNoModelHint(): Promise<void> {
+    try {
+      const shown = await this._storage.get<boolean>(NO_MODEL_HINT_KEY, StorageScope.GLOBAL)
+      if (shown) return
+      await this._storage.set(NO_MODEL_HINT_KEY, true, StorageScope.GLOBAL)
+      this._notification.notify({
+        severity: Severity.Info,
+        message: localize(
+          'acp.sessionTitle.noModelHint',
+          'No session title model configured — AI sessions will use their first message as the title. Pick a model to generate more fitting titles automatically.',
+        ),
+        actions: [
+          {
+            label: localize('acp.sessionTitle.selectModel', 'Select Model'),
+            run: () => {
+              void this._commands.executeCommand('ai.sessionTitle.pickModel')
+            },
+          },
+        ],
+      })
+    } catch (err) {
+      this._logger.debug(`no-model hint failed: ${(err as Error).message}`)
+    }
   }
 }
 

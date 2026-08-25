@@ -3740,6 +3740,217 @@ describe('AcpSessionService — AI session title push-back', () => {
   })
 })
 
+describe('AcpSessionService — first-prompt-derived title protection', () => {
+  function makeServiceWithTitle(
+    client: FakeAcpClientService,
+    title: IAcpSessionTitleService,
+  ): { svc: AcpSessionService; history: AcpSessionHistoryService } {
+    const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService() as ITelemetryService
+    const agentDefaults = makeAgentDefaults()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        title,
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+    )
+    return { svc, history }
+  }
+
+  function reportTitle(client: FakeAcpClientService, sid: string, title: string): void {
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: sid,
+      update: {
+        sessionUpdate: 'session_info_update',
+        title,
+        updatedAt: new Date().toISOString(),
+      },
+    })
+  }
+
+  it('keeps the derived title when the agent reports each new prompt as the summary', async () => {
+    const client = new FakeAcpClientService()
+    // No session-title model configured → generateTitle always yields undefined.
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('first message about login')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).toBe('first message about login')
+      expect(history.get(sid)?.derivedTitle).toBe(true)
+
+      // Turn 1 ends: the SDK summary falls back to lastPrompt.
+      reportTitle(client, sid, 'first message about login')
+      expect(history.get(sid)?.title).toBe('first message about login')
+
+      await session.sendPrompt('second completely different message')
+      await new Promise((r) => setTimeout(r, 0))
+      // Turn 2 ends: lastPrompt is now the second prompt. The title must not follow it.
+      reportTitle(client, sid, 'second completely different message')
+      expect(history.get(sid)?.title).toBe('first message about login')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('drops a truncated prompt echo but still applies updatedAt', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      const long = `refactor ${'the scroll compensation logic '.repeat(20)}`
+      await session.sendPrompt(long)
+      await new Promise((r) => setTimeout(r, 0))
+      const derived = history.get(sid)?.title
+      const before = history.get(sid)!.lastUsedAt
+
+      const stamp = new Date(before + 60_000).toISOString()
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: {
+          sessionUpdate: 'session_info_update',
+          title: `${long.replace(/\s+/g, ' ').trim().slice(0, 255)}…`,
+          updatedAt: stamp,
+        },
+      })
+      expect(history.get(sid)?.title).toBe(derived)
+      expect(history.get(sid)?.lastUsedAt).toBe(Date.parse(stamp))
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('still applies a genuine agent title that is not a prompt echo', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      // No prompt sent yet → no derived title, no protection flag. The SDK's own
+      // background aiTitle must still land.
+      reportTitle(client, sid, 'Refactor auth module')
+      expect(history.get(sid)?.title).toBe('Refactor auth module')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('flags the derived title without pushing it to the agent', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('just a first prompt')
+      await new Promise((r) => setTimeout(r, 0))
+
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.derivedTitle).toBe(true)
+      expect(client.connected[0]!.agent.extMethodCalls).toHaveLength(0)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('applies the buffered derived title and flag once the connection attaches', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      // Prompt before the handshake completes — title/flag are buffered.
+      const sent = session.sendPrompt('queued first prompt')
+      await session.whenConnected()
+      await sent
+      await new Promise((r) => setTimeout(r, 0))
+
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.title).toBe('queued first prompt')
+      expect(history.get(sid)?.derivedTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('lets the AI title overwrite the derived one', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Fix Login Bug'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('how do I fix the broken login page?')
+      await new Promise((r) => setTimeout(r, 0))
+      const entry = history.get(sid)
+      expect(entry?.title).toBe('Fix Login Bug')
+      expect(entry?.aiTitle).toBe(true)
+      expect(entry?.derivedTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('flags the side-task derived title without pushing it', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-derived' },
+    })
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+      await side.sendPrompt('> quoted text\n\nhow does the scroll compensation work?')
+      await new Promise((r) => setTimeout(r, 0))
+
+      const entry = history.get('agent-side-derived')
+      expect(entry?.derivedTitle).toBe(true)
+      expect(entry?.title).toBe('how does the scroll compensati')
+      expect(
+        client.connected.some((c) =>
+          c.agent.extMethodCalls.some((m) => m.method === 'universe-editor/set_session_title'),
+        ),
+      ).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+})
+
 describe('AcpSessionService — first prompt history mirror', () => {
   function makeServiceWithTitle(
     client: FakeAcpClientService,

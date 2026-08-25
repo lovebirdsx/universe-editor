@@ -393,7 +393,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(4)
+    expect(persisted.schemaVersion).toBe(5)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -653,6 +653,77 @@ describe('AcpSessionHistoryService — persistence', () => {
     // strip the flag — resumeSession relies on it to rebuild suppressDefaults.
     const readded = svc.add({ agentId: 'codex', sessionIdOnAgent: 'fix-1', title: 'AI Fix: a.ts' })
     expect(readded.aiFix).toBe(true)
+  })
+
+  it('persists the derivedTitle flag and hydrates it back', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'derived-1', title: 'line one' })
+    svc.setHistoryDerivedTitle('derived-1')
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'plain-1', title: 't' })
+    await flushWrite()
+    const call = storage.setCalls.at(-1)!
+    const persisted = call.value as {
+      entries: Array<{ sessionIdOnAgent: string; derivedTitle?: boolean }>
+    }
+    expect(persisted.entries.find((e) => e.sessionIdOnAgent === 'derived-1')?.derivedTitle).toBe(
+      true,
+    )
+    // Plain sessions stay absent (not `false`) so the payload doesn't grow.
+    expect(persisted.entries.find((e) => e.sessionIdOnAgent === 'plain-1')).not.toHaveProperty(
+      'derivedTitle',
+    )
+
+    // Round-trip through hydration.
+    const made2 = makeService({ storage })
+    const svc2 = made2.svc
+    try {
+      await svc2.initialize()
+      expect(svc2.get('derived-1')?.derivedTitle).toBe(true)
+      expect(svc2.get('plain-1')?.derivedTitle).toBeUndefined()
+    } finally {
+      svc2.dispose()
+    }
+  })
+
+  it('hydrates v4 rows that predate the derivedTitle field', async () => {
+    // Regression guard: v4 buckets (pre-derivedTitle) must still be accepted —
+    // silently dropping them would wipe the user's whole session list.
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 4,
+      entries: [
+        {
+          id: 'old',
+          agentId: 'a',
+          sessionIdOnAgent: 'old',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.get('old')).toBeDefined()
+    expect(svc.get('old')?.derivedTitle).toBeUndefined()
+  })
+
+  it('drops rows whose derivedTitle field is not a boolean', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 4,
+      entries: [
+        { id: 'ok', agentId: 'a', sessionIdOnAgent: 'ok', title: 't', createdAt: 1, lastUsedAt: 2 },
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          derivedTitle: 'x',
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['ok'])
   })
 
   it('initialize() is idempotent — second call resolves without re-reading', async () => {
@@ -1326,6 +1397,60 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     expect(svc.get(e.id)?.manualTitle).toBe(true)
   })
 
+  it('keeps a locally derived title over the protocol summary (no session-title model case)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'line one', cwd: '/work' })
+    svc.setHistoryDerivedTitle(e.id)
+    // Without a session-title model the SDK summary falls back to the newest
+    // prompt at every turn end; it must not clobber the locally derived title.
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'first user prompt', updatedAt: null }],
+      '/work',
+      undefined,
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('line one')
+    expect(svc.get(e.id)?.derivedTitle).toBe(true)
+  })
+
+  it('keeps a local title when the summary just echoes the recorded first prompt (whitespace folded)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'line one', cwd: '/work' })
+    svc.setHistoryFirstPrompt(e.id, 'line one\nline two of a long prompt')
+    // The SDK folds the prompt's whitespace when it reports it as the summary;
+    // without the echo guard the full prompt text would replace the local title.
+    svc.bulkMergeFromAgent(
+      'fake',
+      [
+        {
+          sessionId: 's-1',
+          cwd: '/work',
+          title: 'line one line two of a long prompt',
+          updatedAt: null,
+        },
+      ],
+      '/work',
+      undefined,
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('line one')
+  })
+
+  it('applies a genuinely new protocol title to an unflagged row (echo guard is not a blanket block)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't', cwd: '/work' })
+    svc.setHistoryFirstPrompt(e.id, 'line one\nline two of a long prompt')
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'Refactor auth module', updatedAt: null }],
+      '/work',
+      undefined,
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('Refactor auth module')
+  })
+
   it('preserves a manual title + flag across re-add (resume)', async () => {
     await svc.initialize()
     const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'My Name' })
@@ -1662,6 +1787,22 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-new'])
   })
+
+  it('keeps a locally derived title over the reported summary', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'line one', cwd: '/work' })
+    svc.setHistoryDerivedTitle(e.id)
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'first user prompt', updatedAt: null }],
+      '/work',
+      undefined,
+      new Set<string>(),
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('line one')
+    expect(svc.get(e.id)?.derivedTitle).toBe(true)
+  })
 })
 
 describe('AcpSessionHistoryService — updateInfo', () => {
@@ -1723,6 +1864,23 @@ describe('AcpSessionHistoryService — updateInfo', () => {
     svc.setHistoryManualTitle(e.id)
     svc.updateInfo(e.id, { title: 'agent summary' })
     expect(svc.get(e.id)?.title).toBe('first prompt')
+  })
+
+  it('does not overwrite a locally derived title without the explicit override', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first prompt' })
+    svc.setHistoryDerivedTitle(e.id)
+    svc.updateInfo(e.id, { title: 'agent push' })
+    expect(svc.get(e.id)?.title).toBe('first prompt')
+  })
+
+  it('overwriteProtectedTitle replaces a derived title (authoritative write path)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first prompt' })
+    svc.setHistoryDerivedTitle(e.id)
+    svc.updateInfo(e.id, { title: 'better title' }, { overwriteProtectedTitle: true })
+    expect(svc.get(e.id)?.title).toBe('better title')
+    expect(svc.get(e.id)?.derivedTitle).toBe(true)
   })
 
   it('overwriteProtectedTitle replaces the title on a flagged row', async () => {
@@ -1997,6 +2155,55 @@ describe('AcpSessionHistoryService — setHistoryAiTitle', () => {
     svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'Fake Agent 12:00' })
     expect(svc.get('s1')?.aiTitle).toBe(true)
     expect(svc.get('s1')?.title).toBe('AI Title')
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryDerivedTitle', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+    await svc.initialize()
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('flags a locally derived title on a known session', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'line one' })
+    svc.setHistoryDerivedTitle('s1')
+    expect(svc.get('s1')?.derivedTitle).toBe(true)
+  })
+
+  it('is a no-op for an unknown session id', () => {
+    expect(() => svc.setHistoryDerivedTitle('nonexistent')).not.toThrow()
+    expect(svc.list()).toEqual([])
+  })
+
+  it('is idempotent — a second call does not write again', async () => {
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryDerivedTitle(e.id)
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    // Same flag again — no new write.
+    svc.setHistoryDerivedTitle(e.id)
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('re-add preserves the derived flag and its title (resume must not reset it)', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'line one\nline two' })
+    svc.setHistoryDerivedTitle('s1')
+    // resume() re-adds with the construct-time placeholder title.
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'Fake Agent 12:00' })
+    expect(svc.get('s1')?.derivedTitle).toBe(true)
+    expect(svc.get('s1')?.title).toBe('line one\nline two')
   })
 })
 

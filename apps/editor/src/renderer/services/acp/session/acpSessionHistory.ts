@@ -32,6 +32,7 @@ import {
 import { PersistedStateBase } from '../persistedStateBase.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpPlanEntry } from './acpSessionModel.js'
+import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
 
 /**
  * Which sessions the Agents history surfaces:
@@ -158,6 +159,17 @@ export interface AcpSessionHistoryEntry {
    * regenerating an AI title so a user-chosen name is never overwritten.
    */
   readonly manualTitle?: boolean
+  /**
+   * True once the title was derived locally from the session's first prompt.
+   * Ranks *below* {@link aiTitle} (an AI title lands over it via the authoritative
+   * `overwriteProtectedTitle` channel) but *above* the agent's reported summary:
+   * without a session-title model the SDK summary falls back to `lastPrompt`, so
+   * the agent re-reports the newest prompt as the title at every turn end. Unlike
+   * the other two flags this title is never pushed to the agent — writing a
+   * 30-char prompt slice as the agent's `customTitle` would both impersonate a
+   * user rename and permanently suppress the SDK's own background `aiTitle`.
+   */
+  readonly derivedTitle?: boolean
   /**
    * True once the user archived this session. Archived rows are hidden from the
    * session list by default (the filter popover's "Archived" toggle reveals
@@ -311,6 +323,13 @@ export interface IAcpSessionHistoryService {
    */
   setHistoryManualTitle(sessionId: string): void
   /**
+   * Mark a session's title as locally derived from its first prompt. Idempotent;
+   * no-op if the id is unknown. Protects the title from the agent's reported
+   * summary (which without a session-title model echoes the newest prompt), but
+   * yields to an AI/manual title.
+   */
+  setHistoryDerivedTitle(sessionId: string): void
+  /**
    * Set (or clear, with `false`) the archived flag. Idempotent; no-op if the
    * id is unknown or the value is unchanged. Never touches the live session —
    * archiving is a list-level marker only.
@@ -448,7 +467,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 const MAX_ENTRIES = 100
 
 /**
@@ -532,13 +551,15 @@ export class AcpSessionHistoryService
       if (existing === true) return true
       return entry.hasMessages
     })()
-    // Preserve a prior AI-title / manual-title flag + its title across re-add
-    // (the construct-time `entry.title` is the default placeholder, not the
-    // user-chosen / AI title). Manual title ranks above AI title.
+    // Preserve a prior AI-title / manual-title / derived-title flag + its title
+    // across re-add (the construct-time `entry.title` is the default placeholder,
+    // not the user-chosen / AI / derived title). Manual ranks above AI above derived.
     const existingAiTitle = existingIdx >= 0 ? this._state[existingIdx]!.aiTitle : undefined
     const existingManualTitle = existingIdx >= 0 ? this._state[existingIdx]!.manualTitle : undefined
+    const existingDerivedTitle =
+      existingIdx >= 0 ? this._state[existingIdx]!.derivedTitle : undefined
     const title =
-      existingManualTitle === true || existingAiTitle === true
+      existingManualTitle === true || existingAiTitle === true || existingDerivedTitle === true
         ? this._state[existingIdx]!.title
         : entry.title
     // Same carry-over for the MCP whitelist: re-adding the session (e.g. on a
@@ -606,6 +627,7 @@ export class AcpSessionHistoryService
       ...(carriedAiFix !== undefined ? { aiFix: carriedAiFix } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
+      ...(existingDerivedTitle === true ? { derivedTitle: true } : {}),
       // Same carry-over for the archive/pin flags: re-adding the same session
       // (e.g. on resume) must not drop the user's list-level markers.
       ...(existingIdx >= 0 && this._state[existingIdx]!.archived === true
@@ -815,6 +837,17 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
+  setHistoryDerivedTitle(sessionId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.derivedTitle === true) return
+    const next: AcpSessionHistoryEntry = { ...cur, derivedTitle: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
   setHistoryArchived(sessionId: string, archived: boolean): void {
     const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
@@ -934,13 +967,21 @@ export class AcpSessionHistoryService
         typeof info.title === 'string' && info.title.length > 0
           ? info.title
           : (existing?.title ?? info.sessionId)
-      // An AI-generated or user-renamed local title wins over the agent's
-      // reported `summary`: after `/compact` the SDK summary reverts to the
-      // first prompt, which would otherwise clobber our title here. Once our
-      // `renameSession` push lands the agent reports the same value, so this
-      // only blocks the divergent (compact-reset / unsupported-agent) case.
+      // An AI-generated, user-renamed or first-prompt-derived local title wins
+      // over the agent's reported `summary`: after `/compact` (or with no
+      // session-title model at all) the SDK summary reverts to a prompt, which
+      // would otherwise clobber our title here. Once our `renameSession` push
+      // lands the agent reports the same value, so this only blocks the
+      // divergent (compact-reset / unsupported-agent) case. Unflagged rows get a
+      // second line of defence: a summary that is just our first prompt echoed
+      // back carries no information the local title doesn't already have.
       const title =
-        existing?.manualTitle === true || existing?.aiTitle === true
+        existing?.manualTitle === true ||
+        existing?.aiTitle === true ||
+        existing?.derivedTitle === true ||
+        (existing !== undefined &&
+          existing.firstPrompt !== undefined &&
+          isPromptEchoTitle(reportedTitle, [existing.firstPrompt]))
           ? existing.title
           : reportedTitle
       const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
@@ -1033,7 +1074,8 @@ export class AcpSessionHistoryService
     const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
     const cur = this._state[idx]!
-    const titleProtected = cur.aiTitle === true || cur.manualTitle === true
+    const titleProtected =
+      cur.aiTitle === true || cur.manualTitle === true || cur.derivedTitle === true
     const nextTitle =
       patch.title !== undefined &&
       patch.title.length > 0 &&
@@ -1072,6 +1114,7 @@ export class AcpSessionHistoryService
     if (!Array.isArray(o.entries)) return undefined
     if (
       o.schemaVersion !== SCHEMA_VERSION &&
+      o.schemaVersion !== 4 &&
       o.schemaVersion !== 3 &&
       o.schemaVersion !== 2 &&
       o.schemaVersion !== 1
@@ -1085,6 +1128,8 @@ export class AcpSessionHistoryService
     // next resume — no data migration needed.
     // v3 → v4: `aiFix` is optional, old rows are simply non-AI-Fix sessions — no
     // data migration needed.
+    // v4 → v5: `derivedTitle` is optional, old rows simply carry no
+    // derived-title protection — no data migration needed.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
     return o.entries
@@ -1162,6 +1207,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['firstPrompt'] === undefined || typeof o['firstPrompt'] === 'string') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
     (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean') &&
+    (o['derivedTitle'] === undefined || typeof o['derivedTitle'] === 'boolean') &&
     (o['archived'] === undefined || typeof o['archived'] === 'boolean') &&
     (o['pinned'] === undefined || typeof o['pinned'] === 'boolean') &&
     (o['mcpServerNames'] === undefined || isStringArray(o['mcpServerNames'])) &&

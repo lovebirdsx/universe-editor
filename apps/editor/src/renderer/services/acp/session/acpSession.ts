@@ -33,6 +33,7 @@ import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
+import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
 import type { IAcpCompactionStatsService } from './acpCompactionStats.js'
 import type { IAcpMessageAttachmentStore } from './acpMessageAttachmentStore.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
@@ -165,7 +166,7 @@ export {
 } from './acpSessionContent.js'
 
 /** Provenance of a session title — see {@link AcpSession._pendingTitleKind}. */
-type TitleKind = 'ai' | 'manual' | undefined
+type TitleKind = 'ai' | 'manual' | 'derived' | undefined
 
 /**
  * Continuation prompt sent automatically after a hot-reconnect (or a retried
@@ -479,6 +480,9 @@ function stripLeadingBlockquote(text: string): string {
   return text.replace(/^(?:>[ \t]?.*(?:\n|$))+/, '').trim()
 }
 
+/** How many dispatched prompts to remember for the title-echo guard. */
+const DISPATCHED_PROMPT_MEMORY = 8
+
 export class AcpSession extends Disposable implements IAcpSession {
   readonly sessionIdOnAgent: ISettableObservable<string | undefined>
   /**
@@ -600,11 +604,22 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /**
    * Provenance of {@link _pendingTitle}: `'ai'` (session-title model),
-   * `'manual'` (user rename), or `undefined` (first-prompt fallback). AI and
+   * `'manual'` (user rename), or `'derived'` (first-prompt fallback). AI and
    * manual titles are flagged on the history row and pushed back to the agent so
-   * they survive `/compact` + the next `session/list`; the fallback is not.
+   * they survive `/compact` + the next `session/list`; a derived title is flagged
+   * locally only (see {@link _applyHistoryTitle}).
    */
   private _pendingTitleKind: TitleKind = undefined
+
+  /**
+   * Texts of the prompts this session actually dispatched, newest last (capped at
+   * {@link DISPATCHED_PROMPT_MEMORY}). Without a session-title model the SDK
+   * summary falls back to `lastPrompt`, so the agent re-reports the newest prompt
+   * as the session title at every turn end — these let us recognize and drop that
+   * echo. Replayed history messages are deliberately excluded: a legitimate old
+   * title must not be mistaken for an echo on hydrate.
+   */
+  private readonly _dispatchedPromptTexts: string[] = []
 
   /**
    * Live connection, set by {@link attachConnection} once the agent handshake
@@ -1460,6 +1475,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     this._maybeDeriveTitleFromPrompt(text)
     this._maybeRecordFirstPrompt(text)
+    this._rememberDispatchedPrompt(text)
     // Client-generated anchor for this user turn. Stamped on the local message
     // now (so rewind/fork can target it even before dispatch) and sent as
     // `_meta.messageId`; the agent echoes it back as `_meta.userMessageId`.
@@ -2109,11 +2125,12 @@ export class AcpSession extends Disposable implements IAcpSession {
    * not exist yet, so we buffer the title and re-apply it from
    * {@link attachConnection} once the entry is in place.
    *
-   * `kind` marks a non-fallback title (`'ai'` model-generated, `'manual'` user
-   * rename): it is flagged on the history row (so the hydrate sweep won't clobber
-   * it with the agent's first-prompt `summary`) and pushed back to the agent via
-   * the set-title ext-method, so the title survives `/compact` and the next
-   * `session/list`.
+   * `kind` marks the title's provenance. `'ai'` (model-generated) and `'manual'`
+   * (user rename) are authoritative: they are flagged on the history row (so the
+   * hydrate sweep won't clobber them with the agent's `summary`) and pushed back
+   * to the agent via the set-title ext-method, so the title survives `/compact`
+   * and the next `session/list`. `'derived'` (first prompt) is flagged locally
+   * only — never pushed (see {@link _applyHistoryTitle}).
    */
   private _setHistoryTitle(title: string, kind: TitleKind): void {
     this._pendingTitle = title
@@ -2125,10 +2142,9 @@ export class AcpSession extends Disposable implements IAcpSession {
   /** Write the title to the history row and, for AI/manual titles, push it to the agent. */
   private _applyHistoryTitle(sessionIdOnAgent: string, title: string, kind: TitleKind): void {
     // AI / manual titles are authoritative — they must land even on rows already
-    // flagged aiTitle/manualTitle (e.g. a rename after the AI title). The
-    // first-prompt-derived title (kind undefined) is not: it never overwrites a
-    // protected row.
-    const overwriteProtectedTitle = kind !== undefined
+    // flagged aiTitle/manualTitle/derivedTitle (e.g. a rename after the AI title).
+    // A derived title is not: it never overwrites a protected row.
+    const overwriteProtectedTitle = kind === 'ai' || kind === 'manual'
     this._history?.updateInfo(sessionIdOnAgent, { title }, { overwriteProtectedTitle })
     if (kind === 'ai') {
       this._history?.setHistoryAiTitle(sessionIdOnAgent)
@@ -2136,6 +2152,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     } else if (kind === 'manual') {
       this._history?.setHistoryManualTitle(sessionIdOnAgent)
       this._pushTitleToAgent(sessionIdOnAgent, title)
+    } else if (kind === 'derived') {
+      // Local flag only: pushing a 30-char prompt slice as the agent's
+      // `customTitle` would impersonate a user rename and, since customTitle
+      // outranks aiTitle in the SDK summary chain, permanently suppress the
+      // agent's own background title.
+      this._history?.setHistoryDerivedTitle(sessionIdOnAgent)
     }
   }
 
@@ -2193,7 +2215,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     const derived = stripLeadingBlockquote(text).replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
     this._titleDerived = true
-    this._setHistoryTitle(derived, undefined)
+    this._setHistoryTitle(derived, 'derived')
+  }
+
+  /** Keep the newest {@link DISPATCHED_PROMPT_MEMORY} prompt texts for the title-echo guard. */
+  private _rememberDispatchedPrompt(text: string): void {
+    this._dispatchedPromptTexts.push(text)
+    if (this._dispatchedPromptTexts.length > DISPATCHED_PROMPT_MEMORY) {
+      this._dispatchedPromptTexts.shift()
+    }
   }
 
   /**
@@ -2674,7 +2704,17 @@ export class AcpSession extends Disposable implements IAcpSession {
         if (this._history) {
           const patch: { title?: string; updatedAt?: number } = {}
           if (typeof update.title === 'string' && update.title.length > 0) {
-            patch.title = update.title
+            // Without a session-title model the SDK summary falls back to
+            // `lastPrompt`, so the agent re-reports the newest prompt as the
+            // title at every turn end. Drop that echo (a genuine agent title
+            // still lands); the derivedTitle flag is the second line of defence.
+            if (isPromptEchoTitle(update.title, this._dispatchedPromptTexts)) {
+              console.debug(
+                `[acp-title] dropped session_info_update echoing a dispatched prompt: ${update.title.slice(0, 60)}`,
+              )
+            } else {
+              patch.title = update.title
+            }
           }
           if (typeof update.updatedAt === 'string') {
             const ts = Date.parse(update.updatedAt)
