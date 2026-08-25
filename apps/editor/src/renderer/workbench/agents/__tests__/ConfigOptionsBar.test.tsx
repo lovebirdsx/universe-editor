@@ -59,8 +59,8 @@ const stubWorkspaceService = {
   async clearRecent() {},
   async removeRecent() {},
 } as unknown as IWorkspaceServiceType
-// The model popover's sub-agent footer (claude-code sessions) pulls the claude
-// config through useClaudeConfig — stubbed here so bar-level tests stay focused.
+// The sub-agent picker (claude-code sessions) pulls the claude config through
+// useClaudeConfig — stubbed here so bar-level tests stay focused.
 const stubClaudeConfigService = {
   _serviceBrand: undefined,
   async read() {
@@ -341,29 +341,24 @@ describe('ConfigOptionsBar', () => {
   })
 })
 
-describe('ConfigOptionsBar — sub-agent model footer gate', () => {
-  it('shows the sub-agent footer in the model popover of a claude-code session', () => {
+describe('ConfigOptionsBar — sub-agent picker gate', () => {
+  it('shows the sub-agent picker trigger on claude-code sessions', () => {
     renderWithServices(
       <ConfigOptionsBar session={makeSession([MODEL_OPTION], { agentId: 'claude-code' })} />,
     )
-    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
-    expect(screen.getByTestId('acp-subagent-footer')).toBeTruthy()
+    expect(screen.getByTestId('acp-subagent-picker-trigger')).toBeTruthy()
   })
 
-  it('hides the sub-agent footer for other agents', () => {
+  it('hides the sub-agent picker for other agents', () => {
     renderWithServices(
       <ConfigOptionsBar session={makeSession([MODEL_OPTION], { agentId: 'codex' })} />,
     )
-    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
-    expect(screen.queryByTestId('acp-subagent-footer')).toBeNull()
+    expect(screen.queryByTestId('acp-subagent-picker-trigger')).toBeNull()
   })
 
-  it('hides the sub-agent footer in non-model popovers even on claude-code', () => {
-    renderWithServices(
-      <ConfigOptionsBar session={makeSession([MODE_OPTION], { agentId: 'claude-code' })} />,
-    )
-    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
-    expect(screen.queryByTestId('acp-subagent-footer')).toBeNull()
+  it('still shows the sub-agent picker on claude-code when the session advertises no options', () => {
+    renderWithServices(<ConfigOptionsBar session={makeSession([], { agentId: 'claude-code' })} />)
+    expect(screen.getByTestId('acp-subagent-picker-trigger')).toBeTruthy()
   })
 })
 

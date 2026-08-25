@@ -437,6 +437,14 @@ const AGENT_OUTPUT_UPDATE_KINDS: ReadonlySet<SessionUpdate['sessionUpdate']> = n
  */
 const INTERRUPTED_MARKER_TEXT = '[Request interrupted by user]'
 
+/**
+ * How many superseded durable ids a session remembers (see
+ * {@link AcpSession._priorAgentSessionIds}). Only ids a not-yet-re-persisted
+ * editor tab could still hold need resolving, so a handful is plenty and the
+ * set stays bounded across repeated restarts.
+ */
+const MAX_PRIOR_AGENT_SESSION_IDS = 4
+
 // Built-in slash commands the agent handles locally (mirrors
 // BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts). Their args
 // are command parameters (`/model opus`), not user prose, so a prompt that is
@@ -473,6 +481,18 @@ function stripLeadingBlockquote(text: string): string {
 
 export class AcpSession extends Disposable implements IAcpSession {
   readonly sessionIdOnAgent: ISettableObservable<string | undefined>
+  /**
+   * Durable ids this session used to carry, oldest-first, capped at
+   * {@link MAX_PRIOR_AGENT_SESSION_IDS}. An EMPTY session rebuilt during a hot
+   * reconnect (`session/new` — see AcpSessionService._reconnectSession) gets a
+   * brand-new agent id, but editor tabs / session-list rows opened before the
+   * rebuild still hold the old one. Keeping the aliases lets `getById` resolve
+   * them instead of reporting the session as gone (which would silently close
+   * the user's tab). Only the recent ones can still be referenced — a tab
+   * serializes the live id on every layout persist — so the set is bounded
+   * rather than growing once per restart for the window's whole lifetime.
+   */
+  private readonly _priorAgentSessionIds = new Set<string>()
   readonly messages: ISettableObservable<readonly AcpMessage[]>
   readonly toolCalls: ISettableObservable<readonly AcpToolCall[]>
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
@@ -1121,14 +1141,41 @@ export class AcpSession extends Disposable implements IAcpSession {
    * Service-driven: bind the fresh connection after a successful hot-reconnect
    * (`session/resume` against the same durable id — no history replay, the
    * timeline is already complete locally).
+   *
+   * `sessionIdOnAgent` re-keys the session onto a NEW durable id: an EMPTY
+   * session (never messaged) has no agent-side transcript to resume, so the
+   * service rebuilds it with `session/new` and the agent issues a fresh id. The
+   * local session object — and therefore the editor tab, draft and React key —
+   * is deliberately kept; only the protocol-side id moves.
    */
-  reattachConnection(conn: IAcpClientConnection): void {
-    const sid = this.sessionIdOnAgent.get()
+  reattachConnection(conn: IAcpClientConnection, sessionIdOnAgent?: string): void {
+    const sid = sessionIdOnAgent ?? this.sessionIdOnAgent.get()
     if (sid === undefined || this.status.get() === 'closed') {
       conn.dispose()
       return
     }
+    const prior = this.sessionIdOnAgent.get()
+    if (prior !== undefined && prior !== sid) {
+      this._priorAgentSessionIds.delete(prior)
+      this._priorAgentSessionIds.add(prior)
+      // Set iteration is insertion-ordered, so the first key is the oldest.
+      while (this._priorAgentSessionIds.size > MAX_PRIOR_AGENT_SESSION_IDS) {
+        const oldest = this._priorAgentSessionIds.values().next().value
+        if (oldest === undefined) break
+        this._priorAgentSessionIds.delete(oldest)
+      }
+    }
     this.attachConnection(conn, sid)
+  }
+
+  /** True when `sessionId` is a durable id this session used to be known by. */
+  hasPriorAgentSessionId(sessionId: string): boolean {
+    return this._priorAgentSessionIds.has(sessionId)
+  }
+
+  /** Durable ids this session carried before a rebuild (see {@link _priorAgentSessionIds}). */
+  get priorAgentSessionIds(): ReadonlySet<string> {
+    return this._priorAgentSessionIds
   }
 
   /**

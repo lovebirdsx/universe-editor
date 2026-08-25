@@ -228,6 +228,15 @@ export interface IAcpSessionHistoryService {
   ): AcpSessionHistoryEntry
   /** Bump lastUsedAt; no-op if id is unknown. */
   touch(id: string): void
+  /**
+   * Move a row onto a new agent-issued session id, keeping every other field
+   * (title flags, config snapshot, cwd/authority, MCP pin, createdAt, …). Used
+   * when an EMPTY session is rebuilt with `session/new` during a hot reconnect:
+   * the agent hands out a fresh durable id, but from the user's point of view it
+   * is still the same session (same tab, same draft, same local id). No-op when
+   * `oldId` is unknown or the ids are equal.
+   */
+  rekey(oldId: string, newId: string): void
   remove(id: string): void
   clear(): void
   /**
@@ -621,6 +630,24 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     const next: AcpSessionHistoryEntry = { ...cur, lastUsedAt: Date.now() }
     this._state = [next, ...this._state.filter((_, i) => i !== idx)]
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  rekey(oldId: string, newId: string): void {
+    if (oldId === newId || newId.length === 0) return
+    const idx = this._state.findIndex((e) => e.id === oldId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    const next: AcpSessionHistoryEntry = {
+      ...cur,
+      id: newId,
+      sessionIdOnAgent: newId,
+      lastUsedAt: Date.now(),
+    }
+    // Drop the old row AND any pre-existing row already sitting on newId, so a
+    // rebuild can never leave two rows describing the same session.
+    this._state = [next, ...this._state.filter((e) => e.id !== oldId && e.id !== newId)]
     this._publish()
     this._scheduleWrite()
   }

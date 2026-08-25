@@ -7,14 +7,22 @@ import { AcpSessionRegistry } from '../acpSessionRegistry.js'
 import type { AcpSession } from '../acpSession.js'
 
 /**
- * Minimal stand-in for AcpSession: the registry only ever reads `id` and
- * `sessionIdOnAgent.get()`, never touches behaviour, so a plain object is
- * enough to exercise the CRUD + active-selection invariants in isolation.
+ * Minimal stand-in for AcpSession: the registry only ever reads `id`,
+ * `sessionIdOnAgent.get()` and the rebuild aliases, never touches behaviour, so
+ * a plain object is enough to exercise the CRUD + active-selection invariants in
+ * isolation.
  */
-function fakeSession(id: string, agentId?: string): AcpSession {
+function fakeSession(
+  id: string,
+  agentId?: string,
+  priorAgentIds: readonly string[] = [],
+): AcpSession {
+  const prior = new Set(priorAgentIds)
   return {
     id,
     sessionIdOnAgent: { get: () => agentId },
+    priorAgentSessionIds: prior,
+    hasPriorAgentSessionId: (sessionId: string) => prior.has(sessionId),
   } as unknown as AcpSession
 }
 
@@ -54,6 +62,23 @@ describe('AcpSessionRegistry', () => {
     expect(r.find('local-1')).toBe(s)
     expect(r.find('agent-1')).toBe(s)
     expect(r.find('nope')).toBeUndefined()
+  })
+
+  it('find() resolves a durable id the session carried before a rebuild', () => {
+    // An empty session rebuilt during a hot reconnect gets a new agent id;
+    // editor tabs opened before the rebuild still hold the old one and must not
+    // read as "session gone".
+    const r = new AcpSessionRegistry()
+    const s = fakeSession('local-1', 'agent-2', ['agent-1'])
+    r.add(s, { activate: false })
+    expect(r.find('agent-2')).toBe(s)
+    expect(r.find('agent-1')).toBe(s)
+    // A live session on the current id wins over another session's stale alias.
+    const other = fakeSession('local-2', 'agent-1')
+    r.add(other, { activate: false })
+    expect(r.find('agent-1')).toBe(other)
+    // liveIds carries the alias too, so the refresh-prune sweep can protect it.
+    expect(r.liveIds()).toEqual(new Set(['local-1', 'agent-2', 'agent-1', 'local-2']))
   })
 
   it('replace() swaps a same-id session and activates the new one', () => {

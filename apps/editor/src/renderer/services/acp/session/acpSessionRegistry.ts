@@ -68,6 +68,7 @@ export class AcpSessionRegistry {
       ids.add(s.id)
       const agentId = s.sessionIdOnAgent.get()
       if (agentId !== undefined) ids.add(agentId)
+      for (const prior of s.priorAgentSessionIds) ids.add(prior)
     }
     return ids
   }
@@ -77,9 +78,17 @@ export class AcpSessionRegistry {
    * sessionId. Callers may hold either: the local id is used by freshly-created
    * sessions / editor inputs opened in this run, while the agent id is what
    * history rows, persisted editor inputs, and protocol notifications carry.
+   *
+   * A durable id the session used to carry also resolves (see
+   * `AcpSession.hasPriorAgentSessionId`) — an empty session rebuilt during a hot
+   * reconnect changes agent id, and tabs opened before the rebuild must not be
+   * reported as gone.
    */
   find(sessionId: string): AcpSession | undefined {
-    return this._sessions.find((x) => x.id === sessionId || x.sessionIdOnAgent.get() === sessionId)
+    return (
+      this._sessions.find((x) => x.id === sessionId || x.sessionIdOnAgent.get() === sessionId) ??
+      this._sessions.find((x) => x.hasPriorAgentSessionId(sessionId))
+    )
   }
 
   /** Append a session, optionally making it the active one, atomically. */

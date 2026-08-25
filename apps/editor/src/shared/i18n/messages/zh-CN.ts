@@ -1702,6 +1702,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.inlineDiff.expandLines': '… 展开 {count} 行',
   'acp.subagentStats.costTooltip': '本地按 token 估算，实际计费可能不同',
   'acp.subagent.label': '子 Agent',
+  'acp.subagent.triggerInherit': '子 Agent：继承',
+  'acp.subagent.panelDesc':
+    '子 Agent 使用此模型运行。该值在子进程启动时读取，修改后从下次会话开始生效。',
   'acp.subagent.inherit': '跟随主模型',
   'acp.subagent.nextSession': '下次会话生效',
   'acp.subagent.restartNow': '立即重启',

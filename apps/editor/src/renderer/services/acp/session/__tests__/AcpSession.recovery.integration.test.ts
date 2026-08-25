@@ -32,6 +32,7 @@ import type {
 import type {
   InitializeResponse,
   LoadSessionRequest,
+  NewSessionRequest,
   PromptRequest,
   PromptResponse,
   RequestPermissionResponse,
@@ -182,6 +183,24 @@ interface Script {
   configOptions?: SessionConfigOption[]
   /** When set, newSession rejects with this error — simulates a startup failure. */
   newSessionError?: Error
+  /**
+   * When set, resumeSession rejects with this error on every attempt —
+   * simulates an agent that has no transcript for the durable id (the fork
+   * answers `resourceNotFound` for a session that was never messaged).
+   */
+  resumeSessionError?: Error
+  /**
+   * When true, every connect's `newSession` mints a fresh durable id
+   * (`agent-durable-1`, `-2`, …) instead of the stable `agent-durable`.
+   * Mirrors a real agent: a rebuilt session is a NEW session on its side.
+   */
+  freshSessionIdPerConnect?: boolean
+  /**
+   * 1-based connect index whose `attachSession` throws once — simulates the
+   * attach failing right after a rebuild moved the history row onto the new
+   * durable id, so the retry has to look the row up under the NEW key.
+   */
+  attachSessionErrorOnConnect?: number
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -195,6 +214,7 @@ class ScriptedClient implements IAcpClientService {
     configCalls: SetSessionConfigOptionRequest[]
     resumeCalls: ResumeSessionRequest[]
     loadCalls: LoadSessionRequest[]
+    newCalls: NewSessionRequest[]
     /** Ordered RPC log ('prompt' / `config:<id>`) for cross-RPC ordering assertions. */
     events: string[]
   }> = []
@@ -238,12 +258,17 @@ class ScriptedClient implements IAcpClientService {
 
   async connect(): Promise<IAcpClientConnection> {
     if (!this._sink) throw new Error('sink not installed')
-    const agentSessionId = 'agent-durable' // stable durable id across reconnects
+    // Stable durable id across reconnects, unless the script asks each connect
+    // to mint a fresh one (what a real agent does for a rebuilt session).
+    const agentSessionId = this.script.freshSessionIdPerConnect
+      ? `agent-durable-${this._seq + 1}`
+      : 'agent-durable'
     const controller = new AbortController()
     const promptCalls: PromptRequest[] = []
     const configCalls: SetSessionConfigOptionRequest[] = []
     const resumeCalls: ResumeSessionRequest[] = []
     const loadCalls: LoadSessionRequest[] = []
+    const newCalls: NewSessionRequest[] = []
     const events: string[] = []
     this.connections.push({
       agentSessionId,
@@ -252,10 +277,12 @@ class ScriptedClient implements IAcpClientService {
       configCalls,
       resumeCalls,
       loadCalls,
+      newCalls,
       events,
     })
     const isFirst = this._seq === 0
     this._seq++
+    const connectIndex = this._seq
     const bag = this.script.configOptions
     const sessionResponse = {
       sessionId: agentSessionId,
@@ -271,16 +298,21 @@ class ScriptedClient implements IAcpClientService {
         return next(req)
       },
       cancel: () => Promise.resolve(),
-      newSession: () =>
-        this.script.newSessionError
+      newSession: (req: NewSessionRequest) => {
+        newCalls.push(req)
+        return this.script.newSessionError
           ? Promise.reject(this.script.newSessionError)
-          : Promise.resolve(sessionResponse),
+          : Promise.resolve(sessionResponse)
+      },
       loadSession: (req: LoadSessionRequest) => {
         loadCalls.push(req)
         return Promise.resolve({})
       },
       resumeSession: (req: ResumeSessionRequest) => {
         resumeCalls.push(req)
+        if (this.script.resumeSessionError) {
+          return Promise.reject(this.script.resumeSessionError)
+        }
         return Promise.resolve(sessionResponse)
       },
       // Apply the pushed value into the returned bag, like a real agent whose
@@ -302,7 +334,13 @@ class ScriptedClient implements IAcpClientService {
     return {
       conn: conn as never,
       initializeResult,
-      attachSession: (): void => {},
+      attachSession: (): void => {
+        if (this.script.attachSessionErrorOnConnect === connectIndex) {
+          // One-shot: the retry's connect must get a working attach.
+          delete this.script.attachSessionErrorOnConnect
+          throw new Error('attach failed')
+        }
+      },
       dispose: (): void => {},
       // Expose which connect this was for assertions.
       _isFirst: isFirst,
@@ -310,20 +348,24 @@ class ScriptedClient implements IAcpClientService {
   }
 }
 
-function makeService(
-  client: IAcpClientService,
-  config: ConfigurationService,
-  candidates: IAcpModelCandidateService = stubAcpModelCandidateService(),
-): AcpSessionService {
-  const notification = new StubNotificationService()
-  const telemetry = new NoopTelemetryService() as ITelemetryService
-  const history = new AcpSessionHistoryService(
+function makeHistory(): AcpSessionHistoryService {
+  return new AcpSessionHistoryService(
     new FakeStorage(),
     new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
   )
+}
+
+function makeService(
+  client: IAcpClientService,
+  config: ConfigurationService,
+  candidates: IAcpModelCandidateService = stubAcpModelCandidateService(),
+  history: AcpSessionHistoryService = makeHistory(),
+): AcpSessionService {
+  const notification = new StubNotificationService()
+  const telemetry = new NoopTelemetryService() as ITelemetryService
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
     new FakeWorkspaceService(),
@@ -830,11 +872,17 @@ describe('AcpSession auto-recovery', () => {
   })
 
   it('surfaces an error when the idle-dead agent cannot resume the session', async () => {
-    client = new ScriptedClient({ loadSession: false, promptResults: [] })
+    client = new ScriptedClient({
+      loadSession: false,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
     const config = new ConfigurationService()
     svc = makeService(client, config)
     const s = await svc.createSession()
     await s.whenConnected()
+    // The session must carry a transcript for resume to be the only option — an
+    // empty one is rebuilt with session/new instead of sealing.
+    await s.sendPrompt('first')
 
     client.killConnection(0)
     await waitFor(s.status, (v) => v === 'closed')
@@ -845,19 +893,26 @@ describe('AcpSession auto-recovery', () => {
     await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
     expect(s.status.get()).toBe('errored')
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
-    // The prompt was never dispatched onto any connection.
-    for (const c of client.connections) expect(c.promptCalls.length).toBe(0)
+    // The follow-up was never dispatched: the first connection only ever saw
+    // the pre-death prompt, and no later connection got anything.
+    expect(client.connections[0]!.promptCalls).toHaveLength(1)
+    for (const c of client.connections.slice(1)) expect(c.promptCalls.length).toBe(0)
   })
 
   it('re-enters reconnect when the user prompts again after recovery exhaustion', async () => {
     client = new ScriptedClient({
       loadSession: false,
-      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+      promptResults: [
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
     })
     const config = new ConfigurationService()
     svc = makeService(client, config)
     const s = await svc.createSession()
     await s.whenConnected()
+    // Same as above: a transcript is what makes resume the only path.
+    await s.sendPrompt('seed')
 
     client.killConnection(0)
     await waitFor(s.status, (v) => v === 'closed')
@@ -1166,6 +1221,10 @@ describe('AcpSession auto-recovery', () => {
     svc = makeService(client, config, stubAcpModelCandidateService({ models: ['kimi-k3[1m]'] }))
     const s = await svc.createSession()
     await s.whenConnected()
+    // A messaged session has an agent-side transcript, so the restart resumes
+    // against the same durable id (the empty-session case rebuilds instead —
+    // covered by the two tests below).
+    await s.sendPrompt('do it')
 
     s.requestProcessRestart()
     // connect() leases from a refcounted pool keyed by agentId+cwd — without
@@ -1180,6 +1239,163 @@ describe('AcpSession auto-recovery', () => {
     const meta = resume._meta as Record<string, unknown>
     expect(meta.extraModels).toEqual(['kimi-k3[1m]'])
     expect((meta.claudeCode as { resumeModel?: string }).resumeModel).toBe('sonnet')
+  })
+
+  it('rebuilds an empty session with session/new on restart instead of resuming a transcript it never had', async () => {
+    // A session created but never messaged has no agent-side transcript, so
+    // `session/resume` answers resourceNotFound — three attempts of it burn the
+    // recovery budget and seal the session as "automatic recovery failed",
+    // which is exactly what the sub-agent-model restart used to hit.
+    const modelOption: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet 4.6' }],
+    } as SessionConfigOption
+    client = new ScriptedClient({
+      loadSession: true,
+      configOptions: [modelOption],
+      freshSessionIdPerConnect: true,
+      resumeSessionError: new Error('Resource not found: agent-durable-1'),
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    const history = makeHistory()
+    svc = makeService(
+      client,
+      config,
+      stubAcpModelCandidateService({ models: ['kimi-k3[1m]'] }),
+      history,
+    )
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const oldSid = s.sessionIdOnAgent.get()
+    expect(oldSid).toBe('agent-durable-1')
+    expect(history.get('agent-durable-1')?.hasMessages).toBe(false)
+
+    s.requestProcessRestart()
+    expect(client.killCalls).toEqual([{ agentId: 'fake', cwd: undefined, authority: undefined }])
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // Rebuilt via session/new on the fresh process — never resumed.
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.resumeCalls).toEqual([])
+    expect(client.connections[1]!.newCalls).toHaveLength(1)
+    const newParams = client.connections[1]!.newCalls[0]!
+    expect((newParams._meta as Record<string, unknown>).extraModels).toEqual(['kimi-k3[1m]'])
+
+    // The local session object survives (same local id → same React key, same
+    // editor tab, same draft) and now points at the new durable id.
+    expect(s.sessionIdOnAgent.get()).toBe('agent-durable-2')
+    expect(s.status.get()).toBe('idle')
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+
+    // The history row moved to the new durable id, keeping its metadata.
+    expect(history.get('agent-durable-1')).toBeUndefined()
+    const migrated = history.get('agent-durable-2')
+    expect(migrated?.hasMessages).toBe(false)
+    expect(migrated?.configOptions?.['model']).toBe('sonnet')
+    expect(migrated?.title).toBe(s.title)
+    // Still exactly one row for this session — no orphan left behind.
+    expect(history.list().filter((e) => e.agentId === 'fake')).toHaveLength(1)
+  })
+
+  it('keeps a prompt queued during an empty-session restart and dispatches it against the rebuilt id', async () => {
+    // The rebuild goes through the same connecting → attach path as a first
+    // connect, so a prompt typed mid-restart must land on the NEW durable id
+    // rather than being dropped or sent against the dead one.
+    client = new ScriptedClient({
+      loadSession: true,
+      freshSessionIdPerConnect: true,
+      resumeSessionError: new Error('Resource not found'),
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    s.requestProcessRestart()
+    void s.sendPrompt('typed while restarting')
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+    expect(client.connections[1]!.promptCalls[0]!.sessionId).toBe('agent-durable-2')
+    // The dead process never saw it.
+    expect(client.connections[0]!.promptCalls).toEqual([])
+  })
+
+  it('resumes — never rebuilds — an unmessaged side task, whose transcript the fork already copied', async () => {
+    // A side task is the one hasMessages:false session that DOES have an
+    // agent-side transcript: forkSideTask copies the parent's whole history
+    // before the child sends anything. Rebuilding it with session/new would
+    // throw that forked baseline away and leave the side chat without the very
+    // context it exists to discuss.
+    client = new ScriptedClient({
+      loadSession: true,
+      freshSessionIdPerConnect: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    const history = makeHistory()
+    svc = makeService(client, config, stubAcpModelCandidateService(), history)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+    // Mark the live row like forkSideTask does: empty, but forked off a parent.
+    history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: sid,
+      title: 'side task',
+      hasMessages: false,
+      sideTaskOf: 'parent-durable',
+      sideTaskQuote: 'why does this jump?',
+    })
+
+    s.requestProcessRestart()
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.resumeCalls[0]?.sessionId).toBe(sid)
+    expect(client.connections[1]!.newCalls).toEqual([])
+    // The durable id — and therefore the fork parentage — is untouched.
+    expect(s.sessionIdOnAgent.get()).toBe(sid)
+    expect(history.get(sid)?.sideTaskOf).toBe('parent-durable')
+  })
+
+  it('retries a failed rebuild attach against the NEW durable id the history row moved to', async () => {
+    // The rebuild re-keys the history row before attaching. If a retry still
+    // looked the row up under the dead id it would find nothing, decide the
+    // session is not empty after all, and resume against a session the agent
+    // no longer has — burning the whole budget on resourceNotFound.
+    client = new ScriptedClient({
+      loadSession: true,
+      freshSessionIdPerConnect: true,
+      resumeSessionError: new Error('Resource not found'),
+      attachSessionErrorOnConnect: 2,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    const history = makeHistory()
+    svc = makeService(client, config, stubAcpModelCandidateService(), history)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    expect(s.sessionIdOnAgent.get()).toBe('agent-durable-1')
+
+    s.requestProcessRestart()
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // Attempt 1 rebuilt (row → agent-durable-2) but its attach threw; attempt 2
+    // must rebuild again rather than resume the dead id.
+    expect(client.connections.length).toBe(3)
+    expect(client.connections[1]!.newCalls).toHaveLength(1)
+    expect(client.connections[2]!.newCalls).toHaveLength(1)
+    expect(client.connections[2]!.resumeCalls).toEqual([])
+    expect(s.sessionIdOnAgent.get()).toBe('agent-durable-3')
+    // Exactly one row survives, on the id the session actually ended up on.
+    expect(history.list().filter((e) => e.agentId === 'fake')).toHaveLength(1)
+    expect(history.get('agent-durable-3')).toBeDefined()
   })
 
   it('preserves the restart reason across a second loss so the pool is evicted again', async () => {

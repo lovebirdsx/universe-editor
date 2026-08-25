@@ -2957,14 +2957,27 @@
   text-overflow: ellipsis;
 }
 
-/* Sub-agent model footer inside the Model popover. */
-.configPopoverFooter {
-  margin-top: 2px;
-  padding-top: 2px;
-  border-top: 1px solid var(--vscode-workbench-border, #555);
+/* Sub-agent model picker (standalone trigger + floating panel). */
+.subagentPanel {
+  min-width: 200px;
+  max-width: 280px;
+  overflow-y: auto;
+  background: var(--vscode-agent-messageBackground, #2a2a2a);
+  border: 1px solid var(--vscode-workbench-border, #555);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
+  padding: 2px 0;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
-.subagentFooterHint {
+.subagentPanelDesc {
+  padding: 2px 10px 6px;
+  color: var(--vscode-agent-messageRoleForeground, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.78);
+  line-height: 1.4;
+}
+
+.subagentPanelHint {
   display: flex;
   align-items: baseline;
   gap: 4px;
@@ -2973,7 +2986,7 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.78);
 }
 
-.subagentFooterHint button {
+.subagentPanelHint button {
   background: transparent;
   border: none;
   color: var(--vscode-badge-progressBackground, #4fa6e2);
@@ -2983,7 +2996,7 @@
   white-space: nowrap;
 }
 
-.subagentFooterHint button:hover {
+.subagentPanelHint button:hover {
   text-decoration: underline;
 }
 

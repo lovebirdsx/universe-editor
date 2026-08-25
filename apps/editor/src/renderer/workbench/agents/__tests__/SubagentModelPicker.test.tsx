@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SubagentModelFooter tests — the Model popover footer for claude-code
- *  sessions: candidate rendering (inherit row + provider candidates + stale
- *  value pinning), the setSubagentModel writes (including the inherit=clear
- *  semantic), the silent-until-changed hint row, and the restart ordering
- *  (requestProcessRestart only after the write has resolved).
+ *  SubagentModelPicker tests — the standalone prompt-action-row picker for
+ *  claude-code sessions: candidate rendering (inherit row + provider
+ *  candidates + stale value pinning), the setSubagentModel writes (including
+ *  the inherit=clear semantic), the silent-until-changed hint row, and the
+ *  restart ordering (requestProcessRestart only after the write has resolved).
  *
  *  The current value is seeded through `settings.env.CLAUDE_CODE_SUBAGENT_MODEL` —
  *  the effective value the spawned process reads — because that is the only place
@@ -12,7 +12,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import {
   IAiModelService,
   INotificationService,
@@ -28,7 +29,7 @@ import {
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
-import { SubagentModelFooter } from '../SubagentModelFooter.js'
+import { SubagentModelPicker } from '../SubagentModelPicker.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -80,7 +81,7 @@ function makeClaudeService(opts: { agentSettings: ClaudeAgentSettings; subagentM
       return stored
     },
     async writeAgentSettings(): Promise<void> {
-      throw new Error('the footer must not write the agent-settings block')
+      throw new Error('the picker must not write the agent-settings block')
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
@@ -128,30 +129,53 @@ function setup(opts: {
   const instantiation = new InstantiationService(services)
   render(
     <ServicesContext.Provider value={instantiation}>
-      <SubagentModelFooter session={session} />
+      <PickerHarness session={session} />
     </ServicesContext.Provider>,
   )
   return { claude, session }
 }
 
+/** Controlled-open harness mirroring ConfigOptionsBar's openId wiring. */
+function PickerHarness({ session }: { session: IAcpSession }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <SubagentModelPicker
+      session={session}
+      open={open}
+      onOpen={() => setOpen(true)}
+      onClose={() => setOpen(false)}
+    />
+  )
+}
+
+function openPicker() {
+  fireEvent.click(screen.getByTestId('acp-subagent-picker-trigger'))
+}
+
 function option(label: string): HTMLElement {
-  const el = screen.getByText(label).closest('[role="option"]') as HTMLElement | null
+  const panel = screen.getByTestId('acp-subagent-panel')
+  const el = within(panel).getByText(label).closest('[role="option"]') as HTMLElement | null
   expect(el).toBeTruthy()
   return el!
 }
 
 async function pick(label: string) {
   await act(async () => {
-    fireEvent.mouseDown(screen.getByText(label))
+    fireEvent.mouseDown(within(screen.getByTestId('acp-subagent-panel')).getByText(label))
   })
 }
 
-describe('SubagentModelFooter', () => {
+describe('SubagentModelPicker', () => {
   it('renders the inherit row plus the selected provider candidates', async () => {
     setup({ agentSettings: { authentication: 'gw' } })
+    openPicker()
     // A candidate row proves the provider registry AND the claude agent
     // settings have both loaded; before that only the inherit row renders.
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     expect(option('Follow main model').getAttribute('aria-selected')).toBe('true')
     expect(option('claude-sonnet-4-6').getAttribute('aria-selected')).toBe('false')
@@ -160,7 +184,12 @@ describe('SubagentModelFooter', () => {
 
   it('marks the row matching the effective env value as selected', async () => {
     setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'deepseek-pro-v4' })
-    await waitFor(() => expect(screen.getByText('deepseek-pro-v4')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+      ).toBeTruthy(),
+    )
 
     expect(option('deepseek-pro-v4').getAttribute('aria-selected')).toBe('true')
     expect(option('Follow main model').getAttribute('aria-selected')).toBe('false')
@@ -168,7 +197,12 @@ describe('SubagentModelFooter', () => {
 
   it('picks a candidate by patching the sub-agent model env', async () => {
     const { claude, session } = setup({ agentSettings: { authentication: 'gw' } })
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     await pick('claude-sonnet-4-6')
     claude.flushWrite()
@@ -183,9 +217,14 @@ describe('SubagentModelFooter', () => {
       agentSettings: { authentication: 'gw' },
       subagentModel: 'claude-sonnet-4-6',
     })
+    openPicker()
     // Wait for a candidate row so the loaded current value is in effect —
     // picking before that would see `undefined` and early-return.
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     await pick('Follow main model')
     claude.flushWrite()
@@ -196,10 +235,17 @@ describe('SubagentModelFooter', () => {
 
   it('keeps a stale current value as a pinned top option', async () => {
     setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'old-stale-model' })
-    await waitFor(() => expect(screen.getByText('old-stale-model')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('old-stale-model'),
+      ).toBeTruthy(),
+    )
 
     expect(option('old-stale-model').getAttribute('aria-selected')).toBe('true')
-    const options = screen.getAllByRole('option').map((n) => n.textContent)
+    const options = within(screen.getByTestId('acp-subagent-panel'))
+      .getAllByRole('option')
+      .map((n) => n.textContent)
     expect(options).toEqual([
       'Follow main model',
       'old-stale-model',
@@ -210,7 +256,12 @@ describe('SubagentModelFooter', () => {
 
   it('stays silent until a change, then shows the restart hint', async () => {
     setup({ agentSettings: { authentication: 'gw' } })
-    await waitFor(() => expect(screen.getByText('deepseek-pro-v4')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+      ).toBeTruthy(),
+    )
 
     expect(screen.queryByTestId('acp-subagent-restart')).toBeNull()
 
@@ -219,12 +270,17 @@ describe('SubagentModelFooter', () => {
     expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
   })
 
-  it('does not mark the footer as changed when picking the already-current value', async () => {
+  it('does not mark the picker as changed when picking the already-current value', async () => {
     const { claude } = setup({
       agentSettings: { authentication: 'gw' },
       subagentModel: 'claude-sonnet-4-6',
     })
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     await pick('claude-sonnet-4-6')
 
@@ -235,7 +291,12 @@ describe('SubagentModelFooter', () => {
   it('requests the process restart only after the pick write has resolved', async () => {
     const restart = vi.fn()
     const { claude } = setup({ agentSettings: { authentication: 'gw' }, restart })
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     await pick('claude-sonnet-4-6')
     expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
@@ -261,7 +322,12 @@ describe('SubagentModelFooter', () => {
       restart,
       notify,
     })
-    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
 
     await pick('claude-sonnet-4-6')
     expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
@@ -279,5 +345,56 @@ describe('SubagentModelFooter', () => {
       message: expect.stringContaining('Could not save the sub-agent model'),
     })
     expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('clears the restart hint once the restart has been requested', async () => {
+    // The value is live on the restarted process from here on, so leaving the
+    // "takes effect next session · restart now" row up would be a lie.
+    const { claude } = setup({ agentSettings: { authentication: 'gw' } })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-sonnet-4-6'),
+      ).toBeTruthy(),
+    )
+
+    await pick('claude-sonnet-4-6')
+    claude.flushWrite()
+    await act(async () => {})
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('acp-subagent-restart'))
+    })
+
+    expect(screen.queryByTestId('acp-subagent-restart')).toBeNull()
+    expect(screen.queryByText(/Takes effect next session/)).toBeNull()
+  })
+
+  it('swallows a superseded write rejection instead of leaking an unhandled rejection', async () => {
+    // Picking twice orphans the first write: nobody awaits it, so an unhandled
+    // rejection would escape into the renderer's crash handling.
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const { claude } = setup({ agentSettings: { authentication: 'gw' } })
+      openPicker()
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+        ).toBeTruthy(),
+      )
+
+      await pick('claude-sonnet-4-6')
+      await pick('deepseek-pro-v4')
+      claude.failWrite(new Error('disk full'))
+      claude.flushWrite()
+      await act(async () => {})
+      // Let the microtask queue settle so a leaked rejection would have fired.
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
   })
 })

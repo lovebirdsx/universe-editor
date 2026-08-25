@@ -1228,7 +1228,12 @@ export class AcpSessionService
     if (this._reconnectingSessions.has(session.id)) return
     this._reconnectingSessions.add(session.id)
     try {
-      const sid = session.sessionIdOnAgent.get()
+      // Mutable across retries: an empty-session rebuild (see `rebuild` below)
+      // moves the session onto a NEW durable id, and a retry after that point
+      // must look the history row up under the new key — reading the dead id
+      // would find nothing, fall back to `session/resume` against a session the
+      // agent no longer has, and burn the whole recovery budget.
+      let sid = session.sessionIdOnAgent.get()
       if (sid === undefined) {
         // Never attached — there is no durable session to resume against.
         session.sealRecoveryFailure('connection lost before the session was established')
@@ -1261,15 +1266,36 @@ export class AcpSessionService
           const entry = this._history.get(sid)
           const cwd = entry?.cwd ?? this._currentCwd()
           const authority = entry?.authority ?? this._currentAuthority()
+          // An EMPTY session (created but never messaged) has no agent-side
+          // transcript, so `session/resume` can only answer resourceNotFound —
+          // three attempts of that burn the recovery budget and seal the session
+          // as "automatic recovery failed". Rebuild it with `session/new`
+          // instead: the local session object, its editor tab, draft and config
+          // all survive; only the durable id moves (see `rebuiltSessionId`).
+          //
+          // A side task is the one empty session that DOES have a transcript:
+          // `forkSideTask` copies the parent's full history on the agent before
+          // the child sends anything, so rebuilding it would silently throw the
+          // forked baseline away and leave the side chat without the context it
+          // exists to discuss.
+          const rebuild = entry?.hasMessages === false && entry.sideTaskOf === undefined
+          if (rebuild) {
+            this._logger.info(
+              `session ${sid} has no agent-side transcript — rebuilding with session/new instead of resume`,
+            )
+          }
           const conn = await this._client.connect(session.agentId, {
             ...(cwd !== undefined ? { cwd } : {}),
             ...(authority !== undefined ? { authority } : {}),
-            leaseFor: sid,
+            // A rebuild learns its durable id only from session/new, so the
+            // lease's terminal-ownership tag is set by `attachSession` below —
+            // pre-binding the dead id here would strand its terminals.
+            ...(rebuild ? {} : { leaseFor: sid }),
             silent: true,
           })
           try {
             const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
-            if (initResult.agentCapabilities?.loadSession !== true) {
+            if (!rebuild && initResult.agentCapabilities?.loadSession !== true) {
               throw new Error(`${agentName} does not support session/resume — cannot reconnect`)
             }
             const { kept, dropped } = filterMcpServersByCapabilities(
@@ -1282,21 +1308,43 @@ export class AcpSessionService
             )
             this._warnDroppedMcpServers(agentName, dropped)
             const extraModels = await this._extraModelsFor(session.agentId)
-            const resumeResult = await withTimeout(
-              conn.conn.resumeSession({
-                sessionId: sid,
-                cwd: cwd ?? '',
-                mcpServers: kept,
-                ...(await this._builtinAgentDirs(authority)),
-                _meta: buildResumeMeta(entry, extraModels),
-              }),
-              timeoutMs,
-              'ACP session/resume',
-            )
+            const agentDirs = await this._builtinAgentDirs(authority)
+            let rebuiltSessionId: string | undefined
+            // The SDK types these as `T | null` (absent bag), so keep the null
+            // and gate on `!= null` at the applyInitState call below.
+            let reportedConfigOptions: readonly SessionConfigOption[] | null | undefined
+            if (rebuild) {
+              const newResult = await withTimeout(
+                conn.conn.newSession({
+                  cwd: cwd ?? '',
+                  mcpServers: kept,
+                  ...agentDirs,
+                  _meta: buildNewSessionMeta(extraModels),
+                }),
+                timeoutMs,
+                'ACP session/new',
+              )
+              rebuiltSessionId = newResult.sessionId
+              reportedConfigOptions = newResult.configOptions
+            } else {
+              const resumeResult = await withTimeout(
+                conn.conn.resumeSession({
+                  sessionId: sid,
+                  cwd: cwd ?? '',
+                  mcpServers: kept,
+                  ...agentDirs,
+                  _meta: buildResumeMeta(entry, extraModels),
+                }),
+                timeoutMs,
+                'ACP session/resume',
+              )
+              reportedConfigOptions = resumeResult.configOptions
+            }
             if (session.status.get() === 'closed' || !session.isReconnecting) {
               conn.dispose()
               return
             }
+            const attachId = rebuiltSessionId ?? sid
             // The rebuilt agent session re-seeds its config from settings.json
             // (runtime mode/effort/etc. are lost; only the model survives via
             // SDK live state). Re-seed the state machine with the session's
@@ -1307,11 +1355,25 @@ export class AcpSessionService
               ...this._agentDefaults.getDefaults(session.agentId),
               ...(entry?.configOptions ?? {}),
             })
-            if (resumeResult.configOptions) {
-              session.applyInitState({ configOptions: resumeResult.configOptions })
+            if (reportedConfigOptions != null) {
+              session.applyInitState({ configOptions: reportedConfigOptions })
             }
-            conn.attachSession(sid)
-            session.reattachConnection(conn)
+            // Move the durable history row onto the new id immediately BEFORE
+            // the attach, so everything the attach touches (title/first-prompt
+            // backfill, the active-session pointer autorun) already sees the new
+            // key, while nothing that could still throw runs in between — a
+            // throw after the rekey would leave the row on the new id and the
+            // session on the old one. The row keeps its title/config/cwd/MCP
+            // pin, so the rebuild is invisible to the session list. `sid` moves
+            // too: a later retry must look the row up under the live key.
+            if (rebuiltSessionId !== undefined) {
+              this._history.rekey(sid, rebuiltSessionId)
+              this._sessionFactory.messageAttachments.removeSession(sid)
+              this._logger.info(`rebuilt empty session ${sid} as ${rebuiltSessionId} on restart`)
+              sid = rebuiltSessionId
+            }
+            conn.attachSession(attachId)
+            session.reattachConnection(conn, attachId)
             this._mcpSelectionAtAttach.set(session.id, session.mcpServerSelection.get())
           } catch (err) {
             conn.dispose()

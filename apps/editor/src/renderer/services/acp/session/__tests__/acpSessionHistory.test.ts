@@ -299,6 +299,54 @@ describe('AcpSessionHistoryService — touch / remove / clear', () => {
     expect(svc.list()).toEqual([])
   })
 
+  it('rekey moves a row onto a new durable id, keeping every other field', async () => {
+    await svc.initialize()
+    const a = svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'old',
+      title: 'kept title',
+      cwd: '/w',
+      hasMessages: false,
+      configOptions: { model: 'sonnet' },
+      mcpServerNames: ['fs'],
+    })
+    svc.setHistoryManualTitle('old')
+
+    svc.rekey('old', 'new')
+
+    expect(svc.get('old')).toBeUndefined()
+    const moved = svc.get('new')
+    expect(moved?.sessionIdOnAgent).toBe('new')
+    expect(moved?.title).toBe('kept title')
+    expect(moved?.cwd).toBe('/w')
+    expect(moved?.hasMessages).toBe(false)
+    expect(moved?.configOptions).toEqual({ model: 'sonnet' })
+    expect(moved?.mcpServerNames).toEqual(['fs'])
+    expect(moved?.manualTitle).toBe(true)
+    expect(moved?.createdAt).toBe(a.createdAt)
+    expect(svc.list()).toHaveLength(1)
+  })
+
+  it('rekey collapses a row already sitting on the target id', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'old', title: 'source' })
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'new', title: 'squatter' })
+
+    svc.rekey('old', 'new')
+
+    expect(svc.list()).toHaveLength(1)
+    expect(svc.get('new')?.title).toBe('source')
+  })
+
+  it('rekey is a no-op for unknown ids, equal ids and an empty target', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'a' })
+    svc.rekey('nope', 'x')
+    svc.rekey('1', '1')
+    svc.rekey('1', '')
+    expect(svc.list().map((e) => e.id)).toEqual(['1'])
+  })
+
   it('remove deletes a single entry', async () => {
     await svc.initialize()
     const a = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'a' })

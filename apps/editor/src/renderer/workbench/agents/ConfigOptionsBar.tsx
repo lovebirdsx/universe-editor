@@ -6,7 +6,7 @@
  *  for choosing a value.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef, useState, type ReactNode } from 'react'
+import { useRef, useState } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
 import { IDialogService } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
@@ -23,7 +23,7 @@ import {
   evaluateModelSwitchContextShrink,
 } from '../../services/acp/session/modelSwitchContextGuard.js'
 import { McpServerPicker } from './McpServerPicker.js'
-import { SubagentModelFooter } from './SubagentModelFooter.js'
+import { SubagentModelPicker } from './SubagentModelPicker.js'
 import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
 
@@ -31,6 +31,8 @@ export { findConfigOptionLabel as findLabel }
 
 /** Reserved `openId` for the MCP picker so it excludes the option popovers. */
 const MCP_OPEN_ID = '__mcp__'
+/** Reserved `openId` for the sub-agent picker (claude-code only). */
+const SUBAGENT_OPEN_ID = '__subagent__'
 
 const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
 
@@ -53,11 +55,26 @@ export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
       onClose={() => setOpenId(null)}
     />
   )
-  // No agent-advertised options: the bar collapses to the MCP picker alone
-  // (kept inside the flex container so it still owns the left-hand slot). The
-  // picker self-hides for read-only sessions / an empty definition pool.
+  const subagentPicker =
+    session.agentId === 'claude-code' ? (
+      <SubagentModelPicker
+        session={session}
+        open={openId === SUBAGENT_OPEN_ID}
+        onOpen={() => setOpenId(SUBAGENT_OPEN_ID)}
+        onClose={() => setOpenId(null)}
+      />
+    ) : null
+  // No agent-advertised options: the bar collapses to the pickers alone
+  // (kept inside the flex container so they still own the left-hand slots).
+  // The MCP picker self-hides for read-only sessions / an empty definition
+  // pool; the sub-agent picker stays for claude-code sessions.
   if (options.length === 0) {
-    return <div className={styles['configBar']}>{mcpPicker}</div>
+    return (
+      <div className={styles['configBar']}>
+        {subagentPicker}
+        {mcpPicker}
+      </div>
+    )
   }
   const ordered = [...options].sort(compareByCategory)
   return (
@@ -72,6 +89,7 @@ export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
           onClose={() => setOpenId(null)}
         />
       ))}
+      {subagentPicker}
       {mcpPicker}
     </div>
   )
@@ -149,9 +167,6 @@ function ConfigOptionTrigger({
           }}
           onDismiss={onClose}
           testKey={testKey}
-          {...(option.category === 'model' && session.agentId === 'claude-code'
-            ? { footer: <SubagentModelFooter session={session} /> }
-            : {})}
         />
       ) : null}
     </div>
@@ -163,13 +178,11 @@ function ConfigOptionPopover({
   onPick,
   onDismiss,
   testKey,
-  footer,
 }: {
   option: SessionConfigOption & { type: 'select' }
   onPick: (value: string) => void
   onDismiss: () => void
   testKey: string
-  footer?: ReactNode
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   usePopoverDismiss(containerRef, onDismiss)
@@ -182,7 +195,6 @@ function ConfigOptionPopover({
       data-testid={`acp-config-${testKey}-popover`}
     >
       {renderPopoverItems(option.options, option.currentValue, onPick)}
-      {footer !== undefined ? <div className={styles['configPopoverFooter']}>{footer}</div> : null}
     </div>
   )
 }
