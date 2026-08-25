@@ -2,7 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AiSettingsEditor — the unified settings shell for AI and Agents. A fixed
  *  left-hand nav (mirroring the Settings editor) is split into two groups:
- *    • AI      — static categories (model configuration, feature models)
+ *    • AI      — static categories (providers, model knowledge, feature models,
+ *                MCP servers)
  *    • Agents  — every known ACP agent (from IAcpAgentRegistry); selecting one
  *                renders the settings UI that agent contributed (Claude carries
  *                its own auth / model / env sub-nav).
@@ -12,21 +13,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
-import { Boxes, Plug, SlidersHorizontal, type LucideIcon } from 'lucide-react'
+import { Boxes, Cpu, Plug, SlidersHorizontal, type LucideIcon } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
 import { cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { AgentIcon } from '../agents/agentIcon.js'
 import { getAgentSettingsComponent } from '../agentSettings/agentSettingsRegistry.js'
-import { AiModelsPanel } from './AiModelsPanel.js'
+import { AiProvidersPanel } from './AiProvidersPanel.js'
+import { AiModelKnowledgePanel } from './AiModelKnowledgePanel.js'
 import { AiFeatureModelsPanel } from './AiFeatureModelsPanel.js'
 import { AiMcpServersPanel } from './AiMcpServersPanel.js'
 import { AiSettingsHelpButton } from './AiSettingsHelpButton.js'
 import {
   aiFeatureModelsHelpText,
   aiMcpServersHelpText,
-  aiModelsHelpText,
+  aiModelKnowledgeHelpText,
+  aiProvidersHelpText,
 } from './aiSettingsHelpText.js'
 import styles from './AiSettingsEditor.module.css'
 import '../agentSettings/builtinAgentSettings.js'
@@ -41,11 +44,18 @@ interface AiCategoryDef {
 
 const AI_CATEGORIES: readonly AiCategoryDef[] = [
   {
-    id: 'aiModels',
+    id: 'providers',
     icon: Boxes,
+    label: localize('aiSettings.category.providers', 'Provider Configuration'),
+    panel: AiProvidersPanel,
+    help: aiProvidersHelpText,
+  },
+  {
+    id: 'models',
+    icon: Cpu,
     label: localize('aiSettings.category.models', 'Model Configuration'),
-    panel: AiModelsPanel,
-    help: aiModelsHelpText,
+    panel: AiModelKnowledgePanel,
+    help: aiModelKnowledgeHelpText,
   },
   {
     id: 'featureModels',

@@ -50,6 +50,12 @@ const fakeAi: IAiModelService = {
   getProviders: () => Promise.resolve([]),
   updateProviders: (_providers: readonly AiProviderEntry[]) => Promise.resolve(),
   getModelKnowledge: () => Promise.resolve({} as Readonly<Record<string, AiModelKnowledge>>),
+  getUserModelKnowledge: () => Promise.resolve({} as Readonly<Record<string, AiModelKnowledge>>),
+  updateModelKnowledge: (_models: Readonly<Record<string, AiModelKnowledge>>) => Promise.resolve(),
+  updateModelKnowledgeAndProviders: (
+    _models: Readonly<Record<string, AiModelKnowledge>>,
+    _providers: readonly AiProviderEntry[],
+  ) => Promise.resolve(),
   getProviderIssues: () => Promise.resolve([] as readonly AiProviderIssue[]),
   isLegacySettingsFormat: () => Promise.resolve(false),
   verifyProvider: (_input: AiProviderVerifyInput) => Promise.resolve({ ok: true, modelCount: 0 }),

@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Field-editing plumbing shared by every section of a provider card. One save
- *  paradigm: a commit writes through updateEntry immediately and stamps which
- *  field was written so a "Saved" flag can render next to that field alone.
+ *  Field-editing plumbing shared by every section of a provider card and the
+ *  model knowledge cards. One save paradigm: a commit writes through
+ *  updateEntry immediately and stamps which field was written so a "Saved"
+ *  flag can render next to that field alone.
  *
  *  `useEditableText` additionally guards the input against the aiSettings.json
  *  file watcher: a hot reload arriving mid-edit must not overwrite what the user
@@ -20,31 +21,34 @@ export interface SavedStamp {
 }
 
 /**
- * Write a field, or delete it when the value is empty — an absent key and an
- * empty string mean different things to `resolveProviderEntries`, and only the
- * absent one means "inherit / use the default".
+ * Write a field, or delete it when the value is empty — an absent key is the
+ * only way to mean "inherit / use the default". Only `undefined` and `''` count
+ * as empty, so `0` and `false` are written through.
  */
-export function patchField<K extends keyof AiProviderEntry>(
+export function patchField<T extends object, K extends keyof T>(
   field: K,
-  value: AiProviderEntry[K] | undefined,
-): ProviderPatch {
+  value: T[K] | undefined,
+): (entry: T) => T {
   return (entry) => {
     if (value !== undefined && value !== '') return { ...entry, [field]: value }
     if (!(field in entry)) return entry
     const next = { ...entry }
-    delete (next as Record<string, unknown>)[field]
+    Reflect.deleteProperty(next, field)
     return next
   }
 }
 
-export function useProviderField(updateEntry: (build: ProviderPatch) => Promise<void>) {
+/** Generic core of `useProviderField`: the same save-and-stamp pipeline for any entry type. */
+export function useEntryField<T extends object>(
+  updateEntry: (build: (entry: T) => T) => Promise<void>,
+) {
   const [saved, setSaved] = useState<SavedStamp | undefined>(undefined)
 
   /** Flag a field as written by something other than updateEntry (setApiKey). */
   const stamp = useCallback((field: string) => setSaved({ field, at: Date.now() }), [])
 
   const apply = useCallback(
-    async (field: string, build: ProviderPatch) => {
+    async (field: string, build: (entry: T) => T) => {
       await updateEntry(build)
       setSaved({ field, at: Date.now() })
     },
@@ -52,13 +56,17 @@ export function useProviderField(updateEntry: (build: ProviderPatch) => Promise<
   )
 
   const setField = useCallback(
-    async <K extends keyof AiProviderEntry>(field: K, value: AiProviderEntry[K] | undefined) => {
-      await apply(field, patchField(field, value))
+    async <K extends keyof T>(field: K, value: T[K] | undefined) => {
+      await apply(String(field), patchField<T, K>(field, value))
     },
     [apply],
   )
 
   return { setField, apply, stamp, saved }
+}
+
+export function useProviderField(updateEntry: (build: ProviderPatch) => Promise<void>) {
+  return useEntryField<AiProviderEntry>(updateEntry)
 }
 
 export interface EditableText {

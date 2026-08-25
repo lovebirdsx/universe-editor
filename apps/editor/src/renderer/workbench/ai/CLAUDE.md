@@ -4,9 +4,9 @@
 
 ## AI 设置页面（统一 Settings editor，AI + Agents）
 
-设置页是一个**虚拟 editor**（不是 webview、不是 view），对标 VSCode Settings Editor 的「左侧分类导航 + 右侧内容」双栏范式。左侧导航分两组：**AI**（静态分类：模型配置 / 功能模型）+ **Agents**（动态列出 `IAcpAgentRegistry.list()` 的每个 acp agent，选中后渲染该 agent 贡献的设置组件）。本节只讲这个**页面壳**怎么拼起来；底层 AI 模型服务三层架构（platform 契约 / main 实现 / renderer 门面）、加协议 provider、密钥明文策略见 `apps/editor/CLAUDE.md` **套路 I**；Claude/agent 设置内容本体（claudeConfig 服务、认证选择、面板）见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
+设置页是一个**虚拟 editor**（不是 webview、不是 view），对标 VSCode Settings Editor 的「左侧分类导航 + 右侧内容」双栏范式。左侧导航分两组：**AI**（静态分类：供应商配置 / 模型配置 / 功能模型 / MCP 服务器）+ **Agents**（动态列出 `IAcpAgentRegistry.list()` 的每个 acp agent，选中后渲染该 agent 贡献的设置组件）。本节只讲这个**页面壳**怎么拼起来；底层 AI 模型服务三层架构（platform 契约 / main 实现 / renderer 门面）、加协议 provider、密钥明文策略见 `apps/editor/CLAUDE.md` **套路 I**；Claude/agent 设置内容本体（claudeConfig 服务、认证选择、面板）见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
 
-> ⚠️ 第一原则：先认领改动落在**哪一层**——① 页面壳（导航/分组/状态/帮助，`AiSettingsEditor.tsx`）② 某个 AI 分类面板（`AiModelsPanel` / `AiFeatureModelsPanel`）③ 某个 agent 的设置组件（经 `agentSettingsRegistry` 贡献，见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)）④ 选模型命令（`actions/*Actions.ts`）⑤ 底层服务（`IAiModelService`，**出本主题**）。
+> ⚠️ 第一原则：先认领改动落在**哪一层**——① 页面壳（导航/分组/状态/帮助，`AiSettingsEditor.tsx`）② 某个 AI 分类面板（`AiProvidersPanel` / `AiModelKnowledgePanel` / `AiFeatureModelsPanel` / `AiMcpServersPanel`）③ 某个 agent 的设置组件（经 `agentSettingsRegistry` 贡献，见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)）④ 选模型命令（`actions/*Actions.ts`）⑤ 底层服务（`IAiModelService`，**出本主题**）。
 
 > 🔀 **2026-06 合并**：原独立的 Agent Settings editor（`agentSettings/AgentSettingsEditor.tsx` + `AgentSettingsEditorInput`）已删除，其「列 agent + 渲染贡献组件」的壳职责并入本 `AiSettingsEditor`。`agentSettings/` 目录现只剩贡献注册表与 Claude 设置内容本体（仍原位）。
 
@@ -21,7 +21,7 @@ apps/editor/src/renderer/workbench/ai/
                                     agent 项 → getAgentSettingsComponent(id) 渲染贡献组件（自带滚动），无则占位
                               统一持久化：settings.activeItem（值 `ai:<cat>` / `agent:<id>`）+ AI 项 per-item scrollTop
                               顶部 `import '../agentSettings/builtinAgentSettings.js'` 触发 Claude 自注册
-  AiModelsPanel.tsx           AI 分类①「模型配置」：单层 Provider 入口列表（每个 gateway 端点一条）
+  AiProvidersPanel.tsx        AI 分类①「供应商配置」：单层 Provider 入口列表（每个 gateway 端点一条）
                               顶部旧格式 banner + 「添加提供方」；`replaceProviderAt(index, patch)` 是唯一写入口
                               （按 index 不按 id——手写文件可能重复 id，改一张卡不能连带改另一张）
                               **所有写盘串行化**：updateProviders 是全量替换，故写入基于 `providersRef.current`
@@ -30,17 +30,43 @@ apps/editor/src/renderer/workbench/ai/
                               **账号用量在此批量拉**（按 effectiveUsageSource 过滤 id → Promise.allSettled →
                               整张 Map 全量替换 → 折算成 UsageState 下传）：徽标在卡片折叠时也要显示，而卡片
                               折叠时 body 不挂载；且所有该重拉的触发源都已收敛到 reload()
+  AiModelKnowledgePanel.tsx   AI 分类②「模型配置」：图形化编辑 aiSettings.json 顶层 `models` 模型知识库
+                              （模型内在属性 name/family/vendor/nativeProtocol/token 上限/capabilities/
+                              推理强度档位/请求参数，**不含价格**——价格是 (通道, 模型) 的函数，归供应商条目）。
+                              两个 Section：Your Models（默认展开，用户层条目）+ Built-in Models（默认折叠，
+                              过滤掉已被用户覆盖的 key，每行一个 Override 按钮——**Override 只写空条目 `{}`**，
+                              字段物化-on-touch）；工具栏 Add Model（弹窗只输 key，命中内置 key 时按钮变 Override）
+                              / Open aiSettings.json；legacy banner 同供应商面板。
+                              写盘：`enqueueWrite` 串行队列 + `knowledgeRef`/`providersRef` 最新快照 +
+                              `writeSeqRef` 陈旧回写守卫（理由见「关键架构决策」）；**刻意不调 `getModels()`**——
+                              那是慢枚举路径，本面板不依赖网关当前回哪些模型
+                              **写入门控 `canEdit = !legacy && load==='ready'`**：全量替换语义下，首读未落地
+                              就写会把用户真实 `models` 换成空占位（见「易踩坑」11）；按钮 disabled 之外
+                              `enqueueWrite` 内还有一道写时复查（legacyRef/loadedRef）
+  PanelSection.tsx            两个面板共用的顶层折叠区 + `useCollapseToggle`（折叠态整 Record 存一个 key，
+                              对有效值取反）；与卡内的 `providerCard/CardSection` 是不同层，别混
+  modelCard/                  模型知识条目卡片的可编辑分区（复用 providerCard 的基建：useEntryField /
+                              useEditableText / SavedIndicator / SettingRow 等）
+    ModelKnowledgeCard.tsx    单条卡片：九个字段（name/family/vendor/nativeProtocol/maxInputTokens/
+                              maxOutputTokens/capabilities/supportsReasoningEffort/parameters），
+                              effective 渲染（`user.field ?? builtin.field`）+ Built-in note + Rename/Duplicate/Remove
+    AddModelDialog.tsx        只输入 key；命中内置 key 时按钮文案变 `Override`；`isValidKnowledgeKey` 预检
+    useEditableNumber.ts      `useEditableText` 的数字孪生（token 上限等非负整数；invalid 态驱动 Input 标红）
   ProviderEntryCard.tsx       入口卡**壳**：header(badges/用量徽标/ConnectivityDot/Duplicate/Remove) + 折叠 +
                               三个 CardSection 编排（价格来源/用量来源/协议与模型）；
                               连通性**自动探测**（useAutoVerify）：挂载读 IStorageService 缓存（`ai.settings.connectivity.<id>`，
                               5 分钟 TTL）、缺失/过期即探测；连接字段变更防抖重测；无手动按钮
-  providerCard/               卡片内部的可编辑分区（8 个字段全覆盖，统一「即时保存 + 内联反馈」范式）
+  providerCard/               卡片内部的可编辑分区（8 个字段全覆盖，统一「即时保存 + 内联反馈」范式）；
+                              模型知识卡片复用同一批基建
+    HeaderAction.tsx          header 右侧共享动作（`role="button"` 的 span——header 本身是 button 不能嵌套）；
+                              Duplicate/Remove/Override 从 ProviderEntryCard 抽出，两张卡共用
     SettingRow.tsx            紧凑行（label 左固定列宽 / 控件右 + note 下方）；窄卡片经 @container 回退成上下两行
     CardSection.tsx           带摘要的二级折叠区（标题+摘要常显 + header 右侧 actions 位），受控、折叠态由面板持久化
                               **不复用 workbench-ui 的 CollapsibleSlot**：它硬编码 ACP testid、标题/摘要二选一、无 actions 位
     usageState.ts             UsageState 三态（none / loading / ready+可能 undefined）——loading 与
                               「拉到了但没值」必须分开，后者要显示「不可用」而不是永远转圈
-    useProviderField.ts       `patchField`(空值即删 key) / `useProviderField`(写盘 + 盖「已保存」戳) /
+    useProviderField.ts       `patchField`(空值即删 key) / `useEntryField`(泛化核心：save-and-stamp 管线，
+                              任意 entry 类型，模型知识卡复用) / `useProviderField`(= useEntryField\<AiProviderEntry\>) /
                               `useEditableText`(草稿在聚焦期不被 aiSettings.json 热重载覆盖)
     useAutoVerify.ts          卡片连通性自动探测：挂载恢复缓存（5 分钟 TTL）+ 缺失/过期自动 verify +
                               连接字段指纹变化 600ms 防抖重测（绕过 TTL）+ token 竞态防护；不可测保持「未测试」
@@ -61,10 +87,11 @@ apps/editor/src/renderer/workbench/ai/
                               main 展平 extends 后按子条目 id 缓存，只读自身值会把已有数据显示成「无」
   AddProviderDialog.tsx       加 provider 弹窗：模板选择器（预填 baseUrl/protocolMap/pricingSource，
                               **永不填 id 与 apiKey**）+ 单层表单 → updateProviders
-  AiFeatureModelsPanel.tsx    AI 分类②「功能模型」：chat / inline / commit 三行，数据驱动（FEATURES 数组）
+  AiFeatureModelsPanel.tsx    AI 分类③「功能模型」：chat / inline / commit / sessionTitle 四行，数据驱动（FEATURES 数组）
                               点击行 → executeCommand 对应 pickModel 命令 → reload
+  AiMcpServersPanel.tsx       AI 分类④「MCP 服务器」：MCP 服务器配置列表（增删改，编辑走 McpServerEditDialog 弹窗）
   AiSettingsHelpButton.tsx    AI 分类 header 右上角「?」：点击弹 FocusScopeOverlay + MarkdownView 浮层（agent 项无帮助）
-  aiSettingsHelpText.ts       两段帮助 markdown（default 英文；中文在 zh-CN.ts 同 key）
+  aiSettingsHelpText.ts       四段帮助 markdown（default 英文；中文在 zh-CN.ts 同 key）
   AiSettingsEditor.module.css 壳样式（双栏 + navGroupTitle 分组标题 + 卡片 + 功能行 + 帮助浮层 + 空状态），颜色用 --vscode-* 变量（运行时注入）+ tokens.css 间距/字号 token
 
 apps/editor/src/renderer/workbench/agentSettings/   ← agent 设置内容本体（见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)）
@@ -84,7 +111,7 @@ apps/editor/src/renderer/actions/
   commitMessageActions.ts     PickCommitModelAction(ai.commitMessage.pickModel)
   aiModelPickItems.ts         共享 buildModelPickItems(models, active)：三个 picker 统一的分组/勾选 QuickPick 项
 
-apps/editor/src/shared/i18n/messages/zh-CN.ts   所有 ai.* / aiModels.* / aiFeatures.* / aiSettings.* / settings.group.* 中文翻译
+apps/editor/src/shared/i18n/messages/zh-CN.ts   所有 ai.* / aiModels.* / aiKnowledge.* / aiFeatures.* / aiSettings.* / settings.group.* 中文翻译
 ```
 
 input→组件注册两处（套路见 apps/editor/CLAUDE.md「编辑器输入」）：
@@ -108,6 +135,7 @@ const storage = useService(IStorageService)
 | 当前激活项（AI 分类或 agent） | `settings.activeItem`（值 `ai:<cat>` / `agent:<id>`） | GLOBAL |
 | 各 AI 分类滚动位置 | `ai.settings.scroll.ai:<categoryId>` | GLOBAL |
 | group 折叠态（整体一个 Record） | `ai.settings.models.collapsed`；内部 key：`section:providers` / `provider:<id>` / `provider:<id>:pricing` / `:usage` / `:protocols` / `provider:<id>:protocol:<协议>`（协议块级折叠） | GLOBAL |
+| 模型知识库折叠态（整体一个 Record） | `ai.settings.modelKnowledge.collapsed`；内部 key：`section:custom` / `section:builtin` / `model:<key>` | GLOBAL |
 | Claude 子分类 / 滚动（agent 项内部自管） | `agent.settings.claude.activeCategory` / `…scroll.<id>` | GLOBAL |
 
 > 全用 GLOBAL（AI/agent 配置与 workspace 无关）。滚动恢复要 `requestAnimationFrame` 等面板渲染后再设 `scrollTop`；切换项前先 flush 旧 AI 项滚动位置（agent 项不在壳里跟踪滚动）。
@@ -132,6 +160,7 @@ const storage = useService(IStorageService)
 - **加一个 agent 的设置页**（如 codex）：**不动壳**——agent 项由 `registry.list()` 自动出现在 Agents 组。只需新建 `agentSettings/<agent>/XxxAgentSettings.tsx`（末行 `registerAgentSettings('<id>', Comp)`）+ 在 `agentSettings/builtinAgentSettings.ts` 加一行 import。详见 [`../agentSettings/claude/CLAUDE.md`](../agentSettings/claude/CLAUDE.md)。
 - **某 AI 分类面板加控件**：优先用 workbench-ui 原子件（`Button`/`IconButton`/`Input`/`Checkbox`/`Badge`/`Select`）+ `styles` 里 token 化样式；按钮尽量图标化（`IconButton` + lucide，必带 `label`）。**别再写原生 `<select>`**——`Select` 是自渲染浮层（触发器 `role="combobox"`、选项 `role="option"`），测试里 `fireEvent.change` 对它无效，要点开再点选项。
 - **改 protocolMap / 模型声明编辑**：`providerCard/ProtocolsSection.tsx`（三态与协议增删）+ `providerCard/ModelRefEditor.tsx`（单条 ref）；纯函数（三态语法、ref 字符串↔对象归一化、探测结果回填 `mergeProbedSelection`）在 `shared/ai/protocolMapEdit.ts`，继承链遍历与「探测该拨哪个地址」的 `effectiveConnection` 在 `shared/ai/providerInheritance.ts`——**这两个文件是可单测的边界，逻辑优先往那儿放**。
+- **改模型知识库编辑**（「模型配置」分类）：编排层 `AiModelKnowledgePanel.tsx`（两 Section + 写盘串行队列 + 陈旧回写守卫）；单条卡片 `modelCard/ModelKnowledgeCard.tsx`（九字段）、加模型弹窗 `modelCard/AddModelDialog.tsx`、数字草稿 `modelCard/useEditableNumber.ts`；纯函数在 `shared/ai/modelKnowledgeEdit.ts`（capabilities 四键切换 / reasoningEffort 解析·格式化 / parameters schema 校验 / key 合法性 / 副本命名）与 `shared/ai/modelKnowledgeUsage.ts`（引用该 key 的 provider 反查 / 重命名 ref 改写）——**可单测边界，逻辑优先往 shared 放**。
 - **动到「连通性探测 / 探测端点」**：连接信息一律走 `effectiveConnection(provider, allProviders)`，不要直接读 `provider.baseUrl/apiKey`——纯继承条目自身两者皆空，拨出去必失败。它返回的是**祖先的明文密钥**，只可用于发往 main 建连，**绝不能渲染**。
 - **加一条 provider 模板**：`shared/ai/providerTemplates.ts` 加一项；官方端点的 baseUrl 必须与 `shared/ai/officialEndpoints.ts` 对齐（`providerTemplates.test.ts` pin 住了这个一致性）。
 - **加一个功能→模型项**：`AiFeatureModelsPanel.tsx` 的 `FEATURES` 数组加一项（icon / label / desc / command / read）；该功能的 pickModel 命令需已存在（否则先按 actions 套路加）。
@@ -145,8 +174,11 @@ const storage = useService(IStorageService)
 - **AI 与 Agents 合并到同一壳（2026-06）**：原 Agent Settings 是独立 editor，与 AI Settings 两套界面拼在一起、统一感弱。合并后是**一个**虚拟 editor、左侧单栏分两组（AI 静态分类 + Agents 动态列表），右侧按选中项类型分支渲染。入口也收敛——`ai.manageModels`（标题 Open AI & Agent Settings）是主入口；`workbench.action.agent.openSettings` 保留（兼容 AcpSessionEditor 齿轮等调用），改为预置 `settings.activeItem` 后打开同一编辑器并定位到 Agents 区。
 - **AI 分类用静态数组、Agents 用动态注册表**：AI 分类数量少且固定，硬编码 `AI_CATEGORIES`；agent 数量随 `IAcpAgentRegistry` 变化，且每个 agent 的设置 UI 自包含，故走 `agentSettingsRegistry` 贡献机制（壳零改动即可加新 agent）。
 - **agent 项右侧不套壳的滚动容器**：agent 贡献组件（如 Claude）自带 `subNav`/`subBody` 横向分栏与内部滚动，壳只在 AI 项管 scrollTop，避免双滚动条。agent 项也无帮助按钮（help 是 AI 专属文案）。
-- **激活模型只在「功能模型」分类设置**：chat/inline/commit 的活跃模型由 `AiFeatureModelsPanel` 点击行触发对应命令统一管理。**`AiModelsPanel` 不再有「设为活跃」入口**（曾有，已移除）——模型配置面板只管「配置模型」（baseUrl/key/参数/增删），不管「用哪个」，避免两处重复。
+- **激活模型只在「功能模型」分类设置**：chat/inline/commit/sessionTitle 的活跃模型由 `AiFeatureModelsPanel` 点击行触发对应命令统一管理。**`AiProvidersPanel` 不再有「设为活跃」入口**（曾有，已移除）——供应商面板只管「配置供应商」（baseUrl/key/参数/增删），不管「用哪个」，避免两处重复。
 - **点击功能行复用命令而非自造 picker**：`AiFeatureModelsPanel` 直接 `executeCommand('ai.pickModel'…)`，确保和状态栏 model picker 完全一致的体验，零重复逻辑。
+- **模型知识库只写用户层，不写合并视图**：`getModelKnowledge()` 返回 `mergeModelKnowledge(BUILTIN_MODEL_KNOWLEDGE, user)` 的合并结果，写回去会把全部内置知识物化进用户的 aiSettings.json，未来内置目录升级（厂商调大 token 上限）就被用户副本 pin 死。所以「Override 内置」只写空条目 `{}`，字段**物化-on-touch**（改哪个字段才写哪个）；渲染一律跟 effective（`user.field ?? builtin.field`），写盘只写自身层；清空输入 → 删 key → 输入框回显内置值 + 「Built-in: X」note，这就是可见的「恢复默认」。删除内置覆盖前会确认（Reset to built-in）。
+- **capabilities 必须写完整对象**：`aiModelRegistry.ts` 是 `knowledge.capabilities ?? { streaming: true }`（缺席落乐观默认），且 `mergeModelKnowledge` 对嵌套对象**整体替换**——用户层写部分 capabilities 会静默丢掉内置的 vision 等。所以任何勾选都经 `toggledCapabilities` 写全四键（**streaming / vision / promptCaching / toolCalling**，权威定义 `shared/ai/protocolMapEdit.ts` 的 `AI_CAPABILITY_KEYS`）；删掉覆盖是显式动作（行内小按钮），不是取消勾选的副作用。注意「能力只能收窄不能新增」是**供应商侧 ref** 的规则（`ModelRefEditor`），知识库这边勾选就是在新增能力，两处文案别串。
+- **重命名模型 key 只改显式 ref**：protocolMap 里 `{id, ref}` 形态的显式 `ref` 可安全改写；对象只有 `id` 的、以及字符串简写，其「知识 key」等于 wire 名，改了就破坏端点调用——`rewriteRefsForRename` 只动前者，后者只能在 confirm 里点名警告（降级为裸模型是既有非致命行为）。`referencingProviders` 的 `explicit`/`bare` 两个标志**互不排斥**：一个 provider 同时有两种形态就两个都为 true，两句提示都出——只报「可自动更新」会把静默降级藏起来。重命名的两层（知识库 key + provider 引用）走 **`updateModelKnowledgeAndProviders` 一次原子写**，分两次写中间失败会留下悬空 ref。目标 key 的占用检查要同时查用户层**和内置层**——改成内置 key 会让这条静默变成对那个内置模型的覆盖。
 - **虚拟 EditorInput 无状态**：`AiSettingsEditorInput` 不存任何东西，页面所有数据 live 读 `IAiModelService` / `IClaudeConfigService`，UI 态（激活项/折叠/滚动/过滤）走 IStorageService。这样多窗口/重开行为一致。
 - **帮助浮层用 FocusScopeOverlay**：自带 focus trap + Esc + restoreFocus；再叠一个透明 backdrop 实现点击外部关闭。内容走共享 `MarkdownView`（不引新依赖）。
 - **样式零硬编码**：颜色只用 `--vscode-*` 变量（58 处，由 `renderer/services/themes/generateColorThemeCss.ts` 在运行时注入为 `:root` CSS 变量，本 CSS 文件不定义这些变量；文件里仅剩注释里一处 `--color-*` 字样）+ `tokens.css` 的 spacing/radius/font token，切主题零改动。注意：`agentSettings/AgentSettingsEditor.module.css`（Claude/Codex 面板复用）用 `--ue-*` token，两套并存。
@@ -159,9 +191,13 @@ const storage = useService(IStorageService)
 4. **折叠态是一个整体 Record 存一个 key**，不是每 group 一个 key——读写时整体覆盖。storage 里**只有用户点过的 key**，所以 `toggleCollapsed(key, defaultCollapsed)` 必须对「有效值」取反（`!(prev[key] ?? defaultCollapsed)`）：对默认折叠的区，用 `!prev[key]` 会把 undefined 翻成 true（仍折叠），表现为**首次点击没反应**。
 5. **卡内区域的默认折叠态在 `ProviderEntryCard` 传入**（pricing/usage=折叠，protocols=展开），读写两侧必须传同一个默认值。
 6. **渲染继承字段要用 effective 值，写盘只写自身值**：main 展平 `extends` 后按子条目自己的 id 缓存费率/用量，UI 拿到的却是未展平的原始条目。只读 `provider.usageSource` 会把「已有数据」显示成「无」（这就是曾经的 bug）。收敛函数在 `shared/ai/providerInheritance.ts` 的 `effectiveRemoteSource` 系列。
-5. **加了 localize key 忘了补 zh-CN**：英文环境正常、中文环境回落英文，静默不报错。改完用 `rg` 比对一遍。
-6. **input→组件注册漏一处**：`EditorArea.tsx`（`editorComponentMap.set('aiSettings', …)`）+ `BuiltInEditorProvidersContribution.ts` 两处都要有 'aiSettings'，否则页面开不出。（合并后只剩 'aiSettings' 一个 key，'agentSettings' 已删）
-7. **改 agent 项渲染分支别忘 Claude 自注册**：壳顶部 `import '../agentSettings/builtinAgentSettings.js'` 是 Claude 设置组件注册的唯一触发点，删了它 Agents 区会全是占位。### 验证
+7. **加了 localize key 忘了补 zh-CN**：英文环境正常、中文环境回落英文，静默不报错。改完用 `rg` 比对一遍。
+8. **input→组件注册漏一处**：`EditorArea.tsx`（`editorComponentMap.set('aiSettings', …)`）+ `BuiltInEditorProvidersContribution.ts` 两处都要有 'aiSettings'，否则页面开不出。（合并后只剩 'aiSettings' 一个 key，'agentSettings' 已删）
+9. **改 agent 项渲染分支别忘 Claude 自注册**：壳顶部 `import '../agentSettings/builtinAgentSettings.js'` 是 Claude 设置组件注册的唯一触发点，删了它 Agents 区会全是占位。
+10. **`aiModels.*` localize 前缀与 `ai.settings.models.collapsed` 是供应商面板的历史遗留命名**：面板改名 `AiProvidersPanel` 时刻意没动 ~60 个 `aiModels.*` key 与折叠 storage key（纯 churn 且会丢用户折叠态）。新「模型配置」面板用 `aiKnowledge.*` 前缀与新 key `ai.settings.modelKnowledge.collapsed`——两个面板的 key 空间别混。
+11. **全量替换语义的面板，「首读未落地」必须与 legacy 同等门控**：`updateModelKnowledge`/`updateProviders` 都是整层替换，reload 前快照是空占位，此时任何写入 = 清空用户配置。禁用按钮只是表层，真正的护栏是写时复查（`AiModelKnowledgePanel` 的 `enqueueWrite` 读 `loadedRef`/`legacyRef`）。reload 失败要落**独立的 failed 态**而不是 `loaded=true`——`finally` 里无条件置 loaded 等于把读失败当读成功。同理 legacy banner 自带的「打开 aiSettings.json」按钮也不能顺手 flush 写盘。
+
+### 验证
 
 ```bash
 pnpm check        # lint + typecheck + test，仅看错误
@@ -176,7 +212,8 @@ pnpm e2e          # 涉及编辑器打开/交互时跑；已知多 worker flaky�
 ### 关键参考路径
 
 - `apps/editor/src/renderer/workbench/ai/AiSettingsEditor.tsx` —— 统一双栏壳 + AI_CATEGORIES + Agents 动态组 + 状态持久化
-- `apps/editor/src/renderer/workbench/ai/AiModelsPanel.tsx` —— 模型配置面板（单层 Provider 入口列表，折叠/过滤/模型参数）
+- `apps/editor/src/renderer/workbench/ai/AiProvidersPanel.tsx` —— 供应商配置面板（单层 Provider 入口列表，折叠/过滤/模型参数）
+- `apps/editor/src/renderer/workbench/ai/AiModelKnowledgePanel.tsx` —— 模型配置面板（顶层 `models` 知识库；只写用户层 + effective 渲染）
 - `apps/editor/src/renderer/workbench/ai/AiFeatureModelsPanel.tsx` —— 功能→模型（FEATURES 数组）
 - `apps/editor/src/renderer/workbench/ai/AiSettingsHelpButton.tsx` + `aiSettingsHelpText.ts` —— 帮助浮层 + 文案
 - `apps/editor/src/renderer/workbench/ai/AiSettingsEditor.module.css` —— 壳样式（token 化，navGroupTitle 分组标题）

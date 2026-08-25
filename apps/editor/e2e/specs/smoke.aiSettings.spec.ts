@@ -22,6 +22,7 @@ import { test, expect } from '../fixtures/sharedApp.js'
 
 const PARENT_ID = 'e2e-aisettings-parent'
 const CHILD_ID = 'e2e-aisettings-child'
+const KNOWLEDGE_ID = 'e2e-aisettings-knowledge'
 // Port 1 on loopback is reserved and unreachable — proving declared models never
 // touch the network (a discover path would hang until the metadata timeout and
 // then return nothing).
@@ -180,6 +181,63 @@ test.describe('@p1 ai settings', () => {
       // Clear the per-model config too: updateProviders([]) leaves modelSettings
       // in place, so the shared worker instance would otherwise keep a stale key.
       await page.evaluate((mid) => window.__E2E__!.aiSetModelConfiguration(mid, {}), modelId)
+      await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
+    }
+  })
+
+  // The user `models` layer merges over built-in knowledge per key and per
+  // field: overridden fields win, untouched fields keep their built-in value.
+  test('user model knowledge merges into resolved metadata', async ({ page }) => {
+    try {
+      await page.evaluate(
+        ({ id, baseUrl }) =>
+          window.__E2E__!.aiSetProviders([
+            {
+              id,
+              baseUrl,
+              apiKey: 'k',
+              defaultProtocol: 'anthropic-messages',
+              protocolMap: { 'anthropic-messages': ['claude-sonnet-5'] },
+            },
+          ]),
+        { id: KNOWLEDGE_ID, baseUrl: UNREACHABLE_URL },
+      )
+
+      await page.evaluate((entries) => window.__E2E__!.aiSetModelKnowledge(entries), {
+        'claude-sonnet-5': { name: 'House Sonnet', maxInputTokens: 1 },
+      })
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              window.__E2E__!.aiGetModels().then((models) => {
+                const hit = models.find((m) => m.id === id)
+                return hit === undefined
+                  ? null
+                  : {
+                      name: hit.name,
+                      maxInputTokens: hit.maxInputTokens,
+                      vendor: hit.vendor,
+                      maxOutputTokens: hit.maxOutputTokens,
+                    }
+              }),
+            `${KNOWLEDGE_ID}/anthropic-messages/claude-sonnet-5`,
+          ),
+        )
+        .toEqual({
+          name: 'House Sonnet',
+          maxInputTokens: 1,
+          // Merge semantics: fields the user did not touch must still come
+          // from the built-in knowledge, not from an empty user entry.
+          vendor: 'anthropic',
+          maxOutputTokens: 64000,
+        })
+    } finally {
+      // Clear the knowledge layer too: aiSetProviders([]) leaves the top-level
+      // `models` in place, so the shared worker would otherwise keep the
+      // overridden built-in key and pollute later specs.
+      await page.evaluate(() => window.__E2E__!.aiSetModelKnowledge({}))
       await page.evaluate(() => window.__E2E__!.aiSetProviders([]))
     }
   })

@@ -160,6 +160,21 @@ export class AiModelClientService extends Disposable implements IAiModelService,
     return this._main.getModelKnowledge()
   }
 
+  getUserModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
+    return this._main.getUserModelKnowledge()
+  }
+
+  updateModelKnowledge(models: Readonly<Record<string, AiModelKnowledge>>): Promise<void> {
+    return this._main.updateModelKnowledge(models)
+  }
+
+  updateModelKnowledgeAndProviders(
+    models: Readonly<Record<string, AiModelKnowledge>>,
+    providers: readonly AiProviderEntry[],
+  ): Promise<void> {
+    return this._main.updateModelKnowledgeAndProviders(models, providers)
+  }
+
   getProviderIssues(): Promise<readonly AiProviderIssue[]> {
     return this._main.getProviderIssues()
   }

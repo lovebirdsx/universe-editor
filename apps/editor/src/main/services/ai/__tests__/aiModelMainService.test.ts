@@ -602,6 +602,132 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
+  it('returns an empty user knowledge layer when no aiSettings.json exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+    const service = new AiModelMainService(makeConfigLocation(dir))
+
+    expect(await service.getUserModelKnowledge()).toEqual({})
+    service.dispose()
+  })
+
+  it('round-trips the user model knowledge layer', async () => {
+    const service = makeService([])
+
+    await service.updateModelKnowledge({ 'my-model': { name: 'X', maxInputTokens: 123 } })
+    expect(await service.getUserModelKnowledge()).toEqual({
+      'my-model': { name: 'X', maxInputTokens: 123 },
+    })
+    service.dispose()
+  })
+
+  it('persists only the user knowledge layer to disk, never the built-in keys', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        providers: [{ id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } }],
+      }),
+    )
+
+    await service.updateModelKnowledge({ 'my-model': { name: 'X', maxInputTokens: 123 } })
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(Object.keys(onDisk.models)).toEqual(['my-model'])
+    expect(onDisk.models['claude-sonnet-5']).toBeUndefined()
+
+    // The merged view keeps both the built-in and the user keys.
+    const knowledge = await service.getModelKnowledge()
+    expect(knowledge['claude-sonnet-5']).toBeDefined()
+    expect(knowledge['my-model']).toEqual({ name: 'X', maxInputTokens: 123 })
+    service.dispose()
+  })
+
+  it('removes the top-level models key when the user layer becomes empty', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        models: { 'my-model': { name: 'X', maxInputTokens: 123 } },
+        providers: [],
+      }),
+    )
+
+    await service.updateModelKnowledge({})
+    expect(await service.getUserModelKnowledge()).toEqual({})
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.models).toBeUndefined()
+    service.dispose()
+  })
+
+  it('updateModelKnowledge preserves providers, activeModels and modelSettings', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        providers: [{ id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } }],
+        activeModels: { chat: 'openai/openai-chat/gpt-5.4' },
+        modelSettings: { 'openai/openai-chat/gpt-5.4': { maxTokens: 256 } },
+      }),
+    )
+
+    await service.updateModelKnowledge({ 'my-model': { name: 'X', maxInputTokens: 123 } })
+
+    expect(await service.getProviders()).toEqual([
+      { id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } },
+    ])
+    expect(await service.getActiveModel('chat')).toBe('openai/openai-chat/gpt-5.4')
+    const config = await service.getModelConfiguration('openai/openai-chat/gpt-5.4')
+    expect(config.maxTokens).toBe(256)
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.providers).toEqual([
+      { id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } },
+    ])
+    expect(onDisk.activeModels.chat).toBe('openai/openai-chat/gpt-5.4')
+    expect(onDisk.modelSettings['openai/openai-chat/gpt-5.4']).toEqual({ maxTokens: 256 })
+    service.dispose()
+  })
+
+  it('writes the renamed knowledge key and the rewritten provider ref in one file write', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        models: { 'my-model': { name: 'X' } },
+        providers: [
+          { id: 'gw', protocolMap: { 'anthropic-messages': [{ id: 'wire', ref: 'my-model' }] } },
+        ],
+        activeModels: { chat: 'gw/anthropic-messages/wire' },
+        modelSettings: { 'gw/anthropic-messages/wire': { maxTokens: 256 } },
+      }),
+    )
+
+    // A rename touches both layers; split writes can fail in between and leave the
+    // ref pointing at a key that no longer exists.
+    await service.updateModelKnowledgeAndProviders({ 'my-model-2': { name: 'X' } }, [
+      { id: 'gw', protocolMap: { 'anthropic-messages': [{ id: 'wire', ref: 'my-model-2' }] } },
+    ])
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(Object.keys(onDisk.models)).toEqual(['my-model-2'])
+    expect(onDisk.providers).toEqual([
+      { id: 'gw', protocolMap: { 'anthropic-messages': [{ id: 'wire', ref: 'my-model-2' }] } },
+    ])
+    expect(onDisk.activeModels.chat).toBe('gw/anthropic-messages/wire')
+    expect(onDisk.modelSettings['gw/anthropic-messages/wire']).toEqual({ maxTokens: 256 })
+
+    expect(await service.getUserModelKnowledge()).toEqual({ 'my-model-2': { name: 'X' } })
+    expect(await service.getProviders()).toEqual([
+      { id: 'gw', protocolMap: { 'anthropic-messages': [{ id: 'wire', ref: 'my-model-2' }] } },
+    ])
+    service.dispose()
+  })
+
+  it('returns an empty user knowledge layer for a legacy two-layer file', async () => {
+    const { service } = makeServiceFromFile(
+      JSON.stringify({
+        providerTypes: { anthropic: { protocol: 'anthropic-messages' } },
+        providers: [{ type: 'anthropic', name: 'default' }],
+      }),
+    )
+
+    expect(await service.getUserModelKnowledge()).toEqual({})
+    service.dispose()
+  })
+
   it('enumerates models from the endpoint when protocolMap is [] (discover)', async () => {
     const { service } = makeServiceFromFile(
       JSON.stringify({ providers: [{ id: 'ollama', protocolMap: { ollama: [] } }] }),

@@ -16,7 +16,7 @@
  *  be tested (no effective protocol or base URL) stay at "not tested".
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, KeyRound, Server, Trash2, X } from 'lucide-react'
 import {
   AI_WIRE_PROTOCOLS,
@@ -40,6 +40,7 @@ import { formatUsageBadge, formatUsageTooltip } from '../../../shared/ai/usageFo
 import { CardSection } from './providerCard/CardSection.js'
 import { ConnectionFields } from './providerCard/ConnectionFields.js'
 import { ExtendsField } from './providerCard/ExtendsField.js'
+import { HeaderAction } from './providerCard/HeaderAction.js'
 import { IssuesSection } from './providerCard/IssuesSection.js'
 import { ProtocolsSection } from './providerCard/ProtocolsSection.js'
 import { RemoteSourceFields } from './providerCard/RemoteSourceFields.js'
@@ -363,44 +364,6 @@ function UsageBadge({ usage }: { readonly usage: UsageState }) {
     <Badge tone="accent">
       <span data-tooltip={formatUsageTooltip(usage.value)}>{formatUsageBadge(usage.value)}</span>
     </Badge>
-  )
-}
-
-/**
- * A clickable affordance inside the header button. It cannot be a <button>:
- * the header itself is one, and nesting them is invalid HTML that React will
- * render but the browser will re-parent.
- */
-function HeaderAction({
-  label,
-  onTrigger,
-  children,
-}: {
-  readonly label: string
-  readonly onTrigger: () => void
-  readonly children: ReactNode
-}) {
-  return (
-    <span
-      className={styles['cardHeaderAction']}
-      role="button"
-      tabIndex={0}
-      aria-label={label}
-      data-tooltip={label}
-      onClick={(e) => {
-        e.stopPropagation()
-        onTrigger()
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          e.stopPropagation()
-          onTrigger()
-        }
-      }}
-    >
-      {children}
-    </span>
   )
 }
 

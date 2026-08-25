@@ -1341,8 +1341,107 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiSettings.category.features': '功能模型',
   'aiSettings.category.models': '模型配置',
   'aiSettings.category.mcpServers': 'MCP 服务器',
+  'aiSettings.category.providers': '供应商配置',
 
-  // --- AI: model configuration panel ---
+  // --- AI: model knowledge panel (Model Configuration) ---
+  'aiKnowledge.addModel': '添加模型',
+  'aiKnowledge.loading': '正在加载模型知识…',
+  'aiKnowledge.loadFailed':
+    '读取模型知识失败，为避免覆盖已有内容，编辑已锁定。请查看日志后重新打开设置页。',
+  'aiKnowledge.empty':
+    '还没有你自己的模型定义。可以为内置目录不认识的模型新建一条，或者覆盖下方的内置模型。',
+  'aiKnowledge.legacy.banner':
+    'aiSettings.json 仍是已废弃的两层格式且已被忽略，因此这里无法编辑模型知识。请先按新格式重建该文件。',
+  'aiKnowledge.section.custom': '你的模型',
+  'aiKnowledge.section.builtin': '内置模型',
+  'aiKnowledge.section.builtin.note':
+    '随编辑器发布并由编辑器持续更新。覆盖某条即可改写其中的字段；你没有设置的字段仍跟随内置定义。',
+  'aiKnowledge.section.builtin.allOverridden': '所有内置模型都已在上方有覆盖条目。',
+  'aiKnowledge.builtin.override': '覆盖',
+  'aiKnowledge.builtin.contextBadge': '输入 {count}',
+
+  // card header
+  'aiKnowledge.badge.custom': '自定义',
+  'aiKnowledge.badge.overridesBuiltin': '覆盖内置',
+  'aiKnowledge.badge.usedBy': '{count} 个供应商在用',
+  'aiKnowledge.card.rename': '重命名模型 key',
+  'aiKnowledge.card.duplicate': '复制模型',
+  'aiKnowledge.card.remove': '移除模型',
+  'aiKnowledge.card.reset': '恢复为内置定义',
+
+  // fields
+  'aiKnowledge.field.name': '显示名称',
+  'aiKnowledge.field.family': '模型系列',
+  'aiKnowledge.field.vendor': '厂商',
+  'aiKnowledge.field.nativeProtocol': '原生协议',
+  'aiKnowledge.field.nativeProtocol.unset': '未设置',
+  'aiKnowledge.field.nativeProtocol.builtin': '未设置（内置：{protocol}）',
+  'aiKnowledge.field.nativeProtocol.note':
+    '该模型在自家厂商端点上使用的协议。经由其它协议访问都属于转译。',
+  'aiKnowledge.field.maxInputTokens': '最大输入 token',
+  'aiKnowledge.field.maxOutputTokens': '最大输出 token',
+  'aiKnowledge.field.number.invalid': '请输入整数 token 数。',
+  'aiKnowledge.field.capabilities': '能力',
+  'aiKnowledge.field.capabilities.clear': '清除能力覆盖',
+  'aiKnowledge.field.capabilities.builtin': '来自内置知识。',
+  'aiKnowledge.field.capabilities.default':
+    '未声明——默认按支持流式处理。勾选任意一项都会完整记录整组能力。',
+  'aiKnowledge.field.reasoningEffort': '推理强度档位',
+  'aiKnowledge.field.reasoningEffort.note':
+    '用逗号分隔，按模型文档给出的顺序填写。留空表示该模型没有推理强度设置。',
+  'aiKnowledge.field.parameters': '请求参数',
+  'aiKnowledge.field.parameters.edit': '编辑参数 schema',
+  'aiKnowledge.field.parameters.clear': '清除参数 schema',
+  'aiKnowledge.field.parameters.count': '{count} 个参数',
+  'aiKnowledge.field.parameters.none': '没有可调参数——选模型时不会为它显示配置表单。',
+  'aiKnowledge.capability.streaming': '流式处理',
+  'aiKnowledge.capability.vision': '图片输入',
+  'aiKnowledge.capability.promptCaching': 'Prompt 缓存',
+  'aiKnowledge.capability.toolCalling': '工具调用',
+  'aiKnowledge.inherit.from': '内置：{value}',
+  'aiKnowledge.inherit.overrides': '覆盖内置：{value}',
+  'aiKnowledge.inherit.builtin': '来自内置知识',
+
+  // parameter schema dialog
+  'aiKnowledge.parameters.title': '请求参数 schema',
+  'aiKnowledge.parameters.hint':
+    '每个参数一个 key，例如 { "temperature": { "type": "number", "default": 1 } }。填空对象即清除该 schema。',
+  'aiKnowledge.parameters.save': '保存',
+  'aiKnowledge.parameters.cancel': '取消',
+
+  // add dialog
+  'aiKnowledge.add.title': '添加模型',
+  'aiKnowledge.add.key': '模型 key',
+  'aiKnowledge.add.keyEmpty': '必须填写模型 key。',
+  'aiKnowledge.add.keySlash': '模型 key 不能包含 “/”。',
+  'aiKnowledge.add.keyExists': '该模型 key 已存在。',
+  'aiKnowledge.add.keyHint':
+    '供应商 protocolMap 解析知识时用的 key。若引用写成裸字符串，它同时也是发给端点的 wire 名称。',
+  'aiKnowledge.add.overrideHint':
+    '已有内置模型使用该 key。新建条目为空，你设置的每个字段都会覆盖内置定义。',
+  'aiKnowledge.add.create': '创建',
+  'aiKnowledge.add.override': '覆盖',
+  'aiKnowledge.add.cancel': '取消',
+
+  // remove / reset / rename
+  'aiKnowledge.remove.confirm': '移除模型 {key}？',
+  'aiKnowledge.remove.action': '移除',
+  'aiKnowledge.remove.detail':
+    '被这些供应商引用：{providers}。这些模型仍可调用，但会丢失元数据（名称、token 上限、能力）。',
+  'aiKnowledge.reset.confirm': '把 {key} 恢复为内置定义？',
+  'aiKnowledge.reset.action': '恢复',
+  'aiKnowledge.rename.title': '重命名模型 key',
+  'aiKnowledge.rename.invalid': '模型 key 不能包含 “/”。',
+  'aiKnowledge.rename.exists': '已存在名为 {key} 的模型。',
+  'aiKnowledge.rename.builtinExists':
+    '{key} 是内置模型。改成这个名字会让本条目变成对那个模型的覆盖——请改用「内置模型」区里的「覆盖」。',
+  'aiKnowledge.rename.confirm': '把 {from} 重命名为 {to}？',
+  'aiKnowledge.rename.action': '重命名',
+  'aiKnowledge.rename.rewritable': '将自动更新：{providers}。',
+  'aiKnowledge.rename.bare':
+    '无法自动更新：{providers}——它们按 wire 名称引用该模型，重命名不能改动 wire 名称。这些模型会丢失元数据。',
+
+  // --- AI: provider configuration panel ---
   'aiModels.addProvider': '添加提供方',
   'aiModels.badge.keyed': '已配密钥',
   'aiModels.badge.modelCount': '{count} 个模型',
@@ -1355,11 +1454,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiModels.config.cancel': '取消',
   'aiModels.config.unset': '（默认）',
 
-  // provider type card
-
-  // pricing
-
-  // provider instance card
+  // provider entry card
   'aiModels.instance.remove.remove': '移除',
   'aiModels.instance.status.idle': '未探测',
   'aiModels.instance.status.checking': '探测中…',
@@ -1593,18 +1688,41 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '',
     '点击任意一行会弹出模型选择器，选中后即时生效——与状态栏的模型选择体验一致。',
   ].join('\n'),
+  'aiSettings.help.providers': [
+    '## 供应商配置',
+    '',
+    '每个供应商条目就是一个网关端点——连接信息（网关地址 + API 密钥）加一张 `protocolMap`，声明它会说哪些协议、每种协议下暴露哪些模型。`protocolMap` 有三种状态：',
+    '',
+    '- **未声明**——该条目暂不提供任何协议（会标记为问题）。',
+    '- **`[]`**——从端点自身枚举模型列表。',
+    '- **非空列表**——只使用列出的这些模型，完全不访问网络。',
+    '',
+    '用 **extends** 给同一网关建多个入口（如不同账号）：子条目继承父条目的 `protocolMap`，只覆盖自己声明的字段。',
+    '',
+    '每个条目可选声明**价格来源**与**账号用量来源**：费率永远是（网关, 模型）的函数，用量跟着条目的密钥走。',
+    '',
+    '这里声明的模型可以**收窄**其知识库条目列出的能力——做协议翻译的网关只会丢特性、不会凭空造出特性——所以知识库里没有的能力在这里无法打开。',
+    '',
+    'API 密钥**明文**存放在 aiSettings.json 里——这是刻意的设计，方便配置跨机器同步（POSIX 下文件权限 0600）。界面一律掩码显示，绝不写入日志。',
+    '',
+    '模型的内在属性（token 上限、能力等）**不**在这里配置——它们属于 **模型配置** 分类。',
+    '',
+    '折叠与过滤状态都会被记住。需要直接编辑原始配置时，点 **打开 aiSettings.json**。',
+  ].join('\n'),
   'aiSettings.help.models': [
     '## 模型配置',
     '',
-    '配置分为两层：',
+    '模型**知识库**：每个条目对应一个逻辑模型 id，存放跨网关不变的内在属性。',
     '',
-    '- **提供方类型**：协议、共享的模型目录与费率。在此修改费率会作用于该类型的所有实例。',
-    '- **提供方实例**：每个入口一个——base URL 与 API 密钥。同类型的实例共享其模型与费率。',
+    '字段：`name` / `family` / `vendor` / `nativeProtocol` / `maxInputTokens` / `maxOutputTokens` / `capabilities` / `supportsReasoningEffort` / `parameters`。',
     '',
-    '端点枚举出的模型与你手写声明的模型合并展示，手写优先并置顶。部分模型可在 **配置** 中调整参数（如 temperature）。',
+    '你的条目**按字段**合并覆盖内置目录——只写想改的字段即可；删掉某个字段即恢复内置值。',
     '',
-    '两段与卡片均可折叠，模型列表可过滤——状态都会被记住。',
-    '需要直接编辑原始配置时，点 **打开 aiSettings.json**。',
+    '刻意不含价格：费率是（网关, 模型）的函数，属于各供应商的 `pricingSource`。',
+    '',
+    '重命名 key 会影响 `protocolMap` 引用：显式 `ref` 的条目可自动改写，裸名引用会退化成无知识的裸模型。',
+    '',
+    '四项能力为 `streaming` / `vision` / `promptCaching` / `toolCalling`。勾选任意一项都会写入全部四项——只写一部分会静默丢掉内置条目声明的其余标志。',
   ].join('\n'),
   'aiSettings.help.mcpServers': [
     '## MCP 服务器',
@@ -2042,7 +2160,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.form.model.none': '使用默认',
   'agentSettings.auth.form.oneM.tip':
     '请求 100 万 token 上下文变体 —— 写入 settings.json 的模型 id 会追加 [1m]。',
-  'agentSettings.auth.form.provider': 'Provider 实例',
+  'agentSettings.auth.form.provider': '供应商',
   'agentSettings.auth.form.provider.none': '选择一个 provider…',
   'agentSettings.auth.form.subagentModel.none': '未设置',
   'agentSettings.auth.gateway': '自定义网关 / 认证 token',
@@ -2054,17 +2172,17 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agentSettings.auth.provider.checking': '检测中…',
   'agentSettings.auth.provider.idle': '未检测',
   'agentSettings.auth.provider.missingApiKey':
-    '此 provider 没有 API 密钥。请在 AI 设置（模型配置 → Provider 实例）中设置。',
+    '此供应商没有 API 密钥。请在 AI 设置（供应商配置）中设置。',
   'agentSettings.auth.provider.missingBaseUrl':
-    '此 provider 没有 base URL。请在 AI 设置（模型配置 → Provider 实例）中设置。',
+    '此供应商没有 base URL。请在 AI 设置（供应商配置）中设置。',
   'agentSettings.auth.provider.none':
-    '还没有兼容协议的 provider 实例。请在 AI 设置中添加一个，然后回到这里选择。',
+    '还没有声明兼容协议的供应商。请在 AI 设置中添加一个，然后回到这里选择。',
   'agentSettings.auth.provider.noneCompatible':
-    '你有 {count} 个 provider 实例，但没有一个声明 {protocol} 协议。请在 AI 设置里调整类型协议，或给类型补一个该协议的模型。',
+    '你有 {count} 个供应商，但没有一个声明 {protocol} 协议。请在 AI 设置里调整它的协议映射（protocolMap），或给它补一个该协议的模型。',
   'agentSettings.auth.provider.configure': '打开 AI 设置…',
   'agentSettings.auth.provider.incompatibleOption': '不兼容',
   'agentSettings.auth.provider.incompatible':
-    '此 provider 实例没有声明 {protocol} 协议。请调整其类型协议，或在 AI 设置里给它补一个该协议的模型。',
+    '此供应商没有声明 {protocol} 协议。请调整它的协议映射（protocolMap），或在 AI 设置里给它补一个该协议的模型。',
   'agentSettings.auth.provider.ok': '已连接 · {count} 个模型',
   'agentSettings.auth.provider.okReachable': '已连接',
   'agentSettings.auth.provider.test': '测试',

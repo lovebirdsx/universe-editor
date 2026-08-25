@@ -566,7 +566,7 @@
   padding: var(--spacing-3) 0 var(--spacing-2);
 }
 
-/* -- provider instance card: connectivity / rates / usage ---------------- */
+/* -- provider entry card: connectivity / rates / usage ---------------- */
 
 .statusDot {
   display: inline-block;
@@ -787,6 +787,15 @@
 .fieldError {
   font-size: var(--font-size-xs);
   color: var(--vscode-errorForeground, #f48771);
+}
+
+/* -- model knowledge card: the capability quad on one wrapping line ------- */
+
+.capabilityRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-5);
 }
 
 .filterRow {

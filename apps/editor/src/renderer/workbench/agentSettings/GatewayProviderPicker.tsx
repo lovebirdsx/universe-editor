@@ -221,11 +221,11 @@ export function DerivationError({ missing }: { readonly missing: 'apiKey' | 'bas
     missing === 'apiKey'
       ? localize(
           'agentSettings.auth.provider.missingApiKey',
-          'This provider has no API key. Set it in the AI settings (Model configuration → Providers).',
+          'This provider has no API key. Set it in the AI settings (Provider Configuration).',
         )
       : localize(
           'agentSettings.auth.provider.missingBaseUrl',
-          'This provider has no base URL. Set it in the AI settings (Model configuration → Providers).',
+          'This provider has no base URL. Set it in the AI settings (Provider Configuration).',
         )
   return <div className={styles['deriveError']}>{message}</div>
 }

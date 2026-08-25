@@ -8,21 +8,50 @@
 
 import { localize } from '@universe-editor/platform'
 
-export function aiModelsHelpText(): string {
+export function aiProvidersHelpText(): string {
+  return localize(
+    'aiSettings.help.providers',
+    [
+      '## Provider Configuration',
+      '',
+      'Each provider entry is one gateway endpoint — the connection (base URL + API key) plus a `protocolMap` declaring which wire protocols it speaks and which models each protocol exposes. The `protocolMap` has three states:',
+      '',
+      '- **Undeclared** — the entry serves no protocol yet (flagged as a problem).',
+      '- **`[]`** — enumerate the model list from the endpoint itself.',
+      '- **A non-empty list** — exactly these models; the endpoint is never contacted.',
+      '',
+      "Use **extends** to add several entries for the same gateway (e.g. different accounts): the child inherits the parent's `protocolMap` and only overrides the fields it sets itself.",
+      '',
+      "Each entry optionally declares a **pricing source** and an **account-usage source**: rates are always a function of (gateway, model), and usage belongs to the entry's key.",
+      '',
+      'A model declared here may **narrow** the capabilities its knowledge entry lists — a gateway translating a model to another protocol loses features, it never gains them — so a capability the knowledge base does not have cannot be switched on here.',
+      '',
+      'The API key is stored **plaintext** in aiSettings.json — a deliberate decision so the configuration syncs across machines (the file is chmod 0600 on POSIX). It is masked in the UI and never logged.',
+      '',
+      'Intrinsic model properties (token limits, capabilities, …) are **not** configured here — they live in the **Model Configuration** category.',
+      '',
+      'Collapsed sections and filters are remembered. To edit the raw configuration directly, use **Open aiSettings.json**.',
+    ].join('\n'),
+  )
+}
+
+export function aiModelKnowledgeHelpText(): string {
   return localize(
     'aiSettings.help.models',
     [
       '## Model Configuration',
       '',
-      'Configuration is split into two levels:',
+      'The model **knowledge base**: one entry per logical model id, holding the intrinsic properties that do not change when a model is reached through a different gateway.',
       '',
-      '- **Provider Types**: the protocol, the shared model catalog and the rates. Editing a rate here applies to every instance of that type.',
-      '- **Provider Instances**: one gateway entry each — a base URL and an API key. Instances of the same type share its models and rates.',
+      'Fields: `name` / `family` / `vendor` / `nativeProtocol` / `maxInputTokens` / `maxOutputTokens` / `capabilities` / `supportsReasoningEffort` / `parameters`.',
       '',
-      'Models enumerated from the endpoint are merged with the ones you declare by hand; hand-written entries win and float to the top. Some models expose parameters you can tune via **Configure** (e.g. temperature).',
+      'Your entries merge over the built-in catalog **per field** — set only what you want to override; deleting a field restores the built-in value.',
       '',
-      'Sections and cards can be collapsed, and model lists can be filtered — all are remembered.',
-      'To edit the raw configuration directly, use **Open aiSettings.json**.',
+      "Pricing is deliberately absent: a rate is a function of (gateway, model), so it belongs to each provider's `pricingSource`.",
+      '',
+      'Renaming a key affects `protocolMap` references: entries with an explicit `ref` can be rewritten automatically, while bare-name references degrade to a model without knowledge.',
+      '',
+      'The four capabilities are `streaming` / `vision` / `promptCaching` / `toolCalling`. Ticking any box records all four, because a partial set would silently drop the flags the built-in entry declares.',
     ].join('\n'),
   )
 }

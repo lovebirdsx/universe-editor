@@ -102,6 +102,7 @@ interface ParsedSettings {
 /** Fields `_writeSettings` should change; absent fields preserve what is on disk. */
 interface SettingsWrite {
   readonly providers?: readonly AiProviderEntry[]
+  readonly models?: Readonly<Record<string, AiModelKnowledge>>
   readonly modelSettings?: Readonly<Record<string, AiModelConfiguration>>
   readonly activeModels?: AiActiveModels
 }
@@ -134,6 +135,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   private readonly _metadataRequests = new Set<CancellationTokenSource>()
   private _providers: readonly AiProviderEntry[] = []
   private _knowledge: Readonly<Record<string, AiModelKnowledge>> = BUILTIN_MODEL_KNOWLEDGE
+  private _userKnowledge: Readonly<Record<string, AiModelKnowledge>> = {}
   private _resolvedProviders: readonly AiResolvedProvider[] = []
   private _modelSettings: Readonly<Record<string, AiModelConfiguration>> = {}
   private _activeModels: AiActiveModels = {}
@@ -249,6 +251,37 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   async getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
     await this._ready
     return this._knowledge
+  }
+
+  async getUserModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
+    await this._ready
+    return this._userKnowledge
+  }
+
+  async updateModelKnowledge(models: Readonly<Record<string, AiModelKnowledge>>): Promise<void> {
+    await this._ready
+    await this._writeSettings({ models })
+    await this._reload()
+    this._logger.info(
+      `ai settings: ${Object.keys(models).length} user model knowledge entry(ies) updated`,
+    )
+  }
+
+  /**
+   * One write for both layers. A knowledge-key rename has to move the key and the
+   * `protocolMap` refs pointing at it; doing that as two writes can fail in
+   * between and leave refs dangling at a key that no longer exists.
+   */
+  async updateModelKnowledgeAndProviders(
+    models: Readonly<Record<string, AiModelKnowledge>>,
+    providers: readonly AiProviderEntry[],
+  ): Promise<void> {
+    await this._ready
+    await this._writeSettings({ models, providers })
+    await this._reload()
+    this._logger.info(
+      `ai settings: ${Object.keys(models).length} user model knowledge entry(ies) + ${providers.length} provider entry(ies) updated together`,
+    )
   }
 
   async getProviderIssues(): Promise<readonly AiProviderIssue[]> {
@@ -423,6 +456,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       )
       this._providers = []
       this._knowledge = BUILTIN_MODEL_KNOWLEDGE
+      this._userKnowledge = {}
       this._resolvedProviders = []
       this._modelSettings = {}
       this._activeModels = {}
@@ -433,6 +467,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     }
 
     this._knowledge = mergeModelKnowledge(BUILTIN_MODEL_KNOWLEDGE, parsed.file.models)
+    this._userKnowledge = parsed.file.models ?? {}
     this._providers = parsed.file.providers
     this._modelSettings = parsed.file.modelSettings ?? {}
     this._activeModels = parsed.file.activeModels ?? {}
@@ -464,6 +499,10 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       path,
       (root) => {
         if (write.providers !== undefined) root['providers'] = write.providers
+        if (write.models !== undefined) {
+          if (Object.keys(write.models).length > 0) root['models'] = write.models
+          else delete root['models']
+        }
         if (write.modelSettings !== undefined) {
           if (Object.keys(write.modelSettings).length > 0)
             root['modelSettings'] = write.modelSettings

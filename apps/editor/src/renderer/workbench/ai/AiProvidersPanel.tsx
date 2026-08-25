@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AiModelsPanel — the "Model configuration" category of the AI settings editor.
- *  A single list of provider *entries* (one gateway endpoint each: connection +
- *  credential + protocol map). Reads everything live from IAiModelService; edits
+ *  AiProvidersPanel — the "Provider configuration" category of the AI settings
+ *  editor. A single list of provider *entries* (one gateway endpoint each:
+ *  connection + credential + protocol map). Reads everything live from
+ *  IAiModelService; edits
  *  go through updateProviders / setApiKey / deleteApiKey, and API keys are stored
  *  plaintext on the entry (explicit user decision: cross-machine sync) — never
  *  logged. A banner surfaces when aiSettings.json is still in the retired
@@ -10,8 +11,8 @@
  *  shown on the affected cards rather than silently swallowed.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, FileJson, Plus, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FileJson, Plus, TriangleAlert } from 'lucide-react'
 import {
   IAiModelService,
   IDialogService,
@@ -34,8 +35,10 @@ import { useEventSubscription, useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
 import { IAiRateMirror } from '../../services/ai/aiRateMirror.js'
+import { nextCopyKey } from '../../../shared/ai/modelKnowledgeEdit.js'
 import { effectiveUsageSource } from '../../../shared/ai/providerInheritance.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
+import { PanelSection, useCollapseToggle } from './PanelSection.js'
 import { ProviderEntryCard, issueReasonLabel, type CardSectionId } from './ProviderEntryCard.js'
 import type { UsageState } from './providerCard/usageState.js'
 import type { ProviderPatch } from './providerCard/useProviderField.js'
@@ -51,7 +54,7 @@ const sectionCollapseKey = (id: string, section: CardSectionId): string =>
 const protocolCollapseKey = (id: string, protocol: string): string =>
   `provider:${id}:protocol:${protocol}`
 
-export function AiModelsPanel() {
+export function AiProvidersPanel() {
   const aiModel = useService(IAiModelService)
   const rateMirror = useService(IAiRateMirror)
   const dialog = useService(IDialogService)
@@ -127,22 +130,10 @@ export function AiModelsPanel() {
   }, [storage])
 
   /**
-   * `defaultCollapsed` is not decoration: storage holds only the keys the user has
-   * actually toggled, so a section that starts collapsed would otherwise read
-   * `undefined`, flip to `true`, and stay collapsed — a first click that visibly
-   * does nothing. Toggling the *effective* value keeps the stored model sparse (no
-   * pre-seeded defaults, no migration) while every default behaves.
+   * `defaultCollapsed` matters here: see `useCollapseToggle` for why the toggle has
+   * to negate the *effective* value rather than the stored one.
    */
-  const toggleCollapsed = useCallback(
-    (key: string, defaultCollapsed: boolean) => {
-      setCollapsed((prev) => {
-        const next = { ...prev, [key]: !(prev[key] ?? defaultCollapsed) }
-        void storage.set(COLLAPSED_KEY, next, StorageScope.GLOBAL)
-        return next
-      })
-    },
-    [storage],
-  )
+  const toggleCollapsed = useCollapseToggle(storage, COLLAPSED_KEY, setCollapsed)
 
   /**
    * Fast main-memory reads land immediately so the provider list isn't held
@@ -354,9 +345,7 @@ export function AiModelsPanel() {
         const current = providersRef.current
         const source = current[index]
         if (source === undefined) return
-        const taken = new Set(current.map((p) => p.id))
-        let id = `${source.id}-copy`
-        for (let n = 2; taken.has(id); n++) id = `${source.id}-copy-${n}`
+        const id = nextCopyKey(source.id, new Set(current.map((p) => p.id)))
         console.debug('aiModels: duplicate provider', { from: source.id, to: id })
         await updateProviders([
           ...current.slice(0, index + 1),
@@ -431,7 +420,7 @@ export function AiModelsPanel() {
         </div>
       )}
 
-      <Section
+      <PanelSection
         title={localize('aiModels.section.providers', 'Providers')}
         collapsed={collapsed[SECTION_PROVIDERS] ?? false}
         onToggle={() => toggleCollapsed(SECTION_PROVIDERS, false)}
@@ -504,7 +493,7 @@ export function AiModelsPanel() {
             ))}
           </div>
         )}
-      </Section>
+      </PanelSection>
 
       {addOpen && (
         <AddProviderDialog
@@ -517,36 +506,5 @@ export function AiModelsPanel() {
         />
       )}
     </div>
-  )
-}
-
-function Section({
-  title,
-  collapsed,
-  onToggle,
-  children,
-}: {
-  readonly title: string
-  readonly collapsed: boolean
-  readonly onToggle: () => void
-  readonly children: ReactNode
-}) {
-  return (
-    <section className={styles['section']}>
-      <button
-        type="button"
-        className={styles['sectionHeader']}
-        aria-expanded={!collapsed}
-        onClick={onToggle}
-      >
-        {collapsed ? (
-          <ChevronRight size={16} strokeWidth={1.75} className={styles['cardIcon']} />
-        ) : (
-          <ChevronDown size={16} strokeWidth={1.75} className={styles['cardIcon']} />
-        )}
-        <span className={styles['sectionTitle']}>{title}</span>
-      </button>
-      {!collapsed && <div className={styles['sectionBody']}>{children}</div>}
-    </section>
   )
 }

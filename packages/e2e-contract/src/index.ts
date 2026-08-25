@@ -196,6 +196,21 @@ export type E2EAiProtocolModelRef =
       readonly capabilities?: Readonly<Record<string, boolean>>
     }
 
+/**
+ * One user knowledge entry persisted under aiSettings.json `models` (mirrors
+ * AiModelKnowledge). Merged field-by-field over the built-in entry of the same key.
+ */
+export interface E2EAiModelKnowledge {
+  readonly name?: string
+  readonly family?: string
+  readonly vendor?: string
+  readonly nativeProtocol?: string
+  readonly maxInputTokens?: number
+  readonly maxOutputTokens?: number
+  readonly capabilities?: Readonly<Record<string, boolean>>
+  readonly supportsReasoningEffort?: readonly string[]
+}
+
 export interface E2EAiRemoteSourceSpec {
   readonly id: string
   readonly options?: Readonly<Record<string, unknown>>
@@ -1303,6 +1318,8 @@ export interface E2EProbe {
   // -- AI model settings probe ---------------------------------------------
   /** Replace the persisted provider entries (rewrites aiSettings.json). */
   aiSetProviders(entries: readonly E2EAiProviderEntry[]): Promise<void>
+  /** Replace the user model knowledge layer (rewrites aiSettings.json `models`). */
+  aiSetModelKnowledge(entries: Readonly<Record<string, E2EAiModelKnowledge>>): Promise<void>
   /** Resolved models across every provider (three-segment id + metadata). */
   aiGetModels(): Promise<readonly E2EAiModelInfo[]>
   /** Configuration problems found while resolving `providers[]`. */

@@ -118,6 +118,15 @@ class FakeMain implements IAiModelMainService {
   getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
     return Promise.resolve({})
   }
+  getUserModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>> {
+    return Promise.resolve({})
+  }
+  updateModelKnowledge(): Promise<void> {
+    return Promise.resolve()
+  }
+  updateModelKnowledgeAndProviders(): Promise<void> {
+    return Promise.resolve()
+  }
   getProviderIssues(): Promise<readonly AiProviderIssue[]> {
     return Promise.resolve([])
   }

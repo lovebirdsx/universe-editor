@@ -22,6 +22,7 @@ import {
   StorageScope,
   URI,
   onUnexpectedError,
+  type AiModelKnowledge,
   type AiProviderEntry,
   type IAiModelService,
   type ICommandService,
@@ -1873,6 +1874,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }),
     aiSetProviders: (entries) =>
       services.aiModelService.updateProviders(entries as unknown as readonly AiProviderEntry[]),
+    aiSetModelKnowledge: (entries) =>
+      // The DTO types capabilities as a loose record and nativeProtocol as a
+      // bare string; the persisted shape is AiModelKnowledge per key.
+      services.aiModelService.updateModelKnowledge(
+        entries as unknown as Readonly<Record<string, AiModelKnowledge>>,
+      ),
     aiGetModels: async () => {
       const models = await services.aiModelService.getModels()
       return models.map((m) => ({

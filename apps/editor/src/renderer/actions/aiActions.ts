@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AI-related Action2 definitions: pick the active model, open the model manager
- *  / aiSettings.json, and store / clear a provider instance's API key. Keys are
- *  handed to the AI model service, which persists them on the instance in
+ *  / aiSettings.json, and store / clear a provider entry's API key. Keys are
+ *  handed to the AI model service, which persists them on the entry in
  *  aiSettings.json (user decision: cross-machine sync) — never logged.
  *--------------------------------------------------------------------------------------------*/
 

@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors.
- *  AiModelsPanel tests — the single-layer providers rewrite: entries render,
+ *  AiProvidersPanel tests — the single-layer providers rewrite: entries render,
  *  removal writes through updateProviders, the account-usage block honours the
  *  "authoritative source only" contract (hidden without a usageSource,
  *  "Unavailable" when the source yields nothing), the connectivity dot probes
@@ -32,7 +32,7 @@ import {
   type AiProviderVerifyResult,
 } from '@universe-editor/platform'
 import { IAiRateMirror } from '../../../services/ai/aiRateMirror.js'
-import { AiModelsPanel } from '../AiModelsPanel.js'
+import { AiProvidersPanel } from '../AiProvidersPanel.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -134,7 +134,7 @@ function renderPanel(
   } as unknown as IUserDataFilesService)
   services.set(IEditorGroupsService, {} as unknown as IEditorGroupsService)
   const inst = new InstantiationService(services)
-  const utils = render(<AiModelsPanel />, {
+  const utils = render(<AiProvidersPanel />, {
     wrapper: ({ children }) => (
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
@@ -169,7 +169,7 @@ function expectDotStatus(id: string, status: string): void {
   expect(connectivityDot(id)?.getAttribute('data-status')).toBe(status)
 }
 
-describe('AiModelsPanel', () => {
+describe('AiProvidersPanel', () => {
   it('renders the providers section with an entry card per provider', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [KURO_PROVIDER]

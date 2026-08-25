@@ -64,7 +64,7 @@ export interface AiActiveModelChangeEvent {
 
 /**
  * Transport-level main service. `on*` properties are bridged to `listen` by
- * ProxyChannel; everything else is a `call`. Provider instances, per-model config
+ * ProxyChannel; everything else is a `call`. Provider entries, per-model config
  * and the active model selections are read by main directly from aiSettings.json —
  * no renderer push.
  */
@@ -107,6 +107,15 @@ export interface IAiModelMainService {
 
   /** Effective model knowledge base: built-in merged with the user layer. */
   getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>>
+  /** The user's own `models` layer from aiSettings.json — never the merged view. */
+  getUserModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>>
+  /** Replace the user's `models` layer wholesale. Built-in knowledge is untouched. */
+  updateModelKnowledge(models: Readonly<Record<string, AiModelKnowledge>>): Promise<void>
+  /** Replace the user's `models` layer and the provider entries in one write (rename). */
+  updateModelKnowledgeAndProviders(
+    models: Readonly<Record<string, AiModelKnowledge>>,
+    providers: readonly AiProviderEntry[],
+  ): Promise<void>
   /** Configuration problems found while resolving `providers[]`. */
   getProviderIssues(): Promise<readonly AiProviderIssue[]>
   /** Whether aiSettings.json is still in the retired two-layer format and was ignored. */

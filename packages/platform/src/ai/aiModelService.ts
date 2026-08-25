@@ -113,6 +113,21 @@ export interface IAiModelService {
   /** Model knowledge base in effect: built-in merged with the user layer in aiSettings.json. */
   getModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>>
 
+  /** The user's own `models` layer from aiSettings.json — never the merged view. */
+  getUserModelKnowledge(): Promise<Readonly<Record<string, AiModelKnowledge>>>
+  /** Replace the user's `models` layer wholesale. Built-in knowledge is untouched. */
+  updateModelKnowledge(models: Readonly<Record<string, AiModelKnowledge>>): Promise<void>
+  /**
+   * Replace the user's `models` layer and the provider entries in ONE write.
+   * Renaming a knowledge key has to do both — the key and the `protocolMap` refs
+   * pointing at it — and two sequential writes can fail in between, leaving refs
+   * dangling at a key that no longer exists.
+   */
+  updateModelKnowledgeAndProviders(
+    models: Readonly<Record<string, AiModelKnowledge>>,
+    providers: readonly AiProviderEntry[],
+  ): Promise<void>
+
   /** Configuration problems found while resolving `providers[]` (bad extends, no protocol, …). */
   getProviderIssues(): Promise<readonly AiProviderIssue[]>
 
