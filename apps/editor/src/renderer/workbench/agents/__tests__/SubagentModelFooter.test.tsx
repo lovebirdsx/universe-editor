@@ -5,6 +5,10 @@
  *  value pinning), the setSubagentModel writes (including the inherit=clear
  *  semantic), the silent-until-changed hint row, and the restart ordering
  *  (requestProcessRestart only after the write has resolved).
+ *
+ *  The current value is seeded through `settings.env.CLAUDE_CODE_SUBAGENT_MODEL` —
+ *  the effective value the spawned process reads — because that is the only place
+ *  the pick lives.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -29,6 +33,8 @@ import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
 
+const SUBAGENT_MODEL = 'CLAUDE_CODE_SUBAGENT_MODEL'
+
 const GW_ENTRY: AiProviderEntry = {
   id: 'gw',
   apiKey: 'tok-1',
@@ -36,10 +42,11 @@ const GW_ENTRY: AiProviderEntry = {
   protocolMap: { 'anthropic-messages': ['claude-sonnet-4-6', 'deepseek-pro-v4'] },
 }
 
-function makeClaudeService(agentSettings: ClaudeAgentSettings) {
-  let settings: ClaudeSettings = {}
-  let stored = { ...agentSettings }
-  const writes: ClaudeAgentSettings[] = []
+function makeClaudeService(opts: { agentSettings: ClaudeAgentSettings; subagentModel?: string }) {
+  let settings: ClaudeSettings =
+    opts.subagentModel !== undefined ? { env: { [SUBAGENT_MODEL]: opts.subagentModel } } : {}
+  const stored = { ...opts.agentSettings }
+  const patches: ClaudeSettingsPatch[] = []
   const pending: Array<{ resolve: () => void; reject: (err: Error) => void }> = []
   const service = {
     _serviceBrand: undefined,
@@ -47,6 +54,10 @@ function makeClaudeService(agentSettings: ClaudeAgentSettings) {
       return settings
     },
     async patch(p: ClaudeSettingsPatch): Promise<void> {
+      patches.push(p)
+      // Held open so tests can observe the in-flight window the restart button
+      // has to await.
+      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject }))
       let next = { ...settings }
       if (p.env) {
         const env = { ...(next.env ?? {}) }
@@ -68,10 +79,8 @@ function makeClaudeService(agentSettings: ClaudeAgentSettings) {
     async readAgentSettings(): Promise<ClaudeAgentSettings> {
       return stored
     },
-    async writeAgentSettings(next: ClaudeAgentSettings): Promise<void> {
-      writes.push(next)
-      await new Promise<void>((resolve, reject) => pending.push({ resolve, reject }))
-      stored = next
+    async writeAgentSettings(): Promise<void> {
+      throw new Error('the footer must not write the agent-settings block')
     },
     async checkGatewayConnectivity(): Promise<boolean> {
       return true
@@ -79,21 +88,25 @@ function makeClaudeService(agentSettings: ClaudeAgentSettings) {
   } as unknown as IClaudeConfigService
   return {
     service,
-    writes,
-    /** Resolve the oldest in-flight writeAgentSettings call, if any. */
+    patches,
+    /** Resolve the oldest in-flight patch call, if any. */
     flushWrite: () => pending.shift()?.resolve(),
-    /** Reject the oldest in-flight writeAgentSettings call, if any. */
+    /** Reject the oldest in-flight patch call, if any. */
     failWrite: (err: Error) => pending.shift()?.reject(err),
   }
 }
 
 function setup(opts: {
   agentSettings: ClaudeAgentSettings
+  subagentModel?: string
   entries?: readonly AiProviderEntry[]
   restart?: () => void
   notify?: (n: unknown) => void
 }) {
-  const claude = makeClaudeService(opts.agentSettings)
+  const claude = makeClaudeService({
+    agentSettings: opts.agentSettings,
+    ...(opts.subagentModel !== undefined ? { subagentModel: opts.subagentModel } : {}),
+  })
   const session = {
     requestProcessRestart: opts.restart ?? vi.fn(),
   } as unknown as IAcpSession
@@ -145,7 +158,15 @@ describe('SubagentModelFooter', () => {
     expect(option('deepseek-pro-v4').getAttribute('aria-selected')).toBe('false')
   })
 
-  it('picks a candidate through setSubagentModel', async () => {
+  it('marks the row matching the effective env value as selected', async () => {
+    setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'deepseek-pro-v4' })
+    await waitFor(() => expect(screen.getByText('deepseek-pro-v4')).toBeTruthy())
+
+    expect(option('deepseek-pro-v4').getAttribute('aria-selected')).toBe('true')
+    expect(option('Follow main model').getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('picks a candidate by patching the sub-agent model env', async () => {
     const { claude, session } = setup({ agentSettings: { authentication: 'gw' } })
     await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
 
@@ -153,16 +174,14 @@ describe('SubagentModelFooter', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.writes.at(-1)).toEqual({
-      authentication: 'gw',
-      subagentModel: 'claude-sonnet-4-6',
-    })
+    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6' } })
     expect(session.requestProcessRestart).not.toHaveBeenCalled()
   })
 
-  it('picking the inherit row clears the pick', async () => {
+  it('picking the inherit row clears the env key', async () => {
     const { claude } = setup({
-      agentSettings: { authentication: 'gw', subagentModel: 'claude-sonnet-4-6' },
+      agentSettings: { authentication: 'gw' },
+      subagentModel: 'claude-sonnet-4-6',
     })
     // Wait for a candidate row so the loaded current value is in effect —
     // picking before that would see `undefined` and early-return.
@@ -172,11 +191,11 @@ describe('SubagentModelFooter', () => {
     claude.flushWrite()
     await act(async () => {})
 
-    expect(claude.writes.at(-1)).toEqual({ authentication: 'gw' })
+    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: null } })
   })
 
   it('keeps a stale current value as a pinned top option', async () => {
-    setup({ agentSettings: { authentication: 'gw', subagentModel: 'old-stale-model' } })
+    setup({ agentSettings: { authentication: 'gw' }, subagentModel: 'old-stale-model' })
     await waitFor(() => expect(screen.getByText('old-stale-model')).toBeTruthy())
 
     expect(option('old-stale-model').getAttribute('aria-selected')).toBe('true')
@@ -202,14 +221,15 @@ describe('SubagentModelFooter', () => {
 
   it('does not mark the footer as changed when picking the already-current value', async () => {
     const { claude } = setup({
-      agentSettings: { authentication: 'gw', subagentModel: 'claude-sonnet-4-6' },
+      agentSettings: { authentication: 'gw' },
+      subagentModel: 'claude-sonnet-4-6',
     })
     await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
 
     await pick('claude-sonnet-4-6')
 
     expect(screen.queryByTestId('acp-subagent-restart')).toBeNull()
-    expect(claude.writes).toHaveLength(0)
+    expect(claude.patches).toHaveLength(0)
   })
 
   it('requests the process restart only after the pick write has resolved', async () => {
@@ -230,7 +250,7 @@ describe('SubagentModelFooter', () => {
     expect(restart).toHaveBeenCalledTimes(1)
     // Only the pick wrote; the restart awaits that write rather than issuing a
     // redundant second one.
-    expect(claude.writes).toHaveLength(1)
+    expect(claude.patches).toHaveLength(1)
   })
 
   it('reports the write failure and skips the restart when persisting the pick rejects', async () => {

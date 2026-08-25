@@ -2,8 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-side Claude config service. The file-store core (settings.json +
  *  .credentials.json) lives in node-services (ClaudeConfigStore); this class adds
- *  the local/remote split and the editor-local agent settings (authentication /
- *  model / subagentModel with their `[1m]` toggles, stored in aiSettings.json).
+ *  the local/remote split and the editor-local agent settings (the credential
+ *  selection, stored in aiSettings.json). The model picks are NOT stored here —
+ *  they live only as their effective value in settings.json; see
+ *  ClaudeAgentSettings for why.
  *
  *  Routed by `authority`: set → the remote server's AgentConfig channel for that
  *  authority; absent → the local ClaudeConfigStore (zero behavior change). The
@@ -121,20 +123,18 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
 }
 
 /**
- * Keep only known fields, dropping any legacy shape left in aiSettings.json.
- * Writing is whole-block replace (the renderer always sends a full snapshot),
- * so this doubles as the write-side narrowing.
+ * Keep only known fields, dropping any legacy shape left in aiSettings.json —
+ * including the `model` / `model1m` / `subagentModel` / `subagentModel1m` mirrors
+ * this block used to carry. Those are gone on purpose: `settings.json` holds the
+ * effective value and is the only source of truth, so a leftover mirror must be
+ * dropped rather than migrated (migrating would resurrect the drift). Writing is
+ * whole-block replace (the renderer always sends a full snapshot), so this
+ * doubles as the write-side narrowing.
  */
 function sanitizeClaudeAgentSettings(state: ClaudeAgentSettings | undefined): ClaudeAgentSettings {
   const out: ClaudeAgentSettings = {}
   if (typeof state?.authentication === 'string' && state.authentication !== '') {
     out.authentication = state.authentication
   }
-  if (typeof state?.model === 'string' && state.model !== '') out.model = state.model
-  if (typeof state?.subagentModel === 'string' && state.subagentModel !== '') {
-    out.subagentModel = state.subagentModel
-  }
-  if (state?.model1m === true) out.model1m = true
-  if (state?.subagentModel1m === true) out.subagentModel1m = true
   return out
 }

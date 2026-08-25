@@ -41,18 +41,20 @@ const OPENAI_ENTRY: AiProviderEntry = {
 
 function makeConfig(
   authentication: string | undefined,
-  agentSettings: Partial<UseClaudeConfig['agentSettings']> = {},
+  effective: { model?: string; subagentModel?: string } = {},
 ): UseClaudeConfig {
+  const env: Record<string, string> = {}
+  if (effective.subagentModel !== undefined) {
+    env['CLAUDE_CODE_SUBAGENT_MODEL'] = effective.subagentModel
+  }
   return {
-    settings: { env: {} },
+    settings: { env, ...(effective.model !== undefined ? { model: effective.model } : {}) },
     loaded: true,
     configPath: '',
     authority: undefined,
     authStatus: { loggedIn: false, expired: false },
-    agentSettings: {
-      ...(authentication === undefined ? {} : { authentication }),
-      ...agentSettings,
-    },
+    agentSettings: authentication === undefined ? {} : { authentication },
+    subagentModelEnv: effective.subagentModel,
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     reloadAuthStatus: vi.fn(async () => ({ loggedIn: false, expired: false })),
@@ -176,17 +178,46 @@ describe('AuthenticationPanel provider picker', () => {
     await flushEffects()
 
     const checkbox = screen.getByTestId('model-1m')
-    expect(checkbox).toBeTruthy()
+    expect((checkbox as HTMLInputElement).checked).toBe(false)
     fireEvent.click(checkbox)
     expect(config.setModelOneM).toHaveBeenCalledWith(true)
   })
 
-  it('hides the 1m checkbox when the model id already carries [1m]', async () => {
+  // The row shows the effective id, so a `[1m]` suffix IS the checked state —
+  // there is no second flag that could contradict it.
+  it('shows the 1m checkbox already checked when the model id carries [1m]', async () => {
     const { aiModel } = makeAiModel([GW_ENTRY])
-    renderPanel(makeConfig('gw', { model: 'claude-opus-5[1m]' }), aiModel)
+    const config = makeConfig('gw', { model: 'claude-opus-5[1m]' })
+    renderPanel(config, aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    const checkbox = screen.getByTestId('model-1m')
+    expect((checkbox as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(checkbox)
+    expect(config.setModelOneM).toHaveBeenCalledWith(false)
+  })
+
+  it('hides the 1m checkbox when no model is picked', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig('gw'), aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(screen.queryByTestId('model-1m')).toBeNull()
+  })
+
+  // Regression for the reported bug: the sub-agent row must render the value the
+  // spawned process actually reads (env.CLAUDE_CODE_SUBAGENT_MODEL), not a
+  // separately stored pick that could have drifted from it.
+  it('renders the sub-agent row from the effective env value', async () => {
+    const { aiModel } = makeAiModel([GW_ENTRY])
+    renderPanel(makeConfig('gw', { subagentModel: 'deepseek-v4-flash' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    // The value is pinned as the only option, so it shows on the Select trigger.
+    expect(screen.getByText('deepseek-v4-flash')).toBeTruthy()
+    expect((screen.getByTestId('subagentModel-1m') as HTMLInputElement).checked).toBe(false)
   })
 })

@@ -59,6 +59,18 @@ function candidateModels(provider: AiResolvedProvider | undefined): readonly str
   return p.models.map((m) => m.channelModel)
 }
 
+/**
+ * The option list for one row: the provider's candidates, with `current` pinned
+ * on top when it isn't among them. The pinned entry covers both a value from a
+ * provider the user has since switched away from and one whose `[1m]` lane the
+ * candidate list spells differently — either way it is the id actually in effect
+ * and must stay visible and selected.
+ */
+function pinCurrent(candidates: readonly string[], current: string): readonly string[] {
+  if (current === '' || candidates.includes(current)) return candidates
+  return [current, ...candidates]
+}
+
 export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
   const { settings, authStatus, configPath, authority, agentSettings } = config
   const env = useMemo(() => settings.env ?? {}, [settings.env])
@@ -106,6 +118,8 @@ function AuthenticationSection({
 }) {
   const {
     agentSettings,
+    settings,
+    subagentModelEnv,
     applyAuthentication,
     setModel,
     setModelOneM,
@@ -122,24 +136,18 @@ function AuthenticationSection({
     [authentication, providers],
   )
   const candidates = useMemo(() => candidateModels(resolved), [resolved])
-  const currentModel = agentSettings.model
-  const currentSubagent = agentSettings.subagentModel
-  const modelOneM = agentSettings.model1m === true
-  const subagentOneM = agentSettings.subagentModel1m === true
-  // A structured pick whose current value is not offered by the new provider
-  // must still be visible as an option, not vanish while a stale value persists.
+  // The rows show the EFFECTIVE ids from settings.json — the exact strings the
+  // agent reads. There is no separate stored pick to disagree with them.
+  const currentModel = settings.model ?? ''
+  const currentSubagent = subagentModelEnv ?? ''
+  // A value the provider no longer offers must still be visible as an option,
+  // not vanish while it is the one actually in effect.
   const modelOptions = useMemo(
-    () =>
-      currentModel && !candidates.includes(currentModel)
-        ? [currentModel, ...candidates]
-        : candidates,
+    () => pinCurrent(candidates, currentModel),
     [candidates, currentModel],
   )
   const subagentOptions = useMemo(
-    () =>
-      currentSubagent && !candidates.includes(currentSubagent)
-        ? [currentSubagent, ...candidates]
-        : candidates,
+    () => pinCurrent(candidates, currentSubagent),
     [candidates, currentSubagent],
   )
 
@@ -197,9 +205,7 @@ function AuthenticationSection({
                 <ClaudeDerivationPreview resolved={selected} />
                 <ModelPicks
                   model={currentModel}
-                  modelOneM={modelOneM}
                   subagent={currentSubagent}
-                  subagentOneM={subagentOneM}
                   modelOptions={modelOptions}
                   subagentOptions={subagentOptions}
                   onModel={(m) => void setModel(m || undefined)}
@@ -226,9 +232,7 @@ function AuthenticationSection({
 
 function ModelPicks({
   model,
-  modelOneM,
   subagent,
-  subagentOneM,
   modelOptions,
   subagentOptions,
   onModel,
@@ -236,10 +240,8 @@ function ModelPicks({
   onSubagent,
   onSubagentOneM,
 }: {
-  model: string | undefined
-  modelOneM: boolean
-  subagent: string | undefined
-  subagentOneM: boolean
+  model: string
+  subagent: string
   modelOptions: readonly string[]
   subagentOptions: readonly string[]
   onModel: (value: string) => void
@@ -251,11 +253,11 @@ function ModelPicks({
     <>
       <ModelPickRow
         label={localize('agentSettings.auth.form.model', 'Model')}
-        value={model ?? ''}
+        hint="settings.model"
+        value={model}
         options={modelOptions}
         emptyLabel={localize('agentSettings.auth.form.model.none', 'Use default')}
         placeholder="claude-opus-4-8"
-        oneM={modelOneM}
         testIdPrefix="model"
         onValue={onModel}
         onOneM={onModelOneM}
@@ -263,11 +265,10 @@ function ModelPicks({
       <ModelPickRow
         label={localize('agentSettings.auth.form.subagentModel', 'Sub Agent Model')}
         hint="env.CLAUDE_CODE_SUBAGENT_MODEL"
-        value={subagent ?? ''}
+        value={subagent}
         options={subagentOptions}
         emptyLabel={localize('agentSettings.auth.form.subagentModel.none', 'Unset')}
         placeholder="claude-sonnet-4-6"
-        oneM={subagentOneM}
         testIdPrefix="subagentModel"
         onValue={onSubagent}
         onOneM={onSubagentOneM}
@@ -283,7 +284,6 @@ function ModelPickRow({
   options,
   emptyLabel,
   placeholder,
-  oneM,
   testIdPrefix,
   onValue,
   onOneM,
@@ -294,13 +294,15 @@ function ModelPickRow({
   options: readonly string[]
   emptyLabel: string
   placeholder: string
-  oneM: boolean
   testIdPrefix: string
   onValue: (value: string) => void
   onOneM: (enabled: boolean) => void
 }) {
-  // A bare, empty, or already-suffixed id has no `[1m]` lane to toggle.
-  const showOneM = value.trim() !== '' && !hasOneM(value)
+  // `value` is the effective id, so the suffix IS the checkbox state — there is
+  // no separate flag that could disagree with it. Empty means "no pick", which
+  // has no lane to toggle.
+  const showOneM = value.trim() !== ''
+  const oneM = hasOneM(value)
   return (
     <div className={styles['field']}>
       <label className={styles['label']}>{label}</label>

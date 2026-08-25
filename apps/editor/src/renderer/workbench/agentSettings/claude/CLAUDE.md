@@ -20,16 +20,16 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 
 #### Renderer — Claude 专属（agentSettings/claude/）
 - `claude/ClaudeAgentSettings.tsx` — Claude 设置根组件。持有 `useClaudeConfig()`，三分类子导航（auth/model/env，`CATEGORIES` 数组），滚动位置 + 激活分类经 `IStorageService` 持久化（`agent.settings.claude.activeCategory`、`agent.settings.claude.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`。**
-- `claude/AuthenticationPanel.tsx` — 认证页。两块：`AuthenticationSection`（单一认证选择：选一个 provider 条目或 `@subscription`；结构化选择是 **Model + Sub Agent Model** 两行 `ModelPickRow`，各带一个可选 `1m` 勾选框——勾上写盘的模型 id 追加 `[1m]`，id 自身已带 `[1m]` 时勾选框不出现）与 `LoginForm`（OAuth 登录状态 + 登录按钮）。认证选择是**单个 provider id 字符串**（存 `aiSettings.json` 的 `agentSettings.claude.authentication`），下拉控件是共享组件 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生预览经 `shared/ai/providerDerivation.ts` 的 `deriveClaudeAuth`。算激活态：`isClaudeAuthActive`（`credentialMatch.ts`，比对声明选择与 env）/ `isLoginActive`（由 env + auth 状态推导，不是 UI 展开态）；`mask()` 脱敏显示。
+- `claude/AuthenticationPanel.tsx` — 认证页。两块：`AuthenticationSection`（单一认证选择：选一个 provider 条目或 `@subscription`；结构化选择是 **Model + Sub Agent Model** 两行 `ModelPickRow`，各带一个 `1m` 勾选框——**行显示的是 settings.json 里的有效 id**，勾选框状态由该 id 是否以 `[1m]` 结尾派生，勾上/取消即改写这个 id；没选模型（空值）时勾选框不出现）与 `LoginForm`（OAuth 登录状态 + 登录按钮）。认证选择是**单个 provider id 字符串**（存 `aiSettings.json` 的 `agentSettings.claude.authentication`），下拉控件是共享组件 `../GatewayProviderPicker.js`（`protocol="anthropic-messages"`），派生预览经 `shared/ai/providerDerivation.ts` 的 `deriveClaudeAuth`。算激活态：`isClaudeAuthActive`（`credentialMatch.ts`，比对声明选择与 env）/ `isLoginActive`（由 env + auth 状态推导，不是 UI 展开态）；`mask()` 脱敏显示。
 - `claude/ModelThinkingPanel.tsx` — 模型 / 语言 / 思考开关 / effort / availableModels，绑 settings.json。
 - `claude/AdvancedEnvPanel.tsx` — env 开关（PROMPT_CACHING、AUTO_COMPACT）+ 自定义 env 编辑器。隐藏认证类 env（`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`）与 `CLAUDE_CODE_SUBAGENT_MODEL`（owner 是 AuthenticationPanel 的 Sub Agent Model 行）；`ANTHROPIC_SMALL_FAST_MODEL` 已不再有可视化入口，改由 Custom environment variables 手填（**不隐藏**，老用户遗留值交回手填）。
-- `claude/useClaudeConfig.ts` — Claude 配置 hook。聚合 settings/authStatus/agentSettings 的读取与 patch。`applyAuthentication` 持久化认证选择并把匹配的凭据 env 注入 settings.json（互斥清掉另一种凭据，见下）；`setModel`/`setModelOneM`/`setSubagentModel`/`setSubagentModelOneM` 共用内部 `applyModelPick`，**不变量：每个 setter 只 patch 自己关联的那一个键**（`settings.model` 或 `env.CLAUDE_CODE_SUBAGENT_MODEL`），其余配置逐字不动。常量 `API_KEY`/`AUTH_TOKEN`/`BASE_URL`/`SUBAGENT_MODEL`。
+- `claude/useClaudeConfig.ts` — Claude 配置 hook。聚合 settings/authStatus/agentSettings 的读取与 patch。`applyAuthentication` 持久化认证选择并把匹配的凭据 env 注入 settings.json（互斥清掉另一种凭据，见下）；`setModel`/`setModelOneM`/`setSubagentModel`/`setSubagentModelOneM` 共用内部 `applyModelPick`，两条不变量：(1) **每个 setter 只 patch 自己关联的那一个键**（`settings.model` 或 `env.CLAUDE_CODE_SUBAGENT_MODEL`），其余配置逐字不动；(2) **`applyModelPick` 在写队列内重新 `service.read()` 拿盘上现值**再复合，绝不读 React state——否则另一个 hook 实例/外部编辑的新值会被本实例的陈旧快照盖回去。暴露 `subagentModelEnv`（= `settings.env.CLAUDE_CODE_SUBAGENT_MODEL`）给面板显示。常量 `API_KEY`/`AUTH_TOKEN`/`BASE_URL`/`SUBAGENT_MODEL`。
 - `claude/claudeLogin.ts` — `runClaudeLogin()` 开终端跑 `claude auth login --claudeai|--console`。
 
 #### 跨进程服务三层
 - `shared/ipc/claudeConfigService.ts` — **wire 契约**。`IClaudeConfigService` 装饰器 + 所有类型（`ClaudeSettings`/`ClaudeSettingsPatch`/`ClaudeAuthStatus` re-export 自 node-services；编辑器侧 `ClaudeAgentSettings`）。`AGENT_SUBSCRIPTION_AUTH = '@subscription'` 哨兵也在此。方法：`read`/`patch`/`configPath`/`readAuthStatus`/`readAgentSettings`/`writeAgentSettings`/`checkGatewayConnectivity`。
 - `main/services/claudeConfig/claudeConfigMainService.ts` — **main 实现**。原子写（mkdir -p + temp + rename），读容错（缺失/损坏返回空）；`writeAgentSettings` 是**整块替换**语义（renderer 每次传完整快照），`mergeClaudeAgentSettings` 已删。
-- `main/services/claudeConfig/__tests__/claudeConfigMainService.test.ts` — readAuthStatus + agent settings（authentication / model / model1m / subagentModel / subagentModel1m 读写；false 不落盘 + 整块替换语义）。
+- `main/services/claudeConfig/__tests__/claudeConfigMainService.test.ts` — readAuthStatus + agent settings（只有 `authentication` 一个字段；旧版镜像字段读取时丢弃、下次写入即清除 + 整块替换语义）。
 
 ### claudeConfig 服务接线（5 处，加方法时无需动）
 
@@ -46,11 +46,12 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 |---|---|---|---|
 | `~/.claude/settings.json` | 编辑器 + CLI 共享 | agent/SDK/CLI | **当前生效**配置：model、env（含激活的凭据）、思考开关等 |
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
-| `<configDir>/aiSettings.json` 的 `agentSettings.claude` | **仅编辑器** | 仅编辑器 | 认证选择（单个 provider id 或 `@subscription`）+ `authentication`/`model`/`model1m`/`subagentModel`/`subagentModel1m`（存**裸 id + 1m 开关**，拼接后的有效值才写 settings.json），不是生效配置 |
+| `<configDir>/aiSettings.json` 的 `agentSettings.claude` | **仅编辑器** | 仅编辑器 | **只有认证选择** `authentication`（单个 provider id 或 `@subscription`），不是生效配置 |
 
 - **settings.json = 当前生效菜；aiSettings.json 的 agentSettings.claude = 编辑器记下的选择。** 「选中某 provider」= 把派生的 env 注入 settings.json。
+- **🔴 模型选择只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`），`agentSettings.claude` 里**绝不再镜像** `model`/`model1m`/`subagentModel`/`subagentModel1m`（这四个字段已删）。UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照的写入会覆盖别人刚改的选择，界面高亮 `deepseek-v4-pro` 而子 agent 实跑 `deepseek-v4-flash`（真实 bug）。新增模型类选择项一律直写 settings.json，别往 agentSettings 里加。
 - **登录(OAuth) 不是一个 provider 条目**，它走 `.credentials.json`，与认证选择平行。
-- **切换 Provider 只写三个凭据 env，不连带清空 model 选择**：model/subagentModel 的选择独立于认证；也因此下拉里「当前值不在新候选中时置顶为额外选项」更关键（否则陈旧值会凭空消失）。
+- **切换 Provider 只写三个凭据 env，不连带清空 model 选择**：model/subagentModel 独立于认证；也因此下拉里「当前值不在新候选中时置顶为额外选项」（`pinCurrent`）更关键（否则陈旧值会凭空消失）。
 
 ### 认证优先级（agent/SDK 解析顺序）
 
@@ -79,7 +80,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 ### 常见任务 → 改哪里
 
 - **给 Claude 加一个新设置项**：定字段进 `ClaudeSettings`/`ClaudeSettingsPatch`（契约）→ main 实现读写 → 对应面板（model 类→ModelThinkingPanel、env 类→AdvancedEnvPanel、认证类→AuthenticationPanel + `AUTH_ENV_KEYS`）加 UI，经 `useClaudeConfig().patch` 落盘。
-- **给 Claude 加一个模型相关的结构化选择项**：契约 `ClaudeAgentSettings` 加字段 → `sanitizeClaudeAgentSettings` → `useClaudeConfig` 加 setter（走 `applyModelPick`，只 patch 自己关联的那个键）→ `AuthenticationPanel` 加一行 `ModelPickRow`；若它对应一个 env key，记得在 `AdvancedEnvPanel` 隐藏。
+- **给 Claude 加一个模型相关的结构化选择项**：**不要往 `ClaudeAgentSettings` 加字段**——直接在 `useClaudeConfig` 加走 `applyModelPick` 的 setter（只 patch 它关联的那个 settings.json 键），面板加一行 `ModelPickRow` 显示有效 id；若它对应一个 env key，记得在 `AdvancedEnvPanel` 隐藏。
 - **给 claudeConfig 加一个跨进程方法**：只改契约 + main 实现两个文件（5 处接线不动）。
 - **再加一个 acp agent 的设置页（如 codex）**：新建 `agentSettings/codex/CodexAgentSettings.tsx`，末行 `registerAgentSettings('codex', CodexAgentSettings)`；在 `builtinAgentSettings.ts` 加一行 `import './codex/CodexAgentSettings.js'`。**壳零改动**——只要该 agent 在 `IAcpAgentRegistry.list()` 里，就会自动出现在 Settings 的 Agents 组。Codex 的设置页已存在，其凭据模型（双文件 config.toml/auth.json、resolved_mode 优先级、双维度 auth 状态、fs.watch 实时刷新）与 Claude 不同，见 [`../codex/CLAUDE.md`](../codex/CLAUDE.md)。
 - **加一种认证来源**：改 `applyAuthentication` 的互斥注入逻辑 + `AuthenticationSection`/`GatewayProviderPicker` + `isClaudeAuthActive`。

@@ -41,24 +41,20 @@ export const AGENT_SUBSCRIPTION_AUTH = '@subscription'
 /**
  * Editor-local Claude agent state (`aiSettings.json` under `agentSettings.claude`).
  * `authentication` is a single provider id, the {@link AGENT_SUBSCRIPTION_AUTH}
- * sentinel, or absent. `model` / `subagentModel` are the user's model picks,
- * normally bare — an id whose own name carries `[1m]` is stored verbatim and
- * hides the toggle. Each is paired with a `1m` toggle, and only the composed
- * value (`settings.model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`) is written into
- * `settings.json` on apply. The CLI/agent never read this block — it is the
- * editor's own menu.
+ * sentinel, or absent. The CLI/agent never read this block — it is the editor's
+ * own menu.
+ *
+ * The model picks are deliberately NOT here. They live only as their effective
+ * value in `settings.json` (`model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`), which is
+ * what the agent actually reads; the `[1m]` checkbox is derived from that string's
+ * suffix rather than stored. Mirroring the picks here used to drift: this block is
+ * written wholesale, so a panel holding a stale snapshot would rewrite a pick it
+ * never touched while `settings.json` kept the real value — the UI then
+ * highlighted one model while the process ran another.
  */
 export interface ClaudeAgentSettings {
   /** Provider id serving `anthropic-messages`, `@subscription`, or absent. */
   authentication?: string
-  /** Bare model requested from the provider (written to `settings.model` on apply). */
-  model?: string
-  /** Append `[1m]` to `model` when composing `settings.model`. */
-  model1m?: boolean
-  /** Bare sub-agent model (`env.CLAUDE_CODE_SUBAGENT_MODEL` on apply). */
-  subagentModel?: string
-  /** Append `[1m]` to `subagentModel` when composing the env value. */
-  subagentModel1m?: boolean
 }
 
 export interface IClaudeConfigService {

@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Pure helpers for the `[1m]` (1M-context lane) suffix on Claude model ids.
- *  Shared by the model / sub-agent model picks in the Authentication panel and by
- *  the session-level model candidate injection: the persisted pick stays bare
- *  while the composed id written to settings.json appends `[1m]` when the lane is
- *  enabled.
+ *
+ *  The effective id in `settings.json` (`model` / `env.CLAUDE_CODE_SUBAGENT_MODEL`)
+ *  is the single source of truth — nothing mirrors the pick elsewhere. So the lane
+ *  is not a stored flag but a property of that string: `hasOneM` reads the
+ *  checkbox state off it, `stripOneM` + `withOneM` recompose it when toggled.
  *--------------------------------------------------------------------------------------------*/
 
 /** Whether the model id already carries the 1M-context lane suffix (`claude-opus-5[1m]`). */
@@ -20,4 +21,11 @@ export function withOneM(model: string, enabled: boolean): string {
   const bare = model.trim()
   if (bare === '' || hasOneM(bare)) return model
   return `${bare}[1m]`
+}
+
+/** The id with any trailing `[1m]` removed — the base a lane toggle recomposes
+ *  from, so toggling on then off returns the original id rather than stacking or
+ *  stranding the suffix. */
+export function stripOneM(model: string): string {
+  return model.trim().replace(/\[1m\]$/i, '')
 }

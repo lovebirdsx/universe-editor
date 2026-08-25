@@ -17,7 +17,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AiResolvedProvider, AiWireProtocol } from '@universe-editor/platform'
-import { withOneM } from './modelOneM.js'
 
 /** Wire protocol each built-in agent speaks, i.e. which `protocolMap` entry holds its models. */
 export const CLAUDE_AGENT_PROTOCOL: AiWireProtocol = 'anthropic-messages'
@@ -46,28 +45,23 @@ export function candidateModelsForProtocol(
   return p.models.map((m) => m.channelModel)
 }
 
-/** The editor's model pick for an agent, as a bare id plus its optional `[1m]` lane. */
-export interface ModelPickSpelling {
-  readonly model?: string
-  readonly oneM?: boolean
-}
-
 /**
- * The full candidate list for one agent: every model the selected provider
- * declares, plus the user's own pick in BOTH spellings.
+ * The full candidate list for one agent: the user's own model, then every model
+ * the selected provider declares.
  *
- * The effective spelling (`deepseek-pro-v4[1m]`) is not optional garnish. The
- * claude fork resolves `settings.model` against its catalogue with a fuzzy
- * tokenized fallback that happily matches `foo[1m]` to a bare `foo` entry —
- * silently dropping the 1M lane and clamping the window back to 200k. Carrying
- * the verbatim spelling lets the fork's exact-match layer win instead.
+ * `pick` is the EFFECTIVE id from the agent's own config file (`settings.model` /
+ * config.toml `model`) — the exact string the fork will resolve. Carrying it
+ * verbatim is not optional garnish: the claude fork resolves the model against
+ * its catalogue with a fuzzy tokenized fallback that happily matches `foo[1m]` to
+ * a bare `foo` entry, silently dropping the 1M lane and clamping the window back
+ * to 200k. An exact-match entry lets the fork's precise layer win instead.
  *
- * The bare pick is kept too: the user may have switched providers since, and a
- * stale pick that is not offered anymore must still be selectable (same reason
- * the settings dropdown pins an unlisted current value).
+ * It also goes first so it survives truncation: the user may have switched
+ * providers since, and a value the provider no longer offers must still be
+ * selectable (same reason the settings dropdown pins an unlisted current value).
  */
 export function extraModelsForAgentSettings(
-  pick: ModelPickSpelling,
+  pick: string | undefined,
   provider: AiResolvedProvider | undefined,
   protocol: AiWireProtocol,
 ): readonly string[] {
@@ -80,12 +74,7 @@ export function extraModelsForAgentSettings(
     out.push(trimmed)
   }
 
-  // The user's own pick first — it is the one value that must survive truncation.
-  const bare = pick.model?.trim()
-  if (bare) {
-    add(withOneM(bare, pick.oneM === true))
-    add(bare)
-  }
+  add(pick)
   for (const m of candidateModelsForProtocol(provider, protocol)) add(m)
   return out
 }

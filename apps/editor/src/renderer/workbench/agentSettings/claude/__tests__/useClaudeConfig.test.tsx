@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useClaudeConfig: applyAuthentication injects the derived credential env (or
- *  clears it for `@subscription`) and persists the selection; setModel /
- *  setSubagentModel write settings.json alongside their persisted picks.
+ *  clears it for `@subscription`) and persists the selection; the model picks live
+ *  ONLY in settings.json, so nothing can mirror them out of sync.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -168,7 +168,7 @@ describe('useClaudeConfig', () => {
     expect(result.current.settings.env).toBeUndefined()
   })
 
-  it('writes settings.model and persists the model pick', async () => {
+  it('writes settings.model without touching the agent-settings block', async () => {
     const { service, writeCalls } = makeClaudeService({
       settings: {},
       agentSettings: { authentication: 'gw' },
@@ -180,11 +180,11 @@ describe('useClaudeConfig', () => {
       await result.current.setModel('kimi-k3')
     })
 
-    expect(writeCalls).toEqual([{ authentication: 'gw', model: 'kimi-k3' }])
     expect(result.current.settings.model).toBe('kimi-k3')
+    expect(writeCalls).toEqual([])
   })
 
-  it('writes the sub-agent model env and persists the pick', async () => {
+  it('writes the sub-agent model env and exposes it as the effective value', async () => {
     const { service } = makeClaudeService({
       settings: {},
       agentSettings: { authentication: 'gw' },
@@ -197,12 +197,13 @@ describe('useClaudeConfig', () => {
     })
 
     expect(result.current.settings.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('kimi-k3-mini')
+    expect(result.current.subagentModelEnv).toBe('kimi-k3-mini')
   })
 
-  it('setModelOneM appends [1m] and toggling off drops it from both stores', async () => {
-    const { service, writeCalls } = makeClaudeService({
-      settings: {},
-      agentSettings: { authentication: 'gw', model: 'kimi-k3' },
+  it('setModelOneM appends [1m] and toggling off drops it again', async () => {
+    const { service } = makeClaudeService({
+      settings: { model: 'kimi-k3' },
+      agentSettings: { authentication: 'gw' },
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -211,20 +212,15 @@ describe('useClaudeConfig', () => {
       await result.current.setModelOneM(true)
     })
     expect(result.current.settings.model).toBe('kimi-k3[1m]')
-    expect(writeCalls[writeCalls.length - 1]!.model1m).toBe(true)
 
     await act(async () => {
       await result.current.setModelOneM(false)
     })
     expect(result.current.settings.model).toBe('kimi-k3')
-    expect('model1m' in writeCalls[writeCalls.length - 1]!).toBe(false)
   })
 
-  it('keeps an already-[1m] model id intact and drops the stale 1m flag', async () => {
-    const { service, writeCalls } = makeClaudeService({
-      settings: {},
-      agentSettings: { model: 'a', model1m: true },
-    })
+  it('keeps an already-[1m] model id intact', async () => {
+    const { service } = makeClaudeService({ settings: { model: 'a' }, agentSettings: {} })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
 
@@ -233,9 +229,11 @@ describe('useClaudeConfig', () => {
     })
 
     expect(result.current.settings.model).toBe('claude-opus-5[1m]')
-    const last = writeCalls[writeCalls.length - 1]!
-    expect('model1m' in last).toBe(false)
-    expect(last.model).toBe('claude-opus-5[1m]')
+
+    await act(async () => {
+      await result.current.setModelOneM(true)
+    })
+    expect(result.current.settings.model).toBe('claude-opus-5[1m]')
   })
 
   it('each setter patches only the one related key, leaving the rest untouched', async () => {
@@ -291,8 +289,8 @@ describe('useClaudeConfig', () => {
 
   it('setSubagentModelOneM appends [1m] to the sub-agent model env', async () => {
     const { service } = makeClaudeService({
-      settings: {},
-      agentSettings: { subagentModel: 'kimi-k3' },
+      settings: { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3' } },
+      agentSettings: {},
     })
     const { result } = setup(service)
     await waitFor(() => expect(result.current.loaded).toBe(true))
@@ -313,11 +311,14 @@ describe('useClaudeConfig', () => {
 
     await act(async () => {
       // Fire both without awaiting the first, exactly as the panel's handlers do.
-      await Promise.all([result.current.applyAuthentication('gw'), result.current.setModel('kimi')])
+      await Promise.all([
+        result.current.applyAuthentication('gw'),
+        result.current.applyAuthentication(AGENT_SUBSCRIPTION_AUTH),
+      ])
     })
 
-    expect(writeCalls.at(-1)).toEqual({ authentication: 'gw', model: 'kimi' })
-    expect(result.current.agentSettings).toEqual({ authentication: 'gw', model: 'kimi' })
+    expect(writeCalls.at(-1)).toEqual({ authentication: AGENT_SUBSCRIPTION_AUTH })
+    expect(result.current.agentSettings).toEqual({ authentication: AGENT_SUBSCRIPTION_AUTH })
   })
 
   it('lets a 1m toggle fired alongside a model pick see the settled pick', async () => {
@@ -330,6 +331,32 @@ describe('useClaudeConfig', () => {
     })
 
     expect(result.current.settings.model).toBe('kimi-k3[1m]')
-    expect(result.current.agentSettings).toEqual({ model: 'kimi-k3', model1m: true })
+  })
+
+  // Regression: the reported bug. The Model popover and the settings panel each
+  // mount their own hook instance and each read disk once at mount, so the second
+  // one holds a snapshot taken before the first one wrote. When the picks were
+  // mirrored into the wholesale-replaced agent-settings block, that stale writer
+  // rewrote the sub-agent model it never touched — the UI then highlighted one
+  // model while the spawned sub-agents ran another.
+  it('a stale second instance cannot revert the effective sub-agent model', async () => {
+    const { service } = makeClaudeService({ settings: {}, agentSettings: {} })
+    const first = setup(service, [GATEWAY_ENTRY])
+    const second = setup(service, [GATEWAY_ENTRY])
+    await waitFor(() => expect(first.result.current.loaded).toBe(true))
+    await waitFor(() => expect(second.result.current.loaded).toBe(true))
+
+    await act(async () => {
+      await first.result.current.setSubagentModel('deepseek-v4-pro')
+    })
+
+    // `second` still holds its mount-time snapshot; writing through it must not
+    // touch the sub-agent model.
+    await act(async () => {
+      await second.result.current.applyAuthentication('gw')
+    })
+
+    const onDisk = await service.read()
+    expect(onDisk.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('deepseek-v4-pro')
   })
 })

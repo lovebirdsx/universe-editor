@@ -5,12 +5,14 @@
  *  refreshes local state. All panels in the Agent settings editor share this so
  *  edits stay consistent with the on-disk file the agent + CLI also read.
  *
- *  The editor's own selection (which provider / `@subscription` to inject, plus
- *  the model / sub-agent model picks and their `[1m]` toggles) lives in
- *  aiSettings.json's `agentSettings.claude` block — this hook bridges the two:
- *  `applyAuthentication` both persists the selection and writes the matching
- *  credential env, `setModel` / `setSubagentModel` (and their `1m` variants)
- *  write settings.json alongside their persisted picks.
+ *  Two stores, one direction each:
+ *   - `settings.json` — the effective config the agent reads, and the ONLY home of
+ *     the model picks. `setModel` / `setSubagentModel` (+ their `1m` variants)
+ *     write the composed id straight there, and the panel reads it back from
+ *     `settings.model` / `subagentModelEnv`. Nothing is mirrored, so the UI cannot
+ *     disagree with what the process runs.
+ *   - `aiSettings.json`'s `agentSettings.claude` — the credential selection only.
+ *     `applyAuthentication` persists it and writes the matching credential env.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -31,7 +33,7 @@ import {
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import { deriveClaudeAuth, findProviderById } from '../../../../shared/ai/providerDerivation.js'
-import { hasOneM, withOneM } from '../../../services/acp/modelOneM.js'
+import { stripOneM, withOneM } from '../../../services/acp/modelOneM.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 
@@ -43,18 +45,20 @@ export interface UseClaudeConfig {
   readonly authority: string | undefined
   readonly authStatus: ClaudeAuthStatus
   readonly agentSettings: ClaudeAgentSettings
+  /** Effective `env.CLAUDE_CODE_SUBAGENT_MODEL`, the sub-agent model in effect. */
+  readonly subagentModelEnv: string | undefined
   patch(patch: ClaudeSettingsPatch): Promise<void>
   reload(): Promise<void>
   reloadAuthStatus(): Promise<ClaudeAuthStatus>
   /** Persist the provider/`@subscription` selection and inject/clear the matching env. */
   applyAuthentication(authentication: string | undefined): Promise<void>
-  /** Persist the model pick and write the composed `settings.model` (undefined clears it). */
+  /** Write `settings.model` verbatim (undefined/empty clears it). */
   setModel(model: string | undefined): Promise<void>
-  /** Toggle the `[1m]` lane for the model pick and rewrite `settings.model`. */
+  /** Add/remove the `[1m]` lane on the current `settings.model`. */
   setModelOneM(enabled: boolean): Promise<void>
-  /** Persist the sub-agent model pick and write `env.CLAUDE_CODE_SUBAGENT_MODEL`. */
+  /** Write `env.CLAUDE_CODE_SUBAGENT_MODEL` verbatim (undefined/empty clears it). */
   setSubagentModel(model: string | undefined): Promise<void>
-  /** Toggle the `[1m]` lane for the sub-agent model pick. */
+  /** Add/remove the `[1m]` lane on the current sub-agent model env. */
   setSubagentModelOneM(enabled: boolean): Promise<void>
 }
 
@@ -141,12 +145,11 @@ export function useClaudeConfig(): UseClaudeConfig {
     [service],
   )
 
-  // Every writer snapshots `agentSettingsRef`, then awaits an IPC round-trip
-  // before the ref catches up — and the block is persisted wholesale. Two
-  // controls changed in quick succession would therefore both start from the
-  // same stale snapshot, and the later write would silently drop the earlier
-  // one's field (pick a provider, immediately pick a model → authentication
-  // gone). Serializing the whole read-modify-write section is the fix.
+  // Every writer here is a read-modify-write across an IPC round-trip, so two
+  // controls changed in quick succession would both read the same pre-write
+  // state and the later write would clobber the earlier one (toggle `1m` right
+  // after picking a model → the pick is composed against the old id).
+  // Serializing the whole section is the fix.
   const writeQueue = useRef<Promise<unknown>>(Promise.resolve())
   const serialize = useCallback(<T>(task: () => Promise<T>): Promise<T> => {
     const run = writeQueue.current.then(task, task)
@@ -195,32 +198,19 @@ export function useClaudeConfig(): UseClaudeConfig {
   )
 
   /**
-   * Persist one model pick. `resolve` runs inside the write queue, against the
-   * settled state, so a setter that carries a value over from the current pick
-   * (the `1m` flag, the bare id) never reads a snapshot another write is about
-   * to replace.
+   * Write one model pick into settings.json. `resolve` receives the id as it
+   * currently stands ON DISK — read inside the write queue, not from React
+   * state — so a lane toggle can never compose against a value that another
+   * writer, another panel instance, or an external edit already superseded.
    */
   const applyModelPick = useCallback(
-    (
-      which: 'model' | 'subagentModel',
-      resolve: (current: ClaudeAgentSettings) => { bare: string | undefined; oneM: boolean },
-    ) =>
+    (which: 'model' | 'subagentModel', resolve: (current: string) => string) =>
       serialize(async () => {
-        const current = agentSettingsRef.current
-        const { bare, oneM } = resolve(current)
-        const next: ClaudeAgentSettings = { ...current }
-        const flagKey = which === 'model' ? 'model1m' : 'subagentModel1m'
-        if (bare) {
-          next[which] = bare
-          if (oneM) next[flagKey] = true
-          else delete next[flagKey]
-        } else {
-          delete next[which]
-          delete next[flagKey]
-        }
-        await writeAgentSettings(next)
-
-        const effective = bare ? withOneM(bare, oneM) : null
+        const onDisk = await service.read(authority)
+        const current =
+          which === 'model' ? onDisk.model : (onDisk.env?.[SUBAGENT_MODEL] as string | undefined)
+        const next = resolve(current ?? '').trim()
+        const effective = next === '' ? null : next
         // Patch only the one key this pick owns — the credential env the
         // authentication choice injected, and every other key, stay untouched.
         if (which === 'model') {
@@ -229,43 +219,32 @@ export function useClaudeConfig(): UseClaudeConfig {
           await patch({ env: { [SUBAGENT_MODEL]: effective } })
         }
       }),
-    [serialize, writeAgentSettings, patch],
+    [serialize, service, authority, patch],
   )
 
   const setModel = useCallback(
-    (model: string | undefined) =>
-      applyModelPick('model', (current) => ({
-        bare: model,
-        // An id that already carries `[1m]` hides the checkbox, so a flag left
-        // over from the previous pick must not silently re-append it later.
-        oneM: !!model && !hasOneM(model) && current.model1m === true,
-      })),
+    (model: string | undefined) => applyModelPick('model', () => model ?? ''),
     [applyModelPick],
   )
 
   const setModelOneM = useCallback(
     (enabled: boolean) =>
-      applyModelPick('model', (current) => ({ bare: current.model, oneM: enabled })),
+      applyModelPick('model', (current) => withOneM(stripOneM(current), enabled)),
     [applyModelPick],
   )
 
   const setSubagentModel = useCallback(
-    (model: string | undefined) =>
-      applyModelPick('subagentModel', (current) => ({
-        bare: model,
-        oneM: !!model && !hasOneM(model) && current.subagentModel1m === true,
-      })),
+    (model: string | undefined) => applyModelPick('subagentModel', () => model ?? ''),
     [applyModelPick],
   )
 
   const setSubagentModelOneM = useCallback(
     (enabled: boolean) =>
-      applyModelPick('subagentModel', (current) => ({
-        bare: current.subagentModel,
-        oneM: enabled,
-      })),
+      applyModelPick('subagentModel', (current) => withOneM(stripOneM(current), enabled)),
     [applyModelPick],
   )
+
+  const subagentModelEnv = settings.env?.[SUBAGENT_MODEL]
 
   return {
     settings,
@@ -274,6 +253,7 @@ export function useClaudeConfig(): UseClaudeConfig {
     authority,
     authStatus,
     agentSettings,
+    subagentModelEnv,
     patch,
     reload,
     reloadAuthStatus,

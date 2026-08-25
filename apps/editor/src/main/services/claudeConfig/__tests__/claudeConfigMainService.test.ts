@@ -115,26 +115,14 @@ describe('ClaudeConfigMainService', () => {
     expect(entries).toEqual(['settings.json'])
   })
 
-  it('stores the agent settings (authentication / model / subagentModel) in aiSettings.json', async () => {
+  it('stores the agent settings (authentication only) in aiSettings.json', async () => {
     const configDir = join(dir, 'editor-settings')
     svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-    await svc.writeAgentSettings({
-      authentication: 'gw',
-      model: 'kimi-k3',
-      subagentModel: 'kimi-k3-mini',
-    })
+    await svc.writeAgentSettings({ authentication: 'gw' })
 
-    expect(await svc.readAgentSettings()).toEqual({
-      authentication: 'gw',
-      model: 'kimi-k3',
-      subagentModel: 'kimi-k3-mini',
-    })
+    expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
     const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-    expect(stored.agentSettings.claude).toEqual({
-      authentication: 'gw',
-      model: 'kimi-k3',
-      subagentModel: 'kimi-k3-mini',
-    })
+    expect(stored.agentSettings.claude).toEqual({ authentication: 'gw' })
   })
 
   describe('readAuthStatus', () => {
@@ -223,43 +211,60 @@ describe('ClaudeConfigMainService', () => {
       expect(await svc.readAgentSettings()).toEqual({})
     })
 
-    it('drops legacy non-string fields when reading', async () => {
+    // The picks used to be mirrored here alongside `authentication`; they now
+    // live only as their effective value in settings.json. Legacy mirrors are
+    // dropped on read (not migrated) so a stale copy can never be mistaken for
+    // the value the agent actually runs.
+    it('drops legacy model mirrors and non-string fields when reading', async () => {
       const configDir = join(dir, 'editor-settings')
       await fs.mkdir(configDir, { recursive: true })
       await fs.writeFile(
         join(configDir, 'aiSettings.json'),
-        JSON.stringify({ agentSettings: { claude: { authentication: 'gw', model: 42 } } }),
+        JSON.stringify({
+          agentSettings: {
+            claude: {
+              authentication: 'gw',
+              model: 'deepseek-v4-pro',
+              model1m: true,
+              subagentModel: 'deepseek-v4-pro',
+              subagentModel1m: false,
+            },
+          },
+        }),
         'utf8',
       )
       svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
       expect(await svc.readAgentSettings()).toEqual({ authentication: 'gw' })
     })
 
-    it('persists model1m: true but drops subagentModel1m: false', async () => {
+    it('drops a non-string authentication value', async () => {
       const configDir = join(dir, 'editor-settings')
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        join(configDir, 'aiSettings.json'),
+        JSON.stringify({ agentSettings: { claude: { authentication: 42 } } }),
+        'utf8',
+      )
       svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
-      await svc.writeAgentSettings({
-        authentication: 'gw',
-        model: 'kimi-k3',
-        model1m: true,
-        subagentModel: 'mini',
-        subagentModel1m: false,
-      })
+      expect(await svc.readAgentSettings()).toEqual({})
+    })
 
-      expect(await svc.readAgentSettings()).toEqual({
-        authentication: 'gw',
-        model: 'kimi-k3',
-        model1m: true,
-        subagentModel: 'mini',
-      })
+    it('purges legacy model mirrors on the next write', async () => {
+      const configDir = join(dir, 'editor-settings')
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        join(configDir, 'aiSettings.json'),
+        JSON.stringify({
+          agentSettings: { claude: { authentication: 'gw', model: 'stale', model1m: true } },
+        }),
+        'utf8',
+      )
+      svc = new ClaudeConfigMainService(settingsPath, undefined, configLocation(configDir))
+
+      await svc.writeAgentSettings({ authentication: 'gw2' })
+
       const stored = JSON.parse(await fs.readFile(join(configDir, 'aiSettings.json'), 'utf8'))
-      expect(stored.agentSettings.claude).toEqual({
-        authentication: 'gw',
-        model: 'kimi-k3',
-        model1m: true,
-        subagentModel: 'mini',
-      })
-      expect('subagentModel1m' in stored.agentSettings.claude).toBe(false)
+      expect(stored.agentSettings.claude).toEqual({ authentication: 'gw2' })
     })
 
     it('replaces the whole agent block while preserving other top-level keys and agents', async () => {

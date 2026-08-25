@@ -6,9 +6,10 @@
  *  Each built-in agent has its own credential selection (`aiSettings.json`'s
  *  `agentSettings.claude` / `agentSettings.codex`) naming one provider entry, and
  *  its own wire protocol. This service joins the two: resolve the selected
- *  provider, read the models it declares under that protocol, and add the user's
- *  own model pick so it stays selectable. See acpModelCandidates.ts for why the
- *  forks need this at all.
+ *  provider, read the models it declares under that protocol, and add the model
+ *  currently configured in the agent's own file (`settings.json` / `config.toml`)
+ *  so it stays selectable. See acpModelCandidates.ts for why the forks need this
+ *  at all.
  *
  *  Reads are on-demand (three cheap IPC calls per session handshake) rather than
  *  cached: the user can edit providers or switch credentials at any time, and a
@@ -33,7 +34,6 @@ import {
   CLAUDE_AGENT_PROTOCOL,
   CODEX_AGENT_PROTOCOL,
   extraModelsForAgentSettings,
-  type ModelPickSpelling,
 } from './acpModelCandidates.js'
 
 export interface IAcpModelCandidateService {
@@ -62,17 +62,16 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
 
   async extraModelsForAgent(agentId: string): Promise<readonly string[]> {
     if (agentId === 'claude-code') {
-      const settings = await this._claude.readAgentSettings()
-      return this._resolve(settings.authentication, CLAUDE_AGENT_PROTOCOL, {
-        ...(settings.model !== undefined ? { model: settings.model } : {}),
-        ...(settings.model1m !== undefined ? { oneM: settings.model1m } : {}),
-      })
+      const [agentSettings, settings] = await Promise.all([
+        this._claude.readAgentSettings(),
+        this._claude.read(),
+      ])
+      // The pick is whatever settings.json says — the same value the fork reads.
+      return this._resolve(agentSettings.authentication, CLAUDE_AGENT_PROTOCOL, settings.model)
     }
     if (agentId === 'codex') {
       const settings = await this._codex.readAgentSettings()
-      return this._resolve(settings.authentication, CODEX_AGENT_PROTOCOL, {
-        ...(settings.model !== undefined ? { model: settings.model } : {}),
-      })
+      return this._resolve(settings.authentication, CODEX_AGENT_PROTOCOL, settings.model)
     }
     return []
   }
@@ -80,7 +79,7 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
   private async _resolve(
     authentication: string | undefined,
     protocol: AiWireProtocol,
-    pick: ModelPickSpelling,
+    pick: string | undefined,
   ): Promise<readonly string[]> {
     const provider = await this._findProvider(authentication)
     return extraModelsForAgentSettings(pick, provider, protocol)

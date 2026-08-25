@@ -5,6 +5,10 @@
  *  The pick travels as CLAUDE_CODE_SUBAGENT_MODEL spawn env, so it only reaches a
  *  freshly spawned process; after the user changes it, a hint row appears and
  *  offers an inline restart of the agent process.
+ *
+ *  Rows are the effective env ids straight from settings.json — the same strings
+ *  the spawned process receives — so the highlighted row cannot disagree with the
+ *  model the sub-agents actually run.
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useRef, useState } from 'react'
@@ -20,11 +24,11 @@ import { useProviderRegistry } from '../agentSettings/useProviderRegistry.js'
 import { useService } from '../useService.js'
 import styles from './agents.module.css'
 
-/** Inherit is the empty pick — `setSubagentModel(undefined)` clears every source. */
+/** Inherit is the empty pick — `setSubagentModel(undefined)` clears the env. */
 const INHERIT = ''
 
 export function SubagentModelFooter({ session }: { session: IAcpSession }) {
-  const { agentSettings, setSubagentModel } = useClaudeConfig()
+  const { agentSettings, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
   const notifications = useService(INotificationService)
   // Silent until the user actually changes the value, so the footer stays
@@ -43,18 +47,18 @@ export function SubagentModelFooter({ session }: { session: IAcpSession }) {
     () => candidateModelsForProtocol(provider, CLAUDE_AGENT_PROTOCOL),
     [provider],
   )
-  const current = agentSettings.subagentModel
-  // A stale pick the provider no longer offers must stay selectable instead of
-  // vanishing while it still applies.
+  const current = subagentModelEnv ?? INHERIT
+  // A value the provider no longer offers must stay selectable instead of
+  // vanishing while it is still the one in effect.
   const options = useMemo(
-    () => (current && !candidates.includes(current) ? [current, ...candidates] : candidates),
+    () =>
+      current !== INHERIT && !candidates.includes(current) ? [current, ...candidates] : candidates,
     [candidates, current],
   )
 
   const pick = (value: string): void => {
-    const next = value === INHERIT ? undefined : value
-    if (next === current) return
-    pendingWrite.current = setSubagentModel(next)
+    if (value === current) return
+    pendingWrite.current = setSubagentModel(value === INHERIT ? undefined : value)
     setChanged(true)
   }
 
@@ -82,7 +86,7 @@ export function SubagentModelFooter({ session }: { session: IAcpSession }) {
       key: INHERIT,
       value: INHERIT,
       label: localize('acp.subagent.inherit', 'Follow main model'),
-      active: current === undefined,
+      active: current === INHERIT,
     },
     ...options.map((m) => ({
       key: m,

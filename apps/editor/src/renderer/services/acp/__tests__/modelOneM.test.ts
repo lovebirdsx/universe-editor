@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasOneM, withOneM } from '../modelOneM.js'
+import { hasOneM, stripOneM, withOneM } from '../modelOneM.js'
 
 describe('modelOneM', () => {
   describe('hasOneM', () => {
@@ -45,6 +45,22 @@ describe('modelOneM', () => {
     it('returns empty / whitespace-only input unchanged', () => {
       expect(withOneM('', true)).toBe('')
       expect(withOneM('   ', true)).toBe('   ')
+    })
+  })
+
+  describe('stripOneM', () => {
+    it('removes a trailing suffix in either case', () => {
+      expect(stripOneM('claude-opus-5[1m]')).toBe('claude-opus-5')
+      expect(stripOneM('claude-opus-5[1M]')).toBe('claude-opus-5')
+    })
+
+    it('leaves a bare id alone', () => {
+      expect(stripOneM('claude-opus-5')).toBe('claude-opus-5')
+    })
+
+    it('round-trips a toggle back to the original id', () => {
+      const id = 'deepseek-v4-pro'
+      expect(withOneM(stripOneM(withOneM(id, true)), false)).toBe(id)
     })
   })
 })

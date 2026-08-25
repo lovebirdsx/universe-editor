@@ -21,6 +21,7 @@ function makeConfig(env: Record<string, string>): UseClaudeConfig {
     authority: undefined,
     authStatus: { loggedIn: false, expired: false },
     agentSettings: {},
+    subagentModelEnv: env['CLAUDE_CODE_SUBAGENT_MODEL'],
     patch: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     reloadAuthStatus: vi.fn(async () => ({ loggedIn: false, expired: false })),
