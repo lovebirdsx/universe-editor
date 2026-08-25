@@ -16,6 +16,7 @@ const { relaunch, quit, showSaveDialog, showOpenDialog, notificationState, power
         opts: { title: string; body: string }
         emit(event: 'click' | 'close' | 'failed'): void
         shown: boolean
+        closed: boolean
       }>,
     },
     powerState: {
@@ -29,20 +30,24 @@ vi.mock('electron', async () => {
     static isSupported(): boolean {
       return notificationState.supported
     }
-    private readonly _handlers: Record<string, Array<() => void>> = {}
+    private readonly _handlers: Record<string, Array<(...args: unknown[]) => void>> = {}
     shown = false
+    closed = false
     constructor(readonly opts: { title: string; body: string }) {
       notificationState.instances.push(this)
     }
-    on(event: string, handler: () => void): this {
+    on(event: string, handler: (...args: unknown[]) => void): this {
       ;(this._handlers[event] ??= []).push(handler)
       return this
     }
     show(): void {
       this.shown = true
     }
+    close(): void {
+      this.closed = true
+    }
     emit(event: 'click' | 'close' | 'failed'): void {
-      this._handlers[event]?.forEach((h) => h())
+      this._handlers[event]?.forEach((h) => (event === 'failed' ? h({}, new Error('boom')) : h()))
     }
   }
   return {
@@ -370,15 +375,52 @@ describe('MainHostService', () => {
       service.dispose()
     })
 
-    it('resolves clicked:false when dismissed', async () => {
+    it('resolves clicked:true on a click that arrives after the toast faded out', async () => {
+      // Regression: Windows fires 'close' when the toast animates out of the
+      // screen corner, but the entry stays clickable in Action Center. Settling
+      // on 'close' dropped the strong reference, GC took the native object down
+      // with its 'click' handler, and clicking the toast did nothing at all.
       const win = makeFakeWin()
       win.__setFocused(false)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const service = new MainHostService(win as any)
       const pending = service.notify({ title: 'Q', body: 'asks you' })
-      notificationState.instances[0]!.emit('close')
-      await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+      const notif = notificationState.instances[0]!
+      notif.emit('close')
+      // Still pending: the notification lives on in Action Center.
+      notif.emit('click')
+      await expect(pending).resolves.toEqual({ shown: true, clicked: true })
+      expect(win.calls).toContain('focus')
       service.dispose()
+    })
+
+    it('resolves clicked:false once the click grace window expires', async () => {
+      vi.useFakeTimers()
+      try {
+        const win = makeFakeWin()
+        win.__setFocused(false)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const service = new MainHostService(win as any)
+        const pending = service.notify({ title: 'Q', body: 'asks you' })
+        notificationState.instances[0]!.emit('close')
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+        service.dispose()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('closes still-pending toasts on dispose', async () => {
+      const win = makeFakeWin()
+      win.__setFocused(false)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      void service.notify({ title: 'Q', body: 'asks you' })
+      const notif = notificationState.instances[0]!
+      expect(notif.closed).toBe(false)
+      service.dispose()
+      expect(notif.closed).toBe(true)
     })
 
     it('still shows when focused if onlyWhenBlurred is false', async () => {
@@ -388,8 +430,8 @@ describe('MainHostService', () => {
       const service = new MainHostService(win as any)
       const pending = service.notify({ title: 'X', body: 'y', onlyWhenBlurred: false })
       expect(notificationState.instances).toHaveLength(1)
-      notificationState.instances[0]!.emit('close')
-      await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+      notificationState.instances[0]!.emit('click')
+      await expect(pending).resolves.toEqual({ shown: true, clicked: true })
       service.dispose()
     })
 
@@ -420,8 +462,8 @@ describe('MainHostService', () => {
         const service = new MainHostService(win as any)
         const pending = service.notify({ title: 'Review', body: 'needs action' })
         expect(notificationState.instances).toHaveLength(1)
-        notificationState.instances[0]!.emit('close')
-        await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+        notificationState.instances[0]!.emit('click')
+        await expect(pending).resolves.toEqual({ shown: true, clicked: true })
         service.dispose()
       })
 
@@ -433,8 +475,8 @@ describe('MainHostService', () => {
         const service = new MainHostService(win as any)
         const pending = service.notify({ title: 'Review', body: 'needs action' })
         expect(notificationState.instances).toHaveLength(1)
-        notificationState.instances[0]!.emit('close')
-        await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+        notificationState.instances[0]!.emit('click')
+        await expect(pending).resolves.toEqual({ shown: true, clicked: true })
         service.dispose()
       })
 

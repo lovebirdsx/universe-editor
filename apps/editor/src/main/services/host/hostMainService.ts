@@ -60,6 +60,14 @@ const ZOOM_MAX = 9
  *  ever gets one notification chance — the rising edge is consumed either way). */
 const USER_AWAY_IDLE_SECONDS = 120
 
+/** Windows fires 'close' the instant the toast slides out of the screen corner —
+ *  not when the user dismisses it. The notification lives on in Action Center and
+ *  stays clickable there long afterwards, so a 'close' must not be read as "the
+ *  user passed on this": keep listening for a click past the fade. Give up after
+ *  a while so a click on a stale toast can't jump the user to a session they
+ *  moved on from an hour ago. */
+const NOTIFICATION_CLICK_GRACE_MS = 5 * 60_000
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
@@ -109,6 +117,12 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   private readonly _nativeThemeSubscription = subscribeNativeThemeUpdated(
     this._onNativeThemeUpdated,
   )
+
+  /** Strong references to live toasts. Electron's Notification is a thin JS
+   *  wrapper over a native object; dropping the last JS reference lets GC take
+   *  it down together with its 'click' handler, so a toast the user clicks
+   *  minutes later silently does nothing. Held until the notification settles. */
+  private readonly _pendingNotifications = new Set<Notification>()
 
   constructor(
     private readonly _win: BrowserWindow,
@@ -370,23 +384,42 @@ export class MainHostService implements IHostServiceWire, IDisposable {
 
     return new Promise<ISystemNotificationResult>((resolve) => {
       let settled = false
-      const settle = (clicked: boolean): void => {
+      const finish = (result: ISystemNotificationResult): void => {
         if (settled) return
         settled = true
-        resolve({ shown: true, clicked })
+        clearTimeout(graceTimer)
+        // Releasing the strong reference here (not in 'close') is the whole point:
+        // Electron's Notification is backed by a native object whose event
+        // handlers die with it, and nothing else on the main side holds it. Once
+        // GC collected it the toast stayed visible in Action Center but 'click'
+        // never arrived — which is exactly "clicking the toast does nothing".
+        this._pendingNotifications.delete(notification)
+        resolve(result)
       }
+      const graceTimer = setTimeout(
+        () => finish({ shown: true, clicked: false }),
+        NOTIFICATION_CLICK_GRACE_MS,
+      )
+      // Don't hold the event loop open just to wait out an unclicked toast.
+      graceTimer.unref?.()
+
+      this._pendingNotifications.add(notification)
       notification.on('click', () => {
         // Focus synchronously inside the click handler so the window comes
         // forward within the OS-granted input grace window — a renderer
         // round-trip would step outside it and Windows would refuse foreground.
-        this.focusWindow()
-        settle(true)
+        this._logger.info(`notify clicked title=${opts.title}`)
+        void this.focusWindow()
+        finish({ shown: true, clicked: true })
       })
-      notification.on('close', () => settle(false))
-      notification.on('failed', () => {
-        if (settled) return
-        settled = true
-        resolve({ shown: false, clicked: false })
+      // 'close' deliberately does NOT settle: on Windows it fires when the toast
+      // animates away, while the entry remains clickable in Action Center.
+      notification.on('close', () => {
+        this._logger.debug(`notify toast dismissed, awaiting Action Center title=${opts.title}`)
+      })
+      notification.on('failed', (_event, error) => {
+        this._logger.warn(`notify failed title=${opts.title} error=${String(error)}`)
+        finish({ shown: false, clicked: false })
       })
       notification.show()
     })
@@ -498,6 +531,9 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       this._win.removeListener('maximize', this._onMaximize)
       this._win.removeListener('unmaximize', this._onUnmaximize)
     }
+    // The window is going away; a click can no longer be routed anywhere useful.
+    for (const notification of this._pendingNotifications) notification.close()
+    this._pendingNotifications.clear()
     this._nativeThemeSubscription.dispose()
     this._onDidChangeMaximized.dispose()
     this._onDidChangeColorScheme.dispose()
