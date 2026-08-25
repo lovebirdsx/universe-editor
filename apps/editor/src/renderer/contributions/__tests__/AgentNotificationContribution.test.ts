@@ -141,13 +141,26 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('de-dupes completion: plan all-complete then idle fires only once', () => {
+  it('de-dupes completion: plan all-complete while running does not fire; idle fires only once', () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
     s.status.set('running', undefined)
     s.plan.set([planEntry('in_progress')], undefined)
     s.plan.set([planEntry('completed')], undefined)
+    // Plan check-off lands mid-turn; only the idle edge announces completion.
+    expect(t.notify).not.toHaveBeenCalled()
+    s.status.set('idle', undefined)
+    expect(t.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fire completion while the plan is all-complete but the turn is still running', () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    s.plan.set([planEntry('completed')], undefined)
+    expect(t.notify).not.toHaveBeenCalled()
     s.status.set('idle', undefined)
     expect(t.notify).toHaveBeenCalledTimes(1)
   })

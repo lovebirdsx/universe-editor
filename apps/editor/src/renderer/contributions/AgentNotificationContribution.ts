@@ -26,16 +26,11 @@ import {
   getAgentNotificationIcon,
   primeAgentNotificationIcon,
 } from '../services/acp/agentNotificationIcon.js'
-import type { AcpPlanEntry } from '../services/acp/session/acpSession.js'
 
 const AGENTS_CONTAINER_ID = 'workbench.view.agents'
 const AGENTS_VIEW_ID = 'workbench.view.agents.main'
 
 type NotifyKind = 'permission' | 'question' | 'completed' | 'errored'
-
-function isPlanComplete(plan: readonly AcpPlanEntry[]): boolean {
-  return plan.length > 0 && plan.every((e) => e.status === 'completed')
-}
 
 export class AgentNotificationContribution extends Disposable implements IWorkbenchContribution {
   private readonly _perSession = new Map<string, IDisposable>()
@@ -88,13 +83,11 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     let permissionLatched = session.pendingPermission.get() !== undefined
     let elicitationLatched = session.pendingElicitation.get() !== undefined
     let completionAnnounced = false
-    let planWasComplete = isPlanComplete(session.plan.get())
 
     return autorun((r) => {
       const status = session.status.read(r)
       const permission = session.pendingPermission.read(r)
       const elicitation = session.pendingElicitation.read(r)
-      const planComplete = isPlanComplete(session.plan.read(r))
 
       // Permission request — rising edge only.
       if (permission !== undefined && !permissionLatched) this._fire('permission', session)
@@ -104,22 +97,19 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
       if (elicitation !== undefined && !elicitationLatched) this._fire('question', session)
       elicitationLatched = elicitation !== undefined
 
-      // A new turn opens: reset the per-turn completion latch and re-baseline the
-      // plan so a stale all-complete plan from the previous turn doesn't re-fire.
+      // A new turn opens: reset the per-turn completion latch.
       if (status === 'running' && prevStatus !== 'running') {
         completionAnnounced = false
-        planWasComplete = planComplete
       }
 
-      // "Completed" fires at most once per turn, on whichever lands first:
-      // the plan flipping to all-complete, or the status returning to idle.
-      const planJustCompleted = planComplete && !planWasComplete
+      // "Completed" fires at most once per turn, and only when the status settles
+      // back to idle. The plan flipping to all-complete is not a signal: the agent
+      // checks off its last todo mid-turn while it still streams the summary text.
       const turnFinished = status === 'idle' && prevStatus === 'running'
-      if ((planJustCompleted || turnFinished) && !completionAnnounced) {
+      if (turnFinished && !completionAnnounced) {
         completionAnnounced = true
         this._fire('completed', session)
       }
-      planWasComplete = planComplete
 
       if (status === 'errored' && prevStatus !== 'errored') this._fire('errored', session)
 
