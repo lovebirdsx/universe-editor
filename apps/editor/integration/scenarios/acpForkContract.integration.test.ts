@@ -18,7 +18,13 @@
  *    - the editor's shared ext-method NAME table is internally consistent; and,
  *      crucially, each fork's BUILT dist still declares the wire names the editor
  *      calls — an OFFLINE text scan that runs on CI (no binary), catching a
- *      fork-side rename the binary-gated routing leg would otherwise miss.
+ *      fork-side rename the binary-gated routing leg would otherwise miss;
+ *    - the client-injected model candidates leg (`_meta.extraModels`): a fresh
+ *      session opened with a client-supplied model id surfaces that id in the
+ *      model config option and accepts `session/set_config_option` to it. The
+ *      claude leg needs its native CLI (session/new spawns it) and self-skips
+ *      without one; the codex leg's set_config_option is pure in-memory state
+ *      and runs whenever its dist is ready.
  *
  *  The dist-dependent legs are OPT-IN via `UNIVERSE_FORK_CONTRACT=1` (set only by
  *  CI's dedicated `acp-contract` job, which runs `pnpm agent:build` first). Without
@@ -43,6 +49,7 @@ import {
   spawnForkConnection,
   withTimeout,
 } from '../fixtures/realForkConnection.js'
+import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 
 // Handshake + newSession over a real subprocess: allow generous headroom (fork
 // cold-start + SDK model list ~1.3s observed) so CI machines don't flake.
@@ -97,6 +104,12 @@ describe('editor ext-method name table is the single source of truth', () => {
 // ask_user_question ext-method is their own fallback asset — the editor no
 // longer calls it (AskUserQuestion now flows over the standard elicitation
 // channel), so it's not asserted here.
+//
+// `extraModels` is not an ext-method but the top-level `_meta` key both forks
+// read when opening a session (the editor's gateway-model injection channel).
+// The property access keeps the literal in the built dist, so scanning it
+// catches a rebase that drops the reader — the same protection the method
+// names get.
 const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
   claude: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
@@ -108,6 +121,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.sdkMessage,
     // Both forks advertise universe-editor/* capabilities under the same key.
     'universe-editor/capabilities',
+    'extraModels',
   ],
   codex: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
@@ -119,6 +133,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     // config-seeded "pending" rows (claude covers this via sdkMessage instead).
     EXPECTED_METHOD_NAMES.mcpServerStatus,
     'universe-editor/capabilities',
+    'extraModels',
   ],
 }
 
@@ -134,6 +149,18 @@ describe('fork dist declares the ext-method wire names the editor expects', () =
     })
   }
 })
+
+// A model id that exists in NEITHER fork's hardcoded first-party catalogue.
+// The extraModels legs prove it still reaches the session picker's options and
+// passes `session/set_config_option` validation — the two places the forks'
+// hardcoded catalogues would otherwise reject a gateway model.
+const EXTRA_MODEL_ID = 'contract-extra-model-v4'
+
+/** The select values of a session config option, groups flattened. */
+function configOptionValues(option: SessionConfigOption | undefined): string[] {
+  if (!option || !('options' in option)) return []
+  return option.options.flatMap((o) => ('options' in o ? o.options : [o])).map((o) => o.value)
+}
 
 // One shared handshake suite per fork. Both forks implement the ACP handshake and
 // session/new without auth; only claude implements the universe-editor/* request
@@ -189,6 +216,60 @@ function handshakeSuite(fork: ForkId) {
       expect(universeCaps?.rewind?.filesRolledBackByAgent).toBe(fork === 'claude')
       expect(init.agentInfo?.name).toContain(fork === 'claude' ? 'claude-agent-acp' : 'codex')
     })
+
+    // Codex-only: session/new + set_config_option accept client-injected extra
+    // models. Unlike the claude fork (whose session/new spawns the native CLI),
+    // the codex leg needs only its built dist + bundled app-server binary, and
+    // set_config_option mutates pure in-memory session state — no network.
+    if (fork === 'codex') {
+      it('session/new surfaces client-injected extra models and accepts switching to one', async () => {
+        await withTimeout(
+          connection.conn.initialize(CLIENT_INIT_PARAMS),
+          INIT_TIMEOUT_MS,
+          'codex initialize (extra models leg)',
+        ).catch((err: unknown) => {
+          throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+        })
+        // Configuring the gateway provider is pure in-memory state; it also
+        // flips authRequired() to false so the session open passes without any
+        // account on the test machine.
+        await withTimeout(
+          connection.conn.unstable_setProvider({
+            providerId: 'custom-gateway',
+            apiType: 'openai',
+            baseUrl: 'https://gateway.invalid/v1',
+          }),
+          CALL_TIMEOUT_MS,
+          'codex setProvider',
+        )
+        const ns = await withTimeout(
+          connection.conn.newSession({
+            cwd,
+            mcpServers: [],
+            _meta: { extraModels: [EXTRA_MODEL_ID] },
+          }),
+          INIT_TIMEOUT_MS,
+          'codex newSession with extraModels',
+        ).catch((err: unknown) => {
+          throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+        })
+        const modelOption = ns.configOptions?.find((o) => o.id === 'model')
+        expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
+
+        const set = await withTimeout(
+          connection.conn.setSessionConfigOption({
+            sessionId: ns.sessionId,
+            configId: 'model',
+            value: EXTRA_MODEL_ID,
+          }),
+          CALL_TIMEOUT_MS,
+          'codex setSessionConfigOption to extra model',
+        ).catch((err: unknown) => {
+          throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+        })
+        expect(set.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(EXTRA_MODEL_ID)
+      })
+    }
   })
 }
 
@@ -236,6 +317,39 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
   it('newSession returns a session id offline (no auth needed for handshake)', () => {
     expect(typeof sessionId).toBe('string')
     expect(sessionId.length).toBeGreaterThan(0)
+  })
+
+  it('session/new surfaces client-injected extra models and setSessionConfigOption switches to one', async () => {
+    // The SDK's picker is the hardcoded first-party catalogue; a gateway model
+    // id must arrive via `_meta.extraModels` (appended after the allowlist) and
+    // then pass setSessionConfigOption's options validation.
+    const ns = await withTimeout(
+      connection.conn.newSession({
+        cwd,
+        mcpServers: [],
+        _meta: { extraModels: [EXTRA_MODEL_ID] },
+      }),
+      INIT_TIMEOUT_MS,
+      'claude newSession with extraModels',
+    ).catch((err: unknown) => {
+      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    const modelOption = ns.configOptions?.find((o) => o.id === 'model')
+    expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
+
+    const set = await withTimeout(
+      connection.conn.setSessionConfigOption({
+        sessionId: ns.sessionId,
+        configId: 'model',
+        value: EXTRA_MODEL_ID,
+      }),
+      CALL_TIMEOUT_MS,
+      'claude setSessionConfigOption to extra model',
+    ).catch((err: unknown) => {
+      throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
+    })
+    const modelAfter = set.configOptions.find((o) => o.id === 'model')
+    expect(modelAfter?.currentValue).toBe(EXTRA_MODEL_ID)
   })
 
   it('rewind_session is routed and validates its params (unknown messageId → structured error)', async () => {

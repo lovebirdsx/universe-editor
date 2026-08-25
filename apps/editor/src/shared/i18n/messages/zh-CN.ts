@@ -1696,6 +1696,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.inlineDiff.openTooltip': '查看完整变更',
   'acp.inlineDiff.expandLines': '… 展开 {count} 行',
   'acp.subagentStats.costTooltip': '本地按 token 估算，实际计费可能不同',
+  'acp.subagent.label': '子 Agent',
+  'acp.subagent.inherit': '跟随主模型',
+  'acp.subagent.nextSession': '下次会话生效',
+  'acp.subagent.restartNow': '立即重启',
+  'acp.subagent.writeFailed': '保存子 Agent 模型失败：{0}',
 
   // --- AI: debug ---
   'aiDebug.clear': '清空',
@@ -1779,6 +1784,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.compaction.success': '上下文已压缩',
   'acp.recovery.continueAfterInterrupt':
     '继续。注意：刚才连接中断导致上一轮被迫中止，并非我的操作；如果你当时有正在等待我回答的提问或确认，请不要视为我已回答、跳过或拒绝——请现在重新发起。',
+  'acp.recovery.restarting': '正在重启 agent 进程…（{0}/{1}）',
   'acp.resurrection.failed': '会话恢复失败',
   'acp.resurrection.failedReason': '会话恢复失败：{reason}',
   'acp.resurrection.running': 'Agent 无响应 — 正在从对话记录恢复会话…',

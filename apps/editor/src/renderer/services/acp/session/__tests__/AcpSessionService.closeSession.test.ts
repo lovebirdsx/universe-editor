@@ -70,6 +70,7 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
+import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -334,6 +335,7 @@ describe('AcpSessionService — onDidCloseSession', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
   })
 

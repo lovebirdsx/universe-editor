@@ -81,6 +81,14 @@ function describe(state: AcpRecoveryState): string {
       ? Math.max(0, Math.ceil((state.nextAttemptAt - Date.now()) / 1000))
       : 0
   if (phase === 'reconnecting') {
+    // A user-requested restart is not a fault — saying "connection lost" would
+    // read as an error for something they just asked for.
+    if (state.reason === 'restart') {
+      return localize('acp.recovery.restarting', 'Restarting agent… ({0}/{1})', {
+        0: attempt,
+        1: maxAttempts,
+      })
+    }
     return secs > 0
       ? localize(
           'acp.recovery.reconnectingIn',

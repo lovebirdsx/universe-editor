@@ -623,6 +623,14 @@ export interface IAcpSession {
    */
   retryRecovery(): Promise<void>
   /**
+   * Respawn the agent process, keeping this session's history and runtime
+   * config. Needed for settings that only travel as spawn env — the sub-agent
+   * model above all — which a live process can never pick up. Callers must
+   * finish persisting the env change first. No-op when closed / read-only /
+   * already recovering / never attached.
+   */
+  requestProcessRestart(): void
+  /**
    * Resolves once the connecting phase settles — i.e. {@link attachConnection}
    * or {@link failConnection} has run. Lets callers that genuinely need the live
    * agent connection (and tests injecting agent traffic) await the background

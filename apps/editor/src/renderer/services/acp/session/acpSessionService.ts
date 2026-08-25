@@ -82,11 +82,12 @@ import {
   type ISessionCreateProfileHandle,
   type SessionCreateProfile,
 } from '../acpSessionCreateProfiler.js'
-import { ACP_EXT_METHODS } from './acpExtMethods.js'
+import { ACP_EXT_METHODS, ACP_META_KEYS } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
+import { IAcpModelCandidateService } from '../acpModelCandidateService.js'
 import {
   effectiveEntryAuthority,
   IAcpSessionHistoryService,
@@ -405,13 +406,33 @@ const EMIT_INIT_SDK_MESSAGE_META = {
  * transcript's bare API name, dropping the "[1m]" context-lane spelling and
  * clamping the effective window to 200k. See `ACP_META_KEYS.resumeModel`.
  */
-function buildResumeMeta(entry: AcpSessionHistoryEntry | undefined): Record<string, unknown> {
+function buildResumeMeta(
+  entry: AcpSessionHistoryEntry | undefined,
+  extraModels: readonly string[],
+): Record<string, unknown> {
   const resumeModel = entry?.configOptions?.['model']
   return {
     claudeCode: {
       ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
       ...(resumeModel !== undefined ? { resumeModel } : {}),
     },
+    // Every load/resume rebuilds the fork's model picker from scratch, so the
+    // extra candidates must ride along or gateway models vanish from the
+    // dropdown (and set_config_option rejects values outside its options).
+    ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
+  }
+}
+
+/**
+ * `_meta` for session/new: the init-message filter plus the extra model
+ * candidates the fork appends to its catalogue. `extraModels` is deliberately
+ * top-level (not under `claudeCode`) — both forks read it, and appending is
+ * their concern, not the native CLI's.
+ */
+function buildNewSessionMeta(extraModels: readonly string[]): Record<string, unknown> {
+  return {
+    ...EMIT_INIT_SDK_MESSAGE_META,
+    ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
   }
 }
 
@@ -506,6 +527,8 @@ export class AcpSessionService
     @IWindowsService private readonly _windows: IWindowsService,
     @IEnvironmentSnapshotService
     private readonly _envSnapshot: IEnvironmentSnapshotService,
+    @IAcpModelCandidateService
+    private readonly _modelCandidates: IAcpModelCandidateService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -759,6 +782,21 @@ export class AcpSessionService
   }
 
   /**
+   * Extra model ids to advertise in the handshake `_meta` for `agentId`.
+   * Best-effort: candidate resolution failing must never block session
+   * creation/resume, so every failure collapses to an empty list (and the
+   * `extraModels` key is omitted from `_meta` entirely).
+   */
+  private async _extraModelsFor(agentId: string): Promise<readonly string[]> {
+    try {
+      return await this._modelCandidates.extraModelsForAgent(agentId)
+    } catch (err) {
+      this._logger.warn(`extraModelsForAgent failed: ${(err as Error).message}`)
+      return []
+    }
+  }
+
+  /**
    * Background connect for a freshly created session: spawn + initialize +
    * session/new, then hand the live connection to the session via
    * `attachConnection` (which flushes any queued prompts) and register it in
@@ -803,11 +841,12 @@ export class AcpSessionService
         initResult.agentCapabilities?.mcpCapabilities,
       )
       this._warnDroppedMcpServers(agentName, dropped)
+      const extraModels = await this._extraModelsFor(resolvedAgentId)
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(authority)),
-        _meta: EMIT_INIT_SDK_MESSAGE_META,
+        _meta: buildNewSessionMeta(extraModels),
       }
       profile.step('willNewSession')
       const result = await withTimeout(
@@ -1108,12 +1147,13 @@ export class AcpSessionService
       this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
       const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
       if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
+      const extraModels = await this._extraModelsFor(entry.agentId)
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(effectiveAuthority)),
-        _meta: buildResumeMeta(entry),
+        _meta: buildResumeMeta(entry, extraModels),
       }
       const loadResult = await withTimeout(
         conn.conn.loadSession(loadParams),
@@ -1195,10 +1235,13 @@ export class AcpSessionService
         return
       }
       // A stalled process is alive but wedged: kill it so the reconnect below
-      // spawns fresh instead of reattaching to the same wedged turn. Other
-      // sessions sharing the pooled process crash out and recover on their own
-      // `onDidLoseConnection`.
-      if (event.reason === 'stalled') {
+      // spawns fresh instead of reattaching to the same wedged turn. A restart
+      // must kill it for the same reason plus one more — `connect()` leases from
+      // a refcounted pool keyed by agentId+cwd, so without evicting we would
+      // re-lease the *same* process and its spawn env (the whole point of the
+      // restart) would never change. Other sessions sharing the pooled process
+      // crash out and recover on their own `onDidLoseConnection`.
+      if (event.reason === 'stalled' || event.reason === 'restart') {
         const stalledEntry = this._history.get(sid)
         this._client.killConnectionFor(session.agentId, stalledEntry?.cwd, stalledEntry?.authority)
       }
@@ -1238,13 +1281,14 @@ export class AcpSessionService
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
+            const extraModels = await this._extraModelsFor(session.agentId)
             const resumeResult = await withTimeout(
               conn.conn.resumeSession({
                 sessionId: sid,
                 cwd: cwd ?? '',
                 mcpServers: kept,
                 ...(await this._builtinAgentDirs(authority)),
-                _meta: buildResumeMeta(entry),
+                _meta: buildResumeMeta(entry, extraModels),
               }),
               timeoutMs,
               'ACP session/resume',
@@ -1324,9 +1368,14 @@ export class AcpSessionService
       // all leave isReconnecting false, so this is a no-op for them.
       if (session.isReconnecting && session.status.get() !== 'closed') {
         const st = session.recoveryState.get()
-        void this._reconnectSession(session, {
-          reason: st?.phase === 'reconnecting' && st.reason === 'stalled' ? 'stalled' : 'crash',
-        })
+        // Preserve `stalled`/`restart` — collapsing either to `crash` skips the
+        // pool eviction above, which for a restart means silently re-leasing the
+        // old process with the old spawn env.
+        const carried =
+          st?.phase === 'reconnecting' && (st.reason === 'stalled' || st.reason === 'restart')
+            ? st.reason
+            : 'crash'
+        void this._reconnectSession(session, { reason: carried })
       }
     }
   }

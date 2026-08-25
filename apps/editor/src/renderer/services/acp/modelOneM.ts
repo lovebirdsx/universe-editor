@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Pure helpers for the `[1m]` (1M-context lane) suffix on Claude model ids.
- *  Shared by the model / sub-agent model picks in the Authentication panel: the
- *  persisted pick stays bare while the composed id written to settings.json
- *  appends `[1m]` when the lane is enabled.
+ *  Shared by the model / sub-agent model picks in the Authentication panel and by
+ *  the session-level model candidate injection: the persisted pick stays bare
+ *  while the composed id written to settings.json appends `[1m]` when the lane is
+ *  enabled.
  *--------------------------------------------------------------------------------------------*/
 
 /** Whether the model id already carries the 1M-context lane suffix (`claude-opus-5[1m]`). */

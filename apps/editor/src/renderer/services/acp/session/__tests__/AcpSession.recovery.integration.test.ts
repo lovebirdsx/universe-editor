@@ -31,14 +31,16 @@ import type {
 } from '@universe-editor/platform'
 import type {
   InitializeResponse,
+  LoadSessionRequest,
   PromptRequest,
   PromptResponse,
   RequestPermissionResponse,
+  ResumeSessionRequest,
   SessionConfigOption,
   SetSessionConfigOptionRequest,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
-import { CONTINUE_PROMPT_TEXT, recoveryContinuePromptText } from '../acpSession.js'
+import { AcpSession, CONTINUE_PROMPT_TEXT, recoveryContinuePromptText } from '../acpSession.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
@@ -58,7 +60,9 @@ import {
 } from '../../acpClientService.js'
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
+import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
+import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -189,8 +193,16 @@ class ScriptedClient implements IAcpClientService {
     controller: AbortController
     promptCalls: PromptRequest[]
     configCalls: SetSessionConfigOptionRequest[]
+    resumeCalls: ResumeSessionRequest[]
+    loadCalls: LoadSessionRequest[]
     /** Ordered RPC log ('prompt' / `config:<id>`) for cross-RPC ordering assertions. */
     events: string[]
+  }> = []
+  /** Recorded killConnectionFor invocations — the restart path's pool eviction. */
+  readonly killCalls: Array<{
+    agentId: string
+    cwd: string | undefined
+    authority: string | undefined
   }> = []
 
   constructor(readonly script: Script) {}
@@ -199,7 +211,9 @@ class ScriptedClient implements IAcpClientService {
     this._sink = sink
   }
   drainAll(): void {}
-  killConnectionFor(): void {}
+  killConnectionFor(agentId: string, cwd: string | undefined, authority?: string): void {
+    this.killCalls.push({ agentId, cwd, authority })
+  }
 
   /** Emit a session/update to the given (1-based) connection's sink. */
   emit(connIndex: number, update: Record<string, unknown>): void {
@@ -228,8 +242,18 @@ class ScriptedClient implements IAcpClientService {
     const controller = new AbortController()
     const promptCalls: PromptRequest[] = []
     const configCalls: SetSessionConfigOptionRequest[] = []
+    const resumeCalls: ResumeSessionRequest[] = []
+    const loadCalls: LoadSessionRequest[] = []
     const events: string[] = []
-    this.connections.push({ agentSessionId, controller, promptCalls, configCalls, events })
+    this.connections.push({
+      agentSessionId,
+      controller,
+      promptCalls,
+      configCalls,
+      resumeCalls,
+      loadCalls,
+      events,
+    })
     const isFirst = this._seq === 0
     this._seq++
     const bag = this.script.configOptions
@@ -251,8 +275,14 @@ class ScriptedClient implements IAcpClientService {
         this.script.newSessionError
           ? Promise.reject(this.script.newSessionError)
           : Promise.resolve(sessionResponse),
-      loadSession: () => Promise.resolve({}),
-      resumeSession: () => Promise.resolve(sessionResponse),
+      loadSession: (req: LoadSessionRequest) => {
+        loadCalls.push(req)
+        return Promise.resolve({})
+      },
+      resumeSession: (req: ResumeSessionRequest) => {
+        resumeCalls.push(req)
+        return Promise.resolve(sessionResponse)
+      },
       // Apply the pushed value into the returned bag, like a real agent whose
       // session adopted the selection.
       setSessionConfigOption: (req: SetSessionConfigOptionRequest) => {
@@ -280,7 +310,11 @@ class ScriptedClient implements IAcpClientService {
   }
 }
 
-function makeService(client: IAcpClientService, config: ConfigurationService): AcpSessionService {
+function makeService(
+  client: IAcpClientService,
+  config: ConfigurationService,
+  candidates: IAcpModelCandidateService = stubAcpModelCandidateService(),
+): AcpSessionService {
   const notification = new StubNotificationService()
   const telemetry = new NoopTelemetryService() as ITelemetryService
   const history = new AcpSessionHistoryService(
@@ -328,6 +362,7 @@ function makeService(client: IAcpClientService, config: ConfigurationService): A
     new StubMcpServerEnablementService(),
     stubWindowsService(),
     stubEnvSnapshotService(),
+    candidates,
   )
 }
 
@@ -1109,5 +1144,163 @@ describe('AcpSession auto-recovery', () => {
     expect(continuations()).toHaveLength(1)
     expect(client.connections[0]!.promptCalls.length).toBe(4)
     expect(client.connections[0]!.promptCalls[3]!._meta?.messageId).toBe(continueMessageId)
+  })
+
+  it('restarts the agent process on request: evicts the pooled connection, then resumes with extraModels and resumeModel', async () => {
+    // A model bag seeds the history row so the resume _meta also carries the
+    // remembered per-session model — assert both keys together to pin the
+    // whole reconnect resume payload.
+    const modelOption: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet 4.6' }],
+    } as SessionConfigOption
+    client = new ScriptedClient({
+      loadSession: true,
+      configOptions: [modelOption],
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config, stubAcpModelCandidateService({ models: ['kimi-k3[1m]'] }))
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    s.requestProcessRestart()
+    // connect() leases from a refcounted pool keyed by agentId+cwd — without
+    // this eviction it would re-lease the same process, so the new spawn env
+    // (the whole point of the restart) would never take effect.
+    expect(client.killCalls).toEqual([{ agentId: 'fake', cwd: undefined, authority: undefined }])
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(2)
+    const resume = client.connections[1]!.resumeCalls[0]!
+    expect(resume.sessionId).toBe('agent-durable')
+    const meta = resume._meta as Record<string, unknown>
+    expect(meta.extraModels).toEqual(['kimi-k3[1m]'])
+    expect((meta.claudeCode as { resumeModel?: string }).resumeModel).toBe('sonnet')
+  })
+
+  it('preserves the restart reason across a second loss so the pool is evicted again', async () => {
+    // Two losses in one recovery episode: the second lands after the first
+    // reattach cleared the session's latch, so the finally re-run carries the
+    // recovery state's reason. A restart degraded to 'crash' there would skip
+    // the pool eviction and silently re-lease the old process.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => new Promise<PromptResponse>(() => {}),
+        () => new Promise<PromptResponse>(() => {}),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    const reasons: Array<'crash' | 'stalled' | 'restart'> = []
+    // onDidLoseConnection lives on the concrete view-model, not the IAcpSession
+    // facade — the harness only ever creates AcpSession instances.
+    ;(s as AcpSession).onDidLoseConnection((e) => reasons.push(e.reason))
+
+    void s.sendPrompt('run it')
+    await waitFor(s.status, (v) => v === 'running')
+
+    // First loss: user-requested restart. The interrupted turn is resent on
+    // the fresh connection and hangs there, keeping the recovery loop in
+    // flight while the session's reconnecting latch is already cleared.
+    s.requestProcessRestart()
+    expect(client.killCalls).toHaveLength(1)
+    await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+
+    // Second loss while the loop is still finishing: swallowed by the dedup,
+    // so only the finally re-run (with the carried reason) can recover.
+    s.requestProcessRestart()
+
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(reasons).toEqual(['restart', 'restart'])
+    // The carried reason kept the eviction — degraded to 'crash' the second
+    // round would reconnect without killing and this assertion catches it.
+    expect(client.killCalls).toHaveLength(2)
+    expect(client.connections.length).toBe(3)
+    expect(client.connections[2]!.promptCalls.length).toBe(1)
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+})
+
+describe('requestProcessRestart guards', () => {
+  function makeBareSession(readOnly = false): AcpSession {
+    return new AcpSession(
+      'id',
+      'fake',
+      't',
+      new NoopTelemetryService(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      readOnly,
+    )
+  }
+
+  it('is a no-op for a closed session', () => {
+    const s = makeBareSession()
+    s.sessionIdOnAgent.set('sid', undefined)
+    s.status.set('closed', undefined)
+    const fired = vi.fn()
+    s.onDidLoseConnection(fired)
+
+    s.requestProcessRestart()
+
+    expect(fired).not.toHaveBeenCalled()
+    expect(s.status.get()).toBe('closed')
+    expect(s.isReconnecting).toBe(false)
+  })
+
+  it('is a no-op for a read-only session', () => {
+    const s = makeBareSession(true)
+    s.sessionIdOnAgent.set('sid', undefined)
+    s.status.set('idle', undefined)
+    const fired = vi.fn()
+    s.onDidLoseConnection(fired)
+
+    s.requestProcessRestart()
+
+    expect(fired).not.toHaveBeenCalled()
+    expect(s.status.get()).toBe('idle')
+    expect(s.isReconnecting).toBe(false)
+  })
+
+  it('is a no-op while a reconnect is already in progress', () => {
+    const s = makeBareSession()
+    s.sessionIdOnAgent.set('sid', undefined)
+    s.status.set('running', undefined)
+    const fired = vi.fn()
+    s.onDidLoseConnection(fired)
+    s.handleStall()
+    expect(fired).toHaveBeenCalledTimes(1)
+    expect(fired.mock.calls[0]![0]).toEqual({ reason: 'stalled' })
+
+    s.requestProcessRestart()
+
+    // The guard swallowed the restart: still only the stall's loss event.
+    expect(fired).toHaveBeenCalledTimes(1)
+    expect(s.isReconnecting).toBe(true)
+  })
+
+  it('is a no-op before the session is attached (no durable id)', () => {
+    const s = makeBareSession()
+    const fired = vi.fn()
+    s.onDidLoseConnection(fired)
+
+    s.requestProcessRestart()
+
+    expect(fired).not.toHaveBeenCalled()
+    expect(s.status.get()).toBe('connecting')
+    expect(s.isReconnecting).toBe(false)
   })
 })

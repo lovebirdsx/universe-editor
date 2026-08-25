@@ -96,6 +96,8 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
+import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
 
@@ -536,6 +538,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
   })
 
@@ -631,6 +634,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await slowSvc.createSession()
     await s.whenConnected()
@@ -757,6 +761,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1014,6 +1019,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1076,6 +1082,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1130,6 +1137,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1200,6 +1208,7 @@ describe('AcpSessionService', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1265,6 +1274,7 @@ describe('AcpSessionService', () => {
         new StubMcpServerEnablementService(),
         stubWindowsService(),
         stubEnvSnapshotService(),
+        stubAcpModelCandidateService(),
       )
     }
 
@@ -1583,6 +1593,7 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     return { svc, history }
   }
@@ -2354,6 +2365,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -2406,6 +2418,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -2466,6 +2479,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       enablement,
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
   }
 
@@ -3166,6 +3180,7 @@ describe('AcpSessionService — session MCP selection', () => {
       enablement,
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     return { svc, history, agentDefaults, enablement }
   }
@@ -3503,6 +3518,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     return { svc, history }
   }
@@ -3761,6 +3777,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     return { svc, history }
   }
@@ -3880,6 +3897,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     return { svc, history }
   }
@@ -3941,6 +3959,7 @@ describe('AcpSessionService — stall watchdog', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
   }
 
@@ -4378,6 +4397,7 @@ describe('AcpSessionService — idle process reaper', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
   }
 
@@ -4570,6 +4590,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       envSnapshot,
+      stubAcpModelCandidateService(),
     )
   }
 
@@ -4606,6 +4627,93 @@ describe('AcpSessionService builtin agent skills injection', () => {
       const session = await svc.createSession()
       await session.whenConnected()
       expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  })
+})
+
+describe('AcpSessionService extra model candidates injection', () => {
+  const EXTRA_MODELS = ['gw/one', 'gw/two']
+
+  function makeService(
+    client: FakeAcpClientService,
+    candidates: IAcpModelCandidateService,
+  ): AcpSessionService {
+    const history = makeHistory()
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const agentDefaults = makeAgentDefaults()
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      candidates,
+    )
+  }
+
+  it('stamps the extra model candidates onto session/new _meta', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubAcpModelCandidateService({ models: EXTRA_MODELS }))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      expect(meta?.extraModels).toEqual(EXTRA_MODELS)
+      expect(meta?.claudeCode).toEqual({
+        emitRawSDKMessages: [{ type: 'system', subtype: 'init' }],
+      })
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('omits the extraModels key from session/new _meta when there are no candidates', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubAcpModelCandidateService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      expect(meta).toBeDefined()
+      expect(meta).not.toHaveProperty('extraModels')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('still establishes the session when candidate resolution rejects', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubAcpModelCandidateService({ reject: true }))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(session.sessionIdOnAgent.get()).toBe('agent-1')
+      expect(client.connected[0]!.agent.newSessionCalls[0]!._meta).not.toHaveProperty('extraModels')
     } finally {
       svc.dispose()
     }

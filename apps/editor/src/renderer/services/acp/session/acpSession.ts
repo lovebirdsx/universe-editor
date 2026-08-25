@@ -382,8 +382,12 @@ function selectionReplayTransports(selection: SelectionContext): readonly string
 
 /** Why the session's connection was lost — drives the service's recovery path. */
 export interface AcpConnectionLostEvent {
-  /** `crash`: process exited. `stalled`: alive but silent past the watchdog threshold. */
-  readonly reason: 'crash' | 'stalled'
+  /**
+   * `crash`: process exited. `stalled`: alive but silent past the watchdog
+   * threshold. `restart`: the user asked for a fresh process (the sub-agent
+   * model is spawn env, so it only changes on respawn).
+   */
+  readonly reason: 'crash' | 'stalled' | 'restart'
 }
 
 /** Snapshot of one dispatched prompt, kept so a failed/interrupted turn can be re-sent. */
@@ -1046,7 +1050,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    * aborted, new prompts queue, and the service is notified to re-handshake
    * in place.
    */
-  private _handleConnectionLost(reason: 'crash' | 'stalled'): void {
+  private _handleConnectionLost(reason: 'crash' | 'stalled' | 'restart'): void {
     if (this._reconnecting) return
     this._reconnecting = true
     const deadLease = this._conn
@@ -1096,6 +1100,21 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.compactionInProgress) return
     if (this._autonomousTurnActive && this._inFlight.size === 0) return
     this._handleConnectionLost('stalled')
+  }
+
+  /**
+   * User-driven: respawn the agent process, keeping this session's history and
+   * runtime config (the service resumes against the same durable id and pushes
+   * the config back). Needed because the sub-agent model travels as spawn env —
+   * a live process can never see a new value.
+   *
+   * The caller must have finished persisting whatever env change it wants
+   * picked up; the fresh process reads settings.json as it spawns.
+   */
+  requestProcessRestart(): void {
+    if (this.status.get() === 'closed' || this.readOnly || this._reconnecting) return
+    if (this.sessionIdOnAgent.get() === undefined) return
+    this._handleConnectionLost('restart')
   }
 
   /**

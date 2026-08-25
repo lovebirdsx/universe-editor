@@ -102,6 +102,21 @@ export const ACP_META_KEYS = {
    * so the fork re-asserts this remembered spelling on load.
    */
   resumeModel: 'claudeCode.resumeModel',
+  /**
+   * session/new + session/load + session/resume top-level _meta carrying extra
+   * model ids the fork should append to its own catalogue (`string[]`).
+   *
+   * Both forks build their Model picker from a vendor catalogue that cannot know
+   * about gateway models, and both reject a `set_config_option` value outside the
+   * advertised options — so without this the in-session Model dropdown is unusable
+   * for anyone on a gateway. The editor already knows the answer from
+   * `aiSettings.json`'s `providers[].protocolMap`; this forwards it. Deliberately
+   * top-level (not under `claudeCode`) because both forks read it.
+   *
+   * Append semantics, not replace: the fork's own catalogue and the native CLI's
+   * picker are unaffected.
+   */
+  extraModels: 'extraModels',
   /** usage_update _meta carrying the per-model cost breakdown. */
   modelBreakdown: '_universe/modelBreakdown',
   /** tool_call_update _meta carrying per-sub-agent token tally. */

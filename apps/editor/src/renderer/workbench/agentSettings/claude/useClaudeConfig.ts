@@ -31,7 +31,7 @@ import {
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import { deriveClaudeAuth, findProviderById } from '../../../../shared/ai/providerDerivation.js'
-import { hasOneM, withOneM } from './modelOneM.js'
+import { hasOneM, withOneM } from '../../../services/acp/modelOneM.js'
 import { useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 

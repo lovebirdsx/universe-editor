@@ -89,6 +89,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     recoveryState: observableValue('recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),
+    requestProcessRestart: () => {},
   }
 }
 

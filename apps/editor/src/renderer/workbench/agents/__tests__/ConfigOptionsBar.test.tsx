@@ -13,8 +13,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
   Event,
+  IAiModelService,
   IDialogService,
   IFileService,
+  INotificationService,
   InstantiationService,
   IWorkspaceService,
   observableValue,
@@ -39,6 +41,7 @@ import type {
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
+import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -56,11 +59,49 @@ const stubWorkspaceService = {
   async clearRecent() {},
   async removeRecent() {},
 } as unknown as IWorkspaceServiceType
+// The model popover's sub-agent footer (claude-code sessions) pulls the claude
+// config through useClaudeConfig — stubbed here so bar-level tests stay focused.
+const stubClaudeConfigService = {
+  _serviceBrand: undefined,
+  async read() {
+    return {}
+  },
+  async patch() {},
+  async configPath() {
+    return '/.claude/settings.json'
+  },
+  async readAuthStatus() {
+    return { loggedIn: false, expired: false }
+  },
+  async readAgentSettings() {
+    return {}
+  },
+  async writeAgentSettings() {},
+  async checkGatewayConnectivity() {
+    return true
+  },
+} as unknown as IClaudeConfigService
+const stubAiModelService = {
+  _serviceBrand: undefined,
+  async getProviders() {
+    return []
+  },
+  async getModelKnowledge() {
+    return {}
+  },
+} as unknown as IAiModelService
+const stubNotificationService = {
+  _serviceBrand: undefined,
+  notify: () => ({ dispose: () => {}, update: () => {} }),
+} as unknown as INotificationService
 
 function renderWithServices(node: React.ReactNode, dialogService?: IDialogServiceType) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(IClaudeConfigService, stubClaudeConfigService)
+  services.set(IAiModelService, stubAiModelService)
+  services.set(INotificationService, stubNotificationService)
   services.set(
     IDialogService,
     dialogService ??
@@ -135,6 +176,7 @@ function makeSession(
     recoveryState: observableValue('recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),
+    requestProcessRestart: () => {},
     configObs,
   } satisfies FakeSession
 }
@@ -296,6 +338,32 @@ describe('ConfigOptionsBar', () => {
       'acp-config-thought_level-trigger',
       'acp-config-temp-trigger',
     ])
+  })
+})
+
+describe('ConfigOptionsBar — sub-agent model footer gate', () => {
+  it('shows the sub-agent footer in the model popover of a claude-code session', () => {
+    renderWithServices(
+      <ConfigOptionsBar session={makeSession([MODEL_OPTION], { agentId: 'claude-code' })} />,
+    )
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    expect(screen.getByTestId('acp-subagent-footer')).toBeTruthy()
+  })
+
+  it('hides the sub-agent footer for other agents', () => {
+    renderWithServices(
+      <ConfigOptionsBar session={makeSession([MODEL_OPTION], { agentId: 'codex' })} />,
+    )
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    expect(screen.queryByTestId('acp-subagent-footer')).toBeNull()
+  })
+
+  it('hides the sub-agent footer in non-model popovers even on claude-code', () => {
+    renderWithServices(
+      <ConfigOptionsBar session={makeSession([MODE_OPTION], { agentId: 'claude-code' })} />,
+    )
+    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
+    expect(screen.queryByTestId('acp-subagent-footer')).toBeNull()
   })
 })
 

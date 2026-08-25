@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
 import { _util } from '@universe-editor/platform'
 import { AcpSessionService } from '../acpSessionService.js'
 
-// Current: 16 injected services (was 17; auth-guidance + session-construction
+// Current: 21 injected services (was 17; auth-guidance + session-construction
 // responsibilities moved to IAcpAuthGuidanceService / IAcpSessionFactory).
 // Ratchet DOWN as responsibilities move out (roadmap 06 · task 1 target ≤ 12).
 // Raising this requires a review note here explaining why the dependency can't
@@ -58,7 +58,12 @@ import { AcpSessionService } from '../acpSessionService.js'
 // agent presets, the coordinator owns restore timing. Memoized single read;
 // must be a required injection — an optional (`?`) trailing service parameter
 // breaks createInstance's GetLeadingNonServiceArgs overload under tsc.
-const MAX_INJECTED = 20
+// +1 IAcpModelCandidateService (gateway model candidates in `_meta.extraModels`):
+// the extra model ids join the AI provider registry (IAiModelService) with the
+// per-agent credential selection (claude/codex config services) — no existing
+// collaborator owns that join, and the three wire paths that must carry the
+// ids (session/new + session/load + session/resume) all live on the facade.
+const MAX_INJECTED = 21
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

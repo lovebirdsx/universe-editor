@@ -6,7 +6,7 @@
  *  for choosing a value.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef, useState } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
 import { IDialogService } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
@@ -23,6 +23,7 @@ import {
   evaluateModelSwitchContextShrink,
 } from '../../services/acp/session/modelSwitchContextGuard.js'
 import { McpServerPicker } from './McpServerPicker.js'
+import { SubagentModelFooter } from './SubagentModelFooter.js'
 import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
 
@@ -148,6 +149,9 @@ function ConfigOptionTrigger({
           }}
           onDismiss={onClose}
           testKey={testKey}
+          {...(option.category === 'model' && session.agentId === 'claude-code'
+            ? { footer: <SubagentModelFooter session={session} /> }
+            : {})}
         />
       ) : null}
     </div>
@@ -159,11 +163,13 @@ function ConfigOptionPopover({
   onPick,
   onDismiss,
   testKey,
+  footer,
 }: {
   option: SessionConfigOption & { type: 'select' }
   onPick: (value: string) => void
   onDismiss: () => void
   testKey: string
+  footer?: ReactNode
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   usePopoverDismiss(containerRef, onDismiss)
@@ -176,6 +182,7 @@ function ConfigOptionPopover({
       data-testid={`acp-config-${testKey}-popover`}
     >
       {renderPopoverItems(option.options, option.currentValue, onPick)}
+      {footer !== undefined ? <div className={styles['configPopoverFooter']}>{footer}</div> : null}
     </div>
   )
 }

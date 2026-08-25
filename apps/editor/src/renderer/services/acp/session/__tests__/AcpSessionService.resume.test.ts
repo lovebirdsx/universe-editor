@@ -82,6 +82,8 @@ import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
+import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 // ---------------------------------------------------------------------------
@@ -395,6 +397,7 @@ class FakeAcpClientService implements IAcpClientService {
 function buildService(
   opts: FakeAcpClientOptions = {},
   workspaceFolder?: string | IWorkspace['folder'],
+  candidates: IAcpModelCandidateService = stubAcpModelCandidateService(),
 ): {
   svc: AcpSessionService
   client: FakeAcpClientService
@@ -453,6 +456,7 @@ function buildService(
     new StubMcpServerEnablementService(),
     stubWindowsService(),
     stubEnvSnapshotService(),
+    candidates,
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1192,6 +1196,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1321,6 +1326,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1389,6 +1395,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1455,6 +1462,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1523,6 +1531,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubMcpServerEnablementService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])
@@ -1733,6 +1742,49 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     const resumeAgent = built.client.connected[1]!.agent
     expect(resumeAgent.loadSessionCalls).toHaveLength(1)
     expect(resumeAgent.loadSessionCalls[0]?._meta).toEqual({
+      claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
+    })
+  })
+})
+
+describe('AcpSessionService — extra model candidates on resume', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('stamps extraModels onto session/load _meta', async () => {
+    const built = buildService(
+      { loadSessionResult: {} },
+      undefined,
+      stubAcpModelCandidateService({ models: ['gw/resume-a', 'gw/resume-b'] }),
+    )
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-1', title: 'gw' })
+    await svc.resumeSession('gw-resume-1')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls).toHaveLength(1)
+    expect(agent.loadSessionCalls[0]?._meta).toEqual({
+      claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
+      extraModels: ['gw/resume-a', 'gw/resume-b'],
+    })
+  })
+
+  it('omits extraModels from session/load _meta when there are no candidates', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'gw-resume-2', title: 'gw' })
+    await svc.resumeSession('gw-resume-2')
+
+    const agent = built.client.connected[0]!.agent
+    expect(agent.loadSessionCalls).toHaveLength(1)
+    expect(agent.loadSessionCalls[0]?._meta).toEqual({
       claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
     })
   })
