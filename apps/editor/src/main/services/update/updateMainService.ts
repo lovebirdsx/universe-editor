@@ -28,6 +28,7 @@ import {
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
+import { compareVersions } from '@universe-editor/extensions-common'
 import { IEnvironmentMainService } from '../../environment/environmentMainService.js'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
@@ -60,6 +61,7 @@ export class UpdateMainService implements IUpdateService {
   private readonly _timers = new Set<ReturnType<typeof setTimeout>>()
   private _configDirSub: IDisposable | undefined
   private _disposed = false
+  private _rechecking = false
   /** Shutdown-veto gate run before installing (running-session guard). Wired by
    *  the app entry once WindowMainService exists; absent → install proceeds. */
   private _quitConfirmer: ((requestingWindowId?: number) => Promise<boolean>) | undefined
@@ -110,6 +112,7 @@ export class UpdateMainService implements IUpdateService {
 
   async checkForUpdates(explicit: boolean): Promise<void> {
     if (this._state.type === 'disabled' && !explicit) return
+    if (this._rechecking) return
     if (this._state.type === 'checking' || this._state.type === 'downloading') return
     this._setState({ type: 'checking', currentVersion: this._currentVersion, explicit })
     try {
@@ -121,10 +124,56 @@ export class UpdateMainService implements IUpdateService {
 
   async downloadUpdate(): Promise<void> {
     if (this._state.type !== 'available') return
+    const knownVersion = this._state.version
+    const latest = await this._recheckLatest()
+    const targetVersion = latest ?? knownVersion
+    if (latest && compareVersions(latest, knownVersion) > 0) {
+      this._logger.info(`download: ${knownVersion} is stale, re-downloading ${latest}`)
+    }
+    return this._download(targetVersion)
+  }
+
+  async quitAndInstall(requestingWindowId?: number): Promise<void> {
+    if (this._state.type !== 'downloaded') return
+    // Stamp the click moment before the recheck round-trip so the shutdown trace
+    // keeps measuring click → relaunch, not click + recheck latency.
+    beginShutdownTrace()
+    const downloadedVersion = this._state.version
+    const latest = await this._recheckLatest()
+    if (latest && compareVersions(latest, downloadedVersion) > 0) {
+      // The downloaded build is stale — re-download the newest one instead. The
+      // ensuing update-downloaded event re-prompts "Version {latest} is ready to
+      // install".
+      this._logger.info(`install: ${downloadedVersion} is stale, re-downloading ${latest}`)
+      await this._download(latest)
+      return
+    }
+    return this._doInstall(requestingWindowId)
+  }
+
+  /**
+   * Re-confirm the latest version on the server without mutating the state
+   * machine. Returns the latest version, or null when there is no update or the
+   * check failed (the caller then falls back to the already-known version).
+   */
+  private async _recheckLatest(): Promise<string | null> {
+    this._rechecking = true
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return result && result.isUpdateAvailable ? result.updateInfo.version : null
+    } catch (err) {
+      this._logger.warn(`recheck for latest version failed: ${String(err)}`)
+      return null
+    } finally {
+      this._rechecking = false
+    }
+  }
+
+  private async _download(version: string): Promise<void> {
     this._setState({
       type: 'downloading',
       currentVersion: this._currentVersion,
-      version: this._state.version,
+      version,
       percent: 0,
     })
     try {
@@ -134,12 +183,7 @@ export class UpdateMainService implements IUpdateService {
     }
   }
 
-  async quitAndInstall(requestingWindowId?: number): Promise<void> {
-    if (this._state.type !== 'downloaded') return
-    // Arm the cross-process shutdown trace: stamps the click moment, then each
-    // milestone through will-quit, so the next launch can expose the NSIS-install
-    // gap that no in-process mark can reach (see updateShutdownTrace.ts).
-    beginShutdownTrace()
+  private async _doInstall(requestingWindowId?: number): Promise<void> {
     // Run the same shutdown-veto chain a normal quit would (running-session
     // guard). electron-updater's quitAndInstall spawns the installer BEFORE it
     // calls app.quit(), so before-quit's veto can no longer stop it — the check
@@ -243,11 +287,13 @@ export class UpdateMainService implements IUpdateService {
 
   private _wireEvents(): void {
     autoUpdater.on('checking-for-update', () => {
+      if (this._rechecking) return
       if (this._state.type !== 'checking') {
         this._setState({ type: 'checking', currentVersion: this._currentVersion, explicit: false })
       }
     })
     autoUpdater.on('update-available', (info) => {
+      if (this._rechecking) return
       const explicit = this._state.type === 'checking' ? this._state.explicit : false
       this._setState({
         type: 'available',
@@ -257,10 +303,12 @@ export class UpdateMainService implements IUpdateService {
       })
     })
     autoUpdater.on('update-not-available', () => {
+      if (this._rechecking) return
       const explicit = this._state.type === 'checking' ? this._state.explicit : false
       this._setIdle({ notAvailable: true, explicit })
     })
     autoUpdater.on('download-progress', (progress) => {
+      if (this._rechecking) return
       const version = this._state.type === 'downloading' ? this._state.version : ''
       this._setState({
         type: 'downloading',
@@ -270,6 +318,7 @@ export class UpdateMainService implements IUpdateService {
       })
     })
     autoUpdater.on('update-downloaded', (info) => {
+      if (this._rechecking) return
       this._setState({
         type: 'downloaded',
         currentVersion: this._currentVersion,
@@ -277,6 +326,7 @@ export class UpdateMainService implements IUpdateService {
       })
     })
     autoUpdater.on('error', (err) => {
+      if (this._rechecking) return
       const explicit = this._state.type === 'checking' ? this._state.explicit : true
       this._setIdle({ error: err.message, explicit })
     })
