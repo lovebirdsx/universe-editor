@@ -8,6 +8,8 @@
  *    Replaces the active HTML source tab with the preview tab (VSCode style — no
  *    extra tab). The source FileEditorInput is detached (not disposed) and held
  *    inside the preview so its Monaco model stays alive through the toggle.
+ *    A preview already open in the group is retargeted at the new file rather
+ *    than joined by a second one — see openPreviewInGroup.
  *
  *  OpenHtmlPreviewToSideAction (Ctrl+K Ctrl+V):
  *    Opens the preview in the right group alongside the source.
@@ -32,6 +34,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
+import { togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 
 const HTML_PRECONDITION = 'activeEditorLanguageId == html'
 const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYPE_ID}'`
@@ -56,18 +59,7 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  const input = new HtmlPreviewInput(active)
-  const existing = source.findEditor(input)
-  if (existing) {
-    source.setActive(existing)
-    return
-  }
-  const sourceIndex = source.indexOf(active)
-  // Insert preview at source's position, then detach source (without disposing)
-  // so the held Monaco model survives until the user switches back.
-  source.openEditor(input, { activate: true, pinned: true, index: sourceIndex })
-  source.detachEditor(active)
-  input.adoptSource()
+  togglePreviewInGroup(source, new HtmlPreviewInput(active), active)
 }
 
 export class OpenHtmlPreviewAction extends Action2 {

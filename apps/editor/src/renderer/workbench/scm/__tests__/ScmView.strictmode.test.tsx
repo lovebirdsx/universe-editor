@@ -42,8 +42,16 @@ class FakeEditorGroup {
   activeEditor: unknown
   opened: Array<{ input: unknown; options: unknown }> = []
 
+  get editors(): unknown[] {
+    return this.activeEditor ? [this.activeEditor] : []
+  }
+
   indexOf(): number {
     return -1
+  }
+
+  findEditor(): undefined {
+    return undefined
   }
 
   openEditor(input: unknown, options?: unknown): void {

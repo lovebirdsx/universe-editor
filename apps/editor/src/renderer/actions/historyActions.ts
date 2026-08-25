@@ -23,7 +23,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { openDocInGroup } from '../services/editor/openDoc.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { openMarkdownPreviewInGroup } from '../services/editor/openMarkdownPreview.js'
+import { openPreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { revealSelectionInInput } from '../services/editor/revealEditorPosition.js'
 
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
@@ -58,7 +58,7 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       // A preview no longer open: re-create it in place of the current preview
       // tab (matching link-click navigation) so Alt+←/→ walks the trail in one
       // tab instead of piling up a fresh preview each time.
-      openMarkdownPreviewInGroup(groups.activeGroup, input, false)
+      openPreviewInGroup(groups.activeGroup, input, false)
     } else if (input instanceof DocEditorInput) {
       // Same for the built-in guide: reuse the current doc tab so H/L (and
       // Alt+←/→) walk the trail in place instead of opening a new tab.

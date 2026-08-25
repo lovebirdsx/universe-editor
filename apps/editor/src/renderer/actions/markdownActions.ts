@@ -6,6 +6,8 @@
  *    Replaces the active markdown source tab with the preview tab (VSCode style —
  *    no extra tab is created). The source FileEditorInput is detached (not
  *    disposed) and held inside the preview so its Monaco model stays alive.
+ *    A preview already open in the group is retargeted at the new file rather
+ *    than joined by a second one — see openPreviewInGroup.
  *
  *  OpenMarkdownSourceAction:
  *    Appears in the preview tab's title bar. Replaces the preview tab back with
@@ -33,6 +35,7 @@ import { EditorViewStateCache } from '../services/editor/EditorViewStateCache.js
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
 import { MarkdownPreviewViewStateCache } from '../services/editor/MarkdownPreviewViewStateCache.js'
+import { togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
@@ -84,21 +87,7 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  const input = new MarkdownPreviewInput(active)
-  const existing = target.findEditor(input)
-  if (existing) {
-    // Preview already open in this group — just activate it.
-    target.setActive(existing)
-    return
-  }
-  const sourceIndex = target.indexOf(active)
-  // Insert preview at source's position, then detach source (without disposing
-  // it) so the held Monaco model survives until the user switches back.
-  target.openEditor(input, { activate: true, pinned: true, index: sourceIndex })
-  target.detachEditor(active)
-  // detachEditor cut `active` from the group store without disposing it; the
-  // preview now owns its lifecycle.
-  input.adoptSource()
+  togglePreviewInGroup(target, new MarkdownPreviewInput(active), active)
 }
 
 export class OpenMarkdownPreviewAction extends Action2 {

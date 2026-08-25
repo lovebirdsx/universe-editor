@@ -156,6 +156,11 @@ function makeGroupsService(opened: { editor: EditorInput; options: unknown }[]) 
     },
     closeEditor: () => true,
     indexOf: () => -1,
+    findEditor: (editor: EditorInput) =>
+      activeEditor?.matches(editor) === true ? activeEditor : undefined,
+    setActive: (editor: EditorInput) => {
+      activeEditor = editor
+    },
   } as unknown as IEditorGroup
   return {
     _serviceBrand: undefined,

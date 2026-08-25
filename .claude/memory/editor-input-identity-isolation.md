@@ -19,4 +19,8 @@ metadata:
 
 **通则**：「plain div 无 Monaco 注册 + 裸字符键绑定」的 EditorInput（预览/文档/图片…）必须覆写 `focus()` 把焦点保持在自己容器内——基类默认落编辑器组 body（滚动容器外）→ `focusout` 清 context key → 裸字符键 NO-MATCH（f→Esc→f 失灵）。
 
+**id 去重 ≠ 数量不变量**（2026-08 修 bug 得到）：`id` 隔离保证「同文件的预览与源各占一 tab」，但**管不了「同组多个不同文件的预览」**——渲染预览（markdown/html）对标 VSCode dynamic preview，同组同 kind 最多一个，须显式 retarget。唯一入口 `services/editor/openPreviewInGroup.ts`（`openPreviewInGroup` 非 toggle / `togglePreviewInGroup` Ctrl+Shift+V），故意不走它的例外只有 `toSide`、Reopen Closed Editor、工作区恢复。曾因三处同构逻辑各自只 `findEditor(同 id)` 而漏，[a 预览][a 源] 下开 b 预览堆出第三个 tab。
+
+**dirty 是 per-input 的，dispose 前必须转移**：`FileEditorInput` 无 `updateFrom`，dirty 标志不在共享 Monaco model 上。retarget 时若 toggle 预览持有的 dirty 源要被丢弃（组内已有该文件 tab），必须先 `shown.setDirty(true)`——留下的 tab 是在编辑落地**之后**才 resolveModel 的，自认 clean，丢了标志就关闭无提示 + 不进 backup + 外部变更静默 reload，未保存编辑三条路都会没。
+
 关联 [[path-comparison-convergence]]（同源异层：文件系统身份键 vs 编辑器身份键）、[[editor-text-focus-stuck-swallows-keys]]。e2e：`smoke.imageEditor`、`smoke.markdownPreview`。

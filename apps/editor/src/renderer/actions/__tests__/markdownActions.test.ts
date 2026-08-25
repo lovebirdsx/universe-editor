@@ -295,6 +295,68 @@ describe('OpenMarkdownPreviewAction — aligns the preview to the source viewpor
   })
 })
 
+// Regression: a group must hold at most one markdown preview. Opening b.md's
+// preview while a.md's preview is already a tab used to append a third tab
+// ([a preview][a source][b preview]) instead of retargeting a.md's preview at
+// b.md ([b preview][a source]).
+describe('OpenMarkdownPreviewAction — one preview tab per group', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    MarkdownPreviewViewStateCache._resetForTests()
+    FileEditorRegistry._resetForTests()
+  })
+
+  it("retargets the existing preview when another file's source is active", async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uriA = URI.file('/repo/a.md')
+    const uriB = URI.file('/repo/b.md')
+
+    // [a preview][a source][b source], as produced by: preview a.md, open a.md,
+    // then focus b.md.
+    const previewA = new MarkdownPreviewInput(uriA)
+    group.openEditor(previewA, { activate: true, pinned: true })
+    const sourceA = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(sourceA, { activate: true, pinned: true })
+    const sourceB = inst.createInstance(FileEditorInput, uriB)
+    group.openEditor(sourceB, { activate: true, pinned: true })
+
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+
+    // b.md's preview took a.md's preview slot; b.md's source tab was folded into
+    // it (toggle mode) and a.md's source tab is untouched.
+    expect(group.editors).toHaveLength(2)
+    const active = group.activeEditor
+    expect(active).toBeInstanceOf(MarkdownPreviewInput)
+    expect((active as MarkdownPreviewInput).sourceUri.toString()).toBe(uriB.toString())
+    expect(group.editors[0]).toBe(active)
+    expect(group.editors[1]).toBe(sourceA)
+    expect(previewA.isDisposed).toBe(true)
+    expect(sourceA.isDisposed).toBe(false)
+  })
+
+  it("activates this file's existing preview without detaching its source", async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.md')
+
+    const preview = new MarkdownPreviewInput(uri)
+    group.openEditor(preview, { activate: true, pinned: true })
+    const source = inst.createInstance(FileEditorInput, uri)
+    group.openEditor(source, { activate: true, pinned: true })
+
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+
+    // Nothing to toggle: the preview is simply brought forward.
+    expect(group.editors).toHaveLength(2)
+    expect(group.activeEditor).toBe(preview)
+    expect(group.contains(source)).toBe(true)
+    expect(source.isDisposed).toBe(false)
+  })
+})
+
 // Regression: clicking the preview's title-bar buttons (Find / Help) moves focus
 // off the preview container, which fires `focusout` → clearActive(), so
 // MarkdownPreviewRegistry.getActive() is undefined by the time the command runs.

@@ -37,7 +37,7 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { revealSelectionInInput } from '../../services/editor/revealEditorPosition.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
-import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
+import { openPreviewInGroup } from '../../services/editor/openPreviewInGroup.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
@@ -215,7 +215,7 @@ export function useMarkdownFileLink(
         // means the user wants the source at that line, so fall through.
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
-          openMarkdownPreviewInGroup(groupsService.activeGroup, preview, opts?.toSide === true)
+          openPreviewInGroup(groupsService.activeGroup, preview, opts?.toSide === true)
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
