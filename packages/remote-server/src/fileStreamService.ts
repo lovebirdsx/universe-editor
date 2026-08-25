@@ -16,6 +16,7 @@ import {
   type Event,
   type IDirectoryEntry,
   type IFileStat,
+  type IFileSystemProviderCapabilities,
   type ILogger,
   type IRemoteFileStreamEvent,
   type IRemoteFileStreamService,
@@ -93,6 +94,10 @@ export class RemoteFileStreamService extends Disposable implements IRemoteFileSt
 
   createDirectory(resource: URI): Promise<void> {
     return this._fileService.createDirectory(resource)
+  }
+
+  getCapabilities(resource: URI): Promise<IFileSystemProviderCapabilities> {
+    return this._fileService.getCapabilities(resource)
   }
 
   delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {

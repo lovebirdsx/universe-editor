@@ -35,7 +35,7 @@ function segments(uri: URI): string[] {
  * copy fallback without touching the real filesystem.
  */
 class MemProvider implements IFileSystemProvider {
-  readonly capabilities = { pathCaseSensitive: true }
+  readonly capabilities = { pathCaseSensitive: true, supportsTrash: true }
   private readonly root: Extract<MemNode, { kind: 'dir' }> = { kind: 'dir', entries: new Map() }
   /** When set, `delete` rejects — used for the rename-copy-succeeded scenario. */
   failDelete = false

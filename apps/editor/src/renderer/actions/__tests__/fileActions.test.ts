@@ -114,13 +114,29 @@ function makeNoopWatcher(): IFileWatcherServiceType {
   } as unknown as IFileWatcherServiceType
 }
 
-function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType & {
+/** The in-memory IFileService test double, plus the state tests inspect and the
+ *  knobs they flip. */
+type FakeFileService = IFileServiceType & {
   files: Set<string>
   dirs: Map<string, IDirectoryEntry[]>
   writes: Array<{ path: string; content: string }>
   copies: Array<{ source: string; target: string }>
   renames: Array<{ source: string; target: string }>
-} {
+  /** Flip to false to emulate a remote workspace, whose host has no trash. */
+  supportsTrash: boolean
+  /** Set to make every delete reject, e.g. to exercise the trash-failure fallback. */
+  deleteError: Error | undefined
+  /**
+   * Resources whose `useTrash: true` delete rejects while the rest of the batch
+   * succeeds — the real "the OS refused this one move" shape, which leaves
+   * earlier targets already gone before the permanent retry runs.
+   */
+  trashFailures: Set<string>
+  /** Every delete call, in order, for asserting what the retry actually asked for. */
+  deleteCalls: Array<{ resource: string; useTrash: boolean }>
+}
+
+function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFileService {
   const dirs = new Map<string, IDirectoryEntry[]>()
   for (const [k, v] of Object.entries(initial)) dirs.set(k, v)
   const files = new Set<string>()
@@ -152,13 +168,35 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
       dirs.set(p.toString(), [...entries, { name, isFile: !isDirectory, isDirectory }])
     }
   }
-  return {
+  // Mutable knobs tests flip (h.fs.supportsTrash = false); the returned service
+  // reads them through this object so assignments are actually observed.
+  const state = { supportsTrash: true, deleteError: undefined as Error | undefined }
+  const trashFailures = new Set<string>()
+  const deleteCalls: Array<{ resource: string; useTrash: boolean }> = []
+  const service = {
     _serviceBrand: undefined,
     files,
     dirs,
     writes,
     copies,
     renames,
+    trashFailures,
+    deleteCalls,
+    get supportsTrash() {
+      return state.supportsTrash
+    },
+    set supportsTrash(value: boolean) {
+      state.supportsTrash = value
+    },
+    get deleteError() {
+      return state.deleteError
+    },
+    set deleteError(value: Error | undefined) {
+      state.deleteError = value
+    },
+    async getCapabilities() {
+      return { pathCaseSensitive: false, supportsTrash: state.supportsTrash }
+    },
     async readFile() {
       throw new Error('not used')
     },
@@ -209,7 +247,13 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
       dirs.set(resource.toString(), [])
       upsertParentEntry(resource, true)
     },
-    async delete(resource: URI) {
+    async delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }) {
+      const useTrash = opts?.useTrash === true
+      deleteCalls.push({ resource: resource.toString(), useTrash })
+      if (state.deleteError) throw state.deleteError
+      if (useTrash && trashFailures.has(resource.toString())) {
+        throw new Error(`Failed to move "${basename(resource)}" to the recycle bin`)
+      }
       files.delete(resource.toString())
       dirs.delete(resource.toString())
       removeParentEntry(resource)
@@ -254,7 +298,8 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
         upsertParentEntry(target, true)
       }
     },
-  } as never
+  }
+  return service as unknown as FakeFileService
 }
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
@@ -1029,6 +1074,157 @@ describe('fileActions', () => {
       const spy = vi.spyOn(h.fs, 'delete')
       await run(h, DeleteFileAction.ID, { target, isDirectory: true })
       expect(spy).toHaveBeenCalledWith(expect.anything(), { recursive: true, useTrash: true })
+    })
+
+    it('deletes permanently, without promising a trash, when the host has none', async () => {
+      // Regression: a remote (WSL/SSH) workspace used to be offered "Move to
+      // Recycle Bin" and then fail the delete outright with
+      // "trash is not supported on this filesystem".
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.fs.supportsTrash = false
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      const spy = vi.spyOn(h.fs, 'delete')
+
+      await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+
+      expect(spy).toHaveBeenCalledWith(expect.anything(), {
+        recursive: false,
+        useTrash: false,
+      })
+      expect(h.fs.files.has(target.toString())).toBe(false)
+      const confirm = h.dialog.confirmCalls[0]
+      expect(confirm?.primaryButton).toBe('Delete')
+      expect(confirm?.detail).toBe('This will permanently delete the file.')
+    })
+
+    it('degrades to permanent deletion when only part of the selection has a trash', async () => {
+      const root = URI.file('/ws')
+      const a = URI.joinPath(root, 'a.txt')
+      const b = URI.parse('remote-ssh://host/ws/b.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(a.toString())
+      h.fs.files.add(b.toString())
+      h.tree.setSelection([a, b], b)
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      // Capabilities are queried per scheme; the remote one has no trash, so
+      // half-honouring the promise is worse than being upfront about it.
+      const probed: string[] = []
+      h.fs.getCapabilities = async (resource: URI) => {
+        probed.push(resource.scheme)
+        return { pathCaseSensitive: false, supportsTrash: resource.scheme === 'file' }
+      }
+      const spy = vi.spyOn(h.fs, 'delete')
+
+      await run(h, DeleteFileAction.ID, { target: b, isDirectory: false })
+
+      expect(probed).toContain('remote-ssh')
+      // One probe per scheme/authority, not per target.
+      expect(probed).toHaveLength(new Set(probed).size)
+      for (const call of spy.mock.calls) {
+        expect(call[1]).toMatchObject({ useTrash: false })
+      }
+    })
+
+    it('offers permanent deletion when the trash itself fails', async () => {
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.fs.trashFailures.add(target.toString())
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' }) // delete confirm
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' }) // permanent retry
+
+      await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+
+      const retry = h.dialog.confirmCalls[1]
+      expect(retry?.primaryButton).toBe('Delete Permanently')
+      expect(retry?.detail).toContain('recycle bin')
+      // The retry really re-issued the delete, this time permanently — and it worked.
+      expect(h.fs.deleteCalls).toEqual([
+        { resource: target.toString(), useTrash: true },
+        { resource: target.toString(), useTrash: false },
+      ])
+      expect(h.fs.files.has(target.toString())).toBe(false)
+    })
+
+    it('retries only the targets the failed trash left behind', async () => {
+      // Deletion runs target by target: when the trash refuses the second one the
+      // first is already gone, so a verbatim retry would hit ENOENT on it.
+      const root = URI.file('/ws')
+      const a = URI.joinPath(root, 'a.txt')
+      const b = URI.joinPath(root, 'b.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(a.toString())
+      h.fs.files.add(b.toString())
+      h.fs.trashFailures.add(b.toString())
+      h.tree.setSelection([a, b], a)
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, DeleteFileAction.ID, { target: a, isDirectory: false })
+
+      expect(h.fs.deleteCalls).toEqual([
+        { resource: a.toString(), useTrash: true },
+        { resource: b.toString(), useTrash: true },
+        // `a.txt` is absent from the retry: it was already trashed successfully.
+        { resource: b.toString(), useTrash: false },
+      ])
+      expect(h.fs.files.has(a.toString())).toBe(false)
+      expect(h.fs.files.has(b.toString())).toBe(false)
+    })
+
+    it('does not retry when the user declines permanent deletion', async () => {
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.fs.deleteError = new Error('trash refused')
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      h.dialog.confirmResults.push({ confirmed: false, choice: 'cancel' })
+
+      await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+
+      expect(h.dialog.confirmCalls).toHaveLength(2)
+      expect(h.fs.files.has(target.toString())).toBe(true)
+    })
+
+    it('keeps the trash when the capability probe itself fails', async () => {
+      // A failed probe means "unknown". Answering "no trash" would silently turn
+      // the requested trash move into a permanent delete; instead let the
+      // provider fail loud and offer the permanent retry explicitly.
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.fs.getCapabilities = async () => {
+        throw new Error('remote host is not reachable')
+      }
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+
+      expect(h.fs.deleteCalls).toEqual([{ resource: target.toString(), useTrash: true }])
+      expect(h.dialog.confirmCalls[0]?.primaryButton).toBe('Move to Recycle Bin')
+    })
+
+    it('reports the failure plainly when a permanent delete fails', async () => {
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.fs.supportsTrash = false
+      h.fs.deleteError = new Error('EACCES')
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+
+      // No trash was involved, so there is no permanent-delete fallback to offer.
+      expect(h.dialog.confirmCalls).toHaveLength(2)
+      expect(h.dialog.confirmCalls[1]?.type).toBe('error')
+      expect(h.dialog.confirmCalls[1]?.detail).toBe('EACCES')
     })
 
     it('deletes every selected entry when several are selected', async () => {

@@ -26,6 +26,19 @@ export interface IFileSystemProviderCapabilities {
    * scheme differs from the local platform's policy.
    */
   readonly pathCaseSensitive: boolean
+
+  /**
+   * Whether `delete({ useTrash: true })` can move an entry to the OS trash /
+   * recycle bin (VSCode's `FileSystemProviderCapabilities.Trash`). Only the
+   * local `file:` provider running inside Electron has this — remote hosts are
+   * headless Node with no shell trash API.
+   *
+   * Callers that offer "move to trash" must check this *before* passing
+   * `useTrash: true` and present permanent deletion otherwise; a provider
+   * without trash support fails the call loud rather than silently destroying
+   * data the user expected to be recoverable.
+   */
+  readonly supportsTrash: boolean
 }
 
 /**
@@ -173,6 +186,10 @@ export class FileService extends Disposable implements IFileService {
   async createDirectory(resource: URI): Promise<void> {
     const { provider, uri } = this._resolve(resource)
     return provider.createDirectory(uri)
+  }
+
+  async getCapabilities(resource: URI): Promise<IFileSystemProviderCapabilities> {
+    return this._resolve(resource).provider.capabilities
   }
 
   async delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {

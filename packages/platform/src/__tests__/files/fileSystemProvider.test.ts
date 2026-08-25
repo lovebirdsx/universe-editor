@@ -13,7 +13,7 @@ import {
 
 /** Records the URIs it received so dispatch can be asserted without real IO. */
 class RecordingProvider implements IFileSystemProvider {
-  readonly capabilities = { pathCaseSensitive: true }
+  capabilities = { pathCaseSensitive: true, supportsTrash: true }
   readonly seen: URI[] = []
 
   realpath?: (resource: URI) => Promise<URI>
@@ -139,6 +139,30 @@ describe('FileService scheme dispatch', () => {
 
     expect(local.seen.map((u) => u.toString())).toEqual(['file:///a.ts'])
     expect(remoteProvider.seen.map((u) => u.toString())).toEqual(['remote-ssh://host/b.ts'])
+  })
+
+  it('reports each provider capabilities so callers can gate trash deletion', async () => {
+    const svc = new FileService()
+    const local = new RecordingProvider()
+    const remoteProvider = new RecordingProvider()
+    // A remote host has no shell trash API; deleting there must go permanent.
+    remoteProvider.capabilities.supportsTrash = false
+    svc.providers.register('file', local)
+    svc.providers.register('remote-ssh', remoteProvider)
+
+    await expect(svc.getCapabilities(URI.file('/a.ts'))).resolves.toMatchObject({
+      supportsTrash: true,
+    })
+    await expect(svc.getCapabilities(remote('/b.ts'))).resolves.toMatchObject({
+      supportsTrash: false,
+    })
+  })
+
+  it('rejects getCapabilities for an unregistered scheme instead of guessing', async () => {
+    const { svc } = setup()
+    await expect(svc.getCapabilities(URI.parse('untitled:/draft'))).rejects.toThrow(
+      /Unsupported scheme: untitled/,
+    )
   })
 
   it('rejects an unregistered scheme rather than falling back to the local provider', async () => {

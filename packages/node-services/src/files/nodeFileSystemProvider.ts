@@ -53,9 +53,7 @@ export interface NodeFileSystemProviderOptions {
 }
 
 export class NodeFileSystemProvider implements IFileSystemProvider {
-  readonly capabilities: IFileSystemProviderCapabilities = {
-    pathCaseSensitive: process.platform === 'linux',
-  }
+  readonly capabilities: IFileSystemProviderCapabilities
 
   private readonly _trash: ((nativePath: string) => Promise<void>) | undefined
   private readonly _logger: ILogger
@@ -67,6 +65,12 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
     this._logger = options.logger ?? new NullLogger()
     this._maxTextBytes = options.maxTextBytes ?? DEFAULT_MAX_TEXT_BYTES
     this._maxBinaryBytes = options.maxBinaryBytes ?? DEFAULT_MAX_BINARY_BYTES
+    // Assigned here rather than as a field initializer: those run before the
+    // constructor body, so `this._trash` would still be undefined.
+    this.capabilities = {
+      pathCaseSensitive: process.platform === 'linux',
+      supportsTrash: this._trash !== undefined,
+    }
   }
 
   /** Reject a read that would allocate more than `maxBytes` in one shot. */

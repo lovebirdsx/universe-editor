@@ -484,7 +484,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'dialog.file.delete.confirm.detail.trash': '你可以从{trash}中恢复它。',
   'dialog.file.delete.moveToTrash': '移到{trash}',
   'dialog.file.delete.confirm.message': '确定要删除"{name}"吗？',
+  'dialog.file.delete.confirm.message.multiple': '确定要删除所选的 {count} 个项目吗？',
   'dialog.file.delete.error': '删除失败',
+  'dialog.file.delete.permanent.button': '永久删除',
+  'dialog.file.delete.permanent.retry.detail': '你也可以选择永久删除。',
   'dialog.file.clipboard.confirm.detail': '在其他应用中粘贴时，将使用这些临时副本。',
   'dialog.file.clipboard.confirm.message':
     '需要先将 {size} 的远端文件下载到临时位置，才能放入系统剪贴板。要继续吗？',

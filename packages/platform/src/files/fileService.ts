@@ -5,6 +5,7 @@
 
 import { createDecorator } from '../di/instantiation.js'
 import type { URI } from '../base/uri.js'
+import type { IFileSystemProviderCapabilities } from './fileSystemProvider.js'
 
 export type FileSystemErrorCode =
   | 'ENOENT'
@@ -86,6 +87,16 @@ export interface IFileService {
    */
   listDrives?(): Promise<string[]>
 
+  /**
+   * Reports what the provider backing `resource`'s scheme can do — most
+   * importantly whether `delete({ useTrash: true })` is available (see
+   * {@link IFileSystemProviderCapabilities.supportsTrash}).
+   *
+   * Optional so that test doubles may omit it; the real `FileService` always
+   * implements it, as does its `ProxyChannel` proxy in the renderer.
+   */
+  getCapabilities?(resource: URI): Promise<IFileSystemProviderCapabilities>
+
   createDirectory(resource: URI): Promise<void>
 
   /**
@@ -95,8 +106,11 @@ export interface IFileService {
    *
    * With `useTrash: true` the entry is moved to the OS trash / recycle bin
    * instead of being permanently removed (the whole tree goes to trash, so
-   * `recursive` is irrelevant in that case). Falls back to a
-   * `FileSystemError('UNKNOWN')` when the platform trash operation fails.
+   * `recursive` is irrelevant in that case). Only pass it after checking
+   * `getCapabilities(resource).supportsTrash` — a provider without trash
+   * support (any remote host) throws `FileSystemError('UNKNOWN')` rather than
+   * quietly deleting permanently. A trash operation that fails at the OS level
+   * also surfaces as `FileSystemError('UNKNOWN')`.
    */
   delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void>
 

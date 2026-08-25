@@ -73,7 +73,7 @@ file*Actions 命令 —— run() 里解析目标（单/多）→ 调 tree 的 CR
 - **职责边界**：`tree` 只做 fs 原子操作 + 树状态刷新；**op-service 做撤销编排**——每个写操作跑完 fs 后包成可逆操作 push 到 `IUndoRedoService`。命令层现在调 op-service（`createFile/createFolder/rename/delete(targets,useTrash)/duplicate/copyResources/moveResources`），**不再直调 tree.CRUD**，否则拿不到 Ctrl+Z。
 - **可逆模型**：`IReversibleOperation.perform()` 跑操作并返回其逆（Create↔Delete、Rename↔反向 Rename）；一批操作包成一个 `FileOperationUndoRedoElement`（`IWorkspaceUndoRedoElement`），用共享 `EXPLORER_UNDO_SOURCE` push，撤销/重做命令按此 source 作用域。
 - **删除撤销特殊**：回收站无法程序化精确还原，故删前把内容备份到内存（`_backup` 递归 walk 目录/文件），撤销时用备份重写。单文件 `> MAX_UNDO_FILE_SIZE`（10MB）不备份、标 `truncated`（该文件删后无法撤销恢复；开回收站时仍可去回收站找）。
-- **回收站**：`delete(targets, useTrash)` → `IFileService.delete(uri,{recursive,useTrash})`；main 侧 `shell.trashItem`。默认 `files.enableTrash`（true）走回收站。⚠️ **本仓库 URI.fsPath 是正斜杠**（移植省了 Windows `\` 转换），`shell.trashItem` 走 Windows Shell API 要反斜杠，故 main 侧回收站分支已 `path.normalize(uri.fsPath)`——别退回直接传 fsPath（会 "Failed to parse path"）。
+- **回收站**：`delete(targets, useTrash)` → `IFileService.delete(uri,{recursive,useTrash})`；main 侧 `shell.trashItem`。⚠️ **`useTrash` 不是纯配置开关**：`DeleteFileAction` 算的是 `files.enableTrash（默认 true） && provider 支持回收站`，后者经 `IFileService.getCapabilities(resource).supportsTrash` 查（能力位定义在 `platform/src/files/fileSystemProvider.ts`，对标 VSCode 的 `FileSystemProviderCapabilities.Trash`）。本地 `file:` provider 注入了 `shell.trashItem` 故为 true；**远端（WSL/SSH）恒 false**——远端 server 是 headless node 没有 shell 回收站 API，`RemoteFileSystemProvider._capabilities` 直接硬编码 false（不走握手，故未 bump 协议）。远端因此自然走确认框的「永久删除」分支文案，**别退回无条件 `useTrash: true`**（那会让远端 provider 抛 `trash is not supported on this filesystem`、文件删不掉）。混选（本地+远端）时整批降级为永久删除，不半兑现承诺。同一判定也在 `fileBulkEditService`（扩展 `workspace.applyEdit` 删文件）里做，它无 UI 可问故静默降级。**事后回退**：本地 trash 真的失败时弹框提供「永久删除」重试，重试前用 `exists` 过滤掉已删项（逐项 delete 会中断，原样重试会 ENOENT）。**能力探测本身失败（如远端断连）时保留 `useTrash`**——探测失败等于「不知道」，答「没有回收站」会把用户要的「移到回收站」静默变成永久删除；让 provider fail loud 再由回退弹框请用户明确决定。⚠️ **本仓库 URI.fsPath 是正斜杠**（移植省了 Windows `\` 转换），`shell.trashItem` 走 Windows Shell API 要反斜杠，故 node provider 回收站分支已 `path.normalize(uri.fsPath)`——别退回直接传 fsPath（会 "Failed to parse path"）。
 - **键位/配置**：`explorerUndoActions.ts` 的 Undo(ctrl+z)/Redo(ctrl+y|ctrl+shift+z)，when 叠加 `explorerEnableUndo`；配置 `explorer.enableUndo`/`explorer.confirmDelete`/`files.enableTrash` 由 `ExplorerFileConfigurationContribution` 注册 + 建 context key。IUndoRedoService/UndoRedoService 移植在 `packages/platform/src/undoRedo/`。
 - **DI 注册**：`renderer/main.tsx`（IUndoRedoService 之后建 op-service）。
 
@@ -212,8 +212,9 @@ actions/index.ts                                     registerAction2 注册全�
 7. **compact 折叠行的目标是「段」不是「整行」**：右键/落点要用该段的 URI（`data-segment-uri`），不是 leaf `resource`。
 8. **IPC 来的参数是 UriComponents**：命令 args 里的 URI 先 `reviveUri` 再用。
 9. **命令层写操作要在第一个 await 前取完 service**：文件命令都是 async run，`accessor` 遇第一个 `await` 即失效；`accessor.get(IExplorerFileOperationService)` 必须在任何 `await`（prompt/confirm/showOpenDialog）之前同步取好，否则报 "service accessor is only valid during..."。（见 fix-disposable 无关，属 action2 async accessor 坑。）
-10. **删除撤销靠内存备份，非回收站**：关了 `files.enableTrash` 仍能 Ctrl+Z 找回（>10MB 除外）；改删除/备份逻辑别破坏 `_backup`/`recreateFromBackup` 的对称。
+10. **删除撤销靠内存备份，非回收站**：关了 `files.enableTrash`、或身处远端（无回收站）仍能 Ctrl+Z 找回（>10MB 除外）；改删除/备份逻辑别破坏 `_backup`/`recreateFromBackup` 的对称。
 11. **`_setRoot` 不许清剪贴板**（已修，勿回退）：剪贴板是 **shared（main 进程、全窗口共享 + OS 剪贴板）** 的镜像，不是树根的派生态。在这里清会踩两个坑：① 冷启动竞态——`IWorkspaceService` hydration 会在启动快照 adopt 之后再推一次 root（对象标识比对，同一 workspace 也 refire），把 main 快照清掉；② 窗口 B 切文件夹会摧毁窗口 A 待粘贴的 cut 状态。切根后不会残留错误变暗：`isCut` 比对 URI，旧根下的项匹配不到新根任何一行。
+12. **`useTrash` 必须先问 provider 能力**（已修，勿回退）：远端无回收站，无条件 `useTrash: true` 会让删除整个失败（`trash is not supported on this filesystem`）。判定见上文「回收站」段。
 
 ### 验证
 

@@ -380,9 +380,16 @@ export class FileBulkEditService {
         if (options.ignoreIfNotExists === true) return
         throw new FileSystemError(`delete: resource does not exist: ${oldResource}`, 'ENOENT')
       }
+      // `skipTrashBin: false` means "use the trash if there is one", and there
+      // is none on a remote host — asking anyway would fail the whole edit.
+      // There is no dialog to consult on this path, so degrade silently the way
+      // VSCode's bulkFileEdits does.
+      const caps = this._fileService.getCapabilities
+        ? await this._fileService.getCapabilities(oldResource)
+        : undefined
       await this._fileService.delete(oldResource, {
         recursive: options.recursive === true,
-        useTrash: options.skipTrashBin !== true,
+        useTrash: options.skipTrashBin !== true && (caps?.supportsTrash ?? true),
       })
       return
     }

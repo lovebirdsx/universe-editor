@@ -82,12 +82,26 @@ describe('stripSnippet', () => {
  *  keyed by URI path. `file:///t/a.txt` lives at `/t/a.txt`. */
 class InMemoryFiles implements Pick<
   IFileService,
-  'exists' | 'readFileText' | 'writeFile' | 'createDirectory' | 'rename' | 'delete'
+  | 'exists'
+  | 'readFileText'
+  | 'writeFile'
+  | 'createDirectory'
+  | 'rename'
+  | 'delete'
+  | 'getCapabilities'
 > {
   readonly files = new Map<string, string>()
   readonly dirs = new Set<string>(['/'])
   /** Fault injection: a rename whose source matches this path rejects. */
   failRenameFrom?: string
+  /** Flip to false to emulate a remote host, which has no trash. */
+  supportsTrash = true
+  /** Records the `useTrash` each delete was asked for. */
+  readonly deleteOpts: Array<{ recursive?: boolean; useTrash?: boolean } | undefined> = []
+
+  getCapabilities(): Promise<{ pathCaseSensitive: boolean; supportsTrash: boolean }> {
+    return Promise.resolve({ pathCaseSensitive: false, supportsTrash: this.supportsTrash })
+  }
 
   private _norm(path: string): string {
     return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path
@@ -192,6 +206,7 @@ class InMemoryFiles implements Pick<
   }
 
   delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {
+    this.deleteOpts.push(opts)
     const path = this._norm(resource.path)
     if (this.files.delete(path)) return Promise.resolve()
     if (this._isDir(path)) {
@@ -370,6 +385,29 @@ describe('FileBulkEditService file operations', () => {
     })
     expect(files.files.has('/t/dir/a.ts')).toBe(false)
     expect(files.dirs.has('/t/dir')).toBe(false)
+  })
+
+  it('uses the trash by default, and skips it when asked to', async () => {
+    files.seedFile('/t/a.ts', 'x')
+    await service.apply({ edits: [{ oldResource: uri('/t/a.ts') }] })
+    expect(files.deleteOpts.at(-1)).toMatchObject({ useTrash: true })
+
+    files.seedFile('/t/b.ts', 'x')
+    await service.apply({
+      edits: [{ oldResource: uri('/t/b.ts'), options: { skipTrashBin: true } }],
+    })
+    expect(files.deleteOpts.at(-1)).toMatchObject({ useTrash: false })
+  })
+
+  it('deletes permanently when the filesystem has no trash', async () => {
+    // `skipTrashBin: false` means "use the trash if there is one". On a remote
+    // host there is none, and demanding it would fail the whole edit — there is
+    // no dialog to consult on this path, so degrade silently.
+    files.supportsTrash = false
+    files.seedFile('/t/a.ts', 'x')
+    await service.apply({ edits: [{ oldResource: uri('/t/a.ts') }] })
+    expect(files.deleteOpts.at(-1)).toMatchObject({ useTrash: false })
+    expect(files.files.has('/t/a.ts')).toBe(false)
   })
 
   it('delete of a missing file fails unless ignoreIfNotExists', async () => {

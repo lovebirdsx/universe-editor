@@ -178,7 +178,11 @@ export const EN_US_MESSAGES: MessageMap = {
   'dialog.file.delete.confirm.detail.trash': 'You can restore it from the {trash}.',
   'dialog.file.delete.moveToTrash': 'Move to {trash}',
   'dialog.file.delete.confirm.message': 'Are you sure you want to delete "{name}"?',
+  'dialog.file.delete.confirm.message.multiple':
+    'Are you sure you want to delete the {count} selected items?',
   'dialog.file.delete.error': 'Failed to delete',
+  'dialog.file.delete.permanent.button': 'Delete Permanently',
+  'dialog.file.delete.permanent.retry.detail': 'You can delete it permanently instead.',
   'dialog.file.clipboard.confirm.detail':
     'Other applications will get the local copies when you paste.',
   'dialog.file.clipboard.confirm.message':

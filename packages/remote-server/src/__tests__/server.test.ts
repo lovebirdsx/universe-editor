@@ -173,6 +173,23 @@ describe('createRemoteServer', () => {
     }
   })
 
+  it('reports supportsTrash false over the wire so the client can degrade first', async () => {
+    const root = await makeTempRoot()
+    const filePath = path.join(root, 'x.txt')
+    await writeFile(filePath, 'x')
+
+    const { getClient, dispose } = connect()
+    const fileService = getClient<IFileService>(RemoteChannels.FileSystem)
+    try {
+      // This is what lets the Explorer say "permanently delete" instead of
+      // promising a recycle bin and then failing the delete outright.
+      const caps = await fileService.getCapabilities!(URI.file(filePath))
+      expect(caps.supportsTrash).toBe(false)
+    } finally {
+      dispose()
+    }
+  })
+
   it('fileWatcher tunnel acks subscribe and unsubscribe', async () => {
     const root = await makeTempRoot()
     const { getClient, dispose } = connect()

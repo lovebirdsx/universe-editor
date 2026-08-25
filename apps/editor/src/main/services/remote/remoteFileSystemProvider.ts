@@ -71,7 +71,13 @@ export class RemoteFileSystemProvider extends Disposable implements IFileSystemP
   private readonly _logger: ILogger
   private readonly _entries = new Map<string, AuthorityEntry>()
   private readonly _caseSensitiveByAuthority = new Map<string, boolean>()
-  private readonly _capabilities = { pathCaseSensitive: true }
+  // `supportsTrash` is a constant, not something the handshake reports: the
+  // remote server is headless Node (on every host OS, Windows SSH included) and
+  // has no shell trash API, so `useTrash` could only ever fail there. Supporting
+  // it later means injecting a trash hook into the server's provider
+  // (packages/remote-server/src/server.ts), reporting it through the handshake
+  // env (bumping REMOTE_PROTOCOL_VERSION) and reading it in `_applyConnectionEnv`.
+  private readonly _capabilities = { pathCaseSensitive: true, supportsTrash: false }
   private _caseRegistration: IDisposable | undefined
   private _didWarnConflict = false
 

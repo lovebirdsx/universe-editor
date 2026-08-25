@@ -98,3 +98,31 @@ describe('NodeFileSystemProvider readFileHead', () => {
     })
   })
 })
+
+describe('NodeFileSystemProvider trash capability', () => {
+  it('reports supportsTrash only when a trash hook was injected', () => {
+    // The hook is how a host lends its shell trash API (Electron's
+    // shell.trashItem). Without one there is nowhere for a deleted file to go,
+    // so callers must be told before they promise the user a recycle bin.
+    expect(new NodeFileSystemProvider().capabilities.supportsTrash).toBe(false)
+    expect(
+      new NodeFileSystemProvider({ trash: async () => undefined }).capabilities.supportsTrash,
+    ).toBe(true)
+  })
+
+  it('rejects useTrash without a hook instead of deleting permanently', async () => {
+    const dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-trash-'))
+    const file = join(dir, 'keep.txt')
+    await fs.writeFile(file, 'data', 'utf8')
+    try {
+      const provider = new NodeFileSystemProvider()
+      await expect(provider.delete(URI.file(file), { useTrash: true })).rejects.toBeInstanceOf(
+        FileSystemError,
+      )
+      // The file survives: a failed trash must never fall through to unlink.
+      await expect(fs.readFile(file, 'utf8')).resolves.toBe('data')
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+})

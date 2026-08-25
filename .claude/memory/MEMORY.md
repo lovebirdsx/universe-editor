@@ -4,7 +4,7 @@
 
 ## 功能实现进展
 
-- [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService+op-service 编排撤销；坑=await 前取完 service
+- [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService+op-service 编排撤销；坑=await 前取完 service；useTrash 必须先问 provider 能力位(远端恒无回收站,降级永久删除而非静默兜底)
 - [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — resources/agent-skills 经 additionalDirectories 注入四条 wire 路径,两 fork 零改动发现;加 skill=放文件+补 sentinel;remote 不注入;内置 skill 统一 disable-model-invocation,codex 端 fork 桥接物化 openai.yaml(sentinel 可回收)
 - [session 开销含子 Agent](session-cost-subagent-inclusion.md) — claude SDK 总额天然已含勿双计；codex 须 fork 订阅子 thread tokenUsage 聚合进 _meta.quota
 - [官方订阅额度用量指示器](subscription-usage-indicator.md) — 三分门控(订阅%/网关¥/隐藏)，codex 永不显 ¥；红线=绝不为读用量 connect、bigint 须 String 化、unsupported 判定别做永久粘性

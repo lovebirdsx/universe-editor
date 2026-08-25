@@ -282,6 +282,9 @@ describe('RemoteFileSystemProvider', () => {
       const provider = new RemoteFileSystemProvider(h.connService, undefined)
       await provider.readFile(remote('host', '/a'))
       expect(provider.capabilities.pathCaseSensitive).toBe(true)
+      // No remote host has a shell trash API, so this stays false whatever the
+      // connection reports — the Explorer reads it to offer permanent deletion.
+      expect(provider.capabilities.supportsTrash).toBe(false)
     } finally {
       h.cleanup()
     }

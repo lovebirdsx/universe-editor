@@ -158,6 +158,11 @@ describe('FileSystemMainService', () => {
     await expect(service.exists(target)).resolves.toBe(true)
   })
 
+  it('reports supportsTrash for the local filesystem so callers can offer the recycle bin', async () => {
+    const target = URI.file(join(root, 'anything.txt'))
+    await expect(service.getCapabilities(target)).resolves.toMatchObject({ supportsTrash: true })
+  })
+
   it('delete with useTrash wraps trash failures in FileSystemError', async () => {
     trashItem.mockClear()
     trashItem.mockRejectedValueOnce(new Error('boom'))
