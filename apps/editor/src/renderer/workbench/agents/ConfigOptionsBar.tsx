@@ -16,7 +16,13 @@
 
 import { useLayoutEffect, useState, type HTMLAttributes } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
-import { IDialogService, constObservable } from '@universe-editor/platform'
+import {
+  IDialogService,
+  INotificationService,
+  Severity,
+  constObservable,
+  localize,
+} from '@universe-editor/platform'
 import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import {
@@ -168,6 +174,7 @@ export async function pickConfigValue(
   option: SessionConfigOption & { type: 'select' },
   value: string,
   dialogService: IDialogService,
+  notificationService: INotificationService,
 ): Promise<void> {
   if (value === option.currentValue) return
   // Switching a large session onto a smaller-context model silently
@@ -180,7 +187,19 @@ export async function pickConfigValue(
       if (!ok) return
     }
   }
-  await session.setConfigOption(option.id, value)
+  // Applying can reject — most visibly when the session was asleep and waking
+  // its agent back up failed. Without this the popover would just close and
+  // the value silently snap back, so surface the reason.
+  try {
+    await session.setConfigOption(option.id, value)
+  } catch (err) {
+    notificationService.notify({
+      severity: Severity.Error,
+      message: localize('agent.configOption.failed', 'Failed to apply option: {error}', {
+        error: (err as Error).message,
+      }),
+    })
+  }
 }
 
 function ConfigOptionTrigger({
@@ -197,6 +216,7 @@ function ConfigOptionTrigger({
   onClose: () => void
 }) {
   const dialogService = useService(IDialogService)
+  const notificationService = useService(INotificationService)
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
   const Icon = categoryIcon(option.category)
   const currentLabel = findConfigOptionLabel(option.options, option.currentValue)
@@ -238,7 +258,7 @@ function ConfigOptionTrigger({
           option={option}
           onPick={(value) => {
             onClose()
-            void pickConfigValue(session, option, value, dialogService)
+            void pickConfigValue(session, option, value, dialogService, notificationService)
           }}
           onDismiss={onClose}
           testKey={testKey}

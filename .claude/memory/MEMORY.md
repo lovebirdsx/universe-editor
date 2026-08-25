@@ -30,6 +30,7 @@
 - [会话级 diff](session-diff-feature.md) — pinned baseline 快照制+fs-watch 兜底侦测；watched 推测徽标+忽略
 - [新建 session 异步化](async-session-create.md) — 同步渲染后台握手；双 id；queued prompts 自动派发
 - [空会话 restart 重建](empty-session-rebuild-on-restart.md) — hasMessages:false 无 transcript 须 session/new+history rekey；side task 是唯一例外(fork 已复制 transcript)；重试 sid 须随 rekey 更新
+- [session 空闲回收后统一唤醒](acp-session-dormant-wake-abstraction.md) — isDormant 用 derived 会永久卡住；abort 监听不包一层会把 Event 当 deadOnArrival 吞掉全部休眠标记；setConfigOption 前置 await 打挂 echo 抑制
 - [Codex 三种登录方案](codex-three-auth-modes.md) — gateway 须自包含 provider；统一 applyCredential 原子入口
 - [markdown 预览键盘导航](markdown-preview-link-hints.md) — f/F link hints+滚动/前进后退；controller+contextKey+Action2
 - [Codex 对齐 Claude skills/memory](codex-claude-skills-memory-parity.md) — codex fork 读 .claude/skills+注入 MEMORY.md；openai.yaml+sync 脚本

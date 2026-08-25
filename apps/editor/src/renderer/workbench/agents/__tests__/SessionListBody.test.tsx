@@ -41,6 +41,7 @@ import {
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../../services/acp/session/acpSessionService.js'
 import type { AcpSessionStatus } from '../../../services/acp/session/acpSessionModel.js'
+import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
   AcpSessionHistoryService,
   IAcpSessionHistoryService,
@@ -110,6 +111,7 @@ function makeSessionService() {
   const deleteOnAgentFn = vi.fn(
     async (): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> => 'unsupported',
   )
+  const resumeSessionFn = vi.fn().mockRejectedValue(new Error('not implemented')) as never
   const service = {
     _serviceBrand: undefined,
     sessions,
@@ -117,7 +119,7 @@ function makeSessionService() {
     activeSession,
     onDidCloseSession: Event.None,
     createSession: (() => Promise.reject(new Error('not implemented'))) as never,
-    resumeSession: vi.fn().mockRejectedValue(new Error('not implemented')) as never,
+    resumeSession: resumeSessionFn,
     resumeSessionReadOnly: (() => Promise.reject(new Error('not implemented'))) as never,
     setActive: setActiveFn,
     closeSession: closeSessionFn,
@@ -148,6 +150,7 @@ function makeSessionService() {
     setActiveFn,
     closeSessionFn,
     deleteOnAgentFn,
+    resumeSessionFn,
   }
 }
 
@@ -160,10 +163,14 @@ function makeFakeSession(opts: {
   readOnly?: boolean
   status?: 'connecting' | 'idle' | 'running' | 'errored' | 'closed'
   sessionIdOnAgent?: string
+  dormant?: boolean
 }): IAcpSession & {
   status: ISettableObservable<AcpSessionStatus>
   sessionIdOnAgent: ISettableObservable<string | undefined>
   backgroundTaskCount: ISettableObservable<number>
+  isDormant: ISettableObservable<boolean>
+  configOptions: ISettableObservable<readonly SessionConfigOption[]>
+  ensureAwake: ReturnType<typeof vi.fn>
 } {
   const status = observableValue<AcpSessionStatus>(
     'test.session.status',
@@ -180,7 +187,12 @@ function makeFakeSession(opts: {
     readOnly: opts.readOnly ?? false,
     status,
     sessionIdOnAgent,
-    configOptions: observableValue('test.session.configOptions', []),
+    isDormant: observableValue<boolean>('test.session.dormant', opts.dormant ?? false),
+    ensureAwake: vi.fn().mockResolvedValue('ready'),
+    configOptions: observableValue<readonly SessionConfigOption[]>(
+      'test.session.configOptions',
+      [],
+    ),
     usage: observableValue('test.session.usage', undefined),
     accumulatedRunningMs: observableValue('test.session.accumulated', 0),
     runningStartedAt: observableValue<number | undefined>('test.session.startedAt', undefined),
@@ -602,5 +614,74 @@ describe('SessionListBody — optimistic pending rows', () => {
       filterService.toggleStatus('in_progress')
     })
     expect(rowOrder()).toEqual(['agent-bg'])
+  })
+})
+
+describe('SessionListBody — dormant rows', () => {
+  let harness: Harness
+  beforeEach(async () => {
+    harness = await makeHarness()
+  })
+  afterEach(() => {
+    harness.dispose()
+  })
+
+  function pushSession(session: IAcpSession) {
+    const { sessionCtl } = harness
+    act(() => {
+      sessionCtl.liveById.set(session.id, session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+  }
+
+  it('marks a reclaimed row asleep while keeping its live badges', () => {
+    const { history } = harness
+    addEntry(history, 'agent-1', 'reclaimed session', 1000)
+    const session = makeFakeSession({
+      id: 'agent-1',
+      status: 'closed',
+      sessionIdOnAgent: 'agent-1',
+      dormant: true,
+    })
+    session.configOptions.set(
+      [
+        {
+          id: 'model',
+          category: 'model',
+          type: 'select',
+          name: 'Model',
+          currentValue: 'opus',
+          options: [{ value: 'opus', name: 'Opus 4.7' }],
+        },
+      ],
+      undefined,
+    )
+    pushSession(session)
+
+    const row = screen.getByTestId('session-row-agent-1')
+    const glyph = within(row).getByLabelText(
+      'Session asleep to save memory — wakes when you use it',
+    )
+    expect(glyph.dataset['status']).toBe('dormant')
+    // The reaper only stopped the process, so the row keeps reading its live
+    // view-model rather than degrading to the plain history row.
+    expect(within(row).getByText('Opus 4.7')).toBeTruthy()
+  })
+
+  it('wakes a dormant row in place on click instead of resuming a second session', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'agent-1', 'reclaimed session', 1000)
+    const session = makeFakeSession({
+      id: 'agent-1',
+      status: 'closed',
+      sessionIdOnAgent: 'agent-1',
+      dormant: true,
+    })
+    pushSession(session)
+
+    fireEvent.click(screen.getByTestId('session-row-agent-1'))
+    expect(sessionCtl.setActiveFn).toHaveBeenCalledWith('agent-1')
+    expect(session.ensureAwake).toHaveBeenCalledTimes(1)
+    expect(sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
   })
 })

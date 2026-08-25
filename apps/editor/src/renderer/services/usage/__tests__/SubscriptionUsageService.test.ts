@@ -93,8 +93,14 @@ function fakeSession(
   agentId: string,
   requestExtMethod: IAcpSession['requestExtMethod'],
   id: string = agentId,
-): IAcpSession {
-  return { id, agentId, requestExtMethod } as unknown as IAcpSession
+  awake: Awaited<ReturnType<IAcpSession['ensureAwake']>> = 'ready',
+): IAcpSession & { ensureAwake: ReturnType<typeof vi.fn> } {
+  return {
+    id,
+    agentId,
+    requestExtMethod,
+    ensureAwake: vi.fn().mockResolvedValue(awake),
+  } as unknown as IAcpSession & { ensureAwake: ReturnType<typeof vi.fn> }
 }
 
 function claudeUsage(utilization: number): Record<string, unknown> {
@@ -327,6 +333,35 @@ describe('SubscriptionUsageService', () => {
       sessions.set([fakeSession('codex', requestExtMethod)], undefined)
       const service = createService()
       expect(await service.consumeResetCredit('codex', 'key-1')).toBe('failed')
+      service.dispose()
+    })
+
+    it('wakes a dormant session before redeeming', async () => {
+      const requestExtMethod = vi.fn().mockResolvedValue({ outcome: 'reset' })
+      const session = fakeSession('codex', requestExtMethod)
+      sessions.set([session], undefined)
+      const service = createService()
+
+      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('reset')
+      // The wake has to precede the round trip: requestExtMethod never opens a
+      // connection, so on a stopped agent it would just answer 'unavailable'.
+      expect(session.ensureAwake).toHaveBeenCalledTimes(1)
+      service.dispose()
+    })
+
+    it('reports "unavailable" without redeeming when the wake fails', async () => {
+      const requestExtMethod = vi.fn().mockResolvedValue({ outcome: 'reset' })
+      sessions.set([fakeSession('codex', requestExtMethod, 'codex', 'failed')], undefined)
+      const service = createService()
+
+      expect(await service.consumeResetCredit('codex', 'key-1')).toBe('unavailable')
+      // 'failed' would claim the credit was burned; the round trip never left.
+      // (The same session also serves the usage poll, so assert on the method
+      // rather than on the spy having no calls at all.)
+      expect(requestExtMethod).not.toHaveBeenCalledWith(
+        ACP_EXT_METHODS.consumeResetCredit,
+        expect.anything(),
+      )
       service.dispose()
     })
   })

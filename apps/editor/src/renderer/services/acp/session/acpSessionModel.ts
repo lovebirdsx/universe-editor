@@ -422,6 +422,16 @@ export interface AcpPendingElicitation {
 
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
+/**
+ * Result of {@link IAcpSession.ensureAwake}. Four values because callers need to
+ * act differently on each: `ready` proceed; `closed` the user closed the session
+ * so fail silently; `failed` the wake itself failed so surface it to the user;
+ * `connecting` a handshake is still in flight after the awaited one (the
+ * connection dropped again mid-wake) so take the optimistic local path — never
+ * treat it as failure.
+ */
+export type AcpSessionAwakeOutcome = 'ready' | 'connecting' | 'closed' | 'failed'
+
 /** Per-model cost/token breakdown for a session, reported by the agent. */
 export interface AcpModelCost {
   readonly model: string
@@ -515,6 +525,19 @@ export interface IAcpSession {
    */
   readonly timeline: IObservable<readonly TimelineItem[]>
   readonly status: IObservable<AcpSessionStatus>
+  /**
+   * True while the session is asleep: the idle reaper
+   * (`acp.idleProcessTimeoutMs`) stopped the agent process to free memory, which
+   * sealed {@link status} to `'closed'` while leaving the session object — and
+   * its resumable durable id — intact.
+   *
+   * `status === 'closed'` therefore has two meanings, and consumers must not
+   * conflate them: a dormant session is fully operable (it wakes on demand via
+   * {@link ensureAwake}), a session the user closed is gone. Anywhere that used
+   * to read `status === 'closed'` as "unusable" should read
+   * `status === 'closed' && !isDormant` instead.
+   */
+  readonly isDormant: IObservable<boolean>
   /**
    * True while a resumed session is replaying its history via `session/load`.
    * The session is registered (so `session/update` replay routes to it) before
@@ -626,10 +649,29 @@ export interface IAcpSession {
    * Respawn the agent process, keeping this session's history and runtime
    * config. Needed for settings that only travel as spawn env — the sub-agent
    * model above all — which a live process can never pick up. Callers must
-   * finish persisting the env change first. No-op when closed / read-only /
-   * already recovering / never attached.
+   * finish persisting the env change first. A dormant session restarts too (its
+   * process is gone anyway, and the fresh spawn is what picks the setting up).
+   * No-op when read-only / already recovering / never attached / closed by the
+   * user.
    */
   requestProcessRestart(): void
+  /**
+   * Make sure the agent process is running, awaiting the re-handshake when the
+   * session was dormant. The entry point for every explicit user action that
+   * needs a live connection — forking a side chat, rewinding, switching
+   * model/mode, redeeming a reset credit, activating a session from the list.
+   *
+   * Background pollers must NOT call this: waking a process to read a status
+   * would defeat the idle reclaim. Use {@link requestExtMethod}, which never
+   * opens a connection, and degrade to stale data instead.
+   *
+   * Outcomes: `ready` (connected), `closed` (the user closed this session),
+   * `failed` (the wake itself failed; surface it), `connecting` (still handshaking
+   * after the awaited one — the connection dropped again mid-wake; treat the
+   * operation as deferred, not failed). A first handshake in flight IS awaited.
+   * Concurrent callers share a single reconnect.
+   */
+  ensureAwake(): Promise<AcpSessionAwakeOutcome>
   /**
    * Resolves once the connecting phase settles — i.e. {@link attachConnection}
    * or {@link failConnection} has run. Lets callers that genuinely need the live

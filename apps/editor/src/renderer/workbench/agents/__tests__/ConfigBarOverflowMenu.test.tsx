@@ -213,6 +213,8 @@ function makeSession(
     requestExtMethod: vi.fn().mockResolvedValue(undefined) as never,
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
+    isDormant: observableValue('dormant', false),
+    ensureAwake: () => Promise.resolve('ready' as const),
     recoveryState: observableValue('recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),

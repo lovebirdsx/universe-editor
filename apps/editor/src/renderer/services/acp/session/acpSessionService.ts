@@ -118,6 +118,7 @@ import {
   type IAcpSessionInitState,
   type RewindFilesResult,
 } from './acpSession.js'
+import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
@@ -1034,8 +1035,17 @@ export class AcpSessionService
     const inflight = this._resumingBySessionId.get(sessionId)
     if (inflight) return inflight
     const existing = this._findSession(sessionId)
-    if (existing && existing.status.get() !== 'closed') {
+    if (existing && isResidentLive(existing)) {
       this.setActive(existing.id)
+      // Dormant: the session object, its timeline and its tab are all intact —
+      // only the agent process is gone. Wake it in place rather than building a
+      // SECOND session for the same durable id: a session created in this run
+      // has a local uuid that differs from its agent id, so the store's
+      // replace-by-local-id would not find the dormant instance and both would
+      // live on, with the registry's lookup order handing every notification to
+      // the stale one. Fire-and-forget so the tab opens immediately; the
+      // recovery bar reports the wake.
+      if (existing.isDormant.get()) void existing.ensureAwake()
       return existing
     }
     const promise = this._resumeSessionInner(sessionId, { readOnly: false }).finally(() => {
@@ -1051,9 +1061,11 @@ export class AcpSessionService
     const inflight = this._resumingBySessionId.get(sessionId)
     if (inflight) return inflight
     const existing = this._findSession(sessionId)
-    if (existing && existing.status.get() !== 'closed') {
+    if (existing && isResidentLive(existing)) {
       // Already live (read-only or not): reuse it. Do NOT setActive — a foreign
-      // preview must not steal the current worktree's active session.
+      // preview must not steal the current worktree's active session. A dormant
+      // session is reused as-is and deliberately NOT woken: a read-only view
+      // needs no agent process, and spawning one would undo the idle reclaim.
       return existing
     }
     const promise = this._resumeSessionInner(sessionId, { readOnly: true }).finally(() => {
@@ -1292,6 +1304,24 @@ export class AcpSessionService
    */
   private _wireRecovery(session: AcpSession): void {
     this._register(session.onDidLoseConnection((e) => void this._reconnectSession(session, e)))
+  }
+
+  /**
+   * Resolve a session for an explicit user action, waking it first when the idle
+   * reaper had stopped its agent process. The single place the wake tier is
+   * applied on the facade, so `forkSideTask` / `rewindSession` / activation all
+   * behave identically instead of each re-deriving "is this connection dead?".
+   *
+   * Returns undefined when there is nothing to operate on: no resident session,
+   * a read-only foreign preview (must never spawn against another worktree), a
+   * session the user closed, or a wake that failed. The caller decides the
+   * failure shape — throw for a destructive action, degrade quietly otherwise.
+   */
+  private async _awakeSession(sessionId: string): Promise<AcpSession | undefined> {
+    const session = this._findSession(sessionId)
+    if (!session || session.readOnly) return undefined
+    const outcome = await session.ensureAwake()
+    return outcome === 'closed' || outcome === 'failed' ? undefined : session
   }
 
   private async _reconnectSession(
@@ -1727,7 +1757,11 @@ export class AcpSessionService
     const trimmed = title.trim().replace(/\s+/g, ' ')
     if (trimmed.length === 0) return false
     const live = this._findSession(sessionId)
-    if (live && live.status.get() !== 'closed' && !live.readOnly) {
+    if (live && !live.readOnly && isResidentLive(live)) {
+      // Includes dormant sessions. Deliberately NOT woken: the local title +
+      // manualTitle guard land immediately, and `renameTitle` buffers the value
+      // so `attachConnection` pushes it to the agent on the next natural wake.
+      // Spawning a process just to record a title would undo the idle reclaim.
       live.renameTitle(trimmed)
       this._telemetry.publicLog('acp.session_renamed', { live: true })
       return true
@@ -1828,9 +1862,11 @@ export class AcpSessionService
   ): Promise<IAcpSession> {
     // Side tasks fork the parent's CURRENT tip, so the parent must be resident
     // (a history-only row would fork a stale tip) and writable (a read-only
-    // foreign preview must not spawn side effects in another worktree).
-    const live = this._findSession(parentSessionId)
-    if (!live || live.status.get() === 'closed' || live.readOnly) {
+    // foreign preview must not spawn side effects in another worktree). A parent
+    // the idle reaper put to sleep is woken first — its tip is intact, only the
+    // process was reclaimed.
+    const live = await this._awakeSession(parentSessionId)
+    if (!live) {
       throw new Error(`Cannot fork a side task from session: ${parentSessionId}`)
     }
     const sourceAgentSessionId = live.sessionIdOnAgent.get() ?? parentSessionId
@@ -1967,15 +2003,15 @@ export class AcpSessionService
     }
   }
 
-  rewindSession(
+  async rewindSession(
     sessionId: string,
     messageId: string,
     options?: { dryRun?: boolean; rewindFiles?: boolean },
   ): Promise<RewindFilesResult | undefined> {
-    const session = this._findSession(sessionId)
-    if (!session || session.status.get() === 'closed' || !session.rewindSupported.get()) {
-      return Promise.resolve(undefined)
-    }
+    // Rewind (including the dry-run impact preview) is an ext-method, so a
+    // dormant session needs its process back before it can answer.
+    const session = await this._awakeSession(sessionId)
+    if (!session || !session.rewindSupported.get()) return undefined
     return session.rewindTo(messageId, options ?? {})
   }
 
@@ -2397,7 +2433,7 @@ export class AcpSessionService
 
   setSessionMcpServers(sessionId: string, names: readonly string[] | null): void {
     const session = this._findSession(sessionId)
-    if (!session || session.readOnly || session.status.get() === 'closed') return
+    if (!session || session.readOnly || !isResidentLive(session)) return
     const next = names === null ? null : [...names]
     if (selectionEquals(session.mcpServerSelection.get(), next)) return
     // Session-scoped pin only: the default set for new sessions is governed
@@ -2411,6 +2447,15 @@ export class AcpSessionService
     })
     const sid = session.sessionIdOnAgent.get()
     if (sid !== undefined) this._history.setHistoryMcpServerNames(sid, next)
+    if (session.isDormant.get()) {
+      // The pin is persisted; making it take effect needs a `session/load`, so
+      // wake the reclaimed process first. `_wireMcpDrift` would also converge
+      // once the status flips back to idle — the explicit call just removes the
+      // dependency on that autorun's ordering, and the attach-snapshot equality
+      // guard in `_convergeMcpDrift` keeps the two from reloading twice.
+      void session.ensureAwake().then(() => this._convergeMcpDrift(session))
+      return
+    }
     this._convergeMcpDrift(session)
   }
 

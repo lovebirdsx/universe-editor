@@ -89,6 +89,14 @@ function describe(state: AcpRecoveryState): string {
         1: maxAttempts,
       })
     }
+    // Same reasoning for a wake: the idle reaper stopped the process on purpose
+    // to free memory, so bringing it back is expected housekeeping, not a fault.
+    if (state.reason === 'wake') {
+      return localize('acp.recovery.waking', 'Waking agent… ({0}/{1})', {
+        0: attempt,
+        1: maxAttempts,
+      })
+    }
     return secs > 0
       ? localize(
           'acp.recovery.reconnectingIn',

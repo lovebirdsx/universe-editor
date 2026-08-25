@@ -50,6 +50,8 @@ import {
   type InitializeResponse,
   type LoadSessionRequest,
   type LoadSessionResponse,
+  type ResumeSessionRequest,
+  type ResumeSessionResponse,
   type NewSessionRequest,
   type NewSessionResponse,
   type PromptRequest,
@@ -233,6 +235,7 @@ class StubAgent implements Agent {
   readonly initializeCalls: InitializeRequest[] = []
   readonly newSessionCalls: NewSessionRequest[] = []
   readonly loadSessionCalls: LoadSessionRequest[] = []
+  readonly resumeSessionCalls: ResumeSessionRequest[] = []
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
@@ -271,6 +274,18 @@ class StubAgent implements Agent {
       throw new RequestError(this._opts.loadSessionError.code, this._opts.loadSessionError.message)
     }
     return (this._opts.loadSessionResult ?? {}) as unknown as LoadSessionResponse
+  }
+
+  /**
+   * The hot-reconnect path (waking a dormant session, recovering a crash) uses
+   * `session/resume`, not `session/load`. Tracked separately so a test can tell
+   * the two entry points apart. Deliberately streams no updates: replaying the
+   * transcript onto an already-populated timeline is its own concern, and
+   * conflating it here would just assert the fake's own behaviour.
+   */
+  async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.resumeSessionCalls.push(params)
+    return (this._opts.loadSessionResult ?? {}) as unknown as ResumeSessionResponse
   }
 
   prompt(params: PromptRequest): Promise<PromptResponse> {
@@ -992,19 +1007,20 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(built.notifications.captured[0]?.message).toMatch(/Failed to resume/)
   })
 
-  it('replaces a same-id session that closed without going through closeSession', async () => {
-    // The connection-pool grace timer, drainAll(), and agent crashes all flip
-    // a live AcpSession to status='closed' WITHOUT removing it from _sessions
-    // (the onClose listener in acpSession.ts is the only handler). resumeSession
-    // must purge the stale instance before appending the new one, otherwise
-    // _sessions ends up with two entries for the same id — find()-based routing
-    // hits the stale one and replayed messages either duplicate (editor mode,
-    // reads via getById) or vanish (sidebar mode, reads via activeSession).
+  it('reuses and wakes a same-id session the idle reaper sealed, instead of building a second one', async () => {
+    // The connection-pool grace timer, drainAll(), the idle reaper and agent
+    // crashes all flip a live AcpSession to status='closed' WITHOUT removing it
+    // from _sessions (the onClose listener in acpSession.ts is the only
+    // handler). Such a session is DORMANT, not gone: its timeline, config and
+    // resumable durable id are all intact.
     //
-    // Two live sessions can only collide on the same id when both are RESUMED
-    // (a resumed session's local id === its agent id; a freshly-created one
-    // carries a random local id). So we resume once to get the stale same-id
-    // instance, abort its connection, then resume again.
+    // Building a replacement for it was the root cause of the "clicking a row
+    // in the session list does nothing" bug: a resumed session's local id ===
+    // its agent id, so `_sessionStore.replace` could not always purge the stale
+    // instance, _sessions ended up with two entries for the same id, and
+    // AcpSessionRegistry.find's insertion-order lookup routed every replayed
+    // notification to the ghost. resumeSession must reuse the instance and wake
+    // it through the ordinary recovery channel.
     const built = buildService({
       loadSessionUpdates: [
         {
@@ -1023,23 +1039,42 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     const created = await svc.createSession()
     await created.whenConnected()
     const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(created.id)
     // Resume it: original.id === historyId === 'agent-1' (connection #2).
     const original = await svc.resumeSession(historyId)
     expect(original.id).toBe(historyId)
     expect(svc.sessions.get()).toHaveLength(1)
 
-    // Its connection dies without going through closeSession (connection #2).
+    // Its connection dies without going through closeSession (connection #2) —
+    // the idle seal: closed status, but revivable.
     await built.client.simulateConnectionAbort(1)
     expect(original.status.get()).toBe('closed')
+    expect(original.isDormant.get()).toBe(true)
     expect(svc.sessions.get()).toHaveLength(1)
 
     const resumed = await svc.resumeSession(historyId)
-    expect(resumed).not.toBe(original)
+    // Same instance, reused — no ghost for the registry to route to.
+    expect(resumed).toBe(original)
     expect(svc.sessions.get()).toHaveLength(1)
     expect(svc.getById(historyId)).toBe(resumed)
     expect(svc.activeSession.get()).toBe(resumed)
-    // The replay streamed during the third load routed to the NEW session only.
+    // The wake rides the recovery channel: it re-handshakes over session/resume
+    // (not another session/load, which is what building a second instance would
+    // have done) and lands the session back in a usable state on the SAME object.
+    const deadline = Date.now() + 2000
+    while (resumed.isDormant.get()) {
+      if (Date.now() > deadline) throw new Error('session never woke')
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    await resumed.whenConnected()
+    // 'idle', not merely 'not closed' — a wake whose reconnect exhausted its
+    // budget lands on 'errored', which must not pass for a successful wake.
+    expect(resumed.status.get()).toBe('idle')
+    expect(resumed.recoveryState.get()).toBeUndefined()
+    expect(built.client.connected.at(-1)?.agent.resumeSessionCalls).toHaveLength(1)
+    // Only the first resume replayed onto the timeline; the wake did not
+    // duplicate it, because there was no second instance to load into.
     expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed'])
   })
 

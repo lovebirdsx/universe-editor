@@ -53,4 +53,23 @@ describe('RecoveryBar', () => {
     const bar = screen.getByTestId('acp-recovery-bar')
     expect(bar.textContent).toContain('Connection lost. Reconnecting… (2/3)')
   })
+
+  it('shows the waking message when an operation revived an idle-reclaimed session', () => {
+    // The idle reaper stopped the agent to save memory, so nothing was lost and
+    // nothing crashed — telling the user "connection lost" here would report a
+    // fault where there was only a deliberate power saving.
+    render(
+      <RecoveryBar
+        session={makeSession({
+          phase: 'reconnecting',
+          attempt: 1,
+          maxAttempts: 3,
+          reason: 'wake',
+        })}
+      />,
+    )
+    const bar = screen.getByTestId('acp-recovery-bar')
+    expect(bar.textContent).toContain('Waking agent… (1/3)')
+    expect(bar.textContent).not.toContain('Connection lost')
+  })
 })

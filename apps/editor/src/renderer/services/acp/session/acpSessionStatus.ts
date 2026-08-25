@@ -19,6 +19,27 @@ import type { AcpSessionStatus, IAcpSession } from './acpSession.js'
 export type AcpSessionDisplayStatus = AcpSessionStatus | 'ask' | 'background'
 
 /**
+ * True when a resident session is still usable — i.e. `status === 'closed'` does
+ * NOT mean "gone" for it.
+ *
+ * The idle reaper (`acp.idleProcessTimeoutMs`) stops an idle agent process to
+ * free memory, which seals the session's status to `'closed'` while leaving the
+ * session object, its timeline and its resumable durable id fully intact
+ * ({@link IAcpSession.isDormant}). Such a session must be reused and woken, not
+ * treated as dead: duplicating it would build a second session for the same
+ * durable id, and hiding its live badges would make the row look closed.
+ *
+ * Use this anywhere the old `status !== 'closed'` test meant "this session is
+ * still worth talking to". Pass the autorun `IReader` to keep the subscription
+ * live; omit it for a one-shot snapshot.
+ */
+export function isResidentLive(session: IAcpSession, r?: IReader): boolean {
+  const status = r ? session.status.read(r) : session.status.get()
+  if (status !== 'closed') return true
+  return r ? session.isDormant.read(r) : session.isDormant.get()
+}
+
+/**
  * Derive the display status. When an elicitation or permission is pending (and
  * the session is not closed) the session is waiting on the user → `'ask'`;
  * when the core status is idle but background tasks are still in flight →

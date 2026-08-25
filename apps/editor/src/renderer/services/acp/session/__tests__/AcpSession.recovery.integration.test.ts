@@ -201,6 +201,13 @@ interface Script {
    * durable id, so the retry has to look the row up under the NEW key.
    */
   attachSessionErrorOnConnect?: number
+  /**
+   * 1-based connect index whose connection is already aborted by the time
+   * `connect()` returns — the pool handed out a lease whose process had just
+   * died. `attachConnection` sees `signal.aborted` on arrival, which is a
+   * startup failure, not an idle reclaim.
+   */
+  abortOnConnect?: number
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -215,6 +222,7 @@ class ScriptedClient implements IAcpClientService {
     resumeCalls: ResumeSessionRequest[]
     loadCalls: LoadSessionRequest[]
     newCalls: NewSessionRequest[]
+    extCalls: Array<{ method: string; params: Record<string, unknown> }>
     /** Ordered RPC log ('prompt' / `config:<id>`) for cross-RPC ordering assertions. */
     events: string[]
   }> = []
@@ -269,6 +277,7 @@ class ScriptedClient implements IAcpClientService {
     const resumeCalls: ResumeSessionRequest[] = []
     const loadCalls: LoadSessionRequest[] = []
     const newCalls: NewSessionRequest[] = []
+    const extCalls: Array<{ method: string; params: Record<string, unknown> }> = []
     const events: string[] = []
     this.connections.push({
       agentSessionId,
@@ -278,6 +287,7 @@ class ScriptedClient implements IAcpClientService {
       resumeCalls,
       loadCalls,
       newCalls,
+      extCalls,
       events,
     })
     const isFirst = this._seq === 0
@@ -325,12 +335,22 @@ class ScriptedClient implements IAcpClientService {
         )
         return Promise.resolve({ configOptions: updated })
       },
+      // Custom ext-methods (title push-back, rewind) — recorded per connection.
+      extMethod: (
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<Record<string, unknown>> => {
+        extCalls.push({ method, params })
+        events.push(`ext:${method}`)
+        return Promise.resolve({})
+      },
     }
     const initializeResult = Promise.resolve({
       protocolVersion: 1,
       agentCapabilities: { loadSession: this.script.loadSession, promptCapabilities: {} },
       authMethods: [],
     } as unknown as InitializeResponse)
+    if (this.script.abortOnConnect === connectIndex) controller.abort()
     return {
       conn: conn as never,
       initializeResult,
@@ -1416,7 +1436,7 @@ describe('AcpSession auto-recovery', () => {
     const s = await svc.createSession()
     await s.whenConnected()
 
-    const reasons: Array<'crash' | 'stalled' | 'restart'> = []
+    const reasons: Array<'crash' | 'stalled' | 'restart' | 'wake'> = []
     // onDidLoseConnection lives on the concrete view-model, not the IAcpSession
     // facade — the harness only ever creates AcpSession instances.
     ;(s as AcpSession).onDidLoseConnection((e) => reasons.push(e.reason))
@@ -1518,5 +1538,277 @@ describe('requestProcessRestart guards', () => {
     expect(fired).not.toHaveBeenCalled()
     expect(s.status.get()).toBe('connecting')
     expect(s.isReconnecting).toBe(false)
+  })
+})
+
+describe('AcpSession dormancy (idle seal + on-demand wake)', () => {
+  let svc: AcpSessionService
+  let client: ScriptedClient
+
+  beforeEach(() => {
+    __setRecoveryBackoffForTests(() => 1)
+  })
+
+  afterEach(() => {
+    __setRecoveryBackoffForTests(undefined)
+    svc.dispose()
+    vi.useRealTimers()
+  })
+
+  /** A session that settled one prompt — resumable (hasMessages) and idle. */
+  async function makeSeededSession(history?: AcpSessionHistoryService) {
+    const config = new ConfigurationService()
+    svc = history
+      ? makeService(client, config, stubAcpModelCandidateService(), history)
+      : makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('seed')
+    await waitFor(s.status, (v) => v === 'idle')
+    return s
+  }
+
+  it('marks an idle-killed session dormant and wakes it on demand via session/resume', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    expect(await s.ensureAwake()).toBe('ready')
+    await waitFor(s.recoveryState, (v) => v === undefined)
+    expect(s.isDormant.get()).toBe(false)
+    expect(s.status.get()).toBe('idle')
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.resumeCalls).toHaveLength(1)
+    expect(client.connections[1]!.resumeCalls[0]!.sessionId).toBe('agent-durable')
+  })
+
+  it('clears the dormant flag on a user-initiated close so the session can never wake', async () => {
+    client = new ScriptedClient({ loadSession: true, promptResults: [] })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    await s.close()
+    expect(s.status.get()).toBe('closed')
+    expect(s.isDormant.get()).toBe(false)
+    // A closed session is terminal: no wake, no spawn, ever.
+    expect(await s.ensureAwake()).toBe('closed')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(client.connections.length).toBe(1)
+  })
+
+  it('shares a single reconnect across concurrent ensureAwake callers', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    const [first, second] = await Promise.all([s.ensureAwake(), s.ensureAwake()])
+    expect(first).toBe('ready')
+    expect(second).toBe('ready')
+    // One wake, one spawn — the second caller rode the same re-handshake.
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.resumeCalls).toHaveLength(1)
+  })
+
+  it('surfaces a failed wake: recovery exhausts and the session seals to errored', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      resumeSessionError: new Error('Resource not found'),
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    expect(await s.ensureAwake()).toBe('failed')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    expect(s.status.get()).toBe('errored')
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+  })
+
+  it('does not spawn during the initial handshake when ensureAwake is called', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    // Still connecting: no durable id yet, so _wakeIfDormant must not fire a
+    // reconnect — the very first handshake is the wake. ensureAwake currently
+    // awaits that handshake too (see the 'connecting' outcome note in the
+    // report), so it resolves 'ready' — never a wake failure, never a spawn.
+    const outcome = await s.ensureAwake()
+    expect(outcome).toBe('ready')
+    expect(client.connections.length).toBe(1)
+    expect(client.connections[0]!.newCalls).toHaveLength(1)
+    await waitFor(s.status, (v) => v === 'idle')
+  })
+
+  it('never wakes a read-only preview: no loss event, no spawn, no dormant flag', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('seed')
+    const sid = s.sessionIdOnAgent.get()!
+    // Drop the resident instance so the read-only resume builds its own
+    // connection (a live session is reused as-is otherwise).
+    await svc.closeSession(s.id)
+    const ro = await svc.resumeSessionReadOnly(sid)
+    await ro.whenConnected()
+    const fired = vi.fn()
+    ;(ro as AcpSession).onDidLoseConnection(fired)
+
+    client.killConnection(1)
+    await waitFor(ro.status, (v) => v === 'closed')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(fired).not.toHaveBeenCalled()
+    expect(client.connections.length).toBe(2)
+    expect(ro.isDormant.get()).toBe(false)
+  })
+
+  it('counts a wake as activity — lastActivityAt moves past the seal', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    // Distance the seal from the wake so a missing activity bump is detectable:
+    // without it, lastActivityAt still points at the pre-death dispatch.
+    await new Promise((r) => setTimeout(r, 10))
+    const sealedAt = Date.now()
+    expect((s as AcpSession).lastActivityAt).toBeLessThan(sealedAt)
+
+    expect(await s.ensureAwake()).toBe('ready')
+    expect((s as AcpSession).lastActivityAt).toBeGreaterThanOrEqual(sealedAt)
+  })
+
+  it('buffers a manual rename while dormant and replays it to the agent on wake', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const history = makeHistory()
+    const s = await makeSeededSession(history)
+    const sid = s.sessionIdOnAgent.get()!
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    // The rename lands locally only: the dead lease must not get an RPC, and
+    // nothing spawns just to record a title.
+    expect(svc.renameSession(s.id, 'Renamed Title')).toBe(true)
+    expect(history.get(sid)?.title).toBe('Renamed Title')
+    expect(history.get(sid)?.manualTitle).toBe(true)
+    expect(client.connections[0]!.extCalls).toEqual([])
+    expect(client.connections.length).toBe(1)
+
+    // The wake's attach replays the buffered title onto the fresh connection.
+    expect(await s.ensureAwake()).toBe('ready')
+    await waitFor({ get: () => client.connections[1]?.extCalls.length ?? 0 }, (n) => n === 1)
+    expect(client.connections[1]!.extCalls[0]).toEqual({
+      method: 'universe-editor/set_session_title',
+      params: { sessionId: sid, title: 'Renamed Title' },
+    })
+  })
+
+  it('does not flag a startup failure dormant when the pool hands over a dead lease', async () => {
+    // The lease is already aborted when attachConnection receives it. Because
+    // `open()` has by then flipped the phase to 'connected', a phase-based test
+    // cannot tell this from an idle reclaim — so the seal is told explicitly.
+    // Getting it wrong shows the user a session that never started wearing the
+    // moon glyph and the "asleep to save memory" tooltip, and makes the list row
+    // activate in place instead of re-resuming.
+    client = new ScriptedClient({ loadSession: true, promptResults: [], abortOnConnect: 1 })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    expect(s.status.get()).toBe('closed')
+    expect(s.isDormant.get()).toBe(false)
+    // It stays re-handshakeable, though: `session/new` did hand back a durable
+    // id, so an explicit action can still rebuild it — the same thing sendPrompt
+    // has always done on a dead lease. It never got a message, so the rebuild
+    // goes through `session/new` rather than resuming a transcript. Only the
+    // "asleep" labelling is withheld.
+    expect(await s.ensureAwake()).toBe('ready')
+    expect(client.connections).toHaveLength(2)
+    expect(client.connections[1]!.newCalls).toHaveLength(1)
+  })
+
+  it('lands a config switch on the woken connection when the session was asleep', async () => {
+    // setConfigOption on a dead lease used to reject and roll the picked value
+    // back. It now wakes first — and the RPC has to arrive on the FRESH
+    // connection, not the dead one.
+    const modelOption = {
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet 4.6' },
+        { value: 'opus', name: 'Opus 4.7' },
+      ],
+    } as SessionConfigOption
+    client = new ScriptedClient({
+      loadSession: true,
+      configOptions: [modelOption],
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const s = await makeSeededSession()
+    client.killConnection(0)
+    await waitFor(s.status, (v) => v === 'closed')
+    expect(s.isDormant.get()).toBe(true)
+
+    await s.setConfigOption('model', 'opus')
+
+    expect(client.connections).toHaveLength(2)
+    expect(client.connections[0]!.configCalls).toEqual([])
+    expect(client.connections[1]!.configCalls).toEqual([
+      { sessionId: 'agent-durable', configId: 'model', value: 'opus' },
+    ])
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
+  })
+
+  it('settles prompts queued before a dead-on-arrival attach instead of hanging them', async () => {
+    // `open()` drains the queue out of the connection before the aborted lease
+    // is noticed, so that branch owns those prompts. Left undrained, the queued
+    // promise never settles: sendPrompt swallows the rejection (so PromptInput
+    // sees no unhandled rejection) but its own await would hang forever.
+    client = new ScriptedClient({ loadSession: true, promptResults: [], abortOnConnect: 1 })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    // Deliberately not awaited: createSession publishes the session
+    // synchronously and only then kicks off the handshake, so this is the
+    // window where a typed prompt still queues.
+    const creating = svc.createSession()
+    const s = svc.sessions.get()[0]!
+    const queued = s.sendPrompt('typed while connecting').then(() => 'settled' as const)
+    const raced = await Promise.race([
+      queued,
+      new Promise<'hung'>((r) => setTimeout(() => r('hung'), 200)),
+    ])
+    expect(raced).toBe('settled')
+    await creating
   })
 })

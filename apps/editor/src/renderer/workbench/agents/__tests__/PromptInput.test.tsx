@@ -488,6 +488,8 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     requestExtMethod: () => Promise.resolve(undefined),
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
+    isDormant: observableValue('dormant', false),
+    ensureAwake: () => Promise.resolve('ready' as const),
     recoveryState: observableValue('test.recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),

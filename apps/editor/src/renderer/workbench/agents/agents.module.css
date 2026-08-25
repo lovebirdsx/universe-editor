@@ -1828,6 +1828,14 @@
   flex-shrink: 0;
 }
 
+/* Idle-reclaimed session: present and usable, just not running — read as muted
+   rather than as an error or an active state. */
+.sessionRowDormant {
+  color: var(--vscode-descriptionForeground, #8b949e);
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
 .sessionRowModel {
   flex-shrink: 1;
   min-width: 0;

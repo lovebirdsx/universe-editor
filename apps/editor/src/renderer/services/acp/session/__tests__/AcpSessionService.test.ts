@@ -59,6 +59,8 @@ import {
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type ResumeSessionRequest,
+  type ResumeSessionResponse,
   type SessionConfigOption,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
@@ -296,6 +298,7 @@ class StubAgent implements Agent {
   readonly initializeCalls: InitializeRequest[] = []
   readonly newSessionCalls: NewSessionRequest[] = []
   readonly loadSessionCalls: LoadSessionRequest[] = []
+  readonly resumeSessionCalls: ResumeSessionRequest[] = []
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
@@ -392,6 +395,11 @@ class StubAgent implements Agent {
     return Promise.resolve({} as unknown as LoadSessionResponse)
   }
 
+  resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.resumeSessionCalls.push(params)
+    return Promise.resolve({} as unknown as ResumeSessionResponse)
+  }
+
   authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
     return Promise.resolve()
   }
@@ -422,6 +430,12 @@ interface ConnectedSession {
   readonly clientConn: ClientSideConnection
   /** Set to true once the returned IAcpClientConnection.dispose() runs. */
   disposed: boolean
+  /**
+   * Dispose the lease exactly like the pool does when it evicts a dead entry —
+   * closes both stream ends, so the SDK aborts the signal and the session's
+   * close listener seals it (the way to simulate a reaper kill / crash).
+   */
+  disposeLease: () => void
 }
 
 interface FakeAcpClientOptions {
@@ -474,20 +488,28 @@ class FakeAcpClientService implements IAcpClientService {
     })
     initializeResult.catch(() => {})
 
-    const session: ConnectedSession = { sink, agent, agentConn, clientConn, disposed: false }
+    const disposeLease = (): void => {
+      session.disposed = true
+      // Close both writers to signal end-of-stream — SDK then aborts the
+      // ClientSideConnection's signal and resolves `closed`. We swallow
+      // double-close errors so dispose() stays idempotent.
+      void pair.clientStream.writable.close().catch(() => {})
+      void pair.agentStream.writable.close().catch(() => {})
+    }
+    const session: ConnectedSession = {
+      sink,
+      agent,
+      agentConn,
+      clientConn,
+      disposed: false,
+      disposeLease,
+    }
     this.connected.push(session)
     return {
       conn: clientConn,
       initializeResult,
       attachSession: (): void => {},
-      dispose: (): void => {
-        session.disposed = true
-        // Close both writers to signal end-of-stream — SDK then aborts the
-        // ClientSideConnection's signal and resolves `closed`. We swallow
-        // double-close errors so dispose() stays idempotent.
-        void pair.clientStream.writable.close().catch(() => {})
-        void pair.agentStream.writable.close().catch(() => {})
-      },
+      dispose: disposeLease,
     }
   }
 }
@@ -2326,6 +2348,118 @@ describe('AcpSessionService — rewind / fork', () => {
       svc.dispose()
     }
   })
+
+  it('forkSideTask wakes a dormant parent before forking', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-dorm' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const sid = s.sessionIdOnAgent.get()!
+      // Simulate the idle reaper's kill: the fake killConnectionFor is a no-op,
+      // so dispose the lease to abort the connection like a real process death.
+      client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(s.status.get()).toBe('closed')
+      })
+      expect(s.isDormant.get()).toBe(true)
+
+      const side = await svc.forkSideTask(s.id, { text: 'quoted text', label: 'quote summary' })
+
+      expect(side.id).toBe('agent-side-dorm')
+      expect(history.get('agent-side-dorm')?.sideTaskOf).toBe(sid)
+      // The parent was woken in place: back to idle, no longer dormant.
+      expect(s.isDormant.get()).toBe(false)
+      expect(s.status.get()).toBe('idle')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask refuses a session the user actually closed', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true },
+    })
+    const { svc } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+
+      await svc.closeSession(s.id)
+      await expect(svc.forkSideTask(s.id, { text: 'q', label: 'l' })).rejects.toThrow(
+        `Cannot fork a side task from session: ${s.id}`,
+      )
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('rewindSession wakes a dormant session before sending the rewind ext-method', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, rewindCapable: true, loadSession: true },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+      expect(messageId).toBeTruthy()
+
+      client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(s.status.get()).toBe('closed')
+      })
+      expect(s.isDormant.get()).toBe(true)
+
+      const result = await svc.rewindSession(s.id, messageId!)
+
+      expect(result).toEqual({ canRewind: true })
+      // The wake reconnect reattached before the RPC went out, so the
+      // ext-method landed on the fresh connection — and the baseline tracker
+      // was reset as in the live path.
+      const rewindAgent = client.connected.find((c) =>
+        c.agent.extMethodCalls.some((e) => e.method === REWIND_SESSION_METHOD),
+      )!
+      expect(rewindAgent.agent.extMethodCalls[0]?.params).toMatchObject({
+        sessionId: 'agent-1',
+        messageId,
+      })
+      expect(tracker.clearedSessions).toContain('agent-1')
+      expect(s.isDormant.get()).toBe(false)
+      expect(s.status.get()).toBe('idle')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('rewindSession returns undefined for a session the user closed', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, rewindCapable: true, loadSession: true },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      await svc.closeSession(s.id)
+      expect(await svc.rewindSession(s.id, messageId!)).toBeUndefined()
+      // No wake, no spawn for a gone session.
+      expect(client.connected).toHaveLength(1)
+    } finally {
+      svc.dispose()
+    }
+  })
 })
 
 describe('AcpSessionService — startup timeout', () => {
@@ -3364,6 +3498,60 @@ describe('AcpSessionService — session MCP selection', () => {
     svc.dispose()
   })
 
+  it('pins a dormant session and applies the pin through the wake reconnect', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc, history } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const sid = s.sessionIdOnAgent.get()!
+
+    client.connected[0]!.disposeLease()
+    await vi.waitFor(() => {
+      expect(s.status.get()).toBe('closed')
+    })
+    expect(s.isDormant.get()).toBe(true)
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    // The pin lands locally and on the history row immediately.
+    expect(s.mcpServerSelection.get()).toEqual(['fs'])
+    expect(history.get(sid)?.mcpServerNames).toEqual(['fs'])
+
+    // The wake reconnect resumes the agent-side session with the pin baked in.
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(2)
+      expect(client.connected[1]!.agent.resumeSessionCalls).toHaveLength(1)
+    })
+    const resumeParams = client.connected[1]!.agent.resumeSessionCalls[0]!
+    expect(resumeParams.sessionId).toBe(sid)
+    expect(resumeParams.mcpServers?.map((m) => m.name)).toEqual(['fs'])
+
+    // The drift autorun races the wake's attach-snapshot update (it fires on
+    // the idle flip inside reattachConnection, before _mcpSelectionAtAttach is
+    // re-keyed), so a seamless reload follows the wake and re-applies the pin
+    // through a fresh session/load — the session object is swapped, but the
+    // user-visible session keeps its durable id, pin and live status.
+    await vi.waitFor(() => {
+      expect(client.connected).toHaveLength(3)
+      expect(client.connected[2]!.agent.loadSessionCalls).toHaveLength(1)
+    })
+    const loadParams = client.connected[2]!.agent.loadSessionCalls[0]!
+    expect(loadParams.sessionId).toBe(sid)
+    expect(loadParams.mcpServers.map((m) => m.name)).toEqual(['fs'])
+
+    const live = svc.getById(sid)
+    expect(live?.status.get()).toBe('idle')
+    expect(live?.isDormant.get()).toBe(false)
+    expect(live?.mcpServerSelection.get()).toEqual(['fs'])
+    svc.dispose()
+  })
+
   it('a session pin does not leak into the next new session', async () => {
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
     const config = new ConfigurationService()
@@ -3601,6 +3789,34 @@ describe('AcpSessionService — AI session title push-back', () => {
       const session = await svc.createSession()
       await session.whenConnected()
       expect(svc.renameSession(session.id, '   ')).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('renameSession writes the manual title on a dormant session without waking it', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('first turn')
+      const sid = session.sessionIdOnAgent.get()!
+      client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(session.status.get()).toBe('closed')
+      })
+      expect(session.isDormant.get()).toBe(true)
+
+      expect(svc.renameSession(session.id, '  Manual  Name  ')).toBe(true)
+
+      expect(history.get(sid)?.title).toBe('Manual Name')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+      // The dead lease must not get the title RPC, and nothing spawns just to
+      // record a title — the buffered value rides the next natural wake.
+      expect(client.connected[0]!.agent.extMethodCalls).toEqual([])
+      expect(client.connected).toHaveLength(1)
+      expect(session.isDormant.get()).toBe(true)
     } finally {
       svc.dispose()
     }
@@ -4758,6 +4974,44 @@ describe('AcpSessionService — idle process reaper', () => {
     // The first tick past the window reaps the connection.
     await vi.advanceTimersByTimeAsync(idleMs)
     expect(killSpy).toHaveBeenCalledTimes(1)
+    svc.dispose()
+  })
+
+  it('does not re-reclaim a woken session on the next tick — the wake counts as activity', async () => {
+    const idleMs = 90_000 // above the 60s watchdog tick so tick alignment can't flake the assertions
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const svc = makeService(idleMs, client)
+    const session = await makeIdleSession(svc)
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    // Past the idle window: the reaper stops the process.
+    await vi.advanceTimersByTimeAsync(idleMs + 60_000)
+    expect(killSpy).toHaveBeenCalledTimes(1)
+
+    // The fake kill is a no-op; the real one aborts the connection — simulate
+    // the death by disposing the lease so the session seals dormant.
+    client.connected[0]!.disposeLease()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(session.status.get()).toBe('closed')
+    expect(session.isDormant.get()).toBe(true)
+
+    const wake = session.ensureAwake()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(await wake).toBe('ready')
+    expect(session.status.get()).toBe('idle')
+
+    // The next tick lands ~60s after the wake — well inside the 90s idle
+    // window, so the woken session gets the full grace period instead of being
+    // reclaimed again the moment the user opened it.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(killSpy).toHaveBeenCalledTimes(1)
+
+    // One more tick: idle time since the wake has now passed the window, so
+    // the session is reclaimed again as usual. (In production that kill seals
+    // the group and later ticks skip it as all-closed; the fake kill is a
+    // no-op, so we stop right after the re-reclaim tick.)
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(killSpy).toHaveBeenCalledTimes(2)
     svc.dispose()
   })
 })

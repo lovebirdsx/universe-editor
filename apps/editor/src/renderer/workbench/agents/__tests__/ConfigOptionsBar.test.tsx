@@ -105,13 +105,17 @@ const stubNotificationService = {
   notify: () => ({ dispose: () => {}, update: () => {} }),
 } as unknown as INotificationService
 
-function renderWithServices(node: React.ReactNode, dialogService?: IDialogServiceType) {
+function renderWithServices(
+  node: React.ReactNode,
+  dialogService?: IDialogServiceType,
+  notificationService: INotificationService = stubNotificationService,
+) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
   services.set(IClaudeConfigService, stubClaudeConfigService)
   services.set(IAiModelService, stubAiModelService)
-  services.set(INotificationService, stubNotificationService)
+  services.set(INotificationService, notificationService)
   services.set(
     IDialogService,
     dialogService ??
@@ -183,6 +187,8 @@ function makeSession(
     requestExtMethod: vi.fn().mockResolvedValue(undefined) as never,
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
+    isDormant: observableValue('dormant', false),
+    ensureAwake: () => Promise.resolve('ready' as const),
     recoveryState: observableValue('recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),
@@ -279,6 +285,32 @@ describe('ConfigOptionsBar', () => {
     ].find((n) => n.textContent === 'Sonnet 4.6')!
     fireEvent.mouseDown(sonnet)
     expect(session.setConfigOption).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a rejected apply — a failed wake must not look like a no-op', async () => {
+    // setConfigOption rejects when waking a session the idle reaper stopped
+    // fails. The popover has already closed and the bar still shows the old
+    // value, so without a notification the click reads as "nothing happened".
+    const session = makeSession([MODEL_OPTION])
+    session.setConfigOption.mockRejectedValue(new Error('wake failed'))
+    const notify = vi.fn((_notification: { message: string }) => ({
+      dispose: () => {},
+      update: () => {},
+    }))
+    renderWithServices(<ConfigOptionsBar session={session} />, undefined, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
+
+    fireEvent.click(screen.getByTestId('acp-config-model-trigger'))
+    const opus = [
+      ...screen.getByTestId('acp-config-model-popover').querySelectorAll('[role="option"]'),
+    ].find((n) => n.textContent === 'Opus 4.7')!
+    await act(async () => {
+      fireEvent.mouseDown(opus)
+    })
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0]?.[0].message).toContain('wake failed')
   })
 
   it('Escape dismisses the popover', async () => {

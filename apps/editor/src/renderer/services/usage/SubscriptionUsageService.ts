@@ -214,6 +214,10 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   async consumeResetCredit(agentId: string, idempotencyKey: string): Promise<ResetCreditOutcome> {
     const session = this._liveSessionFor(agentId)
     if (session === undefined) return 'unavailable'
+    // Redeeming is an explicit click, so unlike the polling path above it is
+    // worth waking a session the idle reaper put to sleep — `requestExtMethod`
+    // never opens a connection and would just report 'unavailable'.
+    if ((await session.ensureAwake()) !== 'ready') return 'unavailable'
     try {
       const raw = await session.requestExtMethod<Record<string, unknown>>(
         ACP_EXT_METHODS.consumeResetCredit,
@@ -335,9 +339,16 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
    * Ride along on any live session of `agentId`. `requestExtMethod` answers
    * `undefined` when there is no connection, which is the "keep the cached
    * snapshot, let the UI mark it stale" path — not an error.
+   *
+   * Read-only foreign previews are skipped: they can never wake (spawning
+   * against another worktree is exactly what they exist to avoid), so handing
+   * one to the redeem path would make it look permanently unavailable while a
+   * perfectly wakeable session sat later in the list.
    */
   private _liveSessionFor(agentId: string): IAcpSession | undefined {
-    return this._sessions.sessions.get().find((session) => session.agentId === agentId)
+    return this._sessions.sessions
+      .get()
+      .find((session) => session.agentId === agentId && !session.readOnly)
   }
 
   private async _fetch(agentId: string): Promise<void> {

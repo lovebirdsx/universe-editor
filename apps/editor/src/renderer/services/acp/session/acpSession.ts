@@ -39,6 +39,7 @@ import type { IAcpMessageAttachmentStore } from './acpMessageAttachmentStore.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
+import { AcpConnectionError } from './acpErrors.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { classifyAcpError } from './acpErrorClassify.js'
 import { AcpPromptCancelledDraftStash } from './acpPromptCancelledDraftStash.js'
@@ -102,6 +103,7 @@ import {
   type AcpCompactionPhase,
   type AcpResurrection,
   type AcpResurrectionPhase,
+  type AcpSessionAwakeOutcome,
   type AcpSessionStatus,
   type AcpSubagentStats,
   type AcpToolCall,
@@ -141,6 +143,7 @@ export type {
   AcpPlanEntryStatus,
   AcpResurrection,
   AcpResurrectionPhase,
+  AcpSessionAwakeOutcome,
   AcpSessionStatus,
   AcpSubagentStats,
   AcpToolCall,
@@ -386,9 +389,12 @@ export interface AcpConnectionLostEvent {
   /**
    * `crash`: process exited. `stalled`: alive but silent past the watchdog
    * threshold. `restart`: the user asked for a fresh process (the sub-agent
-   * model is spawn env, so it only changes on respawn).
+   * model is spawn env, so it only changes on respawn). `wake`: the process was
+   * stopped by the idle reaper and an operation needs it back (see
+   * {@link AcpSession.ensureAwake}) — like `crash` the process is already gone,
+   * so the reconnect must NOT evict the pool entry.
    */
-  readonly reason: 'crash' | 'stalled' | 'restart'
+  readonly reason: 'crash' | 'stalled' | 'restart' | 'wake'
 }
 
 /** Snapshot of one dispatched prompt, kept so a failed/interrupted turn can be re-sent. */
@@ -513,6 +519,12 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly accumulatedRunningMs: ISettableObservable<number>
   readonly runningStartedAt: ISettableObservable<number | undefined>
   readonly backgroundTaskCount: ISettableObservable<number>
+
+  /**
+   * Backing store for {@link isDormant} — see that getter for the semantics and
+   * for why this is an explicitly-set flag rather than a `derived(...)`.
+   */
+  private readonly _dormant: ISettableObservable<boolean>
 
   private readonly _onDidRequireAuth = this._register(new Emitter<void>())
   readonly onDidRequireAuth: Event<void> = this._onDidRequireAuth.event
@@ -874,6 +886,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       undefined,
     )
     this.backgroundTaskCount = observableValue<number>(`acp.session.backgroundTaskCount.${id}`, 0)
+    this._dormant = observableValue<boolean>(`acp.session.dormant.${id}`, false)
     this.imageSupported = observableValue<boolean>(`acp.session.imageSupported.${id}`, false)
     this.forkSupported = observableValue<boolean>(`acp.session.forkSupported.${id}`, false)
     this.rewindSupported = observableValue<boolean>(`acp.session.rewindSupported.${id}`, false)
@@ -921,6 +934,8 @@ export class AcpSession extends Disposable implements IAcpSession {
   attachConnection(conn: IAcpClientConnection, sessionIdOnAgent: string): void {
     const drained = this._connection.open(conn)
     if (this._connection.phase !== 'connected') return
+    // A fresh connection is bound: no longer asleep (see {@link isDormant}).
+    this._dormant.set(false, undefined)
     // A successful (re)attach ends any hot-reconnect episode — including the
     // first attach, where the flag was never set.
     this._reconnecting = false
@@ -951,7 +966,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
     // Connection close → seal the session, unless it was unexpected: then the
     // hot-reconnect path takes over instead (see {@link _handleConnectionLost}).
-    const onClose = (): void => {
+    // `deadOnArrival` marks the one call made synchronously below for a lease
+    // that was already aborted when we got it — a startup failure, not an idle
+    // reclaim, so it must not be flagged dormant.
+    const onClose = (deadOnArrival = false): void => {
       if (this._reconnecting) return // stale listener from the superseded connection
       // User-initiated close() seals the status before the lease disposal can
       // abort the connection, so a late abort landing here must not resurrect
@@ -966,20 +984,44 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
       this._commitBatchedTx()
       this._finalizeRunningSegment()
+      // Sealed but revivable: flag it so every session operation can tell this
+      // apart from a user-initiated close and wake the process on demand
+      // (see {@link isDormant}). Excluded: `deadOnArrival` — the lease was
+      // already dead when handed to us, which is a startup failure wearing a
+      // 'connected' phase (open() flipped it before we could look), and a
+      // read-only preview, which must never spawn against the foreign worktree
+      // it is viewing. Neither can ever wake.
+      if (
+        !deadOnArrival &&
+        this._connection.phase === 'connected' &&
+        !this.readOnly &&
+        this.sessionIdOnAgent.get() !== undefined
+      ) {
+        this._dormant.set(true, undefined)
+      }
       this.status.set('closed', undefined)
       this._cancelPending()
       this._abortAllInFlight()
       this._resetBackgroundActivity()
     }
     if (conn.conn.signal.aborted) {
-      // The pooled connection is already dead at attach time. With a live phase
-      // still 'connecting' this is a startup failure — seal, no recovery.
-      onClose()
+      // The pooled connection is already dead at attach time: a startup failure,
+      // so seal without recovery and without the dormant flag. Prompts the user
+      // queued while connecting were already drained out of the connection by
+      // `open()` above, so reject them here — otherwise their callers hang.
+      onClose(true)
+      for (const q of drained) {
+        q.reject(new AcpConnectionError('Agent connection died before it was ready'))
+      }
       return
     }
-    conn.conn.signal.addEventListener('abort', onClose, { once: true })
+    // Wrapped: the abort listener is called with an Event, which would land in
+    // `deadOnArrival` as a truthy value and suppress the dormant flag on every
+    // idle reclaim.
+    const onAbort = (): void => onClose()
+    conn.conn.signal.addEventListener('abort', onAbort, { once: true })
     this._register({
-      dispose: () => conn.conn.signal.removeEventListener('abort', onClose),
+      dispose: () => conn.conn.signal.removeEventListener('abort', onAbort),
     })
     // Leave a terminal status (closed) untouched; otherwise settle to idle and
     // drain the queue.
@@ -1019,6 +1061,96 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   whenConnected(): Promise<void> {
     return this._connection.whenSettled()
+  }
+
+  /**
+   * True while this session sits in the "asleep but revivable" state the idle
+   * reaper leaves behind: the agent process was stopped to free memory
+   * (`acp.idleProcessTimeoutMs`), so the connection's abort signal fired and
+   * `onClose` sealed `status` to `'closed'` — but the phase is still
+   * `'connected'`, the session object is alive, and its durable id can be
+   * resumed. Distinguishing this from a user-initiated `close()` is the whole
+   * point: dormant sessions must stay operable (they wake on demand), closed
+   * ones are gone for good.
+   *
+   * Every consumer that used to test `status === 'closed'` to mean "unusable"
+   * should test `status === 'closed' && !isDormant` instead.
+   *
+   * Deliberately NOT a `derived(status === 'closed' && phase === 'connected')`:
+   * `close()` sets the status before it moves the phase, and the phase is not
+   * observable, so such a derived would latch `true` for that frame with
+   * nothing left to ever invalidate it — the session would look dormant
+   * forever. The four explicit write sites (idle seal sets it; attach, close and
+   * the start of a reconnect clear it) keep the invariant locally checkable
+   * instead.
+   */
+  get isDormant(): IObservable<boolean> {
+    return this._dormant
+  }
+
+  /**
+   * Bring a dormant session's agent process back if it is gone, without
+   * waiting. The single source of truth for "is this connection dead?" —
+   * {@link sendPrompt} and {@link ensureAwake} both route through it so the
+   * detection never drifts into two copies.
+   *
+   * Recognises both dead-lease shapes: the idle seal (phase still `'connected'`
+   * with an aborted signal) and an exhausted/cancelled recovery episode (phase
+   * `'failed'`). Parking the session via `_handleConnectionLost` returns it to
+   * `connecting` — prompts queue, the service re-handshakes, and the attach
+   * flush dispatches them. A user-initiated `close()` (phase `'closed'`) is
+   * never revived; a startup failure has no durable id to resume against and
+   * keeps its existing behaviour.
+   */
+  private _wakeIfDormant(): void {
+    if (this._reconnecting || this.readOnly) return
+    if (this.sessionIdOnAgent.get() === undefined) return
+    const phase = this._connection.phase
+    if ((phase === 'connected' && this._conn?.conn.signal.aborted === true) || phase === 'failed') {
+      this._handleConnectionLost('wake')
+    }
+  }
+
+  /**
+   * Ensure the agent process is up, awaiting the re-handshake when one is
+   * needed. The entry point for every explicit user action that needs a live
+   * connection (fork a side chat, rewind, switch model, redeem a reset
+   * credit, …) — see the "wake tiers" table in this directory's CLAUDE.md for
+   * which operations should call this and which deliberately must not.
+   *
+   * The four outcomes are all load-bearing:
+   * - `ready`     — connected, go ahead.
+   * - `closed`    — the user closed this session; fail silently.
+   * - `failed`    — the wake itself failed (reconnect exhausted); surface it.
+   * - `connecting`— a handshake is STILL in flight after the one we awaited,
+   *                 i.e. the connection was lost again during the wake. Not a
+   *                 failure: the caller should treat the operation as deferred
+   *                 (its optimistic local effect stands and flushes on attach)
+   *                 rather than reporting an error.
+   *
+   * A first handshake in flight IS awaited here, so callers that must never
+   * block on a 10s spawn have to check before calling — `setConfigOption` keeps
+   * a synchronous fast path for exactly that reason.
+   *
+   * Concurrent callers share one reconnect: the first parks the session, the
+   * rest short-circuit on `_reconnecting` and await the same re-armed gate.
+   */
+  async ensureAwake(): Promise<AcpSessionAwakeOutcome> {
+    this._wakeIfDormant()
+    if (this._connection.phase === 'connecting') await this.whenConnected()
+    switch (this._connection.phase) {
+      case 'connected':
+        return 'ready'
+      case 'closed':
+        return 'closed'
+      case 'failed':
+        // A wake that failed leaves the session `errored` with a manual-retry
+        // affordance; a session closed mid-wake settled its gate through
+        // close() and is simply gone.
+        return this.status.get() === 'closed' ? 'closed' : 'failed'
+      default:
+        return 'connecting'
+    }
   }
 
   /** Auto-recovery state (retry / reconnect progress) for the UI; undefined when healthy. */
@@ -1085,9 +1217,18 @@ export class AcpSession extends Disposable implements IAcpSession {
    * aborted, new prompts queue, and the service is notified to re-handshake
    * in place.
    */
-  private _handleConnectionLost(reason: 'crash' | 'stalled' | 'restart'): void {
+  private _handleConnectionLost(reason: 'crash' | 'stalled' | 'restart' | 'wake'): void {
     if (this._reconnecting) return
     this._reconnecting = true
+    // Reconnecting IS activity. Without this bump a session woken from the idle
+    // reaper carries a stale `lastActivityAt`, so the very next watchdog tick
+    // (≤60s) reclaims it again — the user sees "I opened it and it went straight
+    // back to sleep". Re-armed here, a woken session gets the full idle grace
+    // period; with no further interaction it is reclaimed again as usual.
+    this._lastActivityAt = Date.now()
+    // Leaving the asleep state (see {@link isDormant}): from here on the session
+    // is actively re-handshaking, not waiting to be woken.
+    this._dormant.set(false, undefined)
     const deadLease = this._conn
     // Captured before _cancelPending settles the cards — after it, both
     // observables read undefined and the pending state is unrecoverable.
@@ -1147,8 +1288,13 @@ export class AcpSession extends Disposable implements IAcpSession {
    * picked up; the fresh process reads settings.json as it spawns.
    */
   requestProcessRestart(): void {
-    if (this.status.get() === 'closed' || this.readOnly || this._reconnecting) return
+    if (this.readOnly || this._reconnecting) return
     if (this.sessionIdOnAgent.get() === undefined) return
+    // A dormant session restarts too: its process is already gone, so the
+    // reconnect spawns a fresh one that reads the new setting — which is the
+    // whole point of the request. Only a session the user actually closed
+    // (phase 'closed') stays terminal.
+    if (this.status.get() === 'closed' && !this._dormant.get()) return
     this._handleConnectionLost('restart')
   }
 
@@ -1505,20 +1651,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     // idle (the idle close path sealed the status but kept the dead lease
     // bound, phase still 'connected'), or an earlier reconnect exhausted / was
     // cancelled and the user typed a new prompt instead of the recovery bar's
-    // Retry. Park the session back in `connecting` so this prompt queues; the
-    // service re-handshakes (fresh spawn + session/resume) and the attach
-    // flush dispatches it. A user-initiated close() moves the phase to
-    // 'closed' and is never revived here; a startup failure has no durable id
-    // to resume against and keeps its existing behaviour.
-    if (!this._reconnecting && this.sessionIdOnAgent.get() !== undefined) {
-      const phase = this._connection.phase
-      if (
-        (phase === 'connected' && this._conn?.conn.signal.aborted === true) ||
-        phase === 'failed'
-      ) {
-        this._handleConnectionLost('crash')
-      }
-    }
+    // Retry. The parked session queues this prompt; the service re-handshakes
+    // and the attach flush dispatches it. Detection lives in one place so it
+    // can't drift from the explicit-operation path (see {@link ensureAwake}).
+    this._wakeIfDormant()
     // Still connecting — buffer the prompt; the returned promise settles when it
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
@@ -1891,7 +2027,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.readOnly) return undefined
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
-    if (conn === undefined || sid === undefined) return undefined
+    // A dead lease (idle reclaim) would reject every ext-method below. The
+    // facade wakes the session before delegating here; this guard catches any
+    // caller that bypasses it, failing the same way an unconnected session does
+    // instead of surfacing a protocol error.
+    if (conn === undefined || conn.conn.signal.aborted || sid === undefined) return undefined
     const dryRun = options?.dryRun === true
     // Keep the working-tree edits when the caller opted out of the file rollback
     // (保留修改并回退). Defaults to rolling files back.
@@ -2169,10 +2309,16 @@ export class AcpSession extends Disposable implements IAcpSession {
    * doesn't implement it rejects with methodNotFound and we keep the local-only
    * title, which the `aiTitle`/`manualTitle` history flag still protects from
    * hydrate overwrites.
+   *
+   * A dormant session is deliberately NOT woken for this: spawning an agent
+   * process just to record a title would undo the memory the idle reaper freed.
+   * The title is already buffered in `_pendingTitle`, and `attachConnection`
+   * replays it on the next attach — so the push simply happens whenever the
+   * session naturally wakes.
    */
   private _pushTitleToAgent(sessionIdOnAgent: string, title: string): void {
     const conn = this._conn
-    if (conn === undefined) return
+    if (conn === undefined || conn.conn.signal.aborted) return
     void conn.conn
       .extMethod(SET_SESSION_TITLE_METHOD, { sessionId: sessionIdOnAgent, title })
       .catch(() => {
@@ -2288,6 +2434,9 @@ export class AcpSession extends Disposable implements IAcpSession {
   async close(): Promise<void> {
     this._commitBatchedTx()
     this._finalizeRunningSegment()
+    // A user-initiated close is terminal: clear the dormant flag so a session
+    // closed while asleep can never be revived by a wake (see {@link isDormant}).
+    this._dormant.set(false, undefined)
     this.status.set('closed', undefined)
     // Cancel any pending recovery attempt so a service-side reconnect loop
     // observing this session bails instead of reattaching a closed session.
@@ -2827,9 +2976,29 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  setConfigOption(configId: string, value: string): Promise<void> {
+  async setConfigOption(configId: string, value: string): Promise<void> {
     // Read-only preview: never mutate the foreign session's agent-side config.
-    if (this.readOnly) return Promise.resolve()
+    if (this.readOnly) return
+    // Switching model / mode / thought-level is an RPC, so a dormant session
+    // needs its process back first — pushing onto the dead lease would reject
+    // and roll the picked value back.
+    this._wakeIfDormant()
+    // Healthy connection (or the still-connecting / closed session that falls
+    // through to the state machine's optimistic local path): reach the state
+    // machine WITHOUT yielding first. It applies the value locally and arms the
+    // same-id echo gate synchronously, and a `config_option_update` landing in
+    // the same tick would otherwise overwrite the user's pick before the gate
+    // exists.
+    if (!this._reconnecting) return this._configOptions.setConfigOption(configId, value)
+    const outcome = await this.ensureAwake()
+    if (outcome === 'failed') {
+      throw new AcpConnectionError(
+        localize(
+          'acp.session.wakeFailed',
+          'Failed to wake the agent session before applying the change',
+        ),
+      )
+    }
     return this._configOptions.setConfigOption(configId, value)
   }
 

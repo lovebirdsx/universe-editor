@@ -42,6 +42,7 @@ import {
   PinOff,
   Loader2,
   AlertCircle,
+  Moon,
 } from 'lucide-react'
 import {
   IconButton,
@@ -63,7 +64,10 @@ import {
 } from '../../services/acp/session/acpSessionHistory.js'
 import { IAcpSessionFilterService } from '../../services/acp/session/acpSessionFilterService.js'
 import { statusBucketFor } from '../../services/acp/session/acpSessionFilterService.js'
-import { computeSessionDisplayStatus } from '../../services/acp/session/acpSessionStatus.js'
+import {
+  computeSessionDisplayStatus,
+  isResidentLive,
+} from '../../services/acp/session/acpSessionStatus.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
 import {
@@ -145,12 +149,28 @@ function LiveSessionTimer({ session }: { session: IAcpSession }) {
 
 /**
  * Self-subscribed status glyph for a live row: a spinner while the background
- * handshake is in flight, an error badge when it failed. The row list itself
- * does not re-render on status flips (the sessions array identity is stable
- * across attach/fail), so the subscription must live here.
+ * handshake is in flight, an error badge when it failed, a moon while the row is
+ * asleep (the idle reaper stopped its agent process; it wakes on use). The row
+ * list itself does not re-render on status flips (the sessions array identity is
+ * stable across attach/fail), so the subscription must live here.
  */
 function LiveSessionStatus({ session }: { session: IAcpSession }) {
   const status = useObservable(session.status)
+  const dormant = useObservable(session.isDormant)
+  if (dormant) {
+    return (
+      <Moon
+        size={13}
+        strokeWidth={1.75}
+        className={styles['sessionRowDormant']}
+        data-status="dormant"
+        aria-label={localize(
+          'acp.sessions.dormant',
+          'Session asleep to save memory — wakes when you use it',
+        )}
+      />
+    )
+  }
   if (status === 'connecting') {
     return (
       <Loader2
@@ -662,9 +682,11 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
             const live = service.getById(entry.id)
             // A read-only foreign preview is a live AcpSession instance but must
             // not light up the running indicator / timer / "active" styling — it
-            // is a viewer, not the working session.
-            const liveSession =
-              live && live.status.get() !== 'closed' && !live.readOnly ? live : undefined
+            // is a viewer, not the working session. A dormant session IS live:
+            // the idle reaper only stopped its process, so it keeps its badges
+            // (model / effort / timer / cost) rather than degrading to the plain
+            // history row.
+            const liveSession = live && !live.readOnly && isResidentLive(live) ? live : undefined
             const isActive = liveSession !== undefined && liveSession.id === activeId
             const isForeign =
               entry.cwd !== undefined &&
@@ -809,9 +831,14 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                   // be set active; clicking re-opens its (read-only) tab via the
                   // foreign branch below.
                   const liveNow =
-                    fresh && fresh.status.get() !== 'closed' && !fresh.readOnly ? fresh : undefined
+                    fresh && !fresh.readOnly && isResidentLive(fresh) ? fresh : undefined
                   if (liveNow) {
                     service.setActive(liveNow.id)
+                    // Asleep: activate instantly off the resident instance and
+                    // bring its process back in the background (the recovery bar
+                    // reports progress). Falling through to resumeSession would
+                    // build a second session for the same durable id.
+                    if (liveNow.isDormant.get()) void liveNow.ensureAwake()
                   } else if (
                     entry.cwd !== undefined &&
                     currentCwd !== undefined &&

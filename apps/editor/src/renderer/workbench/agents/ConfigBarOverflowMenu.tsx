@@ -11,7 +11,7 @@
 
 import { useEffect, useState, type HTMLAttributes, type ReactNode, type Ref } from 'react'
 import { ChevronRight, MoreHorizontal, Plug, Users } from 'lucide-react'
-import { IDialogService, localize } from '@universe-editor/platform'
+import { IDialogService, INotificationService, localize } from '@universe-editor/platform'
 import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import { useClaudeConfig } from '../agentSettings/claude/useClaudeConfig.js'
 import { useObservable, useOptionalService, useService } from '../useService.js'
@@ -136,6 +136,7 @@ function OverflowRow({
   onRequestClose: () => void
 }) {
   const dialogService = useService(IDialogService)
+  const notificationService = useService(INotificationService)
   // The MCP row gates itself on the service/pool (its hooks must not run
   // conditionally here), so it lives in its own component.
   if (entry.kind === 'mcp') {
@@ -162,7 +163,7 @@ function OverflowRow({
     body = renderPopoverItems(
       option.options,
       option.currentValue,
-      (v) => void pickConfigValue(session, option, v, dialogService),
+      (v) => void pickConfigValue(session, option, v, dialogService, notificationService),
     )
     // The expanded body holds role="option" items — give them their listbox ancestor.
     bodyRole = 'listbox'
