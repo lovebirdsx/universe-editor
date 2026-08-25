@@ -63,6 +63,7 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
 `readDroppedResources(e)` 是所有落点的统一入口（OS 文件 + 应用内 uri-list，去重）。它之后各落点各自处理：
 - **toMentionName(uri, workspaceRoot?)**：工作区内 → 正斜杠相对路径；区外 / 无根 → `uri.fsPath`。**绝不返回 `file://`**。PromptInput 的 `@mention` 用它。
 - **openDroppedResource(resource, {fileService, windowsService, editorResolverService, groupsService?, targetGroup?, notificationService?, logger?})**（`dnd/openDroppedResource.ts`）：`stat().isDirectory` → `windowsService.openWindow`（**新窗口，多文件夹开多窗**）；否则 `editorResolverService.openEditor`；无法 stat 的 URI 当文件。EditorGroupView 标签栏与编辑区共用。**返回 `boolean`**（成功打开=true）。**多 group 必传 `targetGroup` + `groupsService`**：`editorResolverService.openEditor` / `EditorService.openEditor` 永远操作 `activeGroup` 且按 activeGroup 去重"已打开"，所以落点 group ≠ activeGroup 时，不先 `activateGroup(targetGroup)` 就会 ① 文件开进活动 group（拖到右 group 却在左边打开）② 若文件已在活动 group 打开则整体 no-op（看似"判定已打开不再打开"，实为落点 group 未被激活）。见坑⑥。**打开失败会 `notificationService.notify` 出错原因 + `logger` 记录诊断**（openWindow/openEditor 抛错、stat 失败后 open 又失败=文件被移动/删除/无权限）；调用方（EditorGroupView）用 `useOptionalService` 取 `INotificationService`/`ILoggerService`（测试 DI 可不注册），`readDroppedResources` 返回空时（drop 里无 file 句柄且无 uri-list，如拖文本/图片 blob/浏览器链接）单独提示"不是可打开的文件或文件夹"。
+- **importDroppedResources(sources, destDir, fileService, dialogService, logger?)**（`dnd/importDroppedFiles.ts`）：Explorer 文件夹的落点——逐文件 `copy` 导入（同名先弹替换确认；落到自身目录 no-op）。**单个失败不中断整批**，末尾聚合弹一个错误框列出失败项（坑⑦）。`fileService.copy` 跨 scheme 已回退 `copyAcrossProviders`（`packages/platform/src/files/fileSystemProvider.ts`），所以 OS 文件拖进远端工作区文件夹、或本地↔远端互拖，导入直接可用。
 - **formatPathForTerminal(fsPath)**：含空格则加引号。
 
 ## DragSessionContext payload 为何常读不到（关键认知）
@@ -86,6 +87,8 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
 **⑤ dragover 读不到数据。** 浏览器安全限制，dragover/dragenter 阶段 `getData` 返回空，只能用 `dragContainsResources(dt)` 看类型列表。drop 阶段才能读内容。
 
 **⑥ 落点开文件永远进 activeGroup，与 drop 落在哪个 group 无关。** `IEditorService.openEditor` / `IEditorResolverService.openEditor` 没有 group 参数，内部只认 `activeGroup`（`EditorService.openEditor` 用 `activeGroup`/`activeGroupForOpen`，且"已打开"去重也针对 activeGroup）。所以任何"投放到某 group"的落点，**必须在打开前 `groupsService.activateGroup(目标group)`**（`openDroppedResource` 的 `targetGroup`+`groupsService` 参数）。否则表现为：拖到非活动 group 却在活动 group 打开；或该文件已在活动 group 打开时整体 no-op（误以为"判定已打开就不开了"）。EditorGroupView 的两个 `useDropTarget`（tabbar + body）回调里都有 `group`，传给 `openDroppedResources`。**注意**：合成 `DataTransfer` 的 drop dispatch 能测到此路径（e2e `smoke.dropIntoGroup.spec.ts` 用 `bodies[idx]` 定位 group body + `getActiveGroupEditorUris` 断言），但 e2e 跑的是 `out/` 构建产物 —— 改完必须 `pnpm build` 再跑，否则跑的是旧代码。
+
+**⑦ `void` promise 吞掉导入失败（「拖了没反应」的根因）。** ExplorerView 的落点以 `void importDroppedResources(...)` fire-and-forget；旧实现里 `fileService.copy` 抛错（典型如跨 scheme 的 "Cross-scheme copy is not supported"）会直接变成未处理的 promise rejection，UI 零反馈——用户只看到「拖了没反应」。现在逐文件 try/catch + 末尾聚合弹窗（`dnd.copyFailed.*` 文案）；新增落点逻辑时别再用 `void` 把错误直接丢掉，至少接住并上报。
 
 ## 测试与取证
 

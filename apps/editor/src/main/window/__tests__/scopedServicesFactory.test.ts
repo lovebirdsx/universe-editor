@@ -10,6 +10,7 @@ describe('ApplicationServices type', () => {
     const svc: ApplicationServices = {
       ping: {} as ApplicationServices['ping'],
       fileSystem: {} as ApplicationServices['fileSystem'],
+      fileClipboard: {} as ApplicationServices['fileClipboard'],
       fileSearch: {} as ApplicationServices['fileSearch'],
       textSearch: {} as ApplicationServices['textSearch'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
@@ -43,7 +44,7 @@ describe('ApplicationServices type', () => {
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
     }
-    expect(Object.keys(svc)).toHaveLength(34)
+    expect(Object.keys(svc)).toHaveLength(35)
   })
 })
 

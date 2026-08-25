@@ -27,6 +27,7 @@ import { ExplorerTreeService } from '../ExplorerTreeService.js'
 import { incrementFileName } from '../explorerFileOperations.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
+import { IFileClipboardService } from '../../../../shared/ipc/fileClipboardService.js'
 
 interface FakeFs extends IFileServiceType {
   dirs: Map<string, IDirectoryEntry[]>
@@ -248,12 +249,16 @@ function makeInst(
   ws: IWorkspaceServiceType,
   watcher: IFileWatcherServiceType,
   logger?: ILogger,
+  fileClipboard?: IFileClipboardService,
 ): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
   services.set(IFileWatcherService, watcher)
   services.set(IExcludeService, new FakeExcludeService())
+  if (fileClipboard) {
+    services.set(IFileClipboardService, fileClipboard)
+  }
   if (logger) {
     services.set(ILoggerService, {
       _serviceBrand: undefined,
@@ -263,6 +268,29 @@ function makeInst(
     })
   }
   return new InstantiationService(services)
+}
+
+function makeFileClipboard(): IFileClipboardService & {
+  writeResources: ReturnType<typeof vi.fn>
+  clear: ReturnType<typeof vi.fn>
+} {
+  const service = {
+    _serviceBrand: undefined,
+    onDidChangeClipboard: Event.None,
+    writeResources: vi.fn(async () => {}),
+    readResources: vi.fn(async () => ({ resources: [], isCut: false, source: 'os' as const })),
+    checkWriteCost: vi.fn(async () => ({
+      materializeCount: 0,
+      totalBytes: 0,
+      needsConfirmation: false,
+      refused: false,
+    })),
+    clear: vi.fn(async () => {}),
+  }
+  return service as unknown as IFileClipboardService & {
+    writeResources: ReturnType<typeof vi.fn>
+    clear: ReturnType<typeof vi.fn>
+  }
 }
 
 function makeLogger(): ILogger {
@@ -391,7 +419,7 @@ describe('ExplorerTreeService', () => {
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     const readme = URI.joinPath(root, 'README.md')
-    tree.setToCopy([{ resource: readme, isDirectory: false }], true)
+    tree.adoptClipboard([{ resource: readme, isDirectory: false }], true)
     expect(tree.hasClipboard).toBe(true)
     expect(tree.clipboardIsCut).toBe(true)
     expect(tree.isCut(readme)).toBe(true)
@@ -399,6 +427,58 @@ describe('ExplorerTreeService', () => {
     tree.clearClipboard()
     expect(tree.hasClipboard).toBe(false)
     expect(tree.isCut(readme)).toBe(false)
+  })
+
+  it('adoptClipboard writes local state only and never calls the shared service', async () => {
+    const fileClipboard = makeFileClipboard()
+    const tree = makeInst(fs, ws, watcher, undefined, fileClipboard).createInstance(
+      ExplorerTreeService,
+    )
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    tree.adoptClipboard([{ resource: readme, isDirectory: false }], true)
+    expect(tree.hasClipboard).toBe(true)
+    expect(tree.clipboardIsCut).toBe(true)
+    expect(fileClipboard.writeResources).not.toHaveBeenCalled()
+    expect(fileClipboard.clear).not.toHaveBeenCalled()
+  })
+
+  it('clearClipboard also clears the shared clipboard', async () => {
+    const fileClipboard = makeFileClipboard()
+    const tree = makeInst(fs, ws, watcher, undefined, fileClipboard).createInstance(
+      ExplorerTreeService,
+    )
+    await flush()
+    tree.adoptClipboard([{ resource: URI.joinPath(root, 'README.md'), isDirectory: false }], true)
+    tree.clearClipboard()
+    expect(fileClipboard.clear).toHaveBeenCalledTimes(1)
+  })
+
+  it('clearClipboard with an empty clipboard leaves the shared service untouched', async () => {
+    const fileClipboard = makeFileClipboard()
+    const tree = makeInst(fs, ws, watcher, undefined, fileClipboard).createInstance(
+      ExplorerTreeService,
+    )
+    await flush()
+    tree.clearClipboard()
+    expect(fileClipboard.clear).not.toHaveBeenCalled()
+  })
+
+  it('switching the workspace root never touches the shared clipboard', async () => {
+    const fileClipboard = makeFileClipboard()
+    const tree = makeInst(fs, ws, watcher, undefined, fileClipboard).createInstance(
+      ExplorerTreeService,
+    )
+    await flush()
+    tree.adoptClipboard([{ resource: URI.joinPath(root, 'README.md'), isDirectory: false }], true)
+    const other = URI.file('/other')
+    fs.dirs.set(other.toString(), [])
+    ws.setRoot(other)
+    await flush()
+    // The shared clipboard is global (all windows, plus the OS clipboard);
+    // another window switching folders must not destroy a pending cut.
+    expect(fileClipboard.clear).not.toHaveBeenCalled()
+    expect(tree.hasClipboard).toBe(true)
   })
 
   it('increments duplicate file names like VSCode simple naming', () => {
@@ -467,7 +547,7 @@ describe('ExplorerTreeService', () => {
     const readme = URI.joinPath(root, 'README.md')
     const src = URI.joinPath(root, 'src')
     fs.files.add(readme.toString())
-    tree.setToCopy([{ resource: readme, isDirectory: false }], true)
+    tree.adoptClipboard([{ resource: readme, isDirectory: false }], true)
 
     await tree.moveResources([{ resource: readme, isDirectory: false }], src)
 

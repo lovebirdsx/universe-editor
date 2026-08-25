@@ -96,6 +96,7 @@ import {
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
+import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
@@ -153,6 +154,7 @@ export interface E2EProbeServices {
   readonly userKeybindingsService: IUserKeybindingsService
   readonly userSettingsSync: IUserSettingsSyncService
   readonly themeService: WorkbenchThemeService
+  readonly fileClipboardService: IFileClipboardService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -1998,6 +2000,17 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getCurrentWorkspaceUri: () => services.workspaceService.current?.folder.toString(),
     getRecentWorkspaceUris: () => services.workspaceService.recent.map((r) => r.folder.toString()),
     getWindowRemoteAuthority: async () => currentRemoteAuthority(services.workspaceService.current),
+    readClipboardSnapshot: async () => {
+      const snap = await services.fileClipboardService.readResources()
+      return {
+        resources: snap.resources.map((r) => ({
+          resource: URI.revive(r.resource)?.toString() ?? '',
+          isDirectory: r.isDirectory,
+        })),
+        isCut: snap.isCut,
+        source: snap.source,
+      }
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

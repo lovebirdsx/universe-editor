@@ -148,6 +148,7 @@ function makeOpts() {
     appServices: {
       ping: {} as never,
       fileSystem: {} as never,
+      fileClipboard: {} as never,
       fileSearch: {} as never,
       textSearch: {} as never,
       fileWatcher: {} as never,

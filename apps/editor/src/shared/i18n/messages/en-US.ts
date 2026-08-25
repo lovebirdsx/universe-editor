@@ -179,6 +179,14 @@ export const EN_US_MESSAGES: MessageMap = {
   'dialog.file.delete.moveToTrash': 'Move to {trash}',
   'dialog.file.delete.confirm.message': 'Are you sure you want to delete "{name}"?',
   'dialog.file.delete.error': 'Failed to delete',
+  'dialog.file.clipboard.confirm.detail':
+    'Other applications will get the local copies when you paste.',
+  'dialog.file.clipboard.confirm.message':
+    'Copying {size} of files to the system clipboard requires downloading them to a temporary location first. Do you want to continue?',
+  'dialog.file.clipboard.refused.detail':
+    'Copying more than 2GB or 100,000 items to the system clipboard is not supported. Reduce the selection and try again.',
+  'dialog.file.clipboard.refused.message':
+    'The selected items are too large to copy to the system clipboard.',
   'dialog.file.compare.error': 'Failed to compare',
   'dialog.file.duplicate.error': 'Failed to duplicate',
   'dialog.file.move.error': 'Failed to move',

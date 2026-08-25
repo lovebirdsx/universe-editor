@@ -37,6 +37,7 @@ import {
 } from './explorerTreeUtils.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
 import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
+import { IFileClipboardService } from '../../../shared/ipc/fileClipboardService.js'
 
 export interface IExplorerEntry {
   readonly resource: URI
@@ -171,6 +172,12 @@ export class ExplorerTreeService extends Disposable {
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
     @IExcludeService private readonly _exclude: IExcludeService,
     @ILoggerService loggerService: ILoggerServiceType,
+    // Optional DI: tests / early boot may construct the tree before the shared
+    // clipboard proxy exists — the container injects undefined then. Declared
+    // as a required `| undefined` param (not `?`) because a trailing optional
+    // parameter would break GetLeadingNonServiceArgs and every bare
+    // createInstance(ExplorerTreeService) call site.
+    @IFileClipboardService private readonly _fileClipboard: IFileClipboardService | undefined,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'explorer', name: 'Explorer' })
@@ -516,19 +523,33 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  setToCopy(resources: readonly IExplorerResourceOperation[], cut: boolean): void {
-    const normalized = dedupe(resources.map((resource) => normalizeUri(resource.resource)))
+  /**
+   * Mirror the shared file clipboard into this window's local state. The
+   * shared service (main memory + OS clipboard) is the authority — writing
+   * back to it from here would loop, since the ProxyChannel broadcast
+   * includes the originating window.
+   */
+  adoptClipboard(resources: readonly IExplorerResourceOperation[], isCut: boolean): void {
+    const normalized = this._normalizeClipboardResources(resources)
+    this._clipboardResources = normalized
+    this._clipboardIsCut = isCut && normalized.length > 0
+    this._logger.info(
+      `adopt clipboard ${this._clipboardIsCut ? 'cut' : 'copy'} resources=${normalized.length}`,
+    )
+    this._onDidChangeClipboard.fire()
+    this._onDidChange.fire()
+  }
+
+  private _normalizeClipboardResources(
+    resources: readonly IExplorerResourceOperation[],
+  ): IExplorerResourceOperation[] {
+    return dedupe(resources.map((resource) => normalizeUri(resource.resource)))
       .filter((resource) => !this.isRoot(resource))
       .map((resource) => ({
         resource,
         isDirectory:
           resources.find((entry) => sameUri(entry.resource, resource))?.isDirectory ?? false,
       }))
-    this._clipboardResources = normalized
-    this._clipboardIsCut = cut && normalized.length > 0
-    this._logger.info(`${this._clipboardIsCut ? 'cut' : 'copy'} resources=${normalized.length}`)
-    this._onDidChangeClipboard.fire()
-    this._onDidChange.fire()
   }
 
   clearClipboard(): void {
@@ -538,6 +559,11 @@ export class ExplorerTreeService extends Disposable {
     this._logger.info('clear clipboard')
     this._onDidChangeClipboard.fire()
     this._onDidChange.fire()
+    // Also drop the shared clipboard: every caller here just invalidated the
+    // cut entries (rename/delete/move hit one of them), so no window should
+    // keep pasting them. The empty-state early return above keeps this
+    // idempotent — a clear on an already-empty mirror never reaches main.
+    void this._fileClipboard?.clear()
   }
 
   async duplicate(source: IExplorerResourceOperation, newName: string): Promise<URI> {
@@ -644,7 +670,13 @@ export class ExplorerTreeService extends Disposable {
     this._root = normalized
     this._nodes.clear()
     this._activeEditorResource = null
-    this.clearClipboard()
+    // Deliberately does NOT touch the clipboard: it mirrors the shared
+    // (main-process) clipboard, which is not derived from the tree root.
+    // Clearing here would (a) race cold start — hydration re-pushes the root
+    // after the startup snapshot was adopted, wiping the main snapshot — and
+    // (b) let one window's workspace switch destroy another window's cut
+    // state. Stale cut highlighting is impossible anyway: `isCut` compares
+    // URIs, so entries under the old root match no row under the new one.
     this._model.reset()
     if (normalized) {
       void this._model.expand(this._rootEntry(normalized))

@@ -59,6 +59,9 @@ import {
 } from '../../shared/ipc/remoteStatusService.js'
 import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
+import { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
+import { FileClipboardMainService } from './clipboard/fileClipboardMainService.js'
+import { createOsClipboardBackend } from './clipboard/createOsClipboardBackend.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
@@ -274,6 +277,16 @@ registerSingleton(
   IEnvironmentSnapshotService,
   new SyncDescriptor<IEnvironmentSnapshotService>(EnvironmentSnapshotMainService, [], false),
 )
+registerSingletonFactory(IFileClipboardService, (acc) => {
+  const loggerService = acc.get(ILoggerService)
+  const logger = createNamedLogger(loggerService, { id: 'fileClipboard', name: 'File Clipboard' })
+  return new FileClipboardMainService(
+    acc.get(IFileService),
+    loggerService,
+    createOsClipboardBackend(process.platform, app.getPath('temp'), logger),
+    join(app.getPath('temp'), 'universe-editor', 'clipboard'),
+  )
+})
 registerSingletonFactory(IDiagnosticsService, (acc) => {
   const extensionManagement = acc.get(IExtensionManagementService)
   const processMonitor = acc.get(IProcessMonitorService)

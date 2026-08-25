@@ -360,6 +360,19 @@ export interface E2EWatchedChangeEvent {
   readonly resource: string
 }
 
+/**
+ * Snapshot of the shared file clipboard (main-process owned, so every window
+ * reads the same one). `source: 'internal'` means the editor wrote the clipboard
+ * itself and still owns it — the resources are the original high-fidelity URIs
+ * (a remote-ssh URI survives in the snapshot even though the OS clipboard only
+ * got a materialized local path).
+ */
+export interface E2EFileClipboardSnapshot {
+  readonly resources: readonly { readonly resource: string; readonly isDirectory: boolean }[]
+  readonly isCut: boolean
+  readonly source: 'internal' | 'os'
+}
+
 /** Connection-state enum surfaced by the remote-status probe (string union DTO). */
 export type E2ERemoteConnectionState =
   | 'idle'
@@ -1380,6 +1393,13 @@ export interface E2EProbe {
    * authority.
    */
   getWindowRemoteAuthority(): Promise<string | undefined>
+  // -- File clipboard probe ------------------------------------------------
+  /**
+   * Snapshot of the shared file clipboard as the explorer cut/copy/paste
+   * commands see it (read-only). Backs the file-clipboard spec's assertions
+   * about source/isCut/URIs without touching the OS clipboard state directly.
+   */
+  readClipboardSnapshot(): Promise<E2EFileClipboardSnapshot>
 }
 
 declare global {

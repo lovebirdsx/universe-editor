@@ -52,6 +52,7 @@ import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapshotService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
+import { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 
 interface ProxyServiceBinding {
   readonly id: ServiceIdentifier<object>
@@ -102,6 +103,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: IDiagnosticsService, channel: ServiceChannels.Diagnostics },
   { id: IIssueReporterService, channel: ServiceChannels.IssueReporter },
   { id: IProcessMonitorService, channel: ServiceChannels.ProcessMonitor },
+  { id: IFileClipboardService, channel: ServiceChannels.FileClipboard },
 ]
 
 export function registerProxyChannelServices(

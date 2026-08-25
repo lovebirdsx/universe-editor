@@ -72,6 +72,7 @@ import {
 } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
+import { IFileClipboardService } from '../shared/ipc/fileClipboardService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
@@ -905,6 +906,7 @@ async function bootstrapWorkbench(): Promise<void> {
     userKeybindingsService: instantiation.invokeFunction((a) => a.get(IUserKeybindingsService)),
     userSettingsSync: instantiation.invokeFunction((a) => a.get(IUserSettingsSyncService)),
     themeService,
+    fileClipboardService: services.get(IFileClipboardService) as IFileClipboardService,
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

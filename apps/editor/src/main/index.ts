@@ -52,6 +52,7 @@ import { IRemoteStatusService } from '../shared/ipc/remoteStatusService.js'
 import type { RemoteStatusMainService } from './services/remoteStatus/remoteStatusMainService.js'
 import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IEnvironmentSnapshotService } from '../shared/ipc/environmentSnapshotService.js'
+import { IFileClipboardService } from '../shared/ipc/fileClipboardService.js'
 import { IProcessMonitorService } from '../shared/ipc/processMonitorService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import { IWatcherProcessService } from '@universe-editor/node-services'
@@ -489,6 +490,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     applicationServices = rootInstantiation.invokeFunction((accessor) => ({
       ping: accessor.get(IPingService),
       fileSystem: accessor.get(IFileService),
+      fileClipboard: accessor.get(IFileClipboardService),
       fileSearch: accessor.get(IFileSearchService),
       textSearch: accessor.get(ITextSearchMainService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),

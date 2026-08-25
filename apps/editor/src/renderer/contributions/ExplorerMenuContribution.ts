@@ -43,7 +43,9 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
         command: 'filesExplorer.paste',
-        when: 'fileCopied && explorerResourceIsFolder',
+        // Always visible on folders: the OS clipboard can carry files copied
+        // in other applications, so emptiness is only known at run time.
+        when: 'explorerResourceIsFolder',
         group: '2_cutcopypaste',
         order: 3,
       }),

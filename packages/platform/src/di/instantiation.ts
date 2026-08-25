@@ -52,14 +52,17 @@ export const IInstantiationService = createDecorator<IInstantiationService>('ins
 
 /**
  * Given a list of arguments as a tuple, attempt to extract the leading, non-service arguments
- * to their own tuple.
+ * to their own tuple. Optional decorated services (`@IFoo foo?: IFoo`, parameter type
+ * `IFoo | undefined`) count as service arguments too.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type GetLeadingNonServiceArgs<TArgs extends any[]> = TArgs extends []
   ? []
   : TArgs extends [...infer TFirst, BrandedService]
     ? GetLeadingNonServiceArgs<TFirst>
-    : TArgs
+    : TArgs extends [...infer TFirst, BrandedService | undefined]
+      ? GetLeadingNonServiceArgs<TFirst>
+      : TArgs
 
 export interface IInstantiationService {
   readonly _serviceBrand: undefined

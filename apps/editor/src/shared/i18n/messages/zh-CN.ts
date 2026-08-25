@@ -485,6 +485,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'dialog.file.delete.moveToTrash': '移到{trash}',
   'dialog.file.delete.confirm.message': '确定要删除"{name}"吗？',
   'dialog.file.delete.error': '删除失败',
+  'dialog.file.clipboard.confirm.detail': '在其他应用中粘贴时，将使用这些临时副本。',
+  'dialog.file.clipboard.confirm.message':
+    '需要先将 {size} 的远端文件下载到临时位置，才能放入系统剪贴板。要继续吗？',
+  'dialog.file.clipboard.refused.detail':
+    '超过 2GB 或 100,000 个项目的内容无法放入系统剪贴板。请减少选择后再试。',
+  'dialog.file.clipboard.refused.message': '所选内容过大，无法复制到系统剪贴板',
   'dialog.file.compare.error': '比较失败',
   'dialog.file.duplicate.error': '复制副本失败',
   'dialog.file.move.error': '移动失败',
@@ -2361,4 +2367,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Drag & drop ---
   'dnd.replaceExisting.message': '目标文件夹中已存在名为"{name}"的文件或文件夹。是否替换？',
   'dnd.replaceExisting.detail': '此操作不可逆！',
+  'dnd.copyFailed.message': '复制"{name}"失败。',
+  'dnd.copyFailed.message.multiple': '{total} 个项目中有 {failed} 个复制失败。',
 } as const

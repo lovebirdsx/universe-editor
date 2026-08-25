@@ -173,15 +173,16 @@ describe('FileService scheme dispatch', () => {
     expect(files.map((u) => u.toString())).toEqual(['remote-ssh://host/a.ts'])
   })
 
-  it('rejects cross-scheme rename and copy', async () => {
-    const { svc, local, remoteProvider } = setup()
+  it('rejects cross-scheme rename and copy when the target scheme has no provider, naming the target side', async () => {
+    const { svc, local } = setup()
 
-    await expect(svc.rename(URI.file('/a.ts'), remote('/a.ts'))).rejects.toThrow(
-      /Cross-scheme rename/,
+    await expect(svc.rename(URI.file('/a.ts'), URI.parse('untitled:/a.ts'))).rejects.toThrow(
+      /Unsupported target scheme: untitled/,
     )
-    await expect(svc.copy(URI.file('/a.ts'), remote('/a.ts'))).rejects.toThrow(/Cross-scheme copy/)
+    await expect(svc.copy(URI.file('/a.ts'), URI.parse('untitled:/a.ts'))).rejects.toThrow(
+      /Unsupported target scheme: untitled/,
+    )
     expect(local.seen).toHaveLength(0)
-    expect(remoteProvider.seen).toHaveLength(0)
   })
 
   it('allows same-scheme rename and copy', async () => {

@@ -72,6 +72,7 @@ import { OpenFileAction } from '../fileOpenActions.js'
 import {
   CopyExplorerFileAction,
   CutFileAction,
+  CancelCutExplorerFileAction,
   DuplicateFileAction,
   MoveFileAction,
   PasteExplorerFileAction,
@@ -84,6 +85,12 @@ import {
   ExplorerFileOperationService,
   IExplorerFileOperationService,
 } from '../../services/explorer/ExplorerFileOperationService.js'
+import {
+  IFileClipboardService,
+  type IFileClipboardResource,
+  type IFileClipboardSnapshot,
+  type IFileClipboardWriteCost,
+} from '../../../shared/ipc/fileClipboardService.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
@@ -550,6 +557,49 @@ class FakeRecentFilesService implements IRecentFilesService {
   clear(): void {}
 }
 
+class FakeFileClipboardService implements IFileClipboardService {
+  declare readonly _serviceBrand: undefined
+  private readonly _emitter = new Emitter<IFileClipboardSnapshot>()
+  readonly onDidChangeClipboard = this._emitter.event
+  snapshot: IFileClipboardSnapshot = { resources: [], isCut: false, source: 'os' }
+  cost: IFileClipboardWriteCost = {
+    materializeCount: 0,
+    totalBytes: 0,
+    needsConfirmation: false,
+    refused: false,
+  }
+  readonly writeCalls: Array<{
+    resources: readonly IFileClipboardResource[]
+    isCut: boolean
+    opts?: { materialize?: boolean }
+  }> = []
+  clearCalls = 0
+
+  async writeResources(
+    resources: readonly IFileClipboardResource[],
+    isCut: boolean,
+    opts?: { materialize?: boolean },
+  ): Promise<void> {
+    this.writeCalls.push(opts ? { resources, isCut, opts } : { resources, isCut })
+    this.snapshot = { resources, isCut, source: 'internal' }
+    this._emitter.fire(this.snapshot)
+  }
+
+  async readResources(): Promise<IFileClipboardSnapshot> {
+    return this.snapshot
+  }
+
+  async checkWriteCost(): Promise<IFileClipboardWriteCost> {
+    return this.cost
+  }
+
+  async clear(): Promise<void> {
+    this.clearCalls++
+    this.snapshot = { resources: [], isCut: false, source: 'os' }
+    this._emitter.fire(this.snapshot)
+  }
+}
+
 interface FakeGroup extends IEditorGroup {
   readonly opened: EditorInput[]
   readonly closed: EditorInput[]
@@ -605,6 +655,7 @@ interface Harness {
   host: FakeHostService
   fileDialog: FakeFileDialogService
   tree: ExplorerTreeService
+  fileClipboard: FakeFileClipboardService
   group: FakeGroup
   groupsService: IEditorGroupsServiceType
   cmd: FakeCommandService
@@ -628,6 +679,7 @@ function makeHarness(
   const recentFiles = new FakeRecentFilesService()
   const fileSearch = makeFileSearch(fs)
   const contextKeys = new ContextKeyService()
+  const fileClipboard = new FakeFileClipboardService()
   const { group, service: groupsService } = makeGroup(opts.activeEditor)
 
   const services = new ServiceCollection()
@@ -639,6 +691,7 @@ function makeHarness(
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
   services.set(IFileDialogService, fileDialog)
+  services.set(IFileClipboardService, fileClipboard)
   services.set(IEditorGroupsService, groupsService)
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
@@ -673,6 +726,17 @@ function makeHarness(
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   services.set(IExplorerFileOperationService, inst.createInstance(ExplorerFileOperationService))
+  // Mirror the shared clipboard into the tree, like
+  // ExplorerClipboardContextContribution does in the real workbench.
+  fileClipboard.onDidChangeClipboard((snap) => {
+    tree.adoptClipboard(
+      snap.resources.flatMap((entry) => {
+        const resource = URI.revive(entry.resource)
+        return resource ? [{ resource, isDirectory: entry.isDirectory }] : []
+      }),
+      snap.isCut,
+    )
+  })
   // Re-set inst's snapshot in case the runner needs it
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
 
@@ -684,6 +748,7 @@ function makeHarness(
     host,
     fileDialog,
     tree,
+    fileClipboard,
     group,
     groupsService,
     cmd,
@@ -717,6 +782,7 @@ beforeEach(() => {
   disposables.push(registerAction2(CutFileAction))
   disposables.push(registerAction2(CopyExplorerFileAction))
   disposables.push(registerAction2(PasteExplorerFileAction))
+  disposables.push(registerAction2(CancelCutExplorerFileAction))
   disposables.push(registerAction2(DuplicateFileAction))
   disposables.push(registerAction2(MoveFileAction))
 })
@@ -1000,16 +1066,85 @@ describe('fileActions', () => {
   })
 
   describe('Explorer clipboard actions', () => {
-    it('CutFileAction stores the selected resource as cut', async () => {
+    it('CutFileAction writes the selected resource as cut to the shared clipboard', async () => {
       const root = URI.file('/ws')
       const source = URI.joinPath(root, 'a.txt')
       const h = makeHarness({ root })
 
       await run(h, CutFileAction.ID, { target: source, isDirectory: false })
 
+      expect(h.fileClipboard.writeCalls).toHaveLength(1)
+      expect(h.fileClipboard.writeCalls[0]?.isCut).toBe(true)
+      expect(h.fileClipboard.writeCalls[0]?.opts).toEqual({ materialize: true })
       expect(h.tree.hasClipboard).toBe(true)
       expect(h.tree.clipboardIsCut).toBe(true)
       expect(h.tree.isCut(source)).toBe(true)
+    })
+
+    it('CopyFileAction writes the selected resource as copy to the shared clipboard', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+
+      await run(h, CopyExplorerFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.fileClipboard.writeCalls[0]?.isCut).toBe(false)
+      expect(h.tree.hasClipboard).toBe(true)
+      expect(h.tree.clipboardIsCut).toBe(false)
+    })
+
+    it('CutFileAction refuses oversized resources without writing and shows an error', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fileClipboard.cost = {
+        materializeCount: 1,
+        totalBytes: 3 * 1024 * 1024 * 1024,
+        needsConfirmation: false,
+        refused: true,
+      }
+
+      await run(h, CutFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.fileClipboard.writeCalls).toHaveLength(0)
+      expect(h.tree.hasClipboard).toBe(false)
+      expect(h.dialog.confirmCalls[0]?.type).toBe('error')
+    })
+
+    it('does not write when the user rejects the materialization confirmation', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fileClipboard.cost = {
+        materializeCount: 1,
+        totalBytes: 100 * 1024 * 1024,
+        needsConfirmation: true,
+        refused: false,
+      }
+      h.dialog.confirmResults.push({ confirmed: false, choice: 'cancel' })
+
+      await run(h, CopyExplorerFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.fileClipboard.writeCalls).toHaveLength(0)
+      expect(h.dialog.confirmCalls[0]?.type).toBe('warning')
+    })
+
+    it('writes with materialization after the user confirms', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fileClipboard.cost = {
+        materializeCount: 1,
+        totalBytes: 100 * 1024 * 1024,
+        needsConfirmation: true,
+        refused: false,
+      }
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+
+      await run(h, CopyExplorerFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.fileClipboard.writeCalls).toHaveLength(1)
+      expect(h.fileClipboard.writeCalls[0]?.opts).toEqual({ materialize: true })
     })
 
     it('Copy + Paste copies into the target folder', async () => {
@@ -1029,7 +1164,7 @@ describe('fileActions', () => {
       expect(h.tree.hasClipboard).toBe(true)
     })
 
-    it('Cut + Paste moves into the target folder and clears cut state', async () => {
+    it('Cut + Paste moves into the target folder and clears the shared clipboard', async () => {
       const root = URI.file('/ws')
       const source = URI.joinPath(root, 'a.txt')
       const dest = URI.joinPath(root, 'sub')
@@ -1044,7 +1179,78 @@ describe('fileActions', () => {
       expect(h.fs.renames).toContainEqual({ source: source.toString(), target: target.toString() })
       expect(h.fs.files.has(source.toString())).toBe(false)
       expect(h.fs.files.has(target.toString())).toBe(true)
+      expect(h.fileClipboard.clearCalls).toBe(1)
       expect(h.tree.hasClipboard).toBe(false)
+    })
+
+    it('pastes an OS-originated cut snapshot as a copy, never moving external files', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const dest = URI.joinPath(root, 'sub')
+      const target = URI.joinPath(dest, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.fs.dirs.set(dest.toString(), [])
+      h.fileClipboard.snapshot = {
+        resources: [{ resource: source.toJSON(), isDirectory: false }],
+        isCut: true,
+        source: 'os',
+      }
+
+      await run(h, PasteExplorerFileAction.ID, { target: dest, isDirectory: true })
+
+      expect(h.fs.copies).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.renames).toHaveLength(0)
+      expect(h.fs.files.has(source.toString())).toBe(true)
+      expect(h.fileClipboard.clearCalls).toBe(0)
+    })
+
+    it('pastes an internal cut snapshot as a move and clears afterwards', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const dest = URI.joinPath(root, 'sub')
+      const target = URI.joinPath(dest, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.fs.dirs.set(dest.toString(), [])
+      h.fileClipboard.snapshot = {
+        resources: [{ resource: source.toJSON(), isDirectory: false }],
+        isCut: true,
+        source: 'internal',
+      }
+
+      await run(h, PasteExplorerFileAction.ID, { target: dest, isDirectory: true })
+
+      expect(h.fs.renames).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.files.has(source.toString())).toBe(false)
+      expect(h.fileClipboard.clearCalls).toBe(1)
+    })
+
+    it('PasteExplorerFileAction no-ops when the shared clipboard is empty', async () => {
+      const root = URI.file('/ws')
+      const dest = URI.joinPath(root, 'sub')
+      const h = makeHarness({ root })
+      h.fs.dirs.set(dest.toString(), [])
+
+      await run(h, PasteExplorerFileAction.ID, { target: dest, isDirectory: true })
+
+      expect(h.fs.copies).toHaveLength(0)
+      expect(h.fs.renames).toHaveLength(0)
+    })
+
+    it('CancelCutExplorerFileAction clears the shared clipboard', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+
+      await run(h, CutFileAction.ID, { target: source, isDirectory: false })
+      expect(h.tree.hasCutItems).toBe(true)
+
+      await run(h, CancelCutExplorerFileAction.ID)
+
+      expect(h.fileClipboard.clearCalls).toBe(1)
+      expect(h.tree.hasClipboard).toBe(false)
+      expect(h.tree.clipboardIsCut).toBe(false)
     })
 
     it('DuplicateFileAction prompts with an incremental name and copies to it', async () => {

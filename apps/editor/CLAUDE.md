@@ -70,6 +70,7 @@ CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `Environm
 | [workbench/ai/CLAUDE.md](src/renderer/workbench/ai/CLAUDE.md) | AI 设置页面壳（AI/Agents 双组导航） |
 | [main/services/ai/CLAUDE.md](src/main/services/ai/CLAUDE.md) | AI Debug 调用记录 + 离线回放 |
 | [main/services/extensionManagement/CLAUDE.md](src/main/services/extensionManagement/CLAUDE.md) | 插件市场与扩展管理分发链路（不碰加载运行时） |
+| [main/services/clipboard/CLAUDE.md](src/main/services/clipboard/CLAUDE.md) | 文件剪贴板 main 侧实现（所有权模型 + 三平台 OS backend + 远端物化） |
 | [services/explorer/CLAUDE.md](src/renderer/services/explorer/CLAUDE.md) | explorer 状态源 + 文件操作撤销编排 |
 | [services/opener/CLAUDE.md](src/renderer/services/opener/CLAUDE.md) | IOpenerService 三档 + 深链接案例 |
 | [services/views/CLAUDE.md](src/renderer/services/views/CLAUDE.md) | View/ViewContainer 系统运行时核心 |

@@ -26,7 +26,7 @@ ExplorerTreeService  ── 懒加载子节点缓存(_nodes: URI→NodeState) + 
   │  暴露：model(给<Tree>) / selection / focused / selectedResource /
   │        getContextResources(primary) / getContextResourceOperations(primary) /
   │        CRUD: createFile/Folder rename delete duplicate copyResources moveResources /
-  │        剪贴板: setToCopy clearClipboard hasClipboard clipboardIsCut isCut /
+  │        剪贴板: adoptClipboard clearClipboard hasClipboard clipboardIsCut isCut /
   │        reveal expand collapse collapseAll refresh
   ▼
 ExplorerView (<Tree> from workbench-ui, model=tree.model)
@@ -39,7 +39,7 @@ file*Actions 命令 —— run() 里解析目标（单/多）→ 调 tree 的 CR
 
 姊妹协作者：
   ExplorerAutoRevealContribution  编辑器切换 → setActiveEditorResource + (autoReveal) reveal 选中
-  ExplorerClipboardContextContribution  onDidChangeClipboard → 同步 fileCopied/explorerResourceCut context key
+  ExplorerClipboardContextContribution  订阅 shared onDidChangeClipboard → adoptClipboard 回灌镜像 + 同步 context key（单向，不回写；启动时读快照初始化）
   DnD（apps/editor/src/renderer/services/dnd/CLAUDE.md）  ExplorerTreeNode 是拖源/落点；跨窗口/外部导入
   SCM 装饰                          ScmDecorationsService → 行颜色/字母角标/删除线
   markdown 链接更新                 onDidRunFileOperation（rename/move 后）→ 更新引用
@@ -62,7 +62,7 @@ file*Actions 命令 —— run() 里解析目标（单/多）→ 调 tree 的 CR
 - **文件 CRUD**（都会 `refresh` 受影响父目录 + 打日志；失败 throw 由命令层弹窗）：
   - `createFile` / `createFolder`（exists 检查）、`rename`（overwrite:false，fire `onDidRunFileOperation`）、`delete`（recursive 选项）、`duplicate` + `defaultDuplicateName`（自增名）。
   - `copyResources` / `moveResources`（批量，`_dedupeOperations` + `_assertCanPlace` 防「文件夹放进自己」+ 自增名避冲突；move fire `onDidRunFileOperation`；末尾 `_selectOperationTargets` 选中新目标）。
-- **剪贴板**（in-app 权威，非系统剪贴板）：`setToCopy(resources, cut)` / `clearClipboard` / `hasClipboard` / `clipboardIsCut` / `hasCutItems` / `isCut`。cut 的项被 rename/delete/move 时自动 `clearClipboard`。
+- **剪贴板**（共享剪贴板的本地镜像，权威在 main 侧 `IFileClipboardService`，见 `apps/editor/src/shared/ipc/fileClipboardService.ts` + `apps/editor/src/main/services/clipboard/CLAUDE.md`）：`adoptClipboard(resources, isCut)`（只写本地，**绝不可**回写 shared，否则 ProxyChannel 广播含发起窗口 → 死循环）/ `clearClipboard` / `hasClipboard` / `clipboardIsCut` / `hasCutItems` / `isCut`。cut 的项被 rename/delete/move 时自动 `clearClipboard`（并连带 clear shared）。命令层写剪贴板走 `IFileClipboardService.writeResources`，本地状态经 `ExplorerClipboardContextContribution` 订阅 shared 事件回灌。`clearClipboard` 的空态早退让它对已空镜像幂等（不多打一次 IPC）。**`_setRoot`（切 workspace）刻意不动剪贴板**——剪贴板不是树的派生态，详见易踩坑 11。
 - **watcher / exclude**：冷启动延迟 arm（见构造函数大段注释——`_watchStarted` / `_coldStartSettled` 双闸；`WorkspaceWatchContribution` 在 idle phase 调 `startWatching()`）。`_onWatcherEvents` 只刷新已加载的受影响父目录。`_onExcludeChange` 重读 + 重设 watcher globs。
 - **DI 注册**：`renderer/main.tsx`。
 
@@ -119,6 +119,8 @@ fileMutateActions.ts   Rename（★单目标 resolveTarget★，多选无意义�
                          单项失败不中断、末尾汇总报错）。
 fileClipboardActions.ts Cut/Copy/Paste/CancelCut/Duplicate/Move（全多选感知；
                         Paste 用 resolveDestinationDir 定目标目录；Duplicate 取 [0]）。
+                        Cut/Copy 写 main 侧 IFileClipboardService（先 checkWriteCost 弹确认/拒绝），
+                        Paste 读 shared 快照按「来源×cut」决策（见下表），CancelCut 直接 clear shared。
 fileCopyActions.ts     CopyName/CopyPath/CopyRelativePath（★多选：选区内则整选区换行拼接★；
                         同时服务编辑器标签页 → 回退 active editor 单个）。
 fileOpenActions.ts     Reveal/RefreshExplorer/RevealInOS 等（见文件）。
@@ -133,6 +135,18 @@ fileOpenActions.ts     Reveal/RefreshExplorer/RevealInOS 等（见文件）。
 
 **语义约定**：右击**选区内**的行 → 作用于整个选区；右击**选区外**的行 → 只作用于那一行（VSCode 同款，`getContextResources` 的 primary-in-selection 判断实现之）。键盘 Delete/F2 传的是焦点行，焦点必在选区内 → Delete 自然作用全选区。
 
+#### Paste 来源 × cut 决策表（fileClipboardActions.ts）
+
+Paste 读 shared 快照（`readResources`）后按此表行事：
+
+| 快照 source | isCut | 行为 |
+|---|---|---|
+| `internal` | true | move + overwrite 提示；成功后 clear shared |
+| `internal` | false | copy |
+| `os` | 任意 | **一律 copy**（isCut 忽略） |
+
+`os` 一律 copy 的安全理由：`source: 'internal'` 才证明剪贴板是我们自己写的（且所有权校验仍通过），只有这时的 cut 项由我们负责「搬运后删除源」；OS 来源的剪切项属于别的应用，删源就是误删别人的文件。
+
 ### 上下文菜单与 context key
 
 ```
@@ -143,7 +157,7 @@ contributions/ExplorerClipboardContextContribution.ts  剪贴板变化 → 同�
 ```
 
 - **context key**：`explorerResourceIsRoot`、`explorerResourceIsFolder`（右键行的属性，ExplorerContextMenu 里 scoped 创建）；`fileCopied`、`explorerResourceCut`（全局，clipboard contribution 同步）。
-- **键位 when**：`EXPLORER_FOCUS_WHEN = focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus`（cut/copy/paste 键位用它 + `fileCopied` 等叠加）。
+- **键位 when**：`EXPLORER_FOCUS_WHEN = focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus`。cut/copy/paste 键位都只叠它——paste 不再门控 `fileCopied`，右键「粘贴」项 when 也从 `fileCopied && explorerResourceIsFolder` 改为 `explorerResourceIsFolder`（目录上常亮）。取舍：OS 剪贴板可能带着别的应用复制的文件，而**不做 OS 剪贴板焦点轮询**，剪贴板空不空只有运行时（`readResources`）才知道——空剪贴板粘贴 = 静默 no-op。
 
 ### 注册接入点（View 三件套 + 相关 contribution）
 
@@ -172,7 +186,7 @@ actions/index.ts                                     registerAction2 注册全�
 - **树状态委托 TreeModel、不自造**：选择/焦点/展开/虚拟化/键盘导航是通用树能力，放 workbench-ui 的 TreeModel；本 service 只加文件系统特化。所以 explorer 与 outline 等共享同一套 Tree 交互契约。
 - **状态不持久化、切 workspace 全重置**：树是 workspace 的派生视图，换根即弃（对标 VSCode 的轻量策略）。
 - **watcher 冷启动延迟**：递归监听是主进程 CPU 大头，冷启动时 root 展开已够首屏，watcher 推迟到 idle phase arm，避开与 renderer restore 抢 CPU。见构造函数注释。
-- **in-app 剪贴板权威**：cut/copy 用 service 内部剪贴板（带 cut 状态、变暗、自动清），系统剪贴板只 best-effort 写路径文本。
+- **共享剪贴板权威、树是镜像**：cut/copy 命令写 main 侧 `IFileClipboardService`（main 内存 + OS 剪贴板，跨窗口共享、快照可带远端 URI）；`ExplorerClipboardContextContribution` 订阅其 `onDidChangeClipboard`（ProxyChannel 广播**含发起窗口**）→ `tree.adoptClipboard` 回灌本地状态 + 同步 context key，构造时还会 `readResources` 一次做启动快照初始化（renderer reload 后 cut 变暗与 context key 不丢）。**事件方向严格单向**：`adoptClipboard` 只进不出；回写 shared 只有「清空」方向，且**只在剪贴板内容真的失效时**——`tree.clearClipboard`（cut 项被 rename/delete/move）、CancelCut、paste-move 成功后的直接 `clear()`。切 workspace 不在此列（见易踩坑 11）。
 
 ### 常见任务 → 改哪里
 
@@ -192,13 +206,14 @@ actions/index.ts                                     registerAction2 注册全�
 1. **多选命令误用单目标解析**（delete、copy-path 已修，勿回退）：作用于「一批」的命令必须 `resolveContextOperations`，否则多选只生效焦点一个。判据见目标解析决策表。
 2. **右击选区外的行**：应只作用那一行，不能吞整个选区——由 `getContextResources` 的「primary 是否在 selection 内」判断实现，别绕过它自己取 `tree.selection`。
 3. **键盘 Delete 传的是焦点行**：ExplorerView `onRowKeyDown` 只传 `node.element.resource` 作 target，多选删除靠命令层展开选区，不要改成在视图层拼多个 target。
-4. **切 workspace 树状态全丢**：`_setRoot` 会 clear+reset，任何「记住展开/选择」的需求都要另做持久化（默认没有）。
+4. **切 workspace 树状态全丢**：`_setRoot` 会 clear+reset，任何「记住展开/选择」的需求都要另做持久化（默认没有）。**唯一例外是剪贴板**——它是 shared 镜像不是树状态，见易踩坑 11。
 5. **watcher 冷启动窗口不监听**：`startWatching()` 前外部改动可能漏报，`startWatching`/`_refreshLoadedNodes` 会补一次全量重读——别把冷启动期的「没收到 watcher 事件」当 bug。
 6. **cut 项被操作后要清剪贴板**：rename/delete/move 命中 cut 项时 service 已自动 `clearClipboard`；新增会移动/删除文件的路径记得保持这一点。
 7. **compact 折叠行的目标是「段」不是「整行」**：右键/落点要用该段的 URI（`data-segment-uri`），不是 leaf `resource`。
 8. **IPC 来的参数是 UriComponents**：命令 args 里的 URI 先 `reviveUri` 再用。
 9. **命令层写操作要在第一个 await 前取完 service**：文件命令都是 async run，`accessor` 遇第一个 `await` 即失效；`accessor.get(IExplorerFileOperationService)` 必须在任何 `await`（prompt/confirm/showOpenDialog）之前同步取好，否则报 "service accessor is only valid during..."。（见 fix-disposable 无关，属 action2 async accessor 坑。）
 10. **删除撤销靠内存备份，非回收站**：关了 `files.enableTrash` 仍能 Ctrl+Z 找回（>10MB 除外）；改删除/备份逻辑别破坏 `_backup`/`recreateFromBackup` 的对称。
+11. **`_setRoot` 不许清剪贴板**（已修，勿回退）：剪贴板是 **shared（main 进程、全窗口共享 + OS 剪贴板）** 的镜像，不是树根的派生态。在这里清会踩两个坑：① 冷启动竞态——`IWorkspaceService` hydration 会在启动快照 adopt 之后再推一次 root（对象标识比对，同一 workspace 也 refire），把 main 快照清掉；② 窗口 B 切文件夹会摧毁窗口 A 待粘贴的 cut 状态。切根后不会残留错误变暗：`isCut` 比对 URI，旧根下的项匹配不到新根任何一行。
 
 ### 验证
 

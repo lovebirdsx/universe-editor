@@ -50,6 +50,7 @@ export const ServiceChannels = {
   Diagnostics: 'diagnostics',
   IssueReporter: 'issueReporter',
   ProcessMonitor: 'processMonitor',
+  FileClipboard: 'fileClipboard',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

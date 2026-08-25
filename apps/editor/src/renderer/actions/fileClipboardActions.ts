@@ -4,10 +4,10 @@ import {
   IFileDialogService,
   IFileService,
   IWorkspaceService,
+  URI,
   localize,
   localize2,
   type ServicesAccessor,
-  type URI,
 } from '@universe-editor/platform'
 import {
   IExplorerTreeService,
@@ -18,6 +18,10 @@ import { IExplorerFileOperationService } from '../services/explorer/ExplorerFile
 import type { ExplorerFileOperationService } from '../services/explorer/ExplorerFileOperationService.js'
 import { parentOf, sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { basenameOf, targetInDirectory } from '../services/explorer/explorerFileOperations.js'
+import {
+  IFileClipboardService,
+  type IFileClipboardResource,
+} from '../../shared/ipc/fileClipboardService.js'
 import {
   EXPLORER_FOCUS_WHEN,
   implicitPrimaryTarget,
@@ -47,14 +51,60 @@ function resolveDestinationDir(
   return tree.root
 }
 
-async function writePathClipboard(resources: readonly IExplorerResourceOperation[]): Promise<void> {
-  const text = resources.map((resource) => resource.resource.fsPath).join('\n')
-  if (!text) return
-  try {
-    await globalThis.navigator?.clipboard?.writeText(text)
-  } catch {
-    // Browser clipboard permission is best-effort; the in-app Explorer clipboard is authoritative.
+function formatClipboardSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+/**
+ * Write to the shared file clipboard (main memory + OS clipboard) after the
+ * pre-flight cost check. The local Explorer tree state is not touched here —
+ * the shared service's onDidChangeClipboard broadcast feeds it back.
+ */
+async function writeExplorerClipboard(
+  fileClipboard: IFileClipboardService,
+  dialog: IDialogService,
+  resources: readonly IExplorerResourceOperation[],
+  isCut: boolean,
+): Promise<void> {
+  const payload: IFileClipboardResource[] = resources.map((resource) => ({
+    resource: resource.resource.toJSON(),
+    isDirectory: resource.isDirectory,
+  }))
+  const cost = await fileClipboard.checkWriteCost(payload)
+  if (cost.refused) {
+    await dialog.confirm({
+      message: localize(
+        'dialog.file.clipboard.refused.message',
+        'The selected items are too large to copy to the system clipboard.',
+      ),
+      detail: localize(
+        'dialog.file.clipboard.refused.detail',
+        'Copying more than 2GB or 100,000 items to the system clipboard is not supported. Reduce the selection and try again.',
+      ),
+      type: 'error',
+    })
+    return
   }
+  if (cost.needsConfirmation) {
+    const { confirmed } = await dialog.confirm({
+      message: localize(
+        'dialog.file.clipboard.confirm.message',
+        'Copying {size} of files to the system clipboard requires downloading them to a temporary location first. Do you want to continue?',
+        { size: formatClipboardSize(cost.totalBytes) },
+      ),
+      detail: localize(
+        'dialog.file.clipboard.confirm.detail',
+        'Other applications will get the local copies when you paste.',
+      ),
+      primaryButton: localize('common.ok', 'OK'),
+      type: 'warning',
+    })
+    if (!confirmed) return
+  }
+  await fileClipboard.writeResources(payload, isCut, { materialize: true })
 }
 
 async function confirmMoveOverwrite(dialog: IDialogService, target: URI): Promise<boolean> {
@@ -110,10 +160,11 @@ export class CutFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
+    const fileClipboard = accessor.get(IFileClipboardService)
+    const dialog = accessor.get(IDialogService)
     const resources = resolveContextOperations(accessor, tree, args)
     if (resources.length === 0) return
-    tree.setToCopy(resources, true)
-    await writePathClipboard(resources)
+    await writeExplorerClipboard(fileClipboard, dialog, resources, true)
   }
 }
 
@@ -131,10 +182,11 @@ export class CopyExplorerFileAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
+    const fileClipboard = accessor.get(IFileClipboardService)
+    const dialog = accessor.get(IDialogService)
     const resources = resolveContextOperations(accessor, tree, args)
     if (resources.length === 0) return
-    tree.setToCopy(resources, false)
-    await writePathClipboard(resources)
+    await writeExplorerClipboard(fileClipboard, dialog, resources, false)
   }
 }
 
@@ -145,28 +197,35 @@ export class PasteExplorerFileAction extends Action2 {
       id: PasteExplorerFileAction.ID,
       title: localize2('action.filesExplorer.paste', 'Paste'),
       category: localize2('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+v', when: `${EXPLORER_FOCUS_WHEN} && fileCopied` },
+      // No fileCopied gate: the OS clipboard can now carry files copied in
+      // other applications, and we don't poll it, so emptiness is only known
+      // at run time.
+      keybinding: { primary: 'ctrl+v', when: EXPLORER_FOCUS_WHEN },
       f1: true,
     })
   }
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const destinationDir = resolveDestinationDir(accessor, tree, args)
-    const resources = tree.clipboardResources
-    if (!destinationDir || resources.length === 0) return
+    const fileClipboard = accessor.get(IFileClipboardService)
     const dialog = accessor.get(IDialogService)
     const fileOps = accessor.get(IExplorerFileOperationService)
+    const fileService = accessor.get(IFileService)
+    const destinationDir = resolveDestinationDir(accessor, tree, args)
+    if (!destinationDir) return
+    const snap = await fileClipboard.readResources()
+    if (snap.resources.length === 0) return
+    const resources: IExplorerResourceOperation[] = snap.resources.flatMap((entry) => {
+      const resource = URI.revive(entry.resource)
+      return resource ? [{ resource, isDirectory: entry.isDirectory }] : []
+    })
+    if (resources.length === 0) return
     try {
-      if (tree.clipboardIsCut) {
-        await moveWithOverwritePrompt(
-          fileOps,
-          accessor.get(IFileService),
-          dialog,
-          resources,
-          destinationDir,
-        )
-        tree.clearClipboard()
+      // Only move when we wrote the clipboard ourselves and still own it.
+      // OS-originated entries are always copied — never delete external files.
+      if (snap.isCut && snap.source === 'internal') {
+        await moveWithOverwritePrompt(fileOps, fileService, dialog, resources, destinationDir)
+        await fileClipboard.clear()
       } else {
         await fileOps.copyResources(resources, destinationDir)
       }
@@ -192,8 +251,10 @@ export class CancelCutExplorerFileAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IExplorerTreeService).clearClipboard()
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // The tree mirrors the shared clipboard, so clearing it is enough — the
+    // broadcast event re-adopts the empty snapshot in every window.
+    await accessor.get(IFileClipboardService).clear()
   }
 }
 

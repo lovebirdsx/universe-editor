@@ -12,6 +12,8 @@ export type FileSystemErrorCode =
   | 'EISDIR'
   | 'EEXIST'
   | 'ENOTEMPTY'
+  /** Directory recursion exceeded its depth cap — in practice a symlink cycle. */
+  | 'ELOOP'
   | 'FileTooLarge'
   | 'UNKNOWN'
 
