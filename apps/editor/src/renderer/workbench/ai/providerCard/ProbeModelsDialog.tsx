@@ -27,6 +27,7 @@ import {
   VirtualList,
 } from '@universe-editor/workbench-ui'
 import styles from '../AiSettingsEditor.module.css'
+import { verifyFailureMessage } from '../../../services/ai/verifyResult.js'
 import type { EffectiveConnection } from '../../../../shared/ai/providerInheritance.js'
 
 /** Above this, a static list stops being something a human reviews. */
@@ -92,10 +93,7 @@ export function ProbeModelsDialog({
         returned: result.modelIds?.length ?? 0,
       })
       if (!result.ok) {
-        setState({
-          kind: 'fail',
-          error: result.error ?? localize('aiModels.probe.failed', 'Could not reach the endpoint.'),
-        })
+        setState({ kind: 'fail', error: verifyFailureMessage(result) })
         return
       }
       const ids = result.modelIds ?? []

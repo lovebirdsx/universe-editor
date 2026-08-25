@@ -8,6 +8,8 @@
 
 import {
   type CancellationToken,
+  AiError,
+  AiErrorCode,
   CancellationError,
   DisposableStore,
 } from '@universe-editor/platform'
@@ -81,4 +83,22 @@ export function toAbortSignal(token: CancellationToken, store: DisposableStore):
     )
   }
   return controller.signal
+}
+
+/**
+ * Why the model listing failed, as a typed error instead of an empty array — the
+ * two helpers below keep the four providers' `listModels` telling "could not
+ * reach the endpoint" apart from "the endpoint refused us". Collapsing both into
+ * `[]` is what made every failure read as "no models available".
+ */
+export function modelsNetworkError(err: unknown, token: CancellationToken): Error {
+  if (token.isCancellationRequested || (err instanceof Error && err.name === 'AbortError')) {
+    return new CancellationError()
+  }
+  return new AiError(AiErrorCode.NetworkError, err instanceof Error ? err.message : String(err))
+}
+
+export function modelsEndpointError(status: number): AiError {
+  const code = status === 401 || status === 403 ? AiErrorCode.Unauthorized : AiErrorCode.Unknown
+  return new AiError(code, `HTTP ${status}`, status)
 }

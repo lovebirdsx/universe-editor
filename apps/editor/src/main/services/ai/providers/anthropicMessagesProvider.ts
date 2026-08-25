@@ -25,7 +25,12 @@ import {
   type IAiModelProvider,
   localize,
 } from '@universe-editor/platform'
-import { retryWithBackoff, toAbortSignal } from './retry.js'
+import {
+  modelsEndpointError,
+  modelsNetworkError,
+  retryWithBackoff,
+  toAbortSignal,
+} from './retry.js'
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -70,19 +75,18 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
     token: CancellationToken,
   ): Promise<readonly string[]> {
     const signals = new DisposableStore()
-    let res: Response | undefined
+    let res: Response
     try {
       res = await fetch(`${baseUrl(provider)}/v1/models`, {
         headers: anthropicHeaders(provider.apiKey),
         signal: toAbortSignal(token, signals),
       })
-    } catch {
-      // Endpoint unreachable — nothing to enumerate.
-      res = undefined
+    } catch (err) {
+      throw modelsNetworkError(err, token)
     } finally {
       signals.dispose()
     }
-    if (!res || !res.ok) return []
+    if (!res.ok) throw modelsEndpointError(res.status)
     return (((await res.json()) as { data?: AnthropicModelEntry[] }).data ?? []).map(
       (entry) => entry.id,
     )

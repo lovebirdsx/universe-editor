@@ -19,6 +19,7 @@ import {
   InstantiationService,
   ServiceCollection,
   type AiProviderEntry,
+  type AiProviderVerifyResult,
 } from '@universe-editor/platform'
 import { IClaudeBinaryService } from '../../../../../shared/ipc/claudeBinaryService.js'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
@@ -72,7 +73,9 @@ function makeConfig(
 }
 
 function makeAiModel(entries: readonly AiProviderEntry[]) {
-  const verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 2 }))
+  const verifyProvider = vi.fn(
+    async (): Promise<AiProviderVerifyResult> => ({ ok: true, modelCount: 2 }),
+  )
   const aiModel = {
     verifyProvider,
     getProviders: vi.fn(async () => entries),
@@ -249,6 +252,22 @@ describe('AuthenticationPanel provider picker', () => {
     // The value is pinned as the only option, so it shows on the Select trigger.
     expect(screen.getByText('deepseek-v4-flash')).toBeTruthy()
     expect((screen.getByTestId('subagentModel-1m') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('renders a localized reason when the probe fails', async () => {
+    const { aiModel, verifyProvider } = makeAiModel([GW_ENTRY])
+    verifyProvider.mockResolvedValue({ ok: false, modelCount: 0, code: 'unreachable' })
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'gw' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    await flushEffects()
+    await flushEffects()
+
+    const dot = screen.getByRole('img')
+    expect(dot.getAttribute('data-status')).toBe('fail')
+    expect(dot.getAttribute('data-tooltip')?.trim()).not.toBe('')
   })
 })
 

@@ -558,8 +558,14 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
 installMainProtocolDispatcher()
 
 async function loadMainSettingsText(): Promise<string> {
+  // Must read the same file the renderer does: settings.json lives in configDir,
+  // which `--config-dir` can relocate away from userData. Reading the wrong path
+  // silently drops `workbench.language`, leaving main on the system locale while
+  // the window uses the configured one — main-produced strings then arrive in the
+  // wrong language.
+  const dir = environmentService.configDir || app.getPath('userData')
   try {
-    return await fs.readFile(join(app.getPath('userData'), 'settings.json'), 'utf8')
+    return await fs.readFile(join(dir, 'settings.json'), 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
     throw err

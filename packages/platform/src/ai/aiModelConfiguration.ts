@@ -54,6 +54,20 @@ export interface AiProviderVerifyInput {
  */
 export const PROBE_MODEL_CAP = 500
 
+/**
+ * Why a probe failed. A code rather than a message: the probe runs in the main
+ * process, so localizing there would pin the text to main's locale — the
+ * renderer maps this to a message in the locale the user actually sees.
+ */
+export type AiProviderVerifyCode =
+  | 'noProvider'
+  | 'unreachable'
+  | 'timeout'
+  | 'unauthorized'
+  | 'serverError'
+  | 'httpError'
+  | 'noModels'
+
 /** Outcome of probing a candidate entry against its endpoint. */
 export interface AiProviderVerifyResult {
   readonly ok: boolean
@@ -61,7 +75,10 @@ export interface AiProviderVerifyResult {
   readonly modelCount: number
   /** Ids enumerated from the endpoint, capped at {@link PROBE_MODEL_CAP}. */
   readonly modelIds?: readonly string[]
-  readonly error?: string
+  /** Set only when `!ok`. */
+  readonly code?: AiProviderVerifyCode
+  /** HTTP status when the endpoint answered. Never localized. */
+  readonly status?: number
 }
 
 /** A model id parsed back into its three segments. */

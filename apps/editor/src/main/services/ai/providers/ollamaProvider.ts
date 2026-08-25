@@ -25,7 +25,12 @@ import {
   type IAiModelProvider,
   localize,
 } from '@universe-editor/platform'
-import { retryWithBackoff, toAbortSignal } from './retry.js'
+import {
+  modelsEndpointError,
+  modelsNetworkError,
+  retryWithBackoff,
+  toAbortSignal,
+} from './retry.js'
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
 
@@ -47,16 +52,15 @@ export class OllamaProvider implements IAiModelProvider {
     token: CancellationToken,
   ): Promise<readonly string[]> {
     const signals = new DisposableStore()
-    let res: Response | undefined
+    let res: Response
     try {
       res = await fetch(`${baseUrl(provider)}/api/tags`, { signal: toAbortSignal(token, signals) })
-    } catch {
-      // Server not running / unreachable — nothing to enumerate.
-      res = undefined
+    } catch (err) {
+      throw modelsNetworkError(err, token)
     } finally {
       signals.dispose()
     }
-    if (!res || !res.ok) return []
+    if (!res.ok) throw modelsEndpointError(res.status)
     return (((await res.json()) as { models?: OllamaTag[] }).models ?? []).map((tag) => tag.name)
   }
 

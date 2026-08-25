@@ -155,10 +155,12 @@ export class AiModelRegistry extends Disposable {
 
     const key = entry.provider.id
     const pending = this._resolveEntryUncached(entry, token)
-      .then(({ models, byModelId }) => {
-        // Only commit the cache if this entry is still the active one for its id.
+      .then(({ models, byModelId, incomplete }) => {
+        // Only commit the cache if this entry is still the active one for its id,
+        // and discovery actually saw the endpoint: caching a degraded result would
+        // pin an offline gateway to "no models" until the next setProviders.
         if (this._entries.get(key) === entry && entry.pending === pending) {
-          entry.models = models
+          if (!incomplete) entry.models = models
           entry.byModelId = byModelId
           entry.pending = undefined
         }
@@ -180,18 +182,31 @@ export class AiModelRegistry extends Disposable {
   ): Promise<{
     models: readonly AiModelMetadata[]
     byModelId: Map<string, { provider: IAiModelProvider; runtime: AiProviderRuntime }>
+    /** A discovery call failed, so this resolution must not be cached. */
+    incomplete: boolean
   }> {
     const { provider: resolved } = entry
     const models: AiModelMetadata[] = []
     const byModelId = new Map<string, { provider: IAiModelProvider; runtime: AiProviderRuntime }>()
+    let incomplete = false
 
     for (const declaration of resolved.protocols) {
       const impl = this._providers.get(declaration.protocol)
       if (!impl) continue
       const runtime = protocolRuntime(resolved, declaration.protocol)
-      const entries = declaration.discover
-        ? (await impl.listModels(runtime, token)).map((name) => this._discovered(name))
-        : declaration.models
+      let entries: readonly AiResolvedProtocolModel[]
+      if (declaration.discover) {
+        // Discovery is best-effort: an offline or unauthorized endpoint contributes
+        // no models rather than failing the whole catalogue. Probing (verifyProvider)
+        // is where the reason surfaces.
+        const discovered = await impl.listModels(runtime, token).catch(() => {
+          incomplete = true
+          return [] as readonly string[]
+        })
+        entries = discovered.map((name) => this._discovered(name))
+      } else {
+        entries = declaration.models
+      }
 
       for (const model of entries) {
         const id = composeModelId(resolved.id, declaration.protocol, model.channelModel)
@@ -200,7 +215,7 @@ export class AiModelRegistry extends Disposable {
         byModelId.set(id, { provider: impl, runtime })
       }
     }
-    return { models, byModelId }
+    return { models, byModelId, incomplete }
   }
 
   private _discovered(channelModel: string): AiResolvedProtocolModel {

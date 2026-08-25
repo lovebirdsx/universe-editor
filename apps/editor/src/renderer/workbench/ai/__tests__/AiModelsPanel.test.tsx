@@ -29,6 +29,7 @@ import {
   type AiModelMetadata,
   type AiProviderEntry,
   type AiProviderIssue,
+  type AiProviderVerifyResult,
 } from '@universe-editor/platform'
 import { IAiRateMirror } from '../../../services/ai/aiRateMirror.js'
 import { AiModelsPanel } from '../AiModelsPanel.js'
@@ -495,7 +496,7 @@ describe('AiModelsPanel', () => {
       const aiModel = new FakeAiModelService()
       aiModel.providers = [KURO_PROVIDER]
       aiModel.models = [KURO_MODEL]
-      const gates: Array<(result: { ok: boolean; modelCount: number; error?: string }) => void> = []
+      const gates: Array<(result: AiProviderVerifyResult) => void> = []
       aiModel.verifyProvider = vi.fn(
         () =>
           new Promise((resolve) => {
@@ -524,7 +525,7 @@ describe('AiModelsPanel', () => {
       await flushEffects()
       expectDotStatus('kuro', 'ok')
 
-      gates[0]?.({ ok: false, modelCount: 0, error: 'stale failure' })
+      gates[0]?.({ ok: false, modelCount: 0, code: 'unreachable' })
       await flushEffects()
 
       expectDotStatus('kuro', 'ok')
@@ -571,7 +572,7 @@ describe('AiModelsPanel', () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [KURO_PROVIDER]
     aiModel.models = [KURO_MODEL]
-    const gates: Array<(result: { ok: boolean; modelCount: number; error?: string }) => void> = []
+    const gates: Array<(result: AiProviderVerifyResult) => void> = []
     aiModel.verifyProvider = vi.fn(
       () =>
         new Promise((resolve) => {

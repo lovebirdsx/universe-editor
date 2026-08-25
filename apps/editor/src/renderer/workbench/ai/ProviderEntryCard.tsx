@@ -420,9 +420,12 @@ function ConnectivityDot({ state }: { readonly state: ConnectState }) {
     state.kind === 'ok'
       ? {
           className: styles['statusOk'],
-          tooltip: localize('aiModels.instance.status.ok', 'Connected · {count} models', {
-            count: state.modelCount,
-          }),
+          tooltip:
+            state.modelCount > 0
+              ? localize('aiModels.instance.status.ok', 'Connected · {count} models', {
+                  count: state.modelCount,
+                })
+              : localize('aiModels.instance.status.okReachable', 'Connected'),
         }
       : state.kind === 'fail'
         ? { className: styles['statusFail'], tooltip: state.error }

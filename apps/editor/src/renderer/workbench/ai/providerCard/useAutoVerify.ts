@@ -17,13 +17,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   StorageScope,
-  localize,
   type AiProviderEntry,
+  type AiProviderVerifyCode,
   type IAiModelService,
   type IStorageService,
 } from '@universe-editor/platform'
 import { declaredProtocols } from '../../../../shared/ai/protocolMapEdit.js'
 import { effectiveConnection, findInherited } from '../../../../shared/ai/providerInheritance.js'
+import { verifyFailureMessage } from '../../../services/ai/verifyResult.js'
 
 /** How long a probe answer is still worth showing. */
 const CONNECTIVITY_TTL_MS = 5 * 60 * 1000
@@ -31,10 +32,12 @@ const AUTO_VERIFY_DEBOUNCE_MS = 600
 
 const connectivityKey = (id: string): string => `ai.settings.connectivity.${id}`
 
+/** Cached as a code, not a message: the display language can change between reads. */
 interface StoredConnectivity {
   readonly ok: boolean
   readonly modelCount: number
-  readonly error?: string
+  readonly code?: AiProviderVerifyCode
+  readonly status?: number
   readonly at: number
 }
 
@@ -85,13 +88,18 @@ export function useAutoVerify(
       provider: provider.id,
       ok: result.ok,
       modelCount: result.modelCount,
+      ...(result.ok ? {} : { code: result.code, status: result.status }),
     })
-    const error = result.error ?? localize('aiModels.instance.status.fail', 'Connection failed.')
-    setConnect(result.ok ? { kind: 'ok', modelCount: result.modelCount } : { kind: 'fail', error })
+    setConnect(
+      result.ok
+        ? { kind: 'ok', modelCount: result.modelCount }
+        : { kind: 'fail', error: verifyFailureMessage(result) },
+    )
     const stored: StoredConnectivity = {
       ok: result.ok,
       modelCount: result.modelCount,
-      ...(result.ok ? {} : { error }),
+      ...(result.code !== undefined ? { code: result.code } : {}),
+      ...(result.status !== undefined ? { status: result.status } : {}),
       at: Date.now(),
     }
     void storage.set(connectivityKey(provider.id), stored, StorageScope.GLOBAL)
@@ -123,7 +131,15 @@ export function useAutoVerify(
           setConnect(
             stored.ok
               ? { kind: 'ok', modelCount: stored.modelCount }
-              : { kind: 'fail', error: stored.error ?? '' },
+              : {
+                  kind: 'fail',
+                  error: verifyFailureMessage({
+                    ok: false,
+                    modelCount: 0,
+                    ...(stored.code !== undefined ? { code: stored.code } : {}),
+                    ...(stored.status !== undefined ? { status: stored.status } : {}),
+                  }),
+                },
           )
           return
         }

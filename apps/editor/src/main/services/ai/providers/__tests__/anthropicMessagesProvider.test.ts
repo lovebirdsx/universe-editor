@@ -241,14 +241,16 @@ describe('AnthropicMessagesProvider', () => {
     expect(models).toEqual(['claude-sonnet-5', 'claude-opus-4-8'])
   })
 
-  it('listModels returns an empty list when the endpoint is unreachable', async () => {
+  // Swallowing this into [] made a dead endpoint indistinguishable from one
+  // serving no models, which is what the settings probe has to tell apart.
+  it('listModels throws a network error when the endpoint is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     const provider = new AnthropicMessagesProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
-
-    expect(models).toEqual([])
+    await expect(
+      provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token),
+    ).rejects.toMatchObject({ code: AiErrorCode.NetworkError })
   })
 
   it('always sends max_tokens with options > modelConfiguration > 4096 precedence', async () => {

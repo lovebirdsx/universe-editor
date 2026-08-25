@@ -139,6 +139,15 @@ function addProvider(
   registry._providers.set(protocol, provider)
 }
 
+/** Minimal fetch stand-ins for the /models probe (only the fields it reads). */
+function jsonResponse(body: unknown): Response {
+  return { ok: true, status: 200, json: async () => body } as unknown as Response
+}
+
+function statusResponse(status: number): Response {
+  return { ok: false, status, json: async () => ({}) } as unknown as Response
+}
+
 const userMsg: readonly AiMessageDto[] = [{ role: 1, content: [{ type: 'text', value: 'hi' }] }]
 
 function collectEnd(service: AiModelMainService): Promise<AiEndEvent> {
@@ -781,7 +790,7 @@ describe('AiModelMainService', () => {
       protocol: 'no-such-protocol' as AiWireProtocol,
     })
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('no-such-protocol')
+    expect(result.code).toBe('noProvider')
     service.dispose()
   })
 
@@ -795,6 +804,139 @@ describe('AiModelMainService', () => {
     expect(result.ok).toBe(true)
     expect(result.modelCount).toBe(3)
     service.dispose()
+  })
+
+  describe('verifyProvider failure classification', () => {
+    // The agent panels probe with the agent's own protocol. `openai-responses`
+    // gateways declare their models in protocolMap, so a reachable endpoint is a
+    // pass even when it serves no model list — the regression this guards is a
+    // permanently red "Test" dot on a perfectly working gateway.
+    it('treats a reachable openai-responses gateway with an empty list as ok', async () => {
+      const service = makeService([])
+      const fetchMock = vi.fn(async () => jsonResponse({ data: [] }))
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        const result = await service.verifyProvider({
+          id: 'kuro',
+          protocol: 'openai-responses',
+          baseUrl: 'https://gw.example.com/v1',
+          apiKey: 'k',
+        })
+        expect(result).toMatchObject({ ok: true, modelCount: 0 })
+        expect(fetchMock).toHaveBeenCalledOnce()
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
+
+    it('treats 404 on /models as reachable for openai-responses', async () => {
+      const service = makeService([])
+      vi.stubGlobal('fetch', async () => statusResponse(404))
+      try {
+        const result = await service.verifyProvider({
+          id: 'kuro',
+          protocol: 'openai-responses',
+          baseUrl: 'https://gw.example.com/v1',
+          apiKey: 'k',
+        })
+        expect(result).toMatchObject({ ok: true, modelCount: 0 })
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
+
+    it('classifies 401 as unauthorized rather than "no models"', async () => {
+      const service = makeService([])
+      vi.stubGlobal('fetch', async () => statusResponse(401))
+      try {
+        const result = await service.verifyProvider({
+          id: 'kuro',
+          protocol: 'openai-responses',
+          baseUrl: 'https://gw.example.com/v1',
+          apiKey: 'wrong',
+        })
+        expect(result).toMatchObject({ ok: false, code: 'unauthorized', status: 401 })
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
+
+    it('classifies a 5xx as serverError', async () => {
+      const service = makeService([])
+      vi.stubGlobal('fetch', async () => statusResponse(503))
+      try {
+        const result = await service.verifyProvider({
+          id: 'gw',
+          protocol: 'openai-chat',
+          baseUrl: 'https://gw.example.com/v1',
+          apiKey: 'k',
+        })
+        expect(result).toMatchObject({ ok: false, code: 'serverError', status: 503 })
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
+
+    it('classifies an unresolvable endpoint as unreachable', async () => {
+      const service = makeService([])
+      vi.stubGlobal('fetch', async () => {
+        throw new TypeError('fetch failed')
+      })
+      try {
+        const result = await service.verifyProvider({
+          id: 'gw',
+          protocol: 'openai-responses',
+          baseUrl: 'https://nope.invalid',
+          apiKey: 'k',
+        })
+        expect(result).toMatchObject({ ok: false, code: 'unreachable' })
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
+
+    it('classifies a hung endpoint as timeout', async () => {
+      const service = makeService([])
+      const tokenStarted = new DeferredPromise<CancellationToken>()
+      addProvider(service, FAKE_PROTOCOL, hangingListModels(tokenStarted))
+      // Drain _ready under real timers so the deadline is all the fake clock drives.
+      await service.getActiveModel('chat')
+
+      vi.useFakeTimers()
+      try {
+        const pending = service.verifyProvider({ id: 'gw', protocol: FAKE_PROTOCOL })
+        await tokenStarted.p
+        await vi.advanceTimersByTimeAsync(15_000)
+        expect(await pending).toMatchObject({ ok: false, code: 'timeout' })
+      } finally {
+        vi.useRealTimers()
+        service.dispose()
+      }
+    })
+
+    // The relaxed judgement is scoped to openai-responses; enumerating protocols
+    // must still report an empty 2xx list as "no models".
+    it('still reports noModels for an enumerating protocol', async () => {
+      const service = makeService([])
+      vi.stubGlobal('fetch', async () => jsonResponse({ data: [] }))
+      try {
+        const result = await service.verifyProvider({
+          id: 'gw',
+          protocol: 'openai-chat',
+          baseUrl: 'https://gw.example.com/v1',
+          apiKey: 'k',
+        })
+        expect(result).toMatchObject({ ok: false, code: 'noModels' })
+      } finally {
+        vi.unstubAllGlobals()
+        service.dispose()
+      }
+    })
   })
 
   it('writes aiSettings.json with 0600 permissions', async () => {

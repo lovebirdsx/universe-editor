@@ -423,6 +423,9 @@ describe('AiModelRegistry — provider lifecycle', () => {
     reg.dispose()
   })
 
+  // Discovery is best-effort — one offline endpoint must not fail the catalogue —
+  // but a failed attempt must not be cached either, or the entry stays empty
+  // until the next setProviders.
   it('re-resolves after a failed resolution (no poisoned cache)', async () => {
     let attempt = 0
     const listModels = vi.fn(() => {
@@ -433,7 +436,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     reg.registerProvider('openai-chat', fakeProvider(listModels))
     reg.setProviders([provider('kuro', [discovering('openai-chat')])])
 
-    await expect(reg.getModels(CancellationToken.None)).rejects.toThrow('transient')
+    expect(await reg.getModels(CancellationToken.None)).toEqual([])
     const ids = (await reg.getModels(CancellationToken.None)).map((m) => m.id)
     expect(ids).toEqual(['kuro/openai-chat/gpt-4o'])
     reg.dispose()

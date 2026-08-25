@@ -20,6 +20,7 @@ import {
 } from '@universe-editor/platform'
 import { Button, Select, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
+import { verifyFailureMessage } from '../../services/ai/verifyResult.js'
 import { findProviderById } from '../../../shared/ai/providerDerivation.js'
 import { isOfficialEndpoint } from '../../../shared/ai/officialEndpoints.js'
 import { AGENT_SUBSCRIPTION_AUTH } from '../../../shared/ipc/claudeConfigService.js'
@@ -46,7 +47,8 @@ type VerifyState =
   | { readonly kind: 'idle' }
   | { readonly kind: 'checking' }
   | { readonly kind: 'ok'; readonly modelCount: number }
-  | { readonly kind: 'fail'; readonly error: string }
+  /** Already localized by the renderer — main only returns a code. */
+  | { readonly kind: 'fail'; readonly message: string }
 
 export function GatewayProviderPicker({
   providers,
@@ -132,12 +134,7 @@ export function GatewayProviderPicker({
         setVerify(
           result.ok
             ? { kind: 'ok', modelCount: result.modelCount }
-            : {
-                kind: 'fail',
-                error:
-                  result.error ??
-                  localize('agentSettings.auth.provider.verifyFail', 'Connection failed.'),
-              },
+            : { kind: 'fail', message: verifyFailureMessage(result) },
         )
       })
   }, [resolved, aiModel, protocol])
@@ -248,12 +245,17 @@ function VerifyDot({ state }: { readonly state: VerifyState }) {
     state.kind === 'ok'
       ? {
           className: styles['verifyDotOk'],
-          tooltip: localize('agentSettings.auth.provider.ok', 'Connected · {count} models', {
-            count: state.modelCount,
-          }),
+          // Agent protocols declare their models in protocolMap, so a reachable
+          // endpoint legitimately reports none.
+          tooltip:
+            state.modelCount > 0
+              ? localize('agentSettings.auth.provider.ok', 'Connected · {count} models', {
+                  count: state.modelCount,
+                })
+              : localize('agentSettings.auth.provider.okReachable', 'Connected'),
         }
       : state.kind === 'fail'
-        ? { className: styles['verifyDotFail'], tooltip: state.error }
+        ? { className: styles['verifyDotFail'], tooltip: state.message }
         : {
             className: styles['verifyDotIdle'],
             tooltip: localize('agentSettings.auth.provider.idle', 'Not tested'),

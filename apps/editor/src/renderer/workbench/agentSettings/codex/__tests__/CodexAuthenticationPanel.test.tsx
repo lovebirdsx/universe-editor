@@ -17,6 +17,7 @@ import {
   InstantiationService,
   ServiceCollection,
   type AiProviderEntry,
+  type AiProviderVerifyResult,
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
 import type { CodexAuthStatus } from '../../../../../shared/ipc/codexConfigService.js'
@@ -65,7 +66,9 @@ function makeConfig(
 }
 
 function makeAiModel(entries: readonly AiProviderEntry[]) {
-  const verifyProvider = vi.fn(async () => ({ ok: true, modelCount: 2 }))
+  const verifyProvider = vi.fn(
+    async (): Promise<AiProviderVerifyResult> => ({ ok: true, modelCount: 2 }),
+  )
   const aiModel = {
     verifyProvider,
     getProviders: vi.fn(async () => entries),
@@ -171,5 +174,44 @@ describe('CodexAuthenticationPanel provider picker', () => {
 
     // The pinned value is the Select trigger's current option.
     expect(screen.getByText('stale-model')).toBeTruthy()
+  })
+
+  // A gateway that answers but serves no model list is the normal Codex case:
+  // openai-responses models come from protocolMap, so reachable is success.
+  it('shows a green dot when a reachable gateway reports no models', async () => {
+    const { aiModel, verifyProvider } = makeAiModel([GW_ENTRY])
+    verifyProvider.mockResolvedValue({ ok: true, modelCount: 0 })
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'edge' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    await flushEffects()
+    await flushEffects()
+
+    const dot = screen.getByRole('img')
+    expect(dot.getAttribute('data-status')).toBe('ok')
+    expect(dot.getAttribute('data-tooltip')).toBe('Connected')
+  })
+
+  it('renders a localized reason when the probe fails', async () => {
+    const { aiModel, verifyProvider } = makeAiModel([GW_ENTRY])
+    verifyProvider.mockResolvedValue({
+      ok: false,
+      modelCount: 0,
+      code: 'unauthorized',
+      status: 401,
+    })
+    renderPanel(makeConfig({ kind: 'provider', providerId: 'edge' }), aiModel)
+    await flushEffects()
+    await flushEffects()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    await flushEffects()
+    await flushEffects()
+
+    const dot = screen.getByRole('img')
+    expect(dot.getAttribute('data-status')).toBe('fail')
+    expect(dot.getAttribute('data-tooltip')).toContain('401')
   })
 })

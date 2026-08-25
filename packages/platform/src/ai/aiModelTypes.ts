@@ -160,12 +160,17 @@ export const enum AiErrorCode {
 
 /** Error carrying an {@link AiErrorCode}, so consumers can give targeted feedback. */
 export class AiError extends Error {
+  /** HTTP status when the endpoint answered, so callers can classify further. */
+  readonly status?: number
+
   constructor(
     readonly code: AiErrorCode,
     message: string,
+    status?: number,
   ) {
     super(message)
     this.name = 'AiError'
+    if (status !== undefined) this.status = status
   }
 }
 

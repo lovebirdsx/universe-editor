@@ -34,6 +34,7 @@ import {
   type AiProviderTemplate,
 } from '../../../shared/ai/providerTemplates.js'
 import { useService } from '../useService.js'
+import { verifyFailureMessage } from '../../services/ai/verifyResult.js'
 import styles from './AiSettingsEditor.module.css'
 
 const DRAFT_KEY = 'ai.settings.addProvider.draft'
@@ -156,11 +157,7 @@ export function AddProviderDialog({
     setVerify(
       result.ok
         ? { kind: 'ok', modelCount: result.modelCount }
-        : {
-            kind: 'fail',
-            error:
-              result.error ?? localize('aiModels.addProvider.verifyFail', 'Verification failed.'),
-          },
+        : { kind: 'fail', error: verifyFailureMessage(result) },
     )
   }, [aiModel, trimmedId, protocol, baseUrlTrimmed, apiKey])
 

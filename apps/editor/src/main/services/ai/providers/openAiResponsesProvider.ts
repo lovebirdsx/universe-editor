@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  OpenAI Responses provider — a stub for the `openai-responses` wire protocol. It
- *  enumerates no models (the editor never calls this protocol) and rejects every
- *  editor request: only agents drive the Responses protocol today.
+ *  OpenAI Responses provider — the `openai-responses` wire protocol. Only agents
+ *  drive Responses today, so every editor request is rejected; `listModels` is
+ *  real, because it is how the agent settings panel proves a gateway answers.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -10,6 +10,7 @@ import {
   AiErrorCode,
   AsyncIterableSource,
   DeferredPromise,
+  DisposableStore,
   type AiMessage,
   type AiRequestOptions,
   type AiProviderRuntime,
@@ -20,13 +21,35 @@ import {
   type IAiModelProvider,
   localize,
 } from '@universe-editor/platform'
+import { modelsEndpointError, modelsNetworkError, toAbortSignal } from './retry.js'
+
+const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
+
+interface OpenAiModelEntry {
+  readonly id: string
+}
 
 export class OpenAiResponsesProvider implements IAiModelProvider {
   async listModels(
-    _provider: AiProviderRuntime,
-    _token: CancellationToken,
+    provider: AiProviderRuntime,
+    token: CancellationToken,
   ): Promise<readonly string[]> {
-    return []
+    const signals = new DisposableStore()
+    let res: Response
+    try {
+      res = await fetch(`${baseUrl(provider)}/models`, {
+        headers: authHeaders(provider.apiKey),
+        signal: toAbortSignal(token, signals),
+      })
+    } catch (err) {
+      throw modelsNetworkError(err, token)
+    } finally {
+      signals.dispose()
+    }
+    if (!res.ok) throw modelsEndpointError(res.status)
+    return (((await res.json()) as { data?: OpenAiModelEntry[] }).data ?? []).map(
+      (entry) => entry.id,
+    )
   }
 
   sendRequest(
@@ -55,4 +78,12 @@ export class OpenAiResponsesProvider implements IAiModelProvider {
   async provideTokenCount(_modelId: string, text: string): Promise<number> {
     return Math.ceil(text.length / 4)
   }
+}
+
+function baseUrl(provider: AiProviderRuntime): string {
+  return (provider.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
+}
+
+function authHeaders(apiKey: string | undefined): Record<string, string> {
+  return apiKey ? { authorization: `Bearer ${apiKey}` } : {}
 }

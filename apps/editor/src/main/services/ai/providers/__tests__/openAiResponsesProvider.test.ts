@@ -1,6 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for OpenAiResponsesProvider — the stub enumerates no models (never touching the
- *  network) and rejects every request with ConfigurationRequired on both stream and result.
+ *  Tests for OpenAiResponsesProvider — listModels really probes `GET /models` (the
+ *  agent settings panel's Test button proves reachability through it), while
+ *  sendRequest stays a stub that rejects with ConfigurationRequired on both
+ *  stream and result.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -32,16 +34,31 @@ afterEach(() => {
 })
 
 describe('OpenAiResponsesProvider', () => {
-  it('listModels returns an empty list without touching the network', async () => {
-    const fetchMock = vi.fn()
+  it('listModels probes the endpoint and returns the ids it serves', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'gpt-5.5' }, { id: 'gpt-5.5-mini' }] }), {
+        status: 200,
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const provider = new OpenAiResponsesProvider()
     const cts = new CancellationTokenSource()
 
     const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
 
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(models).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/models')
+    expect(models).toEqual(['gpt-5.5', 'gpt-5.5-mini'])
+  })
+
+  it('listModels throws with the HTTP status so a bad key is distinguishable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 401 })))
+    const provider = new OpenAiResponsesProvider()
+    const cts = new CancellationTokenSource()
+
+    await expect(
+      provider.listModels(makeProvider({ apiKey: 'sk-bad' }), cts.token),
+    ).rejects.toMatchObject({ code: AiErrorCode.Unauthorized, status: 401 })
   })
 
   it('rejects both stream and result with ConfigurationRequired', async () => {

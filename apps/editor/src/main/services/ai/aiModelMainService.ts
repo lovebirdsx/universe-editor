@@ -27,7 +27,6 @@ import {
   type ILogger,
   ILoggerService,
   isCancellationError,
-  localize,
   mergeModelKnowledge,
   parseModelRef,
   PROBE_MODEL_CAP,
@@ -265,15 +264,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   async verifyProvider(input: AiProviderVerifyInput): Promise<AiProviderVerifyResult> {
     await this._ready
     const impl = this._registry.getProvider(input.protocol)
-    if (!impl) {
-      return {
-        ok: false,
-        modelCount: 0,
-        error: localize('ai.verify.noProvider', "No provider registered for '{protocol}'.", {
-          protocol: input.protocol,
-        }),
-      }
-    }
+    if (!impl) return { ok: false, modelCount: 0, code: 'noProvider' }
     // A throwaway runtime: the probed key is read from the input only and never
     // written to aiSettings.json.
     const runtime: AiProviderRuntime = {
@@ -282,17 +273,24 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.apiKey !== undefined ? { apiKey: input.apiKey } : {}),
     }
+    // Agents declare their models in protocolMap, so the editor never needs to
+    // enumerate them: a reachable endpoint is the whole assertion. Enumerating
+    // protocols keep the stricter "must serve a model list" bar.
+    const reachableIsSuccess = input.protocol === 'openai-responses'
+    let deadlineToken: CancellationToken | undefined
     try {
-      const models = await this._withTimeoutToken((token) => impl.listModels(runtime, token))
-      if (models.length === 0) {
-        return {
-          ok: false,
-          modelCount: 0,
-          error: localize(
-            'ai.verify.noModels',
-            'The endpoint responded but no models are available.',
-          ),
-        }
+      const models = await this._withTimeoutToken((token) => {
+        deadlineToken = token
+        return impl.listModels(runtime, token)
+      })
+      // The deadline cancels the token rather than rejecting, and a provider may
+      // resolve empty on cancellation — check it before reading the list, or a
+      // timeout masquerades as "no models".
+      if (deadlineToken?.isCancellationRequested === true) {
+        return { ok: false, modelCount: 0, code: 'timeout' }
+      }
+      if (models.length === 0 && !reachableIsSuccess) {
+        return { ok: false, modelCount: 0, code: 'noModels' }
       }
       return {
         ok: true,
@@ -300,7 +298,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
         modelIds: models.length > PROBE_MODEL_CAP ? models.slice(0, PROBE_MODEL_CAP) : models,
       }
     } catch (err) {
-      return { ok: false, modelCount: 0, error: err instanceof Error ? err.message : String(err) }
+      return verifyFailure(err, reachableIsSuccess)
     }
   }
 
@@ -599,6 +597,27 @@ function missingProviderError(modelId: string): AiError {
     )
   }
   return new AiError(AiErrorCode.ModelNotFound, `No AI model provider found for '${modelId}'.`)
+}
+
+/**
+ * Classify a probe failure into a code the renderer can localize. Returns a code,
+ * never a message: this runs in the main process, whose locale is resolved
+ * independently of the window's.
+ */
+function verifyFailure(err: unknown, reachableIsSuccess: boolean): AiProviderVerifyResult {
+  if (isCancellationError(err)) return { ok: false, modelCount: 0, code: 'timeout' }
+  const status = err instanceof AiError ? err.status : undefined
+  if (status === undefined) return { ok: false, modelCount: 0, code: 'unreachable' }
+  if (status === 401 || status === 403) {
+    return { ok: false, modelCount: 0, code: 'unauthorized', status }
+  }
+  // A gateway that answers but serves no `/models` route is still reachable, and
+  // reachability is all an agent protocol needs to assert.
+  if (reachableIsSuccess && (status === 404 || status === 405)) {
+    return { ok: true, modelCount: 0 }
+  }
+  if (status >= 500) return { ok: false, modelCount: 0, code: 'serverError', status }
+  return { ok: false, modelCount: 0, code: 'httpError', status }
 }
 
 function parseSettings(text: string): ParsedSettings {

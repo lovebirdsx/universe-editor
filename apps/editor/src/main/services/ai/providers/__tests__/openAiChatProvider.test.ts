@@ -73,24 +73,26 @@ describe('OpenAiChatProvider', () => {
     expect(models).toEqual(['gpt-4o-mini', 'gpt-4o'])
   })
 
-  it('listModels returns an empty list when the endpoint is unreachable', async () => {
+  // Swallowing these into [] made a dead endpoint indistinguishable from one
+  // serving no models, which is what the settings probe has to tell apart.
+  it('listModels throws a network error when the endpoint is unreachable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token)
-
-    expect(models).toEqual([])
+    await expect(
+      provider.listModels(makeProvider({ apiKey: 'sk-test' }), cts.token),
+    ).rejects.toMatchObject({ code: AiErrorCode.NetworkError })
   })
 
-  it('listModels returns an empty list on a non-2xx response', async () => {
+  it('listModels throws with the HTTP status on a non-2xx response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 401 }))
     const provider = new OpenAiChatProvider()
     const cts = new CancellationTokenSource()
 
-    const models = await provider.listModels(makeProvider({ apiKey: 'sk-bad' }), cts.token)
-
-    expect(models).toEqual([])
+    await expect(
+      provider.listModels(makeProvider({ apiKey: 'sk-bad' }), cts.token),
+    ).rejects.toMatchObject({ code: AiErrorCode.Unauthorized, status: 401 })
   })
 
   it('parses SSE deltas into text chunks and stops at [DONE]', async () => {
