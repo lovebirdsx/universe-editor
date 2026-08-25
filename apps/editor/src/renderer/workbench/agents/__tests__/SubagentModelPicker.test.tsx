@@ -9,6 +9,9 @@
  *  The current value is seeded through `settings.env.CLAUDE_CODE_SUBAGENT_MODEL` —
  *  the effective value the spawned process reads — because that is the only place
  *  the pick lives.
+ *
+ *  Plus a direct-render test of `SubagentModelPanel` (the surface-free content)
+ *  proving it works without the picker's AnchoredSurface shell.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -29,7 +32,7 @@ import {
   type ClaudeSettingsPatch,
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionService.js'
-import { SubagentModelPicker } from '../SubagentModelPicker.js'
+import { SubagentModelPanel, SubagentModelPicker } from '../SubagentModelPicker.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -97,20 +100,10 @@ function makeClaudeService(opts: { agentSettings: ClaudeAgentSettings; subagentM
   }
 }
 
-function setup(opts: {
-  agentSettings: ClaudeAgentSettings
-  subagentModel?: string
-  entries?: readonly AiProviderEntry[]
-  restart?: () => void
-  notify?: (n: unknown) => void
-}) {
-  const claude = makeClaudeService({
-    agentSettings: opts.agentSettings,
-    ...(opts.subagentModel !== undefined ? { subagentModel: opts.subagentModel } : {}),
-  })
-  const session = {
-    requestProcessRestart: opts.restart ?? vi.fn(),
-  } as unknown as IAcpSession
+function makeServices(
+  claude: ReturnType<typeof makeClaudeService>,
+  opts: { entries?: readonly AiProviderEntry[]; notify?: (n: unknown) => void },
+) {
   const services = new ServiceCollection()
   services.set(IClaudeConfigService, claude.service)
   services.set(IAiModelService, {
@@ -126,7 +119,24 @@ function setup(opts: {
     _serviceBrand: undefined,
     notify: opts.notify ?? (() => ({ dispose: () => {}, update: () => {} })),
   } as unknown as INotificationService)
-  const instantiation = new InstantiationService(services)
+  return services
+}
+
+function setup(opts: {
+  agentSettings: ClaudeAgentSettings
+  subagentModel?: string
+  entries?: readonly AiProviderEntry[]
+  restart?: () => void
+  notify?: (n: unknown) => void
+}) {
+  const claude = makeClaudeService({
+    agentSettings: opts.agentSettings,
+    ...(opts.subagentModel !== undefined ? { subagentModel: opts.subagentModel } : {}),
+  })
+  const session = {
+    requestProcessRestart: opts.restart ?? vi.fn(),
+  } as unknown as IAcpSession
+  const instantiation = new InstantiationService(makeServices(claude, opts))
   render(
     <ServicesContext.Provider value={instantiation}>
       <PickerHarness session={session} />
@@ -396,5 +406,30 @@ describe('SubagentModelPicker', () => {
     } finally {
       process.off('unhandledRejection', unhandled)
     }
+  })
+})
+
+describe('SubagentModelPanel (direct render)', () => {
+  it('renders rows and picks without any floating-surface shell', async () => {
+    const claude = makeClaudeService({ agentSettings: { authentication: 'gw' } })
+    const session = { requestProcessRestart: vi.fn() } as unknown as IAcpSession
+    const instantiation = new InstantiationService(makeServices(claude, {}))
+    render(
+      <ServicesContext.Provider value={instantiation}>
+        <SubagentModelPanel session={session} />
+      </ServicesContext.Provider>,
+    )
+
+    // The surface shell (and its testid) belongs to the picker, not the panel.
+    expect(screen.queryByTestId('acp-subagent-panel')).toBeNull()
+    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
+    expect(screen.getByText('Follow main model')).toBeTruthy()
+
+    fireEvent.mouseDown(screen.getByText('claude-sonnet-4-6'))
+    claude.flushWrite()
+    await act(async () => {})
+
+    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-sonnet-4-6' } })
+    expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
   })
 })

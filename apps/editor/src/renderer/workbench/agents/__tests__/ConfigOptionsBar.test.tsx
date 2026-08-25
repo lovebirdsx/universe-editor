@@ -1,12 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ConfigOptionsBar tests — covers icon trigger + popover interaction:
- *    - empty options → renders nothing
+ *    - empty options → empty bar container (pickers self-hide without the ACP layer)
  *    - trigger shows current value label
  *    - clicking trigger opens popover, picking item calls setConfigOption
  *    - Escape / outside click dismisses
  *    - mutual exclusivity (only one popover open at a time)
  *    - grouped + flat option lists
+ *    - entry order incl. the claude-code sub-agent slot right after the model
+ *    - overflow packing: narrow bars mark the low-priority tail with
+ *      data-overflowed/inert, widening clears it, an overflowed entry's open
+ *      popover is closed
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +48,12 @@ import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol
 import { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
 import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
+import {
+  FakeResizeObserver,
+  fireResize,
+  stubClientWidth,
+  stubWidth,
+} from './helpers/resizeObserver.js'
 
 afterEach(() => cleanup())
 
@@ -206,10 +216,36 @@ const MODE_OPTION: SessionConfigOption = {
   ],
 }
 
+const THOUGHT_OPTION: SessionConfigOption = {
+  id: 'thought_level',
+  category: 'thought_level',
+  type: 'select',
+  name: 'Think',
+  currentValue: 'normal',
+  options: [{ value: 'normal', name: 'Normal' }],
+}
+
+const CUSTOM_OPTION: SessionConfigOption = {
+  id: 'temp',
+  type: 'select',
+  name: 'Temp',
+  currentValue: 'low',
+  options: [{ value: 'low', name: 'Low' }],
+}
+
 describe('ConfigOptionsBar', () => {
-  it('renders nothing when there are no options', () => {
+  it('renders the bar container without any triggers when there are no options', () => {
+    // The test DI has no ACP layer, so the MCP picker self-hides — the bar is
+    // an empty container, but still locatable via its testid. The overflow ⋯
+    // button always renders (its testid also ends in "-trigger"), so it is
+    // excluded from the picker-trigger count.
     renderWithServices(<ConfigOptionsBar session={makeSession()} />)
-    expect(screen.queryByTestId('acp-config-options')).toBeNull()
+    const bar = screen.getByTestId('acp-config-options')
+    expect(bar).toBeTruthy()
+    const pickerTriggers = [...bar.querySelectorAll('[data-testid$="-trigger"]')].filter(
+      (t) => t.getAttribute('data-testid') !== 'acp-config-overflow-trigger',
+    )
+    expect(pickerTriggers).toHaveLength(0)
   })
 
   it('renders one trigger per option, showing the current value label', () => {
@@ -309,31 +345,43 @@ describe('ConfigOptionsBar', () => {
     expect(popover.querySelectorAll('[role="option"]')).toHaveLength(3)
   })
 
-  it('orders triggers model → mode → thought_level → custom regardless of input order', () => {
-    const custom: SessionConfigOption = {
-      id: 'temp',
-      type: 'select',
-      name: 'Temp',
-      currentValue: 'low',
-      options: [{ value: 'low', name: 'Low' }],
-    }
-    const thought: SessionConfigOption = {
-      id: 'thought_level',
-      category: 'thought_level',
-      type: 'select',
-      name: 'Think',
-      currentValue: 'normal',
-      options: [{ value: 'normal', name: 'Normal' }],
-    }
+  it('orders triggers model → mode → thought_level → custom regardless of input order (non claude-code)', () => {
     renderWithServices(
-      <ConfigOptionsBar session={makeSession([custom, thought, MODE_OPTION, MODEL_OPTION])} />,
+      <ConfigOptionsBar
+        session={makeSession([CUSTOM_OPTION, THOUGHT_OPTION, MODE_OPTION, MODEL_OPTION])}
+      />,
     )
     const bar = screen.getByTestId('acp-config-options')
-    const triggers = [...bar.querySelectorAll('[data-testid$="-trigger"]')].map((t) =>
-      t.getAttribute('data-testid'),
-    )
+    // The always-mounted overflow ⋯ button shares the "-trigger" suffix and
+    // sits last in the DOM; it is not a config trigger.
+    const triggers = [...bar.querySelectorAll('[data-testid$="-trigger"]')]
+      .filter((t) => t.getAttribute('data-testid') !== 'acp-config-overflow-trigger')
+      .map((t) => t.getAttribute('data-testid'))
     expect(triggers).toEqual([
       'acp-config-model-trigger',
+      'acp-config-mode-trigger',
+      'acp-config-thought_level-trigger',
+      'acp-config-temp-trigger',
+    ])
+  })
+
+  it('orders claude-code triggers model → subagent → mode → thought_level → custom', () => {
+    // The sub-agent picker glues right after the last model option — both pick
+    // a model, one semantic family.
+    renderWithServices(
+      <ConfigOptionsBar
+        session={makeSession([CUSTOM_OPTION, THOUGHT_OPTION, MODE_OPTION, MODEL_OPTION], {
+          agentId: 'claude-code',
+        })}
+      />,
+    )
+    const bar = screen.getByTestId('acp-config-options')
+    const triggers = [...bar.querySelectorAll('[data-testid$="-trigger"]')]
+      .filter((t) => t.getAttribute('data-testid') !== 'acp-config-overflow-trigger')
+      .map((t) => t.getAttribute('data-testid'))
+    expect(triggers).toEqual([
+      'acp-config-model-trigger',
+      'acp-subagent-picker-trigger',
       'acp-config-mode-trigger',
       'acp-config-thought_level-trigger',
       'acp-config-temp-trigger',
@@ -446,5 +494,80 @@ describe('ConfigOptionsBar — model switch context guard', () => {
     await pickModel('Sonnet')
     expect(confirm).not.toHaveBeenCalled()
     expect(session.setConfigOption).toHaveBeenCalledWith('model', 'sonnet')
+  })
+})
+
+describe('ConfigOptionsBar — overflow', () => {
+  const RealRO = globalThis.ResizeObserver
+  afterEach(() => {
+    globalThis.ResizeObserver = RealRO
+    FakeResizeObserver.instances = []
+  })
+
+  // Every entry 100px, ⋯ button 26px, so a 230px line keeps model + subagent
+  // (200 <= 204 available) and overflows mode/thought/temp/mcp.
+  function renderNarrow(
+    barWidth: number,
+    session: ReturnType<typeof makeSession> = makeSession(
+      [MODEL_OPTION, MODE_OPTION, THOUGHT_OPTION, CUSTOM_OPTION],
+      { agentId: 'claude-code' },
+    ),
+  ) {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    renderWithServices(<ConfigOptionsBar session={session} />)
+    const bar = screen.getByTestId('acp-config-options')
+    const items = screen.getByTestId('acp-config-options-items')
+    stubClientWidth(items, barWidth)
+    for (const el of bar.querySelectorAll('[data-entry-key]')) stubWidth(el, 100)
+    stubWidth(screen.getByTestId('acp-config-overflow-trigger'), 26)
+    return { session, bar, items }
+  }
+
+  function entryEl(container: HTMLElement, key: string): HTMLElement {
+    const el = container.querySelector<HTMLElement>(`[data-entry-key="${key}"]`)
+    expect(el).toBeTruthy()
+    return el!
+  }
+
+  it('marks the low-priority tail as overflowed when the bar is too narrow', async () => {
+    const { bar } = renderNarrow(230)
+    await fireResize()
+
+    expect(entryEl(bar, 'model').hasAttribute('data-overflowed')).toBe(false)
+    expect(entryEl(bar, 'mode').getAttribute('data-overflowed')).toBe('true')
+    expect(entryEl(bar, 'mode').hasAttribute('inert')).toBe(true)
+    expect(entryEl(bar, 'mode').getAttribute('aria-hidden')).toBe('true')
+    // The ⋯ button has overflow to show, so it stays visible (no data-empty).
+    expect(screen.getByTestId('acp-config-overflow-trigger').hasAttribute('data-empty')).toBe(false)
+  })
+
+  it('clears the overflow when the bar widens', async () => {
+    const { bar, items } = renderNarrow(230)
+    await fireResize()
+    expect(entryEl(bar, 'mode').getAttribute('data-overflowed')).toBe('true')
+
+    stubClientWidth(items, 1000)
+    await fireResize()
+
+    expect(entryEl(bar, 'mode').hasAttribute('data-overflowed')).toBe(false)
+    expect(screen.getByTestId('acp-config-overflow-trigger').getAttribute('data-empty')).toBe(
+      'true',
+    )
+  })
+
+  it('closes the inline popover when its entry overflows', async () => {
+    // 430px keeps model+subagent+mode+thought (400 <= 404 available).
+    const { items } = renderNarrow(430)
+    await fireResize()
+    expect(
+      entryEl(screen.getByTestId('acp-config-options'), 'mode').hasAttribute('data-overflowed'),
+    ).toBe(false)
+    fireEvent.click(screen.getByTestId('acp-config-mode-trigger'))
+    expect(screen.getByTestId('acp-config-mode-popover')).toBeTruthy()
+
+    stubClientWidth(items, 230)
+    await fireResize()
+
+    expect(screen.queryByTestId('acp-config-mode-popover')).toBeNull()
   })
 })

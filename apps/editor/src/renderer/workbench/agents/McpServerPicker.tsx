@@ -9,11 +9,16 @@
  *  only this session — the default set new sessions start with is governed by
  *  each entry's per-server default switch (`disabled` flag), editable inline
  *  via the "default" toggle and in AI Settings.
+ *
+ *  `McpPickerPanel` is the surface-free content (all logic included) so the
+ *  overflow menu can render the same list inline; the picker is just the
+ *  trigger + anchored shell around it.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef } from 'react'
+import { useState, type HTMLAttributes } from 'react'
 import { ChevronDown, Plug } from 'lucide-react'
 import { ICommandService, localize } from '@universe-editor/platform'
+import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import { useObservable, useOptionalService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -25,8 +30,19 @@ import {
   type McpServerDefinition,
 } from '../../services/acp/acpMcpServers.js'
 import { McpEnablementToggles } from './McpEnablementToggles.js'
-import { usePopoverDismiss } from './usePopoverDismiss.js'
 import styles from './agents.module.css'
+
+/**
+ * The picker (inline trigger and overflow row alike) self-hides for read-only
+ * sessions — they cannot mutate the session's server set — and when the pool
+ * is empty (nothing to toggle). Shared so the two hosts never drift apart.
+ */
+export function isMcpPickerHidden(
+  session: IAcpSession,
+  pool: readonly McpServerDefinition[],
+): boolean {
+  return session.readOnly || pool.length === 0
+}
 
 export function McpServerPicker({
   session,
@@ -69,8 +85,107 @@ function McpServerPickerInner({
 }) {
   const pool = useObservable(service.mcpServerDefinitions)
   const selection = useObservable(session.mcpServerSelection)
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
+  if (isMcpPickerHidden(session, pool)) return null
+  // `null` (inherit) resolves to every non-disabled pool entry — the same
+  // default set a brand-new session starts with.
+  const { enabledNames } = resolveMcpServerSelection(pool, selection)
+  const enabledSet = new Set(enabledNames)
+  const custom = selection !== null
+  return (
+    <div className={styles['configTriggerWrap']} data-testid="acp-mcp-picker">
+      <button
+        type="button"
+        className={styles['configTrigger']}
+        data-custom={custom}
+        data-testid="acp-mcp-picker-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        data-tooltip={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
+        onMouseDown={(e) => {
+          // The surface's outside-press listens on document mousedown; without
+          // this the same click would dismiss and the click below would
+          // immediately reopen the panel.
+          e.stopPropagation()
+        }}
+        onClick={(e) => {
+          if (open) {
+            onClose()
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAnchor({ x: rect.left, y: rect.top })
+          // Pick up a `.mcp.json` edited on disk since the last refresh.
+          void service.refreshMcpServerDefinitions()
+          onOpen()
+        }}
+      >
+        <Plug size={13} strokeWidth={1.75} aria-hidden="true" />
+        <span className={styles['configTriggerValue']}>
+          {enabledSet.size}/{pool.length}
+        </span>
+        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      {open && anchor !== null ? (
+        <AnchoredSurface
+          x={anchor.x}
+          y={anchor.y}
+          placement="top-start"
+          offset={4}
+          onClose={onClose}
+          surfaceProps={
+            {
+              className: styles['configPopover'],
+              role: 'dialog',
+              'aria-label': localize(
+                'acp.mcp.picker.title',
+                'MCP servers enabled for this session',
+              ),
+              'data-testid': 'acp-mcp-picker-popover',
+            } as HTMLAttributes<HTMLDivElement>
+          }
+        >
+          <McpPickerPanel session={session} onRequestClose={onClose} />
+        </AnchoredSurface>
+      ) : null}
+    </div>
+  )
+}
+
+/** Surface-free list content; renders inside any host (picker surface, overflow menu). */
+export function McpPickerPanel({
+  session,
+  onRequestClose,
+}: {
+  session: IAcpSession
+  /** Invoked before navigating away (e.g. opening settings) so a host surface can dismiss. */
+  onRequestClose?: () => void
+}) {
+  // Soft dependency, same as the picker: stays absent without the ACP layer.
+  const service = useOptionalService(IAcpSessionService)
+  if (!service) return null
+  return (
+    <McpPickerPanelInner
+      session={session}
+      service={service}
+      {...(onRequestClose !== undefined ? { onRequestClose } : {})}
+    />
+  )
+}
+
+function McpPickerPanelInner({
+  session,
+  service,
+  onRequestClose,
+}: {
+  session: IAcpSession
+  service: IAcpSessionServiceType
+  onRequestClose?: () => void
+}) {
+  const pool = useObservable(service.mcpServerDefinitions)
+  const selection = useObservable(session.mcpServerSelection)
   const liveServers = useObservable(session.mcpServers)
-  if (session.readOnly || pool.length === 0) return null
+  const commands = useOptionalService(ICommandService)
   // `null` (inherit) resolves to every non-disabled pool entry — the same
   // default set a brand-new session starts with.
   const { enabledNames } = resolveMcpServerSelection(pool, selection)
@@ -83,77 +198,7 @@ function McpServerPickerInner({
     service.setSessionMcpServers(session.id, next)
   }
   return (
-    <div className={styles['configTriggerWrap']} data-testid="acp-mcp-picker">
-      <button
-        type="button"
-        className={styles['configTrigger']}
-        data-custom={custom}
-        data-testid="acp-mcp-picker-trigger"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        data-tooltip={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
-        onClick={() => {
-          if (open) {
-            onClose()
-          } else {
-            // Pick up a `.mcp.json` edited on disk since the last refresh.
-            void service.refreshMcpServerDefinitions()
-            onOpen()
-          }
-        }}
-      >
-        <Plug size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['configTriggerValue']}>
-          {enabledSet.size}/{pool.length}
-        </span>
-        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      {open ? (
-        <McpPickerPopover
-          session={session}
-          service={service}
-          pool={pool}
-          enabledSet={enabledSet}
-          custom={custom}
-          liveStatus={liveStatus}
-          onToggle={toggle}
-          onDismiss={onClose}
-        />
-      ) : null}
-    </div>
-  )
-}
-
-function McpPickerPopover({
-  session,
-  service,
-  pool,
-  enabledSet,
-  custom,
-  liveStatus,
-  onToggle,
-  onDismiss,
-}: {
-  session: IAcpSession
-  service: IAcpSessionServiceType
-  pool: readonly McpServerDefinition[]
-  enabledSet: ReadonlySet<string>
-  custom: boolean
-  liveStatus: ReadonlyMap<string, string>
-  onToggle: (name: string) => void
-  onDismiss: () => void
-}) {
-  const commands = useOptionalService(ICommandService)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  usePopoverDismiss(containerRef, onDismiss)
-  return (
-    <div
-      ref={containerRef}
-      className={styles['configPopover']}
-      role="dialog"
-      aria-label={localize('acp.mcp.picker.title', 'MCP servers enabled for this session')}
-      data-testid="acp-mcp-picker-popover"
-    >
+    <>
       <div className={styles['mcpPickHeader']}>
         <span>
           {custom
@@ -182,7 +227,7 @@ function McpPickerPopover({
             <input
               type="checkbox"
               checked={enabledSet.has(def.name)}
-              onChange={() => onToggle(def.name)}
+              onChange={() => toggle(def.name)}
             />
             {liveStatus.has(def.name) ? (
               <span className={styles['mcpStatusDot']} aria-hidden="true" />
@@ -215,7 +260,7 @@ function McpPickerPopover({
           type="button"
           data-testid="acp-mcp-picker-open-settings"
           onClick={() => {
-            onDismiss()
+            onRequestClose?.()
             void commands?.executeCommand('workbench.action.agent.openMcpSettings')
           }}
         >
@@ -232,6 +277,6 @@ function McpPickerPopover({
           'Checkboxes on the left apply to this session only; the person/folder switches set the user-level and workspace-level defaults (workspace wins, and can go back to inheriting).',
         )}
       </div>
-    </div>
+    </>
   )
 }

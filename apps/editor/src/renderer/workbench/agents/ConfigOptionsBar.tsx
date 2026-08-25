@@ -1,101 +1,151 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ConfigOptionsBar — compact icon-button row of session-level switches
- *  (model / mode / thought level / custom). Sits inline with the Send button
- *  inside PromptInput's action row. Clicking a trigger opens a small popover
- *  for choosing a value.
+ *  (model / mode / thought level / custom / sub agent / MCP). Sits inline with
+ *  the Send button inside PromptInput's action row. Clicking a trigger opens a
+ *  small popover for choosing a value.
+ *
+ *  The bar is a single line: entry order is the single source of truth in
+ *  services/acp/configBarLayout.ts (model… → subagent → mode → thought_level →
+ *  custom… → mcp), and when there is not enough width the low-priority tail
+ *  moves into the "…" overflow panel (ConfigBarOverflowMenu) instead of
+ *  wrapping onto a second line. useConfigBarOverflow measures the line; the
+ *  inline popover and the overflow panel are mutually exclusive so
+ *  SubagentModelPanel's local state never mounts twice.
  *--------------------------------------------------------------------------------------------*/
 
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useState, type HTMLAttributes } from 'react'
 import { Bot, ChevronDown, Settings2, Sliders, Sparkles } from 'lucide-react'
-import { IDialogService } from '@universe-editor/platform'
-import { useObservable, useService } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
+import { IDialogService, constObservable } from '@universe-editor/platform'
+import { AnchoredSurface } from '@universe-editor/workbench-ui'
+import { useObservable, useOptionalService, useService } from '../useService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/session/acpSessionService.js'
+import type { McpServerDefinition } from '../../services/acp/acpMcpServers.js'
 import type {
   SessionConfigOption,
-  SessionConfigOptionCategory,
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 import { findConfigOptionLabel } from '../../services/acp/configOptionLabel.js'
 import {
+  buildConfigBarEntries,
+  compareByCategory,
+  MCP_ENTRY_KEY,
+  SUBAGENT_ENTRY_KEY,
+} from '../../services/acp/configBarLayout.js'
+import {
   confirmModelSwitchContextShrink,
   evaluateModelSwitchContextShrink,
 } from '../../services/acp/session/modelSwitchContextGuard.js'
-import { McpServerPicker } from './McpServerPicker.js'
+import { ConfigBarOverflowMenu } from './ConfigBarOverflowMenu.js'
+import { isMcpPickerHidden, McpServerPicker } from './McpServerPicker.js'
 import { SubagentModelPicker } from './SubagentModelPicker.js'
-import { usePopoverDismiss } from './usePopoverDismiss.js'
+import { useConfigBarOverflow } from './useConfigBarOverflow.js'
 import styles from './agents.module.css'
 
+// Fallback for the soft ACP dependency: without the session service (unit
+// tests) there is no pool observable to read, so the hook count stays fixed
+// by reading from this constant instead.
+const EMPTY_MCP_POOL = constObservable<readonly McpServerDefinition[]>([])
+
 export { findConfigOptionLabel as findLabel }
-
-/** Reserved `openId` for the MCP picker so it excludes the option popovers. */
-const MCP_OPEN_ID = '__mcp__'
-/** Reserved `openId` for the sub-agent picker (claude-code only). */
-const SUBAGENT_OPEN_ID = '__subagent__'
-
-const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
-
-export function compareByCategory(a: SessionConfigOption, b: SessionConfigOption): number {
-  const ai = a.category ? CATEGORY_ORDER.indexOf(a.category as SessionConfigOptionCategory) : -1
-  const bi = b.category ? CATEGORY_ORDER.indexOf(b.category as SessionConfigOptionCategory) : -1
-  const aw = ai === -1 ? CATEGORY_ORDER.length + 1 : ai
-  const bw = bi === -1 ? CATEGORY_ORDER.length + 1 : bi
-  return aw - bw
-}
+export { compareByCategory }
 
 export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
   const options = useObservable(session.configOptions)
+  const service = useOptionalService(IAcpSessionService)
+  const pool = useObservable(service?.mcpServerDefinitions ?? EMPTY_MCP_POOL)
   const [openId, setOpenId] = useState<string | null>(null)
-  const mcpPicker = (
-    <McpServerPicker
-      session={session}
-      open={openId === MCP_OPEN_ID}
-      onOpen={() => setOpenId(MCP_OPEN_ID)}
-      onClose={() => setOpenId(null)}
-    />
-  )
-  const subagentPicker =
-    session.agentId === 'claude-code' ? (
-      <SubagentModelPicker
-        session={session}
-        open={openId === SUBAGENT_OPEN_ID}
-        onOpen={() => setOpenId(SUBAGENT_OPEN_ID)}
-        onClose={() => setOpenId(null)}
-      />
-    ) : null
-  // No agent-advertised options: the bar collapses to the pickers alone
-  // (kept inside the flex container so they still own the left-hand slots).
-  // The MCP picker self-hides for read-only sessions / an empty definition
-  // pool; the sub-agent picker stays for claude-code sessions.
-  if (options.length === 0) {
-    return (
-      <div className={styles['configBar']}>
-        {subagentPicker}
-        {mcpPicker}
-      </div>
-    )
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const entries = buildConfigBarEntries(options, {
+    includeSubagent: session.agentId === 'claude-code',
+    includeMcp: !isMcpPickerHidden(session, pool),
+  })
+  const { itemsRef, overflowRef, entryRefFor, overflowedKeys } = useConfigBarOverflow(entries)
+
+  // The inline popover and the overflow panel are mutually exclusive: the
+  // sub-agent panel keeps local `changed`/`pendingWrite` state, so its two
+  // hosts must never mount it at the same time.
+  const openInline = (key: string) => {
+    setOverflowOpen(false)
+    setOpenId(key)
   }
-  const ordered = [...options].sort(compareByCategory)
+  const openOverflow = () => {
+    setOpenId(null)
+    setOverflowOpen(true)
+  }
+  const closeInline = () => setOpenId(null)
+
+  useLayoutEffect(() => {
+    if (openId !== null && overflowedKeys.has(openId)) setOpenId(null)
+    if (overflowOpen && overflowedKeys.size === 0) setOverflowOpen(false)
+  }, [openId, overflowOpen, overflowedKeys])
+
   return (
     <div className={styles['configBar']} data-testid="acp-config-options">
-      {ordered.map((opt) => (
-        <ConfigOptionTrigger
-          key={opt.id}
+      <div
+        className={styles['configBarItems']}
+        data-testid="acp-config-options-items"
+        ref={itemsRef}
+      >
+        {entries.map((entry) => {
+          // Overflowed entries stay mounted — hidden via CSS outside the flex
+          // line — so their natural offsetWidth keeps feeding the measurement.
+          const overflowed = overflowedKeys.has(entry.key)
+          return (
+            <div
+              key={entry.key}
+              className={styles['configBarEntry']}
+              data-entry-key={entry.key}
+              ref={entryRefFor(entry.key)}
+              data-overflowed={overflowed ? 'true' : undefined}
+              inert={overflowed ? true : undefined}
+              aria-hidden={overflowed ? 'true' : undefined}
+            >
+              {entry.kind === 'option' ? (
+                <ConfigOptionTrigger
+                  session={session}
+                  option={entry.option}
+                  open={openId === entry.key}
+                  onOpen={() => openInline(entry.key)}
+                  onClose={closeInline}
+                />
+              ) : entry.kind === 'subagent' ? (
+                <SubagentModelPicker
+                  session={session}
+                  open={openId === SUBAGENT_ENTRY_KEY}
+                  onOpen={() => openInline(SUBAGENT_ENTRY_KEY)}
+                  onClose={closeInline}
+                />
+              ) : (
+                <McpServerPicker
+                  session={session}
+                  open={openId === MCP_ENTRY_KEY}
+                  onOpen={() => openInline(MCP_ENTRY_KEY)}
+                  onClose={closeInline}
+                />
+              )}
+            </div>
+          )
+        })}
+        <ConfigBarOverflowMenu
           session={session}
-          option={opt}
-          open={openId === opt.id}
-          onOpen={() => setOpenId(opt.id)}
-          onClose={() => setOpenId(null)}
+          entries={entries}
+          overflowedKeys={overflowedKeys}
+          open={overflowOpen}
+          onOpen={openOverflow}
+          onClose={() => setOverflowOpen(false)}
+          buttonRef={overflowRef}
         />
-      ))}
-      {subagentPicker}
-      {mcpPicker}
+      </div>
     </div>
   )
 }
 
-function categoryIcon(category: SessionConfigOption['category']) {
+export function categoryIcon(category: SessionConfigOption['category']) {
   switch (category) {
     case 'model':
       return Bot
@@ -108,6 +158,31 @@ function categoryIcon(category: SessionConfigOption['category']) {
   }
 }
 
+/**
+ * Apply a select pick to the session, guarded by the model-switch
+ * context-shrink confirmation. Shared with the overflow menu so both entry
+ * renderers apply picks identically.
+ */
+export async function pickConfigValue(
+  session: IAcpSession,
+  option: SessionConfigOption & { type: 'select' },
+  value: string,
+  dialogService: IDialogService,
+): Promise<void> {
+  if (value === option.currentValue) return
+  // Switching a large session onto a smaller-context model silently
+  // compacts it on the next prompt — confirm before applying.
+  if (option.category === 'model') {
+    const shrink = evaluateModelSwitchContextShrink(session.agentId, session.usage.get(), value)
+    if (shrink) {
+      const label = findConfigOptionLabel(option.options, value)
+      const ok = await confirmModelSwitchContextShrink(dialogService, shrink, label)
+      if (!ok) return
+    }
+  }
+  await session.setConfigOption(option.id, value)
+}
+
 function ConfigOptionTrigger({
   session,
   option,
@@ -116,32 +191,18 @@ function ConfigOptionTrigger({
   onClose,
 }: {
   session: IAcpSession
-  option: SessionConfigOption
+  option: SessionConfigOption & { type: 'select' }
   open: boolean
   onOpen: () => void
   onClose: () => void
 }) {
   const dialogService = useService(IDialogService)
-  if (option.type !== 'select') return null
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
   const Icon = categoryIcon(option.category)
   const currentLabel = findConfigOptionLabel(option.options, option.currentValue)
   const testKey = option.category ?? option.id
   const tooltipParts = [option.name]
   if (option.description) tooltipParts.push(option.description)
-  const pickValue = async (value: string) => {
-    if (value === option.currentValue) return
-    // Switching a large session onto a smaller-context model silently
-    // compacts it on the next prompt — confirm before applying.
-    if (option.category === 'model') {
-      const shrink = evaluateModelSwitchContextShrink(session.agentId, session.usage.get(), value)
-      if (shrink) {
-        const label = findConfigOptionLabel(option.options, value)
-        const ok = await confirmModelSwitchContextShrink(dialogService, shrink, label)
-        if (!ok) return
-      }
-    }
-    await session.setConfigOption(option.id, value)
-  }
   return (
     <div className={styles['configTriggerWrap']} data-testid={`acp-config-${testKey}`}>
       <button
@@ -152,21 +213,37 @@ function ConfigOptionTrigger({
         aria-haspopup="listbox"
         aria-expanded={open}
         data-tooltip={tooltipParts.join(' — ')}
-        onClick={() => (open ? onClose() : onOpen())}
+        onMouseDown={(e) => {
+          // The surface's outside-press listens on document mousedown; without
+          // this the same click would dismiss and the click below would
+          // immediately reopen the panel.
+          e.stopPropagation()
+        }}
+        onClick={(e) => {
+          if (open) {
+            onClose()
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAnchor({ x: rect.left, y: rect.top })
+          onOpen()
+        }}
       >
         <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
         <span className={styles['configTriggerValue']}>{currentLabel}</span>
         <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
       </button>
-      {open ? (
+      {open && anchor !== null ? (
         <ConfigOptionPopover
           option={option}
           onPick={(value) => {
             onClose()
-            void pickValue(value)
+            void pickConfigValue(session, option, value, dialogService)
           }}
           onDismiss={onClose}
           testKey={testKey}
+          x={anchor.x}
+          y={anchor.y}
         />
       ) : null}
     </div>
@@ -178,28 +255,38 @@ function ConfigOptionPopover({
   onPick,
   onDismiss,
   testKey,
+  x,
+  y,
 }: {
   option: SessionConfigOption & { type: 'select' }
   onPick: (value: string) => void
   onDismiss: () => void
   testKey: string
+  x: number
+  y: number
 }) {
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  usePopoverDismiss(containerRef, onDismiss)
   return (
-    <div
-      ref={containerRef}
-      className={styles['configPopover']}
-      role="listbox"
-      aria-label={option.name}
-      data-testid={`acp-config-${testKey}-popover`}
+    <AnchoredSurface
+      x={x}
+      y={y}
+      placement="top-start"
+      offset={4}
+      onClose={onDismiss}
+      surfaceProps={
+        {
+          className: styles['configPopover'],
+          role: 'listbox',
+          'aria-label': option.name,
+          'data-testid': `acp-config-${testKey}-popover`,
+        } as HTMLAttributes<HTMLDivElement>
+      }
     >
       {renderPopoverItems(option.options, option.currentValue, onPick)}
-    </div>
+    </AnchoredSurface>
   )
 }
 
-function renderPopoverItems(
+export function renderPopoverItems(
   options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
   current: string,
   onPick: (value: string) => void,

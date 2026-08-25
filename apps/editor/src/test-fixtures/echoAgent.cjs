@@ -12,6 +12,10 @@
  *                                      → succeeds only for sessions that ran a
  *                                        prompt; empty sessions fail like they
  *                                        do on real agents (never persisted)
+ *  ECHO_AGENT_CONFIG_OPTIONS=1: session/new advertises a set of select
+ *  configOptions (model/mode/thought_level + 3 custom) and
+ *  session/set_config_option applies a pick, answering with the updated bag —
+ *  used by E2E to drive the config bar's overflow panel.
  *  ECHO_AGENT_SESSION_NEW_DELAY_MS=<ms> delays every session/new response —
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
  *    - session/prompt                    → emits two session/update chunks and
@@ -52,6 +56,94 @@ const sessionCwds = new Map() // sessionId -> cwd from session/new
 const messagedSessions = new Set()
 const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
+const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
+
+// Select options advertised on session/new when ECHO_AGENT_CONFIG_OPTIONS=1.
+// The current values keep the bar's natural width between SIDEBAR_MIN (170px,
+// guaranteed overflow) and a wide sidebar (everything inline); alternatives
+// are deliberately long so an overflow-panel pick also renders long labels.
+const ECHO_CONFIG_OPTIONS = [
+  {
+    id: 'model',
+    name: 'Model',
+    type: 'select',
+    category: 'model',
+    currentValue: 'opus-4-6',
+    options: [
+      { value: 'opus-4-6', name: 'opus-4-6' },
+      { value: 'opus-4-6-lts', name: 'claude-opus-4-6-longterm-support' },
+    ],
+  },
+  {
+    id: 'mode',
+    name: 'Mode',
+    type: 'select',
+    category: 'mode',
+    currentValue: 'plan',
+    options: [
+      { value: 'plan', name: 'plan' },
+      { value: 'bypass', name: 'bypassPermissions (auto-approve everything)' },
+    ],
+  },
+  {
+    id: 'thought_level',
+    name: 'Thought level',
+    type: 'select',
+    category: 'thought_level',
+    currentValue: 'high',
+    options: [
+      { value: 'high', name: 'high' },
+      { value: 'ultra', name: 'ultra deep reasoning (slowest)' },
+    ],
+  },
+  {
+    id: 'profile',
+    name: 'Profile',
+    type: 'select',
+    category: 'profile',
+    currentValue: 'mid',
+    options: [
+      { value: 'mid', name: 'mid' },
+      { value: 'aggressive', name: 'aggressive optimization profile' },
+    ],
+  },
+  {
+    id: 'verbosity',
+    name: 'Verbosity',
+    type: 'select',
+    category: 'verbosity',
+    currentValue: 'fast',
+    options: [
+      { value: 'fast', name: 'fast' },
+      { value: 'verbose', name: 'extremely verbose explanations' },
+    ],
+  },
+  {
+    id: 'style',
+    name: 'Style',
+    type: 'select',
+    category: 'style',
+    currentValue: 'safe',
+    options: [
+      { value: 'safe', name: 'safe' },
+      { value: 'max', name: 'max creative' },
+      { value: 'extreme', name: 'maximally creative exploration' },
+    ],
+  },
+]
+
+// sessionId -> Map(configId -> picked value), so session/set_config_option can
+// answer with the updated bag (ECHO_AGENT_CONFIG_OPTIONS=1 only).
+const sessionConfigOptionValues = new Map()
+
+function buildConfigOptions(sessionId) {
+  const overrides = sessionConfigOptionValues.get(sessionId)
+  if (!overrides) return ECHO_CONFIG_OPTIONS
+  return ECHO_CONFIG_OPTIONS.map((o) => {
+    const v = overrides.get(o.id)
+    return v === undefined || v === o.currentValue ? o : { ...o, currentValue: v }
+  })
+}
 
 // 2×2 red PNG, tiled to fill the emit-image directive's requested payload.
 const PNG_BASE64 =
@@ -356,12 +448,27 @@ function handle(msg) {
       const sessionId = 'echo-' + nextSessionId++
       sessionMcpServers.set(sessionId, msg.params?.mcpServers ?? [])
       sessionCwds.set(sessionId, msg.params?.cwd ?? '')
+      if (configOptionsEnabled) sessionConfigOptionValues.set(sessionId, new Map())
+      const result = configOptionsEnabled
+        ? { sessionId, configOptions: buildConfigOptions(sessionId) }
+        : { sessionId }
       const newDelayMs = Number(process.env.ECHO_AGENT_SESSION_NEW_DELAY_MS ?? 0)
       if (newDelayMs > 0) {
-        setTimeout(() => reply(msg.id, { sessionId }), newDelayMs)
+        setTimeout(() => reply(msg.id, result), newDelayMs)
         return
       }
-      return reply(msg.id, { sessionId })
+      return reply(msg.id, result)
+    }
+    case 'session/set_config_option': {
+      if (!configOptionsEnabled) {
+        return fail(msg.id, -32601, 'Method not found: ' + msg.method)
+      }
+      const sessionId = msg.params?.sessionId
+      const overrides = sessionConfigOptionValues.get(sessionId)
+      if (!overrides) return fail(msg.id, -32602, 'session not found: ' + sessionId)
+      if (typeof msg.params?.value === 'string')
+        overrides.set(msg.params.configId, msg.params.value)
+      return reply(msg.id, { configOptions: buildConfigOptions(sessionId) })
     }
     case 'session/load': {
       if (!loadSessionEnabled) {

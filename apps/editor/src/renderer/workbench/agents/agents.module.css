@@ -2841,10 +2841,151 @@
 .configBar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--acp-act-gap);
-  margin-right: auto;
+  /* Fill the action row so the items container tracks the sidebar width. On
+     its natural width the bar collapses the moment entries overflow (they go
+     position:absolute, out of the intrinsic size) and — with free space going
+     to the auto margin instead of the bar — the ResizeObserver never sees the
+     container grow back: narrow once and the bar stays collapsed at any width. */
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Single-line home of the entries plus the "…" overflow button. Overflowed
+   entries leave the flex line (see .configBarEntry[data-overflowed]) instead
+   of wrapping, so their natural offsetWidths stay measurable for the packing. */
+.configBarItems {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--acp-act-gap);
+  overflow: hidden;
+}
+
+.configBarEntry {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.configBarEntry[data-overflowed='true'] {
+  /* Out of the flex line so the ⋯ button (in flow right after the visible
+     tail) stays visible; hidden but still laid out, so offsetWidth remains
+     the natural width the measurement relies on. */
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.configOverflowButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--acp-act-btn-sm);
+  height: var(--acp-act-btn-sm);
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.configOverflowButton:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+.configOverflowButton:focus-visible {
+  outline: 1px solid var(--vscode-badge-progressBackground, #4fa6e2);
+  outline-offset: 1px;
+}
+
+.configOverflowButton[aria-expanded='true'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+/* Always mounted for measurement; without overflow it leaves the flex line
+   and turns invisible (offsetWidth stays measurable either way). */
+.configOverflowButton[data-empty='true'] {
+  position: absolute;
+  visibility: hidden;
+}
+
+.configOverflowPanel {
+  min-width: 160px;
+  max-width: 280px;
+  overflow-y: auto;
+  background: var(--vscode-agent-messageBackground, #2a2a2a);
+  border: 1px solid var(--vscode-workbench-border, #555);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
+  padding: 2px 0;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+}
+
+.configOverflowRowWrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.configOverflowRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+.configOverflowRow:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.configOverflowRow[aria-expanded='true'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+.configOverflowRowName {
+  flex-shrink: 0;
+}
+
+.configOverflowRowValue {
+  flex: 1;
+  min-width: 0;
+  color: var(--vscode-agent-messageRoleForeground, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.configOverflowRow[aria-expanded='true'] .configOverflowRowValue {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+.configOverflowRowChevron {
+  flex-shrink: 0;
+  transition: transform 0.1s ease;
+}
+
+.configOverflowRow[aria-expanded='true'] .configOverflowRowChevron {
+  transform: rotate(90deg);
+}
+
+.configOverflowRowBody {
+  padding: 2px 0 4px;
+  border-bottom: 1px solid var(--vscode-workbench-border, #555);
 }
 
 .configTriggerWrap {
@@ -2905,10 +3046,6 @@
 }
 
 .configPopover {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 4px);
-  z-index: 6;
   min-width: 160px;
   max-width: 280px;
   max-height: 260px;

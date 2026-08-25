@@ -13,6 +13,10 @@
  *  Rows are the effective env ids straight from settings.json — the same
  *  strings the spawned process receives — so the highlighted row cannot
  *  disagree with the model the sub-agents actually run.
+ *
+ *  `SubagentModelPanel` is the surface-free content (all logic included) so the
+ *  overflow menu can render the same pick inline; the picker is just the
+ *  trigger + anchored shell around it.
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useRef, useState, type HTMLAttributes } from 'react'
@@ -44,6 +48,70 @@ export function SubagentModelPicker({
   onOpen: () => void
   onClose: () => void
 }) {
+  const { subagentModelEnv } = useClaudeConfig()
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
+
+  const current = subagentModelEnv ?? INHERIT
+  const triggerValue =
+    current === INHERIT ? localize('acp.subagent.triggerInherit', 'Sub: inherit') : current
+  const triggerTooltip = `${localize('acp.subagent.label', 'Sub Agent')}: ${
+    current === INHERIT ? localize('acp.subagent.inherit', 'Follow main model') : current
+  }`
+
+  return (
+    <div className={styles['configTriggerWrap']} data-testid="acp-subagent-picker">
+      <button
+        type="button"
+        className={styles['configTrigger']}
+        data-testid="acp-subagent-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-tooltip={triggerTooltip}
+        onMouseDown={(e) => {
+          // The surface's outside-press listens on document mousedown; without
+          // this the same click would dismiss and the click below would
+          // immediately reopen the panel.
+          e.stopPropagation()
+        }}
+        onClick={(e) => {
+          if (open) {
+            onClose()
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAnchor({ x: rect.left, y: rect.top })
+          onOpen()
+        }}
+      >
+        <Users size={13} strokeWidth={1.75} aria-hidden="true" />
+        <span className={styles['configTriggerValue']}>{triggerValue}</span>
+        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      {open && anchor !== null ? (
+        <AnchoredSurface
+          x={anchor.x}
+          y={anchor.y}
+          placement="top-start"
+          offset={4}
+          onClose={onClose}
+          surfaceProps={
+            {
+              className: styles['subagentPanel'],
+              role: 'listbox',
+              'aria-label': localize('acp.subagent.label', 'Sub Agent'),
+              'data-testid': 'acp-subagent-panel',
+            } as HTMLAttributes<HTMLDivElement>
+          }
+        >
+          <SubagentModelPanel session={session} />
+        </AnchoredSurface>
+      ) : null}
+    </div>
+  )
+}
+
+/** Surface-free pick content; renders inside any host (picker surface, overflow menu). */
+export function SubagentModelPanel({ session }: { session: IAcpSession }) {
   const { agentSettings, subagentModelEnv, setSubagentModel } = useClaudeConfig()
   const { providers } = useProviderRegistry()
   const notifications = useService(INotificationService)
@@ -51,7 +119,6 @@ export function SubagentModelPicker({
   // compact for everyone who only opened it to look.
   const [changed, setChanged] = useState(false)
   const pendingWrite = useRef<Promise<void> | undefined>(undefined)
-  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
 
   const provider = useMemo(
     () =>
@@ -121,96 +188,41 @@ export function SubagentModelPicker({
     })),
   ]
 
-  const triggerValue =
-    current === INHERIT ? localize('acp.subagent.triggerInherit', 'Sub: inherit') : current
-  const triggerTooltip = `${localize('acp.subagent.label', 'Sub Agent')}: ${
-    current === INHERIT ? localize('acp.subagent.inherit', 'Follow main model') : current
-  }`
-
   return (
-    <div className={styles['configTriggerWrap']} data-testid="acp-subagent-picker">
-      <button
-        type="button"
-        className={styles['configTrigger']}
-        data-testid="acp-subagent-picker-trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        data-tooltip={triggerTooltip}
-        onMouseDown={(e) => {
-          // The surface's outside-press listens on document mousedown; without
-          // this the same click would dismiss and the click below would
-          // immediately reopen the panel.
-          e.stopPropagation()
-        }}
-        onClick={(e) => {
-          if (open) {
-            onClose()
-            return
-          }
-          const rect = e.currentTarget.getBoundingClientRect()
-          setAnchor({ x: rect.left, y: rect.top })
-          onOpen()
-        }}
-      >
-        <Users size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['configTriggerValue']}>{triggerValue}</span>
-        <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-      {open && anchor !== null ? (
-        <AnchoredSurface
-          x={anchor.x}
-          y={anchor.y}
-          placement="top-start"
-          offset={4}
-          onClose={onClose}
-          surfaceProps={
-            {
-              className: styles['subagentPanel'],
-              role: 'listbox',
-              'aria-label': localize('acp.subagent.label', 'Sub Agent'),
-              'data-testid': 'acp-subagent-panel',
-            } as HTMLAttributes<HTMLDivElement>
-          }
+    <>
+      <div className={styles['configPopoverGroupLabel']}>
+        {localize('acp.subagent.label', 'Sub Agent')}
+      </div>
+      <div className={styles['subagentPanelDesc']}>
+        {localize(
+          'acp.subagent.panelDesc',
+          'Sub agents run with this model. It is read when they spawn, so changes apply from the next session.',
+        )}
+      </div>
+      {rows.map((row) => (
+        <div
+          key={row.key}
+          role="option"
+          aria-selected={row.active}
+          data-active={row.active}
+          className={styles['configPopoverItem']}
+          data-tooltip={row.label}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            pick(row.value)
+          }}
         >
-          <div className={styles['configPopoverGroupLabel']}>
-            {localize('acp.subagent.label', 'Sub Agent')}
-          </div>
-          <div className={styles['subagentPanelDesc']}>
-            {localize(
-              'acp.subagent.panelDesc',
-              'Sub agents run with this model. It is read when they spawn, so changes apply from the next session.',
-            )}
-          </div>
-          {rows.map((row) => (
-            <div
-              key={row.key}
-              role="option"
-              aria-selected={row.active}
-              data-active={row.active}
-              className={styles['configPopoverItem']}
-              data-tooltip={row.label}
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pick(row.value)
-              }}
-            >
-              <span className={styles['configPopoverItemName']}>{row.label}</span>
-            </div>
-          ))}
-          {changed ? (
-            <div className={styles['subagentPanelHint']}>
-              {localize('acp.subagent.nextSession', 'Takes effect next session')} ·{' '}
-              <button
-                type="button"
-                data-testid="acp-subagent-restart"
-                onClick={() => void restart()}
-              >
-                {localize('acp.subagent.restartNow', 'Restart now')}
-              </button>
-            </div>
-          ) : null}
-        </AnchoredSurface>
+          <span className={styles['configPopoverItemName']}>{row.label}</span>
+        </div>
+      ))}
+      {changed ? (
+        <div className={styles['subagentPanelHint']}>
+          {localize('acp.subagent.nextSession', 'Takes effect next session')} ·{' '}
+          <button type="button" data-testid="acp-subagent-restart" onClick={() => void restart()}>
+            {localize('acp.subagent.restartNow', 'Restart now')}
+          </button>
+        </div>
       ) : null}
-    </div>
+    </>
   )
 }

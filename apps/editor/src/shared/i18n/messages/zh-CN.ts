@@ -1674,6 +1674,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mcp.picker.defaultHint':
     '左侧复选框只作用于当前会话；人形/文件夹开关分别是用户级与工作区级默认（工作区优先，可回到继承）。',
 
+  // --- ACP: config bar overflow ---
+  'acp.config.more': '更多选项…',
+
   // --- ACP: model switch context guard ---
   'acp.modelSwitch.shrink.message': '切换到 "{model}"？',
   'acp.modelSwitch.shrink.detail':

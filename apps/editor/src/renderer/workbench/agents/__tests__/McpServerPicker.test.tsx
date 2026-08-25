@@ -3,9 +3,12 @@
  *  McpServerPicker tests — covers the trigger count, popover interactions
  *  (toggle / reset / default switch / open-settings), the custom-selection
  *  marker, and the absence cases (read-only session, empty pool, no service).
+ *  Plus direct-render tests of `McpPickerPanel` (the surface-free content)
+ *  proving it works without the picker's AnchoredSurface shell.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
   Emitter,
@@ -33,7 +36,7 @@ import { IAcpSessionService as IAcpSessionServiceId } from '../../../services/ac
 import type { IMcpServerEnablementService } from '../../../services/acp/mcpServerEnablementService.js'
 import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
 import type { McpServerDefinition } from '../../../services/acp/acpMcpServers.js'
-import { McpServerPicker } from '../McpServerPicker.js'
+import { McpPickerPanel, McpServerPicker } from '../McpServerPicker.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
@@ -142,6 +145,33 @@ const POOL: readonly McpServerDefinition[] = [
   { name: 'web', transport: 'stdio', disabled: true, source: 'global' },
 ]
 
+/** Controlled-open harness mirroring ConfigOptionsBar's openId wiring. */
+function PickerHarness({
+  session,
+  onOpen,
+  onClose,
+}: {
+  session: FakeSession
+  onOpen: () => void
+  onClose: () => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  return (
+    <McpServerPicker
+      session={session}
+      open={isOpen}
+      onOpen={() => {
+        setIsOpen(true)
+        onOpen()
+      }}
+      onClose={() => {
+        setIsOpen(false)
+        onClose()
+      }}
+    />
+  )
+}
+
 function renderPicker({
   session = makeSession(),
   service,
@@ -163,14 +193,16 @@ function renderPicker({
   const inst = new InstantiationService(services)
   const onOpen = vi.fn()
   const onClose = vi.fn()
-  const utils = render(
-    <McpServerPicker session={session} open={open} onOpen={onOpen} onClose={onClose} />,
-    {
-      wrapper: ({ children }) => (
-        <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
-      ),
-    },
-  )
+  const utils = render(<PickerHarness session={session} onOpen={onOpen} onClose={onClose} />, {
+    wrapper: ({ children }) => (
+      <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
+    ),
+  })
+  // The popover anchors to the trigger's click point, so it only exists after
+  // the trigger was clicked — open it the same way production does.
+  if (open) {
+    fireEvent.click(screen.getByTestId('acp-mcp-picker-trigger'))
+  }
   return { ...utils, onOpen, onClose, enablement }
 }
 
@@ -394,5 +426,58 @@ describe('McpServerPicker', () => {
     await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+describe('McpPickerPanel (direct render)', () => {
+  function renderPanel({
+    session = makeSession(),
+    withService = true,
+    onRequestClose,
+  }: {
+    session?: FakeSession
+    withService?: boolean
+    onRequestClose?: () => void
+  }) {
+    const service = makeService(POOL)
+    const services = new ServiceCollection()
+    if (withService) {
+      services.set(IAcpSessionServiceId, service as unknown as IAcpSessionService)
+    }
+    services.set(IMcpServerEnablementServiceId, new StubEnablement())
+    const inst = new InstantiationService(services)
+    render(
+      <McpPickerPanel
+        session={session}
+        {...(onRequestClose !== undefined ? { onRequestClose } : {})}
+      />,
+      {
+        wrapper: ({ children }) => (
+          <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
+        ),
+      },
+    )
+    return { service }
+  }
+
+  it('renders rows and toggles without the picker shell', () => {
+    const { service } = renderPanel({})
+    // The surface shell (and its testid) belongs to the picker, not the panel.
+    expect(screen.queryByTestId('acp-mcp-picker-popover')).toBeNull()
+    expect(rowOf('fs')).toBeTruthy()
+    fireEvent.click(checkboxOf('fs'))
+    expect(service.setSessionMcpServers).toHaveBeenCalledWith('s1', ['docs'])
+  })
+
+  it('requests closing the host surface before opening the MCP settings', () => {
+    const onRequestClose = vi.fn()
+    renderPanel({ onRequestClose })
+    fireEvent.click(screen.getByTestId('acp-mcp-picker-open-settings'))
+    expect(onRequestClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders nothing without the ACP session service', () => {
+    renderPanel({ withService: false })
+    expect(screen.queryByTestId('acp-mcp-picker-row')).toBeNull()
   })
 })
