@@ -6,6 +6,7 @@
 import {
   IContextKeyService,
   IEditorGroupsService,
+  REMOTE_SCHEME,
   URI,
   type ServicesAccessor,
   type UriComponents,
@@ -26,6 +27,13 @@ const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
  * binding (e.g. `editor.action.rename`) when the cursor is in a code editor.
  */
 export const EXPLORER_FOCUS_WHEN = `focusedView == '${EXPLORER_TREE_VIEW_ID}' && !editorTextFocus && !terminalFocus`
+
+/**
+ * Menu when-clause for commands acting on filesystem-backed resources: local
+ * `file:` plus remote workspaces. Parenthesized so appending `&& …` (which binds
+ * tighter than `||`) narrows the whole disjunction rather than only the remote arm.
+ */
+export const RESOURCE_FILE_OR_REMOTE_WHEN = `(resourceScheme == file || resourceScheme == ${REMOTE_SCHEME})`
 
 export function reviveUri(value: URI | UriComponents | null): URI | null {
   if (!value) return null

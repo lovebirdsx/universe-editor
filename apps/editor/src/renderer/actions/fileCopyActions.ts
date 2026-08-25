@@ -11,14 +11,16 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
-import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
+import { isFileSystemUri, resourceDisplayPath } from '../services/files/fileSystemScheme.js'
+import { RESOURCE_FILE_OR_REMOTE_WHEN, reviveUri, type ITargetArg } from './fileActionsCommon.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
 /**
  * Resolve every file the Copy Name/Path command should act on. From the Explorer
  * this honors multi-select (all selected rows when the invoked row is part of the
  * selection); from an editor tab or the command palette it falls back to the
- * explicit target then the active editor. Filters to on-disk (`file`) resources.
+ * explicit target then the active editor. Filters to filesystem-backed
+ * (`file` / `remote-ssh`) resources.
  */
 function resolveUris(accessor: ServicesAccessor, args: unknown[]): URI[] {
   const arg = args[0] as ITargetArg | undefined
@@ -27,13 +29,13 @@ function resolveUris(accessor: ServicesAccessor, args: unknown[]): URI[] {
   if (explicit) {
     const selection = explorer.selection
     if (selection.length > 1 && selection.some((uri) => sameUri(uri, explicit))) {
-      return selection.filter((uri) => uri.scheme === 'file' && !explorer.isRoot(uri))
+      return selection.filter((uri) => isFileSystemUri(uri) && !explorer.isRoot(uri))
     }
-    return explicit.scheme === 'file' ? [explicit] : []
+    return isFileSystemUri(explicit) ? [explicit] : []
   }
   const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
   const resource = active instanceof FileEditorInput ? active.resource : null
-  return resource && resource.scheme === 'file' ? [resource] : []
+  return resource && isFileSystemUri(resource) ? [resource] : []
 }
 
 export class CopyFileNameAction extends Action2 {
@@ -86,7 +88,12 @@ export class CopyFilePathAction extends Action2 {
       title: localize2('action.copyFilePath.title', 'Copy Path'),
       category: localize2('command.category.file', 'File'),
       menu: [
-        { id: MenuId.EditorTabContext, group: '2_path', order: 2, when: 'resourceScheme == file' },
+        {
+          id: MenuId.EditorTabContext,
+          group: '2_path',
+          order: 2,
+          when: RESOURCE_FILE_OR_REMOTE_WHEN,
+        },
       ],
       f1: true,
     })
@@ -94,7 +101,7 @@ export class CopyFilePathAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const uris = resolveUris(accessor, args)
     if (uris.length === 0) return
-    await navigator.clipboard.writeText(uris.map((uri) => uri.fsPath).join('\n'))
+    await navigator.clipboard.writeText(uris.map((uri) => resourceDisplayPath(uri)).join('\n'))
   }
 }
 
@@ -106,7 +113,12 @@ export class CopyFileRelativePathAction extends Action2 {
       title: localize2('action.copyRelativeFilePath.title', 'Copy Relative Path'),
       category: localize2('command.category.file', 'File'),
       menu: [
-        { id: MenuId.EditorTabContext, group: '2_path', order: 3, when: 'resourceScheme == file' },
+        {
+          id: MenuId.EditorTabContext,
+          group: '2_path',
+          order: 3,
+          when: RESOURCE_FILE_OR_REMOTE_WHEN,
+        },
       ],
       f1: true,
     })
@@ -114,12 +126,15 @@ export class CopyFileRelativePathAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const uris = resolveUris(accessor, args)
     if (uris.length === 0) return
+    // The remote scheme's case policy is registered main-side only, so a Windows
+    // client compares a POSIX remote's paths leniently. Harmless: the result is
+    // always a suffix of the file's own path.
     const root = accessor.get(IWorkspaceService).current?.folder
     const uriId = accessor.get(IUriIdentityService)
     const text = uris
       .map((uri) => {
-        if (!root) return uri.fsPath
-        return uriId.relativePathUnder(root.fsPath, uri.fsPath) ?? uri.fsPath
+        if (!root) return resourceDisplayPath(uri)
+        return uriId.relativePath(root, uri) ?? resourceDisplayPath(uri)
       })
       .join('\n')
     await navigator.clipboard.writeText(text)

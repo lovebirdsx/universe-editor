@@ -7,8 +7,9 @@
  *  Session), so the per-target wiring only decides what to *do* with the URIs.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, toDisplayPath } from '@universe-editor/platform'
+import { URI } from '@universe-editor/platform'
 import { readUriList } from '@universe-editor/workbench-ui'
+import { resourceDisplayPath } from '../files/fileSystemScheme.js'
 
 /**
  * Extract the dropped resources as URIs. OS-external files take priority (they
@@ -75,7 +76,7 @@ export function toMentionName(uri: URI, workspaceRoot?: URI): { uri: string; nam
     if (rel) return { uri: resource, name: rel }
   }
   // 非 file: 的 URI（如远端资源）无本机路径，回退到展示形态的 path 段而非折进 authority 的 fsPath。
-  return { uri: resource, name: uri.scheme === 'file' ? uri.fsPath : toDisplayPath(uri.path) }
+  return { uri: resource, name: resourceDisplayPath(uri) }
 }
 
 function relativeUnder(root: URI, uri: URI): string | undefined {

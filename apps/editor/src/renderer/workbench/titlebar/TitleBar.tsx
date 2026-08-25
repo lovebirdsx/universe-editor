@@ -11,14 +11,12 @@ import {
   markAsSingleton,
   MutableDisposable,
   combinedDisposable,
-  toDisplayPath,
   type IEditorGroup,
   type IWorkspace,
-  type URI,
   type EditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { isFileSystemScheme } from '../../services/files/fileSystemScheme.js'
+import { isFileSystemScheme, resourceDisplayPath } from '../../services/files/fileSystemScheme.js'
 import { workspaceTitleLabel } from '../../services/workspace/workspaceLabel.js'
 import { GoToFileAction } from '../../actions/fileOpenActions.js'
 import { AgentStatusIndicator } from './AgentStatusIndicator.js'
@@ -49,11 +47,6 @@ function leftSegment(
   if (!resource || !isFileSystemScheme(resource.scheme)) return editor.getName()
   if (!workspace) return resourceDisplayPath(resource)
   return uriIdentity.relativePath(workspace.folder, resource) ?? resourceDisplayPath(resource)
-}
-
-/** Native path for local files; a Windows remote's `/E:/…` canonical path renders as `E:\…`. */
-function resourceDisplayPath(resource: URI): string {
-  return resource.scheme === 'file' ? resource.fsPath : toDisplayPath(resource.path)
 }
 
 /**

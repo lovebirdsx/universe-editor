@@ -28,6 +28,7 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { isFileSystemUri } from '../services/files/fileSystemScheme.js'
+import { RESOURCE_FILE_OR_REMOTE_WHEN } from './fileActionsCommon.js'
 
 const URI_STRING_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
@@ -82,7 +83,7 @@ export class RevealInExplorerAction extends Action2 {
           id: MenuId.EditorTabContext,
           group: 'reveal',
           order: 1,
-          when: 'resourceScheme == file || resourceScheme == remote-ssh',
+          when: RESOURCE_FILE_OR_REMOTE_WHEN,
         },
       ],
       f1: false,

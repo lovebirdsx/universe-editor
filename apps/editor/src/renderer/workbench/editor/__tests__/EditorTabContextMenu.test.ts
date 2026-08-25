@@ -5,7 +5,9 @@
  *  With) only show for on-disk `file:` tabs; "Copy Name" shows for *every* tab
  *  (it copies the input's display name); "Rename Agent Session…" and "Open
  *  Session Location" only for acp.session tabs. A diff tab (virtual `diff:`
- *  scheme) shows only Copy Name.
+ *  scheme) shows only Copy Name. A remote (`remote-ssh`) tab shows Copy Name
+ *  plus the filesystem-backed path commands, but not OS reveal nor Reopen With
+ *  (both still gated on `file:` / extra context keys).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -71,6 +73,14 @@ const PATH_COMMANDS = [
   ReopenWithAction.ID,
 ]
 
+// Path commands a filesystem-backed (`file:` / `remote-ssh`) tab offers —
+// excludes Reveal in OS (needs `remoteRevealInOsSupported`) and Reopen With.
+const REMOTE_PATH_COMMANDS = [
+  CopyFilePathAction.ID,
+  CopyFileRelativePathAction.ID,
+  RevealInExplorerAction.ID,
+]
+
 afterEach(() => {
   while (disposables.length) disposables.pop()!.dispose()
 })
@@ -116,6 +126,15 @@ describe('EditorTabContext menu — per-tab gating', () => {
     expect(commands).toContain(RenameAgentSessionAction.ID)
     expect(commands).toContain(RevealAgentSessionInOSAction.ID)
     for (const id of PATH_COMMANDS) expect(commands).not.toContain(id)
+  })
+
+  it('a remote-ssh tab shows Copy Name and the filesystem path commands, not OS reveal nor Reopen With', () => {
+    register()
+    const commands = menuCommandsFor({ resourceScheme: 'remote-ssh', activeEditorType: 'file' })
+    expect(commands).toContain(CopyEditorNameAction.ID)
+    for (const id of REMOTE_PATH_COMMANDS) expect(commands).toContain(id)
+    expect(commands).not.toContain(RevealInOSExplorerAction.ID)
+    expect(commands).not.toContain(ReopenWithAction.ID)
   })
 
   it('a file tab does not show the session reveal command', () => {

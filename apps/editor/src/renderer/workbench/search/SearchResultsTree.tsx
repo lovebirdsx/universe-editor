@@ -38,6 +38,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { resourceDisplayPath } from '../../services/files/fileSystemScheme.js'
 import { useObservable } from '../useService.js'
 import { searchViewState } from './searchViewState.js'
 import { searchSession } from './searchSession.js'
@@ -269,7 +270,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       } else if (n.kind === 'file') {
         items.push({
           label: localize('search.menu.copyPath', 'Copy Path'),
-          run: () => void navigator.clipboard?.writeText(n.resource.fsPath),
+          run: () => void navigator.clipboard?.writeText(resourceDisplayPath(n.resource)),
         })
         items.push({
           label: localize('search.menu.copyAll', 'Copy All'),
