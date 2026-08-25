@@ -581,7 +581,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.mcpServers':
     '转发给 Agent session/new 的 MCP 服务器，以服务器名为键。stdio：`{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`。http/sse：`{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`。工作区根目录的 `.mcp.json` 会按同名条目覆盖此处的定义。默认启停开关不属于这些条目——在 MCP 设置面板或会话选择器中按用户/工作区两级设置。Agent 不支持的传输（http/sse）会跳过并发出警告；env/header 值会以明文存储 - 请将密钥保存在真实环境变量中。',
   'settings.acp.notifications.enabled':
-    '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。',
+    '当编辑器窗口未聚焦且 Agent 需要注意（权限请求、问题、任务完成或错误）时，显示系统桌面通知。点击通知会聚焦窗口并跳转到该会话。会自动继续的计划确认卡片（见 `acp.plan.autoExecute`）不会通知。',
   'settings.acp.permissions': '无需提示即可自动批准的工具调用类型（例如 "fs.read"）。',
   'settings.acp.plan.autoExecute':
     '计划模式的会话完成计划（"Ready to code?"）后，经确认卡片上的短暂倒计时自动以所选模式继续——悬停或与卡片交互即可接管。"off" 表示始终等待手动选择。计划确认卡片上的复选框会把此设置切换为 "bypassPermissions"。',

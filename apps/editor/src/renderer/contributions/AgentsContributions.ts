@@ -216,7 +216,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             default: true,
             description: localize(
               'settings.acp.notifications.enabled',
-              'Show an OS desktop notification when an agent needs attention (permission request, question, task completed, or error) while the editor window is not focused. Clicking the notification focuses the window and jumps to that session.',
+              'Show an OS desktop notification when an agent needs attention (permission request, question, task completed, or error) while the editor window is not focused. Clicking the notification focuses the window and jumps to that session. Plan-review cards that auto-continue on their own (see `acp.plan.autoExecute`) do not notify.',
             ),
           },
           'acp.defaultCollapseModes': {

@@ -133,6 +133,41 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
+  it('skips the permission notification when the plan card auto-executes', () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    // `acp.plan.autoExecute` 非 off 时 service 给 plan 审查卡附 autoResolve：
+    // 卡片自己倒计时继续，用户无需介入，不该被拉回窗口。
+    s.pendingPermission.set(
+      {
+        toolCallId: 't',
+        title: 'Ready to code?',
+        kind: 'switch_mode',
+        options: [],
+        autoResolve: { optionId: 'bypassPermissions', delayMs: 3000 },
+      } as never,
+      undefined,
+    )
+    expect(t.notify).not.toHaveBeenCalled()
+    // 自动继续后回 idle 仍照常通知任务完成。
+    s.pendingPermission.set(undefined, undefined)
+    s.status.set('idle', undefined)
+    expect(t.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('still fires for a plan card that waits for a manual choice', () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.pendingPermission.set(
+      { toolCallId: 't', title: 'Ready to code?', kind: 'switch_mode', options: [] } as never,
+      undefined,
+    )
+    expect(t.notify).toHaveBeenCalledTimes(1)
+  })
+
   it('fires once on elicitation rising edge', () => {
     const t = setup()
     const s = makeSession('a')

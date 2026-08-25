@@ -89,8 +89,13 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
       const permission = session.pendingPermission.read(r)
       const elicitation = session.pendingElicitation.read(r)
 
-      // Permission request — rising edge only.
-      if (permission !== undefined && !permissionLatched) this._fire('permission', session)
+      // Permission request — rising edge only. A card the service marked as
+      // auto-resolving (`acp.plan.autoExecute` non-off) needs no attention: it
+      // counts down and continues on its own, so pulling the user back to the
+      // window would be noise.
+      if (permission !== undefined && !permissionLatched && permission.autoResolve === undefined) {
+        this._fire('permission', session)
+      }
       permissionLatched = permission !== undefined
 
       // Agent elicitation — rising edge only.
