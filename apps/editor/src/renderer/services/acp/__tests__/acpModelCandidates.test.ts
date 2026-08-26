@@ -11,7 +11,12 @@ import {
 
 function provider(
   models: readonly string[],
-  opts: { discover?: boolean; protocol?: string; windows?: Record<string, number> } = {},
+  opts: {
+    discover?: boolean
+    protocol?: string
+    windows?: Record<string, number>
+    effortLevels?: Record<string, string[]>
+  } = {},
 ): AiResolvedProvider {
   return {
     id: 'gw',
@@ -23,7 +28,12 @@ function provider(
         models: models.map((m) => ({
           channelModel: m,
           ref: m,
-          knowledge: opts.windows?.[m] !== undefined ? { maxInputTokens: opts.windows[m] } : {},
+          knowledge: {
+            ...(opts.windows?.[m] !== undefined ? { maxInputTokens: opts.windows[m] } : {}),
+            ...(opts.effortLevels?.[m] !== undefined
+              ? { supportsReasoningEffort: opts.effortLevels[m] }
+              : {}),
+          },
         })),
       },
     ],
@@ -115,6 +125,21 @@ describe('candidateModelCandidatesForProtocol', () => {
       { id: 'a' },
     ])
   })
+
+  it('carries the declared effort levels when knowledge has them', () => {
+    expect(
+      candidateModelCandidatesForProtocol(
+        provider(['a', 'b'], { effortLevels: { a: ['low', 'high'] } }),
+        CLAUDE_AGENT_PROTOCOL,
+      ),
+    ).toEqual([{ id: 'a', effortLevels: ['low', 'high'] }, { id: 'b' }])
+  })
+
+  it('omits effort levels when knowledge has none', () => {
+    expect(candidateModelCandidatesForProtocol(provider(['a']), CLAUDE_AGENT_PROTOCOL)).toEqual([
+      { id: 'a' },
+    ])
+  })
 })
 
 describe('extraModelCandidatesForAgentSettings', () => {
@@ -136,6 +161,49 @@ describe('extraModelCandidatesForAgentSettings', () => {
       extraModelCandidatesForAgentSettings('kimi-k3', undefined, CLAUDE_AGENT_PROTOCOL),
     ).toEqual([{ id: 'kimi-k3' }])
   })
+
+  it('resolves the pick own effort levels from the provider declaration', () => {
+    expect(
+      extraModelCandidatesForAgentSettings(
+        'b',
+        provider(['a', 'b'], { effortLevels: { a: ['low'], b: ['low', 'medium', 'high'] } }),
+        CLAUDE_AGENT_PROTOCOL,
+      ),
+    ).toEqual([
+      { id: 'b', effortLevels: ['low', 'medium', 'high'] },
+      { id: 'a', effortLevels: ['low'] },
+    ])
+  })
+
+  it('leaves the pick effort levels undefined when the provider does not declare it', () => {
+    expect(
+      extraModelCandidatesForAgentSettings('kimi-k3', undefined, CLAUDE_AGENT_PROTOCOL),
+    ).toEqual([{ id: 'kimi-k3' }])
+  })
+
+  it('matches a context-lane pick to the bare declared entry, carrying window and effort', () => {
+    expect(
+      extraModelCandidatesForAgentSettings(
+        'deepseek-v4-pro[1m]',
+        provider(['deepseek-v4-pro'], {
+          windows: { 'deepseek-v4-pro': 1000000 },
+          effortLevels: { 'deepseek-v4-pro': ['low', 'high', 'max'] },
+        }),
+        CLAUDE_AGENT_PROTOCOL,
+      ),
+    ).toEqual([
+      {
+        id: 'deepseek-v4-pro[1m]',
+        contextWindow: 1000000,
+        effortLevels: ['low', 'high', 'max'],
+      },
+      {
+        id: 'deepseek-v4-pro',
+        contextWindow: 1000000,
+        effortLevels: ['low', 'high', 'max'],
+      },
+    ])
+  })
 })
 
 describe('contextWindowFor', () => {
@@ -145,6 +213,12 @@ describe('contextWindowFor', () => {
       { id: 'b', contextWindow: 200 },
     ]
     expect(contextWindowFor(candidates, 'b')).toBe(200)
+  })
+
+  it('matches a context-lane id to the bare candidate', () => {
+    expect(
+      contextWindowFor([{ id: 'deepseek-v4-pro', contextWindow: 1000000 }], 'deepseek-v4-pro[1m]'),
+    ).toBe(1000000)
   })
 
   it('never guesses a window for an unnamed model', () => {

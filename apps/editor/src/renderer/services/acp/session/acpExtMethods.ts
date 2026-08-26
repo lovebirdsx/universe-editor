@@ -119,6 +119,17 @@ export const ACP_META_KEYS = {
   extraModels: 'extraModels',
   /**
    * session/new + session/load + session/resume top-level _meta carrying the
+   * reasoning-effort levels the editor knows for each extra model
+   * (`Array<{ id, effortLevels: string[] }>`). Parallels `extraModels` — both
+   * forks read it top-level — but keeps the effort capability bit that the
+   * flat `string[]` above cannot express. A gateway model (deepseek-pro-v4)
+   * whose `supportsReasoningEffort` the editor declares in `aiSettings.json`
+   * then lights up the session config bar's effort selector; without it the
+   * fork's own catalogue has no effort info and the selector stays hidden.
+   */
+  extraModelEffort: 'extraModelEffort',
+  /**
+   * session/new + session/load + session/resume top-level _meta carrying the
    * context window (in tokens) the editor resolved for the CURRENT model — a
    * single number, not a map. Only the codex fork reads it: it overrides codex's
    * built-in fallback (272K) for a gateway model whose id is absent from codex's

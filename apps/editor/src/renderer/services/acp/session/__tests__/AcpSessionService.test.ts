@@ -5125,8 +5125,8 @@ describe('AcpSessionService extra model candidates injection', () => {
     client: FakeAcpClientService,
     candidates: IAcpModelCandidateService,
     notification: StubNotificationService = new StubNotificationService(),
+    history: AcpSessionHistoryService = makeHistory(),
   ): AcpSessionService {
-    const history = makeHistory()
     const telemetry = new NoopTelemetryService()
     const agentDefaults = makeAgentDefaults()
     return new AcpSessionService(
@@ -5186,6 +5186,99 @@ describe('AcpSessionService extra model candidates injection', () => {
       const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
       expect(meta).toBeDefined()
       expect(meta).not.toHaveProperty('extraModels')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('stamps the extra model effort levels onto session/new _meta', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        effortLevels: { 'gw/one': ['low', 'high'], 'gw/two': ['low', 'medium', 'high'] },
+      }),
+    )
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      expect(meta?.extraModelEffort).toEqual([
+        { id: 'gw/one', effortLevels: ['low', 'high'] },
+        { id: 'gw/two', effortLevels: ['low', 'medium', 'high'] },
+      ])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('omits the extraModelEffort key from session/new _meta when no candidate declares effort levels', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubAcpModelCandidateService({ models: EXTRA_MODELS }))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      expect(meta).not.toHaveProperty('extraModelEffort')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('stamps the extra model effort levels onto session/load _meta', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const history = makeHistory()
+    history.add({
+      agentId: 'claude-code',
+      sessionIdOnAgent: 'agent-load-effort',
+      title: 'resume me',
+      hasMessages: true,
+    })
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        effortLevels: { 'gw/one': ['low', 'high'] },
+      }),
+      new StubNotificationService(),
+      history,
+    )
+    try {
+      await svc.resumeSession('agent-load-effort')
+      const meta = client.connected[0]!.agent.loadSessionCalls[0]!._meta
+      expect(meta).toMatchObject({
+        extraModelEffort: [{ id: 'gw/one', effortLevels: ['low', 'high'] }],
+      })
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('stamps the extra model effort levels onto session/fork _meta', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-effort' },
+    })
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        effortLevels: { 'gw/one': ['low', 'high'], 'gw/two': ['low', 'medium', 'high'] },
+      }),
+    )
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+      await svc.forkSession(s.id, messageId)
+      const forkAgent = client.connected.find((c) => c.agent.forkCalls.length > 0)!
+      expect(forkAgent.agent.forkCalls[0]?._meta).toMatchObject({
+        extraModelEffort: [
+          { id: 'gw/one', effortLevels: ['low', 'high'] },
+          { id: 'gw/two', effortLevels: ['low', 'medium', 'high'] },
+        ],
+      })
     } finally {
       svc.dispose()
     }

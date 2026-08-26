@@ -12,6 +12,7 @@ import type { CancellationToken } from '../base/cancellation.js'
 import { Emitter, type Event } from '../base/event.js'
 import { Disposable, type IDisposable, toDisposable } from '../base/lifecycle.js'
 import { buildModelConfigSchema, composeModelId } from './aiModelConfiguration.js'
+import { lookupModelKnowledge } from './aiModelLane.js'
 import {
   protocolRuntime,
   type AiModelKnowledge,
@@ -222,7 +223,7 @@ export class AiModelRegistry extends Disposable {
     return {
       channelModel,
       ref: channelModel,
-      knowledge: this._knowledge[channelModel] ?? {},
+      knowledge: lookupModelKnowledge(this._knowledge, channelModel) ?? {},
     }
   }
 

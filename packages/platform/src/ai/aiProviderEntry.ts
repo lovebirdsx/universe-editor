@@ -9,6 +9,7 @@
 
 import type { AiRemoteSourceSpec } from './aiRemoteSources.js'
 import type { AiModelCapabilities, AiModelConfigSchema, AiWireProtocol } from './aiModelTypes.js'
+import { lookupModelKnowledge } from './aiModelLane.js'
 
 /**
  * Intrinsic properties of a model — the things that do not change when you reach
@@ -287,11 +288,15 @@ function resolveModelRef(
   knowledge: Readonly<Record<string, AiModelKnowledge>>,
 ): AiResolvedProtocolModel {
   if (typeof ref === 'string') {
-    return { channelModel: ref, ref, knowledge: knowledge[ref] ?? {} }
+    return { channelModel: ref, ref, knowledge: lookupModelKnowledge(knowledge, ref) ?? {} }
   }
   const key = ref.ref ?? ref.id ?? ''
   const channelModel = ref.id ?? key
-  return { channelModel, ref: key, knowledge: applyOverride(knowledge[key], ref) }
+  return {
+    channelModel,
+    ref: key,
+    knowledge: applyOverride(lookupModelKnowledge(knowledge, key), ref),
+  }
 }
 
 function applyOverride(

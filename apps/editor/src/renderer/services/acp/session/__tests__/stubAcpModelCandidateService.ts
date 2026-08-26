@@ -16,6 +16,8 @@ export interface StubAcpModelCandidateOptions {
   readonly models?: readonly string[]
   /** Known context window per model id; models absent from it carry none. */
   readonly contextWindows?: Readonly<Record<string, number>>
+  /** Known reasoning-effort levels per model id; models absent from it carry none. */
+  readonly effortLevels?: Readonly<Record<string, readonly string[]>>
   /**
    * The model the agent's own config file picks. Deliberately independent of
    * `models`: production reads it from settings.json / config.toml, and the
@@ -36,7 +38,12 @@ export function stubAcpModelCandidateService(
       if (opts.reject === true) throw new Error('stub candidate service failure')
       const candidates = (opts.models ?? []).map((id) => {
         const contextWindow = opts.contextWindows?.[id]
-        return contextWindow !== undefined ? { id, contextWindow } : { id }
+        const effortLevels = opts.effortLevels?.[id]
+        return {
+          id,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(effortLevels !== undefined ? { effortLevels } : {}),
+        }
       })
       return { pick: opts.pick, candidates }
     },

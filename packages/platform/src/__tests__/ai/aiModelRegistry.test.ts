@@ -207,6 +207,38 @@ describe('AiModelRegistry — endpoint discovery', () => {
     })
     reg.dispose()
   })
+
+  it('applies bare-name knowledge to a lane-suffixed discovered model', async () => {
+    const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
+      'claude-opus-4-8': {
+        name: 'Claude Opus 4.8',
+        vendor: 'anthropic',
+        maxInputTokens: 200000,
+        supportsReasoningEffort: ['low', 'high', 'max'],
+      },
+    }
+    const reg = new AiModelRegistry()
+    reg.registerProvider(
+      'anthropic-messages',
+      fakeProvider(() => Promise.resolve(['claude-opus-4-8[1m]'])),
+    )
+    reg.setProviders(
+      [provider('anthropic-official', [discovering('anthropic-messages')])],
+      knowledge,
+    )
+
+    const [model] = await reg.getModels(CancellationToken.None)
+    expect(model).toMatchObject({
+      name: 'Claude Opus 4.8',
+      vendor: 'anthropic',
+      maxInputTokens: 200000,
+    })
+    expect(model?.configurationSchema?.reasoningEffort).toMatchObject({
+      type: 'enum',
+      enum: ['low', 'high', 'max'],
+    })
+    reg.dispose()
+  })
 })
 
 describe('AiModelRegistry — provider lifecycle', () => {

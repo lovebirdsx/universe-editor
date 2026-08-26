@@ -125,6 +125,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     // Both forks advertise universe-editor/* capabilities under the same key.
     'universe-editor/capabilities',
     'extraModels',
+    'extraModelEffort',
   ],
   codex: [
     EXPECTED_METHOD_NAMES.setSessionTitle,
@@ -137,6 +138,7 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.mcpServerStatus,
     'universe-editor/capabilities',
     'extraModels',
+    'extraModelEffort',
     // Codex-only sibling of extraModels: the resolved context window for the
     // current model, injected per-session so a gateway model absent from
     // codex's registry is not managed on its 272K fallback.
@@ -262,7 +264,10 @@ function handshakeSuite(fork: ForkId) {
           connection.conn.newSession({
             cwd,
             mcpServers: [],
-            _meta: { extraModels: [EXTRA_MODEL_ID] },
+            _meta: {
+              extraModels: [EXTRA_MODEL_ID],
+              extraModelEffort: [{ id: EXTRA_MODEL_ID, effortLevels: ['low', 'high'] }],
+            },
           }),
           INIT_TIMEOUT_MS,
           'codex newSession with extraModels',
@@ -297,6 +302,13 @@ function handshakeSuite(fork: ForkId) {
           throw new Error(`${String(err)}\n--- fork stderr ---\n${connection.stderr()}`)
         })
         expect(set.configOptions.find((o) => o.id === 'model')?.currentValue).toBe(EXTRA_MODEL_ID)
+
+        // The injected effort levels must reach the reasoning-effort option once
+        // the gateway model is current — the `_meta.extraModelEffort` → effort
+        // option leg the model-option assertion alone leaves untested.
+        const effortOption = set.configOptions.find((o) => o.id === 'reasoning_effort')
+        expect(configOptionValues(effortOption)).toContain('low')
+        expect(configOptionValues(effortOption)).toContain('high')
       })
     }
   })
@@ -356,7 +368,10 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
       connection.conn.newSession({
         cwd,
         mcpServers: [],
-        _meta: { extraModels: [EXTRA_MODEL_ID] },
+        _meta: {
+          extraModels: [EXTRA_MODEL_ID],
+          extraModelEffort: [{ id: EXTRA_MODEL_ID, effortLevels: ['low', 'high'] }],
+        },
       }),
       INIT_TIMEOUT_MS,
       'claude newSession with extraModels',
@@ -379,6 +394,13 @@ describe.skipIf(!claudeExtReady)('claude ext-method wire contract (real dist)', 
     })
     const modelAfter = set.configOptions.find((o) => o.id === 'model')
     expect(modelAfter?.currentValue).toBe(EXTRA_MODEL_ID)
+
+    // The injected effort levels must reach the effort option once the gateway
+    // model is current — the `_meta.extraModelEffort` → effort option leg the
+    // model-option assertion alone leaves untested.
+    const effortOption = set.configOptions.find((o) => o.id === 'effort')
+    expect(configOptionValues(effortOption)).toContain('low')
+    expect(configOptionValues(effortOption)).toContain('high')
   })
 
   it('rewind_session is routed and validates its params (unknown messageId → structured error)', async () => {

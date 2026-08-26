@@ -85,6 +85,78 @@ describe('resolveProviderEntries — protocolMap', () => {
     })
   })
 
+  it('applies bare-name knowledge to a lane-suffixed string ref', () => {
+    const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
+      'deepseek-v4-pro': {
+        name: 'DeepSeek V4 Pro',
+        supportsReasoningEffort: ['low', 'high', 'max'],
+        maxInputTokens: 128000,
+      },
+    }
+    const { providers, issues } = resolveProviderEntries(
+      [entry('kuro', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      knowledge,
+    )
+
+    expect(issues).toEqual([])
+    const model = providers[0]?.protocols[0]?.models[0]
+    expect(model?.ref).toBe('deepseek-v4-pro[1m]')
+    expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high', 'max'])
+    expect(model?.knowledge.maxInputTokens).toBe(128000)
+  })
+
+  it('prefers an exact suffixed knowledge key over the bare-name fallback', () => {
+    const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
+      'deepseek-v4-pro': {
+        name: 'DeepSeek V4 Pro',
+        supportsReasoningEffort: ['low', 'high', 'max'],
+        maxInputTokens: 128000,
+      },
+      'deepseek-v4-pro[1m]': {
+        name: 'DeepSeek V4 Pro [1m]',
+        supportsReasoningEffort: ['low', 'high'],
+        maxInputTokens: 1000000,
+      },
+    }
+    const { providers } = resolveProviderEntries(
+      [entry('kuro', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      knowledge,
+    )
+
+    const model = providers[0]?.protocols[0]?.models[0]
+    expect(model?.knowledge.name).toBe('DeepSeek V4 Pro [1m]')
+    expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high'])
+    expect(model?.knowledge.maxInputTokens).toBe(1000000)
+  })
+
+  it('applies bare-name knowledge to a lane-suffixed override ref', () => {
+    const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
+      'deepseek-v4-pro': {
+        name: 'DeepSeek V4 Pro',
+        supportsReasoningEffort: ['low', 'high', 'max'],
+        maxInputTokens: 128000,
+      },
+    }
+    const { providers } = resolveProviderEntries(
+      [
+        entry('kuro', {
+          protocolMap: {
+            'anthropic-messages': [
+              { id: 'anthropic/deepseek-v4-pro[1m]', ref: 'deepseek-v4-pro[1m]' },
+            ],
+          },
+        }),
+      ],
+      knowledge,
+    )
+
+    const model = providers[0]?.protocols[0]?.models[0]
+    expect(model?.channelModel).toBe('anthropic/deepseek-v4-pro[1m]')
+    expect(model?.ref).toBe('deepseek-v4-pro[1m]')
+    expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high', 'max'])
+    expect(model?.knowledge.maxInputTokens).toBe(128000)
+  })
+
   it('separates the wire name from the knowledge key when the channel renamed a model', () => {
     const { providers } = resolveProviderEntries(
       [

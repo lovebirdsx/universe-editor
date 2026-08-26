@@ -18,6 +18,8 @@
 
 import type { AiResolvedProvider, AiWireProtocol } from '@universe-editor/platform'
 
+import { stripTrailingBracketSuffix } from '../../../shared/ai/catalog/index.js'
+
 /** Wire protocol each built-in agent speaks, i.e. which `protocolMap` entry holds its models. */
 export const CLAUDE_AGENT_PROTOCOL: AiWireProtocol = 'anthropic-messages'
 export const CODEX_AGENT_PROTOCOL: AiWireProtocol = 'openai-responses'
@@ -39,6 +41,7 @@ export const MAX_EXTRA_MODELS = 64
 export interface AcpModelCandidate {
   readonly id: string
   readonly contextWindow?: number
+  readonly effortLevels?: readonly string[]
 }
 
 /**
@@ -53,7 +56,9 @@ export function candidateModelCandidatesForProtocol(
 ): readonly AcpModelCandidate[] {
   const p = provider?.protocols.find((pr) => pr.protocol === protocol)
   if (p === undefined || p.discover || p.models.length === 0) return []
-  return p.models.map((m) => candidate(m.channelModel, m.knowledge.maxInputTokens))
+  return p.models.map((m) =>
+    candidate(m.channelModel, m.knowledge.maxInputTokens, m.knowledge.supportsReasoningEffort),
+  )
 }
 
 /** Model ids a resolved provider declares under one protocol (id-only projection). */
@@ -92,13 +97,20 @@ export function extraModelCandidatesForAgentSettings(
     const trimmed = c.id.trim()
     if (!trimmed || seen.has(trimmed) || out.length >= MAX_EXTRA_MODELS) return
     seen.add(trimmed)
-    out.push(candidate(trimmed, c.contextWindow))
+    out.push(candidate(trimmed, c.contextWindow, c.effortLevels))
   }
 
   const trimmedPick = pick?.trim()
   if (trimmedPick) {
-    const declaredPick = declared.find((c) => c.id === trimmedPick)
-    add(declaredPick ?? candidate(trimmedPick, undefined))
+    const declaredPick =
+      declared.find((c) => c.id === trimmedPick) ??
+      declared.find(
+        (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(trimmedPick),
+      )
+    // Keep the pick's verbatim id (its `[1m]` lane) while carrying the matched
+    // bare entry's window + effort, so the fork's exact-match layer wins instead
+    // of its fuzzy fallback shrinking the lane away.
+    add(candidate(trimmedPick, declaredPick?.contextWindow, declaredPick?.effortLevels))
   }
   for (const c of declared) add(c)
   return out
@@ -124,9 +136,23 @@ export function contextWindowFor(
 ): number | undefined {
   const trimmed = modelId?.trim()
   if (!trimmed) return undefined
-  return candidates.find((c) => c.id === trimmed)?.contextWindow
+  const exact = candidates.find((c) => c.id === trimmed)
+  if (exact) return exact.contextWindow
+  // A remembered id may carry a context-lane suffix (`deepseek-v4-pro[1m]`) that
+  // the provider's declaration spells bare; match on the stripped name.
+  return candidates.find(
+    (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(trimmed),
+  )?.contextWindow
 }
 
-function candidate(id: string, contextWindow: number | undefined): AcpModelCandidate {
-  return contextWindow !== undefined ? { id, contextWindow } : { id }
+function candidate(
+  id: string,
+  contextWindow: number | undefined,
+  effortLevels?: readonly string[],
+): AcpModelCandidate {
+  return {
+    id,
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(effortLevels !== undefined ? { effortLevels } : {}),
+  }
 }

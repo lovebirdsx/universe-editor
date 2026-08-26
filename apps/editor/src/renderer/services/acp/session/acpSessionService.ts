@@ -418,6 +418,7 @@ function buildResumeMeta(
   const resumeModel = entry?.configOptions?.['model']
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, resumeModel)
+  const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     claudeCode: {
       ...EMIT_INIT_SDK_MESSAGE_META.claudeCode,
@@ -428,6 +429,7 @@ function buildResumeMeta(
     // dropdown (and set_config_option rejects values outside its options).
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
+    ...(extraModelEffort.length > 0 ? { [ACP_META_KEYS.extraModelEffort]: extraModelEffort } : {}),
   }
 }
 
@@ -449,10 +451,12 @@ function buildNewSessionMeta(
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, pick)
+  const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...EMIT_INIT_SDK_MESSAGE_META,
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
+    ...(extraModelEffort.length > 0 ? { [ACP_META_KEYS.extraModelEffort]: extraModelEffort } : {}),
   }
 }
 
@@ -467,10 +471,31 @@ function buildForkMeta(
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, entry.configOptions?.['model'])
+  const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
+    ...(extraModelEffort.length > 0 ? { [ACP_META_KEYS.extraModelEffort]: extraModelEffort } : {}),
   }
+}
+
+/**
+ * The effort capability payload for the extra model candidates: only models
+ * whose `supportsReasoningEffort` the editor declares a non-empty list for.
+ * Empty and absent lists are both omitted — the fork treats either as a bare
+ * no-effort entry, which is what we want for a gateway model of unknown effort.
+ */
+function buildExtraModelEffortMeta(
+  candidates: readonly AcpModelCandidate[],
+): Array<{ id: string; effortLevels: readonly string[] }> {
+  const out: Array<{ id: string; effortLevels: readonly string[] }> = []
+  for (const c of candidates) {
+    const effortLevels = c.effortLevels
+    if (effortLevels !== undefined && effortLevels.length > 0) {
+      out.push({ id: c.id, effortLevels })
+    }
+  }
+  return out
 }
 
 export class AcpSessionService

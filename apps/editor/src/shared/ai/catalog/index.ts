@@ -6,6 +6,7 @@
  *  Claude CLI cost-trust check).
  *--------------------------------------------------------------------------------------------*/
 
+import { stripModelLaneSuffix } from '@universe-editor/platform'
 import { ANTHROPIC_CATALOG } from './anthropic.js'
 
 /**
@@ -15,7 +16,7 @@ import { ANTHROPIC_CATALOG } from './anthropic.js'
  * a table that prices the lane separately must keep winning on the exact key.
  */
 export function stripTrailingBracketSuffix(id: string): string {
-  return id.replace(/\[[^\]]*\]$/, '')
+  return stripModelLaneSuffix(id)
 }
 
 /**
