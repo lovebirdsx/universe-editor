@@ -7,7 +7,7 @@
 - [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService+op-service 编排撤销；坑=await 前取完 service；useTrash 必须先问 provider 能力位(远端恒无回收站,降级永久删除而非静默兜底)
 - [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — resources/agent-skills 经 additionalDirectories 注入四条 wire 路径,两 fork 零改动发现;加 skill=放文件+补 sentinel;remote 不注入;内置 skill 统一 disable-model-invocation,codex 端 fork 桥接物化 openai.yaml(sentinel 可回收)
 - [session 开销含子 Agent](session-cost-subagent-inclusion.md) — claude SDK 总额天然已含勿双计；codex 须 fork 订阅子 thread tokenUsage 聚合进 _meta.quota
-- [官方订阅额度用量指示器](subscription-usage-indicator.md) — 三分门控(订阅%/网关¥/隐藏)，codex 永不显 ¥；红线=绝不为读用量 connect、bigint 须 String 化、unsupported 判定别做永久粘性
+- [官方订阅额度用量指示器](subscription-usage-indicator.md) — 三分门控(订阅%/网关¥/隐藏)，codex 永不显 ¥；红线=绝不为读用量 connect、bigint 须 String 化、unsupported 判定别做永久粘性、supported 须由认证形态定(codex rateLimits 按 auth.json 作答,网关会话须 fork 侧先查 getAuthenticationStatus 门控)
 - [agent 二进制静默下载 + e2e teardown 修复](agent-binary-silent-download-e2e-fix.md) — allowDownload 网关；tsserver 孤儿卡 app.close()→优雅关+扫孤儿
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸；坑=变更源须区分
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — 引用=decoration 追踪 by-range 药丸，含空格 label 安全，提交读 range 不分词
