@@ -57,7 +57,10 @@ function remoteUriComponents(fsPath: string): {
 
 /** ITargetArg-friendly UriComponents for a local fsPath (URI paths are posix). */
 function localUriComponents(fsPath: string): { scheme: 'file'; path: string } {
-  return { scheme: 'file', path: fsPath.replace(/\\/g, '/') }
+  const normalized = fsPath.replace(/\\/g, '/')
+  // Canonical UriComponents paths start with '/': a bare 'C:/…' stringifies to
+  // parse-unstable file://C:/…, which breaks resource identity downstream.
+  return { scheme: 'file', path: normalized.startsWith('/') ? normalized : '/' + normalized }
 }
 
 test.describe('file clipboard across providers', () => {

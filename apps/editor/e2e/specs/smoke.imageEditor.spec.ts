@@ -48,7 +48,15 @@ test.describe('@p1 image editor', () => {
       .toBe('image')
 
     await page.evaluate((fsPath) => {
-      const uri = { scheme: 'file', path: fsPath, authority: '', query: '', fragment: '' }
+      // Canonical UriComponents: a bare 'C:/…' path stringifies to parse-unstable file://C:/….
+      const forward = fsPath.replace(/\\/g, '/')
+      const uri = {
+        scheme: 'file',
+        path: forward.startsWith('/') ? forward : '/' + forward,
+        authority: '',
+        query: '',
+        fragment: '',
+      }
       void window.__E2E__!.runCommand('workbench.action.reopenWith', { resource: uri })
     }, pngFsPath)
 

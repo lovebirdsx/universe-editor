@@ -61,8 +61,17 @@ test.describe('@p1 editorResolver', () => {
       .toBe('dummyEditor')
 
     // "Reopen With..." — fire-and-forget because QuickPick awaits user input.
+    // The resource must be canonical UriComponents: a bare 'C:/…' path
+    // stringifies to parse-unstable file://C:/… and breaks identity matching.
     await page.evaluate((fsPath) => {
-      const uri = { scheme: 'file', path: fsPath, authority: '', query: '', fragment: '' }
+      const forward = fsPath.replace(/\\/g, '/')
+      const uri = {
+        scheme: 'file',
+        path: forward.startsWith('/') ? forward : '/' + forward,
+        authority: '',
+        query: '',
+        fragment: '',
+      }
       void window.__E2E__!.runCommand('workbench.action.reopenWith', { resource: uri })
     }, dummyFsPath)
 

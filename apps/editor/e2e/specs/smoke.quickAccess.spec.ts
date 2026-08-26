@@ -220,7 +220,8 @@ test.describe('@p0 quick access', () => {
       // `{ path: 'C:/...' }` without the leading slash stringifies to the
       // parse-unstable `file://C:/...`, which breaks resource identity downstream.
       await page.evaluate((fsPath) => {
-        const path = '/' + fsPath.replace(/\\/g, '/')
+        const forward = fsPath.replace(/\\/g, '/')
+        const path = forward.startsWith('/') ? forward : '/' + forward
         const uri = { scheme: 'file', path, authority: '', query: '', fragment: '' }
         void window.__E2E__!.runCommand('workbench.action.reopenWith', { resource: uri })
       }, dummyFsPath)
