@@ -48,7 +48,7 @@ export class AiRemoteCache {
   private _flushPromise: Promise<void> | undefined
 
   constructor(
-    private readonly _configDir: () => Promise<string>,
+    private readonly _dir: () => Promise<string>,
     logger?: ILogger,
   ) {
     this._logger = logger ?? new NullLogger()
@@ -135,7 +135,7 @@ export class AiRemoteCache {
   private async _loadInternal(): Promise<void> {
     let dir: string
     try {
-      dir = await this._configDir()
+      dir = await this._dir()
     } catch {
       return
     }
@@ -175,7 +175,7 @@ export class AiRemoteCache {
   private async _write(): Promise<void> {
     let dir: string
     try {
-      dir = await this._configDir()
+      dir = await this._dir()
     } catch {
       return
     }

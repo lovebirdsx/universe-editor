@@ -59,14 +59,21 @@ function makeConfigLocation(dir: string): IConfigLocationService {
 function makeService(providers: readonly unknown[]): AiModelMainService {
   const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
   writeFileSync(join(dir, 'aiSettings.json'), JSON.stringify({ providers }), 'utf8')
-  return new AiModelMainService(makeConfigLocation(dir))
+  return new AiModelMainService(makeConfigLocation(dir), undefined, undefined, async () =>
+    join(dir, 'ai-remote-cache'),
+  )
 }
 
 /** Like makeService but writes a raw aiSettings.json body (for parse/legacy tests). */
 function makeServiceFromFile(body: string): { service: AiModelMainService; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
   writeFileSync(join(dir, 'aiSettings.json'), body, 'utf8')
-  return { service: new AiModelMainService(makeConfigLocation(dir)), dir }
+  return {
+    service: new AiModelMainService(makeConfigLocation(dir), undefined, undefined, async () =>
+      join(dir, 'ai-remote-cache'),
+    ),
+    dir,
+  }
 }
 
 interface FakeProviderHandle {
@@ -233,12 +240,17 @@ describe('AiModelMainService', () => {
       JSON.stringify({ providers: [{ id: 'fake', protocolMap: { ollama: ['m'] } }] }),
       'utf8',
     )
-    const service = new AiModelMainService(makeConfigLocation(dir), {
-      _serviceBrand: undefined,
-      createLogger: () => spyLogger,
-      setLevel: (level: LogLevel) => spyLogger.setLevel(level),
-      getLevel: () => spyLogger.level,
-    })
+    const service = new AiModelMainService(
+      makeConfigLocation(dir),
+      {
+        _serviceBrand: undefined,
+        createLogger: () => spyLogger,
+        setLevel: (level: LogLevel) => spyLogger.setLevel(level),
+        getLevel: () => spyLogger.level,
+      },
+      undefined,
+      async () => join(dir, 'ai-remote-cache'),
+    )
     addProvider(
       service,
       FAKE_PROTOCOL,
@@ -604,7 +616,12 @@ describe('AiModelMainService', () => {
 
   it('returns an empty user knowledge layer when no aiSettings.json exists', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
-    const service = new AiModelMainService(makeConfigLocation(dir))
+    const service = new AiModelMainService(
+      makeConfigLocation(dir),
+      undefined,
+      undefined,
+      async () => join(dir, 'ai-remote-cache'),
+    )
 
     expect(await service.getUserModelKnowledge()).toEqual({})
     service.dispose()
@@ -1122,7 +1139,12 @@ describe('AiModelMainService', () => {
       { getSessionDir: () => sessionDir } as unknown as LogMainService,
       logService,
     )
-    const service = new AiModelMainService(makeConfigLocation(dir), logService, recorder)
+    const service = new AiModelMainService(
+      makeConfigLocation(dir),
+      logService,
+      recorder,
+      async () => join(dir, 'ai-remote-cache'),
+    )
 
     // A fake provider that proves the key truly reached it, then streams a reply.
     let seenApiKey: string | undefined

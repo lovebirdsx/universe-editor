@@ -152,14 +152,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     @IConfigLocationService configLocation: IConfigLocationService,
     @ILoggerService loggerService?: ILoggerService,
     @IAiDebugRecorderService private readonly _recorder?: AiDebugRecorder,
+    cacheDir?: () => Promise<string>,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'aiModel', name: 'AI Model' })
     this._configLocation = configLocation
-    this._remoteCache = new AiRemoteCache(
-      async () => (await this._configLocation.getInfo()).dir,
-      this._logger,
-    )
+    this._remoteCache = new AiRemoteCache(cacheDir ?? getAiRemoteCacheDir, this._logger)
     this._remoteCoordinator = this._register(
       new AiRemoteCoordinator({
         registry: this._remoteRegistry,
@@ -811,4 +809,9 @@ function reviveMessage(dto: AiMessageDto): AiMessage {
       return part
     }),
   }
+}
+
+/** <userData>/Cache — volatile remote-AI data; does not follow config-dir relocation. */
+function getAiRemoteCacheDir(): Promise<string> {
+  return import('electron').then(({ app }) => join(app.getPath('userData'), 'Cache'))
 }
