@@ -147,9 +147,14 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor(candidates, 'b')).toBe(200)
   })
 
-  it('uses the pick window when no model is named', () => {
-    expect(contextWindowFor([{ id: 'a', contextWindow: 100 }, { id: 'b' }], undefined)).toBe(100)
-    expect(contextWindowFor([{ id: 'a', contextWindow: 100 }], '  ')).toBe(100)
+  it('never guesses a window for an unnamed model', () => {
+    // No pick means the agent's config file names no model, so the fork runs its
+    // own default — candidates[0] is then just the provider's first declared
+    // model, and injecting its window would hand one model's window to another.
+    expect(
+      contextWindowFor([{ id: 'a', contextWindow: 100 }, { id: 'b' }], undefined),
+    ).toBeUndefined()
+    expect(contextWindowFor([{ id: 'a', contextWindow: 100 }], '  ')).toBeUndefined()
   })
 
   it('never substitutes another model window for a named one', () => {

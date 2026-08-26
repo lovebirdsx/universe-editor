@@ -38,16 +38,33 @@ import {
   type AcpModelCandidate,
 } from './acpModelCandidates.js'
 
+/**
+ * What one agent's handshake needs: the candidates to advertise, plus the model
+ * its own config file actually picks.
+ *
+ * The pick is returned separately rather than left implicit as `candidates[0]`
+ * because the two are not the same thing when the config file names no model:
+ * the pick is then absent while `candidates[0]` is merely the provider's first
+ * declared model. Callers resolving "the model this session will run" must be
+ * able to tell those apart — see `contextWindowFor`.
+ */
+export interface AcpAgentModelCandidates {
+  /** Effective model id from the agent's own config file; undefined when unset. */
+  readonly pick: string | undefined
+  readonly candidates: readonly AcpModelCandidate[]
+}
+
 export interface IAcpModelCandidateService {
   readonly _serviceBrand: undefined
   /**
    * Model candidates (id + known context window) to advertise for a session of
-   * `agentId` running on `authority` (undefined = the local host). Empty for
-   * agents with no editor-side credential model (user-defined agents), and empty
-   * when the host runs on a subscription or an external credential (the agent's
-   * own catalogue is already correct there).
+   * `agentId` running on `authority` (undefined = the local host), plus the
+   * agent's own configured pick. No candidates for agents with no editor-side
+   * credential model (user-defined agents), and none when the host runs on a
+   * subscription or an external credential (the agent's own catalogue is already
+   * correct there).
    */
-  extraModelsForAgent(agentId: string, authority?: string): Promise<readonly AcpModelCandidate[]>
+  extraModelsForAgent(agentId: string, authority?: string): Promise<AcpAgentModelCandidates>
 }
 
 export const IAcpModelCandidateService = createDecorator<IAcpModelCandidateService>(
@@ -63,10 +80,7 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
     @ICodexConfigService private readonly _codex: ICodexConfigService,
   ) {}
 
-  async extraModelsForAgent(
-    agentId: string,
-    authority?: string,
-  ): Promise<readonly AcpModelCandidate[]> {
+  async extraModelsForAgent(agentId: string, authority?: string): Promise<AcpAgentModelCandidates> {
     if (agentId === 'claude-code') {
       const [activeAuth, settings] = await Promise.all([
         this._claude.resolveActiveAuth(authority),
@@ -87,16 +101,16 @@ export class AcpModelCandidateService implements IAcpModelCandidateService {
         typeof model === 'string' ? model : undefined,
       )
     }
-    return []
+    return { pick: undefined, candidates: [] }
   }
 
   private async _resolve(
     activeAuth: AgentActiveAuth,
     protocol: AiWireProtocol,
     pick: string | undefined,
-  ): Promise<readonly AcpModelCandidate[]> {
+  ): Promise<AcpAgentModelCandidates> {
     const provider = await this._findProvider(activeAuth)
-    return extraModelCandidatesForAgentSettings(pick, provider, protocol)
+    return { pick, candidates: extraModelCandidatesForAgentSettings(pick, provider, protocol) }
   }
 
   /** The resolved provider in effect on that host, or undefined for a

@@ -38,7 +38,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ACP_EXT_METHODS } from '../../src/renderer/services/acp/session/acpExtMethods.js'
+import {
+  ACP_EXT_METHODS,
+  readCodexModelKnownInCatalog,
+} from '../../src/renderer/services/acp/session/acpExtMethods.js'
 import {
   CLIENT_INIT_PARAMS,
   claudeBinaryAvailable,
@@ -138,6 +141,15 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     // current model, injected per-session so a gateway model absent from
     // codex's registry is not managed on its 272K fallback.
     'modelContextWindow',
+    // Unlike the entries above (all client->agent request/notification or
+    // request _meta), this one is the fork->editor RESPONSE _meta key the codex
+    // fork reports on session/new, session/load and session/resume — the
+    // authoritative "does codex know this model's own context window" verdict
+    // the editor reads to gate its unknown-window warning. This scan only
+    // proves the name survives somewhere in the dist (the SessionState field
+    // alone satisfies it); that the fork actually REPORTS it on a session
+    // response is asserted live in the extra-models leg below.
+    'modelKnownInCatalog',
   ],
 }
 
@@ -259,6 +271,19 @@ function handshakeSuite(fork: ForkId) {
         })
         const modelOption = ns.configOptions?.find((o) => o.id === 'model')
         expect(configOptionValues(modelOption)).toContain(EXTRA_MODEL_ID)
+
+        // The fork->editor verdict the editor gates its unknown-window warning
+        // on. Asserted live because the dist text scan cannot distinguish the
+        // reporter from the SessionState field of the same name: dropping just
+        // the response `_meta` would still leave the literal in the bundle.
+        // Only presence is asserted, not the value — the verdict describes the
+        // model codex itself resolved for this session (its own default here,
+        // since we pin none), and betting on which model that is would couple
+        // this test to codex's default-model resolution. `undefined` is the
+        // failure that matters: the editor reads it as "no verdict" and falls
+        // back to its own incomplete knowledge base, which is the bug this
+        // channel exists to fix.
+        expect(typeof readCodexModelKnownInCatalog(ns._meta)).toBe('boolean')
 
         const set = await withTimeout(
           connection.conn.setSessionConfigOption({

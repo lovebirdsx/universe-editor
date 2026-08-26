@@ -129,6 +129,27 @@ export const ACP_META_KEYS = {
    * the active model id at config-assembly time. The claude fork ignores this key.
    */
   modelContextWindow: 'modelContextWindow',
+  /**
+   * session/new + session/load + session/resume RESPONSE _meta (under `codex`)
+   * where the codex fork reports whether the model the session actually runs came
+   * from its OWN catalogue (app-server `model/list`) rather than from the
+   * `extraModels` we injected.
+   *
+   * Nested, not the flat `'codex.modelKnownInCatalog'` the other entries here
+   * would suggest — the two are different wire shapes, and only
+   * {@link readCodexModelKnownInCatalog} (which consumes these two segments)
+   * should reach for it.
+   *
+   * This is the only authoritative answer to "does codex know this model's context
+   * window", and the editor cannot derive it: `configOptions` presents catalogue
+   * and injected entries identically, and the reported window is indistinguishable
+   * from codex's 272K fallback. Our own model knowledge base is NOT a substitute —
+   * it is routinely behind OpenAI's releases, and treating a gap in it as "codex
+   * doesn't know either" is exactly how an official model gets falsely reported as
+   * unknown.
+   */
+  codexNamespace: 'codex',
+  modelKnownInCatalog: 'modelKnownInCatalog',
   /** usage_update _meta carrying the per-model cost breakdown. */
   modelBreakdown: '_universe/modelBreakdown',
   /** tool_call_update _meta carrying per-sub-agent token tally. */
@@ -143,6 +164,24 @@ export const ACP_META_KEYS = {
  * literal verbatim; the contract test asserts both sides agree.
  */
 export const ACP_CAPABILITIES_META_KEY = 'universe-editor/capabilities'
+
+/**
+ * Read {@link ACP_META_KEYS.modelKnownInCatalog} off a session/new, session/load
+ * or session/resume response `_meta`.
+ *
+ * `undefined` means the fork said nothing — an older or not-yet-rebuilt
+ * `vendor/codex-acp` dist. Callers MUST treat that as "unknown", never as
+ * `false`: the field is the only thing that can clear the "context window
+ * unknown" warning, and a fork that predates it deserves the pre-existing
+ * behaviour rather than a warning it cannot silence.
+ */
+export function readCodexModelKnownInCatalog(meta: unknown): boolean | undefined {
+  const codex = (meta as Record<string, unknown> | null | undefined)?.[ACP_META_KEYS.codexNamespace]
+  const value = (codex as Record<string, unknown> | null | undefined)?.[
+    ACP_META_KEYS.modelKnownInCatalog
+  ]
+  return typeof value === 'boolean' ? value : undefined
+}
 
 /**
  * Key under `initialize` → `clientCapabilities._meta` the editor stamps so the

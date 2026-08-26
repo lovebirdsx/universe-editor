@@ -105,24 +105,25 @@ export function extraModelCandidatesForAgentSettings(
 }
 
 /**
- * The context window to inject for the model this session will actually run:
- * `modelId`'s own declared window, or — when the session names no model, so the
- * agent runs whatever its config file picks — the pick's (`candidates[0]`).
+ * The declared window of exactly the model named by `modelId`, and nothing else:
+ * NEVER hand codex one model's window for another. Anything we cannot resolve
+ * precisely — an unnamed model, or a name absent from the candidates — yields
+ * undefined, which leaves codex on its own documented fallback.
  *
- * A named model we cannot resolve a window for yields undefined rather than the
- * pick's window: NEVER hand codex one model's window for another. The remembered
- * model of an older session commonly isn't among the current candidates (the user
- * has since switched providers), and injecting the pick's number there would
- * silently mismanage the context — auto-compaction firing at half the real window,
- * or prompts overflowing past it. Undefined leaves codex on its own documented
- * fallback and lets the caller prompt the user to declare `maxInputTokens`.
+ * Both unresolvable cases are real and would silently mismanage the context
+ * (auto-compaction firing at half the true window, or prompts overflowing past
+ * it) if we guessed. A remembered model of an older session commonly isn't among
+ * the current candidates because the user has since switched providers. And an
+ * unnamed model means the agent's config file declares no pick, so it runs its
+ * own default — `candidates[0]` is then merely the provider's first declared
+ * model, related to that default by nothing at all.
  */
 export function contextWindowFor(
   candidates: readonly AcpModelCandidate[],
   modelId: string | undefined,
 ): number | undefined {
   const trimmed = modelId?.trim()
-  if (!trimmed) return candidates[0]?.contextWindow
+  if (!trimmed) return undefined
   return candidates.find((c) => c.id === trimmed)?.contextWindow
 }
 

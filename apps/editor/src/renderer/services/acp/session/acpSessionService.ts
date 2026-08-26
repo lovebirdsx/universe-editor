@@ -82,12 +82,15 @@ import {
   type ISessionCreateProfileHandle,
   type SessionCreateProfile,
 } from '../acpSessionCreateProfiler.js'
-import { ACP_EXT_METHODS, ACP_META_KEYS } from './acpExtMethods.js'
+import { ACP_EXT_METHODS, ACP_META_KEYS, readCodexModelKnownInCatalog } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
-import { IAcpModelCandidateService } from '../acpModelCandidateService.js'
+import {
+  IAcpModelCandidateService,
+  type AcpAgentModelCandidates,
+} from '../acpModelCandidateService.js'
 import { contextWindowFor, type AcpModelCandidate } from '../acpModelCandidates.js'
 import {
   effectiveEntryAuthority,
@@ -433,12 +436,19 @@ function buildResumeMeta(
  * candidates the fork appends to its catalogue. `extraModels` is deliberately
  * top-level (not under `claudeCode`) — both forks read it, and appending is
  * their concern, not the native CLI's.
+ *
+ * `pick` is the model the agent's own config file selects, i.e. the one the new
+ * session will actually run. It is passed explicitly rather than inferred from
+ * `candidates[0]`: when the config file names no model the fork runs its own
+ * default, and `candidates[0]` is then just the provider's first declared model —
+ * stamping its window would hand the fork one model's window for another.
  */
-function buildNewSessionMeta(candidates: readonly AcpModelCandidate[]): Record<string, unknown> {
+function buildNewSessionMeta(
+  candidates: readonly AcpModelCandidate[],
+  pick: string | undefined,
+): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
-  // A new session names no model — the fork runs whatever its config file picks,
-  // which is candidates[0]. Same resolution as resume, just without a name.
-  const contextWindow = contextWindowFor(candidates, undefined)
+  const contextWindow = contextWindowFor(candidates, pick)
   return {
     ...EMIT_INIT_SDK_MESSAGE_META,
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
@@ -817,46 +827,65 @@ export class AcpSessionService
 
   /**
    * Extra model candidates (id + known context window) to advertise in the
-   * handshake `_meta` for `agentId`. Best-effort: candidate resolution failing
-   * must never block session creation/resume, so every failure collapses to an
-   * empty list (and the `extraModels` / `modelContextWindow` keys are omitted
-   * from `_meta` entirely).
+   * handshake `_meta` for `agentId`, plus the model the agent's own config file
+   * picks. Best-effort: candidate resolution failing must never block session
+   * creation/resume, so every failure collapses to no candidates and no pick (and
+   * the `extraModels` / `modelContextWindow` keys are omitted from `_meta`
+   * entirely).
    */
   private async _extraModelsFor(
     agentId: string,
     authority: string | undefined,
-  ): Promise<readonly AcpModelCandidate[]> {
+  ): Promise<AcpAgentModelCandidates> {
     try {
       return await this._modelCandidates.extraModelsForAgent(agentId, authority)
     } catch (err) {
       this._logger.warn(`extraModelsForAgent failed: ${(err as Error).message}`)
-      return []
+      return { pick: undefined, candidates: [] }
     }
   }
 
   /**
-   * Warn once per (agent, model) when a codex gateway model has no known context
-   * window: codex then manages it on its 272K fallback, which may be wrong. The
-   * warning lives here (not in the fork, which would re-emit it every turn) and
-   * points the user at aiSettings.json where they can declare `maxInputTokens`.
+   * Warn once per (agent, model) when the codex model a session runs has no known
+   * context window ANYWHERE: neither in codex's own catalogue nor in the editor's
+   * AI settings. codex then manages it on its 272K fallback, which may be wrong.
+   * The warning lives here (not in the fork, which would re-emit it every turn)
+   * and points the user at aiSettings.json where they can declare `maxInputTokens`.
+   *
+   * `knownInCatalog` is the fork's own verdict, read off the session response
+   * `_meta` — the only authoritative source, and why this runs AFTER the session
+   * call rather than while assembling its params. `true` clears the warning
+   * outright: codex knows the window and reports the real value, so asking the
+   * user to type a number codex already has would be both noise and a chance to
+   * type it wrong. `undefined` (a fork predating the field) keeps the old
+   * editor-only judgement.
    *
    * The model judged is the one the session will actually run — the remembered
-   * `resumeModel` when there is one, else the pick. Matching `contextWindowFor`,
-   * a remembered model absent from the candidates counts as unknown (we inject
-   * nothing for it), so the user hears about the very case that needs fixing.
+   * `resumeModel` when there is one, else the config file's pick. With neither
+   * there is nothing to name: the fork runs its own default, whose id we do not
+   * know, and naming a candidate instead would blame an unrelated model.
+   * Matching `contextWindowFor`, a remembered model absent from the candidates
+   * counts as unknown (we inject nothing for it), so the user hears about the
+   * very case that needs fixing.
    */
   private _maybeWarnMissingContextWindow(
     agentId: string,
     candidates: readonly AcpModelCandidate[],
     resumeModel: string | undefined,
+    pick: string | undefined,
+    knownInCatalog: boolean | undefined,
   ): void {
     if (agentId !== 'codex') return
-    const model = resumeModel ?? candidates[0]?.id
+    if (knownInCatalog === true) return
+    const model = resumeModel ?? pick
     if (model === undefined) return
     if (contextWindowFor(candidates, model) !== undefined) return
     const dedupeKey = `${agentId}\0${model}`
     if (this._missingWindowWarned.has(dedupeKey)) return
     this._missingWindowWarned.add(dedupeKey)
+    this._logger.warn(
+      `codex model "${model}" has no known context window (not in codex's catalogue, no maxInputTokens in AI settings) — running on codex's fallback`,
+    )
     this._notification.notify({
       severity: Severity.Warning,
       sticky: true,
@@ -913,13 +942,15 @@ export class AcpSessionService
         initResult.agentCapabilities?.mcpCapabilities,
       )
       this._warnDroppedMcpServers(agentName, dropped)
-      const extraModels = await this._extraModelsFor(resolvedAgentId, authority)
-      this._maybeWarnMissingContextWindow(resolvedAgentId, extraModels, undefined)
+      const { pick, candidates: extraModels } = await this._extraModelsFor(
+        resolvedAgentId,
+        authority,
+      )
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(authority)),
-        _meta: buildNewSessionMeta(extraModels),
+        _meta: buildNewSessionMeta(extraModels, pick),
       }
       profile.step('willNewSession')
       const result = await withTimeout(
@@ -928,6 +959,13 @@ export class AcpSessionService
         'ACP session/new',
       )
       profile.step('didNewSession')
+      this._maybeWarnMissingContextWindow(
+        resolvedAgentId,
+        extraModels,
+        undefined,
+        pick,
+        readCodexModelKnownInCatalog(result._meta),
+      )
       // The session may have been closed by the user while connecting.
       if (session.status.get() === 'closed') {
         activeConn.dispose()
@@ -1234,11 +1272,9 @@ export class AcpSessionService
       this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
       const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
       if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
-      const extraModels = await this._extraModelsFor(entry.agentId, effectiveAuthority)
-      this._maybeWarnMissingContextWindow(
+      const { pick, candidates: extraModels } = await this._extraModelsFor(
         entry.agentId,
-        extraModels,
-        entry.configOptions?.['model'],
+        effectiveAuthority,
       )
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
@@ -1251,6 +1287,13 @@ export class AcpSessionService
         conn.conn.loadSession(loadParams),
         timeoutMs,
         'ACP session/load',
+      )
+      this._maybeWarnMissingContextWindow(
+        entry.agentId,
+        extraModels,
+        entry.configOptions?.['model'],
+        pick,
+        readCodexModelKnownInCatalog(loadResult?._meta),
       )
       // Replay finished: timeline is now populated, so ChatBody can render the
       // history (or the genuine empty-session hint if this session truly has none).
@@ -1417,30 +1460,30 @@ export class AcpSessionService
               initResult.agentCapabilities?.mcpCapabilities,
             )
             this._warnDroppedMcpServers(agentName, dropped)
-            const extraModels = await this._extraModelsFor(session.agentId, authority)
-            this._maybeWarnMissingContextWindow(
+            const { pick, candidates: extraModels } = await this._extraModelsFor(
               session.agentId,
-              extraModels,
-              rebuild ? undefined : entry?.configOptions?.['model'],
+              authority,
             )
             const agentDirs = await this._builtinAgentDirs(authority)
             let rebuiltSessionId: string | undefined
             // The SDK types these as `T | null` (absent bag), so keep the null
             // and gate on `!= null` at the applyInitState call below.
             let reportedConfigOptions: readonly SessionConfigOption[] | null | undefined
+            let knownInCatalog: boolean | undefined
             if (rebuild) {
               const newResult = await withTimeout(
                 conn.conn.newSession({
                   cwd: cwd ?? '',
                   mcpServers: kept,
                   ...agentDirs,
-                  _meta: buildNewSessionMeta(extraModels),
+                  _meta: buildNewSessionMeta(extraModels, pick),
                 }),
                 timeoutMs,
                 'ACP session/new',
               )
               rebuiltSessionId = newResult.sessionId
               reportedConfigOptions = newResult.configOptions
+              knownInCatalog = readCodexModelKnownInCatalog(newResult._meta)
             } else {
               const resumeResult = await withTimeout(
                 conn.conn.resumeSession({
@@ -1454,7 +1497,15 @@ export class AcpSessionService
                 'ACP session/resume',
               )
               reportedConfigOptions = resumeResult.configOptions
+              knownInCatalog = readCodexModelKnownInCatalog(resumeResult._meta)
             }
+            this._maybeWarnMissingContextWindow(
+              session.agentId,
+              extraModels,
+              rebuild ? undefined : entry?.configOptions?.['model'],
+              pick,
+              knownInCatalog,
+            )
             if (session.status.get() === 'closed' || !session.isReconnecting) {
               conn.dispose()
               return
@@ -1993,7 +2044,10 @@ export class AcpSessionService
             // must ride along exactly as they do on new/load — otherwise the
             // forked thread runs its first turn on codex's 272K fallback until
             // the resume below re-injects them.
-            ...buildForkMeta(entry, await this._extraModelsFor(entry.agentId, effectiveAuthority)),
+            ...buildForkMeta(
+              entry,
+              (await this._extraModelsFor(entry.agentId, effectiveAuthority)).candidates,
+            ),
             // Ask the fork to truncate at this user turn (回退 point) instead of the
             // session tip. Unknown/absent id → the agent forks from the tip.
             ...(messageId !== undefined ? { rewindTo: messageId } : {}),

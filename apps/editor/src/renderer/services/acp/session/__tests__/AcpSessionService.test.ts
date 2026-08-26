@@ -292,6 +292,13 @@ interface StubAgentOptions {
   initializeDelayMs?: number
   /** Extra delay before newSession() resolves — exercises slow session/new. */
   newSessionDelayMs?: number
+  /**
+   * When defined, newSession/loadSession/resumeSession report
+   * `_meta.codex.modelKnownInCatalog` with this value — the fork's own-catalogue
+   * verdict the editor reads to gate the context-window warning. Absent models an
+   * old fork dist that never reports the field.
+   */
+  modelKnownInCatalog?: boolean
 }
 
 class StubAgent implements Agent {
@@ -353,6 +360,9 @@ class StubAgent implements Agent {
       ...(this._opts.newSessionConfigOptions
         ? { configOptions: this._opts.newSessionConfigOptions }
         : {}),
+      ...(this._opts.modelKnownInCatalog !== undefined
+        ? { _meta: { codex: { modelKnownInCatalog: this._opts.modelKnownInCatalog } } }
+        : {}),
     } as unknown as NewSessionResponse
     const delay = this._opts.newSessionDelayMs
     if (delay !== undefined) {
@@ -392,12 +402,22 @@ class StubAgent implements Agent {
   loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.loadSessionCalls.push(params)
     if (this._opts.loadSessionHangs) return new Promise<never>(() => {})
-    return Promise.resolve({} as unknown as LoadSessionResponse)
+    const response = {
+      ...(this._opts.modelKnownInCatalog !== undefined
+        ? { _meta: { codex: { modelKnownInCatalog: this._opts.modelKnownInCatalog } } }
+        : {}),
+    } as unknown as LoadSessionResponse
+    return Promise.resolve(response)
   }
 
   resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.resumeSessionCalls.push(params)
-    return Promise.resolve({} as unknown as ResumeSessionResponse)
+    const response = {
+      ...(this._opts.modelKnownInCatalog !== undefined
+        ? { _meta: { codex: { modelKnownInCatalog: this._opts.modelKnownInCatalog } } }
+        : {}),
+    } as unknown as ResumeSessionResponse
+    return Promise.resolve(response)
   }
 
   authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
@@ -5191,13 +5211,14 @@ describe('AcpSessionService extra model candidates injection', () => {
       stubAcpModelCandidateService({
         models: EXTRA_MODELS,
         contextWindows: { 'gw/one': 128000, 'gw/two': 64000 },
+        pick: 'gw/one',
       }),
     )
     try {
       const session = await svc.createSession()
       await session.whenConnected()
       const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
-      // candidates[0] is the effective pick, so its window is the injected one.
+      // The window comes from the explicit pick, never from candidates[0].
       expect(meta?.modelContextWindow).toBe(128000)
     } finally {
       svc.dispose()
@@ -5206,7 +5227,10 @@ describe('AcpSessionService extra model candidates injection', () => {
 
   it('omits modelContextWindow when no candidate declares one', async () => {
     const client = new FakeAcpClientService()
-    const svc = makeService(client, stubAcpModelCandidateService({ models: EXTRA_MODELS }))
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, pick: 'gw/one' }),
+    )
     try {
       const session = await svc.createSession()
       await session.whenConnected()
@@ -5222,7 +5246,7 @@ describe('AcpSessionService extra model candidates injection', () => {
     const notification = new StubNotificationService()
     const svc = makeService(
       client,
-      stubAcpModelCandidateService({ models: EXTRA_MODELS }),
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, pick: 'gw/one' }),
       notification,
     )
     try {
@@ -5241,7 +5265,11 @@ describe('AcpSessionService extra model candidates injection', () => {
     const notification = new StubNotificationService()
     const svc = makeService(
       client,
-      stubAcpModelCandidateService({ models: EXTRA_MODELS, contextWindows: { 'gw/one': 128000 } }),
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        contextWindows: { 'gw/one': 128000 },
+        pick: 'gw/one',
+      }),
       notification,
     )
     try {
@@ -5263,6 +5291,99 @@ describe('AcpSessionService extra model candidates injection', () => {
       expect(notification2.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
     } finally {
       svc2.dispose()
+    }
+  })
+
+  it('never stamps a modelContextWindow when the config file names no pick', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({
+        models: EXTRA_MODELS,
+        contextWindows: { 'gw/one': 128000 },
+      }),
+    )
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const meta = client.connected[0]!.agent.newSessionCalls[0]!._meta
+      // No pick means codex runs its own default; candidates[0] is just the
+      // provider's first declared model. Injecting its 128000 would hand gw/one's
+      // window to whatever the fork actually runs — the reported bug this guards.
+      expect(meta).not.toHaveProperty('modelContextWindow')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not warn for a codex session with no pick', async () => {
+    const client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      expect(notification.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not warn when the fork reports the model is in its own catalogue', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { modelKnownInCatalog: true },
+    })
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, pick: 'gw/one' }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      expect(notification.captured.some((n) => n.message.includes('maxInputTokens'))).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('still warns when the fork reports the model is not in its catalogue', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { modelKnownInCatalog: false },
+    })
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, pick: 'gw/one' }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      const warnings = notification.captured.filter((n) => n.message.includes('gw/one'))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]!.message).toContain('maxInputTokens')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('warns on the editor judgement when the fork predates the field', async () => {
+    const client = new FakeAcpClientService()
+    const notification = new StubNotificationService()
+    const svc = makeService(
+      client,
+      stubAcpModelCandidateService({ models: EXTRA_MODELS, pick: 'gw/one' }),
+      notification,
+    )
+    try {
+      await (await svc.createSession('codex')).whenConnected()
+      const warnings = notification.captured.filter((n) => n.message.includes('gw/one'))
+      expect(warnings).toHaveLength(1)
+    } finally {
+      svc.dispose()
     }
   })
 })
