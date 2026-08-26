@@ -1,5 +1,43 @@
 [
   {
+    "version": "0.13.4",
+    "date": "2026-08-26",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "sider task支持删除，级联清理嵌套子任务",
+          "操作系统文件和explorer可以互拷，同时支持远程工作区",
+          "codex和claude的配置从对应的config.toml和settings.json中读取（唯一真相）",
+          "session的配置栏，宽度不足控件收进[...]面板，子模型紧跟主模型之后显示",
+          "codex acp 支持第三方模型",
+          "ACP会话支持注入可配置模型进行候选",
+          "AI供应商压平为单层providers[]，协议与模型由protocolMap声明",
+          "AI供应商重构为类型/实例两层模型，密钥改明文存储",
+          "claude和codex官方订阅额度用量指示器支持",
+          "远程工作区支持预下载codex和claude的二进制文件",
+          "优化git刷新逻辑，后台窗口不自动刷新，前台获取焦点自动刷新"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "remote工作区无法通过explorer删除文件",
+          "扩展宿主按authority和URI路径绑定，workspace.fs适配远程环境",
+          "预览统一openPreviewInGroup，同组同kind只留一个tab",
+          "自动执行的计划卡片不再触发权限通知",
+          "修复点击系统通知无反应",
+          "优先使用首条prompt作为session标题",
+          "复制路径/名称支持远程文件资源",
+          "完成通知仅在会话回idle时触发，移除plan全完成即通知",
+          "安装/下载前复查最新版本，避免安装过期包"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.3",
     "date": "2026-08-21",
     "groups": [
