@@ -30,6 +30,8 @@ export interface SubscriptionUsageWindow {
 /** Codex-only: prepaid credits that reset a hit rate limit early. */
 export interface SubscriptionResetCredits {
   readonly availableCount: number
+  /** Epoch ms when the soonest available credit expires; absent when details were withheld. */
+  readonly earliestExpiresAt?: number
 }
 
 /** Claude-only: pay-as-you-go spend on top of the plan's included usage. */
@@ -107,6 +109,20 @@ export function toEpochMs(value: unknown): number | undefined {
   if (text === undefined) return undefined
   const parsed = Date.parse(text)
   return Number.isNaN(parsed) ? undefined : parsed
+}
+
+/** The soonest expiry among still-available credits; withheld or malformed details contribute nothing. */
+function earliestCreditExpiry(raw: unknown): number | undefined {
+  if (!Array.isArray(raw)) return undefined
+  let earliest: number | undefined
+  for (const entry of raw) {
+    const credit = asRecord(entry)
+    if (credit === undefined || credit['status'] !== 'available') continue
+    const expiresAt = toEpochMs(credit['expiresAt'])
+    if (expiresAt === undefined) continue
+    if (earliest === undefined || expiresAt < earliest) earliest = expiresAt
+  }
+  return earliest
 }
 
 /** Human label for a rolling window of `minutes`, e.g. 300 → "5-hour", 10080 → "Weekly". */
@@ -278,7 +294,10 @@ function normalizeCodexUsage(
     // a decimal string, because JSON.stringify throws on bigint.
     const parsed = Number(credits['availableCount'])
     if (Number.isFinite(parsed) && parsed >= 0)
-      resetCredits = { availableCount: Math.floor(parsed) }
+      resetCredits = {
+        availableCount: Math.floor(parsed),
+        ...pick('earliestExpiresAt', earliestCreditExpiry(credits['credits'])),
+      }
   }
 
   return {
@@ -321,8 +340,8 @@ export function normalizeSubscriptionUsage(
 
 /**
  * The window the user is closest to hitting — the collapsed indicator shows its
- * *used* percentage (matching Codex's own status readout), so "how much headroom
- * is left" is one glance away.
+ * *remaining* percentage (`100 − usedPercent`), so "how much headroom is left"
+ * is one glance away.
  */
 export function pickTightestWindow(
   snapshot: SubscriptionUsageSnapshot | undefined,

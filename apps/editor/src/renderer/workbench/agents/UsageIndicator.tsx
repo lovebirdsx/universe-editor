@@ -5,10 +5,10 @@
  *  authenticated (see `resolveUsageDisplay`):
  *
  *   - an official subscription (claude.ai Pro/Max, ChatGPT Plus/Pro) reports
- *     rate-limit windows, so the collapsed form is the tightest window's used
- *     percentage — matching what the vendors' own clients show — and the popover
- *     breaks every window down with a bar and a reset time. Codex additionally
- *     offers redeeming a rate-limit reset credit from there.
+ *     rate-limit windows, so the collapsed form is the tightest window's
+ *     remaining percentage, and the popover breaks every window down with a bar
+ *     and a reset time. Codex additionally offers redeeming a rate-limit reset
+ *     credit from there.
  *   - a provider-declared account usage source shows the authoritative account
  *     number (quota / balance / subscription).
  *   - anything else hides the indicator.
@@ -50,6 +50,10 @@ const STALE_RECHECK_MS = 30_000
 
 function formatPercent(value: number): string {
   return `${Math.round(value)}%`
+}
+
+function formatRemainingPercent(usedPercent: number): string {
+  return formatPercent(100 - usedPercent)
 }
 
 function formatAbsolute(epochMs: number): string {
@@ -106,6 +110,30 @@ function formatResetsAt(epochMs: number, now: number): string {
         })
   }
   return localize('acp.subscriptionUsage.resetsAt', 'resets {at}', { at: formatAbsolute(epochMs) })
+}
+
+/** "expires in 30m" / "expires in 2h 15m" / "expires in 3d" once far out / "expired". */
+function formatExpiresAt(epochMs: number, now: number): string {
+  const deltaMs = epochMs - now
+  if (deltaMs <= 0) return localize('acp.subscriptionUsage.expired', 'expired')
+  // Under a minute there is no useful countdown at the 60s refresh cadence.
+  const minutes = Math.max(1, Math.round(deltaMs / 60_000))
+  if (minutes < 60) {
+    return localize('acp.subscriptionUsage.expiresInMinutes', 'expires in {minutes}m', { minutes })
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    const rest = minutes % 60
+    return rest === 0
+      ? localize('acp.subscriptionUsage.expiresInHours', 'expires in {hours}h', { hours })
+      : localize('acp.subscriptionUsage.expiresInHoursMinutes', 'expires in {hours}h {minutes}m', {
+          hours,
+          minutes: rest,
+        })
+  }
+  return localize('acp.subscriptionUsage.expiresInDays', 'expires in {days}d', {
+    days: Math.floor(minutes / (60 * 24)),
+  })
 }
 
 export function UsageIndicator({ session }: { session: IAcpSession }) {
@@ -169,14 +197,23 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   const usage = snapshot as SubscriptionUsageSnapshot
   const tightest = pickTightestWindow(usage)
   const stale = subscription?.isStale(usage, now) === true
+  // The button shows the bare number (width is tight); the "remaining" reading
+  // is spelled out in the tooltip.
+  const remaining = tightest === undefined ? '—' : formatRemainingPercent(tightest.usedPercent)
 
   const tooltip = stale
     ? localize(
         'acp.subscriptionUsage.indicator.stale',
-        'Subscription usage as of {at} — click for details',
-        { at: formatAbsolute(usage.fetchedAt) },
+        'Subscription usage as of {at} — {pct} left — click for details',
+        { at: formatAbsolute(usage.fetchedAt), pct: remaining },
       )
-    : localize('acp.subscriptionUsage.indicator', 'Subscription usage — click for details')
+    : localize(
+        'acp.subscriptionUsage.indicator',
+        'Subscription usage — {pct} left — click for details',
+        {
+          pct: remaining,
+        },
+      )
 
   return (
     <div className={styles['usageWrap']}>
@@ -194,9 +231,7 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
         data-testid="acp-usage-indicator"
       >
         <Gauge size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['usageIndicatorText']}>
-          {tightest === undefined ? '—' : formatPercent(tightest.usedPercent)}
-        </span>
+        <span className={styles['usageIndicatorText']}>{remaining}</span>
       </button>
       {open ? (
         <SubscriptionUsagePopover
@@ -485,9 +520,18 @@ function SubscriptionUsagePopover({
       {snapshot.resetCredits !== undefined ? (
         <div className={styles['usageResetRow']}>
           <span>
-            {localize('acp.subscriptionUsage.resetCredits', 'Reset credits: {count}', {
-              count: availableCredits,
-            })}
+            {snapshot.resetCredits.earliestExpiresAt === undefined
+              ? localize('acp.subscriptionUsage.resetCredits', 'Reset credits: {count}', {
+                  count: availableCredits,
+                })
+              : localize(
+                  'acp.subscriptionUsage.resetCreditsExpiring',
+                  'Reset credits: {count} · {when}',
+                  {
+                    count: availableCredits,
+                    when: formatExpiresAt(snapshot.resetCredits.earliestExpiresAt, now),
+                  },
+                )}
           </span>
           <button
             type="button"
@@ -520,12 +564,14 @@ function UsageWindowRow({ window, now }: { window: SubscriptionUsageWindow; now:
     <div className={styles['usageWindowRow']} data-testid="acp-usage-window">
       <div className={styles['usageWindowHead']}>
         <span className={styles['usageWindowLabel']}>{window.label}</span>
-        <span className={styles['sessionCostTotal']}>{formatPercent(window.usedPercent)}</span>
+        <span className={styles['sessionCostTotal']}>
+          {formatRemainingPercent(window.usedPercent)}
+        </span>
       </div>
       <div className={styles['compactionProgress']} style={{ width: '100%', marginLeft: 0 }}>
         <span
           className={styles['compactionProgressFill']}
-          style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }}
+          style={{ width: `${Math.min(100, Math.max(0, 100 - window.usedPercent))}%` }}
         />
       </div>
       {window.resetsAt === undefined ? null : (

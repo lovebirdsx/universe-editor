@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  UsageIndicator tests — the gating table rendered:
- *    - subscription snapshot → tightest window's used percentage
+ *    - subscription snapshot → tightest window's remaining percentage
  *    - account usage → the provider-declared account number
  *    - neither → nothing
  *    - stale snapshot → dimmed, with the cutoff time in the tooltip
@@ -129,9 +129,16 @@ function renderIndicator(options: {
 }
 
 describe('UsageIndicator — collapsed form', () => {
-  it('shows the tightest window as a percentage', () => {
+  it("shows the tightest window's remaining percentage", () => {
     renderIndicator({ snapshot: snapshot() })
-    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('76%')
+    expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('24%')
+  })
+
+  it('spells out the remaining reading in the tooltip', () => {
+    renderIndicator({ snapshot: snapshot() })
+    expect(screen.getByTestId('acp-usage-indicator').getAttribute('data-tooltip')).toContain(
+      '24% left',
+    )
   })
 
   it('refreshes on mount so a just-opened chat is not showing yesterday', () => {
@@ -199,6 +206,53 @@ describe('UsageIndicator — popover', () => {
     renderIndicator({ snapshot: snapshot({ resetCredits: { availableCount: 0 } }) })
     fireEvent.click(screen.getByTestId('acp-usage-indicator'))
     expect(screen.getByTestId<HTMLButtonElement>('acp-usage-reset-credit').disabled).toBe(true)
+  })
+
+  it("shows each window's remaining percentage with a matching bar", () => {
+    renderIndicator({ snapshot: snapshot() })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+
+    const rows = screen.getAllByTestId('acp-usage-window')
+    // fixture windows: 5-hour used 12 → 88 left, Weekly used 76 → 24 left
+    expect(rows[0]?.textContent).toContain('88%')
+    expect(rows[1]?.textContent).toContain('24%')
+    const fillOf = (row: HTMLElement) => {
+      const fill = Array.from(row.querySelectorAll('span')).find((el) =>
+        el.getAttribute('style')?.includes('width'),
+      )
+      return fill?.getAttribute('style') ?? ''
+    }
+    expect(fillOf(rows[0] as HTMLElement)).toContain('width: 88%')
+    expect(fillOf(rows[1] as HTMLElement)).toContain('width: 24%')
+  })
+
+  it('shows the soonest credit expiry next to the reset-credit balance', () => {
+    // The popover's clock is real Date.now(), so the fixture must be too.
+    renderIndicator({
+      snapshot: snapshot({
+        resetCredits: { availableCount: 2, earliestExpiresAt: Date.now() + 3 * 86_400_000 },
+      }),
+    })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(screen.getByTestId('acp-usage-popover').textContent).toContain('expires in 3d')
+  })
+
+  it('marks an already-expired credit', () => {
+    renderIndicator({
+      snapshot: snapshot({
+        resetCredits: { availableCount: 2, earliestExpiresAt: Date.now() - 60_000 },
+      }),
+    })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    expect(screen.getByTestId('acp-usage-popover').textContent).toContain('expired')
+  })
+
+  it('omits the expiry hint when none is reported', () => {
+    renderIndicator({ snapshot: snapshot({ resetCredits: { availableCount: 2 } }) })
+    fireEvent.click(screen.getByTestId('acp-usage-indicator'))
+    const popover = screen.getByTestId('acp-usage-popover')
+    expect(popover.textContent).toContain('Reset credits: 2')
+    expect(popover.textContent).not.toContain('expires')
   })
 })
 

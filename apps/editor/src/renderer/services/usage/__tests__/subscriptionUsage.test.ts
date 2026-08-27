@@ -181,6 +181,60 @@ describe('normalizeSubscriptionUsage — codex', () => {
     expect(normalizeSubscriptionUsage('codex', payload, FETCHED_AT)?.resetCredits).toBeUndefined()
   })
 
+  it('surfaces the soonest expiry among available credits', () => {
+    const payload = codexPayload({
+      resetCredits: {
+        availableCount: '3',
+        credits: [
+          { status: 'available', expiresAt: 1_700_100_000 },
+          { status: 'available', expiresAt: 1_700_300_000 },
+          { status: 'redeemed', expiresAt: 1_700_050_000 },
+          { status: 'available', expiresAt: null },
+        ],
+      },
+    })
+    const snapshot = normalizeSubscriptionUsage('codex', payload, FETCHED_AT)
+    // The redeemed credit's earlier expiry must not win — it can no longer be spent.
+    expect(snapshot?.resetCredits).toEqual({
+      availableCount: 3,
+      earliestExpiresAt: 1_700_100_000_000,
+    })
+  })
+
+  it('omits the expiry when the backend withholds credit details', () => {
+    const payload = codexPayload({ resetCredits: { availableCount: '2', credits: null } })
+    expect(normalizeSubscriptionUsage('codex', payload, FETCHED_AT)?.resetCredits).toEqual({
+      availableCount: 2,
+    })
+  })
+
+  it('omits the expiry when no available credit has one', () => {
+    const payload = codexPayload({
+      resetCredits: {
+        availableCount: '2',
+        credits: [
+          { status: 'available', expiresAt: null },
+          { status: 'redeemed', expiresAt: 1_700_050_000 },
+        ],
+      },
+    })
+    expect(normalizeSubscriptionUsage('codex', payload, FETCHED_AT)?.resetCredits).toEqual({
+      availableCount: 2,
+    })
+  })
+
+  it('ignores malformed credit entries instead of failing the whole snapshot', () => {
+    const payload = codexPayload({
+      resetCredits: {
+        availableCount: '2',
+        credits: ['junk', { expiresAt: 1_700_050_000 }, { status: 'available', expiresAt: 'soon' }],
+      },
+    })
+    expect(normalizeSubscriptionUsage('codex', payload, FETCHED_AT)?.resetCredits).toEqual({
+      availableCount: 2,
+    })
+  })
+
   it('returns undefined when the account is on an API key', () => {
     const payload = codexPayload({ supported: false, rateLimits: null })
     expect(normalizeSubscriptionUsage('codex', payload, FETCHED_AT)).toBeUndefined()

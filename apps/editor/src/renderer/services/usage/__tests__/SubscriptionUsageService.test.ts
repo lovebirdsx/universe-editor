@@ -263,6 +263,33 @@ describe('SubscriptionUsageService', () => {
     second.dispose()
   })
 
+  it('persists and restores a snapshot with reset-credit expiry intact', async () => {
+    const requestExtMethod = vi.fn().mockResolvedValue({
+      vendor: 'codex',
+      supported: true,
+      rateLimits: { planType: 'plus', primary: { usedPercent: 33, windowDurationMins: 300 } },
+      rateLimitsByLimitId: null,
+      resetCredits: {
+        availableCount: '2',
+        credits: [{ status: 'available', expiresAt: 1_700_003_600 }],
+      },
+    })
+    sessions.set([fakeSession('codex', requestExtMethod)], undefined)
+    const first = createService()
+    await first.refresh('codex')
+    first.dispose()
+
+    sessions.set([], undefined)
+    const second = createService()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(second.snapshotFor('codex').get()?.resetCredits).toEqual({
+      availableCount: 2,
+      earliestExpiresAt: 1_700_003_600_000,
+    })
+    second.dispose()
+  })
+
   it('marks a snapshot stale past the configured window', async () => {
     configuration.values.set('acp.subscriptionUsage.staleAfterMs', 60_000)
     const requestExtMethod = vi.fn().mockResolvedValue(claudeUsage(1))
