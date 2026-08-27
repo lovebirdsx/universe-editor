@@ -1,6 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  市场自助发布 API 的服务端流水线（Phase D，见 docs/plan/third-party-extension-ecosystem-plan/
- *  04-publishing-backend.md）。端点路径与 uex 客户端 packages/uex/src/lib/galleryApi.ts 对齐：
+ *  市场自助发布 API 的服务端流水线（Phase D）。端点路径与 uex 客户端 packages/uex/src/lib/galleryApi.ts 对齐：
  *
  *    POST gallery/api/publish    Bearer + vsix 二进制流 → 201 { id, version }
  *    POST gallery/api/unpublish  Bearer + JSON { id, version|null } → 200 { removed }

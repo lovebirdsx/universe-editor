@@ -6,7 +6,7 @@ metadata:
   type: project
 ---
 
-2026-08-21 分析用户机(linzhenqun,0.13.1)诊断包：**codex** 会话（8.5h WSL cmake/ninja/单测构建型，数百次 kind=execute）切 tab 后 20s 内 Tab 0.4GB→3.4GB、峰值 4.4GB，main heap 同期 58MB→1016MB，renderer OOM；重启后 2s 重放 459 条 session/update、1 分钟又涨回 3.9GB。
+2026-08-21 分析用户机(0.13.1)诊断包：**codex** 会话（8.5h WSL cmake/ninja/单测构建型，数百次 kind=execute）切 tab 后 20s 内 Tab 0.4GB→3.4GB、峰值 4.4GB，main heap 同期 58MB→1016MB，renderer OOM；重启后 2s 重放 459 条 session/update、1 分钟又涨回 3.9GB。
 
 根因：[[renderer-oom-triple-fix-live-budget-replay-cap-orphan]] 的三修**只覆盖 claude fork**，codex 侧四个缺口：
 

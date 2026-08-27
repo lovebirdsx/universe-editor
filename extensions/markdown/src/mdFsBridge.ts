@@ -6,7 +6,7 @@
  *
  * Reads that stay inside the workspace go through the host's gated `workspace.fs`
  * (the path policy vets them). A link may legitimately point at an *absolute path
- * outside the workspace* (e.g. `[vscode](D:/git_project/vscode)`); the gated fs
+ * outside the workspace* (e.g. `[vscode](D:/workspace/vscode)`); the gated fs
  * denies those, which would make a real file/dir read as "does not exist". Since
  * markdown is a trusted built-in plugin (same trust level as the git extension,
  * which also uses `node:fs`), we read those directly with `node:fs` — bypassing

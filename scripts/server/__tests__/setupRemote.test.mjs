@@ -407,7 +407,7 @@ test('buildHealthTimeoutMessage：Windows 给任务状态 + run.cmd 手动排障
     healthUrl: 'http://127.0.0.1/',
     localVersion: '10',
     windows: true,
-    remote: 'songxiao@127.0.0.1',
+    remote: 'devuser@127.0.0.1',
     appDir: 'C:/universe-editor/app/',
   })
   assert.match(win, /健康验证超时：http:\/\/127\.0\.0\.1\/ 未返回 v10/)

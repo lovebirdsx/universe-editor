@@ -275,21 +275,21 @@ describe('TerminalManagerService', () => {
 
   it('expands ${workspaceFolder} in terminal.integrated.cwd', async () => {
     const withConfig = makeHarness(
-      'G:/aki_3.6/Source/Client/TypeScript',
-      { 'terminal.integrated.cwd': '${workspaceFolder}/Src/UniverseEditor' },
+      'G:/p4ws/main/src/client/scripts',
+      { 'terminal.integrated.cwd': '${workspaceFolder}/src/editor' },
       undefined,
       { platform: 'win32' },
     )
     await withConfig.manager.newTerminal()
     expect(withConfig.created[0]!.spec.cwd).toEqual(
-      URI.file('G:/aki_3.6/Source/Client/TypeScript/Src/UniverseEditor').toJSON(),
+      URI.file('G:/p4ws/main/src/client/scripts/src/editor').toJSON(),
     )
   })
 
   it('falls back to home when terminal.integrated.cwd needs a workspace but none is open', async () => {
     const noWs = makeHarness(
       null,
-      { 'terminal.integrated.cwd': '${workspaceFolder}/Src/UniverseEditor' },
+      { 'terminal.integrated.cwd': '${workspaceFolder}/src/editor' },
       undefined,
       { userHome: '/home/tester' },
     )
@@ -582,7 +582,7 @@ describe('TerminalManagerService', () => {
     it('remote Linux workspace leaves shell unset for the remote $SHELL fallback', async () => {
       const remote = makeHarness('/remote/ws', undefined, undefined, {
         platform: 'win32',
-        remoteAuthority: 'xiao@host',
+        remoteAuthority: 'dev@host',
         remoteOs: 'linux',
       })
       remote.setProfiles([
@@ -592,7 +592,7 @@ describe('TerminalManagerService', () => {
       await remote.manager.newTerminal()
       expect(remote.created[0]!.spec.shell).toBeUndefined()
       expect(remote.created[0]!.spec.cwd).toEqual(
-        URI.from({ scheme: 'remote-ssh', authority: 'xiao@host', path: '/remote/ws' }).toJSON(),
+        URI.from({ scheme: 'remote-ssh', authority: 'dev@host', path: '/remote/ws' }).toJSON(),
       )
     })
 
@@ -612,7 +612,7 @@ describe('TerminalManagerService', () => {
         '/remote/ws',
         { 'terminal.integrated.defaultProfile.linux': 'zsh' },
         undefined,
-        { platform: 'win32', remoteAuthority: 'xiao@host', remoteOs: 'linux' },
+        { platform: 'win32', remoteAuthority: 'dev@host', remoteOs: 'linux' },
       )
       const zsh: ITerminalProfile = {
         profileName: 'zsh',

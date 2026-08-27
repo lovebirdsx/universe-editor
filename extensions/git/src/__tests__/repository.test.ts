@@ -260,7 +260,7 @@ describe('classifyWorktreeRemoveFailure', () => {
   it('treats an in-use folder as busy (Windows EINVAL / access denied)', () => {
     expect(
       classifyWorktreeRemoveFailure(
-        "error: failed to delete 'D:/git_project/universe-editor2': Invalid argument",
+        "error: failed to delete 'D:/workspace/universe-editor2': Invalid argument",
       ),
     ).toBe('busy')
     expect(classifyWorktreeRemoveFailure('Access is denied')).toBe('busy')

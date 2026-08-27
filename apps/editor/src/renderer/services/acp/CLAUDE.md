@@ -259,7 +259,6 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 ### 参考坐标
 
 - 模型/序列化：`promptRef.ts`；追踪：`promptRefTracker.ts`；句柄：`PromptMonacoEditor.tsx`；编排：`PromptInput.tsx`；数据源：`contextSuggestions.ts`
-- 计划：`docs/plan/monaco-prompt-input-context-pills-plan.md`
 - 记忆：[[prompt-hash-context-references-feature]]（模型 + 序列化红线）、[[prompt-monaco-input-migration]]（Monaco 迁移的坑）、[[monaco-055-editcontext-nls]]（editContext:true 修中文 IME 必设）
 - 会话全局上下文（协议/发送链路/双 id）：见 [`session/CLAUDE.md`](session/CLAUDE.md)
 

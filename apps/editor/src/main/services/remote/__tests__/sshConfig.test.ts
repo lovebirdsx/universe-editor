@@ -33,7 +33,7 @@ describe('parseSshHosts', () => {
     const hosts = parseSshHosts(`
 # a comment
 Host dev-box
-  HostName 10.0.0.2
+  HostName 192.0.2.12
 
 Host prod prod-alias
   HostName prod.example.com

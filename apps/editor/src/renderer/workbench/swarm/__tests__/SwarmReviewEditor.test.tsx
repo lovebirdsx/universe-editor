@@ -1333,8 +1333,8 @@ describe('SwarmReviewEditor apply to local', () => {
     const foreign: SwarmReviewFileDto[] = [
       {
         status: 'M',
-        path: 'aki/branch_3.7/PosTransfer.ts',
-        depotFile: '//aki/branch_3.7/Source/Client/TypeScript/PosTransfer.ts',
+        path: 'depot/branch_x/SampleModule.ts',
+        depotFile: '//depot/branch_x/src/client/scripts/SampleModule.ts',
         baseRevision: '1',
         localPath: null,
       },
@@ -1357,7 +1357,7 @@ describe('SwarmReviewEditor apply to local', () => {
       expect(dialog.confirm).not.toHaveBeenCalled()
       const message = notifications.notify.mock.calls[0]?.[0]?.message as string
       expect(message).toContain('different stream/branch')
-      expect(message).not.toContain('PosTransfer')
+      expect(message).not.toContain('SampleModule')
     } finally {
       applyToLocal.dispose()
       describeVersion.dispose()

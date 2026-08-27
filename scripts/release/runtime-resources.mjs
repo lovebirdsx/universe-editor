@@ -22,6 +22,7 @@ import {
 import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadEnv } from '../lib/env.mjs'
 import {
   extensionPackageFiles as sharedExtensionPackageFiles,
   normalizePackageFileEntry as sharedNormalizePackageFileEntry,
@@ -31,6 +32,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 const editorRoot = join(repoRoot, 'apps/editor')
 const releaseResourcesRoot = join(editorRoot, 'release/win-unpacked/resources')
+
+const requireFromEditor = createRequire(join(editorRoot, 'package.json'))
+const jsonc = requireFromEditor('jsonc-parser')
 
 export const runtimeResourcesDir = join(editorRoot, '.runtime-resources')
 export const extensionsRoot = join(repoRoot, 'extensions')
@@ -180,6 +184,21 @@ function copyPath(source, destination) {
   cpSync(source, destination, { recursive: statSync(source).isDirectory(), force: true })
 }
 
+// product.json 是 JSONC（带 // 注释）。仅在配置了 UE_GALLERY_URL 时重写（按 env
+// 覆盖 galleryUrl），否则保持原文件字节级一致——没配 env 时占位值原样进入产物。
+function stageProductJson(stageDir) {
+  const source = join(editorRoot, 'build/product.json')
+  assertExists(source, 'product defaults')
+  const galleryUrl = process.env.UE_GALLERY_URL
+  if (!galleryUrl) {
+    copyPath(source, join(stageDir, 'product.json'))
+    return
+  }
+  const product = jsonc.parse(readFileSync(source, 'utf8'))
+  product.galleryUrl = galleryUrl
+  writeFileSync(join(stageDir, 'product.json'), JSON.stringify(product, null, 2) + '\n')
+}
+
 // Keep packages/remote-server/dist-bundle fresh before staging. Invoked directly
 // via node (not pnpm/turbo) — the same stamp-skip fast path the dev scripts use.
 function ensureRemoteServerBundle() {
@@ -242,7 +261,7 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   copyPath(join(tsgoPkgDir, 'lib'), join(stageDir, 'tsgo/lib'))
   copyPath(join(tsgoPkgDir, 'package.json'), join(stageDir, 'tsgo/package.json'))
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
-  copyPath(join(editorRoot, 'build/product.json'), join(stageDir, 'product.json'))
+  stageProductJson(stageDir)
 
   // User guide docs (docs/user/<locale>/**/*.md) ship as plain files beside
   // app.asar so agents can read them off disk; the renderer loads them via
@@ -354,6 +373,7 @@ const isMain =
   process.argv[1] && realpathSync(process.argv[1]).split(sep).join('/') === fileURLToPath(import.meta.url).split(sep).join('/')
 if (isMain) {
   try {
+    loadEnv()
     main(process.argv.slice(2))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

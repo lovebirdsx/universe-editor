@@ -26,5 +26,6 @@ platform、renderer 同理),运行时根本不需要其 node_modules 副本。�
 `**/node_modules/<pkg>/**` 并设 `npmRebuild: false`(@parcel/watcher 是 prebuilt N-API,无需重编)。
 
 **打包可本机验证**:
-`pnpm --filter "@universe-editor/editor..." build` 后 `cd apps/editor && pnpm exec electron-builder --win dir`,
+`pnpm --filter @universe-editor/editor package:win:dir`(必须走这个脚本——`electron-builder.yml`
+的 `publish.url` 是 `${env.UE_UPDATE_FEED_URL}`,直接 `pnpm exec electron-builder` 会因变量未定义而中止),
 检查 `release/win-unpacked/resources/app.asar.unpacked/**/*.node` 存在。

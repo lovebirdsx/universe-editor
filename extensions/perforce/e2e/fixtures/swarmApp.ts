@@ -124,9 +124,9 @@ export const test = base.extend<SwarmFixtures>({
     // A real spreadsheet (valid xlsx bytes made with SheetJS) so the Excel
     // extension actually parses + diffs it. A text-diff path would utf8-corrupt the
     // zip bytes and show nothing; the review must route it through the webview diff
-    // over raw base64 bytes. Deep path mirrors the real depot layout of the bug.
-    const xlsxDepot = '//depot/AkiBase/Source/Config/z.battle/b.Buff/b.Buff_LevelNew.xlsx'
-    const xlsxRel = 'AkiBase/Source/Config/z.battle/b.Buff/b.Buff_LevelNew.xlsx'
+    // over raw base64 bytes. Deep path keeps the directory depth of the original bug.
+    const xlsxDepot = '//depot/src/content/gamedata/tables/buffs/buffs_level_new.xlsx'
+    const xlsxRel = 'src/content/gamedata/tables/buffs/buffs_level_new.xlsx'
     const xlsxBase = readFileSync(resolve(__dirname, 'assets', 'buff-base.xlsx'))
     const xlsxShelf = readFileSync(resolve(__dirname, 'assets', 'buff-shelf.xlsx'))
 
@@ -135,22 +135,22 @@ export const test = base.extend<SwarmFixtures>({
     // Windows argv would mangle the bytes via the ANSI code page and the diff
     // would come back blank (the empty-Swarm-diff bug). A plain text extension:
     // spreadsheet extensions (.csv/.xlsx) route to the webview diff instead.
-    const cnDepot = '//depot/w.文本库/文本库_系统模块.ts'
-    const cnBase = '// 文本库基线\nexport const textLib = 1\n'
-    const cnShelf = '// 文本库改动\nexport const textLib = 2\n'
+    const cnDepot = '//depot/资源库/资源表.ts'
+    const cnBase = '// 资源表基线\nexport const textLib = 1\n'
+    const cnShelf = '// 资源表改动\nexport const textLib = 2\n'
 
     // A Chinese depot path whose csv payload decodes past the 1MB spreadsheet-diff
     // cap: the Excel webview diff (whole-table LCS) would OOM the extension host,
     // so the review must fall back to the Monaco text diff. Content is generated
     // (not inlined) to keep this fixture readable; base/shelf carry distinct
     // Chinese markers the spec asserts on.
-    const bigCsvDepot = '//depot/w.文本库/大数据表.csv'
+    const bigCsvDepot = '//depot/资源库/数据集.csv'
     const bigCsvRows = (marker: string, value: string): string =>
       `编号,名称,${marker}\n` +
       Array.from({ length: 52_000 }, (_, i) => `${i + 1},row-${i + 1},${value}`).join('\n') +
       '\n'
-    const bigCsvBase = bigCsvRows('数据表基线', 'alpha')
-    const bigCsvShelf = bigCsvRows('数据表改动', 'beta')
+    const bigCsvBase = bigCsvRows('数据集基线', 'alpha')
+    const bigCsvShelf = bigCsvRows('数据集改动', 'beta')
     for (const [name, csv] of [
       ['bigCsvBase', bigCsvBase],
       ['bigCsvShelf', bigCsvShelf],
@@ -165,16 +165,16 @@ export const test = base.extend<SwarmFixtures>({
     // Seed a minimal p4 depot so discovery succeeds + shelve has something.
     mkdirSync(join(workspaceDir, 'src', 'editor'), { recursive: true })
     mkdirSync(join(workspaceDir, 'src', 'runtime'), { recursive: true })
-    mkdirSync(join(workspaceDir, 'AkiBase', 'Source', 'Config', 'z.battle', 'b.Buff'), {
+    mkdirSync(join(workspaceDir, 'src', 'content', 'gamedata', 'tables', 'buffs'), {
       recursive: true,
     })
-    mkdirSync(join(workspaceDir, 'w.文本库'), { recursive: true })
+    mkdirSync(join(workspaceDir, '资源库'), { recursive: true })
     writeFileSync(join(workspaceDir, 'hello.txt'), 'hello\n', 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), baselineA, 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'runtime', 'b.ts'), 'export const b = 1\n', 'utf8')
     writeFileSync(join(workspaceDir, xlsxRel), xlsxShelf)
-    writeFileSync(join(workspaceDir, 'w.文本库', '文本库_系统模块.ts'), cnBase, 'utf8')
-    writeFileSync(join(workspaceDir, 'w.文本库', '大数据表.csv'), bigCsvBase, 'utf8')
+    writeFileSync(join(workspaceDir, '资源库', '资源表.ts'), cnBase, 'utf8')
+    writeFileSync(join(workspaceDir, '资源库', '数据集.csv'), bigCsvBase, 'utf8')
     writeFileSync(
       stateFile,
       JSON.stringify({

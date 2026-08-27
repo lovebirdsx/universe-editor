@@ -7,7 +7,7 @@ metadata:
   originSessionId: 711da5a2-5be0-4ef6-ba2d-f4a6a033faa3
 ---
 
-ACP 会话输入框（`PromptInput.tsx`）从 HTML `textarea` 升级为**内嵌 Monaco 编辑器**，`@`/`#` 引用统一改成 VSCode Copilot 式的 **by-range 药丸（decoration）** 机制（按字符区间追踪，含空格天然安全，提交时读 range 列表产 `ContentBlock` 而非分词）。计划见 `docs/plan/monaco-prompt-input-context-pills-plan.md`（取代旧 [[prompt-hash-context-references-feature]] 的 by-name 部分）。
+ACP 会话输入框（`PromptInput.tsx`）从 HTML `textarea` 升级为**内嵌 Monaco 编辑器**，`@`/`#` 引用统一改成 VSCode Copilot 式的 **by-range 药丸（decoration）** 机制（按字符区间追踪，含空格天然安全，提交时读 range 列表产 `ContentBlock` 而非分词）。
 
 **根因**：旧 `#` 照抄 `@` 的 by-name（按 label 分词匹配）管线，label 含空格（符号名/Markdown 标题/文档条目）时提交 walk 到空白即停 → 整个上下文块被丢弃退化成纯文本；textarea 也渲染不出药丸。
 

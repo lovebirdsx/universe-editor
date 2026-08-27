@@ -13,7 +13,7 @@
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — 引用=decoration 追踪 by-range 药丸，含空格 label 安全，提交读 range 不分词
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — IUriIdentityService 单一入口+ResourceMap；MonacoModelKey/SCM 键为刻意独立身份域
 - [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 必须覆写 id 否则 tab 去重；matches 只比 id；打开文件走 resolver；id 去重≠数量不变量(同组同 kind 预览须 retarget，唯一入口 openPreviewInGroup)；dirty per-input，dispose 前须 setDirty 转移
-- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面（已按单层 providers[] 重构）；密钥改明文存 aiSettings.json（红线=不进日志/Debug）；加 provider 见套路 I
+- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面（已按单层 providers[] 重构）；密钥存 aiSettings.json（红线=不进日志/Debug）；加 provider 见套路 I
 - [AI Providers 可视化编辑](ai-providers-visual-editing.md) — label 已删回退 id、Test connection→自动探测(useAutoVerify)；教训=全量替换写 API 须串行化、探测走 effectiveConnection、弹窗回填语义、自动探测触发用指纹非 reloadToken、防抖重测 token 失效须在变更检测时非探测启动时
 - [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率单一来源=provider 自己的 pricingSource(未声明即未知,绝不跨 provider 套官方价);会话开销与账号费用两概念绝不互相兜底(unavailable 不回落到别的账号数字)
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
@@ -73,7 +73,7 @@
 
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — 勿退 O(m·n)；V 数组按 2*maxD+1+100ms 墙钟回退
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — codex 原生 spawn git rev-parse Windows 挂起；adapter 修不了
-- [claude CLI e.includes 崩溃根因](claude-cli-eincludes-usage-crash.md) — 网关 advisor_message 缺 model→CLI usage 记账 TypeError 作废整 turn;编辑器已归 transient 自动续跑;bun exe 可提明文 JS 分析
+- [claude CLI e.includes 崩溃根因](claude-cli-eincludes-usage-crash.md) — 网关 advisor_message 缺 model→CLI usage 记账 TypeError 作废整 turn;编辑器已归 transient 自动续跑
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — markAsSingleton 兜底；render 期 new disposable 用 ref 守卫
 - [openEditor 孤儿泄漏](editor-group-open-orphan-leak.md) — 重复身份早退须 updateFrom?.()+dispose 新 input
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — 消费端须 URI.revive；诊断前必先 pnpm build

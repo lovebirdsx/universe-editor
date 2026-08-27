@@ -7,7 +7,7 @@ metadata:
   originSessionId: de7e52d9-d6d4-474f-bf7d-bb99e60c5ba0
 ---
 
-Explorer 两个需求已完整实现（2026-07-07 完成，参考 D:/git_project/vscode）：
+Explorer 两个需求已完整实现（2026-07-07 完成，参考 VSCode 源码）：
 
 **需求1 删除到回收站**：`IFileService.delete` 加 `useTrash?: boolean`；main 侧 `fileSystemMainService` 用 Electron `shell.trashItem()`，失败包成 `FileSystemError('UNKNOWN')`。默认 `files.enableTrash=true` 走回收站。
 

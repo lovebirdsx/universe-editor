@@ -59,12 +59,12 @@ describe('AiModelRegistry — declared models', () => {
     const listModels = vi.fn(() => Promise.resolve(['should-not-be-asked']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [declared('openai-chat', ['deepseek-v4-pro', 'glm5.3'])])])
+    reg.setProviders([provider('acme', [declared('openai-chat', ['deepseek-v4-pro', 'glm5.3'])])])
 
     const models = await reg.getModels(CancellationToken.None)
     expect(models.map((m) => m.id)).toEqual([
-      'kuro/openai-chat/deepseek-v4-pro',
-      'kuro/openai-chat/glm5.3',
+      'acme/openai-chat/deepseek-v4-pro',
+      'acme/openai-chat/glm5.3',
     ])
     expect(listModels).not.toHaveBeenCalled()
     reg.dispose()
@@ -75,7 +75,7 @@ describe('AiModelRegistry — declared models', () => {
     reg.registerProvider('openai-chat', fakeProvider())
     reg.registerProvider('anthropic-messages', fakeProvider())
     reg.setProviders([
-      provider('kuro', [
+      provider('acme', [
         declared('openai-chat', ['deepseek-v4-pro']),
         declared('anthropic-messages', ['deepseek-v4-pro']),
       ]),
@@ -83,11 +83,11 @@ describe('AiModelRegistry — declared models', () => {
 
     const models = await reg.getModels(CancellationToken.None)
     expect(models.map((m) => m.id)).toEqual([
-      'kuro/openai-chat/deepseek-v4-pro',
-      'kuro/anthropic-messages/deepseek-v4-pro',
+      'acme/openai-chat/deepseek-v4-pro',
+      'acme/anthropic-messages/deepseek-v4-pro',
     ])
     expect(models.map((m) => m.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
-    expect(models.every((m) => m.providerId === 'kuro')).toBe(true)
+    expect(models.every((m) => m.providerId === 'acme')).toBe(true)
     reg.dispose()
   })
 
@@ -95,14 +95,14 @@ describe('AiModelRegistry — declared models', () => {
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider())
     reg.setProviders([
-      provider('kuro', [
+      provider('acme', [
         declared('openai-chat', ['gpt']),
         declared('anthropic-messages', ['claude']),
       ]),
     ])
 
     const models = await reg.getModels(CancellationToken.None)
-    expect(models.map((m) => m.id)).toEqual(['kuro/openai-chat/gpt'])
+    expect(models.map((m) => m.id)).toEqual(['acme/openai-chat/gpt'])
     reg.dispose()
   })
 })
@@ -196,7 +196,7 @@ describe('AiModelRegistry — endpoint discovery', () => {
       'openai-chat',
       fakeProvider(() => Promise.resolve(['o4'])),
     )
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])], {
+    reg.setProviders([provider('acme', [discovering('openai-chat')])], {
       o4: { supportsReasoningEffort: ['low', 'high'] },
     })
 
@@ -265,13 +265,13 @@ describe('AiModelRegistry — provider lifecycle', () => {
     const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     await reg.getModels(CancellationToken.None)
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(1)
 
-    reg.setProviders([provider('kuro', [discovering('openai-chat')], { apiKey: 'sk-live' })])
+    reg.setProviders([provider('acme', [discovering('openai-chat')], { apiKey: 'sk-live' })])
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(2)
     reg.dispose()
@@ -281,14 +281,14 @@ describe('AiModelRegistry — provider lifecycle', () => {
     const listModels = vi.fn(() => Promise.resolve(['gpt-4o']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(1)
 
     // pricingSource / usageSource do not touch what the provider serves.
     reg.setProviders([
-      provider('kuro', [discovering('openai-chat')], {
+      provider('acme', [discovering('openai-chat')], {
         pricingSource: { id: 'catalog' },
         usageSource: { id: 'http-json', options: { url: 'https://example.test/usage' } },
       }),
@@ -303,7 +303,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
     reg.setProviders([
-      provider('kuro', [discovering('openai-chat')], {
+      provider('acme', [discovering('openai-chat')], {
         baseUrl: 'https://a.test/v1',
         apiKey: 'sk-1',
       }),
@@ -313,7 +313,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     expect(listModels).toHaveBeenCalledTimes(1)
 
     reg.setProviders([
-      provider('kuro', [discovering('openai-chat')], {
+      provider('acme', [discovering('openai-chat')], {
         baseUrl: 'https://b.test/v1',
         apiKey: 'sk-1',
       }),
@@ -322,7 +322,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     expect(listModels).toHaveBeenCalledTimes(2)
 
     reg.setProviders([
-      provider('kuro', [discovering('openai-chat')], {
+      provider('acme', [discovering('openai-chat')], {
         baseUrl: 'https://b.test/v1',
         apiKey: 'sk-2',
       }),
@@ -337,13 +337,13 @@ describe('AiModelRegistry — provider lifecycle', () => {
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
     reg.registerProvider('anthropic-messages', fakeProvider())
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     await reg.getModels(CancellationToken.None)
     expect(listModels).toHaveBeenCalledTimes(1)
 
     reg.setProviders([
-      provider('kuro', [
+      provider('acme', [
         discovering('openai-chat'),
         declared('anthropic-messages', ['claude-opus-4-8']),
       ]),
@@ -357,7 +357,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     const listModels = vi.fn(() => Promise.resolve(['o4']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])], {
+    reg.setProviders([provider('acme', [discovering('openai-chat')])], {
       o4: { name: 'Omni 4' },
     })
 
@@ -365,7 +365,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     expect(first?.name).toBe('Omni 4')
     expect(listModels).toHaveBeenCalledTimes(1)
 
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])], {
+    reg.setProviders([provider('acme', [discovering('openai-chat')])], {
       o4: { name: 'Omni 4 Pro' },
     })
     const [second] = await reg.getModels(CancellationToken.None)
@@ -381,7 +381,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     reg.setProviders(
       [
         {
-          id: 'kuro',
+          id: 'acme',
           defaultProtocol: 'openai-chat' as const,
           protocols: [
             {
@@ -401,7 +401,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     reg.setProviders(
       [
         {
-          id: 'kuro',
+          id: 'acme',
           defaultProtocol: 'openai-chat' as const,
           protocols: [
             {
@@ -427,8 +427,8 @@ describe('AiModelRegistry — provider lifecycle', () => {
       'openai-chat',
       fakeProvider(() => Promise.resolve(['o4'])),
     )
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])], { o4: { name: 'Omni 4' } })
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])], { o4: { name: 'Omni 4' } })
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     const [model] = await reg.getModels(CancellationToken.None)
     expect(model?.name).toBe('Omni 4')
@@ -445,7 +445,7 @@ describe('AiModelRegistry — provider lifecycle', () => {
     )
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     const p1 = reg.getModels(CancellationToken.None)
     const p2 = reg.getModels(CancellationToken.None)
@@ -466,11 +466,11 @@ describe('AiModelRegistry — provider lifecycle', () => {
     })
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('kuro', [discovering('openai-chat')])])
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
 
     expect(await reg.getModels(CancellationToken.None)).toEqual([])
     const ids = (await reg.getModels(CancellationToken.None)).map((m) => m.id)
-    expect(ids).toEqual(['kuro/openai-chat/gpt-4o'])
+    expect(ids).toEqual(['acme/openai-chat/gpt-4o'])
     reg.dispose()
   })
 })
@@ -481,7 +481,7 @@ describe('AiModelRegistry — lookup', () => {
     reg.registerProvider('openai-chat', fakeProvider())
     // A declared ref carries its own resolved knowledge; the base is only for discovery.
     reg.setProviders([
-      provider('kuro', [
+      provider('acme', [
         {
           protocol: 'openai-chat',
           discover: false,
@@ -502,10 +502,10 @@ describe('AiModelRegistry — lookup', () => {
     ])
 
     expect(await reg.selectModels({ vendor: 'anthropic' }, CancellationToken.None)).toEqual([
-      'kuro/openai-chat/claude-opus-4-8',
+      'acme/openai-chat/claude-opus-4-8',
     ])
     expect(await reg.selectModels({ family: 'gpt-4o' }, CancellationToken.None)).toEqual([
-      'kuro/openai-chat/gpt-4o',
+      'acme/openai-chat/gpt-4o',
     ])
     reg.dispose()
   })
@@ -517,21 +517,21 @@ describe('AiModelRegistry — lookup', () => {
     reg.registerProvider('openai-chat', chat)
     reg.registerProvider('anthropic-messages', messages)
     reg.setProviders([
-      provider('kuro', [
+      provider('acme', [
         declared('openai-chat', ['deepseek-v4-pro']),
         declared('anthropic-messages', ['deepseek-v4-pro']),
       ]),
     ])
 
     const viaChat = await reg.resolveModel(
-      'kuro/openai-chat/deepseek-v4-pro',
+      'acme/openai-chat/deepseek-v4-pro',
       CancellationToken.None,
     )
     expect(viaChat?.provider).toBe(chat)
     expect(viaChat?.runtime.protocol).toBe('openai-chat')
 
     const viaMessages = await reg.resolveModel(
-      'kuro/anthropic-messages/deepseek-v4-pro',
+      'acme/anthropic-messages/deepseek-v4-pro',
       CancellationToken.None,
     )
     expect(viaMessages?.provider).toBe(messages)

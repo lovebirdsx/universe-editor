@@ -11,9 +11,9 @@ describe('recentPathLabel', () => {
     const folder = URI.from({
       scheme: REMOTE_SCHEME,
       authority: 'wsl+ubuntu-24.04',
-      path: '/home/xiao/proj',
+      path: '/home/dev/proj',
     })
-    expect(recentPathLabel(folder)).toBe('WSL: ubuntu-24.04 · /home/xiao/proj')
+    expect(recentPathLabel(folder)).toBe('WSL: ubuntu-24.04 · /home/dev/proj')
   })
 
   it('formats ssh folders as "SSH: <authority> · <path>"', () => {
@@ -25,13 +25,13 @@ describe('recentPathLabel', () => {
     const folder = URI.from({
       scheme: REMOTE_SCHEME,
       authority: 'winbox',
-      path: '/E:/git_project/foo',
+      path: '/E:/workspace/foo',
     })
-    expect(recentPathLabel(folder)).toBe('SSH: winbox · E:\\git_project\\foo')
+    expect(recentPathLabel(folder)).toBe('SSH: winbox · E:\\workspace\\foo')
   })
 
   it('keeps local folders unchanged', () => {
-    const folder = URI.file('/home/xiao/proj')
+    const folder = URI.file('/home/dev/proj')
     expect(recentPathLabel(folder)).toBe(folder.fsPath)
   })
 })

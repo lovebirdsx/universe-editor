@@ -57,7 +57,7 @@ test('--env <mode> 从 .env.<mode> 生成 server.env，部署侧机密不进产�
       'UE_SERVER_ROOT=/srv/bundletest',
       'UE_SERVER_PORT=8123',
       'UE_RELEASE_KEY=/home/me/.ssh/id_ed25519',
-      'UE_RELEASE_HOST=10.9.9.9',
+      'UE_RELEASE_HOST=192.0.2.99',
     ].join('\n') + '\n',
   )
   const res = runBundle(['--env', MODE])

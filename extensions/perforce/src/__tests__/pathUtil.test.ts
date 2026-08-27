@@ -34,16 +34,16 @@ describe('clientToLocalPath', () => {
   it('rewrites a client-syntax path onto the client root', () => {
     expect(
       clientToLocalPath(
-        '//aki_ws/Source/Client/TypeScript/Src/UniverseEditor/EditorCommon/Scheme/Component/ElementalComponent.ts',
-        'G:/aki_3.6',
+        '//ws/src/client/scripts/src/editor/common/Scheme/Component/ElementalComponent.ts',
+        'G:/p4ws/main',
       ),
     ).toBe(
-      'G:/aki_3.6/Source/Client/TypeScript/Src/UniverseEditor/EditorCommon/Scheme/Component/ElementalComponent.ts',
+      'G:/p4ws/main/src/client/scripts/src/editor/common/Scheme/Component/ElementalComponent.ts',
     )
   })
 
   it('normalizes a backslash client root and drops a trailing slash', () => {
-    expect(clientToLocalPath('//ws/a/b.ts', 'G:\\aki_3.6\\')).toBe('G:/aki_3.6/a/b.ts')
+    expect(clientToLocalPath('//ws/a/b.ts', 'G:\\p4ws\\main\\')).toBe('G:/p4ws/main/a/b.ts')
   })
 
   it('handles a client name that itself contains characters', () => {

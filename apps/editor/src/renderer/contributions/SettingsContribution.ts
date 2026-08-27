@@ -47,13 +47,13 @@ import { ERROR_COLLECTION_ENABLED_KEY } from '../services/telemetry/telemetryCli
 import {
   DEFAULT_ISSUE_REPORTER_PROVIDER,
   GITHUB_PROVIDER_ID,
-  ILOOP_APP_URL_SETTING_KEY,
-  ILOOP_BOARD_SETTING_KEY,
-  ILOOP_CATEGORY_SETTING_KEY,
-  ILOOP_PROVIDER_ID,
-  ILOOP_SERVER_URL_SETTING_KEY,
+  TRACKER_APP_URL_SETTING_KEY,
+  TRACKER_BOARD_SETTING_KEY,
+  TRACKER_CATEGORY_SETTING_KEY,
+  TRACKER_PROVIDER_ID,
+  TRACKER_SERVER_URL_SETTING_KEY,
   ISSUE_REPORTER_PROVIDER_SETTING_KEY,
-  ILoopDefaults,
+  TrackerDefaults,
 } from '../../shared/issueReporter.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
@@ -735,43 +735,43 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
         properties: {
           [ISSUE_REPORTER_PROVIDER_SETTING_KEY]: {
             type: 'string',
-            enum: [ILOOP_PROVIDER_ID, GITHUB_PROVIDER_ID],
+            enum: [TRACKER_PROVIDER_ID, GITHUB_PROVIDER_ID],
             default: DEFAULT_ISSUE_REPORTER_PROVIDER,
             description: localize(
               'settings.issueReporter.provider.description',
-              'Target the Report Issue command submits to. iLoop supports attaching the diagnostics package; GitHub only pre-fills the issue body.',
+              'Target the Report Issue command submits to. Tracker supports attaching the diagnostics package; GitHub only pre-fills the issue body.',
             ),
           },
-          [ILOOP_SERVER_URL_SETTING_KEY]: {
+          [TRACKER_SERVER_URL_SETTING_KEY]: {
             type: 'string',
-            default: ILoopDefaults.serverUrl,
+            default: TrackerDefaults.serverUrl,
             description: localize(
-              'settings.issueReporter.iloop.serverUrl.description',
-              'iLoop file server (go-fastdfs) the diagnostics package is uploaded to when reporting an issue with attachments.',
+              'settings.issueReporter.tracker.serverUrl.description',
+              'Tracker file server the diagnostics package is uploaded to when reporting an issue with attachments.',
             ),
           },
-          [ILOOP_APP_URL_SETTING_KEY]: {
+          [TRACKER_APP_URL_SETTING_KEY]: {
             type: 'string',
-            default: ILoopDefaults.appUrl,
+            default: TrackerDefaults.appUrl,
             description: localize(
-              'settings.issueReporter.iloop.appUrl.description',
-              'iLoop web app base URL. Report Issue opens its pre-filled addPost page.',
+              'settings.issueReporter.tracker.appUrl.description',
+              'Tracker web app base URL. Report Issue opens its pre-filled addPost page.',
             ),
           },
-          [ILOOP_BOARD_SETTING_KEY]: {
+          [TRACKER_BOARD_SETTING_KEY]: {
             type: 'string',
-            default: ILoopDefaults.board,
+            default: TrackerDefaults.board,
             description: localize(
-              'settings.issueReporter.iloop.board.description',
-              'iLoop board (name or id) the issue report post is pre-filled for.',
+              'settings.issueReporter.tracker.board.description',
+              'Tracker board (name or id) the issue report post is pre-filled for.',
             ),
           },
-          [ILOOP_CATEGORY_SETTING_KEY]: {
+          [TRACKER_CATEGORY_SETTING_KEY]: {
             type: 'string',
-            default: ILoopDefaults.category,
+            default: TrackerDefaults.category,
             description: localize(
-              'settings.issueReporter.iloop.category.description',
-              'iLoop category the issue report post is pre-filled for.',
+              'settings.issueReporter.tracker.category.description',
+              'Tracker category the issue report post is pre-filled for.',
             ),
           },
         },

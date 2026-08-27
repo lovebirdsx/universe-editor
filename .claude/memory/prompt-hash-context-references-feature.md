@@ -21,6 +21,6 @@ ACP 会话输入框（`PromptInput.tsx`）从 `textarea` 升级为**内嵌 Monac
 - 测试 stub `test-stubs/monaco-editor.ts` 已扩到能模拟 decoration range 迁移（`applyEdits`/`deltaDecorations`/`getDecorationRange`/`getValueInRange` + edge-bias shiftOffset），renderer-dom 下驱动 tracker/UI 测试无需真 Monaco。DI stub 套路（stubLanguageFeatures 等）仍在 `PromptInput.test.tsx`。
 - `en-US.ts` 只放需覆盖的英文条目；`localize()` 自带英文 default，新面板文案默认只补 `zh-CN.ts`。
 - popover 定位维持贴输入框上沿全宽（`.promptPopover` `bottom:100%`），未升级到光标屏幕坐标——对 3–16 行输入框够用（计划 §3.2 明确允许取简单者）。
-- 计划文档：`docs/plan/monaco-prompt-input-context-pills-plan.md`（M0–M4 全完成）；旧计划 `prompt-hash-context-references-plan.md` 的 by-name 部分已被取代。
+- 计划 M0–M4 已全完成；旧的 by-name 方案已整体取代。
 
 **坑：ACP `resource_link` 的 name/description/_meta 在协议边界被内置 agent 丢弃**。两个 vendor agent 的 prompt→模型转换都只读 `uri`(claude fork `acp-agent.ts:4826` `promptToClaude`→`formatUriAsLink(uri)` 连 name 都丢；codex `CodexAcpClient.ts:837` `buildPromptItems` 用 `formatUriAsLink(name,uri)` 但丢 description+_meta)。后果：符号引用 `#Student` 若序列化成 `resource_link{uri:hello.ts,_meta.symbol.line}`，agent 只收到指向整个 hello.ts 的文件链接，行/列全丢 → agent 读整个文件而非定位符号（用户实测 bug）。**修法**：`composeRefBlock` 的 symbol 分支改产 `text` 块（agent 唯一逐字透传的通道），把符号名+相对路径+行列写进文本 `` `Student` (hello.ts:12:5) ``（`_meta.symbol` 保留供未来 agent 用但当前不依赖它）。教训：任何需要 agent 精确消费的结构化位置信息，不能塞进 resource_link 的 name/description/_meta，只能进 text 块正文。file/folder/openEditor 指整文件无所谓，仍用 resource_link。`_dispatchPrompt` 加了 `console.debug('[acp-prompt] dispatch', ...)` 打印发出块形状便于诊断。

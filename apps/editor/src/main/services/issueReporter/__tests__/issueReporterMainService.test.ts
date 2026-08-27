@@ -16,7 +16,7 @@ describe('IssueReporterMainService', () => {
     const service = makeService()
     expect(await service.listProviders()).toEqual([
       { id: 'github', label: 'GitHub', supportsAttachments: false },
-      { id: 'iloop', label: 'iLoop', supportsAttachments: true },
+      { id: 'tracker', label: 'Tracker', supportsAttachments: true },
     ])
     service.dispose()
   })

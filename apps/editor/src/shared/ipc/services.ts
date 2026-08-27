@@ -261,7 +261,7 @@ export interface IDiagnosticsService {
   exportDiagnosticsZip(): Promise<string>
   /**
    * Same zip as exportDiagnosticsZip but without the OS-shell reveal — used by
-   * main-internal consumers (the iLoop issue reporter uploads it as an
+   * main-internal consumers (the tracker issue reporter uploads it as an
    * attachment).
    */
   createDiagnosticsZip(): Promise<string>
@@ -272,7 +272,7 @@ export const IDiagnosticsService = createDecorator<IDiagnosticsService>('diagnos
 // -------- Issue Reporter (pluggable Report Issue targets) --------
 
 /**
- * Facade over the pluggable issue-report providers (GitHub / iLoop) held by
+ * Facade over the pluggable issue-report providers (GitHub / tracker) held by
  * the main process. The renderer collects the markdown, asks the chosen
  * provider for a pre-filled issue-page URL (uploading the diagnostics zip
  * first when `attachDiagnostics`), then opens that URL itself.

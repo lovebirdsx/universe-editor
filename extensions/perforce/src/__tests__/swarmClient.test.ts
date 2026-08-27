@@ -19,7 +19,7 @@ function fakeP4(user: string): P4Service {
   } as unknown as P4Service
 }
 
-function reviewJson(id: string, state: string, author = 'songxiao') {
+function reviewJson(id: string, state: string, author = 'devuser') {
   return { id, state, author, description: `review ${id}` }
 }
 
@@ -34,10 +34,10 @@ describe('SwarmClient.dashboard', () => {
   })
 
   function client() {
-    return new SwarmClient(fakeP4('songxiao'), {
+    return new SwarmClient(fakeP4('devuser'), {
       baseUrl: 'https://swarm.example.com/',
       apiVersion: 'v9',
-      user: 'songxiao',
+      user: 'devuser',
     })
   }
 
@@ -71,8 +71,8 @@ describe('SwarmClient.dashboard', () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url))
     expect(urls).toHaveLength(2)
     for (const url of urls) expect(url).toContain('keywords=greeting')
-    expect(urls.some((u) => u.includes('author[]=songxiao'))).toBe(true)
-    expect(urls.some((u) => u.includes('participants[]=songxiao'))).toBe(true)
+    expect(urls.some((u) => u.includes('author[]=devuser'))).toBe(true)
+    expect(urls.some((u) => u.includes('participants[]=devuser'))).toBe(true)
   })
 
   it('trims a whitespace-only keyword back to an unfiltered query', async () => {
@@ -125,7 +125,7 @@ describe('SwarmClient.dashboard', () => {
       if (u.includes('state[]=needsReview')) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ reviews: [reviewJson('8113801', 'needsReview', 'zouwei')] }),
+            JSON.stringify({ reviews: [reviewJson('100801', 'needsReview', 'reviewer-a')] }),
             {
               status: 200,
             },
@@ -135,15 +135,15 @@ describe('SwarmClient.dashboard', () => {
       return Promise.resolve(new Response(JSON.stringify({ reviews: [] }), { status: 200 }))
     })
 
-    const dash = await client().dashboard({ needsActionAuthors: ['zouwei'] })
+    const dash = await client().dashboard({ needsActionAuthors: ['reviewer-a'] })
 
-    expect(dash.needsAction.map((r) => r.id)).toEqual(['8113801'])
+    expect(dash.needsAction.map((r) => r.id)).toEqual(['100801'])
     // Three list queries now: authored, participating, and the author query.
     expect(fetchMock).toHaveBeenCalledTimes(3)
     const authorQuery = fetchMock.mock.calls
       .map(([url]) => String(url))
       .find((u) => u.includes('state[]=needsReview'))
-    expect(authorQuery).toContain('author[]=zouwei')
+    expect(authorQuery).toContain('author[]=reviewer-a')
     expect(authorQuery).toContain('state[]=needsRevision')
   })
 
@@ -178,8 +178,8 @@ describe('SwarmClient.dashboard', () => {
     })
 
     const c = new SwarmClient(
-      fakeP4('songxiao'),
-      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      fakeP4('devuser'),
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'devuser' },
       undefined,
       { now: () => nowMs },
     )
@@ -200,8 +200,8 @@ describe('SwarmClient.dashboard', () => {
     })
 
     const c = new SwarmClient(
-      fakeP4('songxiao'),
-      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      fakeP4('devuser'),
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'devuser' },
       undefined,
       { now: () => nowMs },
     )
@@ -227,38 +227,38 @@ describe('SwarmClient comment endpoints', () => {
   })
 
   function client() {
-    return new SwarmClient(fakeP4('songxiao'), {
+    return new SwarmClient(fakeP4('devuser'), {
       baseUrl: 'https://swarm.example.com/',
       apiVersion: 'v9',
-      user: 'songxiao',
+      user: 'devuser',
     })
   }
 
   it('lists comments via GET /comments?topic=reviews/{id}', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ comments: [] }), { status: 200 }))
-    await client().listComments('8089913')
+    await client().listComments('100913')
     const [url, init] = fetchMock.mock.calls[0]!
     expect((init as RequestInit).method).toBe('GET')
-    expect(url).toBe('https://swarm.example.com/api/v9/comments?topic=reviews%2F8089913')
+    expect(url).toBe('https://swarm.example.com/api/v9/comments?topic=reviews%2F100913')
   })
 
   it('adds a comment via POST /comments with topic in the body', async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ comment: { id: '1', body: 'hi' } }), { status: 200 }),
     )
-    await client().addComment('8089913', 'hi')
+    await client().addComment('100913', 'hi')
     const [url, init] = fetchMock.mock.calls[0]!
     expect((init as RequestInit).method).toBe('POST')
     expect(url).toBe('https://swarm.example.com/api/v9/comments')
     expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
-      topic: 'reviews/8089913',
+      topic: 'reviews/100913',
       body: 'hi',
     })
   })
 
   it('sets a task state via PATCH /comments/{id}', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }))
-    await client().setTaskState('8089913', '42', 'addressed')
+    await client().setTaskState('100913', '42', 'addressed')
     const [url, init] = fetchMock.mock.calls[0]!
     expect((init as RequestInit).method).toBe('PATCH')
     expect(url).toBe('https://swarm.example.com/api/v9/comments/42')
@@ -277,10 +277,10 @@ describe('SwarmClient review mutation endpoints', () => {
   })
 
   function client() {
-    return new SwarmClient(fakeP4('songxiao'), {
+    return new SwarmClient(fakeP4('devuser'), {
       baseUrl: 'https://swarm.example.com/',
       apiVersion: 'v9',
-      user: 'songxiao',
+      user: 'devuser',
     })
   }
 
@@ -289,13 +289,13 @@ describe('SwarmClient review mutation endpoints', () => {
       new Response(JSON.stringify({ transitions: { approved: 'Approve' } }), { status: 200 }),
     )
 
-    await expect(client().getTransitions('8089913')).resolves.toEqual([
+    await expect(client().getTransitions('100913')).resolves.toEqual([
       { state: 'approved', label: 'Approve' },
     ])
 
     const [url, init] = fetchMock.mock.calls[0]!
     expect((init as RequestInit).method).toBe('GET')
-    expect(url).toBe('https://swarm.example.com/api/v9/reviews/8089913/transitions')
+    expect(url).toBe('https://swarm.example.com/api/v9/reviews/100913/transitions')
   })
 
   it('obliterates a review via POST /reviews/{id}/obliterate without a body', async () => {
@@ -303,17 +303,17 @@ describe('SwarmClient review mutation endpoints', () => {
       new Response(
         JSON.stringify({
           isValid: true,
-          message: 'The review with id [8089913] has been obliterated.',
+          message: 'The review with id [100913] has been obliterated.',
           code: 200,
         }),
         { status: 200 },
       ),
     )
-    await client().obliterateReview('8089913')
+    await client().obliterateReview('100913')
 
     const [url, init] = fetchMock.mock.calls[0]!
     expect((init as RequestInit).method).toBe('POST')
-    expect(url).toBe('https://swarm.example.com/api/v9/reviews/8089913/obliterate')
+    expect(url).toBe('https://swarm.example.com/api/v9/reviews/100913/obliterate')
     expect((init as RequestInit).body).toBeUndefined()
   })
 })
@@ -334,11 +334,11 @@ describe('SwarmClient cache', () => {
 
   function client() {
     return new SwarmClient(
-      fakeP4('songxiao'),
+      fakeP4('devuser'),
       {
         baseUrl: 'https://swarm.example.com/',
         apiVersion: 'v9',
-        user: 'songxiao',
+        user: 'devuser',
       },
       undefined,
       { ttlMs: 1000, now: () => now },
@@ -520,14 +520,14 @@ describe('SwarmClient credential cache', () => {
   function clientWith(p4: P4Service, now?: () => number) {
     return new SwarmClient(
       p4,
-      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'songxiao' },
+      { baseUrl: 'https://swarm.example.com/', apiVersion: 'v9', user: 'devuser' },
       undefined,
       now ? { now } : {},
     )
   }
 
   it('resolves the credential once across many requests (TTL hit)', async () => {
-    const { p4, exec } = p4WithSpy('songxiao')
+    const { p4, exec } = p4WithSpy('devuser')
     const c = clientWith(p4)
 
     await c.ping()
@@ -551,7 +551,7 @@ describe('SwarmClient credential cache', () => {
       await gate // hold every spawn so all three requests overlap
       if (args[0] === 'login' && args[1] === '-s') return { exitCode: 0, stdout: '', stderr: '' }
       if (args[0] === 'tickets')
-        return { exitCode: 0, stdout: 'server:1666 (songxiao) ABC123TICKET\n', stderr: '' }
+        return { exitCode: 0, stdout: 'server:1666 (devuser) ABC123TICKET\n', stderr: '' }
       return { exitCode: 1, stdout: '', stderr: '' }
     })
     const c = clientWith({ exec } as unknown as P4Service)
@@ -567,7 +567,7 @@ describe('SwarmClient credential cache', () => {
 
   it('re-resolves after the TTL expires', async () => {
     let nowMs = 1_000_000
-    const { p4, exec } = p4WithSpy('songxiao')
+    const { p4, exec } = p4WithSpy('devuser')
     const c = clientWith(p4, () => nowMs)
 
     await c.ping()
@@ -579,7 +579,7 @@ describe('SwarmClient credential cache', () => {
   })
 
   it('invalidateCredential() forces a fresh probe on the next request', async () => {
-    const { p4, exec } = p4WithSpy('songxiao')
+    const { p4, exec } = p4WithSpy('devuser')
     const c = clientWith(p4)
 
     await c.ping()

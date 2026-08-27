@@ -107,7 +107,6 @@ pnpm docs:check                               # 动了 docs/user 后校验死链
 - `apps/editor/src/renderer/contributions/ExtensionsContribution.ts`（`_registerCustomEditor` + `toResolverGlob`）
 - `apps/editor/e2e/specs/smoke.webview.spec.ts`（内联扩展全链路冒烟）
 - VSIX 读取/安装：`packages/extension-packaging/src/vsix.ts` + `apps/editor/src/main/services/extensionManagement/extensionManagementService.ts`（`_installVSIX`）
-- 计划文档：`docs/plan/extension-marketplace-plan/06-webview-customeditor-pdf.md`
 - 相关 memory：[[extension-system-progress]]（运行时基座）、[[editor-input-identity-isolation]]（EditorInput id 隔离约定）、[[realpath-uri-ipc-revive]]（wire URI revive）
 - 相关：`apps/editor/src/main/services/extensionManagement/CLAUDE.md`（装/更新/卸载分发链路）；skill [extend-language-plugin]（语言 provider）、[fix-disposable-leak]（panel/document/iframe 生命周期）
 

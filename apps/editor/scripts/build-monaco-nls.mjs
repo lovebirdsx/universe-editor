@@ -40,7 +40,6 @@ const outPath = path.join(nlsDir, 'zh-cn.messages.json')
 function findVscodeSrcRoot() {
   const candidates = [
     process.env.VSCODE_SRC_ROOT,
-    'D:/git_project/vscode',
     path.resolve(repoRoot, '../../../vscode'),
     path.resolve(repoRoot, '../../vscode'),
   ].filter(Boolean)

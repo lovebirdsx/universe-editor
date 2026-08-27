@@ -303,12 +303,10 @@ export class SwarmReviewNotificationContribution
   }
 
   /** Same verdict as the host's readSwarmConfig: `perforce.swarm.enabled`
-   *  (default true) and a non-empty `perforce.swarm.url` (default non-empty). */
+   *  (default true) and a non-empty `perforce.swarm.url` (default empty ⇒ unconfigured). */
   private _swarmConfigured(): boolean {
     const enabled = this._config.get<boolean>('perforce.swarm.enabled') ?? true
-    const url = (
-      this._config.get<string>('perforce.swarm.url') ?? 'http://swarm.aki.kuro.com/'
-    ).trim()
+    const url = (this._config.get<string>('perforce.swarm.url') ?? '').trim()
     return enabled && url.length > 0
   }
 

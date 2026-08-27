@@ -12,16 +12,16 @@ import {
 
 describe('parseModelRef', () => {
   it('parses providerId / protocol / channelModel', () => {
-    expect(parseModelRef('kuro/openai-chat/deepseek-v4-pro')).toEqual({
-      providerId: 'kuro',
+    expect(parseModelRef('acme/openai-chat/deepseek-v4-pro')).toEqual({
+      providerId: 'acme',
       protocol: 'openai-chat',
       channelModel: 'deepseek-v4-pro',
     })
   })
 
   it('keeps any remaining / in the channel model, which gateways do use', () => {
-    expect(parseModelRef('kuro/anthropic-messages/anthropic/claude-opus-4-8')).toEqual({
-      providerId: 'kuro',
+    expect(parseModelRef('acme/anthropic-messages/anthropic/claude-opus-4-8')).toEqual({
+      providerId: 'acme',
       protocol: 'anthropic-messages',
       channelModel: 'anthropic/claude-opus-4-8',
     })
@@ -37,16 +37,16 @@ describe('parseModelRef', () => {
     expect(parseModelRef('openai-chat/gpt-4o')).toBeUndefined()
     expect(parseModelRef('gpt-4o')).toBeUndefined()
     expect(parseModelRef('/openai-chat/gpt-4o')).toBeUndefined()
-    expect(parseModelRef('kuro//gpt-4o')).toBeUndefined()
-    expect(parseModelRef('kuro/openai-chat/')).toBeUndefined()
+    expect(parseModelRef('acme//gpt-4o')).toBeUndefined()
+    expect(parseModelRef('acme/openai-chat/')).toBeUndefined()
   })
 })
 
 describe('model id helpers', () => {
   it('composeModelId / bareModelName / parseModelRef round-trip', () => {
-    const id = composeModelId('kuro', 'anthropic-messages', 'anthropic/claude-opus')
-    expect(id).toBe('kuro/anthropic-messages/anthropic/claude-opus')
-    expect(bareModelName(id, 'kuro', 'anthropic-messages')).toBe('anthropic/claude-opus')
+    const id = composeModelId('acme', 'anthropic-messages', 'anthropic/claude-opus')
+    expect(id).toBe('acme/anthropic-messages/anthropic/claude-opus')
+    expect(bareModelName(id, 'acme', 'anthropic-messages')).toBe('anthropic/claude-opus')
 
     const ref = parseModelRef(id)
     expect(ref).toBeDefined()
@@ -54,8 +54,8 @@ describe('model id helpers', () => {
   })
 
   it('bareModelName leaves an id that does not carry the expected prefix alone', () => {
-    expect(bareModelName('gpt-4o', 'kuro', 'openai-chat')).toBe('gpt-4o')
-    expect(bareModelName('other/openai-chat/gpt-4o', 'kuro', 'openai-chat')).toBe(
+    expect(bareModelName('gpt-4o', 'acme', 'openai-chat')).toBe('gpt-4o')
+    expect(bareModelName('other/openai-chat/gpt-4o', 'acme', 'openai-chat')).toBe(
       'other/openai-chat/gpt-4o',
     )
   })

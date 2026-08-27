@@ -616,7 +616,7 @@ describe('parseInline — inline layer', () => {
   })
 
   it('parses angle-bracketed Windows file paths with spaces as one link', () => {
-    const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
+    const winPath = String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
     expect(parseInline(`see <${winPath}>`)).toEqual<readonly MdInline[]>([
       text('see '),
       {
@@ -654,12 +654,12 @@ describe('parseInline — inline layer', () => {
   })
 
   it('detects a bare Windows directory path (no extension) up to full-width punctuation', () => {
-    const dir = String.raw`E:\git_project\universe-editor.worktrees\task1\apps\editor\release`
+    const dir = String.raw`E:\workspace\universe-editor.worktrees\task1\apps\editor\release`
     expect(parseInline(dir)).toEqual<readonly MdInline[]>([{ type: 'filepath', path: dir }])
     expect(
-      parseInline(String.raw`E:\git_project\task1\apps\editor\auth（publish API；token）`),
+      parseInline(String.raw`E:\workspace\task1\apps\editor\auth（publish API；token）`),
     ).toEqual<readonly MdInline[]>([
-      { type: 'filepath', path: String.raw`E:\git_project\task1\apps\editor\auth` },
+      { type: 'filepath', path: String.raw`E:\workspace\task1\apps\editor\auth` },
       text('（publish API；token）'),
     ])
   })

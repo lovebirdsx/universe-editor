@@ -273,7 +273,7 @@ export class MainThreadFs implements IMainThreadFs {
     }
     // Containment comparisons below must use the *host's* case-sensitivity, not
     // the client's: a POSIX remote browsed from Windows would otherwise fold
-    // `/home/Xiao/evil` into `/home/xiao/repo` and let it through.
+    // `/home/Dev/evil` into `/home/dev/repo` and let it through.
     const platform = (await this._getRemoteEnv())?.platform ?? this._platform
     let includeBase: URI | undefined
     if (typeof include !== 'string') {

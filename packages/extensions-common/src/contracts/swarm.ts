@@ -57,7 +57,7 @@ export interface SwarmReviewDto {
   /** Last-updated time, Unix ms. */
   updated: number
   /** The p4 stream this review targets, without the leading `//`
-   *  (e.g. `aki/branch_3.6`). Absent when the review is not stream-based. */
+   *  (e.g. `depot/branch_x`). Absent when the review is not stream-based. */
   stream?: string
 }
 
@@ -80,7 +80,7 @@ export interface SwarmVersionDto {
   change: string
   /** Swarm's immutable shelved snapshot for this version, when available. */
   archiveChange?: string
-  /** The p4 stream this version targets (e.g. `//aki/branch_3.6`), when the
+  /** The p4 stream this version targets (e.g. `//depot/branch_x`), when the
    *  version is stream-based. */
   stream?: string
   /** Whether this version is committed (vs shelved). */
@@ -121,7 +121,7 @@ export interface SwarmReviewDetailDto {
   openTaskCount: number
   testStatus: 'pass' | 'fail' | 'running' | 'none'
   /** The p4 stream the latest version targets, without the leading `//`
-   *  (e.g. `aki/branch_3.6`). Absent when the review is not stream-based. */
+   *  (e.g. `depot/branch_x`). Absent when the review is not stream-based. */
   stream?: string
 }
 

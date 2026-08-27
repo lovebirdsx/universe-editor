@@ -73,23 +73,23 @@ describe('parseOpenedRecord', () => {
     const file = parseOpenedRecord(
       {
         depotFile: '//depot/Src/Component/ElementalComponent.ts',
-        clientFile: '//aki_ws/Src/Component/ElementalComponent.ts',
+        clientFile: '//ws/Src/Component/ElementalComponent.ts',
         change: 'default',
         action: 'edit',
         rev: '5',
       },
-      'G:/aki_3.6',
+      'G:/p4ws/main',
     )
-    expect(file?.clientFile).toBe('G:/aki_3.6/Src/Component/ElementalComponent.ts')
+    expect(file?.clientFile).toBe('G:/p4ws/main/Src/Component/ElementalComponent.ts')
   })
 
   it('keeps clientFile verbatim when no clientRoot is given', () => {
     const file = parseOpenedRecord({
       depotFile: '//depot/a.txt',
-      clientFile: '//aki_ws/a.txt',
+      clientFile: '//ws/a.txt',
       action: 'edit',
     })
-    expect(file?.clientFile).toBe('//aki_ws/a.txt')
+    expect(file?.clientFile).toBe('//ws/a.txt')
   })
 })
 

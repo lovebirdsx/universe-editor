@@ -1,5 +1,5 @@
 // One-off measurement script (not part of the repo's permanent tooling) used to
-// validate docs/plan/startup-defer-parcel-watch-plan.md. Launches the built app
+// validate startup parcel-watch deferral. Launches the built app
 // with this repo as the startup workspace and reads window.__E2E__.getStartupMetrics().
 import { _electron as electron } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'

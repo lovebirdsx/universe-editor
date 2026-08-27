@@ -98,7 +98,7 @@ export class OpenSwarmReviewByIdAction extends Action2 {
     const editorService = accessor.get(IEditorService)
     const entered = await quickInput.input({
       prompt: localize('swarm.openById.prompt', 'Enter a Swarm review id to open'),
-      placeholder: localize('swarm.openById.placeholder', 'Review id, e.g. 8113801'),
+      placeholder: localize('swarm.openById.placeholder', 'Review id, e.g. 100801'),
       validateInput: (value: string) => {
         const trimmed = value.trim()
         if (!trimmed) return undefined

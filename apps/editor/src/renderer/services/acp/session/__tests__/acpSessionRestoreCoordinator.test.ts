@@ -639,7 +639,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
   it('passes the current authority through hydrate into history rows', async () => {
     const built = build({
       agentIds: ['fake'],
-      cwd: '/home/xiao',
+      cwd: '/home/dev',
       getCurrentAuthority: () => 'wsl+ubuntu-24.04',
     })
     built.client.agentOptions.set('fake', {
@@ -648,7 +648,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
         [
           {
             sessionId: 's1',
-            cwd: '/home/xiao',
+            cwd: '/home/dev',
             title: 'one',
             updatedAt: '2026-01-01T00:00:00Z',
           } as unknown as SessionInfo,

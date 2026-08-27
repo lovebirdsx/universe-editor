@@ -105,7 +105,6 @@ node scripts/release/runtime-resources.mjs verify-source   # 校验 docs/user se
 ### 关键参考路径
 
 - `docs/user/` —— 文档源文件树（`zh-CN/` 基准；`_template.md` 模板；各册 `index/getting-started/ai-agent/editing/search-navigation/git/customization/reference`）
-- `docs/plan/user-doc-system-plan/` —— 这套系统的设计文档（目录规范/写作约定/多语言/CI 护栏，00-foundation 是地基说明）
 - `apps/editor/src/main/services/docs/docsMainService.ts` —— main 读盘 + 路径解析（packaged vs dev walk-up）+ 缓存降级
 - `apps/editor/src/main/services/docs/__tests__/docsMainService.test.ts` —— 读盘/docId 路径化/缺失降级/缓存 单测
 - `apps/editor/src/shared/ipc/docsService.ts` —— `IDocsService` 契约 + `DocsByLocale` 类型

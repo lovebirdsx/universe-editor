@@ -59,9 +59,9 @@ describe('firstNonEmptyLine', () => {
 
 describe('reviewDtoFromDetail', () => {
   it('rebuilds the snapshot fields from the detail, summarizing the description', () => {
-    const prev = review('7769693', { description: '', upVotes: 5 })
+    const prev = review('100693', { description: '', upVotes: 5 })
     const detail: SwarmReviewDetailDto = {
-      id: '7769693',
+      id: '100693',
       state: 'needsReview',
       stateLabel: 'Needs Review',
       author: 'bob',
@@ -76,16 +76,16 @@ describe('reviewDtoFromDetail', () => {
       commentCount: 3,
       openTaskCount: 1,
       testStatus: 'pass',
-      stream: 'aki/branch_3.6',
+      stream: 'depot/branch_x',
     }
     const dto = reviewDtoFromDetail(detail, prev)
-    expect(dto.id).toBe('7769693')
+    expect(dto.id).toBe('100693')
     expect(dto.description).toBe('Fix the widget')
     expect(dto.author).toBe('bob')
     expect(dto.upVotes).toBe(1)
     expect(dto.downVotes).toBe(1)
     expect(dto.commentCount).toBe(3)
-    expect(dto.stream).toBe('aki/branch_3.6')
+    expect(dto.stream).toBe('depot/branch_x')
   })
 })
 
@@ -145,10 +145,10 @@ describe('swarmIgnoreStore', () => {
     store.onDidChange(() => changes++)
 
     expect(store.isIgnored('100')).toBe(false)
-    store.ignore(review('100', { author: 'zouwei' }))
+    store.ignore(review('100', { author: 'reviewer-a' }))
     expect(store.isIgnored('100')).toBe(true)
     expect(store.list()).toEqual(['100'])
-    expect(store.getMeta('100')?.author).toBe('zouwei')
+    expect(store.getMeta('100')?.author).toBe('reviewer-a')
     expect(changes).toBeGreaterThanOrEqual(1)
 
     // Persisted to GLOBAL storage.
@@ -163,15 +163,15 @@ describe('swarmIgnoreStore', () => {
   it('hydrates the ignored set + metadata from storage on attach', async () => {
     const store = await freshStore()
     const storage = fakeStorage({
-      'swarm.ignoredReviews': ['8113801'],
-      'swarm.ignoredReviewMeta': { '8113801': review('8113801', { author: 'zouwei' }) },
+      'swarm.ignoredReviews': ['100801'],
+      'swarm.ignoredReviewMeta': { '100801': review('100801', { author: 'reviewer-a' }) },
     })
     expect(store.isReady).toBe(false)
     await store.attach(storage)
 
     expect(store.isReady).toBe(true)
-    expect(store.isIgnored('8113801')).toBe(true)
-    expect(store.getMeta('8113801')?.author).toBe('zouwei')
+    expect(store.isIgnored('100801')).toBe(true)
+    expect(store.getMeta('100801')?.author).toBe('reviewer-a')
   })
 
   it('attach is idempotent (view + editor both mount)', async () => {

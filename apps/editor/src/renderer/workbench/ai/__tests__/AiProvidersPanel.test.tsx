@@ -37,9 +37,9 @@ import { ServicesContext } from '../../useService.js'
 
 afterEach(() => cleanup())
 
-const KURO_MODEL: AiModelMetadata = {
-  id: 'kuro/anthropic-messages/qwen3-coder',
-  providerId: 'kuro',
+const ACME_MODEL: AiModelMetadata = {
+  id: 'acme/anthropic-messages/qwen3-coder',
+  providerId: 'acme',
   protocol: 'anthropic-messages',
   channelModel: 'qwen3-coder',
   name: 'Qwen3 Coder',
@@ -49,9 +49,9 @@ const KURO_MODEL: AiModelMetadata = {
   capabilities: { streaming: true },
 }
 
-const KURO_PROVIDER: AiProviderEntry = {
-  id: 'kuro',
-  baseUrl: 'https://kuro.example',
+const ACME_PROVIDER: AiProviderEntry = {
+  id: 'acme',
+  baseUrl: 'https://acme.example',
   protocolMap: { 'anthropic-messages': ['qwen3-coder'] },
 }
 
@@ -172,23 +172,23 @@ function expectDotStatus(id: string, status: string): void {
 describe('AiProvidersPanel', () => {
   it('renders the providers section with an entry card per provider', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
     expect(screen.getByText('Providers')).toBeTruthy()
-    expect(entryCard('kuro')).toBeTruthy()
+    expect(entryCard('acme')).toBeTruthy()
   })
 
   it('removes a provider through updateProviders', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    const card = entryCard('kuro')
+    const card = entryCard('acme')
     fireEvent.click(within(card).getByRole('button', { name: 'Remove provider' }))
     await flushEffects()
 
@@ -197,35 +197,35 @@ describe('AiProvidersPanel', () => {
 
   it('shows no usage badge and fetches nothing when no usageSource is declared', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(screen.queryByText('Account usage')).toBeNull()
-    expect(usageBadge('kuro')).toBeNull()
+    expect(usageBadge('acme')).toBeNull()
     expect(aiModel.getAccountUsage).not.toHaveBeenCalled()
   })
 
   it('shows "Unavailable" in the header badge when the source yields no authoritative value', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
-    aiModel.models = [KURO_MODEL]
-    aiModel.usages.set('kuro', undefined)
+    aiModel.providers = [{ ...ACME_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [ACME_MODEL]
+    aiModel.usages.set('acme', undefined)
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
-    expect(usageBadge('kuro')?.textContent).toBe('Unavailable')
-    expect(aiModel.getAccountUsage).toHaveBeenCalledWith('kuro')
+    expect(usageBadge('acme')?.textContent).toBe('Unavailable')
+    expect(aiModel.getAccountUsage).toHaveBeenCalledWith('acme')
   })
 
   it('shows the used / limit pair in the header badge', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
-    aiModel.models = [KURO_MODEL]
-    aiModel.usages.set('kuro', {
+    aiModel.providers = [{ ...ACME_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [ACME_MODEL]
+    aiModel.usages.set('acme', {
       kind: 'quota',
       usedUSD: 0.09,
       limitUSD: 3000,
@@ -236,19 +236,19 @@ describe('AiProvidersPanel', () => {
     await flushEffects()
     await flushEffects()
 
-    expect(usageBadge('kuro')?.textContent).toBe('¥0.09 / ¥3,000')
+    expect(usageBadge('acme')?.textContent).toBe('¥0.09 / ¥3,000')
   })
 
   it('keeps the usage badge visible while the card body is collapsed', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
-    aiModel.models = [KURO_MODEL]
-    aiModel.usages.set('kuro', { kind: 'balance', remainingUSD: 29.91, fetchedAt: 1 })
+    aiModel.providers = [{ ...ACME_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [ACME_MODEL]
+    aiModel.usages.set('acme', { kind: 'balance', remainingUSD: 29.91, fetchedAt: 1 })
     renderPanel(
       aiModel,
       { confirmed: true },
       {
-        'ai.settings.models.collapsed': { 'provider:kuro': true },
+        'ai.settings.models.collapsed': { 'provider:acme': true },
       },
     )
     await flushEffects()
@@ -256,7 +256,7 @@ describe('AiProvidersPanel', () => {
 
     // The body is gone, so the detail row cannot be the source of the number.
     expect(screen.queryByText('Account usage')).toBeNull()
-    expect(usageBadge('kuro')?.textContent).toBe('$29.91')
+    expect(usageBadge('acme')?.textContent).toBe('$29.91')
   })
 
   it('fetches usage for an entry that only inherits its usageSource', async () => {
@@ -278,33 +278,33 @@ describe('AiProvidersPanel', () => {
 
   it('reports a failed usage read as Unavailable rather than spinning forever', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [{ ...ACME_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [ACME_MODEL]
     aiModel.getAccountUsage.mockRejectedValue(new Error('channel closed'))
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
-    expect(usageBadge('kuro')?.textContent).toBe('Unavailable')
+    expect(usageBadge('acme')?.textContent).toBe('Unavailable')
   })
 
   it('asks only for providers with an effective usage source', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [
-      { ...KURO_PROVIDER, usageSource: { id: 'http-json' } },
+      { ...ACME_PROVIDER, usageSource: { id: 'http-json' } },
       { id: 'plain', baseUrl: 'https://plain.example' },
     ]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
-    expect(aiModel.getAccountUsage.mock.calls.map(([id]) => id)).toEqual(['kuro'])
+    expect(aiModel.getAccountUsage.mock.calls.map(([id]) => id)).toEqual(['acme'])
   })
 
   it('persists a card section collapse under its own key', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     const { storage } = renderPanel(aiModel)
     await flushEffects()
 
@@ -315,7 +315,7 @@ describe('AiProvidersPanel', () => {
 
     expect(storage.set).toHaveBeenCalledWith(
       'ai.settings.models.collapsed',
-      expect.objectContaining({ 'provider:kuro:pricing': false }),
+      expect.objectContaining({ 'provider:acme:pricing': false }),
       expect.anything(),
     )
     expect(screen.getByRole('combobox', { name: 'Pricing source' })).toBeTruthy()
@@ -323,80 +323,80 @@ describe('AiProvidersPanel', () => {
 
   it('refreshing usage goes through refreshRemote and re-reads the cache', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ ...KURO_PROVIDER, usageSource: { id: 'http-json' } }]
-    aiModel.models = [KURO_MODEL]
-    aiModel.usages.set('kuro', undefined)
+    aiModel.providers = [{ ...ACME_PROVIDER, usageSource: { id: 'http-json' } }]
+    aiModel.models = [ACME_MODEL]
+    aiModel.usages.set('acme', undefined)
     renderPanel(
       aiModel,
       { confirmed: true },
       {
-        'ai.settings.models.collapsed': { 'provider:kuro:usage': false },
+        'ai.settings.models.collapsed': { 'provider:acme:usage': false },
       },
     )
     await flushEffects()
     await flushEffects()
     const before = aiModel.getAccountUsage.mock.calls.length
 
-    aiModel.usages.set('kuro', { kind: 'quota', usedUSD: 2, limitUSD: 10, fetchedAt: 2 })
+    aiModel.usages.set('acme', { kind: 'quota', usedUSD: 2, limitUSD: 10, fetchedAt: 2 })
     fireEvent.click(screen.getByRole('button', { name: /Refresh usage/ }))
     await flushEffects()
     await flushEffects()
 
-    expect(aiModel.refreshRemote).toHaveBeenCalledWith('kuro')
+    expect(aiModel.refreshRemote).toHaveBeenCalledWith('acme')
     expect(aiModel.getAccountUsage.mock.calls.length).toBeGreaterThan(before)
-    expect(usageBadge('kuro')?.textContent).toBe('$2 / $10')
+    expect(usageBadge('acme')?.textContent).toBe('$2 / $10')
   })
 
   it('probes a testable provider automatically on mount, without a manual button', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
     expect(aiModel.verifyProvider).toHaveBeenCalledWith({
-      id: 'kuro',
+      id: 'acme',
       protocol: 'anthropic-messages',
-      baseUrl: 'https://kuro.example',
+      baseUrl: 'https://acme.example',
     })
-    expectDotStatus('kuro', 'ok')
+    expectDotStatus('acme', 'ok')
     expect(screen.queryByRole('button', { name: 'Test connection' })).toBeNull()
   })
 
   it('skips the auto-probe when there is no effective base URL', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [{ id: 'kuro', protocolMap: { 'anthropic-messages': ['qwen3-coder'] } }]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [{ id: 'acme', protocolMap: { 'anthropic-messages': ['qwen3-coder'] } }]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
 
     expect(aiModel.verifyProvider).not.toHaveBeenCalled()
-    expectDotStatus('kuro', 'idle')
+    expectDotStatus('acme', 'idle')
   })
 
   it('shows a fresh cached result without probing again', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel, undefined, {
-      'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() },
+      'ai.settings.connectivity.acme': { ok: true, modelCount: 2, at: Date.now() },
     })
     await flushEffects()
     await flushEffects()
 
     expect(aiModel.verifyProvider).not.toHaveBeenCalled()
-    expectDotStatus('kuro', 'ok')
+    expectDotStatus('acme', 'ok')
   })
 
   it('probes when the cached result is stale', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel, undefined, {
-      'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() - 6 * 60 * 1000 },
+      'ai.settings.connectivity.acme': { ok: true, modelCount: 2, at: Date.now() - 6 * 60 * 1000 },
     })
     await flushEffects()
     await flushEffects()
@@ -406,8 +406,8 @@ describe('AiProvidersPanel', () => {
 
   it('a model-list reload does not re-probe', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
     await flushEffects()
@@ -424,16 +424,16 @@ describe('AiProvidersPanel', () => {
     vi.useFakeTimers()
     try {
       const aiModel = new FakeAiModelService()
-      aiModel.providers = [KURO_PROVIDER]
-      aiModel.models = [KURO_MODEL]
+      aiModel.providers = [ACME_PROVIDER]
+      aiModel.models = [ACME_MODEL]
       renderPanel(aiModel)
       await flushEffects()
       await flushEffects()
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
 
-      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      const input = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(input)
-      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.change(input, { target: { value: 'https://acme2.example' } })
       fireEvent.blur(input)
       await flushEffects()
       await flushEffects()
@@ -443,9 +443,9 @@ describe('AiProvidersPanel', () => {
 
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(2)
       expect(aiModel.verifyProvider).toHaveBeenLastCalledWith({
-        id: 'kuro',
+        id: 'acme',
         protocol: 'anthropic-messages',
-        baseUrl: 'https://kuro2.example',
+        baseUrl: 'https://acme2.example',
       })
     } finally {
       vi.useRealTimers()
@@ -456,22 +456,22 @@ describe('AiProvidersPanel', () => {
     vi.useFakeTimers()
     try {
       const aiModel = new FakeAiModelService()
-      aiModel.providers = [KURO_PROVIDER]
-      aiModel.models = [KURO_MODEL]
+      aiModel.providers = [ACME_PROVIDER]
+      aiModel.models = [ACME_MODEL]
       renderPanel(aiModel)
       await flushEffects()
       await flushEffects()
 
-      const first = within(entryCard('kuro')).getByLabelText('Base URL')
+      const first = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(first)
-      fireEvent.change(first, { target: { value: 'https://kuro2.example' } })
+      fireEvent.change(first, { target: { value: 'https://acme2.example' } })
       fireEvent.blur(first)
       await flushEffects()
       await flushEffects()
 
-      const second = within(entryCard('kuro')).getByLabelText('Base URL')
+      const second = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(second)
-      fireEvent.change(second, { target: { value: 'https://kuro3.example' } })
+      fireEvent.change(second, { target: { value: 'https://acme3.example' } })
       fireEvent.blur(second)
       await flushEffects()
       await flushEffects()
@@ -481,9 +481,9 @@ describe('AiProvidersPanel', () => {
 
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(2)
       expect(aiModel.verifyProvider).toHaveBeenLastCalledWith({
-        id: 'kuro',
+        id: 'acme',
         protocol: 'anthropic-messages',
-        baseUrl: 'https://kuro3.example',
+        baseUrl: 'https://acme3.example',
       })
     } finally {
       vi.useRealTimers()
@@ -494,8 +494,8 @@ describe('AiProvidersPanel', () => {
     vi.useFakeTimers()
     try {
       const aiModel = new FakeAiModelService()
-      aiModel.providers = [KURO_PROVIDER]
-      aiModel.models = [KURO_MODEL]
+      aiModel.providers = [ACME_PROVIDER]
+      aiModel.models = [ACME_MODEL]
       const gates: Array<(result: AiProviderVerifyResult) => void> = []
       aiModel.verifyProvider = vi.fn(
         () =>
@@ -509,9 +509,9 @@ describe('AiProvidersPanel', () => {
       await flushEffects()
       expect(gates).toHaveLength(1)
 
-      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      const input = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(input)
-      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.change(input, { target: { value: 'https://acme2.example' } })
       fireEvent.blur(input)
       await flushEffects()
       await flushEffects()
@@ -523,12 +523,12 @@ describe('AiProvidersPanel', () => {
       // probe must not paint over it afterwards.
       gates[1]?.({ ok: true, modelCount: 5 })
       await flushEffects()
-      expectDotStatus('kuro', 'ok')
+      expectDotStatus('acme', 'ok')
 
       gates[0]?.({ ok: false, modelCount: 0, code: 'unreachable' })
       await flushEffects()
 
-      expectDotStatus('kuro', 'ok')
+      expectDotStatus('acme', 'ok')
     } finally {
       vi.useRealTimers()
     }
@@ -538,19 +538,19 @@ describe('AiProvidersPanel', () => {
     vi.useFakeTimers()
     try {
       const aiModel = new FakeAiModelService()
-      aiModel.providers = [KURO_PROVIDER]
-      aiModel.models = [KURO_MODEL]
+      aiModel.providers = [ACME_PROVIDER]
+      aiModel.models = [ACME_MODEL]
       renderPanel(aiModel, undefined, {
-        'ai.settings.connectivity.kuro': { ok: true, modelCount: 2, at: Date.now() },
+        'ai.settings.connectivity.acme': { ok: true, modelCount: 2, at: Date.now() },
       })
       await flushEffects()
       await flushEffects()
       expect(aiModel.verifyProvider).not.toHaveBeenCalled()
-      expectDotStatus('kuro', 'ok')
+      expectDotStatus('acme', 'ok')
 
-      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      const input = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(input)
-      fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+      fireEvent.change(input, { target: { value: 'https://acme2.example' } })
       fireEvent.blur(input)
       await flushEffects()
       await flushEffects()
@@ -559,9 +559,9 @@ describe('AiProvidersPanel', () => {
 
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
       expect(aiModel.verifyProvider).toHaveBeenCalledWith({
-        id: 'kuro',
+        id: 'acme',
         protocol: 'anthropic-messages',
-        baseUrl: 'https://kuro2.example',
+        baseUrl: 'https://acme2.example',
       })
     } finally {
       vi.useRealTimers()
@@ -570,8 +570,8 @@ describe('AiProvidersPanel', () => {
 
   it('clearing the base URL invalidates an in-flight probe immediately', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     const gates: Array<(result: AiProviderVerifyResult) => void> = []
     aiModel.verifyProvider = vi.fn(
       () =>
@@ -584,35 +584,35 @@ describe('AiProvidersPanel', () => {
     await flushEffects()
     await flushEffects()
     expect(gates).toHaveLength(1)
-    expectDotStatus('kuro', 'checking')
+    expectDotStatus('acme', 'checking')
 
-    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    const input = within(entryCard('acme')).getByLabelText('Base URL')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '  ' } })
     fireEvent.blur(input)
     await flushEffects()
     await flushEffects()
-    expectDotStatus('kuro', 'idle')
+    expectDotStatus('acme', 'idle')
 
     gates[0]?.({ ok: true, modelCount: 3 })
     await flushEffects()
 
-    expectDotStatus('kuro', 'idle')
+    expectDotStatus('acme', 'idle')
   })
 
   it('clearing the base URL falls back to "not tested" without probing', async () => {
     vi.useFakeTimers()
     try {
       const aiModel = new FakeAiModelService()
-      aiModel.providers = [KURO_PROVIDER]
-      aiModel.models = [KURO_MODEL]
+      aiModel.providers = [ACME_PROVIDER]
+      aiModel.models = [ACME_MODEL]
       renderPanel(aiModel)
       await flushEffects()
       await flushEffects()
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
-      expectDotStatus('kuro', 'ok')
+      expectDotStatus('acme', 'ok')
 
-      const input = within(entryCard('kuro')).getByLabelText('Base URL')
+      const input = within(entryCard('acme')).getByLabelText('Base URL')
       fireEvent.focus(input)
       fireEvent.change(input, { target: { value: '  ' } })
       fireEvent.blur(input)
@@ -622,7 +622,7 @@ describe('AiProvidersPanel', () => {
       await flushEffects()
 
       expect(aiModel.verifyProvider).toHaveBeenCalledTimes(1)
-      expectDotStatus('kuro', 'idle')
+      expectDotStatus('acme', 'idle')
     } finally {
       vi.useRealTimers()
     }
@@ -639,9 +639,9 @@ describe('AiProvidersPanel', () => {
 
   it('surfaces provider issues visibly on the affected card', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
-    aiModel.issues = [{ providerId: 'kuro', reason: 'no-protocol', fatal: true }]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
+    aiModel.issues = [{ providerId: 'acme', reason: 'no-protocol', fatal: true }]
     renderPanel(aiModel)
     await flushEffects()
 
@@ -650,8 +650,8 @@ describe('AiProvidersPanel', () => {
 
   it('shows "Rate unknown" on models of a provider without a pricing source', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
@@ -660,31 +660,31 @@ describe('AiProvidersPanel', () => {
 
   it('writes a field through on blur and flags it as saved', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    const input = within(entryCard('acme')).getByLabelText('Base URL')
     fireEvent.focus(input)
-    fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+    fireEvent.change(input, { target: { value: 'https://acme2.example' } })
     fireEvent.blur(input)
     await flushEffects()
 
     expect(aiModel.updateProviders).toHaveBeenCalledWith([
-      { ...KURO_PROVIDER, baseUrl: 'https://kuro2.example' },
+      { ...ACME_PROVIDER, baseUrl: 'https://acme2.example' },
     ])
     expect(screen.getByTestId('ai-provider-saved')).toBeTruthy()
   })
 
   it('clearing a field deletes the key rather than writing an empty string', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    const input = within(entryCard('acme')).getByLabelText('Base URL')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '  ' } })
     fireEvent.blur(input)
@@ -697,16 +697,16 @@ describe('AiProvidersPanel', () => {
 
   it('a hot reload of aiSettings.json does not overwrite a focused input', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Base URL')
+    const input = within(entryCard('acme')).getByLabelText<HTMLInputElement>('Base URL')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: 'half-typed' } })
 
-    aiModel.providers = [{ ...KURO_PROVIDER, baseUrl: 'https://changed.example' }]
+    aiModel.providers = [{ ...ACME_PROVIDER, baseUrl: 'https://changed.example' }]
     aiModel.fireModelsChanged()
     await flushEffects()
 
@@ -715,17 +715,17 @@ describe('AiProvidersPanel', () => {
 
   it('duplicates a provider under a free id', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     renderPanel(aiModel)
     await flushEffects()
 
-    fireEvent.click(within(entryCard('kuro')).getByRole('button', { name: 'Duplicate provider' }))
+    fireEvent.click(within(entryCard('acme')).getByRole('button', { name: 'Duplicate provider' }))
     await flushEffects()
 
     expect(aiModel.updateProviders).toHaveBeenCalledWith([
-      KURO_PROVIDER,
-      { ...KURO_PROVIDER, id: 'kuro-copy' },
+      ACME_PROVIDER,
+      { ...ACME_PROVIDER, id: 'acme-copy' },
     ])
   })
 
@@ -735,8 +735,8 @@ describe('AiProvidersPanel', () => {
   it('a second field edit committed mid-flight does not undo the first', async () => {
     const other: AiProviderEntry = { id: 'other', baseUrl: 'https://other.example' }
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER, other]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER, other]
+    aiModel.models = [ACME_MODEL]
 
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
@@ -755,9 +755,9 @@ describe('AiProvidersPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const first = within(entryCard('kuro')).getByLabelText<HTMLInputElement>('Base URL')
+    const first = within(entryCard('acme')).getByLabelText<HTMLInputElement>('Base URL')
     fireEvent.focus(first)
-    fireEvent.change(first, { target: { value: 'https://kuro2.example' } })
+    fireEvent.change(first, { target: { value: 'https://acme2.example' } })
     fireEvent.blur(first)
 
     const second = within(entryCard('other')).getByLabelText<HTMLInputElement>('Base URL')
@@ -770,15 +770,15 @@ describe('AiProvidersPanel', () => {
     await flushEffects()
 
     expect(aiModel.providers).toEqual([
-      { ...KURO_PROVIDER, baseUrl: 'https://kuro2.example' },
+      { ...ACME_PROVIDER, baseUrl: 'https://acme2.example' },
       { ...other, baseUrl: 'https://other2.example' },
     ])
   })
 
   it('renders providers while getModels hangs instead of flashing the empty state', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     // A discover provider whose /v1/models endpoint never answers would keep the
     // old Promise.all pending forever; the fast provider reads must land anyway.
     aiModel.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
@@ -786,20 +786,20 @@ describe('AiProvidersPanel', () => {
     await flushEffects()
 
     expect(screen.queryByText('No providers yet. Add one to connect an AI service.')).toBeNull()
-    expect(entryCard('kuro')).toBeTruthy()
+    expect(entryCard('acme')).toBeTruthy()
   })
 
   it('flags a field edit as saved while getModels is still hanging', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     aiModel.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
     renderPanel(aiModel)
     await flushEffects()
 
-    const input = within(entryCard('kuro')).getByLabelText('Base URL')
+    const input = within(entryCard('acme')).getByLabelText('Base URL')
     fireEvent.focus(input)
-    fireEvent.change(input, { target: { value: 'https://kuro2.example' } })
+    fireEvent.change(input, { target: { value: 'https://acme2.example' } })
     fireEvent.blur(input)
     await flushEffects()
 
@@ -813,7 +813,7 @@ describe('AiProvidersPanel', () => {
     // Empty refs = discover mode: the protocol is declared, the list comes from
     // the endpoint — exactly the case that can hang on /v1/models.
     aiModel.providers = [
-      { id: 'kuro', baseUrl: 'https://kuro.example', protocolMap: { 'anthropic-messages': [] } },
+      { id: 'acme', baseUrl: 'https://acme.example', protocolMap: { 'anthropic-messages': [] } },
     ]
     aiModel.models = []
     // A discover provider whose /v1/models endpoint never answers: the card must
@@ -822,7 +822,7 @@ describe('AiProvidersPanel', () => {
     renderPanel(aiModel)
     await flushEffects()
 
-    const card = entryCard('kuro')
+    const card = entryCard('acme')
     expect(screen.queryByText('No models resolved for this protocol.')).toBeNull()
     expect(within(card).queryByText('0 models')).toBeNull()
     // The discover block says the enumeration is in flight; the Pin button stays
@@ -838,7 +838,7 @@ describe('AiProvidersPanel', () => {
   it('shows "No models resolved for this protocol." only after the enumeration answers empty', async () => {
     const aiModel = new FakeAiModelService()
     aiModel.providers = [
-      { id: 'kuro', baseUrl: 'https://kuro.example', protocolMap: { 'anthropic-messages': [] } },
+      { id: 'acme', baseUrl: 'https://acme.example', protocolMap: { 'anthropic-messages': [] } },
     ]
     aiModel.models = []
     const gates: Array<(result: AiModelMetadata[]) => void> = []
@@ -857,14 +857,14 @@ describe('AiProvidersPanel', () => {
     await flushEffects()
 
     expect(screen.getByText('No models resolved for this protocol.')).toBeTruthy()
-    expect(within(entryCard('kuro')).getByText('0 models')).toBeTruthy()
+    expect(within(entryCard('acme')).getByText('0 models')).toBeTruthy()
     expect(screen.queryByText('Fetching the model list from the endpoint…')).toBeNull()
   })
 
   it('a stale getModels result does not overwrite a newer reload', async () => {
     const aiModel = new FakeAiModelService()
-    aiModel.providers = [KURO_PROVIDER]
-    aiModel.models = [KURO_MODEL]
+    aiModel.providers = [ACME_PROVIDER]
+    aiModel.models = [ACME_MODEL]
     const gates: Array<(result: AiModelMetadata[]) => void> = []
     aiModel.getModels = vi.fn(
       () =>
@@ -883,17 +883,17 @@ describe('AiProvidersPanel', () => {
 
     // The newer enumeration resolves first with two models…
     const plus = {
-      ...KURO_MODEL,
-      id: 'kuro/anthropic-messages/qwen3-coder-plus',
+      ...ACME_MODEL,
+      id: 'acme/anthropic-messages/qwen3-coder-plus',
       channelModel: 'qwen3-coder-plus',
       name: 'Qwen3 Coder Plus',
     } as const
-    gates[1]?.([plus, KURO_MODEL])
+    gates[1]?.([plus, ACME_MODEL])
     await flushEffects()
     expect(screen.getByText('2 models')).toBeTruthy()
 
     // …then the stale mount enumeration resolves with one model; it must not win.
-    gates[0]?.([KURO_MODEL])
+    gates[0]?.([ACME_MODEL])
     await flushEffects()
     expect(screen.getByText('2 models')).toBeTruthy()
   })

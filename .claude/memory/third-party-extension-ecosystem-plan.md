@@ -1,6 +1,6 @@
 ---
 name: third-party-extension-ecosystem-plan
-description: 第三方插件生态计划（docs/plan/third-party-extension-ecosystem-plan/），Phase A 已落地；四个方向性决策已由用户拍板
+description: 第三方插件生态计划，Phase A 已落地；四个方向性决策已由用户拍板
 metadata: 
   node_type: memory
   type: project
@@ -8,7 +8,7 @@ metadata:
   modified: 2026-08-10T01:59:55.094Z
 ---
 
-第三方插件生态（对标 VSCode 外部开发者体验）计划于 2026-07-29 完成规划，文档在 `docs/plan/third-party-extension-ecosystem-plan/`（README + 01–06）。核心判断：编辑器侧"跑扩展+装扩展"两条链路已就绪（见 [[extension-system-progress]]），缺口全在"仓库外开发者"一侧——SDK 未发 npm、无脚手架/CLI、无 `--extension-development-path` 开发模式、无自助发布通道、无对外文档。
+第三方插件生态（对标 VSCode 外部开发者体验）计划于 2026-07-29 完成规划。核心判断：编辑器侧"跑扩展+装扩展"两条链路已就绪（见 [[extension-system-progress]]），缺口全在"仓库外开发者"一侧——SDK 未发 npm、无脚手架/CLI、无 `--extension-development-path` 开发模式、无自助发布通道、无对外文档。
 
 **Phase A（SDK 对外化）已于 2026-07-29 落地**（pnpm check 全绿 + 仓库外 tarball 三验通过）：
 - 发布集合三件套：`extension-api@0.7.0` + `extension-manifest@0.1.0`（🆕）+ `extension-packaging@0.1.0`，均 Apache-2.0。**关键修订**：extensions-common 运行时依赖不可发布的 platform（stdioProtocol 的 Disposable/Emitter + rpc/aiWire 的类型引用），无法按计划整包发布——作者面 5 模块（activation/manifest/manifest-schema/semver/categories）物理迁入新包 `@universe-editor/extension-manifest`，extensions-common 依赖并 re-export（仓库内消费方零改动），packaging 改依赖新包。

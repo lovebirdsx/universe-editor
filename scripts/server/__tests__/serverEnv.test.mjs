@@ -19,7 +19,7 @@ test('pickServerEnv 只取白名单，部署侧机密与空值不进', () => {
     UE_SERVER_PORT: '8080',
     UE_SERVER_HOST: '',
     UE_RELEASE_KEY: '/home/me/.ssh/id_ed25519',
-    UE_RELEASE_HOST: '10.0.0.5',
+    UE_RELEASE_HOST: '192.0.2.10',
     RANDOM_SECRET: 'nope',
   })
   assert.deepEqual(picked, { UE_SERVER_ROOT: '/srv/ue', UE_SERVER_PORT: '8080' })
@@ -28,7 +28,7 @@ test('pickServerEnv 只取白名单，部署侧机密与空值不进', () => {
 test('pickServerEnv 排除部署侧的 UE_SERVER_APP_DIR / HEALTH_URL', () => {
   const picked = pickServerEnv({
     UE_SERVER_APP_DIR: '/opt/universe-update-server',
-    UE_SERVER_HEALTH_URL: 'http://10.0.0.5/',
+    UE_SERVER_HEALTH_URL: 'http://192.0.2.10/',
     UE_SERVER_ROOT: '/srv/ue',
   })
   assert.deepEqual(picked, { UE_SERVER_ROOT: '/srv/ue' })

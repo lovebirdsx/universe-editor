@@ -74,7 +74,7 @@ async function readSwarmConfig(): Promise<SwarmConfig | undefined> {
   // round instead of four serial ones (activation used to stall minutes on this).
   const [enabled, urlRaw, apiVersionRaw, authMode] = await Promise.all([
     cfg.get('swarm.enabled', true),
-    cfg.get('swarm.url', 'http://swarm.aki.kuro.com/'),
+    cfg.get('swarm.url', ''),
     cfg.get('swarm.apiVersion', 'v9'),
     cfg.get<'ticket' | 'token'>('swarm.authMode', 'ticket'),
   ])

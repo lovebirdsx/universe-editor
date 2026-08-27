@@ -711,12 +711,12 @@ describe('MainThreadFs', () => {
         new NullLogger(),
         'win32',
         authority,
-        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/xiao' })),
+        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/dev' })),
       )
       await fs.$stat('/home/user/repo/a.md')
       const call = policy.calls()[0]
       expect(call?.cwd).toBe('/home/user/repo')
-      expect(call?.env).toEqual({ platform: 'linux', home: '/home/xiao' })
+      expect(call?.env).toEqual({ platform: 'linux', home: '/home/dev' })
     })
 
     it('leaves the policy env unset for a local workspace', async () => {
@@ -769,7 +769,7 @@ describe('MainThreadFs', () => {
       let connected = false
       const policy = recordingPolicy()
       const remoteStatus = fakeRemoteStatus(null, () =>
-        Promise.resolve(connected ? remoteEnvDto({ homeDir: '/home/xiao' }) : null),
+        Promise.resolve(connected ? remoteEnvDto({ homeDir: '/home/dev' }) : null),
       )
       const fs = makeFs(
         '/home/user/repo',
@@ -787,7 +787,7 @@ describe('MainThreadFs', () => {
 
       connected = true
       await fs.$stat('/home/user/repo/b.md')
-      expect(policy.calls()[1]?.env).toEqual({ platform: 'linux', home: '/home/xiao' })
+      expect(policy.calls()[1]?.env).toEqual({ platform: 'linux', home: '/home/dev' })
       // …and the healed answer is memoized again.
       await fs.$stat('/home/user/repo/c.md')
       expect((remoteStatus as unknown as { calls: () => number }).calls()).toBe(2)
@@ -922,13 +922,13 @@ describe('MainThreadFs', () => {
       // A POSIX remote browsed from Windows. The policy here is permissive on
       // purpose so the only thing under test is the containment re-check in
       // _resolveRelativePatternBase: with the client's case-insensitive rules
-      // `/home/Xiao/repo/src` folds into the root `/home/xiao/repo` and gets
+      // `/home/Dev/repo/src` folds into the root `/home/dev/repo` and gets
       // enumerated; the remote's own `linux` facts keep it out.
       const search = fakeSearchRecorder()
       const warn = vi.fn()
       const logger = { ...new NullLogger(), warn } as unknown as ILogger
       const fs = makeFs(
-        '/home/xiao/repo',
+        '/home/dev/repo',
         allowPolicy,
         fakeFiles({}),
         search,
@@ -936,11 +936,11 @@ describe('MainThreadFs', () => {
         logger,
         'win32',
         authority,
-        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/xiao' })),
+        fakeRemoteStatus(remoteEnvDto({ homeDir: '/home/dev' })),
       )
       await expect(
         fs.$findFiles(
-          { base: remoteUri('/home/Xiao/repo/src').toJSON(), pattern: '*.ts' },
+          { base: remoteUri('/home/Dev/repo/src').toJSON(), pattern: '*.ts' },
           null,
           null,
         ),

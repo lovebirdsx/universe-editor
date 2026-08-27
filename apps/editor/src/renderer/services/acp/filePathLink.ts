@@ -124,7 +124,7 @@ const REL_SEG = `[^${NON_SEG}:/\\\\]`
 // the `u` flag on every regex that embeds it (all the *_U regexes below).
 const NAL = `(?:(?![\\x00-\\x7f])[\\p{L}\\p{N}])`
 // CJK-aware segments: an ASCII path char OR a non-ASCII letter/number. Used for
-// grammars that should recognize Chinese file/dir names (`个人考核/2026q1.md`).
+// grammars that should recognize Chinese file/dir names (`项目文档/2026q1.md`).
 const CJK_SEG = `(?:${SEG}|${NAL})`
 const CJK_REL_SEG = `(?:${REL_SEG}|${NAL})`
 
@@ -132,7 +132,7 @@ const CJK_REL_SEG = `(?:${REL_SEG}|${NAL})`
 const WIN_ABS = `[A-Za-z]:[/\\\\](?:${CJK_SEG}+[/\\\\])*${CJK_SEG}+${EXT}`
 // Unix absolute or relative dot-slash:  /path/file.ts  ./path/file.ts  ../path/file.ts
 const UNIX_ABS = `\\.{0,2}/(?:${CJK_SEG}+/)*${CJK_SEG}+${EXT}`
-// Relative with at least one dir component:  src/foo/bar.ts  个人考核/2026q1.md
+// Relative with at least one dir component:  src/foo/bar.ts  项目文档/2026q1.md
 const REL = `(?:${CJK_REL_SEG}+[/\\\\])+${CJK_REL_SEG}+${EXT}`
 // Extension-less variants. `@` mentions are explicit file references so they may
 // omit a known extension; bare non-`@` relative paths still require a known
@@ -268,7 +268,7 @@ export function matchFullFilePath(text: string): FilePathMatch | null {
  * Absolute paths (Windows drive `D:/…`/`D:\…` or POSIX-absolute `/…`) count even
  * without a known extension, since the drive prefix / leading slash makes the
  * filesystem intent unambiguous and the target may well be a directory
- * (`[vscode](D:/git_project/vscode)`).
+ * (`[vscode](D:/workspace/vscode)`).
  */
 export function looksLikeFilePath(href: string): boolean {
   const atPrefixed = href.startsWith('@')

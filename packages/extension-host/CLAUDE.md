@@ -89,7 +89,7 @@
 
 **fs 网关仍在但非沙箱**：`workspace.fs` API 仍走 `MainThreadFs`（复用 `AcpPathPolicy` 拒 .ssh/.aws/.env + 禁逃逸，cwd=workspaceRoot），但扩展可裸 `node:fs` 绕过——它只约束走 API 的扩展，不是安全边界。
 
-**贯穿红线**：密钥只走 main `ISecretStorageService`(safeStorage)，绝不进 renderer/wire DTO。
+**贯穿红线**：密钥绝不进 renderer/wire DTO，也绝不进日志。
 
 ### ④ 启用/禁用：决策引擎 + 生效链
 

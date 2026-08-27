@@ -84,9 +84,9 @@ describe('AddProviderDialog', () => {
     renderDialog(aiModel)
     await flushEffects()
 
-    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'acme' } })
     fireEvent.change(screen.getByPlaceholderText('https://…'), {
-      target: { value: 'https://kuro.example' },
+      target: { value: 'https://acme.example' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await flushEffects()
@@ -94,8 +94,8 @@ describe('AddProviderDialog', () => {
     expect(aiModel.updateProviders).toHaveBeenCalledTimes(1)
     expect(aiModel.updateProviders).toHaveBeenCalledWith([
       {
-        id: 'kuro',
-        baseUrl: 'https://kuro.example',
+        id: 'acme',
+        baseUrl: 'https://acme.example',
         defaultProtocol: 'openai-chat',
         protocolMap: { 'openai-chat': [] },
       },
@@ -159,10 +159,10 @@ describe('AddProviderDialog', () => {
 
   it('rejects a duplicate provider id', async () => {
     const aiModel = new FakeDialogAiModel()
-    renderDialog(aiModel, { existingProviders: [{ id: 'kuro' }] })
+    renderDialog(aiModel, { existingProviders: [{ id: 'acme' }] })
     await flushEffects()
 
-    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'acme' } })
 
     expect(screen.getByText('That provider id already exists.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(
@@ -201,16 +201,16 @@ describe('AddProviderDialog — persisted draft', () => {
   it('restores a well-formed draft', async () => {
     const storage = new FakeStorage()
     await storage.set(DRAFT_KEY, {
-      id: 'kuro',
-      baseUrl: 'https://kuro.example',
+      id: 'acme',
+      baseUrl: 'https://acme.example',
       template: 'custom',
     })
     renderDialog(new FakeDialogAiModel(), { storage })
     await flushEffects()
 
-    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('kuro')
+    expect((screen.getByPlaceholderText('my-gateway') as HTMLInputElement).value).toBe('acme')
     expect((screen.getByPlaceholderText('https://…') as HTMLInputElement).value).toBe(
-      'https://kuro.example',
+      'https://acme.example',
     )
   })
 
@@ -218,7 +218,7 @@ describe('AddProviderDialog — persisted draft', () => {
   // picker and is taken all-or-nothing like every other shape change.
   it('ignores a draft written before the template picker existed', async () => {
     const storage = new FakeStorage()
-    await storage.set(DRAFT_KEY, { id: 'kuro', baseUrl: 'https://kuro.example' })
+    await storage.set(DRAFT_KEY, { id: 'acme', baseUrl: 'https://acme.example' })
     renderDialog(new FakeDialogAiModel(), { storage })
     await flushEffects()
 
@@ -231,11 +231,11 @@ describe('AddProviderDialog — persisted draft', () => {
     await flushEffects()
 
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-secret' } })
-    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'kuro' } })
+    fireEvent.change(screen.getByPlaceholderText('my-gateway'), { target: { value: 'acme' } })
     await flushEffects()
 
     const written = JSON.stringify(await storage.get(DRAFT_KEY))
-    expect(written).toContain('kuro')
+    expect(written).toContain('acme')
     expect(written).not.toContain('sk-secret')
   })
 })

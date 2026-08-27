@@ -61,7 +61,7 @@ function validate(schema: IJSONSchema, value: unknown, path: string): string[] {
   return errors
 }
 
-const MODEL_IDS = ['kuro-gbl/anthropic-messages/deepseek-v4-pro', 'kuro-gbl/openai-chat/glm5.3']
+const MODEL_IDS = ['acme-gbl/anthropic-messages/deepseek-v4-pro', 'acme-gbl/openai-chat/glm5.3']
 
 const SAMPLE_SETTINGS = {
   models: {
@@ -78,8 +78,8 @@ const SAMPLE_SETTINGS = {
   },
   providers: [
     {
-      id: 'kuro',
-      baseUrl: 'https://api.kuro.example/v1',
+      id: 'acme',
+      baseUrl: 'https://api.acme.example/v1',
       apiKey: 'key-xxxx',
       defaultProtocol: 'openai-chat',
       protocolMap: {
@@ -96,15 +96,15 @@ const SAMPLE_SETTINGS = {
       pricingSource: { id: 'http-json', options: { path: '/v1/pricing', currency: 'CNY' } },
       usageSource: { id: 'http-json', options: { path: '/v1/quota' } },
     },
-    { id: 'kuro-gbl', extends: 'kuro', baseUrl: 'http://10.0.1.0:9080/v1', apiKey: 'kr-...' },
+    { id: 'acme-gbl', extends: 'acme', baseUrl: 'http://192.0.2.31:9080/v1', apiKey: 'ak-...' },
   ],
-  modelSettings: { 'kuro-gbl/anthropic-messages/deepseek-v4-pro': { temperature: 0.3 } },
+  modelSettings: { 'acme-gbl/anthropic-messages/deepseek-v4-pro': { temperature: 0.3 } },
   activeModels: {
-    chat: 'kuro-gbl/anthropic-messages/deepseek-v4-pro',
-    inlineCompletion: 'kuro-gbl/openai-chat/glm5.3',
+    chat: 'acme-gbl/anthropic-messages/deepseek-v4-pro',
+    inlineCompletion: 'acme-gbl/openai-chat/glm5.3',
   },
   agentSettings: {
-    claude: { authentication: 'kuro-gbl', model: 'deepseek-v4-pro' },
+    claude: { authentication: 'acme-gbl', model: 'deepseek-v4-pro' },
     codex: { authentication: '@subscription' },
   },
 }

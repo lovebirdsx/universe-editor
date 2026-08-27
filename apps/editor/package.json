@@ -30,10 +30,10 @@
     "lint:fix": "eslint --fix src bench integration e2e",
     "clean": "tsgo --build --clean",
     "package": "pnpm run package:win",
-    "package:win": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis dir && pnpm -w run runtime:verify:packaged",
-    "package:win:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win dir && pnpm -w run runtime:verify:packaged",
-    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis && pnpm -w run runtime:verify:packaged",
-    "package:linux:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --linux dir --publish never && pnpm -w run runtime:verify:packaged apps/editor/release/linux-unpacked/resources"
+    "package:win": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win nsis dir && pnpm -w run runtime:verify:packaged",
+    "package:win:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win dir && pnpm -w run runtime:verify:packaged",
+    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win nsis && pnpm -w run runtime:verify:packaged",
+    "package:linux:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --linux dir --publish never && pnpm -w run runtime:verify:packaged apps/editor/release/linux-unpacked/resources"
   },
   "dependencies": {
     "@parcel/watcher": "catalog:",

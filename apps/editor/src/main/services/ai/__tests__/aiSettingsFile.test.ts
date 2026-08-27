@@ -43,8 +43,8 @@ function transientError(code: string): NodeJS.ErrnoException {
 
 describe('aiSettingsFile atomic write', () => {
   it('writes and reads back the root', async () => {
-    await writeAiSettingsFile(path, { providers: [{ id: 'kuro' }] })
-    expect(await readAiSettingsRoot(path)).toEqual({ providers: [{ id: 'kuro' }] })
+    await writeAiSettingsFile(path, { providers: [{ id: 'acme' }] })
+    expect(await readAiSettingsRoot(path)).toEqual({ providers: [{ id: 'acme' }] })
   })
 
   it.each(['EPERM', 'EACCES', 'EBUSY'])('retries a transient %s rename', async (code) => {

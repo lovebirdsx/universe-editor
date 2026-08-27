@@ -67,10 +67,15 @@ describe('parseReconcileRecord', () => {
   // in client syntax; with a clientRoot it must become the local path.
   it('translates a client-syntax clientFile onto the client root', () => {
     const file = parseReconcileRecord(
-      { depotFile: '//depot/Src/a.ts', clientFile: '//aki_ws/Src/a.ts', action: 'edit', rev: '2' },
-      'G:/aki_3.6',
+      {
+        depotFile: '//depot/Src/a.ts',
+        clientFile: '//ws/Src/a.ts',
+        action: 'edit',
+        rev: '2',
+      },
+      'G:/p4ws/main',
     )
-    expect(file?.clientFile).toBe('G:/aki_3.6/Src/a.ts')
+    expect(file?.clientFile).toBe('G:/p4ws/main/Src/a.ts')
   })
 })
 

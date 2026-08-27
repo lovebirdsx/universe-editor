@@ -829,7 +829,7 @@ describe('ResumeAgentSessionAction', () => {
       makeEntry({
         id: 'sess-win',
         sessionIdOnAgent: 'sess-win',
-        cwd: 'D:\\git_project\\universe-editor\\',
+        cwd: 'D:\\workspace\\universe-editor\\',
         title: 'Windows path',
       }),
       makeEntry({

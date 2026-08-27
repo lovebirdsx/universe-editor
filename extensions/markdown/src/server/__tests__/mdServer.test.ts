@@ -86,11 +86,11 @@ describe('createMdServer — diagnostics', () => {
   it('resolves a Windows drive-absolute link against the drive, not the doc dir', async () => {
     // Regression for the patched resolveInternalDocumentLink: `D:/…` used to fall
     // into the relative branch and get joined onto the document's directory
-    // (`f:/ws/D:/git_project/vscode`), so it never matched what's on disk. The
+    // (`f:/ws/D:/workspace/vscode`), so it never matched what's on disk. The
     // stub reports the *real* drive path exists; a doc-dir-joined path would not.
     const stat = (uri: string) =>
       Promise.resolve(
-        uri === URI.file('D:/git_project/vscode').toString()
+        uri === URI.file('D:/workspace/vscode').toString()
           ? ({ type: 'dir', mtime: 0, size: 0 } as const)
           : undefined,
       )
@@ -99,7 +99,7 @@ describe('createMdServer — diagnostics', () => {
     await server.$didOpen({
       uri: URI_A,
       version: 1,
-      text: '[vscode](D:/git_project/vscode)\n',
+      text: '[vscode](D:/workspace/vscode)\n',
     })
 
     const diagnostics = await server.$computeDiagnostics(URI_A)
@@ -130,14 +130,14 @@ describe('createMdServer — document links', () => {
     // The language service resolves a directory link to
     // `command:revealInExplorer?<uri>`; we don't register that command, so the
     // server must hand back a `file:` URI for Monaco's editor opener to follow.
-    const dirUri = URI.file('D:/git_project/vscode')
+    const dirUri = URI.file('D:/workspace/vscode')
     const stat = (uri: string) =>
       Promise.resolve(
         uri === dirUri.toString() ? ({ type: 'dir', mtime: 0, size: 0 } as const) : undefined,
       )
     const client: IMdClient = { ...stubClient, $stat: stat }
     const server = createMdServer(client, URI.file('/ws')).server
-    await server.$didOpen({ uri: URI_A, version: 1, text: '[vscode](D:/git_project/vscode)\n' })
+    await server.$didOpen({ uri: URI_A, version: 1, text: '[vscode](D:/workspace/vscode)\n' })
 
     const links = await server.$provideDocumentLinks(URI_A)
     expect(links.length).toBe(1)

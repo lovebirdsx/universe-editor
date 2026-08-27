@@ -7,7 +7,7 @@ metadata:
   originSessionId: ae0fd3b3-d185-4df3-9aff-7647cb31b036
 ---
 
-34 万行 `index.d.ts` 暴露的十轮问题与修法均已落地（2026-07），实现细节 git 可查，此处只留通用教训：
+超大 `index.d.ts` 暴露的十轮问题与修法均已落地（2026-07），实现细节 git 可查，此处只留通用教训：
 
 **Why:** ① 定时轮询等异步挂载在大文件上必然超窗——reveal 是 model 就绪的后继动作，走事件（`waitForFileEditor`/`revealSelectionInInput`）；② 主线程全文字符串 diff 无豁免必然卡顿——`ThrottledDelayer` + 大小豁免 + 行级 diff（见 [[linediff-myers-perf]]）；③ 全文文档同步每键都是灾难——Monaco deltas 按 rangeOffset 降序转 LSP contentChanges 增量同步，tsserver 设 `maxTsServerMemory`；④ 多余的全文 didOpen 只有靠「恰好 N 次」日志断言暴露，功能测试全绿也抓不到——连接代际去重；⑤ 字符串流式切帧必须带分片累积器，`+=`+全量扫描在多 MB 帧上是 O(n²)；⑥ **任何挂在 activeEditor 变化上的反应都不得携带/构造全文**（DTO 带 text、`getValue()` 后正则扫全文都算）——每次切 tab 都重付一次；⑦ 跨 IPC 的错误 stack 是 synthetic，renderer 帧不可信。
 

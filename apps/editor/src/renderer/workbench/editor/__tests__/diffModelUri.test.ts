@@ -3,7 +3,7 @@ import { URI } from '@universe-editor/platform'
 import { diffModelUri } from '../diffModelUri.js'
 
 describe('diffModelUri', () => {
-  const original = URI.file('D:/git_project/universe-editor/apps/editor/src/main/windowState.ts')
+  const original = URI.file('D:/workspace/universe-editor/apps/editor/src/main/windowState.ts')
 
   it('只替换 scheme，保留干净的资源 path', () => {
     expect(diffModelUri(original, 'original').scheme).toBe('diff-original')
@@ -11,7 +11,7 @@ describe('diffModelUri', () => {
 
     for (const side of ['original', 'modified'] as const) {
       expect(diffModelUri(original, side).path).toBe(
-        '/D:/git_project/universe-editor/apps/editor/src/main/windowState.ts',
+        '/D:/workspace/universe-editor/apps/editor/src/main/windowState.ts',
       )
     }
   })

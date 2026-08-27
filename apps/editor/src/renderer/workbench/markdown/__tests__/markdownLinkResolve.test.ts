@@ -33,7 +33,7 @@ describe('markdownLinkCandidates', () => {
 
   it('decodes percent-encoded absolute paths before probing', () => {
     const encoded =
-      'C:/Users/KURO/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+      'C:/Users/testuser/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
     const c = markdownLinkCandidates(encoded, baseDir, root)
 
     expect(c[0]!.fsPath).toContain('Universe Editor')
@@ -112,25 +112,25 @@ describe('markdownLinkCandidates', () => {
     const remoteRoot = URI.from({
       scheme: 'remote-ssh',
       authority: 'wsl+Ubuntu',
-      path: '/home/xiao/proj',
+      path: '/home/dev/proj',
     })
 
     it('probes the remote workspace authority before the local file fallback', () => {
-      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', remoteRoot, remoteRoot)
-      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      const c = markdownLinkCandidates('/home/dev/proj/src/a.ts', remoteRoot, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/dev/proj/src/a.ts')
       expect(c[1]?.scheme).toBe('file')
       expect(c).toHaveLength(2)
     })
 
     it('inherits the remote authority from the workspace root when the base dir is local', () => {
-      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', baseDir, remoteRoot)
-      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      const c = markdownLinkCandidates('/home/dev/proj/src/a.ts', baseDir, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/dev/proj/src/a.ts')
       expect(c[1]?.scheme).toBe('file')
     })
 
     it('inherits the remote authority from the workspace root when the base dir is missing', () => {
-      const c = markdownLinkCandidates('/home/xiao/proj/src/a.ts', undefined, remoteRoot)
-      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/xiao/proj/src/a.ts')
+      const c = markdownLinkCandidates('/home/dev/proj/src/a.ts', undefined, remoteRoot)
+      expect(c[0]?.toString()).toBe('remote-ssh://wsl+Ubuntu/home/dev/proj/src/a.ts')
       expect(c[1]?.scheme).toBe('file')
     })
 
@@ -147,12 +147,12 @@ describe('markdownLinkCandidates', () => {
     })
 
     it('probes the remote authority for decoded percent-encoded variants first', () => {
-      const c = markdownLinkCandidates('/home/xiao/Universe%20Editor/a.ts', remoteRoot, remoteRoot)
+      const c = markdownLinkCandidates('/home/dev/Universe%20Editor/a.ts', remoteRoot, remoteRoot)
       expect(c[0]?.scheme).toBe('remote-ssh')
       expect(c[0]?.authority).toBe('wsl+Ubuntu')
-      expect(c[0]?.path).toBe('/home/xiao/Universe Editor/a.ts')
+      expect(c[0]?.path).toBe('/home/dev/Universe Editor/a.ts')
       expect(c[2]?.scheme).toBe('remote-ssh')
-      expect(c[2]?.path).toBe('/home/xiao/Universe%20Editor/a.ts')
+      expect(c[2]?.path).toBe('/home/dev/Universe%20Editor/a.ts')
     })
   })
 })
@@ -177,14 +177,14 @@ describe('searchPatternFor', () => {
 
 describe('fileUriLinkTarget', () => {
   it('extracts the path from a file: URI link', () => {
-    expect(fileUriLinkTarget('file:///D:/git_project/vscode')).toEqual({
-      path: 'D:/git_project/vscode',
+    expect(fileUriLinkTarget('file:///D:/workspace/vscode')).toEqual({
+      path: 'D:/workspace/vscode',
     })
   })
 
   it('decodes percent-encoded path segments', () => {
-    expect(fileUriLinkTarget('file:///D:/git_project/Universe%20Editor')).toEqual({
-      path: 'D:/git_project/Universe Editor',
+    expect(fileUriLinkTarget('file:///D:/workspace/Universe%20Editor')).toEqual({
+      path: 'D:/workspace/Universe Editor',
     })
   })
 

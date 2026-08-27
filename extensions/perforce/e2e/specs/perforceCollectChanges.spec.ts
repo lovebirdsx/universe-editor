@@ -186,12 +186,12 @@ test.describe('@p1 perforce collect changes', () => {
   // edit was never seen. It must watch the opened folder instead.
   test.describe('opening a nested subdirectory', () => {
     test.use({
-      openSubdir: 'Source/Client/TypeScript',
+      openSubdir: 'src/client/scripts',
       p4Seeds: {
         files: [
-          { relPath: 'Source/Client/TypeScript/gulpfile.ts', content: 'export const x = 1\n' },
+          { relPath: 'src/client/scripts/gulpfile.ts', content: 'export const x = 1\n' },
           // A file outside the opened folder to prove scope narrowing doesn't break.
-          { relPath: 'Source/Server/readme.md', content: '# server\n' },
+          { relPath: 'src/server/readme.md', content: '# server\n' },
         ],
       },
     })
@@ -216,7 +216,7 @@ test.describe('@p1 perforce collect changes', () => {
 
       // Edit the deeply-nested file — the exact failing case from the report.
       writeFileSync(
-        perforce.file('Source/Client/TypeScript/gulpfile.ts'),
+        perforce.file('src/client/scripts/gulpfile.ts'),
         'export const x = 2\n',
         'utf8',
       )
@@ -228,7 +228,7 @@ test.describe('@p1 perforce collect changes', () => {
           async () => {
             if (!(await row.isVisible())) {
               writeFileSync(
-                perforce.file('Source/Client/TypeScript/gulpfile.ts'),
+                perforce.file('src/client/scripts/gulpfile.ts'),
                 'export const x = 2\n',
                 'utf8',
               )

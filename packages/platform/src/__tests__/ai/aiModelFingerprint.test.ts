@@ -11,7 +11,7 @@ import type { AiResolvedProvider } from '../../ai/aiProviderEntry.js'
 
 function baseProvider(): AiResolvedProvider {
   return {
-    id: 'kuro',
+    id: 'acme',
     baseUrl: 'https://a.test/v1',
     apiKey: 'sk-1',
     defaultProtocol: 'openai-chat',

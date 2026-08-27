@@ -12,7 +12,7 @@ tag 体系、命令、fixture 分层等通用说明见 [testing.md](testing.md) 
 
 ```bash
 git clone <remote-url> ~/universe-editor
-git -C ~/universe-editor remote add win /mnt/e/git_project/universe-editor   # 按你 Windows 盘符改路径
+git -C ~/universe-editor remote add win /mnt/e/workspace/universe-editor   # 按你 Windows 盘符改路径
 git -C ~/universe-editor fetch win   # 只 fetch 对象；工作区始终在 ~/ 原生 fs
 ```
 

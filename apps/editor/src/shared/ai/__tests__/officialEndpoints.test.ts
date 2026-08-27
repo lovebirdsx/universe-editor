@@ -31,7 +31,7 @@ describe('isOfficialEndpoint', () => {
   })
 
   it('rejects a gateway endpoint', () => {
-    expect(isOfficialEndpoint('anthropic-messages', 'https://api.kuro.example/v1')).toBe(false)
+    expect(isOfficialEndpoint('anthropic-messages', 'https://api.acme.example/v1')).toBe(false)
     expect(isOfficialEndpoint('openai-chat', 'https://api.moonshot.cn/anthropic')).toBe(false)
   })
 

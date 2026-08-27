@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Issue reporter facade (main side): holds the IssueReporterRegistry with the
- *  built-in providers (GitHub / iLoop) and dispatches buildIssueUrl calls from
- *  the renderer. The iLoop provider needs the diagnostics zip, which is why the
+ *  built-in providers (GitHub / Tracker) and dispatches buildIssueUrl calls from
+ *  the renderer. The tracker provider needs the diagnostics zip, which is why the
  *  zip factory is injected by the singleton registration rather than pulled via
  *  DI (keeps the provider itself DI-free and unit-testable).
  *--------------------------------------------------------------------------------------------*/
@@ -19,7 +19,7 @@ import {
 } from '@universe-editor/platform'
 import type { IIssueReporterService } from '../../../shared/ipc/services.js'
 import { GitHubIssueReporterProvider } from './providers/githubProvider.js'
-import { ILoopIssueReporterProvider } from './providers/iloopProvider.js'
+import { TrackerIssueReporterProvider } from './providers/trackerProvider.js'
 
 export interface IssueReporterMainServiceOptions {
   readonly createDiagnosticsZip: () => Promise<string>
@@ -42,7 +42,7 @@ export class IssueReporterMainService extends Disposable implements IIssueReport
     this._register(this._registry.registerProvider(new GitHubIssueReporterProvider()))
     this._register(
       this._registry.registerProvider(
-        new ILoopIssueReporterProvider(options.createDiagnosticsZip, logger),
+        new TrackerIssueReporterProvider(options.createDiagnosticsZip, logger),
       ),
     )
   }

@@ -8,12 +8,12 @@ metadata:
   modified: 2026-08-09T13:15:33.113Z
 ---
 
-2026-07-29 崩溃调查结论：在已开窗口执行「打开目录」（aki_3.6 → aki_3.7）导致整个应用闪退。根因 = `@parcel/watcher` 2.5.6 Windows native 后端在 `unsubscribe()` 时后台工作线程 use-after-free → 主进程（browser process）ACCESS_VIOLATION。
+2026-07-29 崩溃调查结论：在已开窗口执行「打开目录」（切换工作区）导致整个应用闪退。根因 = `@parcel/watcher` 2.5.6 Windows native 后端在 `unsubscribe()` 时后台工作线程 use-after-free → 主进程（browser process）ACCESS_VIOLATION。
 
 **证据链**：
 - dump `Crashes/reports/9fac4940-*.dmp`（09:53）与 `1151f1f4-*.dmp`（7月28）崩溃点**同一偏移** `watcher.node +0x2ab6e`，确定性复发 bug
 - 崩溃线程栈全程在 watcher.node 内（栈底 BaseThreadInitThunk → watcher 工作线程入口），Crashpad 注解 `ptype=browser`
-- main 侧 fileWatcher.log 没打出 `unwatch g:/aki_3.6`（该日志在 `await sub.unsubscribe()` 之后才打）→ 崩溃发生在 unsubscribe 调用窗口内
+- main 侧 fileWatcher.log 没打出 `unwatch <旧工作区>`（该日志在 `await sub.unsubscribe()` 之后才打）→ 崩溃发生在 unsubscribe 调用窗口内
 - 触发链：openFolder → WorkspaceMainService fire → renderer ExplorerTreeService `_syncWatch` → IPC → FileWatcherMainService `_subscribe` → `_teardown` → `sub.unsubscribe()`（旧订阅）→ native UAF
 
 **Why**：watcher 直接跑在主进程（`fileWatcherMainService.ts`），native 崩溃 = 全部窗口闪退。VSCode 对策 = 文件监视放独立进程，崩溃只重启该进程。

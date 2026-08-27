@@ -106,7 +106,7 @@
 3. **发布者信任**：首次安装某发布者弹确认（`_ensurePublisherTrusted`），记住集存 `IStorageService` GLOBAL scope（key `extensions.trustedPublishers`）。诚实告知"接近编辑器本身的权限"。
 4. **恶意隔离**：control manifest 标记的恶意扩展——安装时拒绝（`_assertNotMalicious`，fetch 失败 fail-open、命中 fail-closed），已装的在启动时 `quarantineMalicious` 自动禁用 + 通知（`ExtensionsContribution._boot` 末尾）。
 
-**贯穿红线（全项目级）**：密钥只走 main `ISecretStorageService`(safeStorage)，绝不进 renderer/settings.json/任何 wire DTO；扩展无读密钥接口；**UI/文档不得宣称扩展已沙箱**（外部扩展近乎原生 Node 权限，`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
+**贯穿红线（全项目级）**：密钥绝不进日志/AI Debug/任何 wire DTO，UI 一律掩码显示；扩展无读密钥接口；**UI/文档不得宣称扩展已沙箱**（外部扩展近乎原生 Node 权限，`docs/user/zh-CN/customization/extensions.md` 已如实写"接近编辑器本身的权限"）。
 
 ## 关键决策（已拍板，见计划 README §5/§6）
 
@@ -189,7 +189,6 @@ pnpm check    # lint+typecheck+test（含 docs:check），仅看错误
 - `apps/editor/src/main/environment/{configItems,environmentMainService}.ts` —— GALLERY_URL 配置注入
 - `packages/extension-host/src/bootstrap.ts` —— 扫描时按 `UNIVERSE_DISABLED_EXTENSIONS` 过滤（启用禁用生效点）
 - DI 接线：`apps/editor/src/main/services/main-services.ts`（gallery 先于 management）、`channelNames.ts`、`registerMainServices.ts`、`registerProxyServices.ts`、`window/scopedServicesFactory.ts`
-- 计划文档：`docs/plan/extension-marketplace-plan/`（README §5 分阶段 + §6 决策；01 打包 / 02 协议 / 03 管理 / 04 UI / 05 安全）
 - 用户文档：`docs/user/zh-CN/customization/extensions.md`（"安装第三方扩展"节）
 - VSCode 对照：`src/vs/platform/extensionManagement/`（`IExtensionGalleryService` / `IExtensionManagementService` / `ExtensionsControlManifest`）、VSIX 格式、`extensionQuery`
 - 相关：memory [[extension-system-progress]]（运行时：host/RPC/provider/SCM，本文档的下游）、[[extension-marketplace-progress]]（本层实施全记录）；`packages/extension-host/CLAUDE.md`（运行时）、`apps/editor/src/renderer/services/views/CLAUDE.md`（套路 B 视图）；skill extend-language-plugin（运行时语言特性）、register-monaco-command（命令）、fix-disposable-leak

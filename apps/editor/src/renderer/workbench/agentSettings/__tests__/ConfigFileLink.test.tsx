@@ -32,13 +32,15 @@ function mount(path: string, opts?: { label?: string; authority?: string }) {
 
 describe('ConfigFileLink', () => {
   it('opens the linked filesystem path in the editor', () => {
-    const { getByRole, opened } = mount('C:\\Users\\kuro\\.claude\\settings.json')
+    const { getByRole, opened } = mount('C:\\Users\\testuser\\.claude\\settings.json')
 
-    fireEvent.click(getByRole('button', { name: 'Open C:\\Users\\kuro\\.claude\\settings.json' }))
+    fireEvent.click(
+      getByRole('button', { name: 'Open C:\\Users\\testuser\\.claude\\settings.json' }),
+    )
 
     expect(opened).toHaveLength(1)
     expect(opened[0]!.scheme).toBe('file')
-    expect(opened[0]!.fsPath).toBe('C:/Users/kuro/.claude/settings.json')
+    expect(opened[0]!.fsPath).toBe('C:/Users/testuser/.claude/settings.json')
   })
 
   it('opens a remote-ssh URI when authority is provided', () => {
@@ -55,11 +57,11 @@ describe('ConfigFileLink', () => {
   })
 
   it('derives sibling config paths while preserving path separators', () => {
-    expect(getSiblingConfigPath('C:\\Users\\kuro\\.codex\\config.toml', 'auth.json')).toBe(
-      'C:\\Users\\kuro\\.codex\\auth.json',
+    expect(getSiblingConfigPath('C:\\Users\\testuser\\.codex\\config.toml', 'auth.json')).toBe(
+      'C:\\Users\\testuser\\.codex\\auth.json',
     )
-    expect(getSiblingConfigPath('/home/kuro/.codex/config.toml', 'auth.json')).toBe(
-      '/home/kuro/.codex/auth.json',
+    expect(getSiblingConfigPath('/home/testuser/.codex/config.toml', 'auth.json')).toBe(
+      '/home/testuser/.codex/auth.json',
     )
   })
 })

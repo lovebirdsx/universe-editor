@@ -18,10 +18,10 @@
 
 ### 📋 dashboard「Needs My Action」铁律：`participants=me` 不展开 group/project
 
-`SwarmClient._loadDashboard` 本地推导 needsAction（**故意不调 `dashboards/action`**：v9-only、此部署会 504）。但 **Swarm 的 `reviews?participants=<me>` 过滤器只匹配 individual participant（被单独指派为 reviewer、或已投票/评论的人），绝不展开 group/project 成员**。于是纯通过 Swarm project（如 `swarm-project-typescriptreview`）或 group 关联、用户还没个人参与的 review，`participants=me` **永远查不到**（实测穷尽翻 600 条不出现），从不进 needsAction——投票后才变 individual participant，但那时往往已 approved 被状态过滤掉，表现为「从来不出现」。
+`SwarmClient._loadDashboard` 本地推导 needsAction（**故意不调 `dashboards/action`**：v9-only、部分 Swarm 部署此接口返回 504）。但 **Swarm 的 `reviews?participants=<me>` 过滤器只匹配 individual participant（被单独指派为 reviewer、或已投票/评论的人），绝不展开 group/project 成员**。于是纯通过 Swarm project（如 `swarm-project-example`）或 group 关联、用户还没个人参与的 review，`participants=me` **永远查不到**（实测穷尽翻 600 条不出现），从不进 needsAction——投票后才变 individual participant，但那时往往已 approved 被状态过滤掉，表现为「从来不出现」。
 
 - **补法**：`perforce.swarm.needsActionAuthors`（发起者集合，持久化配置）非空时，`_loadDashboard` 并发多发一路 `listReviews({ author: [...authors], state: ['needsReview','needsRevision'] })`，其 open review 并入 needsAction（`deriveNeedsAction` 按 id 去重合并 authored+participating+byAuthor）。空集=仅 participants（旧行为）。dashboard command handler 从 `workspace.getConfiguration('perforce').get('swarm.needsActionAuthors')` 读配置传入；in-flight 合并 key 须纳入 authors 签名。
-- **实测确认的过滤器语义**（v9，别再逐个试）：`author[]=a&author[]=b`、`state[]=needsReview&state[]=needsRevision` 都是**精确 OR**；`author=` 命中该作者全部 review。而 **`group=` 参数被服务端忽略**（不同 group 返回相同集合）；`project=<name>`（= `swarm-project-<name>` 去前缀）**真生效**但一个 project 就动辄 200+、全公司审核池并集 >500，直接并入会淹没列表——所以走 author 白名单而非 project/group 展开。
+- **实测确认的过滤器语义**（v9，别再逐个试）：`author[]=a&author[]=b`、`state[]=needsReview&state[]=needsRevision` 都是**精确 OR**；`author=` 命中该作者全部 review。而 **`group=` 参数被服务端忽略**（不同 group 返回相同集合）；`project=<name>`（= `swarm-project-<name>` 去前缀）**真生效**但一个 project 就可能包含大量 review、并集过大直接并入会淹没列表——所以走 author 白名单而非 project/group 展开。
 
 ### Activity Bar 角标 + 状态栏计数（Needs My Action 计数）
 
@@ -113,7 +113,7 @@
 
 ### ⚠️ OS toast 的焦点门控必须考虑「人不在场」（整夜聚焦窗口零 OS 通知）
 
-检测链路（poller → dashboard → renderer 决策）全部健康也可能颗粒无收：**真实 bug（第三环）**——renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...) → in-app fallback`，其中一次在深夜 00:07。根因在 main 侧 `MainHostService.notify()` 的门控只看 `win.isFocused()`：**Windows 在用户锁屏 / 离开后仍保持最后前台窗口的 focused 状态**，于是「焦点停在 G 盘工作区窗口 + 人走了」= 每条新 review 的 OS toast 都被吞，只剩后台窗口里没人看的 in-app toast。多窗口更放大：只有 swarm 工作区那个窗口的焦点状态说了算。
+检测链路（poller → dashboard → renderer 决策）全部健康也可能颗粒无收：**真实 bug（第三环）**——renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...) → in-app fallback`，其中一次在深夜 00:07。根因在 main 侧 `MainHostService.notify()` 的门控只看 `win.isFocused()`：**Windows 在用户锁屏 / 离开后仍保持最后前台窗口的 focused 状态**，于是「焦点停在某个工作区窗口 + 人走了」= 每条新 review 的 OS toast 都被吞，只剩后台窗口里没人看的 in-app toast。多窗口更放大：只有 swarm 工作区那个窗口的焦点状态说了算。
 
 - **修复（main 侧 `hostMainService.ts`）**：gate 条件 = `isFocused() && !_isUserAway()`；`_isUserAway()` 用 `powerMonitor.getSystemIdleState(120)` —— `locked` / `idle`（≥2 分钟无键鼠输入）视为不在场，照发 OS toast（进系统通知中心 + flashFrame）；`active` / `unknown` 保守视为在场维持原门控。所有 `IHostService.notify` 调用方（swarm + agent 通知）同时受益。**E2E 下探针冻结为「在场」**（无人值守 CI 恒 idle，会把聚焦窗口的 in-app fallback spec 全翻到 OS toast 路径）；`UNIVERSE_E2E_REAL_IDLE=1` 可 opt-in 真实探测。
 - **诊断铁证是「缺失的日志行」**：host.log 只有 agent 的 `notify shown`、没有同时段 swarm 的 —— skipped 分支当时是 debug 级不落盘，只能反证。已把两个 skipped 分支（focused / unsupported）升为 **info**：`notify skipped (window focused, user present)`，之后排查直接看 host.log 的明示决策。
@@ -138,7 +138,7 @@
 - **修复（缓存失效协议）**：`swarmReviewsViewState.transitionsSeenUpdated` 记录每个 entry 拉取时的 `review.updated`（vote / re-shelve / 评论都会 bump 它，dashboard 每 tick 带回最新值）。stamp 移动 = stale → 重拉且 **`getTransitions(id, force=true, silent=true)` 穿透 host 侧 60s TTL 缓存**（`swarmClient.getTransitions(force)` 先 invalidate 再 wrap，否则 TTL 会把旧 verdict 原样回吐）；**首拉（无 entry）不 force**——没有旧 verdict 要冲掉，吃 TTL 缓存省服务器请求；**失败不写 seenUpdated**（cache 保留旧值防误报，下一 tick 因仍 stale 自动重试）。稳态（updated 不动）零额外请求；翻案最迟 1 个 tick 可见。侧栏 `SwarmReviewsView.loadTransitions` 同一协议（挂载/手动刷新路径也自动翻新），staleIds 清理同步清 seenUpdated。
 - **观测补课**：`poll ok` 现在带**过滤明细** `N actionable (pool P, dropped: A author-filtered, B not-approvable, C ignored, D authored)`，且**计数指纹变化即升 info**（稳态仍 debug 零噪音）——下次「有 poll ok 但不通知」直接看哪个桶吃掉了 review。
 - **附带修复（补推）**：`setBackgroundPoll` 推送重试预算 20×250ms=5s，冷启动 host 实测 11s+ 可能耗尽 → host 首个 tick 到达（证明命令面已活）时检测到预算曾耗尽即重置并补推一次，否则 host driver 拿着过期 enabled/interval 快照跑到下次配置变更。
-- **已知权衡（不改）**：dashboard 白名单池实测 231 个 open review，`max: 50` 截断——Swarm 按 id 降序返回（新的在前），新 review 不受截断影响；扩池只影响「陈年 review 突然翻案」的边角，不值得每 tick 多拉 4 页。
+- **已知权衡（不改）**：dashboard 白名单池实测数百个 open review，`max: 50` 截断——Swarm 按 id 降序返回（新的在前），新 review 不受截断影响；扩池只影响「陈年 review 突然翻案」的边角，不值得每 tick 多拉 4 页。
 - **回归**：`SwarmReviewNotificationContribution.test.ts`「fifth incident」套件（updated bump + verdict 翻转 → 必须通知【修复前红】；updated 不动不重拉且首拉不 force；重拉失败保 stale 下轮重试；补推用例）；`swarmClient.test.ts` 的 `getTransitions(force)` 穿透 + re-prime 用例；`SwarmReviewsView.test.tsx` 首拉 `force=false` 断言。
 
 ### 🔍 通知链路的日志观测点（排查「收不到通知」先看这三处）
@@ -167,7 +167,7 @@ ticket / token / password **只存在于内存 + Authorization header**，**绝�
 
 ### 🛣️ REST 路径铁律：comments 是 topic-based，不是嵌套资源
 
-Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-based 资源。写成嵌套路径会 404（`GET /api/v9/comments/reviews/8089913 → Swarm resource not found`）。
+Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-based 资源。写成嵌套路径会 404（`GET /api/v9/comments/reviews/100913 → Swarm resource not found`）。
 
 | 操作 | ✅ 正确（v9） | ❌ 错误（会 404） |
 |---|---|---|
@@ -188,7 +188,7 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 - Swarm version 有 `archiveChange` 时优先用它作为不可变快照，回退 `change`。作者 changelist 会被重新 shelve，不能拿它代表旧 version。
 - `#revision` 可进 immutable print cache；`@=<pending-change>` 可被 reshelve 原地替换，不能进永久缓存——**但 `@=<archiveChange>` 不可变**，renderer 请求带 `immutable: true`（`SwarmFileContentRequest.immutable`），`printRevision/printRevisionBytes(spec, immutable)` 据此走 `P4CacheNs.print`（bytes 以 `bytes:` 前缀 key + base64 存字符串缓存）。打开已存在的 immutable diff tab 还会被 renderer 短路（`openFileDiff` 查 `editorService.openEditors`，零 p4 流量）；diff model 另有 `diffModelCache` LRU（容量 8，全文校验防 pending re-shelve 脏读），关闭重开免 createModel+tokenize+diff 计算。
 - **绝不用工作区当前文件当右侧**——它会随本地编辑漂移，行号对不上 Swarm 评论锚点。
-- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见上文 p4 插件节）。**`describeVersion` 的入参 change 也必须走 `archiveChange ?? change`**：作者的 `version.change`（如 8105452）可能被 re-shelve/清空，直接用它会让文件列表时有时无、内容漂移成空；archive shelf（如 8105475）才是不可变快照。这条与右侧内容 `changeForVersion` 是同一铁律的两个消费点，别只修一处。
+- 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见上文 p4 插件节）。**`describeVersion` 的入参 change 也必须走 `archiveChange ?? change`**：作者的 `version.change`（如 100452）可能被 re-shelve/清空，直接用它会让文件列表时有时无、内容漂移成空；archive shelf（如 100475）才是不可变快照。这条与右侧内容 `changeForVersion` 是同一铁律的两个消费点，别只修一处。
 - “打开文件”目标是当前 client 的工作区副本，路径必须批量走 `p4 where <depotFile...>`；不能从 depot/display path 猜本地路径。无映射时 DTO 传 `localPath:null`，标题栏隐藏该动作。
 
 ### diff 编辑器基础能力接入
@@ -269,7 +269,6 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `apps/editor/src/renderer/contributions/SwarmViewContribution.ts` —— view 容器
 - `extensions/perforce/e2e/fixtures/fake-swarm.mjs` · `swarmApp.ts` —— e2e fake server + fixture
 - `extensions/perforce/e2e/specs/swarmReview.spec.ts` —— e2e 冒烟
-- `docs/plan/perforce-swarm-review-plan.md` —— 原始分阶段计划（P0–P5）
 
 ### 其它
 

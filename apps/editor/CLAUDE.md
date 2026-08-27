@@ -339,7 +339,7 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 - `{ id, extends?, baseUrl?, apiKey?, defaultProtocol?, protocolMap?, pricingSource?, usageSource? }`。`id` 全局唯一、不能含 `/`，也是它名下所有模型 id 的第一段。
 - **`extends`**：继承另一个条目（同一网关的多个入口）。`protocolMap` **整体替换**，其余标量字段（baseUrl/apiKey/defaultProtocol/pricingSource/usageSource）覆盖。环引用 / 指向不存在的 id / 继承深度 >8 都会产出 `AiProviderIssue` 并**跳过该 provider**（不静默丢弃），问题经 `IAiModelService.getProviderIssues()` 暴露，管理页卡片上显示徽标。
 - **`protocolMap`**：`协议 → 模型列表`。**空数组 `[]` = 从该 provider 的端点拉模型（discover）；非空数组 = 直接就是这些模型，完全不碰网络**。元素是字符串（简写，按同名查顶层 `models` 知识库；查不到即裸模型，降级不报错）或对象 `{ id, ref, capabilities?, … }`（`id` 是线上真实模型名，`ref` 指向知识库 key，自身字段覆盖知识库；**能力只能置 false 不能加 true**，翻译链路有损）。
-- 模型 id 三段 = `providerId/protocol/channelModel`（例：`kuro-gbl/anthropic-messages/deepseek-v4-pro`，第三段保留剩余 `/`）。helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`（`composeModelId` / `parseModelRef` / `bareModelName`）。
+- 模型 id 三段 = `providerId/protocol/channelModel`（例：`acme-gbl/anthropic-messages/deepseek-v4-pro`，第三段保留剩余 `/`）。helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`（`composeModelId` / `parseModelRef` / `bareModelName`）。
 - 协议枚举 `AiWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'ollama'`（`aiModelTypes.ts`）。`openai-responses` 是 agent-only 桩：管理页可见并打「Agent-only」徽标，但模型 picker 与 schema enum 里不可选（`isEditorSelectable` 排除）。
 - **8 个字段全部有图形入口**，在 `renderer/workbench/ai/providerCard/`（三态 protocolMap / extends / pricing·usage source / 模板化新建）。改 UI 前先读 `renderer/workbench/ai/CLAUDE.md` 的文件地图；`protocolMap` 三态语法与 ref 归一化的纯函数在 `shared/ai/protocolMapEdit.ts`。
 

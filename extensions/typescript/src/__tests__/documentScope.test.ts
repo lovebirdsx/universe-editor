@@ -205,9 +205,9 @@ vi.mock('@universe-editor/extension-api', async (importOriginal) => {
 /** The URI shape from the production log: a diff view over a Windows file keeps
  *  the original path and only swaps the scheme (see diffModelUri.ts). */
 const DIFF_URI =
-  'diff-modified:/d%3A/git_project/universe-editor.worktrees/task3/apps/editor/src/shared/deepLink.ts'
+  'diff-modified:/d%3A/workspace/universe-editor.worktrees/task3/apps/editor/src/shared/deepLink.ts'
 const FILE_URI =
-  'file:///d%3A/git_project/universe-editor.worktrees/task3/apps/editor/src/shared/deepLink.ts'
+  'file:///d%3A/workspace/universe-editor.worktrees/task3/apps/editor/src/shared/deepLink.ts'
 
 function makeDoc(uri: string, languageId = 'typescript'): TextDocument {
   return {

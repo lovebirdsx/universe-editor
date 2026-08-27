@@ -128,8 +128,8 @@ export class ShowReleaseNotesAction extends Action2 {
  * Report Issue (VSCode parity: workbench.action.openIssueReporter). Builds the
  * diagnostics markdown (versions / system / extensions / top error
  * fingerprints), copies it to the clipboard, then delegates to the configured
- * issue-report provider (iLoop by default, GitHub optional) for a pre-filled
- * issue URL. Providers with attachment support (iLoop) first ask whether to
+ * issue-report provider (tracker by default, GitHub optional) for a pre-filled
+ * issue URL. Providers with attachment support (tracker) first ask whether to
  * upload the diagnostics zip alongside the report. The orchestration lives in
  * services/issueReporter/reportIssue.ts.
  */

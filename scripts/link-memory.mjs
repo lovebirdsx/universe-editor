@@ -44,7 +44,7 @@ const FORCE = args.has('--force')
 
 // Claude encodes the cwd into the projects dir name: replace the drive colon,
 // every path separator, and underscores with '-'. e.g.
-//   D:\git_project\universe-editor2  ->  D--git-project-universe-editor2
+//   D:\workspace\universe-editor2  ->  D--workspace-universe-editor2
 //   /Users/me/universe_editor        ->  -Users-me-universe-editor
 function encodeProjectDir(absPath) {
   return absPath.replace(/[:\\/_]/g, '-')

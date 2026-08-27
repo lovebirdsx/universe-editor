@@ -322,7 +322,7 @@ describe('OutlineService', () => {
     svc.dispose()
   })
 
-  // Repro for the aki_3.7 tab-switch jank: every switch re-pulled the full
+  // Repro for the tab-switch jank: every switch re-pulled the full
   // symbol tree (×3 trigger paths), and a 17k-line file's tree is a multi-MB
   // RPC payload. Switching back to an UNCHANGED file must be served from the
   // version-keyed cache with zero provider calls.

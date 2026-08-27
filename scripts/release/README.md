@@ -100,16 +100,20 @@ sudo rm /srv/universe-editor/ping.txt
 
 ## 二、把服务器地址写进打包配置
 
-编辑 `apps/editor/electron-builder.yml`，把占位 url 换成真实地址（务必与 nginx `location` 对应）：
+真实地址**不要改仓库文件**——仓库里永远只保留占位值（`gallery.example.com` 等 RFC 保留段）。把它写进 gitignored 的仓库根 `.env`，打包脚本会在构建期注入：
 
-```yaml
-publish:
-  provider: generic
-  url: http://<服务器IP>/universe-editor/
-  channel: latest
+```bash
+# 仓库根 .env
+UE_UPDATE_FEED_URL=http://<服务器IP>/universe-editor/   # electron-builder.yml 的 publish.url（更新 feed）
+UE_GALLERY_URL=http://<服务器IP>/universe-editor         # 打包版 product.json 的 galleryUrl（扩展市场）
 ```
 
-> 暂未做代码签名，安装时 Windows SmartScreen 会提示“未知发布者”，点“更多信息 → 仍要运行”即可。
+- `UE_UPDATE_FEED_URL` 注入 `electron-builder.yml` 的 `publish.url`（`${env.UE_UPDATE_FEED_URL}`），务必与 nginx `location` 对应。
+- `UE_GALLERY_URL` 注入打包版 `product.json` 的 `galleryUrl`（扩展市场地址，与更新地址可不同源）。
+
+不配这两个变量时打包**不会失败**，只是产出指向占位地址的包。变量清单与分层规则见仓库根 [`.env.example`](../../.env.example)。
+
+> 暂未做代码签名，安装时 Windows SmartScreen 会提示”未知发布者”，点”更多信息 → 仍要运行”即可。
 > 后续接入证书后，自动更新无需改动客户端逻辑。
 
 ---
@@ -226,7 +230,7 @@ pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 环境变量方式（适合写进 CI 或本地 shell profile）：
 
 ```bash
-export UE_RELEASE_HOST=10.0.0.5
+export UE_RELEASE_HOST=192.0.2.10
 export UE_RELEASE_USER=deploy
 export UE_RELEASE_DIR=/srv/universe-editor
 pnpm release:upload          # 不必再带参数
@@ -243,7 +247,7 @@ mode 由 `--env <mode>` 旗标或 `UE_ENV` 决定，默认 `dev`。变量清单�
 先看会执行什么，不实际传：
 
 ```bash
-pnpm release:upload --host 10.0.0.5 --user deploy --dir /srv/universe-editor --dry-run
+pnpm release:upload --host 192.0.2.10 --user deploy --dir /srv/universe-editor --dry-run
 ```
 
 ---

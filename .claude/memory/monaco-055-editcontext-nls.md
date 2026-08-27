@@ -16,7 +16,7 @@ metadata:
 2. **NLS 从 string-key 变索引制（最关键）**：0.55 ESM 是 prebuilt，`localize('key', "EN")` 全变成 `localize(786, "EN")`，经 `lookupMessage` 查 `globalThis._VSCODE_NLS_MESSAGES[index]`，缺失回退英文。旧机制（patch nls.js 让 string-key 查 `__MONACO_NLS__[key]` + `zh-cn.json` 是 key→中文）整套失效，monaco 内置 UI（查找框/右键/peek 等）会回退英文。
    - **采用方案（英文桥接，零新依赖）**：`__MONACO_NLS__` 改为 **英文→中文** 表。patch `lookupMessage`：索引查不到时用英文 fallback 查表（`apps/editor/src/renderer/workbench/editor/monaco/monacoNlsPatch.ts`，正则锚 `function lookupMessage(index, fallback)`，native 索引优先、英文表兜底）。
    - **数据流**：monaco 索引→英文(inline fallback) ⋈ vscode 源码 key→英文 ⋈ 现有 `zh-cn.json` key→中文 ⇒ 英文→中文。
-   - **build 脚本** `apps/editor/scripts/build-monaco-nls.mjs` 改为扫 vscode 源码（`VSCODE_SRC_ROOT` 或默认 `D:/git_project/vscode`，需是 vscode 源码树非构建产物）生成 `apps/editor/src/renderer/vendor/monaco-nls/zh-cn.messages.json`（英文→中文，入库，bootstrap 读它）。源字典 `zh-cn.json`（key→中文）保留仅供 build 桥接。命中率 ~80.5%（1150/1428），未命中多为版本文案微调或本不该译的修饰键名。
+   - **build 脚本** `apps/editor/scripts/build-monaco-nls.mjs` 改为扫 vscode 源码（`VSCODE_SRC_ROOT` 或默认仓库外的 vscode 源码树，需是 vscode 源码树非构建产物）生成 `apps/editor/src/renderer/vendor/monaco-nls/zh-cn.messages.json`（英文→中文，入库，bootstrap 读它）。源字典 `zh-cn.json`（key→中文）保留仅供 build 桥接。命中率 ~80.5%（1150/1428），未命中多为版本文案微调或本不该译的修饰键名。
 
 预存噪音：`DiffEditor` 测试 stderr 有 `getModifiedEditor().getPosition is not a function`，是桩缺方法的被吞清理错误，不致 fail，与本次无关。
 

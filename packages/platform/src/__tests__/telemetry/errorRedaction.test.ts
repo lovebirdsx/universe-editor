@@ -8,9 +8,9 @@ import { redactErrorText } from '../../telemetry/errorRedaction.js'
 describe('redactErrorText — piiPaths', () => {
   it('masks known paths including the forward-slash variant', () => {
     const text =
-      'at f (C:\\Users\\kuro\\project\\src\\a.ts:1:1) and C:/Users/kuro/project/src/b.ts:2:2'
-    const out = redactErrorText(text, { piiPaths: ['C:\\Users\\kuro\\project'] })
-    expect(out).not.toContain('kuro')
+      'at f (C:\\Users\\testuser\\project\\src\\a.ts:1:1) and C:/Users/testuser/project/src/b.ts:2:2'
+    const out = redactErrorText(text, { piiPaths: ['C:\\Users\\testuser\\project'] })
+    expect(out).not.toContain('testuser')
     expect(out).toContain('<pii>')
   })
 

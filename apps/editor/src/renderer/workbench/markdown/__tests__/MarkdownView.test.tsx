@@ -289,7 +289,7 @@ describe('MarkdownView', () => {
 
   it('demotes a file-path label inside a link to plain text (no nested <a>)', () => {
     const { container } = renderMarkdown(
-      '[packages/workbench-ui/package.json:18](D:/git_project/repo/packages/workbench-ui/package.json:18)',
+      '[packages/workbench-ui/package.json:18](D:/workspace/repo/packages/workbench-ui/package.json:18)',
     )
     const links = container.querySelectorAll('a')
     expect(links).toHaveLength(1)
@@ -336,7 +336,7 @@ describe('MarkdownView', () => {
   })
 
   it('renders an angle-bracketed Windows file path with spaces as one full-path link', () => {
-    const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
+    const winPath = String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
     renderMarkdown(`see <${winPath}>`)
 
     const link = screen.getByRole('link', { name: winPath })
@@ -620,9 +620,9 @@ describe('MarkdownView', () => {
 
   it('decodes percent-encoded Windows absolute file links before opening', async () => {
     const encoded =
-      'C:/Users/KURO/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+      'C:/Users/testuser/AppData/Local/Programs/Universe%20Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
     const decoded =
-      'C:/Users/KURO/AppData/Local/Programs/Universe Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
+      'C:/Users/testuser/AppData/Local/Programs/Universe Editor/resources/docs/user/zh-CN/customization/ai-providers.md'
     const resolverOpen = vi.fn().mockResolvedValue(undefined)
     const exists = vi.fn((resource: URI) => resource.fsPath === decoded)
     const services = new ServiceCollection()
@@ -669,7 +669,7 @@ describe('MarkdownView', () => {
   it('opens a file:// directory link as a folder in a new window', async () => {
     const openWindow = vi.fn().mockResolvedValue(undefined)
     const resolverOpen = vi.fn().mockResolvedValue(undefined)
-    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/git_project/vscode')
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/workspace/vscode')
     const services = new ServiceCollection()
     services.set(IEditorResolverService, makeResolver(resolverOpen))
     services.set(IConfigurationService, makeConfig())
@@ -681,7 +681,7 @@ describe('MarkdownView', () => {
     render(
       <ServicesContext.Provider value={inst}>
         <MarkdownView
-          text="[@vscode](file:///D:/git_project/vscode)"
+          text="[@vscode](file:///D:/workspace/vscode)"
           baseUri={URI.file('/repo/docs')}
         />
       </ServicesContext.Provider>,
@@ -689,7 +689,7 @@ describe('MarkdownView', () => {
 
     screen.getByRole('link', { name: '@vscode' }).click()
     await waitFor(() => expect(openWindow).toHaveBeenCalledTimes(1))
-    expect(openWindow.mock.calls[0]?.[0]?.fsPath).toBe('D:/git_project/vscode')
+    expect(openWindow.mock.calls[0]?.[0]?.fsPath).toBe('D:/workspace/vscode')
     // A directory target never reaches the editor resolver.
     expect(resolverOpen).not.toHaveBeenCalled()
   })
@@ -697,7 +697,7 @@ describe('MarkdownView', () => {
   it('routes a file:// file link through the editor resolver', async () => {
     const openWindow = vi.fn().mockResolvedValue(undefined)
     const resolverOpen = vi.fn().mockResolvedValue(undefined)
-    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/git_project/repo/docs/a.md')
+    const exists = vi.fn((resource: URI) => resource.fsPath === 'D:/workspace/repo/docs/a.md')
     const services = new ServiceCollection()
     services.set(IEditorResolverService, makeResolver(resolverOpen))
     services.set(IConfigurationService, makeConfig())
@@ -709,7 +709,7 @@ describe('MarkdownView', () => {
     render(
       <ServicesContext.Provider value={inst}>
         <MarkdownView
-          text="[doc](file:///D:/git_project/repo/docs/a.md)"
+          text="[doc](file:///D:/workspace/repo/docs/a.md)"
           baseUri={URI.file('/repo/docs')}
         />
       </ServicesContext.Provider>,
@@ -717,7 +717,7 @@ describe('MarkdownView', () => {
 
     screen.getByRole('link', { name: 'doc' }).click()
     await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
-    expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe('D:/git_project/repo/docs/a.md')
+    expect(resolverOpen.mock.calls[0]?.[0]?.fsPath).toBe('D:/workspace/repo/docs/a.md')
     expect(openWindow).not.toHaveBeenCalled()
   })
 

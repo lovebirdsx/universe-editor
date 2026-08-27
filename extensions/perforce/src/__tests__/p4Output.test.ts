@@ -82,15 +82,15 @@ describe('isCollapsed', () => {
     // degrades report-style commands to a per-line data blob.
     const records = parseMarshalJson(
       [
-        '{"data":"Change 8080456 on 2026/07/11 by jenkins.aki@host \'msg\'\\n","level":0}',
-        '{"data":"Change 8080454 on 2026/07/11 by jenkins.aki@host2 \'msg2\'\\n","level":0}',
+        '{"data":"Change 100456 on 2026/07/11 by jenkins.depot@host \'msg\'\\n","level":0}',
+        '{"data":"Change 101454 on 2026/07/11 by jenkins.depot@host2 \'msg2\'\\n","level":0}',
       ].join('\n'),
     )
     expect(isCollapsed(records)).toBe(true)
   })
 
   it('is false for genuine structured records', () => {
-    const records = parseMarshalJson('{"change":"8080456","user":"alice","time":"1700000000"}')
+    const records = parseMarshalJson('{"change":"100456","user":"alice","time":"1700000000"}')
     expect(isCollapsed(records)).toBe(false)
   })
 
@@ -112,17 +112,17 @@ describe('parseZtagAsMarshal', () => {
     // lines, `desc` may be the last field. Reshaped records must be readable by
     // the -Mj parser (parseChangesList) with `change`/`user`/`time`/`desc`.
     const stdout = [
-      '... change 8080456',
+      '... change 100456',
       '... time 1783699976',
-      '... user jenkins.aki',
+      '... user jenkins.depot',
       '... client host-a',
       '... status submitted',
       '... desc store build params',
       '',
       '',
-      '... change 8080454',
+      '... change 101454',
       '... time 1783699875',
-      '... user huyunjun',
+      '... user devuser',
       '... client host-b',
       '... status submitted',
       '... desc energy bar',
@@ -132,25 +132,25 @@ describe('parseZtagAsMarshal', () => {
     const records = parseZtagAsMarshal(stdout)
     expect(records).toHaveLength(2)
     expect(records[0]).toMatchObject({
-      change: '8080456',
+      change: '100456',
       time: '1783699976',
-      user: 'jenkins.aki',
+      user: 'jenkins.depot',
       desc: 'store build params',
     })
-    expect(records[1]).toMatchObject({ change: '8080454', user: 'huyunjun', desc: 'energy bar' })
+    expect(records[1]).toMatchObject({ change: '101454', user: 'devuser', desc: 'energy bar' })
   })
 
   it('keeps a multi-line desc intact and starts a new record on the repeated first key', () => {
     // `changes -l` desc can wrap across lines (continuation lines have no `... `
     // prefix); the blank line before the next `... change` must not truncate it.
     const stdout = [
-      '... change 8080454',
-      '... user jenkins.aki',
+      '... change 101454',
+      '... user jenkins.depot',
       '... desc line one',
       '\tline two indented',
       'line three',
       '',
-      '... change 8080453',
+      '... change 100453',
       '... user bob',
       '... desc single',
       '',
@@ -158,7 +158,7 @@ describe('parseZtagAsMarshal', () => {
     const records = parseZtagAsMarshal(stdout)
     expect(records).toHaveLength(2)
     expect(records[0]!['desc']).toBe('line one\n\tline two indented\nline three')
-    expect(records[1]).toMatchObject({ change: '8080453', desc: 'single' })
+    expect(records[1]).toMatchObject({ change: '100453', desc: 'single' })
   })
 
   it('keeps numbered parallel keys flat (depotFile0/1) for describe', () => {
@@ -166,7 +166,7 @@ describe('parseZtagAsMarshal', () => {
     // multi-line desc and the file list. Numbered keys must stay flat so
     // parseChangeDescribe's numberedValues() reads them.
     const stdout = [
-      '... change 8080454',
+      '... change 101454',
       '... user alice',
       '... time 1783699875',
       '... desc fix widget',
@@ -184,7 +184,7 @@ describe('parseZtagAsMarshal', () => {
     const records = parseZtagAsMarshal(stdout)
     expect(records).toHaveLength(1)
     const r = records[0]!
-    expect(r['change']).toBe('8080454')
+    expect(r['change']).toBe('101454')
     expect(r['desc']).toBe('fix widget\n\tmore detail')
     expect(r['depotFile0']).toBe('//depot/a.js')
     expect(r['action0']).toBe('edit')

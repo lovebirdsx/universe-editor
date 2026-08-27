@@ -48,43 +48,43 @@ function clientsZtag(entries: { name: string; root: string }[]): string {
 
 describe('discoverClient', () => {
   it('accepts the ambient client when its root contains the open folder', async () => {
-    const p4 = fakeP4({ info: { stdout: infoZtag('AkiBase', 'D:/depot/aki') } })
-    const client = await discoverClient(p4, 'D:/depot/aki/game', {})
-    expect(client?.clientName).toBe('AkiBase')
-    expect(client?.clientRoot).toBe('D:/depot/aki')
+    const p4 = fakeP4({ info: { stdout: infoZtag('DepotBase', 'D:/p4ws/main') } })
+    const client = await discoverClient(p4, 'D:/p4ws/main/game', {})
+    expect(client?.clientName).toBe('DepotBase')
+    expect(client?.clientRoot).toBe('D:/p4ws/main')
   })
 
   it('accepts a deep folder when the client root differs only in case', async () => {
     // Regression: p4's `Root:` casing often differs from the on-disk path the
-    // workspace opened with (Windows is case-insensitive). `G:\aki_3.6` root vs
-    // an opened `G:/Aki_3.6/Source/Client/TypeScript` must still match.
-    const p4 = fakeP4({ info: { stdout: infoZtag('AkiBase', 'G:\\aki_3.6') } })
-    const client = await discoverClient(p4, 'G:/Aki_3.6/Source/Client/TypeScript', {})
-    expect(client?.clientName).toBe('AkiBase')
+    // workspace opened with (Windows is case-insensitive). `G:\p4ws\main` root vs
+    // an opened `G:/P4ws/main/src/client/scripts` must still match.
+    const p4 = fakeP4({ info: { stdout: infoZtag('DepotBase', 'G:\\p4ws\\main') } })
+    const client = await discoverClient(p4, 'G:/P4ws/main/src/client/scripts', {})
+    expect(client?.clientName).toBe('DepotBase')
   })
 
   it('accepts the client when its root equals the open folder', async () => {
-    const p4 = fakeP4({ info: { stdout: infoZtag('AkiBase', 'D:/depot/aki') } })
-    const client = await discoverClient(p4, 'D:/depot/aki', {})
-    expect(client?.clientName).toBe('AkiBase')
+    const p4 = fakeP4({ info: { stdout: infoZtag('DepotBase', 'D:/p4ws/main') } })
+    const client = await discoverClient(p4, 'D:/p4ws/main', {})
+    expect(client?.clientName).toBe('DepotBase')
   })
 
   it('falls back to a user client whose root contains the folder', async () => {
-    // Real-world case: global P4CLIENT roots at D:\AkiBase, but the open folder
-    // lives under a *different* client's root (G:\aki_3.6). Discovery must scan
+    // Real-world case: global P4CLIENT roots at D:\p4ws\main, but the open folder
+    // lives under a *different* client's root (G:\p4ws\main). Discovery must scan
     // the user's clients and pick the one that actually owns the folder.
     const p4 = fakeP4({
-      info: { stdout: infoZtag('songxiao_aki_base', 'D:\\AkiBase') },
+      info: { stdout: infoZtag('devuser_depot_main', 'D:\\p4ws\\main') },
       clients: {
         stdout: clientsZtag([
-          { name: 'songxiao_aki_base', root: 'D:\\AkiBase' },
-          { name: 'songxiao_aki_branch_3.6', root: 'G:\\aki_3.6' },
+          { name: 'devuser_depot_main', root: 'D:\\p4ws\\main' },
+          { name: 'devuser_depot_branch_a', root: 'G:\\p4ws\\main' },
         ]),
       },
     })
-    const client = await discoverClient(p4, 'G:/aki_3.6/Source/Client/TypeScript', {})
-    expect(client?.clientName).toBe('songxiao_aki_branch_3.6')
-    expect(client?.clientRoot).toBe('G:\\aki_3.6')
+    const client = await discoverClient(p4, 'G:/p4ws/main/src/client/scripts', {})
+    expect(client?.clientName).toBe('devuser_depot_branch_a')
+    expect(client?.clientRoot).toBe('G:\\p4ws\\main')
   })
 
   it('picks the longest-prefix client when several roots contain the folder', async () => {
@@ -92,19 +92,19 @@ describe('discoverClient', () => {
       info: { stdout: infoZtag('other', 'D:\\elsewhere') },
       clients: {
         stdout: clientsZtag([
-          { name: 'broad', root: 'G:\\aki_3.6' },
-          { name: 'narrow', root: 'G:\\aki_3.6\\Source\\Client' },
+          { name: 'broad', root: 'G:\\p4ws\\main' },
+          { name: 'narrow', root: 'G:\\p4ws\\main\\src\\client' },
         ]),
       },
     })
-    const client = await discoverClient(p4, 'G:/aki_3.6/Source/Client/TypeScript', {})
+    const client = await discoverClient(p4, 'G:/p4ws/main/src/client/scripts', {})
     expect(client?.clientName).toBe('narrow')
   })
 
   it('returns undefined when no user client contains the folder', async () => {
     const p4 = fakeP4({
-      info: { stdout: infoZtag('AkiBase', 'D:/depot/aki') },
-      clients: { stdout: clientsZtag([{ name: 'AkiBase', root: 'D:/depot/aki' }]) },
+      info: { stdout: infoZtag('DepotBase', 'D:/p4ws/main') },
+      clients: { stdout: clientsZtag([{ name: 'DepotBase', root: 'D:/p4ws/main' }]) },
     })
     const client = await discoverClient(p4, 'D:/git/universe-editor', {})
     expect(client).toBeUndefined()
@@ -112,7 +112,7 @@ describe('discoverClient', () => {
 
   it('returns undefined when the client scan fails (offline / not logged in)', async () => {
     const p4 = fakeP4({
-      info: { stdout: infoZtag('AkiBase', 'D:/depot/aki') },
+      info: { stdout: infoZtag('DepotBase', 'D:/p4ws/main') },
       clients: { stdout: '', exitCode: 1 },
     })
     const client = await discoverClient(p4, 'D:/git/universe-editor', {})
@@ -121,16 +121,16 @@ describe('discoverClient', () => {
 
   it('scans clients when the ambient clientRoot is unset ("null")', async () => {
     const p4 = fakeP4({
-      info: { stdout: infoZtag('AkiBase', 'null') },
-      clients: { stdout: clientsZtag([{ name: 'branch', root: 'G:\\aki_3.6' }]) },
+      info: { stdout: infoZtag('DepotBase', 'null') },
+      clients: { stdout: clientsZtag([{ name: 'branch', root: 'G:\\p4ws\\main' }]) },
     })
-    const client = await discoverClient(p4, 'G:/aki_3.6/Source', {})
+    const client = await discoverClient(p4, 'G:/p4ws/main/src', {})
     expect(client?.clientName).toBe('branch')
   })
 
   it('rejects on a non-zero p4 info exit', async () => {
     const p4 = fakeP4({ info: { stdout: '', exitCode: 1 } })
-    const client = await discoverClient(p4, 'D:/depot/aki', {})
+    const client = await discoverClient(p4, 'D:/p4ws/main', {})
     expect(client).toBeUndefined()
   })
 
@@ -146,7 +146,7 @@ describe('discoverClient', () => {
         return { result: { stdout: '', stderr: '', exitCode: 1 }, records: [] }
       },
     } as unknown as P4Service
-    await discoverClient(p4, 'D:/depot/aki', {})
+    await discoverClient(p4, 'D:/p4ws/main', {})
     expect(seen).toEqual([DISCOVERY_PROBE_TIMEOUT_MS])
   })
 
@@ -157,56 +157,62 @@ describe('discoverClient', () => {
         seen.push(options?.timeoutMs ?? -1)
         if (args[0] === 'info') {
           return {
-            result: { stdout: infoZtag('AkiBase', 'D:/depot/aki'), exitCode: 0 },
+            result: { stdout: infoZtag('DepotBase', 'D:/p4ws/main'), exitCode: 0 },
             records: [],
           }
         }
         return {
-          result: { stdout: clientsZtag([{ name: 'branch', root: 'G:\\aki_3.6' }]), exitCode: 0 },
+          result: {
+            stdout: clientsZtag([{ name: 'branch', root: 'G:\\p4ws\\main' }]),
+            exitCode: 0,
+          },
           records: [],
         }
       },
     } as unknown as P4Service
-    await discoverClient(p4, 'G:/aki_3.6/Source', {})
+    await discoverClient(p4, 'G:/p4ws/main/src', {})
     expect(seen).toEqual([DISCOVERY_PROBE_TIMEOUT_MS, DISCOVERY_PROBE_TIMEOUT_MS])
   })
 })
 
 describe('rootContains', () => {
   it('matches equal paths ignoring separators and drive case', () => {
-    expect(rootContains('D:\\depot\\aki', 'd:/depot/aki')).toBe(true)
+    expect(rootContains('D:\\p4ws\\main', 'd:/p4ws/main')).toBe(true)
   })
 
   it('matches an ancestor root', () => {
-    expect(rootContains('D:/depot', 'D:/depot/aki/game')).toBe(true)
+    expect(rootContains('D:/p4ws', 'D:/p4ws/main/game')).toBe(true)
   })
 
   it('does not match a sibling path with a shared prefix', () => {
-    expect(rootContains('D:/depot/aki', 'D:/depot/aki-extra')).toBe(false)
+    expect(rootContains('D:/p4ws/main', 'D:/p4ws/main-extra')).toBe(false)
   })
 
   it('does not match an unrelated path', () => {
-    expect(rootContains('D:/depot/aki', 'D:/git/universe-editor')).toBe(false)
+    expect(rootContains('D:/p4ws/main', 'D:/git/universe-editor')).toBe(false)
   })
 })
 
 describe('connectionFor', () => {
   it('pins the client and user but omits the port so p4 resolves P4CONFIG by cwd', () => {
-    const conn = connectionFor({ clientName: 'branch', clientRoot: 'G:\\aki', userName: 'bob' }, {})
+    const conn = connectionFor(
+      { clientName: 'branch', clientRoot: 'G:\\depot', userName: 'bob' },
+      {},
+    )
     expect(conn).toEqual({ client: 'branch', user: 'bob' })
     expect(conn.port).toBeUndefined()
   })
 
   it('passes the port only when perforce.port is set explicitly', () => {
     const conn = connectionFor(
-      { clientName: 'branch', clientRoot: 'G:\\aki', userName: 'bob' },
+      { clientName: 'branch', clientRoot: 'G:\\depot', userName: 'bob' },
       { port: 'ssl:host:1666' },
     )
     expect(conn).toEqual({ client: 'branch', user: 'bob', port: 'ssl:host:1666' })
   })
 
   it('falls back to the config user when discovery reports none', () => {
-    const conn = connectionFor({ clientName: 'branch', clientRoot: 'G:\\aki' }, { user: 'carol' })
+    const conn = connectionFor({ clientName: 'branch', clientRoot: 'G:\\depot' }, { user: 'carol' })
     expect(conn).toEqual({ client: 'branch', user: 'carol' })
   })
 })

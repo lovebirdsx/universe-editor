@@ -8,7 +8,7 @@ function fakeResponse() {
 describe('probeGatewayConnectivity', () => {
   it('resolves true when the server answers with any HTTP status', async () => {
     const fetchImpl = vi.fn(async () => fakeResponse())
-    await expect(probeGatewayConnectivity('http://10.0.0.1:9080', fetchImpl)).resolves.toBe(true)
+    await expect(probeGatewayConnectivity('http://192.0.2.30:9080', fetchImpl)).resolves.toBe(true)
     expect(fetchImpl).toHaveBeenCalledOnce()
   })
 
@@ -16,18 +16,18 @@ describe('probeGatewayConnectivity', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('connect ECONNREFUSED')
     })
-    await expect(probeGatewayConnectivity('http://10.0.0.1:9080', fetchImpl)).resolves.toBe(false)
+    await expect(probeGatewayConnectivity('http://192.0.2.30:9080', fetchImpl)).resolves.toBe(false)
   })
 
   it('resolves false when the probe times out', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new DOMException('The operation timed out', 'TimeoutError')
     })
-    await expect(probeGatewayConnectivity('http://10.0.0.1:9080', fetchImpl)).resolves.toBe(false)
+    await expect(probeGatewayConnectivity('http://192.0.2.30:9080', fetchImpl)).resolves.toBe(false)
   })
 
   it('tolerates a null body', async () => {
     const fetchImpl = vi.fn(async () => ({ body: null }))
-    await expect(probeGatewayConnectivity('http://10.0.0.1:9080', fetchImpl)).resolves.toBe(true)
+    await expect(probeGatewayConnectivity('http://192.0.2.30:9080', fetchImpl)).resolves.toBe(true)
   })
 })

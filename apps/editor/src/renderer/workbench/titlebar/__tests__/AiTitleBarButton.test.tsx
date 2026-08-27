@@ -26,8 +26,8 @@ afterEach(() => cleanup())
 
 const MODELS: AiModelMetadata[] = [
   {
-    id: 'kuro/openai-chat/m1',
-    providerId: 'kuro',
+    id: 'acme/openai-chat/m1',
+    providerId: 'acme',
     protocol: 'openai-chat',
     channelModel: 'm1',
     name: 'Model One',

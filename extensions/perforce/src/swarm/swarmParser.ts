@@ -162,7 +162,7 @@ function parseCommentCounts(raw: unknown): [number, number] {
 
 /**
  * The p4 `stream` a review targets, normalized for display: strip the leading
- * `//` so `//aki/branch_3.6` becomes `aki/branch_3.6`. Missing / empty → undefined.
+ * `//` so `//depot/branch_x` becomes `depot/branch_x`. Missing / empty → undefined.
  */
 export function parseStream(raw: unknown): string | undefined {
   const s = asString(raw)?.trim()

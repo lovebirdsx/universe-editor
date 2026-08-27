@@ -12,11 +12,13 @@ directories:
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 # 内网自建静态服务器分发更新。把 release/ 下的 latest.yml + .exe + .blockmap
 # 同步到该 url 指向的目录即可；autoUpdater 启动时 GET `${url}/latest.yml` 比对版本。
-# 此处仅为打包默认；发布版可在运行时覆盖 feed（不必重新打包）：
+# 打包默认值在构建期注入：scripts/release/package.mjs 先 loadEnv() 把 UE_UPDATE_FEED_URL
+# 注入 process.env（未配置时回填下方占位值兜底），electron-builder 展开 `${env.UE_UPDATE_FEED_URL}`。
+# 发布版仍可在运行时覆盖 feed（不必重新打包）：
 #   --update-url=<url> / 环境变量 UNIVERSE_UPDATE_URL / <userData>/update-config.json 的 updateUrl 字段。
 publish:
   provider: generic
-  url: http://iloop.aki.kuro.com:9999/universe-editor/
+  url: ${env.UE_UPDATE_FEED_URL}
   channel: latest
 # 只保留应用实际用到的 Chromium locale。Electron 默认带 55 个 .pak(~41MB,多为
 # 印度语系),而本应用 NLS 只有 en-US + zh-CN。删掉多余的省 ~39MB 净荷——静默更新

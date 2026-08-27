@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/main/services/issueReporter/providers/iloopProvider.ts
+ *  Tests for apps/editor/src/main/services/issueReporter/providers/trackerProvider.ts
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
@@ -7,13 +7,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NullLogger } from '@universe-editor/platform'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ILoopDefaults } from '../../../../shared/issueReporter.js'
-import { ILoopIssueReporterProvider } from '../providers/iloopProvider.js'
+import { TrackerIssueReporterProvider } from '../providers/trackerProvider.js'
+import { ISSUE_REPORTER_NOT_CONFIGURED } from '../../../../shared/issueReporter.js'
 
 const PASTE_HINT = '（诊断信息较长，请从剪贴板粘贴）'
 
 function makeProvider(zipPath = '/nonexistent/universe-diagnostics.zip') {
-  return new ILoopIssueReporterProvider(() => Promise.resolve(zipPath), new NullLogger())
+  return new TrackerIssueReporterProvider(() => Promise.resolve(zipPath), new NullLogger())
 }
 
 function stubFetchOk(path = '/default/2026/08/05/zip.zip') {
@@ -28,27 +28,40 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('ILoopIssueReporterProvider', () => {
+describe('TrackerIssueReporterProvider', () => {
   it('declares attachment support', () => {
     expect(makeProvider().supportsAttachments).toBe(true)
   })
 
-  it('builds the addPost url from defaults without attachments when not requested', async () => {
-    const fetchMock = stubFetchOk()
+  it('throws a not-configured error carrying the ISSUE_REPORTER_NOT_CONFIGURED prefix', async () => {
+    await expect(
+      makeProvider().buildIssueUrl({
+        markdown: '## 版本',
+        pasteHint: PASTE_HINT,
+        attachDiagnostics: false,
+      }),
+    ).rejects.toThrow(/^issueReporter\.notConfigured:.*not configured/i)
+  })
+
+  it('throws not-configured when appUrl is set but serverUrl is empty with diagnostics attached', async () => {
+    await expect(
+      makeProvider().buildIssueUrl({
+        markdown: 'x',
+        pasteHint: PASTE_HINT,
+        attachDiagnostics: true,
+        providerOptions: { appUrl: 'http://tracker.example.com/' },
+      }),
+    ).rejects.toThrow(ISSUE_REPORTER_NOT_CONFIGURED)
+  })
+
+  it('returns the addPost URL when only appUrl is set and no diagnostics are attached', async () => {
     const url = await makeProvider().buildIssueUrl({
-      markdown: '## 版本',
+      markdown: 'x',
       pasteHint: PASTE_HINT,
       attachDiagnostics: false,
+      providerOptions: { appUrl: 'http://tracker.example.com/' },
     })
-    expect(fetchMock).not.toHaveBeenCalled()
-    const parsed = new URL(url)
-    expect(`${parsed.protocol}//${parsed.host}`).toBe(ILoopDefaults.appUrl)
-    expect(parsed.pathname).toBe('/addPost')
-    expect(parsed.searchParams.get('board')).toBe(ILoopDefaults.board)
-    expect(parsed.searchParams.get('category')).toBe(ILoopDefaults.category)
-    expect(parsed.searchParams.get('content')).toBe('## 版本')
-    expect(parsed.searchParams.get('title')).toBeNull()
-    expect(parsed.searchParams.get('attachments')).toBeNull()
+    expect(url.startsWith('http://tracker.example.com/addPost?')).toBe(true)
   })
 
   it('honors providerOptions overrides', async () => {
@@ -59,19 +72,19 @@ describe('ILoopIssueReporterProvider', () => {
       attachDiagnostics: false,
       providerOptions: {
         serverUrl: 'http://files.example.com:9999',
-        appUrl: 'http://iloop.example.com/',
+        appUrl: 'http://tracker.example.com/',
         board: 'other-board',
         category: '建议',
       },
     })
-    expect(url.startsWith('http://iloop.example.com/addPost?')).toBe(true)
+    expect(url.startsWith('http://tracker.example.com/addPost?')).toBe(true)
     const parsed = new URL(url)
     expect(parsed.searchParams.get('board')).toBe('other-board')
     expect(parsed.searchParams.get('category')).toBe('建议')
   })
 
   it('uploads the diagnostics zip and references it as name@path attachment', async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'iloop-test-'))
+    const dir = await fs.mkdtemp(join(tmpdir(), 'tracker-test-'))
     const zipPath = join(dir, 'universe-diagnostics-2026-08-05.zip')
     await fs.writeFile(zipPath, 'PK fake zip')
 
@@ -80,7 +93,10 @@ describe('ILoopIssueReporterProvider', () => {
       markdown: 'body',
       pasteHint: PASTE_HINT,
       attachDiagnostics: true,
-      providerOptions: { serverUrl: 'http://files.example.com:3030' },
+      providerOptions: {
+        serverUrl: 'http://files.example.com:3030',
+        appUrl: 'http://tracker.example.com/',
+      },
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -96,7 +112,7 @@ describe('ILoopIssueReporterProvider', () => {
   })
 
   it('propagates upload failures', async () => {
-    const dir = await fs.mkdtemp(join(tmpdir(), 'iloop-test-'))
+    const dir = await fs.mkdtemp(join(tmpdir(), 'tracker-test-'))
     const zipPath = join(dir, 'diag.zip')
     await fs.writeFile(zipPath, 'PK')
     vi.stubGlobal(
@@ -110,6 +126,10 @@ describe('ILoopIssueReporterProvider', () => {
         markdown: 'body',
         pasteHint: PASTE_HINT,
         attachDiagnostics: true,
+        providerOptions: {
+          serverUrl: 'http://files.example.com:3030',
+          appUrl: 'http://tracker.example.com/',
+        },
       }),
     ).rejects.toThrow('HTTP 500')
   })
@@ -120,6 +140,7 @@ describe('ILoopIssueReporterProvider', () => {
       markdown: 'x'.repeat(8000),
       pasteHint: PASTE_HINT,
       attachDiagnostics: false,
+      providerOptions: { appUrl: 'http://tracker.example.com/' },
     })
     const parsed = new URL(url)
     expect(parsed.searchParams.get('content')).toBe(PASTE_HINT)

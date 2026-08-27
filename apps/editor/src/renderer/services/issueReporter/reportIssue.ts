@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Orchestration of the Report Issue flow, extracted from ReportIssueAction so
  *  it can be unit-tested without the Action2/CommandsRegistry machinery. The
- *  flow is provider-agnostic: the configured provider (default iLoop) is asked
- *  for a pre-filled issue URL; providers that support attachments (iLoop)
+ *  flow is provider-agnostic: the configured provider (default tracker) is asked
+ *  for a pre-filled issue URL; providers that support attachments (tracker)
  *  first prompt whether to upload the diagnostics zip.
  *--------------------------------------------------------------------------------------------*/
 
@@ -19,14 +19,15 @@ import {
 import type { IDiagnosticsService, IIssueReporterService } from '../../../shared/ipc/services.js'
 import {
   DEFAULT_ISSUE_REPORTER_PROVIDER,
-  ILOOP_APP_URL_SETTING_KEY,
-  ILOOP_BOARD_SETTING_KEY,
-  ILOOP_CATEGORY_SETTING_KEY,
-  ILOOP_PROVIDER_ID,
-  ILOOP_SERVER_URL_SETTING_KEY,
+  TRACKER_APP_URL_SETTING_KEY,
+  TRACKER_BOARD_SETTING_KEY,
+  TRACKER_CATEGORY_SETTING_KEY,
+  TRACKER_PROVIDER_ID,
+  TRACKER_SERVER_URL_SETTING_KEY,
   ISSUE_REPORTER_PROVIDER_SETTING_KEY,
-  ILoopDefaults,
-  ILoopOptionKeys,
+  ISSUE_REPORTER_NOT_CONFIGURED,
+  TrackerDefaults,
+  TrackerOptionKeys,
 } from '../../../shared/issueReporter.js'
 
 /** All services must be captured synchronously before the first await (async accessors go stale). */
@@ -90,8 +91,8 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
       '(The diagnostics summary is long — please paste it from your clipboard)',
     ),
     attachDiagnostics,
-    ...(provider.id === ILOOP_PROVIDER_ID
-      ? { providerOptions: collectILoopOptions(deps.configuration) }
+    ...(provider.id === TRACKER_PROVIDER_ID
+      ? { providerOptions: collectTrackerOptions(deps.configuration) }
       : {}),
   }
 
@@ -106,15 +107,19 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
       ),
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    if (!attachDiagnostics) {
+    const raw = err instanceof Error ? err.message : String(err)
+    const notConfigured = raw.startsWith(ISSUE_REPORTER_NOT_CONFIGURED)
+    const message = notConfigured ? raw.slice(ISSUE_REPORTER_NOT_CONFIGURED.length) : raw
+    // Not configured: retrying without the attachment fails the same way, so skip
+    // the "upload failed" wording and the pointless fallback action.
+    if (!attachDiagnostics || notConfigured) {
       deps.notifications.notify({
         severity: Severity.Error,
-        message: localize(
-          'reportIssue.failed',
-          'Failed to open the issue reporting page: {message}',
-          { message },
-        ),
+        message: notConfigured
+          ? message
+          : localize('reportIssue.failed', 'Failed to open the issue reporting page: {message}', {
+              message,
+            }),
       })
       return
     }
@@ -133,6 +138,18 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
             void deps.issueReporter
               .buildIssueUrl(provider.id, { ...payload, attachDiagnostics: false })
               .then((url) => deps.opener.open(url))
+              .catch((fallbackErr: unknown) => {
+                const detail =
+                  fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+                deps.notifications.notify({
+                  severity: Severity.Error,
+                  message: localize(
+                    'reportIssue.failed',
+                    'Failed to open the issue reporting page: {message}',
+                    { message: detail.replace(ISSUE_REPORTER_NOT_CONFIGURED, '') },
+                  ),
+                })
+              })
           },
         },
       ],
@@ -140,13 +157,15 @@ export async function runReportIssueFlow(deps: ReportIssueFlowDeps): Promise<voi
   }
 }
 
-function collectILoopOptions(config: IConfigurationService): Record<string, string> {
+function collectTrackerOptions(config: IConfigurationService): Record<string, string> {
   return {
-    [ILoopOptionKeys.serverUrl]:
-      config.get<string>(ILOOP_SERVER_URL_SETTING_KEY) ?? ILoopDefaults.serverUrl,
-    [ILoopOptionKeys.appUrl]: config.get<string>(ILOOP_APP_URL_SETTING_KEY) ?? ILoopDefaults.appUrl,
-    [ILoopOptionKeys.board]: config.get<string>(ILOOP_BOARD_SETTING_KEY) ?? ILoopDefaults.board,
-    [ILoopOptionKeys.category]:
-      config.get<string>(ILOOP_CATEGORY_SETTING_KEY) ?? ILoopDefaults.category,
+    [TrackerOptionKeys.serverUrl]:
+      config.get<string>(TRACKER_SERVER_URL_SETTING_KEY) ?? TrackerDefaults.serverUrl,
+    [TrackerOptionKeys.appUrl]:
+      config.get<string>(TRACKER_APP_URL_SETTING_KEY) ?? TrackerDefaults.appUrl,
+    [TrackerOptionKeys.board]:
+      config.get<string>(TRACKER_BOARD_SETTING_KEY) ?? TrackerDefaults.board,
+    [TrackerOptionKeys.category]:
+      config.get<string>(TRACKER_CATEGORY_SETTING_KEY) ?? TrackerDefaults.category,
   }
 }

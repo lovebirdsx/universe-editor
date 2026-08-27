@@ -17,7 +17,7 @@ openTextDocument untitled/content 重载+isUntitled）+ 新面（getDiagnostics/
 window.createWebviewPanel（host 负数 handle 空间与 renderer 非负 custom-editor handle 共存；无
 ViewColumn/serializer；iframe 不重建故隐藏期状态天然保留）。0.12.0（P4）=Tree View（contributes.
 viewsContainers/views + registerTreeDataProvider/createTreeView，见 [[tree-view-feature]]）。
-计划文档 docs/plan/extension-api-parity-roadmap-plan.md 已全部执行完毕（仅 P1.5 Command 归因按计划
+上述 parity 计划已全部执行完毕（仅 P1.5 Command 归因按计划
 留待真实诉求）。
 
 **Why:** 外部插件开发开放前 API 面不足；各版变更与限制全记录在 packages/extension-api/COMPATIBILITY.md 对应条目。

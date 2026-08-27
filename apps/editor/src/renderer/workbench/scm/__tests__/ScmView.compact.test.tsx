@@ -138,7 +138,7 @@ describe('groupIconName', () => {
     // The whole point of the icon: sibling changelists read as one category, so
     // the default group no longer looks unlike a numbered one.
     expect(groupIconName('default')).toBe('changelist')
-    expect(groupIconName('cl:8084918')).toBe('changelist')
+    expect(groupIconName('cl:100918')).toBe('changelist')
   })
 
   it('distinguishes reconcile and shelved groups', () => {

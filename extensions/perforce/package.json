@@ -717,7 +717,7 @@
         },
         "perforce.swarm.url": {
           "type": "string",
-          "default": "http://swarm.aki.kuro.com/",
+          "default": "",
           "description": "%perforce.config.swarm.url.description%"
         },
         "perforce.swarm.apiVersion": {

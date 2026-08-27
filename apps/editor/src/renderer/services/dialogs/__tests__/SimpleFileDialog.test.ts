@@ -115,13 +115,13 @@ const DIRS = new Map<string, string[]>([
   ['/home/u', ['Documents']],
   ['/home/u/Documents', []],
   // Remote host layout (browsed via a remote: URI — keyed by URI path only).
-  ['/home/xiao', ['.bun', 'proj']],
-  ['/home/xiao/.bun', ['bin']],
-  ['/home/xiao/proj', []],
+  ['/home/dev', ['.bun', 'proj']],
+  ['/home/dev/.bun', ['bin']],
+  ['/home/dev/proj', []],
   // win32 remote host layout (Windows direct-mode target; keyed by URI path only).
-  ['/C:/Users/xiao', ['Documents', 'proj']],
-  ['/C:/Users/xiao/Documents', []],
-  ['/C:/Users/xiao/proj', []],
+  ['/C:/Users/dev', ['Documents', 'proj']],
+  ['/C:/Users/dev/Documents', []],
+  ['/C:/Users/dev/proj', []],
 ])
 const FILES = new Set<string>(['/a/readme.md', '/a/notes.txt', '/a/pic.png', '/a/src/code.ts'])
 
@@ -1184,7 +1184,7 @@ describe('SimpleFileDialog remote target browsing', () => {
   const LINUX_ENV: RemoteEnvironmentDto = {
     os: 'linux',
     arch: 'x64',
-    homeDir: '/home/xiao',
+    homeDir: '/home/dev',
     tmpDir: '/tmp',
     pathCaseSensitive: true,
     serverVersion: '0.0.0',
@@ -1229,49 +1229,49 @@ describe('SimpleFileDialog remote target browsing', () => {
   beforeEach(() => {
     // Windows client browsing a Linux remote host.
     ;(globalThis as { window?: unknown }).window = {
-      ipc: { platform: 'win32', home: 'C:\\Users\\xiao' },
+      ipc: { platform: 'win32', home: 'C:\\Users\\dev' },
     }
   })
 
   it('displays the remote path with the remote separator, not the client one', async () => {
-    const qp = await openAt(remoteUri('/home/xiao'))
+    const qp = await openAt(remoteUri('/home/dev'))
 
-    expect(qp.value).toBe('/home/xiao/')
+    expect(qp.value).toBe('/home/dev/')
   })
 
   it('keeps the remote separator while navigating into a subfolder', async () => {
-    const qp = await openAt(remoteUri('/home/xiao'))
+    const qp = await openAt(remoteUri('/home/dev'))
 
     qp.activeItems = [itemByLabel(qp, 'proj')]
     qp.accept()
     await flush()
 
-    expect(qp.value).toBe('/home/xiao/proj/')
+    expect(qp.value).toBe('/home/dev/proj/')
   })
 
   it('typing a bare segment matches within the remote folder — not the local drive list', async () => {
-    const qp = await openAt(remoteUri('/home/xiao'))
+    const qp = await openAt(remoteUri('/home/dev'))
 
     qp.type('p')
     await flush()
 
     expect(labels(qp)).toEqual(['..', 'proj'])
-    expect(qp.value).toBe('/home/xiao/proj')
+    expect(qp.value).toBe('/home/dev/proj')
   })
 
   it('expands ~ to the remote home directory', async () => {
-    const qp = await openAt(remoteUri('/home/xiao'))
+    const qp = await openAt(remoteUri('/home/dev'))
 
     qp.type('~')
     await flush()
 
-    expect(qp.value).toBe('/home/xiao/')
+    expect(qp.value).toBe('/home/dev/')
   })
 
   it('falls back to POSIX separators when the remote environment is unknown', async () => {
-    const qp = await openAt(remoteUri('/home/xiao'), null)
+    const qp = await openAt(remoteUri('/home/dev'), null)
 
-    expect(qp.value).toBe('/home/xiao/')
+    expect(qp.value).toBe('/home/dev/')
   })
 })
 
@@ -1279,7 +1279,7 @@ describe('SimpleFileDialog empty remote window', () => {
   const REMOTE_ENV: RemoteEnvironmentDto = {
     os: 'linux',
     arch: 'x64',
-    homeDir: '/home/xiao',
+    homeDir: '/home/dev',
     tmpDir: '/tmp',
     pathCaseSensitive: true,
     serverVersion: '0.0.0',
@@ -1325,7 +1325,7 @@ describe('SimpleFileDialog empty remote window', () => {
     })
     await flush()
     const qp = quickInput.lastPick
-    expect(qp.value).toBe('/home/xiao/')
+    expect(qp.value).toBe('/home/dev/')
     expect(labels(qp)).toEqual(['..', 'proj'])
   })
 
@@ -1357,12 +1357,12 @@ describe('SimpleFileDialog empty remote window', () => {
       title: 'Open Folder',
       canSelectFiles: false,
       canSelectFolders: true,
-      defaultUri: remoteUri('/home/xiao'),
+      defaultUri: remoteUri('/home/dev'),
     })
     await flush()
     expect(host.openCalls).toEqual([])
     expect(quickInput.lastPick).toBeDefined()
-    expect(quickInput.lastPick.value).toBe('/home/xiao/')
+    expect(quickInput.lastPick.value).toBe('/home/dev/')
   })
 
   it('keeps the simple dialog for an empty remote window when the native dialog is enabled', async () => {
@@ -1380,7 +1380,7 @@ describe('SimpleFileDialog empty remote window', () => {
     await flush()
     expect(host.openCalls).toEqual([])
     expect(quickInput.lastPick).toBeDefined()
-    expect(quickInput.lastPick.value).toBe('/home/xiao/')
+    expect(quickInput.lastPick.value).toBe('/home/dev/')
   })
 })
 
@@ -1388,8 +1388,8 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
   const WIN_REMOTE_ENV: RemoteEnvironmentDto = {
     os: 'win32',
     arch: 'x64',
-    homeDir: 'C:\\Users\\xiao',
-    tmpDir: 'C:\\Users\\xiao\\AppData\\Local\\Temp',
+    homeDir: 'C:\\Users\\dev',
+    tmpDir: 'C:\\Users\\dev\\AppData\\Local\\Temp',
     pathCaseSensitive: false,
     serverVersion: '0.0.0',
   }
@@ -1430,7 +1430,7 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
     })
     await flush()
     const qp = quickInput.lastPick
-    expect(qp.value).toBe('C:\\Users\\xiao\\')
+    expect(qp.value).toBe('C:\\Users\\dev\\')
     expect(labels(qp)).toEqual(['..', 'Documents', 'proj'])
   })
 
@@ -1446,12 +1446,12 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
     await flush()
     const qp = quickInput.lastPick
 
-    qp.type('C:\\Users\\xiao\\proj\\')
+    qp.type('C:\\Users\\dev\\proj\\')
     await flush()
     qp.accept()
 
     const picked = await result
-    expect(picked?.[0]?.path).toBe('/C:/Users/xiao/proj')
+    expect(picked?.[0]?.path).toBe('/C:/Users/dev/proj')
     expect(picked?.[0]?.authority).toBe('winhost')
   })
 
@@ -1470,6 +1470,6 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
     qp.type('~')
     await flush()
 
-    expect(qp.value).toBe('C:\\Users\\xiao\\')
+    expect(qp.value).toBe('C:\\Users\\dev\\')
   })
 })

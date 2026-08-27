@@ -425,7 +425,7 @@ function gatewayProviderContext(): IAcpSessionProviderContext {
     _serviceBrand: undefined,
     onDidChangeContext: Event.None,
     getProviderContext: () => ({
-      providerId: 'kuro',
+      providerId: 'acme',
       protocol: 'anthropic-messages',
       pricingSource: { id: 'http-json', options: {} },
       gatewayRates: {

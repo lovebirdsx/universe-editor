@@ -36,10 +36,10 @@ describe('formatWindowTitle', () => {
       formatWindowTitle({
         appName: 'Universe Editor',
         workspaceName: 'universe-editor3',
-        parent: 'D:\\git_project',
+        parent: 'D:\\workspace',
         devHostBadge: badge,
       }),
-    ).toBe(`universe-editor3 - D:\\git_project ${badge}`)
+    ).toBe(`universe-editor3 - D:\\workspace ${badge}`)
     expect(
       formatWindowTitle({
         appName: 'Universe Editor',
@@ -60,10 +60,10 @@ describe('formatWindowTitle', () => {
       formatWindowTitle({
         appName: 'Universe Editor',
         workspaceName: 'myproj',
-        parent: '/home/xiao/git_project',
+        parent: '/home/dev/workspace',
         remotePrefix: marker,
       }),
-    ).toBe(`⇄ myproj - /home/xiao/git_project`)
+    ).toBe(`⇄ myproj - /home/dev/workspace`)
     expect(
       formatWindowTitle({
         appName: 'Universe Editor',
@@ -93,9 +93,9 @@ describe('formatWindowTitle', () => {
       formatWindowTitle({
         appName: 'Universe Editor',
         workspaceName: 'universe-editor3',
-        parent: 'D:\\git_project',
+        parent: 'D:\\workspace',
       }),
-    ).toBe('universe-editor3 - D:\\git_project')
+    ).toBe('universe-editor3 - D:\\workspace')
   })
 
   it('appends the session segment (workspace-first, parent dropped)', () => {
@@ -103,7 +103,7 @@ describe('formatWindowTitle', () => {
       formatWindowTitle({
         appName: 'Universe Editor',
         workspaceName: 'universe-editor3',
-        parent: 'D:\\git_project',
+        parent: 'D:\\workspace',
         symbol: '🟢',
         sessionTitle: '修复登录Bug',
       }),
@@ -115,11 +115,11 @@ describe('formatWindowTitle', () => {
       formatWindowTitle({
         appName: 'Universe Editor',
         workspaceName: 'universe-editor3',
-        parent: 'D:\\git_project',
+        parent: 'D:\\workspace',
         symbol: '',
         sessionTitle: '修复登录Bug',
       }),
-    ).toBe('universe-editor3 - D:\\git_project')
+    ).toBe('universe-editor3 - D:\\workspace')
   })
 })
 

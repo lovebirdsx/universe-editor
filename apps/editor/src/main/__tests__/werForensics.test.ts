@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildWerQuery, describeWerEvent, parseWerEvents } from '../werForensics.js'
 
-const CRASH_EVENT = `<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Application Error'/><EventID Qualifiers='0'>1000</EventID><Level>2</Level><TimeCreated SystemTime='2026-08-06T12:37:59.123456700Z'/><Channel>Application</Channel><Computer>DESKTOP-KURO</Computer></System><EventData><Data>Universe Editor.exe</Data><Data>0.1.60.0</Data><Data>ntdll.dll</Data><Data>10.0.19041.3636</Data><Data>c0000005</Data><Data>000000000009d7f4</Data></EventData></Event>`
+const CRASH_EVENT = `<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Application Error'/><EventID Qualifiers='0'>1000</EventID><Level>2</Level><TimeCreated SystemTime='2026-08-06T12:37:59.123456700Z'/><Channel>Application</Channel><Computer>DESKTOP-TEST</Computer></System><EventData><Data>Universe Editor.exe</Data><Data>1.0.0.0</Data><Data>ntdll.dll</Data><Data>10.0.00000.0000</Data><Data>c0000005</Data><Data>000000000009d7f4</Data></EventData></Event>`
 
 const HANG_EVENT = `<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Application Hang'/><EventID Qualifiers='0'>1002</EventID><TimeCreated SystemTime='2026-08-06T12:35:00.000000000Z'/></System><EventData><Data>Universe Editor.exe</Data><Data>1.0</Data><Data>4a2c</Data></EventData></Event>`
 

@@ -3,9 +3,9 @@
  *  把 apps/editor/release/ 下的更新产物同步到内网静态服务器。
  *
  *  用法（在仓库根目录）:
- *    node scripts/release/upload.mjs --host 10.0.0.5 --user deploy --dir /srv/universe-editor
+ *    node scripts/release/upload.mjs --host 192.0.2.10 --user deploy --dir /srv/universe-editor
  *  或用环境变量:
- *    UE_RELEASE_HOST=10.0.0.5 UE_RELEASE_USER=deploy UE_RELEASE_DIR=/srv/universe-editor \
+ *    UE_RELEASE_HOST=192.0.2.10 UE_RELEASE_USER=deploy UE_RELEASE_DIR=/srv/universe-editor \
  *      node scripts/release/upload.mjs
  *
  *  底层用系统自带的 ssh / scp（Windows 10+ 与 Ubuntu 均内置 OpenSSH），无第三方依赖。

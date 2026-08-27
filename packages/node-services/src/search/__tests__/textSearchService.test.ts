@@ -109,18 +109,18 @@ describe('TextSearchService', () => {
   it('resolves packaged ripgrep binaries from app.asar.unpacked', () => {
     expect(
       resolveRipgrepDiskPath(
-        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+        String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\app.asar\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
       ),
     ).toBe(
-      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
     )
 
     expect(
       resolveRipgrepDiskPath(
-        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\node_modules.asar\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+        String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\node_modules.asar\@vscode\ripgrep-win32-x64\bin\rg.exe`,
       ),
     ).toBe(
-      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\node_modules.asar.unpacked\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\node_modules.asar.unpacked\@vscode\ripgrep-win32-x64\bin\rg.exe`,
     )
   })
 
@@ -133,10 +133,10 @@ describe('TextSearchService', () => {
 
     expect(
       resolveRipgrepDiskPath(
-        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+        String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
       ),
     ).toBe(
-      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      String.raw`C:\Users\testuser\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
     )
   })
 

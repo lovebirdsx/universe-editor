@@ -100,7 +100,7 @@ test.describe('@p1 ai settings', () => {
         ({ parent, child, baseUrl }) =>
           window.__E2E__!.aiSetProviders([
             { id: parent, baseUrl, protocolMap: { 'openai-chat': ['m-a'] } },
-            { id: child, extends: parent, baseUrl: 'http://10.0.0.1:9080/v1' },
+            { id: child, extends: parent, baseUrl: 'http://192.0.2.30:9080/v1' },
           ]),
         { parent: PARENT_ID, child: CHILD_ID, baseUrl: UNREACHABLE_URL },
       )

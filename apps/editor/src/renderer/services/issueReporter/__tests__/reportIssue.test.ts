@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
+import { Severity } from '@universe-editor/platform'
 import type {
   IConfigurationService,
   INotificationService,
@@ -14,9 +15,10 @@ import type {
 import type { IDiagnosticsService, IIssueReporterService } from '../../../../shared/ipc/services.js'
 import {
   GITHUB_PROVIDER_ID,
-  ILOOP_PROVIDER_ID,
+  TRACKER_PROVIDER_ID,
   ISSUE_REPORTER_PROVIDER_SETTING_KEY,
-  ILoopDefaults,
+  ISSUE_REPORTER_NOT_CONFIGURED,
+  TrackerDefaults,
 } from '../../../../shared/issueReporter.js'
 import { runReportIssueFlow, type ReportIssueFlowDeps } from '../reportIssue.js'
 
@@ -25,9 +27,9 @@ const GITHUB: IssueReportProviderInfo = {
   label: 'GitHub',
   supportsAttachments: false,
 }
-const ILOOP: IssueReportProviderInfo = {
-  id: ILOOP_PROVIDER_ID,
-  label: 'iLoop',
+const TRACKER: IssueReportProviderInfo = {
+  id: TRACKER_PROVIDER_ID,
+  label: 'Tracker',
   supportsAttachments: true,
 }
 
@@ -62,7 +64,7 @@ function makeDeps(overrides?: {
       collectIssueReport: () => Promise.resolve('## 版本\n- 应用版本: 1.0.0'),
     } as unknown as IDiagnosticsService,
     issueReporter: {
-      listProviders: () => Promise.resolve(overrides?.providers ?? [ILOOP, GITHUB]),
+      listProviders: () => Promise.resolve(overrides?.providers ?? [TRACKER, GITHUB]),
       buildIssueUrl,
     } as unknown as IIssueReporterService,
     notifications: {
@@ -82,20 +84,20 @@ function makeDeps(overrides?: {
 }
 
 describe('runReportIssueFlow', () => {
-  it('defaults to iLoop, asks about the attachment and forwards iloop options', async () => {
+  it('defaults to tracker, asks about the attachment and forwards tracker options', async () => {
     const { deps, opened, buildIssueUrl, pick, notifications } = makeDeps({ pickResult: 'attach' })
     await runReportIssueFlow(deps)
 
     expect(pick).toHaveBeenCalledTimes(1)
     expect(buildIssueUrl).toHaveBeenCalledWith(
-      ILOOP_PROVIDER_ID,
+      TRACKER_PROVIDER_ID,
       expect.objectContaining({
         attachDiagnostics: true,
         providerOptions: expect.objectContaining({
-          serverUrl: ILoopDefaults.serverUrl,
-          appUrl: ILoopDefaults.appUrl,
-          board: ILoopDefaults.board,
-          category: ILoopDefaults.category,
+          serverUrl: TrackerDefaults.serverUrl,
+          appUrl: TrackerDefaults.appUrl,
+          board: TrackerDefaults.board,
+          category: TrackerDefaults.category,
         }),
       }),
     )
@@ -114,7 +116,7 @@ describe('runReportIssueFlow', () => {
     const { deps, buildIssueUrl } = makeDeps({ pickResult: 'skip' })
     await runReportIssueFlow(deps)
     expect(buildIssueUrl).toHaveBeenCalledWith(
-      ILOOP_PROVIDER_ID,
+      TRACKER_PROVIDER_ID,
       expect.objectContaining({ attachDiagnostics: false }),
     )
   })
@@ -132,7 +134,7 @@ describe('runReportIssueFlow', () => {
   it('falls back to the first provider when the configured one is unknown', async () => {
     const { deps, buildIssueUrl } = makeDeps({ providerSetting: 'nope', pickResult: 'skip' })
     await runReportIssueFlow(deps)
-    expect(buildIssueUrl.mock.calls[0]?.[0]).toBe(ILOOP_PROVIDER_ID)
+    expect(buildIssueUrl.mock.calls[0]?.[0]).toBe(TRACKER_PROVIDER_ID)
   })
 
   it('warns when no provider is registered', async () => {
@@ -153,15 +155,57 @@ describe('runReportIssueFlow', () => {
     await runReportIssueFlow(deps)
 
     expect(notifications).toHaveLength(1)
+    expect(notifications[0]?.severity).toBe(Severity.Error)
+    expect(notifications[0]?.message).toContain('Failed to upload the diagnostics bundle')
+    expect(notifications[0]?.message).not.toContain(ISSUE_REPORTER_NOT_CONFIGURED)
+    const fallback = notifications[0]?.actions?.[0]
+    expect(fallback).toBeDefined()
+    expect(fallback?.label).toContain('Open without attachment')
+    fallback!.run()
+    await vi.waitFor(() => {
+      expect(buildIssueUrl).toHaveBeenLastCalledWith(
+        TRACKER_PROVIDER_ID,
+        expect.objectContaining({ attachDiagnostics: false }),
+      )
+    })
+  })
+
+  it('shows a plain not-configured error without the fallback action', async () => {
+    const { deps, notifications } = makeDeps({
+      pickResult: 'attach',
+      buildIssueUrl: () =>
+        Promise.reject(
+          new Error(
+            ISSUE_REPORTER_NOT_CONFIGURED +
+              'Issue tracker is not configured. Set issueReporter.tracker.serverUrl and issueReporter.tracker.appUrl.',
+          ),
+        ),
+    })
+    await runReportIssueFlow(deps)
+
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]?.severity).toBe(Severity.Error)
+    expect(notifications[0]?.actions).toBeUndefined()
+    expect(notifications[0]?.message).not.toContain(ISSUE_REPORTER_NOT_CONFIGURED)
+    expect(notifications[0]?.message).toContain('not configured')
+  })
+
+  it('notifies again when the attach-free fallback also fails', async () => {
+    const { deps, notifications } = makeDeps({
+      pickResult: 'attach',
+      buildIssueUrl: () => Promise.reject(new Error('boom')),
+    })
+    await runReportIssueFlow(deps)
+
+    expect(notifications).toHaveLength(1)
     const fallback = notifications[0]?.actions?.[0]
     expect(fallback).toBeDefined()
     fallback!.run()
     await vi.waitFor(() => {
-      expect(buildIssueUrl).toHaveBeenLastCalledWith(
-        ILOOP_PROVIDER_ID,
-        expect.objectContaining({ attachDiagnostics: false }),
-      )
+      expect(notifications).toHaveLength(2)
     })
+    expect(notifications[1]?.message).toContain('boom')
+    expect(notifications[1]?.actions).toBeUndefined()
   })
 
   it('surfaces plain errors without a fallback when nothing was attached', async () => {

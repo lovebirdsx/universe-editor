@@ -156,7 +156,7 @@ describe('TMGrammarFactory (real textmate + oniguruma + TypeScript grammar)', ()
 
   it('passes the original remote-ssh URI to readFile instead of folding to a local fsPath', async () => {
     const location = URI.parse(
-      'remote-ssh://wsl+Ubuntu/home/xiao/.universe-editor-server/ext/textmate-grammars/syntaxes/ignore.tmLanguage.json',
+      'remote-ssh://wsl+Ubuntu/home/dev/.universe-editor-server/ext/textmate-grammars/syntaxes/ignore.tmLanguage.json',
     )
     const definition: IGrammarDefinition = {
       language: 'ignore',

@@ -30,7 +30,7 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 - `shared/ipc/codexConfigService.ts` — **wire 契约**。`ICodexConfigService` 装饰器 + 全部类型(`CodexSettings`(含 `model_provider` / `model_providers?: Record<string,unknown>`)/`CodexSettingsPatch`/`CodexAuthStatus`/**`CodexCredentialIntent`** + 枚举 `CodexReasoningEffort`/`CodexApprovalPolicy`/`CodexSandboxMode`/`CodexCredentialStore`;`AgentActiveAuth` 来自 `shared/ai/agentActiveAuth.ts`)。方法:`read`/`patch`/`configPath`/`readAuthStatus`/**`applyCredential(intent)`**/**`resolveActiveAuth(authority?)`**/`checkGatewayConnectivity` + 事件 `onDidChangeAuth`。`readAgentSettings`/`writeAgentSettings` 与 `CodexAgentSettings`/`CodexActiveAuth` 已删。`CodexCredentialIntent` 是判别联合:`{kind:'gateway',baseUrl,apiKey,providerName?}` | `{kind:'apiKey',apiKey}` | `{kind:'chatgpt'}`。
 - `main/services/codexConfig/codexConfigMainService.ts` — **main 服务**。`extends Disposable`。职责是**按 authority 路由**(本地 → `CodexConfigStore`,远端 → `RemoteChannels.AgentConfig`)+ `resolveActiveAuth`(并行 `read`/`readAuthStatus`/`readResolvedProviders` 后交给共享纯函数 `resolveCodexActiveAuth`;原先本文件里的 `computeCodexActiveAuth`/`computeDrift`/`matchingProviderId` 已搬进 `shared/ai/agentActiveAuth.ts` 并删除)。provider 条目读取走共享 helper `main/services/ai/aiSettingsProviders.ts` 的 `readResolvedProviders`(claude 侧同一份)。
 - `packages/node-services/src/agentConfig/{codexConfigStore.ts,types.ts}` — **文件存储层**(main 与 remote server 共享)。`CodexAuthStatus`/`CodexCredentialIntent` 的类型定义、原子写(mkdir -p + temp + rename)、读容错(缺失/损坏返回空)、`applyCredential` + 内部纯函数 `reconcileGatewayProvider(current, intent)`(见下「三种登录方案」)、`_startAuthWatch()` 与 `dispose()` 关 watcher，**全在这里**,不在 main 服务文件里。
-- `main/services/codexConfig/__tests__/codexConfigMainService.test.ts` — readAuthStatus(含共存 + 优先级 + "never returns the credentials themselves")+ `applyCredential`(gateway 自包含 provider 写入 / chatgpt-token 保留 / 残留 base_url 清理 / 保留用户手写 provider 如 `[model_providers.kuro]`)+ `onDidChangeAuth` 事件;文件末尾另有一个 `CodexConfigMainService — remote resolveActiveAuth` describe 覆盖远端路由下的反查。
+- `main/services/codexConfig/__tests__/codexConfigMainService.test.ts` — readAuthStatus(含共存 + 优先级 + "never returns the credentials themselves")+ `applyCredential`(gateway 自包含 provider 写入 / chatgpt-token 保留 / 残留 base_url 清理 / 保留用户手写 provider 如 `[model_providers.acme]`)+ `onDidChangeAuth` 事件;文件末尾另有一个 `CodexConfigMainService — remote resolveActiveAuth` describe 覆盖远端路由下的反查。
 
 ### codexConfig 服务接线(6 处,加方法时无需动)
 
@@ -62,13 +62,13 @@ Codex 是接入统一 Settings editor「Agents」组的 acp agent 之一。它**
 |---|---|---|---|
 | ChatGPT 登录(Plus/Pro) | `auth.json` 的 `tokens` 块 + `auth_mode:"chatgpt"` | 内置 `openai` | OAuth token,codex 自己刷新 |
 | 官方 OpenAI API Key | `auth.json` 的 `OPENAI_API_KEY` + `auth_mode:"apikey"` | 内置 `openai` | key 作 Bearer 发往 api.openai.com |
-| 自定义 gateway(kurogames) | provider 自己的 `experimental_bearer_token` | 独立命名的 provider | 与 OpenAI auth 无关 |
+| 自定义 gateway(example) | provider 自己的 `experimental_bearer_token` | 独立命名的 provider | 与 OpenAI auth 无关 |
 
 > 表格是 **main 层契约(`CodexCredentialIntent` 三 kind)支持的机制**。当前面板只提供其中两条:`AuthenticationSection` 选 provider 条目(gateway)或 `@subscription`(ChatGPT),**没有官方 OpenAI API Key 的输入框**——`{kind:'apiKey'}` 是保留能力,renderer 从不发它。
 
-**最关键的解析规则**:ChatGPT 与 API Key **都走内置 `openai` provider**,而内置 `openai` **仅在 config.toml 顶层 `model_provider` 为空/未设时才生效**。一旦 `model_provider` 指向某自定义 provider(如 `codex-gateway`/`kuro`),auth.json 里的登录就被绕过——即便 `auth_mode`/resolved 仍报 chatgpt/apikey 也没用(这就是"误显 In Use"的根因)。
+**最关键的解析规则**:ChatGPT 与 API Key **都走内置 `openai` provider**,而内置 `openai` **仅在 config.toml 顶层 `model_provider` 为空/未设时才生效**。一旦 `model_provider` 指向某自定义 provider(如 `codex-gateway`/`acme`),auth.json 里的登录就被绕过——即便 `auth_mode`/resolved 仍报 chatgpt/apikey 也没用(这就是"误显 In Use"的根因)。
 
-**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.kuro]`)。下方 TOML 块由选中的 provider 条目经 `deriveCodexGateway`(派生 base_url/key/name)后落盘:
+**gateway = 完全自包含的独立 provider**(镜像用户手写的 `[model_providers.acme]`)。下方 TOML 块由选中的 provider 条目经 `deriveCodexGateway`(派生 base_url/key/name)后落盘:
 ```toml
 model_provider = "codex-gateway"
 [model_providers.codex-gateway]
@@ -88,7 +88,7 @@ experimental_bearer_token = "sk-..."  # key 直接落 config.toml(用户明确�
 
 - `{kind:'apiKey',apiKey}`:auth.json 写 `OPENAI_API_KEY` + `auth_mode='apikey'`;config 经 `reconcileGatewayProvider` 拆掉 gateway provider+指针+残留 `openai_base_url`(回到内置 openai)。
 - `{kind:'chatgpt'}`:auth.json 删 `OPENAI_API_KEY`,若仍有 ChatGPT token 则 `auth_mode='chatgpt'` 否则删 mode(**保留 token,不登出**);config 同样拆掉 gateway,顶层 `model_provider` 清空。
-- `{kind:'gateway',baseUrl,apiKey,providerName?}`:auth.json 只删 key 不动 token;config 写自包含 provider + `model_provider='codex-gateway'`,删 `openai_base_url`。**保留**用户手写的其它 provider(如 `[model_providers.kuro]`)。
+- `{kind:'gateway',baseUrl,apiKey,providerName?}`:auth.json 只删 key 不动 token;config 写自包含 provider + `model_provider='codex-gateway'`,删 `openai_base_url`。**保留**用户手写的其它 provider(如 `[model_providers.acme]`)。
 
 `reconcileGatewayProvider(current, intent)` 是纯函数,返回新 settings(无变化返回 `null`)。**ChatGPT + API key 可共存**:切到 chatgpt 只清 key、不删 token。
 
@@ -131,7 +131,7 @@ interface AgentActiveAuth {
 **没有 `drift` 字段了**：agent 自己的配置文件就是唯一真相，编辑器不再存声明值（`agentSettings.codex` 已废弃、不再被读取），所以不存在「声明与盘上不一致」这回事。
 
 判定顺序：
-1. 顶层 `model_provider` 指向**任何非空且非 `openai`** 的名字 → `kind:'provider'`；读该名字的 `[model_providers.<name>]` 块，再用 `deriveCodexGateway` 逐个派生本地 provider 条目，`base_url` + `experimental_bearer_token` 全等才回 `providerId`。**放宽点**：早先只认硬编码的 `'codex-gateway'`，用户手写 `[model_providers.kuro]` + `model_provider='kuro'` 会被误报 `none`（真实盲区）。
+1. 顶层 `model_provider` 指向**任何非空且非 `openai`** 的名字 → `kind:'provider'`；读该名字的 `[model_providers.<name>]` 块，再用 `deriveCodexGateway` 逐个派生本地 provider 条目，`base_url` + `experimental_bearer_token` 全等才回 `providerId`。**放宽点**：早先只认硬编码的 `'codex-gateway'`，用户手写 `[model_providers.acme]` + `model_provider='acme'` 会被误报 `none`（真实盲区）。
 2. 手写/外部 gateway 匹配不上任何条目 → `kind:'provider'` 但 `providerId` 缺席，**刻意不归属**（面板显示「外部凭据」，会话开销「—」，账号用量 hidden）。硬猜会把钱记到别人账上。
 3. 否则（`model_provider` 为空/未设，或显式 `='openai'` 即内置）→ `authStatus.active === 'chatgpt'` ? `kind:'subscription'` : `'none'`。
 

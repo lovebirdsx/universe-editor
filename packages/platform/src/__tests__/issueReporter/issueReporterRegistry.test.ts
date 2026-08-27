@@ -19,12 +19,12 @@ describe('IssueReporterRegistry', () => {
   it('registers, gets and lists providers', () => {
     const registry = new IssueReporterRegistry()
     registry.registerProvider(fakeProvider('github'))
-    registry.registerProvider(fakeProvider('iloop', true))
+    registry.registerProvider(fakeProvider('tracker', true))
 
     expect(registry.getProvider('github')?.label).toBe('GITHUB')
     expect(registry.listProviders()).toEqual([
       { id: 'github', label: 'GITHUB', supportsAttachments: false },
-      { id: 'iloop', label: 'ILOOP', supportsAttachments: true },
+      { id: 'tracker', label: 'TRACKER', supportsAttachments: true },
     ])
     registry.dispose()
   })
@@ -34,9 +34,9 @@ describe('IssueReporterRegistry', () => {
     registry.registerProvider(fakeProvider('github'))
     expect(() => registry.registerProvider(fakeProvider('github'))).toThrow()
 
-    const d = registry.registerProvider(fakeProvider('iloop'))
+    const d = registry.registerProvider(fakeProvider('tracker'))
     d.dispose()
-    expect(registry.getProvider('iloop')).toBeUndefined()
+    expect(registry.getProvider('tracker')).toBeUndefined()
     registry.dispose()
   })
 })

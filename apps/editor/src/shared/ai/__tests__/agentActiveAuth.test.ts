@@ -154,7 +154,7 @@ describe('resolveCodexActiveAuth', () => {
   })
 
   it('recognises a hand-written provider block under any name', () => {
-    const settings = codexGateway('kuro', 'https://a.example.com', 'key-a')
+    const settings = codexGateway('acme', 'https://a.example.com', 'key-a')
     expect(resolveCodexActiveAuth(settings, CHATGPT, providers)).toEqual({
       kind: 'provider',
       providerId: 'gw-a',
@@ -162,14 +162,14 @@ describe('resolveCodexActiveAuth', () => {
   })
 
   it('reports an unattributed provider for a gateway matching no entry', () => {
-    const settings = codexGateway('kuro', 'https://elsewhere.example.com', 'nope')
+    const settings = codexGateway('acme', 'https://elsewhere.example.com', 'nope')
     expect(resolveCodexActiveAuth(settings, CHATGPT, providers)).toEqual({ kind: 'provider' })
   })
 
   it('reports an unattributed provider for an incomplete custom block', () => {
     const settings: CodexSettings = {
-      model_provider: 'kuro',
-      model_providers: { kuro: { base_url: 'https://a.example.com' } },
+      model_provider: 'acme',
+      model_providers: { acme: { base_url: 'https://a.example.com' } },
     }
     expect(resolveCodexActiveAuth(settings, CHATGPT, providers)).toEqual({ kind: 'provider' })
   })

@@ -88,7 +88,7 @@
 
 改完保存时会自动归一化：如果你只是填了个模型名、没改别的，配置文件里就还是一个普通字符串，不会平白多出一层对象。
 
-模型 id 是三段 `供应商 id/协议/模型名`。比如 `kuro-gbl/anthropic-messages/deepseek-v4-pro` 表示：`kuro-gbl` 这个供应商、走 `anthropic-messages` 协议、端点上叫 `deepseek-v4-pro`。
+模型 id 是三段 `供应商 id/协议/模型名`。比如 `acme-test/anthropic-messages/deepseek-v4-pro` 表示：`acme-test` 这个供应商、走 `anthropic-messages` 协议、端点上叫 `deepseek-v4-pro`。
 
 顶层 `models` 是可选的**知识库**：存模型与网关无关的内在属性（显示名、家族、厂商、原生协议、上下文窗口、能力等）。静态清单里的字符串会按同名去这里查，查不到就当成「裸模型」直接使用，不报错。**费率不在这里**——见下一节。
 
@@ -96,7 +96,7 @@
 
 只有当 Codex 会话要跑的模型**既不在 Codex 自己的内置模型表里、这里也查不到**时，编辑器才会提示一次引导你来补（同一个模型不重复提示）。Codex 的官方模型（`gpt-5.6-sol` 这类）Codex 自己就知道窗口大小，不需要你填。
 
-同级的 `modelSettings` 存单个模型的参数（键是三段模型 id，如 `"kuro-gbl/anthropic-messages/deepseek-v4-pro": { "temperature": 0.3 }`）。设置页里模型行的齿轮图标就是编辑它。
+同级的 `modelSettings` 存单个模型的参数（键是三段模型 id，如 `"acme-test/anthropic-messages/deepseek-v4-pro": { "temperature": 0.3 }`）。设置页里模型行的齿轮图标就是编辑它。
 
 ## 模型知识库（模型配置）
 
@@ -223,8 +223,8 @@ API 密钥是敏感信息。编辑器的保管方式是一个**有意的设计�
       "pricingSource": { "id": "catalog", "options": { "vendor": "openai" } }
     },
     {
-      "id": "kuro-gbl",
-      "baseUrl": "https://kuro.example/v1",
+      "id": "acme-test",
+      "baseUrl": "https://acme.example/v1",
       "apiKey": "sk-这里换成你的密钥",
       "defaultProtocol": "anthropic-messages",
       "protocolMap": {
@@ -236,9 +236,9 @@ API 密钥是敏感信息。编辑器的保管方式是一个**有意的设计�
     },
     {
       // 同一个网关的第二个入口：只换地址，其余全部继承
-      "id": "kuro-home",
-      "extends": "kuro-gbl",
-      "baseUrl": "https://kuro-home.example/v1"
+      "id": "acme-home",
+      "extends": "acme-test",
+      "baseUrl": "https://acme-home.example/v1"
     },
     {
       "id": "ollama",

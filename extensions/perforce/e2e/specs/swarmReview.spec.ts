@@ -137,12 +137,12 @@ test.describe('@p1 swarm reviews', () => {
         .locator('[data-testid="swarm-review-row"]', { hasText: 'Patch shared lib' })
         .first()
         .click()
-      // `//depot/w.文本库/文本库_系统模块.ts` is shelved in the same review. Its
+      // `//depot/资源库/资源表.ts` is shelved in the same review. Its
       // `p4 print` args are non-ASCII and only reach the server intact via the
       // `-x` argfile — a regression shows a blank diff on both sides (the bug
       // this guards).
-      await expect(review.getByText('文本库_系统模块.ts')).toBeVisible()
-      await review.getByText('文本库_系统模块.ts').click()
+      await expect(review.getByText('资源表.ts')).toBeVisible()
+      await review.getByText('资源表.ts').click()
       await expect(diff).toBeVisible()
 
       await expect
@@ -150,13 +150,13 @@ test.describe('@p1 swarm reviews', () => {
           const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
           return content?.original
         })
-        .toContain('文本库基线')
+        .toContain('资源表基线')
       await expect
         .poll(async () => {
           const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
           return content?.modified
         })
-        .toContain('文本库改动')
+        .toContain('资源表改动')
     })
 
     await test.step('routes an oversized Chinese-path csv to the Monaco text diff, not the webview', async () => {
@@ -164,12 +164,12 @@ test.describe('@p1 swarm reviews', () => {
         .locator('[data-testid="swarm-review-row"]', { hasText: 'Patch shared lib' })
         .first()
         .click()
-      // `//depot/w.文本库/大数据表.csv` decodes past the 1MB spreadsheet-diff cap:
+      // `//depot/资源库/数据集.csv` decodes past the 1MB spreadsheet-diff cap:
       // the Excel webview's whole-table LCS would OOM the extension host, so the
       // review must fall back to the plain text diff — fetched via `p4 print`
       // through the `-x` argfile (the path is non-ASCII).
-      await expect(review.getByText('大数据表.csv')).toBeVisible()
-      await review.getByText('大数据表.csv').click()
+      await expect(review.getByText('数据集.csv')).toBeVisible()
+      await review.getByText('数据集.csv').click()
       // Two 1.1MB `p4 print` round-trips (bytes probe, both sides; the text diff
       // reuses the probed bytes) precede the editor mount.
       // Poll for ANY terminal editor kind, then assert which. A mis-route opens
@@ -198,13 +198,13 @@ test.describe('@p1 swarm reviews', () => {
           },
           { timeout: 15_000 },
         )
-        .toContain('数据表基线')
+        .toContain('数据集基线')
       await expect
         .poll(async () => {
           const content = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
           return content?.modified
         })
-        .toContain('数据表改动')
+        .toContain('数据集改动')
     })
 
     await test.step('diffs a submitted-change review against the pre-edit base', async () => {

@@ -204,9 +204,9 @@ describe('SwarmReviewsView', () => {
     // Regression: a review ignored before blank-first-line descriptions were
     // parsed correctly has '' frozen as its snapshot description; the dashboard
     // no longer returns it, so the IGNORED group rendered "(no description)".
-    swarmIgnoreStore.ignore({ ...review, id: '7769693', description: '' })
+    swarmIgnoreStore.ignore({ ...review, id: '100693', description: '' })
     const detail: SwarmReviewDetailDto = {
-      id: '7769693',
+      id: '100693',
       state: 'needsReview',
       stateLabel: 'Needs Review',
       author: 'alice',
@@ -235,7 +235,7 @@ describe('SwarmReviewsView', () => {
 
     expect(await screen.findByText('Healed summary')).toBeTruthy()
     await waitFor(() =>
-      expect(swarmIgnoreStore.getMeta('7769693')?.description).toBe('Healed summary'),
+      expect(swarmIgnoreStore.getMeta('100693')?.description).toBe('Healed summary'),
     )
   })
 

@@ -274,6 +274,23 @@ pnpm gallery:token -- list --auth-dir /srv/auth
 
 `<userData>` 是编辑器的用户数据目录（可用 `--user-data-dir` 或 `UNIVERSE_USER_DATA_DIR` 覆盖）。文件缺失或格式错误会被静默忽略，此时回退到环境变量 / 命令行。
 
+### 构建期注入：打出开箱可用的包
+
+上面的几种方式都是**运行时**覆盖打包默认值。内网部署方若希望**打出来的客户端开箱可用**（首次启动即连上市场与更新，不用给每个用户再下发 `update-config.json`），在构建前把真实地址写进仓库根的 `.env`（`.env*` 已 gitignore，不会误提交）：
+
+```bash
+# 仓库根 .env（或 .env.prod，按 --env <mode> 分层选择）
+UE_GALLERY_URL=http://<host>/universe-editor       # 写入打包版 product.json 的 galleryUrl
+UE_UPDATE_FEED_URL=http://<host>/universe-editor/  # 写入 electron-builder.yml 的 publish.url
+```
+
+打包脚本（`pnpm --filter @universe-editor/editor package:win*` / `package:linux:dir`）在打包前 `loadEnv()` 并注入这两个变量：
+
+- **`UE_GALLERY_URL`**：`scripts/release/runtime-resources.mjs` 在 stage `product.json` 时按 env 覆盖 `galleryUrl`（未配置则保留仓库里的占位值原样）。
+- **`UE_UPDATE_FEED_URL`**：`scripts/release/package.mjs` 注入 `process.env`，electron-builder 展开 `electron-builder.yml` 里的 `${env.UE_UPDATE_FEED_URL}`（未配置则回填占位值兜底）。
+
+**仓库里永远只保留占位值**（`gallery.example.com` 等 RFC 保留段），真实内网地址只存在于 gitignored 的 `.env`，不进仓库。没配 env 时构建**不会失败**，只是产出指向占位地址的包。变量清单与占位值见仓库根 [`.env.example`](../../.env.example)。
+
 ## 服务器要实现的接口
 
 > 下面几节是给**从零写后端**或对接 open-vsx 的人看的协议参考。用[内置静态 registry 服务器](#最快路径用内置静态-registry-服务器自建市场)的话这些已经实现好了，可跳到[两个约定](#两个必须与后端对齐的约定)与[防投毒](#防投毒客户端会做的一致性校验)了解客户端行为即可。

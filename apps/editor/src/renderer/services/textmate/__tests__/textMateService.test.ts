@@ -262,7 +262,7 @@ describe('TextMateService remote grammar read routing', () => {
       [{ language: 'toml', scopeName: 'source.toml', path: './syntaxes/toml.tmLanguage.json' }],
       {
         extensionId: 'test',
-        extensionLocation: URI.parse('remote-ssh://wsl+Ubuntu/home/xiao/ext'),
+        extensionLocation: URI.parse('remote-ssh://wsl+Ubuntu/home/dev/ext'),
         extensionIsBuiltin: true,
       },
     )
@@ -272,7 +272,7 @@ describe('TextMateService remote grammar read routing', () => {
     await vi.waitFor(() => expect(readFileText).toHaveBeenCalled())
     const received = readFileText.mock.calls[0]![0]
     expect(received.scheme).toBe('remote-ssh')
-    expect(received.path).toBe('/home/xiao/ext/syntaxes/toml.tmLanguage.json')
+    expect(received.path).toBe('/home/dev/ext/syntaxes/toml.tmLanguage.json')
     service.dispose()
   })
 })

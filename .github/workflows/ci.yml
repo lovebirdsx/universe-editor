@@ -46,6 +46,10 @@ jobs:
       - name: Docs link check
         run: pnpm docs:check
 
+      # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库
+      - name: Sensitive string check
+        run: pnpm sensitive:check
+
       - name: Lint
         run: pnpm lint
 

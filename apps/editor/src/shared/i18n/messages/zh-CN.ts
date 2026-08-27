@@ -1045,7 +1045,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'swarm.notify.needsAction.open': '打开审核',
   'swarm.notify.needsAction.openList': '打开 Swarm 审核列表',
   'swarm.openById.invalid': '请输入数字形式的审核 ID。',
-  'swarm.openById.placeholder': '审核 ID，例如 8113801',
+  'swarm.openById.placeholder': '审核 ID，例如 100801',
   'swarm.openById.prompt': '输入要打开的 Swarm 审核 ID',
 
   // --- Diff editor & Merge ---
@@ -2460,6 +2460,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Issue reporter ---
   'issueReporter.error.unknownProvider': '未知的问题上报提供方"{providerId}"',
+  'issueReporter.error.notConfigured':
+    '尚未配置问题追踪服务。请设置 issueReporter.tracker.serverUrl 与 issueReporter.tracker.appUrl。',
   'issueReporter.error.attachmentsNotSupported': '问题上报提供方"{providerId}"不支持附件',
   'issueReporter.error.uploadHttp': '诊断包上传失败：HTTP {status} {statusText}',
   'issueReporter.error.uploadNoPath': '诊断包上传响应中没有 path：{body}',

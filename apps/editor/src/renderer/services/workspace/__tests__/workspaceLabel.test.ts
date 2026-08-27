@@ -10,8 +10,8 @@ const REMOTE_FOLDER = URI.from({
 
 const WINDOWS_REMOTE_FOLDER = URI.from({
   scheme: 'remote-ssh',
-  authority: 'ssh+10.102.13.131',
-  path: '/E:/git_project/universe-editor.worktrees/task1',
+  authority: 'ssh+192.0.2.20',
+  path: '/E:/workspace/universe-editor.worktrees/task1',
 })
 
 describe('workspaceTitleLabel', () => {
@@ -26,7 +26,7 @@ describe('workspaceTitleLabel', () => {
 
   it('renders a Windows remote path in native drive form', () => {
     expect(workspaceTitleLabel(WINDOWS_REMOTE_FOLDER)).toBe(
-      'E:\\git_project\\universe-editor.worktrees\\task1',
+      'E:\\workspace\\universe-editor.worktrees\\task1',
     )
   })
 })
@@ -52,14 +52,14 @@ describe('workspaceParentLabel', () => {
 
   it('renders a Windows remote parent in native drive form', () => {
     expect(workspaceParentLabel(WINDOWS_REMOTE_FOLDER)).toBe(
-      'E:\\git_project\\universe-editor.worktrees',
+      'E:\\workspace\\universe-editor.worktrees',
     )
   })
 
   it('renders a Windows remote drive root as `E:\\`', () => {
     const driveRoot = URI.from({
       scheme: 'remote-ssh',
-      authority: 'ssh+10.102.13.131',
+      authority: 'ssh+192.0.2.20',
       path: '/E:/proj',
     })
     expect(workspaceParentLabel(driveRoot)).toBe('E:\\')

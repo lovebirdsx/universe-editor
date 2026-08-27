@@ -454,15 +454,15 @@ describe('CodexConfigMainService', () => {
 
     const gatewayProviders = [
       {
-        id: 'kuro-a',
-        apiKey: 'kuro-b2',
-        baseUrl: 'http://gw:9080/',
+        id: 'acme-a',
+        apiKey: 'acme-b2',
+        baseUrl: 'http://gateway.example.com:9080/',
         protocolMap: { 'openai-responses': [] },
       },
       {
-        id: 'kuro-b',
-        apiKey: 'kuro-5a',
-        baseUrl: 'http://gw:9080/',
+        id: 'acme-b',
+        apiKey: 'acme-5a',
+        baseUrl: 'http://gateway.example.com:9080/',
         protocolMap: { 'openai-responses': [] },
       },
     ]
@@ -470,31 +470,31 @@ describe('CodexConfigMainService', () => {
     it('reports the matching provider when a gateway is in effect', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
-      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'kuro-b' })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'acme-b' })
     })
 
     it('distinguishes same-URL providers by their bearer token', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
-      expect((await svc.resolveActiveAuth()).providerId).toBe('kuro-b')
+      expect((await svc.resolveActiveAuth()).providerId).toBe('acme-b')
     })
 
     it('resolves a hand-written model_provider name to its matching provider', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "kuro"\n[model_providers.kuro]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
+        'model_provider = "acme"\n[model_providers.acme]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
-      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'kuro-b' })
+      expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'acme-b' })
     })
 
     it('leaves a hand-written gateway that matches no entry unattributed', async () => {
       await useAiSettings([])
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gw:9080/"\nexperimental_bearer_token = "kuro-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
       expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider' })
     })
@@ -634,15 +634,15 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
 
   const gatewayProviders = [
     {
-      id: 'kuro-a',
-      apiKey: 'kuro-b2',
-      baseUrl: 'http://gw:9080/',
+      id: 'acme-a',
+      apiKey: 'acme-b2',
+      baseUrl: 'http://gateway.example.com:9080/',
       protocolMap: { 'openai-responses': [] },
     },
     {
-      id: 'kuro-b',
-      apiKey: 'kuro-5a',
-      baseUrl: 'http://gw:9080/',
+      id: 'acme-b',
+      apiKey: 'acme-5a',
+      baseUrl: 'http://gateway.example.com:9080/',
       protocolMap: { 'openai-responses': [] },
     },
   ]
@@ -653,14 +653,14 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       model_provider: 'codex-gateway',
       model_providers: {
         'codex-gateway': {
-          base_url: 'http://gw:9080/',
-          experimental_bearer_token: 'kuro-5a',
+          base_url: 'http://gateway.example.com:9080/',
+          experimental_bearer_token: 'acme-5a',
         },
       },
     }
     const { svc, configDir } = await makeRemoteService(remote)
     await writeLocalProviders(configDir, gatewayProviders)
-    expect(await svc.resolveActiveAuth('host')).toEqual({ kind: 'provider', providerId: 'kuro-b' })
+    expect(await svc.resolveActiveAuth('host')).toEqual({ kind: 'provider', providerId: 'acme-b' })
   })
 
   it('resolves a remote ChatGPT login to the subscription kind', async () => {

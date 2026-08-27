@@ -16,7 +16,6 @@ disable-model-invocation: true
 | `apps/editor/resources/defender/add\|remove-defender-exclusion.ps1` | Defender 排除脚本，installer.nsh 经 `ExecShellWait "runas"` 提权调用 |
 | `apps/editor/src/main/services/update/updateMainService.ts` | `quitAndInstall`（running-session veto → `autoUpdater.quitAndInstall(false, true)`） |
 | `apps/editor/src/main/services/update/updateShutdownTrace.ts` | 跨进程停机 trace（墙钟 epoch + 同步落盘），量"点击更新→新版启动"黑洞的唯一手段 |
-| `docs/plan/update-install-perf-plan.md` | 完整诊断历程、实测数据、已排除假设、待决策方向 |
 | `node_modules/.pnpm/app-builder-lib@*/node_modules/app-builder-lib/templates/nsis/` | electron-builder NSIS 模板源码（改行为前先读这里，别猜） |
 
 ## electron-builder NSIS 模板机制速查
@@ -60,7 +59,7 @@ disable-model-invocation: true
    System::Call 'user32::SendMessageTimeout(p 0xFFFF, i 0x1A, p 0, t "Environment", i 0x2, i 1000, *p .r0)'
    ```
    （0x1A=WM_SETTINGCHANGE，0x2=SMTO_ABORTIFHUNG，1s 超时）。**边界**：ABORTIFHUNG 依赖系统 hung 标记，对长期挂死进程有效（微基准 36.5s→1.3s），对刚被 `NtSuspendProcess` 挂起的进程无效（标记滞后，两种 flag 都 ~71s）——必须叠加 1s 短超时兜底；正常窗口毫秒级响应无损失。另：PowerShell `[Environment]::SetEnvironmentVariable(...,'User')` 内部**自带一次 SMTO_NORMAL 广播**，卸载侧 PATH 移除因此改 `Set-ItemProperty` 直写注册表。
-2. **解压双写本体（固定 ~6s @305MB）**：模板 `extractUsing7za` 先解到 `$PLUGINSDIR` 再 CopyFiles 到 `$INSTDIR`（PR #6547 原子性保护）。耗时 ∝ 净荷字节 ~22ms/MB（本机 Defender 排除生效），瘦身 48MB 仅省 ~1s；patch 掉双写收益 ~2-3s 且丢保护，**已评估搁置**。压缩等级/差量/盘速均已排除（见 plan 文档表格）。
+2. **解压双写本体（固定 ~6s @305MB）**：模板 `extractUsing7za` 先解到 `$PLUGINSDIR` 再 CopyFiles 到 `$INSTDIR`（PR #6547 原子性保护）。耗时 ∝ 净荷字节 ~22ms/MB（本机 Defender 排除生效），瘦身 48MB 仅省 ~1s；patch 掉双写收益 ~2-3s 且丢保护，**已评估搁置**。压缩等级/差量/盘速均已排除。
 
 ## 测量与验证方法学
 

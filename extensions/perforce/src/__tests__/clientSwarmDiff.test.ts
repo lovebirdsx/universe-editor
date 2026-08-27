@@ -304,7 +304,7 @@ describe('PerforceClient Swarm diff files', () => {
   it('bases a submitted change on rev-1 (the pre-edit revision)', async () => {
     spawnMock.mockImplementation(
       describeReturning({
-        change: '8143439',
+        change: '100439',
         status: 'submitted',
         depotFile0: '//depot/src/a.ts',
         action0: 'edit',
@@ -315,7 +315,7 @@ describe('PerforceClient Swarm diff files', () => {
       enabled: true,
       workspaceTtlMs: 4000,
     })
-    const files = await client!.describeChangeFiles('8143439')
+    const files = await client!.describeChangeFiles('100439')
     expect(files[0]?.baseRevision).toBe('17')
     client!.dispose()
   })
@@ -323,7 +323,7 @@ describe('PerforceClient Swarm diff files', () => {
   it('bases a pending shelf on its reported rev (already the pre-edit base)', async () => {
     spawnMock.mockImplementation(
       describeReturning({
-        change: '8144405',
+        change: '100405',
         status: 'pending',
         depotFile0: '//depot/src/a.ts',
         action0: 'edit',
@@ -334,7 +334,7 @@ describe('PerforceClient Swarm diff files', () => {
       enabled: true,
       workspaceTtlMs: 4000,
     })
-    const files = await client!.describeChangeFiles('8144405')
+    const files = await client!.describeChangeFiles('100405')
     expect(files[0]?.baseRevision).toBe('3')
     client!.dispose()
   })

@@ -357,21 +357,21 @@ pnpm server:deploy -- --env test    # 测试机（预验证）
 
 ```bash
 # .env.prod（Ubuntu 远端示例）
-UE_RELEASE_HOST=10.0.0.5
+UE_RELEASE_HOST=192.0.2.10
 UE_RELEASE_USER=deploy
 UE_RELEASE_PORT=22
 #UE_RELEASE_KEY=/path/to/id_ed25519              # 缺省用 ssh 默认凭证
 #UE_SERVER_APP_DIR=/opt/universe-update-server   # 服务程序安装目录（默认即此）
-#UE_SERVER_HEALTH_URL=http://10.0.0.5/           # 默认 http://<host>/
+#UE_SERVER_HEALTH_URL=http://192.0.2.10/           # 默认 http://<host>/
 # 服务端运行时配置（会生成 server.env 上传，重启即生效）
 UE_SERVER_PORT=80
 UE_SERVER_BASE=/universe-editor/
 
 # .env.test（Windows 远端示例——UE_SERVER_APP_DIR 必须显式给 Windows 路径，deploy 据此识别）
-UE_RELEASE_HOST=10.0.0.6
+UE_RELEASE_HOST=192.0.2.11
 UE_RELEASE_USER=Administrator
 UE_SERVER_APP_DIR=C:\universe-editor\app
-UE_SERVER_HEALTH_URL=http://10.0.0.6/
+UE_SERVER_HEALTH_URL=http://192.0.2.11/
 UE_SERVER_ROOT=C:\universe-editor\data
 ```
 

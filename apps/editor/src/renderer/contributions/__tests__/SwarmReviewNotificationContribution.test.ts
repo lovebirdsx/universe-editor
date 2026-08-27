@@ -309,15 +309,33 @@ describe('SwarmReviewNotificationContribution', () => {
     await flush()
     // Full snapshot: the enabled switch, the RAW poll-interval seconds (ms
     // conversion + e2e env override stay host-side), and the configured verdict
-    // (mirrors the host's readSwarmConfig defaults: enabled=true, url non-empty).
+    // (mirrors the host's readSwarmConfig defaults: enabled=true, url empty ⇒ unconfigured).
     expect(setBackgroundPoll).toHaveBeenCalledWith({
       enabled: true,
       pollIntervalSeconds: 0,
-      configured: true,
+      configured: false,
     })
     instance.dispose()
     dashboardCmd.dispose()
     pushCmd.dispose()
+  })
+
+  it('reports configured: true when perforce.swarm.url is set', async () => {
+    const t = await setup({ config: { 'perforce.swarm.url': 'https://swarm.example.com/' } })
+    const pushCmd = t.platform.CommandsRegistry.registerCommand(
+      'perforce.swarm.setBackgroundPoll',
+      vi.fn(),
+    )
+    const pushCalls = () =>
+      t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.setBackgroundPoll')
+
+    t.configChange.fire({ affectsConfiguration: (k: string) => k === 'perforce.swarm' })
+    await flush()
+
+    expect(pushCalls().length).toBeGreaterThanOrEqual(1)
+    expect(pushCalls().at(-1)![1]).toMatchObject({ configured: true })
+    pushCmd.dispose()
+    t.dispose()
   })
 
   // Repro for the host-activation race: the contribution is constructed before the
@@ -370,7 +388,7 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(pushCalls()[0]![1]).toEqual({
         enabled: true,
         pollIntervalSeconds: 0,
-        configured: true,
+        configured: false,
       })
 
       // Delivered — no further retries.
@@ -442,7 +460,7 @@ describe('SwarmReviewNotificationContribution', () => {
       await tick.driveSwarmNotificationTick()
       await vi.advanceTimersByTimeAsync(0)
       expect(pushCalls().length).toBe(1)
-      expect(pushCalls()[0]![1]).toMatchObject({ enabled: true, configured: true })
+      expect(pushCalls()[0]![1]).toMatchObject({ enabled: true, configured: false })
       instance.dispose()
       dashboardCmd.dispose()
       pushCmd.dispose()
@@ -466,7 +484,7 @@ describe('SwarmReviewNotificationContribution', () => {
     expect(pushCalls().at(-1)![1]).toMatchObject({
       enabled: true,
       pollIntervalSeconds: 30,
-      configured: true,
+      configured: false,
     })
     pushCmd.dispose()
     t.dispose()

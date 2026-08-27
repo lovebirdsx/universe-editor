@@ -47,18 +47,18 @@ function modelIds(items: QuickPickInput<ModelPickItem>[]): readonly (string | un
 describe('buildModelPickItems', () => {
   it('groups models by providerId', () => {
     const models = [
-      model('kuro', 'openai-chat', 'a'),
-      model('kuro', 'openai-chat', 'b'),
+      model('acme', 'openai-chat', 'a'),
+      model('acme', 'openai-chat', 'b'),
       model('ollama', 'ollama', 'c'),
     ]
-    expect(separators(buildModelPickItems(models, undefined))).toEqual(['kuro', 'ollama'])
+    expect(separators(buildModelPickItems(models, undefined))).toEqual(['acme', 'ollama'])
   })
 
   it('degrades the group label to providerId/protocol when a provider spans protocols', () => {
-    const models = [model('kuro', 'openai-chat', 'a'), model('kuro', 'anthropic-messages', 'b')]
+    const models = [model('acme', 'openai-chat', 'a'), model('acme', 'anthropic-messages', 'b')]
     expect(separators(buildModelPickItems(models, undefined))).toEqual([
-      'kuro/openai-chat',
-      'kuro/anthropic-messages',
+      'acme/openai-chat',
+      'acme/anthropic-messages',
     ])
   })
 
@@ -71,11 +71,11 @@ describe('buildModelPickItems', () => {
   })
 
   it('marks the active model with a check', () => {
-    const models = [model('kuro', 'openai-chat', 'a'), model('kuro', 'openai-chat', 'b')]
-    const items = buildModelPickItems(models, 'kuro/openai-chat/b')
+    const models = [model('acme', 'openai-chat', 'a'), model('acme', 'openai-chat', 'b')]
+    const items = buildModelPickItems(models, 'acme/openai-chat/b')
     const active = items
       .filter((i): i is ModelPickItem => !isSeparator(i))
-      .find((i) => i.id === 'kuro/openai-chat/b')
+      .find((i) => i.id === 'acme/openai-chat/b')
     expect(active?.statusIconId).toBe('check')
   })
 })

@@ -71,7 +71,7 @@ pnpm gallery:publish -- --stage ./market-stage --signing-key-file ./market-key.p
   extensions-external/eslint/universe.universe-eslint-0.1.0.vsix
 
 # 3) 同步到服务器市场根（--dir = server 的 --gallery-root；assets 先、registry.json 后）
-pnpm gallery:upload -- --stage ./market-stage --host iloop.aki.kuro.com  --user deploy --dir /srv/universe-editor/gallery
+pnpm gallery:upload -- --stage ./market-stage --host gallery.example.com  --user deploy --dir /srv/universe-editor/gallery
 ```
 
 `--stage` 也可用环境变量 `UE_GALLERY_STAGE`；`upload.mjs` 的 `--host/--user` 与 `scripts/release/upload.mjs` 共用 `UE_RELEASE_*`，而**市场根用独立的 `--dir`（或 `UE_GALLERY_DIR`）**，与更新目录 `UE_RELEASE_DIR` 解耦。这些变量都可统一写进仓库根 `.env`（见下文「.env 配置」）。

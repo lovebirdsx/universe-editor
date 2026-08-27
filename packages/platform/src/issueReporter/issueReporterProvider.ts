@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pluggable issue-reporting targets (GitHub / iLoop / ...). A provider turns a
+ *  Pluggable issue-reporting targets (GitHub / tracker / ...). A provider turns a
  *  collected diagnostics summary into an issue-page URL, optionally uploading
  *  the diagnostics zip as an attachment first. Providers run in the main
  *  process (network access + filesystem zip); the renderer only picks one and
@@ -26,7 +26,7 @@ export interface IssueReportPayload {
   readonly attachDiagnostics: boolean
   /**
    * Provider-specific options forwarded verbatim from settings
-   * (e.g. iLoop's serverUrl / appUrl / board / category). Populated by the renderer.
+   * (e.g. tracker's serverUrl / appUrl / board / category). Populated by the renderer.
    */
   readonly providerOptions?: Readonly<Record<string, string>>
 }

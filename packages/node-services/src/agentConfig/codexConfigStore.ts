@@ -342,7 +342,7 @@ export function hasCodexChatgptTokens(auth: Record<string, unknown>): boolean {
  * Reconcile the `codex-gateway` provider in config.toml with the chosen
  * credential. Returns the next settings to write, or `null` when nothing needs
  * to change. Idempotent; preserves every unmanaged key (e.g. a hand-written
- * `[model_providers.kuro]`).
+ * `[model_providers.acme]`).
  *
  * - gateway intent: write/update the provider + pointer.
  * - apiKey / chatgpt intent: tear the provider + pointer down so codex uses the

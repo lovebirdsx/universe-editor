@@ -67,7 +67,7 @@ describe('swarmParser.parseReview', () => {
 
   it('uses the first non-empty line as the title when the description starts with blank lines', () => {
     const review = parseReview({
-      id: '8185288',
+      id: '100288',
       description: '\n  \nReal summary line\nmore body',
     })
     expect(review!.description).toBe('Real summary line')
@@ -77,11 +77,11 @@ describe('swarmParser.parseReview', () => {
     const review = parseReview({
       id: '10',
       versions: [
-        { rev: 1, change: '100', stream: '//aki/branch_2.1' },
-        { rev: 2, change: '105', stream: '//aki/branch_3.6' },
+        { rev: 1, change: '100', stream: '//depot/branch_a' },
+        { rev: 2, change: '105', stream: '//depot/branch_b' },
       ],
     })
-    expect(review!.stream).toBe('aki/branch_3.6')
+    expect(review!.stream).toBe('depot/branch_b')
   })
 
   it('omits stream when absent (list shape has no versions)', () => {
@@ -143,14 +143,14 @@ describe('swarmParser.parseReviewDetail', () => {
   it('parses the version stream and uses the real Swarm rev/difference key', () => {
     const detail = parseReviewDetail({
       review: {
-        id: '2952448',
+        id: '100448',
         versions: [
-          { difference: 1, change: '2952454', stream: '//aki/branch_2.1', pending: true },
-          { difference: 2, change: '2952679', stream: '//aki/branch_2.1', pending: false },
+          { difference: 1, change: '100454', stream: '//depot/branch_x', pending: true },
+          { difference: 2, change: '100679', stream: '//depot/branch_x', pending: false },
         ],
       },
     })
-    expect(detail!.versions[0]).toMatchObject({ version: 1, stream: '//aki/branch_2.1' })
+    expect(detail!.versions[0]).toMatchObject({ version: 1, stream: '//depot/branch_x' })
     expect(detail!.versions[1]!.version).toBe(2)
   })
 })

@@ -22,7 +22,7 @@
 
 - 已按 [Perforce 概览与连接](./overview.md) 完成连接（能正常登录 p4）。
 - 有一台可达的 Swarm 服务器地址。
-- Swarm 集成默认开启，默认服务器 URL 为 `http://swarm.aki.kuro.com/`。需要连接其它服务器时，在[设置](../customization/settings.md)里修改 `perforce.swarm.url`。
+- Swarm 集成默认开启，服务器 URL **默认为空**（未配置时 Swarm 功能静默不可用，不会弹错）。需要连接服务器时，在[设置](../customization/settings.md)里填写 `perforce.swarm.url`。
 
 开启后可在命令面板运行 **"Perforce: Swarm：检查连接"**（分类 Perforce）做连通性自检——成功会提示已连接。
 
@@ -71,7 +71,7 @@
 - 在 **Swarm Reviews** 视图标题栏点**按 ID 打开**图标（Go to File 图标），或
 - 命令面板运行 **"Open Swarm Review by ID…"**（分类 Swarm）。
 
-输入审核编号（纯数字，如 `8113801`）回车，即在主编辑区打开对应审核详情。
+输入审核编号（纯数字，如 `100801`）回车，即在主编辑区打开对应审核详情。
 
 在审核详情页里修改了状态（投票、改状态、更新版本、丢弃）后，侧栏对应分组会**自动同步刷新**，无需手动重载。
 
@@ -137,7 +137,7 @@
   - 已打开（本地已有跟踪改动）或基线过期的文件会被 Perforce 拒绝，操作结束后以警告通知列出这些**已跳过**的文件，其余文件照常应用。
   - 确认框里的「也替换工作区之外的文件」开关默认**关闭**：映射在当前工作区之外的文件会被跳过（弹窗会列出将跳过的路径）。开关状态**全局持久化**，下次沿用。
   - 确认框里的「在默认 changelist 中打开应用的文件」开关默认**开启**：应用的文件进入默认 changelist，SCM 面板随即可见。**关闭**时文件内容照常写入工作区，但不会签出——磁盘改动不出现在任何 changelist（内部在 unshelve 后追加 `p4 revert -k` 取消签出）；下次「收集修改」扫描时它们可能出现在「待收集的改动」组，可用该组的「移出列表」忽略。开关状态**全局持久化**，下次沿用；个别文件取消签出失败时会以警告通知列出（这些文件仍留在默认 changelist，内容不受影响）。
-  - 未映射进客户端视图（client view）的文件**无法应用**——例如审核目标在另一分支 / stream（`//aki/branch_3.7` 的审核，而本机 client 映射的是 `branch_3.6`），p4 无法把搁置还原到任何本地路径。此时会提示该审核的改动与当前工作区不匹配、无法应用。
+  - 未映射进客户端视图（client view）的文件**无法应用**——例如审核目标在另一分支 / stream（`//depot/branch_a` 的审核，而本机 client 映射的是 `branch_b`），p4 无法把搁置还原到任何本地路径。此时会提示该审核的改动与当前工作区不匹配、无法应用。
   - **已批准并提交（approve and commit）的审核同样可以应用**：`p4 unshelve` 只认未提交的搁置，对已提交的 changelist 会拒绝（"already committed"）——此时自动改为按**提交快照**强制覆盖（内部用 `p4 print` 取该 changelist 的文件内容写盘；「在默认 changelist 中打开」开关的语义不变，开启时文件先签出再覆盖）。
 - **评论**：右侧评论面板列出 review 级评论，可直接发表新评论（`Ctrl/Cmd+Enter` 快捷提交）。
 - **丢弃审核**：`Obliterate Review` 会永久删除该审核，而不是把它归档。编辑器会先要求确认，Swarm 服务器还会校验当前用户权限；该操作不可撤销。
@@ -180,7 +180,7 @@ universe-editor://swarm/review/1234
 | 配置项                        | 默认                         | 说明                                                                                                              |
 | ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `perforce.swarm.enabled`      | `true`                       | 是否开启 Swarm 集成。                                                                                             |
-| `perforce.swarm.url`          | `http://swarm.aki.kuro.com/` | Swarm 服务器 URL。**凭据绝不进配置**。                                                                            |
+| `perforce.swarm.url`          | `""`（空）                    | Swarm 服务器 URL，默认为空需自行配置。**凭据绝不进配置**。                                                        |
 | `perforce.swarm.apiVersion`   | `v9`                         | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。                          |
 | `perforce.swarm.backgroundPoll.enabled` | `false`        | 是否在后台定时轮询 Swarm 看板（驱动新审核通知、Activity Bar 角标与状态栏计数）。默认关闭——审核列表在打开视图或手动刷新时仍会更新。改动即时生效。 |
 | `perforce.swarm.pollInterval` | `0`                          | 后台轮询看板的秒数（仅在 `perforce.swarm.backgroundPoll.enabled` 开启时生效），`0` 用默认 60 秒，最小 10 秒。                     |

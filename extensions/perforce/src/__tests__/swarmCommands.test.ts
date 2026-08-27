@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The module is fully mocked below; importing `commands` here yields the mock's
 // registerCommand/executeCommand spies for the poller-driving assertions.
-import { commands } from '@universe-editor/extension-api'
+import { commands, window, workspace } from '@universe-editor/extension-api'
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -35,7 +35,9 @@ vi.mock('@universe-editor/extension-api', () => ({
   },
   workspace: {
     getConfiguration: vi.fn(() => ({
-      get: vi.fn(async (_key: string, fallback: unknown) => fallback),
+      get: vi.fn(async (key: string, fallback: unknown) =>
+        key === 'swarm.url' ? 'https://swarm.example.com/' : fallback,
+      ),
     })),
   },
 }))
@@ -77,7 +79,7 @@ describe('registerSwarmCommands review operations', () => {
     registerSwarmCommands(
       {
         active: {
-          user: 'songxiao',
+          user: 'devuser',
           p4Service: {},
           printRevisionResult: mocks.printRevisionResult,
           printRevisionBytesResult: mocks.printRevisionBytesResult,
@@ -257,7 +259,7 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
 
     registerSwarmCommands(
       {
-        active: { user: 'songxiao', p4Service: {} },
+        active: { user: 'devuser', p4Service: {} },
       } as never,
       logger,
     )
@@ -305,6 +307,45 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
   })
 })
 
+// A freshly-installed workspace has no swarm.url (default ""), so readSwarmConfig
+// returns undefined and both the guard() fallback and ping's "not configured"
+// warning fire. Unreachable while the shared mock always returned a non-empty URL.
+describe('registerSwarmCommands when swarm.url is empty (not configured)', () => {
+  beforeEach(() => {
+    mocks.handlers.clear()
+    mocks.dashboard.mockReset()
+    mocks.showErrorMessage.mockReset()
+    logger.warn.mockClear()
+    vi.mocked(window.showWarningMessage).mockClear()
+    vi.mocked(workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(async (key: string, fallback: unknown) => (key === 'swarm.url' ? '' : fallback)),
+    } as never)
+    registerSwarmCommands({ active: { user: 'devuser', p4Service: {} } } as never, logger)
+  })
+
+  afterEach(() => {
+    vi.mocked(workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(async (key: string, fallback: unknown) =>
+        key === 'swarm.url' ? 'https://swarm.example.com/' : fallback,
+      ),
+    } as never)
+  })
+
+  it('returns the guard fallback for review operations instead of building a client', async () => {
+    const result = await mocks.handlers.get('perforce.swarm.listReviews')?.({})
+    expect(result).toEqual({ reviews: [], lastSeen: null })
+    expect(logger.warn).toHaveBeenCalledWith('cmd', expect.stringContaining('not configured'))
+  })
+
+  it('ping warns that Swarm is not configured and reports ok:false', async () => {
+    const result = await mocks.handlers.get('perforce.swarm.ping')?.()
+    expect(window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining('Swarm is not configured'),
+    )
+    expect(result).toEqual({ ok: false, count: 0 })
+  })
+})
+
 // The renderer pushes the full polling snapshot ({enabled, pollIntervalSeconds,
 // configured}) because the host has no config-change event. The host-side
 // configured cache feeds the poller's SYNCHRONOUS per-tick read (a tick path
@@ -321,7 +362,7 @@ describe('registerSwarmCommands setBackgroundPoll payload', () => {
 
     registerSwarmCommands(
       {
-        active: { user: 'songxiao', p4Service: {} },
+        active: { user: 'devuser', p4Service: {} },
       } as never,
       logger,
     )

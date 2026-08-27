@@ -29,10 +29,10 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
                                                      ▼
         IDiagnosticsService ── collectIssueReport()（markdown 摘要）
                             ├─ exportDiagnosticsZip()（诊断包 zip，弹文件管理器）
-                            └─ createDiagnosticsZip()（同产物不弹，供 iLoop 上传）
+                            └─ createDiagnosticsZip()（同产物不弹，供 tracker 上传）
                                                      ▼
-        IIssueReporterService（可插拔 provider：iloop / github）
-          iloop：上传 zip 到 go-fastdfs → addPost 预填 URL（可带附件）
+        IIssueReporterService（可插拔 provider：tracker / github）
+          tracker：上传 zip → 拼 addPost 预填 URL（可带附件）
           github：issues/new?body=... 预填 URL
                                                      ▼
               「帮助: 报告问题…」/「帮助: 导出诊断包…」/ 异常退出启动提示
@@ -100,9 +100,9 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 
 命令 `workbench.action.openIssueReporter`（**帮助: 报告问题…**，VSCode 同名 ID 对齐）。上报目标是**可插拔 provider 架构**（platform 出契约 + Registry，main 出实现，renderer 走 `IIssueReporterService` 门面，对标 AI provider 三层）：
 
-1. renderer `runReportIssueFlow`（`services/issueReporter/reportIssue.ts`）读 `issueReporter.provider`（默认 `iloop`，可切 `github`）选 provider；`IDiagnosticsService.collectIssueReport()` 生成 markdown（版本 / 系统信息 / 已装扩展 / **errors.jsonl 最近 2 个 session 的错误指纹 Top 10**）并复制进剪贴板。
-2. provider 支持附件时（iLoop）QuickPick 询问是否附带诊断包；随后 `buildIssueUrl(providerId, payload)` 在 **main 端**完成上传与拼 URL，renderer 只负责 `opener.open(url)`。URL 超 7500 字符时两个 provider 都降级为粘贴提示（VSCode 同款）。
-3. **iLoop provider**（`main/services/issueReporter/providers/iloopProvider.ts`）：附带时先 `createDiagnosticsZip()`（与 `exportDiagnosticsZip()` 同产物但不弹文件管理器），再按 go-fastdfs 协议 POST `{serverUrl}/upload`，拼 `{appUrl}/addPost?board=&category=&content=&attachments=name@path` 预填 URL（标题留空由用户在页面填）。端点与板块走 `issueReporter.iloop.serverUrl/appUrl/board/category` 设置（默认值见 `shared/issueReporter.ts` 的 `ILoopDefaults`），由 renderer 读配置经 `providerOptions` 传给 main。上传失败 → 错误通知 +「不附带诊断包直接打开」降级 action。
+1. renderer `runReportIssueFlow`（`services/issueReporter/reportIssue.ts`）读 `issueReporter.provider`（默认 `tracker`，可切 `github`）选 provider；`IDiagnosticsService.collectIssueReport()` 生成 markdown（版本 / 系统信息 / 已装扩展 / **errors.jsonl 最近 2 个 session 的错误指纹 Top 10**）并复制进剪贴板。
+2. provider 支持附件时（tracker）QuickPick 询问是否附带诊断包；随后 `buildIssueUrl(providerId, payload)` 在 **main 端**完成上传与拼 URL，renderer 只负责 `opener.open(url)`。URL 超 7500 字符时两个 provider 都降级为粘贴提示（VSCode 同款）。
+3. **tracker provider**（`main/services/issueReporter/providers/trackerProvider.ts`）：附带时先 `createDiagnosticsZip()`（与 `exportDiagnosticsZip()` 同产物但不弹文件管理器），再按所配置服务的上传接口 POST 上传 zip，拼 `addPost` 预填 URL（board/category/content/attachments 参数；标题留空由用户在页面填）。端点与板块走 `issueReporter.tracker.serverUrl/appUrl/board/category` 设置（默认值见 `shared/issueReporter.ts` 的 `TrackerDefaults`；`serverUrl` / `appUrl` 默认为空 = 未配置，此时上报流程抛「not configured」错误，需先配置），由 renderer 读配置经 `providerOptions` 传给 main。上传失败 → 错误通知 +「不附带诊断包直接打开」降级 action。
 4. **GitHub provider**：纯拼 `issues/new?body=...`，不支持附件。
 5. `exportDiagnosticsZip()`（独立命令 `workbench.action.exportDiagnostics`）：`<userData>/diagnostics/universe-diagnostics-<ts>.zip`，含 `sysinfo.md` + 最近 2 session 的 `errors-*.jsonl` + 各日志文件**尾部 512KB** + `crash-dumps.txt`（dump 清单，行尾标注 included/skipped）+ `crashes/` 下**最新最多 2 个 dump 本体**（单文件 64MB 上限，读失败静默跳过）。E2E 下不弹系统文件管理器（`revealInShell`）。
 
@@ -130,7 +130,7 @@ renderer 未捕获异常 / 服务埋点                main 进程异常
 - `apps/editor/src/main/services/telemetry/errorSinkMainService.ts` — errors.jsonl 写入 + per-window source 注入
 - `apps/editor/src/renderer/services/telemetry/telemetryClientService.ts` — renderer 聚合客户端 + 配置键
 - `apps/editor/src/main/services/diagnostics/` — 异常退出报告 + 系统信息 + 诊断 zip（`diagnosticsReport.ts` 为纯逻辑）
-- `apps/editor/src/main/services/issueReporter/` — 上报 provider（github / iloop）+ 门面服务；契约在 platform `issueReporter/`，共享常量在 `shared/issueReporter.ts`
+- `apps/editor/src/main/services/issueReporter/` — 上报 provider（github / tracker）+ 门面服务；契约在 platform `issueReporter/`，共享常量在 `shared/issueReporter.ts`
 - `apps/editor/src/renderer/services/issueReporter/reportIssue.ts` — 报告问题流程编排（provider 选择 / 附件询问 / 失败降级）
 - `apps/editor/src/main/sessionSentinel.ts` / `crashMonitoring.ts` / `errors.ts` — 哨兵 / 进程死亡 / main 异常钩子
 - `apps/editor/src/renderer/actions/helpActions.ts` — 报告问题 / 导出诊断包命令

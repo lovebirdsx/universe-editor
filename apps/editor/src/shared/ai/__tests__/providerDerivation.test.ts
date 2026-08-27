@@ -31,10 +31,10 @@ describe('deriveClaudeAuth', () => {
   })
 
   it('writes the auth token + baseUrl for a gateway endpoint', () => {
-    expect(deriveClaudeAuth(provider({ baseUrl: 'https://api.kuro.example/v1' }))).toEqual({
+    expect(deriveClaudeAuth(provider({ baseUrl: 'https://api.acme.example/v1' }))).toEqual({
       kind: 'gateway',
       authToken: 'sk-1',
-      baseUrl: 'https://api.kuro.example/v1',
+      baseUrl: 'https://api.acme.example/v1',
     })
   })
 

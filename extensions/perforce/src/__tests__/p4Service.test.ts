@@ -119,7 +119,7 @@ describe('P4Service._spawn output cap', () => {
 // parameter". The fix routes such arguments through `p4 -x <argfile>`: a UTF-8
 // temp file p4 reads arguments from, bypassing the ANSI argv conversion entirely.
 describe('P4Service non-ASCII args go through -x argfile', () => {
-  const CN_SPEC = '//depot/w.文本库/文本库_系统模块.csv#47'
+  const CN_SPEC = '//depot/资源库/资源表.csv#47'
   let child: FakeChildProcess
   beforeEach(() => {
     child = new FakeChildProcess()

@@ -167,9 +167,9 @@ describe('PtyHostService', () => {
       cwdStat: () => ({ isDirectory: () => true }),
     })
 
-    await service.create({ cwd: 'G:/aki_3.6/Source/Client/TypeScript' })
+    await service.create({ cwd: 'G:/p4ws/main/src/client/scripts' })
 
-    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+    expect(captured?.cwd).toBe('G:/p4ws/main/src/client/scripts')
   })
 
   it('normalizes a Windows drive cwd that arrived as a URI path', async () => {
@@ -184,9 +184,9 @@ describe('PtyHostService', () => {
       platform: 'win32',
     })
 
-    await service.create({ cwd: '/G:/aki_3.6/Source/Client/TypeScript' })
+    await service.create({ cwd: '/G:/p4ws/main/src/client/scripts' })
 
-    expect(captured?.cwd).toBe('G:/aki_3.6/Source/Client/TypeScript')
+    expect(captured?.cwd).toBe('G:/p4ws/main/src/client/scripts')
   })
 
   it('omits an unavailable cwd before calling node-pty', async () => {
@@ -203,7 +203,7 @@ describe('PtyHostService', () => {
       },
     })
 
-    await service.create({ cwd: '${workspaceFolder}/Src/UniverseEditor' })
+    await service.create({ cwd: '${workspaceFolder}/src/editor' })
 
     expect(captured?.cwd).toBeUndefined()
   })

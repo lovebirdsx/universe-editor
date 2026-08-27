@@ -35,7 +35,7 @@ test('parseArgs reads release mode and upload options', () => {
       '--dry-run',
       '--no-upload',
       '--host',
-      '10.0.0.5',
+      '192.0.2.10',
       '--remote-os',
       'linux',
     ]),
@@ -43,7 +43,7 @@ test('parseArgs reads release mode and upload options', () => {
       version: '0.2.0',
       dryRun: true,
       noUpload: true,
-      host: '10.0.0.5',
+      host: '192.0.2.10',
       remoteOs: 'linux',
     },
   )

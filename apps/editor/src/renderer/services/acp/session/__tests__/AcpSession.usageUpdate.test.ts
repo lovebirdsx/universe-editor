@@ -33,7 +33,7 @@ const SUBSCRIPTION_CTX = undefined
 
 /** A reselling gateway publishing CNY rates for the bare model name. */
 const GATEWAY_CTX: SessionProviderContext = {
-  providerId: 'kuro',
+  providerId: 'acme',
   protocol: 'anthropic-messages',
   pricingSource: { id: 'http-json', options: {} },
   gatewayRates: {

@@ -26,7 +26,7 @@ packages/
 | 加 StatusBar 条目 | `apps/editor/src/renderer/workbench/statusbar/` | `apps/editor/CLAUDE.md`（套路 E） | `addEntry` + accessor `update/dispose` 生命周期 |
 | 加性能打点 / 启动耗时检测 | `apps/editor/src/shared/perf/marks.ts` + 打点处 | `apps/editor/CLAUDE.md`（套路 G） | `mark()` 打点 + `PerfMarks` 常量 + `ITimerService` 聚合 |
 | 加 E2E 冒烟场景 | `apps/editor/e2e/specs/` | `apps/editor/CLAUDE.md`（套路 F） | Playwright + `_electron`，通过 `window.__E2E__` 探针调服务；`@p0` 阻塞 CI |
-| 加 AI 供应商（provider） | `apps/editor/src/main/services/ai/providers/` | `apps/editor/CLAUDE.md`（套路 I） | 实现 `IAiModelProvider` + 一行 `registerProvider`；密钥只走 `ISecretStorageService`，绝不进 renderer/settings.json |
+| 加 AI 供应商（provider） | `apps/editor/src/main/services/ai/providers/` | `apps/editor/CLAUDE.md`（套路 I） | 实现 `IAiModelProvider` + 一行 `registerProvider`；密钥存 `aiSettings.json`（明文 + `chmod 0600`），绝不进日志/AI Debug，UI 一律掩码 |
 | 加 platform 内核 API（DI/Event/Command） | `packages/platform/src/` | `packages/platform/CLAUDE.md` | **必须**在 `packages/platform/src/index.ts` re-export |
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |
@@ -41,7 +41,7 @@ packages/
 ## 常用命令
 
 ```bash
-pnpm check        # 快速校验：docs/skills/knowledge 检查 + lint/typecheck（turbo 缓存）+ 按变更选测试
+pnpm check        # 快速校验：docs/敏感串/skills/knowledge 检查 + lint/typecheck（turbo 缓存）+ 按变更选测试
                   #   纯测试变更 → 只跑变更测试文件；叶子包源码 → vitest related 按 import 图选测试；
                   #   配置类/上游包变更 → turbo 全量兜底
 pnpm check:full   # 全量校验（lint + typecheck + test + build），大改动/发版前用
@@ -51,6 +51,20 @@ pnpm e2e          # 端到端测试（未提交改动仅含 e2e spec 时自动�
 ```
 
 ## 跨包共同约定
+
+**占位值规范（本仓库公开，`pnpm sensitive:check` 守护）**：源码、测试固定值与文档里**不得出现**内部服务域名、公司/项目代号、私网地址、开发者本机路径与真实账号名。统一用下表占位值——它们落在 RFC 保留段，扫描器识别为非真实地址：
+
+| 类别 | 占位值 |
+|---|---|
+| 域名 | `*.example.com`（RFC 2606），如 `gallery.example.com` / `swarm.example.com` |
+| IP | `192.0.2.x`（RFC 5737 文档段） |
+| AI provider id / 凭据前缀 | `acme`、`acme-gbl`、`ak-1` |
+| Perforce depot / 工作区 | `//depot/branch_x`、`X:/p4ws/main` |
+| 问题上报服务 | `tracker` |
+| 本机路径 | `X:/workspace` |
+| 账号名 / 机器名 | `testuser`、`dev`、`DESKTOP-TEST` |
+
+内网真实地址走 gitignored 的 `.env`（`UE_UPDATE_FEED_URL` / `UE_GALLERY_URL` 构建期注入）或部署时的 `<userData>/update-config.json`，绝不写进仓库。规则命中确属无害巧合时，在该行加 `sensitive-strings:allow` 注释豁免。
 
 **包依赖传递**：修改 `platform` 后，apps 看到的是 `dist/`。`pnpm dev` 下 watcher 会自动重建；离开 dev 模式时手动 `pnpm build` 或 `pnpm --filter <pkg> build`，否则 apps 仍使用旧产物。
 

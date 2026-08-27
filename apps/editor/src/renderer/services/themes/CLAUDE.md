@@ -88,4 +88,4 @@ TextMate（后注册者胜，无 grammar 回退 Monarch）→ LSP semantic token
 - 内置主题扩展：`extensions/theme-defaults/`
 - TextMate 引擎：`services/textmate/`
 - 用户文档：`docs/user/zh-CN/customization/themes-and-language.md`
-- VSCode 蓝本：`src/vs/workbench/services/themes/`（D:\git_project\vscode）
+- VSCode 蓝本：`src/vs/workbench/services/themes/`

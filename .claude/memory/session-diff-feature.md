@@ -8,7 +8,7 @@ metadata:
   modified: 2026-08-12T08:35:55.031Z
 ---
 
-会话级 diff（VSCode-Copilot 式「Session Changes」），跟踪当前 ACP agent 会话改动的文件。2026-08 重构为 **pinned baseline 快照制**（替代旧「从盘上内容逆向 un-apply hunks 重建 baseline」——旧机制对 agent 未上报的改动/外部改动会误报漏报）。方案文档 `docs/plan/session-changes-baseline-snapshot-plan.md`。
+会话级 diff（VSCode-Copilot 式「Session Changes」），跟踪当前 ACP agent 会话改动的文件。2026-08 重构为 **pinned baseline 快照制**（替代旧「从盘上内容逆向 un-apply hunks 重建 baseline」——旧机制对 agent 未上报的改动/外部改动会误报漏报）。
 
 核心设计（2026-08 现状）：
 - **P1 baseline 快照**：写前全文已在 wire 上——claude PostToolUse `toolResponse.originalFile`（Edit=改前全文、create=null）、codex diff-content `oldText`。`readFileChanges`（acpSessionUpdateMeta.ts）提取为 `FileChangeDescriptor.baseline?: string | null`（string=写前全文、null=created、undefined=未上报）。tracker **first-touch-wins** 钉住快照；展示 diff = pinned baseline vs 现读盘；hunk batches 仅供 rewind restore。per-file cap `MAX_BASELINE_BYTES=4MB`（超限不 pin，回退 `sessionDiffReconstruct` 逆推）。

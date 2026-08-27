@@ -34,12 +34,12 @@ pnpm memory:status        # 只查看状态,不改动
 ## 手动建链接(脚本不可用时的兜底)
 
 按 cwd 推算 Claude 全局目录名:盘符保留、`:`/`\`/`/`/`_` 全部替换成 `-`。
-例 `D:\git_project\universe-editor` → `D--git-project-universe-editor`。
+例 `D:\workspace\universe-editor` → `D--workspace-universe-editor`。
 
 Windows:
 ```cmd
 rmdir /S /Q "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory"
-mklink /J "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory" "D:\git_project\universe-editor\.claude\memory"
+mklink /J "%USERPROFILE%\.claude\projects\D--workspace-universe-editor\memory" "D:\workspace\universe-editor\.claude\memory"
 ```
 
 macOS / Linux(无盘符,例 `/Users/me/universe-editor` → `-Users-me-universe-editor`):

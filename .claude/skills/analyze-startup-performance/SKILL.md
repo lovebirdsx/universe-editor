@@ -94,4 +94,3 @@ dev 与打包版的差异集中在两处，报告读法不变但病因谱不同�
 - `apps/editor/src/renderer/actions/performanceActions.ts` — Startup Performance 命令
 - `apps/editor/src/main/services/performance/performanceMainService.ts` — 主进程 mark 回传
 - `apps/editor/src/main/services/fileWatcher/fileWatcherMainService.ts` — 冷启动只打首次的样板
-- `docs/plan/maintainability-roadmap/06-perf-and-engineering.md` — 计时体系的规划背景（套路 G）

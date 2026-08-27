@@ -51,15 +51,15 @@ describe('matchFilePathAt', () => {
     // Regression: explicit `@` mentions are deliberate file references and may
     // carry CJK directory/file names. The bare-path grammar excludes non-ASCII
     // to avoid Chinese-prose false positives, but that must NOT clip `@` paths —
-    // `@project/aki/个人考核/2026q1.md` was truncated at `@project/aki`.
-    expect(matchFilePathAt('@project/aki/个人考核/2026q1.md', 0)?.path).toBe(
-      'project/aki/个人考核/2026q1.md',
+    // `@project/depot/项目文档/2026q1.md` was truncated at `@project/depot`.
+    expect(matchFilePathAt('@project/depot/项目文档/2026q1.md', 0)?.path).toBe(
+      'project/depot/项目文档/2026q1.md',
     )
-    expect(matchFilePathAt('@project/aki/个人考核/2026q2', 0)?.path).toBe(
-      'project/aki/个人考核/2026q2',
+    expect(matchFilePathAt('@project/depot/项目文档/2026q2', 0)?.path).toBe(
+      'project/depot/项目文档/2026q2',
     )
     // Full-width punctuation still bounds an @ mention (it is not \p{L}/\p{N}).
-    expect(matchFilePathAt('@project/aki（备注）', 0)?.path).toBe('project/aki')
+    expect(matchFilePathAt('@project/depot（备注）', 0)?.path).toBe('project/depot')
   })
 
   it('captures :line:col location', () => {
@@ -99,11 +99,11 @@ describe('matchFilePathAt', () => {
   it('matches a bare Windows directory path without a known extension', () => {
     // A drive prefix is unambiguous filesystem intent and the target may be a
     // directory, so no known extension is required (mirrors looksLikeFilePath).
-    expect(matchFilePathAt('E:\\git_project\\task1\\apps\\editor\\release', 0)?.path).toBe(
-      'E:\\git_project\\task1\\apps\\editor\\release',
+    expect(matchFilePathAt('E:\\workspace\\task1\\apps\\editor\\release', 0)?.path).toBe(
+      'E:\\workspace\\task1\\apps\\editor\\release',
     )
-    expect(matchFilePathAt('E:/git_project/task1/release', 0)?.path).toBe(
-      'E:/git_project/task1/release',
+    expect(matchFilePathAt('E:/workspace/task1/release', 0)?.path).toBe(
+      'E:/workspace/task1/release',
     )
   })
 
@@ -129,7 +129,7 @@ describe('matchFilePathAt', () => {
 
   it('still rejects extension-less relative paths', () => {
     expect(matchFilePathAt('src/foo/bar', 0)).toBeNull()
-    expect(matchFilePathAt('个人考核/2026q2', 0)).toBeNull()
+    expect(matchFilePathAt('项目文档/2026q2', 0)).toBeNull()
   })
 
   it('matches a Unix absolute directory path without a known extension', () => {
@@ -185,10 +185,10 @@ describe('matchFilePathAt', () => {
   it('recognizes CJK segments in a bare relative path', () => {
     // A relative path with a known extension keeps its CJK directory names —
     // one separator is enough because the extension already signals a file.
-    expect(matchFilePathAt('project/aki/个人考核/2026q1.md', 0)?.path).toBe(
-      'project/aki/个人考核/2026q1.md',
+    expect(matchFilePathAt('project/depot/项目文档/2026q1.md', 0)?.path).toBe(
+      'project/depot/项目文档/2026q1.md',
     )
-    expect(matchFilePathAt('个人考核/2026q1.md', 0)?.path).toBe('个人考核/2026q1.md')
+    expect(matchFilePathAt('项目文档/2026q1.md', 0)?.path).toBe('项目文档/2026q1.md')
   })
 
   it('does NOT treat extension-less prose as a directory path', () => {
@@ -202,7 +202,7 @@ describe('matchFilePathAt', () => {
   it('does NOT treat a single-separator CJK phrase as a directory path', () => {
     expect(matchFilePathAt('我的读/写', 0)).toBeNull()
     expect(matchFilePathAt('输入/输出', 0)).toBeNull()
-    expect(matchFilePathAt('个人考核/2026q2', 0)).toBeNull()
+    expect(matchFilePathAt('项目文档/2026q2', 0)).toBeNull()
   })
 
   it('does NOT start a bare path mid-CJK-word', () => {
@@ -258,15 +258,15 @@ describe('looksLikeFilePath', () => {
     expect(looksLikeFilePath('@src/a.ts')).toBe(true)
     expect(looksLikeFilePath('@path/to/file')).toBe(true)
     expect(looksLikeFilePath('@./foo.md#hello')).toBe(true)
-    expect(looksLikeFilePath('@project/aki/个人考核/2026q1.md')).toBe(true)
-    expect(looksLikeFilePath('@project/aki/个人考核/2026q2')).toBe(true)
+    expect(looksLikeFilePath('@project/depot/项目文档/2026q1.md')).toBe(true)
+    expect(looksLikeFilePath('@project/depot/项目文档/2026q2')).toBe(true)
   })
 
   it('accepts absolute paths without an extension (directory targets)', () => {
     // Drive-absolute and POSIX-absolute paths are filesystem paths even without a
     // known extension — they may point at a directory (`[vscode](D:/…/vscode)`).
-    expect(looksLikeFilePath('D:/git_project/vscode')).toBe(true)
-    expect(looksLikeFilePath('D:\\git_project\\vscode')).toBe(true)
+    expect(looksLikeFilePath('D:/workspace/vscode')).toBe(true)
+    expect(looksLikeFilePath('D:\\workspace\\vscode')).toBe(true)
     expect(looksLikeFilePath('C:/Users/foo')).toBe(true)
     expect(looksLikeFilePath('/usr/local/lib')).toBe(true)
   })

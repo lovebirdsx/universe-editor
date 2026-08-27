@@ -13,8 +13,8 @@ import {
 
 const WIN_STACK = [
   'Error: boom',
-  '    at sendPrompt (D:\\git_project\\universe-editor\\apps\\editor\\src\\renderer\\services\\acp\\session\\acpSession.ts:412:15)',
-  '    at async run (D:\\git_project\\universe-editor\\packages\\platform\\dist\\command\\commandService.js:88:7)',
+  '    at sendPrompt (D:\\workspace\\universe-editor\\apps\\editor\\src\\renderer\\services\\acp\\session\\acpSession.ts:412:15)',
+  '    at async run (D:\\workspace\\universe-editor\\packages\\platform\\dist\\command\\commandService.js:88:7)',
 ].join('\n')
 
 const POSIX_STACK = [
@@ -30,7 +30,7 @@ describe('parseStackFrames', () => {
     expect(frames[0]).toEqual({
       func: 'sendPrompt',
       location:
-        'D:\\git_project\\universe-editor\\apps\\editor\\src\\renderer\\services\\acp\\session\\acpSession.ts',
+        'D:\\workspace\\universe-editor\\apps\\editor\\src\\renderer\\services\\acp\\session\\acpSession.ts',
       line: 412,
     })
   })
@@ -63,7 +63,7 @@ describe('normalizeStackPath', () => {
 
 describe('shortStackPath', () => {
   it('keeps the last two segments', () => {
-    expect(shortStackPath('D:\\git_project\\universe-editor\\packages\\platform\\dist\\x.js')).toBe(
+    expect(shortStackPath('D:\\workspace\\universe-editor\\packages\\platform\\dist\\x.js')).toBe(
       'dist/x.js',
     )
     expect(shortStackPath('file:///a/b/c/d.ts')).toBe('c/d.ts')
@@ -72,7 +72,7 @@ describe('shortStackPath', () => {
 
 describe('computeStackKey', () => {
   it('is identical for identical stacks regardless of path roots', () => {
-    const otherRoot = WIN_STACK.replaceAll('D:\\git_project\\universe-editor', 'E:\\other\\root')
+    const otherRoot = WIN_STACK.replaceAll('D:\\workspace\\universe-editor', 'E:\\other\\root')
     expect(computeStackKey(otherRoot)).toBe(computeStackKey(WIN_STACK))
   })
 
@@ -88,8 +88,11 @@ describe('computeErrorFingerprint', () => {
   })
 
   it('falls back to a normalized message for stackless errors', () => {
-    const fp = computeErrorFingerprint(undefined, "ENOENT: open 'C:\\Users\\kuro\\x.txt' failed")
-    expect(fp).not.toContain('kuro')
+    const fp = computeErrorFingerprint(
+      undefined,
+      "ENOENT: open 'C:\\Users\\testuser\\x.txt' failed",
+    )
+    expect(fp).not.toContain('testuser')
     expect(fp).not.toContain('C:')
   })
 

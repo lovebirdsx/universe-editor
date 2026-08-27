@@ -6,7 +6,12 @@ describe('parseFileToOpen', () => {
   // mistaken for a folder to open. This was the cause of the user-data-dir
   // directory being reopened as a workspace on every launch.
   it('does not treat the value of --user-data-dir (space form) as a folder', () => {
-    const argv = ['node', 'main.js', '--user-data-dir', 'C:\\Users\\kuro\\AppData\\Roaming\\App']
+    const argv = [
+      'node',
+      'main.js',
+      '--user-data-dir',
+      'C:\\Users\\testuser\\AppData\\Roaming\\App',
+    ]
     expect(parseFileToOpen(argv, false)).toBeUndefined()
   })
 

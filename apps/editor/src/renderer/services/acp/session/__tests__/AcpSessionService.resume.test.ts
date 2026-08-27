@@ -565,7 +565,7 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
 
   it('resumes a remote legacy row (no authority) by inferring the current workspace authority', async () => {
     const remoteFolder = {
-      fsPath: '/home/xiao',
+      fsPath: '/home/dev',
       scheme: 'remote-ssh',
       authority: 'wsl+ubuntu-24.04',
     } as unknown as IWorkspace['folder']
@@ -576,7 +576,7 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
       agentId: 'fake',
       sessionIdOnAgent: 'remote-legacy',
       title: 'remote session',
-      cwd: '/home/xiao',
+      cwd: '/home/dev',
     })
     const resumed = await svc.resumeSession('remote-legacy')
     expect(resumed.id).toBe('remote-legacy')

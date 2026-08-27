@@ -177,7 +177,3 @@ UNIVERSE_PERF_WORKSPACE=<目录> pnpm --filter @universe-editor/editor e2eg "dri
 排查方法论（采集 → 定性 JS 瓶颈 vs 渲染管线 vs 环境噪音 → 优化）收敛在 skill **`analyze-interaction-performance`**（按需加载）。
 
 用户侧的手动排查路径（报告页 / `interactionPerf.log` / 配置项）见 [`docs/user/zh-CN/reference/troubleshooting.md`](../user/zh-CN/reference/troubleshooting.md)。
-
-## 设计背景
-
-E2E 模块化（内核/插件分离 + 最小扩展集 + affected 执行）的完整设计与阶段记录见 [`docs/plan/e2e-modularization-plan.md`](../plan/e2e-modularization-plan.md)。

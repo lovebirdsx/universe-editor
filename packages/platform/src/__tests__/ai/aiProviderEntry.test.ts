@@ -30,7 +30,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('keeps each protocol’s model set separate', () => {
     const { providers, issues } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: {
             'openai-chat': ['deepseek-v4-pro', 'glm5.3'],
             'anthropic-messages': ['deepseek-v4-pro'],
@@ -41,13 +41,13 @@ describe('resolveProviderEntries — protocolMap', () => {
     )
 
     expect(issues).toEqual([])
-    const kuro = providers[0]
-    expect(kuro?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
-    expect(kuro?.protocols[0]?.models.map((m) => m.channelModel)).toEqual([
+    const acme = providers[0]
+    expect(acme?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
+    expect(acme?.protocols[0]?.models.map((m) => m.channelModel)).toEqual([
       'deepseek-v4-pro',
       'glm5.3',
     ])
-    expect(kuro?.protocols[1]?.models.map((m) => m.channelModel)).toEqual(['deepseek-v4-pro'])
+    expect(acme?.protocols[1]?.models.map((m) => m.channelModel)).toEqual(['deepseek-v4-pro'])
   })
 
   it('marks an empty array as endpoint discovery rather than an empty catalog', () => {
@@ -61,7 +61,7 @@ describe('resolveProviderEntries — protocolMap', () => {
 
   it('applies knowledge to a bare string ref', () => {
     const { providers } = resolveProviderEntries(
-      [entry('kuro', { protocolMap: { 'openai-chat': ['deepseek-v4-pro'] } })],
+      [entry('acme', { protocolMap: { 'openai-chat': ['deepseek-v4-pro'] } })],
       KNOWLEDGE,
     )
 
@@ -73,7 +73,7 @@ describe('resolveProviderEntries — protocolMap', () => {
 
   it('degrades to an empty knowledge entry for an unknown model instead of failing', () => {
     const { providers, issues } = resolveProviderEntries(
-      [entry('kuro', { protocolMap: { 'openai-chat': ['never-heard-of-it'] } })],
+      [entry('acme', { protocolMap: { 'openai-chat': ['never-heard-of-it'] } })],
       KNOWLEDGE,
     )
 
@@ -94,7 +94,7 @@ describe('resolveProviderEntries — protocolMap', () => {
       },
     }
     const { providers, issues } = resolveProviderEntries(
-      [entry('kuro', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      [entry('acme', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
       knowledge,
     )
 
@@ -119,7 +119,7 @@ describe('resolveProviderEntries — protocolMap', () => {
       },
     }
     const { providers } = resolveProviderEntries(
-      [entry('kuro', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      [entry('acme', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
       knowledge,
     )
 
@@ -139,7 +139,7 @@ describe('resolveProviderEntries — protocolMap', () => {
     }
     const { providers } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: {
             'anthropic-messages': [
               { id: 'anthropic/deepseek-v4-pro[1m]', ref: 'deepseek-v4-pro[1m]' },
@@ -160,7 +160,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('separates the wire name from the knowledge key when the channel renamed a model', () => {
     const { providers } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: {
             'anthropic-messages': [{ id: 'anthropic/claude-opus-4-8', ref: 'claude-opus-4-8' }],
           },
@@ -178,7 +178,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('lets a channel take capabilities away but never add them', () => {
     const { providers } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: {
             'openai-chat': [
               { ref: 'claude-opus-4-8', capabilities: { streaming: true, promptCaching: false } },
@@ -203,7 +203,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('lets an override change non-capability fields freely', () => {
     const { providers } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: { 'openai-chat': [{ ref: 'deepseek-v4-pro', maxOutputTokens: 4096 }] },
         }),
       ],
@@ -217,8 +217,8 @@ describe('resolveProviderEntries — protocolMap', () => {
 })
 
 describe('resolveProviderEntries — extends', () => {
-  const base = entry('kuro', {
-    baseUrl: 'https://api.kuro.example/v1',
+  const base = entry('acme', {
+    baseUrl: 'https://api.acme.example/v1',
     apiKey: 'base-key',
     defaultProtocol: 'openai-chat',
     protocolMap: { 'openai-chat': ['deepseek-v4-pro'], 'anthropic-messages': ['deepseek-v4-pro'] },
@@ -227,13 +227,13 @@ describe('resolveProviderEntries — extends', () => {
 
   it('inherits everything the child does not restate', () => {
     const { providers, issues } = resolveProviderEntries(
-      [base, entry('kuro-gbl', { extends: 'kuro', baseUrl: 'http://10.0.1.0:9080/v1' })],
+      [base, entry('acme-gbl', { extends: 'acme', baseUrl: 'http://192.0.2.31:9080/v1' })],
       KNOWLEDGE,
     )
 
     expect(issues).toEqual([])
-    const gbl = providers.find((p) => p.id === 'kuro-gbl')
-    expect(gbl?.baseUrl).toBe('http://10.0.1.0:9080/v1')
+    const gbl = providers.find((p) => p.id === 'acme-gbl')
+    expect(gbl?.baseUrl).toBe('http://192.0.2.31:9080/v1')
     expect(gbl?.apiKey).toBe('base-key')
     expect(gbl?.defaultProtocol).toBe('openai-chat')
     expect(gbl?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
@@ -242,7 +242,7 @@ describe('resolveProviderEntries — extends', () => {
 
   it('replaces protocolMap wholesale rather than merging per protocol', () => {
     const { providers } = resolveProviderEntries(
-      [base, entry('narrow', { extends: 'kuro', protocolMap: { 'openai-chat': ['glm5.3'] } })],
+      [base, entry('narrow', { extends: 'acme', protocolMap: { 'openai-chat': ['glm5.3'] } })],
       KNOWLEDGE,
     )
 
@@ -255,7 +255,7 @@ describe('resolveProviderEntries — extends', () => {
     const { providers, issues } = resolveProviderEntries(
       [
         base,
-        entry('mid', { extends: 'kuro', apiKey: 'mid-key' }),
+        entry('mid', { extends: 'acme', apiKey: 'mid-key' }),
         entry('leaf', { extends: 'mid', apiKey: 'leaf-key' }),
       ],
       KNOWLEDGE,
@@ -264,7 +264,7 @@ describe('resolveProviderEntries — extends', () => {
     expect(issues).toEqual([])
     const leaf = providers.find((p) => p.id === 'leaf')
     expect(leaf?.apiKey).toBe('leaf-key')
-    expect(leaf?.baseUrl).toBe('https://api.kuro.example/v1')
+    expect(leaf?.baseUrl).toBe('https://api.acme.example/v1')
   })
 
   it('skips an entry extending an id that does not exist, and says which', () => {
@@ -273,7 +273,7 @@ describe('resolveProviderEntries — extends', () => {
       KNOWLEDGE,
     )
 
-    expect(providers.map((p) => p.id)).toEqual(['kuro'])
+    expect(providers.map((p) => p.id)).toEqual(['acme'])
     expect(issues).toEqual([
       { providerId: 'orphan', reason: 'unknown-extends', fatal: true, detail: 'nope' },
     ])
@@ -355,7 +355,7 @@ describe('resolveProviderEntries — validation', () => {
   it('falls back to the first protocol when defaultProtocol is not in the map, non-fatally', () => {
     const { providers, issues } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           defaultProtocol: 'openai-responses',
           protocolMap: { 'openai-chat': ['deepseek-v4-pro'] },
         }),
@@ -366,7 +366,7 @@ describe('resolveProviderEntries — validation', () => {
     expect(providers[0]?.defaultProtocol).toBe('openai-chat')
     expect(issues).toEqual([
       {
-        providerId: 'kuro',
+        providerId: 'acme',
         reason: 'unknown-default-protocol',
         fatal: false,
         detail: 'openai-responses',
@@ -377,7 +377,7 @@ describe('resolveProviderEntries — validation', () => {
   it('defaults to the first declared protocol when none is named', () => {
     const { providers } = resolveProviderEntries(
       [
-        entry('kuro', {
+        entry('acme', {
           protocolMap: { 'anthropic-messages': ['deepseek-v4-pro'], 'openai-chat': [] },
         }),
       ],

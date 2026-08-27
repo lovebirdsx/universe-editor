@@ -304,14 +304,14 @@ describe('TitleBar — title text', () => {
 
   it('shows the native drive form for an in-workspace Windows remote file', () => {
     const folder = URI.parse(
-      'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1',
+      'remote-ssh://ssh+192.0.2.20/E:/workspace/universe-editor.worktrees/task1',
     )
     const workspace: IWorkspace = { folder, name: 'task1' }
     const inst = makeContainer(svc, { workspace })
     const input = inst.createInstance(
       FileEditorInput,
       URI.parse(
-        'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1/src/main.ts',
+        'remote-ssh://ssh+192.0.2.20/E:/workspace/universe-editor.worktrees/task1/src/main.ts',
       ),
     )
     svc.activeGroup.openEditor(input)
@@ -322,18 +322,18 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe('src/main.ts — E:\\git_project\\universe-editor.worktrees\\task1')
+    expect(titleText()).toBe('src/main.ts — E:\\workspace\\universe-editor.worktrees\\task1')
   })
 
   it('shows the native drive form for a Windows remote file outside the workspace', () => {
     const folder = URI.parse(
-      'remote-ssh://ssh+10.102.13.131/E:/git_project/universe-editor.worktrees/task1',
+      'remote-ssh://ssh+192.0.2.20/E:/workspace/universe-editor.worktrees/task1',
     )
     const workspace: IWorkspace = { folder, name: 'task1' }
     const inst = makeContainer(svc, { workspace })
     const input = inst.createInstance(
       FileEditorInput,
-      URI.parse('remote-ssh://ssh+10.102.13.131/E:/other/foo.txt'),
+      URI.parse('remote-ssh://ssh+192.0.2.20/E:/other/foo.txt'),
     )
     svc.activeGroup.openEditor(input)
 
@@ -343,9 +343,7 @@ describe('TitleBar — title text', () => {
       </ServicesContext.Provider>,
     )
 
-    expect(titleText()).toBe(
-      'E:\\other\\foo.txt — E:\\git_project\\universe-editor.worktrees\\task1',
-    )
+    expect(titleText()).toBe('E:\\other\\foo.txt — E:\\workspace\\universe-editor.worktrees\\task1')
   })
 
   it('does not treat a different remote authority as in-workspace', () => {
