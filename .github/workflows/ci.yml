@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref. On a PR, a new push cancels the prior
 # run (cancel-in-progress). On main, the group is per-SHA so pushes never cancel
