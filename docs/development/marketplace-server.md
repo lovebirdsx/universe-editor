@@ -284,7 +284,11 @@ UE_GALLERY_URL=http://<host>/universe-editor       # 写入打包版 product.jso
 UE_UPDATE_FEED_URL=http://<host>/universe-editor/  # 写入 electron-builder.yml 的 publish.url
 ```
 
-打包脚本（`pnpm --filter @universe-editor/editor package:win*` / `package:linux:dir`）在打包前 `loadEnv()` 并注入这两个变量：
+打包脚本（`pnpm --filter @universe-editor/editor package:win*` / `package:linux:dir`）在打包前 `loadEnv()` 并注入这两个变量；按 `--env <mode>` 分层选文件（默认 `dev`，读 `.env` / `.env.dev`），用 `.env.prod` 时须显式透传：
+
+```bash
+pnpm --filter @universe-editor/editor package:win -- --env prod
+```
 
 - **`UE_GALLERY_URL`**：`scripts/release/runtime-resources.mjs` 在 stage `product.json` 时按 env 覆盖 `galleryUrl`（未配置则保留仓库里的占位值原样）。
 - **`UE_UPDATE_FEED_URL`**：`scripts/release/package.mjs` 注入 `process.env`，electron-builder 展开 `electron-builder.yml` 里的 `${env.UE_UPDATE_FEED_URL}`（未配置则回填占位值兜底）。

@@ -30,10 +30,10 @@
     "lint:fix": "eslint --fix src bench integration e2e",
     "clean": "tsgo --build --clean",
     "package": "pnpm run package:win",
-    "package:win": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win nsis dir && pnpm -w run runtime:verify:packaged",
-    "package:win:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win dir && pnpm -w run runtime:verify:packaged",
-    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --win nsis && pnpm -w run runtime:verify:packaged",
-    "package:linux:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && node ../../scripts/release/package.mjs --linux dir --publish never && pnpm -w run runtime:verify:packaged apps/editor/release/linux-unpacked/resources"
+    "package:win": "node ../../scripts/release/package-editor.mjs --win nsis dir",
+    "package:win:dir": "node ../../scripts/release/package-editor.mjs --win dir",
+    "package:win:installer": "node ../../scripts/release/package-editor.mjs --win nsis",
+    "package:linux:dir": "node ../../scripts/release/package-editor.mjs --linux dir --publish never --verify-root apps/editor/release/linux-unpacked/resources"
   },
   "dependencies": {
     "@parcel/watcher": "catalog:",

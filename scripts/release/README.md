@@ -111,6 +111,14 @@ UE_GALLERY_URL=http://<服务器IP>/universe-editor         # 打包版 product.
 - `UE_UPDATE_FEED_URL` 注入 `electron-builder.yml` 的 `publish.url`（`${env.UE_UPDATE_FEED_URL}`），务必与 nginx `location` 对应。
 - `UE_GALLERY_URL` 注入打包版 `product.json` 的 `galleryUrl`（扩展市场地址，与更新地址可不同源）。
 
+**选择分层文件**：打包脚本默认 `mode=dev`（只读 `.env` / `.env.dev`）。要把真实地址写在 `.env.prod`，须显式把 mode 传进打包脚本——`--env` 会一路透传并回写 `UE_ENV` 给后续子进程：
+
+```bash
+pnpm --filter @universe-editor/editor package:win -- --env prod
+```
+
+注意 `.env.prod` 里那行 `UE_ENV=prod` 只是给 `server:deploy -- --env prod` 这类脚本记部署目标用，**不会**让打包脚本自动选中 `.env.prod`——mode 只来自 `--env` 旗标或 shell 环境变量 `UE_ENV`（`$env:UE_ENV='prod'`）。
+
 不配这两个变量时打包**不会失败**，只是产出指向占位地址的包。变量清单与分层规则见仓库根 [`.env.example`](../../.env.example)。
 
 > 暂未做代码签名，安装时 Windows SmartScreen 会提示”未知发布者”，点”更多信息 → 仍要运行”即可。
