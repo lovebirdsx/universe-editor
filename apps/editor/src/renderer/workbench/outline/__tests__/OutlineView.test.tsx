@@ -560,6 +560,58 @@ describe('OutlineView — keyboard navigation', () => {
   })
 })
 
+// Mouse parity: clicking the row jumps to the symbol WITHOUT toggling; only the
+// chevron expands/collapses. (Regression: the row click used to reuse the Tree's
+// onClickRow, which also toggles non-leaf rows.)
+describe('OutlineView — mouse interaction', () => {
+  function makeTree() {
+    const child = makeSymbol('Child', { line: 2 })
+    const parent = makeSymbol('Parent', { line: 1, children: [child] })
+    const { revealSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [parent],
+      languageId: 'typescript',
+      version: 1,
+    })
+    outlineViewState.setFollowCursor(false)
+    renderView(instantiation)
+    return { revealSymbol, parent }
+  }
+
+  const rowByLabel = (label: string): HTMLElement => {
+    const el = Array.from(document.querySelectorAll('[role="treeitem"]')).find(
+      (r) => r.lastElementChild?.textContent === label,
+    )
+    if (!el) throw new Error(`row not found: ${label}`)
+    return el as HTMLElement
+  }
+
+  it('clicking a non-leaf row jumps without collapsing it', () => {
+    const { revealSymbol, parent } = makeTree()
+    expect(screen.getByText('Child')).toBeTruthy()
+
+    act(() => fireEvent.click(rowByLabel('Parent')))
+
+    expect(revealSymbol).toHaveBeenCalledWith(parent)
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('Child')).toBeTruthy()
+  })
+
+  it('clicking the chevron toggles without jumping', () => {
+    const { revealSymbol } = makeTree()
+    const chevron = rowByLabel('Parent').firstElementChild as HTMLElement
+
+    act(() => fireEvent.click(chevron))
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Child')).toBeNull()
+    expect(revealSymbol).not.toHaveBeenCalled()
+
+    act(() => fireEvent.click(chevron))
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('true')
+    expect(revealSymbol).not.toHaveBeenCalled()
+  })
+})
+
 // End-to-end repro: drive the REAL OutlineService for an agent session behind the
 // view and reproduce the user-reported bug — moving the session's keyboard
 // selection (Alt+Up/Down/Home/End) must move the outline highlight, exactly like

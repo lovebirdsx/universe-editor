@@ -503,8 +503,17 @@ export function OutlineView() {
             ]
               .filter(Boolean)
               .join(' ')
+            // Row click selects + jumps only — expansion is left to the chevron,
+            // so clicking a parent row doesn't collapse it out from under you.
+            // (ctx.onClickRow would also toggle non-leaf rows; don't use it here.)
             const onClick = (e: ReactMouseEvent) => {
-              ctx.onClickRow(e)
+              if (e.shiftKey) {
+                model.selectRange(model.focused ?? node.id, node.id)
+              } else if (e.ctrlKey || e.metaKey) {
+                model.toggleInSelection(node.id)
+              } else {
+                model.setSelection([node.id], node.id)
+              }
               outlineService.revealSymbol(node.element.symbol)
             }
             return (
