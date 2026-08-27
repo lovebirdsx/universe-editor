@@ -75,21 +75,12 @@ const SKIP_FILES = new Set([
 ])
 
 /**
- * Default rules: harmless placeholder patterns used when no external config exists.
- * These validate that placeholder values follow RFC conventions.
+ * Default rules used when no external config exists. Empty by design: the real
+ * rules live in the gitignored scripts/sensitive-rules.json so that this file
+ * carries no sensitive patterns. Without the config there is nothing to scan
+ * for — flagging the RFC placeholder values themselves would be a false hit.
  */
-const DEFAULT_RULES = [
-  {
-    id: 'placeholder-domain',
-    desc: 'Placeholder domain should use RFC 2606 example.com',
-    re: /\b(?:[a-z0-9-]+\.)*example\.com\b/gi,
-  },
-  {
-    id: 'placeholder-ip',
-    desc: 'Placeholder IP should use RFC 5737 192.0.2.x',
-    re: /\b192\.0\.2\.\d{1,3}\b/g,
-  },
-]
+const DEFAULT_RULES = []
 
 /**
  * Load rules from external JSON config if present, otherwise use defaults.

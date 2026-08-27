@@ -61,7 +61,10 @@ function validate(schema: IJSONSchema, value: unknown, path: string): string[] {
   return errors
 }
 
-const MODEL_IDS = ['acme-gbl/anthropic-messages/acme-chat-pro', 'acme-gbl/openai-chat/acme-chat-standard']
+const MODEL_IDS = [
+  'acme-gbl/anthropic-messages/acme-chat-pro',
+  'acme-gbl/openai-chat/acme-chat-standard',
+]
 
 const SAMPLE_SETTINGS = {
   models: {

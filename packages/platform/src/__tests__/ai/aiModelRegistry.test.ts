@@ -59,7 +59,9 @@ describe('AiModelRegistry — declared models', () => {
     const listModels = vi.fn(() => Promise.resolve(['should-not-be-asked']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('acme', [declared('openai-chat', ['acme-chat-pro', 'acme-chat-standard'])])])
+    reg.setProviders([
+      provider('acme', [declared('openai-chat', ['acme-chat-pro', 'acme-chat-standard'])]),
+    ])
 
     const models = await reg.getModels(CancellationToken.None)
     expect(models.map((m) => m.id)).toEqual([
@@ -523,10 +525,7 @@ describe('AiModelRegistry — lookup', () => {
       ]),
     ])
 
-    const viaChat = await reg.resolveModel(
-      'acme/openai-chat/acme-chat-pro',
-      CancellationToken.None,
-    )
+    const viaChat = await reg.resolveModel('acme/openai-chat/acme-chat-pro', CancellationToken.None)
     expect(viaChat?.provider).toBe(chat)
     expect(viaChat?.runtime.protocol).toBe('openai-chat')
 

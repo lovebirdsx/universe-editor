@@ -141,9 +141,7 @@ describe('resolveProviderEntries — protocolMap', () => {
       [
         entry('acme', {
           protocolMap: {
-            'anthropic-messages': [
-              { id: 'anthropic/acme-chat-pro[1m]', ref: 'acme-chat-pro[1m]' },
-            ],
+            'anthropic-messages': [{ id: 'anthropic/acme-chat-pro[1m]', ref: 'acme-chat-pro[1m]' }],
           },
         }),
       ],
@@ -242,7 +240,13 @@ describe('resolveProviderEntries — extends', () => {
 
   it('replaces protocolMap wholesale rather than merging per protocol', () => {
     const { providers } = resolveProviderEntries(
-      [base, entry('narrow', { extends: 'acme', protocolMap: { 'openai-chat': ['acme-chat-standard'] } })],
+      [
+        base,
+        entry('narrow', {
+          extends: 'acme',
+          protocolMap: { 'openai-chat': ['acme-chat-standard'] },
+        }),
+      ],
       KNOWLEDGE,
     )
 

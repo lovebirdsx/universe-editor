@@ -762,7 +762,9 @@ describe('AiModelMainService', () => {
 
   it('uses the declared model list verbatim and never touches the network', async () => {
     const { service } = makeServiceFromFile(
-      JSON.stringify({ providers: [{ id: 'acme', protocolMap: { ollama: ['acme-chat-standard'] } }] }),
+      JSON.stringify({
+        providers: [{ id: 'acme', protocolMap: { ollama: ['acme-chat-standard'] } }],
+      }),
     )
     const handle = fakeProvider({ models: ['should-not-be-called'] })
     addProvider(service, FAKE_PROTOCOL, handle.provider)
