@@ -345,7 +345,7 @@ describe('useClaudeConfig', () => {
     await waitFor(() => expect(second.result.current.loaded).toBe(true))
 
     await act(async () => {
-      await first.result.current.setSubagentModel('deepseek-v4-pro')
+      await first.result.current.setSubagentModel('acme-chat-pro')
     })
 
     // `second` still holds its mount-time snapshot; writing through it must not
@@ -355,7 +355,7 @@ describe('useClaudeConfig', () => {
     })
 
     const onDisk = await service.read()
-    expect(onDisk.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('deepseek-v4-pro')
+    expect(onDisk.env?.['CLAUDE_CODE_SUBAGENT_MODEL']).toBe('acme-chat-pro')
   })
 
   it('refreshes settings and active auth when the config file changes on disk', async () => {

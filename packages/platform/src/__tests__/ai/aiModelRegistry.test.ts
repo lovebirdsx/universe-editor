@@ -59,12 +59,12 @@ describe('AiModelRegistry — declared models', () => {
     const listModels = vi.fn(() => Promise.resolve(['should-not-be-asked']))
     const reg = new AiModelRegistry()
     reg.registerProvider('openai-chat', fakeProvider(listModels))
-    reg.setProviders([provider('acme', [declared('openai-chat', ['deepseek-v4-pro', 'glm5.3'])])])
+    reg.setProviders([provider('acme', [declared('openai-chat', ['acme-chat-pro', 'acme-chat-standard'])])])
 
     const models = await reg.getModels(CancellationToken.None)
     expect(models.map((m) => m.id)).toEqual([
-      'acme/openai-chat/deepseek-v4-pro',
-      'acme/openai-chat/glm5.3',
+      'acme/openai-chat/acme-chat-pro',
+      'acme/openai-chat/acme-chat-standard',
     ])
     expect(listModels).not.toHaveBeenCalled()
     reg.dispose()
@@ -76,15 +76,15 @@ describe('AiModelRegistry — declared models', () => {
     reg.registerProvider('anthropic-messages', fakeProvider())
     reg.setProviders([
       provider('acme', [
-        declared('openai-chat', ['deepseek-v4-pro']),
-        declared('anthropic-messages', ['deepseek-v4-pro']),
+        declared('openai-chat', ['acme-chat-pro']),
+        declared('anthropic-messages', ['acme-chat-pro']),
       ]),
     ])
 
     const models = await reg.getModels(CancellationToken.None)
     expect(models.map((m) => m.id)).toEqual([
-      'acme/openai-chat/deepseek-v4-pro',
-      'acme/anthropic-messages/deepseek-v4-pro',
+      'acme/openai-chat/acme-chat-pro',
+      'acme/anthropic-messages/acme-chat-pro',
     ])
     expect(models.map((m) => m.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
     expect(models.every((m) => m.providerId === 'acme')).toBe(true)
@@ -518,20 +518,20 @@ describe('AiModelRegistry — lookup', () => {
     reg.registerProvider('anthropic-messages', messages)
     reg.setProviders([
       provider('acme', [
-        declared('openai-chat', ['deepseek-v4-pro']),
-        declared('anthropic-messages', ['deepseek-v4-pro']),
+        declared('openai-chat', ['acme-chat-pro']),
+        declared('anthropic-messages', ['acme-chat-pro']),
       ]),
     ])
 
     const viaChat = await reg.resolveModel(
-      'acme/openai-chat/deepseek-v4-pro',
+      'acme/openai-chat/acme-chat-pro',
       CancellationToken.None,
     )
     expect(viaChat?.provider).toBe(chat)
     expect(viaChat?.runtime.protocol).toBe('openai-chat')
 
     const viaMessages = await reg.resolveModel(
-      'acme/anthropic-messages/deepseek-v4-pro',
+      'acme/anthropic-messages/acme-chat-pro',
       CancellationToken.None,
     )
     expect(viaMessages?.provider).toBe(messages)

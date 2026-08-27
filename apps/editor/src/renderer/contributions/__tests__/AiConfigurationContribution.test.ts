@@ -61,11 +61,11 @@ function validate(schema: IJSONSchema, value: unknown, path: string): string[] {
   return errors
 }
 
-const MODEL_IDS = ['acme-gbl/anthropic-messages/deepseek-v4-pro', 'acme-gbl/openai-chat/glm5.3']
+const MODEL_IDS = ['acme-gbl/anthropic-messages/acme-chat-pro', 'acme-gbl/openai-chat/acme-chat-standard']
 
 const SAMPLE_SETTINGS = {
   models: {
-    'deepseek-v4-pro': {
+    'acme-chat-pro': {
       name: 'DeepSeek V4 Pro',
       vendor: 'deepseek',
       nativeProtocol: 'openai-chat',
@@ -83,9 +83,9 @@ const SAMPLE_SETTINGS = {
       apiKey: 'key-xxxx',
       defaultProtocol: 'openai-chat',
       protocolMap: {
-        'openai-chat': ['deepseek-v4-pro', 'glm5.3'],
+        'openai-chat': ['acme-chat-pro', 'acme-chat-standard'],
         'anthropic-messages': [
-          'deepseek-v4-pro',
+          'acme-chat-pro',
           {
             id: 'anthropic/claude-opus-4-8',
             ref: 'claude-opus-4-8',
@@ -96,15 +96,15 @@ const SAMPLE_SETTINGS = {
       pricingSource: { id: 'http-json', options: { path: '/v1/pricing', currency: 'CNY' } },
       usageSource: { id: 'http-json', options: { path: '/v1/quota' } },
     },
-    { id: 'acme-gbl', extends: 'acme', baseUrl: 'http://192.0.2.31:9080/v1', apiKey: 'ak-...' },
+    { id: 'acme-gbl', extends: 'acme', baseUrl: 'http://192.0.2.31:8080/v1', apiKey: 'ak-...' },
   ],
-  modelSettings: { 'acme-gbl/anthropic-messages/deepseek-v4-pro': { temperature: 0.3 } },
+  modelSettings: { 'acme-gbl/anthropic-messages/acme-chat-pro': { temperature: 0.3 } },
   activeModels: {
-    chat: 'acme-gbl/anthropic-messages/deepseek-v4-pro',
-    inlineCompletion: 'acme-gbl/openai-chat/glm5.3',
+    chat: 'acme-gbl/anthropic-messages/acme-chat-pro',
+    inlineCompletion: 'acme-gbl/openai-chat/acme-chat-standard',
   },
   agentSettings: {
-    claude: { authentication: 'acme-gbl', model: 'deepseek-v4-pro' },
+    claude: { authentication: 'acme-gbl', model: 'acme-chat-pro' },
     codex: { authentication: '@subscription' },
   },
 }

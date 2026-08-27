@@ -59,7 +59,7 @@ describe('modelOneM', () => {
     })
 
     it('round-trips a toggle back to the original id', () => {
-      const id = 'deepseek-v4-pro'
+      const id = 'acme-chat-pro'
       expect(withOneM(stripOneM(withOneM(id, true)), false)).toBe(id)
     })
   })

@@ -16,7 +16,7 @@
  *  session-cost path never sees a `ref` and would otherwise show "—" while the
  *  picker showed a rate. Such a channel should declare its own rate source.
  *
- *  The wire name may carry a trailing context/effort hint (`deepseek-v4-pro[1m]`,
+ *  The wire name may carry a trailing context/effort hint (`acme-chat-pro[1m]`,
  *  the spelling the agent reports usage under). Lookup tries the exact name first
  *  and only then the name with that hint stripped: a table pricing the 1M lane
  *  separately keeps winning on its own key, and one keyed by the bare name still

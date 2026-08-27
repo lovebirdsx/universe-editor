@@ -222,7 +222,7 @@ pnpm gallery:token -- revoke --publisher acme --label zhangsan-laptop --auth-dir
 pnpm gallery:token -- list --auth-dir /srv/auth
 ```
 
-> ⚠️ **HTTPS 是 token 安全的前提**：token 以 Bearer 明文过线。公网/跨办公网部署必须置于 TLS 反代之后（server 自身不做 TLS，反代是标准解）；纯内网 HTTP 部署请自知风险等级。
+> ⚠️ **HTTPS 是 token 安全的前提**：token 以 Bearer 明文过线。公网/跨办公网部署必须置于 TLS 反代之后（server 自身不做 TLS，反代是标准解）；纯内网 HTTP 部署建议评估网络边界并启用 TLS。
 
 ### 服务端发布流水线
 

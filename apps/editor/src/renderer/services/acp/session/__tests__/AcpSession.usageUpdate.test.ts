@@ -37,7 +37,7 @@ const GATEWAY_CTX: SessionProviderContext = {
   protocol: 'anthropic-messages',
   pricingSource: { id: 'http-json', options: {} },
   gatewayRates: {
-    'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+    'acme-chat-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
   },
   cnyPerUsd: 6.74,
 }
@@ -113,7 +113,7 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     session = createSession(GATEWAY_CTX)
 
     session.applyUpdate(
-      midturnUpdate([{ model: 'deepseek-v4-pro[1m]', inputTokens: 1_000_000, outputTokens: 0 }]),
+      midturnUpdate([{ model: 'acme-chat-pro[1m]', inputTokens: 1_000_000, outputTokens: 0 }]),
     )
 
     const usage = session.usage.get()
@@ -128,9 +128,9 @@ describe('AcpSession — mid-turn usage_update cost', () => {
   it('grows the amount as the turn progresses (the whole point of the feature)', () => {
     session = createSession(GATEWAY_CTX)
 
-    session.applyUpdate(midturnUpdate([{ model: 'deepseek-v4-pro', inputTokens: 500_000 }], 500))
+    session.applyUpdate(midturnUpdate([{ model: 'acme-chat-pro', inputTokens: 500_000 }], 500))
     const first = session.usage.get()?.cost?.amount
-    session.applyUpdate(midturnUpdate([{ model: 'deepseek-v4-pro', inputTokens: 1_000_000 }], 1000))
+    session.applyUpdate(midturnUpdate([{ model: 'acme-chat-pro', inputTokens: 1_000_000 }], 1000))
     const second = session.usage.get()?.cost?.amount
 
     expect(first).toBeGreaterThan(0)
@@ -179,7 +179,7 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     // The CLI billed this gateway model at its Anthropic flagship fallback rate.
     session.applyUpdate(
       turnFinalUpdate(
-        [{ model: 'deepseek-v4-pro[1m]', inputTokens: 1_000_000, costUSD: 9.99 }],
+        [{ model: 'acme-chat-pro[1m]', inputTokens: 1_000_000, costUSD: 9.99 }],
         9.99,
       ),
     )
@@ -193,7 +193,7 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     session = createSession(GATEWAY_CTX)
 
     session.applyUpdate(
-      turnFinalUpdate([{ model: 'deepseek-v4-pro', inputTokens: 1_000_000, costUSD: 9.99 }], 9.99),
+      turnFinalUpdate([{ model: 'acme-chat-pro', inputTokens: 1_000_000, costUSD: 9.99 }], 9.99),
     )
     const priced = session.usage.get()?.cost?.amount
 
@@ -205,7 +205,7 @@ describe('AcpSession — mid-turn usage_update cost', () => {
 
     const usage = session.usage.get()
     expect(usage?.cost?.amount).toBe(priced)
-    expect(usage?.models?.[0]?.model).toBe('deepseek-v4-pro')
+    expect(usage?.models?.[0]?.model).toBe('acme-chat-pro')
     expect(usage?.used).toBe(3000)
   })
 
@@ -218,11 +218,11 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     session = createSession(GATEWAY_CTX)
 
     session.applyUpdate(
-      turnFinalUpdate([{ model: 'deepseek-v4-pro', inputTokens: 10_000_000, costUSD: 99 }], 99),
+      turnFinalUpdate([{ model: 'acme-chat-pro', inputTokens: 10_000_000, costUSD: 99 }], 99),
     )
     const authoritative = session.usage.get()?.cost?.amount
 
-    session.applyUpdate(midturnUpdate([{ model: 'deepseek-v4-pro', inputTokens: 1000 }], 1000))
+    session.applyUpdate(midturnUpdate([{ model: 'acme-chat-pro', inputTokens: 1000 }], 1000))
 
     const usage = session.usage.get()
     expect(usage?.cost?.amount).toBe(authoritative)
@@ -237,12 +237,12 @@ describe('AcpSession — mid-turn usage_update cost', () => {
     session = createSession(GATEWAY_CTX)
 
     session.applyUpdate(
-      turnFinalUpdate([{ model: 'deepseek-v4-pro', inputTokens: 10_000_000, costUSD: 99 }], 99),
+      turnFinalUpdate([{ model: 'acme-chat-pro', inputTokens: 10_000_000, costUSD: 99 }], 99),
     )
     const before = session.usage.get()?.cost?.amount
 
     session.applyUpdate(
-      turnFinalUpdate([{ model: 'deepseek-v4-pro', inputTokens: 1000, costUSD: 1 }], 1),
+      turnFinalUpdate([{ model: 'acme-chat-pro', inputTokens: 1000, costUSD: 1 }], 1),
     )
 
     const after = session.usage.get()?.cost?.amount

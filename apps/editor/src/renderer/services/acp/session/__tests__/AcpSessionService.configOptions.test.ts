@@ -429,7 +429,7 @@ function gatewayProviderContext(): IAcpSessionProviderContext {
       protocol: 'anthropic-messages',
       pricingSource: { id: 'http-json', options: {} },
       gatewayRates: {
-        'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+        'acme-chat-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
       },
       cnyPerUsd: 6.74,
     }),
@@ -808,7 +808,7 @@ describe('AcpSessionService — session/update fan-out', () => {
         _meta: {
           '_universe/modelBreakdown': [
             {
-              model: 'deepseek-v4-flash',
+              model: 'acme-chat-flash',
               inputTokens: 1_000_000,
               outputTokens: 100_000,
               cacheReadTokens: 500_000,
@@ -866,7 +866,7 @@ describe('AcpSessionService — session/update fan-out', () => {
   })
 
   // End-to-end guard for the real-world miss: the agent reports usage under
-  // `deepseek-v4-pro[1m]` (the `[1m]` comes from the model1m setting) while the
+  // `acme-chat-pro[1m]` (the `[1m]` comes from the model1m setting) while the
   // gateway prices the bare name. The exact-only lookup used to miss, leaving the
   // CLI's Anthropic-tier guess in place — over 4x the gateway's actual charge.
   it('re-prices a lane-suffixed gateway model against the bare rate table', async () => {
@@ -885,7 +885,7 @@ describe('AcpSessionService — session/update fan-out', () => {
           _meta: {
             '_universe/modelBreakdown': [
               {
-                model: 'deepseek-v4-pro[1m]',
+                model: 'acme-chat-pro[1m]',
                 inputTokens: 1_000_000,
                 outputTokens: 100_000,
                 cacheReadTokens: 500_000,

@@ -24,6 +24,10 @@ coverage/
 .claude/plans/
 .claude/explore-results/
 .claude/handoff/
+.claude/settings.local.json
+
+# Sensitive rules config (contains internal identifiers, keep local only)
+scripts/sensitive-rules.json
 
 # Playwright
 playwright-report/

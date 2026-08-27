@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Model-lane helpers. A trailing bracket suffix (`deepseek-v4-pro[1m]`,
+ *  Model-lane helpers. A trailing bracket suffix (`acme-chat-pro[1m]`,
  *  `kimi-k3[high]`) marks a lane of the same model — a context-window or effort
  *  variant — not a different model. The knowledge base is keyed by the bare
  *  model name (lane-invariant intrinsic properties), so a bare entry still

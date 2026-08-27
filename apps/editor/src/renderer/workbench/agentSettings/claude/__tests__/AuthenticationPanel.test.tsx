@@ -199,7 +199,7 @@ describe('AuthenticationPanel provider picker', () => {
 
   it('renders the 1m checkbox for a plain model and toggles it on', async () => {
     const { aiModel } = makeAiModel([GW_ENTRY])
-    const config = makeConfig({ kind: 'provider', providerId: 'gw' }, { model: 'deepseek-v4-pro' })
+    const config = makeConfig({ kind: 'provider', providerId: 'gw' }, { model: 'acme-chat-pro' })
     renderPanel(config, aiModel)
     await flushEffects()
     await flushEffects()
@@ -243,14 +243,14 @@ describe('AuthenticationPanel provider picker', () => {
   it('renders the sub-agent row from the effective env value', async () => {
     const { aiModel } = makeAiModel([GW_ENTRY])
     renderPanel(
-      makeConfig({ kind: 'provider', providerId: 'gw' }, { subagentModel: 'deepseek-v4-flash' }),
+      makeConfig({ kind: 'provider', providerId: 'gw' }, { subagentModel: 'acme-chat-flash' }),
       aiModel,
     )
     await flushEffects()
     await flushEffects()
 
     // The value is pinned as the only option, so it shows on the Select trigger.
-    expect(screen.getByText('deepseek-v4-flash')).toBeTruthy()
+    expect(screen.getByText('acme-chat-flash')).toBeTruthy()
     expect((screen.getByTestId('subagentModel-1m') as HTMLInputElement).checked).toBe(false)
   })
 

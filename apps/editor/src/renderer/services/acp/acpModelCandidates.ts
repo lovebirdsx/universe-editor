@@ -138,7 +138,7 @@ export function contextWindowFor(
   if (!trimmed) return undefined
   const exact = candidates.find((c) => c.id === trimmed)
   if (exact) return exact.contextWindow
-  // A remembered id may carry a context-lane suffix (`deepseek-v4-pro[1m]`) that
+  // A remembered id may carry a context-lane suffix (`acme-chat-pro[1m]`) that
   // the provider's declaration spells bare; match on the stripped name.
   return candidates.find(
     (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(trimmed),

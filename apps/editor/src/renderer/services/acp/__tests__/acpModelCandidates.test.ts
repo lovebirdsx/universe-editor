@@ -184,21 +184,21 @@ describe('extraModelCandidatesForAgentSettings', () => {
   it('matches a context-lane pick to the bare declared entry, carrying window and effort', () => {
     expect(
       extraModelCandidatesForAgentSettings(
-        'deepseek-v4-pro[1m]',
-        provider(['deepseek-v4-pro'], {
-          windows: { 'deepseek-v4-pro': 1000000 },
-          effortLevels: { 'deepseek-v4-pro': ['low', 'high', 'max'] },
+        'acme-chat-pro[1m]',
+        provider(['acme-chat-pro'], {
+          windows: { 'acme-chat-pro': 1000000 },
+          effortLevels: { 'acme-chat-pro': ['low', 'high', 'max'] },
         }),
         CLAUDE_AGENT_PROTOCOL,
       ),
     ).toEqual([
       {
-        id: 'deepseek-v4-pro[1m]',
+        id: 'acme-chat-pro[1m]',
         contextWindow: 1000000,
         effortLevels: ['low', 'high', 'max'],
       },
       {
-        id: 'deepseek-v4-pro',
+        id: 'acme-chat-pro',
         contextWindow: 1000000,
         effortLevels: ['low', 'high', 'max'],
       },
@@ -217,7 +217,7 @@ describe('contextWindowFor', () => {
 
   it('matches a context-lane id to the bare candidate', () => {
     expect(
-      contextWindowFor([{ id: 'deepseek-v4-pro', contextWindow: 1000000 }], 'deepseek-v4-pro[1m]'),
+      contextWindowFor([{ id: 'acme-chat-pro', contextWindow: 1000000 }], 'acme-chat-pro[1m]'),
     ).toBe(1000000)
   })
 

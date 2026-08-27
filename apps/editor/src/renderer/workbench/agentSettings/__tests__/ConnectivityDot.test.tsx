@@ -6,17 +6,17 @@ describe('ConnectivityDot', () => {
   it('turns green when the probe reports the gateway reachable', async () => {
     const probe = vi.fn(async () => true)
     const { findByRole } = render(
-      <ConnectivityDot baseUrl="http://gateway.example.com:9080" probe={probe} />,
+      <ConnectivityDot baseUrl="http://gateway.example.com:8080" probe={probe} />,
     )
 
     await findByRole('img', { name: 'Gateway reachable' })
-    expect(probe).toHaveBeenCalledWith('http://gateway.example.com:9080')
+    expect(probe).toHaveBeenCalledWith('http://gateway.example.com:8080')
   })
 
   it('stays gray when the probe reports the gateway unreachable', async () => {
     const probe = vi.fn(async () => false)
     const { findByRole } = render(
-      <ConnectivityDot baseUrl="http://gateway.example.com:9080" probe={probe} />,
+      <ConnectivityDot baseUrl="http://gateway.example.com:8080" probe={probe} />,
     )
 
     await findByRole('img', { name: 'Gateway unreachable' })
@@ -27,7 +27,7 @@ describe('ConnectivityDot', () => {
       throw new Error('ipc down')
     })
     const { findByRole } = render(
-      <ConnectivityDot baseUrl="http://gateway.example.com:9080" probe={probe} />,
+      <ConnectivityDot baseUrl="http://gateway.example.com:8080" probe={probe} />,
     )
 
     await findByRole('img', { name: 'Gateway unreachable' })

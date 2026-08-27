@@ -7,9 +7,9 @@ import {
 } from '../../ai/aiProviderEntry.js'
 
 const KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
-  'deepseek-v4-pro': {
+  'acme-chat-pro': {
     name: 'DeepSeek V4 Pro',
-    family: 'deepseek-v4',
+    family: 'acme-chat',
     vendor: 'deepseek',
     nativeProtocol: 'openai-chat',
     maxInputTokens: 128000,
@@ -32,8 +32,8 @@ describe('resolveProviderEntries — protocolMap', () => {
       [
         entry('acme', {
           protocolMap: {
-            'openai-chat': ['deepseek-v4-pro', 'glm5.3'],
-            'anthropic-messages': ['deepseek-v4-pro'],
+            'openai-chat': ['acme-chat-pro', 'acme-chat-standard'],
+            'anthropic-messages': ['acme-chat-pro'],
           },
         }),
       ],
@@ -44,10 +44,10 @@ describe('resolveProviderEntries — protocolMap', () => {
     const acme = providers[0]
     expect(acme?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
     expect(acme?.protocols[0]?.models.map((m) => m.channelModel)).toEqual([
-      'deepseek-v4-pro',
-      'glm5.3',
+      'acme-chat-pro',
+      'acme-chat-standard',
     ])
-    expect(acme?.protocols[1]?.models.map((m) => m.channelModel)).toEqual(['deepseek-v4-pro'])
+    expect(acme?.protocols[1]?.models.map((m) => m.channelModel)).toEqual(['acme-chat-pro'])
   })
 
   it('marks an empty array as endpoint discovery rather than an empty catalog', () => {
@@ -61,12 +61,12 @@ describe('resolveProviderEntries — protocolMap', () => {
 
   it('applies knowledge to a bare string ref', () => {
     const { providers } = resolveProviderEntries(
-      [entry('acme', { protocolMap: { 'openai-chat': ['deepseek-v4-pro'] } })],
+      [entry('acme', { protocolMap: { 'openai-chat': ['acme-chat-pro'] } })],
       KNOWLEDGE,
     )
 
     const model = providers[0]?.protocols[0]?.models[0]
-    expect(model?.ref).toBe('deepseek-v4-pro')
+    expect(model?.ref).toBe('acme-chat-pro')
     expect(model?.knowledge.vendor).toBe('deepseek')
     expect(model?.knowledge.maxInputTokens).toBe(128000)
   })
@@ -87,39 +87,39 @@ describe('resolveProviderEntries — protocolMap', () => {
 
   it('applies bare-name knowledge to a lane-suffixed string ref', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
-      'deepseek-v4-pro': {
+      'acme-chat-pro': {
         name: 'DeepSeek V4 Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
       },
     }
     const { providers, issues } = resolveProviderEntries(
-      [entry('acme', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      [entry('acme', { protocolMap: { 'anthropic-messages': ['acme-chat-pro[1m]'] } })],
       knowledge,
     )
 
     expect(issues).toEqual([])
     const model = providers[0]?.protocols[0]?.models[0]
-    expect(model?.ref).toBe('deepseek-v4-pro[1m]')
+    expect(model?.ref).toBe('acme-chat-pro[1m]')
     expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high', 'max'])
     expect(model?.knowledge.maxInputTokens).toBe(128000)
   })
 
   it('prefers an exact suffixed knowledge key over the bare-name fallback', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
-      'deepseek-v4-pro': {
+      'acme-chat-pro': {
         name: 'DeepSeek V4 Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
       },
-      'deepseek-v4-pro[1m]': {
+      'acme-chat-pro[1m]': {
         name: 'DeepSeek V4 Pro [1m]',
         supportsReasoningEffort: ['low', 'high'],
         maxInputTokens: 1000000,
       },
     }
     const { providers } = resolveProviderEntries(
-      [entry('acme', { protocolMap: { 'anthropic-messages': ['deepseek-v4-pro[1m]'] } })],
+      [entry('acme', { protocolMap: { 'anthropic-messages': ['acme-chat-pro[1m]'] } })],
       knowledge,
     )
 
@@ -131,7 +131,7 @@ describe('resolveProviderEntries — protocolMap', () => {
 
   it('applies bare-name knowledge to a lane-suffixed override ref', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
-      'deepseek-v4-pro': {
+      'acme-chat-pro': {
         name: 'DeepSeek V4 Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
@@ -142,7 +142,7 @@ describe('resolveProviderEntries — protocolMap', () => {
         entry('acme', {
           protocolMap: {
             'anthropic-messages': [
-              { id: 'anthropic/deepseek-v4-pro[1m]', ref: 'deepseek-v4-pro[1m]' },
+              { id: 'anthropic/acme-chat-pro[1m]', ref: 'acme-chat-pro[1m]' },
             ],
           },
         }),
@@ -151,8 +151,8 @@ describe('resolveProviderEntries — protocolMap', () => {
     )
 
     const model = providers[0]?.protocols[0]?.models[0]
-    expect(model?.channelModel).toBe('anthropic/deepseek-v4-pro[1m]')
-    expect(model?.ref).toBe('deepseek-v4-pro[1m]')
+    expect(model?.channelModel).toBe('anthropic/acme-chat-pro[1m]')
+    expect(model?.ref).toBe('acme-chat-pro[1m]')
     expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high', 'max'])
     expect(model?.knowledge.maxInputTokens).toBe(128000)
   })
@@ -183,7 +183,7 @@ describe('resolveProviderEntries — protocolMap', () => {
             'openai-chat': [
               { ref: 'claude-opus-4-8', capabilities: { streaming: true, promptCaching: false } },
               // toolCalling is absent from the knowledge base — asking for it changes nothing
-              { ref: 'deepseek-v4-pro', capabilities: { streaming: true, toolCalling: true } },
+              { ref: 'acme-chat-pro', capabilities: { streaming: true, toolCalling: true } },
             ],
           },
         }),
@@ -204,7 +204,7 @@ describe('resolveProviderEntries — protocolMap', () => {
     const { providers } = resolveProviderEntries(
       [
         entry('acme', {
-          protocolMap: { 'openai-chat': [{ ref: 'deepseek-v4-pro', maxOutputTokens: 4096 }] },
+          protocolMap: { 'openai-chat': [{ ref: 'acme-chat-pro', maxOutputTokens: 4096 }] },
         }),
       ],
       KNOWLEDGE,
@@ -221,19 +221,19 @@ describe('resolveProviderEntries — extends', () => {
     baseUrl: 'https://api.acme.example/v1',
     apiKey: 'base-key',
     defaultProtocol: 'openai-chat',
-    protocolMap: { 'openai-chat': ['deepseek-v4-pro'], 'anthropic-messages': ['deepseek-v4-pro'] },
+    protocolMap: { 'openai-chat': ['acme-chat-pro'], 'anthropic-messages': ['acme-chat-pro'] },
     pricingSource: { id: 'http-json' },
   })
 
   it('inherits everything the child does not restate', () => {
     const { providers, issues } = resolveProviderEntries(
-      [base, entry('acme-gbl', { extends: 'acme', baseUrl: 'http://192.0.2.31:9080/v1' })],
+      [base, entry('acme-gbl', { extends: 'acme', baseUrl: 'http://192.0.2.31:8080/v1' })],
       KNOWLEDGE,
     )
 
     expect(issues).toEqual([])
     const gbl = providers.find((p) => p.id === 'acme-gbl')
-    expect(gbl?.baseUrl).toBe('http://192.0.2.31:9080/v1')
+    expect(gbl?.baseUrl).toBe('http://192.0.2.31:8080/v1')
     expect(gbl?.apiKey).toBe('base-key')
     expect(gbl?.defaultProtocol).toBe('openai-chat')
     expect(gbl?.protocols.map((p) => p.protocol)).toEqual(['openai-chat', 'anthropic-messages'])
@@ -242,13 +242,13 @@ describe('resolveProviderEntries — extends', () => {
 
   it('replaces protocolMap wholesale rather than merging per protocol', () => {
     const { providers } = resolveProviderEntries(
-      [base, entry('narrow', { extends: 'acme', protocolMap: { 'openai-chat': ['glm5.3'] } })],
+      [base, entry('narrow', { extends: 'acme', protocolMap: { 'openai-chat': ['acme-chat-standard'] } })],
       KNOWLEDGE,
     )
 
     const narrow = providers.find((p) => p.id === 'narrow')
     expect(narrow?.protocols.map((p) => p.protocol)).toEqual(['openai-chat'])
-    expect(narrow?.protocols[0]?.models.map((m) => m.channelModel)).toEqual(['glm5.3'])
+    expect(narrow?.protocols[0]?.models.map((m) => m.channelModel)).toEqual(['acme-chat-standard'])
   })
 
   it('resolves a multi-level chain with the nearest layer winning', () => {
@@ -291,7 +291,7 @@ describe('resolveProviderEntries — extends', () => {
 
   it('rejects a chain deeper than the limit', () => {
     const chain: AiProviderEntry[] = [
-      entry('p0', { protocolMap: { 'openai-chat': ['deepseek-v4-pro'] } }),
+      entry('p0', { protocolMap: { 'openai-chat': ['acme-chat-pro'] } }),
     ]
     for (let i = 1; i <= 9; i++) chain.push(entry(`p${i}`, { extends: `p${i - 1}` }))
 
@@ -306,7 +306,7 @@ describe('resolveProviderEntries — extends', () => {
     [8, false],
   ])('accepts a chain of %i hops: %s', (hops, ok) => {
     const chain: AiProviderEntry[] = [
-      entry('p0', { protocolMap: { 'openai-chat': ['deepseek-v4-pro'] } }),
+      entry('p0', { protocolMap: { 'openai-chat': ['acme-chat-pro'] } }),
     ]
     for (let i = 1; i <= hops; i++) chain.push(entry(`p${i}`, { extends: `p${i - 1}` }))
 
@@ -357,7 +357,7 @@ describe('resolveProviderEntries — validation', () => {
       [
         entry('acme', {
           defaultProtocol: 'openai-responses',
-          protocolMap: { 'openai-chat': ['deepseek-v4-pro'] },
+          protocolMap: { 'openai-chat': ['acme-chat-pro'] },
         }),
       ],
       KNOWLEDGE,
@@ -378,7 +378,7 @@ describe('resolveProviderEntries — validation', () => {
     const { providers } = resolveProviderEntries(
       [
         entry('acme', {
-          protocolMap: { 'anthropic-messages': ['deepseek-v4-pro'], 'openai-chat': [] },
+          protocolMap: { 'anthropic-messages': ['acme-chat-pro'], 'openai-chat': [] },
         }),
       ],
       KNOWLEDGE,
@@ -403,10 +403,10 @@ describe('mergeModelKnowledge', () => {
   })
 
   it('adds entries the builtin base does not know', () => {
-    const merged = mergeModelKnowledge(KNOWLEDGE, { 'glm5.3': { vendor: 'zhipu' } })
+    const merged = mergeModelKnowledge(KNOWLEDGE, { 'acme-chat-standard': { vendor: 'zhipu' } })
 
-    expect(merged['glm5.3']).toEqual({ vendor: 'zhipu' })
-    expect(merged['deepseek-v4-pro']?.vendor).toBe('deepseek')
+    expect(merged['acme-chat-standard']).toEqual({ vendor: 'zhipu' })
+    expect(merged['acme-chat-pro']?.vendor).toBe('deepseek')
   })
 
   it('returns the builtin base untouched when there is no user override', () => {

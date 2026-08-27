@@ -12,10 +12,10 @@ import {
 
 describe('parseModelRef', () => {
   it('parses providerId / protocol / channelModel', () => {
-    expect(parseModelRef('acme/openai-chat/deepseek-v4-pro')).toEqual({
+    expect(parseModelRef('acme/openai-chat/acme-chat-pro')).toEqual({
       providerId: 'acme',
       protocol: 'openai-chat',
-      channelModel: 'deepseek-v4-pro',
+      channelModel: 'acme-chat-pro',
     })
   })
 

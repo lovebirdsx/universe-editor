@@ -456,13 +456,13 @@ describe('CodexConfigMainService', () => {
       {
         id: 'acme-a',
         apiKey: 'acme-b2',
-        baseUrl: 'http://gateway.example.com:9080/',
+        baseUrl: 'http://gateway.example.com:8080/',
         protocolMap: { 'openai-responses': [] },
       },
       {
         id: 'acme-b',
         apiKey: 'acme-5a',
-        baseUrl: 'http://gateway.example.com:9080/',
+        baseUrl: 'http://gateway.example.com:8080/',
         protocolMap: { 'openai-responses': [] },
       },
     ]
@@ -470,7 +470,7 @@ describe('CodexConfigMainService', () => {
     it('reports the matching provider when a gateway is in effect', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:8080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
       expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'acme-b' })
     })
@@ -478,7 +478,7 @@ describe('CodexConfigMainService', () => {
     it('distinguishes same-URL providers by their bearer token', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:8080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
       expect((await svc.resolveActiveAuth()).providerId).toBe('acme-b')
     })
@@ -486,7 +486,7 @@ describe('CodexConfigMainService', () => {
     it('resolves a hand-written model_provider name to its matching provider', async () => {
       await useAiSettings(gatewayProviders)
       await writeToml(
-        'model_provider = "acme"\n[model_providers.acme]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
+        'model_provider = "acme"\n[model_providers.acme]\nbase_url = "http://gateway.example.com:8080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
       expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'acme-b' })
     })
@@ -494,7 +494,7 @@ describe('CodexConfigMainService', () => {
     it('leaves a hand-written gateway that matches no entry unattributed', async () => {
       await useAiSettings([])
       await writeToml(
-        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:9080/"\nexperimental_bearer_token = "acme-5a"\n',
+        'model_provider = "codex-gateway"\n[model_providers.codex-gateway]\nbase_url = "http://gateway.example.com:8080/"\nexperimental_bearer_token = "acme-5a"\n',
       )
       expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider' })
     })
@@ -636,13 +636,13 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     {
       id: 'acme-a',
       apiKey: 'acme-b2',
-      baseUrl: 'http://gateway.example.com:9080/',
+      baseUrl: 'http://gateway.example.com:8080/',
       protocolMap: { 'openai-responses': [] },
     },
     {
       id: 'acme-b',
       apiKey: 'acme-5a',
-      baseUrl: 'http://gateway.example.com:9080/',
+      baseUrl: 'http://gateway.example.com:8080/',
       protocolMap: { 'openai-responses': [] },
     },
   ]
@@ -653,7 +653,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       model_provider: 'codex-gateway',
       model_providers: {
         'codex-gateway': {
-          base_url: 'http://gateway.example.com:9080/',
+          base_url: 'http://gateway.example.com:8080/',
           experimental_bearer_token: 'acme-5a',
         },
       },

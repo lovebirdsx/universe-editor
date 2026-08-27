@@ -48,7 +48,7 @@ agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的�
 | `~/.claude/.credentials.json` | `claude auth login`（OAuth） | agent/SDK | `claudeAiOauth`：accessToken/refreshToken/expiresAt/scopes/subscriptionType/rateLimitTier |
 
 - **🔴 agent 自己的配置文件是唯一真相**。编辑器**不存任何声明值**（`aiSettings.json` 的 `agentSettings.claude` 已废弃、不再被读取），「当前用哪个凭据」一律**反查**：`resolveActiveAuth(authority)` 读上面两个文件 + provider 条目正向派生后比对，见下节决策表。因此外部 `claude auth login`、手改 settings.json、换机器同步，编辑器都自动跟上（`onDidChangeConfig` 去抖 150ms 后刷新），不存在「声明与盘上漂移」这个概念——原先为此打的两块补丁（`credentialMatch.isClaudeAuthActive`、codex 的 drift 检测）已删。
-- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）。UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照的写入会覆盖别人刚改的选择，界面高亮 `deepseek-v4-pro` 而子 agent 实跑 `deepseek-v4-flash`（真实 bug）。新增模型类选择项一律直写 settings.json。
+- **🔴 模型选择同样只有一处真相：settings.json**（`model` 与 `env.CLAUDE_CODE_SUBAGENT_MODEL`）。UI 显示的就是有效 id，`1m` 勾选框由 id 后缀派生。历史教训：镜像版本 + 整块替换写入 = 陈旧快照的写入会覆盖别人刚改的选择，界面高亮 `acme-chat-pro` 而子 agent 实跑 `acme-chat-flash`（真实 bug）。新增模型类选择项一律直写 settings.json。
 - **登录(OAuth) 不是一个 provider 条目**，它走 `.credentials.json`，是反查的最后一档。
 - **切换 Provider 只写三个凭据 env，不连带清空 model 选择**：model/subagentModel 独立于认证；也因此下拉里「当前值不在新候选中时置顶为额外选项」（`pinCurrent`）更关键（否则陈旧值会凭空消失）。
 

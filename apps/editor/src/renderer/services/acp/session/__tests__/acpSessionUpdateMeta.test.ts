@@ -49,9 +49,9 @@ describe('extractModelBreakdown', () => {
   // has to stay absent (= unknown, priced locally) rather than collapse to 0,
   // or the popover would claim every running turn was free.
   it('leaves costUSD undefined when the fork reported none', () => {
-    const [row] = breakdown({ model: 'deepseek-v4-pro', inputTokens: 1000 })
+    const [row] = breakdown({ model: 'acme-chat-pro', inputTokens: 1000 })
     expect(row).toEqual({
-      model: 'deepseek-v4-pro',
+      model: 'acme-chat-pro',
       inputTokens: 1000,
       outputTokens: 0,
       cacheReadTokens: 0,

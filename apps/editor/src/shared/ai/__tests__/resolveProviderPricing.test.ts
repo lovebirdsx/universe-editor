@@ -84,7 +84,7 @@ describe('resolveModelPricing — catalog source', () => {
 
   it('strips a trailing context hint to reach the bare catalog entry', () => {
     const result = resolveModelPricing({
-      bareModel: 'deepseek-v4-flash[1m]',
+      bareModel: 'acme-chat-flash[1m]',
       pricingSource: { id: 'catalog', options: { vendor: 'deepseek' } },
     })
     expect(result.origin).toBe('catalog')
@@ -123,32 +123,32 @@ describe('resolveModelPricing — gateway source', () => {
 })
 
 // The agent reports usage under the model id it ran with, context hint and all
-// (`deepseek-v4-pro[1m]`), while a gateway table is normally keyed by the bare
+// (`acme-chat-pro[1m]`), while a gateway table is normally keyed by the bare
 // name. An exact-only lookup missed, and the session fell back to the CLI's
 // Anthropic-tier guess — off by more than 4x against the gateway's own rate.
 describe('resolveModelPricing — trailing context hints', () => {
   const LANE: AiRateTable = {
-    'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
-    'deepseek-v4-pro[1m]': { currency: 'CNY', input: 18, output: 54, cacheRead: 0.6 },
+    'acme-chat-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+    'acme-chat-pro[1m]': { currency: 'CNY', input: 18, output: 54, cacheRead: 0.6 },
   }
 
   it('prefers an exact lane entry over the bare name', () => {
     const result = resolveModelPricing({
-      bareModel: 'deepseek-v4-pro[1m]',
+      bareModel: 'acme-chat-pro[1m]',
       pricingSource: { id: 'http-json' },
       gatewayRates: LANE,
     })
-    expect(result).toEqual({ pricing: LANE['deepseek-v4-pro[1m]'], origin: 'gateway' })
+    expect(result).toEqual({ pricing: LANE['acme-chat-pro[1m]'], origin: 'gateway' })
   })
 
   it('falls back to the bare name when the table prices no separate lane', () => {
-    const bareOnly: AiRateTable = { 'deepseek-v4-pro': LANE['deepseek-v4-pro']! }
+    const bareOnly: AiRateTable = { 'acme-chat-pro': LANE['acme-chat-pro']! }
     const result = resolveModelPricing({
-      bareModel: 'deepseek-v4-pro[1m]',
+      bareModel: 'acme-chat-pro[1m]',
       pricingSource: { id: 'http-json' },
       gatewayRates: bareOnly,
     })
-    expect(result).toEqual({ pricing: bareOnly['deepseek-v4-pro'], origin: 'gateway' })
+    expect(result).toEqual({ pricing: bareOnly['acme-chat-pro'], origin: 'gateway' })
   })
 
   // Gateway keys are copied verbatim out of remote JSON, so lower-casing the
@@ -156,7 +156,7 @@ describe('resolveModelPricing — trailing context hints', () => {
   it('does not lower-case the key while stripping the hint', () => {
     expect(
       resolveModelPricing({
-        bareModel: 'deepseek-v4-pro[1m]',
+        bareModel: 'acme-chat-pro[1m]',
         pricingSource: { id: 'http-json' },
         gatewayRates: { 'DeepSeek-V4-Pro': { input: 9, output: 27 } },
       }),

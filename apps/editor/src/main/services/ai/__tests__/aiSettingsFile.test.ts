@@ -56,10 +56,10 @@ describe('aiSettingsFile atomic write', () => {
       return actual.rename(from, to)
     })
 
-    await writeAiSettingsFile(path, { models: { 'deepseek-v4-pro': {} } })
+    await writeAiSettingsFile(path, { models: { 'acme-chat-pro': {} } })
 
     expect(attempts).toBe(4)
-    expect(await readAiSettingsRoot(path)).toEqual({ models: { 'deepseek-v4-pro': {} } })
+    expect(await readAiSettingsRoot(path)).toEqual({ models: { 'acme-chat-pro': {} } })
   })
 
   it('rethrows a non-transient rename error instead of retrying', async () => {

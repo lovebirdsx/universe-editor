@@ -213,7 +213,7 @@ describe('ClaudeConfigMainService', () => {
       {
         id: 'gw-a',
         apiKey: 'gw-tok-a',
-        baseUrl: 'http://gateway.example.com:9080/',
+        baseUrl: 'http://gateway.example.com:8080/',
         protocolMap: { 'anthropic-messages': [] },
       },
     ]
@@ -223,7 +223,7 @@ describe('ClaudeConfigMainService', () => {
       await writeRaw({
         env: {
           ANTHROPIC_AUTH_TOKEN: 'gw-tok-a',
-          ANTHROPIC_BASE_URL: 'http://gateway.example.com:9080/',
+          ANTHROPIC_BASE_URL: 'http://gateway.example.com:8080/',
         },
       })
       expect(await svc.resolveActiveAuth()).toEqual({ kind: 'provider', providerId: 'gw-a' })
@@ -371,7 +371,7 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
     )
     svcs.push(svc)
 
-    expect(await svc.checkGatewayConnectivity('http://192.0.2.30:9080', 'host')).toBe(false)
+    expect(await svc.checkGatewayConnectivity('http://192.0.2.30:8080', 'host')).toBe(false)
     expect(remote.probeCalls).toBe(1)
     expect(proxyCalls).toEqual([{ authority: 'host', channel: RemoteChannels.AgentConfig }])
   })

@@ -55,7 +55,7 @@ describe('repriceForeignModelBreakdown', () => {
     const result = repriceForeignModelBreakdown(
       [
         row({
-          model: 'deepseek-v4-flash',
+          model: 'acme-chat-flash',
           inputTokens: 1_000_000,
           cacheReadTokens: 500_000,
           outputTokens: 100_000,
@@ -64,7 +64,7 @@ describe('repriceForeignModelBreakdown', () => {
       ],
       ctx,
     )
-    // deepseek-v4-flash (CNY): input 1 / cacheRead 0.2 / output 2 per M, at 7.2.
+    // acme-chat-flash (CNY): input 1 / cacheRead 0.2 / output 2 per M, at 7.2.
     const expected = (1_000_000 * 1 + 500_000 * 0.2 + 100_000 * 2) / 7.2 / 1e6
     expect(result).toBeDefined()
     expect(result!.cost).toEqual({ amount: expected, currency: 'USD' })
@@ -122,14 +122,14 @@ describe('repriceForeignModelBreakdown', () => {
     expect(result).toBeUndefined()
   })
 
-  // The agent reports usage under `deepseek-v4-pro[1m]` while the gateway prices
+  // The agent reports usage under `acme-chat-pro[1m]` while the gateway prices
   // the bare name. An exact-only lookup missed and the CLI's Anthropic-tier guess
   // survived — the figure users saw was over 4x the gateway's own charge.
   it('re-prices a lane-suffixed model against the bare gateway entry', () => {
     const result = repriceForeignModelBreakdown(
       [
         row({
-          model: 'deepseek-v4-pro[1m]',
+          model: 'acme-chat-pro[1m]',
           inputTokens: 1_000_000,
           cacheReadTokens: 500_000,
           outputTokens: 100_000,
@@ -141,7 +141,7 @@ describe('repriceForeignModelBreakdown', () => {
         protocol: 'anthropic-messages',
         pricingSource: { id: 'http-json', options: {} },
         gatewayRates: {
-          'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
+          'acme-chat-pro': { currency: 'CNY', input: 9, output: 27, cacheRead: 0.2997 },
         },
       },
     )
@@ -154,12 +154,12 @@ describe('repriceForeignModelBreakdown', () => {
   // the UI. Both directions have to use the same rate or the figure skews.
   it('normalizes a CNY gateway rate with the live rate from the context', () => {
     const result = repriceForeignModelBreakdown(
-      [row({ model: 'deepseek-v4-pro', inputTokens: 1_000_000, costUSD: 9.99 })],
+      [row({ model: 'acme-chat-pro', inputTokens: 1_000_000, costUSD: 9.99 })],
       {
         providerId: 'gw',
         protocol: 'anthropic-messages',
         pricingSource: { id: 'http-json', options: {} },
-        gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+        gatewayRates: { 'acme-chat-pro': { currency: 'CNY', input: 9, output: 27 } },
         cnyPerUsd: 6.74,
       },
     )
@@ -225,12 +225,12 @@ describe('repriceForeignModelBreakdown', () => {
 
   it('prices a mid-turn gateway row from the gateway table', () => {
     const result = repriceForeignModelBreakdown(
-      [midturnRow({ model: 'deepseek-v4-pro[1m]', inputTokens: 1_000_000 })],
+      [midturnRow({ model: 'acme-chat-pro[1m]', inputTokens: 1_000_000 })],
       {
         providerId: 'gw',
         protocol: 'anthropic-messages',
         pricingSource: { id: 'http-json', options: {} },
-        gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+        gatewayRates: { 'acme-chat-pro': { currency: 'CNY', input: 9, output: 27 } },
         cnyPerUsd: 6.74,
       },
     )
@@ -313,11 +313,11 @@ describe('estimateCodexCost', () => {
   })
 
   it('normalizes a CNY rate with the live rate from the context', () => {
-    const result = estimateCodexCost([codexUsage('deepseek-v4-pro', { inputTokens: 1_000_000 })], {
+    const result = estimateCodexCost([codexUsage('acme-chat-pro', { inputTokens: 1_000_000 })], {
       providerId: 'gw',
       protocol: 'openai-responses',
       pricingSource: { id: 'http-json', options: {} },
-      gatewayRates: { 'deepseek-v4-pro': { currency: 'CNY', input: 9, output: 27 } },
+      gatewayRates: { 'acme-chat-pro': { currency: 'CNY', input: 9, output: 27 } },
       cnyPerUsd: 6.74,
     })
     expect(result!.models[0]!.costUSD).toBeCloseTo(9 / 6.74, 10)

@@ -8,16 +8,16 @@ import type { AiModelKnowledge } from '../../ai/aiProviderEntry.js'
 
 describe('stripModelLaneSuffix', () => {
   it('drops a trailing bracket suffix', () => {
-    expect(stripModelLaneSuffix('deepseek-v4-pro[1m]')).toBe('deepseek-v4-pro')
+    expect(stripModelLaneSuffix('acme-chat-pro[1m]')).toBe('acme-chat-pro')
     expect(stripModelLaneSuffix('kimi-k3[high]')).toBe('kimi-k3')
   })
 
   it('drops an empty bracket suffix', () => {
-    expect(stripModelLaneSuffix('deepseek-v4-pro[]')).toBe('deepseek-v4-pro')
+    expect(stripModelLaneSuffix('acme-chat-pro[]')).toBe('acme-chat-pro')
   })
 
   it('leaves ids without a trailing suffix untouched', () => {
-    expect(stripModelLaneSuffix('deepseek-v4-pro')).toBe('deepseek-v4-pro')
+    expect(stripModelLaneSuffix('acme-chat-pro')).toBe('acme-chat-pro')
   })
 
   it('ignores brackets in the middle of an id', () => {
@@ -28,12 +28,12 @@ describe('stripModelLaneSuffix', () => {
 
 describe('lookupModelKnowledge', () => {
   const KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
-    'deepseek-v4-pro': { name: 'DeepSeek V4 Pro', maxInputTokens: 128000 },
-    'deepseek-v4-pro[1m]': { name: 'DeepSeek V4 Pro [1m]', maxInputTokens: 1000000 },
+    'acme-chat-pro': { name: 'DeepSeek V4 Pro', maxInputTokens: 128000 },
+    'acme-chat-pro[1m]': { name: 'DeepSeek V4 Pro [1m]', maxInputTokens: 1000000 },
   }
 
   it('prefers the exact key over the bare-name fallback', () => {
-    expect(lookupModelKnowledge(KNOWLEDGE, 'deepseek-v4-pro[1m]')).toEqual({
+    expect(lookupModelKnowledge(KNOWLEDGE, 'acme-chat-pro[1m]')).toEqual({
       name: 'DeepSeek V4 Pro [1m]',
       maxInputTokens: 1000000,
     })
@@ -53,17 +53,17 @@ describe('lookupModelKnowledge', () => {
   it('does not look up the bare name twice for an unsuffixed id', () => {
     const hits: string[] = []
     const knowledge: Record<string, AiModelKnowledge> = {}
-    Object.defineProperty(knowledge, 'deepseek-v4-pro', {
+    Object.defineProperty(knowledge, 'acme-chat-pro', {
       enumerable: true,
       get: () => {
-        hits.push('deepseek-v4-pro')
+        hits.push('acme-chat-pro')
         return { name: 'DeepSeek V4 Pro' }
       },
     })
 
-    expect(lookupModelKnowledge(knowledge, 'deepseek-v4-pro')).toEqual({
+    expect(lookupModelKnowledge(knowledge, 'acme-chat-pro')).toEqual({
       name: 'DeepSeek V4 Pro',
     })
-    expect(hits).toEqual(['deepseek-v4-pro'])
+    expect(hits).toEqual(['acme-chat-pro'])
   })
 })

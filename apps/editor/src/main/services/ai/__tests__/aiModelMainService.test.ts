@@ -525,7 +525,7 @@ describe('AiModelMainService', () => {
       JSON.stringify({
         providers: [{ id: 'openai', protocolMap: { 'openai-chat': ['gpt-5.4'] } }],
         agentSettings: {
-          claude: { authentication: 'acme-gbl', model: 'deepseek-v4-pro' },
+          claude: { authentication: 'acme-gbl', model: 'acme-chat-pro' },
           codex: { authentication: '@subscription', model: 'gpt-5.4' },
         },
       }),
@@ -535,7 +535,7 @@ describe('AiModelMainService', () => {
 
     const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
     expect(onDisk.agentSettings.claude.authentication).toBe('acme-gbl')
-    expect(onDisk.agentSettings.claude.model).toBe('deepseek-v4-pro')
+    expect(onDisk.agentSettings.claude.model).toBe('acme-chat-pro')
     expect(onDisk.agentSettings.codex.authentication).toBe('@subscription')
     service.dispose()
   })
@@ -584,8 +584,8 @@ describe('AiModelMainService', () => {
     const { service } = makeServiceFromFile(
       JSON.stringify({
         providers: [
-          { id: 'acme', protocolMap: { ollama: ['deepseek-v4-pro'] } },
-          { id: 'acme-gbl', extends: 'acme', baseUrl: 'http://192.0.2.31:9080/v1', apiKey: 'ak-1' },
+          { id: 'acme', protocolMap: { ollama: ['acme-chat-pro'] } },
+          { id: 'acme-gbl', extends: 'acme', baseUrl: 'http://192.0.2.31:8080/v1', apiKey: 'ak-1' },
         ],
       }),
     )
@@ -593,8 +593,8 @@ describe('AiModelMainService', () => {
 
     const models = await service.getModels()
     const ids = models.map((m) => m.id)
-    expect(ids).toContain('acme/ollama/deepseek-v4-pro')
-    expect(ids).toContain('acme-gbl/ollama/deepseek-v4-pro')
+    expect(ids).toContain('acme/ollama/acme-chat-pro')
+    expect(ids).toContain('acme-gbl/ollama/acme-chat-pro')
     service.dispose()
   })
 
@@ -762,14 +762,14 @@ describe('AiModelMainService', () => {
 
   it('uses the declared model list verbatim and never touches the network', async () => {
     const { service } = makeServiceFromFile(
-      JSON.stringify({ providers: [{ id: 'acme', protocolMap: { ollama: ['glm5.3'] } }] }),
+      JSON.stringify({ providers: [{ id: 'acme', protocolMap: { ollama: ['acme-chat-standard'] } }] }),
     )
     const handle = fakeProvider({ models: ['should-not-be-called'] })
     addProvider(service, FAKE_PROTOCOL, handle.provider)
 
     const models = await service.getModels()
     expect(handle.listModelsCalls()).toBe(0)
-    expect(models.map((m) => m.id)).toEqual(['acme/ollama/glm5.3'])
+    expect(models.map((m) => m.id)).toEqual(['acme/ollama/acme-chat-standard'])
     service.dispose()
   })
 
