@@ -1,16 +1,19 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for openPreviewInGroup — a group holds at most one rendered preview per
- *  kind, so opening another file's preview retargets the existing tab in place
- *  (VSCode's dynamic preview) instead of piling up tabs.
+ *  Tests for openPreviewInGroup — a preview of a given file is globally unique
+ *  (opening it while another group shows it focuses that tab instead of opening
+ *  a second one), previews of different files coexist in one group, and a
+ *  toggle preview inherits the source tab's pin state.
  *
  *  Regression guard: a toggle-mode preview holds its source FileEditorInput
- *  (detached, not disposed) so the Monaco model survives the toggle. Retargeting
- *  such a preview must not cascade-dispose a *dirty* source — that would release
- *  the shared model and silently drop unsaved edits.
+ *  (detached, not disposed) so the Monaco model survives the toggle. Replacing
+ *  a clean toggle preview via the preview slot must cascade-dispose that held
+ *  source (no leak); a *dirty* held source must survive — a previewReplace
+ *  would release the shared model and silently drop unsaved edits.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  GroupDirection,
   IFileService,
   InstantiationService,
   ServiceCollection,
@@ -21,7 +24,7 @@ import { EditorGroupsService } from '../EditorGroupsService.js'
 import { FileEditorInput } from '../FileEditorInput.js'
 import { HtmlPreviewInput } from '../HtmlPreviewInput.js'
 import { MarkdownPreviewInput } from '../MarkdownPreviewInput.js'
-import { openPreviewInGroup } from '../openPreviewInGroup.js'
+import { openPreviewInGroup, togglePreviewInGroup } from '../openPreviewInGroup.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 
 function makeFs(initial: Record<string, string>): IFileServiceType {
@@ -67,115 +70,73 @@ describe('openPreviewInGroup', () => {
   const uriB = URI.file('/workspace/b.md')
   const uriC = URI.file('/workspace/c.md')
   let inst: InstantiationService
+  let groups: EditorGroupsService
   let group: EditorGroupsService['activeGroup']
+  let side: EditorGroupsService['activeGroup']
 
   beforeEach(() => {
     const services = new ServiceCollection()
     services.set(IFileService, makeFs({ [uriA.toString()]: 'original' }))
     inst = new InstantiationService(services)
-    group = new EditorGroupsService().activeGroup
+    groups = new EditorGroupsService()
+    group = groups.activeGroup
+    side = groups.addGroup(group, GroupDirection.Right)
   })
 
   afterEach(() => {
     MonacoModelRegistry._resetForTests()
   })
 
-  /** Mimic Ctrl+Shift+V: replace the source tab with a preview that adopts it. */
-  async function openDirtySourceInTogglePreview(dirtyText?: string): Promise<FileEditorInput> {
+  /** A source sitting in the group's preview slot with unsaved model edits. */
+  async function openDirtySourceInSlot(dirtyText: string): Promise<FileEditorInput> {
     const source = inst.createInstance(FileEditorInput, uriA)
     const model = await source.resolveModel()
-    if (dirtyText !== undefined) {
-      model.setValue(dirtyText)
-      source.updateDirtyFromModel(model)
-    }
-    group.openEditor(source, { activate: true, pinned: true })
-
-    const preview = new MarkdownPreviewInput(source)
-    group.openEditor(preview, { activate: true, pinned: true })
-    group.detachEditor(source)
-    preview.adoptSource()
+    model.setValue(dirtyText)
+    source.updateDirtyFromModel(model)
+    group.openEditor(source, { activate: true, pinned: false })
     return source
   }
 
-  it('keeps a dirty held source alive: re-attaches it as a tab instead of dropping its edits', async () => {
-    const source = await openDirtySourceInTogglePreview('LOCAL EDITS')
-    expect(source.isDirty).toBe(true)
-
-    openPreviewInGroup(group, new MarkdownPreviewInput(uriB), false)
-
-    expect(source.isDisposed).toBe(false)
-    expect(group.contains(source)).toBe(true)
-    expect(source.isDirty).toBe(true)
-    expect(MonacoModelRegistry.peek(uriA)?.getValue()).toBe('LOCAL EDITS')
-    // The new preview took the old preview's slot; the source sits next to it.
-    expect(group.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
-    expect(group.editors).toHaveLength(2)
-    source.dispose()
-  })
-
-  it('disposes a clean held source with the preview (no extra tab)', async () => {
-    const source = await openDirtySourceInTogglePreview()
-    expect(source.isDirty).toBe(false)
-
-    openPreviewInGroup(group, new MarkdownPreviewInput(uriB), false)
-
-    expect(source.isDisposed).toBe(true)
-    expect(group.editors).toHaveLength(1)
-    expect(group.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
-  })
-
-  it('replaces a link-opened preview (no held source) in place', () => {
-    const first = new MarkdownPreviewInput(uriA)
-    group.openEditor(first, { activate: true, pinned: true })
-
-    const second = new MarkdownPreviewInput(uriB)
-    openPreviewInGroup(group, second, false)
-
-    expect(first.isDisposed).toBe(true)
-    expect(group.editors).toHaveLength(1)
-    expect(group.activeEditor).toBe(second)
-  })
-
-  it('opens an additional tab with toSide', () => {
-    const first = new MarkdownPreviewInput(uriA)
-    group.openEditor(first, { activate: true, pinned: true })
-
-    const second = new MarkdownPreviewInput(uriB)
-    openPreviewInGroup(group, second, true)
-
-    expect(first.isDisposed).toBe(false)
-    expect(group.editors).toHaveLength(2)
-    first.dispose()
-  })
-
-  it('retargets an inactive preview tab when the active editor is a file', () => {
+  it('activates the existing preview for the same file instead of adding a tab', () => {
     const first = new MarkdownPreviewInput(uriA)
     group.openEditor(first, { activate: true, pinned: true })
     const sourceB = inst.createInstance(FileEditorInput, uriB)
     group.openEditor(sourceB, { activate: true, pinned: true })
 
-    const second = new MarkdownPreviewInput(uriC)
-    openPreviewInGroup(group, second, false)
+    const duplicate = new MarkdownPreviewInput(uriA)
+    openPreviewInGroup(groups, group, duplicate)
 
-    // The preview took a.md's preview slot rather than becoming a third tab.
-    expect(first.isDisposed).toBe(true)
-    expect(group.editors).toEqual([second, sourceB])
-    expect(group.activeEditor).toBe(second)
+    expect(group.activeEditor).toBe(first)
+    expect(group.editors).toHaveLength(2)
+    // The speculative input must not linger as a parentless disposable.
+    expect(duplicate.isDisposed).toBe(true)
+    expect(first.isDisposed).toBe(false)
   })
 
-  it('retargets the active preview rather than an earlier one in the group', () => {
-    const first = new MarkdownPreviewInput(uriA)
-    group.openEditor(first, { activate: true, pinned: true })
-    const second = new MarkdownPreviewInput(uriB)
-    group.openEditor(second, { activate: true, pinned: true })
+  it('focuses the existing preview in another group instead of opening a duplicate', () => {
+    const existing = new MarkdownPreviewInput(uriA)
+    side.openEditor(existing, { activate: true, pinned: true })
+    groups.activateGroup(group)
 
-    const third = new MarkdownPreviewInput(uriC)
-    openPreviewInGroup(group, third, false)
+    const duplicate = new MarkdownPreviewInput(uriA)
+    openPreviewInGroup(groups, group, duplicate)
 
-    expect(second.isDisposed).toBe(true)
-    expect(first.isDisposed).toBe(false)
-    expect(group.editors).toEqual([first, third])
-    first.dispose()
+    expect(groups.activeGroup).toBe(side)
+    expect(side.activeEditor).toBe(existing)
+    expect(duplicate.isDisposed).toBe(true)
+    expect(existing.isDisposed).toBe(false)
+    expect(group.editors).toHaveLength(0)
+  })
+
+  it('lets previews of different files coexist in the same group', () => {
+    const a = new MarkdownPreviewInput(uriA)
+    openPreviewInGroup(groups, group, a)
+    const b = new MarkdownPreviewInput(uriB)
+    openPreviewInGroup(groups, group, b)
+
+    expect(group.editors).toHaveLength(2)
+    expect(a.isDisposed).toBe(false)
+    expect(group.activeEditor).toBe(b)
   })
 
   it('leaves a preview of another kind alone', () => {
@@ -183,48 +144,122 @@ describe('openPreviewInGroup', () => {
     group.openEditor(html, { activate: true, pinned: true })
 
     const markdown = new MarkdownPreviewInput(uriA)
-    openPreviewInGroup(group, markdown, false)
+    openPreviewInGroup(groups, group, markdown)
 
     expect(html.isDisposed).toBe(false)
     expect(group.editors).toEqual([html, markdown])
-    html.dispose()
   })
 
-  it('disposes a dirty held source when the group already shows that file', async () => {
-    const held = await openDirtySourceInTogglePreview('LOCAL EDITS')
-    // A second tab for a.md, as if the user reopened the source alongside the
-    // preview — the held input must not become a duplicate tab.
-    const reopened = inst.createInstance(FileEditorInput, uriA)
-    await reopened.resolveModel()
-    group.openEditor(reopened, { activate: false, pinned: true })
-    // It resolved the shared model *after* the edits landed, so it starts clean.
-    expect(reopened.isDirty).toBe(false)
+  it('toggle: a pinned source yields a pinned preview that holds the source', () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(source, { activate: true, pinned: true })
 
-    openPreviewInGroup(group, new MarkdownPreviewInput(uriB), false)
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
 
-    expect(held.isDisposed).toBe(true)
-    expect(reopened.isDisposed).toBe(false)
-    // The surviving tab inherits the dirty flag, or closing it would neither
-    // prompt nor back up the unsaved edits sitting in the shared model.
-    expect(reopened.isDirty).toBe(true)
+    expect(group.isPinned(preview)).toBe(true)
+    expect(group.contains(source)).toBe(false)
+    expect(preview.sourceInput).toBe(source)
+    expect(source.isDisposed).toBe(false)
+    expect(group.editors).toEqual([preview])
+  })
+
+  it('toggle: a preview-slot source yields a preview in the slot, without disposing the source', () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(source, { activate: true, pinned: false })
+
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
+
+    expect(group.isPinned(preview)).toBe(false)
+    expect(group.previewEditor).toBe(preview)
+    expect(source.isDisposed).toBe(false)
+    expect(group.editors).toEqual([preview])
+  })
+
+  it('toggle: a dirty source forces the preview pinned even when the source sits in the slot', async () => {
+    const source = await openDirtySourceInSlot('LOCAL EDITS')
+    expect(source.isDirty).toBe(true)
+
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
+
+    expect(group.isPinned(preview)).toBe(true)
+    expect(preview.sourceInput).toBe(source)
+    expect(source.isDisposed).toBe(false)
+  })
+
+  it('toggle pins a dirty source so a later slot open cannot evict it', async () => {
+    const source = await openDirtySourceInSlot('LOCAL EDITS')
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
+
+    const other = inst.createInstance(FileEditorInput, uriB)
+    group.openEditor(other, { activate: true, pinned: false })
+
+    // The pinned preview stays; the new file takes the slot next to it.
+    expect(group.editors).toEqual([preview, other])
+    expect(group.previewEditor).toBe(other)
+    expect(preview.isDisposed).toBe(false)
+    expect(source.isDisposed).toBe(false)
     expect(MonacoModelRegistry.peek(uriA)?.getValue()).toBe('LOCAL EDITS')
-    expect(group.editors).toEqual([group.activeEditor, reopened])
-    expect(group.editors).toHaveLength(2)
   })
 
-  it('reactivates the existing preview for the same file instead of adding a tab', () => {
-    const first = new MarkdownPreviewInput(uriA)
-    group.openEditor(first, { activate: true, pinned: true })
-    const sourceB = inst.createInstance(FileEditorInput, uriB)
-    group.openEditor(sourceB, { activate: true, pinned: true })
+  it('replacing a clean toggle preview in the slot cascade-disposes its held source (no leak)', () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(source, { activate: true, pinned: false })
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
 
-    const duplicate = new MarkdownPreviewInput(uriA)
-    openPreviewInGroup(group, duplicate, false)
+    const other = inst.createInstance(FileEditorInput, uriB)
+    group.openEditor(other, { activate: true, pinned: false })
 
-    expect(group.activeEditor).toBe(first)
-    expect(group.editors).toHaveLength(2)
-    // The speculative input must not linger as a parentless disposable.
-    expect(duplicate.isDisposed).toBe(true)
-    expect(first.isDisposed).toBe(false)
+    expect(preview.isDisposed).toBe(true)
+    expect(source.isDisposed).toBe(true)
+    expect(group.editors).toEqual([other])
+    expect(group.previewEditor).toBe(other)
+  })
+
+  it('toggle focuses a preview already open in another group and leaves the source alone', () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    group.openEditor(source, { activate: true, pinned: true })
+    const existingPreview = new MarkdownPreviewInput(uriA)
+    side.openEditor(existingPreview, { activate: true, pinned: true })
+    groups.activateGroup(group)
+
+    const spec = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, spec, source)
+
+    expect(groups.activeGroup).toBe(side)
+    expect(side.activeEditor).toBe(existingPreview)
+    expect(spec.isDisposed).toBe(true)
+    expect(existingPreview.isDisposed).toBe(false)
+    expect(group.contains(source)).toBe(true)
+    expect(source.isDisposed).toBe(false)
+  })
+
+  it('toggle lands the preview at the source tab position among other tabs', () => {
+    const source = inst.createInstance(FileEditorInput, uriA)
+    const before = inst.createInstance(FileEditorInput, uriB)
+    const after = inst.createInstance(FileEditorInput, uriC)
+    group.openEditor(before, { activate: false, pinned: true })
+    group.openEditor(source, { activate: true, pinned: true })
+    group.openEditor(after, { activate: false, pinned: true })
+
+    const preview = new MarkdownPreviewInput(source)
+    togglePreviewInGroup(groups, group, preview, source)
+
+    expect(group.editors).toEqual([before, preview, after])
+    expect(group.activeEditor).toBe(preview)
+  })
+
+  it('opening into a non-active group activates it (reopen / lock-routed paths stay visible)', () => {
+    groups.activateGroup(group)
+    const preview = new MarkdownPreviewInput(uriA)
+    openPreviewInGroup(groups, side, preview)
+
+    expect(side.contains(preview)).toBe(true)
+    expect(groups.activeGroup).toBe(side)
+    expect(side.activeEditor).toBe(preview)
   })
 })

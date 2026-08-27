@@ -83,6 +83,8 @@ function setup() {
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: editorGroup,
+    getGroups: () => [editorGroup],
+    activateGroup: (g: unknown) => g,
   } as unknown as IEditorGroupsServiceType)
   services.set(IStorageService, stubStorage)
   services.set(IEditorResolverService, stubEditorResolver)

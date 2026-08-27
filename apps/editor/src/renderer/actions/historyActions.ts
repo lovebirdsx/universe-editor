@@ -55,10 +55,12 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
     }
     const input = recreated ?? inst.createInstance(FileEditorInput, entry.resource)
     if (input instanceof MarkdownPreviewInput) {
-      // A preview no longer open: re-create it in place of the current preview
-      // tab (matching link-click navigation) so Alt+←/→ walks the trail in one
-      // tab instead of piling up a fresh preview each time.
-      openPreviewInGroup(groups.activeGroup, input, false)
+      // A preview no longer open: re-create it in the preview slot (pinned:false,
+      // like the plain-file branch below) so Alt+←/→ walks the trail in a single
+      // tab. History entries are built from a URI — no held source — so the slot
+      // occupant may be replaced safely (a dirty occupant is pinned instead of
+      // evicted — see the dirty guard in EditorGroupModel.openEditor).
+      openPreviewInGroup(groups, groups.activeGroupForOpen, input, { pinned: false })
     } else if (input instanceof DocEditorInput) {
       // Same for the built-in guide: reuse the current doc tab so H/L (and
       // Alt+←/→) walk the trail in place instead of opening a new tab.

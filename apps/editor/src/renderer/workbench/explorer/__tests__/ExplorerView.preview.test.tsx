@@ -177,6 +177,8 @@ function renderView(folder: URI, fs: IFileServiceType) {
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: editorGroup,
+    getGroups: () => [editorGroup],
+    activateGroup: (g: unknown) => g,
   } as unknown as IEditorGroupsServiceType)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)

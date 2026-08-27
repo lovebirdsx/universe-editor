@@ -63,6 +63,26 @@ describe('EditorGroupModel — preview slot', () => {
     expect(replace?.replacedEditor).toBe(a)
   })
 
+  it('pins a dirty preview occupant instead of replacing it', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    const events: IEditorGroupModelChangeEvent[] = []
+    model.openEditor(a, { pinned: false })
+    model.onDidChangeModel((e) => events.push(e))
+    a.isDirty = true
+
+    model.openEditor(b, { pinned: false })
+
+    // The dirty tab is promoted out of the slot; the new editor takes it.
+    expect(model.count).toBe(2)
+    expect(model.previewEditor).toBe(b)
+    expect(model.isPinned(a)).toBe(true)
+    expect(a.disposed).toBe(false)
+    const pin = events.find((e) => e.kind === 'pin')
+    expect(pin?.editor).toBe(a)
+  })
+
   it('promotes the existing preview to pinned when re-opened with pinned:true', () => {
     const model = new EditorGroupModel()
     const a = make('a')

@@ -9,11 +9,11 @@
  *  intended target, and zero hits surfaces a "file not found" notification.
  *
  *  In `previewLinks` mode (the doc preview) a link to another markdown file opens
- *  as a *preview* rather than its source: a plain click navigates in place
- *  (replacing the current preview tab so Alt+←/→ walks the trail, VSCode-style),
- *  Ctrl/Cmd+click opens an additional preview tab in the same group. Links that
- *  carry a `:line` location, or point at non-markdown files, always open the
- *  source editor as before.
+ *  as a *preview* rather than its source: the preview tab is opened pinned
+ *  (deduplicated globally — an existing preview of that file is focused instead
+ *  of duplicated), and Ctrl/Cmd+click appends it after the last tab via an
+ *  explicit `index: count`. Links that carry a `:line` location, or point at
+ *  non-markdown files, always open the source editor as before.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useMemo, useRef } from 'react'
@@ -210,12 +210,15 @@ export function useMarkdownFileLink(
           }
           return
         }
-        // A markdown→markdown link in the preview opens as another preview
-        // (in place, or to a new tab on Ctrl/Cmd+click). A `:line` location
-        // means the user wants the source at that line, so fall through.
+        // A markdown→markdown link in the preview opens as another pinned
+        // preview tab (the same-file one is focused instead — previews are
+        // globally unique). Ctrl/Cmd+click behaves the same; the old
+        // "open to the side" nuance no longer applies now that multiple
+        // previews coexist. A `:line` location means the user wants the
+        // source at that line, so fall through.
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
-          openPreviewInGroup(groupsService.activeGroup, preview, opts?.toSide === true)
+          openPreviewInGroup(groupsService, groupsService.activeGroup, preview)
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }

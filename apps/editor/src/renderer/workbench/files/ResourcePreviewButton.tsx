@@ -37,7 +37,7 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
       {...(testId !== undefined ? { 'data-testid': testId } : {})}
       onClick={(e) => {
         e.stopPropagation()
-        openResourcePreviewInGroup(groups.activeGroup, resource, false)
+        openResourcePreviewInGroup(groups, groups.activeGroup, resource)
       }}
     >
       <Eye size={16} strokeWidth={1.6} />

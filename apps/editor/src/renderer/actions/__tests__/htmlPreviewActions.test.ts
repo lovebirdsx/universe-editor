@@ -2,9 +2,9 @@
  *  Tests for the HTML preview actions — mirrors the markdown ones, since both
  *  share togglePreviewInGroup.
  *
- *  Regression: a group must hold at most one html preview. Opening b.html's
- *  preview while a.html's preview is already a tab used to append a third tab
- *  instead of retargeting a.html's preview at b.html.
+ *  Previews of different files coexist as separate tabs (a.html's preview is
+ *  not retargeted at b.html), and the toggle preview inherits the source tab's
+ *  pin state (slot in → slot, pinned in → pinned).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,7 +22,7 @@ import {
   type IDisposable,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
-import { OpenHtmlPreviewAction } from '../htmlPreviewActions.js'
+import { OpenHtmlPreviewAction, OpenHtmlSourceAction } from '../htmlPreviewActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -86,7 +86,7 @@ async function runCommand(
   })
 }
 
-describe('OpenHtmlPreviewAction — one preview tab per group', () => {
+describe('OpenHtmlPreviewAction — preview tab lifecycle', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -94,7 +94,7 @@ describe('OpenHtmlPreviewAction — one preview tab per group', () => {
     FileEditorRegistry._resetForTests()
   })
 
-  it("retargets the existing preview when another file's source is active", async () => {
+  it("adds a preview tab for another file's source without disposing the first preview", async () => {
     const { groups, inst } = setup()
     const group = groups.activeGroup
     const uriA = URI.file('/repo/a.html')
@@ -109,14 +109,56 @@ describe('OpenHtmlPreviewAction — one preview tab per group', () => {
 
     await runCommand(inst, OpenHtmlPreviewAction, disposables)
 
-    expect(group.editors).toHaveLength(2)
+    expect(group.editors).toHaveLength(3)
     const active = group.activeEditor
     expect(active).toBeInstanceOf(HtmlPreviewInput)
     expect((active as HtmlPreviewInput).sourceUri.toString()).toBe(uriB.toString())
-    expect(group.editors[0]).toBe(active)
+    expect(group.editors[0]).toBe(previewA)
     expect(group.editors[1]).toBe(sourceA)
-    expect(previewA.isDisposed).toBe(true)
+    expect(group.editors[2]).toBe(active)
+    expect(previewA.isDisposed).toBe(false)
     expect(sourceA.isDisposed).toBe(false)
+    expect(sourceB.isDisposed).toBe(false)
+    expect((active as HtmlPreviewInput).sourceInput).toBe(sourceB)
+  })
+
+  it('toggles a preview-slot source into a preview that takes the slot', async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.html')
+
+    const source = inst.createInstance(FileEditorInput, uri)
+    group.openEditor(source, { activate: true, pinned: false })
+
+    await runCommand(inst, OpenHtmlPreviewAction, disposables)
+
+    const active = group.activeEditor
+    expect(active).toBeInstanceOf(HtmlPreviewInput)
+    expect(group.editors).toHaveLength(1)
+    expect(group.isPinned(active!)).toBe(false)
+    expect(group.previewEditor).toBe(active)
+    expect(source.isDisposed).toBe(false)
+    expect((active as HtmlPreviewInput).sourceInput).toBe(source)
+  })
+
+  it('Open Source on a slot preview puts the source back in the slot (round trip)', async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.html')
+
+    const source = inst.createInstance(FileEditorInput, uri)
+    group.openEditor(source, { activate: true, pinned: false })
+    await runCommand(inst, OpenHtmlPreviewAction, disposables)
+    const preview = group.activeEditor as HtmlPreviewInput
+    expect(group.isPinned(preview)).toBe(false)
+
+    await runCommand(inst, OpenHtmlSourceAction, disposables)
+
+    expect(group.activeEditor).toBe(source)
+    expect(group.editors).toHaveLength(1)
+    expect(group.isPinned(source)).toBe(false)
+    expect(group.previewEditor).toBe(source)
+    expect(preview.isDisposed).toBe(true)
   })
 
   it("activates this file's existing preview without detaching its source", async () => {

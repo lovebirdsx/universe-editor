@@ -171,6 +171,7 @@ function makeGroupsService(opened: { editor: EditorInput; options: unknown }[]) 
       return [group]
     },
     getGroups: () => [group],
+    activateGroup: (g: unknown) => g,
   } as unknown as IEditorGroupsServiceType
 }
 

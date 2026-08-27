@@ -6,13 +6,15 @@
  *    Replaces the active markdown source tab with the preview tab (VSCode style —
  *    no extra tab is created). The source FileEditorInput is detached (not
  *    disposed) and held inside the preview so its Monaco model stays alive.
- *    A preview already open in the group is retargeted at the new file rather
- *    than joined by a second one — see openPreviewInGroup.
+ *    The preview inherits the source tab's pin state (a preview-slot source
+ *    yields a preview in the slot), and a preview of the same file already open
+ *    in another group is focused instead of duplicated — see openPreviewInGroup.
  *
  *  OpenMarkdownSourceAction:
  *    Appears in the preview tab's title bar. Replaces the preview tab back with
- *    the original source tab (toggle back). The held FileEditorInput is re-added
- *    to the group before the preview is closed, so dirty content is preserved.
+ *    the original source tab (toggle back), re-opening it with the preview's
+ *    own pin state. The held FileEditorInput is re-added to the group before
+ *    the preview is closed, so dirty content is preserved.
  *
  *  OpenMarkdownPreviewToSideAction (Ctrl+K Ctrl+V):
  *    Opens preview in the right group alongside the source (unchanged).
@@ -35,7 +37,7 @@ import { EditorViewStateCache } from '../services/editor/EditorViewStateCache.js
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
 import { MarkdownPreviewViewStateCache } from '../services/editor/MarkdownPreviewViewStateCache.js'
-import { togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
+import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
@@ -82,12 +84,17 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
     target = groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
     if (target === source) target = groups.addGroup(source, GroupDirection.Right)
     groups.activateGroup(target)
-    target.openEditor(new MarkdownPreviewInput(active.resource), { activate: true, pinned: true })
+    // The preview inherits the source tab's pin state — a preview-slot source
+    // (still in the source group here) yields a slot preview, a pinned one a
+    // pinned preview.
+    openPreviewInGroup(groups, target, new MarkdownPreviewInput(active.resource), {
+      pinned: source.isPinned(active) || active.isDirty,
+    })
     return
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(target, new MarkdownPreviewInput(active), active)
+  togglePreviewInGroup(groups, target, new MarkdownPreviewInput(active), active)
 }
 
 export class OpenMarkdownPreviewAction extends Action2 {
@@ -152,6 +159,7 @@ export class OpenMarkdownSourceAction extends Action2 {
     if (!(active instanceof MarkdownPreviewInput)) return
 
     const previewIndex = group.indexOf(active)
+    const pinned = group.isPinned(active)
     const sourceUri = active.sourceUri
     // The source line to bring to the top of the (re)mounted source editor, to
     // carry the preview's scroll position back. In toggle mode the source editor
@@ -174,10 +182,12 @@ export class OpenMarkdownSourceAction extends Action2 {
 
     if (sourceInput) {
       // Toggle mode: re-attach the held FileEditorInput at the preview's position,
-      // then close the preview. The preview's dispose() is a no-op for the source
-      // since releaseSource() cleared _sourceInput.
+      // then close the preview. When the preview sat in the slot, this open hits
+      // the previewReplace branch and replaces it in place (the close below is a
+      // no-op); the preview's dispose() no longer touches the source since
+      // releaseSource() cleared _sourceInput.
       stashRevealLine()
-      group.openEditor(sourceInput, { activate: true, pinned: true, index: previewIndex })
+      group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
       return
     }
@@ -199,7 +209,7 @@ export class OpenMarkdownSourceAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const source = inst.createInstance(FileEditorInput, sourceUri)
     stashRevealLine()
-    group.openEditor(source, { activate: true, pinned: true, index: previewIndex })
+    group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
   }
 }

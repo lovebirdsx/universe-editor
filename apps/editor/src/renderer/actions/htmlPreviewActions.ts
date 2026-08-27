@@ -8,14 +8,16 @@
  *    Replaces the active HTML source tab with the preview tab (VSCode style — no
  *    extra tab). The source FileEditorInput is detached (not disposed) and held
  *    inside the preview so its Monaco model stays alive through the toggle.
- *    A preview already open in the group is retargeted at the new file rather
- *    than joined by a second one — see openPreviewInGroup.
+ *    The preview inherits the source tab's pin state (a preview-slot source
+ *    yields a preview in the slot), and a preview of the same file already open
+ *    in another group is focused instead of duplicated — see openPreviewInGroup.
  *
  *  OpenHtmlPreviewToSideAction (Ctrl+K Ctrl+V):
  *    Opens the preview in the right group alongside the source.
  *
  *  OpenHtmlSourceAction:
- *    Preview title-bar button; toggles back to the source tab.
+ *    Preview title-bar button; toggles back to the source tab, re-opening it
+ *    with the preview's own pin state.
  *
  *  `Ctrl+Shift+V` is shared with the markdown preview commands; the two never
  *  clash because each is gated on its own active language / editor type
@@ -34,7 +36,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
-import { togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
+import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 
 const HTML_PRECONDITION = 'activeEditorLanguageId == html'
 const HTML_PREVIEW_PRECONDITION = `activeEditorTypeId == '${HtmlPreviewInput.TYPE_ID}'`
@@ -54,12 +56,17 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
       groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
     if (target === source) target = groups.addGroup(source, GroupDirection.Right)
     groups.activateGroup(target)
-    target.openEditor(new HtmlPreviewInput(active.resource), { activate: true, pinned: true })
+    // The preview inherits the source tab's pin state — a preview-slot source
+    // (still in the source group here) yields a slot preview, a pinned one a
+    // pinned preview.
+    openPreviewInGroup(groups, target, new HtmlPreviewInput(active.resource), {
+      pinned: source.isPinned(active) || active.isDirty,
+    })
     return
   }
 
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(source, new HtmlPreviewInput(active), active)
+  togglePreviewInGroup(groups, source, new HtmlPreviewInput(active), active)
 }
 
 export class OpenHtmlPreviewAction extends Action2 {
@@ -121,13 +128,16 @@ export class OpenHtmlSourceAction extends Action2 {
     if (!(active instanceof HtmlPreviewInput)) return
 
     const previewIndex = group.indexOf(active)
+    const pinned = group.isPinned(active)
     const sourceUri = active.sourceUri
     const sourceInput = active.releaseSource()
 
     if (sourceInput) {
       // Toggle mode: re-attach the held FileEditorInput at the preview's slot,
       // then close the preview (its dispose() no longer touches the source).
-      group.openEditor(sourceInput, { activate: true, pinned: true, index: previewIndex })
+      // A slot preview is replaced in place by the previewReplace branch, so
+      // the close below is a no-op.
+      group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
       return
     }
@@ -143,7 +153,7 @@ export class OpenHtmlSourceAction extends Action2 {
       }
     }
     const source = inst.createInstance(FileEditorInput, sourceUri)
-    group.openEditor(source, { activate: true, pinned: true, index: previewIndex })
+    group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
   }
 }

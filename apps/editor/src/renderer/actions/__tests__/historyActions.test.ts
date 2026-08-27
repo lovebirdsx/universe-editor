@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  EditorRegistry,
   IContextKeyService,
   IEditorGroupsService,
   IFileService,
@@ -19,6 +20,7 @@ import { GoBackAction, GoForwardAction } from '../historyActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { HistoryService } from '../../services/history/HistoryService.js'
 
 function makeFakeFileService(): IFileServiceType {
@@ -184,5 +186,41 @@ describe('History navigation actions', () => {
     await runCommand(inst, GoForwardAction, disposables)
     expect(groups.activeGroup.editors).toHaveLength(1)
     expect(groups.activeGroup.activeEditor?.resource?.toString()).toBe(uriB.toString())
+  })
+
+  it('GoBack re-creates a MarkdownPreviewInput entry in the preview slot', async () => {
+    const { groups, history, inst } = setup()
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: MarkdownPreviewInput.TYPE_ID,
+        componentKey: 'markdown.preview',
+        deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+      }),
+    )
+
+    // A history entry as recorded for a preview tab (non-text editor with
+    // typeId + serialized payload), followed by a newer entry so goBack lands
+    // on the preview one (goBack needs a "current" entry to pop).
+    const sourceUri = URI.file('/repo/a.md')
+    const preview = new MarkdownPreviewInput(sourceUri)
+    history.record({
+      resource: preview.resource,
+      typeId: MarkdownPreviewInput.TYPE_ID,
+      serialized: preview.serialize(),
+    })
+    history.record({
+      resource: URI.file('/repo/b.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+
+    await runCommand(inst, GoBackAction, disposables)
+
+    // The recreated preview lands in the preview slot (pinned:false), like the
+    // plain-file branch, so Alt+←/→ walks the trail in a single tab.
+    const active = groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(MarkdownPreviewInput)
+    expect(groups.activeGroup.previewEditor).toBe(active)
+    expect(groups.activeGroup.isPinned(active!)).toBe(false)
+    expect(groups.activeGroup.editors).toHaveLength(1)
   })
 })

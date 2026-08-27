@@ -295,11 +295,11 @@ describe('OpenMarkdownPreviewAction — aligns the preview to the source viewpor
   })
 })
 
-// Regression: a group must hold at most one markdown preview. Opening b.md's
-// preview while a.md's preview is already a tab used to append a third tab
-// ([a preview][a source][b preview]) instead of retargeting a.md's preview at
-// b.md ([b preview][a source]).
-describe('OpenMarkdownPreviewAction — one preview tab per group', () => {
+// Previews of different files coexist as separate tabs (a.md's preview is not
+// retargeted at b.md), the toggle preview inherits the source tab's pin state
+// (slot in → slot, pinned in → pinned, dirty forces pinned), and toggling back
+// re-opens the source with the preview's own pin state.
+describe('OpenMarkdownPreviewAction — preview tab lifecycle', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -308,7 +308,7 @@ describe('OpenMarkdownPreviewAction — one preview tab per group', () => {
     FileEditorRegistry._resetForTests()
   })
 
-  it("retargets the existing preview when another file's source is active", async () => {
+  it("adds a preview tab for another file's source without disposing the first preview", async () => {
     const { groups, inst } = setup()
     const group = groups.activeGroup
     const uriA = URI.file('/repo/a.md')
@@ -325,16 +325,78 @@ describe('OpenMarkdownPreviewAction — one preview tab per group', () => {
 
     await runCommand(inst, OpenMarkdownPreviewAction, disposables)
 
-    // b.md's preview took a.md's preview slot; b.md's source tab was folded into
-    // it (toggle mode) and a.md's source tab is untouched.
-    expect(group.editors).toHaveLength(2)
+    // b.md's preview joined a.md's; b.md's source tab was folded into it
+    // (toggle mode) and a.md's tabs are untouched.
+    expect(group.editors).toHaveLength(3)
     const active = group.activeEditor
     expect(active).toBeInstanceOf(MarkdownPreviewInput)
     expect((active as MarkdownPreviewInput).sourceUri.toString()).toBe(uriB.toString())
-    expect(group.editors[0]).toBe(active)
+    expect(group.editors[0]).toBe(previewA)
     expect(group.editors[1]).toBe(sourceA)
-    expect(previewA.isDisposed).toBe(true)
+    expect(group.editors[2]).toBe(active)
+    expect(previewA.isDisposed).toBe(false)
     expect(sourceA.isDisposed).toBe(false)
+    expect(sourceB.isDisposed).toBe(false)
+    expect((active as MarkdownPreviewInput).sourceInput).toBe(sourceB)
+  })
+
+  it('toggles a preview-slot source into a preview that takes the slot', async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.md')
+
+    const source = inst.createInstance(FileEditorInput, uri)
+    group.openEditor(source, { activate: true, pinned: false })
+
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+
+    const active = group.activeEditor
+    expect(active).toBeInstanceOf(MarkdownPreviewInput)
+    expect(group.editors).toHaveLength(1)
+    expect(group.isPinned(active!)).toBe(false)
+    expect(group.previewEditor).toBe(active)
+    expect(source.isDisposed).toBe(false)
+    expect((active as MarkdownPreviewInput).sourceInput).toBe(source)
+  })
+
+  it('Open Source on a slot preview puts the source back in the slot (round trip)', async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.md')
+
+    const source = inst.createInstance(FileEditorInput, uri)
+    group.openEditor(source, { activate: true, pinned: false })
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+    const preview = group.activeEditor as MarkdownPreviewInput
+    expect(group.isPinned(preview)).toBe(false)
+
+    await runCommand(inst, OpenMarkdownSourceAction, disposables)
+
+    // The preview-slot preview was replaced in place by its source, which
+    // inherits the slot.
+    expect(group.activeEditor).toBe(source)
+    expect(group.editors).toHaveLength(1)
+    expect(group.isPinned(source)).toBe(false)
+    expect(group.previewEditor).toBe(source)
+    expect(preview.isDisposed).toBe(true)
+  })
+
+  it('forces the preview pinned when the source is dirty, even from the slot', async () => {
+    const { groups, inst } = setup()
+    const group = groups.activeGroup
+    const uri = URI.file('/repo/a.md')
+
+    const source = inst.createInstance(FileEditorInput, uri)
+    source.isDirty = true
+    group.openEditor(source, { activate: true, pinned: false })
+
+    await runCommand(inst, OpenMarkdownPreviewAction, disposables)
+
+    const active = group.activeEditor
+    expect(active).toBeInstanceOf(MarkdownPreviewInput)
+    expect(group.isPinned(active!)).toBe(true)
+    expect((active as MarkdownPreviewInput).sourceInput).toBe(source)
+    expect(source.isDisposed).toBe(false)
   })
 
   it("activates this file's existing preview without detaching its source", async () => {

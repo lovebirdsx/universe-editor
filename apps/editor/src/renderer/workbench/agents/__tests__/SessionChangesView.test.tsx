@@ -102,6 +102,12 @@ class FakeEditorGroup {
 class FakeEditorGroups {
   declare readonly _serviceBrand: undefined
   constructor(readonly activeGroup: FakeEditorGroup) {}
+  getGroups() {
+    return [this.activeGroup]
+  }
+  activateGroup(g: FakeEditorGroup) {
+    return g
+  }
 }
 
 function change(path: string, status: SessionFileChange['status'] = 'modified'): SessionFileChange {

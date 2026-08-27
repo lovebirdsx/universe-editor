@@ -10,6 +10,7 @@ import {
   EditorInput,
   EditorRegistry,
   Emitter,
+  GroupDirection,
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
@@ -28,7 +29,9 @@ import {
   ClosedEditorsService,
   IClosedEditorsService,
   MAX_PERSISTED_ENTRY_BYTES,
+  type ClosedEditorEntry,
 } from '../ClosedEditorsService.js'
+import { MarkdownPreviewInput } from '../MarkdownPreviewInput.js'
 import { ReopenClosedEditorAction } from '../../../actions/editorActions.js'
 
 // ---------------------------------------------------------------------------
@@ -173,6 +176,23 @@ class FakeFocusStackService implements IFocusStackService {
     return undefined
   }
   clear(): void {}
+}
+
+/** Serves one pre-baked entry through popMostRecent, bypassing the open-entry skip. */
+class FakeClosedEditorsService implements IClosedEditorsService {
+  declare readonly _serviceBrand: undefined
+  constructor(private _entry: ClosedEditorEntry | undefined) {}
+  popMostRecent(): ClosedEditorEntry | undefined {
+    const e = this._entry
+    this._entry = undefined
+    return e
+  }
+  getClosedEditors(): readonly ClosedEditorEntry[] {
+    return this._entry ? [this._entry] : []
+  }
+  takeMostRecentMatching(): ClosedEditorEntry | undefined {
+    return undefined
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +799,13 @@ describe('ReopenClosedEditorAction', () => {
 
   beforeEach(() => {
     disposables.push(registerAction2(ReopenClosedEditorAction))
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: MarkdownPreviewInput.TYPE_ID,
+        componentKey: 'markdown.preview',
+        deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+      }),
+    )
   })
 
   afterEach(() => {
@@ -880,5 +907,67 @@ describe('ReopenClosedEditorAction', () => {
     d.dispose()
     h.groups.dispose()
     h.closedSvc.dispose()
+  })
+
+  it('records a preview evicted by previewReplace and reopens it pinned', () => {
+    const h = makeHarness()
+    const group = h.groups.activeGroup
+    const sourceUri = URI.file('/workspace/a.md')
+    const preview = new MarkdownPreviewInput(sourceUri)
+    group.openEditor(preview, { pinned: false })
+
+    // Another file opening into the preview slot evicts the preview in place.
+    const other = new FakeVirtualInput('other')
+    group.openEditor(other, { pinned: false })
+    expect(group.editors).toHaveLength(1)
+
+    runAction(h)
+
+    // The evicted preview was captured for reopen and comes back (pinned)
+    // next to the file that replaced it.
+    expect(group.editors).toHaveLength(2)
+    const reopened = group.activeEditor
+    expect(reopened).toBeInstanceOf(MarkdownPreviewInput)
+    expect((reopened as MarkdownPreviewInput).sourceUri.toString()).toBe(sourceUri.toString())
+    h.groups.dispose()
+    h.closedSvc.dispose()
+  })
+
+  it('focuses an existing preview in another group instead of reopening a duplicate', () => {
+    // Stub the closed-editors service to hand the action a preview entry
+    // directly: the real popMostRecent skips entries whose (typeId, resource)
+    // is open anywhere, so the dedupe branch is a safety net that must be
+    // exercised through a popped entry here.
+    const groups = new EditorGroupsService()
+    const sourceUri = URI.file('/workspace/a.md')
+    const preview = new MarkdownPreviewInput(sourceUri)
+    const side = groups.addGroup(groups.activeGroup, GroupDirection.Right)
+    side.openEditor(preview, { activate: true, pinned: true })
+    const entry: ClosedEditorEntry = {
+      resource: preview.resource,
+      typeId: MarkdownPreviewInput.TYPE_ID,
+      groupId: groups.activeGroup.id,
+      serializedData: preview.serialize(),
+      label: preview.getName(),
+    }
+
+    const services = new ServiceCollection()
+    services.set(IEditorGroupsService, groups)
+    services.set(IClosedEditorsService, new FakeClosedEditorsService(entry))
+    services.set(IFocusStackService, new FakeFocusStackService())
+    services.set(IContextKeyService, new ContextKeyService())
+    const inst = new InstantiationService(services)
+
+    const cmd = CommandsRegistry.getCommand(ReopenClosedEditorAction.ID)
+    if (!cmd) throw new Error('ReopenClosedEditorAction not registered')
+    inst.invokeFunction((accessor) => cmd.handler(accessor))
+
+    // The same-file preview in the side group wins; nothing was re-added to the
+    // entry's original group.
+    expect(groups.activeGroup).toBe(side)
+    expect(side.editors).toHaveLength(1)
+    expect(side.activeEditor).toBe(preview)
+    expect(groups.getGroup(entry.groupId)!.editors).toHaveLength(0)
+    groups.dispose()
   })
 })

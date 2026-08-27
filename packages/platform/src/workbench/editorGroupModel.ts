@@ -44,7 +44,9 @@ export interface IOpenEditorOptions {
   index?: number
   /**
    * Pin the editor (default: true). `false` opens into the group's single
-   * preview slot, replacing any existing preview in-place.
+   * preview slot, replacing any existing preview in-place — unless that
+   * occupant is dirty, in which case it is pinned instead and the new editor
+   * takes the slot beside it.
    */
   pinned?: boolean
   /** Open without moving keyboard focus to the editor (default: false). */
@@ -187,33 +189,41 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     }
 
     if (!pinned && this._previewEditor) {
-      // Replace the existing preview slot in-place: same index, dispose old.
       const oldPreview = this._previewEditor
-      const slotIndex = this._editors.indexOf(oldPreview)
-      if (slotIndex !== -1) {
-        this._editors.splice(slotIndex, 1, editor)
-        this._editorStore.add(editor)
-        const mruIdx = this._mru.indexOf(oldPreview)
-        if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
-        this._mru.unshift(editor)
-        this._previewEditor = editor
-        const wasActive = this._activeEditor === oldPreview
-        if (wasActive) this._activeEditor = undefined
-        this._onDidChangeModel.fire({
-          kind: 'previewReplace',
-          editor,
-          oldIndex: slotIndex,
-          newIndex: slotIndex,
-          replacedEditor: oldPreview,
-        })
-        this._editorStore.delete(oldPreview)
-        if (activate || wasActive) {
-          this._setActiveInternal(editor)
+      if (oldPreview.isDirty) {
+        // A dirty occupant is never silently evicted: pin it (VSCode-style dirty
+        // protection) and fall through to a normal insert, so the new editor
+        // takes the slot while the dirty tab stays.
+        this._previewEditor = undefined
+        this._onDidChangeModel.fire({ kind: 'pin', editor: oldPreview })
+      } else {
+        // Replace the existing preview slot in-place: same index, dispose old.
+        const slotIndex = this._editors.indexOf(oldPreview)
+        if (slotIndex !== -1) {
+          this._editors.splice(slotIndex, 1, editor)
+          this._editorStore.add(editor)
+          const mruIdx = this._mru.indexOf(oldPreview)
+          if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
+          this._mru.unshift(editor)
+          this._previewEditor = editor
+          const wasActive = this._activeEditor === oldPreview
+          if (wasActive) this._activeEditor = undefined
+          this._onDidChangeModel.fire({
+            kind: 'previewReplace',
+            editor,
+            oldIndex: slotIndex,
+            newIndex: slotIndex,
+            replacedEditor: oldPreview,
+          })
+          this._editorStore.delete(oldPreview)
+          if (activate || wasActive) {
+            this._setActiveInternal(editor)
+          }
+          return
         }
-        return
+        // Stale preview ref — fall through to normal insert.
+        this._previewEditor = undefined
       }
-      // Stale preview ref — fall through to normal insert.
-      this._previewEditor = undefined
     }
 
     const insertIndex = options?.index ?? this._editors.length

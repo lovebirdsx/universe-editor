@@ -29,6 +29,9 @@ import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfir
 import { cloneEditorInputForSplit } from '../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
+import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
+import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { openPreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import {
   decodeEditorPickId,
   encodeEditorPickId,
@@ -993,6 +996,14 @@ export class ReopenClosedEditorAction extends Action2 {
     const group = groups.getGroup(entry.groupId) ?? groups.activeGroup
     const input = EditorRegistry.deserialize(entry.typeId, entry.serializedData, accessor)
     if (!input) return
+    if (input instanceof MarkdownPreviewInput || input instanceof HtmlPreviewInput) {
+      // Reopen means "bring back exactly this tab", but a preview of the same
+      // file open elsewhere wins — focus it instead of duplicating.
+      // openPreviewInGroup activates the owning group itself (which may differ
+      // from `group`), so don't re-activate here.
+      openPreviewInGroup(groups, group, input, { pinned: true })
+      return
+    }
     group.openEditor(input, { activate: true, pinned: true })
     activateGroupAndFocus(
       groups,
