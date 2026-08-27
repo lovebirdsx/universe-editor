@@ -23,7 +23,7 @@ export interface TerminalInstanceProps {
   cwd: string
   home: string | undefined
   resolveFile: (absolutePath: string) => Promise<URI | null>
-  openFile: (uri: URI, line?: number, col?: number) => void
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void
 }
 
 export function TerminalInstance({
@@ -64,7 +64,7 @@ export function TerminalInstance({
     holderRef.current = holder
     holder.setLinkHandlers({
       resolveFile: (p) => resolveFileRef.current(p),
-      openFile: (uri, line, col) => openFileRef.current(uri, line, col),
+      openFile: (uri, line, col, endLine) => openFileRef.current(uri, line, col, endLine),
       getCwd: () => cwdRef.current,
       getHome: () => homeRef.current,
     })

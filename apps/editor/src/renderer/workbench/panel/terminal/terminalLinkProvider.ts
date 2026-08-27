@@ -1,6 +1,7 @@
 import type { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
 import { expandHomeDir, type URI, normalizeFsPath } from '@universe-editor/platform'
 import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/filePathLink.js'
+import { mapStringIndexToCell, readWrappedWindow } from './terminalBufferText.js'
 
 // Reuse the same path grammar as rendered markdown so terminal and markdown
 // links recognize exactly the same set of files (extensions, location suffixes).
@@ -23,13 +24,9 @@ export function createFileLinkProvider(
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const bufLine = term.buffer.active.getLine(bufferLineNumber - 1)
-      if (!bufLine) {
-        callback(undefined)
-        return
-      }
+      const buf = term.buffer.active
+      const win = readWrappedWindow(buf, bufferLineNumber - 1)
 
-      const text = bufLine.translateToString(true)
       const cwd = getCwd()
       const home = getHome()
 
@@ -39,25 +36,31 @@ export function createFileLinkProvider(
         lineNum: number | undefined
         colNum: number | undefined
         endLineNum: number | undefined
-        startX: number
-        endX: number
+        start: { y: number; x: number }
+        end: { y: number; x: number }
       }
 
       const matches: MatchInfo[] = []
       FILE_LINK_RE.lastIndex = 0
       let m: RegExpExecArray | null
-      while ((m = FILE_LINK_RE.exec(text)) !== null) {
+      while ((m = FILE_LINK_RE.exec(win.text)) !== null) {
         const full = m[0] ?? ''
         const filePath = m[1] ?? ''
         const { line: lineNum, col: colNum, endLine: endLineNum } = parseFilePathLocation(m)
+        const start = mapStringIndexToCell(buf, win.startLineIndex, 0, m.index)
+        if (!start) continue
+        // Walk on from `start` rather than re-walking the match prefix from the
+        // window origin — same cell either way, one less pass.
+        const end = mapStringIndexToCell(buf, start.y, start.x, full.length)
+        if (!end) continue
         matches.push({
           full,
           absPath: resolvePath(cwd, filePath, home),
           lineNum,
           colNum,
           endLineNum,
-          startX: m.index + 1,
-          endX: m.index + full.length,
+          start,
+          end,
         })
       }
 
@@ -73,8 +76,8 @@ export function createFileLinkProvider(
         const resolvePromise = resolveFile(match.absPath)
         return {
           range: {
-            start: { x: match.startX, y: bufferLineNumber },
-            end: { x: match.endX, y: bufferLineNumber },
+            start: { x: match.start.x + 1, y: match.start.y + 1 },
+            end: { x: match.end.x, y: match.end.y + 1 },
           },
           text: match.full,
           activate(event: MouseEvent) {
