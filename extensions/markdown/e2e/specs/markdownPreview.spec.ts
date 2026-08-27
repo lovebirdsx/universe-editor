@@ -548,11 +548,22 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('markdown.preview')
-    // A group holds at most one markdown preview: index.md's preview retargeted
-    // outline.md's rather than becoming a third tab alongside it.
+    // Previews of different files coexist in one group: index.md's preview opens
+    // beside outline.md's instead of replacing it. Both inherit pinned from their
+    // source tabs, so neither sits in the evictable preview slot. Assert the URIs
+    // rather than a bare count of 2 — any two tabs would satisfy the count.
     await expect
-      .poll(() => workbench.getContextKey<number>('groupEditorsCount'), { timeout: 5000 })
-      .toBe(1)
+      .poll(
+        async () => {
+          const uris = await page.evaluate(() => window.__E2E__!.getActiveGroupEditorUris())
+          return [...uris].sort()
+        },
+        { timeout: 5000 },
+      )
+      .toEqual([
+        expect.stringMatching(/^markdown-preview:.*index\.md$/),
+        expect.stringMatching(/^markdown-preview:.*outline\.md$/),
+      ])
     await expect(page.locator('[data-testid="markdown-preview"] a').first()).toBeVisible()
     await expect
       .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
