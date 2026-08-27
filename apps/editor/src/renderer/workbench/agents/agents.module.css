@@ -2626,9 +2626,33 @@
   gap: 8px;
 }
 
+.elicitationHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
 .elicitationMessage {
   font-weight: 600;
   white-space: pre-wrap;
+}
+
+.elicitationCardCollapsed {
+  max-height: none;
+  overflow: visible;
+}
+
+.elicitationCardCollapsed .elicitationHeader {
+  align-items: center;
+}
+
+.elicitationCardCollapsed .elicitationMessage {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .elicitationField {
@@ -2668,6 +2692,8 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.786);
   color: var(--vscode-agent-messageRoleForeground, #aaa);
   white-space: normal;
+  /* Long URLs / unbroken CJK runs must fold inside the capped popover. */
+  overflow-wrap: anywhere;
 }
 
 .elicitationPreview {

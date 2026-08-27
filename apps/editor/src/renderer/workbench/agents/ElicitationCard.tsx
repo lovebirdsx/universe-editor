@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { IOpenerService, localize, type ISettableObservable } from '@universe-editor/platform'
 import { Button, Checkbox, IconButton, Input, Select } from '@universe-editor/workbench-ui'
-import { ExternalLink, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, X } from 'lucide-react'
 import { useObservable, useService } from '../useService.js'
 import type {
   AcpPendingElicitation,
@@ -145,6 +145,73 @@ export function ElicitationCard({ session }: { session: IAcpSession }) {
   return <FormElicitationCard session={session} pending={pending} />
 }
 
+/**
+ * Shared frame for the form/url cards: header holds the agent's question
+ * (single-line ellipsis when collapsed) plus collapse and close actions. The
+ * collapse is pure visual — only the body is conditionally rendered, while each
+ * card keeps its own input state ABOVE this shell, so folding never unmounts
+ * the in-progress values and never touches the pending elicitation. Esc on the
+ * root still closes/cancels regardless of collapsed state (a collapse toggle
+ * must not repurpose that gesture).
+ */
+function ElicitationShell({
+  message,
+  collapsed,
+  onToggleCollapse,
+  onClose,
+  children,
+}: {
+  message: ReactNode
+  collapsed: boolean
+  onToggleCollapse: () => void
+  onClose: () => void
+  children?: ReactNode
+}) {
+  return (
+    <section
+      className={
+        collapsed
+          ? `${styles['elicitationCard']} ${styles['elicitationCardCollapsed']}`
+          : styles['elicitationCard']
+      }
+      data-testid="acp-elicitation-card"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose()
+      }}
+    >
+      <header className={styles['elicitationHeader']}>
+        <span className={styles['elicitationMessage']}>{message}</span>
+        <div className={styles['elicitationHeaderActions']}>
+          <IconButton
+            label={
+              collapsed
+                ? localize('acp.elicitation.expand', 'Expand question')
+                : localize('acp.elicitation.collapse', 'Collapse question')
+            }
+            onClick={onToggleCollapse}
+            aria-expanded={!collapsed}
+            data-testid="acp-elicitation-collapse"
+          >
+            {collapsed ? (
+              <ChevronUp size={14} strokeWidth={1.75} />
+            ) : (
+              <ChevronDown size={14} strokeWidth={1.75} />
+            )}
+          </IconButton>
+          <IconButton
+            label={localize('acp.elicitation.close', 'Close (Esc)')}
+            onClick={onClose}
+            data-testid="acp-elicitation-close"
+          >
+            <X size={14} strokeWidth={1.75} />
+          </IconButton>
+        </div>
+      </header>
+      {!collapsed && children}
+    </section>
+  )
+}
+
 /** Split a URL into (prefix, host, rest) so the domain can be highlighted. */
 function splitUrlForDisplay(url: string): { prefix: string; host: string; rest: string } | null {
   try {
@@ -170,6 +237,17 @@ function UrlElicitationCard({
   const url = typeof rawUrl === 'string' ? rawUrl : ''
   const parts = useMemo(() => splitUrlForDisplay(url), [url])
 
+  // A fresh elicitation resets the fold so it never opens collapsed.
+  const rawElicitationId = 'elicitationId' in request ? request.elicitationId : undefined
+  const elicitationId = typeof rawElicitationId === 'string' ? rawElicitationId : undefined
+  const collapseKey = elicitationId ?? `msg:${request.message ?? ''}`
+  const [collapseStateKey, setCollapseStateKey] = useState(collapseKey)
+  const [collapsed, setCollapsed] = useState(false)
+  if (collapseKey !== collapseStateKey) {
+    setCollapseStateKey(collapseKey)
+    setCollapsed(false)
+  }
+
   const close = (): void => {
     if (state === 'consent') {
       pending.cancel()
@@ -188,23 +266,12 @@ function UrlElicitationCard({
   }
 
   return (
-    <section
-      className={styles['elicitationCard']}
-      data-testid="acp-elicitation-card"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') close()
-      }}
+    <ElicitationShell
+      message={request.message}
+      collapsed={collapsed}
+      onToggleCollapse={() => setCollapsed((c) => !c)}
+      onClose={close}
     >
-      <header className={styles['elicitationHeader']}>
-        <span className={styles['elicitationMessage']}>{request.message}</span>
-        <IconButton
-          label={localize('acp.elicitation.close', 'Close (Esc)')}
-          onClick={close}
-          data-testid="acp-elicitation-close"
-        >
-          <X size={14} strokeWidth={1.75} />
-        </IconButton>
-      </header>
       {state === 'consent' && (
         <>
           <div className={styles['elicitationDescription']}>
@@ -258,7 +325,7 @@ function UrlElicitationCard({
           {localize('acp.elicitation.url.done', 'The agent has finished this flow.')}
         </div>
       )}
-    </section>
+    </ElicitationShell>
   )
 }
 
@@ -294,10 +361,13 @@ function FormElicitationCard({
     initialValues(fields, AcpElicitationDraftCache.load(session.id, draftKey)),
   )
   const [error, setError] = useState<string | null>(null)
+  // Fold is per-elicitation and defaults open so a new question is never missed.
+  const [collapsed, setCollapsed] = useState(false)
   if (draftKey !== stateKey) {
     setStateKey(draftKey)
     setValues(initialValues(fields, AcpElicitationDraftCache.load(session.id, draftKey)))
     setError(null)
+    setCollapsed(false)
   }
 
   useEffect(() => {
@@ -348,23 +418,12 @@ function FormElicitationCard({
   const isPlanMode = configOptions.some((o) => o.category === 'mode' && o.currentValue === 'plan')
 
   return (
-    <section
-      className={styles['elicitationCard']}
-      data-testid="acp-elicitation-card"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') close()
-      }}
+    <ElicitationShell
+      message={request.message}
+      collapsed={collapsed}
+      onToggleCollapse={() => setCollapsed((c) => !c)}
+      onClose={close}
     >
-      <header className={styles['elicitationHeader']}>
-        <span className={styles['elicitationMessage']}>{request.message}</span>
-        <IconButton
-          label={localize('acp.elicitation.close', 'Close (Esc)')}
-          onClick={close}
-          data-testid="acp-elicitation-close"
-        >
-          <X size={14} strokeWidth={1.75} />
-        </IconButton>
-      </header>
       {request.mode !== 'form' && (
         <div className={styles['elicitationDescription']}>
           {localize('acp.elicitation.unsupportedMode', 'Unsupported elicitation mode: {mode}', {
@@ -406,7 +465,7 @@ function FormElicitationCard({
           <PlanAutoExecuteToggle testId="acp-elicitation-auto-execute" />
         </div>
       )}
-    </section>
+    </ElicitationShell>
   )
 }
 
@@ -559,6 +618,7 @@ function EnumSelect({
       <div className={customField ? styles['elicitationEnumRow'] : undefined}>
         <Select
           value={value}
+          wrapItems
           options={[
             { value: '', label: localize('acp.elicitation.selectPlaceholder', 'Select…') },
             ...field.options.map((o) => ({

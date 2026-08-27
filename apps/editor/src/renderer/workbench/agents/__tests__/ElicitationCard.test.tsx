@@ -295,6 +295,63 @@ describe('ElicitationCard', () => {
   })
 })
 
+describe('ElicitationCard — collapse', () => {
+  it('collapses to a title-only strip and expands again', () => {
+    const h = makePending(formRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    expect(screen.getByTestId('acp-elicitation-input-name')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-input-name')).toBeNull()
+    expect(screen.queryByTestId('acp-elicitation-submit')).toBeNull()
+    // Title, collapse toggle and close stay visible in the strip.
+    expect(screen.getByTestId('acp-elicitation-card').textContent).toContain('Configure the thing')
+    expect(screen.getByTestId('acp-elicitation-collapse')).toBeTruthy()
+    expect(screen.getByTestId('acp-elicitation-close')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.getByTestId('acp-elicitation-input-name')).toBeTruthy()
+  })
+
+  it('keeps typed input across collapse and expand', () => {
+    const h = makePending(formRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.change(screen.getByTestId('acp-elicitation-input-name'), {
+      target: { value: 'typed value' },
+    })
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-input-name')).toBeNull()
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+
+    expect((screen.getByTestId('acp-elicitation-input-name') as HTMLInputElement).value).toBe(
+      'typed value',
+    )
+  })
+
+  it('a new elicitation defaults to expanded', () => {
+    const h = makePending(formRequest({ toolCallId: 'tc-1' }))
+    const { rerender } = render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-input-name')).toBeNull()
+
+    const next = makePending(formRequest({ toolCallId: 'tc-2', message: 'Next question' }))
+    rerender(renderCard(makeSession('A', next.pending)))
+    expect(screen.getByTestId('acp-elicitation-input-name')).toBeTruthy()
+  })
+
+  it('Esc in the collapsed state still settles as cancel', () => {
+    const h = makePending(formRequest())
+    render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    fireEvent.keyDown(screen.getByTestId('acp-elicitation-collapse'), { key: 'Escape' })
+    expect(h.cancelled).toBe(true)
+  })
+})
+
 describe('ElicitationCard — AskUserQuestion folding', () => {
   function askRequest(): CreateElicitationRequest {
     return {
@@ -528,6 +585,20 @@ describe('ElicitationCard — url mode', () => {
     expect(url.textContent).toBe('https://auth.example.com/flow?token=abc')
     expect(url.querySelector('strong')?.textContent).toBe('auth.example.com')
     expect(h.opener.open).not.toHaveBeenCalled()
+  })
+
+  it('collapses the consent card to a title strip and expands again', () => {
+    const h = makeUrlPending()
+    render(renderUrlCard(makeSession('A', h.pending), h.opener))
+
+    expect(screen.getByTestId('acp-elicitation-url')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-url')).toBeNull()
+    expect(screen.getByTestId('acp-elicitation-card').textContent).toContain('Authorize the thing')
+    expect(screen.getByTestId('acp-elicitation-collapse')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.getByTestId('acp-elicitation-url')).toBeTruthy()
   })
 
   it('confirm opens the link via the opener and settles accept', () => {

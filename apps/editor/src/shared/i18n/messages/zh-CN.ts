@@ -1967,6 +1967,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.elicitation.submit': '提交',
   'acp.elicitation.decline': '拒绝',
   'acp.elicitation.close': '关闭 (Esc)',
+  'acp.elicitation.collapse': '折叠问题',
+  'acp.elicitation.expand': '展开问题',
   'acp.elicitation.selectPlaceholder': '请选择…',
   'acp.elicitation.otherPlaceholder': '给所选选项加备注，或输入自定义回答…',
   'acp.elicitation.unsupportedMode': '不支持的信息收集模式：{mode}',

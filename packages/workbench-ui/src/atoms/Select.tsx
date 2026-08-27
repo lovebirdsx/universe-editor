@@ -25,6 +25,12 @@ import {
 import { cx } from './cx.js'
 import styles from './Select.module.css'
 
+/**
+ * Cap for wrap-mode popovers: long option descriptions would otherwise stretch
+ * the popover to the full viewport width on wide screens.
+ */
+const WRAP_MAX_WIDTH = 420
+
 export interface SelectOption<T extends string> {
   readonly value: T
   readonly label: ReactNode
@@ -49,6 +55,12 @@ export interface SelectProps<T extends string> {
   readonly className?: string | undefined
   readonly 'aria-label'?: string
   readonly 'data-testid'?: string
+  /**
+   * Lets dropdown item labels wrap instead of staying on one line. For options
+   * whose label carries a description block — a nowrap item would otherwise
+   * push the popover past the viewport.
+   */
+  readonly wrapItems?: boolean
 }
 
 export function Select<T extends string>({
@@ -57,6 +69,7 @@ export function Select<T extends string>({
   onChange,
   disabled = false,
   invalid = false,
+  wrapItems = false,
   className,
   'aria-label': ariaLabel,
   'data-testid': testId,
@@ -76,9 +89,18 @@ export function Select<T extends string>({
       offset(4),
       flip({ padding: 8 }),
       size({
-        apply({ rects, elements, availableHeight }) {
+        apply({ rects, elements, availableWidth, availableHeight }) {
+          const minWidth = rects.reference.width
+          // availableWidth already deducts the `padding: 8` clearance, so the
+          // popover never runs past the viewport; wrap mode additionally caps
+          // it so long descriptions don't span the whole screen (without
+          // squeezing it below the trigger width).
+          const maxWidth = wrapItems
+            ? Math.max(minWidth, Math.min(availableWidth, WRAP_MAX_WIDTH))
+            : availableWidth
           Object.assign(elements.floating.style, {
-            minWidth: `${rects.reference.width}px`,
+            minWidth: `${minWidth}px`,
+            maxWidth: `${maxWidth}px`,
             maxHeight: `${Math.min(availableHeight - 8, 280)}px`,
           })
         },
@@ -180,7 +202,7 @@ export function Select<T extends string>({
                     ref={(node) => {
                       listRef.current[index] = node
                     }}
-                    className={styles['item']}
+                    className={cx(styles['item'], wrapItems && styles['itemWrap'])}
                     {...getItemProps({
                       onClick: () => select(index),
                       onKeyDown: (e) => {

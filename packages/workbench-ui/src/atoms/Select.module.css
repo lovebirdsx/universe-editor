@@ -51,6 +51,7 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   font-size: var(--font-size-base);
+  box-sizing: border-box;
 }
 
 .item {
@@ -60,6 +61,18 @@
   cursor: pointer;
   outline: none;
   white-space: nowrap;
+}
+
+/* The popover is capped to the viewport, so a nowrap label wider than that
+   would otherwise bleed into a horizontal scrollbar instead of staying read. */
+.item:not(.itemWrap) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemWrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .item:hover {

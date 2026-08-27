@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Select } from '../atoms/Select.js'
+import styles from '../atoms/Select.module.css'
 
 const OPTIONS = [
   { value: '', label: '(default)' },
@@ -60,6 +61,20 @@ describe('Select', () => {
     render(<Select value="" options={OPTIONS} onChange={() => {}} data-testid="sel" />)
     fireEvent.click(screen.getByTestId('sel'))
     expect(document.querySelector('[data-react-aria-top-layer]')).toBeTruthy()
+  })
+
+  it('adds a wrapping class to items when wrapItems is set', () => {
+    render(<Select value="" options={OPTIONS} onChange={() => {}} data-testid="sel" wrapItems />)
+    fireEvent.click(screen.getByTestId('sel'))
+    const item = screen.getByRole('option', { name: '(default)' })
+    expect(item.classList.contains(styles['itemWrap']!)).toBe(true)
+  })
+
+  it('keeps items nowrap by default', () => {
+    render(<Select value="" options={OPTIONS} onChange={() => {}} data-testid="sel" />)
+    fireEvent.click(screen.getByTestId('sel'))
+    const item = screen.getByRole('option', { name: '(default)' })
+    expect(item.classList.contains(styles['itemWrap']!)).toBe(false)
   })
 
   describe('disabled options', () => {
