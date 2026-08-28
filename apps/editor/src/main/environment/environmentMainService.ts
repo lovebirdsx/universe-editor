@@ -24,6 +24,7 @@ import {
   APP_DATA,
   CLI_OPTIONS,
   CONFIG_DIR,
+  CONFIGURATION_DEFAULTS,
   EXTENSION_DEV_PATHS,
   GALLERY_SIGNING_KEYS,
   GALLERY_URL,
@@ -42,10 +43,16 @@ import {
   VERSION,
   XDG_CONFIG_HOME,
 } from './configItems.js'
+import {
+  parseConfigurationDefaults,
+  type ConfigurationDefaults,
+} from '../../shared/productDefaults.js'
 import type { ResolveEnv } from '../productPaths.js'
 
 const UPDATE_CONFIG_FILE = 'update-config.json'
 const CONFIG_LOCATION_FILE = 'config-location.json'
+/** product.json field holding shipped settings.json defaults. */
+const CONFIGURATION_DEFAULTS_FIELD = 'configurationDefaults'
 
 export interface EnvironmentMainServiceOptions {
   argv: readonly string[]
@@ -68,6 +75,7 @@ export class EnvironmentMainService {
   private readonly _platform: NodeJS.Platform
   private readonly _homeDir: string
   private _userDataDir: string | undefined
+  private _productConfigurationDefaults: ConfigurationDefaults = {}
 
   constructor(opts: EnvironmentMainServiceOptions) {
     this._isDev = opts.isDev
@@ -196,6 +204,12 @@ export class EnvironmentMainService {
     if (productConfigFile !== undefined) {
       const productData = this._readJsonFile(productConfigFile)
       this._resolver.appendSource(new FileConfigSource(productData))
+      const defaults = productData[CONFIGURATION_DEFAULTS_FIELD]
+      // Read off the parsed object rather than through a ConfigItem: these keys are
+      // dotted settings paths, which FileConfigSource would walk as nested segments.
+      if (defaults !== null && typeof defaults === 'object' && !Array.isArray(defaults)) {
+        this._productConfigurationDefaults = defaults as ConfigurationDefaults
+      }
     }
   }
 
@@ -210,6 +224,18 @@ export class EnvironmentMainService {
   /** Env-only signing-key overlay for marketplace VSIX verification (dev/e2e seam). */
   get gallerySigningKeys(): string | undefined {
     return this._resolver.get(GALLERY_SIGNING_KEYS)
+  }
+
+  /**
+   * Shipped defaults for settings.json keys, forwarded to the renderer's
+   * ConfigurationRegistry. product.json is the base (packaged builds) and the
+   * UNIVERSE_CONFIGURATION_DEFAULTS env var overlays it per key — same
+   * built-ins-plus-env-overlay shape as resolveMarketplaceSigningKeys, and what
+   * `pnpm dev` uses to inject values straight from .env.
+   */
+  get configurationDefaults(): ConfigurationDefaults {
+    const envDefaults = parseConfigurationDefaults(this._resolver.get(CONFIGURATION_DEFAULTS))
+    return { ...this._productConfigurationDefaults, ...envDefaults }
   }
 
   /**

@@ -6,10 +6,22 @@ afterEach(() => {
   cleanup()
 })
 
-function mountControl(schema: Parameters<typeof SettingsRowControl>[0]['schema'], value: unknown) {
+// defaultValue mirrors what SettingsEditor passes: the effective Default-layer
+// value, which equals schema.default unless a product override replaced it.
+function mountControl(
+  schema: Parameters<typeof SettingsRowControl>[0]['schema'],
+  value: unknown,
+  defaultValue: unknown = schema.default,
+) {
   const onCommit = vi.fn()
   const utils = render(
-    <SettingsRowControl configKey="test.key" schema={schema} value={value} onCommit={onCommit} />,
+    <SettingsRowControl
+      configKey="test.key"
+      schema={schema}
+      value={value}
+      defaultValue={defaultValue}
+      onCommit={onCommit}
+    />,
   )
   return { ...utils, onCommit }
 }
@@ -50,6 +62,7 @@ describe('SettingsRowControl enum', () => {
         configKey="test.key"
         schema={schema}
         value="afterDelay"
+        defaultValue={schema.default}
         onCommit={onCommit}
       />,
     )
@@ -71,6 +84,7 @@ describe('SettingsRowControl boolean', () => {
         configKey="test.key"
         schema={{ type: 'boolean', default: true }}
         value={true}
+        defaultValue={true}
         onCommit={onCommit}
       />,
     )
@@ -83,6 +97,7 @@ describe('SettingsRowControl boolean', () => {
         configKey="test.key"
         schema={{ type: 'boolean', default: true }}
         value={false}
+        defaultValue={true}
         onCommit={onCommit}
       />,
     )
@@ -124,13 +139,25 @@ describe('SettingsRowControl number', () => {
   it('external value changes clear the draft', () => {
     const onCommit = vi.fn()
     const utils = render(
-      <SettingsRowControl configKey="test.key" schema={schema} value={14} onCommit={onCommit} />,
+      <SettingsRowControl
+        configKey="test.key"
+        schema={schema}
+        value={14}
+        defaultValue={14}
+        onCommit={onCommit}
+      />,
     )
     const input = utils.container.querySelector('input[type=number]') as HTMLInputElement
     fireEvent.change(input, { target: { value: '' } })
     expect(input.value).toBe('')
     utils.rerender(
-      <SettingsRowControl configKey="test.key" schema={schema} value={22} onCommit={onCommit} />,
+      <SettingsRowControl
+        configKey="test.key"
+        schema={schema}
+        value={22}
+        defaultValue={14}
+        onCommit={onCommit}
+      />,
     )
     expect(input.value).toBe('22')
   })
@@ -150,5 +177,39 @@ describe('SettingsRowControl string', () => {
     const { container, onCommit } = mountControl({ type: 'string', default: 'off' }, 'afterDelay')
     fireEvent.change(container.querySelector('input[type=text]')!, { target: { value: 'off' } })
     expect(onCommit).toHaveBeenLastCalledWith(undefined)
+  })
+})
+
+// A product override (build-time injected default) replaces the effective default
+// without touching schema.default. Reading schema.default here would both mislabel
+// the reset target and swallow "clear the field to disable" — the injected value
+// would silently come back.
+describe('SettingsRowControl product-overridden default', () => {
+  const schema = { type: 'string' as const, default: '' }
+
+  it('clearing the field commits the empty string, not a reset', () => {
+    const { container, onCommit } = mountControl(schema, 'http://injected/', 'http://injected/')
+    fireEvent.change(container.querySelector('input[type=text]')!, { target: { value: '' } })
+    expect(onCommit).toHaveBeenLastCalledWith('')
+  })
+
+  it('typing the injected value commits undefined (reset)', () => {
+    const { container, onCommit } = mountControl(schema, 'http://mine/', 'http://injected/')
+    fireEvent.change(container.querySelector('input[type=text]')!, {
+      target: { value: 'http://injected/' },
+    })
+    expect(onCommit).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it('marks the overridden enum option as the default', () => {
+    const enumSchema = {
+      type: 'string' as const,
+      default: 'off',
+      enum: ['off', 'afterDelay'],
+    }
+    const { container } = mountControl(enumSchema, 'afterDelay', 'afterDelay')
+    fireEvent.click(container.querySelector('button')!)
+    const options = Array.from(document.querySelectorAll('[role="option"]'))
+    expect(options.map((o) => o.textContent)).toEqual(['off', 'afterDelay (default)'])
   })
 })

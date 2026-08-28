@@ -31,6 +31,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { loadEnv } from '../../../scripts/lib/env.mjs'
+import { collectConfigurationDefaults } from '../../../scripts/lib/productDefaults.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPO_ROOT = resolve(APP_ROOT, '../..')
@@ -64,6 +66,11 @@ if (process.argv[2] === BUILD_CHILD_FLAG) {
 const args = process.argv.slice(2)
 const force = args.includes('--force') || process.env.UNIVERSE_DEVRUN_FORCE === '1'
 const electronArgs = args.filter((a) => a !== '--force')
+
+// 读 .env* 让 dev:run 与 pnpm dev 拿到同一套内置配置默认值（scripts/lib/productDefaults.mjs）。
+// 放在 build-child 早退之后：子进程只跑 vite build，不需要也不该重复打 [env] 日志。
+loadEnv({ cwd: REPO_ROOT })
+const configurationDefaults = collectConfigurationDefaults()
 
 const vendor = spawnSync(
   process.execPath,
@@ -263,7 +270,13 @@ const t0 = Date.now()
 const child = spawn(electronExe, [OUT_DEV, ...electronArgs], {
   cwd: APP_ROOT,
   stdio: 'inherit',
-  env: { ...cleanEnv, UNIVERSE_DEVRUN_T0: String(t0) },
+  env: {
+    ...cleanEnv,
+    UNIVERSE_DEVRUN_T0: String(t0),
+    ...(configurationDefaults
+      ? { UNIVERSE_CONFIGURATION_DEFAULTS: JSON.stringify(configurationDefaults) }
+      : {}),
+  },
 })
 
 child.on('exit', (code, signal) => {

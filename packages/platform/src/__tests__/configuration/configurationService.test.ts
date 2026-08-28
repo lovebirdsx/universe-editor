@@ -65,6 +65,61 @@ describe('ConfigurationRegistry', () => {
   })
 })
 
+describe('ConfigurationRegistry.registerDefaultOverrides', () => {
+  it('getDefaultValue prefers an override over the schema default', () => {
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'ovr',
+      properties: { 'ovr.url': { type: 'string', default: '' } },
+    })
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'ovr.url': 'http://injected/' })
+
+    expect(ConfigurationRegistry.getDefaultValue('ovr.url')).toBe('http://injected/')
+
+    ovr.dispose()
+    expect(ConfigurationRegistry.getDefaultValue('ovr.url')).toBe('')
+    node.dispose()
+  })
+
+  it('applies to keys with no schema declaration at all', () => {
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'ovr.undeclared': 1 })
+    expect(ConfigurationRegistry.getDefaultValue('ovr.undeclared')).toBe(1)
+    ovr.dispose()
+  })
+
+  it('later registrations win on conflicting keys and getDefaultOverrides merges all', () => {
+    const first = ConfigurationRegistry.registerDefaultOverrides({ 'ovr.a': 1, 'ovr.b': 1 })
+    const second = ConfigurationRegistry.registerDefaultOverrides({ 'ovr.b': 2 })
+
+    const merged = ConfigurationRegistry.getDefaultOverrides()
+    expect(merged['ovr.a']).toBe(1)
+    expect(merged['ovr.b']).toBe(2)
+    expect(ConfigurationRegistry.getDefaultValue('ovr.b')).toBe(2)
+
+    second.dispose()
+    expect(ConfigurationRegistry.getDefaultValue('ovr.b')).toBe(1)
+    first.dispose()
+    expect(ConfigurationRegistry.getDefaultOverrides()).toEqual({})
+  })
+
+  it('snapshots the caller object so later mutation cannot leak in', () => {
+    const source: Record<string, unknown> = { 'ovr.snap': 'a' }
+    const ovr = ConfigurationRegistry.registerDefaultOverrides(source)
+    source['ovr.snap'] = 'b'
+    expect(ConfigurationRegistry.getDefaultValue('ovr.snap')).toBe('a')
+    ovr.dispose()
+  })
+
+  it('fires onDidRegisterConfiguration on register and dispose', () => {
+    let count = 0
+    const sub = ConfigurationRegistry.onDidRegisterConfiguration(() => count++)
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'ovr.evt': 1 })
+    expect(count).toBe(1)
+    ovr.dispose()
+    expect(count).toBe(2)
+    sub.dispose()
+  })
+})
+
 describe('ConfigurationService', () => {
   it('returns undefined for unknown key without default', () => {
     const svc = new ConfigurationService()
@@ -224,6 +279,115 @@ describe('ConfigurationService', () => {
     expect(svc.get('auto.x')).toBe(7)
 
     d.dispose()
+    svc.dispose()
+  })
+})
+
+describe('ConfigurationService default overrides', () => {
+  it('an override outranks the schema default but loses to the User layer', () => {
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'povr',
+      properties: { 'povr.url': { type: 'string', default: '' } },
+    })
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'povr.url': 'http://injected/' })
+
+    const svc = new ConfigurationService()
+    expect(svc.get('povr.url')).toBe('http://injected/')
+    // Still reported as Default — the Settings UI must not show it as modified.
+    expect(svc.getValueOrigin('povr.url')).toBe(ConfigurationTarget.Default)
+
+    svc.update('povr.url', 'http://mine/', ConfigurationTarget.User)
+    expect(svc.get('povr.url')).toBe('http://mine/')
+
+    // Resetting the user layer falls back to the injected value, not the schema default.
+    svc.update('povr.url', undefined, ConfigurationTarget.User)
+    expect(svc.get('povr.url')).toBe('http://injected/')
+
+    svc.dispose()
+    ovr.dispose()
+    node.dispose()
+  })
+
+  it('survives a later configuration contribution recomputing the Default layer', () => {
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'late.url': 'http://injected/' })
+    const svc = new ConfigurationService()
+    expect(svc.get('late.url')).toBe('http://injected/')
+
+    // An extension contributing its own schema (default '') must not wipe the override.
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'late',
+      properties: { 'late.url': { type: 'string', default: '' } },
+    })
+    expect(svc.get('late.url')).toBe('http://injected/')
+
+    node.dispose()
+    svc.dispose()
+    ovr.dispose()
+  })
+
+  it('registering an override fires onDidChangeConfiguration for the changed key only', () => {
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'fire',
+      properties: {
+        'fire.a': { type: 'string', default: 'a' },
+        'fire.b': { type: 'string', default: 'b' },
+      },
+    })
+    const svc = new ConfigurationService()
+
+    const affected: string[] = []
+    let fired = 0
+    const sub = svc.onDidChangeConfiguration((e) => {
+      fired++
+      for (const k of ['fire.a', 'fire.b']) {
+        if (e.affectsConfiguration(k)) affected.push(k)
+      }
+    })
+
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'fire.a': 'injected' })
+    expect(fired).toBe(1)
+    expect(affected).toEqual(['fire.a'])
+
+    sub.dispose()
+    svc.dispose()
+    ovr.dispose()
+    node.dispose()
+  })
+
+  it('does not fire when a User-layer value already shadows the overridden key', () => {
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'shadow',
+      properties: { 'shadow.x': { type: 'string', default: '' } },
+    })
+    const svc = new ConfigurationService()
+    svc.update('shadow.x', 'mine', ConfigurationTarget.User)
+
+    let fired = 0
+    const sub = svc.onDidChangeConfiguration(() => fired++)
+    const ovr = ConfigurationRegistry.registerDefaultOverrides({ 'shadow.x': 'injected' })
+    expect(fired).toBe(0)
+    expect(svc.get('shadow.x')).toBe('mine')
+
+    sub.dispose()
+    svc.dispose()
+    ovr.dispose()
+    node.dispose()
+  })
+
+  it('registering a schema whose default matches the effective value does not fire', () => {
+    const svc = new ConfigurationService()
+    let fired = 0
+    const sub = svc.onDidChangeConfiguration(() => fired++)
+
+    // No-op contribution: the key had no value before and its default is undefined.
+    const node = ConfigurationRegistry.registerConfiguration({
+      id: 'quiet',
+      properties: { 'quiet.x': { type: 'string' } },
+    })
+    expect(fired).toBe(0)
+
+    sub.dispose()
+    node.dispose()
     svc.dispose()
   })
 })

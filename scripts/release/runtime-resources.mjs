@@ -24,6 +24,10 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadEnv } from '../lib/env.mjs'
 import {
+  CONFIGURATION_DEFAULTS_FIELD,
+  collectConfigurationDefaults,
+} from '../lib/productDefaults.mjs'
+import {
   extensionPackageFiles as sharedExtensionPackageFiles,
   normalizePackageFileEntry as sharedNormalizePackageFileEntry,
 } from '../../packages/extension-packaging/dist/packageFiles.js'
@@ -184,19 +188,32 @@ function copyPath(source, destination) {
   cpSync(source, destination, { recursive: statSync(source).isDirectory(), force: true })
 }
 
-// product.json 是 JSONC（带 // 注释）。仅在配置了 UE_GALLERY_URL 时重写（按 env
-// 覆盖 galleryUrl），否则保持原文件字节级一致——没配 env 时占位值原样进入产物。
+/**
+ * product.json 是 JSONC（带 // 注释）。返回要写入产物的内容，`undefined` 表示
+ * 「没有任何 env 配置，原样字节拷贝」——没配 env 时占位值与注释原样进入产物。
+ * 一旦要重写，注释就会丢失（JSON.stringify 的固有结果），产物是给程序读的，可接受。
+ */
+export function resolveStagedProductJson(sourceText, env = process.env) {
+  const galleryUrl = env.UE_GALLERY_URL
+  const configurationDefaults = collectConfigurationDefaults(env)
+  if (!galleryUrl && !configurationDefaults) return undefined
+  const product = jsonc.parse(sourceText)
+  if (galleryUrl) product.galleryUrl = galleryUrl
+  if (configurationDefaults) product[CONFIGURATION_DEFAULTS_FIELD] = configurationDefaults
+  return JSON.stringify(product, null, 2) + '\n'
+}
+
 function stageProductJson(stageDir) {
   const source = join(editorRoot, 'build/product.json')
   assertExists(source, 'product defaults')
-  const galleryUrl = process.env.UE_GALLERY_URL
-  if (!galleryUrl) {
-    copyPath(source, join(stageDir, 'product.json'))
+  const target = join(stageDir, 'product.json')
+  const rewritten = resolveStagedProductJson(readFileSync(source, 'utf8'))
+  if (rewritten === undefined) {
+    copyPath(source, target)
     return
   }
-  const product = jsonc.parse(readFileSync(source, 'utf8'))
-  product.galleryUrl = galleryUrl
-  writeFileSync(join(stageDir, 'product.json'), JSON.stringify(product, null, 2) + '\n')
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(target, rewritten)
 }
 
 // Keep packages/remote-server/dist-bundle fresh before staging. Invoked directly

@@ -14,19 +14,24 @@ interface ControlProps {
   configKey: string
   schema: IConfigurationPropertySchema
   value: unknown
+  /**
+   * Effective default (schema default, possibly overridden at build time).
+   * Compared against on commit so typing the default resets the key instead of
+   * pinning a copy of it — must not be read off `schema.default`, which ignores
+   * product overrides.
+   */
+  defaultValue: unknown
   onCommit: (value: unknown) => void
 }
 
-function EnumControl({ schema, value, onCommit }: ControlProps): JSX.Element {
+function EnumControl({ schema, value, defaultValue, onCommit }: ControlProps): JSX.Element {
   const options = (schema.enum ?? []).map((opt) => {
     const str = String(opt)
     const label = schema.enumItemLabels?.[str] ?? str
     return {
       value: str,
       label:
-        opt === schema.default
-          ? `${label} (${localize('settings.defaultBadge', 'default')})`
-          : label,
+        opt === defaultValue ? `${label} (${localize('settings.defaultBadge', 'default')})` : label,
       text: str,
     }
   })
@@ -34,22 +39,22 @@ function EnumControl({ schema, value, onCommit }: ControlProps): JSX.Element {
     <Select
       value={String(value ?? '')}
       options={options}
-      onChange={(v) => onCommit(v === String(schema.default) ? undefined : v)}
+      onChange={(v) => onCommit(v === String(defaultValue) ? undefined : v)}
       aria-label={localize('settings.control.ariaLabel', 'Setting value')}
     />
   )
 }
 
-function BooleanControl({ value, schema, onCommit }: ControlProps): JSX.Element {
+function BooleanControl({ value, defaultValue, onCommit }: ControlProps): JSX.Element {
   return (
     <Checkbox
       checked={Boolean(value)}
-      onChange={(checked) => onCommit(checked === schema.default ? undefined : checked)}
+      onChange={(checked) => onCommit(checked === defaultValue ? undefined : checked)}
     />
   )
 }
 
-function NumberControl({ value, schema, onCommit }: ControlProps): JSX.Element {
+function NumberControl({ value, schema, defaultValue, onCommit }: ControlProps): JSX.Element {
   // Draft state so typing intermediates ('', '1.') never commit garbage; the
   // committed value flows back in as a normal render prop. An empty draft is
   // held until blur — committing the reset immediately would snap the field
@@ -70,7 +75,7 @@ function NumberControl({ value, schema, onCommit }: ControlProps): JSX.Element {
         setDraft(raw)
         if (raw === '') return
         const n = Number(raw)
-        if (!Number.isNaN(n)) onCommit(n === schema.default ? undefined : n)
+        if (!Number.isNaN(n)) onCommit(n === defaultValue ? undefined : n)
       }}
       onBlur={() => {
         if (draft === '') onCommit(undefined)
@@ -79,7 +84,7 @@ function NumberControl({ value, schema, onCommit }: ControlProps): JSX.Element {
   )
 }
 
-function StringControl({ value, schema, onCommit }: ControlProps): JSX.Element {
+function StringControl({ value, defaultValue, onCommit }: ControlProps): JSX.Element {
   const [draft, setDraft] = useState<string | undefined>(undefined)
   useEffect(() => {
     setDraft(undefined)
@@ -92,7 +97,7 @@ function StringControl({ value, schema, onCommit }: ControlProps): JSX.Element {
       onChange={(e) => {
         const raw = e.target.value
         setDraft(raw)
-        onCommit(raw === String(schema.default ?? '') ? undefined : raw)
+        onCommit(raw === String(defaultValue ?? '') ? undefined : raw)
       }}
     />
   )

@@ -247,6 +247,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
           schema={item.schema}
           groupTitle={groupTitles.get(item.groupId) ?? item.groupId}
           value={config.getValueForTarget(item.key, activeTarget)}
+          defaultValue={config.getValueForTarget(item.key, ConfigurationTarget.Default)}
           origin={origin}
           activeTarget={activeTarget}
           otherOrigin={otherOrigin}

@@ -152,6 +152,7 @@ function makeOpts() {
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => '/tmp/ue-state',
+    getConfigurationDefaults: () => ({}),
   }
 }
 

@@ -6,6 +6,7 @@ import {
   EXTENSION_DEVELOPMENT_ARGV_FLAG,
   EXTENSION_DEVELOPMENT_ENABLED_KEY,
 } from '../shared/extensionDevelopment.js'
+import { parseConfigurationDefaultsArg } from '../shared/productDefaults.js'
 
 const HOME_DIR_FLAG = '--ue-home-dir='
 const homeArg = process.argv.find((a) => a.startsWith(HOME_DIR_FLAG))
@@ -28,6 +29,8 @@ const remoteAuthorityArg = process.argv.find((a) => a.startsWith(REMOTE_AUTHORIT
 const remoteAuthority = remoteAuthorityArg
   ? remoteAuthorityArg.slice(REMOTE_AUTHORITY_FLAG.length)
   : undefined
+
+const configurationDefaults = parseConfigurationDefaultsArg(process.argv)
 
 /** 存储在监听器没有就绪时收到的 deep link，等待监听器添加后进行处理 */
 const pendingOpenUriTargets: string[] = []
@@ -72,6 +75,12 @@ const bridge = {
   openFilePath,
   /** remote-ssh authority this window is scoped to at cold-launch (undefined for a local window). */
   remoteAuthority,
+  /**
+   * Build-time defaults for settings.json keys (empty when none were injected).
+   * Synchronous by design: the renderer registers these before constructing
+   * ConfigurationService, so no consumer can observe a pre-override value.
+   */
+  configurationDefaults,
   /** Listen for files pushed by the main process (second-instance scenario). */
   onOpenFile(cb: (path: string) => void): () => void {
     const listener = (_event: IpcRendererEvent, path: unknown): void => {

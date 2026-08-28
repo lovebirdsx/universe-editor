@@ -25,6 +25,12 @@ export interface SettingsRowProps {
   readonly groupTitle: string
   /** Effective value as seen from the viewed target (falls back to default). */
   readonly value: unknown
+  /**
+   * Effective default (schema default, or a build-time product override on top of
+   * it). Controls compare against this to decide "typed the default = reset", so
+   * an injected default must not be shadowed by the raw `schema.default`.
+   */
+  readonly defaultValue: unknown
   /** Which layer owns the value in the viewed scope (undefined = default). */
   readonly origin: ConfigurationTarget | undefined
   /** The scope being viewed — the modified bar tracks ownership at this layer. */
@@ -45,6 +51,7 @@ export const SettingsRow = memo(function SettingsRow({
   schema,
   groupTitle,
   value,
+  defaultValue,
   origin,
   activeTarget,
   otherOrigin,
@@ -54,7 +61,7 @@ export const SettingsRow = memo(function SettingsRow({
 
   const { category, label } = settingDisplayTitle(configKey, groupTitle)
   const modified = origin === activeTarget
-  const displayValue = value ?? schema.default
+  const displayValue = value ?? defaultValue
 
   return (
     <div
@@ -82,6 +89,7 @@ export const SettingsRow = memo(function SettingsRow({
           configKey={configKey}
           schema={schema}
           value={displayValue}
+          defaultValue={defaultValue}
           onCommit={(v) => onUpdate(configKey, v)}
         />
       </div>

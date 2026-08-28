@@ -540,6 +540,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       preloadPath: join(import.meta.dirname, '../preload/index.cjs'),
       rendererUrl: environmentService.rendererUrl,
       getConfigDir: () => applicationServices!.configLocation.currentDir,
+      getConfigurationDefaults: () => environmentService.configurationDefaults,
     })
     // Gate quitAndInstall behind the same running-session veto a normal quit runs.
     // Without this, electron-updater spawns the installer before before-quit can

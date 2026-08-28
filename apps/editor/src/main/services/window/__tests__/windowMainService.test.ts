@@ -197,6 +197,7 @@ function makeOpts() {
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
     getConfigDir: () => join(tmpdir(), 'ue-wintest'),
+    getConfigurationDefaults: () => ({}),
   }
 }
 

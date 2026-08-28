@@ -22,7 +22,7 @@
 
 - 已按 [Perforce 概览与连接](./overview.md) 完成连接（能正常登录 p4）。
 - 有一台可达的 Swarm 服务器地址。
-- Swarm 集成默认开启，服务器 URL **默认为空**（未配置时 Swarm 功能静默不可用，不会弹错）。需要连接服务器时，在[设置](../customization/settings.md)里填写 `perforce.swarm.url`。
+- Swarm 集成默认开启。服务器 URL 由**打包时内置**：若你的安装包是团队内部构建的，`perforce.swarm.url` 开箱即已指向内部 Swarm，无需配置；未内置时该项**默认为空**（Swarm 功能静默不可用，不会弹错），可在[设置](../customization/settings.md)里填写。任何情况下都可以在设置里填自己的地址覆盖内置值。
 
 开启后可在命令面板运行 **"Perforce: Swarm：检查连接"**（分类 Perforce）做连通性自检——成功会提示已连接。
 
@@ -37,7 +37,7 @@
 
 ## Swarm Reviews 侧栏
 
-日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。该入口只在 Perforce 工作区出现——打开的目录不是 Perforce 工作区时，整个视图会从活动栏隐藏。已开启但视图内提示「Swarm is not configured」时，说明 `perforce.swarm.url` 未配置（或 `perforce.swarm.enabled` 被关闭），在设置里补齐即可。
+日常主入口是活动栏里的 **Swarm Reviews** 视图（图标为 Pull Request）。也可用命令面板运行 **"Show Swarm Reviews"** 打开。该入口只在 Perforce 工作区出现——打开的目录不是 Perforce 工作区时，整个视图会从活动栏隐藏。已开启但视图内提示「Swarm is not configured」时，说明 `perforce.swarm.url` 既没有打包内置值、也没在设置里填（或 `perforce.swarm.enabled` 被关闭），在设置里补齐即可。
 
 活动栏图标上会显示一个**数字角标**，即「Needs My Action」分组当前的审核数量（含自己发起但仍待处理的审核，不含已忽略的；不受关键词过滤框影响）。开启后台轮询（`perforce.swarm.backgroundPoll.enabled`，**默认关闭**）后，侧栏关闭时该数字也会持续刷新；未开启时仅在打开视图或手动刷新时更新。
 
@@ -180,7 +180,7 @@ universe-editor://swarm/review/1234
 | 配置项                        | 默认                         | 说明                                                                                                              |
 | ----------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `perforce.swarm.enabled`      | `true`                       | 是否开启 Swarm 集成。                                                                                             |
-| `perforce.swarm.url`          | `""`（空）                    | Swarm 服务器 URL，默认为空需自行配置。**凭据绝不进配置**。                                                        |
+| `perforce.swarm.url`          | 打包内置值，未内置时 `""`（空） | Swarm 服务器 URL。团队内部构建的安装包会在打包时内置该地址，开箱可用；在设置里填写即覆盖内置值。**凭据绝不进配置**。 |
 | `perforce.swarm.apiVersion`   | `v9`                         | Swarm REST API 版本。`v9` 端点覆盖最全（含 action 看板）；仅当服务器版本要求时改 `v11`。                          |
 | `perforce.swarm.backgroundPoll.enabled` | `false`        | 是否在后台定时轮询 Swarm 看板（驱动新审核通知、Activity Bar 角标与状态栏计数）。默认关闭——审核列表在打开视图或手动刷新时仍会更新。改动即时生效。 |
 | `perforce.swarm.pollInterval` | `0`                          | 后台轮询看板的秒数（仅在 `perforce.swarm.backgroundPoll.enabled` 开启时生效），`0` 用默认 60 秒，最小 10 秒。                     |

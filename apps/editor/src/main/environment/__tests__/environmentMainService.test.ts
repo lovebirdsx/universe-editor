@@ -169,6 +169,62 @@ describe('galleryUrl', () => {
   })
 })
 
+describe('configurationDefaults', () => {
+  function withProduct(content: string, env?: Record<string, string | undefined>) {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-cfgdef-'))
+    const product = join(dir, 'product.json')
+    writeFileSync(product, content)
+    const svc = make(env ? { env } : {})
+    svc.resolveFileConfig(dir, product)
+    return svc
+  }
+
+  it('is empty before resolveFileConfig runs', () => {
+    expect(make({}).configurationDefaults).toEqual({})
+  })
+
+  it('reads the product.json object (dotted keys stay flat)', () => {
+    const svc = withProduct(
+      JSON.stringify({
+        galleryUrl: 'http://product/',
+        configurationDefaults: { 'perforce.swarm.url': 'http://swarm/' },
+      }),
+    )
+    expect(svc.configurationDefaults).toEqual({ 'perforce.swarm.url': 'http://swarm/' })
+  })
+
+  it('lets the env var overlay product.json per key', () => {
+    const svc = withProduct(
+      JSON.stringify({ configurationDefaults: { 'a.x': 'product', 'b.y': 'product' } }),
+      {
+        UNIVERSE_CONFIGURATION_DEFAULTS: JSON.stringify({ 'a.x': 'env', 'c.z': 'env' }),
+      },
+    )
+    expect(svc.configurationDefaults).toEqual({ 'a.x': 'env', 'b.y': 'product', 'c.z': 'env' })
+  })
+
+  it('is empty when the product config has no such field', () => {
+    expect(withProduct(JSON.stringify({ galleryUrl: 'http://p/' })).configurationDefaults).toEqual(
+      {},
+    )
+  })
+
+  it('degrades to the product value when the env var is malformed JSON', () => {
+    const svc = withProduct(JSON.stringify({ configurationDefaults: { 'a.x': 'product' } }), {
+      UNIVERSE_CONFIGURATION_DEFAULTS: '{not json',
+    })
+    expect(svc.configurationDefaults).toEqual({ 'a.x': 'product' })
+  })
+
+  it('ignores non-object shapes on both sources', () => {
+    expect(
+      withProduct(JSON.stringify({ configurationDefaults: ['nope'] }), {
+        UNIVERSE_CONFIGURATION_DEFAULTS: '["also nope"]',
+      }).configurationDefaults,
+    ).toEqual({})
+  })
+})
+
 describe('configDir', () => {
   it('falls back to userData when nothing overrides it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))

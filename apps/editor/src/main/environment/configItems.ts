@@ -167,6 +167,22 @@ export const GALLERY_SIGNING_KEYS: ConfigItem<'string'> = {
   type: 'string',
   env: 'UNIVERSE_GALLERY_SIGNING_KEYS',
 }
+
+/**
+ * Shipped defaults for settings.json keys (JSON {"<settings key>": <value>}).
+ *
+ * Deliberately has no `filePath`: FileConfigSource walks `filePath` segment by
+ * segment on `.` and only yields string/boolean/string[], while these keys are
+ * dotted paths mapping to arbitrary JSON. The product.json object is therefore
+ * read directly in EnvironmentMainService; this item is the higher-priority env
+ * seam over it (same JSON-string convention as GALLERY_SIGNING_KEYS).
+ */
+export const CONFIGURATION_DEFAULTS: ConfigItem<'string'> = {
+  id: 'configurationDefaults',
+  type: 'string',
+  env: 'UNIVERSE_CONFIGURATION_DEFAULTS',
+}
+
 export const XDG_CONFIG_HOME: ConfigItem<'string'> = {
   id: 'xdgConfigHome',
   type: 'string',

@@ -8,10 +8,17 @@
 // 这里前置执行，保证两条入口行为一致。
 import { spawn, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
+import { loadEnv } from '../../../scripts/lib/env.mjs'
+import { collectConfigurationDefaults } from '../../../scripts/lib/productDefaults.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPO_ROOT = resolve(APP_ROOT, '../..')
 const ELECTRON_VITE_BIN = resolve(APP_ROOT, 'node_modules/electron-vite/bin/electron-vite.js')
+
+// 读 .env* 让 dev 会话拿到和打包版同一套内置配置默认值（映射表见 scripts/lib/
+// productDefaults.mjs）。产物侧走 resources/product.json，dev 侧靠下面这个环境变量。
+loadEnv({ cwd: REPO_ROOT })
+const configurationDefaults = collectConfigurationDefaults()
 
 const vendor = spawnSync(
   process.execPath,
@@ -58,7 +65,13 @@ const remoteWatch = spawn(process.execPath, [REMOTE_SERVER_ESBUILD, '--watch', '
 const child = spawn(process.execPath, [ELECTRON_VITE_BIN, 'dev', ...process.argv.slice(2)], {
   cwd: APP_ROOT,
   stdio: 'inherit',
-  env: { ...cleanEnv, UNIVERSE_DEV_T0: String(Date.now()) },
+  env: {
+    ...cleanEnv,
+    UNIVERSE_DEV_T0: String(Date.now()),
+    ...(configurationDefaults
+      ? { UNIVERSE_CONFIGURATION_DEFAULTS: JSON.stringify(configurationDefaults) }
+      : {}),
+  },
 })
 
 child.on('exit', (code, signal) => {

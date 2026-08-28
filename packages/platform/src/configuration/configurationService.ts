@@ -136,7 +136,37 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
         }
       }
     }
-    this._layers[ConfigurationTarget.Default] = defaults
+    // Build-time / product overrides rank above schema defaults but below every
+    // writable layer, so an injected value applies out of the box while user
+    // settings still win (see IConfigurationRegistry.registerDefaultOverrides).
+    Object.assign(defaults, ConfigurationRegistry.getDefaultOverrides())
+    this._setLayer(ConfigurationTarget.Default, defaults)
+  }
+
+  /**
+   * Replace a layer wholesale, firing only for keys whose effective (post-merge)
+   * value actually changed. Shared by `_refreshDefaults` and `loadLayer`.
+   */
+  private _setLayer(target: ConfigurationTarget, data: ConfigStore): void {
+    const allKeys = new Set([...Object.keys(this._layers[target] ?? {}), ...Object.keys(data)])
+
+    const before = new Map<string, unknown>()
+    for (const k of allKeys) before.set(k, this.get(k))
+
+    this._layers[target] = data
+
+    const changedKeys: string[] = []
+    for (const k of allKeys) {
+      if (this.get(k) !== before.get(k)) changedKeys.push(k)
+    }
+
+    if (changedKeys.length > 0) {
+      const changed = new Set(changedKeys)
+      this._onDidChangeConfiguration.fire({
+        keys: changedKeys,
+        affectsConfiguration: (k) => changed.has(k),
+      })
+    }
   }
 
   get<T>(key: string, defaultValue?: T): T | undefined {
@@ -206,26 +236,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
     if (!this._layers[target]) {
       throw new Error(`Unknown configuration target: ${target}`)
     }
-    const oldKeys = Object.keys(this._layers[target] ?? {})
-    const newKeys = Object.keys(data)
-    const allKeys = new Set([...oldKeys, ...newKeys])
-
-    const before = new Map<string, unknown>()
-    for (const k of allKeys) before.set(k, this.get(k))
-
-    this._layers[target] = { ...data }
-
-    const changedKeys = new Set<string>()
-    for (const k of allKeys) {
-      if (this.get(k) !== before.get(k)) changedKeys.add(k)
-    }
-
-    if (changedKeys.size > 0) {
-      this._onDidChangeConfiguration.fire({
-        keys: [...changedKeys],
-        affectsConfiguration: (k) => changedKeys.has(k),
-      })
-    }
+    this._setLayer(target, { ...data })
   }
 
   getLayerSnapshot(target: ConfigurationTarget): Readonly<Record<string, unknown>> {

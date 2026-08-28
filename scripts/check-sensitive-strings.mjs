@@ -47,6 +47,9 @@ const SKIP_DIRS = new Set([
   'plans',
   'explore-results',
   'handoff',
+  // packaging staging dir (apps/editor/.runtime-resources): gitignored build output,
+  // and it holds the real internal addresses injected from .env by design
+  '.runtime-resources',
 ])
 
 /** Only scan text source and documentation; skip binaries and lock files. */

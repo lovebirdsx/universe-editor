@@ -28,6 +28,10 @@ import {
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
 import { EXTENSION_DEVELOPMENT_ARGV_FLAG } from '../../../shared/extensionDevelopment.js'
+import {
+  encodeConfigurationDefaultsArg,
+  type ConfigurationDefaults,
+} from '../../../shared/productDefaults.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 import { APP_PROTOCOL_SCHEME, APP_SHELL_URL } from '../../ipc/resourceProtocol.js'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
@@ -111,6 +115,8 @@ export interface WindowMainServiceOptions {
   readonly rendererUrl: string | undefined
   /** Resolved directory for user settings/keybindings (EnvironmentMainService.configDir). */
   readonly getConfigDir: () => string
+  /** Shipped settings.json defaults forwarded to the renderer (EnvironmentMainService.configurationDefaults). */
+  readonly getConfigurationDefaults: () => ConfigurationDefaults
 }
 
 // Upper bound on the renderer's shutdown-veto round-trip. Long enough for a busy
@@ -166,6 +172,11 @@ export class WindowMainService implements IWindowMainService {
 
     const isMac = process.platform === 'darwin'
     const uiState = opts?.uiState
+    // Encoded once per window; undefined when nothing is injected so the argv stays
+    // clean (and the renderer skips registering an empty override layer).
+    const configurationDefaultsArg = encodeConfigurationDefaultsArg(
+      this._opts.getConfigurationDefaults(),
+    )
     const windowRemoteAuthority = deriveWindowRemoteAuthority(
       opts?.workspace?.folder ?? undefined,
       opts?.remoteAuthority,
@@ -220,6 +231,7 @@ export class WindowMainService implements IWindowMainService {
           ...(windowRemoteAuthority ? [`--ue-remote-authority=${windowRemoteAuthority}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
           ...(extensionDevelopment ? [EXTENSION_DEVELOPMENT_ARGV_FLAG] : []),
+          ...(configurationDefaultsArg !== undefined ? [configurationDefaultsArg] : []),
         ],
       },
     })

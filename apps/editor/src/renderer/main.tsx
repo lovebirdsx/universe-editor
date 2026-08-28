@@ -40,6 +40,7 @@ import {
   WorkspaceTrustManagementService,
   type IWorkspaceServiceWire,
   ConfigurationService,
+  ConfigurationRegistry,
   ConfigurationTarget,
   ContributionService,
   IContributionService,
@@ -440,6 +441,16 @@ async function bootstrapWorkbench(): Promise<void> {
 
   // Configuration core. UserSettingsSync (below) bridges the User layer to
   // IStorageService so user settings persist across restarts.
+  //
+  // Build-time product defaults go in first: they outrank each setting's own
+  // schema default but lose to every writable layer, so a packaged build works
+  // out of the box while settings.json still wins. Registered on the registry
+  // (not written into the Default layer) because extension contributions arrive
+  // later and recompute that layer wholesale.
+  const productDefaults = window.ipc?.configurationDefaults ?? {}
+  if (Object.keys(productDefaults).length > 0) {
+    workbenchStore.add(ConfigurationRegistry.registerDefaultOverrides(productDefaults))
+  }
   const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
 
