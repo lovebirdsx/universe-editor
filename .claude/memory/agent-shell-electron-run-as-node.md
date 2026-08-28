@@ -4,7 +4,6 @@ description: agent 的 Bash 环境注入了 ELECTRON_RUN_AS_NODE=1，直接跑 e
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 48d261e6-7954-4ec7-aa08-ced6557db7e3
 ---
 
 在 agent（Claude Code 类 harness）的 Bash 工具环境里，`ELECTRON_RUN_AS_NODE=1` 被默认注入。此变量下 Electron 退化为纯 node 模式：ESM 主进程 `import ... from 'electron'` 直接崩 `TypeError: Cannot read properties of undefined (reading 'exports')`（cjsPreparseModuleExports），`pnpm dev` 在 "starting electron app..." 后必崩。

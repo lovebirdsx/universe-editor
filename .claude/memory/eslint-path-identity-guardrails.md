@@ -4,7 +4,6 @@ description: config-eslint 的路径身份护栏——no-restricted-syntax 禁�
 metadata: 
   node_type: memory
   type: reference
-  originSessionId: 18ef86fa-63d0-4b47-8b18-5dfe4d6a3fe3
 ---
 
 `packages/config-eslint/index.js` 加了防"手写路径身份比较回潮"的护栏，配合 [[path-comparison-convergence]]。

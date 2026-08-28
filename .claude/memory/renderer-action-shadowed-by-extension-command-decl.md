@@ -4,7 +4,6 @@ description: "内置扩展里 renderer Action2 命令若同时写进扩展 packa
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 8e9c20cb-08f1-496c-8647-f46e7e1c1af2
 ---
 
 内置扩展(git/perforce)贡献到 scm/title 菜单、但真正 handler 在 **renderer 的 Action2**(如 `git-graph.view`/`perforce-graph.view`)的命令,**绝不能**再写进扩展 `package.json` 的 `contributes.commands` 数组。

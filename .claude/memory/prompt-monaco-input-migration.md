@@ -4,7 +4,6 @@ description: "ACP 输入框从 textarea 升级为内嵌 Monaco + @/# by-range �
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 711da5a2-5be0-4ef6-ba2d-f4a6a033faa3
 ---
 
 ACP 会话输入框（`PromptInput.tsx`）从 HTML `textarea` 升级为**内嵌 Monaco 编辑器**，`@`/`#` 引用统一改成 VSCode Copilot 式的 **by-range 药丸（decoration）** 机制（按字符区间追踪，含空格天然安全，提交时读 range 列表产 `ContentBlock` 而非分词）。

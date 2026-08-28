@@ -4,7 +4,6 @@ description: 远程连接安装过程透明化——细粒度 progress 事件复
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 1df8fe2c-d148-422c-aed8-015886728991
   modified: 2026-08-15T13:44:20.915Z
 ---
 

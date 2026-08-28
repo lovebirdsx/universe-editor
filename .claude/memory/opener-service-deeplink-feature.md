@@ -4,7 +4,6 @@ description: "VSCode 式链接打开机制(IOpenerService + universe-editor:// �
 metadata: 
   node_type: memory
   type: project
-  originSessionId: f3edba3c-f264-4fbc-9907-92448504a61f
 ---
 
 对等 VSCode 的"发一个地址就打开对应文件并定位行列"机制,分三层落地:

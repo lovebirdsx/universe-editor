@@ -4,7 +4,6 @@ description: 大文件治理十轮教训索引——reveal 事件化/行级 diff
 metadata: 
   node_type: memory
   type: project
-  originSessionId: ae0fd3b3-d185-4df3-9aff-7647cb31b036
 ---
 
 超大 `index.d.ts` 暴露的十轮问题与修法均已落地（2026-07），实现细节 git 可查，此处只留通用教训：

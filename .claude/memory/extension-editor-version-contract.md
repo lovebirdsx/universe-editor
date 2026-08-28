@@ -4,7 +4,6 @@ description: 插件↔编辑器版本依赖契约——版本空间统一 0.13.0
 metadata: 
   node_type: memory
   type: project
-  originSessionId: fda7c259-b4eb-41c9-b9ed-30d54bc45221
   modified: 2026-08-19T17:34:13.535Z
 ---
 

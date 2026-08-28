@@ -33,6 +33,8 @@
     "skills:check": "pnpm skills:policy:check && pnpm skills:lint",
     "knowledge:check": "node scripts/check-knowledge-links.mjs --check",
     "sensitive:check": "node scripts/check-sensitive-strings.mjs --check",
+    "sensitive:check:ci": "node scripts/check-sensitive-strings.mjs --check --mask",
+    "sensitive:minify": "node scripts/minify-sensitive-rules.mjs",
     "builtin-engines:check": "node scripts/check-builtin-extensions-engines.mjs",
     "builtin-engines:fix": "node scripts/check-builtin-extensions-engines.mjs --fix",
     "bundle-size": "node scripts/bench/bundle-size.mjs",

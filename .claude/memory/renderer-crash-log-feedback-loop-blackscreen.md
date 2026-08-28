@@ -4,7 +4,6 @@ description: 长任务跑 agent 时窗口变黑(可拖动)不自愈的根因=渲
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 4d28f74d-f67d-4ca0-ad4c-c9a2a3f4553e
 ---
 
 **现象**：编辑器跑 claude code 长任务时窗口变黑但可拖动 = 主进程存活、渲染进程崩溃。崩溃后 `console.log` 疯狂轮转(几秒一个 10MB,1h40m 写爆 500MB+)、打满 CPU,窗口永不自愈。

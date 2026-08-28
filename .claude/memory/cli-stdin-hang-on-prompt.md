@@ -4,7 +4,6 @@ description: spawn 外部 CLI 时不关 stdin，命令在需要输入时永久�
 metadata: 
   node_type: memory
   type: feedback
-  originSessionId: 8761d741-d79a-4e7c-9b58-6fe88cc948ff
 ---
 
 spawn 交互型 CLI（p4/git/npm…）时，若不显式处理 stdin，命令在**需要输入**时会永久挂起——没有输入途径就卡死；就算传空 stdin 兜底，也只是把挂起变成快速失败（拿不到想要的东西）。真正的解法是**换一个只读的命令**。

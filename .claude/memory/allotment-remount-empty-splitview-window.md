@@ -4,7 +4,6 @@ description: allotment key 重挂载后 SplitView 为空直到 ResizeObserver ti
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 0dab18bb-cb6a-4aa2-a0cd-cbbcd589cae1
 ---
 
 allotment v1.20 的 `SplitView` 在 mount effect(deps `[]`)里创建，但不传 `defaultSizes` 时 **viewItems 初始为空**；子 pane 的 `addView` reconcile 被状态门控，要等 **ResizeObserver 首次回调**(异步)后的二次渲染才执行。因此 key 重挂载后存在一个**跨越多次 commit** 的窗口期：`ref.current.resize(sizes)` 会打到 `viewItems` 为空的 SplitView 上，`resizeViews` 不做边界检查 → `Cannot read properties of undefined (reading 'minimumSize')`。

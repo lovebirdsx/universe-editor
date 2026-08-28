@@ -4,7 +4,6 @@ description: 路径/URI 比较根治方案——IUriIdentityService 单一入口
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 18ef86fa-63d0-4b47-8b18-5dfe4d6a3fe3
 ---
 
 路径比较有**单一入口 `IUriIdentityService`**（`packages/platform/src/uriIdentity/`，消费端经 DI 拿，不再手写比较、不手动传 platform）；内核纯函数在 `base/path.ts` / `base/uri.ts` / `base/resourceMap.ts`（main 进程无 DI 容器，直接调纯函数 + `normalizePlatform(process.platform)`）。新增比较逻辑前一律先查它有没有现成方法。

@@ -4,7 +4,6 @@ description: "swarm 通知第三环 bug——检测链路全绿但 OS toast 被�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: f7fe7855-0b03-47c7-a41b-c521947b4a3c
 ---
 
 swarm 后台通知 bug 是多环链条(第五环见 [[swarm-notify-transitions-cache-stale]]),前两环(401 模态卡闩锁、p4 spawn 挂死)修完后 2026-07-29 又复发:renderer 日志三次 `notifying N new review(s)` 全部跟着 `OS toast gated (window focused...)`,其中一次在深夜 00:07——检测链路全部健康,断在最后一环发送门控。

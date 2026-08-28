@@ -4,7 +4,6 @@ description: openFolder 闪退根因 = @parcel/watcher win32 unsubscribe UAF；�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 77e33e24-07d3-437e-885c-33e27b18a3cf
   modified: 2026-08-09T13:15:33.113Z
 ---
 

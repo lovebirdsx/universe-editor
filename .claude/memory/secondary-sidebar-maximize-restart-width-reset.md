@@ -4,7 +4,6 @@ description: 最大化状态重启后二级侧栏宽度被重置的真根因:All
 metadata: 
   node_type: memory
   type: project
-  originSessionId: b6866530-fc08-4f67-9b73-b1fbc2e9417d
 ---
 
 aea7b026 给横向 editor pane 加 `LayoutPriority.High` 只修了「容器增量分给谁」,真实用户场景(state.json `isMaximized:true` 重启)仍必现(本机 4/6):main 在 ready-to-show 才 `maximize()`,与 renderer 初始布局 + 异步 layout reconcile 竞速。

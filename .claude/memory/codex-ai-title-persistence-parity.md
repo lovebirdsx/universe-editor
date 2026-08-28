@@ -4,7 +4,6 @@ description: codex 跨工作区 AI 标题显示成首条用户消息的根因与
 metadata: 
   node_type: memory
   type: project
-  originSessionId: d615990a-81ec-4e6f-9ae0-9148b38570d7
 ---
 
 claude 提交 5593b63 引入 `universe-editor/set_session_title` ext-method:AI 标题除写本地 history(打 `aiTitle` flag),还经 `_pushTitleToAgent`→`renameSession` 持久化回 agent,故跨工作区时 `session/list` 报告正确标题。codex fork 当时**未实现**该 ext-method → `_pushTitleToAgent` 被 methodNotFound 吞掉,AI 标题只留在**工作区作用域**的本地 history;从非当前工作区看时,session 经 hydrate sweep 由 codex `listSessions` 引入,标题 = `thread.name ?? thread.preview`(`CodexAcpClient.ts`),`thread.name` 为 null → 回退到 `thread.preview`(首条用户消息)。

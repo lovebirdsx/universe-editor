@@ -4,7 +4,6 @@ description: editorTextFocus 残留 true 致全局键盘守卫吞裸字符键(�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: d7080423-794f-4974-8916-b46829d36e07
 ---
 
 markdown 预览 link hints 的裸 `f` 键退化(按 f 无反应)真因:context key `editorTextFocus` 残留为 true。

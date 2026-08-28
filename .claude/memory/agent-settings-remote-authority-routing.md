@@ -4,7 +4,6 @@ description: "remote 工作区 AI Settings 读写本地配置的根因与修复�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: fa6d551b-7857-43db-ae0b-fa0cc7f8c9e2
   modified: 2026-08-15T13:48:55.874Z
 ---
 

@@ -4,7 +4,6 @@ description: 内置 agent skills 注入机制(additionalDirectories)+ 面向最�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: f86867f1-14e0-464f-a4ac-a23dc2b222d3
   modified: 2026-08-19T02:39:59.062Z
 ---
 

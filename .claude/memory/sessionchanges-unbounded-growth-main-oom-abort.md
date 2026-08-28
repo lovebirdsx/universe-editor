@@ -4,7 +4,6 @@ description: acp.sessionChanges 无界增长(实测152MB)→全量IPC+全量日�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: c8ea6232-2d44-484d-b96d-a8f72cb9157b
 ---
 
 工作区状态文件 200MB(`acp.sessionChanges` 152MB,minified/生成文件的 diff 行达 MB 级)导致启动约 8 秒后 exit 134。根因链(2026-07 修复):

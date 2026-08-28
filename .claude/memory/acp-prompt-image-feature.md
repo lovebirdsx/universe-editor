@@ -4,7 +4,6 @@ description: ACP 输入框图片支持（粘贴/拖拽/附件按钮）+ 88×88 �
 metadata: 
   node_type: memory
   type: project
-  originSessionId: e2666196-90c8-4c60-b914-e96bf9211c33
 ---
 
 ACP session 输入框支持图片，渲染侧原本就支持（MessageContent 的 ImageBlock），只补了输入侧。整条管线镜像 SelectionContext 套路。

@@ -4,7 +4,6 @@ description: TypeScript 语言能力已迁为内置插件 extensions/typescript�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: eef1661c-9689-4223-8f94-18e0e7d827db
 ---
 
 TypeScript 语言能力已从 renderer-core 硬编码 + 主进程 LSP，完整迁移为单个内置插件 `extensions/typescript`（**选项 B 真 VSCode 形态**：LSP server 自 spawn 在 trusted 插件进程内，10 类 provider + 文档同步 + 诊断全部插件内自洽）。Git 之外的第二个真插件。延续 [[extension-system-progress]] 的插件内核。

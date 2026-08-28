@@ -4,7 +4,6 @@ description: SCM 支持 git submodule 多 repo 显示，命令路由用 rootUri 
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 1a9da2ca-57fd-4850-b9e9-25a6ed5af1db
 ---
 
 SCM 视图现已支持 git submodule：主 repo + 每个已初始化 submodule 各作为独立 SourceControl provider（独立 commit box / 暂存·工作区分组 / stage·commit·push）。仿 VSCode。

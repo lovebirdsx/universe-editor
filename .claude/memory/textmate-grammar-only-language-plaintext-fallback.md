@@ -4,7 +4,6 @@ description: TextMate 语法贡献的语言若不在 monaco basic-languages 里�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: b3766455-1d5a-43a4-a27f-bd700df5eda7
 ---
 
 症状：状态栏显示语言类型正确（resourceLanguage 映射生效），但文件内容零高亮。根因：monaco `createModel(text, 'toml')` → `LanguageService._createAndGetLanguageIdentifier` 对未注册语言 id **静默回退 plaintext**，TextMate 工厂（按语言 id 绑定）永远不触发。状态栏显示的是 `languageForResource` 结果而非 model 真实语言，造成"类型对、无高亮"的假象。

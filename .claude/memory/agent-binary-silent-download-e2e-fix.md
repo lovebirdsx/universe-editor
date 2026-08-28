@@ -4,7 +4,6 @@ description: "e2e \"Failed to start agent\" 噪音 + Worker teardown timeout 的
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 3d49b0d2-fa51-4982-b374-9f7b6f7f7797
 ---
 
 e2e agent 通知噪音与 `Worker teardown timeout` 已修（全链路：binary guard 误路由 → silent 通知 → 背景 prefetch 真下载 → tsserver 孤儿）。细节 git 可查，非显然 hook：

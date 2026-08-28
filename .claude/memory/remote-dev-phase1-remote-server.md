@@ -4,7 +4,6 @@ description: 远程开发 Phase 1——remote-server 包 + main 侧连接/路由
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 3e48fb74-1024-441a-9c16-853d59574ec0
   modified: 2026-08-13T13:05:48.505Z
 ---
 

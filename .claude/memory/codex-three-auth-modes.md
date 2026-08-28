@@ -4,7 +4,6 @@ description: Codex 三种登录方案的正确建模（gateway 必须自包含�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: a972bb16-a7ec-4e5f-a4d2-c65d82476ed5
 ---
 
 codex-acp 是 app-server 协议，editor 对 codex 的全部控制 = 改两个文件（`auth.json` 凭据 + `config.toml` provider）。editor **从不调 ACP `authenticate`、从不注入 `MODEL_PROVIDER`/`CODEX_CONFIG`**（`MODEL_PROVIDER` 仅 codex-acp 的 index.ts 读）。

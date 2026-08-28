@@ -4,7 +4,6 @@ description: 子 agent 回放 fire-and-forget 绕过 renderer 回放预算断路
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 57320a0a-0453-4d77-a1d2-71a19bd8b56c
   modified: 2026-08-19T07:59:18.446Z
 ---
 

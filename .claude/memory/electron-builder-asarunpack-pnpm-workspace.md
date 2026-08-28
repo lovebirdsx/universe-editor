@@ -4,7 +4,6 @@ description: apps/editor 的 platform/workbench-ui 必须放 devDependencies—�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 41bab4d7-386e-4d58-9bc9-6db73a2fc5d5
 ---
 
 `apps/editor/package.json` 里 `@universe-editor/platform` 和 `@universe-editor/workbench-ui` 必须在

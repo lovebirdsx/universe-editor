@@ -69,7 +69,7 @@ const MODEL_IDS = [
 const SAMPLE_SETTINGS = {
   models: {
     'acme-chat-pro': {
-      name: 'DeepSeek V4 Pro',
+      name: 'Acme Chat Pro',
       vendor: 'deepseek',
       nativeProtocol: 'openai-chat',
       maxInputTokens: 128000,

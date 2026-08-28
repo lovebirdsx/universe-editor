@@ -1,0 +1,22 @@
+[
+  {
+    "id": "example-skeleton-basic",
+    "desc": "[SKELETON — 非真实规则] 基础 pattern：哨兵 pattern，永不命中。",
+    "pattern": "EXAMPLE_DOMAIN_NEVER_MATCH",
+    "flags": "gi"
+  },
+  {
+    "id": "example-skeleton-allow",
+    "desc": "[SKELETON — 非真实规则] 带 allow：行内含 RFC 5737 占位 IP 段 192.0.2.x 则整行豁免。",
+    "pattern": "EXAMPLE_IP_NEVER_MATCH",
+    "flags": "gi",
+    "allow": [{ "pattern": "192\\.0\\.2\\." }]
+  },
+  {
+    "id": "example-skeleton-allowMatch",
+    "desc": "[SKELETON — 非真实规则] 带 allowMatch：只豁免命中片段（example.com）。",
+    "pattern": "EXAMPLE_MATCH_NEVER_MATCH",
+    "flags": "gi",
+    "allowMatch": [{ "pattern": "example\\.com" }]
+  }
+]

@@ -4,7 +4,6 @@ description: EditorGroupModel.openEditor 命中重复身份时早退但不释放
 metadata: 
   node_type: memory
   type: project
-  originSessionId: b5d2a352-85ef-4b72-adce-15788ccd02e0
 ---
 
 `EditorGroupModel.openEditor`（`packages/platform/src/workbench/editorGroupModel.ts`）在 `findEditor` 命中同 `id`（`matches`）的 `existing` 时**早退**，但调用方按约定已把新建的 `editor` 交出所有权——早退路径既不 add 进 `_editorStore`、也不 dispose，于是新实例 + 其内部 `_store` 两个 Disposable 泄漏。

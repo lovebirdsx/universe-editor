@@ -8,7 +8,7 @@ import {
 
 const KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
   'acme-chat-pro': {
-    name: 'DeepSeek V4 Pro',
+    name: 'Acme Chat Pro',
     family: 'acme-chat',
     vendor: 'deepseek',
     nativeProtocol: 'openai-chat',
@@ -88,7 +88,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('applies bare-name knowledge to a lane-suffixed string ref', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
       'acme-chat-pro': {
-        name: 'DeepSeek V4 Pro',
+        name: 'Acme Chat Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
       },
@@ -108,12 +108,12 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('prefers an exact suffixed knowledge key over the bare-name fallback', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
       'acme-chat-pro': {
-        name: 'DeepSeek V4 Pro',
+        name: 'Acme Chat Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
       },
       'acme-chat-pro[1m]': {
-        name: 'DeepSeek V4 Pro [1m]',
+        name: 'Acme Chat Pro [1m]',
         supportsReasoningEffort: ['low', 'high'],
         maxInputTokens: 1000000,
       },
@@ -124,7 +124,7 @@ describe('resolveProviderEntries — protocolMap', () => {
     )
 
     const model = providers[0]?.protocols[0]?.models[0]
-    expect(model?.knowledge.name).toBe('DeepSeek V4 Pro [1m]')
+    expect(model?.knowledge.name).toBe('Acme Chat Pro [1m]')
     expect(model?.knowledge.supportsReasoningEffort).toEqual(['low', 'high'])
     expect(model?.knowledge.maxInputTokens).toBe(1000000)
   })
@@ -132,7 +132,7 @@ describe('resolveProviderEntries — protocolMap', () => {
   it('applies bare-name knowledge to a lane-suffixed override ref', () => {
     const knowledge: Readonly<Record<string, AiModelKnowledge>> = {
       'acme-chat-pro': {
-        name: 'DeepSeek V4 Pro',
+        name: 'Acme Chat Pro',
         supportsReasoningEffort: ['low', 'high', 'max'],
         maxInputTokens: 128000,
       },

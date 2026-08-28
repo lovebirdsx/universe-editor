@@ -4,7 +4,6 @@ description: apps/editor 通用 UI 组件已全部抽取到 packages/workbench-u
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 52f68668-17c4-4187-9bf4-9bbda45945f7
 ---
 
 通用 UI 统一抽取重构（2026-06-07 完成，批次 0–9 全过）。

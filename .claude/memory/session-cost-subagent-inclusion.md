@@ -4,7 +4,6 @@ description: session 开销与子 Agent：claude SDK 总额天然已含（勿双
 metadata: 
   node_type: memory
   type: project
-  originSessionId: afaac44f-0fa6-4214-b3f3-177251e09b75
   modified: 2026-08-14T02:56:44.653Z
 ---
 

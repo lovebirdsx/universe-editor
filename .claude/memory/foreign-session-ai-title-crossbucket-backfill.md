@@ -4,7 +4,6 @@ description: 跨 worktree 窗口看外部 session 标题卡在首条消息(非 A
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 300a6827-73b5-419b-9186-e29a09da72f4
 ---
 
 **现象**:在 worktree A(如 task1)窗口查看归属 worktree B(如 main)的 session,Side Bar 列表 + tab + 窗口标题显示的是**首条用户消息**而非设定的 AI 标题;在 B 自己窗口看则正常。

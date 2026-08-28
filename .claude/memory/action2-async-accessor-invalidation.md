@@ -4,7 +4,6 @@ description: Action2.run 的 ServicesAccessor 遇第一个 await 即失效；asy
 metadata: 
   node_type: memory
   type: feedback
-  originSessionId: 8460b79a-7d83-4678-8b67-8d536f61d7ae
 ---
 
 `Action2.run(accessor, ...)` 里的 `ServicesAccessor` **只在同步执行期有效**，一旦命中第一个 `await` 就失效，之后 `accessor.get(...)` 抛 `service accessor is only valid during the invocation of its target method`（源在 `packages/platform/src/di/instantiationService.ts` 的 Object.get 守卫）。

@@ -4,7 +4,6 @@ description: ACP 输入框 @/# 结构化引用——已重构为 Monaco 内嵌�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: cdbc8e83-2043-482d-9bc7-5b45bd11d4da
 ---
 
 ACP 会话输入框（`PromptInput.tsx`）从 `textarea` 升级为**内嵌 Monaco 编辑器**（`PromptMonacoEditor.tsx`），`@` 文件提及与 `#` 结构化上下文**统一成 VSCode Copilot 式 by-range 药丸**：引用作为可编辑文本 token 存在文本流，用 Monaco decoration（`inlineClassName: acp-prompt-ref-pill` + `NeverGrowsWhenTypingAtEdges`）染成药丸，按字符区间追踪、随编辑自动平移、手改药丸内部即整体失效；提交时读追踪的 range 列表产出 `ContentBlock`，**不再分词/by-name 匹配**。

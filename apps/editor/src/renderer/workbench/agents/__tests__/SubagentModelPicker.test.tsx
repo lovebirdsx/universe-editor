@@ -45,7 +45,7 @@ const GW_ENTRY: AiProviderEntry = {
   id: 'gw',
   apiKey: 'tok-1',
   baseUrl: 'https://gw.example.com',
-  protocolMap: { 'anthropic-messages': ['claude-sonnet-4-6', 'deepseek-pro-v4'] },
+  protocolMap: { 'anthropic-messages': ['claude-sonnet-4-6', 'acme-chat-pro'] },
 }
 
 function makeClaudeService(opts: { activeAuth: AgentActiveAuth; subagentModel?: string }) {
@@ -188,19 +188,19 @@ describe('SubagentModelPicker', () => {
 
     expect(option('Follow main model').getAttribute('aria-selected')).toBe('true')
     expect(option('claude-sonnet-4-6').getAttribute('aria-selected')).toBe('false')
-    expect(option('deepseek-pro-v4').getAttribute('aria-selected')).toBe('false')
+    expect(option('acme-chat-pro').getAttribute('aria-selected')).toBe('false')
   })
 
   it('marks the row matching the effective env value as selected', async () => {
-    setup({ activeAuth: { kind: 'provider', providerId: 'gw' }, subagentModel: 'deepseek-pro-v4' })
+    setup({ activeAuth: { kind: 'provider', providerId: 'gw' }, subagentModel: 'acme-chat-pro' })
     openPicker()
     await waitFor(() =>
       expect(
-        within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+        within(screen.getByTestId('acp-subagent-panel')).getByText('acme-chat-pro'),
       ).toBeTruthy(),
     )
 
-    expect(option('deepseek-pro-v4').getAttribute('aria-selected')).toBe('true')
+    expect(option('acme-chat-pro').getAttribute('aria-selected')).toBe('true')
     expect(option('Follow main model').getAttribute('aria-selected')).toBe('false')
   })
 
@@ -259,7 +259,7 @@ describe('SubagentModelPicker', () => {
       'Follow main model',
       'old-stale-model',
       'claude-sonnet-4-6',
-      'deepseek-pro-v4',
+      'acme-chat-pro',
     ])
   })
 
@@ -268,13 +268,13 @@ describe('SubagentModelPicker', () => {
     openPicker()
     await waitFor(() =>
       expect(
-        within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+        within(screen.getByTestId('acp-subagent-panel')).getByText('acme-chat-pro'),
       ).toBeTruthy(),
     )
 
     expect(screen.queryByTestId('acp-subagent-restart')).toBeNull()
 
-    await pick('deepseek-pro-v4')
+    await pick('acme-chat-pro')
     expect(screen.getByText(/Takes effect next session/)).toBeTruthy()
     expect(screen.getByTestId('acp-subagent-restart')).toBeTruthy()
   })
@@ -389,12 +389,12 @@ describe('SubagentModelPicker', () => {
       openPicker()
       await waitFor(() =>
         expect(
-          within(screen.getByTestId('acp-subagent-panel')).getByText('deepseek-pro-v4'),
+          within(screen.getByTestId('acp-subagent-panel')).getByText('acme-chat-pro'),
         ).toBeTruthy(),
       )
 
       await pick('claude-sonnet-4-6')
-      await pick('deepseek-pro-v4')
+      await pick('acme-chat-pro')
       claude.failWrite(new Error('disk full'))
       claude.flushWrite()
       await act(async () => {})

@@ -4,7 +4,6 @@ description: "markdown 预览本地图片渲染;prod renderer 页面从 file:// 
 metadata: 
   node_type: memory
   type: project
-  originSessionId: a620497a-2399-4d0f-b8f2-c16fae586c69
 ---
 
 markdown 预览支持本地图片(相对/绝对/file:// 路径),对齐 VSCode asWebviewUri + localResourceRoots。完成于 2026-07-02。

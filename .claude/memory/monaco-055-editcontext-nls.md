@@ -4,7 +4,6 @@ description: monaco 升级 0.52→0.55 修中文 IME 加粗 + NLS 从 string-key
 metadata: 
   node_type: memory
   type: project
-  originSessionId: e5198bfd-ce31-4b3d-b0c7-bf5f008c79c3
 ---
 
 为修复 Monaco 中文 IME 组合输入时当前行加粗/变色，把 `monaco-editor` 从 0.52 升到 0.55（`pnpm-workspace.yaml` catalog `^0.55.0`，lockfile 0.55.1），并在三处 create 显式设 `editContext: true`（`FileEditor.tsx` / `DiffEditor.tsx` / `LogOutputView.tsx`）。0.52 用旧 textarea-overlay 输入机制（组合文字被 textarea + view-line 两层渲染 → 视觉加粗）；EditContext API（monaco ≥0.53、VSCode 1.96 引入/1.101 默认）让组合输入走 OS 层，无第二层叠加，与 VSCode 同源根治。

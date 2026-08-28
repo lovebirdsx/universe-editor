@@ -4,7 +4,6 @@ description: 同一文件的多视图 EditorInput 必须靠覆写 id 隔离身�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 18ef86fa-63d0-4b47-8b18-5dfe4d6a3fe3
 ---
 
 **约定**：凡「同一文件、不同视图」的 `EditorInput`（预览/diff/merge/图片…），身份必须与 `FileEditorInput` 分开。

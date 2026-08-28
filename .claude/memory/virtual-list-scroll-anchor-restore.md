@@ -4,7 +4,6 @@ description: 动态测量虚拟列表的滚动恢复/导航必须用内容锚点
 metadata: 
   node_type: memory
   type: project
-  originSessionId: d4a78575-231a-4281-adfb-56c38d235aee
 ---
 
 设置编辑器（`SettingsEditor.tsx`）TOC 高亮错位与滚动不恢复的完整修法（2026-08，worktree task1）：

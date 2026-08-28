@@ -4,7 +4,6 @@ description: 远程工作区 agent 原生二进制受管下载到远端主机（
 metadata: 
   node_type: memory
   type: project
-  originSessionId: ccf30490-4e23-41fb-9454-b5c051ee5f33
   modified: 2026-08-16T03:03:51.906Z
 ---
 

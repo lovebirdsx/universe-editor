@@ -4,7 +4,6 @@ description: dev-only 失效根因——StrictMode 空跑在 effect cleanup 里 
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 877bf397-b151-41ae-b0e7-1aba88c4e832
 ---
 
 只在 `pnpm dev` 复现的 bug，先怀疑 React StrictMode（dev 对每个 effect 做 mount→cleanup→re-mount 空跑，prod 是 no-op）。

@@ -4,7 +4,6 @@ description: markdownLsp/peekNavigation @p1 真回归根因：IFileService.realp
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 30b4592d-181c-485e-8740-8ffead34339a
 ---
 
 `smoke.markdownLsp` / `smoke.peekNavigation` 两个 @p1 在重建产物后**稳定失败**（received 恒 `[]`），是**真回归不是环境噪音**。

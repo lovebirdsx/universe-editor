@@ -4,7 +4,6 @@ description: extension-api 0.9.0→0.12.0 对标 vscode.d.ts 补全 API 面的�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 6cea3abf-b6c0-45ae-ab33-f9bffaf42c4d
   modified: 2026-08-12T00:00:00.000Z
 ---
 

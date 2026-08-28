@@ -4,7 +4,6 @@ description: "standalone Monaco 的 addCommand 注册在共享键位服务(无�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 048b0bef-4c30-40e0-8e2b-e957dfb5f41f
 ---
 
 ACP 输入框(PromptMonacoEditor)曾用 `ed.addCommand(m.KeyCode.Enter, …)` 绑定回车提交。**坑**:standalone Monaco 的 `addCommand` 注册在 Monaco **共享的 StandaloneKeybindingService** 上,**没有编辑器作用域**——于是在**任意** Monaco 编辑器里按 Enter 都会触发 prompt 的 onEnter(提交/no-op),把回车吞掉。

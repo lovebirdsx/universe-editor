@@ -4,7 +4,6 @@ description: 点击 dirty-diff gutter 色条弹出内联 peek（HEAD↔当前，
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 674ce5d9-3e47-4237-bb38-455d597592ac
 ---
 
 对照 VSCode `quickDiffWidget.ts`（PeekViewWidget + EmbeddedDiffEditorWidget + ZoneWidget）实现"点击文档左侧修改色条弹出内联 diff"。我们是 monaco **standalone**，VSCode 私有 PeekView 模块被 tree-shake，但 `createDiffEditor` 在 standalone 可用（DiffEditor.tsx 已证），故 peek 直接**内嵌一个真 Monaco diff editor**——双侧行号 / 语法高亮 / 内部滚动全部白拿，比手写 DOM diff 强。详细套路 + 三类布局公式见 skill **[dirty-diff-inline-peek]**（本 memory 给状态与索引，做功能前先读 skill）。

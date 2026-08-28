@@ -4,7 +4,6 @@ description: WSL/Linux pnpm install 报 not found make 的根因与修法；pnpm
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 5acde3ce-5581-4ee8-8737-21d146e7cb4a
   modified: 2026-08-15T13:57:33.673Z
 ---
 

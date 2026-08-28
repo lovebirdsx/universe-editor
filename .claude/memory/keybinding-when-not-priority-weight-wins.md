@@ -4,7 +4,6 @@ description: KeybindingsRegistry 解析是 weight 优先+后注册优先，when 
 metadata: 
   node_type: memory
   type: project
-  originSessionId: dacb1e3b-74df-425c-af63-04c8e97d140c
 ---
 
 `packages/platform/src/command/keybindingRegistry.ts` 的按键解析**不是** VSCode 的「when 匹配优先」：排序只看 weight（高优先）→ 同 weight 后注册优先；`when` 仅做过滤，不提升优先级。

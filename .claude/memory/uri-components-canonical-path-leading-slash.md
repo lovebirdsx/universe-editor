@@ -4,7 +4,6 @@ description: "手写 UriComponents 的 path 必须带前导斜杠（'/C:/...'）
 metadata: 
   node_type: memory
   type: feedback
-  originSessionId: 8b85dad3-e93b-4e8b-b626-dc43533691ff
 ---
 
 跨 IPC/探针手造 `UriComponents` 时，`path` 必须是规范形态（Windows 下 `'/C:/...'`，带前导斜杠），照抄 `URI.file(p).toJSON()` 的输出。

@@ -4,7 +4,6 @@ description: SSH 连接 Windows 远程主机全链路支持:平台探测/cmd 命
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 502da6cd-7dca-4622-9408-b646a02f1c61
   modified: 2026-08-21T16:12:56.336Z
 ---
 

@@ -38,7 +38,7 @@ pnpm memory:status        # 只查看状态,不改动
 
 Windows:
 ```cmd
-rmdir /S /Q "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory"
+rmdir /S /Q "%USERPROFILE%\.claude\projects\D--workspace-universe-editor\memory"
 mklink /J "%USERPROFILE%\.claude\projects\D--workspace-universe-editor\memory" "D:\workspace\universe-editor\.claude\memory"
 ```
 

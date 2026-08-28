@@ -4,7 +4,6 @@ description: codex 新建 session 慢的真因是 thread/start 内 spawn 的 git
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 663aea7e-9cab-4c3a-9ab3-d9f454b6cc9f
 ---
 
 内置 codex ACP agent 新建 session 慢（用户体感 >10s）的真因：codex 原生二进制在处理 `thread/start` RPC 时同步 spawn `git -c core.hooksPath=NUL -c core.fsmonitor=false rev-parse --git-dir` 子进程，该进程在 Windows 下挂起数秒。**触发条件：cwd 是 git 仓库**（仓库大小无关；非 git 目录秒开；`codex exec`/TUI 无此问题因 git 探测推迟到 turn 内）。

@@ -4,7 +4,6 @@ description: markdown 移动被引用文件后语言服务残留旧路径诊断�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: dbb45f76-b2a6-460a-8601-1a898ecc5b79
 ---
 
 markdown "移动文件自动更新链接" 功能有隐蔽 bug:A 引用 B,B 被移动(A 关闭),bulk edit 正确改写 A 磁盘链接,但重新打开 A 时语言服务仍警告旧 B 路径 "file does not exist"。

@@ -4,7 +4,6 @@ description: 新建 session 异步化——本地 uuid 立即渲染，后台握�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: a0725e18-bb93-4673-b17f-0638a710bc98
 ---
 
 新建 ACP session 从「等 init(1-5s) 再显示」改为异步：createSession 同步建好 AcpSession 并立即返回（UI 立即可输入），spawn+initialize+session/new 在后台 `_connectSession` 跑。

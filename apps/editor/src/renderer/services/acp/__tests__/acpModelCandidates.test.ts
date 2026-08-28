@@ -79,7 +79,7 @@ describe('candidateModelsForProtocol', () => {
 
 describe('extraModelCandidatesForAgentSettings (id ordering)', () => {
   it('carries the effective pick verbatim so the fork exact-matches the 1m lane', () => {
-    expect(ids('deepseek-pro-v4[1m]', undefined)).toEqual(['deepseek-pro-v4[1m]'])
+    expect(ids('acme-chat-pro[1m]', undefined)).toEqual(['acme-chat-pro[1m]'])
   })
 
   it('emits a bare pick as-is', () => {

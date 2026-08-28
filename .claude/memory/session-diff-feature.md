@@ -4,7 +4,6 @@ description: 会话级 diff（Session Changes）——pinned baseline 快照制�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: f6f35c5d-d60d-486e-b6f2-8a1f136ffcfd
   modified: 2026-08-12T08:35:55.031Z
 ---
 

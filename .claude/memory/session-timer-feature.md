@@ -4,7 +4,6 @@ description: Session 执行时间统计功能 — 只计 running 状态的时间
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 7df8458e-7021-459b-8343-238a6a4f834f
 ---
 
 实现了 Session 执行时间统计，只算 `status === 'running'` 的净时长，支持多段累积、持久化恢复。

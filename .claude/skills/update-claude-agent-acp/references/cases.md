@@ -80,7 +80,7 @@
 - **现象**：`vendor/claude-agent-acp` 等 submodule 的 `npm ci`（`agent:build`/打包时）报 `Missing: X from lock file` / `EUSAGE`，本机 `npm install` 却正常。
 - **根因**：某包的 **peerDependencies 在 lock 中无满足节点**——lock 里已有的 X 嵌套在别的包下、不在 peer 消费者的祖先链上，`npm ci` 构建理想树时需要顶层放置新版本（registry 最新），lock 没有即 `EUSAGE`。多由上游依赖链演进（如 `vitest→vite→rolldown→@napi-rs/wasm-runtime` peer `@emnapi/*`）引起，老 lock 突然失效。
 - **解法**：submodule 内 `npm install --package-lock-only --registry=https://registry.npmjs.org`，验证 `npm ci --dry-run` 通过后提交 fork 分支（注意 gitlink 指向的分支可能是 `main-060726` 这类平行分支，先 `git branch -a --contains <gitlink>` 确认），再更新主仓库 gitlink。
-- **Why 必带 `--registry`**：本机 npm 常配了镜像（如腾讯 `mirrors.tencent.com`），不指定 `--registry` 会把镜像 URL 写进 lock 的 `resolved` 字段，CI（境外 runner）拉包慢甚至不通。**凡在 `vendor/*` 重新生成 lock，一律带 `--registry=https://registry.npmjs.org`**；提交后本地 `pnpm agent:build` 全链路验证。
+- **Why 必带 `--registry`**：本机 npm 可能配了第三方镜像，不指定 `--registry` 会把镜像 URL 写进 lock 的 `resolved` 字段，CI（境外 runner）拉包慢甚至不通。**凡在 `vendor/*` 重新生成 lock，一律带 `--registry=https://registry.npmjs.org`**；提交后本地 `pnpm agent:build` 全链路验证。
 - **锚点**：`vendor/claude-agent-acp/package-lock.json`、主仓库 `scripts/release/vendor-install.mjs`（`npm ci` 调用处）；与 SKILL.md 要点 8「optional 依赖静默省略导致隔天 `npm ci` 挂」是同一 lock 环节的两个坑。相关记忆 `agent-binary-silent-download-e2e-fix`。
 
 ## 案例 11（0.62.0→0.64.2 复盘）：上游 #881 嵌套子代理 transcript 撞我方用量累积；尾部相邻 append 冲突的闭合括号套路

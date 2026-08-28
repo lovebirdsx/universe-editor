@@ -4,7 +4,6 @@ description: remote 开发 v2 全栈落地——daemon+TCP+PersistentProtocol、
 metadata: 
   node_type: memory
   type: project
-  originSessionId: eb9da09e-9e55-414b-81dd-97a9a92fd7d9
   modified: 2026-08-20T11:05:00.000Z
 ---
 

@@ -4,7 +4,6 @@ description: Explorer 删除到回收站 + Ctrl+Z 撤销文件操作（移植 VS
 metadata: 
   node_type: memory
   type: project
-  originSessionId: de7e52d9-d6d4-474f-bf7d-bb99e60c5ba0
 ---
 
 Explorer 两个需求已完整实现（2026-07-07 完成，参考 VSCode 源码）：

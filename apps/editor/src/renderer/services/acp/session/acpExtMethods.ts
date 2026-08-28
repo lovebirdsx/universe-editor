@@ -122,7 +122,7 @@ export const ACP_META_KEYS = {
    * reasoning-effort levels the editor knows for each extra model
    * (`Array<{ id, effortLevels: string[] }>`). Parallels `extraModels` — both
    * forks read it top-level — but keeps the effort capability bit that the
-   * flat `string[]` above cannot express. A gateway model (deepseek-pro-v4)
+   * flat `string[]` above cannot express. A gateway model (acme-chat-pro)
    * whose `supportsReasoningEffort` the editor declares in `aiSettings.json`
    * then lights up the session config bar's effort selector; without it the
    * fork's own catalogue has no effort info and the selector stays hidden.

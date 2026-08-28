@@ -4,7 +4,6 @@ description: VSCode 式外部插件系统 + Git 扩展已全部落地（Phase 0�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: b2559863-e8e1-47c5-9ee4-b32064419766
 ---
 
 VSCode 式外部插件系统 + Git 扩展已全部落地：Phase 0–6（脚手架/stdio RPC/manifest 懒激活/配置菜单键位/SCM API/Git 扩展/外部加载）+ 2026-07 重构为**单 host + Workspace Trust**。目录知识：`packages/extension-host/CLAUDE.md`（运行时）、`apps/editor/src/main/services/extensionManagement/CLAUDE.md`（分发链路）；实施史见 git。

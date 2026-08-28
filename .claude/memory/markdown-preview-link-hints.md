@@ -4,7 +4,6 @@ description: "markdown 预览的 vimium 式键盘导航(link hints + 滚动/前�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: d7080423-794f-4974-8916-b46829d36e07
 ---
 
 markdown 预览(`MarkdownPreviewEditor`)加了 vimium 风格键盘导航,属 markdown 子系统**线②预览渲染**(纯 renderer,不碰插件/LSP)。

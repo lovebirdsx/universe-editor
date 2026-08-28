@@ -4,7 +4,6 @@ description: remote 工作区用户扩展全生命周期支持(安装/卸载/启
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 670a52f9-3b1f-4fcd-b541-4653d393eaef
   modified: 2026-08-20T01:53:37.075Z
 ---
 

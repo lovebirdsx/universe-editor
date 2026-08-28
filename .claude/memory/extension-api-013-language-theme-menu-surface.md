@@ -4,7 +4,6 @@ description: extension-api 0.13.0 面补全:contributes.languages/colors、setTe
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 3766c5a5-72a5-4938-ad23-50eaa25fc4b9
   modified: 2026-08-19T16:04:02.952Z
 ---
 

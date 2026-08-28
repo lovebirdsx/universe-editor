@@ -4,7 +4,6 @@ description: 插件 manifest 静态贡献点（命令title/子菜单label/配置
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 3c663683-6d02-4dbc-8c8b-9ce3e9166ac0
 ---
 
 插件 `contributes` 里的用户可见字符串（命令 `title`/`category`、子菜单 `label`、配置 `description`）此前是英文硬编码，命令面板/菜单不跟随语言。已按 VSCode `package.nls` 范式做本地化。

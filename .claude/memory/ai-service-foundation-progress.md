@@ -4,7 +4,6 @@ description: AI 基础服务层（模型抽象/provider 注册/流式/取消/配
 metadata: 
   node_type: memory
   type: project
-  originSessionId: dc261e01-bf02-41d3-9759-0c3cefe285f8
 ---
 
 **AI 基础服务层** 已实施完成，阶段 0–8 全部完成（2026-06-14）。范围严格限定 AI 基建，不含业务（补全 UI / commit 生成是后续消费方）。

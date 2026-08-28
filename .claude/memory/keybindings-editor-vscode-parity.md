@@ -4,7 +4,6 @@ description: Keyboard Shortcuts 编辑器完整对标 VSCode 的架构与关键�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 892247bf-63f5-4d34-bd78-ca5c41ed01a3
   modified: 2026-08-08T08:43:48.769Z
 ---
 

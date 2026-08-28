@@ -4,7 +4,6 @@ description: 嵌入式 Monaco（ACP prompt 输入框）不得冒充全局 editor
 metadata: 
   node_type: memory
   type: project
-  originSessionId: a1b74095-2246-4c42-ad9e-8c3b788b4c09
   modified: 2026-08-13T11:45:42.448Z
 ---
 

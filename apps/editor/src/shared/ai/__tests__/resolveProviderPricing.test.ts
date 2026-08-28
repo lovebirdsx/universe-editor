@@ -158,7 +158,7 @@ describe('resolveModelPricing — trailing context hints', () => {
       resolveModelPricing({
         bareModel: 'acme-chat-pro[1m]',
         pricingSource: { id: 'http-json' },
-        gatewayRates: { 'DeepSeek-V4-Pro': { input: 9, output: 27 } },
+        gatewayRates: { 'Acme-Chat-Pro': { input: 9, output: 27 } },
       }),
     ).toEqual({})
   })

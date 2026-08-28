@@ -5,7 +5,7 @@
  *
  *  Why this exists: an agent fork builds its Model picker from its own vendor
  *  catalogue — the Claude SDK's hardcoded Anthropic list, or codex's app-server
- *  `model/list`. A gateway model (`deepseek-pro-v4`) is never in there, and both
+ *  `model/list`. A gateway model (`acme-chat-pro`) is never in there, and both
  *  forks REJECT a `set_config_option` value that is not among the advertised
  *  options. So a gateway user cannot switch models inside a session at all.
  *

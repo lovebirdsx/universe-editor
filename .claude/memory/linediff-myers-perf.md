@@ -4,7 +4,6 @@ description: computeLineDiff 必须保持 Myers O(ND)，dirty-diff 在大文件�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: cdf89e3f-38f7-4a13-8e49-b0bbb6a13eb0
 ---
 
 `apps/editor/src/renderer/workbench/agents/lineDiff.ts` 的 `computeLineDiff` 表面是「ACP 聊天内联 diff 的小工具」，但它被 `contributions/dirtyDiff.ts` 的 `computeDirtyDiffRegions` 复用，对**整个打开文件 vs git HEAD** 做 diff。

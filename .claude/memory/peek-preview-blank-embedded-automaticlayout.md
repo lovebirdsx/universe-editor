@@ -4,7 +4,6 @@ description: "Peek References 预览面板 blank 根因=.preview.inline 容器�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: af35df42-2ca9-41bc-9e33-82fe1b468365
 ---
 
 Peek References 弹窗左侧预览 blank（点 CodeLens "N references" 复现，稳定按符号区分：首个引用在别的文件的符号必坏，在当前文件的好；"Peek References" 命令不复现）。

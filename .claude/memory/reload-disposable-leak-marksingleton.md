@@ -4,7 +4,6 @@ description: dev/E2E 下 React 组件拥有的订阅/disposable 在 reload(befor
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 2c01cba2-8358-4546-a5a2-4b3ec47f5eab
 ---
 
 本仓库 renderer 的 `DisposableTracker`（dev/E2E 安装）在 `beforeunload` 里先 `reactRoot.unmount()` 再 `computeLeakingDisposables()`（`apps/editor/src/renderer/main.tsx`）。但 reload 这个**同步**卸载路径下，React StrictMode 在 `reappearLayoutEffects` / `reconnectPassiveEffects` 阶段创建的 effect 资源（`useEffect`/`useLayoutEffect` 里的订阅）**cleanup 不会 flush**，于是被当成泄漏报告——即使代码的 effect cleanup 写得完全正确。

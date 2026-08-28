@@ -4,7 +4,6 @@ description: session diff 视图文件二次修改后重新点开仍显示旧内
 metadata: 
   node_type: memory
   type: project
-  originSessionId: a22877a8-e388-45bf-ad10-18d57f6fc5c3
 ---
 
 会话级 diff（[[session-diff-feature]]）文件被 agent 二次修改后 diff 视图不同步。有**两条独立路径**，必须都修：

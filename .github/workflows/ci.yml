@@ -47,9 +47,31 @@ jobs:
       - name: Docs link check
         run: pnpm docs:check
 
-      # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库
-      - name: Sensitive string check
-        run: pnpm sensitive:check
+      # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库。
+      # 规则文件 gitignored，走 CI secret（raw JSON 数组）注入：raw 时落盘内容 ===
+      # secret 值，任何意外打印都会被 GitHub 自动 mask（base64 解码后 ≠ secret 值，
+      # 打印不会被 mask，故这里不用 base64）。fork PR 拿不到 secret（GitHub 不给
+      # fork 传 secret），硬 fail 会拦死外部贡献，只能跳过并显式标注 guard skipped。
+      - name: Inject sensitive rules and check
+        env:
+          SENSITIVE_RULES: ${{ secrets.SENSITIVE_RULES }}
+        run: |
+          if [ -z "$SENSITIVE_RULES" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+              echo "::warning::sensitive string guard skipped：fork PR 无法接收 SENSITIVE_RULES secret，本次未执行敏感串扫描"
+              exit 0
+            fi
+            echo "::error::SENSITIVE_RULES secret 未配置，敏感串守护无法运行"
+            exit 1
+          fi
+          printf '%s' "$SENSITIVE_RULES" > scripts/sensitive-rules.json
+          pnpm sensitive:check:ci
+
+      # 命中时 Step 1 会 exit 1，后续 step 被 skip，必须紧贴 Step 1 清理，避免规则
+      # 文件残留在工作树（防御纵深：未来若有人加 upload-artifact 也不会带走）。
+      - name: Clean up sensitive rules
+        if: always()
+        run: rm -f scripts/sensitive-rules.json
 
       - name: Lint
         run: pnpm lint

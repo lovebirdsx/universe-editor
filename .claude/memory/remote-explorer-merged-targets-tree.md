@@ -4,7 +4,6 @@ description: Remote Explorer 4 view 合并为单 Targets 树；Connections 重�
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 5412f4c8-e658-4186-bf9e-2adf48ba17ac
   modified: 2026-08-15T13:57:34.085Z
 ---
 

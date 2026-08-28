@@ -4,7 +4,6 @@ description: "Windows spawnSync shell:true 走 cmd，裸 ^ 等元字符被吞—
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 5a8dfb6e-ab4d-409e-86bc-347ca327832f
 ---
 
 Node `spawnSync(cmd, args, { shell: true })` 在 Windows 走 cmd.exe，参数里的裸 `^` 是 cmd 转义符会被**静默吞掉**（`!` 在延迟展开下同理）。实例：`scripts/test-changed.mjs` 传 turbo `--filter=@universe-editor/editor^...`（只 build 上游），经 cmd 变成 `--filter=...editor...`（含自身），把要跳过的 electron-vite 重 build 又拉了回来——单测断言数组值全绿，运行时才露馅。

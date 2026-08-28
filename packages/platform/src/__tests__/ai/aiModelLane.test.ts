@@ -28,13 +28,13 @@ describe('stripModelLaneSuffix', () => {
 
 describe('lookupModelKnowledge', () => {
   const KNOWLEDGE: Readonly<Record<string, AiModelKnowledge>> = {
-    'acme-chat-pro': { name: 'DeepSeek V4 Pro', maxInputTokens: 128000 },
-    'acme-chat-pro[1m]': { name: 'DeepSeek V4 Pro [1m]', maxInputTokens: 1000000 },
+    'acme-chat-pro': { name: 'Acme Chat Pro', maxInputTokens: 128000 },
+    'acme-chat-pro[1m]': { name: 'Acme Chat Pro [1m]', maxInputTokens: 1000000 },
   }
 
   it('prefers the exact key over the bare-name fallback', () => {
     expect(lookupModelKnowledge(KNOWLEDGE, 'acme-chat-pro[1m]')).toEqual({
-      name: 'DeepSeek V4 Pro [1m]',
+      name: 'Acme Chat Pro [1m]',
       maxInputTokens: 1000000,
     })
   })
@@ -57,12 +57,12 @@ describe('lookupModelKnowledge', () => {
       enumerable: true,
       get: () => {
         hits.push('acme-chat-pro')
-        return { name: 'DeepSeek V4 Pro' }
+        return { name: 'Acme Chat Pro' }
       },
     })
 
     expect(lookupModelKnowledge(knowledge, 'acme-chat-pro')).toEqual({
-      name: 'DeepSeek V4 Pro',
+      name: 'Acme Chat Pro',
     })
     expect(hits).toEqual(['acme-chat-pro'])
   })

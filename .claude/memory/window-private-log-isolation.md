@@ -4,7 +4,6 @@ description: 窗口私有日志隔离——renderer/acp 日志按 BrowserWindow.
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 1d135e9f-28d2-4afa-8c41-c2d1f4dd2b4d
 ---
 
 多窗口下 renderer 日志曾广播到所有窗口的 Output（含错误自动 reveal 串窗）。采用 VSCode "按来源进程隔离" 范式做物理文件级分流。

@@ -73,7 +73,7 @@
 
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — 勿退 O(m·n)；V 数组按 2*maxD+1+100ms 墙钟回退
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — codex 原生 spawn git rev-parse Windows 挂起；adapter 修不了
-- [claude CLI e.includes 崩溃根因](claude-cli-eincludes-usage-crash.md) — 网关 advisor_message 缺 model→CLI usage 记账 TypeError 作废整 turn;编辑器已归 transient 自动续跑
+- [claude CLI e.includes 崩溃根因](claude-cli-eincludes-usage-crash.md) — 上游 usage 条目缺 model→CLI usage 记账 TypeError 作废整 turn;编辑器已归 transient 自动续跑
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — markAsSingleton 兜底；render 期 new disposable 用 ref 守卫
 - [openEditor 孤儿泄漏](editor-group-open-orphan-leak.md) — 重复身份早退须 updateFrom?.()+dispose 新 input
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — 消费端须 URI.revive；诊断前必先 pnpm build
