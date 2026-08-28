@@ -42,7 +42,7 @@
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",
     "runtime:verify:source": "node scripts/release/runtime-resources.mjs verify-source",
     "runtime:verify:packaged": "node scripts/release/runtime-resources.mjs verify-packaged",
-    "clean": "git clean -fdx -e .claude -e apps/editor/release",
+    "clean": "git clean -fdx -e .claude -e apps/editor/release -e \".env\" -e \".env.*\" -e scripts/sensitive-rules.json",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "publish-packages": "changeset publish",
