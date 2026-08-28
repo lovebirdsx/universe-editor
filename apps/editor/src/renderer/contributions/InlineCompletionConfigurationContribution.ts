@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Registers the ai.inlineCompletion.* settings that drive the AI ghost-text
- *  completions. These control whether AI requests are issued and how context is
- *  built; Monaco's own editor.inlineSuggest.* options (which control ghost-text
+ *  Registers the ai.* settings: ai.inlineCompletion.* drives the AI ghost-text
+ *  completions and ai.accountUsage.* paces the gateway account-usage poller.
+ *  These control whether AI requests are issued and how context is built;
+ *  Monaco's own editor.inlineSuggest.* options (which control ghost-text
  *  rendering) are separate and registered by the generated editor-option schema.
  *--------------------------------------------------------------------------------------------*/
 
@@ -24,6 +25,15 @@ export class InlineCompletionConfigurationContribution
         id: 'ai',
         title: localize('settings.ai', 'AI'),
         properties: {
+          'ai.accountUsage.refreshIntervalMs': {
+            type: 'number',
+            default: 60000,
+            minimum: 15000,
+            description: localize(
+              'settings.ai.accountUsage.refreshIntervalMs',
+              'How often (milliseconds) the gateway account-usage indicator re-reads its value. Each refresh reads the cached value; a missing or stale (5 minutes) reading triggers one network fetch to the gateway.',
+            ),
+          },
           'ai.inlineCompletion.enabled': {
             type: 'boolean',
             default: true,

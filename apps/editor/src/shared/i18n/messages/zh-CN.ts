@@ -614,6 +614,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '一次订阅用量读数在多长时间内仍视为可信（毫秒）。超过后指示器会弱化数值，并在悬浮提示里标注数据读取时间。',
   'settings.agents': 'Agents',
   'settings.ai': 'AI',
+  'settings.ai.accountUsage.refreshIntervalMs':
+    '网关账号用量指示器的刷新间隔（毫秒）。每次刷新先读缓存；读数缺失或已过期（5 分钟）才向网关发起一次网络拉取。',
   'settings.ai.inlineCompletion.debounceDelay': '自动触发内联补全请求前的延迟（毫秒）。',
   'settings.ai.inlineCompletion.disabledLanguages':
     '禁用 AI 内联补全的语言 id，例如 ["json", "log"]。',

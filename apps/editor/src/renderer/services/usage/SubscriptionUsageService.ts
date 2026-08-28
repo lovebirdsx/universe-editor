@@ -40,6 +40,7 @@ import {
   normalizeSubscriptionUsage,
   type SubscriptionUsageSnapshot,
 } from './subscriptionUsage.js'
+import { PollingLoop } from './usagePolling.js'
 
 /** Outcome of redeeming a rate-limit reset credit (codex). */
 export type ResetCreditOutcome =
@@ -133,7 +134,7 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   private _seenSessionIds = new Set<string>()
   private readonly _logger: ILogger
 
-  private _intervalTimer: ReturnType<typeof setInterval> | undefined
+  private readonly _polling: PollingLoop
   private readonly _restored: Promise<void>
 
   constructor(
@@ -148,23 +149,17 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       name: 'Subscription Usage',
     })
     this._restored = this._restore()
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        this._stopPolling()
-      } else {
-        void this._tick()
-        this._restartPolling()
-      }
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    this._register({
-      dispose: () => document.removeEventListener('visibilitychange', onVisibility),
-    })
+    this._polling = this._register(
+      new PollingLoop({
+        interval: () => this._intervalMs(),
+        onTick: () => this._tick(),
+        logger: this._logger,
+      }),
+    )
 
     this._register(
       this._configuration.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(REFRESH_INTERVAL_KEY)) this._restartPolling()
+        if (e.affectsConfiguration(REFRESH_INTERVAL_KEY)) this._polling.restart()
       }),
     )
 
@@ -197,7 +192,7 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     )
 
     void this._restored.then(() => this._tick())
-    this._restartPolling()
+    this._polling.restart()
   }
 
   snapshotFor(
@@ -256,11 +251,6 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       this._logger.error(`consumeResetCredit(${agentId}@${where}) failed: ${String(error)}`)
       return 'failed'
     }
-  }
-
-  override dispose(): void {
-    this._stopPolling()
-    super.dispose()
   }
 
   private _observableFor(key: string): ISettableObservable<SubscriptionUsageSnapshot | undefined> {
@@ -325,19 +315,6 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   private _intervalMs(): number {
     const value = this._configuration.get<number>(REFRESH_INTERVAL_KEY)
     return typeof value === 'number' && value >= MIN_INTERVAL_MS ? value : DEFAULT_INTERVAL_MS
-  }
-
-  private _restartPolling(): void {
-    this._stopPolling()
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-    this._intervalTimer = setInterval(() => void this._tick(), this._intervalMs())
-  }
-
-  private _stopPolling(): void {
-    if (this._intervalTimer !== undefined) {
-      clearInterval(this._intervalTimer)
-      this._intervalTimer = undefined
-    }
   }
 
   /**

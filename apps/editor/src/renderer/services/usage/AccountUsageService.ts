@@ -12,15 +12,17 @@
  *  gateway session of the same agent; collapsing them would report one host's
  *  quota against the other's sessions.
  *
- *  The main-side remoteCoordinator already owns the TTL cache, so this service
- *  runs no polling loop — it refreshes on demand (cold cache, model/remote
- *  changes, the popover's force button).
+ *  The main-side remoteCoordinator owns the TTL cache (5-minute usage TTL), so
+ *  the periodic loop only re-reads the cache; it escalates to a forced gateway
+ *  fetch — throttled per provider — when the cached number is missing or past
+ *  its TTL. The loop pauses while the window is hidden.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
   createNamedLogger,
   Disposable,
+  IConfigurationService,
   ILoggerService,
   InstantiationType,
   observableValue,
@@ -31,8 +33,10 @@ import {
   IAiModelService,
 } from '@universe-editor/platform'
 import type { AiAccountUsage } from '@universe-editor/platform'
+import { USAGE_TTL_MS } from '../../../shared/ai/aiRemoteTtls.js'
 import { IAcpSessionProviderContext } from '../acp/session/acpSessionProviderContext.js'
 import type { AccountUsageState } from './subscriptionUsage.js'
+import { PollingLoop } from './usagePolling.js'
 
 export type { AccountUsageState } from './subscriptionUsage.js'
 
@@ -50,6 +54,10 @@ export interface IAccountUsageService {
 
 export const IAccountUsageService = createDecorator<IAccountUsageService>('accountUsageService')
 
+const REFRESH_INTERVAL_KEY = 'ai.accountUsage.refreshIntervalMs'
+const DEFAULT_INTERVAL_MS = 60_000
+const MIN_INTERVAL_MS = 15_000
+
 /** Cache key. `\0` cannot occur in an agent id or an authority. */
 function usageKey(agentId: string, authority: string | undefined): string {
   return `${agentId}\0${authority ?? ''}`
@@ -65,11 +73,15 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
   private readonly _inflightForce = new Set<string>()
   private readonly _warmed = new Set<string>()
   private readonly _lastProviderId = new Map<string, string>()
+  /** providerId → last time this renderer asked main to refetch that gateway. */
+  private readonly _lastForcedAt = new Map<string, number>()
+  private readonly _polling: PollingLoop
   private readonly _logger: ILogger
 
   constructor(
     @IAcpSessionProviderContext private readonly _providerContext: IAcpSessionProviderContext,
     @IAiModelService private readonly _aiModel: IAiModelService,
+    @IConfigurationService private readonly _configuration: IConfigurationService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -81,6 +93,22 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
     // remote / auth sources and fires only after re-resolving, so this covers all
     // of them without double-refreshing on the same aiModel event.
     this._register(this._providerContext.onDidChangeContext(() => void this._refreshKnown()))
+    // Push path: a manual refresh elsewhere (the AI settings page) or a main-side
+    // stale re-fetch lands here without waiting for the next tick.
+    this._register(this._aiModel.onDidChangeRemote(() => void this._refreshKnown()))
+    this._polling = this._register(
+      new PollingLoop({
+        interval: () => this._intervalMs(),
+        onTick: () => this._tick(),
+        logger: this._logger,
+      }),
+    )
+    this._register(
+      this._configuration.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(REFRESH_INTERVAL_KEY)) this._polling.restart()
+      }),
+    )
+    this._polling.restart()
   }
 
   stateFor(agentId: string, authority?: string): IObservable<AccountUsageState> {
@@ -139,6 +167,32 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
     }
   }
 
+  private _intervalMs(): number {
+    const value = this._configuration.get<number>(REFRESH_INTERVAL_KEY)
+    return typeof value === 'number' && value >= MIN_INTERVAL_MS ? value : DEFAULT_INTERVAL_MS
+  }
+
+  /**
+   * Re-read the cache for every known pair; escalate to a forced gateway fetch
+   * only when the cached number is missing or past the usage TTL, throttled per
+   * provider so a gateway that never answers is not hit every tick.
+   */
+  private _tick(): void {
+    const now = Date.now()
+    for (const { agentId, authority } of [...this._known.values()]) {
+      const ctx = this._providerContext.getProviderContext(agentId, authority)
+      if (ctx === undefined || ctx.usageSource === undefined) continue
+      const usage = this._states.get(usageKey(agentId, authority))?.get()?.usage
+      const stale = usage === undefined || now - usage.fetchedAt >= USAGE_TTL_MS
+      if (stale && now - (this._lastForcedAt.get(ctx.providerId) ?? -Infinity) >= USAGE_TTL_MS) {
+        this._lastForcedAt.set(ctx.providerId, now)
+        void this.refresh(agentId, authority, { force: true })
+      } else {
+        void this.refresh(agentId, authority)
+      }
+    }
+  }
+
   private async _fetch(
     agentId: string,
     authority: string | undefined,
@@ -157,8 +211,13 @@ export class AccountUsageService extends Disposable implements IAccountUsageServ
     const previousProviderId = this._lastProviderId.get(key)
     let usage: AiAccountUsage | undefined
     try {
-      // `force` bypasses main's TTL cache by re-fetching the source first.
-      if (force) await this._aiModel.refreshRemote(ctx.providerId)
+      // `force` bypasses main's TTL cache by re-fetching the source first. A
+      // user-initiated force also refreshes the throttle clock, so the next tick
+      // does not immediately force again.
+      if (force) {
+        this._lastForcedAt.set(ctx.providerId, Date.now())
+        await this._aiModel.refreshRemote(ctx.providerId)
+      }
       usage = await this._aiModel.getAccountUsage(ctx.providerId)
       this._logger.debug(
         `account usage for ${agentId}@${where} (${ctx.providerId}): ${usage === undefined ? 'unavailable' : usage.kind}`,

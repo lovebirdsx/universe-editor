@@ -11,9 +11,11 @@
  *      provider context is still resolving, and only `onDidChangeContext` tells
  *      this service to re-read. Without that re-read the indicator would stay
  *      stuck at `hasSource: false`.
+ *   3. The periodic loop only escalates to a forced gateway fetch when the
+ *      cached number is missing or past the usage TTL, throttled per provider.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   LogLevel,
@@ -21,12 +23,16 @@ import {
   type AiAccountUsage,
   type Event,
   type IAiModelService,
+  type IConfigurationChangeEvent,
+  type IConfigurationService,
   type ILogger,
   type ILoggerService,
 } from '@universe-editor/platform'
+import { USAGE_TTL_MS } from '../../../../shared/ai/aiRemoteTtls.js'
 import { AccountUsageService } from '../AccountUsageService.js'
 import type { IAcpSessionProviderContext } from '../../acp/session/acpSessionProviderContext.js'
 
+const REFRESH_INTERVAL_KEY = 'ai.accountUsage.refreshIntervalMs'
 const FETCHED_AT = 1_700_000_000_000
 
 function usage(kind: AiAccountUsage['kind'] = 'balance'): AiAccountUsage {
@@ -44,8 +50,23 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
+class FakeConfiguration implements Partial<IConfigurationService> {
+  declare readonly _serviceBrand: undefined
+  readonly values = new Map<string, unknown>()
+  private readonly _onDidChange = new Emitter<IConfigurationChangeEvent>()
+  readonly onDidChangeConfiguration = this._onDidChange.event
+  get<T>(key: string): T | undefined {
+    return this.values.get(key) as T | undefined
+  }
+  fire(keys: string[]): void {
+    this._onDidChange.fire({ keys, affectsConfiguration: (key: string) => keys.includes(key) })
+  }
+}
+
 describe('AccountUsageService', () => {
   let contextChanged: Emitter<void>
+  let remoteChanged: Emitter<void>
+  let configuration: FakeConfiguration
   let getAccountUsage: ReturnType<typeof vi.fn>
   let refreshRemote: ReturnType<typeof vi.fn>
   let aiModel: IAiModelService
@@ -59,6 +80,7 @@ describe('AccountUsageService', () => {
     return new AccountUsageService(
       providerContext as unknown as IAcpSessionProviderContext,
       aiModel,
+      configuration as unknown as IConfigurationService,
       new StubLoggerService(),
     )
   }
@@ -69,9 +91,15 @@ describe('AccountUsageService', () => {
 
   beforeEach(() => {
     contextChanged = new Emitter<void>()
+    remoteChanged = new Emitter<void>()
+    configuration = new FakeConfiguration()
     getAccountUsage = vi.fn().mockResolvedValue(usage())
     refreshRemote = vi.fn().mockResolvedValue(undefined)
-    aiModel = { getAccountUsage, refreshRemote } as unknown as IAiModelService
+    aiModel = {
+      getAccountUsage,
+      refreshRemote,
+      onDidChangeRemote: remoteChanged.event,
+    } as unknown as IAiModelService
     providerContext = {
       onDidChangeContext: contextChanged.event,
       getProviderContext: vi.fn().mockReturnValue(ctx()),
@@ -264,6 +292,144 @@ describe('AccountUsageService', () => {
       service.dispose()
     })
   })
+
+  describe('periodic refresh', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      // The minimum legal interval; smaller values fall back to the 60s default.
+      configuration.values.set(REFRESH_INTERVAL_KEY, 15_000)
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    function freshUsage(): AiAccountUsage {
+      return { kind: 'balance', remainingUSD: 12.5, fetchedAt: Date.now() - 1_000 }
+    }
+
+    it('re-reads the cache for every known agent each interval', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      getAccountUsage.mockClear()
+
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(getAccountUsage).toHaveBeenCalledTimes(2)
+      expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
+      service.dispose()
+    })
+
+    it('never forces an upstream fetch while the cached number is fresh', async () => {
+      getAccountUsage.mockResolvedValue(freshUsage())
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      getAccountUsage.mockClear()
+      refreshRemote.mockClear()
+
+      await vi.advanceTimersByTimeAsync(45_000)
+
+      expect(getAccountUsage).toHaveBeenCalledTimes(3)
+      expect(refreshRemote).not.toHaveBeenCalled()
+      service.dispose()
+    })
+
+    it('escalates to one forced fetch when stale, then throttles', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      refreshRemote.mockClear()
+
+      await vi.advanceTimersByTimeAsync(45_000)
+
+      expect(refreshRemote).toHaveBeenCalledTimes(1)
+      expect(refreshRemote).toHaveBeenCalledWith('anthropic-gw')
+      service.dispose()
+    })
+
+    it('re-forces once the usage TTL elapses', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      refreshRemote.mockClear()
+
+      await vi.advanceTimersByTimeAsync(USAGE_TTL_MS + 30_000)
+
+      expect(refreshRemote).toHaveBeenCalledTimes(2)
+      service.dispose()
+    })
+
+    it('a user-initiated force also refreshes the throttle clock', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+
+      await service.refresh('codex', undefined, { force: true })
+      refreshRemote.mockClear()
+
+      await vi.advanceTimersByTimeAsync(45_000)
+
+      expect(refreshRemote).not.toHaveBeenCalled()
+      service.dispose()
+    })
+
+    it('skips pairs whose context declares no usage source', async () => {
+      providerContext.getProviderContext.mockReturnValue({ providerId: 'anthropic-gw' })
+      const service = createService()
+      service.stateFor('codex')
+
+      await vi.advanceTimersByTimeAsync(45_000)
+
+      expect(getAccountUsage).not.toHaveBeenCalled()
+      expect(refreshRemote).not.toHaveBeenCalled()
+      service.dispose()
+    })
+
+    it('restarts with the new interval when the configuration changes', async () => {
+      configuration.values.delete(REFRESH_INTERVAL_KEY)
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      getAccountUsage.mockClear()
+
+      await vi.advanceTimersByTimeAsync(50_000)
+      expect(getAccountUsage).not.toHaveBeenCalled()
+
+      configuration.values.set(REFRESH_INTERVAL_KEY, 15_000)
+      configuration.fire([REFRESH_INTERVAL_KEY])
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(getAccountUsage).toHaveBeenCalledTimes(1)
+      service.dispose()
+    })
+
+    it('stops ticking after dispose', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      getAccountUsage.mockClear()
+
+      service.dispose()
+      await vi.advanceTimersByTimeAsync(50_000)
+
+      expect(getAccountUsage).not.toHaveBeenCalled()
+    })
+
+    it('re-reads the cache without forcing when onDidChangeRemote fires', async () => {
+      const service = createService()
+      service.stateFor('codex')
+      await vi.advanceTimersByTimeAsync(0)
+      getAccountUsage.mockClear()
+      refreshRemote.mockClear()
+
+      remoteChanged.fire()
+
+      expect(getAccountUsage).toHaveBeenCalledWith('anthropic-gw')
+      expect(refreshRemote).not.toHaveBeenCalled()
+      service.dispose()
+    })
+  })
 })
 
 describe('AccountUsageService — cold-start race', () => {
@@ -280,8 +446,14 @@ describe('AccountUsageService — cold-start race', () => {
     const aiModel = {
       getAccountUsage: vi.fn().mockResolvedValue(usage()),
       refreshRemote: vi.fn().mockResolvedValue(undefined),
+      onDidChangeRemote: new Emitter<void>().event,
     } as unknown as IAiModelService
-    const service = new AccountUsageService(providerContext, aiModel, new StubLoggerService())
+    const service = new AccountUsageService(
+      providerContext,
+      aiModel,
+      new FakeConfiguration() as unknown as IConfigurationService,
+      new StubLoggerService(),
+    )
 
     // Cold cache: the synchronous answer is hasSource:false while the provider
     // context is still resolving.

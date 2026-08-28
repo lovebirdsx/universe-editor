@@ -19,12 +19,12 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import { toFiniteNumber } from '../../../../shared/ai/parseRemoteJson.js'
+import { RATES_TTL_MS, USAGE_TTL_MS } from '../../../../shared/ai/aiRemoteTtls.js'
+
+export { RATES_TTL_MS, USAGE_TTL_MS }
 
 const FILE_NAME = 'aiRemoteCache.json'
 const FLUSH_DEBOUNCE_MS = 200
-
-export const RATES_TTL_MS = 24 * 60 * 60_000
-export const USAGE_TTL_MS = 5 * 60_000
 
 export interface CachedRates {
   readonly fetchedAt: number
