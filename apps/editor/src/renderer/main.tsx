@@ -77,6 +77,7 @@ import { IExtensionManagementService } from '../shared/ipc/extensionManagementSe
 import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
+import type { IBugRecorderService } from '../shared/ipc/bugRecorderService.js'
 import { ITimerService } from './services/performance/TimerService.js'
 import {
   IInteractionPerfService,
@@ -99,6 +100,7 @@ import {
 } from './services/telemetry/telemetryClientService.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './services/command/CommandService.js'
+import { BugRecorderClient, IBugRecorderClient } from './services/bugRecording/bugRecorderClient.js'
 import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import { ViewsService } from './services/views/ViewsService.js'
@@ -302,6 +304,19 @@ async function bootstrapWorkbench(): Promise<void> {
   telemetry.bindSink(
     ProxyChannel.toService<IErrorSinkService>(ipcService.getChannel(ServiceChannels.ErrorSink)),
   )
+
+  // Bug recording: main owns the state machine, this is the per-window producer.
+  // Bound to telemetry so every existing publicLog call site becomes part of the
+  // step stream while a recording is active (and costs nothing while it is not).
+  const bugRecorder = workbenchStore.add(
+    new BugRecorderClient(
+      ProxyChannel.toService<IBugRecorderService>(
+        ipcService.getChannel(ServiceChannels.BugRecorder),
+      ),
+    ),
+  )
+  services.set(IBugRecorderClient, bugRecorder)
+  telemetry.bindRecorder(bugRecorder)
 
   // Reverse channel: the main process invokes this before closing a window /
   // quitting so the renderer can run its lifecycle veto chain (e.g. confirm
@@ -536,6 +551,7 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation,
     telemetry,
     loggerService.createLogger({ id: 'command', name: 'Command' }),
+    bugRecorder,
   )
 
   services.set(ICommandService, commandService)
@@ -875,6 +891,7 @@ async function bootstrapWorkbench(): Promise<void> {
     storageService: instantiation.invokeFunction((a) => a.get(IStorageService)),
     acpSessionService,
     acpSessionHistoryService: instantiation.invokeFunction((a) => a.get(IAcpSessionHistoryService)),
+    bugRecorderClient: bugRecorder,
     mcpServerEnablementService,
     extensionMcpServersService,
     outputService,

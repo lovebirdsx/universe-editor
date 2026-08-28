@@ -108,6 +108,16 @@ class Registry {
     return this._entries.get(monacoModelKey(resource))?.model
   }
 
+  /**
+   * Every model currently held, without changing refcounts. Lets a late
+   * subscriber to `onDidAddModel` catch up on models acquired before it
+   * subscribed — editors restored at startup are created during the React mount,
+   * which runs before AfterRestore contributions exist.
+   */
+  models(): readonly monaco.editor.ITextModel[] {
+    return [...this._entries.values()].map((entry) => entry.model)
+  }
+
   markModelClean(model: monaco.editor.ITextModel): void {
     this._onDidMarkModelClean.fire(model)
   }

@@ -48,6 +48,8 @@ import {
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
+import type { BugRecorderClient } from '../services/bugRecording/bugRecorderClient.js'
+import { collectTranscripts } from '../actions/bugRecordingActions.js'
 import type { IMcpServerEnablementService } from '../services/acp/mcpServerEnablementService.js'
 import type { ITimelineService } from '../services/timeline/TimelineService.js'
 import type { ITreeViewsService } from '../services/extensions/TreeViewsService.js'
@@ -84,6 +86,8 @@ import {
   type E2EStatusBarEntry,
   type E2EUpdateState,
   type E2EAiDebugRecord,
+  type E2EBugRecordingResult,
+  type E2EBugRecordingStatus,
   type E2ECodeAction,
   type E2EConfigTarget,
   type E2EContributedMcpServer,
@@ -126,6 +130,7 @@ export interface E2EProbeServices {
   readonly storageService: IStorageService
   readonly acpSessionService: IAcpSessionService
   readonly acpSessionHistoryService: IAcpSessionHistoryService
+  readonly bugRecorderClient: BugRecorderClient
   readonly mcpServerEnablementService: IMcpServerEnablementService
   readonly extensionMcpServersService: IExtensionMcpServersService
   readonly outputService: IOutputService
@@ -1821,6 +1826,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       )
       return controller?.model?.get?.()?.inlineEditState?.get?.()?.inlineEdit?.edit?.text
     },
+    startBugRecording: async (): Promise<E2EBugRecordingStatus> => {
+      const folder = services.workspaceService.current?.folder.toString()
+      return await services.bugRecorderClient.startRecording(
+        folder !== undefined ? { workspaceFolders: [folder] } : {},
+      )
+    },
+    // Bypasses the redaction dialog on purpose: the spec asserts both branches
+    // of the export, and the dialog itself is covered by unit tests.
+    stopBugRecording: (redact: boolean): Promise<E2EBugRecordingResult> => {
+      const transcripts = collectTranscripts(services.acpSessionHistoryService)
+      return services.bugRecorderClient.stopRecording({
+        redact,
+        ...(transcripts.length > 0 ? { transcripts } : {}),
+      })
+    },
+    markBugRecordingStep: () => services.bugRecorderClient.markStep(),
+    getBugRecordingStatus: (): E2EBugRecordingStatus => services.bugRecorderClient.status.get(),
     getAiDebugRecords: async (): Promise<readonly E2EAiDebugRecord[]> => {
       const records = await services.aiDebugService.listRecords()
       return records.map((r) => ({

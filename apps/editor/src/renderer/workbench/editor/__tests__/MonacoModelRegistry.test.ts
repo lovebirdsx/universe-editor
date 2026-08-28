@@ -83,4 +83,25 @@ describe('MonacoModelRegistry', () => {
       MonacoModelRegistry.release(resource)
     }
   })
+
+  it('enumerates held models so a late subscriber can catch up (bug recording)', () => {
+    // Editors restored at startup create their models during the React mount,
+    // which runs before AfterRestore contributions exist. A consumer that only
+    // subscribes to onDidAddModel would miss exactly the files already open, so
+    // it enumerates models() first — that list must hold every live model and
+    // drop released ones.
+    const a = URI.file('/tmp/catchup-a.ts')
+    const b = URI.file('/tmp/catchup-b.ts')
+    const modelA = MonacoModelRegistry.acquire(a, 'a')
+    const modelB = MonacoModelRegistry.acquire(b, 'b')
+
+    expect(MonacoModelRegistry.models()).toContain(modelA)
+    expect(MonacoModelRegistry.models()).toContain(modelB)
+    // Enumerating must not change refcounts, or the caller would leak the model.
+    MonacoModelRegistry.release(a)
+    expect(MonacoModelRegistry.models()).not.toContain(modelA)
+    expect(MonacoModelRegistry.models()).toContain(modelB)
+    MonacoModelRegistry.release(b)
+    expect(MonacoModelRegistry.models()).toHaveLength(0)
+  })
 })

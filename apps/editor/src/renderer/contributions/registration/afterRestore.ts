@@ -7,6 +7,8 @@
 
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
 import { AbnormalExitNotificationContribution } from '../AbnormalExitNotificationContribution.js'
+import { BugRecordingContribution } from '../bugRecordingContribution.js'
+import { BugRecordingOrphanContribution } from '../BugRecordingOrphanContribution.js'
 import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.js'
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
@@ -92,6 +94,22 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.abnormalExitNotification',
   AbnormalExitNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Bug recording hooks + status bar. AfterRestore so the status bar and the
+// editor/notification/ACP observables the hooks read are all live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.bugRecording',
+  BugRecordingContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Orphan recording prompt: consume-once on the main side, same as the
+// abnormal-exit report above.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.bugRecordingOrphan',
+  BugRecordingOrphanContribution,
   WorkbenchPhase.AfterRestore,
 )
 

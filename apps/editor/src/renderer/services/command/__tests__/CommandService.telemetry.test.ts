@@ -13,7 +13,7 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { ITelemetryService } from '@universe-editor/platform'
-import { CommandService } from '../CommandService.js'
+import { CommandService, type ICommandFailureRecorder } from '../CommandService.js'
 
 function makeTelemetry(): ITelemetryService {
   return {
@@ -116,6 +116,95 @@ describe('CommandService telemetry', () => {
       await expect(svc.executeCommand('test.disposed.sync')).rejects.toBe(err)
       expect(logger.error).not.toHaveBeenCalled()
       expect(logger.warn).toHaveBeenCalledWith('command interrupted id=test.disposed.sync', err)
+    } finally {
+      disposable.dispose()
+    }
+  })
+})
+
+describe('CommandService bug recording hook', () => {
+  function makeRecorder(): ICommandFailureRecorder & {
+    events: Array<{ kind: string; commandId: string; message: string }>
+  } {
+    const events: Array<{ kind: 'commandError'; commandId: string; message: string }> = []
+    return { events, recordEvent: (event) => events.push(event) }
+  }
+
+  it('records a missing command', async () => {
+    const recorder = makeRecorder()
+    const svc = new CommandService(
+      new InstantiationService(new ServiceCollection()),
+      undefined,
+      undefined,
+      recorder,
+    )
+
+    await svc.executeCommand('test.recorder.missing')
+
+    expect(recorder.events).toEqual([
+      { kind: 'commandError', commandId: 'test.recorder.missing', message: 'command not found' },
+    ])
+  })
+
+  it('records a thrown handler error with its message', async () => {
+    const recorder = makeRecorder()
+    const svc = new CommandService(
+      new InstantiationService(new ServiceCollection()),
+      undefined,
+      undefined,
+      recorder,
+    )
+    const disposable = CommandsRegistry.registerCommand('test.recorder.throwing', () => {
+      throw new Error('kaboom')
+    })
+    try {
+      await expect(svc.executeCommand('test.recorder.throwing')).rejects.toThrow('kaboom')
+      expect(recorder.events).toEqual([
+        { kind: 'commandError', commandId: 'test.recorder.throwing', message: 'kaboom' },
+      ])
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  // Benign lifecycle rejections are still worth recording: a bug bundle wants to
+  // show the interruption even though the log keeps it at warn level.
+  it('records benign interruptions too', async () => {
+    const recorder = makeRecorder()
+    const svc = new CommandService(
+      new InstantiationService(new ServiceCollection()),
+      undefined,
+      undefined,
+      recorder,
+    )
+    const disposable = CommandsRegistry.registerCommand('test.recorder.benign', () =>
+      Promise.reject(new IpcChannelDisposedError()),
+    )
+    try {
+      await expect(svc.executeCommand('test.recorder.benign')).rejects.toBeInstanceOf(
+        IpcChannelDisposedError,
+      )
+      expect(recorder.events).toHaveLength(1)
+      expect(recorder.events[0]?.commandId).toBe('test.recorder.benign')
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('does not record successful commands — telemetry already covers them', async () => {
+    const recorder = makeRecorder()
+    const telemetry = makeTelemetry()
+    const svc = new CommandService(
+      new InstantiationService(new ServiceCollection()),
+      telemetry,
+      undefined,
+      recorder,
+    )
+    const disposable = CommandsRegistry.registerCommand('test.recorder.ok', () => 'fine')
+    try {
+      await svc.executeCommand('test.recorder.ok')
+      expect(recorder.events).toHaveLength(0)
+      expect(telemetry.publicLog).toHaveBeenCalledOnce()
     } finally {
       disposable.dispose()
     }

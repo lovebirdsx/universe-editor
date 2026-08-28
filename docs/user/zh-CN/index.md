@@ -100,13 +100,14 @@ Perforce 集成：连接登录、changelist 管理、签出/提交/对比、搁�
 
 ## 参考与排障
 
-快捷键速查、命令速查、术语表、FAQ、排障指南。
+快捷键速查、命令速查、术语表、FAQ、排障指南、Bug 录制。
 
 - [快捷键速查表](./reference/keyboard-shortcuts.md)
 - [命令速查表](./reference/command-reference.md)
 - [术语表](./reference/glossary.md)
 - [FAQ 常见问题](./reference/faq.md)
 - [排障指南](./reference/troubleshooting.md)
+- [Bug 录制](./reference/bug-recording.md)
 
 ---
 

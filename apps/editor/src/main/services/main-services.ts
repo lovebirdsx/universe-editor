@@ -18,7 +18,7 @@ import {
   registerSingletonFactory,
   SyncDescriptor,
 } from '@universe-editor/platform'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { ILoggerService, createNamedLogger } from '@universe-editor/platform'
@@ -98,6 +98,9 @@ import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.
 import { ResourceAccessMainService } from './resourceAccess/resourceAccessMainService.js'
 import { EnvironmentSnapshotMainService } from './environmentSnapshot/environmentSnapshotMainService.js'
 import { DiagnosticsMainService } from './diagnostics/diagnosticsMainService.js'
+import { IBugRecorderService } from '../../shared/ipc/bugRecorderService.js'
+import { BugRecordingMainService } from './bugRecording/bugRecordingMainService.js'
+import { ILogMainService } from './log/logMainService.js'
 import { IssueReporterMainService } from './issueReporter/issueReporterMainService.js'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { ProcessMonitorMainService } from './processMonitor/processMonitorMainService.js'
@@ -315,6 +318,26 @@ registerSingletonFactory(IDiagnosticsService, (acc) => {
 })
 registerSingletonFactory(IProcessMonitorService, (acc) => {
   return new ProcessMonitorMainService(undefined, undefined, acc.get(ILoggerService))
+})
+registerSingletonFactory(IBugRecorderService, (acc) => {
+  const diagnostics = acc.get(IDiagnosticsService)
+  return new BugRecordingMainService(
+    {
+      recordingsDir: join(app.getPath('userData'), 'bug-recordings'),
+      piiPaths: [
+        app.getPath('userData'),
+        app.getPath('home'),
+        app.getPath('temp'),
+        app.getAppPath(),
+      ],
+      revealInShell: process.env['UNIVERSE_E2E'] !== '1',
+      revealItem: (path) => shell.showItemInFolder(path),
+      collectEnvironment: () => diagnostics.collectIssueReport(),
+      crashDumpsDir: app.getPath('crashDumps'),
+    },
+    acc.get(ILogMainService),
+    acc.get(ILoggerService),
+  )
 })
 registerSingletonFactory(IIssueReporterService, (acc) => {
   const diagnostics = acc.get(IDiagnosticsService)

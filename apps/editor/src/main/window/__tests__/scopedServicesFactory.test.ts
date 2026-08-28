@@ -40,11 +40,12 @@ describe('ApplicationServices type', () => {
       diagnostics: {} as ApplicationServices['diagnostics'],
       issueReporter: {} as ApplicationServices['issueReporter'],
       processMonitor: {} as ApplicationServices['processMonitor'],
+      bugRecorder: {} as ApplicationServices['bugRecorder'],
       watcherProcess: {} as ApplicationServices['watcherProcess'],
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
     }
-    expect(Object.keys(svc)).toHaveLength(35)
+    expect(Object.keys(svc)).toHaveLength(36)
   })
 })
 

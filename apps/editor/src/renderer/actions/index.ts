@@ -293,6 +293,11 @@ import {
 } from './updateActions.js'
 import { ShowReleaseNotesAction } from './helpActions.js'
 import {
+  MarkBugRecordingStepAction,
+  StartBugRecordingAction,
+  StopBugRecordingAction,
+} from './bugRecordingActions.js'
+import {
   ClearOutputAction,
   EmitTestErrorLogAction,
   OpenActiveLogFileAction,
@@ -731,6 +736,11 @@ registerAction2(InstallUpdateAction)
 registerAction2(ShowReleaseNotesAction)
 registerAction2(ReportIssueAction)
 registerAction2(ExportDiagnosticsAction)
+
+// Bug recording
+registerAction2(StartBugRecordingAction)
+registerAction2(StopBugRecordingAction)
+registerAction2(MarkBugRecordingStepAction)
 
 // Terminal
 registerAction2(OpenInTerminalAction)

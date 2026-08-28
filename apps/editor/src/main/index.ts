@@ -39,6 +39,8 @@ import { getAppVersion } from './appVersion.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
+import { IBugRecorderService } from '../shared/ipc/bugRecorderService.js'
+import type { BugRecordingMainService } from './services/bugRecording/bugRecordingMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { WindowsJumpList } from './services/window/windowsJumpList.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
@@ -516,6 +518,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       environmentSnapshot: accessor.get(IEnvironmentSnapshotService),
       errorSink: accessor.get(IErrorSinkService) as ErrorSinkMainService,
       diagnostics: accessor.get(IDiagnosticsService) as DiagnosticsMainService,
+      bugRecorder: accessor.get(IBugRecorderService) as BugRecordingMainService,
       issueReporter: accessor.get(IIssueReporterService),
       processMonitor: accessor.get(IProcessMonitorService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
@@ -548,6 +551,12 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // Stop Remote Server closes every window scoped to that authority (after
     // their shutdown veto) before tearing the server down.
     applicationServices.remoteStatus.setWindowsParticipant(windows)
+    // Screenshots need a live BrowserWindow, which only exists once the window
+    // service is up — the recorder is constructed before it.
+    applicationServices.bugRecorder.setWindowProvider(() => {
+      const id = windows.getFocusedWindowId()
+      return id === null ? undefined : windows.getWindowById(id)
+    })
     // Windows taskbar Jump List (right-click the pinned icon). Tracks the shared
     // recent-workspaces list; no-op on non-Windows platforms.
     windowsJumpList = new WindowsJumpList(applicationServices.recentWorkspaces, logMainService)

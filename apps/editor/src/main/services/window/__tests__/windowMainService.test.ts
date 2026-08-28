@@ -184,6 +184,7 @@ function makeOpts() {
       diagnostics: {} as never,
       issueReporter: {} as never,
       processMonitor: {} as never,
+      bugRecorder: {} as never,
       watcherProcess: createStubWatcherProcessClient(),
       remoteConnection: {} as never,
       remoteStatus: {} as never,

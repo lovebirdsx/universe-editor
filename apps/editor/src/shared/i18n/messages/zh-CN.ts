@@ -275,6 +275,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.editor.nextChange.title': '转到下一处更改',
   'action.editor.previousChange.title': '转到上一处更改',
   'action.exit.title': '退出',
+  'action.exportDiagnostics.title': '导出诊断包...',
   'action.find.title': '查找',
   'action.findInFiles.title': '在文件中查找',
   'action.findInFolder.title': '在文件夹中查找...',
@@ -304,6 +305,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.increaseViewWidth.title': '增大当前视图宽度',
   'action.json.showSchema.title': '显示 JSON Schema',
   'action.lastEditorInGroup.title': '打开组内最后一个编辑器',
+  'action.markBugRecordingStep.title': '标记 Bug 录制步骤',
   'action.markdown.openPreview.title': '打开预览',
   'action.markdown.openPreviewToSide.title': '在侧边打开预览',
   'action.markdown.showSource.title': '打开源文件',
@@ -385,6 +387,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.reopenWith.placeHolder': '选择编辑器类型',
   'action.reopenWith.title': '重新打开方式...',
   'action.replace.title': '替换',
+  'action.reportIssue.title': '报告问题...',
   'action.resetConfigLocation.title': '将配置目录重置为默认值',
   'action.resetViewLocations.title': '重置视图位置',
   'action.revealActiveFileInExplorer.title': '在资源管理器中定位当前文件',
@@ -416,6 +419,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.splitEditorRight.title': '向右拆分编辑器',
   'action.splitEditorUp.title': '向上拆分编辑器',
   'action.splitTerminal.title': '拆分终端',
+  'action.startBugRecording.title': '开始 Bug 录制',
+  'action.stopBugRecording.title': '停止 Bug 录制并导出证据包',
   'action.switchWindow.title': '切换窗口…',
   'action.terminal.focusPanel.title': '聚焦终端',
   'action.terminalInEditor.title': '在编辑器中打开终端',
@@ -2486,6 +2491,24 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- Diagnostics ---
   'exportDiagnostics.done': '诊断包已导出：{path}',
   'exportDiagnostics.failed': '诊断包导出失败：{message}',
+
+  // --- Bug recording ---
+  'bugRecording.statusTooltip': '正在录制 bug 证据。点击停止并导出。',
+  'bugRecording.alreadyRecording': '已有一个 bug 录制在进行中。',
+  'bugRecording.started': 'Bug 录制已开始。请复现问题，然后运行「停止 Bug 录制并导出证据包」。',
+  'bugRecording.notRecording': '当前没有正在进行的 bug 录制。',
+  'bugRecording.stopConfirm': '停止录制并导出证据包？',
+  'bugRecording.stopDetail':
+    '「保存证据包」保留全部信息，最有利于定位问题。\n\n「脱敏并保存」会掩码用户名、账号目录、项目路径与密钥 token——但也可能抹掉恰好解释这个 bug 的关键线索（例如只在特定路径或用户名下才复现的问题）。\n\n截图无法脱敏：它们是屏幕画面。如果画面可能含敏感信息，请自行检查。',
+  'bugRecording.save': '保存证据包',
+  'bugRecording.redactAndSave': '脱敏并保存',
+  'bugRecording.keepRecording': '继续录制',
+  'bugRecording.exported': 'Bug 证据包已导出：{path}（{events} 条事件，{shots} 张截图）',
+  'bugRecording.exportFailed': '导出 bug 证据包失败：{message}',
+  'bugRecording.orphanFound':
+    '{time} 的一次 bug 录制被中断（崩溃或强制退出）。它记录的 {events} 条事件仍在磁盘上。',
+  'bugRecording.orphanExport': '导出证据包',
+  'bugRecording.orphanDiscard': '暂不导出',
 
   // --- User data ---
   'userData.error.readOnly': 'UserData：{file} 为只读',

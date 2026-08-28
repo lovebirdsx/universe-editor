@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ITelemetryData } from '@universe-editor/platform'
 import { TelemetryClientService } from '../telemetryClientService.js'
 import type { IErrorSinkService, WireErrorRecord } from '../../../../shared/ipc/services.js'
 
@@ -143,5 +144,43 @@ describe('TelemetryClientService', () => {
     const b = await telemetry.getTelemetryInfo()
     expect(a.sessionId).toBe(b.sessionId)
     expect(a.sessionId.length).toBeGreaterThan(0)
+  })
+
+  describe('bug recording bridge', () => {
+    function makeRecorder(): {
+      calls: Array<{ name: string; data?: ITelemetryData }>
+      recordTelemetry(name: string, data?: ITelemetryData): void
+    } {
+      const calls: Array<{ name: string; data?: ITelemetryData }> = []
+      return {
+        calls,
+        recordTelemetry: (name, data) => {
+          calls.push(data !== undefined ? { name, data } : { name })
+        },
+      }
+    }
+
+    it('mirrors usage events so existing publicLog call sites feed the recording', () => {
+      const recorder = makeRecorder()
+      telemetry.bindRecorder(recorder)
+      telemetry.publicLog('commandExecuted', { commandId: 'workbench.action.files.save' })
+      expect(recorder.calls).toEqual([
+        { name: 'commandExecuted', data: { commandId: 'workbench.action.files.save' } },
+      ])
+    })
+
+    it('publicLog without a bound recorder stays a no-op', () => {
+      expect(() => telemetry.publicLog('commandExecuted')).not.toThrow()
+    })
+
+    it('does not route error events through the recorder (the log tail carries them)', async () => {
+      const recorder = makeRecorder()
+      telemetry.bindRecorder(recorder)
+      telemetry.bindSink(sink)
+      telemetry.publicLogError('unhandledError', { message: 'boom' })
+      await tick()
+      expect(recorder.calls).toHaveLength(0)
+      expect(sink.calls).toHaveLength(1)
+    })
   })
 })

@@ -145,6 +145,19 @@ export interface E2EAiDebugRecord {
   readonly responsePreview: string
 }
 
+/** Outcome of a bug-recording export, as reported back to a spec. */
+export interface E2EBugRecordingResult {
+  readonly zipPath: string
+  readonly eventCount: number
+  readonly screenshotCount: number
+  readonly zipSizeBytes: number
+}
+
+export interface E2EBugRecordingStatus {
+  readonly state: 'idle' | 'recording'
+  readonly startedAt?: number
+}
+
 /** One resolved AI model as reported by the model service (three-segment id + metadata). */
 export interface E2EAiModelInfo {
   readonly id: string
@@ -1300,6 +1313,20 @@ export interface E2EProbe {
    * inline edit appeared and to read its replacement text.
    */
   getActiveInlineEditText(): string | undefined
+  // -- Bug recording probe --------------------------------------------------
+  /** Start a bug recording (same path as the Start Bug Recording command). */
+  startBugRecording(): Promise<E2EBugRecordingStatus>
+  /**
+   * Stop the recording and export the evidence bundle, bypassing the redaction
+   * dialog by passing the choice directly. Returns the bundle description so the
+   * spec can unzip and assert on its contents.
+   */
+  stopBugRecording(redact: boolean): Promise<E2EBugRecordingResult>
+  /** Record a manual step marker (forces a screenshot). */
+  markBugRecordingStep(): Promise<void>
+  /** Current recording status as mirrored from the main process. */
+  getBugRecordingStatus(): E2EBugRecordingStatus
+
   // -- AI debug probe -------------------------------------------------------
   /**
    * Summaries of every recorded "direct provider" AI request, newest first, via

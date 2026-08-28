@@ -22,6 +22,7 @@ import {
 import type { AbnormalExitInfo, IDiagnosticsService } from '../../../shared/ipc/services.js'
 import type { AbnormalExitReport } from '../../sessionSentinel.js'
 import { SESSION_DIR_RE } from '../log/logMainService.js'
+import { collectSessionLogTails } from '../log/logTails.js'
 import {
   aggregateErrorFingerprints,
   buildIssueMarkdown,
@@ -130,7 +131,7 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
       if (errors !== null) {
         zip.addFile(`errors-${session}.jsonl`, errors)
       }
-      for (const logFile of await this._collectSessionLogTails(dir)) {
+      for (const logFile of await collectSessionLogTails(dir, LOG_TAIL_BYTES)) {
         zip.addFile(`logs/${session}/${logFile.name}`, logFile.content)
       }
     }
@@ -202,36 +203,6 @@ export class DiagnosticsMainService extends Disposable implements IDiagnosticsSe
       .sort()
       .reverse()
       .slice(0, REPORT_SESSION_COUNT)
-  }
-
-  /** Tail-capped log buffers from one session dir (root + window-* subdirs). */
-  private async _collectSessionLogTails(
-    sessionDir: string,
-  ): Promise<{ name: string; content: Buffer }[]> {
-    const out: { name: string; content: Buffer }[] = []
-    const collectFrom = async (dir: string, prefix: string): Promise<void> => {
-      let entries
-      try {
-        entries = await fs.readdir(dir, { withFileTypes: true })
-      } catch {
-        return
-      }
-      for (const entry of entries) {
-        const full = join(dir, entry.name)
-        if (entry.isDirectory() && entry.name.startsWith('window-')) {
-          await collectFrom(full, `${entry.name}/`)
-        } else if (entry.isFile() && entry.name.endsWith('.log')) {
-          const buf = await this._readFileIfExists(full)
-          if (buf === null) continue
-          out.push({
-            name: `${prefix}${entry.name}`,
-            content: buf.length > LOG_TAIL_BYTES ? buf.subarray(buf.length - LOG_TAIL_BYTES) : buf,
-          })
-        }
-      }
-    }
-    await collectFrom(sessionDir, '')
-    return out
   }
 
   /**

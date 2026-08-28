@@ -48,6 +48,7 @@ export class TelemetryClientService extends Disposable implements ITelemetryServ
   private readonly _sessionId = crypto.randomUUID()
   private readonly _buffer = new AggregationBuffer<PendingRecord>((r) => r.dedupKey)
   private _sink: IErrorSinkService | null = null
+  private _recorder: { recordTelemetry(name: string, data?: ITelemetryData): void } | null = null
   private _enabled = true
   private _flushScheduled = false
 
@@ -57,14 +58,24 @@ export class TelemetryClientService extends Disposable implements ITelemetryServ
     this._flush()
   }
 
+  /**
+   * Mirror usage events into bug recording. Wired here rather than at each of the
+   * ~20 publicLog call sites, which already carry the events worth recording.
+   */
+  bindRecorder(recorder: { recordTelemetry(name: string, data?: ITelemetryData): void }): void {
+    this._recorder = recorder
+  }
+
   /** Settings gate (`telemetry.errorCollection.enabled`). Disabling drops pending records. */
   setCollectionEnabled(enabled: boolean): void {
     this._enabled = enabled
     if (!enabled) this._buffer.flush()
   }
 
-  publicLog(_eventName: string, _data?: ITelemetryData): void {
-    // Local sink persists errors only; usage events stay unwired by design.
+  publicLog(eventName: string, data?: ITelemetryData): void {
+    // Local sink persists errors only; usage events stay unwired by design —
+    // except while a bug recording is active, where they are the step stream.
+    this._recorder?.recordTelemetry(eventName, data)
   }
 
   publicLogMeasure(_eventName: string, _value: number, _dimensions?: ITelemetryData): void {
