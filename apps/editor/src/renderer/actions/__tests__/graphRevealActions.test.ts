@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  IEditorGroupsService,
   IEditorService,
   InstantiationService,
   ServiceCollection,
@@ -39,6 +40,14 @@ describe('graph reveal bridge actions', () => {
       _serviceBrand: undefined,
       openEditor,
     } as unknown as IEditorService)
+    // The actions reveal an already-open singleton editor across groups first;
+    // no group holds a match in this suite, so it falls through to openEditor.
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      groups: [],
+      activeGroup: { editors: [], setActive: vi.fn() },
+      activateGroup: vi.fn(),
+    } as unknown as IEditorGroupsService)
     const inst = new InstantiationService(services)
     await inst.invokeFunction(async (accessor) => {
       await CommandsRegistry.getCommand(id)!.handler(accessor, ...args)
