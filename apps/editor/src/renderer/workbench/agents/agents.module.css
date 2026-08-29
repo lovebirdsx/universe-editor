@@ -708,6 +708,37 @@
   min-width: 0;
 }
 
+/* "Read this file" affordance on a whole-file-write card, sitting immediately
+   left of the stats badge. `margin-left: auto` pushes it to the trailing edge
+   and the following badge drops its own auto margin, so the two stay adjacent.
+
+   Always visible, deliberately: revealing on hover would either reserve the
+   width permanently (an empty gap that pushes this card's elapsed-time and
+   status columns out of line with its neighbours) or reflow the trailing
+   columns the moment the pointer arrives. Shown, it is content that occupies
+   its own width like the MCP badge does — no gap, no jitter. */
+.toolCallReadAction {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  cursor: pointer;
+}
+
+.toolCallReadAction + .subagentStats {
+  margin-left: 0;
+}
+
+.toolCallReadAction:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #ccc);
+}
+
 .toolCallCommand {
   margin: 4px 0;
   padding: 6px 8px;

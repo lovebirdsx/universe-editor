@@ -38,6 +38,23 @@ const agentResult = toolCallItem(
   }),
 )
 
+const createdSourceFile = toolCallItem(
+  makeCall({
+    kind: 'edit',
+    title: 'Write newModule.ts',
+    diffs: [{ path: '/repo/src/newModule.ts', oldText: '', newText: 'export const a = 1\n' }],
+  }),
+)
+
+const trimmedEdit = toolCallItem(
+  makeCall({
+    kind: 'edit',
+    title: 'Write newModule.ts',
+    memoryTrimmed: true,
+    diffs: [{ path: '/repo/src/newModule.ts', oldText: '', newText: '' }],
+  }),
+)
+
 const ordinaryEdit = toolCallItem(
   makeCall({
     kind: 'edit',
@@ -49,6 +66,14 @@ const ordinaryEdit = toolCallItem(
 describe('defaultCollapsed', () => {
   it('folds a sub-agent result document even though it is an edit card', () => {
     expect(defaultCollapsed(agentResult, 'default')).toBe(true)
+  })
+
+  it('folds a whole-file write of any file type', () => {
+    expect(defaultCollapsed(createdSourceFile, 'default')).toBe(true)
+  })
+
+  it('keeps a memory-trimmed edit card expanded (blanked oldText is not a create)', () => {
+    expect(defaultCollapsed(trimmedEdit, 'default')).toBe(false)
   })
 
   it('keeps an ordinary edit card expanded', () => {

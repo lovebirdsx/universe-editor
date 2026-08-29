@@ -142,29 +142,22 @@ export function keepPlanningFeedback(call: AcpToolCall): string | undefined {
 }
 
 /**
- * 子 agent（Explore）的调查结果落盘目录。fork 在 SubagentStop 时把最终答复写成
- * `<cwd>/.claude/explore-results/<stamp>-<session>-<agent>.md`，并伪造一条
- * `kind: 'edit'` 的 tool_call 让它出现在时间线里（见 vendor/claude-agent-acp）。
- */
-const AGENT_RESULT_DIR = '.claude/explore-results/'
-
-/**
- * 子 agent 调查结果文档的路径；不是这类卡则返回 undefined。
+ * 「整文件写入」卡（claude 的 Write / codex 的 add file，ACP 无 write kind，二者都
+ * 映射成 `kind: 'edit'`）的目标路径；不是这类卡则返回 undefined。子 agent 的调查结果
+ * 文档是它的一个子集。
  *
- * 它是一篇待阅读的文档而非一次代码改动，所以默认折叠、并在卡头提供 markdown
- * 预览入口——两个消费方共用这一次判定，故返回路径而非布尔。
+ * 它是一份新文档而非一次待审改动，所以默认折叠、并在卡头给出阅读入口——折叠与卡头
+ * 两个消费方共用这一次判定，故返回路径而非布尔。
+ *
+ * `oldText` 为空是唯一可用的「新建」信号（wire 上的 `null` 由 splitToolCallContent
+ * 归一为 `''`），但 trimToolCall 也会把所有 diff 的 oldText 清空以释放内存——所以必须
+ * 先排除 memoryTrimmed，否则每张被裁剪的卡都会被误判成新建。
  */
-export function agentResultDocumentPath(call: AcpToolCall): string | undefined {
-  if (call.kind !== 'edit') return undefined
+export function createdFilePath(call: AcpToolCall): string | undefined {
+  if (call.kind !== 'edit' || call.memoryTrimmed) return undefined
   const [diff, ...rest] = call.diffs
   if (diff === undefined || rest.length > 0) return undefined
-  // Only the separator needs normalizing: the directory and the `.md` suffix are
-  // both fork-generated and always lower-case, so this is a literal marker match
-  // rather than a path identity comparison (which would belong to
-  // IUriIdentityService).
-  const slashed = diff.path.replace(/\\/g, '/')
-  if (!slashed.endsWith('.md') || !slashed.includes(AGENT_RESULT_DIR)) return undefined
-  return diff.path
+  return diff.oldText.length === 0 ? diff.path : undefined
 }
 
 function deriveSwitchModeDisplay(call: AcpToolCall): ToolCallDisplay {

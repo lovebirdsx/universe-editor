@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import {
   IConfigurationService,
   IEditorGroupsService,
+  IEditorResolverService,
   IEditorService,
   InstantiationService,
   ServiceCollection,
@@ -16,6 +17,7 @@ import {
 import type {
   IConfigurationService as IConfigurationServiceType,
   IEditorGroupsService as IEditorGroupsServiceType,
+  IEditorResolverService as IEditorResolverServiceType,
   IEditorService as IEditorServiceType,
 } from '@universe-editor/platform'
 import type {
@@ -33,6 +35,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
 afterEach(() => {
   cleanup()
   openedInGroup.length = 0
+  resolvedOpens.length = 0
 })
 
 function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
@@ -60,6 +63,9 @@ function makeChildMessage(text: string): AcpMessage {
 
 /** Captures editors opened through the group service (the preview button's route). */
 const openedInGroup: unknown[] = []
+
+/** Captures files opened through the resolver (the "Open File" button's route). */
+const resolvedOpens: { resource: unknown; options: unknown }[] = []
 
 function makeGroupsService(): IEditorGroupsServiceType {
   const group = {
@@ -91,6 +97,13 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
     get: (key: string) => config[key],
   } as unknown as IConfigurationServiceType)
   services.set(IEditorGroupsService, makeGroupsService())
+  services.set(IEditorResolverService, {
+    _serviceBrand: undefined,
+    openEditor: vi.fn((resource: unknown, options: unknown) => {
+      resolvedOpens.push({ resource, options })
+      return Promise.resolve(undefined)
+    }),
+  } as unknown as IEditorResolverServiceType)
   const inst = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={inst}>
@@ -502,7 +515,7 @@ describe('ToolCallCard', () => {
     expect(screen.getByTestId('acp-inline-diff-path')).toBeTruthy()
   })
 
-  describe('sub-agent result document card', () => {
+  describe('created-file card', () => {
     const RESULT_PATH = '/repo/.claude/explore-results/20260829-sess-agent.md'
 
     function makeResultCall(path = RESULT_PATH): AcpToolCall {
@@ -513,6 +526,14 @@ describe('ToolCallCard', () => {
       })
     }
 
+    function makeSourceCreateCall(path = '/repo/src/newModule.ts'): AcpToolCall {
+      return makeCall({
+        kind: 'edit',
+        title: 'Write newModule.ts',
+        diffs: [{ path, oldText: '', newText: 'export const a = 1\n' }],
+      })
+    }
+
     it('starts collapsed and expands on click', () => {
       renderCard(makeResultCall())
       expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
@@ -520,13 +541,33 @@ describe('ToolCallCard', () => {
       expect(screen.getByTestId('acp-inline-diff')).toBeTruthy()
     })
 
-    it('renders a preview button outside the toggle button', () => {
+    it('starts a non-previewable create collapsed too', () => {
+      renderCard(makeSourceCreateCall())
+      expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
+    })
+
+    it('renders the read action inside the header, never as a nested button', () => {
       renderCard(makeResultCall())
       const preview = screen.getByTestId('acp-toolcall-open-preview')
-      expect(preview).toBeTruthy()
-      // Nested <button> is invalid HTML — the action must be a sibling.
+      // It lives in the header (inline, so it does not shift the trailing
+      // elapsed-time / status columns), which makes the header's own <button>
+      // its ancestor — hence a role="button" span: nesting real buttons is
+      // invalid HTML that the browser silently re-parents.
       const toggle = screen.getByTestId('acp-collapsible-toggle')
-      expect(toggle.contains(preview)).toBe(false)
+      expect(toggle.contains(preview)).toBe(true)
+      expect(preview.tagName).toBe('SPAN')
+      expect(preview.getAttribute('role')).toBe('button')
+      expect(preview.closest('button')).toBe(toggle)
+    })
+
+    it('places the read action before the stats badge', () => {
+      // `durationMs` is what makes SubagentStatsBadge render at all — without it
+      // there is no trailing column to order against.
+      renderCard({ ...makeResultCall(), durationMs: 1200 })
+      const preview = screen.getByTestId('acp-toolcall-open-preview')
+      const stats = screen.getByTestId('acp-subagent-stats')
+      // Left of the elapsed time, per the header's trailing-column order.
+      expect(preview.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
     it('opens a markdown preview (not the source) when the button is clicked', () => {
@@ -534,6 +575,8 @@ describe('ToolCallCard', () => {
       fireEvent.click(screen.getByTestId('acp-toolcall-open-preview'))
       expect(openedInGroup).toHaveLength(1)
       expect((openedInGroup[0] as { typeId: string }).typeId).toBe('markdown.preview')
+      // Clicking the action must not also toggle the card open.
+      expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
     })
 
     it('keeps the preview button available once expanded', () => {
@@ -542,7 +585,23 @@ describe('ToolCallCard', () => {
       expect(screen.getByTestId('acp-toolcall-open-preview')).toBeTruthy()
     })
 
-    it('leaves an ordinary edit card expanded and without a preview button', () => {
+    it('offers "open file" instead of a preview for a non-previewable document', () => {
+      renderCard(makeSourceCreateCall())
+      expect(screen.queryByTestId('acp-toolcall-open-preview')).toBeNull()
+      expect(screen.getByTestId('acp-toolcall-open-file')).toBeTruthy()
+    })
+
+    it('opens the file itself (pinned) when the open button is clicked', () => {
+      renderCard(makeSourceCreateCall())
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-file'))
+      expect(resolvedOpens).toHaveLength(1)
+      expect((resolvedOpens[0]?.resource as { path: string }).path).toBe('/repo/src/newModule.ts')
+      expect(resolvedOpens[0]?.options).toEqual({ pinned: true })
+      // The click must not also toggle the card open.
+      expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
+    })
+
+    it('leaves an ordinary edit card expanded and without any header action', () => {
       renderCard(
         makeCall({
           kind: 'edit',
@@ -552,6 +611,7 @@ describe('ToolCallCard', () => {
       )
       expect(screen.getByTestId('acp-inline-diff')).toBeTruthy()
       expect(screen.queryByTestId('acp-toolcall-open-preview')).toBeNull()
+      expect(screen.queryByTestId('acp-toolcall-open-file')).toBeNull()
     })
   })
 })

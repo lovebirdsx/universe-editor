@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { AcpToolCall } from '../../../services/acp/session/acpSessionService.js'
 import {
   DEFAULT_KEEP_PLANNING_MESSAGE,
-  agentResultDocumentPath,
+  createdFilePath,
   deriveToolCallDisplay,
   humanizeMcpTool,
   isKeepPlanning,
@@ -205,8 +205,8 @@ describe('tryPrettyJson', () => {
   })
 })
 
-describe('agentResultDocumentPath', () => {
-  function resultCall(path: string, overrides: Partial<AcpToolCall> = {}): AcpToolCall {
+describe('createdFilePath', () => {
+  function createCall(path: string, overrides: Partial<AcpToolCall> = {}): AcpToolCall {
     return makeCall({
       kind: 'edit',
       diffs: [{ path, oldText: '', newText: '# result' }],
@@ -214,44 +214,39 @@ describe('agentResultDocumentPath', () => {
     })
   }
 
-  it('matches a POSIX result path and returns it verbatim', () => {
-    const path = '/repo/.claude/explore-results/20260829-sess-agent.md'
-    expect(agentResultDocumentPath(resultCall(path))).toBe(path)
+  it('matches a whole-file write and returns its path verbatim', () => {
+    const path = '/repo/src/newModule.ts'
+    expect(createdFilePath(createCall(path))).toBe(path)
   })
 
-  it('matches a Windows result path (backslashes) and returns it verbatim', () => {
-    const path = 'E:\\repo\\.claude\\explore-results\\20260829-sess-agent.md'
-    expect(agentResultDocumentPath(resultCall(path))).toBe(path)
+  it('returns a Windows path verbatim (no separator normalization)', () => {
+    const path = 'X:\\workspace\\.claude\\explore-results\\20260829-sess-agent.md'
+    expect(createdFilePath(createCall(path))).toBe(path)
   })
 
-  it('does not match a differently-cased directory (the fork always emits lower case)', () => {
-    const path = 'E:\\Repo\\.Claude\\Explore-Results\\Result.MD'
-    expect(agentResultDocumentPath(resultCall(path))).toBeUndefined()
-  })
-
-  it('ignores a non-markdown file in the results directory', () => {
+  it('ignores a partial edit (oldText carries the previous content)', () => {
     expect(
-      agentResultDocumentPath(resultCall('/repo/.claude/explore-results/notes.txt')),
+      createdFilePath(
+        makeCall({ kind: 'edit', diffs: [{ path: '/repo/a.ts', oldText: 'a', newText: 'b' }] }),
+      ),
     ).toBeUndefined()
   })
 
-  it('ignores a markdown file outside the results directory', () => {
-    expect(agentResultDocumentPath(resultCall('/repo/docs/user/guide.md'))).toBeUndefined()
+  it('ignores a memory-trimmed card (trimming blanks oldText on every diff)', () => {
+    expect(createdFilePath(createCall('/repo/a.ts', { memoryTrimmed: true }))).toBeUndefined()
   })
 
   it('ignores a non-edit card', () => {
-    expect(
-      agentResultDocumentPath(resultCall('/repo/.claude/explore-results/a.md', { kind: 'read' })),
-    ).toBeUndefined()
+    expect(createdFilePath(createCall('/repo/a.md', { kind: 'read' }))).toBeUndefined()
   })
 
   it('ignores a card carrying several diffs', () => {
     expect(
-      agentResultDocumentPath(
+      createdFilePath(
         makeCall({
           kind: 'edit',
           diffs: [
-            { path: '/repo/.claude/explore-results/a.md', oldText: '', newText: 'x' },
+            { path: '/repo/a.md', oldText: '', newText: 'x' },
             { path: '/repo/src/foo.ts', oldText: 'a', newText: 'b' },
           ],
         }),
@@ -259,7 +254,7 @@ describe('agentResultDocumentPath', () => {
     ).toBeUndefined()
   })
 
-  it('ignores a card with no diff (e.g. memory-trimmed)', () => {
-    expect(agentResultDocumentPath(makeCall({ kind: 'edit' }))).toBeUndefined()
+  it('ignores a card with no diff', () => {
+    expect(createdFilePath(makeCall({ kind: 'edit' }))).toBeUndefined()
   })
 })

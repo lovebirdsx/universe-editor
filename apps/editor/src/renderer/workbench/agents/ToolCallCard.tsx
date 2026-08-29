@@ -10,8 +10,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useState, type ReactNode } from 'react'
+import { Eye, FileSymlink } from 'lucide-react'
 import {
   IConfigurationService,
+  IEditorGroupsService,
+  IEditorResolverService,
   IEditorService,
   IInstantiationService,
   IWorkspaceService,
@@ -35,7 +38,8 @@ import {
 } from '../../services/acp/session/acpSession.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
-import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
+import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
+import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { ToolCallLocations } from './ToolCallLocations.js'
@@ -45,7 +49,7 @@ import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallO
 import { SubagentStatsBadge } from './SubagentStatsBadge.js'
 import {
   deriveToolCallDisplay,
-  agentResultDocumentPath,
+  createdFilePath,
   isKeepPlanning,
   keepPlanningFeedback,
   tryPrettyJson,
@@ -131,6 +135,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   badge?: ReactNode
 }) {
   const editorService = useService(IEditorService)
+  const editorResolver = useService(IEditorResolverService)
+  const editorGroups = useService(IEditorGroupsService)
   const configService = useService(IConfigurationService)
   const workspaceService = useOptionalService(IWorkspaceService)
   const inst = useService(IInstantiationService)
@@ -139,18 +145,17 @@ export const ToolCallCard = memo(function ToolCallCard({
   // its line exactly like a path clicked anywhere else in the chat.
   const openFilePath = useMarkdownFileLink(workspaceService?.current?.folder)
   const isMcp = call.mcpServer !== undefined
-  // A sub-agent result document: folded by default (it is a document, not an
-  // edit) and given a preview affordance in its header.
-  const agentResultPath = agentResultDocumentPath(call)
+  // A whole-file write (Write / add file): folded by default (it is a new
+  // document, not an edit to review) and given a read affordance in its header.
+  const createdPath = createdFilePath(call)
   // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
   // state when used standalone (ToolCallList). read/search start collapsed, but
   // MCP cards start expanded so their input/output panels are visible.
-  // Keep the agent-result clause in step with `defaultCollapsed` in
+  // Keep the created-file clause in step with `defaultCollapsed` in
   // timelineCollapse.ts — the same card must fold the same way on both paths.
   const controlled = collapsedProp !== undefined
   const [internalCollapsed, setInternalCollapsed] = useState(
-    () =>
-      !isMcp && (call.kind === 'read' || call.kind === 'search' || agentResultPath !== undefined),
+    () => !isMcp && (call.kind === 'read' || call.kind === 'search' || createdPath !== undefined),
   )
   const collapsed = controlled ? collapsedProp : internalCollapsed
   const onToggle = controlled
@@ -350,6 +355,56 @@ export const ToolCallCard = memo(function ToolCallCard({
     </ul>
   )
 
+  // A whole-file write is meant to be *read*, so offer that straight from the
+  // folded header: a rendered preview when the document has one (md / html),
+  // otherwise the file itself — never the diff, which is all `+` lines anyway.
+  //
+  // Rendered inline, immediately left of the stats badge, rather than through
+  // `CollapsibleSlot.actions`: that overlay reserves a fixed-width spacer in
+  // every header it touches, which shifted this card's elapsed-time and status
+  // columns out of line with every neighbouring card. Inline costs nothing when
+  // absent and keeps the trailing columns where the other cards put them.
+  const createdUri =
+    createdPath !== undefined ? diffUri(createdPath, workspaceService?.current?.folder) : undefined
+  const previewable =
+    createdUri !== undefined && previewLanguageForResource(createdUri) !== undefined
+  const readLabel = previewable
+    ? localize('resourcePreview.openPreview', 'Open Preview')
+    : localize('acp.toolCall.openFile', 'Open File')
+  const openCreated = (): void => {
+    if (createdUri === undefined) return
+    if (previewable) openResourcePreviewInGroup(editorGroups, editorGroups.activeGroup, createdUri)
+    else void editorResolver.openEditor(createdUri, { pinned: true })
+  }
+  // The header is itself a <button>; nesting one inside it is invalid HTML that
+  // the browser silently re-parents, so this affordance is a span acting as one.
+  const readAction = createdUri !== undefined && (
+    <span
+      className={styles['toolCallReadAction']}
+      role="button"
+      tabIndex={0}
+      aria-label={readLabel}
+      data-tooltip={readLabel}
+      data-testid={previewable ? 'acp-toolcall-open-preview' : 'acp-toolcall-open-file'}
+      onClick={(e) => {
+        e.stopPropagation()
+        openCreated()
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        openCreated()
+      }}
+    >
+      {previewable ? (
+        <Eye size={14} strokeWidth={1.6} />
+      ) : (
+        <FileSymlink size={14} strokeWidth={1.6} />
+      )}
+    </span>
+  )
+
   const titleNode = (
     <span className={styles['toolCallTitle']}>
       {display.title}
@@ -363,6 +418,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           MCP · {call.mcpServer}
         </span>
       )}
+      {readAction}
       <SubagentStatsBadge call={call} />
     </span>
   )
@@ -373,16 +429,6 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
-  // The point of a saved sub-agent result is to *read* it, so offer the rendered
-  // preview straight from the folded header instead of routing through the diff.
-  const headerActions =
-    agentResultPath !== undefined ? (
-      <ResourcePreviewButton
-        resource={diffUri(agentResultPath, workspaceService?.current?.folder)}
-        testId="acp-toolcall-open-preview"
-      />
-    ) : undefined
-
   return (
     <CollapsibleSlot
       as="li"
@@ -392,7 +438,6 @@ export const ToolCallCard = memo(function ToolCallCard({
       summary={titleNode}
       statusIcon={<ToolCallStatusIcon status={effectiveStatus} />}
       {...(badge !== undefined ? { badge } : {})}
-      {...(headerActions !== undefined ? { actions: headerActions } : {})}
       collapsed={collapsed}
       onToggle={onToggle}
       rootProps={{

@@ -1864,6 +1864,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.switchMode.keepPlanning': '已继续规划',
   'acp.switchMode.feedbackLabel': '你的反馈',
   'acp.toolCall.searchTitle': '搜索“{pattern}”',
+  'acp.toolCall.openFile': '打开文件',
+  'resourcePreview.openPreview': '打开预览',
   'acp.inlineDiff.openTooltip': '查看完整变更',
   'acp.inlineDiff.expandLines': '… 展开 {count} 行',
   'acp.subagentStats.costTooltip': '本地按 token 估算，实际计费可能不同',
