@@ -188,6 +188,7 @@ export async function syncWorktreesToCommit(
   newHead: string,
   currentRoot: string,
   log?: Log,
+  excludePaths?: readonly string[],
 ): Promise<WorktreeAutoSyncResult> {
   const listRes = await gitExec(['worktree', 'list', '--porcelain'], currentRoot, log)
   if (listRes.exitCode !== 0) {
@@ -196,7 +197,10 @@ export async function syncWorktreesToCommit(
   }
 
   const candidates = parseWorktrees(listRes.stdout).filter(
-    (wt) => !wt.bare && !samePath(wt.path, currentRoot),
+    (wt) =>
+      !wt.bare &&
+      !samePath(wt.path, currentRoot) &&
+      !excludePaths?.some((p) => samePath(wt.path, p)),
   )
   if (candidates.length === 0) return emptyResult()
 

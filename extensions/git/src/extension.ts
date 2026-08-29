@@ -50,6 +50,7 @@ import {
 } from './gitGraphSource.js'
 import * as gga from './gitGraphActions.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
+import { autoSyncWorktreesAfterPull } from './worktreeAutoSync.js'
 import { getBlame } from './blameSource.js'
 import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
@@ -511,6 +512,18 @@ function registerGitCommands(
         ),
       ),
     ),
+    register('git-graph.pull', async (...a: unknown[]) => {
+      const branch = a[0] as string
+      const ok = await finishOp(
+        'pull',
+        gga.pullBranch(graph.current, branch, a[1] as gga.PullMode, log),
+        { submoduleUpdate: true },
+      )
+      // HEAD is back on the original branch after a cross-branch pull, so the
+      // pulled branch's ref — not HEAD — points at the new commit to sync to.
+      if (ok) await autoSyncWorktreesAfterPull(graph.current, branch, log)
+      return ok
+    }),
     register('git-graph.checkoutRemote', (...a: unknown[]) =>
       finishOp('checkout', gga.checkoutRemote(graph.current, a[0] as string, a[1] as string, log), {
         submoduleUpdate: true,

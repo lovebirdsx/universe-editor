@@ -10,8 +10,8 @@
 import { basename } from 'node:path'
 import { gitExec, type GitExecResult } from './gitService.js'
 import { gitErrorText } from './gitError.js'
-import { parseWorktrees } from './worktreeParser.js'
-import { norm } from './pathUtil.js'
+import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
+import { samePath } from './pathUtil.js'
 import { updateSubmodules } from './submoduleSync.js'
 
 export type ResetMode = 'soft' | 'mixed' | 'hard'
@@ -45,6 +45,17 @@ export const cherrypick = (root: string, hash: string, log: Log): Promise<GitExe
 /** Synthesize a failed GitExecResult so callers surface a message via the normal path. */
 const failure = (message: string): GitExecResult => ({ stdout: '', stderr: message, exitCode: 1 })
 
+/** The worktree holding `branch`, or undefined when none lists it (or listing fails). */
+const findBranchHolder = async (
+  root: string,
+  branch: string,
+  log: Log,
+): Promise<WorktreeInfo | undefined> => {
+  const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
+  if (wtRes.exitCode !== 0) return undefined
+  return parseWorktrees(wtRes.stdout).find((wt) => wt.branch === branch)
+}
+
 /**
  * Cherry-pick `hash` onto `targetBranch`.
  *
@@ -67,14 +78,12 @@ export const cherryPickToBranch = async (
   targetBranch: string,
   log: Log,
 ): Promise<GraphMutationResult> => {
-  const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
-  const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
-  const holder = worktrees.find((wt) => wt.branch === targetBranch)
+  const holder = await findBranchHolder(root, targetBranch, log)
 
   if (holder) {
     // Picking into the current worktree needs no checkout; into another one, run
     // it there so this tree stays put. Either way, guard against a dirty tree.
-    const isCurrent = norm(holder.path) === norm(root)
+    const isCurrent = samePath(holder.path, root)
     const status = await gitExec(['status', '--porcelain'], holder.path, log)
     if (status.exitCode !== 0) return status
     if (status.stdout.trim()) {
@@ -161,6 +170,109 @@ export const pushBranch = (
 ): Promise<GitExecResult> =>
   gitExec(force ? ['push', '--force-with-lease', remote, name] : ['push', remote, name], root, log)
 
+export type PullMode = 'default' | 'rebase' | 'autostash'
+
+const PULL_ARGS: Record<PullMode, string[]> = {
+  default: ['pull'],
+  rebase: ['pull', '--rebase'],
+  autostash: ['pull', '--rebase', '--autostash'],
+}
+
+/**
+ * Pull `branch`. When it isn't checked out here, the pull runs where it can
+ * without disturbing this working tree:
+ *
+ * - A branch held by another worktree (the classic case: `main` in the main
+ *   tree while you work in a linked one) can't be checked out here — git
+ *   rejects it with "already used by worktree". So the pull runs *inside that
+ *   worktree's own directory*: its HEAD advances there and this tree never
+ *   moves, no stash involved. That tree must be clean — autostash must not
+ *   silently bury changes the user made in another window.
+ * - Otherwise we stash pending changes (if any), check the branch out, pull,
+ *   then restore the original HEAD and stash — the caller ends up exactly
+ *   where they started, only with the branch advanced. A pull failure still
+ *   restores HEAD and stash when it can (network failures shouldn't strand the
+ *   user on a branch they didn't ask to be on); a conflict that blocks the
+ *   restore checkout leaves HEAD on the target and the stash in the list for
+ *   manual recovery.
+ *
+ * The dirty check is `status --porcelain`, which includes untracked files, so
+ * the stash takes `--include-untracked` to match — anything less would not
+ * fully restore the tree. On both redirected paths `--autostash` is a no-op
+ * (the tree is already clean there); the argv still matches the SCM commands
+ * so every mode behaves identically wherever the branch lives.
+ */
+export const pullBranch = async (
+  root: string,
+  branch: string,
+  mode: PullMode,
+  log: Log,
+): Promise<GraphMutationResult> => {
+  const args = PULL_ARGS[mode] ?? PULL_ARGS.default
+
+  const headRes = await gitExec(['symbolic-ref', '--short', '-q', 'HEAD'], root, log)
+  const restoreRef = headRes.stdout.trim()
+  if (restoreRef === branch) return gitExec(args, root, log)
+
+  // Redirect into the holding worktree before resolving a restore ref — the
+  // redirected path never needs one (HEAD here doesn't move).
+  const holder = await findBranchHolder(root, branch, log)
+  if (holder) {
+    // Defensive: the symbolic-ref shortcut above covers the on-branch case, and
+    // porcelain reports no branch line for a detached tree, so this is unreachable.
+    if (samePath(holder.path, root)) return gitExec(args, root, log)
+    const status = await gitExec(['status', '--porcelain'], holder.path, log)
+    if (status.exitCode !== 0) return status
+    if (status.stdout.trim()) {
+      return failure(
+        `Worktree at '${holder.path}' has '${branch}' checked out with uncommitted changes; commit or stash them there before pulling.`,
+      )
+    }
+    const res = await gitExec(args, holder.path, log)
+    return res.exitCode === 0 ? inWorktree(res, holder.path) : res
+  }
+
+  // Resolve the restore ref before stashing anything: never stash without
+  // knowing how to get back.
+  let restore = restoreRef
+  if (!restore) {
+    const sha = await gitExec(['rev-parse', 'HEAD'], root, log)
+    if (sha.exitCode !== 0) return sha
+    restore = sha.stdout.trim()
+  }
+
+  const status = await gitExec(['status', '--porcelain'], root, log)
+  if (status.exitCode !== 0) return status
+  const stashed = status.stdout.trim() !== ''
+  if (stashed) {
+    const st = await gitExec(['stash', 'push', '--include-untracked'], root, log)
+    if (st.exitCode !== 0) return st
+  }
+
+  const co = await gitExec(['checkout', branch], root, log)
+  if (co.exitCode !== 0) {
+    // HEAD never moved, so the pop cannot conflict — best-effort restore.
+    if (stashed) await gitExec(['stash', 'pop'], root, log)
+    return co
+  }
+
+  const pull = await gitExec(args, root, log)
+  const back = await gitExec(['checkout', restore], root, log)
+  if (back.exitCode !== 0) return back
+
+  if (!stashed) return pull
+  const pop = await gitExec(['stash', 'pop'], root, log)
+  if (pop.exitCode !== 0) {
+    if (pull.exitCode !== 0) {
+      return failure(
+        `${gitErrorText(pull)}\nFailed to restore stashed changes: ${gitErrorText(pop)}`,
+      )
+    }
+    return pop
+  }
+  return pull
+}
+
 export const checkoutRemote = (
   root: string,
   remoteRef: string,
@@ -183,12 +295,10 @@ export const resetBranchToRemote = async (
   localName: string,
   log: Log,
 ): Promise<GraphMutationResult> => {
-  const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
-  const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
-  const holder = worktrees.find((wt) => wt.branch === localName)
+  const holder = await findBranchHolder(root, localName, log)
 
   if (holder) {
-    const isCurrent = norm(holder.path) === norm(root)
+    const isCurrent = samePath(holder.path, root)
     const status = await gitExec(['status', '--porcelain'], holder.path, log)
     if (status.exitCode !== 0) return status
     if (status.stdout.trim()) {

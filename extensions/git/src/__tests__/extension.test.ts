@@ -340,6 +340,112 @@ describe('git-graph operation follow-up', () => {
     expect(submoduleCalls()).toEqual([])
   })
 
+  describe('git-graph.pull', () => {
+    const pullCalls = (): string[][] =>
+      mocks.gitExec.mock.calls
+        .map(([args]) => args as string[])
+        .filter((args) => args[0] === 'pull')
+    const worktreeCalls = (): string[][] =>
+      mocks.gitExec.mock.calls
+        .map(([args]) => args as string[])
+        .filter((args) => args[0] === 'worktree')
+    /** symbolic-ref reports `feature` checked out, so pulls run in place. */
+    const mockOnFeature = (): void => {
+      mocks.gitExec.mockImplementation((args: string[]) => {
+        if (args[0] === 'symbolic-ref') return Promise.resolve(gitOk('feature'))
+        return Promise.resolve(gitOk(''))
+      })
+    }
+
+    it.each([
+      ['default', ['pull']],
+      ['rebase', ['pull', '--rebase']],
+      ['autostash', ['pull', '--rebase', '--autostash']],
+    ] as const)('pulls the current branch (%s)', async (mode, argv) => {
+      const commands = makeCommands(() => fakeRepo(ROOT))
+      mockOnFeature()
+      mocks.configValues.set('autoSyncWorktreesAfterPull', false)
+
+      const result = await commands.get('git-graph.pull')?.('feature', mode)
+
+      expect(result).toBe(true)
+      expect(pullCalls()).toEqual([argv])
+    })
+
+    it('syncs other worktrees to the pulled branch after success', async () => {
+      const commands = makeCommands(() => fakeRepo(ROOT))
+      mocks.gitExec.mockImplementation((args: string[]) => {
+        if (args[0] === 'symbolic-ref') return Promise.resolve(gitOk('feature'))
+        if (args[0] === 'rev-parse') return Promise.resolve(gitOk('b'.repeat(40)))
+        return Promise.resolve(gitOk(''))
+      })
+
+      await commands.get('git-graph.pull')?.('feature', 'default')
+
+      // The sync targets the pulled branch's ref, not HEAD — after a
+      // cross-branch pull HEAD is back on the original branch.
+      const revParseCalls = mocks.gitExec.mock.calls
+        .map(([args]) => args as string[])
+        .filter((args) => args[0] === 'rev-parse')
+      expect(revParseCalls).toContainEqual(['rev-parse', 'feature'])
+      expect(worktreeCalls()).toContainEqual(['worktree', 'list', '--porcelain'])
+    })
+
+    it('skips the worktree sync when git.autoSyncWorktreesAfterPull is off', async () => {
+      const commands = makeCommands(() => fakeRepo(ROOT))
+      mockOnFeature()
+      mocks.configValues.set('autoSyncWorktreesAfterPull', false)
+
+      await commands.get('git-graph.pull')?.('feature', 'default')
+
+      expect(worktreeCalls()).toEqual([])
+    })
+
+    it('reports the pull failure and skips the worktree sync', async () => {
+      const commands = makeCommands(() => fakeRepo(ROOT))
+      mocks.gitExec.mockImplementation((args: string[]) => {
+        if (args[0] === 'symbolic-ref') return Promise.resolve(gitOk('feature'))
+        return Promise.resolve(gitFail())
+      })
+
+      const result = await commands.get('git-graph.pull')?.('feature', 'default')
+
+      expect(result).toBe(false)
+      expect(mocks.showErrorMessage).toHaveBeenCalled()
+      expect(worktreeCalls()).toEqual([])
+    })
+
+    it('tells the user when a pull landed in another worktree', async () => {
+      const commands = makeCommands(() => fakeRepo(ROOT))
+      mocks.configValues.set('autoSyncWorktreesAfterPull', false)
+      mocks.gitExec.mockImplementation((args: string[]) => {
+        if (args[0] === 'symbolic-ref') return Promise.resolve(gitOk('feature'))
+        if (args[0] === 'worktree') {
+          return Promise.resolve(
+            gitOk(
+              [
+                `worktree ${OTHER_WT}`,
+                'HEAD aaa',
+                'branch refs/heads/main',
+                '',
+                `worktree ${ROOT}`,
+                'HEAD bbb',
+                'branch refs/heads/feature',
+                '',
+              ].join('\n'),
+            ),
+          )
+        }
+        return Promise.resolve(gitOk(''))
+      })
+
+      await commands.get('git-graph.pull')?.('main', 'default')
+
+      expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1)
+      expect(String(mocks.showInformationMessage.mock.calls[0]?.[0])).toContain('main')
+    })
+  })
+
   it('skips the submodule update when the operation failed', async () => {
     mocks.hasSubmodules.mockResolvedValue(true)
     const commands = makeCommands(() => fakeRepo(ROOT))

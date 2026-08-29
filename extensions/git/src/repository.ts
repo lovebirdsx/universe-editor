@@ -42,7 +42,7 @@ import { debounce, throttle, timeout } from './async.js'
 import { RepositoryWatcher } from './repositoryWatcher.js'
 import { RepositoryWorktrees } from './repositoryWorktrees.js'
 import { hasSubmodules, SUBMODULE_UPDATE_ARGS } from './submoduleSync.js'
-import { syncWorktreesToCommit, type WorktreeAutoSyncResult } from './worktreeSync.js'
+import { autoSyncWorktreesAfterPull } from './worktreeAutoSync.js'
 import {
   GIT_COMMIT_INPUT_COMMAND,
   gitCommitActions,
@@ -734,85 +734,18 @@ export class Repository {
   /**
    * Fast-forward the repository's other worktrees to the commit this pull landed
    * on. Only clean worktrees whose HEAD is an ancestor of it are moved; see
-   * worktreeSync.ts for the rules.
+   * worktreeSync.ts for the rules. The sync + report live in worktreeAutoSync.ts
+   * so the Git Graph pull command can reuse them; the progress shell stays here.
    */
   private async _syncWorktreesAfterPull(): Promise<void> {
-    const enabled = await workspace.getConfiguration('git').get('autoSyncWorktreesAfterPull', true)
-    if (!enabled) {
-      this._log?.('[git] skip worktree sync: git.autoSyncWorktreesAfterPull is disabled')
-      return
-    }
-    const headRes = await gitExec(['rev-parse', 'HEAD'], this.root, this._log)
-    if (headRes.exitCode !== 0) return
-    const newHead = headRes.stdout.trim()
-    if (!newHead) return
-
     this._beginOperation()
     this._beginProgress(localize('git.progress.syncingWorktrees', 'Syncing worktrees…'), 'spinning')
     try {
-      const result = await syncWorktreesToCommit(newHead, this.root, this._log)
-      this._reportWorktreeAutoSync(result)
+      await autoSyncWorktreesAfterPull(this.root, 'HEAD', this._log)
     } finally {
       this._endProgress()
       this._endOperation()
     }
-  }
-
-  private _reportWorktreeAutoSync(result: WorktreeAutoSyncResult): void {
-    const lines: string[] = []
-    if (result.syncedDetached.length > 0) {
-      lines.push(
-        localize('git.worktree.autoSyncSynced', 'Synced worktrees: {0}', {
-          0: result.syncedDetached.join(', '),
-        }),
-      )
-    }
-    // Branch moves are called out separately: the branch ref itself advanced, not
-    // just the working tree, and that is worth seeing.
-    for (const wt of result.syncedBranches) {
-      lines.push(
-        localize(
-          'git.worktree.autoSyncSyncedBranch',
-          "Worktree '{0}': branch '{1}' fast-forwarded",
-          { 0: wt.name, 1: wt.branch },
-        ),
-      )
-    }
-    if (result.skippedDirty.length > 0) {
-      lines.push(
-        localize('git.worktree.autoSyncSkippedDirty', 'Skipped (uncommitted changes): {0}', {
-          0: result.skippedDirty.join(', '),
-        }),
-      )
-    }
-    if (result.skippedInProgress.length > 0) {
-      lines.push(
-        localize(
-          'git.worktree.autoSyncSkippedInProgress',
-          'Skipped (rebase/merge in progress): {0}',
-          { 0: result.skippedInProgress.join(', ') },
-        ),
-      )
-    }
-    if (result.skippedDiverged.length > 0) {
-      lines.push(
-        localize('git.worktree.autoSyncSkippedDiverged', 'Skipped (commits of their own): {0}', {
-          0: result.skippedDiverged.join(', '),
-        }),
-      )
-    }
-    for (const f of result.failed) {
-      lines.push(
-        localize('git.worktree.autoSyncFailed', "Worktree '{0}' failed: {1}", {
-          0: f.name,
-          1: f.error,
-        }),
-      )
-    }
-    if (lines.length === 0) return
-    const message = lines.join('\n')
-    if (result.failed.length > 0) void window.showWarningMessage(message)
-    else void window.showInformationMessage(message)
   }
 
   async discard(path: string, untracked: boolean): Promise<void> {

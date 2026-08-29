@@ -1187,6 +1187,22 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          label: localize('gitGraph.pull', 'Pull'),
+          run: () => runOp(GitGraphCommands.pull, name, 'default'),
+        },
+        {
+          kind: 'item',
+          label: localize('gitGraph.pullRebase', 'Pull (Rebase)'),
+          run: () => runOp(GitGraphCommands.pull, name, 'rebase'),
+        },
+        {
+          kind: 'item',
+          label: localize('gitGraph.pullAutostash', 'Pull (Autostash)'),
+          run: () => runOp(GitGraphCommands.pull, name, 'autostash'),
+        },
+        { kind: 'sep' },
+        {
+          kind: 'item',
           label: localize('gitGraph.push', 'Push…'),
           run: () => runOp(GitGraphCommands.pushBranch, name, 'origin'),
         },

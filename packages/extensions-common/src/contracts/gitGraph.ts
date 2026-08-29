@@ -187,6 +187,7 @@ export const GitGraphCommands = {
   renameBranch: 'git-graph.renameBranch',
   deleteBranch: 'git-graph.deleteBranch',
   pushBranch: 'git-graph.pushBranch',
+  pull: 'git-graph.pull',
   checkoutRemote: 'git-graph.checkoutRemote',
   resetBranchToRemote: 'git-graph.resetBranchToRemote',
   deleteRemoteBranch: 'git-graph.deleteRemoteBranch',
