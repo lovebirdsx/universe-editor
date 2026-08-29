@@ -33,7 +33,7 @@ import {
   type DiscoveredRepo,
 } from './repoDiscovery.js'
 import { PossibleRepoWatcher, joinCandidate } from './possibleRepoWatcher.js'
-import { detectRepoRoot, type GitExecResult } from './gitService.js'
+import { detectRepoRoot } from './gitService.js'
 import { norm } from './pathUtil.js'
 import type { Repository } from './repository.js'
 import {
@@ -49,6 +49,7 @@ import {
   type GitGraphFileDiffRequest,
 } from './gitGraphSource.js'
 import * as gga from './gitGraphActions.js'
+import { updateSubmodulesIfPresent } from './submoduleSync.js'
 import { getBlame } from './blameSource.js'
 import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
@@ -212,12 +213,47 @@ function registerGitCommands(
     return commands.registerCommand(id, handler)
   }
 
-  // Run a Git Graph mutating op: report failure (with the real git error), refresh
-  // SCM, return ok.
-  const finishOp = async (label: string, p: Promise<GitExecResult>): Promise<boolean> => {
+  // Bring submodules to the commit a graph operation just moved HEAD to, then
+  // refresh the SCM views of the submodule repos it moved behind their back.
+  const syncSubmodulesForGraphOp = async (root: string): Promise<void> => {
+    const enabled = await workspace.getConfiguration('git').get('autoUpdateSubmodules', true)
+    if (!enabled) {
+      log?.('[git] skip submodule update: git.autoUpdateSubmodules is disabled')
+      return
+    }
+    const outcome = await updateSubmodulesIfPresent(root, log)
+    if (!outcome.ran) return
+    if (outcome.result.exitCode !== 0) {
+      await notifyGitFailure('submodule update', outcome.result)
+      return
+    }
+    for (const sub of mgr.submodulesOf(root)) void sub.refresh()
+  }
+
+  // Run a Git Graph mutating op: report failure (with the real git error), tell
+  // the user when it landed in another worktree, update submodules when the op
+  // moved the working tree, refresh SCM, return ok.
+  const finishOp = async (
+    label: string,
+    p: Promise<gga.GraphMutationResult>,
+    opts?: { readonly submoduleUpdate?: boolean },
+  ): Promise<boolean> => {
     const res = await p
     const ok = res.exitCode === 0
-    if (!ok) await notifyGitFailure(`Graph: ${label}`, res)
+    if (!ok) {
+      await notifyGitFailure(`Graph: ${label}`, res)
+    } else {
+      if (res.worktreeName !== undefined) {
+        void window.showInformationMessage(
+          localize('git.graph.opDoneInWorktree', "Done in worktree '{0}'.", {
+            0: res.worktreeName,
+          }),
+        )
+      }
+      // Submodules must be updated where HEAD actually moved: an op redirected
+      // into another worktree changed that tree's gitlinks, not graph.current's.
+      if (opts?.submoduleUpdate) await syncSubmodulesForGraphOp(res.worktreePath ?? graph.current)
+    }
     await mgr.resolveRepo({ rootUri: graph.current })?.refresh()
     return ok
   }
@@ -408,33 +444,47 @@ function registerGitCommands(
     // git, surfaces failures, then refreshes the SCM view; returns ok to the
     // renderer, which reloads the graph afterwards.
     register('git-graph.checkout', (...a: unknown[]) =>
-      finishOp('checkout', gga.checkout(graph.current, a[0] as string, log)),
+      finishOp('checkout', gga.checkout(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.cherrypick', (...a: unknown[]) =>
-      finishOp('cherry-pick', gga.cherrypick(graph.current, a[0] as string, log)),
+      finishOp('cherry-pick', gga.cherrypick(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.cherryPickToBranch', (...a: unknown[]) =>
       finishOp(
         'cherry-pick to branch',
         gga.cherryPickToBranch(graph.current, a[0] as string, a[1] as string, log),
+        { submoduleUpdate: true },
       ),
     ),
     register('git-graph.revert', (...a: unknown[]) =>
-      finishOp('revert', gga.revert(graph.current, a[0] as string, log)),
+      finishOp('revert', gga.revert(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
+    // Only `--hard` refreshes the working tree; after soft/mixed the superproject's
+    // tree still holds the old gitlinks, so updating submodules would desync them.
     register('git-graph.reset', (...a: unknown[]) =>
-      finishOp('reset', gga.reset(graph.current, a[0] as string, a[1] as gga.ResetMode, log)),
+      finishOp('reset', gga.reset(graph.current, a[0] as string, a[1] as gga.ResetMode, log), {
+        submoduleUpdate: a[1] === 'hard',
+      }),
     ),
     register('git-graph.merge', (...a: unknown[]) =>
-      finishOp('merge', gga.merge(graph.current, a[0] as string, log)),
+      finishOp('merge', gga.merge(graph.current, a[0] as string, log), { submoduleUpdate: true }),
     ),
     register('git-graph.rebase', (...a: unknown[]) =>
-      finishOp('rebase', gga.rebase(graph.current, a[0] as string, log)),
+      finishOp('rebase', gga.rebase(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.createBranch', (...a: unknown[]) =>
       finishOp(
         'create branch',
         gga.createBranch(graph.current, a[0] as string, a[1] as string, a[2] !== false, log),
+        { submoduleUpdate: a[2] !== false },
       ),
     ),
     register('git-graph.renameBranch', (...a: unknown[]) =>
@@ -462,12 +512,15 @@ function registerGitCommands(
       ),
     ),
     register('git-graph.checkoutRemote', (...a: unknown[]) =>
-      finishOp('checkout', gga.checkoutRemote(graph.current, a[0] as string, a[1] as string, log)),
+      finishOp('checkout', gga.checkoutRemote(graph.current, a[0] as string, a[1] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.resetBranchToRemote', (...a: unknown[]) =>
       finishOp(
         'reset branch',
         gga.resetBranchToRemote(graph.current, a[0] as string, a[1] as string, log),
+        { submoduleUpdate: true },
       ),
     ),
     register('git-graph.deleteRemoteBranch', (...a: unknown[]) => {
@@ -503,10 +556,14 @@ function registerGitCommands(
       ),
     ),
     register('git-graph.stashApply', (...a: unknown[]) =>
-      finishOp('stash apply', gga.stashApply(graph.current, a[0] as string, log)),
+      finishOp('stash apply', gga.stashApply(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.stashPop', (...a: unknown[]) =>
-      finishOp('stash pop', gga.stashPop(graph.current, a[0] as string, log)),
+      finishOp('stash pop', gga.stashPop(graph.current, a[0] as string, log), {
+        submoduleUpdate: true,
+      }),
     ),
     register('git-graph.stashDrop', (...a: unknown[]) =>
       finishOp('stash drop', gga.stashDrop(graph.current, a[0] as string, log)),

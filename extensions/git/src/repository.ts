@@ -41,6 +41,8 @@ import { stagedStates, workingStates } from './repositoryDecoration.js'
 import { debounce, throttle, timeout } from './async.js'
 import { RepositoryWatcher } from './repositoryWatcher.js'
 import { RepositoryWorktrees } from './repositoryWorktrees.js'
+import { hasSubmodules, SUBMODULE_UPDATE_ARGS } from './submoduleSync.js'
+import { syncWorktreesToCommit, type WorktreeAutoSyncResult } from './worktreeSync.js'
 import {
   GIT_COMMIT_INPUT_COMMAND,
   gitCommitActions,
@@ -103,6 +105,7 @@ export class Repository {
   private _isRepositoryHuge = false
   private readonly _disposedPromise: Promise<void>
   private _resolveDisposed!: () => void
+  private readonly _onSubmodulesUpdated: (() => void) | undefined
   private readonly _idleWaiters = new Set<() => void>()
   private readonly _updateWhenIdleAndWait = throttle(async () => {
     // The autorefresh read is cross-process RPC; it runs here, after the debounce,
@@ -128,6 +131,7 @@ export class Repository {
     private readonly _log?: (msg: string) => void,
     opts: RepositoryOptions = {},
   ) {
+    this._onSubmodulesUpdated = opts.onSubmodulesUpdated
     this._disposedPromise = new Promise<void>((resolve) => (this._resolveDisposed = resolve))
     this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = localize(
@@ -419,6 +423,7 @@ export class Repository {
         return
       }
       await this._updateSubmodulesIfNeeded()
+      await this._syncWorktreesAfterPull()
       const push = await gitExec(['push'], this.root, this._log)
       if (push.exitCode !== 0) {
         await notifyGitFailure('push', push)
@@ -436,7 +441,7 @@ export class Repository {
       text: localize('git.progress.pulling', 'Pulling…'),
       kind: 'syncing',
     })
-    if (ok) await this._updateSubmodulesIfNeeded()
+    if (ok) await this._afterPull()
   }
 
   async pullRebase(): Promise<void> {
@@ -444,7 +449,7 @@ export class Repository {
       text: localize('git.progress.pulling', 'Pulling…'),
       kind: 'syncing',
     })
-    if (ok) await this._updateSubmodulesIfNeeded()
+    if (ok) await this._afterPull()
   }
 
   async pullAutostash(): Promise<void> {
@@ -452,7 +457,12 @@ export class Repository {
       text: localize('git.progress.pulling', 'Pulling…'),
       kind: 'syncing',
     })
-    if (ok) await this._updateSubmodulesIfNeeded()
+    if (ok) await this._afterPull()
+  }
+
+  private async _afterPull(): Promise<void> {
+    await this._updateSubmodulesIfNeeded()
+    await this._syncWorktreesAfterPull()
   }
 
   async push(): Promise<void> {
@@ -535,7 +545,11 @@ export class Repository {
         : localize('git.pick.stashToApply', 'Select a stash to apply'),
     )
     if (!ref) return
-    await this._run(['stash', pop ? 'pop' : 'apply', ref], pop ? 'stash pop' : 'stash apply')
+    const ok = await this._run(
+      ['stash', pop ? 'pop' : 'apply', ref],
+      pop ? 'stash pop' : 'stash apply',
+    )
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async stashDrop(): Promise<void> {
@@ -549,7 +563,8 @@ export class Repository {
       localize('git.pick.branchToMerge', 'Select a branch to merge into the current branch'),
     )
     if (!branch) return
-    await this._run(['merge', branch], 'merge')
+    const ok = await this._run(['merge', branch], 'merge')
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async rebase(): Promise<void> {
@@ -557,7 +572,8 @@ export class Repository {
       localize('git.pick.branchToRebase', 'Select a branch to rebase onto'),
     )
     if (!branch) return
-    await this._run(['rebase', branch], 'rebase')
+    const ok = await this._run(['rebase', branch], 'rebase')
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async renameBranch(): Promise<void> {
@@ -669,29 +685,134 @@ export class Repository {
   }
 
   async submoduleUpdateInit(): Promise<void> {
-    await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
+    const ok = await this._run(SUBMODULE_UPDATE_ARGS, 'submodule update', {
       text: localize('git.progress.updatingSubmodules', 'Updating submodules…'),
       kind: 'spinning',
     })
+    if (ok) this._notifySubmodulesUpdated()
   }
 
+  /**
+   * Bring submodules to the commit HEAD now points at. Called after every
+   * operation that moves HEAD and refreshes the working tree, so a submodule's
+   * checkout never silently lags its recorded gitlink.
+   */
   private async _updateSubmodulesIfNeeded(): Promise<void> {
-    const cfg = workspace.getConfiguration('git')
-    const enabled = await cfg.get('pullSubmoduleUpdate', true)
-    if (!enabled) return
-    try {
-      await stat(join(this.root, '.gitmodules'))
-    } catch {
+    const enabled = await workspace.getConfiguration('git').get('autoUpdateSubmodules', true)
+    if (!enabled) {
+      this._log?.('[git] skip submodule update: git.autoUpdateSubmodules is disabled')
       return
     }
-    await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
+    if (!(await hasSubmodules(this.root))) return
+    const ok = await this._run(SUBMODULE_UPDATE_ARGS, 'submodule update', {
       text: localize('git.progress.updatingSubmodules', 'Updating submodules…'),
       kind: 'spinning',
     })
+    if (ok) this._notifySubmodulesUpdated()
+  }
+
+  /**
+   * Fire the host's post-submodule-update hook. It runs on the tail of an already
+   * finished operation, so a throw here must not turn a successful pull/checkout
+   * into a reported failure.
+   */
+  private _notifySubmodulesUpdated(): void {
+    try {
+      this._onSubmodulesUpdated?.()
+    } catch (err) {
+      this._log?.(
+        `[git] onSubmodulesUpdated failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 
   async submoduleSync(): Promise<void> {
-    await this._run(['submodule', 'sync', '--recursive'], 'submodule sync')
+    const ok = await this._run(['submodule', 'sync', '--recursive'], 'submodule sync')
+    if (ok) this._notifySubmodulesUpdated()
+  }
+
+  /**
+   * Fast-forward the repository's other worktrees to the commit this pull landed
+   * on. Only clean worktrees whose HEAD is an ancestor of it are moved; see
+   * worktreeSync.ts for the rules.
+   */
+  private async _syncWorktreesAfterPull(): Promise<void> {
+    const enabled = await workspace.getConfiguration('git').get('autoSyncWorktreesAfterPull', true)
+    if (!enabled) {
+      this._log?.('[git] skip worktree sync: git.autoSyncWorktreesAfterPull is disabled')
+      return
+    }
+    const headRes = await gitExec(['rev-parse', 'HEAD'], this.root, this._log)
+    if (headRes.exitCode !== 0) return
+    const newHead = headRes.stdout.trim()
+    if (!newHead) return
+
+    this._beginOperation()
+    this._beginProgress(localize('git.progress.syncingWorktrees', 'Syncing worktrees…'), 'spinning')
+    try {
+      const result = await syncWorktreesToCommit(newHead, this.root, this._log)
+      this._reportWorktreeAutoSync(result)
+    } finally {
+      this._endProgress()
+      this._endOperation()
+    }
+  }
+
+  private _reportWorktreeAutoSync(result: WorktreeAutoSyncResult): void {
+    const lines: string[] = []
+    if (result.syncedDetached.length > 0) {
+      lines.push(
+        localize('git.worktree.autoSyncSynced', 'Synced worktrees: {0}', {
+          0: result.syncedDetached.join(', '),
+        }),
+      )
+    }
+    // Branch moves are called out separately: the branch ref itself advanced, not
+    // just the working tree, and that is worth seeing.
+    for (const wt of result.syncedBranches) {
+      lines.push(
+        localize(
+          'git.worktree.autoSyncSyncedBranch',
+          "Worktree '{0}': branch '{1}' fast-forwarded",
+          { 0: wt.name, 1: wt.branch },
+        ),
+      )
+    }
+    if (result.skippedDirty.length > 0) {
+      lines.push(
+        localize('git.worktree.autoSyncSkippedDirty', 'Skipped (uncommitted changes): {0}', {
+          0: result.skippedDirty.join(', '),
+        }),
+      )
+    }
+    if (result.skippedInProgress.length > 0) {
+      lines.push(
+        localize(
+          'git.worktree.autoSyncSkippedInProgress',
+          'Skipped (rebase/merge in progress): {0}',
+          { 0: result.skippedInProgress.join(', ') },
+        ),
+      )
+    }
+    if (result.skippedDiverged.length > 0) {
+      lines.push(
+        localize('git.worktree.autoSyncSkippedDiverged', 'Skipped (commits of their own): {0}', {
+          0: result.skippedDiverged.join(', '),
+        }),
+      )
+    }
+    for (const f of result.failed) {
+      lines.push(
+        localize('git.worktree.autoSyncFailed', "Worktree '{0}' failed: {1}", {
+          0: f.name,
+          1: f.error,
+        }),
+      )
+    }
+    if (lines.length === 0) return
+    const message = lines.join('\n')
+    if (result.failed.length > 0) void window.showWarningMessage(message)
+    else void window.showInformationMessage(message)
   }
 
   async discard(path: string, untracked: boolean): Promise<void> {
@@ -728,16 +849,20 @@ export class Repository {
     )
     if (confirm !== BTN_DISCARD_ALL) return
     this._beginOperation()
+    let checkoutOk = false
     try {
       const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
       if (checkout.exitCode !== 0) {
         await notifyGitFailure('discard', checkout)
+      } else {
+        checkoutOk = true
       }
       await gitExec(['clean', '-fd'], this.root, this._log)
     } finally {
       this._endOperation()
     }
     await this.refresh()
+    if (checkoutOk) await this._updateSubmodulesIfNeeded()
   }
 
   async checkout(): Promise<void> {
@@ -745,7 +870,8 @@ export class Repository {
       localize('git.pick.branchToCheckout', 'Select a branch to checkout'),
     )
     if (!pick) return
-    await this._run(['checkout', pick], 'checkout')
+    const ok = await this._run(['checkout', pick], 'checkout')
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async createBranch(): Promise<void> {
@@ -753,7 +879,8 @@ export class Repository {
       prompt: localize('git.input.newBranchName', 'Name of the new branch'),
     })
     if (!name) return
-    await this._run(['checkout', '-b', name.trim()], 'create branch')
+    const ok = await this._run(['checkout', '-b', name.trim()], 'create branch')
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   // --- worktrees: delegated to RepositoryWorktrees (constructed with this repo

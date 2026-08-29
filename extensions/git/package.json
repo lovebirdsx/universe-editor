@@ -229,10 +229,15 @@
           "default": ["node_modules"],
           "description": "%git.config.repositoryScanIgnoredFolders.description%"
         },
-        "git.pullSubmoduleUpdate": {
+        "git.autoUpdateSubmodules": {
           "type": "boolean",
           "default": true,
-          "description": "%git.config.pullSubmoduleUpdate.description%"
+          "description": "%git.config.autoUpdateSubmodules.description%"
+        },
+        "git.autoSyncWorktreesAfterPull": {
+          "type": "boolean",
+          "default": true,
+          "description": "%git.config.autoSyncWorktreesAfterPull.description%"
         },
         "git.autofetch": {
           "type": "boolean",

@@ -10,7 +10,7 @@
  */
 import type { Disposable } from '@universe-editor/extension-api'
 import { Repository } from './repository.js'
-import { norm } from './pathUtil.js'
+import { isSubPath, norm } from './pathUtil.js'
 
 interface RepoArg {
   readonly rootUri?: string
@@ -76,11 +76,29 @@ export class RepositoryManager {
     return [...this._repos.values()]
   }
 
+  /**
+   * Repos nested under `root` — its submodules (including nested ones), which a
+   * `submodule update --recursive` in `root` moves. Linked worktrees live in a
+   * sibling `<repo>.worktrees/` directory, so they never match this prefix.
+   */
+  submodulesOf(root: string): Repository[] {
+    return this.all.filter((repo) => isSubPath(root, repo.root))
+  }
+
   add(root: string, opts: { statusBar?: boolean; label?: string }): Repository {
     const key = norm(root)
     const existing = this._repos.get(key)
     if (existing) return existing
-    const repo = new Repository(root, this._log, opts)
+    const repo = new Repository(root, this._log, {
+      ...(opts.label !== undefined ? { label: opts.label } : {}),
+      onSubmodulesUpdated: () => {
+        for (const sub of this.submodulesOf(root)) {
+          void sub
+            .refresh()
+            .catch((err) => this._log?.(`[git] submodule refresh failed: ${String(err)}`))
+        }
+      },
+    })
     this._repos.set(key, repo)
     for (const l of this._addListeners) l(repo)
     return repo

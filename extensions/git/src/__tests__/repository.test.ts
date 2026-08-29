@@ -324,6 +324,61 @@ describe('Repository remote state refresh', () => {
   })
 })
 
+describe('Repository submodule update callback', () => {
+  async function createRepoWithSubmoduleMarker(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'ue-git-submodule-'))
+    tmpRoots.push(root)
+    await git(['init', root])
+    await writeFile(join(root, '.gitmodules'), '')
+    return root
+  }
+
+  it('notifies once submodule update succeeds so submodule repos can refresh', async () => {
+    const root = await createRepoWithSubmoduleMarker()
+    const onSubmodulesUpdated = vi.fn()
+    const repo = new Repository(root, undefined, { onSubmodulesUpdated })
+    try {
+      await repo.submoduleUpdateInit()
+    } finally {
+      repo.dispose()
+    }
+
+    expect(onSubmodulesUpdated).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not notify when the update fails', async () => {
+    // No repository at all — `git submodule update` exits non-zero.
+    const root = await mkdtemp(join(tmpdir(), 'ue-git-nosubmodule-'))
+    tmpRoots.push(root)
+    const onSubmodulesUpdated = vi.fn()
+    const repo = new Repository(root, undefined, { onSubmodulesUpdated })
+    try {
+      await repo.submoduleUpdateInit()
+    } finally {
+      repo.dispose()
+    }
+
+    expect(onSubmodulesUpdated).not.toHaveBeenCalled()
+  })
+
+  it('contains a throwing listener so the operation still counts as succeeded', async () => {
+    const root = await createRepoWithSubmoduleMarker()
+    const log = vi.fn()
+    const repo = new Repository(root, log, {
+      onSubmodulesUpdated: () => {
+        throw new Error('refresh exploded')
+      },
+    })
+    try {
+      await expect(repo.submoduleUpdateInit()).resolves.toBeUndefined()
+    } finally {
+      repo.dispose()
+    }
+
+    expect(log.mock.calls.flat().join('\n')).toContain('refresh exploded')
+  })
+})
+
 describe('Repository.checkIgnore', () => {
   async function createPlainRepo(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'ue-git-checkignore-'))

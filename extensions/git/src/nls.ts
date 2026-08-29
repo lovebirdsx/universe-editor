@@ -42,6 +42,15 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'git.tag.noneToDelete': '没有标签可删除。',
   'git.pick.tagToDelete': '选择要删除的标签',
   'git.progress.updatingSubmodules': '正在更新子模块…',
+  // 拉取后自动同步其它工作树。这里统称"工作树"（而非 SCM 菜单里的"工作区"），
+  // 与 Git 图谱及用户手册用词一致。
+  'git.progress.syncingWorktrees': '正在同步工作树…',
+  'git.worktree.autoSyncSynced': '已同步工作树：{0}',
+  'git.worktree.autoSyncSyncedBranch': '工作树"{0}"：分支"{1}"已快进',
+  'git.worktree.autoSyncSkippedDirty': '已跳过（有未提交更改）：{0}',
+  'git.worktree.autoSyncSkippedInProgress': '已跳过（变基/合并等操作进行中）：{0}',
+  'git.worktree.autoSyncSkippedDiverged': '已跳过（有独有提交）：{0}',
+  'git.worktree.autoSyncFailed': '工作树"{0}"同步失败：{1}',
   'git.btn.discardAll': '放弃所有更改',
   'git.discard.allConfirm': '放弃工作区中的所有更改？此操作无法撤销。',
   'git.pick.branchToCheckout': '选择要签出的分支',
@@ -54,6 +63,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'git.commit.noCommitsToAmend': '没有可修正的提交。',
   'git.btn.discardChanges': '放弃更改',
   'git.discard.fileConfirm': '放弃"{0}"中的更改？此操作无法撤销。',
+  'git.graph.opDoneInWorktree': '已在工作树"{0}"上完成。',
   // repositoryWorktrees.ts
   'git.worktree.createNewBranch': '新建分支…',
   'git.pick.branchForWorktree': '选择要从其创建工作区的分支',

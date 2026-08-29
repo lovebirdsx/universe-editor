@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { RepositoryOptions } from '../repositoryTypes.js'
 
 // RepositoryManager only touches Repository via `new Repository(root, ...)` and
-// `repo.root` / `repo.dispose()`. Stub it so routing can be tested without git.
+// `repo.root` / `repo.refresh()` / `repo.dispose()`. Stub it so routing can be
+// tested without git.
 vi.mock('../repository.js', () => ({
   Repository: class {
-    constructor(readonly root: string) {}
+    readonly refresh = vi.fn(async () => {})
+    constructor(
+      readonly root: string,
+      readonly log?: (msg: string) => void,
+      readonly opts: RepositoryOptions = {},
+    ) {}
     dispose(): void {}
   },
 }))
@@ -91,5 +98,45 @@ describe('RepositoryManager late additions', () => {
     const mgr = makeManager()
     mgr.setMainRoot('/not/a/repo')
     expect(mgr.mainRoot).toBe(MAIN)
+  })
+})
+
+describe('RepositoryManager submodule tracking', () => {
+  const NESTED = '/repo/sub/nested'
+  // A linked worktree lives beside the repo, not under it, so the prefix match
+  // must not pick it up.
+  const WORKTREE = '/repo.worktrees/feature'
+  const OTHER = '/elsewhere'
+
+  function makeFullManager(): RepositoryManager {
+    const mgr = new RepositoryManager(MAIN)
+    for (const root of [MAIN, SUB, NESTED, WORKTREE, OTHER]) mgr.add(root, {})
+    return mgr
+  }
+
+  it('lists repos nested under a root, excluding itself and siblings', () => {
+    const mgr = makeFullManager()
+    expect(mgr.submodulesOf(MAIN).map((r) => r.root)).toEqual([SUB, NESTED])
+  })
+
+  it('lists only deeper repos for a submodule root', () => {
+    const mgr = makeFullManager()
+    expect(mgr.submodulesOf(SUB).map((r) => r.root)).toEqual([NESTED])
+    expect(mgr.submodulesOf(NESTED)).toEqual([])
+  })
+
+  it('refreshes nested repos when a repo reports its submodules moved', async () => {
+    const mgr = makeFullManager()
+    const main = mgr.resolveRepo({ rootUri: MAIN })
+    const sub = mgr.resolveRepo({ rootUri: SUB })
+    const unrelated = mgr.resolveRepo({ rootUri: OTHER })
+
+    ;(main as unknown as { opts: RepositoryOptions }).opts.onSubmodulesUpdated?.()
+    await Promise.resolve()
+
+    expect((sub as unknown as { refresh: ReturnType<typeof vi.fn> }).refresh).toHaveBeenCalled()
+    expect(
+      (unrelated as unknown as { refresh: ReturnType<typeof vi.fn> }).refresh,
+    ).not.toHaveBeenCalled()
   })
 })

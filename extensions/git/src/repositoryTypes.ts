@@ -19,6 +19,15 @@ export interface FetchOptions {
 export interface RepositoryOptions {
   /** SourceControl label shown in the SCM view header (e.g. `Git: <submodule>`). */
   readonly label?: string
+  /**
+   * Called after `submodule update` succeeds. Submodules are surfaced as their own
+   * Repository objects, and updating them from the superproject moves their HEAD
+   * behind their back — the manager uses this to refresh their SCM state.
+   *
+   * Notification only: it runs on the tail of a completed git operation, so a throw
+   * is caught and logged rather than surfaced as an operation failure.
+   */
+  readonly onSubmodulesUpdated?: () => void
 }
 
 /** Branch / sync state the shared status-bar controller renders. */

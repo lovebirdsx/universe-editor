@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   gitExec: vi.fn(),
   registerCommand: vi.fn(),
   executeCommand: vi.fn(),
+  showInformationMessage: vi.fn(),
+  showErrorMessage: vi.fn(),
+  configValues: new Map<string, unknown>(),
+  hasSubmodules: vi.fn(),
 }))
 
 vi.mock('../gitService.js', () => ({
@@ -16,13 +20,36 @@ vi.mock('../gitService.js', () => ({
   gitExecBinary: vi.fn(),
   detectRepoRoot: vi.fn(),
 }))
+// Make the .gitmodules probe a knob instead of touching the filesystem, while
+// still routing the update through the real `updateSubmodules` so the git argv
+// the extension issues is asserted for real.
+vi.mock('../submoduleSync.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../submoduleSync.js')>()
+  return {
+    ...actual,
+    updateSubmodulesIfPresent: async (root: string, log?: (msg: string) => void) =>
+      (await mocks.hasSubmodules(root))
+        ? { ran: true, result: await actual.updateSubmodules(root, log) }
+        : { ran: false },
+  }
+})
 vi.mock('@universe-editor/extension-api', () => ({
   commands: {
     registerCommand: mocks.registerCommand,
     executeCommand: mocks.executeCommand,
   },
-  workspace: { getConfiguration: () => ({ get: vi.fn((_k: string, d: unknown) => d) }) },
-  window: { showWarningMessage: vi.fn() },
+  workspace: {
+    getConfiguration: () => ({
+      get: vi.fn((k: string, d: unknown) =>
+        mocks.configValues.has(k) ? mocks.configValues.get(k) : d,
+      ),
+    }),
+  },
+  window: {
+    showWarningMessage: vi.fn(),
+    showInformationMessage: mocks.showInformationMessage,
+    showErrorMessage: mocks.showErrorMessage,
+  },
 }))
 
 const ROOT = process.platform === 'win32' ? 'c:\\repo' : '/repo'
@@ -39,11 +66,14 @@ function gitFail() {
 }
 
 function fakeRepo(root: string): Repository {
-  return { root } as unknown as Repository
+  return { root, refresh: vi.fn(async () => {}) } as unknown as Repository
 }
 
 function fakeManager(resolve: (arg: unknown) => Repository | undefined): RepositoryManager {
-  return { resolveRepo: vi.fn(resolve) } as unknown as RepositoryManager
+  return {
+    resolveRepo: vi.fn(resolve),
+    submodulesOf: vi.fn(() => []),
+  } as unknown as RepositoryManager
 }
 
 function makeCommands(
@@ -72,6 +102,8 @@ function mockCommitDetails() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.configValues.clear()
+  mocks.hasSubmodules.mockResolvedValue(false)
   mocks.gitExec.mockResolvedValue(gitFail())
   mocks.executeCommand.mockResolvedValue(undefined)
 })
@@ -233,5 +265,140 @@ describe('git-graph.openFileDiff', () => {
       '_workbench.openDiff',
       expect.objectContaining({ preserveFocus: true }),
     )
+  })
+})
+
+describe('git-graph operation follow-up', () => {
+  const OTHER_WT =
+    process.platform === 'win32' ? 'c:\\repo.worktrees\\main' : '/repo.worktrees/main'
+  const submoduleCalls = (): string[][] =>
+    mocks.gitExec.mock.calls
+      .map(([args]) => args as string[])
+      .filter((args) => args[0] === 'submodule')
+
+  /** Canned responses that route a cherry-pick-to-branch into another worktree. */
+  function mockCherryPickIntoOtherWorktree(): void {
+    mocks.gitExec.mockImplementation((args: string[]) => {
+      if (args[0] === 'worktree') {
+        return Promise.resolve(
+          gitOk(
+            [
+              `worktree ${OTHER_WT}`,
+              'HEAD aaa',
+              'branch refs/heads/main',
+              '',
+              `worktree ${ROOT}`,
+              'HEAD bbb',
+              'branch refs/heads/feature',
+              '',
+            ].join('\n'),
+          ),
+        )
+      }
+      return Promise.resolve(gitOk(''))
+    })
+  }
+
+  it('tells the user when an operation landed in another worktree', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mockCherryPickIntoOtherWorktree()
+
+    await commands.get('git-graph.cherryPickToBranch')?.(HASH, 'main')
+
+    expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1)
+    expect(String(mocks.showInformationMessage.mock.calls[0]?.[0])).toContain('main')
+  })
+
+  it('stays quiet about worktrees when the operation failed', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitFail())
+
+    await commands.get('git-graph.cherryPickToBranch')?.(HASH, 'main')
+
+    expect(mocks.showInformationMessage).not.toHaveBeenCalled()
+    expect(mocks.showErrorMessage).toHaveBeenCalled()
+  })
+
+  it('updates submodules after an operation that moves the working tree', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+
+    await commands.get('git-graph.cherrypick')?.(HASH)
+
+    expect(submoduleCalls()).toEqual([['submodule', 'update', '--init', '--recursive']])
+  })
+
+  it('skips the submodule update when git.autoUpdateSubmodules is off', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    mocks.configValues.set('autoUpdateSubmodules', false)
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+
+    await commands.get('git-graph.cherrypick')?.(HASH)
+
+    expect(submoduleCalls()).toEqual([])
+  })
+
+  it('skips the submodule update when the operation failed', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitFail())
+
+    await commands.get('git-graph.cherrypick')?.(HASH)
+
+    expect(submoduleCalls()).toEqual([])
+  })
+
+  it('updates submodules after reset --hard but not after soft or mixed', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+
+    await commands.get('git-graph.reset')?.(HASH, 'hard')
+    expect(submoduleCalls()).toHaveLength(1)
+
+    vi.clearAllMocks()
+    mocks.hasSubmodules.mockResolvedValue(true)
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+    await commands.get('git-graph.reset')?.(HASH, 'mixed')
+    await commands.get('git-graph.reset')?.(HASH, 'soft')
+    expect(submoduleCalls()).toEqual([])
+  })
+
+  it('does not update submodules for ref-only operations', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+
+    await commands.get('git-graph.deleteBranch')?.('stale')
+    await commands.get('git-graph.createTag')?.(HASH, 'v1')
+    await commands.get('git-graph.stashDrop')?.('stash@{0}')
+
+    expect(submoduleCalls()).toEqual([])
+  })
+
+  it('refreshes the submodule repos after updating them', async () => {
+    mocks.hasSubmodules.mockResolvedValue(true)
+    const sub = fakeRepo(join(ROOT, 'sub'))
+    mocks.registerCommand.mockImplementation(() => ({ dispose: () => undefined }))
+    const mgr = {
+      resolveRepo: vi.fn(() => fakeRepo(ROOT)),
+      submodulesOf: vi.fn(() => [sub]),
+    } as unknown as RepositoryManager
+    const commands = createGitCommandsForTest(
+      mgr,
+      { current: ROOT },
+      {
+        root: ROOT,
+        scanOpts: { maxDepth: 0, ignoredFolders: [] },
+        log: () => undefined,
+      },
+    )
+    mocks.gitExec.mockResolvedValue(gitOk(''))
+
+    await commands.get('git-graph.cherrypick')?.(HASH)
+
+    expect((sub as unknown as { refresh: ReturnType<typeof vi.fn> }).refresh).toHaveBeenCalled()
   })
 })

@@ -6,12 +6,12 @@
  * progress + refresh plumbing without owning SCM state.
  */
 import { basename, dirname, join } from 'node:path'
-import { stat } from 'node:fs/promises'
 import { commands, window, type QuickPickItem } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
 import { gitErrorText, notifyGitFailure } from './gitError.js'
 import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 import { classifyWorktreeRemoveFailure } from './repositoryTypes.js'
+import { hasSubmodules, updateSubmodules } from './submoduleSync.js'
 import { localize } from './nls.js'
 
 /** The slice of the repository the worktree operations need. */
@@ -98,18 +98,13 @@ export class RepositoryWorktrees {
     if (!ok) return
 
     const worktreePath = path.trim()
-    try {
-      await stat(join(this._root, '.gitmodules'))
+    if (await hasSubmodules(this._root)) {
       this._host.beginProgress(
         localize('git.progress.initializingSubmodules', 'Initializing submodules…'),
         'spinning',
       )
       try {
-        const subRes = await gitExec(
-          ['submodule', 'update', '--init', '--recursive'],
-          worktreePath,
-          this._log,
-        )
+        const subRes = await updateSubmodules(worktreePath, this._log)
         if (subRes.exitCode !== 0) {
           void window.showWarningMessage(
             localize(
@@ -122,8 +117,6 @@ export class RepositoryWorktrees {
       } finally {
         this._host.endProgress()
       }
-    } catch {
-      // no .gitmodules, skip
     }
 
     const BTN_OPEN_IN_NEW_WINDOW = localize('git.btn.openInNewWindow', 'Open in New Window')

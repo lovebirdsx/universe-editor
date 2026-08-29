@@ -7,14 +7,34 @@
  *
  * Read-only queries live in `gitGraphSource.ts`; this file only writes.
  */
+import { basename } from 'node:path'
 import { gitExec, type GitExecResult } from './gitService.js'
 import { gitErrorText } from './gitError.js'
 import { parseWorktrees } from './worktreeParser.js'
 import { norm } from './pathUtil.js'
+import { updateSubmodules } from './submoduleSync.js'
 
 export type ResetMode = 'soft' | 'mixed' | 'hard'
 
 type Log = ((msg: string) => void) | undefined
+
+/**
+ * A mutation's result, plus where it actually ran. Some operations are redirected
+ * into another worktree's directory (git refuses to check out a branch a linked
+ * worktree already holds), and the caller reports that so the change doesn't land
+ * somewhere the user can't see.
+ */
+export interface GraphMutationResult extends GitExecResult {
+  readonly worktreePath?: string
+  readonly worktreeName?: string
+}
+
+/** Tag a result with the worktree it ran in, for the caller to surface. */
+const inWorktree = (res: GitExecResult, path: string): GraphMutationResult => ({
+  ...res,
+  worktreePath: path,
+  worktreeName: basename(path),
+})
 
 export const checkout = (root: string, ref: string, log: Log): Promise<GitExecResult> =>
   gitExec(['checkout', ref], root, log)
@@ -46,7 +66,7 @@ export const cherryPickToBranch = async (
   hash: string,
   targetBranch: string,
   log: Log,
-): Promise<GitExecResult> => {
+): Promise<GraphMutationResult> => {
   const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
   const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
   const holder = worktrees.find((wt) => wt.branch === targetBranch)
@@ -64,7 +84,8 @@ export const cherryPickToBranch = async (
           : `Worktree at '${holder.path}' has '${targetBranch}' checked out with uncommitted changes; commit or stash them there before cherry-picking.`,
       )
     }
-    return gitExec(['cherry-pick', hash], holder.path, log)
+    const res = await gitExec(['cherry-pick', hash], holder.path, log)
+    return res.exitCode === 0 && !isCurrent ? inWorktree(res, holder.path) : res
   }
 
   const headName = await gitExec(['symbolic-ref', '--short', '-q', 'HEAD'], root, log)
@@ -161,7 +182,7 @@ export const resetBranchToRemote = async (
   remoteRef: string,
   localName: string,
   log: Log,
-): Promise<GitExecResult> => {
+): Promise<GraphMutationResult> => {
   const wtRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
   const worktrees = wtRes.exitCode === 0 ? parseWorktrees(wtRes.stdout) : []
   const holder = worktrees.find((wt) => wt.branch === localName)
@@ -180,7 +201,7 @@ export const resetBranchToRemote = async (
     const res = await gitExec(['reset', '--hard', remoteRef], holder.path, log)
     if (res.exitCode !== 0) return res
     await gitExec(['branch', '--set-upstream-to', remoteRef, localName], root, log)
-    return res
+    return isCurrent ? res : inWorktree(res, holder.path)
   }
 
   const res = await gitExec(['branch', '-f', localName, remoteRef], root, log)
@@ -272,7 +293,7 @@ const syncOneWorktree = async (
   }
   const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
   if (reset.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(reset) }
-  const subUpdate = await gitExec(['submodule', 'update', '--init', '--recursive'], wt.path, log)
+  const subUpdate = await updateSubmodules(wt.path, log)
   if (subUpdate.exitCode !== 0)
     return { kind: 'failed', name: wt.name, error: gitErrorText(subUpdate) }
   return { kind: 'synced', name: wt.name }

@@ -71,6 +71,31 @@ describe('cherryPickToBranch', () => {
     expect(calls).toContainEqual({ args: ['cherry-pick', HASH], cwd: '/repo' })
     // Never checks out the target in the current worktree.
     expect(calls.some((c) => c.args[0] === 'checkout')).toBe(false)
+    // The caller needs to know the pick landed somewhere else to report it.
+    expect(res.worktreePath).toBe('/repo')
+    expect(res.worktreeName).toBe('repo')
+  })
+
+  it('does not tag the result with a worktree when the pick conflicts there', async () => {
+    setup({
+      worktreePorcelain: [
+        'worktree /repo',
+        'HEAD aaa',
+        'branch refs/heads/main',
+        '',
+        `worktree ${CUR}`,
+        'HEAD bbb',
+        'branch refs/heads/feature',
+        '',
+      ].join('\n'),
+      pickFail: true,
+    })
+
+    const res = await cherryPickToBranch(CUR, HASH, 'main', undefined)
+
+    expect(res.exitCode).toBe(1)
+    expect(res.worktreePath).toBeUndefined()
+    expect(res.worktreeName).toBeUndefined()
   })
 
   it('refuses when the holding worktree is dirty, without applying anything', async () => {
@@ -98,6 +123,8 @@ describe('cherryPickToBranch', () => {
     expect(res.exitCode).toBe(0)
     expect(calls).toContainEqual({ args: ['cherry-pick', HASH], cwd: CUR })
     expect(calls.some((c) => c.args[0] === 'checkout')).toBe(false)
+    // Picking into the current tree is not a cross-worktree operation.
+    expect(res.worktreePath).toBeUndefined()
   })
 
   it('checks out, picks, then restores HEAD when the target is not checked out anywhere', async () => {
@@ -117,6 +144,7 @@ describe('cherryPickToBranch', () => {
       ['checkout', 'feature'],
     ])
     expect(calls).toContainEqual({ args: ['cherry-pick', HASH], cwd: CUR })
+    expect(res.worktreePath).toBeUndefined()
   })
 
   it('leaves HEAD on the target (no restore) when the pick conflicts on the fallback path', async () => {

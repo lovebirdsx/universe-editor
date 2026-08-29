@@ -82,6 +82,8 @@ describe('resetBranchToRemote', () => {
       cwd: CUR,
     })
     expect(calls.some((c) => c.args[0] === 'checkout')).toBe(false)
+    // Resetting the current tree is not a cross-worktree operation.
+    expect(res.worktreePath).toBeUndefined()
   })
 
   it('resets inside the holding worktree when another worktree holds the branch', async () => {
@@ -103,6 +105,31 @@ describe('resetBranchToRemote', () => {
     expect(res.exitCode).toBe(0)
     expect(calls).toContainEqual({ args: ['reset', '--hard', REMOTE], cwd: '/repo' })
     expect(calls.some((c) => c.args[1] === '-f')).toBe(false)
+    // The caller needs to know the reset landed somewhere else to report it.
+    expect(res.worktreePath).toBe('/repo')
+    expect(res.worktreeName).toBe('repo')
+  })
+
+  it('does not tag the result with a worktree when the reset there fails', async () => {
+    setup({
+      worktreePorcelain: [
+        'worktree /repo',
+        'HEAD aaa',
+        'branch refs/heads/development',
+        '',
+        `worktree ${CUR}`,
+        'HEAD bbb',
+        'branch refs/heads/feature',
+        '',
+      ].join('\n'),
+      resetFail: true,
+    })
+
+    const res = await resetBranchToRemote(CUR, REMOTE, 'development', undefined)
+
+    expect(res.exitCode).toBe(1)
+    expect(res.worktreePath).toBeUndefined()
+    expect(res.worktreeName).toBeUndefined()
   })
 
   it('refuses when the holding worktree is dirty, without resetting anything', async () => {
