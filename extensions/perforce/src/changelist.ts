@@ -44,6 +44,14 @@ export interface PendingChangelist {
   readonly id: string
   /** Description (may be multi-line; first line is used for the label). */
   readonly description: string
+  /**
+   * Whether the changelist has shelved files. `p4 changes` reports a bare
+   * `shelved` key (no value) for changelists that do, and omits it entirely for
+   * those that don't — so its mere presence is the signal. Lets the refresh skip
+   * `describe -S -s` for every changelist without a shelf (see
+   * `client._fetchShelved`).
+   */
+  readonly shelved: boolean
 }
 
 /** A grouped changelist ready to become a SCM ResourceGroup. */

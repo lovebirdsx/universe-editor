@@ -83,6 +83,11 @@ function memStore(initial?: ReconcilePersistState): ReconcileStore & {
 interface RespondOptions {
   /** Reconcile candidates returned by any `reconcile -n` scan (as client-syntax rows). */
   reconcile?: () => { rel: string; action?: string }[]
+  /** Opened files reported by `p4 opened` (client-syntax rows). */
+  opened?: () => { rel: string; action?: string; change?: string }[]
+  /** Pending changelists reported by `p4 changes -s pending`. `shelved: true`
+   *  emits the bare `shelved` key real p4 uses to flag a changelist with a shelf. */
+  changes?: () => { id: string; desc?: string; shelved?: boolean }[]
 }
 
 const calls: string[][] = []
@@ -119,7 +124,40 @@ function handle(argv: string[], opts: RespondOptions): { stdout: string; exit?: 
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n` }
   }
-  if (cmd === 'opened' || cmd === 'changes') return { stdout: '' }
+  if (cmd === 'opened') {
+    const rows = opts.opened?.() ?? []
+    return {
+      stdout: rows
+        .map((r) =>
+          JSON.stringify({
+            depotFile: `//depot/${r.rel}`,
+            clientFile: `//${CLIENT}/${r.rel}`,
+            action: r.action ?? 'edit',
+            rev: '1',
+            change: r.change ?? 'default',
+          }),
+        )
+        .join('\n'),
+    }
+  }
+  if (cmd === 'changes') {
+    const rows = opts.changes?.() ?? []
+    return {
+      stdout: rows
+        .map((r) =>
+          JSON.stringify({
+            change: r.id,
+            desc: r.desc ?? '',
+            status: 'pending',
+            client: CLIENT,
+            // A bare `shelved` key (empty value) is p4's flag for "has a shelf";
+            // the key is absent entirely otherwise.
+            ...(r.shelved ? { shelved: '' } : {}),
+          }),
+        )
+        .join('\n'),
+    }
+  }
   if (cmd === 'reconcile' && argv.includes('-n')) {
     const rows = opts.reconcile?.() ?? []
     const stdout = rows
@@ -414,5 +452,124 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
       for (const p of scanPaths) seen.add(p)
     }
     for (const p of paths) expect(seen.has(p)).toBe(true)
+  })
+
+  // Regression: `describe -S -s` used to run once per *pending* changelist, even
+  // though only changelists holding a shelf have anything to report. `describe`
+  // lists every file in a changelist, so on a client with many pending changelists
+  // — one of them a giant branch CL — this serialized GB-scale, minutes-long
+  // commands behind the status-bar spinner after every mutation. `p4 changes`
+  // reports a bare `shelved` key for the changelists that have a shelf; the
+  // refresh must filter on it.
+  it('describes only the pending changelists that report a shelf', async () => {
+    const store = memStore()
+    const client = await makeClient(store, {
+      changes: () => [
+        { id: '100', desc: 'no shelf' },
+        { id: '101', desc: 'has a shelf', shelved: true },
+        { id: '102', desc: 'also no shelf' },
+      ],
+    })
+    calls.length = 0
+
+    await client.refresh()
+
+    const describes = calls.filter((a) => subcommand(a) === 'describe')
+    expect(describes).toHaveLength(1)
+    expect(describes[0]).toContain('101')
+  })
+
+  it('makes zero describe calls when no pending changelist has a shelf', async () => {
+    const store = memStore()
+    const client = await makeClient(store, {
+      changes: () => [{ id: '100' }, { id: '101' }, { id: '102' }],
+    })
+    calls.length = 0
+
+    await client.refresh()
+
+    expect(calls.filter((a) => subcommand(a) === 'describe')).toHaveLength(0)
+  })
+
+  // Collecting one file used to await a `reconcile -n` re-verify of every *other*
+  // candidate before the status-bar spinner cleared — O(group size) round-trips for
+  // an O(1) operation. The opened-set filter still has to happen synchronously (so
+  // the collected file leaves the group at once), but the disk re-verify moves off
+  // the awaited path.
+  it('collecting a file does not await a re-verify of the other candidates', async () => {
+    const store = memStore()
+    // b.txt/c.txt stay diverged; a.txt is the one being collected.
+    let openedRows: { rel: string }[] = []
+    const client = await makeClient(store, {
+      reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }, { rel: 'c.txt' }],
+      opened: () => openedRows,
+    })
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(3)
+
+    // After the real reconcile, p4 reports a.txt as opened.
+    openedRows = [{ rel: 'a.txt' }]
+    calls.length = 0
+
+    await client.reconcile([`${LOCAL}/a.txt`])
+
+    // Awaited work: the real reconcile, but no dry-run re-verify scan.
+    expect(reconcileScans()).toHaveLength(0)
+    // a.txt left the group immediately (filtered against the fresh opened set).
+    expect(client.status.reconcileCount).toBe(2)
+
+    // The re-verify still happens — just afterwards.
+    await client.whenBackgroundReverifySettled()
+    expect(reconcileScans().length).toBeGreaterThan(0)
+    for (const argv of reconcileScans()) {
+      expect(argv).not.toContain('//...')
+      expect(argv).not.toContain(`${LOCAL}/...`)
+    }
+    expect(client.status.reconcileCount).toBe(2)
+  })
+
+  it('the deferred re-verify drops a candidate that came back clean', async () => {
+    const store = memStore()
+    let openedRows: { rel: string }[] = []
+    let scanRows: { rel: string }[] = [{ rel: 'a.txt' }, { rel: 'b.txt' }]
+    const client = await makeClient(store, {
+      reconcile: () => scanRows,
+      opened: () => openedRows,
+    })
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(2)
+
+    // a.txt gets collected; b.txt's change was discarded behind our back.
+    openedRows = [{ rel: 'a.txt' }]
+    scanRows = []
+    await client.reconcile([`${LOCAL}/a.txt`])
+    // Synchronously only a.txt is gone — b.txt is still listed, unverified.
+    expect(client.status.reconcileCount).toBe(1)
+
+    await client.whenBackgroundReverifySettled()
+    // The background scan found b.txt clean and dropped it.
+    expect(client.status.reconcileCount).toBe(0)
+  })
+
+  // Opening a file for edit clears its read-only bit, which the watcher reports as
+  // a change — so every collect echoes back into refreshReconcilePaths for a scan
+  // whose result is discarded anyway (opened files are filtered out of the group).
+  it('skips the watcher echo for paths that are already opened', async () => {
+    const store = memStore()
+    const client = await makeClient(store, {
+      reconcile: () => [{ rel: 'b.txt' }],
+      opened: () => [{ rel: 'a.txt' }],
+    })
+    await client.refresh()
+    calls.length = 0
+
+    // a.txt is opened → nothing to scan; b.txt is not → scanned.
+    await client.refreshReconcilePaths([`${LOCAL}/a.txt`])
+    expect(reconcileScans()).toHaveLength(0)
+
+    await client.refreshReconcilePaths([`${LOCAL}/b.txt`])
+    const scans = reconcileScans()
+    expect(scans).toHaveLength(1)
+    expect(scans[0]).toContain(`${LOCAL}/b.txt`)
   })
 })

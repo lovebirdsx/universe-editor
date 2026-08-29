@@ -42,6 +42,20 @@
 
 `describe -s <cl>` 即使不带 diff 也列出该 CL 的**全部文件**（`depotFile0..N`）。对巨型 branch CL（initial branch，几十万文件）输出是 GB 级、命令永不返回（实测 >3min）——`getBlame` 曾按 unique CL 串行 `describe -s` 补 summary，blame 因此永远不显示。修法：元数据（user/time/desc 第一行）改从**一次** `p4 -ztag changes -l <file>` 取（单文件历史，亚秒级），解析复用图谱的 `parseChangesList`，缓存走 `P4CacheNs.changesSubmitted`（key `blame:<file>`）。回归护栏 `clientBlame.test.ts`（describe 挂起时 getBlame 仍须返回 + 断言零 describe 调用）。同理，任何新功能需要"CL 的元数据"时都用 `changes`/`change -o`，**不要** `describe`。
 
+## ⚠️ 搁置发现绝不扇出 `describe -S -s`（同款挂死风险）
+
+搁置组（`shelved:<n>`）需要每个 CL 的搁置文件列表，只能靠 `describe -S -s <cl>`——**但绝不能对每个 pending CL 都跑一遍**。`_fetchShelved` 曾如此（注释写了"只查有搁置的"，`parsePendingRecord` 却把标记字段丢了 → 实际全量扇出），在大 depot 上 O(pending CL 数) 条串行 GB 级命令，正是收集操作 spinner 长时间转圈的头号挂死源。
+
+**实测事实（P4D 2024.2，真服务器验证）**：
+
+| 探测 | 结果 |
+|---|---|
+| `p4 -ztag changes -s pending -c <client>` | 记录带**裸键** `... shelved `（无值）；**只有该 CL 真有搁置时才出现**，否则整个键缺席 → 存在性即信号 |
+| `p4 -Mj changes ...` | 在该服务器上塌成 `{"data":...}` blob（故走 `execRecords` 自动回退 `-ztag`） |
+| `p4 changes -s shelved -c <client>` | **不过滤**——同一个 CL 仍以 `*pending*` 返回，不能当权威索引用（曾按此设计，已被验证推翻） |
+
+**现行实现**：`PendingChangelist.shelved: boolean`（`changelist.ts`）由 `parsePendingRecord` 按 `record['shelved'] !== undefined` 填充（`openedParser.ts`）→ `_fetchShelved(ids)` 只收 `pending.filter(c => c.shelved)` 的 id，**零额外往返**；余下 O(有搁置的 CL 数，通常 0–2) 条 describe 用 `Promise.all` 并行提交（由 `ConcurrencyGate` 排队），每条带 `SHELVED_DESCRIBE_TIMEOUT_MS`（30s）紧超时作硬顶。单条失败记日志跳过，**绝不回退成逐 CL 扇出**。
+
 
 ## ⚠️ `opened`/`reconcile -n` 的 `clientFile` 是 client 语法，不是本地路径（踩过）
 
@@ -98,6 +112,10 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 
 - **发现**：`p4 reconcile -n -a -e -d //...`（`-n` = **dry-run，绝不改服务器**）报告偏离 depot 的文件；`reconcileParser.ts`（纯函数 + 单测）把记录 → `ReconcileFile[]`（字段同 `opened`：depotFile/clientFile/action/rev）。`client.ts` `_refreshReconcile()` 跑它并**过滤掉已 opened 的路径**（用 `norm()` 比对，防同一文件双列）。
 - **收集**：`reconcile()` / `reconcileAll()` 跑**真** `p4 reconcile -a -e -d`（去掉 `-n`），文件签出进 changelist、离开待收集组。
+- **⚠️ 收集后的复核是后台异步的（去卡顿，踩过）**：`_mutate` 的 spinner 原本包住「收集命令 + 一整条全 client refresh」，其中最贵的是**对待收集组全部历史候选重跑 `reconcile -n`**（O(候选数)，大 workspace 上千条）——单文件收集的命令本身 O(1)，用户看到的长时间转圈全来自它。现在 `reconcile()`/`reconcileInto()`/`reconcileAll()` 传 `_mutate(..., { deferReconcileReverify: true })` → `refresh({deferReconcileReverify:true})` → `_refreshReconcile` 的 cheap path **先按最新 `_openedPaths` 过滤并立即 `_setReconcileFiles(candidates)` 渲染**（刚收集的文件正确离组），再把 `_rescanReconcilePaths` 挂到后台（`_scheduleBackgroundReverify`，**必须先跨一个 macrotask 边界**——只挂 `_runSerial` 会被调用方的 `await` 顺带 drain 掉，等于没延后，单测正是这么红的）。取舍：后台复核完成前，其余陈旧候选会短暂滞留数秒；`perforce.autoRefresh=false` 时滞留更久（无文件监视自愈），靠下次刷新收敛。**fullScan（Clean Refresh）永不延后**——那是用户显式要的全量扫描。`whenBackgroundReverifySettled()` 供测试等待。其余 mutation（edit/revert/submit/shelve…）保持同步复核，语义变更面缩到最小。
+- **批次并行**：`_rescanReconcilePaths` 的 `chunkByLength` 批次用 `Promise.all` 并行提交（`ConcurrencyGate` 限流），**但必须按批序合并** `scanned`/`fresh` —— `mergeReconcile` 对 `fresh` 顺序敏感，乱序会改变待收集组行序。单批 `execRecords` 套 try/catch（spawn ENOENT 不再连坐整条 refresh）；失败批不计入 `scanned` 从而保留旧条目。
+- **watcher 回环消噪**：真 `p4 reconcile`/`p4 edit` 会清只读位 → 触发 watcher → 对**已签出**文件跑 `reconcile -n` 报错（纯噪音）。`refreshReconcilePaths` 在 `_runSerial` 任务**内部**（确保读到最新 `_openedPaths`）过滤掉已签出路径，全空直接 return。
+- **分阶段 busy 文案 + 耗时打点**：`_busyOps` 是栈、栈顶即状态栏文案 → `_refreshAfterMutation` 把 refresh 包进第二层 `_withBusy('Refreshing')`，用户看到「正在收集改动…」→「正在刷新…」，立刻知道收集本身已成功。`_doRefresh` 对 opened / changes+shelved / reconcile 各打一条 `[perforce] refresh/<stage> Nms` + 一条 total，配合 `p4Service` 的逐命令 `exit N (Xms)` 拼成完整链路（打开 Perforce 输出频道自查慢在哪步）。**不要改成逐阶段推 busy 标签** —— 每次 `_emitChange` 波及 polling/timeline 订阅者。
 - **性能门控（关键取舍）**：reconcile 扫描在大 workspace 慢，**默认不在每次 refresh 跑**。`_reconcileActive` 粘性开关：`refresh({reconcile:true})`（cleanRefresh）/ 收集操作 / `perforce.autoReconcile` 才开启；关闭时 `_refreshReconcile` 直接清空组返回，**零额外 p4 调用**。
 - **固定组生命周期**：reconcile 组在**构造函数里第一个** `createResourceGroup`（SCM 视图按创建序渲染 → 保证置顶），`hideWhenEmpty=true`，**不进 `_groups` Map**（`_applyGroups` 对账不碰它，避免被 dispose），`dispose()` 里单独释放。
 - **行 contextValue = `RC`**（`p4Decoration.ts` `toReconcileResourceState`），与已签出行区分，menu `when` 用 `scmResourceState == RC` 单独挂「收集」inline。
@@ -117,10 +135,12 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 
 ## 操作方法约定（`client.ts`）
 
-绝大多数 mutating 操作走 `_mutate(label, args, paths?)`：跑 p4 → 失败 toast（`notifyP4Failure`）→ **清 baseline 缓存** → **refresh**。加新操作时优先复用它。
+绝大多数 mutating 操作走 `_mutate(label, args, paths?, options?)`：跑 p4（可取消）→ 失败 toast（`notifyP4Failure`）→ **按文件失效缓存** → **refresh（第二层 busy 文案）**。加新操作时优先复用它。
 
+- **缓存失效按文件（`_invalidateAfterMutation`）**：单文件/小批量（≤ `MAX_FILE_SCOPED_INVALIDATIONS`=64、且不含 `/...` 递归语法）→ 逐条 `_cache.invalidateFile(p)`（原始路径 + `norm(p)` 双针，`invalidateFile` 是子串匹配）**外加显式清 `P4CacheNs.opened`**；空 paths / 批量 / 目录递归 → 保持 `invalidateWorkspace()`。`opened` ns 必须显式清：它只有 `'all'` 一个 key（喂图谱 `getPendingCount`/`getOpenedForGraph`），路径 needle 匹配不到，不清会让图谱 pending 数在 TTL 内陈旧。其余 ttl ns 无需动的完整论证写在该方法的注释里（`where`/`changeDetailPaths` 只依赖 client view；`filelog`/`changesSubmitted` 只在 submit/sync 后变、那些操作 paths 为空 → 走全清；`shelvedDescribe` key 是 CL id 且 shelve/unshelve 不带 paths → 走全清）。`invalidateFile` 此前只有单测、生产零调用，现已转正。
+- **取消能力（用户主动放弃长操作）**：三层管道 —— ① `P4ExecOptions.signal?: AbortSignal`（`p4Service.ts`）：abort 即 `proc.kill()`，`close` 时 **resolve 一个 stderr 带 `was cancelled` 的失败结果**（与 watchdog / 巨量 stdout 同款红线：异步回调绝不 throw）；② `client.ts` 的 `_cancellable(fn)` 把 in-flight `AbortController` 压进 `_cancelSources` 栈并经 `status.busyCancellable` 上报，`cancelBusy()` 全部 abort；取消后**不弹错误 toast**（主动取消不是故障），只记日志并照常刷新；③ UI 入口 = 状态栏 spinner 项在 `busyCancellable` 时把 `command` 指向 `perforce.cancelBusy`（`p4StatusBar.ts`）。**该命令是运行时命令（`commands.registerCommand`），绝不进 `contributes.commands`** —— 见下文头号坑（会注册无 handler 同名命令并遮蔽真 handler）。测试：`p4Service.test.ts` 的 cancellation suite（假子进程 + 断言 kill + resolve 失败而非 reject）。
 - 需要 spec 表单的（`change -i`、`change -o` 改描述）走 stdin `input`，见 `newChangelist`/`editChangelistDescription` + `changeSpec.ts`（`buildNewChangeSpec`/`replaceDescription`/`parseDescription` 纯函数）。
-- `refresh()` 有**合并（coalesce）**：并发调用排队成一次，`_refreshing`/`_queued` 守卫；每步查完 `if (this._disposed) return`。支持 `refresh({reconcile:true})` 开启 reconcile 发现（见上文待收集分组）。**在飞时的并发调用会 `await _inFlightRefresh` 等在飞刷新链结束**（不提前返回）——调用方 promise 语义 = "我要的刷新已被真正执行"；SCM 标题栏 Refresh 按钮的禁用/转圈正是挂在这个 promise 上（renderer `ScmViewToolbar` 按 `命令@rootUri` 跟踪在飞命令，`ActionButton` busy 时禁用 + **原图标原地旋转**——git syncing 同款表达，无图标的命令才兜底 Loader2）。改 refresh 语义时同步改 git 侧 `repository.ts`（同构）。测试：`clientRefresh.test.ts`（perforce）/ `repositoryRefresh.test.ts`（git）/ `ScmViewToolbar.pending.test.tsx`（renderer）。
+- `refresh()` 有**合并（coalesce）**：并发调用排队成一次，`_refreshing`/`_queued` 守卫；每步查完 `if (this._disposed) return`。支持 `refresh({reconcile:true})` 开启 reconcile 发现、`refresh({deferReconcileReverify:true})` 把候选复核推到后台（都是 last-writer-wins 标志，见上文待收集分组）。**在飞时的并发调用会 `await _inFlightRefresh` 等在飞刷新链结束**（不提前返回）——调用方 promise 语义 = "我要的刷新已被真正执行"；SCM 标题栏 Refresh 按钮的禁用/转圈正是挂在这个 promise 上（renderer `ScmViewToolbar` 按 `命令@rootUri` 跟踪在飞命令，`ActionButton` busy 时禁用 + **原图标原地旋转**——git syncing 同款表达，无图标的命令才兜底 Loader2）。改 refresh 语义时同步改 git 侧 `repository.ts`（同构）。测试：`clientRefresh.test.ts`（perforce）/ `repositoryRefresh.test.ts`（git）/ `ScmViewToolbar.pending.test.tsx`（renderer）。
 - SCM 标题栏按钮**不走** `ViewTitleActions`（那是 view/title 的通用渲染），而是 `ScmViewToolbar.tsx`（经 view toolbar registry 挂进 SideBar 头）→ `scmShared.tsx` `menuActions(MenuId.ScmTitle, {scmProvider}, 'navigation')` + `ActionButton`；overflow（`…` 菜单）走 `menuToRows`。按钮点击 = `commandService.executeCommand(cmd, {rootUri, sourceControlId})`，promise 经 RPC 直通扩展宿主 handler。
 - **view/title 按钮（`ViewTitleActions.tsx`）有同款 pending**：点击后禁用 + 原图标旋转，await executeCommand settle 恢复。Swarm Reviews 的手动刷新走这里——但 `swarm.refreshReviews` 的 handler 只是同步发事件总线（`requestSwarmReviewsRefresh`），真实 fetch 在视图侧，故 bus 带**完成回执**：请求返回 promise，视图 reload 完成后 `resolveSwarmReviewsRefresh()` flush；`trackSwarmRefreshConsumer()` 计数防无消费者时 promise 挂起（按钮永久禁用）。给任何"命令只发事件、视图干活"的按钮加加载态，照此 ack 模式办。
 - 破坏性操作（delete/revert/revertChangelist/submit/deleteShelved）在 `extension.ts` 命令层 `showWarningMessage` 二次确认，**不要**把确认塞进 client 方法。**submit 直达 depot 不可撤销**（不像 git 有 amend/undo）→ 确认框文案须注明「This cannot be undone / 此操作不可撤销」。
@@ -171,7 +191,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 解析器测试套路（纯函数，node 环境）
 
-领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`reconcileParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。带 I/O 的 `p4Service` 用 `vi.mock('node:child_process')` 注入假子进程测（见上节崩溃防护）。当前 perforce 包 15 个测试文件。
+领域/输出解析全部纯函数 + `src/__tests__/*.test.ts`，对 fixture 断言（`openedParser`/`reconcileParser`/`changeSpec`/`changelist`/`shelveParser`/`blameSource`/`pathUtil`/`p4Output`）。**新增任何解析逻辑先写纯函数 + 单测**，client 只做编排。mock extension-api 套路见 create-extension（`vi.mock('@universe-editor/extension-api', …)`）。带 I/O 的 `p4Service` 用 `vi.mock('node:child_process')` 注入假子进程测（见上节崩溃防护 + 超时 / 取消 suite）。
 
 ## Timeline（单文件历史，`p4 filelog`）
 
@@ -214,7 +234,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 
 本机 / CI 有 `p4` client 但**无可达 p4d**，`p4 info` 发现失败 → provider 整体禁用，任何 p4 端到端链路都跑不起来。故有一套 **fake p4**：
 - `p4Service._spawn` 认 **`UNIVERSE_P4_PATH`** 覆盖 `spawn('p4')`；`.mjs/.js/.cjs` 结尾则用 `process.execPath <script>` 跑（宿主里是 Electron-as-node，`sanitizeEnv` 会剥 `ELECTRON_RUN_AS_NODE`，`_spawn` 对该情况**重新补回** `=1` 否则起成 GUI Electron）。纯逻辑 `resolveP4Command()` 已导出 + `p4Service.test.ts` 守。
-- `extensions/perforce/e2e/fixtures/fake-p4.mjs`：**磁盘状态** fake，depot/have/opened 存一个 JSON（`UNIVERSE_P4_FAKE_STATE`）；`reconcile -n` 真去 walk client root 比对磁盘 vs have-revision，`edit/add/delete/reconcile/revert` 真改 opened 集。依赖零、纯 Node。要覆盖新 p4 子命令就在它的 `switch(command)` 里加一个 case，注意 `-Mj`(默认) 与 `-ztag` 两种输出模式（`emit()` 已分流）。
+- `extensions/perforce/e2e/fixtures/fake-p4.mjs`：**磁盘状态** fake，depot/have/opened 存一个 JSON（`UNIVERSE_P4_FAKE_STATE`）；`reconcile -n` 真去 walk client root 比对磁盘 vs have-revision，`edit/add/delete/reconcile/revert` 真改 opened 集。依赖零、纯 Node。要覆盖新 p4 子命令就在它的 `switch(command)` 里加一个 case，注意 `-Mj`(默认) 与 `-ztag` 两种输出模式（`emit()` 已分流）。**⚠️ 协议形态必须与真服务器对齐**：`changes` case 现在按 `state.shelved[id]` 非空才 emit 裸键 `shelved: ''`（对齐上文实测的裸键存在性信号）——漏了它就会让「无搁置 → 零 describe」的优化在 e2e 里假绿，或让搁置组在真机上永不出现。
 - `extensions/perforce/e2e/fixtures/perforceApp.ts`：cold-launch fixture（开 workspace 会重启宿主，不能用 shared 实例），`test.use({ p4Seeds:{files:[...]}, openSubdir })` 定制，`perforce` fixture 给 `clientRoot`/`openDir`/`file()`。spec 在 `extensions/perforce/e2e/specs/`（如 `perforceCollectChanges.spec.ts`，改盘上文件 → 断言进「Changes to Reconcile」组）。**⚠️ Playwright option fixture 的值不能是裸数组**（会被当 tuple 只取首元素 → `seeds is not iterable`），故种子包一层对象 `P4SeedConfig{files}`。
 - 改了扩展 `src/` 后 e2e 用的是 `dist/`：先 `pnpm --filter @universe-editor/perforce build`；改了 app 侧（renderer/main）先 `pnpm --filter @universe-editor/editor build`（e2e 跑 `out/`）。**⚠️ 单跑某个 spec 必须带 `UNIVERSE_E2E_NO_TAG_FILTER=1`**（在 `extensions/perforce` 目录下 `npx playwright test -c e2e/playwright.config.ts perforceCollectChanges`）——默认 pass 的 grepInvert 排除 `@regression`/`@serial` 等 tag，p4 spec 基本全带 `@regression`，不带该 env 会报 "No tests found"（机制见 `packages/e2e-harness/src/playwrightConfig.ts`）。
 

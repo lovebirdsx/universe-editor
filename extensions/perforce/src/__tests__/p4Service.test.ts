@@ -294,3 +294,64 @@ describe('P4Service._spawn command timeout', () => {
     expect(result.stdout).toBe('ok')
   })
 })
+
+// User-initiated cancellation (status-bar spinner click → `client.cancelBusy()`).
+// Same red line as the watchdog: the abort listener and `close` handler are async,
+// so cancelling must resolve a failure result and never reject — a rejection from
+// there has no catcher and takes the extension host down.
+describe('P4Service._spawn cancellation via AbortSignal', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('kills the child and resolves a cancelled failure result', async () => {
+    const svc = makeService()
+    const source = new AbortController()
+    const p = svc.exec(['reconcile', '-n', '-a', '-e', '-d', '/repo/a.txt'], {
+      signal: source.signal,
+    })
+    await flush()
+    expect(child.killed).toBe(false)
+    source.abort()
+    expect(child.killed).toBe(true)
+    // A killed child closes with a null code; the failure must be resolved, not thrown.
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toMatch(/was cancelled/)
+  })
+
+  it('kills immediately when the signal is already aborted at spawn time', async () => {
+    const svc = makeService()
+    const source = new AbortController()
+    source.abort()
+    const p = svc.exec(['opened'], { signal: source.signal })
+    await flush()
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/cancelled/)
+  })
+
+  it('leaves a command that finished before the abort untouched', async () => {
+    const svc = makeService()
+    const source = new AbortController()
+    const p = svc.exec(['info'], { signal: source.signal })
+    await flush()
+    child.stdout.emit('data', Buffer.from('ok'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('ok')
+    // The listener was detached on close — a later abort must not kill anything.
+    source.abort()
+    expect(child.killed).toBe(false)
+  })
+})

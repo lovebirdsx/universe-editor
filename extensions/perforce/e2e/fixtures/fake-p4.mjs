@@ -326,6 +326,11 @@ function main() {
       }
       // Pending changelists this client owns. The default changelist is never
       // listed by p4; report each numbered changelist we've created.
+      //
+      // A changelist holding shelved files carries a *bare* `shelved` key (empty
+      // value) and omits it otherwise — verified against P4D 2024.2. The extension
+      // filters on it to avoid one `describe -S -s` per pending changelist, so
+      // emitting it is required for that path to be exercised faithfully.
       emit(
         Object.entries(state.changelists).map(([id, cl]) => ({
           change: id,
@@ -333,6 +338,7 @@ function main() {
           status: 'pending',
           client: state.client,
           user: state.user,
+          ...(Object.keys(state.shelved[id] ?? {}).length > 0 ? { shelved: '' } : {}),
         })),
       )
       return 0

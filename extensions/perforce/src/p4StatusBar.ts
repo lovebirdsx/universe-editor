@@ -37,17 +37,30 @@ export class P4StatusBarController {
       this._item.hide()
       return
     }
-    const { clientName, connection, openedCount, reconcileCount, busy } = client.status
+    const { clientName, connection, openedCount, reconcileCount, busy, busyCancellable } =
+      client.status
     if (busy) {
       // A long-running p4 operation is in flight — show a spinner + its label so
       // the user sees the client isn't stalled (mirrors git's syncing indicator).
+      // While it's cancellable, clicking cancels instead of opening the graph:
+      // without this the only way out of a slow operation is to wait out
+      // `perforce.commandTimeout`.
       this._item.text = `$(server) ${clientName}: ${busy}…`
       this._item.showProgress = 'spinning'
-      this._item.tooltip = busy
+      if (busyCancellable) {
+        this._item.command = 'perforce.cancelBusy'
+        this._item.tooltip = localize('perforce.status.cancelTooltip', '{0} — click to cancel', {
+          0: busy,
+        })
+      } else {
+        this._item.command = 'perforce-graph.view'
+        this._item.tooltip = busy
+      }
       this._item.show()
       return
     }
     this._item.showProgress = undefined
+    this._item.command = 'perforce-graph.view'
     if (connection === 'offline') {
       this._item.text = `$(server) ${clientName} (${localize('perforce.status.offline', 'offline')})`
     } else if (connection === 'not-logged-in') {

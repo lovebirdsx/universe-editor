@@ -6,8 +6,9 @@
  *
  * `p4 opened` JSON fields of interest: `depotFile`, `clientFile`, `change`
  * ('default' or a number), `action`, `rev`, and `unresolved` (present when the
- * file needs resolving). Field presence varies by server version, so every read
- * is defensive.
+ * file needs resolving). `p4 changes -s pending` adds `change`, `desc` and a bare
+ * `shelved` key (present only when the changelist has shelved files). Field
+ * presence varies by server version, so every read is defensive.
  */
 import type { OpenedFile, P4Action, PendingChangelist } from './changelist.js'
 import { clientToLocalPath } from './pathUtil.js'
@@ -75,11 +76,22 @@ export function parseOpened(
   return out
 }
 
-/** Parse one `p4 changes -s pending` JSON record into a PendingChangelist. */
+/** Parse one `p4 changes -s pending` JSON record into a PendingChangelist.
+ *
+ *  The `shelved` key is reported *bare* (`... shelved` in `-ztag`, i.e. an empty
+ *  string value) for changelists that have shelved files and is omitted entirely
+ *  for those that don't — verified against P4D 2024.2. So presence, not value, is
+ *  the signal; an empty string is truthy-as-present here. Callers use it to avoid
+ *  fanning out one `describe -S -s` per pending changelist (a GB-scale, minutes-
+ *  long command on huge changelists). */
 export function parsePendingRecord(record: Record<string, unknown>): PendingChangelist | undefined {
   const id = asString(record['change'])
   if (!id) return undefined
-  return { id, description: asString(record['desc']) ?? '' }
+  return {
+    id,
+    description: asString(record['desc']) ?? '',
+    shelved: record['shelved'] !== undefined,
+  }
 }
 
 export function parsePending(records: readonly Record<string, unknown>[]): PendingChangelist[] {

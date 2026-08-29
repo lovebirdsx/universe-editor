@@ -285,6 +285,16 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     commands.registerCommand('perforce.showOutput', () => out.show()),
 
+    // Cancel whatever cancellable p4 operation is in flight. Wired to the
+    // status-bar spinner's click while it's busy, so a slow operation doesn't have
+    // to be waited out. Runtime-only registration (deliberately NOT in
+    // `contributes.commands`) — declaring it there registers a handler-less
+    // duplicate that shadows this one.
+    commands.registerCommand('perforce.cancelBusy', (arg) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      target?.cancelBusy()
+    }),
+
     commands.registerCommand('perforce.login', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       if (!target) return

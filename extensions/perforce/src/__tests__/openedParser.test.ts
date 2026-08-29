@@ -109,8 +109,23 @@ describe('parseOpened / parsePending', () => {
       { notAChange: true },
     ])
     expect(pending).toEqual([
-      { id: '100', description: 'first line\nsecond' },
-      { id: '101', description: '' },
+      { id: '100', description: 'first line\nsecond', shelved: false },
+      { id: '101', description: '', shelved: false },
+    ])
+  })
+
+  // `p4 changes` reports a *bare* `shelved` key (empty value after -ztag parsing)
+  // for changelists holding a shelf and omits it otherwise — verified against P4D
+  // 2024.2. Presence, not value, is the signal; the refresh uses it to skip
+  // `describe -S -s` for every changelist without a shelf.
+  it('flags a pending changelist that reports a bare shelved key', () => {
+    const pending = parsePending([
+      { change: '100', desc: 'has a shelf', shelved: '' },
+      { change: '101', desc: 'no shelf' },
+    ])
+    expect(pending.map((c) => [c.id, c.shelved])).toEqual([
+      ['100', true],
+      ['101', false],
     ])
   })
 })

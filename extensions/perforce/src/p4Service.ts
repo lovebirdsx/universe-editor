@@ -54,6 +54,14 @@ export interface P4ExecOptions {
    * Swarm HTTP (the 44-minute poll wedge). Overrides the service default.
    */
   readonly timeoutMs?: number
+  /**
+   * Kill the child when this signal aborts, resolving a failure result whose
+   * stderr says the command was cancelled. Lets a user abandon a long operation
+   * (the status-bar spinner offers this) instead of waiting out
+   * `perforce.commandTimeout`. A command already finished when the signal fires is
+   * unaffected; a command that never started is never spawned.
+   */
+  readonly signal?: AbortSignal
 }
 
 /**
@@ -442,6 +450,21 @@ export class P4Service {
       const stderr: Buffer[] = []
       let stdoutBytes = 0
       let overflowed = false
+      // Cancellation: kill the child and remember why, so `close` can resolve a
+      // cancelled failure instead of a confusing "killed with no output" result.
+      // Same red line as the watchdog — this callback is async, so it never throws.
+      let cancelled = false
+      const signal = options?.signal
+      const onAbort = (): void => {
+        cancelled = true
+        this._log?.(`  p4 ${args[0] ?? ''} cancelled; killing`)
+        proc.kill()
+      }
+      if (signal) {
+        if (signal.aborted) onAbort()
+        else signal.addEventListener('abort', onAbort, { once: true })
+      }
+      const detachSignal = (): void => signal?.removeEventListener('abort', onAbort)
       proc.stdout.on('data', (chunk: Buffer) => {
         if (overflowed) return
         stdoutBytes += chunk.length
@@ -458,12 +481,19 @@ export class P4Service {
       proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
       proc.on('error', (err) => {
         watchdog.dispose()
+        detachSignal()
         prepared.cleanup()
         reject(err)
       })
       proc.on('close', (code) => {
         watchdog.dispose()
+        detachSignal()
         prepared.cleanup()
+        if (cancelled) {
+          const msg = `p4 ${args[0] ?? ''} was cancelled`
+          resolve({ stdout: '', stderr: msg, exitCode: code ?? 1 })
+          return
+        }
         if (watchdog.timedOut) {
           // The watchdog already logged the kill; resolve a failure result so a
           // hung command fails loudly instead of wedging its gate slot forever.

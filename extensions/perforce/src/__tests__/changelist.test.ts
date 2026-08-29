@@ -44,7 +44,9 @@ describe('groupChangelists', () => {
 
   it('buckets opened files into default and numbered groups', () => {
     const files = [opened('default', 'a.txt'), opened('123', 'b.txt'), opened('123', 'c.txt')]
-    const pending: PendingChangelist[] = [{ id: '123', description: 'my feature\ndetails' }]
+    const pending: PendingChangelist[] = [
+      { id: '123', description: 'my feature\ndetails', shelved: false },
+    ]
     const groups = groupChangelists(files, pending, labels)
 
     expect(groups.map((g) => g.id)).toEqual(['default', numberedGroupId('123')])
@@ -65,7 +67,11 @@ describe('groupChangelists', () => {
   })
 
   it('shows a pending changelist with no open files', () => {
-    const groups = groupChangelists([], [{ id: '9', description: 'shelved only' }], labels)
+    const groups = groupChangelists(
+      [],
+      [{ id: '9', description: 'shelved only', shelved: true }],
+      labels,
+    )
     expect(groups.map((g) => g.id)).toEqual(['default', numberedGroupId('9')])
     expect(groups[1]!.files).toEqual([])
   })
