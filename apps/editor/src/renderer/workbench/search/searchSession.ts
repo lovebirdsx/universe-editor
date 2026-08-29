@@ -21,7 +21,13 @@ export interface SearchSessionState {
   replaceVisible: boolean
   filtersVisible: boolean
   results: readonly IFileMatch[]
-  treeCollapsedIds: ReadonlySet<string>
+  /**
+   * Nodes the user expanded or collapsed by hand, as a diff against whatever
+   * `search.collapseResults` would have chosen. Storing the deviation rather
+   * than the raw collapsed set keeps an auto-collapsed file from being mistaken
+   * for a deliberate collapse when the setting later changes.
+   */
+  treeExpansionOverrides: ReadonlyMap<string, boolean>
   /** Resource last opened from the results tree, so a re-focus can target it. */
   lastActivatedResource?: string
   /** The match node id that was focused when that file was opened. */
@@ -51,7 +57,7 @@ function emptyState(): SearchSessionState {
     replaceVisible: false,
     filtersVisible: false,
     results: [],
-    treeCollapsedIds: new Set<string>(),
+    treeExpansionOverrides: new Map<string, boolean>(),
   }
 }
 

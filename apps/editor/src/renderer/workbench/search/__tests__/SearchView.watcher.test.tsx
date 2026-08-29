@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   Emitter,
+  IConfigurationService,
   IEditorService,
   IFileService,
   IFileWatcherService,
@@ -30,14 +31,29 @@ import {
 import { SearchView } from '../SearchView.js'
 import { ServicesContext } from '../../useService.js'
 import { resetSearchSession } from '../searchSession.js'
+import { stubConfigurationService } from './stubConfigurationService.js'
 
 class FakeTextSearch implements ITextSearchServiceType {
   declare readonly _serviceBrand: undefined
   results: readonly IFileMatch[] = []
+  /** When set, emit these batches via onResults before resolving. */
+  batches: readonly (readonly IFileMatch[])[] | undefined
+  /** Delay between emitted batches, so each lands past the 80ms result-flush timer. */
+  batchDelayMs = 0
   async search(
     _query: ITextSearchQuery,
     opts?: ITextSearchOptions,
   ): Promise<readonly IFileMatch[]> {
+    if (opts?.signal?.aborted) return []
+    if (this.batches) {
+      for (const batch of this.batches) {
+        if (opts?.signal?.aborted) return []
+        opts?.onResults?.(batch)
+        if (this.batchDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, this.batchDelayMs))
+        }
+      }
+    }
     if (opts?.signal?.aborted) return []
     opts?.onProgress?.({ filesScanned: 1, filesMatched: this.results.length, totalMatches: 1 })
     return this.results
@@ -102,9 +118,13 @@ function renderWithServices(search: FakeTextSearch) {
   const services = new ServiceCollection()
   const watcherEmitter = new Emitter<readonly IFileChangeEvent[]>()
   const workspaceEmitter = new Emitter<IWorkspace | null>()
+  let watcherSubscriptions = 0
   const watcher = {
     _serviceBrand: undefined,
-    onDidChangeFiles: watcherEmitter.event,
+    onDidChangeFiles: ((listener: (e: readonly IFileChangeEvent[]) => unknown) => {
+      watcherSubscriptions++
+      return watcherEmitter.event(listener)
+    }) as typeof watcherEmitter.event,
     watch: async () => {},
     unwatch: async () => {},
   }
@@ -124,11 +144,15 @@ function renderWithServices(search: FakeTextSearch) {
   services.set(IFileService, stubFile as never)
   services.set(IFileWatcherService, watcher as never)
   services.set(IWorkspaceService, workspace as never)
+  services.set(IConfigurationService, stubConfigurationService())
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return {
     watcherEmitter,
     workspaceEmitter,
+    get watcherSubscriptionCount() {
+      return watcherSubscriptions
+    },
     rendered: render(
       <ServicesContext.Provider value={inst}>
         <SearchView />
@@ -150,7 +174,7 @@ async function runQuery(search: FakeTextSearch) {
     fireEvent.change(input, { target: { value: 'foo' } })
   })
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(260)
+    await vi.advanceTimersByTimeAsync(400)
   })
   void search
 }
@@ -199,5 +223,27 @@ describe('SearchView watcher + workspace', () => {
       ctx.workspaceEmitter.fire(null)
     })
     expect(screen.queryByText(/matches/)).toBeFalsy()
+  })
+
+  it('subscribes to the file watcher once while results stream in', async () => {
+    const search = new FakeTextSearch()
+    const a = makeFileMatch('/ws/a.ts')
+    const b = makeFileMatch('/ws/b.ts')
+    const c = makeFileMatch('/ws/c.ts')
+    search.batches = [[a], [b], [c]]
+    search.batchDelayMs = 100
+    search.results = [a, b, c]
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    // Drain the remaining batches across the 80ms flush timer so `results` state
+    // changes several times; the watcher must stay subscribed exactly once.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(ctx.watcherSubscriptionCount).toBe(1)
+    act(() => {
+      ctx.watcherEmitter.fire([{ type: 'modified', resource: URI.file('/ws/a.ts') }])
+    })
+    expect(screen.queryByTestId('search-stale')).toBeTruthy()
   })
 })

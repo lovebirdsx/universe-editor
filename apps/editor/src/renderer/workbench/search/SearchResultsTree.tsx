@@ -24,6 +24,7 @@ import {
   type IFileMatch,
   type ITextSearchMatch,
   type URI,
+  IConfigurationService,
   localize,
   markAsSingleton,
 } from '@universe-editor/platform'
@@ -39,12 +40,14 @@ import {
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resourceDisplayPath } from '../../services/files/fileSystemScheme.js'
-import { useObservable } from '../useService.js'
+import { recordPerfPhase } from '../../services/performance/perfPhases.js'
+import { useObservable, useOptionalService } from '../useService.js'
 import { searchViewState } from './searchViewState.js'
 import { searchSession } from './searchSession.js'
 import {
   EMPTY_SNAPSHOT,
   buildSearchSnapshot,
+  type SearchBuildContext,
   type SearchNode,
   type SearchSnapshot,
 } from './searchTree.js'
@@ -54,6 +57,33 @@ import {
   type SearchMenuItem,
 } from './SearchResultsContextMenu.js'
 import styles from './SearchView.module.css'
+
+/** Mirrors VSCode's `search.collapseResults` auto threshold. */
+const AUTO_COLLAPSE_THRESHOLD = 10
+
+type CollapseResults = 'auto' | 'alwaysCollapse' | 'alwaysExpand'
+
+/**
+ * What `search.collapseResults` alone would choose for a node. `alwaysExpand`
+ * (the default, as in VSCode) keeps every file open; `auto` folds any container
+ * holding many matches, which is what keeps the visible-row count near the file
+ * count on huge result sets.
+ *
+ * Mirrors VSCode's searchView.shouldCollapse: the threshold applies to every
+ * non-match node, so folders fold on the same rule as files.
+ */
+function policyExpanded(node: SearchNode, mode: CollapseResults): boolean {
+  if (mode === 'alwaysCollapse') return false
+  if (mode === 'auto' && node.kind !== 'match' && node.matchCount > AUTO_COLLAPSE_THRESHOLD) {
+    return false
+  }
+  return true
+}
+
+/** The policy default, unless the user expanded/collapsed this node by hand. */
+function resolveExpanded(node: SearchNode, mode: CollapseResults): boolean {
+  return searchSession.treeExpansionOverrides.get(node.id) ?? policyExpanded(node, mode)
+}
 
 export interface SearchResultsTreeProps {
   results: readonly IFileMatch[]
@@ -134,6 +164,34 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
     const viewMode = useObservable(searchViewState.viewMode)
     const [menu, setMenu] = useState<SearchContextMenuState | null>(null)
 
+    // Soft dependency: the tree renders fine without a container (it takes all
+    // its data through props), so an absent configuration service just means the
+    // VSCode-default `alwaysExpand`.
+    const configurationService = useOptionalService(IConfigurationService)
+    const [collapseMode, setCollapseMode] = useState<CollapseResults>(
+      () =>
+        configurationService?.get<CollapseResults>('search.collapseResults', 'alwaysExpand') ??
+        'alwaysExpand',
+    )
+    // The model is created once and `defaultExpanded` is called long after
+    // render, so the current mode is also kept in a ref for it to read.
+    const collapseModeRef = useRef<CollapseResults>(collapseMode)
+    collapseModeRef.current = collapseMode
+
+    useEffect(() => {
+      if (!configurationService) return
+      const d = markAsSingleton(
+        configurationService.onDidChangeConfiguration((e) => {
+          if (!e.affectsConfiguration('search.collapseResults')) return
+          setCollapseMode(
+            configurationService.get<CollapseResults>('search.collapseResults', 'alwaysExpand') ??
+              'alwaysExpand',
+          )
+        }),
+      )
+      return () => d.dispose()
+    }, [configurationService])
+
     const containerRef = useRef<HTMLDivElement | null>(null)
     const snapshotRef = useRef<SearchSnapshot>(EMPTY_SNAPSHOT)
     const model = useOwnedTreeModel<SearchNode>(() => {
@@ -148,27 +206,25 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       // so the first render already shows the correct state without a flash.
       return new TreeModel<SearchNode>({
         dataSource,
-        defaultExpanded: (n) => !searchSession.treeCollapsedIds.has(n.id),
+        defaultExpanded: (n) => resolveExpanded(n, collapseModeRef.current),
       })
     })
 
-    const snapshot = useMemo(
-      () => buildSearchSnapshot(results, rootUri, viewMode),
-      [results, rootUri, viewMode],
-    )
+    // Feeding the previous build back in lets unchanged files keep their node
+    // objects, so a streamed batch costs O(changed matches) instead of O(all).
+    const prevBuildRef = useRef<SearchBuildContext | undefined>(undefined)
+    const snapshot = useMemo(() => {
+      const next = recordPerfPhase('search.buildSnapshot', () =>
+        buildSearchSnapshot(results, rootUri, viewMode, prevBuildRef.current),
+      )
+      prevBuildRef.current = { rootUri, mode: viewMode, snapshot: next }
+      return next
+    }, [results, rootUri, viewMode])
     snapshotRef.current = snapshot
 
-    // id → node lookup derived from the snapshot, for imperative focus targeting.
-    const nodeById = useMemo(() => {
-      const map = new Map<string, SearchNode>()
-      for (const n of snapshot.roots) map.set(n.id, n)
-      for (const children of snapshot.childrenMap.values()) {
-        for (const n of children) map.set(n.id, n)
-      }
-      return map
-    }, [snapshot])
-    const nodeByIdRef = useRef(nodeById)
-    nodeByIdRef.current = nodeById
+    // id → node lookup, built as part of the snapshot for imperative focus targeting.
+    const nodeByIdRef = useRef(snapshot.nodeById)
+    nodeByIdRef.current = snapshot.nodeById
 
     // Selected file URIs (deduped), read lazily at dragstart so a multi-selection
     // drags all of them. A match contributes its file; folders are skipped.
@@ -220,15 +276,32 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
 
     useLayoutEffect(() => {
       // Seed newly-seen expandable nodes, respecting any saved collapsed state from
-      // a prior mount so switching views and back preserves user collapses.
-      const toSeed = snapshot.expandableIds.filter((id) => !model.hasState(id))
-      if (toSeed.length > 0) {
-        model.setExpansion(
-          toSeed.map((id) => [id, !searchSession.treeCollapsedIds.has(id)] as const),
-        )
+      // a prior mount so switching views and back preserves user collapses. One
+      // combined call: seeding and the post-data refresh would otherwise fire two
+      // structure events per streamed batch, recomputing every visible row twice.
+      const toSeed: (readonly [string, boolean])[] = []
+      for (const id of snapshot.expandableIds) {
+        if (model.hasState(id)) continue
+        const node = snapshot.nodeById.get(id)
+        if (node) toSeed.push([id, resolveExpanded(node, collapseModeRef.current)] as const)
       }
-      model.refresh()
+      recordPerfPhase('search.seedExpansion', () => model.setExpansionAndRefresh(toSeed))
     }, [snapshot, model])
+
+    // Switching search.collapseResults re-applies the new policy to nodes that
+    // are already rendered (VSCode does the same), leaving hand-set nodes alone.
+    const appliedModeRef = useRef(collapseMode)
+    useLayoutEffect(() => {
+      if (appliedModeRef.current === collapseMode) return
+      appliedModeRef.current = collapseMode
+      const updates: (readonly [string, boolean])[] = []
+      for (const id of snapshotRef.current.expandableIds) {
+        const node = snapshotRef.current.nodeById.get(id)
+        if (!node) continue
+        updates.push([id, resolveExpanded(node, collapseMode)] as const)
+      }
+      model.setExpansionAndRefresh(updates)
+    }, [collapseMode, model])
 
     // Collapse-all driven from the title toolbar via a shared signal counter.
     const collapseSignal = useObservable(searchViewState.collapseAllSignal)
@@ -239,13 +312,25 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       model.setExpansion(snapshotRef.current.expandableIds.map((id) => [id, false] as const))
     }, [collapseSignal, model])
 
-    // Persist collapsed nodes to searchSession so switching views and back restores them.
+    // Persist expansion deviations to searchSession so switching views and back
+    // restores them. Only nodes whose state differs from what the current
+    // collapseResults policy would pick are recorded, so an auto-collapsed file
+    // is not later mistaken for a deliberate one.
     useEffect(() => {
       const d = markAsSingleton(
         model.onDidChangeStructure(() => {
-          searchSession.treeCollapsedIds = new Set(
-            snapshotRef.current.expandableIds.filter((id) => !model.isExpanded(id)),
-          )
+          const overrides = new Map<string, boolean>()
+          for (const id of snapshotRef.current.expandableIds) {
+            if (!model.hasState(id)) continue
+            const node = snapshotRef.current.nodeById.get(id)
+            if (!node) continue
+            const expanded = model.isExpanded(id)
+            // A node back at its policy default stops being an override.
+            if (expanded !== policyExpanded(node, collapseModeRef.current)) {
+              overrides.set(id, expanded)
+            }
+          }
+          searchSession.treeExpansionOverrides = overrides
         }),
       )
       return () => d.dispose()

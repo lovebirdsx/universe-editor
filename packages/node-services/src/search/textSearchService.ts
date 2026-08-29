@@ -131,8 +131,59 @@ function bytesOrTextToString(value: RgBytesOrText): string {
   return value.text
 }
 
-function columnAtUtf8Offset(line: string, byteOffset: number): number {
-  return Buffer.from(line).subarray(0, byteOffset).toString().length + 1
+/**
+ * ripgrep reports column offsets in UTF-8 bytes; the editor needs UTF-16 code
+ * units. Converting by encoding the whole line and measuring a prefix costs
+ * O(line length) per submatch, which turns pathological on the long single-line
+ * files a short query inevitably hits: one `.tsbuildinfo` is a single 373KB
+ * line and a two-letter query matches it hundreds of times. Measured on this
+ * repo, a query like "he" pushed ~90MB through `Buffer.from` and stalled the
+ * main process for 3+ seconds — the whole window froze.
+ *
+ * Two properties make it cheap instead. Lines that are pure ASCII (which every
+ * pathological case here is — `.tsbuildinfo` and source maps are ASCII JSON)
+ * have column === byteOffset + 1, so one `Buffer.byteLength` per *line* settles
+ * every submatch in O(1). Otherwise offsets within a line arrive in increasing
+ * order, so a single cursor walks the line once per line rather than once per
+ * submatch, restarting only if a caller ever goes backwards.
+ */
+export function createColumnMapper(line: string): (byteOffset: number) => number {
+  if (Buffer.byteLength(line) === line.length) {
+    return (byteOffset) => (byteOffset <= 0 ? 1 : Math.min(byteOffset, line.length) + 1)
+  }
+  let cursorBytes = 0
+  let cursorUnits = 0
+  return (byteOffset) => {
+    if (byteOffset <= 0) return 1
+    if (byteOffset < cursorBytes) {
+      cursorBytes = 0
+      cursorUnits = 0
+    }
+    while (cursorBytes < byteOffset && cursorUnits < line.length) {
+      const code = line.charCodeAt(cursorUnits)
+      if (code < 0x80) {
+        cursorBytes += 1
+        cursorUnits += 1
+      } else if (code < 0x800) {
+        cursorBytes += 2
+        cursorUnits += 1
+      } else if (code >= 0xd800 && code <= 0xdbff && cursorUnits + 1 < line.length) {
+        const next = line.charCodeAt(cursorUnits + 1)
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          // Surrogate pair: one 4-byte code point spanning two UTF-16 units.
+          cursorBytes += 4
+          cursorUnits += 2
+        } else {
+          cursorBytes += 3
+          cursorUnits += 1
+        }
+      } else {
+        cursorBytes += 3
+        cursorUnits += 1
+      }
+    }
+    return cursorUnits + 1
+  }
 }
 
 function progressOf(
@@ -304,6 +355,7 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
           : [{ match: { text: line.slice(0, 1) }, start: 0, end: line.length > 0 ? 1 : 0 }]
       const ranges: ITextSearchRange[] = []
       let fileCount = fileMatchCounts.get(key) ?? 0
+      const columnAt = createColumnMapper(line)
 
       for (const submatch of submatches) {
         if (fileCount >= maxMatchesPerFile) {
@@ -316,8 +368,8 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
           break
         }
         ranges.push({
-          startColumn: columnAtUtf8Offset(line, submatch.start),
-          endColumn: columnAtUtf8Offset(line, submatch.end),
+          startColumn: columnAt(submatch.start),
+          endColumn: columnAt(submatch.end),
         })
         fileCount++
         totalMatches++

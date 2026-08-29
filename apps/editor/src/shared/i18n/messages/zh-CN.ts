@@ -753,6 +753,15 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.search.exclude.description':
     '配置搜索和快速打开时要排除的文件和文件夹 glob 模式。继承 files.exclude。',
   'settings.search.threads.description': '全局搜索使用的线程数。0 表示自动（CPU 内核数减 2）。',
+  'settings.search.searchOnType.description':
+    '输入时即搜索全部文件。关闭后仅在按下 Enter 时执行搜索。',
+  'settings.search.searchOnTypeDebouncePeriod.description':
+    '停止输入后等待多久（毫秒）再执行搜索。几乎匹配一切的正则表达式会按比例延长等待时间。仅在启用「输入时搜索」时生效。',
+  'settings.search.collapseResults.description':
+    '搜索结果树是否默认展开文件。折叠可让超大结果集保持流畅。',
+  'settings.search.collapseResults.auto': '匹配少于 10 条的文件展开，其余折叠。',
+  'settings.search.collapseResults.alwaysCollapse': '折叠所有文件。',
+  'settings.search.collapseResults.alwaysExpand': '展开所有文件。',
   'settings.search.placeholder': '搜索设置（{count}）',
   'settings.swarm.notifications.enabled':
     '当有新审核进入「需我处理」列表且编辑器窗口未聚焦时，显示系统桌面通知。点击通知会打开该审核。',

@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import {
   DisposableTracker,
+  IConfigurationService,
   IFileWatcherService,
   IStatusBarService,
   ITextSearchService,
@@ -29,12 +30,13 @@ import { useSearchEngine, type ISearchQuery } from '../useSearchEngine.js'
 import { ServicesContext } from '../../useService.js'
 import { searchViewState } from '../searchViewState.js'
 import { searchSession } from '../searchSession.js'
+import { stubConfigurationService } from './stubConfigurationService.js'
 
 afterEach(() => {
   cleanup()
   setDisposableTracker(null)
   searchViewState.setViewMode('list')
-  searchSession.treeCollapsedIds = new Set()
+  searchSession.treeExpansionOverrides = new Map()
 })
 
 function makeMatch(path: string): IFileMatch {
@@ -91,6 +93,7 @@ function makeContainer(tracked: Tracked) {
     [IStatusBarService, statusBarService],
     [IFileWatcherService, fileWatcherService],
     [IWorkspaceService, workspaceService],
+    [IConfigurationService, stubConfigurationService()],
   ])
   return {
     invokeFunction: (fn: (accessor: { get: (id: unknown) => unknown }) => unknown) =>

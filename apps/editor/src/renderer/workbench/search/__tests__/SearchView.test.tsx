@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   Emitter,
+  IConfigurationService,
   IEditorService,
   IFileService,
   IFileWatcherService,
@@ -31,6 +32,7 @@ import { SearchView } from '../SearchView.js'
 import { ServicesContext } from '../../useService.js'
 import { resetSearchSession } from '../searchSession.js'
 import { searchViewState } from '../searchViewState.js'
+import { stubConfigurationService } from './stubConfigurationService.js'
 
 class FakeTextSearch implements ITextSearchServiceType {
   declare readonly _serviceBrand: undefined
@@ -128,7 +130,7 @@ const stubFile = {
   async rename() {},
 }
 
-function renderWithServices(search: FakeTextSearch) {
+function renderWithServices(search: FakeTextSearch, config: Record<string, unknown> = {}) {
   const services = new ServiceCollection()
   const editor = new FakeEditorService()
   const status = new FakeStatusBar()
@@ -156,6 +158,7 @@ function renderWithServices(search: FakeTextSearch) {
   services.set(IFileService, stubFile as never)
   services.set(IFileWatcherService, watcher as never)
   services.set(IWorkspaceService, workspace as never)
+  services.set(IConfigurationService, stubConfigurationService(config))
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return {
@@ -179,6 +182,10 @@ function makeFileMatch(path: string, line: number, preview: string): IFileMatch 
   }
 }
 
+// Just past search.searchOnTypeDebouncePeriod (300ms), so one tick of this length
+// fires the debounced search without also draining the 80ms result-flush timer.
+const PAST_DEBOUNCE_MS = 320
+
 describe('SearchView', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -192,7 +199,7 @@ describe('SearchView', () => {
     cleanup()
   })
 
-  it('debounces input changes — single search after 250ms', async () => {
+  it('debounces input changes — a single search after the debounce period', async () => {
     const search = new FakeTextSearch()
     search.results = [makeFileMatch('/ws/a.ts', 1, 'foo bar')]
     renderWithServices(search)
@@ -208,7 +215,7 @@ describe('SearchView', () => {
     })
     expect(search.searchCalls).toBe(0)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(search.searchCalls).toBe(1)
   })
@@ -226,9 +233,9 @@ describe('SearchView', () => {
     act(() => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
-    // Fire debounce (250ms) → runSearch → onResults batch → 80ms flush timer.
+    // Fire the debounce → runSearch → onResults batch → 80ms flush timer.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100)
@@ -253,14 +260,14 @@ describe('SearchView', () => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(screen.queryByText(/matches/)).toBeTruthy()
     act(() => {
       fireEvent.change(input, { target: { value: '' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(screen.queryByText(/matches/)).toBeFalsy()
   })
@@ -275,14 +282,14 @@ describe('SearchView', () => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     const firstSignal = search.lastSignal
     act(() => {
       fireEvent.change(input, { target: { value: 'foobar' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(firstSignal?.aborted).toBe(true)
   })
@@ -297,7 +304,7 @@ describe('SearchView', () => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(ctx.status.entries.length).toBeGreaterThan(0)
     expect(ctx.status.entries[0]?.disposed).toBe(false)
@@ -316,7 +323,7 @@ describe('SearchView', () => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(search.searchCalls).toBe(1)
     expect(screen.getByText('a.ts')).toBeTruthy()
@@ -344,14 +351,14 @@ describe('SearchView', () => {
       fireEvent.change(input, { target: { value: 'foo' } })
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     const before = search.searchCalls
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Match Case' }))
     })
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(260)
+      await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(search.searchCalls).toBeGreaterThan(before)
   })

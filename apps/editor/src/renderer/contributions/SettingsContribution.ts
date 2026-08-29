@@ -419,6 +419,40 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Number of threads used for workspace text search. 0 means automatic (CPU cores minus 2).',
             ),
           },
+          'search.searchOnType': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.search.searchOnType.description',
+              'Search all files as you type. When disabled, the search runs only when you press Enter.',
+            ),
+          },
+          'search.searchOnTypeDebouncePeriod': {
+            type: 'number',
+            default: 300,
+            minimum: 0,
+            description: localize(
+              'settings.search.searchOnTypeDebouncePeriod.description',
+              'How long to wait (in milliseconds) after you stop typing before running the search. Regular expressions that match almost everything wait proportionally longer. Only applies when Search On Type is enabled.',
+            ),
+          },
+          'search.collapseResults': {
+            type: 'string',
+            enum: ['auto', 'alwaysCollapse', 'alwaysExpand'],
+            default: 'alwaysExpand',
+            enumDescriptions: [
+              localize(
+                'settings.search.collapseResults.auto',
+                'Files with less than 10 results are expanded. Others are collapsed.',
+              ),
+              localize('settings.search.collapseResults.alwaysCollapse', 'Collapse every file.'),
+              localize('settings.search.collapseResults.alwaysExpand', 'Expand every file.'),
+            ],
+            description: localize(
+              'settings.search.collapseResults.description',
+              'Whether the search results tree expands files by default. Collapsing keeps very large result sets responsive.',
+            ),
+          },
         },
       }),
     )

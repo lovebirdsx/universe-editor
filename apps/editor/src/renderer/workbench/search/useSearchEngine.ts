@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  IConfigurationService,
   IFileWatcherService,
   IStatusBarService,
   ITextSearchService,
@@ -22,8 +23,12 @@ import {
   type ITextSearchProgress,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { recordPerfPhase } from '../../services/performance/perfPhases.js'
+import { searchDebounceDelay } from './searchDebounce.js'
 
-const DEBOUNCE_MS = 250
+// Base keystroke debounce, matching VSCode's search.searchOnTypeDebouncePeriod.
+// Loose regexes stretch it further — see searchDebounce.ts.
+const DEFAULT_DEBOUNCE_MS = 300
 // Coalesce incremental result batches into the tree on this cadence, so a large
 // result set fills in progressively without re-rendering on every batch. Mirrors
 // VSCode's ~80ms refresh scheduler.
@@ -47,6 +52,8 @@ export interface ISearchEngine {
   readonly regexError: string | null
   readonly isStale: boolean
   readonly rerun: () => void
+  /** Run the current query now, bypassing the debounce (Enter in the input). */
+  readonly submit: () => void
 }
 
 export function useSearchEngine(
@@ -57,6 +64,7 @@ export function useSearchEngine(
   const statusBarService = useService(IStatusBarService)
   const fileWatcherService = useService(IFileWatcherService)
   const workspaceService = useService(IWorkspaceService)
+  const configurationService = useService(IConfigurationService)
 
   const [results, setResults] = useState<readonly IFileMatch[]>(initialResults)
   const [progress, setProgress] = useState<ITextSearchProgress | null>(null)
@@ -72,6 +80,9 @@ export function useSearchEngine(
   // (append-only, stable order) instead of appearing all at once at the end.
   const accumRef = useRef<Map<string, IFileMatch>>(new Map())
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Resources currently in the results, read by the file watcher without making
+  // it re-subscribe on every streamed batch.
+  const knownRef = useRef<Set<string>>(new Set(initialResults.map((fm) => fm.resource.toString())))
   // On a remount with cached results for the same query, skip the first debounced
   // run so switching sidebars back doesn't re-search (and flash the status bar).
   const skipFirstRef = useRef(initialResults.length > 0 && query.pattern.length > 0)
@@ -87,6 +98,7 @@ export function useSearchEngine(
         flushTimerRef.current = null
       }
       accumRef.current = new Map()
+      knownRef.current = new Set()
       if (q.length === 0) {
         setResults([])
         setProgress(null)
@@ -104,7 +116,7 @@ export function useSearchEngine(
       const flush = (): void => {
         flushTimerRef.current = null
         if (ac.signal.aborted) return
-        setResults([...accumRef.current.values()])
+        recordPerfPhase('search.flushResults', () => setResults([...accumRef.current.values()]))
       }
       const scheduleFlush = (): void => {
         if (flushTimerRef.current !== null) return
@@ -162,11 +174,25 @@ export function useSearchEngine(
       return
     }
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => runSearch(pattern), DEBOUNCE_MS)
+    // Clearing the query always takes effect immediately — there is nothing to
+    // debounce, and leaving stale results up while the input is empty is worse
+    // than an extra render.
+    if (pattern.length === 0) {
+      runSearch('')
+      return
+    }
+    if (!configurationService.get<boolean>('search.searchOnType', true)) return
+    const baseMs =
+      configurationService.get<number>('search.searchOnTypeDebouncePeriod', DEFAULT_DEBOUNCE_MS) ??
+      DEFAULT_DEBOUNCE_MS
+    debounceRef.current = setTimeout(
+      () => runSearch(pattern),
+      searchDebounceDelay(pattern, isRegex, baseMs),
+    )
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [pattern, runSearch])
+  }, [pattern, isRegex, runSearch, configurationService])
 
   useEffect(() => {
     return () => {
@@ -180,14 +206,18 @@ export function useSearchEngine(
     }
   }, [])
 
+  // The watched set is kept in a ref and refreshed separately, so streaming
+  // results don't tear down and re-create this subscription every batch.
   useEffect(() => {
-    if (results.length === 0) return
-    const known = new Set(results.map((fm) => fm.resource.toString()))
+    knownRef.current = new Set(results.map((fm) => fm.resource.toString()))
+  }, [results])
+
+  useEffect(() => {
     const disposable = markAsSingleton(
       fileWatcherService.onDidChangeFiles((events) => {
+        if (knownRef.current.size === 0) return
         for (const ev of events) {
-          const key = ev.resource.toString()
-          if (known.has(key)) {
+          if (knownRef.current.has(ev.resource.toString())) {
             setIsStale(true)
             return
           }
@@ -195,7 +225,7 @@ export function useSearchEngine(
       }),
     )
     return () => disposable.dispose()
-  }, [results, fileWatcherService])
+  }, [fileWatcherService])
 
   useEffect(() => {
     const disposable = markAsSingleton(
@@ -256,5 +286,15 @@ export function useSearchEngine(
     runSearch(pattern)
   }, [runSearch, pattern])
 
-  return { results, setResults, progress, isSearching, regexError, isStale, rerun }
+  // Enter in the query input: run now, cancelling any pending debounce. This is
+  // the only way to search when search.searchOnType is off.
+  const submit = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+    runSearch(pattern)
+  }, [runSearch, pattern])
+
+  return { results, setResults, progress, isSearching, regexError, isStale, rerun, submit }
 }

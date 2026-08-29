@@ -328,4 +328,76 @@ describe('TreeModel', () => {
       expect(ids(second)).toEqual(['a', 'b']) // collapsed — children stay hidden
     })
   })
+
+  describe('setExpansionAndRefresh', () => {
+    const counting = (model: TreeModel<N>): (() => number) => {
+      let count = 0
+      model.onDidChangeStructure(() => count++)
+      return () => count
+    }
+    const sample = (): N[] => [
+      { id: 'a', children: [{ id: 'a1' }, { id: 'a2' }] },
+      { id: 'b', children: [{ id: 'b1' }] },
+    ]
+
+    it('applies a batch of updates in a single structure event', () => {
+      const model = new TreeModel({ dataSource: eagerSource(sample()) })
+      const structures = counting(model)
+
+      model.setExpansionAndRefresh([
+        ['a', true],
+        ['b', false],
+      ])
+
+      expect(structures()).toBe(1)
+      expect(model.isExpanded('a')).toBe(true)
+      expect(model.isExpanded('b')).toBe(false)
+      expect(ids(model)).toEqual(['a', 'a1', 'a2', 'b'])
+    })
+
+    it('emits one event where setExpansion + refresh emitted two', () => {
+      const updates = [['a', true] as const]
+
+      const separate = new TreeModel({ dataSource: eagerSource(sample()) })
+      const separateEvents = counting(separate)
+      separate.setExpansion(updates)
+      separate.refresh()
+      expect(separateEvents()).toBe(2)
+
+      const combined = new TreeModel({ dataSource: eagerSource(sample()) })
+      const combinedEvents = counting(combined)
+      combined.setExpansionAndRefresh(updates)
+      expect(combinedEvents()).toBe(1)
+
+      // Same resulting state, half the events.
+      expect(ids(combined)).toEqual(ids(separate))
+    })
+
+    it('invalidates the visible cache even when no expansion flag moved', () => {
+      // refresh() semantics: the caller's data changed even if expansion did not.
+      const roots: N[] = [{ id: 'a' }]
+      const model = new TreeModel({ dataSource: eagerSource(roots) })
+      expect(ids(model)).toEqual(['a'])
+
+      const structures = counting(model)
+      roots.push({ id: 'c' })
+      model.setExpansionAndRefresh([])
+
+      expect(structures()).toBe(1)
+      expect(ids(model)).toEqual(['a', 'c'])
+    })
+
+    it('does not fire onDidChangeExpansion (that is expand/collapse only)', () => {
+      const roots = sample()
+      const model = new TreeModel({ dataSource: eagerSource(roots) })
+      let expansionEvents = 0
+      model.onDidChangeExpansion(() => expansionEvents++)
+
+      model.setExpansionAndRefresh([['a', true]])
+      expect(expansionEvents).toBe(0)
+
+      model.collapse(roots[0]!)
+      expect(expansionEvents).toBe(1)
+    })
+  })
 })

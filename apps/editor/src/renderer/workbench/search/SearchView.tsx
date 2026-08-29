@@ -66,7 +66,7 @@ export function SearchView() {
     [pattern, isRegex, matchCase, matchWholeWord, includesText, excludesText, useExcludeSettings],
   )
 
-  const { results, setResults, progress, isSearching, regexError, isStale, rerun } =
+  const { results, setResults, progress, isSearching, regexError, isStale, rerun, submit } =
     useSearchEngine(query, searchSession.results)
   const { onActivateMatch, onReplaceFile, onReplaceMatch, replaceAll, dismissMatch, dismissFile } =
     useSearchActions(results, setResults, replacePattern)
@@ -197,12 +197,15 @@ export function SearchView() {
     rerun()
   }, [rerun])
 
-  const totals = results.reduce(
-    (acc, fm) => ({
-      files: acc.files + 1,
-      matches: acc.matches + fm.matches.reduce((n, m) => n + m.ranges.length, 0),
+  const totals = useMemo(
+    () => ({
+      files: results.length,
+      matches: results.reduce(
+        (n, fm) => n + fm.matches.reduce((m, mm) => m + mm.ranges.length, 0),
+        0,
+      ),
     }),
-    { files: 0, matches: 0 },
+    [results],
   )
 
   return (
@@ -230,7 +233,10 @@ export function SearchView() {
         onToggleReplace={() => setReplaceVisible((v) => !v)}
         onToggleFilters={() => setFiltersVisible((v) => !v)}
         onToggleUseExclude={() => searchViewState.setUseExcludeSettings(!useExcludeSettings)}
-        onSubmit={() => searchViewState.addHistory(pattern)}
+        onSubmit={() => {
+          searchViewState.addHistory(pattern)
+          submit()
+        }}
         onTabToResults={() => treeRef.current?.focusFirst()}
       />
       {regexError && <p className={styles['error']}>{regexError}</p>}

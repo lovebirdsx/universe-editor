@@ -348,6 +348,38 @@ test.describe('@perf interaction perf collect (real workspace)', () => {
         await page.keyboard.press('Escape')
       })
 
+      // The reported pain point, reproduced verbatim: type a word, then delete
+      // it back to one character with a pause partway. The pause is the whole
+      // point — it is longer than search.searchOnTypeDebouncePeriod, so the
+      // short prefixes ("he", "h") each genuinely execute a full search instead
+      // of being swallowed by the debounce. Short prefixes match orders of
+      // magnitude more often than the full word (in this repo: "hello" 573
+      // matches, "he" 260k, "h" 1.2M), so every one of them runs to the 10000
+      // result cap and pays a full-size result render.
+      await runScenario('search-retype-midflight', async () => {
+        await page.keyboard.press('Control+Shift+f')
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Control+a')
+        await page.keyboard.press('Delete')
+        for (let round = 0; round < 3; round++) {
+          await page.keyboard.type('hello', { delay: 60 })
+          await page.waitForTimeout(600)
+          // Delete "llo" fast (debounce swallows these), then pause at "he"…
+          for (let i = 0; i < 3; i++) {
+            await page.keyboard.press('Backspace')
+            await page.waitForTimeout(40)
+          }
+          await page.waitForTimeout(600)
+          // …then "h", each with its own pause so both really search.
+          await page.keyboard.press('Backspace')
+          await page.waitForTimeout(600)
+          await page.keyboard.press('Backspace')
+          await page.waitForTimeout(600)
+        }
+        await page.waitForTimeout(1000)
+        await page.keyboard.press('Escape')
+      })
+
       await runScenario('explorer-click', async () => {
         await page.keyboard.press('Control+Shift+e')
         const probeItem = page.locator('[role="treeitem"]', { hasText: PROBE_FILE })

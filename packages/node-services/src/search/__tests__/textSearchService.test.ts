@@ -8,6 +8,7 @@ import { tmpdir, cpus } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
 import {
+  createColumnMapper,
   resolveSearchThreads,
   rgErrorMsgForDisplay,
   resolveRipgrepDiskPath,
@@ -387,4 +388,93 @@ describe('TextSearchService', () => {
       svc.dispose()
     }
   }, 15_000)
+
+  it('reports 1-based UTF-16 columns for multi-byte matches', async () => {
+    const root = await makeTempRoot()
+    // The match sits after a 3-byte CJK run and a 4-byte emoji, so a byte
+    // offset and a UTF-16 column genuinely disagree here.
+    await writeFile(path.join(root, 'utf8.txt'), '中文🎉 needle tail\n', 'utf8')
+
+    const svc = new TextSearchService()
+    try {
+      const complete = await svc.search(baseQuery(root, 'needle'))
+      expect(complete.results).toHaveLength(1)
+      const range = complete.results[0]!.matches[0]!.ranges[0]!
+      // '中文🎉 ' is 5 UTF-16 units (the emoji is a surrogate pair), so the
+      // match starts at column 6 and spans 'needle'.
+      expect(range.startColumn).toBe(6)
+      expect(range.endColumn).toBe(12)
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
+})
+
+describe('createColumnMapper', () => {
+  // The pre-existing implementation, kept as the differential oracle: it is
+  // obviously correct and obviously too slow (it encoded the whole line per
+  // submatch, which stalled the main process for seconds on the long
+  // single-line files a short query hits).
+  const oracle = (line: string, byteOffset: number): number =>
+    Buffer.from(line).subarray(0, byteOffset).toString().length + 1
+
+  /** Byte offsets that start a character — the only offsets ripgrep emits. */
+  const charBoundaries = (line: string): number[] => {
+    const offsets: number[] = []
+    let bytes = 0
+    for (const ch of line) {
+      offsets.push(bytes)
+      bytes += Buffer.byteLength(ch)
+    }
+    offsets.push(bytes)
+    return offsets
+  }
+
+  const LINES = [
+    'const foo = bar',
+    '',
+    'a',
+    '中文测试内容',
+    'héllo wörld',
+    '🎉 emoji 🚀 test',
+    'mixed 中文 and 🎉 and ascii',
+    'ünïcödé'.repeat(20),
+    '\t\ttabbed content',
+    'ending with surrogate 🎉',
+    '\ud800lone high surrogate',
+    'lone low \udc00 surrogate',
+    'trailing lone high \ud800',
+    '🎉'.repeat(30),
+    'a🎉b🎉c',
+  ]
+
+  it('matches a whole-line encode at every character boundary', () => {
+    for (const line of LINES) {
+      const mapper = createColumnMapper(line)
+      for (const offset of charBoundaries(line)) {
+        expect(mapper(offset), `line=${JSON.stringify(line)} offset=${offset}`).toBe(
+          oracle(line, offset),
+        )
+      }
+    }
+  })
+
+  it('agrees regardless of the order offsets are requested in', () => {
+    for (const line of LINES) {
+      const descending = createColumnMapper(line)
+      for (const offset of [...charBoundaries(line)].reverse()) {
+        expect(descending(offset), `line=${JSON.stringify(line)} offset=${offset}`).toBe(
+          oracle(line, offset),
+        )
+      }
+    }
+  })
+
+  it('clamps non-positive and past-the-end offsets', () => {
+    const mapper = createColumnMapper('abc')
+    expect(mapper(0)).toBe(1)
+    expect(mapper(-5)).toBe(1)
+    expect(createColumnMapper('abc')(99)).toBe(4)
+    expect(createColumnMapper('中文')(99)).toBe(3)
+  })
 })

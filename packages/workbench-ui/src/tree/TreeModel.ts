@@ -230,6 +230,22 @@ export class TreeModel<T> extends Disposable {
     if (changed) this._emitStructure()
   }
 
+  /**
+   * `setExpansion(updates)` followed by `refresh()`, but with a single structure
+   * event. Views that seed expansion state right after their data changed (e.g.
+   * Search, on every streamed batch) would otherwise fire twice and recompute
+   * the whole visible-row list for each.
+   */
+  setExpansionAndRefresh(updates: Iterable<readonly [string, boolean]>): void {
+    for (const [id, expanded] of updates) {
+      const state = this._ensureState(id)
+      if (state.expanded !== expanded) state.expanded = expanded
+    }
+    // Unconditional, matching refresh(): the caller's data changed even when no
+    // expansion flag moved.
+    this._emitStructure()
+  }
+
   /** Whether the model has any recorded state for an id (vs. never seen). */
   hasState(id: string): boolean {
     return this._state.has(id)
