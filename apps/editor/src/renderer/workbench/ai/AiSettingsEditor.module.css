@@ -532,6 +532,13 @@
   color: var(--vscode-editor-mutedForeground);
 }
 
+/* Configured, but its metadata could not be resolved — distinct from "unset". */
+.featureUnavailable {
+  font-size: var(--font-size-sm);
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* -- two-section models panel -------------------------------------------- */
 
 .section {

@@ -21,9 +21,11 @@ import {
 import {
   IAiModelService,
   ICommandService,
+  bareModelName,
   constObservable,
   derived,
   localize,
+  parseModelRef,
   type AiModelMetadata,
 } from '@universe-editor/platform'
 import { Bot, Settings, Sparkles } from 'lucide-react'
@@ -83,24 +85,54 @@ export function AiTitleBarButton() {
 
   const btnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
+  /** Monotonic guard so a stale enumeration can never paint over a newer one. */
+  const modelsTokenRef = useRef(0)
+  /** Set on unmount; async reload continuations skip setState once it flips. */
+  const disposedRef = useRef(false)
 
-  const refresh = useCallback(async () => {
-    const [models, chat, inlineModel, commit, sessionTitle] = await Promise.all([
-      ai.getModels(),
-      ai.getActiveModelId(),
-      ai.getInlineCompletionModelId(),
-      ai.getCommitModelId(),
-      ai.getSessionTitleModelId(),
-    ])
-    return { models, chat, inline: inlineModel, commit, sessionTitle }
+  useEffect(() => {
+    disposedRef.current = false
+    return () => {
+      disposedRef.current = true
+      modelsTokenRef.current++
+    }
+  }, [])
+
+  /**
+   * The four active-model reads hit main's memory; `getModels` is a network
+   * enumeration that can block for the full metadata timeout. Keeping them in one
+   * `Promise.all` made every configured row read "Select model…" until the
+   * enumeration settled, so the ids land first and models only upgrade the names.
+   */
+  const reload = useCallback(async () => {
+    try {
+      const [chat, inlineModel, commit, sessionTitle] = await Promise.all([
+        ai.getActiveModelId(),
+        ai.getInlineCompletionModelId(),
+        ai.getCommitModelId(),
+        ai.getSessionTitleModelId(),
+      ])
+      if (disposedRef.current) return
+      setSnapshot((prev) => ({ ...prev, chat, inline: inlineModel, commit, sessionTitle }))
+    } catch (error) {
+      console.debug('aiTitleBar: active model reads failed', error)
+    }
+
+    const token = ++modelsTokenRef.current
+    void ai
+      .getModels()
+      .then((models) => {
+        if (disposedRef.current || token !== modelsTokenRef.current) return
+        setSnapshot((prev) => ({ ...prev, models }))
+      })
+      .catch((error) => {
+        console.debug('aiTitleBar: model enumeration failed', error)
+      })
   }, [ai])
 
   useEffect(() => {
-    let alive = true
     const apply = () => {
-      void refresh().then((s) => {
-        if (alive) setSnapshot(s)
-      })
+      void reload()
       setInlineEnabled(inline.enabled)
     }
     apply()
@@ -113,10 +145,9 @@ export function AiTitleBarButton() {
       inline.onDidChange(apply),
     ]
     return () => {
-      alive = false
       for (const d of disposables) d.dispose()
     }
-  }, [ai, inline, refresh])
+  }, [ai, inline, reload])
 
   const mcpServersObs = useMemo(
     () =>
@@ -152,8 +183,18 @@ export function AiTitleBarButton() {
     setOpen((o) => !o)
   }
 
-  const modelName = (id: string | undefined): string | undefined =>
-    id ? snapshot.models.find((m) => m.id === id)?.name : undefined
+  /**
+   * A configured id we can't find in the (possibly not-yet-loaded, possibly
+   * degraded) model list still names a model: fall back to the wire name encoded
+   * in the id rather than reporting the slot as empty.
+   */
+  const modelName = (id: string | undefined): string | undefined => {
+    if (!id) return undefined
+    const found = snapshot.models.find((m) => m.id === id)
+    if (found) return found.name
+    const ref = parseModelRef(id)
+    return ref ? bareModelName(id, ref.providerId, ref.protocol) : id
+  }
 
   const rows: readonly AiSlotRow[] = [
     {

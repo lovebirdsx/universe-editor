@@ -140,4 +140,16 @@ describe('AiTitleBarButton', () => {
     expect(commands.executeCommand).toHaveBeenCalledWith('workbench.action.agent.openView')
     expect(commands.executeCommand).toHaveBeenCalledWith('ai.manageModels')
   })
+
+  it('names a configured slot from its id while the enumeration is still in flight', async () => {
+    const ai = makeAi()
+    // A hung /v1/models must not make a configured slot read "Select model…".
+    ai.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
+    renderButton(ai)
+    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    await screen.findByTestId('ai-quick-settings')
+
+    expect(screen.getByTestId('ai-quick-settings-model-chat').textContent).toBe('m1')
+    expect(screen.getByTestId('ai-quick-settings-model-commit').textContent).toBe('Select model…')
+  })
 })

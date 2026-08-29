@@ -1697,6 +1697,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiFeatures.inline.desc': '编辑器幽灵文本补全使用的模型（可选更小更快的模型）。',
   'aiFeatures.sessionTitle': '会话标题',
   'aiFeatures.sessionTitle.desc': '为 AGENTS 会话生成友好标题使用的模型。',
+  'aiFeatures.unavailable': '不可用',
   'aiFeatures.unset': '未设置',
 
   // --- AI: settings help (markdown) ---
