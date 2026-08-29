@@ -16,16 +16,12 @@ import {
   IViewDescriptorService,
   IViewsService,
   InstantiationService,
-  ProgressLocation,
   ServiceCollection,
   observableValue,
   type IDisposable,
   type IProgressOptions,
 } from '@universe-editor/platform'
-import {
-  GitGraphCommands,
-  type GitGraphLoadResult,
-} from '@universe-editor/extensions-common'
+import { GitGraphCommands, type GitGraphLoadResult } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
 import { scmViewState } from '../../scm/scmViewState.js'
@@ -99,9 +95,7 @@ function renderEditor() {
   } as unknown as IDialogService)
   services.set(IProgressService, {
     _serviceBrand: undefined,
-    withProgress: vi.fn(async (_options: IProgressOptions, task: () => Promise<unknown>) =>
-      task(),
-    ),
+    withProgress: vi.fn(async (_options: IProgressOptions, task: () => Promise<unknown>) => task()),
   } as unknown as IProgressService)
   services.set(IStorageService, {
     _serviceBrand: undefined,
