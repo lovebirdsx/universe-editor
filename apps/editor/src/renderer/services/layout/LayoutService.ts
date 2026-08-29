@@ -304,12 +304,26 @@ export class LayoutService extends Disposable implements ILayoutService {
   // -- Focus routing --------------------------------------------------------
 
   async focusPart(id: PartId, opts: IFocusPartOptions = {}): Promise<boolean> {
+    return this._focusPart(id, opts, undefined)
+  }
+
+  /**
+   * `skipViewId` is set when focusPart is reached from focusView: that caller
+   * already owns the view-level focusing, so re-delegating to the part's
+   * remembered view would recurse forever whenever the remembered view *is*
+   * the one being focused (i.e. any view the user has focused before).
+   */
+  private async _focusPart(
+    id: PartId,
+    opts: IFocusPartOptions,
+    skipViewId: string | undefined,
+  ): Promise<boolean> {
     const part = this._parts.get(id)
     if (!part) return false
     if (!this.getVisible(id)) this.setVisible(id, true)
 
     const lastViewId = this._lastFocusedViewForPart(id)
-    if (lastViewId) {
+    if (lastViewId && lastViewId !== skipViewId) {
       const ok = await this.focusView(lastViewId, opts)
       if (ok) return true
     }
@@ -353,7 +367,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     // Make the container visible at its location, then bring its hosting part up.
     this._viewsService.openViewContainer(descriptor.containerId)
     const partId = LayoutService._partIdForLocation(container.location)
-    const ok = await this.focusPart(partId, opts)
+    const ok = await this._focusPart(partId, opts, viewId)
     if (!ok) return false
 
     // The view's focusable element registers when its React subtree mounts,

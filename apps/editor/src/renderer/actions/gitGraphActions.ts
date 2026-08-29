@@ -5,15 +5,28 @@
 
 import {
   Action2,
+  IEditorGroupsService,
   IEditorService,
   KeybindingWeight,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
+import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { gitGraphViewState } from '../services/gitGraph/gitGraphViewState.js'
 
 const CATEGORY = localize2('command.category.gitGraph', 'Git Graph')
+
+/**
+ * The graph is a singleton editor, so reveal the existing tab wherever it lives
+ * rather than opening a second copy in the active group (openEditor only dedupes
+ * within the active group).
+ */
+async function openGitGraph(accessor: ServicesAccessor): Promise<void> {
+  const groups = accessor.get(IEditorGroupsService)
+  if (revealEditorInGroups(groups, (e) => e instanceof GitGraphEditorInput)) return
+  await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
+}
 
 export class ViewGitGraphAction extends Action2 {
   static readonly ID = 'git-graph.view'
@@ -28,7 +41,7 @@ export class ViewGitGraphAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
+    await openGitGraph(accessor)
   }
 }
 
@@ -49,7 +62,7 @@ export class OpenGitGraphFromExtensionAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor, hash?: unknown): Promise<void> {
-    await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
+    await openGitGraph(accessor)
     if (typeof hash !== 'string' || hash === '') return
     // Always route through the observable pendingReveal, never a directly
     // registered revealCommit: openEditor resolves before React commits the

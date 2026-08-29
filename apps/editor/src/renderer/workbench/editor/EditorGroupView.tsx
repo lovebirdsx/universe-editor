@@ -261,7 +261,7 @@ function useGroupVersion(group: IEditorGroup): string {
       return () => combined.dispose()
     },
     () =>
-      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.editors.map((e) => e.label).join('|')}:${group.isLocked ? 'L' : ''}`,
+      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.editors.map((e) => e.label).join('|')}:${group.isLocked ? 'L' : ''}:${group.activationId}`,
   )
 }
 
@@ -776,6 +776,7 @@ export const EditorGroupView = memo(function EditorGroupView({
   // focus the Monaco editor so keyboard input goes to the editor immediately — unless the
   // open explicitly asked to keep focus elsewhere (Space-preview from a list).
   const activeEditor = group.activeEditor
+  const activationId = group.activationId
   const focusedActivationRef = useRef<number>(-1)
   const wasActiveGroupRef = useRef(false)
   useLayoutEffect(() => {
@@ -787,18 +788,20 @@ export const EditorGroupView = memo(function EditorGroupView({
     // leave focus in the originating tree). Record the activation either way so
     // the already-active branch below doesn't re-focus it.
     if (!wasActive) {
-      focusedActivationRef.current = group.activationId
+      focusedActivationRef.current = activationId
       if (group.lastActivationPreservedFocus) return
       focusEditorInput(activeEditor, contextKeyService, group.id)
       return
     }
     // Already-active group: handle each activation once (dedupes StrictMode's
-    // double-invoke) and honor preserveFocus.
-    if (focusedActivationRef.current === group.activationId) return
-    focusedActivationRef.current = group.activationId
+    // double-invoke) and honor preserveFocus. Re-activating the editor that is
+    // already active bumps activationId too, so "open X" while X is already
+    // showing pulls focus back into the editor.
+    if (focusedActivationRef.current === activationId) return
+    focusedActivationRef.current = activationId
     if (group.lastActivationPreservedFocus) return
     focusEditorInput(activeEditor, contextKeyService, group.id)
-  }, [contextKeyService, group, isActiveGroup, activeEditor])
+  }, [contextKeyService, group, isActiveGroup, activeEditor, activationId])
 
   const renderContent = () => {
     const active = group.activeEditor

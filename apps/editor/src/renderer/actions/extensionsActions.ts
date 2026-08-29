@@ -9,9 +9,9 @@ import {
   Action2,
   IDialogService,
   IFileDialogService,
+  ILayoutService,
   INotificationService,
   IQuickInputService,
-  IViewsService,
   Severity,
   localize,
   localize2,
@@ -40,7 +40,11 @@ export class ShowExtensionsAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    await accessor.get(IViewsService).openViewContainer('workbench.view.extensions')
+    // focusView (not openViewContainer) so re-running this while the extensions
+    // container is already active still moves keyboard focus into the view.
+    await accessor
+      .get(ILayoutService)
+      .focusView('workbench.view.extensions.main', { source: 'command' })
   }
 }
 

@@ -59,7 +59,11 @@ export interface IEditorGroupModel {
   readonly activeEditor: EditorInput | undefined
   readonly previewEditor: EditorInput | undefined
   readonly count: number
-  /** Monotonic counter bumped on every effective activation; lets views dedupe focus handling. */
+  /**
+   * Monotonic counter bumped on every activation — including re-activating the
+   * editor that is already active. Lets views dedupe focus handling while still
+   * seeing repeat activations.
+   */
   readonly activationId: number
   /** Whether the most recent activation asked to keep keyboard focus off the editor. */
   readonly lastActivationPreservedFocus: boolean
@@ -313,7 +317,18 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     const existing = this.findEditor(editor)
     if (!existing) return
     this._lastActivationPreservedFocus = options?.preserveFocus === true
-    if (existing === this._activeEditor) return
+    if (existing === this._activeEditor) {
+      // Re-activating the editor that is already active still counts as an
+      // activation: the caller asked for it (command palette, keybinding, tab
+      // click) and expects keyboard focus to land back in the editor. Bump the
+      // activation id and announce it so views re-run their focus handling —
+      // without it, "open X" while X is already active was a silent no-op and
+      // focus stayed wherever it was (sidebar, quick input). Active editor
+      // identity is unchanged, so `onDidActiveEditorChange` stays quiet.
+      this._activationId++
+      this._onDidChangeModel.fire({ kind: 'active', editor: existing })
+      return
+    }
     this._setActiveInternal(existing)
   }
 

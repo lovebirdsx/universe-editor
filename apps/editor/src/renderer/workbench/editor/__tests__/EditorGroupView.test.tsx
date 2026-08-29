@@ -1,10 +1,15 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for EditorGroupView — tab activation.
+ *  Tests for EditorGroupView — tab activation and re-activation focus.
  *
- *  Regression: clicking a tab that was not active did not visually activate it
+ *  Regression 1: clicking a tab that was not active did not visually activate it
  *  because useGroupVersion's snapshot only tracked *whether* an active editor
  *  existed, not *which* editor was active. All subsequent snapshots returned the
  *  same number, so React skipped the re-render.
+ *
+ *  Regression 2: re-activating the editor that was already active (running its
+ *  command again from the palette / a keybinding) did not move keyboard focus
+ *  back into the editor — the snapshot omitted activationId, so nothing
+ *  re-rendered and the focus effect never re-ran.
  *--------------------------------------------------------------------------------------------*/
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +31,14 @@ import {
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { EditorGroupView } from '../EditorGroupView.js'
 import { ServicesContext } from '../../useService.js'
+import { focusEditorInput } from '../../../services/editor/editorFocus.js'
+
+vi.mock('../../../services/editor/editorFocus.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../services/editor/editorFocus.js')>()
+  return { ...actual, focusEditorInput: vi.fn(() => true) }
+})
+
+const focusEditorInputMock = vi.mocked(focusEditorInput)
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -260,6 +273,54 @@ describe('EditorGroupView — tab switching', () => {
 
     fireEvent.mouseLeave(tab)
     expect(screen.queryByTestId('editor-tab-hover')).toBeNull()
+
+    svc.dispose()
+  })
+})
+
+describe('EditorGroupView — re-activation focus', () => {
+  function renderGroup(svc: EditorGroupsService) {
+    return render(
+      <ServicesContext.Provider value={makeFakeInstantiation()}>
+        <EditorGroupView
+          group={svc.activeGroup}
+          groupsService={svc}
+          resolveComponent={(k) => componentMap.get(k)}
+        />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  it('re-activating the already-active editor focuses it again', () => {
+    // Regression: "open X" while X was already the active editor was a silent
+    // no-op down in EditorGroupModel, so this view never re-ran its focus
+    // effect and keyboard focus stayed in the quick input / side bar.
+    const svc = new EditorGroupsService()
+    const group = svc.activeGroup
+    const a = new TabTestInput('Alpha', URI.file('/test/a.txt'))
+    group.openEditor(a)
+    renderGroup(svc)
+    focusEditorInputMock.mockClear()
+
+    act(() => group.setActive(a))
+
+    expect(focusEditorInputMock).toHaveBeenCalledTimes(1)
+    expect(focusEditorInputMock).toHaveBeenCalledWith(a, expect.anything(), group.id)
+
+    svc.dispose()
+  })
+
+  it('re-activating with preserveFocus leaves focus where it is', () => {
+    const svc = new EditorGroupsService()
+    const group = svc.activeGroup
+    const a = new TabTestInput('Alpha', URI.file('/test/a.txt'))
+    group.openEditor(a)
+    renderGroup(svc)
+    focusEditorInputMock.mockClear()
+
+    act(() => group.setActive(a, { preserveFocus: true }))
+
+    expect(focusEditorInputMock).not.toHaveBeenCalled()
 
     svc.dispose()
   })

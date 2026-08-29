@@ -244,14 +244,39 @@ describe('EditorGroupModel — setActive', () => {
     expect(model.activeEditor).toBe(a)
   })
 
-  it('setActive to already-active editor is a no-op', () => {
+  it('setActive to already-active editor re-announces the activation', () => {
+    // Regression: re-running "open X" while X is already active used to be a
+    // silent no-op, so the view never re-ran its focus handling and keyboard
+    // focus stayed in the side bar / quick input.
     const model = new EditorGroupModel()
     const a = make('a')
     model.openEditor(a)
-    const spy = vi.fn()
-    model.onDidActiveEditorChange(spy)
+    const activeSpy = vi.fn()
+    const modelSpy = vi.fn()
+    model.onDidActiveEditorChange(activeSpy)
+    model.onDidChangeModel(modelSpy)
+    const before = model.activationId
+
     model.setActive(a)
-    expect(spy).not.toHaveBeenCalled()
+
+    // Active editor identity is unchanged, so onDidActiveEditorChange stays quiet…
+    expect(activeSpy).not.toHaveBeenCalled()
+    expect(model.activeEditor).toBe(a)
+    // …but the activation is still observable to views.
+    expect(model.activationId).toBe(before + 1)
+    expect(modelSpy).toHaveBeenCalledWith({ kind: 'active', editor: a })
+  })
+
+  it('setActive to already-active editor honors preserveFocus', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    model.openEditor(a)
+    const before = model.activationId
+
+    model.setActive(a, { preserveFocus: true })
+
+    expect(model.lastActivationPreservedFocus).toBe(true)
+    expect(model.activationId).toBe(before + 1)
   })
 
   it('setActive on unknown editor is a no-op', () => {
@@ -259,8 +284,10 @@ describe('EditorGroupModel — setActive', () => {
     const a = make('a')
     const b = make('b')
     model.openEditor(a)
+    const before = model.activationId
     model.setActive(b)
     expect(model.activeEditor).toBe(a)
+    expect(model.activationId).toBe(before)
   })
 })
 

@@ -48,6 +48,8 @@ import {
 } from '@universe-editor/platform'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { useObservable, useService } from '../useService.js'
+import { useViewFocusable } from '../useViewFocusable.js'
+import { SWARM_REVIEWS_VIEW_ID } from '../../actions/swarmActions.js'
 import { IconButton, Input, Spinner, cx, useScrollRestore } from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
@@ -189,9 +191,16 @@ export function SwarmReviewsView() {
   // mount — keeps a genuinely blank description from re-fetching on every poll.
   const healAttemptedRef = useRef<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const filterInputRef = useRef<HTMLInputElement | null>(null)
   useScrollRestore(
     'swarmReviews',
     useCallback(() => scrollRef.current, []),
+  )
+  // Focus target for ILayoutService.focusView (Show Swarm Reviews); without it
+  // focusView polls for two seconds and settles on the side bar part instead.
+  useViewFocusable(
+    SWARM_REVIEWS_VIEW_ID,
+    useCallback(() => filterInputRef.current, []),
   )
   const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>(
     swarmReviewsViewState.transitions,
@@ -682,6 +691,7 @@ export function SwarmReviewsView() {
       {swarmReady && (
         <div className={styles['filterRow']}>
           <Input
+            ref={filterInputRef}
             className={styles['filterInput']}
             value={keyword}
             onChange={(e) => onKeywordChange(e.target.value)}

@@ -12,7 +12,6 @@ import {
   IEditorService,
   ILayoutService,
   IQuickInputService,
-  IViewsService,
   MenuId,
   PartId,
   localize,
@@ -25,11 +24,15 @@ import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationT
 
 const CATEGORY = localize2('command.category.swarm', 'Swarm')
 
+export const SWARM_REVIEWS_VIEW_ID = 'workbench.view.swarm.reviews'
+
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
   const layout = accessor.get(ILayoutService)
   if (!layout.getVisible(PartId.SideBar)) layout.setVisible(PartId.SideBar, true)
-  accessor.get(IViewsService).openViewContainer('workbench.view.swarm')
+  // focusView (not openViewContainer) so re-running this while the container is
+  // already the active one still moves keyboard focus into the view.
+  void layout.focusView(SWARM_REVIEWS_VIEW_ID, { source: 'command' })
 }
 
 export class OpenSwarmReviewsAction extends Action2 {

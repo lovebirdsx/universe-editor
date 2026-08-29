@@ -9,6 +9,9 @@ import {
   type IViewsService,
   type IWorkspaceService,
   PartId,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
 } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
 import {
@@ -158,5 +161,64 @@ describe('LayoutService — part registry', () => {
     d.dispose()
     expect(() => svc.registerPart(b)).not.toThrow()
     expect(svc.getPart(PartId.SideBar)).toBe(b)
+  })
+})
+
+describe('LayoutService — focus routing', () => {
+  const CONTAINER_ID = 'workbench.view.focusProbe'
+  const VIEW_ID = 'workbench.view.focusProbe.main'
+
+  it('focusView does not recurse when the part remembers that same view', async () => {
+    // Regression: focusView -> focusPart -> "focus the part's last focused
+    // view" -> focusView ... blew the stack whenever the remembered view was
+    // the one being focused, which is true for any view the user has already
+    // focused once (e.g. Show Swarm Reviews after clicking into the view).
+    const containerDisposable = ViewContainerRegistry.registerViewContainer({
+      id: CONTAINER_ID,
+      label: 'Focus Probe',
+      icon: 'window',
+      order: 99,
+      location: ViewContainerLocation.SideBar,
+    })
+    const viewDisposable = ViewRegistry.registerView({
+      id: VIEW_ID,
+      name: 'Focus Probe',
+      containerId: CONTAINER_ID,
+      componentKey: 'focusProbe.main',
+      order: 1,
+    })
+
+    const memory = new ViewContainerMemoryService()
+    memory.setLastFocusedView(CONTAINER_ID, VIEW_ID)
+    const views = {
+      _serviceBrand: undefined,
+      openViewContainer: vi.fn(),
+      getActiveViewContainerId: vi.fn(() => CONTAINER_ID),
+    } as unknown as IViewsService
+    const element = { focus: vi.fn() }
+    const registry = {
+      _serviceBrand: undefined,
+      register: vi.fn(() => ({ dispose() {} })),
+      get: vi.fn(() => () => element),
+      onDidChange: Event.None,
+    } as unknown as IFocusableRegistry
+
+    const svc = new LayoutService(
+      makeStorage(),
+      views,
+      registry,
+      memory as unknown as IViewContainerMemoryService,
+      makeEditorGroups(),
+      makeContextKeyService(),
+      makeWorkspace(),
+    )
+    const part = makePart(PartId.SideBar)
+    svc.registerPart(part)
+
+    await expect(svc.focusView(VIEW_ID, { timeoutMs: 200 })).resolves.toBe(true)
+    expect(element.focus).toHaveBeenCalledTimes(1)
+
+    containerDisposable.dispose()
+    viewDisposable.dispose()
   })
 })

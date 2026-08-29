@@ -24,6 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
@@ -81,15 +82,7 @@ export class ManageModelsAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof AiSettingsEditorInput) {
-          groups.activateGroup(group)
-          group.setActive(editor)
-          return
-        }
-      }
-    }
+    if (revealEditorInGroups(groups, (e) => e instanceof AiSettingsEditorInput)) return
     openInLockAwareGroup(groups, new AiSettingsEditorInput())
   }
 }
