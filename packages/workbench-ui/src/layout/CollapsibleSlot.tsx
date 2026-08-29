@@ -105,6 +105,9 @@ export function CollapsibleSlot({
         <span className={styles['slotTitle']}>{title}</span>
       )}
       {statusIcon}
+      {/* Reserve room for the hover actions so they can overlay the header's
+       *  trailing edge (left of the status icon) without covering the title. */}
+      {actions != null && <span className={styles['slotActionsSlot']} aria-hidden="true" />}
       <span className={styles['slotChevron']} aria-hidden="true">
         <Chevron collapsed={collapsed} />
       </span>
@@ -119,6 +122,9 @@ export function CollapsibleSlot({
       {actions != null ? (
         <span className={styles['slotHeaderRow']}>
           {header}
+          {/* A button cannot nest inside the header's toggle button, so the
+           *  actions overlay the header row absolutely, landing just left of the
+           *  status icon to line up with the other cards' trailing columns. */}
           <span className={styles['slotActions']}>{actions}</span>
         </span>
       ) : (

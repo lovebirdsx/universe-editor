@@ -91,14 +91,34 @@
 
 /* `visibility` rather than `display`: the actions share a flex line with the
    title, so removing them from layout on hover-out would make the title's
-   ellipsis jump. Hidden but reserved keeps the header geometry stable. */
+   ellipsis jump. Hidden but reserved keeps the header geometry stable.
+
+   The actions overlay the header row absolutely, just left of the status icon
+   and chevron, so they line up with the trailing columns of cards that carry no
+   actions. The header button reserves matching room via `.slotActionsSlot`. */
+.slotHeaderRow {
+  position: relative;
+}
+
 .slotActions {
-  flex: none;
+  position: absolute;
+  /* From the row's right edge: header padding + chevron(14) + gap + status(14)
+   *  + gap lands the actions immediately left of the status icon. */
+  right: calc(var(--spacing-4) + 14px + var(--spacing-4) + 14px + var(--spacing-4));
+  top: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
-  padding-right: var(--spacing-4);
+  padding-right: var(--spacing-2);
   visibility: hidden;
+}
+
+/* In-button spacer matching the overlay's footprint so a long title never slides
+   under the actions: 20px button + gap to the status icon. */
+.slotActionsSlot {
+  flex: none;
+  width: calc(20px + var(--spacing-2));
 }
 
 /* Scoped to the header row, not the whole slot — a nested sub-agent card's
