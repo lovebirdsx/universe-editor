@@ -129,6 +129,99 @@ export function computeDirtyDiffRegionsFromLines(
   return regions
 }
 
+/**
+ * Where the dirty-diff marks are painted. Mirrors VSCode's `scm.diffDecorations`
+ * setting: one enum controls all three surfaces, there is no per-surface toggle.
+ */
+export type DirtyDiffDecorationsMode = 'all' | 'gutter' | 'overview' | 'minimap' | 'none'
+
+/** Which of the three surfaces the current `scm.diffDecorations` value enables. */
+export interface DirtyDiffDecorationVisibility {
+  readonly gutter: boolean
+  readonly overview: boolean
+  readonly minimap: boolean
+}
+
+/** Theme color ids for the minimap marks, per change kind (VSCode parity ids). */
+export const DIRTY_DIFF_MINIMAP_COLOR_IDS: Readonly<Record<DirtyDiffKind, string>> = {
+  added: 'minimapGutter.addedBackground',
+  modified: 'minimapGutter.modifiedBackground',
+  deleted: 'minimapGutter.deletedBackground',
+}
+
+/** Theme color ids for the overview ruler marks, per change kind. */
+export const DIRTY_DIFF_OVERVIEW_RULER_COLOR_IDS: Readonly<Record<DirtyDiffKind, string>> = {
+  added: 'editorOverviewRuler.addedForeground',
+  modified: 'editorOverviewRuler.modifiedForeground',
+  deleted: 'editorOverviewRuler.deletedForeground',
+}
+
+/** Resolved CSS colors for one change kind. Always concrete hex — see {@link buildDirtyDiffDecorationSpec}. */
+export interface DirtyDiffDecorationColors {
+  readonly overviewRuler: string
+  readonly minimap: string
+}
+
+export type DirtyDiffDecorationColorsByKind = Readonly<
+  Record<DirtyDiffKind, DirtyDiffDecorationColors>
+>
+
+/**
+ * A monaco-free description of one region's decoration. The caller turns it into
+ * `IModelDecorationOptions` and supplies the monaco position enums, so this stays
+ * testable without loading monaco.
+ */
+export interface DirtyDiffDecorationSpec {
+  readonly isWholeLine: boolean
+  readonly linesDecorationsClassName?: string
+  readonly overviewRulerColor?: string
+  readonly minimapColor?: string
+}
+
+/** `scm.diffDecorations` → per-surface flags. An unset / unknown value means `'all'`. */
+export function resolveDirtyDiffDecorationsVisibility(
+  mode: DirtyDiffDecorationsMode | undefined,
+): DirtyDiffDecorationVisibility {
+  switch (mode) {
+    case 'gutter':
+      return { gutter: true, overview: false, minimap: false }
+    case 'overview':
+      return { gutter: false, overview: true, minimap: false }
+    case 'minimap':
+      return { gutter: false, overview: false, minimap: true }
+    case 'none':
+      return { gutter: false, overview: false, minimap: false }
+    default:
+      return { gutter: true, overview: true, minimap: true }
+  }
+}
+
+/**
+ * Build the decoration description for one region.
+ *
+ * `colors` must hold concrete hex strings. Monaco's standalone theme only knows
+ * the `editor*` / `diffEditor*` ids the theme adapter feeds it, so a `ThemeColor`
+ * reference to `minimapGutter.*` resolves to nothing; and a non-hex literal like
+ * `rgba(...)` silently degrades to solid red in `Color.fromHex`.
+ */
+export function buildDirtyDiffDecorationSpec(
+  kind: DirtyDiffKind,
+  colors: DirtyDiffDecorationColors,
+  visibility: DirtyDiffDecorationVisibility,
+): DirtyDiffDecorationSpec {
+  return {
+    // VSCode uses isWholeLine:false for deletions (its gutter mark is a glyph);
+    // ours is a CSS triangle on a whole-line decoration, and the gutter click
+    // that opens the peek hit-tests against it — keep every kind whole-line.
+    isWholeLine: true,
+    ...(visibility.gutter
+      ? { linesDecorationsClassName: `dirty-diff-gutter dirty-diff-gutter-${kind}` }
+      : {}),
+    ...(visibility.overview ? { overviewRulerColor: colors.overviewRuler } : {}),
+    ...(visibility.minimap ? { minimapColor: colors.minimap } : {}),
+  }
+}
+
 /** The SCM file decoration fields the HEAD-cache invalidation decision reads. */
 export interface ScmFileDecorationState {
   readonly letter?: string

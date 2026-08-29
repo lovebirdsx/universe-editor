@@ -92,6 +92,7 @@ import {
   type E2ECodeAction,
   type E2EConfigTarget,
   type E2EContributedMcpServer,
+  type E2EDirtyDiffDecoration,
   type E2EEditorDecoration,
   type E2EExtensionUpdate,
   type E2EInstalledExtension,
@@ -616,6 +617,36 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.contextKeyService.get('dirtyDiffPeekVisible') === true,
     resizeDirtyDiffPeekByPx: (deltaPx: number): number | undefined =>
       DirtyDiffPeekRegistry.getHost()?.resizePeekByPx(deltaPx),
+    getDirtyDiffDecorationSummary: async (
+      uri: string,
+    ): Promise<readonly E2EDirtyDiffDecoration[]> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const out: E2EDirtyDiffDecoration[] = []
+      for (const d of model.getAllDecorations()) {
+        const className = d.options.linesDecorationsClassName
+        if (typeof className !== 'string') continue
+        const kind = /\bdirty-diff-gutter-(added|modified|deleted)\b/.exec(className)?.[1] as
+          | E2EDirtyDiffDecoration['kind']
+          | undefined
+        if (kind === undefined) continue
+        const overviewRuler = d.options.overviewRuler
+        const minimap = d.options.minimap
+        out.push({
+          kind,
+          startLineNumber: d.range.startLineNumber,
+          endLineNumber: d.range.endLineNumber,
+          hasOverviewRuler: overviewRuler != null,
+          ...(typeof overviewRuler?.color === 'string'
+            ? { overviewRulerColor: overviewRuler.color }
+            : {}),
+          hasMinimap: minimap != null,
+          ...(typeof minimap?.color === 'string' ? { minimapColor: minimap.color } : {}),
+        })
+      }
+      return out
+    },
     installAcpEchoAgent: (agentId, jsPath, env) => {
       services.configurationService.update(
         'acp.agents',

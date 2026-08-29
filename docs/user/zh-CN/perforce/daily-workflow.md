@@ -73,7 +73,7 @@ Perforce 里改文件前要先"签出"。三种改动方式：
 - 在面板里**单击**文件行：打开本地版本与仓库 **have 版本**的差异对比。
 - **打开当前文件的改动**：对活动编辑器里的文件直接开差异视图——快捷键 `Shift+Alt+Y`，或点编辑器标题栏的对比图标，或命令面板搜索 "打开更改"。
 
-编辑器左侧的**改动色条（dirty-diff）**同样对 Perforce 文件生效：改动的行会显示色条，点色条弹出行内小 diff（have 版本 ↔ 当前内容），`Esc` 关闭。详见 [Git 的改动色条说明](../git/session-changes.md)，Perforce 行为一致。
+编辑器左侧的**改动色条（dirty-diff）**同样对 Perforce 文件生效：改动的行会显示色条，点色条弹出行内小 diff（have 版本 ↔ 当前内容），`Esc` 关闭。同一批改动行还会同步画到右侧总览标尺和小地图上，长文件里滚动时一眼就能看出改了哪几处；想只留其中一处显示，用设置 `scm.diffDecorations`（见 [改动色条的显示位置](../git/blame-and-history.md#自定义显示)）。详见 [Git 的改动色条说明](../git/session-changes.md)，Perforce 行为一致。
 
 ## 时间线（文件历史）
 

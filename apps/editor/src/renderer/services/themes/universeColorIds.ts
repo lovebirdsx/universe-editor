@@ -16,6 +16,7 @@
 
 import {
   registerColor,
+  transparent,
   type ColorIdentifier,
   type ColorValue,
   getColorRegistry,
@@ -1077,6 +1078,44 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     '#c74e39',
     '#c74e39',
     'Editor gutter background color for deleted lines.',
+  ),
+  // minimap / overview ruler 的 dirty-diff 色默认沿用 editorGutter 三色（VSCode 同款
+  // 引用关系）：主题只改 editorGutter.* 就三处一起变，需要区分时再单独覆盖这些 id。
+  d(
+    'minimapGutter.addedBackground',
+    'editorGutter.addedBackground',
+    'editorGutter.addedBackground',
+    'Minimap gutter background color for added lines.',
+  ),
+  d(
+    'minimapGutter.modifiedBackground',
+    'editorGutter.modifiedBackground',
+    'editorGutter.modifiedBackground',
+    'Minimap gutter background color for modified lines.',
+  ),
+  d(
+    'minimapGutter.deletedBackground',
+    'editorGutter.deletedBackground',
+    'editorGutter.deletedBackground',
+    'Minimap gutter background color for deleted lines.',
+  ),
+  d(
+    'editorOverviewRuler.addedForeground',
+    transparent('editorGutter.addedBackground', 0.6),
+    transparent('editorGutter.addedBackground', 0.6),
+    'Overview ruler marker color for added content.',
+  ),
+  d(
+    'editorOverviewRuler.modifiedForeground',
+    transparent('editorGutter.modifiedBackground', 0.6),
+    transparent('editorGutter.modifiedBackground', 0.6),
+    'Overview ruler marker color for modified content.',
+  ),
+  d(
+    'editorOverviewRuler.deletedForeground',
+    transparent('editorGutter.deletedBackground', 0.6),
+    transparent('editorGutter.deletedBackground', 0.6),
+    'Overview ruler marker color for deleted content.',
   ),
   d(
     'gitDecoration.addedResourceForeground',

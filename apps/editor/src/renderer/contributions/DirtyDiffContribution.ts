@@ -3,9 +3,11 @@
  *
  *  DirtyDiffContribution — VSCode-style "dirty diff" decorations. For the active
  *  file editor it diffs the current document against its HEAD revision and
- *  paints the change regions: coloured bars in the left gutter (green = added,
- *  blue = modified, red triangle = deleted) and matching marks in the right
- *  overview ruler. HEAD content comes from the owning SCM provider's
+ *  paints the change regions on three surfaces: coloured bars in the left gutter
+ *  (green = added, blue = modified, red triangle = deleted), matching marks in
+ *  the right overview ruler, and matching bars in the minimap gutter. Which
+ *  surfaces are painted follows the `scm.diffDecorations` setting (VSCode parity).
+ *  HEAD content comes from the owning SCM provider's
  *  `<providerId>.getHeadContent` contributed command (git / perforce); the diff
  *  itself runs in-renderer. When several providers own the file, the one the SCM
  *  view has selected wins (see resolveScmProviderId).
@@ -27,9 +29,11 @@ import {
   Disposable,
   DisposableStore,
   ICommandService,
+  IConfigurationService,
   IContextKeyService,
   IEditorService,
   ILoggerService,
+  IThemeService,
   ThrottledDelayer,
   autorun,
   type IContextKey,
@@ -46,16 +50,25 @@ import { IScmService, resolveScmProviderId } from '../services/extensions/ScmSer
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { recordPerfPhase } from '../services/performance/perfPhases.js'
+import { normalizeColor } from '../services/themes/colorThemeData.js'
 import { InlineDirtyDiffController } from '../workbench/scm/dirtyDiff/InlineDirtyDiffController.js'
 import {
   DirtyDiffPeekRegistry,
   type IDirtyDiffPeekHost,
 } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import {
+  DIRTY_DIFF_MINIMAP_COLOR_IDS,
+  DIRTY_DIFF_OVERVIEW_RULER_COLOR_IDS,
+  buildDirtyDiffDecorationSpec,
   computeDirtyDiffRegionsFromLines,
   computeScmHeadCacheInvalidation,
+  resolveDirtyDiffDecorationsVisibility,
   toDiffLines,
   trimTrailingEmptyLine,
+  type DirtyDiffDecorationColorsByKind,
+  type DirtyDiffDecorationVisibility,
+  type DirtyDiffDecorationsMode,
+  type DirtyDiffKind,
   type DirtyDiffRegion,
   type ScmHeadCacheInvalidation,
   type ScmHeadSnapshot,
@@ -87,11 +100,18 @@ function headCacheKey(providerId: string | undefined, path: string): string {
   return `${providerId ?? ''}\n${path}`
 }
 
-const COLORS = {
-  added: '#2ea043',
-  modified: '#0c7d9d',
-  deleted: '#c74e39',
-} as const
+/**
+ * Fallback marks colors, used only when the active theme resolves nothing for the
+ * registered ids (they always have registry defaults, so this is belt-and-braces).
+ * Upper-case to match `normalizeColor`'s output.
+ */
+const FALLBACK_COLORS: Readonly<Record<DirtyDiffKind, string>> = {
+  added: '#2EA043',
+  modified: '#0C7D9D',
+  deleted: '#C74E39',
+}
+
+const DIFF_DECORATIONS_SETTING = 'scm.diffDecorations'
 
 export class DirtyDiffContribution
   extends Disposable
@@ -104,6 +124,10 @@ export class DirtyDiffContribution
   private _controller: InlineDirtyDiffController | undefined
   private _regions: readonly DirtyDiffRegion[] = []
   private _headText = ''
+  /** Concrete hex per kind, re-resolved on every theme change (see _resolveColors). */
+  private _colors: DirtyDiffDecorationColorsByKind
+  /** Which surfaces `scm.diffDecorations` currently enables. */
+  private _visibility: DirtyDiffDecorationVisibility
   /** Set on gutter mousedown, consumed on the matching mouseup (VSCode parity). */
   private _mouseDownLine: number | undefined
   private readonly _peekVisible: IContextKey<boolean>
@@ -130,8 +154,13 @@ export class DirtyDiffContribution
     @IContextKeyService contextKeyService: IContextKeyService,
     @IScmService private readonly _scm: IScmService,
     @ILoggerService loggerService: ILoggerService,
+    @IThemeService private readonly _themeService: IThemeService,
+    @IConfigurationService private readonly _configurationService: IConfigurationService,
   ) {
     super()
+
+    this._colors = this._resolveColors()
+    this._visibility = this._resolveVisibility()
 
     this._logger = loggerService.createLogger({ id: 'dirtyDiff', name: 'Dirty Diff' })
     this._peekVisible = contextKeyService.createKey<boolean>(DIRTY_DIFF_PEEK_VISIBLE, false)
@@ -192,12 +221,54 @@ export class DirtyDiffContribution
       }),
     )
 
+    // The colors handed to monaco are concrete hex snapshots, so a theme switch
+    // must re-resolve them AND re-apply the decorations. Monaco's own color-cache
+    // invalidation only walks `getOverviewRulerDecorations()`, so a mark that is
+    // minimap-only (scm.diffDecorations === 'minimap') would never be refreshed.
+    this._register(
+      this._themeService.onDidColorThemeChange(() => {
+        this._colors = this._resolveColors()
+        this._applyDecorations()
+      }),
+    )
+
+    this._register(
+      this._configurationService.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration(DIFF_DECORATIONS_SETTING)) return
+        this._visibility = this._resolveVisibility()
+        this._applyDecorations()
+      }),
+    )
+
     this._register({ dispose: () => this._clear() })
+  }
+
+  /** Resolve the per-kind marks colors from the active theme (concrete hex, never a ThemeColor ref). */
+  private _resolveColors(): DirtyDiffDecorationColorsByKind {
+    const theme = this._themeService.getColorTheme()
+    const forKind = (kind: DirtyDiffKind) => ({
+      overviewRuler:
+        normalizeColor(theme.getColor(DIRTY_DIFF_OVERVIEW_RULER_COLOR_IDS[kind])) ??
+        FALLBACK_COLORS[kind],
+      minimap:
+        normalizeColor(theme.getColor(DIRTY_DIFF_MINIMAP_COLOR_IDS[kind])) ?? FALLBACK_COLORS[kind],
+    })
+    return { added: forKind('added'), modified: forKind('modified'), deleted: forKind('deleted') }
+  }
+
+  private _resolveVisibility(): DirtyDiffDecorationVisibility {
+    return resolveDirtyDiffDecorationsVisibility(
+      this._configurationService.get<DirtyDiffDecorationsMode>(DIFF_DECORATIONS_SETTING),
+    )
   }
 
   private _bind(input: FileEditorInput): void {
     this._activeResource = input.resource
     this._activePath = input.resource.fsPath
+    // The new document's diff is async (throttled + a HEAD fetch), so drop the
+    // previous file's regions right away: until `_render` publishes fresh ones,
+    // any repaint (theme / setting change) would paint stale line numbers here.
+    this._regions = []
     this._editorStore.clear()
     this._registryStore.clear()
 
@@ -392,6 +463,12 @@ export class DirtyDiffContribution
     return p
   }
 
+  /**
+   * Publish a fresh diff result: the only place that writes `_regions` alongside
+   * the navigation state. Theme / setting changes re-paint through
+   * {@link _applyDecorations} alone so they never disturb navigation.
+   * (`_bind` / `_clear` also reset `_regions`, but only ever to empty.)
+   */
   private _render(
     resource: URI,
     headContent: string | null,
@@ -399,25 +476,55 @@ export class DirtyDiffContribution
   ): void {
     this._regions = regions
     this._navigation.setState({ resource, headContent, regions })
+    this._applyDecorations()
+  }
+
+  /** Paint `_regions` with the current colors / visibility. Idempotent, no side effects. */
+  private _applyDecorations(): void {
     const collection = this._decorations
     if (!collection) return
-    if (regions.length === 0) {
+    const regions = this._regions
+    const { gutter, overview, minimap } = this._visibility
+    // `scm.diffDecorations: none` — nothing would be drawn, so don't materialise
+    // an invisible whole-line decoration per region.
+    if (regions.length === 0 || (!gutter && !overview && !minimap)) {
       collection.clear()
       return
     }
     const m = MonacoLoader.get()
     collection.set(
-      regions.map((region) => ({
-        range: new m.Range(region.startLine, 1, region.endLine, 1),
-        options: {
-          isWholeLine: true,
-          linesDecorationsClassName: `dirty-diff-gutter dirty-diff-gutter-${region.kind}`,
-          overviewRuler: {
-            color: COLORS[region.kind],
-            position: m.editor.OverviewRulerLane.Left,
+      regions.map((region) => {
+        const spec = buildDirtyDiffDecorationSpec(
+          region.kind,
+          this._colors[region.kind],
+          this._visibility,
+        )
+        return {
+          range: new m.Range(region.startLine, 1, region.endLine, 1),
+          options: {
+            isWholeLine: spec.isWholeLine,
+            ...(spec.linesDecorationsClassName !== undefined
+              ? { linesDecorationsClassName: spec.linesDecorationsClassName }
+              : {}),
+            ...(spec.overviewRulerColor !== undefined
+              ? {
+                  overviewRuler: {
+                    color: spec.overviewRulerColor,
+                    position: m.editor.OverviewRulerLane.Left,
+                  },
+                }
+              : {}),
+            ...(spec.minimapColor !== undefined
+              ? {
+                  minimap: {
+                    color: spec.minimapColor,
+                    position: m.editor.MinimapPosition.Gutter,
+                  },
+                }
+              : {}),
           },
-        },
-      })),
+        }
+      }),
     )
   }
 

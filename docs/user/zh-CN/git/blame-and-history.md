@@ -51,6 +51,16 @@ Blame 的两块显示可以分别开关，命令都能从命令面板搜到：
 - `scm.blame.editorDecoration.disableHover`：关掉行尾注解的悬停卡片。
 - `scm.blame.ignoreWhitespace`：计算 Blame 时忽略只改了空白的改动（避免因为缩进调整就把整行算到你头上）。
 
+改动色条（dirty-diff）画在三个地方：编辑器左侧行号槽、右侧总览标尺、以及小地图最左侧那条窄色带——三处一一对应同一批改动行，绿=新增、蓝=修改、红=删除。想只留其中一处，用 `scm.diffDecorations`：
+
+- `all`（默认）：三处都显示。
+- `gutter`：只显示行号槽的色条。
+- `overview`：只显示总览标尺的标记。
+- `minimap`：只显示小地图上的色带。
+- `none`：全部关闭。
+
+改完立即生效，不用重开文件。注意选了不含行号槽的值时没有色条可点，行内小 diff 改用命令 **显示更改** 打开。色条的颜色跟随主题：行号槽和小地图取 `editorGutter.{added,modified,deleted}Background`（小地图可用 `minimapGutter.*Background` 单独覆盖），总览标尺取 `editorOverviewRuler.{added,modified,deleted}Foreground`，默认是前者的半透明版。少数主题（如 Dark 2026）会给总览标尺单独指定颜色，此时它与另外两处不完全同色——这与 VSCode 的表现一致。
+
 ## 查一个文件的完整历史
 
 想看一个文件都经历过哪些改动，首选[时间线视图](./timeline.md)：它在资源管理器侧栏里按时间列出这个文件的历次提交，点一下就对比相邻两版。想看这次提交在整个仓库历史里的位置，走 [Git 图谱](./git-graph.md)：单击某次提交，侧栏的"提交变更"视图会列出它改动的文件；或者用 Blame 悬停卡片里的 **"Open in Graph"** 链接定位到某一行对应的那次提交，再往前后翻。

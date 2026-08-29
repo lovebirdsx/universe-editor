@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Registers the scm.* settings — provider-neutral SCM settings shared by every
- *  source-control extension (blame rendering is renderer-side, so its settings
- *  live here rather than in the git extension).
+ *  source-control extension (blame rendering and the dirty-diff decorations are
+ *  renderer-side, so their settings live here rather than in the git extension).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -23,6 +23,34 @@ export class ScmConfigurationContribution extends Disposable implements IWorkben
         id: 'scm',
         title: localize('settings.scm', 'Source Control'),
         properties: {
+          'scm.diffDecorations': {
+            type: 'string',
+            enum: ['all', 'gutter', 'overview', 'minimap', 'none'],
+            enumDescriptions: [
+              localize(
+                'settings.scm.diffDecorations.all',
+                'Show the diff decorations in all available locations.',
+              ),
+              localize(
+                'settings.scm.diffDecorations.gutter',
+                'Show the diff decorations only in the editor gutter.',
+              ),
+              localize(
+                'settings.scm.diffDecorations.overview',
+                'Show the diff decorations only in the overview ruler.',
+              ),
+              localize(
+                'settings.scm.diffDecorations.minimap',
+                'Show the diff decorations only in the minimap.',
+              ),
+              localize('settings.scm.diffDecorations.none', 'Do not show the diff decorations.'),
+            ],
+            default: 'all',
+            description: localize(
+              'settings.scm.diffDecorations',
+              'Controls diff decorations in the editor.',
+            ),
+          },
           'scm.blame.editorDecoration.enabled': {
             type: 'boolean',
             default: true,

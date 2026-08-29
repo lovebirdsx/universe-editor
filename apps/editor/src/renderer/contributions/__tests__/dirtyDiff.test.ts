@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildDirtyDiffDecorationSpec,
   computeDirtyDiffRegions,
   computeDirtyDiffRegionsFromLines,
   computeScmHeadCacheInvalidation,
+  resolveDirtyDiffDecorationsVisibility,
   toDiffLines,
   trimTrailingEmptyLine,
+  type DirtyDiffDecorationColors,
+  type DirtyDiffDecorationsMode,
   type ScmFileDecorationState,
   type ScmHeadSnapshot,
   type ScmProviderHeadState,
@@ -243,5 +247,104 @@ describe('computeScmHeadCacheInvalidation', () => {
         snap(files({ a: 'M', b: 'M' }), p4),
       ),
     ).toEqual({ full: false, providerIds: new Set(), paths: new Set(['a']) })
+  })
+})
+
+describe('resolveDirtyDiffDecorationsVisibility', () => {
+  it('enables every surface for "all" and for an unset value', () => {
+    const all = { gutter: true, overview: true, minimap: true }
+    expect(resolveDirtyDiffDecorationsVisibility('all')).toEqual(all)
+    expect(resolveDirtyDiffDecorationsVisibility(undefined)).toEqual(all)
+  })
+
+  // A hand-edited settings.json can hold anything; falling back to the schema
+  // default beats silently painting nothing.
+  it('falls back to every surface for a value outside the enum', () => {
+    expect(resolveDirtyDiffDecorationsVisibility('gutters' as DirtyDiffDecorationsMode)).toEqual({
+      gutter: true,
+      overview: true,
+      minimap: true,
+    })
+  })
+
+  it('enables exactly one surface for each single-surface value', () => {
+    expect(resolveDirtyDiffDecorationsVisibility('gutter')).toEqual({
+      gutter: true,
+      overview: false,
+      minimap: false,
+    })
+    expect(resolveDirtyDiffDecorationsVisibility('overview')).toEqual({
+      gutter: false,
+      overview: true,
+      minimap: false,
+    })
+    expect(resolveDirtyDiffDecorationsVisibility('minimap')).toEqual({
+      gutter: false,
+      overview: false,
+      minimap: true,
+    })
+  })
+
+  it('disables every surface for "none"', () => {
+    expect(resolveDirtyDiffDecorationsVisibility('none')).toEqual({
+      gutter: false,
+      overview: false,
+      minimap: false,
+    })
+  })
+})
+
+describe('buildDirtyDiffDecorationSpec', () => {
+  const colors: DirtyDiffDecorationColors = { overviewRuler: '#AABBCC99', minimap: '#AABBCC' }
+  const all = { gutter: true, overview: true, minimap: true }
+
+  it('paints all three surfaces with the kind-specific gutter class', () => {
+    expect(buildDirtyDiffDecorationSpec('added', colors, all)).toEqual({
+      isWholeLine: true,
+      linesDecorationsClassName: 'dirty-diff-gutter dirty-diff-gutter-added',
+      overviewRulerColor: '#AABBCC99',
+      minimapColor: '#AABBCC',
+    })
+    expect(buildDirtyDiffDecorationSpec('modified', colors, all).linesDecorationsClassName).toBe(
+      'dirty-diff-gutter dirty-diff-gutter-modified',
+    )
+    expect(buildDirtyDiffDecorationSpec('deleted', colors, all).linesDecorationsClassName).toBe(
+      'dirty-diff-gutter dirty-diff-gutter-deleted',
+    )
+  })
+
+  it('keeps deletions whole-line so the gutter triangle stays clickable', () => {
+    expect(buildDirtyDiffDecorationSpec('deleted', colors, all).isWholeLine).toBe(true)
+  })
+
+  it('omits the surfaces the visibility disables', () => {
+    expect(
+      buildDirtyDiffDecorationSpec('modified', colors, {
+        gutter: false,
+        overview: false,
+        minimap: true,
+      }),
+    ).toEqual({ isWholeLine: true, minimapColor: '#AABBCC' })
+
+    expect(
+      buildDirtyDiffDecorationSpec('modified', colors, {
+        gutter: true,
+        overview: false,
+        minimap: false,
+      }),
+    ).toEqual({
+      isWholeLine: true,
+      linesDecorationsClassName: 'dirty-diff-gutter dirty-diff-gutter-modified',
+    })
+  })
+
+  it('produces a bare whole-line decoration when nothing is visible', () => {
+    expect(
+      buildDirtyDiffDecorationSpec('added', colors, {
+        gutter: false,
+        overview: false,
+        minimap: false,
+      }),
+    ).toEqual({ isWholeLine: true })
   })
 })

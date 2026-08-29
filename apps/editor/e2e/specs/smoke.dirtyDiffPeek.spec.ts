@@ -7,6 +7,8 @@
  *    1. Esc closes the peek (gated by the `dirtyDiffPeekVisible` context key).
  *    2. The peek opens at a capped height (≤ the 80% max) and is resizable.
  *    3. Opening a change that's outside the viewport scrolls it into view.
+ *  Plus: the change decoration reaches all three surfaces (gutter / overview
+ *  ruler / minimap) with concrete theme-resolved hex colors.
  *
  *  Setup: a real git repo with a committed long file, opened in the editor, then
  *  the buffer is edited far down so a single large change region exists off the
@@ -98,6 +100,26 @@ test.describe('@p1 dirty diff peek', () => {
         })
         .toBeGreaterThan(0)
       await page.evaluate((text) => window.__E2E__!.setActiveEditorText(text), makeModified())
+
+      // The change region is painted on all three surfaces (gutter class, overview
+      // ruler, minimap gutter) with concrete hex colors resolved from the theme —
+      // monaco's standalone theme cannot resolve a `minimapGutter.*` ThemeColor ref.
+      const editorUri = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+      expect(editorUri).toBeTruthy()
+      await expect
+        .poll(
+          () => page.evaluate((u) => window.__E2E__!.getDirtyDiffDecorationSummary(u), editorUri!),
+          { timeout: 30_000, message: 'dirty-diff decorations should reach the minimap' },
+        )
+        .toContainEqual(
+          expect.objectContaining({
+            kind: 'modified',
+            hasMinimap: true,
+            minimapColor: expect.stringMatching(/^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/),
+            hasOverviewRuler: true,
+            overviewRulerColor: expect.stringMatching(/^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/),
+          }),
+        )
 
       // The dirty-diff regions are computed against HEAD asynchronously; opening
       // the peek at the change line only succeeds once they exist.

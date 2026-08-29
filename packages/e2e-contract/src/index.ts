@@ -105,6 +105,18 @@ export interface E2EEditorDecoration {
   readonly description?: string
 }
 
+/** One dirty-diff change region and the surfaces its decoration paints on. */
+export interface E2EDirtyDiffDecoration {
+  readonly kind: 'added' | 'modified' | 'deleted'
+  readonly startLineNumber: number
+  readonly endLineNumber: number
+  readonly hasOverviewRuler: boolean
+  /** Concrete CSS color handed to monaco — never a ThemeColor reference. */
+  readonly overviewRulerColor?: string
+  readonly hasMinimap: boolean
+  readonly minimapColor?: string
+}
+
 /** One top-level node of an extension-contributed tree view. */
 export interface E2ETreeItem {
   readonly label: string
@@ -721,6 +733,15 @@ export interface E2EProbe {
   isDirtyDiffPeekVisible(): boolean
   /** Resize the open peek by `deltaPx`; returns the resulting panel height in px. */
   resizeDirtyDiffPeekByPx(deltaPx: number): number | undefined
+  /**
+   * The dirty-diff decorations currently painted on a document, one entry per
+   * change region, with the surfaces each one targets.
+   *
+   * Regions are recognised by their gutter class, so this only sees decorations
+   * painted while `scm.diffDecorations` keeps the gutter on (`all` / `gutter`) —
+   * the gutter-less modes are covered by the unit tests instead.
+   */
+  getDirtyDiffDecorationSummary(uri: string): Promise<readonly E2EDirtyDiffDecoration[]>
   // -- ACP probe -----------------------------------------------------------
   /**
    * Inject a test ACP agent that runs `node <jsPath>`. Writes into the Memory
