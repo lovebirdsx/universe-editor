@@ -141,6 +141,32 @@ export function keepPlanningFeedback(call: AcpToolCall): string | undefined {
   return text
 }
 
+/**
+ * 子 agent（Explore）的调查结果落盘目录。fork 在 SubagentStop 时把最终答复写成
+ * `<cwd>/.claude/explore-results/<stamp>-<session>-<agent>.md`，并伪造一条
+ * `kind: 'edit'` 的 tool_call 让它出现在时间线里（见 vendor/claude-agent-acp）。
+ */
+const AGENT_RESULT_DIR = '.claude/explore-results/'
+
+/**
+ * 子 agent 调查结果文档的路径；不是这类卡则返回 undefined。
+ *
+ * 它是一篇待阅读的文档而非一次代码改动，所以默认折叠、并在卡头提供 markdown
+ * 预览入口——两个消费方共用这一次判定，故返回路径而非布尔。
+ */
+export function agentResultDocumentPath(call: AcpToolCall): string | undefined {
+  if (call.kind !== 'edit') return undefined
+  const [diff, ...rest] = call.diffs
+  if (diff === undefined || rest.length > 0) return undefined
+  // Only the separator needs normalizing: the directory and the `.md` suffix are
+  // both fork-generated and always lower-case, so this is a literal marker match
+  // rather than a path identity comparison (which would belong to
+  // IUriIdentityService).
+  const slashed = diff.path.replace(/\\/g, '/')
+  if (!slashed.endsWith('.md') || !slashed.includes(AGENT_RESULT_DIR)) return undefined
+  return diff.path
+}
+
 function deriveSwitchModeDisplay(call: AcpToolCall): ToolCallDisplay {
   if (isKeepPlanning(call)) {
     return { title: localize('acp.switchMode.keepPlanning', 'Continued planning') }

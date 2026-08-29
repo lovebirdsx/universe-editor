@@ -72,4 +72,71 @@ describe('CollapsibleSlot', () => {
     )
     expect(screen.getByTestId('acp-collapsible-toggle').className).toContain('sticky-header')
   })
+
+  describe('actions', () => {
+    function renderWithActions(collapsed: boolean) {
+      const onAction = vi.fn()
+      render(
+        <ul>
+          <CollapsibleSlot
+            icon={<span>icon</span>}
+            kindLabel="edit"
+            title={<span>the title</span>}
+            summary="a short summary"
+            collapsed={collapsed}
+            onToggle={vi.fn()}
+            actions={
+              <button type="button" data-testid="slot-action" onClick={onAction}>
+                preview
+              </button>
+            }
+          >
+            <div data-testid="slot-body">body content</div>
+          </CollapsibleSlot>
+        </ul>,
+      )
+      return onAction
+    }
+
+    it('renders the action outside the toggle button (no nested buttons)', () => {
+      renderWithActions(true)
+      const action = screen.getByTestId('slot-action')
+      expect(screen.getByTestId('acp-collapsible-toggle').contains(action)).toBe(false)
+    })
+
+    it('renders actions in both collapsed and expanded states', () => {
+      renderWithActions(true)
+      expect(screen.getByTestId('slot-action')).toBeTruthy()
+      cleanup()
+      renderWithActions(false)
+      expect(screen.getByTestId('slot-action')).toBeTruthy()
+    })
+
+    it('does not toggle the slot when the action is clicked', () => {
+      const onToggle = vi.fn()
+      render(
+        <ul>
+          <CollapsibleSlot
+            icon={<span>icon</span>}
+            kindLabel="edit"
+            collapsed
+            onToggle={onToggle}
+            actions={<button type="button" data-testid="slot-action" />}
+          >
+            <div>body</div>
+          </CollapsibleSlot>
+        </ul>,
+      )
+      fireEvent.click(screen.getByTestId('slot-action'))
+      expect(onToggle).not.toHaveBeenCalled()
+    })
+
+    it('leaves the header unwrapped when no actions are given, so a sticky header keeps working', () => {
+      renderSlot(false)
+      const header = screen.getByTestId('acp-collapsible-toggle')
+      // The header is a direct child of the slot root — an extra wrapper box
+      // would clip a caller-applied `position: sticky` out of stickiness.
+      expect(header.parentElement?.tagName).toBe('LI')
+    })
+  })
 })

@@ -8,6 +8,7 @@
 
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
+import { agentResultDocumentPath } from './toolCallDisplay.js'
 
 export interface CollapseState {
   readonly mode: CollapseMode
@@ -16,7 +17,8 @@ export interface CollapseState {
 
 // Per-kind default under the `default` mode: read/search / sub-agent-parent
 // tool calls start collapsed, everything else (thought messages included)
-// starts expanded.
+// starts expanded. A sub-agent result document is an `edit` card by shape but a
+// whole document by content — folded so it does not flood the timeline.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
@@ -24,6 +26,7 @@ export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: Collap
     case 'message':
       return false
     case 'toolCall':
+      if (agentResultDocumentPath(item.call) !== undefined) return true
       return item.call.kind !== 'edit' && item.call.kind !== 'switch_mode'
     case 'compaction':
     case 'resurrection':

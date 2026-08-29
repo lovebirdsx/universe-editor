@@ -61,8 +61,15 @@ export function toolCallToText(call: AcpToolCall): string {
   parts.push(call.mcpServer !== undefined ? `${call.title} (MCP · ${call.mcpServer})` : call.title)
 
   for (const d of call.diffs) {
-    const label = d.oldText.length === 0 ? `[new file: ${d.path}]` : `[diff: ${d.path}]`
-    parts.push(`${label}\n${d.newText}`)
+    // A trimmed card keeps its diff paths but not the two sides, so the
+    // "new file vs edit" distinction (which reads `oldText`) is no longer
+    // knowable — label it neutrally instead of claiming every file is new.
+    const label = call.memoryTrimmed
+      ? `[file: ${d.path}]`
+      : d.oldText.length === 0
+        ? `[new file: ${d.path}]`
+        : `[diff: ${d.path}]`
+    parts.push(call.memoryTrimmed ? label : `${label}\n${d.newText}`)
   }
 
   const body = call.kind === 'execute' ? call.text : blocksToText(call.blocks)

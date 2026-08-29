@@ -35,6 +35,7 @@ import {
 } from '../../services/acp/session/acpSession.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
+import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { ToolCallLocations } from './ToolCallLocations.js'
@@ -44,6 +45,7 @@ import { TerminalOutput, ToolCallSection, ToolCallStatusIcon } from './ToolCallO
 import { SubagentStatsBadge } from './SubagentStatsBadge.js'
 import {
   deriveToolCallDisplay,
+  agentResultDocumentPath,
   isKeepPlanning,
   keepPlanningFeedback,
   tryPrettyJson,
@@ -71,6 +73,11 @@ function formatMcpInput(rawInput: unknown): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/** Resolve a tool-call diff path to a URI, following the workspace's scheme. */
+function diffUri(path: string, folder: URI | undefined): URI {
+  return path.includes('://') ? URI.parse(path) : absolutePathToWorkspaceUri(path, folder)
 }
 
 /**
@@ -132,12 +139,18 @@ export const ToolCallCard = memo(function ToolCallCard({
   // its line exactly like a path clicked anywhere else in the chat.
   const openFilePath = useMarkdownFileLink(workspaceService?.current?.folder)
   const isMcp = call.mcpServer !== undefined
+  // A sub-agent result document: folded by default (it is a document, not an
+  // edit) and given a preview affordance in its header.
+  const agentResultPath = agentResultDocumentPath(call)
   // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
   // state when used standalone (ToolCallList). read/search start collapsed, but
   // MCP cards start expanded so their input/output panels are visible.
+  // Keep the agent-result clause in step with `defaultCollapsed` in
+  // timelineCollapse.ts — the same card must fold the same way on both paths.
   const controlled = collapsedProp !== undefined
   const [internalCollapsed, setInternalCollapsed] = useState(
-    () => !isMcp && (call.kind === 'read' || call.kind === 'search'),
+    () =>
+      !isMcp && (call.kind === 'read' || call.kind === 'search' || agentResultPath !== undefined),
   )
   const collapsed = controlled ? collapsedProp : internalCollapsed
   const onToggle = controlled
@@ -145,9 +158,7 @@ export const ToolCallCard = memo(function ToolCallCard({
     : () => setInternalCollapsed((v) => !v)
 
   const openDiff = (diff: AcpToolCallDiff): void => {
-    const uri = diff.path.includes('://')
-      ? URI.parse(diff.path)
-      : absolutePathToWorkspaceUri(diff.path, workspaceService?.current?.folder)
+    const uri = diffUri(diff.path, workspaceService?.current?.folder)
     // Local and remote workspace files can both be reopened as a source file
     // from the diff title bar; only non-file schemes are left closed.
     const openable = uri.scheme === 'file' || uri.scheme === REMOTE_SCHEME ? uri : undefined
@@ -362,6 +373,16 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
+  // The point of a saved sub-agent result is to *read* it, so offer the rendered
+  // preview straight from the folded header instead of routing through the diff.
+  const headerActions =
+    agentResultPath !== undefined ? (
+      <ResourcePreviewButton
+        resource={diffUri(agentResultPath, workspaceService?.current?.folder)}
+        testId="acp-toolcall-open-preview"
+      />
+    ) : undefined
+
   return (
     <CollapsibleSlot
       as="li"
@@ -371,6 +392,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       summary={titleNode}
       statusIcon={<ToolCallStatusIcon status={effectiveStatus} />}
       {...(badge !== undefined ? { badge } : {})}
+      {...(headerActions !== undefined ? { actions: headerActions } : {})}
       collapsed={collapsed}
       onToggle={onToggle}
       rootProps={{

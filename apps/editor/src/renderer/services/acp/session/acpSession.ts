@@ -250,10 +250,10 @@ function messageHeavyBytes(message: AcpMessage): number {
 }
 
 /** Release a tool card's heavy content, keeping the shell (title / status /
- * kind / locations / children) so the timeline still renders a recognisable
- * card marked `memoryTrimmed`. Children keep their own shells but are trimmed
- * too — `toolCallHeavyBytes` counts them, so leaving them intact would report
- * bytes the trim never actually released. */
+ * kind / locations / diff paths / children) so the timeline still renders a
+ * recognisable card marked `memoryTrimmed`. Children keep their own shells but
+ * are trimmed too — `toolCallHeavyBytes` counts them, so leaving them intact
+ * would report bytes the trim never actually released. */
 function trimToolCall(call: AcpToolCall): AcpToolCall {
   const children = call.children?.map(
     (child): AcpChildItem =>
@@ -267,7 +267,11 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     kind: call.kind,
     status: call.status,
     blocks: [],
-    diffs: [],
+    // Keep each diff's path, drop only its two text sides — the path is what
+    // `toolCallHeavyBytes` never charged for, and the card's affordances read it
+    // (a sub-agent result document's header preview button would otherwise
+    // vanish the moment the card is trimmed).
+    diffs: call.diffs.map((d) => ({ path: d.path, oldText: '', newText: '' })),
     text: '',
     memoryTrimmed: true,
     ...(call.mcpServer !== undefined ? { mcpServer: call.mcpServer } : {}),

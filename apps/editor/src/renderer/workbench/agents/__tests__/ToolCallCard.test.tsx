@@ -8,12 +8,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   IConfigurationService,
+  IEditorGroupsService,
   IEditorService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService as IConfigurationServiceType,
+  IEditorGroupsService as IEditorGroupsServiceType,
   IEditorService as IEditorServiceType,
 } from '@universe-editor/platform'
 import type {
@@ -30,6 +32,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
 
 afterEach(() => {
   cleanup()
+  openedInGroup.length = 0
 })
 
 function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
@@ -55,6 +58,28 @@ function makeChildMessage(text: string): AcpMessage {
   }
 }
 
+/** Captures editors opened through the group service (the preview button's route). */
+const openedInGroup: unknown[] = []
+
+function makeGroupsService(): IEditorGroupsServiceType {
+  const group = {
+    // No preview is ever already open in these tests, so the dedupe lookup that
+    // openPreviewInGroup performs always misses.
+    findEditor: () => undefined,
+    openEditor: vi.fn((input: unknown) => {
+      openedInGroup.push(input)
+      return Promise.resolve(undefined)
+    }),
+  }
+  const groups = {
+    _serviceBrand: undefined,
+    activeGroup: group,
+    getGroups: () => [group],
+    activateGroup: vi.fn(),
+  }
+  return groups as unknown as IEditorGroupsServiceType
+}
+
 function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
   const services = new ServiceCollection()
   services.set(IEditorService, {
@@ -65,6 +90,7 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
     _serviceBrand: undefined,
     get: (key: string) => config[key],
   } as unknown as IConfigurationServiceType)
+  services.set(IEditorGroupsService, makeGroupsService())
   const inst = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={inst}>
@@ -474,5 +500,58 @@ describe('ToolCallCard', () => {
     expect(screen.queryByTestId('acp-toolcall-locations')).toBeNull()
     // The diff header path is itself clickable.
     expect(screen.getByTestId('acp-inline-diff-path')).toBeTruthy()
+  })
+
+  describe('sub-agent result document card', () => {
+    const RESULT_PATH = '/repo/.claude/explore-results/20260829-sess-agent.md'
+
+    function makeResultCall(path = RESULT_PATH): AcpToolCall {
+      return makeCall({
+        kind: 'edit',
+        title: 'Saved Explore result: 20260829-sess-agent.md',
+        diffs: [{ path, oldText: '', newText: '# Explore subagent result\n' }],
+      })
+    }
+
+    it('starts collapsed and expands on click', () => {
+      renderCard(makeResultCall())
+      expect(screen.queryByTestId('acp-inline-diff')).toBeNull()
+      fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+      expect(screen.getByTestId('acp-inline-diff')).toBeTruthy()
+    })
+
+    it('renders a preview button outside the toggle button', () => {
+      renderCard(makeResultCall())
+      const preview = screen.getByTestId('acp-toolcall-open-preview')
+      expect(preview).toBeTruthy()
+      // Nested <button> is invalid HTML — the action must be a sibling.
+      const toggle = screen.getByTestId('acp-collapsible-toggle')
+      expect(toggle.contains(preview)).toBe(false)
+    })
+
+    it('opens a markdown preview (not the source) when the button is clicked', () => {
+      renderCard(makeResultCall())
+      fireEvent.click(screen.getByTestId('acp-toolcall-open-preview'))
+      expect(openedInGroup).toHaveLength(1)
+      expect((openedInGroup[0] as { typeId: string }).typeId).toBe('markdown.preview')
+    })
+
+    it('keeps the preview button available once expanded', () => {
+      renderCard(makeResultCall())
+      fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+      expect(screen.getByTestId('acp-toolcall-open-preview')).toBeTruthy()
+    })
+
+    it('leaves an ordinary edit card expanded and without a preview button', () => {
+      renderCard(
+        makeCall({
+          kind: 'edit',
+          title: 'Edit foo.ts',
+          diffs: [{ path: '/repo/src/foo.ts', oldText: 'a', newText: 'b' }],
+        }),
+      )
+      expect(screen.getByTestId('acp-inline-diff')).toBeTruthy()
+      expect(screen.queryByTestId('acp-toolcall-open-preview')).toBeNull()
+    })
   })
 })

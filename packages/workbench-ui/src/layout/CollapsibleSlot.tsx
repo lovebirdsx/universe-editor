@@ -8,6 +8,9 @@
  *  `rootProps` are spread onto the root element so callers keep their existing
  *  `data-*` / focus class hooks (selectors and tests depend on these living on
  *  the root). The chevron is rendered inline (no icon-library dependency).
+ *
+ *  An optional `actions` bar sits beside the toggle (never inside it — nested
+ *  buttons are invalid) and is revealed on header hover/focus.
  *--------------------------------------------------------------------------------------------*/
 
 import type { HTMLAttributes, ReactNode } from 'react'
@@ -45,6 +48,10 @@ export interface CollapsibleSlotProps {
   /** Optional marker pinned to the row's left edge (e.g. a numbered bookmark),
    *  absolutely positioned so it never shifts the header layout or sticky rects. */
   readonly badge?: ReactNode
+  /** Optional trailing action bar (e.g. an "Open Preview" button), rendered
+   *  *beside* the toggle — a button cannot nest inside another button. Revealed
+   *  on header hover/focus; omit it and the header DOM stays exactly as before. */
+  readonly actions?: ReactNode
   readonly collapsed: boolean
   readonly onToggle: () => void
   /** Collapsible body, rendered only when expanded. */
@@ -64,6 +71,7 @@ export function CollapsibleSlot({
   summary,
   statusIcon,
   badge,
+  actions,
   collapsed,
   onToggle,
   children,
@@ -79,30 +87,43 @@ export function CollapsibleSlot({
   const headerCls = headerClassName
     ? `${styles['collapsibleHeader']} ${headerClassName}`
     : styles['collapsibleHeader']
+  const header = (
+    <button
+      type="button"
+      className={headerCls}
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+      data-tooltip={kindLabel}
+      data-testid="acp-collapsible-toggle"
+    >
+      <span className={styles['slotIcon']} aria-hidden="true">
+        {icon}
+      </span>
+      {collapsed ? (
+        <span className={styles['slotSummary']}>{summary ?? title}</span>
+      ) : (
+        <span className={styles['slotTitle']}>{title}</span>
+      )}
+      {statusIcon}
+      <span className={styles['slotChevron']} aria-hidden="true">
+        <Chevron collapsed={collapsed} />
+      </span>
+    </button>
+  )
   return (
     <Tag className={cls} {...restRoot}>
       {badge != null && <span className={styles['slotBadge']}>{badge}</span>}
-      <button
-        type="button"
-        className={headerCls}
-        aria-expanded={!collapsed}
-        onClick={onToggle}
-        data-tooltip={kindLabel}
-        data-testid="acp-collapsible-toggle"
-      >
-        <span className={styles['slotIcon']} aria-hidden="true">
-          {icon}
+      {/* Wrap only when there are actions: a caller's `headerClassName` may make
+       *  the header `position: sticky`, and an unconditional wrapper the exact
+       *  height of the header would clip it out of stickiness immediately. */}
+      {actions != null ? (
+        <span className={styles['slotHeaderRow']}>
+          {header}
+          <span className={styles['slotActions']}>{actions}</span>
         </span>
-        {collapsed ? (
-          <span className={styles['slotSummary']}>{summary ?? title}</span>
-        ) : (
-          <span className={styles['slotTitle']}>{title}</span>
-        )}
-        {statusIcon}
-        <span className={styles['slotChevron']} aria-hidden="true">
-          <Chevron collapsed={collapsed} />
-        </span>
-      </button>
+      ) : (
+        header
+      )}
       {!collapsed && <div className={styles['slotBody']}>{children}</div>}
     </Tag>
   )

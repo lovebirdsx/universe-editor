@@ -66,6 +66,19 @@ function childToolCall(parentId: string, id: string, text: string): SessionUpdat
   }
 }
 
+/** An edit tool call carrying a single diff — the shape a sub-agent result
+ *  document arrives in (the fork fakes one so the saved file shows up). */
+function editToolCall(id: string, path: string, newText: string): SessionUpdate {
+  return {
+    sessionUpdate: 'tool_call',
+    toolCallId: id,
+    title: `Saved Explore result: ${path}`,
+    kind: 'edit',
+    status: 'completed',
+    content: [{ type: 'diff', path, oldText: null, newText }],
+  }
+}
+
 describe('AcpSession — live resident budget', () => {
   let session: AcpSession | undefined
 
@@ -189,6 +202,26 @@ describe('AcpSession — live resident budget', () => {
     const newest = session.toolCalls.get().find((c) => c.id === 'newest')
     expect(newest?.memoryTrimmed).toBeUndefined()
     expect(newest?.text).toBe('n'.repeat(800))
+  })
+
+  it('keeps a trimmed edit card’s diff path while releasing both text sides', () => {
+    // The path costs nothing (it was never charged to the budget) but the card's
+    // affordances read it — a sub-agent result document keyed off the diff path
+    // would otherwise lose its header preview button the moment it is trimmed.
+    session = createSession()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(
+      editToolCall('tc-doc', '.claude/explore-results/2026-doc.md', 'd'.repeat(1200)),
+    )
+    session.applyUpdate(terminalToolCall('tc-newest', 'n'.repeat(800)))
+
+    const doc = session.toolCalls.get().find((c) => c.id === 'tc-doc')
+    expect(doc?.memoryTrimmed).toBe(true)
+    expect(doc?.diffs).toHaveLength(1)
+    expect(doc?.diffs[0]?.path).toBe('.claude/explore-results/2026-doc.md')
+    expect(doc?.diffs[0]?.oldText).toBe('')
+    expect(doc?.diffs[0]?.newText).toBe('')
   })
 
   it('charges the transient rawOutput copy codex ships alongside terminal output', () => {
