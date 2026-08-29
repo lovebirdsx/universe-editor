@@ -51,7 +51,10 @@ interface OpenAiModelEntry {
 }
 
 interface OpenAiChatStreamChunk {
-  readonly choices?: ReadonlyArray<{ readonly delta?: { readonly content?: string } }>
+  readonly choices?: ReadonlyArray<{
+    readonly delta?: { readonly content?: string }
+    readonly finish_reason?: string
+  }>
   readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number }
 }
 
@@ -103,6 +106,8 @@ export class OpenAiChatProvider implements IAiModelProvider {
     result: DeferredPromise<AiRequestResult>,
   ): Promise<void> {
     let usage: { inputTokens: number; outputTokens: number } | undefined
+    let emittedText = false
+    let finishReason: string | undefined
     const signals = new DisposableStore()
     try {
       const apiKey = provider.apiKey
@@ -131,7 +136,12 @@ export class OpenAiChatProvider implements IAiModelProvider {
 
       for await (const chunk of readSse(res.body, token)) {
         const delta = chunk.choices?.[0]?.delta?.content
-        if (delta) source.emitOne({ type: 'text', value: delta })
+        if (delta) {
+          emittedText = true
+          source.emitOne({ type: 'text', value: delta })
+        }
+        const reason = chunk.choices?.[0]?.finish_reason
+        if (reason !== undefined) finishReason = reason
         if (chunk.usage) {
           usage = {
             inputTokens: chunk.usage.prompt_tokens ?? 0,
@@ -139,6 +149,10 @@ export class OpenAiChatProvider implements IAiModelProvider {
           }
         }
       }
+
+      // 'length' with no text mirrors Anthropic's max_tokens stop: the output
+      // budget was exhausted before any content — typically reasoning ate it.
+      if (finishReason === 'length' && !emittedText) throw outputLimitError()
 
       if (usage) source.emitOne({ type: 'usage', ...usage })
       source.resolve()
@@ -160,6 +174,17 @@ export class OpenAiChatProvider implements IAiModelProvider {
 
 function baseUrl(provider: AiProviderRuntime): string {
   return (provider.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
+}
+
+/** The output budget was exhausted before any text — the model's thinking ate it. */
+function outputLimitError(): AiError {
+  return new AiError(
+    AiErrorCode.OutputLimit,
+    localize(
+      'ai.error.openai.outputLimit',
+      'The model reached the output token limit before producing any text — its thinking (reasoning) consumed the entire output budget. Open AI Settings and set this model\'s "thinking" parameter to "disabled", or raise the request\'s token limit.',
+    ),
+  )
 }
 
 function authHeaders(apiKey: string | undefined): Record<string, string> {

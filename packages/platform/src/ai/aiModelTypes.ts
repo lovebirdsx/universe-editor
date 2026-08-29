@@ -153,6 +153,8 @@ export const enum AiErrorCode {
   Unauthorized = 'unauthorized',
   RateLimited = 'rateLimited',
   QuotaExceeded = 'quotaExceeded',
+  /** The model hit its output limit before producing usable content (e.g. reasoning consumed the whole budget). */
+  OutputLimit = 'outputLimit',
   NetworkError = 'networkError',
   Canceled = 'canceled',
   Unknown = 'unknown',

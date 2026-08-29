@@ -15,6 +15,7 @@ import {
   CancellationError,
   DeferredPromise,
   DisposableStore,
+  stripModelLaneSuffix,
   type AiMessage,
   type AiRequestOptions,
   type AiProviderRuntime,
@@ -31,6 +32,7 @@ import {
   retryWithBackoff,
   toAbortSignal,
 } from './retry.js'
+import { isOfficialEndpoint } from '../../../../shared/ai/officialEndpoints.js'
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -58,7 +60,11 @@ interface AnthropicUsage {
 
 interface AnthropicStreamEvent {
   readonly type?: string
-  readonly delta?: { readonly type?: string; readonly text?: string }
+  readonly delta?: {
+    readonly type?: string
+    readonly text?: string
+    readonly stop_reason?: string
+  }
   readonly message?: { readonly usage?: AnthropicUsage }
   readonly usage?: AnthropicUsage
   readonly error?: { readonly type?: string; readonly message?: string }
@@ -124,6 +130,8 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
     let cacheCreationTokens = 0
     let cacheReadTokens = 0
     let outputTokens = 0
+    let emittedText = false
+    let stopReason: string | undefined
     try {
       const res = await retryWithBackoff(
         () =>
@@ -131,11 +139,7 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
             method: 'POST',
             headers: anthropicHeaders(provider.apiKey),
             body: JSON.stringify(
-              buildMessagesBody(
-                bareModelName(options.modelId, provider.id, provider.protocol),
-                messages,
-                options,
-              ),
+              buildMessagesBody(wireModelName(options.modelId, provider), messages, options),
             ),
             signal: toAbortSignal(token, signals),
           }),
@@ -151,6 +155,7 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
         switch (evt.type) {
           case 'content_block_delta':
             if (evt.delta?.type === 'text_delta' && evt.delta.text) {
+              emittedText = true
               source.emitOne({ type: 'text', value: evt.delta.text })
             }
             break
@@ -161,11 +166,14 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
             break
           case 'message_delta':
             outputTokens = evt.usage?.output_tokens ?? outputTokens
+            if (evt.delta?.stop_reason !== undefined) stopReason = evt.delta.stop_reason
             break
           case 'error':
             throw new AiError(AiErrorCode.Unknown, evt.error?.message ?? 'Anthropic stream error')
         }
       }
+
+      if (stopReason === 'max_tokens' && !emittedText) throw outputLimitError()
 
       const usage = {
         inputTokens: inputTokens + cacheCreationTokens + cacheReadTokens,
@@ -191,6 +199,27 @@ export class AnthropicMessagesProvider implements IAiModelProvider {
 
 function baseUrl(provider: AiProviderRuntime): string {
   return (provider.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
+}
+
+/**
+ * The wire model name sent to the endpoint. Gateway endpoints register bare
+ * model names only, while `[1m]` (context lane) is an editor/agent-side hint;
+ * the official endpoint is the one place where the suffix is a real wire name.
+ */
+function wireModelName(modelId: string, provider: AiProviderRuntime): string {
+  const bare = bareModelName(modelId, provider.id, provider.protocol)
+  return isOfficialEndpoint(provider.protocol, provider.baseUrl) ? bare : stripModelLaneSuffix(bare)
+}
+
+/** max_tokens hit before any text came out — the model's thinking ate the whole budget. */
+function outputLimitError(): AiError {
+  return new AiError(
+    AiErrorCode.OutputLimit,
+    localize(
+      'ai.error.anthropic.outputLimit',
+      'The model reached the max_tokens limit before producing any text — its thinking (reasoning) consumed the entire output budget. Open AI Settings and set this model\'s "thinking" parameter to "disabled", or raise the request\'s token limit.',
+    ),
+  )
 }
 
 function anthropicHeaders(apiKey: string | undefined): Record<string, string> {

@@ -1338,6 +1338,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'ai.error.anthropic.rateLimited': 'Anthropic 触发限流（{status}）：{detail}',
   'ai.error.anthropic.serverError': 'Anthropic 服务器错误（{status}）：{detail}',
   'ai.error.anthropic.requestFailed': 'Anthropic 请求失败（{status}）：{detail}',
+  'ai.error.anthropic.outputLimit':
+    '模型在输出任何文本前就达到了 max_tokens 上限——思考（推理）耗尽了全部输出预算。请打开 AI 设置，将该模型的 thinking 参数设为 disabled，或提高请求的 token 上限。',
+  'ai.error.openai.outputLimit':
+    '模型在输出任何文本前就达到了输出 token 上限——思考（推理）耗尽了全部输出预算。请打开 AI 设置，将该模型的 thinking 参数设为 disabled，或提高请求的 token 上限。',
   'ai.error.responsesNotSupported':
     'OpenAI Responses 协议仅供 agent 使用；请为编辑器功能选择 chat 协议的模型。',
 
@@ -1835,6 +1839,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessionTitle.noModelHint':
     '未配置会话标题模型，AI 会话将使用首条消息作为标题。选择一个模型可自动生成更贴切的标题。',
   'acp.sessionTitle.selectModel': '选择模型',
+  'acp.sessionTitle.outputLimitHint':
+    '会话标题生成失败：模型的思考（推理）耗尽了全部输出 token 预算，未产出任何文本。请打开 AI 设置，将该模型的 thinking 参数设为 disabled。',
+  'acp.sessionTitle.openAiSettings': '打开 AI 设置',
   'acp.sessionStartFailed': '启动 Agent 会话失败：{msg}',
   'acp.sessionResumeFailed': '恢复 Agent 会话失败：{msg}',
   'acp.mcpTransportUnsupported':

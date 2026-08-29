@@ -294,4 +294,104 @@ describe('AnthropicMessagesProvider', () => {
     )
     expect(bodyOf(fetchMock, 2).max_tokens).toBe(4096)
   })
+
+  const LANE_MODEL_ID = 'anthropic/anthropic-messages/deepseek-v4-flash[1m]'
+
+  it('keeps the [1m] lane suffix on the official endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(streamFromChunks([]), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    await getTextResponse(
+      provider.sendRequest(
+        userMessages,
+        { modelId: LANE_MODEL_ID },
+        makeProvider({ apiKey: 'sk-test' }),
+        cts.token,
+      ),
+    )
+
+    expect(bodyOf(fetchMock, 0).model).toBe('deepseek-v4-flash[1m]')
+  })
+
+  it('strips the [1m] lane suffix on gateway endpoints', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(streamFromChunks([]), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    await getTextResponse(
+      provider.sendRequest(
+        userMessages,
+        { modelId: LANE_MODEL_ID },
+        makeProvider({ apiKey: 'sk-test', baseUrl: 'https://ai-gateway.example.com' }),
+        cts.token,
+      ),
+    )
+
+    expect(bodyOf(fetchMock, 0).model).toBe('deepseek-v4-flash')
+  })
+
+  it('throws an OutputLimit error when max_tokens stops with zero text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({ type: 'message_start', message: { usage: { input_tokens: 1 } } }),
+            sse({
+              type: 'message_delta',
+              delta: { stop_reason: 'max_tokens' },
+              usage: { output_tokens: 32 },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID, maxTokens: 32 },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+
+    await expect(response.result).rejects.toMatchObject({ code: AiErrorCode.OutputLimit })
+  })
+
+  it('does not throw when text was emitted before max_tokens', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          streamFromChunks([
+            sse({ type: 'message_start', message: { usage: { input_tokens: 1 } } }),
+            sse({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello' } }),
+            sse({
+              type: 'message_delta',
+              delta: { stop_reason: 'max_tokens' },
+              usage: { output_tokens: 32 },
+            }),
+          ]),
+          { status: 200 },
+        ),
+      ),
+    )
+    const provider = new AnthropicMessagesProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID, maxTokens: 32 },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const text = await getTextResponse(response)
+
+    expect(text).toBe('Hello')
+  })
 })

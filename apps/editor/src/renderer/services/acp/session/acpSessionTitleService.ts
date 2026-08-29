@@ -9,8 +9,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  AiErrorCode,
   AiMessageRole,
   CancellationTokenSource,
+  getAiErrorCode,
   ICommandService,
   IAiModelService,
   ILoggerService,
@@ -58,6 +60,7 @@ export const IAcpSessionTitleService =
 const MAX_INPUT_CHARS = 2000
 const MAX_TITLE_CHARS = 60
 const NO_MODEL_HINT_KEY = 'acp.sessionTitle.noModelHintShown'
+const OUTPUT_LIMIT_HINT_KEY = 'acp.sessionTitle.outputLimitHintShown'
 
 const SYSTEM_PROMPT = [
   'You generate a concise title for a coding-assistant conversation.',
@@ -125,6 +128,9 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
     } catch (err) {
       if (!cts.token.isCancellationRequested) {
         this._logger.warn(`session title generation failed: ${(err as Error).message}`)
+        if (getAiErrorCode(err) === AiErrorCode.OutputLimit) {
+          await this._maybeShowOutputLimitHint()
+        }
       }
       return undefined
     } finally {
@@ -176,6 +182,36 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
       })
     } catch (err) {
       this._logger.debug(`no-model hint failed: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * One-time nudge when the title request hit the output limit with zero text
+   * (the model's thinking consumed the whole budget). Points at the fix: the
+   * model's thinking parameter, configurable in AI Settings.
+   */
+  private async _maybeShowOutputLimitHint(): Promise<void> {
+    try {
+      const shown = await this._storage.get<boolean>(OUTPUT_LIMIT_HINT_KEY, StorageScope.GLOBAL)
+      if (shown) return
+      await this._storage.set(OUTPUT_LIMIT_HINT_KEY, true, StorageScope.GLOBAL)
+      this._notification.notify({
+        severity: Severity.Warning,
+        message: localize(
+          'acp.sessionTitle.outputLimitHint',
+          'Session title generation hit the output token limit before producing any text — the model\'s thinking (reasoning) consumed the whole budget. Open AI Settings and set this model\'s "thinking" parameter to "disabled", or raise the request\'s token limit.',
+        ),
+        actions: [
+          {
+            label: localize('acp.sessionTitle.openAiSettings', 'Open AI Settings'),
+            run: () => {
+              void this._commands.executeCommand('ai.manageModels')
+            },
+          },
+        ],
+      })
+    } catch (err) {
+      this._logger.debug(`output-limit hint failed: ${(err as Error).message}`)
     }
   }
 }

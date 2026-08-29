@@ -281,4 +281,50 @@ describe('OpenAiChatProvider', () => {
       setDisposableTracker(null)
     }
   })
+
+  it('throws an OutputLimit error when finish_reason length ends with zero text', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        streamFromChunks([
+          'data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":32}}\n',
+        ]),
+        { status: 200 },
+      ),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID, maxTokens: 32 },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+
+    await expect(response.result).rejects.toMatchObject({ code: AiErrorCode.OutputLimit })
+  })
+
+  it('does not throw when text was emitted before finish_reason length', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        streamFromChunks([
+          'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n',
+        ]),
+        { status: 200 },
+      ),
+    )
+    const provider = new OpenAiChatProvider()
+    const cts = new CancellationTokenSource()
+
+    const response = provider.sendRequest(
+      userMessages,
+      { modelId: MODEL_ID, maxTokens: 32 },
+      makeProvider({ apiKey: 'sk-test' }),
+      cts.token,
+    )
+    const text = await getTextResponse(response)
+
+    expect(text).toBe('Hello')
+  })
 })
