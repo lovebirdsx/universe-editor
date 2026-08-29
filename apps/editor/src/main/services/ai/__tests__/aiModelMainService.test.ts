@@ -580,6 +580,95 @@ describe('AiModelMainService', () => {
     await expect(modelsPromise).resolves.toEqual([])
   })
 
+  // A gateway that never answers /models used to cost every request the full
+  // metadata deadline, because the hot path resolved config by enumerating the
+  // whole catalogue. Requests for another provider must not pay for it at all.
+  it('starts a request without enumerating an unreachable sibling provider', async () => {
+    const service = makeService([
+      { id: 'live', protocolMap: { ollama: ['m'] } },
+      { id: 'dead', protocolMap: { 'openai-chat': [] } },
+    ])
+    addProvider(
+      service,
+      FAKE_PROTOCOL,
+      fakeProvider({
+        run: (source, result) => {
+          source.emitOne({ type: 'text', value: 'ok' })
+          source.resolve()
+          result.complete({})
+        },
+      }).provider,
+    )
+    const tokenStarted = new DeferredPromise<CancellationToken>()
+    const dead = hangingListModels(tokenStarted)
+    let deadCalls = 0
+    addProvider(service, 'openai-chat', {
+      ...dead,
+      listModels: (runtime, token) => {
+        deadCalls++
+        return dead.listModels(runtime, token)
+      },
+    })
+
+    const chunks: AiChunkEvent[] = []
+    service.onDidEmitChunk((e) => chunks.push(e))
+    const ended = collectEnd(service)
+
+    await service.startRequest('r-live', userMsg, { modelId: 'live/ollama/m' })
+    const end = await ended
+
+    expect(end.requestId).toBe('r-live')
+    expect(end.error).toBeUndefined()
+    expect(chunks.map((c) => (c.chunk.type === 'text' ? c.chunk.value : ''))).toEqual(['ok'])
+    expect(deadCalls).toBe(0)
+    service.dispose()
+  })
+
+  it('reads model configuration without enumerating an unreachable sibling provider', async () => {
+    const service = makeService([
+      { id: 'live', protocolMap: { ollama: ['m'] } },
+      { id: 'dead', protocolMap: { 'openai-chat': [] } },
+    ])
+    addProvider(service, FAKE_PROTOCOL, fakeProvider({}).provider)
+    const tokenStarted = new DeferredPromise<CancellationToken>()
+    const dead = hangingListModels(tokenStarted)
+    let deadCalls = 0
+    addProvider(service, 'openai-chat', {
+      ...dead,
+      listModels: (runtime, token) => {
+        deadCalls++
+        return dead.listModels(runtime, token)
+      },
+    })
+
+    expect(await service.getModelConfiguration('live/ollama/m')).toEqual({})
+    expect(deadCalls).toBe(0)
+    service.dispose()
+  })
+
+  it('checks model availability without enumerating an unreachable sibling provider', async () => {
+    const service = makeService([
+      { id: 'live', protocolMap: { ollama: ['m'] } },
+      { id: 'dead', protocolMap: { 'openai-chat': [] } },
+    ])
+    addProvider(service, FAKE_PROTOCOL, fakeProvider({}).provider)
+    const tokenStarted = new DeferredPromise<CancellationToken>()
+    const dead = hangingListModels(tokenStarted)
+    let deadCalls = 0
+    addProvider(service, 'openai-chat', {
+      ...dead,
+      listModels: (runtime, token) => {
+        deadCalls++
+        return dead.listModels(runtime, token)
+      },
+    })
+
+    expect(await service.hasModel('live/ollama/m')).toBe(true)
+    expect(await service.hasModel('live/ollama/gone')).toBe(false)
+    expect(deadCalls).toBe(0)
+    service.dispose()
+  })
+
   it('flattens extends so a child inherits the parent protocolMap', async () => {
     const { service } = makeServiceFromFile(
       JSON.stringify({

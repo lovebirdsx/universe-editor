@@ -75,6 +75,9 @@ class FakeAiModel implements Partial<IAiModelService> {
   getModels(): Promise<readonly AiModelMetadata[]> {
     return Promise.resolve(this.models)
   }
+  hasModel(modelId: string): Promise<boolean> {
+    return Promise.resolve(this.models.some((m) => m.id === modelId))
+  }
   getInlineCompletionModelId(): Promise<string | undefined> {
     return Promise.resolve(this.inlineModelId)
   }

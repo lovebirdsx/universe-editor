@@ -67,6 +67,13 @@ export interface IAiModelService {
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
 
   /**
+   * Whether `modelId` is currently available. Resolves only that model's own
+   * provider, so an unreachable endpoint elsewhere cannot slow the check down —
+   * prefer this over scanning getModels() to validate a stored selection.
+   */
+  hasModel(modelId: string): Promise<boolean>
+
+  /**
    * Issue a request. Returns a clean stream + final-result promise.
    * Cancellation via `token` propagates across the process boundary and aborts
    * the underlying network request.

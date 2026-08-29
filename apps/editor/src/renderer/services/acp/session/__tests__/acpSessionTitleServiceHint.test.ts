@@ -112,6 +112,7 @@ function stubAiModel(options: {
   return {
     getSessionTitleModelId: vi.fn(async () => options.sessionTitleModelId),
     getModels: vi.fn(async () => options.models ?? []),
+    hasModel: vi.fn(async (id: string) => (options.models ?? []).some((m) => m.id === id)),
   } as unknown as IAiModelService
 }
 

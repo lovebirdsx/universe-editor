@@ -82,6 +82,9 @@ class FakeMain implements IAiModelMainService {
   selectModels() {
     return Promise.resolve([])
   }
+  hasModel() {
+    return Promise.resolve(true)
+  }
   computeTokenLength() {
     return Promise.resolve(0)
   }

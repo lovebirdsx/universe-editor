@@ -146,8 +146,7 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
       await this._maybeShowNoModelHint()
       return undefined
     }
-    const models = await this._aiModel.getModels()
-    if (!models.some((m) => m.id === chosen)) {
+    if (!(await this._aiModel.hasModel(chosen))) {
       this._logger.debug(
         `session-title model '${chosen}' not in the available model list; skipping`,
       )

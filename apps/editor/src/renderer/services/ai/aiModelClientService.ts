@@ -104,6 +104,10 @@ export class AiModelClientService extends Disposable implements IAiModelService,
     return this._main.selectModels(selector)
   }
 
+  hasModel(modelId: string): Promise<boolean> {
+    return this._main.hasModel(modelId)
+  }
+
   computeTokenLength(modelId: string, text: string): Promise<number> {
     return this._main.computeTokenLength(modelId, text)
   }

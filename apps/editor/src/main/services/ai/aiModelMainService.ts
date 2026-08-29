@@ -207,6 +207,14 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     return this._withTimeoutToken((token) => this._registry.selectModels(selector, token))
   }
 
+  async hasModel(modelId: string): Promise<boolean> {
+    await this._ready
+    const resolved = await this._withTimeoutToken((token) =>
+      this._registry.resolveModel(modelId, token),
+    )
+    return resolved !== undefined
+  }
+
   async computeTokenLength(modelId: string, text: string): Promise<number> {
     await this._ready
     return this._withTimeoutToken(async (token) => {
@@ -392,7 +400,13 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
         return
       }
 
-      const modelConfiguration = await this.getModelConfiguration(options.modelId)
+      // Resolve straight off the model's own provider entry and reuse the metadata
+      // it carries: enumerating the whole catalogue here would let one unreachable
+      // endpoint add its timeout to every single request.
+      const modelConfiguration = mergeModelConfig(
+        resolved.metadata.configurationSchema,
+        this._modelSettings[options.modelId] ?? {},
+      )
       const merged: AiRequestOptions = { ...options, modelConfiguration }
       this._pumpResponse(
         requestId,
@@ -431,8 +445,10 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   }
 
   private async _schemaFor(modelId: string): Promise<AiModelConfigSchema | undefined> {
-    const models = await this._withTimeoutToken((token) => this._registry.getModels(token))
-    return models.find((m) => m.id === modelId)?.configurationSchema
+    const resolved = await this._withTimeoutToken((token) =>
+      this._registry.resolveModel(modelId, token),
+    )
+    return resolved?.metadata.configurationSchema
   }
 
   private async _reload(): Promise<void> {

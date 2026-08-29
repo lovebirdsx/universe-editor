@@ -8,10 +8,10 @@
  *  Electron dependency, so it can be unit-tested in plain node.
  *--------------------------------------------------------------------------------------------*/
 
-import type { CancellationToken } from '../base/cancellation.js'
+import { CancellationTokenSource, type CancellationToken } from '../base/cancellation.js'
 import { Emitter, type Event } from '../base/event.js'
 import { Disposable, type IDisposable, toDisposable } from '../base/lifecycle.js'
-import { buildModelConfigSchema, composeModelId } from './aiModelConfiguration.js'
+import { buildModelConfigSchema, composeModelId, parseModelRef } from './aiModelConfiguration.js'
 import { lookupModelKnowledge } from './aiModelLane.js'
 import {
   protocolRuntime,
@@ -37,6 +37,11 @@ const PROTOCOL_TOKEN_DEFAULTS: Readonly<
   ollama: { input: 4096, output: 4096 },
 }
 
+/** One endpoint that never answers must not stall the whole catalogue. */
+const DISCOVERY_TIMEOUT_MS = 2_500
+/** How long a failed endpoint is skipped before discovery probes it again. */
+const DISCOVERY_FAILURE_COOLDOWN_MS = 30_000
+
 interface Entry {
   /** Mutated in place when a reload keeps this entry: the newest resolved provider. */
   provider: AiResolvedProvider
@@ -45,9 +50,15 @@ interface Entry {
   /** Resolved models for this entry, or undefined when not yet resolved. */
   models: readonly AiModelMetadata[] | undefined
   /** model id → the protocol provider + runtime view that produced it. */
-  byModelId: Map<string, { provider: IAiModelProvider; runtime: AiProviderRuntime }>
+  byModelId: Map<string, ResolvedModel>
   /** In-flight resolution, shared across concurrent callers (dedup). */
   pending: Promise<readonly AiModelMetadata[]> | undefined
+}
+
+interface ResolvedModel {
+  readonly provider: IAiModelProvider
+  readonly runtime: AiProviderRuntime
+  readonly metadata: AiModelMetadata
 }
 
 export class AiModelRegistry extends Disposable {
@@ -55,6 +66,8 @@ export class AiModelRegistry extends Disposable {
   private _entries = new Map<string, Entry>()
   private _knowledge: Readonly<Record<string, AiModelKnowledge>> = {}
   private _knowledgeFingerprint = computeKnowledgeFingerprint({})
+  /** provider id → when its last discovery attempt failed (see _discover). */
+  private readonly _discoveryFailedAt = new Map<string, number>()
 
   private readonly _onDidChangeModels = this._register(new Emitter<void>())
   readonly onDidChangeModels: Event<void> = this._onDidChangeModels.event
@@ -110,7 +123,15 @@ export class AiModelRegistry extends Disposable {
       const old = knowledgeChanged
         ? undefined
         : (next.get(provider.id) ?? this._entries.get(provider.id))
+      // A changed endpoint / credential / protocolMap may well have fixed whatever
+      // made discovery fail, so retry it now instead of serving the cooldown.
+      if (old === undefined || old.modelFingerprint !== fingerprint) {
+        this._discoveryFailedAt.delete(provider.id)
+      }
       next.set(provider.id, reuseEntry(old, provider, fingerprint))
+    }
+    for (const id of this._discoveryFailedAt.keys()) {
+      if (!next.has(id)) this._discoveryFailedAt.delete(id)
     }
     this._entries = next
     this._onDidChangeModels.fire()
@@ -132,17 +153,28 @@ export class AiModelRegistry extends Disposable {
     return models.filter((m) => matchesSelector(m, selector)).map((m) => m.id)
   }
 
-  /** Find the protocol provider + runtime view that own `modelId` (resolving caches as needed). */
+  /**
+   * Find the protocol provider + runtime view that own `modelId` (resolving caches
+   * as needed). Every id is composed from its own entry's id, so a well-formed id
+   * names exactly one candidate entry and no other endpoint is ever contacted —
+   * an unreachable sibling can neither slow this down nor block it. Only an
+   * unparseable id (a stale two-layer ref) falls back to scanning.
+   */
   async resolveModel(
     modelId: string,
     token: CancellationToken,
-  ): Promise<
-    { readonly provider: IAiModelProvider; readonly runtime: AiProviderRuntime } | undefined
-  > {
+  ): Promise<ResolvedModel | undefined> {
+    const ref = parseModelRef(modelId)
+    if (ref !== undefined) {
+      const owner = this._entries.get(ref.providerId)
+      if (owner === undefined) return undefined
+      await this._resolveEntry(owner, token)
+      return owner.byModelId.get(modelId)
+    }
     for (const entry of this._entries.values()) {
       await this._resolveEntry(entry, token)
       const info = entry.byModelId.get(modelId)
-      if (info) return { provider: info.provider, runtime: info.runtime }
+      if (info) return info
     }
     return undefined
   }
@@ -182,13 +214,13 @@ export class AiModelRegistry extends Disposable {
     token: CancellationToken,
   ): Promise<{
     models: readonly AiModelMetadata[]
-    byModelId: Map<string, { provider: IAiModelProvider; runtime: AiProviderRuntime }>
+    byModelId: Map<string, ResolvedModel>
     /** A discovery call failed, so this resolution must not be cached. */
     incomplete: boolean
   }> {
     const { provider: resolved } = entry
     const models: AiModelMetadata[] = []
-    const byModelId = new Map<string, { provider: IAiModelProvider; runtime: AiProviderRuntime }>()
+    const byModelId = new Map<string, ResolvedModel>()
     let incomplete = false
 
     for (const declaration of resolved.protocols) {
@@ -197,14 +229,9 @@ export class AiModelRegistry extends Disposable {
       const runtime = protocolRuntime(resolved, declaration.protocol)
       let entries: readonly AiResolvedProtocolModel[]
       if (declaration.discover) {
-        // Discovery is best-effort: an offline or unauthorized endpoint contributes
-        // no models rather than failing the whole catalogue. Probing (verifyProvider)
-        // is where the reason surfaces.
-        const discovered = await impl.listModels(runtime, token).catch(() => {
-          incomplete = true
-          return [] as readonly string[]
-        })
-        entries = discovered.map((name) => this._discovered(name))
+        const discovered = await this._discover(impl, runtime, resolved.id, token)
+        if (discovered.failed) incomplete = true
+        entries = discovered.models.map((name) => this._discovered(name))
       } else {
         entries = declaration.models
       }
@@ -212,11 +239,60 @@ export class AiModelRegistry extends Disposable {
       for (const model of entries) {
         const id = composeModelId(resolved.id, declaration.protocol, model.channelModel)
         if (byModelId.has(id)) continue
-        models.push(toMetadata(id, resolved.id, declaration.protocol, model))
-        byModelId.set(id, { provider: impl, runtime })
+        const metadata = toMetadata(id, resolved.id, declaration.protocol, model)
+        models.push(metadata)
+        byModelId.set(id, { provider: impl, runtime, metadata })
       }
     }
     return { models, byModelId, incomplete }
+  }
+
+  /**
+   * Enumerate one endpoint under its own deadline. Discovery is best-effort: an
+   * offline or unauthorized endpoint contributes no models rather than failing the
+   * whole catalogue (probing via verifyProvider is where the reason surfaces).
+   *
+   * Only a timeout starts a cooldown. An endpoint that hangs costs every later
+   * caller the full deadline again, so it is worth remembering for a while; one
+   * that refuses the connection outright answers in milliseconds, and deferring
+   * its retry would just keep a recovered gateway dark for no gain.
+   */
+  private async _discover(
+    impl: IAiModelProvider,
+    runtime: AiProviderRuntime,
+    providerId: string,
+    token: CancellationToken,
+  ): Promise<{ readonly models: readonly string[]; readonly failed: boolean }> {
+    const failedAt = this._discoveryFailedAt.get(providerId)
+    if (failedAt !== undefined && Date.now() - failedAt < DISCOVERY_FAILURE_COOLDOWN_MS) {
+      return { models: [], failed: true }
+    }
+    const cts = new CancellationTokenSource(token)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // Race rather than await: cancelling asks the provider to stop, but a provider
+    // that ignores its token would otherwise still stall every other entry.
+    const deadline = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        cts.cancel()
+        resolve(undefined)
+      }, DISCOVERY_TIMEOUT_MS)
+    })
+    try {
+      const models = await Promise.race([impl.listModels(runtime, cts.token), deadline])
+      // The deadline cancels rather than rejects, and a provider may well resolve
+      // empty once cancelled — without this check a timeout would masquerade as
+      // "this gateway has no models" and get cached as a complete answer.
+      if (models === undefined || cts.token.isCancellationRequested) {
+        this._discoveryFailedAt.set(providerId, Date.now())
+        return { models: [], failed: true }
+      }
+      return { models, failed: false }
+    } catch {
+      return { models: [], failed: true }
+    } finally {
+      clearTimeout(timer)
+      cts.dispose()
+    }
   }
 
   private _discovered(channelModel: string): AiResolvedProtocolModel {
@@ -230,6 +306,7 @@ export class AiModelRegistry extends Disposable {
   override dispose(): void {
     this._providers.clear()
     this._entries.clear()
+    this._discoveryFailedAt.clear()
     super.dispose()
   }
 }

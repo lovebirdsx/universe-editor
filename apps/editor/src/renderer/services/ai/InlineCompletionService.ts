@@ -348,9 +348,9 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   private async _resolveModelId(): Promise<string | undefined> {
     const chosen = await this.getModelId()
     if (!chosen) return undefined
-    // Drop a stale selection (model removed from aiSettings.json).
-    const models = await this._aiModel.getModels()
-    return models.some((m) => m.id === chosen) ? chosen : undefined
+    // Drop a stale selection (model removed from aiSettings.json). Targeted, so
+    // this runs on every keystroke without touching any other provider.
+    return (await this._aiModel.hasModel(chosen)) ? chosen : undefined
   }
 
   private _debounce(delay: number, token: CancellationToken): Promise<boolean> {

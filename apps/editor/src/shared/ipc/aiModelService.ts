@@ -79,6 +79,8 @@ export interface IAiModelMainService {
 
   getModels(): Promise<readonly AiModelMetadata[]>
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
+  /** Targeted availability check — resolves only this model's own provider. */
+  hasModel(modelId: string): Promise<boolean>
   computeTokenLength(modelId: string, text: string): Promise<number>
 
   /** Fire a request; chunks/end come back via the events keyed by `requestId`. */

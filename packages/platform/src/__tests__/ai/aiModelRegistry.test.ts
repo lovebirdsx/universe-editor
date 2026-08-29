@@ -540,3 +540,136 @@ describe('AiModelRegistry — lookup', () => {
     reg.dispose()
   })
 })
+
+describe('AiModelRegistry — one unreachable endpoint stays contained', () => {
+  /** A listModels that never settles on its own, ignoring cancellation. */
+  function hanging(calls: { n: number }): IAiModelProvider {
+    return fakeProvider(() => {
+      calls.n++
+      return new Promise<readonly string[]>(() => {})
+    })
+  }
+
+  it('bounds a hung endpoint by its own deadline instead of stalling the catalogue', async () => {
+    vi.useFakeTimers()
+    try {
+      const reg = new AiModelRegistry()
+      reg.registerProvider('ollama', hanging({ n: 0 }))
+      reg.registerProvider(
+        'openai-chat',
+        fakeProvider(() => Promise.resolve(['fast-model'])),
+      )
+      reg.setProviders([
+        provider('dead', [discovering('ollama')]),
+        provider('live', [discovering('openai-chat')]),
+      ])
+
+      const pending = reg.getModels(CancellationToken.None)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect((await pending).map((m) => m.id)).toEqual(['live/openai-chat/fast-model'])
+      reg.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resolveModel goes straight to the owning entry, never probing a dead sibling', async () => {
+    const calls = { n: 0 }
+    const reg = new AiModelRegistry()
+    reg.registerProvider('ollama', hanging(calls))
+    reg.registerProvider('openai-chat', fakeProvider())
+    // The dead entry is listed first, so a scanning resolve would hang here.
+    reg.setProviders([
+      provider('dead', [discovering('ollama')]),
+      provider('live', [declared('openai-chat', ['gpt'])]),
+    ])
+
+    const resolved = await reg.resolveModel('live/openai-chat/gpt', CancellationToken.None)
+    expect(resolved?.metadata.id).toBe('live/openai-chat/gpt')
+    expect(calls.n).toBe(0)
+    reg.dispose()
+  })
+
+  it('skips a just-timed-out endpoint, then probes it again once the cooldown lapses', async () => {
+    vi.useFakeTimers()
+    try {
+      let down = true
+      const listModels = vi.fn(() =>
+        down
+          ? new Promise<readonly string[]>(() => {})
+          : Promise.resolve<readonly string[]>(['gpt-4o']),
+      )
+      const reg = new AiModelRegistry()
+      reg.registerProvider('openai-chat', fakeProvider(listModels))
+      reg.setProviders([provider('acme', [discovering('openai-chat')])])
+
+      const first = reg.getModels(CancellationToken.None)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await first).toEqual([])
+      expect(listModels).toHaveBeenCalledTimes(1)
+
+      // Inside the cooldown the dead endpoint is not contacted at all, so this
+      // resolves immediately rather than spending another full deadline.
+      expect(await reg.getModels(CancellationToken.None)).toEqual([])
+      expect(listModels).toHaveBeenCalledTimes(1)
+
+      down = false
+      await vi.advanceTimersByTimeAsync(31_000)
+      expect((await reg.getModels(CancellationToken.None)).map((m) => m.id)).toEqual([
+        'acme/openai-chat/gpt-4o',
+      ])
+      expect(listModels).toHaveBeenCalledTimes(2)
+      reg.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries a fast-failing endpoint right away — only hangs are worth deferring', async () => {
+    let attempt = 0
+    const listModels = vi.fn(() => {
+      attempt++
+      return attempt === 1
+        ? Promise.reject(new Error('connection refused'))
+        : Promise.resolve<readonly string[]>(['gpt-4o'])
+    })
+    const reg = new AiModelRegistry()
+    reg.registerProvider('openai-chat', fakeProvider(listModels))
+    reg.setProviders([provider('acme', [discovering('openai-chat')])])
+
+    expect(await reg.getModels(CancellationToken.None)).toEqual([])
+    expect((await reg.getModels(CancellationToken.None)).map((m) => m.id)).toEqual([
+      'acme/openai-chat/gpt-4o',
+    ])
+    reg.dispose()
+  })
+
+  it('drops the cooldown when the entry changes, so a fixed endpoint retries at once', async () => {
+    vi.useFakeTimers()
+    try {
+      let down = true
+      const listModels = vi.fn(() =>
+        down
+          ? new Promise<readonly string[]>(() => {})
+          : Promise.resolve<readonly string[]>(['gpt-4o']),
+      )
+      const reg = new AiModelRegistry()
+      reg.registerProvider('openai-chat', fakeProvider(listModels))
+      reg.setProviders([provider('acme', [discovering('openai-chat')])])
+
+      const first = reg.getModels(CancellationToken.None)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await first).toEqual([])
+
+      down = false
+      reg.setProviders([provider('acme', [discovering('openai-chat')], { apiKey: 'ak-1' })])
+      expect((await reg.getModels(CancellationToken.None)).map((m) => m.id)).toEqual([
+        'acme/openai-chat/gpt-4o',
+      ])
+      expect(listModels).toHaveBeenCalledTimes(2)
+      reg.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

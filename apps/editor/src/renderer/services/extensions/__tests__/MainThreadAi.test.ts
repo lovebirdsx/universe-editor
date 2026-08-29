@@ -28,6 +28,7 @@ const fakeAi: IAiModelService = {
   onDidChangeRemote: Event.None,
   getModels: () => Promise.resolve([]),
   selectModels: (_selector: AiModelSelector) => Promise.resolve([]),
+  hasModel: (_modelId: string) => Promise.resolve(true),
   computeTokenLength: (_modelId: string, _text: string, _token: CancellationToken) =>
     Promise.resolve(0),
   sendRequest: (
