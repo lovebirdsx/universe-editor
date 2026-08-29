@@ -4,22 +4,22 @@
 
 ## 功能实现进展
 
-- [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService+op-service 编排撤销；坑=await 前取完 service；useTrash 必须先问 provider 能力位(远端恒无回收站,降级永久删除而非静默兜底)
-- [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — resources/agent-skills 经 additionalDirectories 注入四条 wire 路径,两 fork 零改动发现;加 skill=放文件+补 sentinel;remote 不注入;内置 skill 统一 disable-model-invocation,codex 端 fork 桥接物化 openai.yaml(sentinel 可回收)
+- [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService；useTrash 须先问 provider 能力位，远端降级须显式非静默
+- [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — additionalDirectories 注入四条 wire 路径两 fork 零改动发现；加 skill=放文件+补 sentinel
 - [session 开销含子 Agent](session-cost-subagent-inclusion.md) — claude SDK 总额天然已含勿双计；codex 须 fork 订阅子 thread tokenUsage 聚合进 _meta.quota
-- [官方订阅额度用量指示器](subscription-usage-indicator.md) — 三分门控(订阅%/网关¥/隐藏)，codex 永不显 ¥；红线=绝不为读用量 connect、bigint 须 String 化、unsupported 判定别做永久粘性、supported 须由认证形态定(codex rateLimits 按 auth.json 作答,网关会话须 fork 侧先查 getAuthenticationStatus 门控)
+- [官方订阅额度用量指示器](subscription-usage-indicator.md) — 按认证形态三分(订阅%/账号数字/隐藏)；四条红线含绝不为读用量 connect、supported 须由认证形态定
 - [agent 二进制静默下载 + e2e teardown 修复](agent-binary-silent-download-e2e-fix.md) — allowDownload 网关；tsserver 孤儿卡 app.close()→优雅关+扫孤儿
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸；坑=变更源须区分
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — 引用=decoration 追踪 by-range 药丸，含空格 label 安全，提交读 range 不分词
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — IUriIdentityService 单一入口+ResourceMap；MonacoModelKey/SCM 键为刻意独立身份域
-- [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 必须覆写 id 否则 tab 去重；matches 只比 id；打开文件走 resolver；id 去重≠数量不变量(同组同 kind 预览须 retarget，唯一入口 openPreviewInGroup)；dirty per-input，dispose 前须 setDirty 转移
-- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面（已按单层 providers[] 重构）；密钥存 aiSettings.json（红线=不进日志/Debug）；加 provider 见套路 I
-- [AI Providers 可视化编辑](ai-providers-visual-editing.md) — label 已删回退 id、Test connection→自动探测(useAutoVerify)；教训=全量替换写 API 须串行化、探测走 effectiveConnection、弹窗回填语义、自动探测触发用指纹非 reloadToken、防抖重测 token 失效须在变更检测时非探测启动时
-- [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率单一来源=provider 自己的 pricingSource(未声明即未知,绝不跨 provider 套官方价);会话开销与账号费用两概念绝不互相兜底(unavailable 不回落到别的账号数字)
+- [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 须覆写 id，matches 只比 id；id 去重≠数量不变量；dirty per-input
+- [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面，单层 providers[]；密钥存 aiSettings.json 不进日志/Debug
+- [AI Providers 可视化编辑](ai-providers-visual-editing.md) — 连通性改自动探测(useAutoVerify)；五条教训含全量替换写 API 须串行化、探测触发用指纹非 reloadToken
+- [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率单一来源=provider 自己的 pricingSource，绝不跨 provider 套官方价；会话开销与账号费用绝不互相兜底
 - [插件系统](extension-system-progress.md) — 外部插件 Phase 0–6；2026-07 单 host+Workspace Trust（激活门控，built-in 豁免）
 - [第三方插件生态计划](third-party-extension-ecosystem-plan.md) — 注册页+服务端发布签名已落地（2026-08-10 修订决策2）；发布闭环 register→login→publish→可装已通；uex 待用户手动发 npm
 - [extension-api 0.9→0.12 API 面补全](extension-api-09-surface-expansion.md) — parity 计划 P1-P4 全落地；bump 版本常量已生成物化+publish 耦合拦截，示例仓库 check-sdk-drift 兜底；事件推兴趣订阅+防抖
-- [extension-api 0.13 语言/主题/菜单面补全](extension-api-013-language-theme-menu-surface.md) — contributes.languages/colors+setTextDocumentLanguage+semantic tokens 刷新+editor/context 渲染；坑=overviewRulerColor 不能透传 {id}、Monaco semantic provider 原生支持 onDidChange
+- [extension-api 0.13 语言/主题/菜单面补全](extension-api-013-language-theme-menu-surface.md) — contributes.languages/colors+setTextDocumentLanguage+semantic tokens 刷新；坑=overviewRulerColor 不能透传 {id}
 - [插件 manifest NLS](extension-manifest-nls.md) — %key%+package.nls.json；nls 文件须列 files 数组否则打包丢失
 - [TypeScript 内置插件](typescript-builtin-plugin.md) — 插件自 spawn tsserver+10 类 provider；地图见 extensions/typescript/CLAUDE.md
 - [通用 UI 抽取 workbench-ui](workbench-ui-consolidation.md) — 通用件沉淀 workbench-ui，editor 留薄 wrapper；展示组件纯数据+回调
@@ -29,8 +29,8 @@
 - [Session 执行时间统计](session-timer-feature.md) — 只计 running 净时长；useSessionTimer+持久化
 - [会话级 diff](session-diff-feature.md) — pinned baseline 快照制+fs-watch 兜底侦测；watched 推测徽标+忽略
 - [新建 session 异步化](async-session-create.md) — 同步渲染后台握手；双 id；queued prompts 自动派发
-- [空会话 restart 重建](empty-session-rebuild-on-restart.md) — hasMessages:false 无 transcript 须 session/new+history rekey；side task 是唯一例外(fork 已复制 transcript)；重试 sid 须随 rekey 更新
-- [session 空闲回收后统一唤醒](acp-session-dormant-wake-abstraction.md) — isDormant 用 derived 会永久卡住；abort 监听不包一层会把 Event 当 deadOnArrival 吞掉全部休眠标记；setConfigOption 前置 await 打挂 echo 抑制
+- [空会话 restart 重建](empty-session-rebuild-on-restart.md) — hasMessages:false 无 transcript 须 session/new+history rekey；side task 是唯一例外
+- [session 空闲回收后统一唤醒](acp-session-dormant-wake-abstraction.md) — isDormant 用 derived 会永久卡住；abort 监听须包一层否则 Event 当 deadOnArrival
 - [Codex 三种登录方案](codex-three-auth-modes.md) — gateway 须自包含 provider；统一 applyCredential 原子入口
 - [markdown 预览键盘导航](markdown-preview-link-hints.md) — f/F link hints+滚动/前进后退；controller+contextKey+Action2
 - [Codex 对齐 Claude skills/memory](codex-claude-skills-memory-parity.md) — codex fork 读 .claude/skills+注入 MEMORY.md；openai.yaml+sync 脚本
@@ -46,19 +46,19 @@
 - [extension-api 评审遗留优化 10 项收官](extension-api-review-followup-round.md) — 计划文件留改法/验收；教训=refcount 资源 dispose 须全量直发、cap 须在过滤后扣、引擎收敛前先列语义差异
 - [远程开发 Phase 0 地基](remote-dev-phase0-fs-provider.md) — scheme 分派 FileService+per-scheme 大小写+fsPath 审计；护栏只守内核，main 侧加 scheme 守卫不重写
 - [远程开发 Phase 1 remote-server](remote-dev-phase1-remote-server.md) — 路由在 main 侧/URI 互译收口/server 零 scheme 感知；UNIVERSE_REMOTE_SERVER_CMD 联调；@regression 须 ONLY_TAG
-- [远程开发 v2 全栈](remote-dev-v2-full-stack.md) — daemon+TCP+PersistentProtocol；exthost/ACP 迁远端；host 内须 JSON codec 非 binary；vendor 绝不 scp node_modules；WSL 验收四坑；协议 bump 须纳入 daemon 自愈决策
-- [远程 agent binary 受管下载](remote-agent-binary-managed-download.md) — AgentBinaryStore 沉 node-services 双端共享+AgentBinary channel(协议v3)+按 authority 注入 env；坑=store 须并发去重防 .extract 互踩；部署 --omit=optional 省500MB；预下载已补齐远端(v7,事件驱动每 authority 一次,须门控 connected 否则后台维护会拉起 SSH 连接)
-- [Remote Explorer 单 Targets 树](remote-explorer-merged-targets-tree.md) — 4 view 合一(分组→target→recent 子行)+buildRemoteTree 纯函数；连接双条根因=WSL authority 大小写未归一化，normalizeRemoteAuthority 只在 main 边界收敛
+- [远程开发 v2 全栈](remote-dev-v2-full-stack.md) — daemon+TCP+PersistentProtocol；exthost/ACP 迁远端；host 内须 JSON codec；WSL 实机验收坑；协议 bump 须纳入 daemon 自愈
+- [远程 agent binary 受管下载](remote-agent-binary-managed-download.md) — AgentBinaryStore 沉 node-services 双端共享+AgentBinary channel；store 须并发去重；预下载须门控 connected
+- [Remote Explorer 单 Targets 树](remote-explorer-merged-targets-tree.md) — 4 view 合一+buildRemoteTree 纯函数；连接双条根因=WSL authority 大小写未归一化
 - [AI Settings 远程路由修复](agent-settings-remote-authority-routing.md) — authority 须订阅 onDidChangeWorkspace 勿 useMemo 读 current；useRemoteAuthority hook；协议匹配只回 index 不回秘密
-- [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState+needsInstall 门控 Output；坑=状态栏须回退 in-flight authority（connect 先于 openFolder）
-- [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — 版本空间统一 0.13.0+engines=编辑器版本;不兼容=禁用+通知,市场选版,发布拦截;大坑=非打包 app.getVersion() 回退 Electron 版本,main 一律走 getAppVersion()
-- [ext-host 无声失败治理](extension-host-silent-failure-hardening.md) — getActiveTextEditor 激活期立即 undefined 防死锁+onDidOpen 订阅补发+plaintext 语言重扫+rejection 上浮(dev 通知/e2e teardown 门);原则=API getter 永不无限挂起
+- [远程连接安装过程透明化](remote-connect-progress-transparency.md) — progress 事件复用 onDidChangeState；坑=状态栏须回退 in-flight authority
+- [插件↔编辑器版本依赖契约](extension-editor-version-contract.md) — engines=编辑器版本，不兼容=禁用+通知/市场选版/发布拦截；大坑=main 取版本一律走 getAppVersion()
+- [ext-host 无声失败治理](extension-host-silent-failure-hardening.md) — 激活期 getActiveTextEditor 立即 undefined+订阅补发+rejection 上浮；原则=API getter 永不无限挂起
 - [remote 工作区用户扩展支持](remote-user-extensions-management.md) — ExtensionManagement channel(协议v6)+引擎沉 node-services;本地验签+分片上传远端装;目录单一真相 serverPaths;listBuiltin 不路由
-- [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族(cd /d %USERPROFILE% 前缀,git-bash 拒绝=MSYS 重写 /d/s/c)+install.js 独立entry(鸡生蛋)+WMI Win32_Process.Create 逃 sshd job kill(env 为默认环境);npm11 allow-scripts 虚惊/ripgrep1.18 平台包布局;远端路径展示一律过 toDisplayPath(URI.path 是 /E:/... 形态,勿用 fsPath)
+- [Windows SSH 远程主机支持](remote-windows-ssh-support.md) — uname→cmd 探测+cmd 命令族+install.js 独立 entry+WMI 逃 sshd job kill；远端路径展示一律过 toDisplayPath
 
 ## 性能 / 疑难根因
 
-- [AI provider 面板保存慢/列表闪空](ai-panel-getmodels-blocking-latency.md) — 根因=getModels 在线枚举(discover 端点黑洞等满 10s)被绑进 reload 的 Promise.all；修=快读先落地+枚举后台化+loading 三态贯穿到叶子+registry 按内容指纹保留缓存(knowledge 变化须全量失效)；去 await reload 须补 writeSeq 守卫
+- [AI provider 面板保存慢/列表闪空](ai-panel-getmodels-blocking-latency.md) — 根因=getModels 在线枚举被绑进 reload 的 Promise.all；修=快读先落地+枚举后台化+registry 按内容指纹保留缓存
 - [大文件十连修](largefile-reveal-dirtydiff-vscode-parity.md) — reveal 事件化/行级 diff/增量同步/tsserver OOM 化/IPC 分片/DTO 去 text/切tab看门狗
 - [allotment 重挂载空窗口期](allotment-remount-empty-splitview-window.md) — 重挂载 viewItems 空至 RO tick；sizes 守卫只用当前实例报告值
 - [sessionChanges 无界增长 OOM](sessionchanges-unbounded-growth-main-oom-abort.md) — tracker 预算+有界日志+64MB 写入兜底
@@ -79,7 +79,7 @@
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — 消费端须 URI.revive；诊断前必先 pnpm build
 - [editorTextFocus 残留吞键](editor-text-focus-stuck-swallows-keys.md) — 焦点离开 Monaco 即清；测裸字符键用真键盘
 - [Monaco addCommand 全局泄漏](monaco-addcommand-global-key-leak.md) — 无编辑器作用域吞键；改作用域化 DOM keydown
-- [终端跨折行链接失效的三个独立根因](terminal-wrapped-link-two-root-causes.md) 
+- [终端跨折行链接失效的三个独立根因](terminal-wrapped-link-two-root-causes.md) — windowsPty 须 IPC 透传；provideLinks 只能返回与该行相交的链接；trimRight 拼窗口须按 trimmedLength 映射坐标
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — 去重复用旧快照；EditorInput.updateFrom 钩子
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — $didChangeFiles 主动通知磁盘变更
 - [StrictMode dispose useRef 的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — useRef 持有的 disposable 绝不在 cleanup dispose
@@ -106,8 +106,8 @@
 - [renderer Action2 被扩展命令遮蔽](renderer-action-shadowed-by-extension-command-decl.md) — renderer handler 命令只写 menus 别写扩展 commands
 - [WSL 时钟漂移毒化 tsgo 增量缓存（已根治）](tsgo-stale-tsbuildinfo-phantom-typecheck-errors.md) — RTC 快 24h→未来 mtime→tsgo 误判 up-to-date；已修=ensure-fresh-mtimes 入口守卫+editor typecheck 失败自愈重试
 - [可选注入参数破坏 createInstance + tsgo Windows 漏报](tsgo-optional-di-param-ci-only-typecheck-fail.md) — 注入服务禁写 `?`；「CI typecheck 挂本地绿」用 tsc 复现即真错
-- [esbuild 跨包引源码须声明 workspace 依赖](esbuild-cross-pkg-src-needs-workspace-dep.md) — 裸 `../pkg/src` 引用对 turbo 隐形→依赖图缺边→上游 miss 时下游并发读未生成的 dist（CI-only 竞态）；声明 workspace:* 同时修调度与 hash 感知
-- [配置层 toggle 持久化的写入顺序](config-layer-toggle-order-update-fire-semantics.md) — 先删 Project 覆盖再写 User；ConfigurationService.update 按「写前 effective≠写入值」fire（非写后 effective），顺序反了被遮罩期间事件回弹假翻转；冷启动立即 toggle 撞 UserSettingsSync hydration 竞态用 whenUserSettingsInitialized 探针门控
+- [esbuild 跨包引源码须声明 workspace 依赖](esbuild-cross-pkg-src-needs-workspace-dep.md) — 裸 `../pkg/src` 对 turbo 隐形→依赖图缺边→CI-only 竞态；声明 workspace:* 同时修调度与 hash
+- [配置层 toggle 持久化的写入顺序](config-layer-toggle-order-update-fire-semantics.md) — 先删 Project 再写 User，反了被遮罩期间事件回弹假翻转；冷启动 toggle 撞 hydration 竞态须探针门控
 
 ## e2e flaky / 排查
 
