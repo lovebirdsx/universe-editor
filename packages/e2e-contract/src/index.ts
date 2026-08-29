@@ -419,6 +419,22 @@ export interface E2ERemoteConnectionStatus {
   readonly errorMessage?: string
 }
 
+/**
+ * A link the terminal's file-link provider reports for a given buffer row, with
+ * the range it hands to xterm. `startX`/`startY` are xterm's 1-based inclusive
+ * coordinates; `endY` is the 1-based row and `endX` the count of columns the
+ * link occupies on it (equivalently: the 1-based inclusive end column). xterm
+ * draws the underline straight from these, so a spec can only tell a correctly-
+ * underlined wrapped link from a mis-mapped one by reading them.
+ */
+export interface E2ETerminalLink {
+  readonly text: string
+  readonly startX: number
+  readonly startY: number
+  readonly endX: number
+  readonly endY: number
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -887,6 +903,18 @@ export interface E2EProbe {
   terminalClose(id: string): Promise<void>
   /** All output observed for a terminal id since creation. */
   terminalReadBuffer(id: string): string
+  /**
+   * Ask the terminal's real link provider what links it reports for a buffer
+   * row, and return their ranges. Read-only: it queries the live provider
+   * registered on the xterm instance without moving the mouse or opening
+   * anything. `row` is xterm's 1-based absolute buffer line, the same value the
+   * provider receives on hover.
+   */
+  terminalProvideLinks(id: string, row: number): Promise<readonly E2ETerminalLink[]>
+  /** Absolute 1-based buffer row of the last line containing `needle`, or -1. */
+  terminalFindRow(id: string, needle: string): number
+  /** Rendered text of one absolute 1-based buffer row, right-trimmed. */
+  terminalRowText(id: string, row: number): string
   /**
    * Names of the detected terminal profiles (drives detection if needed).
    * Empty when no usable shell was found on this machine.

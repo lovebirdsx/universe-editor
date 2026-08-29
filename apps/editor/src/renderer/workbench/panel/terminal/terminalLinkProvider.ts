@@ -51,7 +51,7 @@ export function createFileLinkProvider(
         if (!start) continue
         // Walk on from `start` rather than re-walking the match prefix from the
         // window origin — same cell either way, one less pass.
-        const end = mapStringIndexToCell(buf, start.y, start.x, full.length)
+        const end = mapStringIndexToCell(buf, start.y, start.x, full.length, 'exclusiveEnd')
         if (!end) continue
         matches.push({
           full,
@@ -64,7 +64,21 @@ export function createFileLinkProvider(
         })
       }
 
-      if (matches.length === 0) {
+      // The wrapped window spans several rows, so it also yields matches lying
+      // entirely on other rows. Those must not be answered with: xterm's
+      // Linkifier._removeIntersectingLinks projects every returned link onto the
+      // hovered row (start.y < y becomes column 0) and drops any link whose
+      // projected span collides with an already-claimed column. An off-row link
+      // would squat on the low columns and evict the genuinely wrapped link from
+      // the reply — leaving the wrapped path unclickable.
+      const onRow = matches.filter((match) => {
+        // end.x === 0 means the link stopped exactly on the column boundary, so
+        // its last visible row is the one above `end.y`.
+        const lastRow = match.end.x === 0 ? Math.max(match.start.y, match.end.y - 1) : match.end.y
+        const row = bufferLineNumber - 1
+        return match.start.y <= row && row <= lastRow
+      })
+      if (onRow.length === 0) {
         callback(undefined)
         return
       }
@@ -72,7 +86,7 @@ export function createFileLinkProvider(
       // Return links to xterm immediately so the pointer cursor appears without
       // delay. Each activate() awaits the already-in-flight resolve promise —
       // by click time it is almost always settled (cache hit or IPC done).
-      const links: ILink[] = matches.map((match) => {
+      const links: ILink[] = onRow.map((match) => {
         const resolvePromise = resolveFile(match.absPath)
         return {
           range: {

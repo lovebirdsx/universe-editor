@@ -71,6 +71,35 @@ describe('PtyHostService', () => {
     expect(ptys).toHaveLength(1)
   })
 
+  // xterm can only enable its wrapping heuristic (and reflow) when it knows the
+  // pty backend, and for a remote workspace that is the remote host's, not the
+  // UI process's — so it has to ride along on the created-terminal info.
+  it('reports conpty on a Windows build that supports it', async () => {
+    const service = new PtyHostService({
+      spawn: () => new FakePty(1),
+      platform: 'win32',
+      osRelease: () => '10.0.19045',
+    })
+    const info = await service.create({})
+    expect(info.windowsPty).toEqual({ backend: 'conpty', buildNumber: 19045 })
+  })
+
+  it('reports winpty below the conpty build threshold', async () => {
+    const service = new PtyHostService({
+      spawn: () => new FakePty(1),
+      platform: 'win32',
+      osRelease: () => '10.0.17763',
+    })
+    const info = await service.create({})
+    expect(info.windowsPty).toEqual({ backend: 'winpty', buildNumber: 17763 })
+  })
+
+  it('omits the pty backend on non-Windows hosts', async () => {
+    const service = new PtyHostService({ spawn: () => new FakePty(1), platform: 'linux' })
+    const info = await service.create({})
+    expect(info.windowsPty).toBeUndefined()
+  })
+
   it('defaults the name to the shell basename', async () => {
     const { service } = makeService()
     const info = await service.create({ shell: '/usr/bin/zsh' })

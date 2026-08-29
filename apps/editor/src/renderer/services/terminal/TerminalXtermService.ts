@@ -10,7 +10,7 @@
  *  terminal process is closed or exits (driven by onDidRemoveTerminal).
  *--------------------------------------------------------------------------------------------*/
 
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal, type ILink, type ILinkProvider, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
@@ -53,6 +53,13 @@ export interface ITerminalXtermHolder {
   readonly term: Terminal
   readonly wrapper: HTMLElement
   readonly onDidChangeSelection: Event<void>
+  /**
+   * Ask the registered file-link provider what links it reports for a buffer
+   * row. Diagnostic only: the ranges are what xterm draws the underline from,
+   * and nothing else observes them, so a caller checking the underline geometry
+   * has no other way to see it.
+   */
+  provideLinks(row: number, callback: (links: ILink[] | undefined) => void): void
   setLinkHandlers(handlers: ITerminalLinkHandlers): void
   /** Move the wrapper into a host element and repaint/restore. */
   reattachTo(host: HTMLElement): void
@@ -150,6 +157,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
   readonly term: Terminal
   readonly wrapper: HTMLElement
 
+  private readonly _linkProvider: ILinkProvider
   private readonly _fit: FitAddon
   private readonly _onDidChangeSelection = this._register(new Emitter<void>())
   readonly onDidChangeSelection: Event<void> = this._onDidChangeSelection.event
@@ -182,6 +190,16 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     // Margin keeps clientHeight=0 when the container is 0-height. ✓
     this.wrapper.style.margin = '4px 6px'
 
+    // conpty before build 21376 has no wraparound mode: a line running past the
+    // last column arrives as a hard `\r\n` and is never flagged as wrapped, so
+    // xterm needs this to enable its Windows wrapping heuristic (without it a
+    // file path split across rows is never linkified). The pty backend belongs
+    // to the HOST that spawned it — the remote machine for a remote workspace —
+    // so it travels on the terminal info rather than being read off this
+    // process. It must reach the constructor rather than be assigned after:
+    // `attach` below flushes buffered output immediately.
+    const windowsPty = manager.terminals.get().find((t) => t.id === id)?.windowsPty
+
     this.term = new Terminal({
       fontFamily: normalizeFontFamily(
         this._config.get<string>('terminal.integrated.fontFamily'),
@@ -192,6 +210,9 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
       cursorBlink: true,
       scrollback: this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK,
       theme: buildTerminalTheme(this._themeService),
+      // Shallow-copied: xterm mutates its options object, and the source lives
+      // inside an observable shared with the rest of the workbench.
+      ...(windowsPty ? { windowsPty: { ...windowsPty } } : {}),
     })
     this._fit = new FitAddon()
     this.term.loadAddon(this._fit)
@@ -244,17 +265,14 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
         }
       }),
     )
-    store.add(
-      this.term.registerLinkProvider(
-        createFileLinkProvider(
-          this.term,
-          (absPath) => this._handlers.resolveFile(absPath),
-          (uri, line, col, endLine) => this._handlers.openFile(uri, line, col, endLine),
-          () => this._handlers.getCwd(),
-          () => this._handlers.getHome(),
-        ),
-      ),
+    this._linkProvider = createFileLinkProvider(
+      this.term,
+      (absPath) => this._handlers.resolveFile(absPath),
+      (uri, line, col, endLine) => this._handlers.openFile(uri, line, col, endLine),
+      () => this._handlers.getCwd(),
+      () => this._handlers.getHome(),
     )
+    store.add(this.term.registerLinkProvider(this._linkProvider))
 
     this._register({
       dispose: () => {
@@ -263,6 +281,10 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
         this.term.dispose()
       },
     })
+  }
+
+  provideLinks(row: number, callback: (links: ILink[] | undefined) => void): void {
+    this._linkProvider.provideLinks(row, callback)
   }
 
   setLinkHandlers(handlers: ITerminalLinkHandlers): void {

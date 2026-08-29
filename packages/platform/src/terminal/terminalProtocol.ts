@@ -98,12 +98,28 @@ export interface ITerminalTitleEvent {
   readonly title: string
 }
 
+/**
+ * Pty emulation in use on the terminal's host. Windows-only: conpty before
+ * build 21376 does not support wraparound mode, so a line that runs past the
+ * last column arrives as a hard `\r\n` and is never flagged as wrapped. xterm
+ * needs this to decide whether to enable its wrapping heuristic (and reflow),
+ * and it can only learn it from the host that spawned the pty — which for a
+ * remote workspace is the remote machine, not the one running the UI.
+ */
+export interface ITerminalPtyHostInfo {
+  readonly backend: 'conpty' | 'winpty'
+  /** Windows build number, e.g. 19045. */
+  readonly buildNumber: number
+}
+
 /** Snapshot describing a live terminal, returned from `create` / `list`. */
 export interface ITerminalCreatedInfo {
   readonly id: string
   readonly pid: number
   readonly shell: string
   readonly name: string
+  /** Absent on non-Windows hosts. */
+  readonly windowsPty?: ITerminalPtyHostInfo
 }
 
 /**

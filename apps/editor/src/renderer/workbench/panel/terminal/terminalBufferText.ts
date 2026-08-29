@@ -71,11 +71,41 @@ export function readWrappedWindow(buffer: TerminalBuffer, lineIndex: number): Wr
   return { text: lines.join(''), startLineIndex: firstIdx }
 }
 
+/**
+ * Columns that `translateToString(true)` actually renders, i.e. one past the
+ * last column holding a character. The window string is joined from trimmed
+ * rows, so the walk below has to stop at the same place — a trailing blank cell
+ * contributed nothing to the string and must not consume from it. Mirrors
+ * xterm's own `BufferLine.getTrimmedLength`, including counting a trailing wide
+ * char as the two columns it occupies.
+ */
+function trimmedLength(line: TerminalBufferLine, cell: TerminalBufferCell): number {
+  for (let i = line.length - 1; i >= 0; i--) {
+    line.getCell(i, cell)
+    if (cell.getChars() !== '') return i + (cell.getWidth() || 1)
+  }
+  return 0
+}
+
+/**
+ * What the caller is locating, which is the only thing that decides where a
+ * string index landing exactly on a row's content boundary belongs.
+ *
+ * `'char'` looks for a real character: it lives at the next wrapped row's
+ * column 0, so the walk falls through.
+ * `'exclusiveEnd'` looks for the position one past the last character: that is
+ * this row's own boundary column. Falling through would report column 0 of the
+ * next row, which xterm renders as an underline stretching across all of this
+ * row's padding to its edge.
+ */
+export type CellTarget = 'char' | 'exclusiveEnd'
+
 export function mapStringIndexToCell(
   buffer: TerminalBuffer,
   lineIndex: number,
   cellIndex: number,
   stringIndex: number,
+  target: CellTarget = 'char',
 ): { y: number; x: number } | null {
   const cell = buffer.getNullCell()
   let start = cellIndex
@@ -84,27 +114,26 @@ export function mapStringIndexToCell(
     if (!line) {
       return null
     }
-    for (let i = start; i < line.length; ++i) {
+    const trimmed = trimmedLength(line, cell)
+    for (let i = start; i < trimmed; ++i) {
       line.getCell(i, cell)
       const chars = cell.getChars()
-      const width = cell.getWidth()
-      if (width) {
+      if (cell.getWidth()) {
         stringIndex -= chars.length || 1
-        // Correct for early-wrapped wide chars: a wide char that didn't fit the
-        // last cell wraps to the next line, leaving this trailing cell empty
-        // (width 1) but trimmed out of the window string by trimRight.
-        if (i === line.length - 1 && chars === '') {
-          const next = buffer.getLine(lineIndex + 1)
-          if (next && next.isWrapped) {
-            next.getCell(0, cell)
-            if (cell.getWidth() === 2) {
-              stringIndex += 1
-            }
-          }
-        }
       }
       if (stringIndex < 0) {
         return { y: lineIndex, x: i }
+      }
+    }
+    // Exhausted this row's content with the index landing exactly on the
+    // boundary; `target` decides whether that position is this row's boundary
+    // column or the next row's column 0. On a row with no padding the boundary
+    // column is one past the last cell, which IS the next row's column 0, so
+    // falling through is correct for both targets there.
+    if (stringIndex === 0 && trimmed < line.length) {
+      const next = buffer.getLine(lineIndex + 1)
+      if (target === 'exclusiveEnd' || !next?.isWrapped) {
+        return { y: lineIndex, x: trimmed }
       }
     }
     lineIndex++

@@ -59,6 +59,7 @@ import type { IUserSettingsSyncService } from '../services/configuration/UserSet
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IRemoteStatusService } from '../../shared/ipc/remoteStatusService.js'
 import type { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
+import type { ITerminalXtermService } from '../services/terminal/TerminalXtermService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import type { ITimerService } from '../services/performance/TimerService.js'
@@ -96,6 +97,7 @@ import {
   type E2EInstalledExtension,
   type E2EMarker,
   type E2ENotification,
+  type E2ETerminalLink,
   type E2ETimelineItem,
   type E2ETreeItem,
 } from '../../shared/e2e/contract.js'
@@ -137,6 +139,7 @@ export interface E2EProbeServices {
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
   readonly terminalManagerService: ITerminalManagerService
+  readonly terminalXtermService: ITerminalXtermService
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
@@ -824,6 +827,37 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return Promise.resolve()
     },
     terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
+    terminalProvideLinks: (id: string, row: number): Promise<readonly E2ETerminalLink[]> => {
+      const holder = services.terminalXtermService.get(id)
+      if (!holder) return Promise.resolve([])
+      return new Promise((resolve) => {
+        // provideLinks is callback-style and may answer synchronously; the
+        // promise wrapper just normalizes both shapes for the spec.
+        holder.provideLinks(row, (links) => {
+          resolve(
+            (links ?? []).map((l) => ({
+              text: l.text,
+              startX: l.range.start.x,
+              startY: l.range.start.y,
+              endX: l.range.end.x,
+              endY: l.range.end.y,
+            })),
+          )
+        })
+      })
+    },
+    terminalFindRow: (id: string, needle: string): number => {
+      const buf = services.terminalXtermService.get(id)?.term.buffer.active
+      if (!buf) return -1
+      for (let y = buf.length - 1; y >= 0; y--) {
+        if (buf.getLine(y)?.translateToString(true).includes(needle)) return y + 1
+      }
+      return -1
+    },
+    terminalRowText: (id: string, row: number): string => {
+      const buf = services.terminalXtermService.get(id)?.term.buffer.active
+      return buf?.getLine(row - 1)?.translateToString(true) ?? ''
+    },
     terminalProfiles: async (): Promise<readonly string[]> => {
       await services.terminalManagerService.refreshProfiles()
       return services.terminalManagerService.profiles.get()?.map((p) => p.profileName) ?? []

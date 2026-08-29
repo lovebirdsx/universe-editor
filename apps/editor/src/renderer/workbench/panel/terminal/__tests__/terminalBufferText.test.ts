@@ -106,6 +106,49 @@ describe('mapStringIndexToCell', () => {
     expect(mapStringIndexToCell(buf, 0, 0, 7)).toEqual({ y: 2, x: 1 })
   })
 
+  // Trimming has to count a trailing wide char as the two columns it occupies
+  // (xterm's own getTrimmedLength does), otherwise the row looks one column
+  // shorter than the string it contributed and every later index slides left.
+  it('counts a trailing wide char as two columns when trimming', () => {
+    const buf = makeTerminalBuffer('a中', 8)
+    const line = buf.getLine(0)
+    expect(line!.translateToString(true)).toBe('a中')
+    // 'a' in cell 0, '中' spanning cells 1..2 — the exclusive end is cell 3, not
+    // cell 2, and it must stay on this row rather than jumping to the next.
+    expect(mapStringIndexToCell(buf, 0, 0, 2)).toEqual({ y: 0, x: 3 })
+  })
+
+  // An index landing exactly on a padded row's content boundary is ambiguous:
+  // the next character lives at the following wrapped row's column 0, but the
+  // exclusive end of the text that stopped here is this row's own boundary
+  // column. Reporting the latter as column 0 of the next row makes xterm draw
+  // the underline across all this row's padding to its edge.
+  it('resolves a boundary index per target when a wrapped row follows', () => {
+    const buf = makeBufferFromLines(
+      [
+        { text: 'abcde', isWrapped: false },
+        { text: 'fg', isWrapped: true },
+      ],
+      10,
+    )
+    expect(mapStringIndexToCell(buf, 0, 0, 5, 'char')).toEqual({ y: 1, x: 0 })
+    expect(mapStringIndexToCell(buf, 0, 0, 5, 'exclusiveEnd')).toEqual({ y: 0, x: 5 })
+  })
+
+  // On a full row the boundary column IS the next row's column 0, so both
+  // targets must agree — the distinction above must not leak into this case.
+  it('agrees on both targets when the row has no padding', () => {
+    const buf = makeBufferFromLines(
+      [
+        { text: 'abcde', isWrapped: false },
+        { text: 'fg', isWrapped: true },
+      ],
+      5,
+    )
+    expect(mapStringIndexToCell(buf, 0, 0, 5, 'char')).toEqual({ y: 1, x: 0 })
+    expect(mapStringIndexToCell(buf, 0, 0, 5, 'exclusiveEnd')).toEqual({ y: 1, x: 0 })
+  })
+
   // A combining mark lives in the *preceding* cell, so one cell yields 2 JS
   // chars — the `chars.length || 1` decrement is the only thing keeping the
   // string index and the column in step here (no wide char involved).

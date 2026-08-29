@@ -79,6 +79,7 @@
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — 消费端须 URI.revive；诊断前必先 pnpm build
 - [editorTextFocus 残留吞键](editor-text-focus-stuck-swallows-keys.md) — 焦点离开 Monaco 即清；测裸字符键用真键盘
 - [Monaco addCommand 全局泄漏](monaco-addcommand-global-key-leak.md) — 无编辑器作用域吞键；改作用域化 DOM keydown
+- [终端跨折行链接失效的三个独立根因](terminal-wrapped-link-two-root-causes.md) 
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — 去重复用旧快照；EditorInput.updateFrom 钩子
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — $didChangeFiles 主动通知磁盘变更
 - [StrictMode dispose useRef 的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — useRef 持有的 disposable 绝不在 cleanup dispose

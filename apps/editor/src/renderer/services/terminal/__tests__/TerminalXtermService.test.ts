@@ -6,8 +6,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  observableValue,
   type IConfigurationService,
   type IOpenerService,
+  type ITerminalCreatedInfo,
   type IThemeService,
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../TerminalManagerService.js'
@@ -100,9 +102,14 @@ interface Harness {
   onDidRemoveTerminal: Emitter<{ id: string }>
 }
 
-function makeManager(h: Harness): ITerminalManagerService {
+function makeManager(
+  h: Harness,
+  terminals: readonly ITerminalCreatedInfo[] = [],
+): ITerminalManagerService {
   return {
     _serviceBrand: undefined,
+    // The holder reads this at construction to learn the host's pty backend.
+    terminals: observableValue<readonly ITerminalCreatedInfo[]>('test.terminals', terminals),
     attach: () => ({
       dispose() {
         h.attachDisposed = true
@@ -145,9 +152,18 @@ function makeOpener(): { opener: IOpenerService; open: ReturnType<typeof vi.fn> 
   return { opener, open }
 }
 
-async function makeService(h: Harness, opener: IOpenerService = makeOpener().opener) {
+async function makeService(
+  h: Harness,
+  opener: IOpenerService = makeOpener().opener,
+  terminals?: readonly ITerminalCreatedInfo[],
+) {
   const { TerminalXtermService } = await import('../TerminalXtermService.js')
-  return new TerminalXtermService(makeManager(h), makeConfig(), makeThemeService(), opener)
+  return new TerminalXtermService(
+    makeManager(h, terminals),
+    makeConfig(),
+    makeThemeService(),
+    opener,
+  )
 }
 
 function makeHarness(): Harness {
@@ -289,6 +305,33 @@ describe('TerminalXtermService', () => {
 
     expect(a.disposed).toBe(true)
     expect(b.disposed).toBe(true)
+  })
+
+  // The wrapping heuristic (and with it cross-row file links) only turns on when
+  // xterm knows the host's pty backend, and it has to be in the constructor
+  // options because `attach` flushes buffered output right after.
+  it('passes the host pty backend to the Terminal constructor', async () => {
+    const svc = await makeService(makeHarness(), makeOpener().opener, [
+      {
+        id: 't1',
+        pid: 1,
+        shell: 'cmd.exe',
+        name: 'cmd',
+        windowsPty: { backend: 'conpty', buildNumber: 19045 },
+      },
+    ])
+    const holder = svc.acquire('t1')
+
+    expect(holder.term.options.windowsPty).toEqual({ backend: 'conpty', buildNumber: 19045 })
+  })
+
+  it('omits windowsPty when the host did not report one', async () => {
+    const svc = await makeService(makeHarness(), makeOpener().opener, [
+      { id: 't1', pid: 1, shell: '/bin/bash', name: 'bash' },
+    ])
+    const holder = svc.acquire('t1')
+
+    expect(holder.term.options.windowsPty).toBeUndefined()
   })
 
   it('routes WebLinksAddon URL clicks through IOpenerService', async () => {

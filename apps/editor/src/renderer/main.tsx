@@ -223,6 +223,7 @@ import {
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
+import { ITerminalXtermService } from './services/terminal/TerminalXtermService.js'
 import {
   ISubscriptionUsageService,
   SubscriptionUsageService,
@@ -909,6 +910,7 @@ async function bootstrapWorkbench(): Promise<void> {
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
     terminalManagerService,
+    terminalXtermService: instantiation.invokeFunction((a) => a.get(ITerminalXtermService)),
     scmService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,

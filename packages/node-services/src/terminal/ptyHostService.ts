@@ -29,6 +29,7 @@ import {
   type ILogChannel,
   type ILogger,
   type ITerminalCreatedInfo,
+  type ITerminalPtyHostInfo,
   type ITerminalDataEvent,
   type ITerminalExitEvent,
   type ITerminalProfile,
@@ -81,6 +82,8 @@ export interface PtyHostServiceOptions {
   readonly spawn?: PtySpawner
   readonly cwdStat?: CwdStat
   readonly platform?: NodeJS.Platform
+  /** Injectable `os.release()`, so the Windows build number is testable off Windows. */
+  readonly osRelease?: () => string
   readonly profileDeps?: ITerminalProfilesDeps
   readonly logger?: { createLogger(channel: ILogChannel): ILogger }
   /**
@@ -150,14 +153,30 @@ function runDetectionProbe(
   })
 }
 
-function windowsBuildNumber(platform: NodeJS.Platform): number {
+function windowsBuildNumber(platform: NodeJS.Platform, release: () => string): number {
   if (platform !== 'win32') return 0
-  const build = parseInt(osRelease().split('.')[2] ?? '', 10)
+  const build = parseInt(release().split('.')[2] ?? '', 10)
   return Number.isNaN(build) ? 0 : build
+}
+
+/**
+ * Which pty emulation node-pty picks for us. It uses conpty whenever the build
+ * supports it (>= 18309) and falls back to winpty below that; we do not pass
+ * `useConpty`, so this mirrors that default. Consumers (xterm) need it to know
+ * whether wraparound mode is available.
+ */
+function describeWindowsPty(
+  platform: NodeJS.Platform,
+  release: () => string,
+): ITerminalPtyHostInfo | undefined {
+  if (platform !== 'win32') return undefined
+  const buildNumber = windowsBuildNumber(platform, release)
+  return { backend: buildNumber >= 18309 ? 'conpty' : 'winpty', buildNumber }
 }
 
 function defaultProfileDeps(
   platform: NodeJS.Platform,
+  release: () => string,
   log: (message: string) => void,
 ): ITerminalProfilesDeps {
   const statKind = (p: string): Promise<'file' | 'dir' | 'missing'> =>
@@ -175,7 +194,7 @@ function defaultProfileDeps(
     execFile: runDetectionProbe,
     env: process.env,
     platform,
-    windowsBuildNumber: windowsBuildNumber(platform),
+    windowsBuildNumber: windowsBuildNumber(platform, release),
     processArch: process.arch,
     log,
   }
@@ -227,6 +246,7 @@ export class PtyHostService extends Disposable implements IPtyHostService {
   private readonly _spawn: PtySpawner
   private readonly _cwdStat: CwdStat
   private readonly _platform: NodeJS.Platform
+  private readonly _osRelease: () => string
   private readonly _profileDeps: ITerminalProfilesDeps | undefined
   private readonly _onPtySpawned:
     | ((pid: number, label: string) => IDisposable | undefined)
@@ -247,6 +267,7 @@ export class PtyHostService extends Disposable implements IPtyHostService {
     this._spawn = options.spawn ?? defaultSpawner
     this._cwdStat = options.cwdStat ?? statSync
     this._platform = options.platform ?? process.platform
+    this._osRelease = options.osRelease ?? osRelease
     this._profileDeps = options.profileDeps
     this._onPtySpawned = options.onPtySpawned
   }
@@ -280,11 +301,13 @@ export class PtyHostService extends Disposable implements IPtyHostService {
     }
 
     const id = randomUUID()
+    const windowsPty = describeWindowsPty(this._platform, this._osRelease)
     const info: ITerminalCreatedInfo = {
       id,
       pid: pty.pid,
       shell,
       name: spec.name && spec.name.length > 0 ? spec.name : basename(shell),
+      ...(windowsPty ? { windowsPty } : {}),
     }
     const entry: TerminalEntry = {
       pty,
@@ -307,7 +330,8 @@ export class PtyHostService extends Disposable implements IPtyHostService {
 
   getProfiles(request: ITerminalProfilesRequest): Promise<readonly ITerminalProfile[]> {
     const deps =
-      this._profileDeps ?? defaultProfileDeps(this._platform, (m) => this._logger.warn(m))
+      this._profileDeps ??
+      defaultProfileDeps(this._platform, this._osRelease, (m) => this._logger.warn(m))
     return detectAvailableProfiles(request, deps)
   }
 
