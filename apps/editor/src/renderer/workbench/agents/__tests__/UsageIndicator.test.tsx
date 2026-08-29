@@ -45,7 +45,9 @@ function snapshot(overrides: Partial<SubscriptionUsageSnapshot> = {}): Subscript
     agentId: 'codex',
     planLabel: 'plus',
     windows: [
-      { id: 'a', label: '5-hour', usedPercent: 12, resetsAt: FETCHED_AT + 3_600_000 },
+      // Relative to the real clock, so the window is genuinely still open — a
+      // fixed 2023 timestamp would read as rolled over and render "—".
+      { id: 'a', label: '5-hour', usedPercent: 12, resetsAt: Date.now() + 3_600_000 },
       { id: 'b', label: 'Weekly', usedPercent: 76 },
     ],
     fetchedAt: FETCHED_AT,
@@ -167,6 +169,40 @@ describe('UsageIndicator — collapsed form', () => {
   it('hides itself when neither readout applies', () => {
     renderIndicator({ agentId: 'claude-code', snapshot: undefined })
     expect(screen.queryByTestId('acp-usage-indicator')).toBeNull()
+  })
+
+  describe('once the tightest window has rolled over', () => {
+    // Its percentage describes a window that no longer exists — the quota reset
+    // upstream. Showing the old number reads as a current reading and is worse
+    // than admitting we do not know yet.
+    function rolledOver(): SubscriptionUsageSnapshot {
+      const now = Date.now()
+      return snapshot({
+        windows: [{ id: 'a', label: '5-hour', usedPercent: 71, resetsAt: now - 60_000 }],
+        fetchedAt: now - 3_600_000,
+      })
+    }
+
+    it('shows a placeholder instead of the expired percentage', () => {
+      renderIndicator({ snapshot: rolledOver(), stale: true })
+      const button = screen.getByTestId('acp-usage-indicator')
+      expect(button.textContent).toBe('—')
+      expect(button.textContent).not.toContain('29')
+      expect(button.getAttribute('data-stale')).toBe('true')
+    })
+
+    it('says the quota reset in the tooltip', () => {
+      renderIndicator({ snapshot: rolledOver(), stale: true })
+      expect(screen.getByTestId('acp-usage-indicator').getAttribute('data-tooltip')).toContain(
+        'reset',
+      )
+    })
+
+    it('still shows the percentage for a merely stale window', () => {
+      // Old but not rolled over: the number is still about a live window.
+      renderIndicator({ snapshot: snapshot(), stale: true })
+      expect(screen.getByTestId('acp-usage-indicator').textContent).toBe('24%')
+    })
   })
 })
 

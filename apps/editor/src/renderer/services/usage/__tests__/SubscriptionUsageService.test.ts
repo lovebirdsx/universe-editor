@@ -245,6 +245,104 @@ describe('SubscriptionUsageService', () => {
     service.dispose()
   })
 
+  describe('waking a dormant agent', () => {
+    // `requestExtMethod` answers `undefined` — rather than connecting — once the
+    // idle reaper has stopped the agent child process, while the session stays in
+    // the list. Without a wake on the explicit-refresh path the snapshot then
+    // freezes until the editor restarts, which is exactly the bug this guards.
+
+    it('wakes a dormant session on a forced refresh and reads the fresh snapshot', async () => {
+      const requestExtMethod = vi.fn().mockResolvedValue(claudeUsage(90))
+      const session = fakeSession('codex', requestExtMethod)
+      sessions.set([session], undefined)
+      const service = createService()
+      await service.refresh('codex')
+      expect(service.snapshotFor('codex').get()?.windows[0]?.usedPercent).toBe(90)
+
+      // The agent is stopped: the connection is gone, so the ext-method reports
+      // "no connection" instead of throwing.
+      requestExtMethod.mockResolvedValue(undefined)
+      await service.refresh('codex', undefined, { force: true })
+      session.ensureAwake.mockClear()
+      // Waking re-establishes it; the quota has since reset upstream.
+      requestExtMethod.mockResolvedValue(claudeUsage(1))
+      await service.refresh('codex', undefined, { force: true })
+
+      expect(session.ensureAwake).toHaveBeenCalled()
+      expect(service.snapshotFor('codex').get()?.windows[0]?.usedPercent).toBe(1)
+      service.dispose()
+    })
+
+    it('never wakes an agent for the background poll', async () => {
+      // Rule 1 in this service's header: polling rides along on an existing
+      // connection and must never resurrect a process just to read a status.
+      const requestExtMethod = vi.fn().mockResolvedValue(claudeUsage(40))
+      const session = fakeSession('codex', requestExtMethod)
+      sessions.set([session], undefined)
+      const service = createService()
+
+      await service.refresh('codex')
+      await service.refresh('codex')
+
+      expect(session.ensureAwake).not.toHaveBeenCalled()
+      service.dispose()
+    })
+
+    it.each(['closed', 'failed', 'connecting'] as const)(
+      'keeps the cached snapshot when the wake answers "%s"',
+      async (outcome) => {
+        const requestExtMethod = vi.fn().mockResolvedValue(claudeUsage(50))
+        sessions.set([fakeSession('codex', requestExtMethod)], undefined)
+        const service = createService()
+        await service.refresh('codex')
+        const cached = service.snapshotFor('codex').get()
+
+        sessions.set(
+          [fakeSession('codex', requestExtMethod, 'codex', undefined, outcome)],
+          undefined,
+        )
+        requestExtMethod.mockClear()
+        await service.refresh('codex', undefined, { force: true })
+
+        // A wake that did not land is "cannot read right now", not "this agent has
+        // no subscription readout" — the snapshot stands and polling continues.
+        expect(requestExtMethod).not.toHaveBeenCalled()
+        expect(service.snapshotFor('codex').get()).toBe(cached)
+        service.dispose()
+      },
+    )
+
+    it('does not let an in-flight poll swallow a forced refresh', async () => {
+      // Reusing the poll's round trip would drop the force flag, and with it the
+      // wake the user's click asked for.
+      const resolvers: Array<(value: unknown) => void> = []
+      const requestExtMethod = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve)
+          }),
+      )
+      const session = fakeSession('codex', requestExtMethod as never)
+      sessions.set([session], undefined)
+      const service = createService()
+
+      const poll = service.refresh('codex')
+      const forced = service.refresh('codex', undefined, { force: true })
+      // The forced fetch awaits its wake first, so let both settle before
+      // resolving: the round trips are only issued once the wake lands.
+      await Promise.resolve()
+      await Promise.resolve()
+      for (const resolve of resolvers) resolve(claudeUsage(5))
+      await Promise.all([poll, forced])
+
+      // Two distinct round trips, so the forced one was not the poll's echo —
+      // had it been reused, the wake would never have happened.
+      expect(requestExtMethod).toHaveBeenCalledTimes(2)
+      expect(session.ensureAwake).toHaveBeenCalled()
+      service.dispose()
+    })
+  })
+
   it('persists per remote authority and restores on a cold start', async () => {
     const requestExtMethod = vi.fn().mockResolvedValue(claudeUsage(66))
     sessions.set([fakeSession('claude-code', requestExtMethod)], undefined)

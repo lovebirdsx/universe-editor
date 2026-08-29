@@ -8,7 +8,9 @@
  *     rate-limit windows, so the collapsed form is the tightest window's
  *     remaining percentage, and the popover breaks every window down with a bar
  *     and a reset time. Codex additionally offers redeeming a rate-limit reset
- *     credit from there.
+ *     credit from there. A window past its reset shows "—" instead: the quota
+ *     rolled over upstream, so the old percentage is wrong rather than merely
+ *     old, and clicking refreshes (waking the agent if it was stopped).
  *   - a provider-declared account usage source shows the authoritative account
  *     number (quota / balance / subscription).
  *   - anything else hides the indicator.
@@ -32,6 +34,7 @@ import {
 } from '../../services/usage/SubscriptionUsageService.js'
 import { IAccountUsageService } from '../../services/usage/AccountUsageService.js'
 import {
+  hasWindowRolledOver,
   pickTightestWindow,
   resolveUsageDisplay,
   type AccountUsageState,
@@ -197,23 +200,32 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
   const usage = snapshot as SubscriptionUsageSnapshot
   const tightest = pickTightestWindow(usage)
   const stale = subscription?.isStale(usage, now) === true
+  // Past its reset the window no longer exists, so its percentage is not merely
+  // old but wrong — a placeholder beats a number that reads as current.
+  const rolledOver = hasWindowRolledOver(tightest, now)
   // The button shows the bare number (width is tight); the "remaining" reading
   // is spelled out in the tooltip.
-  const remaining = tightest === undefined ? '—' : formatRemainingPercent(tightest.usedPercent)
+  const remaining =
+    tightest === undefined || rolledOver ? '—' : formatRemainingPercent(tightest.usedPercent)
 
-  const tooltip = stale
+  const tooltip = rolledOver
     ? localize(
-        'acp.subscriptionUsage.indicator.stale',
-        'Subscription usage as of {at} — {pct} left — click for details',
-        { at: formatAbsolute(usage.fetchedAt), pct: remaining },
+        'acp.subscriptionUsage.indicator.rolledOver',
+        'Subscription usage — the quota reset; click to refresh',
       )
-    : localize(
-        'acp.subscriptionUsage.indicator',
-        'Subscription usage — {pct} left — click for details',
-        {
-          pct: remaining,
-        },
-      )
+    : stale
+      ? localize(
+          'acp.subscriptionUsage.indicator.stale',
+          'Subscription usage as of {at} — {pct} left — click for details',
+          { at: formatAbsolute(usage.fetchedAt), pct: remaining },
+        )
+      : localize(
+          'acp.subscriptionUsage.indicator',
+          'Subscription usage — {pct} left — click for details',
+          {
+            pct: remaining,
+          },
+        )
 
   return (
     <div className={styles['usageWrap']}>
@@ -221,7 +233,7 @@ export function UsageIndicator({ session }: { session: IAcpSession }) {
         type="button"
         className={styles['usageIndicator']}
         data-state="ok"
-        data-stale={stale ? 'true' : undefined}
+        data-stale={stale || rolledOver ? 'true' : undefined}
         data-tooltip={tooltip}
         onClick={() => {
           if (!open) void subscription?.refresh(agentId, authority, { force: true })
@@ -560,18 +572,23 @@ function SubscriptionUsagePopover({
 }
 
 function UsageWindowRow({ window, now }: { window: SubscriptionUsageWindow; now: number }) {
+  // Past its reset the bucket has rolled over: the old percentage describes a
+  // window that is gone, so neither the number nor the bar is shown.
+  const rolledOver = hasWindowRolledOver(window, now)
   return (
     <div className={styles['usageWindowRow']} data-testid="acp-usage-window">
       <div className={styles['usageWindowHead']}>
         <span className={styles['usageWindowLabel']}>{window.label}</span>
         <span className={styles['sessionCostTotal']}>
-          {formatRemainingPercent(window.usedPercent)}
+          {rolledOver ? '—' : formatRemainingPercent(window.usedPercent)}
         </span>
       </div>
       <div className={styles['compactionProgress']} style={{ width: '100%', marginLeft: 0 }}>
         <span
           className={styles['compactionProgressFill']}
-          style={{ width: `${Math.min(100, Math.max(0, 100 - window.usedPercent))}%` }}
+          style={{
+            width: rolledOver ? '0%' : `${Math.min(100, Math.max(0, 100 - window.usedPercent))}%`,
+          }}
         />
       </div>
       {window.resetsAt === undefined ? null : (

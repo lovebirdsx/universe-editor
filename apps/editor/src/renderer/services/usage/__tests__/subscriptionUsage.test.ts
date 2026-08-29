@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  hasRolledOver,
+  hasWindowRolledOver,
   isStale,
   normalizeSubscriptionUsage,
   pickTightestWindow,
@@ -288,6 +290,53 @@ describe('isStale', () => {
 
   it('is never stale without a snapshot', () => {
     expect(isStale(undefined, FETCHED_AT, 1)).toBe(false)
+  })
+})
+
+describe('hasWindowRolledOver', () => {
+  it('is true from the reset instant onwards', () => {
+    const window = { id: 'w', label: 'w', usedPercent: 10, resetsAt: FETCHED_AT }
+    expect(hasWindowRolledOver(window, FETCHED_AT - 1)).toBe(false)
+    expect(hasWindowRolledOver(window, FETCHED_AT)).toBe(true)
+  })
+
+  it('is false when the vendor reported no reset time', () => {
+    expect(hasWindowRolledOver({ id: 'w', label: 'w', usedPercent: 10 }, FETCHED_AT)).toBe(false)
+  })
+
+  it('is false without a window', () => {
+    expect(hasWindowRolledOver(undefined, FETCHED_AT)).toBe(false)
+  })
+})
+
+describe('hasRolledOver', () => {
+  const snapshot: SubscriptionUsageSnapshot = {
+    agentId: 'codex',
+    windows: [{ id: 'w', label: 'w', usedPercent: 10, resetsAt: FETCHED_AT + 60_000 }],
+    fetchedAt: FETCHED_AT,
+  }
+
+  it('is true once a window has passed its reset time', () => {
+    expect(hasRolledOver(snapshot, FETCHED_AT + 60_000)).toBe(true)
+  })
+
+  it('is false right up to the reset instant', () => {
+    // Merely stale is not the same thing: the percentages still describe a
+    // window that exists, so the indicator keeps showing them.
+    expect(hasRolledOver(snapshot, FETCHED_AT + 59_999)).toBe(false)
+  })
+
+  it('is false when no window reports a reset time', () => {
+    const undated: SubscriptionUsageSnapshot = {
+      agentId: 'codex',
+      windows: [{ id: 'w', label: 'w', usedPercent: 10 }],
+      fetchedAt: FETCHED_AT,
+    }
+    expect(hasRolledOver(undated, FETCHED_AT + 10 * 86_400_000)).toBe(false)
+  })
+
+  it('is false without a snapshot', () => {
+    expect(hasRolledOver(undefined, FETCHED_AT)).toBe(false)
   })
 })
 

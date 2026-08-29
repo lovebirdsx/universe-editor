@@ -355,6 +355,26 @@ export function pickTightestWindow(
 }
 
 /**
+ * Whether `window`'s reset time has passed — its `usedPercent` then describes a
+ * window that no longer exists, so the number is not merely old but wrong. The
+ * UI shows a placeholder for such a window rather than a stale reading.
+ */
+export function hasWindowRolledOver(
+  window: SubscriptionUsageWindow | undefined,
+  now: number,
+): boolean {
+  return window?.resetsAt !== undefined && window.resetsAt <= now
+}
+
+/** Whether any of `snapshot`'s windows has rolled over. */
+export function hasRolledOver(
+  snapshot: SubscriptionUsageSnapshot | undefined,
+  now: number,
+): boolean {
+  return snapshot?.windows.some((w) => hasWindowRolledOver(w, now)) === true
+}
+
+/**
  * A snapshot is stale once it is older than `ttlMs`, or once any of its windows
  * has rolled over (its reset time has passed) — at that point the percentages
  * describe a window that no longer exists, which is worse than being merely old.
@@ -366,7 +386,7 @@ export function isStale(
 ): boolean {
   if (snapshot === undefined) return false
   if (now - snapshot.fetchedAt > ttlMs) return true
-  return snapshot.windows.some((w) => w.resetsAt !== undefined && w.resetsAt <= now)
+  return hasRolledOver(snapshot, now)
 }
 
 /**

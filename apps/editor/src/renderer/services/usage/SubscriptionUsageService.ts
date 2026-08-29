@@ -10,7 +10,10 @@
  *      `IAcpClientService.connect()` — the pool stops an idle agent 30s after the
  *      last lease is released, and waking a child process just to read a status
  *      would defeat that. No live session ⇒ serve the cached snapshot, marked
- *      stale.
+ *      stale. The one exception is a round trip the user explicitly asked for
+ *      (`force`), which wakes a stopped agent the same way `consumeResetCredit`
+ *      does — otherwise the reading stays frozen until the editor restarts, since
+ *      `requestExtMethod` reports "no connection" instead of opening one.
  *   2. Polling is slow (60s, vs the gateway readout's 10s) because every round
  *      trip reaches an agent child process. The claude fork already had to delete
  *      a per-turn `getContextUsage()` call for exactly this reason.
@@ -69,7 +72,8 @@ export interface ISubscriptionUsageService {
    * Read a fresh snapshot from a live session of `agentId` on `authority`.
    * Concurrent calls for the same pair share one round trip. A no-op when that
    * host's account has already answered "not a subscription" unless `force` is set
-   * (the user opening the popover is a good reason to re-ask).
+   * (the user opening the popover is a good reason to re-ask). `force` also wakes
+   * an agent the idle reaper stopped; the background poll never does.
    */
   refresh(agentId: string, authority?: string, options?: { force?: boolean }): Promise<void>
   /** Whether a snapshot is past the configured freshness window, or its windows rolled over. */
@@ -124,6 +128,8 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
     ISettableObservable<SubscriptionUsageSnapshot | undefined>
   >()
   private readonly _inflight = new Map<string, Promise<void>>()
+  /** Keys whose in-flight round trip carries the force flag (and so may wake). */
+  private readonly _inflightForced = new Set<string>()
   /**
    * Agent+host pairs that answered "no subscription readout here" — polled no
    * further. The verdict belongs to the ACCOUNT that answered, not to the agent,
@@ -207,17 +213,33 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
   }
 
   async refresh(agentId: string, authority?: string, options?: { force?: boolean }): Promise<void> {
+    const force = options?.force === true
+    return this._refresh(agentId, authority, { force, wake: force })
+  }
+
+  private async _refresh(
+    agentId: string,
+    authority: string | undefined,
+    options: { force: boolean; wake: boolean },
+  ): Promise<void> {
     const key = usageKey(agentId, authority)
-    if (options?.force === true) this._unsupported.delete(key)
+    const { force, wake } = options
+    if (force) this._unsupported.delete(key)
     else if (this._unsupported.has(key)) return
 
+    // Only a forced round trip may wake a stopped agent, so a poll already in
+    // flight cannot stand in for one: reusing it would silently drop the wake
+    // the user's click asked for. The reverse — a poll riding along on a forced
+    // fetch — is free.
     const pending = this._inflight.get(key)
-    if (pending !== undefined) return pending
+    if (pending !== undefined && (!force || this._inflightForced.has(key))) return pending
 
-    const run = this._fetch(agentId, authority).finally(() => {
+    const run = this._fetch(agentId, authority, wake).finally(() => {
       this._inflight.delete(key)
+      this._inflightForced.delete(key)
     })
     this._inflight.set(key, run)
+    if (force) this._inflightForced.add(key)
     return run
   }
 
@@ -243,7 +265,8 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       this._logger.info(`consumeResetCredit(${agentId}@${where}) -> ${String(outcome)}`)
       if (typeof outcome === 'string' && RESET_CREDIT_OUTCOMES.has(outcome)) {
         // The window may have moved; re-read so the UI reflects the redemption.
-        void this.refresh(agentId, authority, { force: true })
+        // The session was just woken above, so the re-read skips its own wake.
+        void this._refresh(agentId, authority, { force: true, wake: false })
         return outcome as ResetCreditOutcome
       }
       return 'failed'
@@ -339,6 +362,13 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
    * `requestExtMethod` answers `undefined` when there is no connection, which is
    * the "keep the cached snapshot, let the UI mark it stale" path — not an error.
    *
+   * `wake` marks a round trip the user explicitly asked for (opening the
+   * popover, its refresh button), and only those may wake an agent the idle
+   * reaper stopped — same tier as `consumeResetCredit`. Without the wake the
+   * snapshot freezes until the editor restarts, because `requestExtMethod`
+   * deliberately never opens a connection. The poll stays on the read-only tier,
+   * as does the re-read after a redemption (which just woke the session itself).
+   *
    * Read-only foreign previews are skipped: they can never wake (spawning
    * against another worktree is exactly what they exist to avoid), so handing
    * one to the redeem path would make it look permanently unavailable while a
@@ -353,11 +383,24 @@ export class SubscriptionUsageService extends Disposable implements ISubscriptio
       )
   }
 
-  private async _fetch(agentId: string, authority: string | undefined): Promise<void> {
+  private async _fetch(
+    agentId: string,
+    authority: string | undefined,
+    wake: boolean,
+  ): Promise<void> {
     const key = usageKey(agentId, authority)
     const where = authority ?? 'local'
     const session = this._liveSessionFor(agentId, authority)
     if (session === undefined) return
+    if (wake) {
+      const outcome = await session.ensureAwake()
+      if (outcome !== 'ready') {
+        // Not "this agent has no readout" — just "cannot read it right now", so
+        // the cached snapshot stands and polling continues.
+        this._logger.info(`wake for usage read of ${agentId}@${where} answered ${outcome}`)
+        return
+      }
+    }
     let raw: unknown
     try {
       raw = await session.requestExtMethod(ACP_EXT_METHODS.subscriptionUsage)
