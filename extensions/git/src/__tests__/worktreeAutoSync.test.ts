@@ -58,8 +58,10 @@ function porcelain(
 /**
  * Drive `gitExec(args, cwd)` from per-cwd canned responses. `status[cwd]` is the
  * `git status --porcelain` stdout (text ⇒ dirty); `head[cwd]` is what
- * `rev-parse HEAD` resolves to in that worktree; `ancestor[cwd]` overrides the
- * `merge-base --is-ancestor` result (exit 1 ⇒ diverged). Records every call.
+ * `rev-parse HEAD` resolves to in that worktree, defaulting to NEW_HEAD for the
+ * pulling worktree (where a plain pull leaves HEAD) and OLD_HEAD elsewhere;
+ * `ancestor[cwd]` overrides the `merge-base --is-ancestor` result (exit 1 ⇒
+ * diverged). Records every call.
  */
 function setup(opts: {
   list?: string
@@ -71,6 +73,7 @@ function setup(opts: {
   ancestor?: Record<string, GitExecResult>
   reset?: Record<string, GitExecResult>
 }): Call[] {
+  const headOf = (cwd: string): string => opts.head?.[cwd] ?? (cwd === ROOT ? NEW_HEAD : OLD_HEAD)
   const calls: Call[] = []
   execMock.mockImplementation((args: readonly string[], cwd: string): Promise<GitExecResult> => {
     calls.push({ args, cwd })
@@ -82,15 +85,13 @@ function setup(opts: {
     if (args[0] === 'rev-parse') {
       if (args[1] === '--git-path') return Promise.resolve(ok(`${gitDirOf(cwd)}x\n`))
       const failure = opts.headFail?.[cwd]
-      return Promise.resolve(failure ?? ok(`${opts.head?.[cwd] ?? OLD_HEAD}\n`))
+      return Promise.resolve(failure ?? ok(`${headOf(cwd)}\n`))
     }
     // The ancestry test runs in the pulling repo, so key it off the worktree
     // path carried in argv rather than cwd.
     if (args[0] === 'merge-base') {
       const subject = args[2] ?? ''
-      const forWt = Object.entries(opts.ancestor ?? {}).find(
-        ([wt]) => (opts.head?.[wt] ?? OLD_HEAD) === subject,
-      )
+      const forWt = Object.entries(opts.ancestor ?? {}).find(([wt]) => headOf(wt) === subject)
       return Promise.resolve(forWt?.[1] ?? ok())
     }
     if (args[0] === 'reset') return Promise.resolve(opts.reset?.[cwd] ?? ok())
@@ -109,11 +110,16 @@ describe('syncWorktreesToCommit', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  /** Plant in-progress operation markers: `markers[worktreePath] = ['MERGE_HEAD']`. */
+  /**
+   * Plant in-progress operation markers: `markers[worktreePath] = ['MERGE_HEAD']`.
+   * The probed path comes from `path.join`, so compare separator-insensitively —
+   * otherwise these never match on Windows.
+   */
   const withMarkers = (markers: Record<string, readonly string[]>): void => {
+    const norm = (p: string): string => p.replace(/\\/g, '/')
     statMock.mockImplementation((path: string) => {
       const hit = Object.entries(markers).some(([wt, files]) =>
-        files.some((f) => path === `${gitDirOf(wt)}${f}`),
+        files.some((f) => norm(path) === `${gitDirOf(wt)}${f}`),
       )
       return hit ? Promise.resolve({}) : Promise.reject(new Error('ENOENT'))
     })
@@ -156,7 +162,7 @@ describe('syncWorktreesToCommit', () => {
     expect(res.syncedDetached).toEqual([])
   })
 
-  it('excludes the worktree the pull ran in and bare worktrees', async () => {
+  it('leaves the pulling worktree (already at the new commit) and bare worktrees untouched', async () => {
     const calls = setup({
       list: porcelain([
         { path: ROOT, branch: 'main', head: NEW_HEAD },
@@ -166,22 +172,31 @@ describe('syncWorktreesToCommit', () => {
 
     const res = await syncWorktreesToCommit(NEW_HEAD, ROOT, undefined)
 
+    expect(res.upToDate).toEqual(['repo'])
     expect(res.syncedDetached).toEqual([])
     expect(res.syncedBranches).toEqual([])
     expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
   })
 
-  it('matches the current worktree regardless of path separator style', async () => {
+  // A Git Graph pull of a branch held elsewhere runs in that worktree, leaving
+  // the current one behind — it must be fast-forwarded like any other.
+  it('fast-forwards the pulling worktree itself when its HEAD is behind the new commit', async () => {
     const calls = setup({
-      list: porcelain([{ path: 'C:/repo', branch: 'main', head: NEW_HEAD }]),
+      list: porcelain([
+        { path: ROOT, branch: 'task1' },
+        { path: WT_A, branch: 'main', head: NEW_HEAD },
+      ]),
+      head: { [ROOT]: OLD_HEAD, [WT_A]: NEW_HEAD },
     })
 
-    await syncWorktreesToCommit(NEW_HEAD, 'C:\\repo\\', undefined)
+    const res = await syncWorktreesToCommit(NEW_HEAD, ROOT, undefined)
 
-    expect(calls.some((c) => c.args[0] === 'status')).toBe(false)
+    expect(res.syncedBranches).toEqual([{ name: 'repo', branch: 'task1' }])
+    expect(res.upToDate).toEqual(['a'])
+    expect(calls).toContainEqual({ args: ['reset', '--hard', NEW_HEAD], cwd: ROOT })
   })
 
-  it('skips a dirty worktree without resolving its HEAD or resetting it', async () => {
+  it('skips a dirty worktree without resetting it', async () => {
     const calls = setup({
       list: porcelain([{ path: ROOT, branch: 'main', head: NEW_HEAD }, { path: WT_A }]),
       status: { [WT_A]: ' M file.ts\n' },
@@ -192,7 +207,23 @@ describe('syncWorktreesToCommit', () => {
     expect(res.skippedDirty).toEqual(['a'])
     expect(res.syncedDetached).toEqual([])
     expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
-    expect(calls.some((c) => c.args[0] === 'rev-parse')).toBe(false)
+  })
+
+  // HEAD is resolved before the dirty check so an SCM pull, which leaves the
+  // pulling worktree at the new commit with its uncommitted edits intact, does
+  // not report that tree as "skipped (uncommitted changes)".
+  it('reports a dirty worktree already at the new commit as up-to-date, not dirty', async () => {
+    const calls = setup({
+      list: porcelain([{ path: ROOT, branch: 'main', head: NEW_HEAD }, { path: WT_A }]),
+      head: { [WT_A]: NEW_HEAD },
+      status: { [WT_A]: ' M file.ts\n' },
+    })
+
+    const res = await syncWorktreesToCommit(NEW_HEAD, ROOT, undefined)
+
+    expect(res.upToDate).toEqual(['repo', 'a'])
+    expect(res.skippedDirty).toEqual([])
+    expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
   })
 
   // A paused rebase leaves a clean tree, so the dirty check above waves it through
@@ -228,7 +259,7 @@ describe('syncWorktreesToCommit', () => {
       if (args[0] === 'worktree') return Promise.resolve(ok(list))
       if (cwd === WT_A) return Promise.reject(new Error('spawn ENOENT'))
       if (args[0] === 'rev-parse' && args[1] !== '--git-path') {
-        return Promise.resolve(ok(`${OLD_HEAD}\n`))
+        return Promise.resolve(ok(`${cwd === ROOT ? NEW_HEAD : OLD_HEAD}\n`))
       }
       if (args[0] === 'rev-parse') return Promise.resolve(ok(`${gitDirOf(cwd)}x\n`))
       return Promise.resolve(ok())
@@ -267,7 +298,7 @@ describe('syncWorktreesToCommit', () => {
     })
   })
 
-  it('counts a worktree already at the new commit as synced without resetting it', async () => {
+  it('counts a worktree already at the new commit as up-to-date without resetting it', async () => {
     const calls = setup({
       list: porcelain([{ path: ROOT, branch: 'main', head: NEW_HEAD }, { path: WT_A }]),
       head: { [WT_A]: NEW_HEAD },
@@ -275,7 +306,8 @@ describe('syncWorktreesToCommit', () => {
 
     const res = await syncWorktreesToCommit(NEW_HEAD, ROOT, undefined)
 
-    expect(res.syncedDetached).toEqual(['a'])
+    expect(res.upToDate).toEqual(['repo', 'a'])
+    expect(res.syncedDetached).toEqual([])
     expect(calls.some((c) => c.args[0] === 'reset')).toBe(false)
     expect(calls.some((c) => c.args[0] === 'merge-base')).toBe(false)
   })
@@ -347,6 +379,7 @@ describe('syncWorktreesToCommit', () => {
     expect(res).toEqual({
       syncedDetached: [],
       syncedBranches: [],
+      upToDate: [],
       skippedDirty: [],
       skippedInProgress: [],
       skippedDiverged: [],
@@ -374,7 +407,10 @@ describe('syncWorktreesToCommit', () => {
         releaseA?.(ok())
         return Promise.resolve(ok())
       }
-      if (args[0] === 'rev-parse') return Promise.resolve(ok(`${OLD_HEAD}\n`))
+      if (args[0] === 'rev-parse' && args[1] !== '--git-path') {
+        return Promise.resolve(ok(`${cwd === ROOT ? NEW_HEAD : OLD_HEAD}\n`))
+      }
+      if (args[0] === 'rev-parse') return Promise.resolve(ok(`${gitDirOf(cwd)}x\n`))
       return Promise.resolve(ok())
     })
 

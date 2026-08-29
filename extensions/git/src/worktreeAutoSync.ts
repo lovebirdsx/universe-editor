@@ -8,7 +8,6 @@
 import { window, workspace } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
 import { localize } from './nls.js'
-import { parseWorktrees } from './worktreeParser.js'
 import { syncWorktreesToCommit, type WorktreeAutoSyncResult } from './worktreeSync.js'
 
 type Log = ((msg: string) => void) | undefined
@@ -70,11 +69,14 @@ export function reportWorktreeAutoSync(result: WorktreeAutoSyncResult): void {
 }
 
 /**
- * Fast-forward the repository's other worktrees to `targetRef`'s commit, when
+ * Fast-forward the repository's worktrees to `targetRef`'s commit, when
  * `git.autoSyncWorktreesAfterPull` is enabled. The SCM pull commands pass
  * `'HEAD'` (a pull always moves HEAD there); the Git Graph pull command passes
- * the pulled branch — after its checkout-back HEAD is on the *original* branch
- * again, so only the branch ref knows where the pull landed.
+ * the pulled branch — it may have run in another worktree, or checked the branch
+ * out here and back again, so only the branch ref knows where the pull landed.
+ *
+ * Whichever worktree the pull actually ran in is already on that commit, so the
+ * sync engine passes it over silently; no path bookkeeping is needed here.
  */
 export async function autoSyncWorktreesAfterPull(
   root: string,
@@ -91,17 +93,5 @@ export async function autoSyncWorktreesAfterPull(
   const newHead = headRes.stdout.trim()
   if (!newHead) return
 
-  // A Graph pull redirected into the worktree holding `targetRef` already ran
-  // there — its HEAD *is* newHead, so reporting it as fast-forwarded would be
-  // noise (and plain wrong for a no-op pull). Exclude that holder; for the SCM
-  // path targetRef is 'HEAD', which matches no branch, so nothing changes.
-  const listRes = await gitExec(['worktree', 'list', '--porcelain'], root, log)
-  const holder =
-    listRes.exitCode === 0
-      ? parseWorktrees(listRes.stdout).find((wt) => wt.branch === targetRef)
-      : undefined
-
-  reportWorktreeAutoSync(
-    await syncWorktreesToCommit(newHead, root, log, holder ? [holder.path] : undefined),
-  )
+  reportWorktreeAutoSync(await syncWorktreesToCommit(newHead, root, log))
 }

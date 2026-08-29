@@ -1,8 +1,14 @@
 /**
- * Fast-forwarding the repository's *other* worktrees after a pull. A pull only
- * moves the working tree it ran in; every linked worktree sitting on the commit
- * that was HEAD a moment ago stays behind and has to be pulled or reset by hand.
- * This closes that gap automatically.
+ * Fast-forwarding a repository's worktrees after a pull. A pull only advances the
+ * branch it targeted; every worktree sitting on the commit that was its tip a
+ * moment ago stays behind and has to be pulled or reset by hand. This closes that
+ * gap automatically.
+ *
+ * The worktree the pull ran in is not special-cased: a Git Graph pull of a branch
+ * held by another worktree runs *there*, leaving the current tree behind just like
+ * any other. Instead, a worktree whose HEAD already is the new commit lands in the
+ * unreported `upToDate` bucket — which covers the plain-pull case without claiming
+ * a tree moved when it never did.
  *
  * Only worktrees that can be fast-forwarded are touched: clean (no uncommitted
  * changes) and with a HEAD that is a strict ancestor of the new commit. Ancestry
@@ -22,7 +28,6 @@ import { basename, join } from 'node:path'
 import { gitExec } from './gitService.js'
 import { gitErrorText } from './gitError.js'
 import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
-import { samePath } from './pathUtil.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
 
 type Log = ((msg: string) => void) | undefined
@@ -36,6 +41,7 @@ export interface SyncedBranchWorktree {
 export interface WorktreeAutoSyncResult {
   syncedDetached: string[]
   syncedBranches: SyncedBranchWorktree[]
+  upToDate: string[]
   skippedDirty: string[]
   skippedInProgress: string[]
   skippedDiverged: string[]
@@ -44,7 +50,7 @@ export interface WorktreeAutoSyncResult {
 
 type SyncOutcome =
   | {
-      kind: 'syncedDetached' | 'skippedDirty' | 'skippedInProgress' | 'skippedDiverged'
+      kind: 'syncedDetached' | 'upToDate' | 'skippedDirty' | 'skippedInProgress' | 'skippedDiverged'
       name: string
     }
   | { kind: 'syncedBranch'; name: string; branch: string }
@@ -53,6 +59,7 @@ type SyncOutcome =
 const emptyResult = (): WorktreeAutoSyncResult => ({
   syncedDetached: [],
   syncedBranches: [],
+  upToDate: [],
   skippedDirty: [],
   skippedInProgress: [],
   skippedDiverged: [],
@@ -108,6 +115,20 @@ const syncOne = async (
       ? { kind: 'syncedDetached', name }
       : { kind: 'syncedBranch', name, branch: wt.branch }
 
+  // Resolved first, before the dirty check: the worktree the pull ran in is
+  // already at the new commit and may well carry uncommitted edits — reporting it
+  // as "skipped (uncommitted changes)" would be noise about a tree that needs
+  // nothing. `worktree list --porcelain` may abbreviate HEAD, so resolve the full
+  // sha here for both the equality check and the ancestry test.
+  const headRes = await gitExec(['rev-parse', 'HEAD'], wt.path, log)
+  if (headRes.exitCode !== 0) return { kind: 'failed', name, error: gitErrorText(headRes) }
+  const wtHead = headRes.stdout.trim()
+
+  if (wtHead === newHead) {
+    log?.(`[git] auto-sync worktree ${name}: already at ${newHead.slice(0, 8)}`)
+    return { kind: 'upToDate', name }
+  }
+
   const status = await gitExec(['status', '--porcelain'], wt.path, log)
   if (status.exitCode !== 0) return { kind: 'failed', name, error: gitErrorText(status) }
   if (status.stdout.trim()) {
@@ -122,17 +143,6 @@ const syncOne = async (
   if (pending !== undefined) {
     log?.(`[git] auto-sync worktree ${name}: skipped (${pending} in progress)`)
     return { kind: 'skippedInProgress', name }
-  }
-
-  // `worktree list --porcelain` may abbreviate HEAD; resolve the full sha so the
-  // equality check below and the ancestry test both compare like for like.
-  const headRes = await gitExec(['rev-parse', 'HEAD'], wt.path, log)
-  if (headRes.exitCode !== 0) return { kind: 'failed', name, error: gitErrorText(headRes) }
-  const wtHead = headRes.stdout.trim()
-
-  if (wtHead === newHead) {
-    log?.(`[git] auto-sync worktree ${name}: already at ${newHead.slice(0, 8)}`)
-    return synced()
   }
 
   // Ancestry is a property of the shared object database, so this runs in the
@@ -176,10 +186,11 @@ const syncOneSafely = async (
 }
 
 /**
- * Fast-forward every linked worktree of `currentRoot` that can reach `newHead`
- * without losing work. `newHead` must be a full sha. The worktree the pull ran in
- * and bare worktrees are excluded; everything else lands in exactly one result
- * bucket, in input order regardless of completion order.
+ * Fast-forward every worktree of `currentRoot` — including `currentRoot` itself —
+ * that can reach `newHead` without losing work. `newHead` must be a full sha. A
+ * worktree already on `newHead` lands in the unreported `upToDate` bucket and bare
+ * worktrees are excluded; everything else lands in exactly one result bucket, in
+ * input order regardless of completion order.
  *
  * Worktrees are processed concurrently — each owns its working directory, index
  * and refs, so their git invocations don't contend.
@@ -188,7 +199,6 @@ export async function syncWorktreesToCommit(
   newHead: string,
   currentRoot: string,
   log?: Log,
-  excludePaths?: readonly string[],
 ): Promise<WorktreeAutoSyncResult> {
   const listRes = await gitExec(['worktree', 'list', '--porcelain'], currentRoot, log)
   if (listRes.exitCode !== 0) {
@@ -196,12 +206,7 @@ export async function syncWorktreesToCommit(
     return emptyResult()
   }
 
-  const candidates = parseWorktrees(listRes.stdout).filter(
-    (wt) =>
-      !wt.bare &&
-      !samePath(wt.path, currentRoot) &&
-      !excludePaths?.some((p) => samePath(wt.path, p)),
-  )
+  const candidates = parseWorktrees(listRes.stdout).filter((wt) => !wt.bare)
   if (candidates.length === 0) return emptyResult()
 
   log?.(`[git] auto-sync worktrees: ${candidates.length} candidate(s) for ${newHead.slice(0, 8)}`)

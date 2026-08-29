@@ -78,6 +78,8 @@ vi.mock('@universe-editor/extension-api', () => ({
 }))
 
 import { Repository } from '../repository.js'
+import { pullBranch } from '../gitGraphActions.js'
+import { autoSyncWorktreesAfterPull } from '../worktreeAutoSync.js'
 
 const execFileAsync = promisify(execFile)
 const tmpRoots: string[] = []
@@ -248,5 +250,25 @@ describe('post-pull worktree sync', () => {
     expect(await headOf(detached)).toBe(newHead)
     expect(await headOf(branch)).toBe(newHead)
     expect(await headOf(dirty)).toBe(baseHead)
+  })
+
+  // A Git Graph pull of a branch held elsewhere runs in *that* worktree, so the
+  // one the user is sitting in never moves — it has to be fast-forwarded like any
+  // other, which the pull-ran-here exclusion used to prevent.
+  it('fast-forwards the current worktree when a Graph pull landed in another one', async () => {
+    const { local, baseHead } = await createRemoteBackedRepo()
+    const task1 = join(local, '..', 'task1')
+    await addWorktree(local, 'task1', ['-b', 'task1'], baseHead)
+
+    // `main` is held by `local`, so pulling it from task1 is redirected there.
+    const res = await pullBranch(task1, 'main', 'default', undefined)
+    expect(res.exitCode).toBe(0)
+    expect(res.worktreeName).toBe('local')
+    await autoSyncWorktreesAfterPull(task1, 'main', undefined)
+
+    const newHead = await headOf(local)
+    expect(newHead).not.toBe(baseHead)
+    expect(await headOf(task1)).toBe(newHead)
+    expect((await git(['rev-parse', 'task1'], local)).trim()).toBe(newHead)
   })
 })

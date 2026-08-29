@@ -71,7 +71,7 @@
   "git.config.repositoryScanMaxDepth.description": "扫描嵌套 git 仓库的最大子文件夹深度。-1 表示不限制。",
   "git.config.repositoryScanIgnoredFolders.description": "扫描嵌套 git 仓库时跳过的文件夹名称。",
   "git.config.autoUpdateSubmodules.description": "当重写工作树的操作（拉取、签出、创建分支、合并、变基、还原、拣选、重置 --hard、应用/弹出储藏、放弃所有更改、重置分支到远程）成功后，自动运行 `git submodule update --init --recursive`。仅在仓库包含子模块时生效。",
-  "git.config.autoSyncWorktreesAfterPull.description": "拉取成功后，自动将 HEAD 是新提交祖先的其它工作树快进到新提交。检出在分支上的工作树，其分支也会一并快进。有未提交更改、正处于变基/合并/拣选/二分查找过程中、或有独有提交的工作树会被跳过。",
+  "git.config.autoSyncWorktreesAfterPull.description": "拉取成功后，自动将 HEAD 是新提交祖先的工作树快进到新提交，包括你当前所在的工作树——Git 图谱拉取一个被别处检出的分支时，拉取落在持有它的工作树里，当前工作树会留在旧提交上。检出在分支上的工作树，其分支也会一并快进。有未提交更改、正处于变基/合并/拣选/二分查找过程中、或有独有提交的工作树会被跳过。",
   "git.config.autofetch.description": "定期从远程获取，使状态栏显示传入/传出的提交。",
   "git.config.autofetchPeriod.description": "启用 git.autofetch 时自动获取之间的间隔（秒）。",
   "git.config.timeline.showUncommitted.description": "在时间线视图中显示文件未提交的更改条目。",
