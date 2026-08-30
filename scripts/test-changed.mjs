@@ -136,8 +136,10 @@ const isPkgLevel = (rel) => rel === 'package.json' || rel.startsWith('tsconfig')
 
 /**
  * 每个测试域四组谓词：isTest（targeted 精确安全）/ isFull（--check 必须退全量）/
- * isRelated（--check 可用 import 图追踪）/ affects（test:changed 模式的整域触发，
- * 保持既有行为——integration 域不因 src 变更触发，该缺口由 --check 的 related 与 CI 覆盖）。
+ * isRelated（--check 可用 import 图追踪）/ affects（test:changed 模式的整域触发；
+ * integration 域也含 src——scenarios 直接 import '../../src/**'，给服务加一个必填
+ * 注入却漏改 integration 侧构造点这类问题，要在最快的本地命令里就暴露）。
+ * 一个文件可命中多个域的 affects（src 同时触发 unit 与 integration）。
  */
 function domainsFor(pkgName) {
   if (pkgName === '@universe-editor/editor') {
@@ -164,7 +166,8 @@ function domainsFor(pkgName) {
           rel === 'integration/tsconfig.json',
         // scenarios/fixtures 直接 import '../../src/**'，src 变更对本域同样要追
         isRelated: (rel) => rel.startsWith('integration/') || rel.startsWith('src/'),
-        affects: (rel) => isPkgLevel(rel) || rel.startsWith('integration/'),
+        affects: (rel) =>
+          isPkgLevel(rel) || rel.startsWith('integration/') || rel.startsWith('src/'),
         // 该 config 的 root 是 integration/，targeted 过滤路径须相对它
         run: (files) => [
           'exec',
@@ -201,7 +204,9 @@ function domainsFor(pkgName) {
   ]
 }
 
-function buildPlans(changed, pkgs) {
+/** fileExists 可注入以便单测（默认查磁盘），与 classifyCheck 一致。 */
+export function buildPlans(changed, pkgs, fileExists) {
+  const exists = fileExists ?? ((p) => existsSync(path.join(repoRoot, p)))
   const runAll = changed.some((f) => GLOBAL_FULL_RUN_FILES.has(f.path))
   const outside = []
   const plans = []
@@ -214,11 +219,13 @@ function buildPlans(changed, pkgs) {
       const rel = f.path.slice(prefix.length)
       const testDomain = domains.find((d) => d.isTest(rel))
       if (testDomain) {
-        if (!f.deleted && existsSync(path.join(repoRoot, f.path))) testDomain.targeted.push(rel)
+        if (!f.deleted && exists(f.path)) testDomain.targeted.push(rel)
         continue
       }
-      const affected = domains.find((d) => d.affects(rel))
-      if (affected) affected.full = true
+      // 一个文件可影响多个域：editor 的 src 同时喂 unit 与 integration，pkg-level
+      // 文件喂两者——只取首个匹配域会静默漏掉 integration
+      const affected = domains.filter((d) => d.affects(rel))
+      if (affected.length > 0) for (const d of affected) d.full = true
       else outside.push(f.path)
     }
     const active = domains.filter((d) => d.full || d.targeted.length > 0)

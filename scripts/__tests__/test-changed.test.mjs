@@ -1,5 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for test-changed.mjs --check classification. Run with `node --test`.
+ *  Tests for test-changed.mjs — --check classification (classifyCheck) and the
+ *  plain `pnpm test:changed` planner (buildPlans). Run with `node --test`.
  *
  *  These guard the safety boundary of the fast path:
  *    1. OVER-scoping is cheap, UNDER-scoping is a false green — anything vitest's
@@ -9,12 +10,14 @@
  *    2. Command construction: related files go through as forward-slash absolute
  *       paths (the integration config's root is integration/, relative paths are
  *       ambiguous), targeted files stay package-relative.
+ *    3. A changed file may belong to several domains at once — editor's src feeds
+ *       both the unit and the integration suites, and both must run.
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isAbsolute } from 'node:path'
-import { buildLeafSet, classifyCheck } from '../test-changed.mjs'
+import { buildLeafSet, buildPlans, classifyCheck } from '../test-changed.mjs'
 
 const PKGS = [
   {
@@ -197,3 +200,52 @@ test('mixed targeted + related in one package → both plans, ^... build filter'
 test('empty change set → full (turbo cache semantics decide)', () => {
   assert.equal(classify([]).mode, 'full')
 })
+
+/* ---- buildPlans (the plain `pnpm test:changed` path, no --check) ---- */
+
+const plansFor = (files) => buildPlans(files, PKGS, exists)
+
+test('buildPlans: editor src change → BOTH unit and integration domains go full', () => {
+  // Regression: a required DI param added to a renderer service broke the
+  // integration scenarios while `test:changed` stayed green, because src only
+  // triggered the unit domain. A file may match several domains' affects.
+  const { plans } = plansFor(changed('apps/editor/src/renderer/services/explorer/foo.ts'))
+  assert.equal(plans.length, 1)
+  const domains = plans[0].domains
+  assert.deepEqual(
+    domains.map((d) => d.label).sort(),
+    ['integration', 'unit'],
+  )
+  assert.ok(
+    domains.every((d) => d.full),
+    'both domains must run in full',
+  )
+})
+
+test('buildPlans: integration-only change leaves the unit domain idle', () => {
+  const { plans } = plansFor(changed('apps/editor/integration/fixtures/explorerTree.ts'))
+  assert.deepEqual(
+    plans[0].domains.map((d) => d.label),
+    ['integration'],
+  )
+})
+
+test('buildPlans: editor pkg-level file → BOTH domains go full', () => {
+  const { plans } = plansFor(changed('apps/editor/package.json'))
+  assert.deepEqual(
+    plans[0].domains.map((d) => d.label).sort(),
+    ['integration', 'unit'],
+  )
+})
+
+test('buildPlans: editor test file → targeted only, no domain goes full', () => {
+  const { plans } = plansFor(changed('apps/editor/src/main/__tests__/bar.test.ts'))
+  const domains = plans[0].domains
+  assert.deepEqual(
+    domains.map((d) => d.label),
+    ['unit'],
+  )
+  assert.equal(domains[0].full, false)
+  assert.deepEqual(domains[0].targeted, ['src/main/__tests__/bar.test.ts'])
+})
+

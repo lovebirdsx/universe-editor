@@ -10,64 +10,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  Emitter,
-  IFileService,
-  IFileWatcherService,
-  IWorkspaceService,
-  InstantiationService,
-  ServiceCollection,
-  URI,
-  type IWorkspace,
-  type IWorkspaceService as IWorkspaceServiceType,
-} from '@universe-editor/platform'
+import { IFileWatcherService, URI } from '@universe-editor/platform'
 import { ExplorerTreeService } from '../../src/renderer/services/explorer/ExplorerTreeService.js'
-import { IExcludeService } from '../../src/renderer/services/exclude/ExcludeService.js'
-import { FakeExcludeService } from '../../src/renderer/services/exclude/testing/fakeExcludeService.js'
-import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
 import { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   createInMemoryWatcherTransport,
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
-
-class FakeWorkspaceService implements IWorkspaceServiceType {
-  declare readonly _serviceBrand: undefined
-  private readonly _changed = new Emitter<IWorkspace | null>()
-  readonly onDidChangeWorkspace = this._changed.event
-  readonly onDidChangeRecent = new Emitter<readonly never[]>().event
-  current: IWorkspace | null
-  readonly recent = [] as never[]
-  readonly whenReady: Promise<void> = Promise.resolve()
-  constructor(initial: URI | null) {
-    this.current = initial ? { folder: initial, name: 'ws' } : null
-  }
-  async openFolder() {}
-  async closeFolder() {}
-  async clearRecent() {}
-  async removeRecent() {}
-}
-
-function waitFor(fn: () => boolean, timeout = 5000, interval = 25): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const start = Date.now()
-    const tick = () => {
-      if (fn()) return resolve()
-      if (Date.now() - start > timeout) return reject(new Error('waitFor timed out'))
-      setTimeout(tick, interval)
-    }
-    tick()
-  })
-}
+import { createExplorerTree, waitFor } from '../fixtures/explorerTree.js'
 
 function makeTree(watcher: IFileWatcherService, root: string): ExplorerTreeService {
-  const services = new ServiceCollection()
-  services.set(IFileService, new FileSystemMainService())
-  services.set(IFileWatcherService, watcher)
-  services.set(IWorkspaceService, new FakeWorkspaceService(URI.file(root)))
-  services.set(IExcludeService, new FakeExcludeService())
-  return new InstantiationService(services).createInstance(ExplorerTreeService)
+  return createExplorerTree({ watcher, root: URI.file(root) }).tree
 }
 
 describe('FileWatcher is per-window across two windows', () => {
