@@ -38,6 +38,31 @@ export interface MentionFileFilter {
   readonly excludeGlobs?: readonly string[]
 }
 
+/**
+ * Focus-mode inputs for the workspace walk: the folders narrow the enumeration
+ * to ripgrep positional arguments, and the fingerprint partitions the cache so
+ * a scope change never serves a listing walked under a different scope.
+ */
+export interface MentionFileFocus {
+  readonly scanPaths?: readonly string[]
+  readonly rootFilesInScope: boolean
+  readonly fingerprint: string
+}
+
+/** Derive the mention focus inputs from a focus-scope-shaped source. */
+export function focusScopeForMention(scope: {
+  readonly active: boolean
+  readonly folders: readonly string[]
+  readonly rootFilesInScope: boolean
+  readonly fingerprint: string
+}): MentionFileFocus {
+  return {
+    ...(scope.active ? { scanPaths: [...scope.folders] } : {}),
+    rootFilesInScope: scope.rootFilesInScope,
+    fingerprint: scope.fingerprint,
+  }
+}
+
 const FALLBACK_IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.turbo']
 const MAX_FILES = 100_000
 // Backstop only: day-to-day freshness comes from the file watcher invalidating
@@ -61,25 +86,35 @@ interface _Cache {
 }
 const _cache = new Map<string, _Cache>()
 
-function cacheKey(root: URI, dirNames: readonly string[], excludeGlobs: readonly string[]): string {
-  return root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',')
+function cacheKey(
+  root: URI,
+  dirNames: readonly string[],
+  excludeGlobs: readonly string[],
+  fingerprint: string,
+): string {
+  return (
+    root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',') + '|' + fingerprint
+  )
 }
 
 /**
  * Walk the workspace under `root` (cached). Returns at most `MAX_FILES`
  * entries with workspace-relative `relPath`. The cache key is the URI string
- * plus the exclude signature; each entry is normalized to use forward slashes
- * regardless of the host OS so the displayed mention is stable across platforms.
+ * plus the exclude signature plus the focus fingerprint; each entry is
+ * normalized to use forward slashes regardless of the host OS so the displayed
+ * mention is stable across platforms.
  */
 export async function loadWorkspaceFiles(
   root: URI,
   fileSearch: IFileSearchService,
   filter?: MentionFileFilter,
   token?: CancellationToken,
+  focus?: MentionFileFocus,
 ): Promise<WorkspaceFileListing> {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
-  const key = cacheKey(root, dirNames, excludeGlobs)
+  const fingerprint = focus?.fingerprint ?? ''
+  const key = cacheKey(root, dirNames, excludeGlobs, fingerprint)
   const now = Date.now()
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.listing
@@ -92,6 +127,8 @@ export async function loadWorkspaceFiles(
       excludes: excludeGlobs,
       ignore: dirNames,
       maxResults: MAX_FILES,
+      ...(focus?.scanPaths && focus.scanPaths.length > 0 ? { scanPaths: focus.scanPaths } : {}),
+      ...(focus ? { rootFilesInScope: focus.rootFilesInScope } : {}),
     },
     token,
   )
@@ -120,10 +157,12 @@ export async function loadWorkspaceFiles(
 export function peekWorkspaceFiles(
   root: URI,
   filter?: MentionFileFilter,
+  focus?: MentionFileFocus,
 ): WorkspaceFileListing | undefined {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
-  return _cache.get(cacheKey(root, dirNames, excludeGlobs))?.listing
+  const fingerprint = focus?.fingerprint ?? ''
+  return _cache.get(cacheKey(root, dirNames, excludeGlobs, fingerprint))?.listing
 }
 
 /** Invalidate the cache — exposed for tests and for explicit refresh actions. */
@@ -132,7 +171,7 @@ export function invalidateMentionFileCache(root?: URI): void {
     _cache.clear()
     return
   }
-  // Keys are `<root>|<dirNameSignature>`, so clear every variant for this root.
+  // Keys are `<root>|<dirNameSignature>…`, so clear every variant for this root.
   const prefix = root.toString() + '|'
   for (const key of [..._cache.keys()]) {
     if (key.startsWith(prefix)) _cache.delete(key)

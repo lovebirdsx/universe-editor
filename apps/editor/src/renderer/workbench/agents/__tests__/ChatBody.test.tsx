@@ -66,6 +66,8 @@ import { EditorGroupsService } from '../../../services/editor/EditorGroupsServic
 import styles from '../agents.module.css'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
+import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
 
 // All cases here stay below the virtualization threshold, so the virtualizer's
 // return value is never used. The real @tanstack/react-virtual, however, attaches
@@ -243,6 +245,7 @@ function makeInstantiation(
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
   services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
     get: () => undefined,

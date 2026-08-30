@@ -23,6 +23,8 @@ import {
 import { WorkspaceFileListingContribution } from '../WorkspaceFileListingContribution.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
 import {
   invalidateMentionFileCache,
   loadWorkspaceFiles,
@@ -89,6 +91,7 @@ function setup(fileSearch: ReturnType<typeof makeFileSearch> = makeFileSearch())
   services.set(IFileWatcherService, watcher)
   services.set(IFileSearchService, fileSearch)
   services.set(IExcludeService, new FakeExcludeService())
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(WorkspaceFileListingContribution)
   return { contribution, fileSearch, watcher }

@@ -239,6 +239,68 @@ describe('loadWorkspaceFiles', () => {
     expect(calls).toBe(2)
     expect(peekWorkspaceFiles(root)).toBeUndefined()
   })
+
+  it('partitions the cache by focus fingerprint and forwards the scope to the walk', async () => {
+    const root = URI.file('/repo')
+    const seenQueries: { scanPaths?: readonly string[]; rootFilesInScope: boolean | undefined }[] =
+      []
+    let calls = 0
+    const fs = {
+      _serviceBrand: undefined,
+      async search(query) {
+        calls++
+        seenQueries.push({
+          ...(query.scanPaths ? { scanPaths: query.scanPaths } : {}),
+          rootFilesInScope: query.rootFilesInScope,
+        })
+        return {
+          results: [],
+          limitHit: false,
+          filesWalked: 0,
+          directoriesWalked: 0,
+          durationMs: 0,
+        }
+      },
+    } satisfies IFileSearchService
+
+    const focusA = { scanPaths: ['Client'] as const, rootFilesInScope: true, fingerprint: 'a' }
+    const focusB = { scanPaths: ['Engine'] as const, rootFilesInScope: false, fingerprint: 'b' }
+
+    await loadWorkspaceFiles(root, fs, undefined, undefined, focusA)
+    await loadWorkspaceFiles(root, fs, undefined, undefined, focusA)
+    expect(calls).toBe(1)
+
+    // 同一 root、不同 fingerprint = 不同缓存键：必须重新 walk。
+    await loadWorkspaceFiles(root, fs, undefined, undefined, focusB)
+    expect(calls).toBe(2)
+
+    expect(peekWorkspaceFiles(root, undefined, focusA)).toBeDefined()
+    expect(peekWorkspaceFiles(root, undefined, focusB)).toBeDefined()
+
+    expect(seenQueries[0]).toEqual({ scanPaths: ['Client'], rootFilesInScope: true })
+    expect(seenQueries[1]).toEqual({ scanPaths: ['Engine'], rootFilesInScope: false })
+  })
+
+  it('does not narrow the walk when no focus is given', async () => {
+    const root = URI.file('/repo')
+    let seenScanPaths: readonly string[] | undefined = ['sentinel']
+    const fs = {
+      _serviceBrand: undefined,
+      async search(query) {
+        seenScanPaths = query.scanPaths
+        return {
+          results: [],
+          limitHit: false,
+          filesWalked: 0,
+          directoriesWalked: 0,
+          durationMs: 0,
+        }
+      },
+    } satisfies IFileSearchService
+
+    await loadWorkspaceFiles(root, fs)
+    expect(seenScanPaths).toBeUndefined()
+  })
 })
 
 describe('filterMentionFiles', () => {

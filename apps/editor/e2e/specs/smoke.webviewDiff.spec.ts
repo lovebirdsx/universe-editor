@@ -152,6 +152,7 @@ test.describe('@p1 webview diff', () => {
 
   test('native Explorer compare routes a diff-capable custom editor to a webview diff', async ({
     workbench,
+    scratchDir,
   }) => {
     // Heavier than the sibling: opens a workspace (Restricted Mode) then trusts it,
     // which relaunches the extension host before the provider can register. The host
@@ -159,7 +160,10 @@ test.describe('@p1 webview diff', () => {
     // mounts once the fresh connection scans the trusted extension; give the
     // cold-start host room on a loaded CI runner.
     test.slow()
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-webviewdiff-native-'))
+    // scratchDir, unlike the sibling test: this one opens tmpDir as the
+    // workspace, so the watcher pins its root and a test-body delete races
+    // handles the running app still holds. Cleanup runs after closeApp.
+    const tmpDir = scratchDir('ue2-webviewdiff-native-')
     const vsixPath = await makeDiffEditorVsix(tmpDir, true)
 
     // Two real files on disk: the native compare path reads their bytes via
@@ -214,6 +218,5 @@ test.describe('@p1 webview diff', () => {
     await expect(marker).toHaveText('LEFT_SIDE|RIGHT_SIDE', { timeout: 10000 })
 
     await workbench.page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
-    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 })

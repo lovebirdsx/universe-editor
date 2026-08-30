@@ -120,6 +120,84 @@ describe('UserDataMainService', () => {
     svc.dispose()
   })
 
+  // Regression: two setValue() calls landing in the same tick is the normal
+  // shape of "one programmatic write of two configuration keys" — the config
+  // service fires an event per key and the persistence sync reacts to each
+  // without awaiting the previous one. Unserialized, both read the same original
+  // text and the second rename silently dropped the first key; the tmp names
+  // also collided within a millisecond, so the loser's rename threw ENOENT.
+  it('concurrent setValue() calls keep every key and never race on the tmp file', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    await svc.write(UserDataFile.Settings, '{}\n')
+
+    await Promise.all([
+      svc.setValue(UserDataFile.Settings, ['workspace.focusFolders'], { Client: true }),
+      svc.setValue(UserDataFile.Settings, ['workspace.focusEnabled'], true),
+    ])
+
+    const after = JSON.parse(await svc.read(UserDataFile.Settings)) as Record<string, unknown>
+    expect(after).toEqual({
+      'workspace.focusFolders': { Client: true },
+      'workspace.focusEnabled': true,
+    })
+    svc.dispose()
+  })
+
+  it('a whole-file write() concurrent with setValue() does not tear the file', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    await svc.write(UserDataFile.Settings, '{}\n')
+
+    // write() replaces the file, so ordering decides which keys survive. The
+    // queue is FIFO on call order, so write() lands first and setValue() then
+    // edits *its* text — asserting the exact state, not a set of acceptable
+    // ones, is what makes this a regression guard: unserialized, setValue()
+    // reads the pre-write `{}` and its rename drops editor.fontSize.
+    await Promise.all([
+      svc.write(UserDataFile.Settings, '{"editor.fontSize": 20}\n'),
+      svc.setValue(UserDataFile.Settings, ['editor.tabSize'], 4),
+    ])
+
+    const after = JSON.parse(await svc.read(UserDataFile.Settings)) as Record<string, unknown>
+    expect(after).toEqual({ 'editor.fontSize': 20, 'editor.tabSize': 4 })
+    svc.dispose()
+  })
+
+  it('leaves no .tmp files behind after concurrent writes', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) => svc.setValue(UserDataFile.Settings, [`key${i}`], i)),
+    )
+    const left = (await fs.readdir(currentUserData)).filter((f) => f.endsWith('.tmp'))
+    expect(left).toEqual([])
+    const after = JSON.parse(await svc.read(UserDataFile.Settings)) as Record<string, unknown>
+    expect(Object.keys(after)).toHaveLength(8)
+    svc.dispose()
+  })
+
+  // The write target is captured before queueing, so a relocate() landing while
+  // a read-modify-write is in flight cannot redirect it. Re-resolving inside the
+  // queued task would write this content into the new directory — and do it
+  // unserialized, since the queue key came from the old path.
+  it('a setValue() in flight writes to the directory it started against', async () => {
+    const ws = new FakeWorkspace()
+    const configA = join(tmp, 'configA')
+    const configB = join(tmp, 'configB')
+    await fs.mkdir(configA, { recursive: true })
+    await fs.mkdir(configB, { recursive: true })
+    const svc = new UserDataMainService(ws as never, configA)
+
+    const inFlight = svc.setValue(UserDataFile.Settings, ['a'], 1)
+    svc.relocate(configB)
+    await inFlight
+
+    expect(JSON.parse(await fs.readFile(join(configA, 'settings.json'), 'utf8'))).toEqual({ a: 1 })
+    await expect(fs.stat(join(configB, 'settings.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    svc.dispose()
+  })
+
   it('getFileUri() returns null for ProjectSettings when no workspace is open', async () => {
     const ws = new FakeWorkspace()
     const svc = new UserDataMainService(ws as never)

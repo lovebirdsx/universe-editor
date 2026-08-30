@@ -32,6 +32,7 @@ import {
 import { compileQuery } from './scanText.js'
 import { mergeOpenEditorResults, searchOpenEditorModels } from './openEditorSearch.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { IFocusScopeService } from '../focus/FocusScopeService.js'
 
 let searchSessionSeq = 0
 
@@ -53,6 +54,7 @@ export class TextSearchService implements ITextSearchService {
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityServiceType,
     @IConfigurationService private readonly _config: IConfigurationServiceType,
     @ILoggerService loggerService: ILoggerServiceType,
+    @IFocusScopeService private readonly _focus: IFocusScopeService,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'search', name: 'Search' })
   }
@@ -134,6 +136,8 @@ export class TextSearchService implements ITextSearchService {
         configurationExcludes:
           opts.useExcludeSettings === false ? [] : this._exclude.getSearchExcludeGlobs(),
         threads: this._config.get<number>('search.threads', 0) ?? 0,
+        ...(this._focus.active ? { scanPaths: [...this._focus.folders] } : {}),
+        rootFilesInScope: this._focus.rootFilesInScope,
       })
       opts.onProgress?.(complete.progress)
       this._logger.info(

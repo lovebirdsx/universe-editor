@@ -33,6 +33,7 @@ import {
 } from '@universe-editor/platform'
 import { languageActivationEvent } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import { IFocusScopeService } from '../services/focus/FocusScopeService.js'
 
 const DEFAULT_PREWARM_LANGUAGES = ['typescript', 'markdown']
 
@@ -62,6 +63,7 @@ export class LanguageServicePrewarmContribution
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
+    @IFocusScopeService private readonly _focus: IFocusScopeService,
   ) {
     super()
     this._register(
@@ -124,6 +126,8 @@ export class LanguageServicePrewarmContribution
 
     void this._refreshTsProjectsSchema()
     this._register(this._workspace.onDidChangeWorkspace(() => void this._refreshTsProjectsSchema()))
+    // 聚焦范围变化时 tsconfig 枚举集合随之变化，schema enum 也要重扫。
+    this._register(this._focus.onDidChange(() => void this._refreshTsProjectsSchema()))
 
     this._register(runWhenIdle(globalThis, () => void this._prewarm()))
     // A workspace swap / crash relaunches the host, which only re-fires the
@@ -178,6 +182,8 @@ export class LanguageServicePrewarmContribution
           matchAll: true,
           ignore: TSCONFIG_IGNORE_DIRS,
           maxResults: 5000,
+          ...(this._focus.active ? { scanPaths: [...this._focus.folders] } : {}),
+          rootFilesInScope: this._focus.rootFilesInScope,
         },
         token,
       )

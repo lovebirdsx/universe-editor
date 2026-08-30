@@ -21,8 +21,10 @@ import {
 import {
   invalidateMentionFileCache,
   loadWorkspaceFiles,
+  focusScopeForMention,
 } from '../services/acp/mentionFileSearch.js'
 import { IExcludeService } from '../services/exclude/ExcludeService.js'
+import { IFocusScopeService } from '../services/focus/FocusScopeService.js'
 
 export class WorkspaceFileListingContribution extends Disposable implements IWorkbenchContribution {
   // Prewarm walks the whole workspace; on a pathological tree that is minutes
@@ -34,6 +36,7 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
     @IExcludeService private readonly _exclude: IExcludeService,
+    @IFocusScopeService private readonly _focus: IFocusScopeService,
   ) {
     super()
     this._register(toDisposable(() => this._prewarmCts.dispose(true)))
@@ -45,6 +48,11 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
     // Events during a watcher crash gap are lost — rebuild from scratch.
     this._register(
       this._watcher.onDidRestart(() => invalidateMentionFileCache(this._workspace.current?.folder)),
+    )
+    // A focus-scope change partitions the cache; stale listings for the old
+    // scope must not survive it.
+    this._register(
+      this._focus.onDidChange(() => invalidateMentionFileCache(this._workspace.current?.folder)),
     )
     this._register(runWhenIdle(globalThis, () => void this._prewarm()))
   }
@@ -61,6 +69,7 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
         excludeGlobs: this._exclude.getSearchExcludeGlobs(),
       },
       this._prewarmCts.token,
+      focusScopeForMention(this._focus),
     ).catch(() => undefined)
   }
 }

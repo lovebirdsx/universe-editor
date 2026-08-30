@@ -47,6 +47,8 @@ import {
 import { FileQuickAccessProvider } from '../providers/FileQuickAccessProvider.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
 import { IRecentEditorsService } from '../../editor/RecentEditorsService.js'
 import { IClosedEditorsService, type ClosedEditorEntry } from '../../editor/ClosedEditorsService.js'
@@ -365,6 +367,7 @@ function setup(
     root?: URI | null
     recent?: readonly IRecentFile[]
     exclude?: IExcludeService
+    focus?: IFocusScopeService
     existingFiles?: Iterable<string>
     openEditors?: EditorInput[]
     sideEditors?: EditorInput[]
@@ -395,6 +398,7 @@ function setup(
   services.set(IRecentEditorsService, recentEditors)
   services.set(IClosedEditorsService, closedEditors)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
+  services.set(IFocusScopeService, opts.focus ?? new FakeFocusScopeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
   services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
   services.set(IFileService, makeFileService(opts.existingFiles))

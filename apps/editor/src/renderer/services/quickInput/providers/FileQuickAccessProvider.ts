@@ -47,9 +47,11 @@ import { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
   loadWorkspaceFiles,
   peekWorkspaceFiles,
+  focusScopeForMention,
   type MentionFileEntry,
   type MentionFileFilter,
 } from '../../acp/mentionFileSearch.js'
+import { IFocusScopeService } from '../../focus/FocusScopeService.js'
 import {
   decodeEditorPickId,
   encodeEditorPickId,
@@ -178,6 +180,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IClosedEditorsService private readonly _closedEditors: IClosedEditorsService,
     @IInstantiationService private readonly _inst: IInstantiationService,
     @ILoggerService loggerService: ILoggerService,
+    @IFocusScopeService private readonly _focus: IFocusScopeService,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'quickOpen', name: 'Quick Open' })
   }
@@ -355,6 +358,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.filterExternally = true
     picker.placeholder = localize('quickInput.goToFile.placeholder', 'Go to File…')
 
+    const focus = focusScopeForMention(this._focus)
     const filter: MentionFileFilter = {
       dirNames: this._exclude.getDirNameIgnores(),
       excludeGlobs: this._exclude.getSearchExcludeGlobs(),
@@ -533,6 +537,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
               maxResults: GO_TO_FILE_MAX_RESULTS,
               excludes: filter.excludeGlobs ?? [],
               ignore: filter.dirNames,
+              ...(focus.scanPaths ? { scanPaths: focus.scanPaths } : {}),
+              rootFilesInScope: focus.rootFilesInScope,
             },
             cts.token,
           )
@@ -646,14 +652,14 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // @-mention). Seed from the previous listing first — even a stale one beats
     // an empty picker — then revalidate in the background and re-run the
     // current query when fresh files land, so an early keystroke isn't lost.
-    const cachedListing = peekWorkspaceFiles(root, filter)
+    const cachedListing = peekWorkspaceFiles(root, filter, focus)
     allFiles = cachedListing?.entries
     listingComplete = cachedListing?.complete ?? true
     if (picker.value.trim().length > 0) {
       if (allFiles === undefined) picker.busy = true
       else runSearch(picker.value)
     }
-    void loadWorkspaceFiles(root, this._fileSearch, filter, token)
+    void loadWorkspaceFiles(root, this._fileSearch, filter, token, focus)
       .then((listing) => {
         if (token.isCancellationRequested) return
         allFiles = listing.entries

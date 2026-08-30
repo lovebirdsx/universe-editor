@@ -15,7 +15,8 @@ import {
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { IObservable, URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
-import { parentOf } from '../../services/explorer/explorerTreeUtils.js'
+import { parentOf, relativeTo } from '../../services/explorer/explorerTreeUtils.js'
+import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
 import {
   IScmService,
   encodeScmProviderIds,
@@ -92,6 +93,14 @@ export function ExplorerContextMenu({
       ? encodeScmProviderIds(resolveScmProviderIds(sourceControls, resource.fsPath))
       : ''
 
+  // Whether the clicked directory is itself a configured focus folder — swaps
+  // the "Focus on This Folder" / "Add to Focus" entries for "Remove from Focus".
+  const focusScopeService = useOptionalService(IFocusScopeService)
+  const explorerResourceIsFocusFolder =
+    isDirectory &&
+    !isRoot &&
+    (focusScopeService?.isFocusFolder(relativeTo(rootResource, resource)) ?? false)
+
   const scopedContext = useMemo(
     () =>
       contextKeyService
@@ -99,6 +108,7 @@ export function ExplorerContextMenu({
             contextKeyService.createScoped({
               explorerResourceIsFolder: isDirectory,
               explorerResourceIsRoot: isRoot,
+              explorerResourceIsFocusFolder,
               resourceScheme,
               resourceExtname,
               resourceScmProvider,
@@ -111,6 +121,7 @@ export function ExplorerContextMenu({
       contextKeyService,
       isDirectory,
       isRoot,
+      explorerResourceIsFocusFolder,
       resourceScheme,
       resourceExtname,
       resourceScmProvider,

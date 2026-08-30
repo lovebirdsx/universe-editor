@@ -36,6 +36,7 @@ import {
   sameUri,
 } from './explorerTreeUtils.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { IFocusScopeService } from '../focus/FocusScopeService.js'
 import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
 import { IFileClipboardService } from '../../../shared/ipc/fileClipboardService.js'
 
@@ -171,6 +172,7 @@ export class ExplorerTreeService extends Disposable {
     @IFileService private readonly _fileService: IFileService,
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
     @IExcludeService private readonly _exclude: IExcludeService,
+    @IFocusScopeService private readonly _focus: IFocusScopeService,
     @ILoggerService loggerService: ILoggerServiceType,
     // Optional DI: tests / early boot may construct the tree before the shared
     // clipboard proxy exists — the container injects undefined then. Declared
@@ -204,6 +206,9 @@ export class ExplorerTreeService extends Disposable {
     // re-read everything already loaded to resync the tree.
     this._register(this._watcher.onDidRestart(() => this._refreshLoadedNodes()))
     this._register(this._exclude.onDidChange(() => this._onExcludeChange()))
+    // Focus folders narrow which entries survive _loadChildren, and drive which
+    // subtrees the watcher subscribes to — both need re-deriving on a change.
+    this._register(this._focus.onDidChange(() => this._onFocusChange()))
   }
 
   /** The TreeModel powering this view — consumed directly by ExplorerView's <Tree>. */
@@ -716,7 +721,11 @@ export class ExplorerTreeService extends Disposable {
   private _syncWatch(root: URI | null): void {
     if (root) {
       void this._watcher
-        .watch(root, { excludes: this._exclude.currentWatcherGlobs })
+        .watch(root, {
+          excludes: this._exclude.currentWatcherGlobs,
+          scopes: this._focus.scanRoots,
+          includeRootFiles: this._focus.rootFilesInScope,
+        })
         .then(() => {
           // parcel only reports changes after the subscription is live; the
           // ack resolves once the watcher process has armed. Anything created
@@ -756,6 +765,15 @@ export class ExplorerTreeService extends Disposable {
     if (this._root) {
       void this._watcher.setExcludes(this._exclude.currentWatcherGlobs).catch(() => {})
     }
+    this._refreshLoadedNodes()
+  }
+
+  /**
+   * Focus folders changed: the visible entry set and the watched subtrees both
+   * derive from them, so re-arm the watch and re-read every loaded directory.
+   */
+  private _onFocusChange(): void {
+    if (this._watchStarted) this._syncWatch(this._root)
     this._refreshLoadedNodes()
   }
 
@@ -908,11 +926,8 @@ export class ExplorerTreeService extends Disposable {
     try {
       const entries = await this._fileService.list(resource)
       const sorted = sortEntries(entries, resource)
-      node.children = this._root
-        ? sorted.filter(
-            (e) => !this._exclude.isExcluded(relativeTo(this._root!, e.resource), 'files'),
-          )
-        : sorted
+      const root = this._root
+      node.children = root ? sorted.filter((e) => this._isEntryVisible(root, e)) : sorted
       this._logger.debug(`loadChildren ${resource.toString()} entries=${node.children.length}`)
     } catch (err) {
       node.children = []
@@ -921,5 +936,17 @@ export class ExplorerTreeService extends Disposable {
     } finally {
       node.loading = false
     }
+  }
+
+  /**
+   * Two independent filters, both anchored on the workspace root: the
+   * `files.exclude` blacklist and the focus-folder whitelist. Focus keeps
+   * ancestor directories of a focus folder visible so the subtree stays
+   * reachable — see focusScopeUtils.
+   */
+  private _isEntryVisible(root: URI, entry: IExplorerEntry): boolean {
+    const rel = relativeTo(root, entry.resource)
+    if (this._exclude.isExcluded(rel, 'files')) return false
+    return this._focus.isVisible(rel, entry.isDirectory)
   }
 }

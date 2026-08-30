@@ -14,6 +14,7 @@ import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContrib
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
 import { AiFixCodeActionContribution } from '../AiFixCodeActionContribution.js'
 import { FileEditorStatusContribution } from '../FileEditorStatusContribution.js'
+import { FocusScopeStatusContribution } from '../FocusScopeStatusContribution.js'
 import { ScmBlameContribution } from '../ScmBlameContribution.js'
 import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
 import { CommitChangesViewResetContribution } from '../CommitChangesViewResetContribution.js'
@@ -143,6 +144,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.fileEditorStatus',
   FileEditorStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Focus-folders status entry: "Focus: N folders" while a focus set is active.
+// AfterRestore so the status bar is live; the focus scope service is an eager
+// singleton and its state is already resolved by then.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.focusScopeStatus',
+  FocusScopeStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 

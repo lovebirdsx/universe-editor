@@ -388,6 +388,14 @@ import {
   RedoExplorerFileOperationAction,
 } from './explorerUndoActions.js'
 import {
+  AddFolderToFocusAction,
+  AddFoldersToFocusAction,
+  ClearFocusScopeAction,
+  FocusOnFolderAction,
+  ManageFocusScopeAction,
+  RemoveFolderFromFocusAction,
+} from './focusScopeActions.js'
+import {
   CheckForExtensionUpdatesAction,
   DisableExtensionForWorkspaceAction,
   DisableExtensionGloballyAction,
@@ -837,6 +845,14 @@ registerAction2(OutlineNavigateRightAction)
 // focused (and explorer.enableUndo is on), regardless of registration order.
 registerAction2(UndoExplorerFileOperationAction)
 registerAction2(RedoExplorerFileOperationAction)
+
+// Focus folders — Explorer context-menu commands plus the palette-visible exit
+registerAction2(FocusOnFolderAction)
+registerAction2(AddFolderToFocusAction)
+registerAction2(RemoveFolderFromFocusAction)
+registerAction2(ClearFocusScopeAction)
+registerAction2(AddFoldersToFocusAction)
+registerAction2(ManageFocusScopeAction)
 registerAction2(InstallExtensionFromVsixAction)
 registerAction2(UninstallExtensionAction)
 registerAction2(ShowExtensionsAction)

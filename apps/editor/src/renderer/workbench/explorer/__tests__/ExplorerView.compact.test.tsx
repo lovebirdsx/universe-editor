@@ -52,6 +52,8 @@ import { ServicesContext } from '../../useService.js'
 import { EditorResolverService } from '../../../services/editor/EditorResolverService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
 import { DragSessionProvider } from '@universe-editor/workbench-ui'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType & {
@@ -146,6 +148,7 @@ function renderView(opts: { folder: URI | null; fs?: ReturnType<typeof makeFs> }
   services.set(IFileService, fs)
   services.set(IFileWatcherService, makeNoopWatcher())
   services.set(IExcludeService, new FakeExcludeService())
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IWorkspaceService, ws)
   services.set(IEditorService, editor as unknown as IEditorService)
   const commandCalls: Array<{ id: string; args: unknown[] }> = []

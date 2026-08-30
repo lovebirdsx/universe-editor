@@ -8,6 +8,41 @@ export function norm(p: string): string {
   return s
 }
 
+/** Whether the host filesystem is case-insensitive. */
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin'
+
+/**
+ * Comparison key for a *scope* path: {@link norm} plus the host case policy.
+ *
+ * Scope comparison has one side the user typed (a focus folder, `Client`) and one
+ * side p4 or the OS reported (`client`), so on Windows/macOS their case will not
+ * match even though they name the same directory. `norm` alone folds only the
+ * drive letter and is right where both sides come from the same OS-reported
+ * source (client routing, dedupe map keys) — folding more there would merge two
+ * genuinely distinct paths on linux.
+ */
+export function scopeKey(p: string): string {
+  const s = norm(p)
+  return CASE_INSENSITIVE_FS ? s.toLowerCase() : s
+}
+
+/**
+ * Whether `path` equals or sits under one of `dirs`, using {@link scopeKey} for
+ * identity. The containment check is directory-boundary aware (`path` must equal
+ * `dir` or start with `dir + '/'`), so `A` never matches `AB`. Empty `dirs`
+ * matches nothing. Pure, so unit-testable without spawning p4.
+ */
+export function isUnderAny(path: string, dirs: readonly string[]): boolean {
+  if (dirs.length === 0) return false
+  const key = scopeKey(path)
+  for (const dir of dirs) {
+    const d = scopeKey(dir)
+    if (key === d) return true
+    if (key.length > d.length && key.startsWith(`${d}/`)) return true
+  }
+  return false
+}
+
 /** Convert a host-shaped file URI (scheme `file`, path like `/D:/a/b.txt` on
  *  Windows or `/a/b` on posix) to an OS filesystem path. Returns undefined for
  *  non-file URIs (e.g. an untitled or virtual document). Pure, so unit-testable

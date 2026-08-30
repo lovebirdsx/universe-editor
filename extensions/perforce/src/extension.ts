@@ -38,6 +38,7 @@ import {
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
 import { uriToFsPath, norm } from './pathUtil.js'
+import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
@@ -197,6 +198,37 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const statusBar = new P4StatusBarController(mgr)
   context.subscriptions.push(statusBar)
   statusBar.refresh()
+
+  // Reconcile discovery scope: the workspace focus folders when focus is enabled
+  // and non-empty, else the opened folder — so a huge depot is never walked as
+  // `//...` on every refresh. Recomputed when the focus config changes; SCM
+  // operations stay whole-client (only reconcile discovery is narrowed).
+  //
+  // Applied BEFORE restoreReconcile(): the restored snapshot goes through the
+  // same `_setReconcileFiles` funnel, so setting the scope first is what drops
+  // entries a since-narrowed focus no longer covers, instead of rendering them
+  // until the next refresh.
+  const applyReconcileScope = async (): Promise<void> => {
+    const scopeCfg = workspace.getConfiguration('workspace')
+    const enabled = await scopeCfg.get('focusEnabled', false)
+    const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
+    const dirs = resolveFocusScopeDirs({ enabled, folders }, root)
+    client.setReconcileScope(dirs.length > 0 ? dirs : root)
+    log(`[perforce] reconcile scope: ${dirs.length > 0 ? dirs.join(', ') : '<opened folder>'}`)
+  }
+  await applyReconcileScope()
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration('workspace.focusEnabled') &&
+        !e.affectsConfiguration('workspace.focusFolders')
+      ) {
+        return
+      }
+      void applyReconcileScope()
+    }),
+  )
+
   // Restore the persisted "changes to reconcile" snapshot (+ dismissed set) so it
   // shows immediately on reload. This turns reconcile discovery on (sticky) but
   // does NOT trigger a full `reconcile -n` walk — the first refresh below just
@@ -224,7 +256,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // editor or an edit from an external tool schedules a reconcile-discovery
   // refresh, so drifted files surface in "changes to reconcile" without a manual
   // Clean Refresh. We watch the opened folder (not the far larger p4 client root)
-  // and narrow the reconcile scan to it — see WorkspaceWatchController.
+  // — see WorkspaceWatchController.
   const watcher = new WorkspaceWatchController(mgr, log)
   context.subscriptions.push(watcher)
   watcher.start(await cfg.get('autoRefresh', true), root)

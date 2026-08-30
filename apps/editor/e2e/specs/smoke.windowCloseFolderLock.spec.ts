@@ -12,8 +12,7 @@
  *  app.quit()，一切句柄随之释放，锁无从谈起）。仅 Windows 有删目录锁定语义。
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
@@ -22,11 +21,6 @@ import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
-function tmpFolder(prefix: string): { dir: string; fsPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), prefix))
-  return { dir, fsPath: dir.replace(/\\/g, '/') }
-}
-
 test.describe('window close releases workspace folder', () => {
   test.skip(process.platform !== 'win32', 'directory-deletion locking is Windows-specific')
 
@@ -34,74 +28,79 @@ test.describe('window close releases workspace folder', () => {
     electronApp,
     page,
     workbench,
+    scratchDir,
   }) => {
     await workbench.waitForRestored()
-    const folderA = tmpFolder('universe-editor-e2e-lock-a-')
+    // scratchDir, so the leftover cleanup runs after closeApp: folderB stays
+    // open in the surviving window for the whole test, and deleting it from the
+    // test body would race handles the app still holds (the very lock this test
+    // is about, just on the wrong folder).
+    const folderA = tmpFolder(scratchDir('universe-editor-e2e-lock-a-'))
     writeFileSync(join(folderA.dir, 'hello.txt'), 'hello')
-    const folderB = tmpFolder('universe-editor-e2e-lock-b-')
+    const folderB = tmpFolder(scratchDir('universe-editor-e2e-lock-b-'))
 
-    try {
-      await workbench.openWorkspace(folderA.dir)
-      await expect
-        .poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 })
-        .toBe(folderA.fsPath)
+    await workbench.openWorkspace(folderA.dir)
+    await expect
+      .poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 })
+      .toBe(folderA.fsPath)
 
-      // 起 echo agent 会话（agent 进程 cwd = folderA），等 echo 回合完成确保连接就绪。
-      await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
-        'echo',
-        ECHO_AGENT_PATH,
-      ] as const)
-      await page.evaluate(() => {
-        void window.__E2E__!.runCommand('workbench.action.agent.newSession')
-      })
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
-        .toBe(1)
-      await page.evaluate(() => window.__E2E__!.sendAcpPrompt('hello'))
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
-        .toEqual([
-          { role: 'user', text: 'hello' },
-          { role: 'agent', text: 'echo: hello' },
-        ])
+    // 起 echo agent 会话（agent 进程 cwd = folderA），等 echo 回合完成确保连接就绪。
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
+      .toBe(1)
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('hello'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+      .toEqual([
+        { role: 'user', text: 'hello' },
+        { role: 'agent', text: 'echo: hello' },
+      ])
 
-      // 第二窗口保活：Windows 上最后一个窗口关闭即 app.quit()，锁便无从观察。
-      const newWindow = electronApp.waitForEvent('window')
-      await workbench.openFolderInNewWindow(folderB.dir)
-      const page2 = await newWindow
-      await page2.waitForFunction(() =>
-        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+    // 第二窗口保活：Windows 上最后一个窗口关闭即 app.quit()，锁便无从观察。
+    const newWindow = electronApp.waitForEvent('window')
+    await workbench.openFolderInNewWindow(folderB.dir)
+    const page2 = await newWindow
+    await page2.waitForFunction(() =>
+      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+    )
+    await evaluateWhenRestored(page2)
+    await expect.poll(() => electronApp.windows().length, { timeout: 8000 }).toBe(2)
+
+    // 关 folderA 所在窗口（走真实 close → veto → willShutdown join 路径）。
+    const windows = await workbench.getOpenWindows()
+    const target = windows.find((w) => w.folder === folderA.fsPath)
+    expect(target).toBeDefined()
+    await electronApp.evaluate(({ BrowserWindow }, id) => {
+      BrowserWindow.fromId(id)?.close()
+    }, target!.id)
+    await expect.poll(() => electronApp.windows().length, { timeout: 8000 }).toBe(1)
+
+    // 修复前：agent 进程残留，rmSync 抛 EBUSY 直到 app 退出。
+    // 修复后：willShutdown join 已 stop agent，文件夹立即可删。
+    // 这句 rmSync 是断言本身（不是清理）——folderA 的窗口已关，锁必须已释放。
+    await expect
+      .poll(
+        () => {
+          try {
+            rmSync(folderA.dir, { recursive: true })
+            return true
+          } catch {
+            return false
+          }
+        },
+        { timeout: 15000 },
       )
-      await evaluateWhenRestored(page2)
-      await expect.poll(() => electronApp.windows().length, { timeout: 8000 }).toBe(2)
-
-      // 关 folderA 所在窗口（走真实 close → veto → willShutdown join 路径）。
-      const windows = await workbench.getOpenWindows()
-      const target = windows.find((w) => w.folder === folderA.fsPath)
-      expect(target).toBeDefined()
-      await electronApp.evaluate(({ BrowserWindow }, id) => {
-        BrowserWindow.fromId(id)?.close()
-      }, target!.id)
-      await expect.poll(() => electronApp.windows().length, { timeout: 8000 }).toBe(1)
-
-      // 修复前：agent 进程残留，rmSync 抛 EBUSY 直到 app 退出。
-      // 修复后：willShutdown join 已 stop agent，文件夹立即可删。
-      await expect
-        .poll(
-          () => {
-            try {
-              rmSync(folderA.dir, { recursive: true })
-              return true
-            } catch {
-              return false
-            }
-          },
-          { timeout: 15000 },
-        )
-        .toBe(true)
-    } finally {
-      rmSync(folderA.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-      rmSync(folderB.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-    }
+      .toBe(true)
   })
 })
+
+function tmpFolder(dir: string): { dir: string; fsPath: string } {
+  return { dir, fsPath: dir.replace(/\\/g, '/') }
+}

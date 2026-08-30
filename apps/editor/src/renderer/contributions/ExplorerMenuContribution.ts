@@ -4,6 +4,11 @@ import {
   MenuId,
   MenuRegistry,
 } from '@universe-editor/platform'
+import {
+  AddFolderToFocusAction,
+  FocusOnFolderAction,
+  RemoveFolderFromFocusAction,
+} from '../actions/focusScopeActions.js'
 
 export class ExplorerMenuContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -171,6 +176,33 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
         command: 'workbench.files.action.refresh',
         group: '6_misc',
         order: 1,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: FocusOnFolderAction.ID,
+        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && !explorerResourceIsFocusFolder',
+        group: '7_focus',
+        order: 1,
+      }),
+    )
+    // Only once a focus set exists: with focus off, adding to it and focusing on
+    // it are the same operation, and offering both invites a coin flip.
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: AddFolderToFocusAction.ID,
+        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && !explorerResourceIsFocusFolder && focusScopeActive',
+        group: '7_focus',
+        order: 2,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: RemoveFolderFromFocusAction.ID,
+        when: 'explorerResourceIsFolder && !explorerResourceIsRoot && explorerResourceIsFocusFolder',
+        group: '7_focus',
+        order: 3,
       }),
     )
   }

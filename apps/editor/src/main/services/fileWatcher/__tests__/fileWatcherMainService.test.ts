@@ -683,3 +683,283 @@ describe('FileWatcherMainService re-subscribe coalescing', () => {
     expect(host.watch.mock.calls[1]?.[1]).toBe(otherRoot.fsPath)
   })
 })
+
+// Focus mode: `scopes` replaces the single recursive root with N subtree
+// subscriptions, coordinated through the SAME quiet window as the single-root
+// case — a per-target window would let concurrent changes land a mix of old and
+// new targets.
+describe('FileWatcherMainService focus scopes', () => {
+  let nextId: number
+  function createStubHost() {
+    nextId = 1
+    return {
+      allocateId: () => nextId++,
+      watch: vi.fn(async (_id: number, _dir: string, _ignore: readonly string[]) => {}),
+      unwatch: vi.fn(async (_id: number) => {}),
+      onFileEvents: new Emitter<never>().event,
+      onWatchError: new Emitter<never>().event,
+      onDidRestart: new Emitter<void>().event,
+    }
+  }
+
+  let host: ReturnType<typeof createStubHost>
+  let svc: FileWatcherMainService
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    host = createStubHost()
+    svc = new FileWatcherMainService(host as unknown as WatcherProcessClient)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+    vi.useRealTimers()
+  })
+
+  const root = URI.file('/w/root')
+  const client = URI.file('/w/root/Client')
+  const server = URI.file('/w/root/Server')
+
+  /** Sorted (dir, id) pairs of the watch calls made since `from`. */
+  function watchTargets(from = 0): string[] {
+    return host.watch.mock.calls
+      .slice(from)
+      .map((c) => String(c[1]))
+      .sort()
+  }
+
+  it('subscribes one target per scope instead of the root', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    expect(host.watch).toHaveBeenCalledTimes(2)
+    expect(watchTargets()).toEqual([client.fsPath, server.fsPath].sort())
+    expect(host.watch.mock.calls.some((c) => c[1] === root.fsPath)).toBe(false)
+  })
+
+  it('gives the first target the stable primary id so crash replay is unchanged', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    const ids = host.watch.mock.calls.map((c) => c[0])
+    expect(ids).toContain(1) // allocated in the constructor
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('collapses a scope nested inside another into the shallower one', async () => {
+    await svc.watch(root, { scopes: [client, URI.file('/w/root/Client/Sub')] })
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    expect(host.watch.mock.calls[0]?.[1]).toBe(client.fsPath)
+  })
+
+  it('falls back to the root when a scope IS the root', async () => {
+    await svc.watch(root, { scopes: [root] })
+    expect(host.watch).toHaveBeenCalledTimes(1)
+    expect(host.watch.mock.calls[0]?.[1]).toBe(root.fsPath)
+  })
+
+  it('drops scopes outside the workspace rather than widening the watch', async () => {
+    await svc.watch(root, { scopes: [client, URI.file('/elsewhere')] })
+    expect(watchTargets()).toEqual([client.fsPath])
+  })
+
+  it('dedupes an identical plan against the live subscription', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    await svc.watch(root, { scopes: [server, client] }) // same set, different order
+    expect(host.watch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reuses surviving ids and releases only the dropped target', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    const keptId = host.watch.mock.calls.find((c) => c[1] === client.fsPath)?.[0]
+    const droppedId = host.watch.mock.calls.find((c) => c[1] === server.fsPath)?.[0]
+    const before = host.watch.mock.calls.length
+
+    const narrowed = svc.watch(root, { scopes: [client] })
+    await vi.advanceTimersByTimeAsync(500)
+    await narrowed
+
+    expect(host.unwatch.mock.calls.map((c) => c[0])).toEqual([droppedId])
+    // The surviving target keeps its id across the re-subscribe.
+    expect(host.watch.mock.calls.slice(before).map((c) => c[0])).toEqual([keptId])
+  })
+
+  it('routes events from every subscribed id, not just the primary', async () => {
+    const fileEvents = new Emitter<{
+      id: number
+      events: readonly { path: string; type: 'create' | 'update' | 'delete' }[]
+    }>()
+    const multiHost = {
+      ...createStubHost(),
+      onFileEvents: fileEvents.event,
+    }
+    const multiSvc = new FileWatcherMainService(multiHost as unknown as WatcherProcessClient)
+    try {
+      await multiSvc.watch(root, { scopes: [client, server] })
+      const ids = multiHost.watch.mock.calls.map((c) => c[0] as number)
+      const batches: IFileChangeEvent[] = []
+      const sub = multiSvc.onDidChangeFiles((b) => batches.push(...b))
+      for (const id of ids) {
+        fileEvents.fire({ id, events: [{ path: `/w/root/x-${id}.txt`, type: 'create' }] })
+      }
+      multiSvc._flushForTests()
+      sub.dispose()
+      expect(batches.length).toBe(ids.length)
+    } finally {
+      multiSvc.dispose()
+    }
+  })
+
+  it('arms a non-recursive root watch only when includeRootFiles is set', async () => {
+    // fs.watch on a non-existent dir is caught and warned; what matters here is
+    // that the plan (not the realized watcher) drives dedupe, so a repeat call
+    // with the same intent must not re-subscribe.
+    await svc.watch(root, { scopes: [client], includeRootFiles: true })
+    const before = host.watch.mock.calls.length
+    await svc.watch(root, { scopes: [client], includeRootFiles: true })
+    expect(host.watch).toHaveBeenCalledTimes(before)
+  })
+
+  it('treats a change to includeRootFiles as a different plan', async () => {
+    await svc.watch(root, { scopes: [client] })
+    void svc.watch(root, { scopes: [client], includeRootFiles: true })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(host.watch).toHaveBeenCalledTimes(2)
+  })
+
+  it('supersedes a pending scope change with a later one, landing only the last', async () => {
+    await svc.watch(root, { scopes: [client] })
+    const before = host.watch.mock.calls.length
+    // Two concurrent changes inside one quiet window: the second must fully
+    // replace the first, never land a mix of both plans.
+    let firstLanded = false
+    const first = svc.watch(root, { scopes: [server] }).then(() => {
+      firstLanded = true
+    })
+    const second = svc.watch(root, { scopes: [client, server] })
+    await vi.advanceTimersByTimeAsync(500)
+    await first
+    await second
+    // A superseded waiter still resolves — its intent was replaced, which
+    // satisfies watch()'s contract.
+    expect(firstLanded).toBe(true)
+    expect(watchTargets(before)).toEqual([client.fsPath, server.fsPath].sort())
+  })
+
+  it('coalesces an exclude storm during focus mode into one re-subscribe per target', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    const before = host.watch.mock.calls.length
+    await svc.setExcludes(['**/b/**'])
+    await svc.setExcludes(['**/c/**'])
+    expect(host.watch).toHaveBeenCalledTimes(before)
+    await vi.advanceTimersByTimeAsync(500)
+    const after = host.watch.mock.calls.slice(before)
+    expect(after.length).toBe(2)
+    expect(watchTargets(before)).toEqual([client.fsPath, server.fsPath].sort())
+    for (const call of after) expect(call[2]).toEqual(['**/c', '**/c/**'])
+  })
+
+  it('unwatch releases every id armed in focus mode', async () => {
+    await svc.watch(root, { scopes: [client, server] })
+    const armed = new Set(host.watch.mock.calls.map((c) => c[0]))
+    await svc.unwatch()
+    const released = new Set(host.unwatch.mock.calls.map((c) => c[0]))
+    for (const id of armed) expect(released.has(id)).toBe(true)
+  })
+
+  it('routes an in-workspace folder interest into the plan, not an in-main fs.watch', async () => {
+    // Focus hides Other/, but an extension that declared interest in it (git's
+    // working-tree watcher over the whole repo) must keep getting its events.
+    // It has to arrive as another host subscription: an in-main recursive
+    // fs.watch on a workspace subtree would be unfiltered by excludes and is
+    // exactly the shape the out-of-process watcher exists to avoid.
+    const other = URI.file('/w/root/Other')
+    await svc.watch(root, { scopes: [client], excludes: ['c'] })
+    expect(watchTargets()).toEqual([client.fsPath])
+
+    const from = host.watch.mock.calls.length
+    const declared = svc.addOutOfWorkspaceFolder(other)
+    await vi.advanceTimersByTimeAsync(500)
+    await declared
+
+    expect(svc._extraFolderWatcherCount).toBe(0)
+    expect(watchTargets(from)).toEqual([client.fsPath, other.fsPath].sort())
+    // Excludes still apply to it, unlike the fs.watch path.
+    for (const call of host.watch.mock.calls.slice(from)) {
+      expect(call[2]).toEqual(['c'])
+    }
+  })
+
+  it('drops the interest target again once the interest is released', async () => {
+    const other = URI.file('/w/root/Other')
+    await svc.watch(root, { scopes: [client] })
+    const added = svc.addOutOfWorkspaceFolder(other)
+    await vi.advanceTimersByTimeAsync(500)
+    await added
+    expect(watchTargets(host.watch.mock.calls.length - 2)).toContain(other.fsPath)
+
+    const from = host.watch.mock.calls.length
+    const removed = svc.removeOutOfWorkspaceFolder(other)
+    await vi.advanceTimersByTimeAsync(500)
+    await removed
+    // Back to the focus scope alone — the interest must not become permanent.
+    expect(watchTargets(from)).toEqual([client.fsPath])
+  })
+
+  it('keeps genuinely out-of-workspace folders on their own fs.watch', async () => {
+    // Real dirs: the out-of-workspace path arms a genuine fs.watch, which needs
+    // the path (or at least its parent) to exist.
+    vi.useRealTimers()
+    const realRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-focus-'))
+    const outside = await fs.mkdtemp(join(tmpdir(), 'universe-editor-outside-'))
+    await fs.mkdir(join(realRoot, 'Client', 'Deep'), { recursive: true })
+    try {
+      await svc.watch(URI.file(realRoot), { scopes: [URI.file(join(realRoot, 'Client'))] })
+      await svc.addOutOfWorkspaceFolder(URI.file(outside))
+      expect(svc._extraFolderWatcherCount).toBe(1)
+      // A path already inside a live target needs nothing at all.
+      await svc.addOutOfWorkspaceFolder(URI.file(join(realRoot, 'Client', 'Deep')))
+      expect(svc._extraFolderWatcherCount).toBe(1)
+    } finally {
+      await svc.unwatch()
+      await fs.rm(realRoot, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('releases an id whose watch threw, so crash replay cannot resurrect it', async () => {
+    // The client records a subscription as desired BEFORE it can fail, so a
+    // watch that throws leaves an entry the service no longer tracks — a host
+    // restart would replay it as an orphan subscription.
+    host.watch.mockImplementation(async (_id: number, dir: string) => {
+      if (dir === server.fsPath) throw new Error('parcel refused')
+    })
+    await svc.watch(root, { scopes: [client, server] })
+
+    const failedId = host.watch.mock.calls.find((c) => c[1] === server.fsPath)?.[0]
+    expect(failedId).toBeDefined()
+    expect(host.unwatch.mock.calls.map((c) => c[0])).toContain(failedId)
+    // The target that did land is untouched.
+    expect(host.unwatch.mock.calls.map((c) => c[0])).not.toContain(
+      host.watch.mock.calls.find((c) => c[1] === client.fsPath)?.[0],
+    )
+  })
+
+  it('releases what it armed when an unwatch lands mid-subscribe', async () => {
+    // `_subscribe` arms one target at a time, so an unwatch can slip between
+    // them. Whatever the interrupted pass already armed is nothing this window
+    // tracks anymore, so it must release it rather than leave host subscriptions
+    // (and crash-replay entries) behind.
+    let unwatchDuringSubscribe: Promise<void> | undefined
+    host.watch.mockImplementation(async (_id: number, dir: string) => {
+      if (dir === client.fsPath && !unwatchDuringSubscribe) {
+        unwatchDuringSubscribe = svc.unwatch()
+      }
+    })
+    await svc.watch(root, { scopes: [client, server] })
+    await unwatchDuringSubscribe
+
+    // The second scope never got armed; the first one did and must be released.
+    const armed = host.watch.mock.calls.map((c) => c[1])
+    expect(armed).toContain(client.fsPath)
+    const released = new Set(host.unwatch.mock.calls.map((c) => c[0]))
+    const clientId = host.watch.mock.calls.find((c) => c[1] === client.fsPath)?.[0]
+    expect(released.has(clientId as number)).toBe(true)
+  })
+})

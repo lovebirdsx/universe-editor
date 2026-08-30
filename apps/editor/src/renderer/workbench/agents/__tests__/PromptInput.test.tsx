@@ -91,6 +91,8 @@ import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import {
   AcpChatWidgetService,
@@ -387,6 +389,7 @@ function renderWithServices(
   services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IConfigurationService, opts.config ?? stubConfigurationService)
   services.set(IDialogService, opts.dialog ?? stubDialogService)
   services.set(IAcpPromptHistoryService, stubHistoryService)

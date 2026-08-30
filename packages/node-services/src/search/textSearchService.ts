@@ -81,7 +81,7 @@ interface RgMessage {
 }
 
 interface RunningSearch {
-  readonly process: ManagedChildProcess
+  readonly processes: Set<ManagedChildProcess>
   cancelled: boolean
   killedForLimit: boolean
 }
@@ -92,13 +92,16 @@ function reviveUri(value: URI | UriComponents | string): URI {
   return URI.revive(value) as URI
 }
 
-function buildRgArgs(query: ITextSearchMainQuery): string[] {
+export function buildRgArgs(query: ITextSearchMainQuery): string[] {
   const args = ['--hidden', '--no-require-git', '--no-ignore', '--no-ignore-global', '--json']
   args.push('--follow')
   args.push(query.matchCase ? '--case-sensitive' : '--ignore-case')
   args.push('--crlf')
   args.push('--threads', String(resolveSearchThreads(query.threads)))
   args.push('--max-filesize', String(query.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES))
+  if (query.maxDepth !== undefined) {
+    args.push('--max-depth', String(query.maxDepth))
+  }
 
   for (const include of query.includes.flatMap(expandIncludeGlob)) {
     args.push('-g', include)
@@ -122,7 +125,9 @@ function buildRgArgs(query: ITextSearchMainQuery): string[] {
   if (!query.matchWholeWord && !query.isRegex) {
     args.push(query.pattern)
   }
-  args.push('.')
+  // 多个位置参数一次 spawn：rg 输出的 path 相对 cwd，解析无需感知扫描范围。
+  const scanPaths = query.scanPaths && query.scanPaths.length > 0 ? [...query.scanPaths] : ['.']
+  args.push(...scanPaths)
   return args
 }
 
@@ -273,27 +278,17 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
         `threads=${resolveSearchThreads(query.threads)}`,
     )
 
-    const child = new ManagedChildProcess(
-      spawn(rgDiskPath, args, { cwd: root.fsPath, windowsHide: true }),
-      {
-        logger: this._logger,
-        label: query.sessionId,
-      },
-    )
     const running: RunningSearch = {
-      process: child,
+      processes: new Set(),
       cancelled: false,
       killedForLimit: false,
     }
     this._sessions.set(query.sessionId, running)
 
-    const decoder = new StringDecoder('utf8')
     const results = new Map<string, IFileMatch>()
     const fileMatchCounts = new Map<string, number>()
     const maxResults = query.maxResults ?? DEFAULT_MAX_RESULTS
     const maxMatchesPerFile = query.maxMatchesPerFile ?? DEFAULT_MAX_MATCHES_PER_FILE
-    let remainder = ''
-    let stderr = ''
     let filesScanned = 0
     let totalMatches = 0
     let limitHit: SearchLimitHit | undefined
@@ -340,7 +335,7 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
 
     const stopForLimit = (): void => {
       running.killedForLimit = true
-      child.kill()
+      for (const process of running.processes) process.kill()
     }
 
     const addMatch = (data: RgMatchData): void => {
@@ -409,93 +404,135 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
       if (message.type === 'match') {
         addMatch(message.data as RgMatchData)
       } else if (message.type === 'summary') {
-        filesScanned = (message.data as RgSummaryData | undefined)?.stats?.searches ?? filesScanned
+        filesScanned += (message.data as RgSummaryData | undefined)?.stats?.searches ?? 0
       }
     }
 
-    const handleData = (chunk: string): void => {
-      const data = remainder + chunk
-      const lines = data.split(/\r?\n/)
-      remainder = lines.pop() ?? ''
-      for (const line of lines) handleLine(line.trim())
-    }
-
-    return await new Promise<ITextSearchMainComplete>((resolve, reject) => {
-      const listeners = new DisposableStore()
-      listeners.add(child.onStdout((data: Buffer) => handleData(decoder.write(data))))
-      listeners.add(
-        child.onStderr((data: Buffer) => {
-          const next = data.toString()
-          if (stderr.length + next.length < STDERR_LIMIT) stderr += next
-        }),
-      )
-      listeners.add(
-        child.onDidExit((exit) => {
-          this._sessions.delete(query.sessionId)
-          listeners.dispose()
-          child.dispose()
-          if (exit.error !== undefined) {
-            reject(new Error(exit.error))
-            return
-          }
-          const code = exit.code
-          handleData(decoder.end())
-          if (remainder.trim().length > 0) {
-            handleLine(remainder.trim())
-            remainder = ''
-          }
-          const durationMs = Date.now() - startedAt
-          const progress = progressOf(
-            Math.max(filesScanned, results.size),
-            results.size,
-            totalMatches,
-            limitHit,
-          )
-          emitProgress(true)
-
-          this._logger.info(
-            `textSearch finished files=${progress.filesScanned} matched=${progress.filesMatched} ` +
-              `matches=${progress.totalMatches} limit=${progress.limitHit ?? 'none'} ` +
-              `cancelled=${running.cancelled} ms=${durationMs}`,
-          )
-
-          if (!running.cancelled && !running.killedForLimit && code !== 0 && code !== 1) {
-            const fatal = rgErrorMsgForDisplay(stderr)
-            if (fatal !== undefined) {
-              reject(new Error(fatal))
+    // 一次 spawn 跑完所有 scanPaths（rg 原生多位置参数）；聚焦且 showRootFiles
+    // 时根的直接文件在任何 scan path 之外，补一次浅层扫描（毫秒级）合并结果。
+    // 顺序执行让 limit 状态自然共享：主扫描先占额度，根扫描随后。
+    const runChild = (childArgs: string[], label: string): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const child = new ManagedChildProcess(
+          spawn(rgDiskPath, childArgs, { cwd: root.fsPath, windowsHide: true }),
+          {
+            logger: this._logger,
+            label: `${query.sessionId}:${label}`,
+          },
+        )
+        running.processes.add(child)
+        const decoder = new StringDecoder('utf8')
+        let remainder = ''
+        let stderr = ''
+        const handleData = (chunk: string): void => {
+          const data = remainder + chunk
+          const lines = data.split(/\r?\n/)
+          remainder = lines.pop() ?? ''
+          for (const line of lines) handleLine(line.trim())
+        }
+        const listeners = new DisposableStore()
+        listeners.add(child.onStdout((data: Buffer) => handleData(decoder.write(data))))
+        listeners.add(
+          child.onStderr((data: Buffer) => {
+            const next = data.toString()
+            if (stderr.length + next.length < STDERR_LIMIT) stderr += next
+          }),
+        )
+        listeners.add(
+          child.onDidExit((exit) => {
+            running.processes.delete(child)
+            listeners.dispose()
+            child.dispose()
+            if (exit.error !== undefined) {
+              reject(new Error(exit.error))
               return
             }
-            // Non-fatal exit (e.g. an unreadable path or broken symlink): the
-            // rest of the tree was searched, so keep the results and only log.
-            if (stderr.trim().length > 0) {
-              this._logger.warn(
-                `textSearch ignored non-fatal rg exit code=${code}: ` +
-                  errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`),
-              )
+            const code = exit.code
+            handleData(decoder.end())
+            if (remainder.trim().length > 0) {
+              handleLine(remainder.trim())
+              remainder = ''
             }
-          }
+            if (!running.cancelled && !running.killedForLimit && code !== 0 && code !== 1) {
+              const fatal = rgErrorMsgForDisplay(stderr)
+              if (fatal !== undefined) {
+                reject(new Error(fatal))
+                return
+              }
+              // Non-fatal exit (e.g. an unreadable path or broken symlink): the
+              // rest of the tree was searched, so keep the results and only log.
+              if (stderr.trim().length > 0) {
+                this._logger.warn(
+                  `textSearch ignored non-fatal rg exit code=${code}: ` +
+                    errorMessageFromRipgrep(stderr, `ripgrep exited with code ${code}`),
+                )
+              }
+            }
+            resolve()
+          }),
+        )
+      })
 
-          resolve({
-            results: [...results.values()],
-            progress,
-            durationMs,
-          })
+    const spawns: { args: string[]; label: string }[] = [{ args, label: 'scan' }]
+    if (query.rootFilesInScope === true && (query.scanPaths?.length ?? 0) > 0) {
+      spawns.push({
+        args: buildRgArgs({
+          ...query,
+          pattern,
+          scanPaths: [],
+          rootFilesInScope: false,
+          maxDepth: 1,
         }),
-      )
-    })
+        label: 'rootFiles',
+      })
+    }
+
+    let searchError: Error | undefined
+    for (const spawnSpec of spawns) {
+      if (running.cancelled || running.killedForLimit) break
+      try {
+        await runChild(spawnSpec.args, spawnSpec.label)
+      } catch (err) {
+        searchError = err as Error
+        break
+      }
+    }
+    this._sessions.delete(query.sessionId)
+
+    const durationMs = Date.now() - startedAt
+    const progress = progressOf(
+      Math.max(filesScanned, results.size),
+      results.size,
+      totalMatches,
+      limitHit,
+    )
+    emitProgress(true)
+
+    this._logger.info(
+      `textSearch finished files=${progress.filesScanned} matched=${progress.filesMatched} ` +
+        `matches=${progress.totalMatches} limit=${progress.limitHit ?? 'none'} ` +
+        `cancelled=${running.cancelled} ms=${durationMs}`,
+    )
+
+    if (searchError !== undefined) throw searchError
+    return {
+      results: [...results.values()],
+      progress,
+      durationMs,
+    }
   }
 
   async cancel(sessionId: string): Promise<void> {
     const session = this._sessions.get(sessionId)
     if (!session) return
     session.cancelled = true
-    session.process.kill()
+    for (const process of session.processes) process.kill()
   }
 
   override dispose(): void {
     for (const session of this._sessions.values()) {
       session.cancelled = true
-      session.process.dispose()
+      for (const process of session.processes) process.dispose()
     }
     this._sessions.clear()
     super.dispose()

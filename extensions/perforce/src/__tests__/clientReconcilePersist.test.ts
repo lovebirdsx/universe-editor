@@ -1,12 +1,14 @@
 /**
  * The "changes to reconcile" group persists across sessions and supports
- * permanently dismissing entries ("move out of the list"). This locks in four
- * behaviours:
+ * permanently dismissing entries ("move out of the list"), and respects the
+ * reconcile discovery scope (focus folders). This locks in the behaviours:
  *  1. Moving a file out of a changelist re-scans only that path — never a full
  *     `reconcile -n //...` (or folder-scope) walk (the large-depot slowdown).
  *  2. A dismissed file stays out of the group even after a full Clean Refresh.
  *  3. Restoring at startup renders the persisted list WITHOUT any `reconcile -n`.
  *  4. Collecting a previously dismissed file re-includes it (drops the dismissal).
+ *  5. A narrowed scope turns into multiple p4 filespecs (nested ones collapsed),
+ *     and paths outside it never enter the group, whatever produced them.
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -83,6 +85,8 @@ function memStore(initial?: ReconcilePersistState): ReconcileStore & {
 interface RespondOptions {
   /** Reconcile candidates returned by any `reconcile -n` scan (as client-syntax rows). */
   reconcile?: () => { rel: string; action?: string }[]
+  /** stderr + non-zero exit for `reconcile -n`, alongside whatever `reconcile` returns. */
+  reconcileError?: () => { stderr: string } | undefined
   /** Opened files reported by `p4 opened` (client-syntax rows). */
   opened?: () => { rel: string; action?: string; change?: string }[]
   /** Pending changelists reported by `p4 changes -s pending`. `shelved: true`
@@ -98,8 +102,9 @@ function respond(opts: RespondOptions = {}): void {
     calls.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {
-      const { stdout, exit } = handle(argv, opts)
+      const { stdout, stderr, exit } = handle(argv, opts)
       if (stdout) child.stdout.emit('data', Buffer.from(stdout))
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr))
       child.emit('close', exit ?? 0)
     })
     return child
@@ -119,7 +124,10 @@ function subcommand(argv: string[]): string | undefined {
   return undefined
 }
 
-function handle(argv: string[], opts: RespondOptions): { stdout: string; exit?: number } {
+function handle(
+  argv: string[],
+  opts: RespondOptions,
+): { stdout: string; stderr?: string; exit?: number } {
   const cmd = subcommand(argv)
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName bob\n\n` }
@@ -170,6 +178,8 @@ function handle(argv: string[], opts: RespondOptions): { stdout: string; exit?: 
         }),
       )
       .join('\n')
+    const err = opts.reconcileError?.()
+    if (err) return { stdout, stderr: err.stderr, exit: 1 }
     return { stdout }
   }
   // revert -k / reconcile (real) / clean — succeed silently.
@@ -571,5 +581,163 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     const scans = reconcileScans()
     expect(scans).toHaveLength(1)
     expect(scans[0]).toContain(`${LOCAL}/b.txt`)
+  })
+})
+
+describe('PerforceClient reconcile scope', () => {
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    calls.length = 0
+    createdGroups.length = 0
+  })
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('expands multiple scopes as separate filespecs on a full scan', async () => {
+    const store = memStore()
+    const client = await makeClient(store)
+    calls.length = 0
+
+    client.setReconcileScope([`${LOCAL}/Client`, `${LOCAL}/Server`])
+    await client.refresh({ reconcile: true })
+
+    const scans = reconcileScans()
+    expect(scans).toHaveLength(1)
+    expect(scans[0]).toContain(`${LOCAL}/Client/...`)
+    expect(scans[0]).toContain(`${LOCAL}/Server/...`)
+    expect(scans[0]).not.toContain('//...')
+  })
+
+  it('collapses a scope nested under another, either input order', async () => {
+    const store = memStore()
+    const client = await makeClient(store)
+    calls.length = 0
+
+    client.setReconcileScope([`${LOCAL}/Client`, `${LOCAL}/Client/Tools`])
+    await client.refresh({ reconcile: true })
+    expect(reconcileScans()[0]).toContain(`${LOCAL}/Client/...`)
+    expect(reconcileScans()[0]).not.toContain(`${LOCAL}/Client/Tools/...`)
+
+    calls.length = 0
+    client.setReconcileScope([`${LOCAL}/Client/Tools`, `${LOCAL}/Client`])
+    await client.refresh({ reconcile: true })
+    expect(reconcileScans()[0]).toContain(`${LOCAL}/Client/...`)
+    expect(reconcileScans()[0]).not.toContain(`${LOCAL}/Client/Tools/...`)
+  })
+
+  it('accepts a single folder string and turns it into one filespec', async () => {
+    const store = memStore()
+    const client = await makeClient(store)
+    calls.length = 0
+
+    client.setReconcileScope(LOCAL)
+    await client.refresh({ reconcile: true })
+
+    expect(reconcileScans()[0]).toContain(`${LOCAL}/...`)
+  })
+
+  it('restores the whole-client scope on undefined or an empty list', async () => {
+    const store = memStore()
+    const client = await makeClient(store)
+    calls.length = 0
+
+    client.setReconcileScope(undefined)
+    await client.refresh({ reconcile: true })
+    expect(reconcileScans()[0]).toContain('//...')
+
+    calls.length = 0
+    client.setReconcileScope([])
+    await client.refresh({ reconcile: true })
+    expect(reconcileScans()[0]).toContain('//...')
+  })
+
+  // The scope funnel in _setReconcileFiles is the single write path, so a file
+  // the watcher reported (and the scan re-confirmed) still stays out of the
+  // group when it sits outside the scope.
+  it('keeps a watcher-reported path outside the scope out of the group', async () => {
+    const store = memStore()
+    const client = await makeClient(store, { reconcile: () => [{ rel: 'outside.txt' }] })
+    client.setReconcileScope([`${LOCAL}/Client`])
+    calls.length = 0
+
+    await client.refreshReconcilePaths([`${LOCAL}/outside.txt`])
+
+    expect(reconcileScans()).toHaveLength(1)
+    expect(client.status.reconcileCount).toBe(0)
+  })
+
+  it('drops already-listed entries the moment the scope narrows', async () => {
+    const store = memStore()
+    const client = await makeClient(store, {
+      reconcile: () => [{ rel: 'Client/a.txt' }, { rel: 'outside.txt' }],
+    })
+    // Populate the group under the whole-client scope.
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(2)
+    calls.length = 0
+
+    // Narrowing re-filters the rendered group right away — waiting for the next
+    // refresh would leave out-of-scope rows visible after the user narrowed focus.
+    client.setReconcileScope([`${LOCAL}/Client`])
+
+    expect(client.status.reconcileCount).toBe(1)
+    expect(reconcileScans()).toHaveLength(0)
+    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
+    expect(states.some((s) => (s.resourceUri ?? '').includes('Client/a.txt'))).toBe(true)
+    expect(states.some((s) => (s.resourceUri ?? '').includes('outside.txt'))).toBe(false)
+  })
+
+  it('keeps the surviving scopes when one focus directory is gone from the workspace', async () => {
+    // One missing directory makes the whole multi-filespec invocation exit
+    // non-zero while p4 still reports the other scopes. Discarding the parsed
+    // records would empty the group on every refresh until that directory came
+    // back — the user would see "no changes to collect" with changes pending.
+    const store = memStore()
+    const client = await makeClient(store, {
+      reconcile: () => [{ rel: 'Client/a.txt' }],
+      reconcileError: () => ({ stderr: `${LOCAL}/Server/... - no such file(s).\n` }),
+    })
+    client.setReconcileScope([`${LOCAL}/Client`, `${LOCAL}/Server`])
+
+    await client.refresh({ reconcile: true })
+
+    expect(client.status.reconcileCount).toBe(1)
+    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
+    expect(states.some((s) => (s.resourceUri ?? '').includes('Client/a.txt'))).toBe(true)
+  })
+
+  it('still empties the group when the scan reports nothing at all', async () => {
+    const store = memStore()
+    const client = await makeClient(store, {
+      reconcile: () => [{ rel: 'Client/a.txt' }],
+    })
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(1)
+
+    // Now every scope is missing: no records, so there is nothing to keep.
+    respond({
+      reconcile: () => [],
+      reconcileError: () => ({ stderr: `${LOCAL}/Client/... - no such file(s).\n` }),
+    })
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(0)
+  })
+
+  it('does not re-render when the scope is set to the same dirs again', async () => {
+    const store = memStore()
+    const client = await makeClient(store, { reconcile: () => [{ rel: 'Client/a.txt' }] })
+    client.setReconcileScope([`${LOCAL}/Client`])
+    await client.refresh({ reconcile: true })
+    expect(client.status.reconcileCount).toBe(1)
+
+    let changes = 0
+    client.onDidChange(() => {
+      changes++
+    })
+    client.setReconcileScope([`${LOCAL}/Client/`]) // same dir, trailing slash
+    expect(changes).toBe(0)
+    expect(client.status.reconcileCount).toBe(1)
   })
 })

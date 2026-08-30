@@ -9,7 +9,9 @@
  *  - write()/setValue() suppress the watcher's own rename event, then fire an
  *    explicit { source: 'self' } change so open editors reload while config-layer
  *    subscribers (which already hold the value) skip a redundant re-read.
- *  - Writes are atomic (temp file + rename) so readers never see partial JSON.
+ *  - Writes are atomic (temp file + rename) so readers never see partial JSON,
+ *    and serialized per file so concurrent writers can't clobber each other —
+ *    see the `enqueue` comment for the race this closes.
  *--------------------------------------------------------------------------------------------*/
 
 import { app } from 'electron'
@@ -72,6 +74,49 @@ async function retryTransient<T>(op: () => Promise<T>, attempts = 5, baseDelayMs
   throw lastErr
 }
 
+/**
+ * Monotonic tmp-file discriminator. The pid alone is not enough: two writers in
+ * one process racing inside the same millisecond used to derive the same tmp
+ * name, so one would rename it into place and the other's rename then failed
+ * with ENOENT (which retryTransient rightly does not retry — the file is gone).
+ */
+let tmpSeq = 0
+
+/** In-flight write chain per absolute file path. See {@link enqueue}. */
+const writeQueues = new Map<string, Promise<void>>()
+
+/**
+ * Serialize a whole read-modify-write against one file.
+ *
+ * Two callers reaching setValue() concurrently is routine, not exotic: a single
+ * programmatic write of two configuration keys fires two synchronous
+ * configuration events, and the persistence sync reacts to each without
+ * awaiting the previous one. Unserialized, both read the same original text,
+ * each applies only its own edit, and the second rename silently drops the
+ * first key. Queueing on the path makes the second read observe the first
+ * write. Mirrors the aiSettings.json funnel (see main/services/ai/aiSettingsFile.ts).
+ *
+ * A failed task must not poison the chain, hence the `catch` on the link the
+ * next caller waits for — the rejection still reaches that task's own caller.
+ */
+function enqueue<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const previous = writeQueues.get(path) ?? Promise.resolve()
+  const operation = previous.catch(() => undefined).then(task)
+  const tail = operation.then(
+    () => undefined,
+    () => undefined,
+  )
+  writeQueues.set(path, tail)
+  // Drop the entry once this is the last link, so the map does not accumulate
+  // one permanent entry per workspace visited in a long session. Guarded on
+  // identity: a caller that queued behind us has already replaced the tail, and
+  // deleting it then would let the next caller start without waiting.
+  void tail.then(() => {
+    if (writeQueues.get(path) === tail) writeQueues.delete(path)
+  })
+  return operation
+}
+
 function vscodeUserDir(): string {
   if (process.platform === 'win32') {
     const appdata = process.env['APPDATA'] ?? join(os.homedir(), 'AppData', 'Roaming')
@@ -131,6 +176,14 @@ interface RemoteSlot {
   readonly file: URI
   readonly dir: URI
 }
+
+/**
+ * A resolved backing store, captured before queueing so the location cannot
+ * change under an in-flight read-modify-write. See `_resolveTarget`.
+ */
+type WriteTarget =
+  | { readonly kind: 'local'; readonly slot: WatchSlot }
+  | { readonly kind: 'remote'; readonly slot: RemoteSlot }
 
 export class UserDataMainService extends Disposable implements IUserDataFilesService {
   declare readonly _serviceBrand: undefined
@@ -229,16 +282,9 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   async read(file: UserDataFile): Promise<string> {
-    const remote = this._remoteSlots.get(file)
-    if (remote) return this._readRemote(remote.file)
-    const slot = this._slots.get(file)
-    if (!slot) return ''
-    try {
-      return await retryTransient(() => fs.readFile(slot.fullPath, 'utf8'))
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
-      throw err
-    }
+    const target = this._resolveTarget(file)
+    if (!target) return ''
+    return this._readTarget(target)
   }
 
   async write(file: UserDataFile, content: string): Promise<void> {
@@ -251,7 +297,20 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         localize('userData.error.readOnly', 'UserData: {file} is read-only', { file }),
       )
     }
-    await this._write(file, content)
+    const target = this._resolveTarget(file)
+    if (!target) {
+      throw new Error(
+        localize(
+          'userData.error.noWorkspace',
+          'UserData: no workspace open (cannot write {file})',
+          { file },
+        ),
+      )
+    }
+    // Queued alongside setValue: a whole-file write interleaved into another
+    // caller's read-modify-write would be read as the "current" text and then
+    // overwritten by that caller's edit of the older text.
+    await this._serialized(target, () => this._write(file, target, content))
   }
 
   async setValue(
@@ -265,18 +324,53 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       file === UserDataFile.VSCodeKeybindings
     )
       return false
-    if (!this._slots.has(file) && !this._remoteSlots.has(file)) return false
-    let current = await this.read(file)
-    if (current === '') {
-      current = file === UserDataFile.Keybindings ? '[]\n' : '{}\n'
-    }
-    const edits = modify(current, jsonPath as (string | number)[], value, {
-      formattingOptions: FORMATTING,
+    const target = this._resolveTarget(file)
+    if (!target) return false
+    // The read must be inside the queue, not just the write: two callers that
+    // both read the pre-edit text each keep only their own key.
+    return this._serialized(target, async () => {
+      let current = await this._readTarget(target)
+      if (current === '') {
+        current = file === UserDataFile.Keybindings ? '[]\n' : '{}\n'
+      }
+      const edits = modify(current, jsonPath as (string | number)[], value, {
+        formattingOptions: FORMATTING,
+      })
+      const next = applyEdits(current, edits)
+      if (next === current) return true
+      await this._write(file, target, next)
+      return true
     })
-    const next = applyEdits(current, edits)
-    if (next === current) return true
-    await this._write(file, next)
-    return true
+  }
+
+  /**
+   * Where a UserDataFile currently lives. Resolved once per public call and
+   * carried through the whole read-modify-write: re-resolving inside the queued
+   * task would let a workspace switch or `relocate()` land mid-queue, writing one
+   * workspace's content into another's file and — because the queue key was
+   * derived from the old location — doing it concurrently with a newly queued
+   * writer.
+   */
+  private _resolveTarget(file: UserDataFile): WriteTarget | null {
+    const remote = this._remoteSlots.get(file)
+    if (remote) return { kind: 'remote', slot: remote }
+    const slot = this._slots.get(file)
+    if (slot) return { kind: 'local', slot }
+    return null
+  }
+
+  /**
+   * Run `task` with exclusive access to one backing store. Keyed on the resolved
+   * location, so the local and remote slots of one UserDataFile cannot share a
+   * queue by accident and two UserDataFiles pointing at one path cannot escape
+   * each other's.
+   *
+   * Only the public entry points queue; `_write` deliberately does not, so a
+   * queued task calling it does not wait on itself.
+   */
+  private _serialized<T>(target: WriteTarget, task: () => Promise<T>): Promise<T> {
+    const key = target.kind === 'remote' ? target.slot.file.toString() : target.slot.fullPath
+    return enqueue(key, task)
   }
 
   async getFileUri(file: UserDataFile): Promise<URI | null> {
@@ -406,27 +500,31 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._slots.delete(file)
   }
 
-  private async _write(file: UserDataFile, content: string): Promise<void> {
-    const remote = this._remoteSlots.get(file)
-    if (remote) {
+  private async _write(file: UserDataFile, target: WriteTarget, content: string): Promise<void> {
+    if (target.kind === 'remote') {
       const fileService = this._fileService
       if (!fileService) throw new Error('UserData: remote file service unavailable')
-      await fileService.createDirectory(remote.dir)
-      await fileService.writeFile(remote.file, content)
+      await fileService.createDirectory(target.slot.dir)
+      await fileService.writeFile(target.slot.file, content)
       this._onDidChangeFile.fire({ file, source: 'self' })
       return
     }
-    const slot = this._slots.get(file)
-    if (!slot) {
-      throw new Error(
-        localize(
-          'userData.error.noWorkspace',
-          'UserData: no workspace open (cannot write {file})',
-          { file },
-        ),
-      )
+    await this._atomicWrite(file, target.slot, content)
+  }
+
+  /** Read the captured target rather than re-resolving. See {@link _resolveTarget}. */
+  private async _readTarget(target: WriteTarget): Promise<string> {
+    if (target.kind === 'remote') return this._readRemote(target.slot.file)
+    return this._readLocal(target.slot)
+  }
+
+  private async _readLocal(slot: WatchSlot): Promise<string> {
+    try {
+      return await retryTransient(() => fs.readFile(slot.fullPath, 'utf8'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw err
     }
-    await this._atomicWrite(file, slot, content)
   }
 
   private async _readRemote(uri: URI): Promise<string> {
@@ -443,7 +541,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   private async _atomicWrite(file: UserDataFile, slot: WatchSlot, content: string): Promise<void> {
     slot.suppressUntil = Date.now() + SELF_WRITE_SUPPRESS_MS
     await fs.mkdir(slot.dir, { recursive: true })
-    const tmp = `${slot.fullPath}.${process.pid}.${Date.now()}.tmp`
+    const tmp = `${slot.fullPath}.${process.pid}.${tmpSeq++}.tmp`
     await fs.writeFile(tmp, content, 'utf8')
     try {
       await retryTransient(() => fs.rename(tmp, slot.fullPath))

@@ -36,6 +36,7 @@ export { EditorContextMenuContribution } from './EditorContextMenuContribution.j
 export { RemoteExplorerMenuContribution } from './RemoteExplorerMenuContribution.js'
 export { SettingsContribution } from './SettingsContribution.js'
 export { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
+export { FocusScopeStatusContribution } from './FocusScopeStatusContribution.js'
 export { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
 export { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 export { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'

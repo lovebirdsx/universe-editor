@@ -389,6 +389,43 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
 
     this._register(
       ConfigurationRegistry.registerConfiguration({
+        id: 'workspace',
+        // "Focus" rather than "Workspace": the Settings editor already has a
+        // Workspace *scope* tab, and a same-named group in the table of
+        // contents reads as the same thing. This group is only the focus keys.
+        title: localize('settings.workspace', 'Focus'),
+        properties: {
+          'workspace.focusEnabled': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.workspace.focusEnabled.description',
+              'Restrict the editor to the subfolders listed in `workspace.focusFolders`. Narrows the Explorer, search, Quick Open and file watching — a whitelist alternative to excluding noise folder by folder in a very large workspace.',
+            ),
+          },
+          'workspace.focusFolders': {
+            type: 'object',
+            default: {},
+            additionalProperties: { type: 'boolean' },
+            description: localize(
+              'settings.workspace.focusFolders.description',
+              'Workspace-relative folders to focus on, e.g. `{ "Client": true }`. Paths, not glob patterns — they are handed straight to the file scanner and watcher. Set an entry to false to cancel one inherited from a lower settings layer. Only takes effect when `workspace.focusEnabled` is on.',
+            ),
+          },
+          'workspace.focusShowRootFiles': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.workspace.focusShowRootFiles.description',
+              'Keep files sitting directly in the workspace root visible while focus mode is on. Folders leading to a focus folder are always shown, but their own files are hidden.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
         id: 'search',
         title: localize('settings.search', 'Search'),
         properties: {

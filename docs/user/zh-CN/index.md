@@ -57,6 +57,7 @@
 - [快速打开文件](./search-navigation/quick-open.md)
 - [符号与定义跳转](./search-navigation/symbols-and-definitions.md)
 - [历史导航](./search-navigation/history.md)
+- [聚焦目录](./search-navigation/focus-folders.md)
 
 ## 版本控制
 

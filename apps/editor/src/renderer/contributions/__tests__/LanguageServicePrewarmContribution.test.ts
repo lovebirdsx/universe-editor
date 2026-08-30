@@ -24,6 +24,7 @@ import {
 import { type IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
+import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
 
 function fileMatch(relativePath: string): IFileSearchMatch {
   const basename = relativePath.split('/').pop() ?? relativePath
@@ -78,6 +79,7 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
     workspace,
     client,
     fileSearch,
+    new FakeFocusScopeService(),
   )
 
   return { contribution, activations, onDidChangeContributions, onDidChangeWorkspace }

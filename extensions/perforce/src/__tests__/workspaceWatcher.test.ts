@@ -56,7 +56,6 @@ function createFakeWatcher() {
 function fakeClient(overrides: Record<string, unknown> = {}): PerforceClient {
   return {
     root: ROOT,
-    setReconcileScope: vi.fn(),
     refreshReconcilePaths: vi.fn(async () => undefined),
     dispose: () => undefined,
     ...overrides,
@@ -99,13 +98,12 @@ describe('isNoise', () => {
 })
 
 describe('WorkspaceWatchController', () => {
-  it('narrows the reconcile scope to the watched folder and arms the watcher', () => {
+  it('arms the watcher on the opened folder', () => {
     const { watcher, ...fake } = createFakeWatcher()
-    const { client, controller } = makeController(() => watcher)
+    const { controller } = makeController(() => watcher)
 
     controller.start(true, ROOT)
 
-    expect(client.setReconcileScope).toHaveBeenCalledWith(ROOT)
     expect(fake.isDisposed()).toBe(false)
   })
 

@@ -17,6 +17,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -163,6 +164,14 @@ interface ListingSpec {
   readonly excludes: readonly string[]
   readonly ignore: readonly string[]
   readonly maxDepth: number
+  readonly scanPaths: readonly string[]
+  readonly rootFilesInScope: boolean
+}
+
+interface RgCollectExit {
+  readonly code: number | null
+  readonly error?: string
+  readonly stderr: string
 }
 
 function fileListArgs(spec: ListingSpec): string[] {
@@ -187,6 +196,7 @@ function fileListArgs(spec: ListingSpec): string[] {
     if (!name) continue
     args.push('-g', `!**/${name}`, '-g', `!**/${name}/**`)
   }
+  if (spec.scanPaths.length > 0) args.push(...spec.scanPaths)
   return args
 }
 
@@ -196,6 +206,8 @@ function listingKey(spec: ListingSpec): string {
     excludes: [...spec.excludes].sort(),
     ignore: [...spec.ignore].sort(),
     maxDepth: spec.maxDepth,
+    scanPaths: [...spec.scanPaths].sort(),
+    rootFilesInScope: spec.rootFilesInScope,
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
 }
@@ -255,6 +267,8 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       excludes: query.excludes ?? [],
       ignore: query.ignore ?? [],
       maxDepth: query.maxDepth ?? DEFAULT_MAX_DEPTH,
+      scanPaths: query.scanPaths ?? [],
+      rootFilesInScope: query.rootFilesInScope === true,
     }
 
     let stopReason: StopReason | null = null
@@ -301,9 +315,25 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         deadlineAt,
         label: 'list',
       })
+      let lines = res.lines
+      let capped = res.capped
       stopReason = res.stopReason ?? (res.capped ? 'maxResults' : null)
-      filesWalked = res.lines.length
-      for (const line of res.lines) {
+      // 聚焦时根的直接文件在任何 scan path 之外，需要一次独立的浅层枚举补上。
+      if (spec.rootFilesInScope && spec.scanPaths.length > 0 && stopReason === null) {
+        const rootRes = await this._runRgLines({
+          args: fileListArgs({ ...spec, scanPaths: [], maxDepth: 1 }),
+          cwd: spec.rootFsPath,
+          cap: Math.max(0, maxResults - lines.length),
+          token,
+          deadlineAt,
+          label: 'rootFiles',
+        })
+        lines = [...lines, ...rootRes.lines]
+        capped = capped || rootRes.capped
+        stopReason = rootRes.stopReason ?? (rootRes.capped ? 'maxResults' : null)
+      }
+      filesWalked = lines.length
+      for (const line of lines) {
         const rel = normalizeRel(line)
         const abs = path.join(spec.rootFsPath, rel)
         scored.push({
@@ -317,7 +347,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       }
       // 清单被截断说明这是巨型工作区：renderer 之后的每次击键都会走打分兜底，
       // 提前把磁盘清单建好（后台，不阻塞本次调用）。
-      if (res.capped) this._kickBackgroundBuild(spec)
+      if (capped) this._kickBackgroundBuild(spec)
     } else if (pattern.length > 0) {
       const listing = await this._ensureListingForQuery(spec, token, deadlineAt)
       if (listing === 'canceled' || listing === 'timeout') {
@@ -514,32 +544,21 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         const tmpPath = path.join(this._cacheDir, `${entry.key}-${stamp}.building`)
         const finalPath = path.join(this._cacheDir, `${entry.key}-${stamp}.list`)
         const fh = await fs.open(tmpPath, 'w')
-        let stderr = ''
-        const exit = await new Promise<{ code: number | null; error?: string }>((resolve) => {
-          let child: ChildProcess
-          try {
-            child = spawn(rgDiskPath, fileListArgs(spec), {
-              cwd: spec.rootFsPath,
-              stdio: ['ignore', fh.fd, 'pipe'],
-              windowsHide: true,
-            })
-          } catch (err) {
-            resolve({ code: null, error: (err as Error).message })
-            return
-          }
-          this._procs.add(child)
-          child.stderr?.on('data', (data: Buffer) => {
-            if (stderr.length < STDERR_LIMIT) stderr += data.toString()
-          })
-          child.on('error', (err) => {
-            this._procs.delete(child)
-            resolve({ code: null, error: err.message })
-          })
-          child.on('exit', (code) => {
-            this._procs.delete(child)
-            resolve({ code })
-          })
-        })
+        const exit = await this._collectToFile(fh, fileListArgs(spec), spec.rootFsPath)
+        // 聚焦时根的直接文件在任何 scan path 之外：主清单写完后追加一次浅层枚举。
+        let rootExit: RgCollectExit | undefined
+        if (
+          exit.error === undefined &&
+          exit.code !== null &&
+          spec.rootFilesInScope &&
+          spec.scanPaths.length > 0
+        ) {
+          rootExit = await this._collectToFile(
+            fh,
+            fileListArgs({ ...spec, scanPaths: [], maxDepth: 1 }),
+            spec.rootFsPath,
+          )
+        }
         await fh.close()
         // code === null 意味着 spawn 失败或被 kill（dispose/部分退出）——清单不完整，
         // 绝不能当可用缓存落盘。rg 对个别不可读目录会以 code 2 退出但清单仍有效。
@@ -550,6 +569,12 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           }
           return null
         }
+        // 根文件补扫失败只丢根直接文件（数量极少），清单主体完整，仍可落盘。
+        if (rootExit !== undefined && (rootExit.error !== undefined || rootExit.code === null)) {
+          this._logger.warn(
+            `fileSearch root-files listing partial: ${rootExit.error ?? 'killed before exit'}`,
+          )
+        }
         await fs.rename(tmpPath, finalPath)
         const prev = entry.file
         entry.file = { filePath: finalPath, builtAt: Date.now() }
@@ -559,9 +584,9 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           `fileSearch listing built root=${spec.rootFsPath} bytes=${stat?.size ?? -1} ` +
             `exit=${exit.code} ms=${Date.now() - startedAt}`,
         )
-        if (exit.code !== 0 && exit.code !== 1 && stderr.trim().length > 0) {
+        if (exit.code !== 0 && exit.code !== 1 && exit.stderr.trim().length > 0) {
           this._logger.warn(
-            `fileSearch listing build partial (exit=${exit.code}): ${stderr.split('\n')[0]}`,
+            `fileSearch listing build partial (exit=${exit.code}): ${exit.stderr.split('\n')[0]}`,
           )
         }
         return entry.file
@@ -574,6 +599,39 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     })()
     entry.building = promise
     return promise
+  }
+
+  private _collectToFile(
+    fh: FileHandle,
+    args: readonly string[],
+    cwd: string,
+  ): Promise<RgCollectExit> {
+    return new Promise((resolve) => {
+      let child: ChildProcess
+      let stderr = ''
+      try {
+        child = spawn(rgDiskPath, args as string[], {
+          cwd,
+          stdio: ['ignore', fh.fd, 'pipe'],
+          windowsHide: true,
+        })
+      } catch (err) {
+        resolve({ code: null, error: (err as Error).message, stderr })
+        return
+      }
+      this._procs.add(child)
+      child.stderr?.on('data', (data: Buffer) => {
+        if (stderr.length < STDERR_LIMIT) stderr += data.toString()
+      })
+      child.on('error', (err) => {
+        this._procs.delete(child)
+        resolve({ code: null, error: err.message, stderr })
+      })
+      child.on('exit', (code) => {
+        this._procs.delete(child)
+        resolve({ code, stderr })
+      })
+    })
   }
 
   private async _sweepStaleListings(): Promise<void> {

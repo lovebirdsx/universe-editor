@@ -27,6 +27,8 @@ import { ExplorerTreeService } from '../ExplorerTreeService.js'
 import { incrementFileName } from '../explorerFileOperations.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 import { IFileClipboardService } from '../../../../shared/ipc/fileClipboardService.js'
 
 interface FakeFs extends IFileServiceType {
@@ -250,12 +252,15 @@ function makeInst(
   watcher: IFileWatcherServiceType,
   logger?: ILogger,
   fileClipboard?: IFileClipboardService,
+  focus?: IFocusScopeService,
+  exclude?: IExcludeService,
 ): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
   services.set(IFileWatcherService, watcher)
-  services.set(IExcludeService, new FakeExcludeService())
+  services.set(IExcludeService, exclude ?? new FakeExcludeService())
+  services.set(IFocusScopeService, focus ?? new FakeFocusScopeService())
   if (fileClipboard) {
     services.set(IFileClipboardService, fileClipboard)
   }
@@ -988,5 +993,121 @@ describe('ExplorerTreeService — compact folders', () => {
     fs.dirs.set(lib.toString(), [{ name: 'index.ts', isFile: true, isDirectory: false }])
     await tree.refresh(lib)
     expect(tree.getChildren(lib)?.some((e) => e.name === 'index.ts')).toBe(true)
+  })
+})
+
+describe('ExplorerTreeService — focus folders', () => {
+  const root = URI.file('/ws')
+  const client = URI.joinPath(root, 'Client')
+  const clientSub = URI.joinPath(client, 'Sub')
+  const tools = URI.joinPath(root, 'Tools')
+  const toolsEditor = URI.joinPath(tools, 'Editor')
+
+  function makeFocusFs() {
+    return makeFs({
+      [root.toString()]: [
+        { name: 'Client', isFile: false, isDirectory: true },
+        { name: 'Tools', isFile: false, isDirectory: true },
+        { name: 'Engine', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [client.toString()]: [
+        { name: 'client.txt', isFile: true, isDirectory: false },
+        { name: 'Sub', isFile: false, isDirectory: true },
+      ],
+      [clientSub.toString()]: [{ name: 'sub.txt', isFile: true, isDirectory: false }],
+      [tools.toString()]: [
+        { name: 'tools.txt', isFile: true, isDirectory: false },
+        { name: 'Editor', isFile: false, isDirectory: true },
+      ],
+      [toolsEditor.toString()]: [{ name: 'editor.ts', isFile: true, isDirectory: false }],
+      [URI.joinPath(root, 'Engine').toString()]: [
+        { name: 'engine.txt', isFile: true, isDirectory: false },
+      ],
+    })
+  }
+
+  function makeFocusInst(showRootFiles = true, exclude?: IExcludeService) {
+    const fs = makeFocusFs()
+    const focus = new FakeFocusScopeService(['Client', 'Tools/Editor'], root, showRootFiles)
+    const inst = makeInst(
+      fs,
+      new FakeWorkspaceService(root),
+      new FakeWatcher(),
+      undefined,
+      undefined,
+      focus,
+      exclude,
+    )
+    return { fs, focus, inst }
+  }
+
+  function childNames(tree: ExplorerTreeService, uri: URI): string[] {
+    return (tree.getChildren(uri) ?? []).map((c) => c.name)
+  }
+
+  it('keeps focus folders and their subtrees visible', async () => {
+    const { inst } = makeFocusInst()
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+
+    expect(childNames(tree, root)).toEqual(['Client', 'Tools', 'README.md'])
+    await tree.expand(client)
+    expect(childNames(tree, client)).toEqual(['Sub', 'client.txt'])
+    await tree.expand(clientSub)
+    expect(childNames(tree, clientSub)).toEqual(['sub.txt'])
+    await tree.expand(toolsEditor)
+    expect(childNames(tree, toolsEditor)).toEqual(['editor.ts'])
+  })
+
+  it('keeps skeleton directories visible but hides their direct files', async () => {
+    const { inst } = makeFocusInst()
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(tools)
+    // tools.txt sits directly in the skeleton dir Tools; only Editor survives.
+    expect(childNames(tree, tools)).toEqual(['Editor'])
+  })
+
+  it('hides unrelated top-level directories', async () => {
+    const { inst } = makeFocusInst()
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    expect(childNames(tree, root)).not.toContain('Engine')
+  })
+
+  it('shows root-level files by default and hides them when showRootFiles is off', async () => {
+    const visible = makeFocusInst().inst.createInstance(ExplorerTreeService)
+    await flush()
+    expect(childNames(visible, root)).toContain('README.md')
+
+    const hidden = makeFocusInst(false).inst.createInstance(ExplorerTreeService)
+    await flush()
+    expect(childNames(hidden, root)).toEqual(['Client', 'Tools'])
+  })
+
+  it('applies files.exclude independently of focus', async () => {
+    const exclude = new FakeExcludeService(new Set(['Client', 'Tools/Editor/editor.ts']))
+    const { inst } = makeFocusInst(true, exclude)
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+
+    // The whole focus folder Client is excluded → gone even though focused.
+    expect(childNames(tree, root)).toEqual(['Tools', 'README.md'])
+    // editor.ts is inside the focus folder Tools/Editor but excluded → hidden.
+    await tree.expand(toolsEditor)
+    expect(childNames(tree, toolsEditor)).toEqual([])
+  })
+
+  it('re-reads loaded directories when the focus scope changes', async () => {
+    const { fs, focus, inst } = makeFocusInst()
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    expect(childNames(tree, root)).toEqual(['Client', 'Tools', 'README.md'])
+
+    fs.calls.list.length = 0
+    focus.fireChange()
+    await flush()
+    expect(fs.calls.list).toContain(root.toString())
   })
 })

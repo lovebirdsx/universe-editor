@@ -34,10 +34,10 @@ test.describe('@p1 workspace settings UX', () => {
       void window.__E2E__!.runCommand('workbench.action.openWorkspaceSettings')
     })
 
-    await expect(workbench.page.getByRole('button', { name: 'User' })).toBeVisible({
+    await expect(workbench.page.getByTestId('settings-scope-tab-user')).toBeVisible({
       timeout: 5000,
     })
-    await expect(workbench.page.getByRole('button', { name: 'Workspace' })).toBeVisible({
+    await expect(workbench.page.getByTestId('settings-scope-tab-workspace')).toBeVisible({
       timeout: 5000,
     })
   })
@@ -52,13 +52,14 @@ test.describe('@p1 workspace settings UX', () => {
       .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
       .toMatch(/universe:\/settings/)
 
-    // Wait for the tab strip to render.
-    await expect(workbench.page.getByRole('button', { name: 'Workspace' })).toBeVisible({
-      timeout: 3000,
-    })
+    // Wait for the tab strip to render. Keyed by testid, not the accessible
+    // name: `getByRole(name)` matches substrings, so any settings *group*
+    // titled "Workspace …" in the table of contents collides with the tab.
+    const wsTab = workbench.page.getByTestId('settings-scope-tab-workspace')
+    await expect(wsTab).toBeVisible({ timeout: 3000 })
 
     // Click Workspace tab — no workspace is open, should show Info toast.
-    await workbench.page.getByRole('button', { name: 'Workspace' }).click()
+    await wsTab.click()
 
     await expect(
       workbench.page.locator('[data-testid="notification-toast-item"]').first(),
@@ -82,7 +83,7 @@ test.describe('@p1 workspace settings UX', () => {
       .toMatch(/universe:\/settings/)
 
     // Workspace tab should be active — check via aria-selected (stable across CSS module hashing).
-    const wsBtn = workbench.page.getByRole('button', { name: 'Workspace' })
+    const wsBtn = workbench.page.getByTestId('settings-scope-tab-workspace')
     await expect(wsBtn).toBeVisible({ timeout: 5000 })
     await expect(wsBtn).toHaveAttribute('aria-selected', 'true', { timeout: 3000 })
   })

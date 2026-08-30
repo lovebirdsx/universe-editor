@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clientToLocalPath, norm, uriToFsPath } from '../pathUtil.js'
+import { clientToLocalPath, isUnderAny, norm, scopeKey, uriToFsPath } from '../pathUtil.js'
 
 describe('uriToFsPath', () => {
   it('strips the leading slash before a Windows drive letter', () => {
@@ -23,6 +23,55 @@ describe('uriToFsPath', () => {
 describe('norm', () => {
   it('lower-cases the drive letter and forward-slashes', () => {
     expect(norm('D:\\Git\\Foo')).toBe('d:/Git/Foo')
+  })
+})
+
+describe('isUnderAny', () => {
+  it('matches a file under one of the dirs', () => {
+    expect(isUnderAny('C:/ws/Client/a.txt', ['C:/ws/Client'])).toBe(true)
+    expect(isUnderAny('C:/ws/Client', ['C:/ws/Client'])).toBe(true)
+  })
+
+  it('matches under any dir, not just the first', () => {
+    expect(isUnderAny('C:/ws/Other/x.txt', ['C:/ws/A', 'C:/ws/Other'])).toBe(true)
+  })
+
+  it('never matches on a bare prefix (Client must not match ClientTools)', () => {
+    expect(isUnderAny('C:/ws/ClientTools/a.txt', ['C:/ws/Client'])).toBe(false)
+    expect(isUnderAny('C:/ws/Client/a.txt', ['C:/ws/ClientTools'])).toBe(false)
+  })
+
+  it('is drive-letter case-insensitive and slash-insensitive', () => {
+    expect(isUnderAny('c:/ws/Client/a.txt', ['C:\\ws\\Client'])).toBe(true)
+  })
+
+  it('matches nothing for an empty dir list', () => {
+    expect(isUnderAny('C:/ws/a.txt', [])).toBe(false)
+  })
+
+  it('does not match a sibling directory that only shares a prefix', () => {
+    expect(isUnderAny('C:/ws/AB', ['C:/ws/A'])).toBe(false)
+    expect(isUnderAny('C:/ws/A', ['C:/ws/AB'])).toBe(false)
+  })
+
+  it('follows the host case policy for the path segments too', () => {
+    // Focus folders are typed by a human, the compared path comes from p4 or
+    // the OS — on win32/darwin their case will not match.
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(isUnderAny('C:/ws/Client/a.txt', ['C:/ws/client'])).toBe(insensitive)
+    expect(isUnderAny('C:/ws/CLIENT', ['C:/ws/client'])).toBe(insensitive)
+    // Case folding must not defeat the directory boundary.
+    expect(isUnderAny('C:/ws/clientTools/a.txt', ['C:/ws/Client'])).toBe(false)
+  })
+})
+
+describe('scopeKey', () => {
+  it('folds the whole path on a case-insensitive host, drive letter only elsewhere', () => {
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      expect(scopeKey('C:\\ws\\Client\\')).toBe('c:/ws/client')
+    } else {
+      expect(scopeKey('/ws/Client/')).toBe('/ws/Client')
+    }
   })
 })
 

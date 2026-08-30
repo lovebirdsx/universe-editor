@@ -110,6 +110,101 @@ describe('FileSearchService', () => {
     expect(listings).toHaveLength(1)
   })
 
+  it('uses a distinct listing cache key per scan-path set', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'Engine/b.ts')
+
+    const cacheDir = path.join(await makeRoot(), 'listings')
+    const service = new FileSearchService(undefined, { cacheDir })
+    services.push(service)
+
+    await service.search({
+      root: URI.file(root),
+      pattern: 'a',
+      scanPaths: ['Client'],
+      maxResults: 10,
+    })
+    await service.search({
+      root: URI.file(root),
+      pattern: 'b',
+      scanPaths: ['Engine'],
+      maxResults: 10,
+    })
+
+    const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
+    expect(listings).toHaveLength(2)
+  })
+
+  it('enumerates only the given scan paths for matchAll', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'Engine/b.ts')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      scanPaths: ['Client'],
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['Client/a.ts'])
+  })
+
+  it('covers root files with rootFilesInScope without widening the scan', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'Engine/b.ts')
+    await writeFile(root, 'README.md')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      scanPaths: ['Client'],
+      rootFilesInScope: true,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath).sort()).toEqual(['Client/a.ts', 'README.md'])
+  })
+
+  it('scores only files inside the scan paths', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/main.ts')
+    await writeFile(root, 'Engine/main.ts')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'main',
+      scanPaths: ['Client'],
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['Client/main.ts'])
+  })
+
+  it('finds root files through the listing when rootFilesInScope is set', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'Client/a.ts')
+    await writeFile(root, 'README.md')
+
+    const service = await makeService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'README',
+      scanPaths: ['Client'],
+      rootFilesInScope: true,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['README.md'])
+  })
+
   it('supports matchAll with search excludes and ignored directory names', async () => {
     const root = await makeRoot()
     await writeFile(root, 'src/main.ts')

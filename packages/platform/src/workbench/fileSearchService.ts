@@ -18,6 +18,17 @@ export interface IFileSearchQuery {
   readonly includeExactPathMatches?: boolean
   /** Wall-clock budget for the walk; partial results are returned on expiry. */
   readonly timeoutMs?: number
+  /**
+   * Workspace-relative directories to enumerate instead of the whole root
+   * (ripgrep positional arguments). Results resolve against `root`. Absent or
+   * empty = enumerate the whole root.
+   */
+  readonly scanPaths?: readonly string[]
+  /**
+   * Also cover files directly inside `root` (depth 1) when `scanPaths` narrows
+   * the walk — the root's own files live outside every scan path.
+   */
+  readonly rootFilesInScope?: boolean
 }
 
 export interface IFileSearchMatch {

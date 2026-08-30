@@ -38,6 +38,8 @@ import {
 } from '../ExplorerFileOperationService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 
 /**
  * In-memory fs backing both directory structure (dirs) and file contents
@@ -265,6 +267,7 @@ describe('ExplorerFileOperationService', () => {
     services.set(IWorkspaceService, new FakeWorkspaceService(root))
     services.set(IFileWatcherService, new FakeWatcher())
     services.set(IExcludeService, new FakeExcludeService())
+    services.set(IFocusScopeService, new FakeFocusScopeService())
     services.set(IUndoRedoService, undoRedo)
     const logger = makeLogger()
     services.set(ILoggerService, {

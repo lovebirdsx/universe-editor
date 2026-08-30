@@ -48,6 +48,8 @@ Perforce 面板按 **changelist** 把你签出的文件分组：
 
 > **想让它一直自动扫描？** 开启 `perforce.autoReconcile`（默认关）：此后每次刷新都会顺带扫描待收集的改动。默认关闭是因为大型工作区扫描（`p4 reconcile -n`）可能较慢；平时用「刷新（清理）」或「收集改动」按需触发即可。
 
+> 提示：[聚焦目录](../search-navigation/focus-folders.md)生效时，reconcile 的扫描范围会收窄到聚焦目录——超大 depot 上这是每次刷新的主要耗时来源。但 SCM 操作本身不跟随聚焦：已签出文件列表（`p4 opened`）、整个 changelist 的还原与搁置仍是全 client 范围，不会因为开了聚焦就变成部分操作。
+
 ## 签出、新增、删除
 
 Perforce 里改文件前要先"签出"。三种改动方式：

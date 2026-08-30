@@ -8,6 +8,7 @@ import { tmpdir, cpus } from 'node:os'
 import path from 'node:path'
 import { DisposableTracker, setDisposableTracker, URI } from '@universe-editor/platform'
 import {
+  buildRgArgs,
   createColumnMapper,
   resolveSearchThreads,
   rgErrorMsgForDisplay,
@@ -347,6 +348,72 @@ describe('TextSearchService', () => {
     // Degenerate values must never reach ripgrep as a non-positive --threads.
     expect(resolveSearchThreads(-5)).toBeGreaterThanOrEqual(1)
   })
+
+  it('turns scanPaths into positional arguments instead of a bare .', () => {
+    const args = buildRgArgs({
+      ...baseQuery('/ws', 'token'),
+      scanPaths: ['Client', 'Tools/Editor'],
+    })
+    const afterDash = args.slice(args.indexOf('--') + 1)
+    expect(afterDash).toEqual(['token', 'Client', 'Tools/Editor'])
+    expect(args).not.toContain('.')
+  })
+
+  it('defaults to the whole root without scanPaths', () => {
+    const args = buildRgArgs(baseQuery('/ws', 'token'))
+    const afterDash = args.slice(args.indexOf('--') + 1)
+    expect(afterDash).toEqual(['token', '.'])
+  })
+
+  it('searches only the given scan paths', async () => {
+    const root = await makeTempRoot()
+    await mkdir(path.join(root, 'Client'), { recursive: true })
+    await mkdir(path.join(root, 'Engine'), { recursive: true })
+    await writeFile(path.join(root, 'Client', 'a.ts'), 'scan-path-token\n')
+    await writeFile(path.join(root, 'Engine', 'b.ts'), 'scan-path-token\n')
+
+    const svc = new TextSearchService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'scan-path-token'),
+        scanPaths: ['Client'],
+      })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(path.join(root, 'Client', 'a.ts')),
+      )
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
+
+  it('covers root files with rootFilesInScope without widening the scan', async () => {
+    const root = await makeTempRoot()
+    await mkdir(path.join(root, 'Client'), { recursive: true })
+    await mkdir(path.join(root, 'Engine'), { recursive: true })
+    await writeFile(path.join(root, 'Client', 'a.ts'), 'root-scope-token\n')
+    await writeFile(path.join(root, 'Engine', 'b.ts'), 'root-scope-token\n')
+    await writeFile(path.join(root, 'README.md'), 'root-scope-token\n')
+
+    const svc = new TextSearchService()
+    try {
+      const complete = await svc.search({
+        ...baseQuery(root, 'root-scope-token'),
+        scanPaths: ['Client'],
+        rootFilesInScope: true,
+      })
+      const hits = complete.results
+        .map((r) => path.normalize(URI.revive(r.resource)!.fsPath))
+        .sort()
+      expect(hits).toEqual(
+        [path.join(root, 'Client', 'a.ts'), path.join(root, 'README.md')]
+          .map((p) => path.normalize(p))
+          .sort(),
+      )
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
 
   it('classifies fatal ripgrep stderr but ignores non-fatal path errors', () => {
     // Broken symlink / unreadable path → non-fatal, results should be kept.

@@ -7,8 +7,8 @@
  * Crucially we watch the **opened folder** (`workspace.rootPath`), NOT the p4
  * client root. A p4 client root is the whole workspace mapping (e.g. an entire
  * game project), often many levels above the folder actually open in the editor;
- * watching it is slow, and we narrow the reconcile scan to the opened folder too
- * (`<folder>/...` instead of `//...`) so a huge depot isn't walked on every save.
+ * watching it is slow. The reconcile *scan scope* is narrowed separately, by the
+ * extension (focus folders, or the opened folder) via `client.setReconcileScope`.
  *
  * We must NOT do a recursive `node:fs.watch` over a user directory tree here. On
  * Linux Node implements recursive watch with a per-process inotify instance: a
@@ -75,9 +75,9 @@ export class WorkspaceWatchController {
       workspace.createFileSystemWatcher(new RelativePattern(folder, '**/*')),
   ) {}
 
-  /** Start watching `folder` (the opened workspace directory). The full reconcile
-   *  scan (Clean Refresh) for its owning client is narrowed to that folder so a
-   *  huge depot isn't walked; ordinary saves reconcile only the changed paths. */
+  /** Start watching `folder` (the opened workspace directory). Events reconcile
+   *  only the exact changed paths (O(changes)); the full-scan scope is owned by
+   *  the extension, not this watcher. */
   start(enabled: boolean, folder: string | undefined): void {
     if (!enabled || !folder) return
 
@@ -86,7 +86,6 @@ export class WorkspaceWatchController {
       this._log?.(`[perforce] file watch: no client owns ${folder}; auto-refresh off`)
       return
     }
-    client.setReconcileScope(folder)
 
     // Incremental: reconcile only the exact changed paths (O(changes)).
     const triggerIncremental = (absPath: string): void => {

@@ -180,6 +180,8 @@ import './services/acp/session/acpSessionFilterService.js'
 import './services/quickInput/QuickAccessController.js'
 // Side-effect import: registers IOpenerService for the same snapshot.
 import './services/opener/OpenerService.js'
+// Side-effect import: registers IFocusScopeService for the same snapshot.
+import './services/focus/FocusScopeService.js'
 import {
   AcpChatWidgetService,
   IAcpChatWidgetService,

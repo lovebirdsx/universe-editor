@@ -11,7 +11,6 @@
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import { test, expect } from '../fixtures/electronApp.js'
 import { evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
@@ -26,8 +25,12 @@ async function waitForProbe(page: Page): Promise<void> {
 test.describe('@p1 explorer external file detection', () => {
   test('a file created externally appears in the tree automatically @regression', async ({
     workbench,
+    scratchDir,
   }) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-extwatch-'))
+    // scratchDir, not a hand-rolled mkdtemp + rm: this directory is opened as
+    // the workspace, so the watcher pins its root and a test-body delete races
+    // handles the app still owns. Cleanup here runs after closeApp.
+    const tmpDir = scratchDir('ue2-extwatch-')
     await fs.writeFile(path.join(tmpDir, 'existing.txt'), 'seed')
 
     await workbench.waitForRestored()
@@ -50,16 +53,15 @@ test.describe('@p1 explorer external file detection', () => {
     await expect(
       workbench.page.locator('[role="treeitem"]', { hasText: 'created-externally.txt' }),
     ).toBeVisible({ timeout: 8000 })
-
-    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
   test('both windows keep detecting their own external files @regression', async ({
     electronApp,
     workbench,
+    scratchDir,
   }) => {
-    const dirA = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-extwatch-a-'))
-    const dirB = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-extwatch-b-'))
+    const dirA = scratchDir('ue2-extwatch-a-')
+    const dirB = scratchDir('ue2-extwatch-b-')
     await fs.writeFile(path.join(dirA, 'seed-a.txt'), 'seed')
     await fs.writeFile(path.join(dirB, 'seed-b.txt'), 'seed')
 
@@ -90,8 +92,5 @@ test.describe('@p1 explorer external file detection', () => {
     await expect(pageB.locator('[role="treeitem"]', { hasText: 'created-in-b.txt' })).toBeVisible({
       timeout: 8000,
     })
-
-    await fs.rm(dirA, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-    await fs.rm(dirB, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 })

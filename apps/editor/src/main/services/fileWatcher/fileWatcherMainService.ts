@@ -36,6 +36,7 @@ import {
   type IDisposable,
   type IFileChangeEvent,
   type IFileWatcherService,
+  type IWatchOptions,
   ILoggerService,
   URI,
   type ILogger,
@@ -99,6 +100,47 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return true
 }
 
+/**
+ * The resolved recursive watch targets, plus the root when only its direct
+ * files need covering. Sorted so two resolutions of the same intent compare
+ * equal with {@link sameSet}.
+ */
+interface WatchPlan {
+  /** Workspace root, for containment checks by the out-of-workspace watches. */
+  readonly root: string
+  /** Directories to subscribe recursively. */
+  readonly recursive: readonly string[]
+  /** Whether the root also needs a non-recursive watch for its own files. */
+  readonly rootFilesOnly: boolean
+  /**
+   * The focus scopes this plan was resolved from, before declared in-workspace
+   * folder interests were folded in. Carried on the plan so re-resolving (a
+   * later interest, an exclude change) starts from the original request rather
+   * than from `recursive`, which would make those interests permanent.
+   */
+  readonly scopes: readonly string[]
+}
+
+/**
+ * Collapse nested targets into their shallowest ancestor. Two overlapping
+ * recursive subscriptions would report every event under the deeper one twice,
+ * and win32 would pin duplicate kernel handles on the same subtree.
+ */
+function collapseNestedPaths(paths: readonly string[]): string[] {
+  const kept: string[] = []
+  for (const candidate of [...paths].sort((a, b) => a.length - b.length)) {
+    if (kept.some((ancestor) => isUnder(candidate, ancestor))) continue
+    kept.push(candidate)
+  }
+  return kept.sort()
+}
+
+function samePlanValue(a: WatchPlan, b: WatchPlan): boolean {
+  return (
+    a.root === b.root && a.rootFilesOnly === b.rootFilesOnly && sameSet(a.recursive, b.recursive)
+  )
+}
+
 function reviveUri(value: UriComponents): URI {
   if (value instanceof URI) return value
   return URI.revive(value) as URI
@@ -106,6 +148,10 @@ function reviveUri(value: UriComponents): URI {
 
 function isUnder(fsPath: string, rootFsPath: string): boolean {
   return relativePathUnder(rootFsPath, fsPath, normalizePlatform(platform)) !== null
+}
+
+function samePath(a: string, b: string): boolean {
+  return relativePathUnder(b, a, normalizePlatform(platform)) === ''
 }
 
 export class FileWatcherMainService implements IFileWatcherService, IDisposable {
@@ -124,17 +170,25 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     this._watchId = _host.allocateId()
     this._clientListeners = [
       _host.onFileEvents((msg) => {
-        if (msg.id !== this._watchId) return
+        if (!this._ownsWatchId(msg.id)) return
         for (const ev of msg.events) {
           this._enqueue(ev.path, PARCEL_EVENT_TYPE[ev.type])
         }
       }),
       _host.onWatchError((msg) => {
-        if (msg.id !== this._watchId) return
+        if (!this._ownsWatchId(msg.id)) return
         this._logger.warn('watcher error', msg.error)
       }),
       _host.onDidRestart(() => this._onDidRestart.fire()),
     ]
+  }
+
+  /**
+   * Whether a host message belongs to this window. Focus mode subscribes one id
+   * per focused subtree, so the set — not a single id — is the identity.
+   */
+  private _ownsWatchId(id: number): boolean {
+    return id === this._watchId || this._extraWatchIds.has(id)
   }
 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
@@ -161,15 +215,44 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   private _watching = false
   private _rootFsPath: string | null = null
+  /**
+   * Bumped by every `_subscribe` and every `_teardown`. `_subscribe` arms one
+   * target at a time, so a teardown can land between two of them; the epoch is
+   * how the in-flight pass notices it no longer owns the state and releases the
+   * ids it armed instead of leaving orphans in the watcher host.
+   */
+  private _subscribeEpoch = 0
+  // The live recursive subscriptions: target fsPath → watcher-host id. The
+  // first target reuses `_watchId` so the unfocused single-root case keeps its
+  // stable id (and its crash-replay entry) exactly as before.
+  private readonly _watchIds = new Map<string, number>()
+  private readonly _extraWatchIds = new Set<number>()
+  // Non-recursive watch covering the workspace root's own files, armed only in
+  // focus mode with focusShowRootFiles on (where no recursive target covers it).
+  // `_currentRootFilesOnly` is the *intent* and `_rootFilesWatcher` the realized
+  // state: they diverge when fs.watch fails, and plan comparison must follow the
+  // intent or every watch() call would see a mismatch and re-subscribe forever.
+  private _currentRootFilesOnly = false
+  private _rootFilesWatcher: FSWatcher | null = null
+  private _rootFilesWatchedPath: string | null = null
+  // The focus scopes the workbench last requested, kept apart from the resolved
+  // targets in `_watchIds` (which also carry declared in-workspace folder
+  // interests). Re-resolving a plan needs the request, not the result: folding
+  // the interests back in as scopes would make them permanent.
+  private _currentScopes: readonly string[] = []
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
   private _remotePending = new Map<string, { resource: URI; type: FileChangeType }>()
   private _flushTimer: NodeJS.Timeout | null = null
   // Coalesced re-subscribe waiting out its quiet window. Waiters resolve when
   // the coalesced _subscribe lands, or when cancelled (teardown / superseded by
-  // a different root) — their intent was replaced, which still satisfies watch().
+  // a different plan) — their intent was replaced, which still satisfies watch().
+  //
+  // Deliberately ONE window for the whole plan rather than one per target: the
+  // plan is resolved as a unit, so a per-target window would let two concurrent
+  // changes interleave and land a mix of old and new targets.
   private _scheduledSubscribe: {
-    target: string
+    plan: WatchPlan
     ignore: string[]
     waiters: DeferredPromise<void>[]
     quietTimer: NodeJS.Timeout
@@ -188,7 +271,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   // Extra (out-of-workspace) folder watches, recursive: folderPath → watcher
   private _extraFolderWatchers = new Map<string, FSWatcher>()
 
-  async watch(folder: URI, options?: { excludes?: readonly string[] }): Promise<void> {
+  async watch(folder: URI, options?: IWatchOptions): Promise<void> {
     const uri = reviveUri(folder)
     if (uri.scheme === REMOTE_SCHEME) {
       await this._watchRemote(uri, options)
@@ -197,19 +280,96 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     if (uri.scheme !== 'file') {
       throw new Error(`FileWatcher: unsupported scheme: ${uri.scheme}`)
     }
-    const target = uri.fsPath
+    const plan = this._resolvePlan(uri, options)
     const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
     if (this._scheduledSubscribe) {
-      return this._scheduleSubscribe(target, ignore)
+      return this._scheduleSubscribe(plan, ignore)
     }
-    if (this._watching && this._rootFsPath === target && sameSet(ignore, this._currentIgnore)) {
+    if (this._watching && this._samePlan(plan) && sameSet(ignore, this._currentIgnore)) {
       return
     }
     if (!this._watching) {
       // No live subscription to tear down — arm immediately.
-      return this._subscribe(target, ignore)
+      return this._subscribe(plan, ignore)
     }
-    return this._scheduleSubscribe(target, ignore)
+    return this._scheduleSubscribe(plan, ignore)
+  }
+
+  /**
+   * Turn a watch request into the concrete set of directories to subscribe.
+   * Scopes outside the root are dropped: they would silently widen the watch
+   * beyond the workspace, and `_enqueue` filters events by root anyway.
+   */
+  private _resolvePlan(root: URI, options?: IWatchOptions): WatchPlan {
+    const rootFsPath = root.fsPath
+    const scopes: string[] = []
+    for (const scope of options?.scopes ?? []) {
+      const uri = reviveUri(scope)
+      if (uri.scheme !== 'file') continue
+      const fsPath = uri.fsPath
+      if (!isUnder(fsPath, rootFsPath)) {
+        this._logger.warn(`ignoring watch scope outside workspace: ${fsPath}`)
+        continue
+      }
+      scopes.push(fsPath)
+    }
+    const targets = [...scopes]
+    // Declared in-workspace folder interests join the plan as their own targets.
+    // Focus narrows what the *workbench* scans, but an extension that asked to
+    // watch the whole repo (git's working-tree watcher) must keep receiving
+    // events for paths focus hides, or its SCM state goes stale with no way
+    // back. Routing them here rather than through _watchExtraFolder is what
+    // keeps them out-of-process and exclude-filtered: an in-main recursive
+    // fs.watch on the workspace root would be both unfiltered and a repeat of
+    // the crash the out-of-process watcher exists to avoid.
+    if (scopes.length > 0) {
+      for (const fsPath of this._declaredExtraFolders.values()) {
+        if (isUnder(fsPath, rootFsPath)) targets.push(fsPath)
+      }
+    }
+    const recursive = collapseNestedPaths(targets)
+    // A scope equal to the root, or an empty scope list, means "watch it all" —
+    // then the root's own files are already covered recursively.
+    const coversRoot = recursive.length === 0 || recursive.some((p) => samePath(p, rootFsPath))
+    if (coversRoot) {
+      return { root: rootFsPath, recursive: [rootFsPath], rootFilesOnly: false, scopes }
+    }
+    return {
+      root: rootFsPath,
+      recursive,
+      rootFilesOnly: options?.includeRootFiles === true,
+      scopes,
+    }
+  }
+
+  private _samePlan(plan: WatchPlan): boolean {
+    return (
+      this._rootFsPath === plan.root &&
+      sameSet([...this._watchIds.keys()].sort(), plan.recursive) &&
+      this._currentRootFilesOnly === plan.rootFilesOnly
+    )
+  }
+
+  /** The plan currently live (or pending), for re-subscribes that only change excludes. */
+  private _currentPlan(): WatchPlan | null {
+    const scheduled = this._scheduledSubscribe
+    if (scheduled) return scheduled.plan
+    const root = this._rootFsPath
+    if (!root) return null
+    return {
+      root,
+      recursive: [...this._watchIds.keys()].sort(),
+      rootFilesOnly: this._currentRootFilesOnly,
+      scopes: this._currentScopes,
+    }
+  }
+
+  /** Whether any live recursive target covers `fsPath`. */
+  private _isCoveredByWatch(fsPath: string): boolean {
+    for (const target of this._watchIds.keys()) {
+      if (isUnder(fsPath, target)) return true
+    }
+    return false
   }
 
   private async _watchRemote(uri: URI, options?: { excludes?: readonly string[] }): Promise<void> {
@@ -294,13 +454,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       return
     }
     if (sameSet(ignore, this._currentIgnore)) return
-    if (!this._rootFsPath) {
+    const plan = this._currentPlan()
+    if (!plan) {
       this._currentIgnore = ignore
       return
     }
-    // parcel's `ignore` is fixed at subscribe time; re-subscribe the same root.
+    // parcel's `ignore` is fixed at subscribe time; re-subscribe the same plan.
     // Fire-and-forget: callers notify, they don't wait out the quiet window.
-    this._scheduleSubscribe(this._rootFsPath, ignore)
+    this._scheduleSubscribe(plan, ignore)
   }
 
   async unwatch(): Promise<void> {
@@ -319,7 +480,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       }
       if (uri.scheme !== 'file') continue
       const fsPath = uri.fsPath
-      if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) continue
+      if (this._isCoveredByWatch(fsPath)) continue
       const dir = dirname(fsPath)
       const files = newDirMap.get(dir) ?? new Set()
       files.add(fsPath)
@@ -398,6 +559,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   // Declared out-of-workspace folder interests (comparison key → fsPath).
   // Callers reference-count; each add/remove re-syncs the armed watch set.
+  //
+  // Entries that fall *inside* the workspace root are still recorded here, but
+  // they are realized as extra targets of the main plan (see _resolvePlan)
+  // rather than as in-main fs.watch handles. Under focus they are the only
+  // reason a hidden subtree still reports events.
   private readonly _declaredExtraFolders = new Map<string, string>()
 
   async addOutOfWorkspaceFolder(folder: URI): Promise<void> {
@@ -408,27 +574,62 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     if (uri.scheme !== 'file') return
     const fsPath = uri.fsPath
-    // The recursive workspace watch already covers these.
-    if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) return
+    // Already inside a live recursive target — that subscription delivers it.
+    if (this._isCoveredByWatch(fsPath)) return
     const key = getPathComparisonKey(fsPath, normalizePlatform(platform))
     if (this._declaredExtraFolders.has(key)) return
     this._declaredExtraFolders.set(key, fsPath)
-    this._syncExtraFolderWatchers()
+    await this._syncDeclaredFolder(fsPath)
   }
 
   async removeOutOfWorkspaceFolder(folder: URI): Promise<void> {
     const uri = reviveUri(folder)
     if (uri.scheme !== 'file') return
-    const key = getPathComparisonKey(uri.fsPath, normalizePlatform(platform))
+    const fsPath = uri.fsPath
+    const key = getPathComparisonKey(fsPath, normalizePlatform(platform))
     if (this._declaredExtraFolders.delete(key)) {
-      this._syncExtraFolderWatchers()
+      await this._syncDeclaredFolder(fsPath)
     }
   }
 
   async clearOutOfWorkspaceFolders(): Promise<void> {
     if (this._declaredExtraFolders.size === 0) return
+    const hadInWorkspace = [...this._declaredExtraFolders.values()].some((p) =>
+      this._isInWorkspace(p),
+    )
     this._declaredExtraFolders.clear()
     this._syncExtraFolderWatchers()
+    if (hadInWorkspace) await this._resubscribeCurrentPlan()
+  }
+
+  /**
+   * Realize one declared-folder change. In-workspace folders belong to the main
+   * plan (out-of-process, exclude-filtered); everything else keeps using the
+   * in-main fs.watch set, which is bounded to genuinely external directories.
+   */
+  private async _syncDeclaredFolder(fsPath: string): Promise<void> {
+    if (this._isInWorkspace(fsPath)) {
+      await this._resubscribeCurrentPlan()
+      return
+    }
+    this._syncExtraFolderWatchers()
+  }
+
+  private _isInWorkspace(fsPath: string): boolean {
+    const root = this._rootFsPath
+    return root !== null && isUnder(fsPath, root)
+  }
+
+  /** Re-resolve the live plan so a declared-folder change joins/leaves it. */
+  private async _resubscribeCurrentPlan(): Promise<void> {
+    const root = this._rootFsPath
+    if (!this._watching || root === null) return
+    const plan = this._resolvePlan(URI.file(root), {
+      scopes: this._currentScopes.map((p) => URI.file(p)),
+      includeRootFiles: this._currentRootFilesOnly,
+    })
+    if (this._samePlan(plan) && this._scheduledSubscribe === null) return
+    await this._scheduleSubscribe(plan, this._currentIgnore)
   }
 
   private _syncExtraFolderWatchers(): void {
@@ -551,9 +752,9 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     return this._extraFolderWatchers.size
   }
 
-  private _scheduleSubscribe(target: string, ignore: string[]): Promise<void> {
+  private _scheduleSubscribe(plan: WatchPlan, ignore: string[]): Promise<void> {
     const existing = this._scheduledSubscribe
-    if (existing && existing.target === target) {
+    if (existing && samePlanValue(existing.plan, plan)) {
       if (!sameSet(ignore, existing.ignore)) {
         existing.ignore = ignore
         this._slideQuietWindow()
@@ -562,14 +763,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       existing.waiters.push(waiter)
       return waiter.p
     }
-    // A different root supersedes the pending target entirely.
+    // A different plan supersedes the pending one entirely.
     if (existing) this._cancelScheduledSubscribe()
     const waiter = new DeferredPromise<void>()
     const quietTimer = setTimeout(() => this._flushScheduledSubscribe(), RESUBSCRIBE_QUIET_MS)
     quietTimer.unref()
     const maxTimer = setTimeout(() => this._flushScheduledSubscribe(), RESUBSCRIBE_MAX_WAIT_MS)
     maxTimer.unref()
-    this._scheduledSubscribe = { target, ignore, waiters: [waiter], quietTimer, maxTimer }
+    this._scheduledSubscribe = { plan, ignore, waiters: [waiter], quietTimer, maxTimer }
     return waiter.p
   }
 
@@ -587,7 +788,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     clearTimeout(scheduled.quietTimer)
     clearTimeout(scheduled.maxTimer)
     this._scheduledSubscribe = null
-    void this._subscribe(scheduled.target, scheduled.ignore).then(() => {
+    void this._subscribe(scheduled.plan, scheduled.ignore).then(() => {
       for (const waiter of scheduled.waiters) waiter.complete()
     })
   }
@@ -601,50 +802,183 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     for (const waiter of scheduled.waiters) waiter.complete()
   }
 
-  private async _subscribe(target: string, ignore: string[]): Promise<void> {
+  private async _subscribe(plan: WatchPlan, ignore: string[]): Promise<void> {
     this._resetPending()
+    const epoch = ++this._subscribeEpoch
     const isFirstWatch = !this._didMarkFirstWatch
     if (isFirstWatch) {
       this._didMarkFirstWatch = true
       mark(PerfMarks.mainWillWatchWorkspace)
     }
+    // Reuse the id of any target that survives this plan, and hand `_watchId`
+    // to the first newcomer — so the unfocused single-root case keeps the exact
+    // id (and crash-replay entry) it has always had.
+    const nextIds = new Map<string, number>()
+    const reused = new Set<number>()
+    for (const target of plan.recursive) {
+      const existing = this._watchIds.get(target)
+      if (existing !== undefined) {
+        nextIds.set(target, existing)
+        reused.add(existing)
+      }
+    }
+    let primaryFree = !reused.has(this._watchId)
+    for (const target of plan.recursive) {
+      if (nextIds.has(target)) continue
+      if (primaryFree) {
+        nextIds.set(target, this._watchId)
+        primaryFree = false
+      } else {
+        nextIds.set(target, this._host.allocateId())
+      }
+    }
+
     // Adopt the target state up front: concurrent watch()/setExcludes() calls
-    // must coalesce against the in-flight target, not the stale subscription.
+    // must coalesce against the in-flight plan, not the stale subscription.
+    const keptIds = new Set(nextIds.values())
+    const staleIds = [...this._watchIds.values()].filter((id) => !keptIds.has(id))
     this._watching = true
-    this._rootFsPath = target
+    this._rootFsPath = plan.root
     this._currentIgnore = ignore
-    try {
-      // Same-id subscribe replaces the previous subscription inside the watcher
-      // process, so the old root is torn down there without a separate round trip.
-      await this._host.watch(this._watchId, target, ignore)
-      this._logger.info(`watch ${target}`)
-    } catch (err) {
-      // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+    this._currentScopes = plan.scopes
+    this._watchIds.clear()
+    this._extraWatchIds.clear()
+    for (const [target, id] of nextIds) {
+      this._watchIds.set(target, id)
+      if (id !== this._watchId) this._extraWatchIds.add(id)
+    }
+    this._syncRootFilesWatcher(plan)
+
+    for (const id of staleIds) {
+      await this._unwatchQuietly(id)
+    }
+
+    let anyLanded = false
+    const armed: number[] = []
+    for (const [target, id] of nextIds) {
+      // A teardown (or a superseding plan) that landed while the previous target
+      // was in flight already owns the state. Arming the rest would leave host
+      // subscriptions nothing in this window claims, and since the client records
+      // a subscription as desired *before* it can fail, they would also come back
+      // on crash replay. Release what this pass armed and stop — the concurrent
+      // caller cannot do it for us: its own unwatch sweep may already have run by
+      // the time our `watch` reached the host.
+      if (epoch !== this._subscribeEpoch) {
+        for (const id of armed) await this._unwatchQuietly(id)
+        return
+      }
+      try {
+        // Same-id subscribe replaces the previous subscription inside the watcher
+        // process, so the old target is torn down there without a separate round trip.
+        await this._host.watch(id, target, ignore)
+        armed.push(id)
+        anyLanded = true
+        this._logger.info(`watch ${target}`)
+      } catch (err) {
+        // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+        // The unwatch clears the id from the client's desired set, which `watch`
+        // populated before throwing — otherwise a crash restart would replay a
+        // subscription that never worked and that nothing here tracks anymore.
+        this._watchIds.delete(target)
+        this._extraWatchIds.delete(id)
+        await this._unwatchQuietly(id)
+        this._logger.warn(
+          `watch failed ${target}`,
+          err instanceof Error ? (err.stack ?? err.message) : String(err),
+        )
+      }
+    }
+    if (epoch !== this._subscribeEpoch) {
+      for (const id of armed) await this._unwatchQuietly(id)
+      return
+    }
+    if (!anyLanded) {
       this._watching = false
       this._rootFsPath = null
+    }
+    if (isFirstWatch) mark(PerfMarks.mainDidWatchWorkspace)
+  }
+
+  /** Release a watcher-host id, tolerating a dead/broken host. */
+  private async _unwatchQuietly(id: number): Promise<void> {
+    try {
+      await this._host.unwatch(id)
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Arm or retire the non-recursive watch on the workspace root. Needed only in
+   * focus mode with root files in scope: no recursive target covers the root
+   * then, so a plain node:fs watch (no native addon) fills the gap.
+   */
+  private _syncRootFilesWatcher(plan: WatchPlan): void {
+    this._currentRootFilesOnly = plan.rootFilesOnly
+    if (!plan.rootFilesOnly) {
+      this._closeRootFilesWatcher()
+      return
+    }
+    if (this._rootFilesWatcher && this._rootFilesWatchedPath === plan.root) return
+    this._closeRootFilesWatcher()
+    try {
+      const w = fsWatch(plan.root, { recursive: false, persistent: false }, (event, filename) => {
+        if (!filename) return
+        const absPath = join(plan.root, filename)
+        if (event === 'change') this._enqueue(absPath, 'modified')
+        else this._enqueue(absPath, existsSync(absPath) ? 'added' : 'deleted')
+      })
+      w.on('error', (err) => {
+        this._logger.warn(
+          `root files watcher error ${plan.root}`,
+          err instanceof Error ? err.message : String(err),
+        )
+        if (this._rootFilesWatcher === w) this._closeRootFilesWatcher()
+      })
+      this._rootFilesWatcher = w
+      this._rootFilesWatchedPath = plan.root
+      this._logger.info(`watch root files ${plan.root}`)
+    } catch (err) {
       this._logger.warn(
-        `watch failed ${target}`,
-        err instanceof Error ? (err.stack ?? err.message) : String(err),
+        `watch root files failed ${plan.root}`,
+        err instanceof Error ? err.message : String(err),
       )
-    } finally {
-      if (isFirstWatch) mark(PerfMarks.mainDidWatchWorkspace)
+    }
+  }
+
+  private _closeRootFilesWatcher(): void {
+    const w = this._rootFilesWatcher
+    this._rootFilesWatcher = null
+    this._rootFilesWatchedPath = null
+    if (!w) return
+    try {
+      w.close()
+    } catch {
+      // ignore
     }
   }
 
   private async _teardown(): Promise<void> {
     this._cancelScheduledSubscribe()
     this._resetPending()
+    // Invalidates any `_subscribe` still mid-flight, so it releases the ids it
+    // armed rather than resurrecting the subscription we are tearing down.
+    this._subscribeEpoch++
     this._watching = false
     const root = this._rootFsPath
     this._rootFsPath = null
     this._currentIgnore = []
-    // Unconditionally clear this id on the client: even after a failed watch
-    // (where _watching stayed false) the desired entry must go away, or a
-    // crash-restart would replay a subscription this window no longer wants.
-    try {
-      await this._host.unwatch(this._watchId)
-    } catch {
-      // ignore
+    this._currentScopes = []
+    this._currentRootFilesOnly = false
+    this._closeRootFilesWatcher()
+    // Unconditionally clear every id this window ever armed, plus `_watchId`
+    // even after a failed watch (where it never entered the map): a
+    // crash-restart would otherwise replay a subscription we no longer want.
+    const ids = new Set<number>([this._watchId, ...this._watchIds.values(), ...this._extraWatchIds])
+    this._watchIds.clear()
+    this._extraWatchIds.clear()
+    for (const id of ids) {
+      await this._unwatchQuietly(id)
     }
     if (root) this._logger.info(`unwatch ${root}`)
   }

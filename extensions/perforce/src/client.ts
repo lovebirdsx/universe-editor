@@ -51,7 +51,7 @@ import {
   expandDismissPaths,
   type ReconcileFile,
 } from './reconcileParser.js'
-import { norm } from './pathUtil.js'
+import { norm, isUnderAny, scopeKey } from './pathUtil.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
@@ -162,6 +162,11 @@ function firstStderrLine(stderr: string): string | undefined {
     .find((line) => line.length > 0)
 }
 
+function sameScopeDirs(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((dir, i) => scopeKey(dir) === scopeKey(b[i] ?? ''))
+}
+
 export class PerforceClient {
   private readonly _p4: P4Service
   private readonly _sc: SourceControl
@@ -225,10 +230,15 @@ export class PerforceClient {
   private _deferReverify = false
   /** In-flight background re-verify, so `dispose` and tests can await it. */
   private _backgroundReverify: Promise<void> | undefined
-  /** Depot/local scope the reconcile-discovery pass covers. Defaults to the whole
-   *  client (`//...`); narrowed to the opened folder so a huge depot isn't scanned
-   *  on every refresh (see {@link setReconcileScope}). */
-  private _reconcileScope = '//...'
+  /** Depot/local scopes (p4 filespecs) the reconcile-discovery pass covers.
+   *  Defaults to the whole client (`//...`); narrowed to the workspace focus
+   *  folders (or the opened folder) so a huge depot isn't scanned on every
+   *  refresh (see {@link setReconcileScope}). */
+  private _reconcileScopes: readonly string[] = ['//...']
+  /** The same scope as plain local directories, for membership tests. Empty means
+   *  the whole-client default — kept separately rather than re-derived from the
+   *  filespecs above so the `/...` suffix is never parsed back off. */
+  private _reconcileScopeDirs: readonly string[] = []
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
   /** Whether Swarm is enabled + configured, so the commit bar offers "Request New
@@ -459,17 +469,56 @@ export class PerforceClient {
     this._swarmAvailable = available
   }
 
-  /** Narrow the reconcile-discovery scan to `localPath` (the opened folder) so a
-   *  huge depot isn't walked as `//...` on every refresh. A local filesystem path
-   *  is passed to p4 as `<path>/...`; `undefined` restores the whole-client `//...`
-   *  default. */
-  setReconcileScope(localPath: string | undefined): void {
-    if (!localPath) {
-      this._reconcileScope = '//...'
-      return
+  /** Narrow the reconcile-discovery scan to the given local directories so a huge
+   *  depot isn't walked as `//...` on every refresh. Each directory is passed to
+   *  p4 as `<dir>/...` (p4 takes multiple filespecs); a directory nested under
+   *  another is dropped, since the shallowest one already covers its files and an
+   *  overlap would reconcile them twice. `undefined` or an empty list restores the
+   *  whole-client `//...` default.
+   *
+   *  Re-filters the already-rendered group, so narrowing the scope at runtime
+   *  (the focus config changed) drops the now-out-of-scope rows immediately
+   *  instead of leaving them until the next refresh. Widening cannot bring rows
+   *  back — those need an actual scan, which the next refresh does. */
+  setReconcileScope(localPaths: readonly string[] | string | undefined): void {
+    const paths =
+      localPaths === undefined ? [] : typeof localPaths === 'string' ? [localPaths] : localPaths
+    const previous = this._reconcileScopeDirs
+    if (paths.length === 0) {
+      this._reconcileScopeDirs = []
+      this._reconcileScopes = ['//...']
+    } else {
+      const trimmed = paths.map((p) => p.replace(/[/\\]+$/, ''))
+      const seen = new Set<string>()
+      const unique: string[] = []
+      for (const dir of trimmed) {
+        // Keyed the same way the containment test below keys, so `Client` and
+        // `client` are one entry on Windows. Two survivors differing only by
+        // case would each look nested under the other and both get dropped,
+        // silently widening the scan back to the whole client.
+        const key = scopeKey(dir)
+        if (seen.has(key)) continue
+        seen.add(key)
+        unique.push(dir)
+      }
+      this._reconcileScopeDirs = unique.filter(
+        (dir) => !unique.some((other) => other !== dir && isUnderAny(dir, [other])),
+      )
+      this._reconcileScopes = this._reconcileScopeDirs.map((dir) => `${dir}/...`)
     }
-    const trimmed = localPath.replace(/[/\\]+$/, '')
-    this._reconcileScope = `${trimmed}/...`
+    if (sameScopeDirs(previous, this._reconcileScopeDirs)) return
+    if (this._reconcileFiles.length > 0) {
+      this._setReconcileFiles(this._reconcileFiles)
+      this._emitChange()
+    }
+  }
+
+  /** Whether a local path falls inside the current reconcile discovery scope.
+   *  The whole-client default (no scope dirs) matches everything; a narrowed
+   *  scope matches only paths equal to or under one of its directories. */
+  private _isInReconcileScope(localPath: string): boolean {
+    if (this._reconcileScopeDirs.length === 0) return true
+    return isUnderAny(localPath, this._reconcileScopeDirs)
   }
 
   /**
@@ -696,18 +745,30 @@ export class PerforceClient {
       '-a',
       '-e',
       '-d',
-      this._reconcileScope,
+      ...this._reconcileScopes,
     ])
     if (this._disposed) return
     if (res.result.exitCode !== 0) {
       // `reconcile -n` exits non-zero with "no file(s) to reconcile" when the
       // tree is clean — that's not an error, just an empty result.
       const stderr = res.result.stderr.toLowerCase()
-      if (!stderr.includes('no file(s) to reconcile') && !stderr.includes('- no such file')) {
+      const missingScope = stderr.includes('- no such file')
+      if (!stderr.includes('no file(s) to reconcile') && !missingScope) {
         this._log?.(`[perforce] reconcile -n failed: ${res.result.stderr.trim()}`)
       }
-      this._setReconcileFiles([])
-      return
+      // With several focus scopes on one command line, one missing directory
+      // makes the whole invocation exit non-zero while p4 still reports the
+      // other scopes. Discarding the parsed records would empty the group on
+      // every refresh for as long as that directory is gone, so keep whatever
+      // came back and only fall through to empty when there is nothing.
+      if (missingScope && res.records.length > 0) {
+        this._log?.(
+          `[perforce] reconcile -n: a scope is missing from the workspace; keeping the rest`,
+        )
+      } else {
+        this._setReconcileFiles([])
+        return
+      }
     }
     const files = parseReconcile(res.records, this.root).filter(
       (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
@@ -855,11 +916,15 @@ export class PerforceClient {
   }
 
   /** Set the reconcile file list and mirror it into the group's resource states.
-   *  Dismissed files are filtered out here so every producer (full scan, cheap
-   *  re-filter, incremental merge, restore) is uniformly clean, then the result
-   *  is persisted so it survives a reload without a fresh scan. */
+   *  Every producer (full scan, cheap re-filter, incremental merge, restore)
+   *  lands here, so this is the single funnel where the discovery scope is
+   *  enforced — a file outside the scope never enters the group, whatever path
+   *  reported it, and narrowing the scope drops entries already listed. Dismissed
+   *  files are filtered out here too, then the result is persisted so it survives
+   *  a reload without a fresh scan. */
   private _setReconcileFiles(files: readonly ReconcileFile[]): void {
-    const visible = filterDismissed(files, this._dismissed)
+    const inScope = files.filter((f) => !f.clientFile || this._isInReconcileScope(f.clientFile))
+    const visible = filterDismissed(inScope, this._dismissed)
     this._reconcileFiles = visible
     this._reconcileGroup.resourceStates = toReconcileResourceStates(visible)
     this._persistReconcile()

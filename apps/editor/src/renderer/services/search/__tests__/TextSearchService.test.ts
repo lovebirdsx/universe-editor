@@ -21,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { TextSearchService } from '../TextSearchService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
+import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 import type {
   ITextSearchMainComplete,
   ITextSearchMainProgressEvent,
@@ -121,6 +122,7 @@ function makeService(
   root: URI | null,
   main = new FakeMainSearch(),
   threads = 0,
+  focus = new FakeFocusScopeService(),
 ): {
   readonly main: FakeMainSearch
   readonly service: TextSearchService
@@ -141,6 +143,7 @@ function makeService(
       new UriIdentityService('linux'),
       config,
       makeLoggerService(),
+      focus,
     ),
   }
 }
@@ -299,5 +302,40 @@ describe('TextSearchService renderer adapter', () => {
 
     expect(results).toEqual([])
     expect(main.queries).toHaveLength(0)
+  })
+
+  it('narrows the main query to the focus folders when focus is active', async () => {
+    const focus = new FakeFocusScopeService(['Client', 'Tools/Editor'], URI.file('/ws'))
+    const { main, service } = makeService(URI.file('/ws'), undefined, 0, focus)
+
+    await service.search({
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: true,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    })
+
+    expect(main.queries).toHaveLength(1)
+    expect(main.queries[0]!.scanPaths).toEqual(['Client', 'Tools/Editor'])
+    expect(main.queries[0]!.rootFilesInScope).toBe(true)
+  })
+
+  it('leaves the main query whole-root when focus is inactive', async () => {
+    const { main, service } = makeService(URI.file('/ws'))
+
+    await service.search({
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: true,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    })
+
+    expect(main.queries).toHaveLength(1)
+    expect(main.queries[0]!.scanPaths).toBeUndefined()
+    expect(main.queries[0]!.rootFilesInScope).toBe(false)
   })
 })

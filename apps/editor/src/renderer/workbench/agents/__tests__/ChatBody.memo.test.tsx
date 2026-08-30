@@ -50,6 +50,8 @@ import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk
 import { ServicesContext } from '../../useService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/session/acpPromptHistoryService.js'
 import { ISessionBookmarkService } from '../../../services/acp/session/sessionBookmarkService.js'
+import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
 
 // Replace MessageContent with a counter keyed by its first text block so we can
 // detect exactly which slots re-rendered.
@@ -183,6 +185,7 @@ function makeInstantiation(threshold?: number) {
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
   services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
     get: (key: string) =>

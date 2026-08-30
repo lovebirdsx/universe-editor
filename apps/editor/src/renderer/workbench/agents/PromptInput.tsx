@@ -52,7 +52,8 @@ import { readDroppedResources, toMentionName } from '../../services/dnd/resource
 import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
-import { useObservable, useService } from '../useService.js'
+import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
+import { useEventValue, useObservable, useService } from '../useService.js'
 import type { IAcpSession, SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import {
   blobToPromptImage,
@@ -97,6 +98,7 @@ import {
 } from '../../services/acp/promptContext.js'
 import {
   filterMentionFiles,
+  focusScopeForMention,
   loadWorkspaceFiles,
   type MentionFileEntry,
 } from '../../services/acp/mentionFileSearch.js'
@@ -226,6 +228,9 @@ export function PromptInput({
   const hashSeqRef = useRef(0)
   // Same guard for the truncated-listing mention fallback search.
   const mentionFallbackSeqRef = useRef(0)
+  // And for the workspace file listing itself, which a focus-scope change
+  // invalidates mid-flight.
+  const mentionScanSeqRef = useRef(0)
   const contextProvidersRef = useRef<{
     readonly symbol: WorkspaceSymbolContextProvider
     readonly scmChange: ScmChangeContextProvider
@@ -237,6 +242,7 @@ export function PromptInput({
   const fileSearch = useService(IFileSearchService)
   const workspace = useService(IWorkspaceService)
   const exclude = useService(IExcludeService)
+  const focusScope = useService(IFocusScopeService)
   const config = useService(IConfigurationService)
   const dialogService = useService(IDialogService)
   const fileDialog = useService(IFileDialogService)
@@ -250,6 +256,12 @@ export function PromptInput({
   const commandService = useService(ICommandService)
   const widgetService = useService(IAcpChatWidgetService)
   const workspaceRoot = workspace.current?.folder
+  // Focus-scope changes partition the mention cache, so the scans below must
+  // re-run when the fingerprint moves.
+  const focusFingerprint = useEventValue(
+    focusScope.onDidChange,
+    useCallback(() => focusScope.fingerprint, [focusScope]),
+  )
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
@@ -649,22 +661,57 @@ export function PromptInput({
     [text, caret, slashOpen, hashOpen],
   )
 
+  // A focus-scope change partitions the mention cache; drop the stale listing
+  // so the scan effect re-runs under the new scope.
+  useEffect(() => {
+    mentionScanSeqRef.current++
+    setFiles([])
+    setFilesComplete(true)
+  }, [focusFingerprint])
+
   // Lazily kick off the workspace file scan the first time `@` is typed.
   useEffect(() => {
     if (mentionQuery === null || files.length > 0 || filesLoading) return
     if (!workspaceRoot) return
+    // A scan started under the previous focus scope must not land: its entries
+    // would overwrite the cleared list AND restore its own `complete` flag, and
+    // since a non-empty list stops this effect from re-running, the stale scope
+    // would stick for the rest of the session.
+    const seq = mentionScanSeqRef.current
     setFilesLoading(true)
-    loadWorkspaceFiles(workspaceRoot, fileSearch, {
-      dirNames: exclude.getDirNameIgnores(),
-      excludeGlobs: exclude.getSearchExcludeGlobs(),
-    })
+    loadWorkspaceFiles(
+      workspaceRoot,
+      fileSearch,
+      {
+        dirNames: exclude.getDirNameIgnores(),
+        excludeGlobs: exclude.getSearchExcludeGlobs(),
+      },
+      undefined,
+      focusScopeForMention(focusScope),
+    )
       .then((listing) => {
+        if (seq !== mentionScanSeqRef.current) return
         setFiles(listing.entries)
         setFilesComplete(listing.complete)
       })
-      .catch(() => setFiles([]))
-      .finally(() => setFilesLoading(false))
-  }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileSearch, exclude])
+      .catch(() => {
+        if (seq !== mentionScanSeqRef.current) return
+        setFiles([])
+      })
+      .finally(() => {
+        if (seq !== mentionScanSeqRef.current) return
+        setFilesLoading(false)
+      })
+  }, [
+    mentionQuery,
+    files.length,
+    filesLoading,
+    workspaceRoot,
+    fileSearch,
+    exclude,
+    focusScope,
+    focusFingerprint,
+  ])
 
   // Truncated-listing fallback (mirrors quick open's): the cached listing is an
   // arbitrary subset of the workspace, so relying on it alone would make every
@@ -677,6 +724,7 @@ export function PromptInput({
     }
     if (!workspaceRoot) return
     const seq = ++mentionFallbackSeqRef.current
+    const focus = focusScopeForMention(focusScope)
     const cts = new CancellationTokenSource()
     const timer = setTimeout(() => {
       fileSearch
@@ -687,6 +735,8 @@ export function PromptInput({
             maxResults: 30,
             ignore: exclude.getDirNameIgnores(),
             excludes: exclude.getSearchExcludeGlobs(),
+            ...(focus.scanPaths ? { scanPaths: focus.scanPaths } : {}),
+            rootFilesInScope: focus.rootFilesInScope,
           },
           cts.token,
         )
@@ -706,7 +756,15 @@ export function PromptInput({
       clearTimeout(timer)
       cts.dispose(true)
     }
-  }, [filesComplete, mentionQuery, workspaceRoot, fileSearch, exclude])
+  }, [
+    filesComplete,
+    mentionQuery,
+    workspaceRoot,
+    fileSearch,
+    exclude,
+    focusScope,
+    focusFingerprint,
+  ])
 
   const mentionMatches = useMemo<readonly MentionFileEntry[]>(() => {
     if (mentionQuery === null) return []

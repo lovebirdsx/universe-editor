@@ -265,6 +265,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
           <button
             className={`${styles['tab']} ${activeTarget === ConfigurationTarget.User ? styles['tabActive'] : ''}`}
             aria-selected={activeTarget === ConfigurationTarget.User}
+            data-testid="settings-scope-tab-user"
             onClick={() => handleSwitchTarget(ConfigurationTarget.User)}
           >
             {localize('settings.tab.user', 'User')}
@@ -272,6 +273,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
           <button
             className={`${styles['tab']} ${!hasWorkspace ? styles['tabDisabled'] : ''} ${activeTarget === ConfigurationTarget.Project ? styles['tabActive'] : ''}`}
             aria-selected={activeTarget === ConfigurationTarget.Project}
+            data-testid="settings-scope-tab-workspace"
             onClick={() => handleSwitchTarget(ConfigurationTarget.Project)}
           >
             {localize('settings.tab.workspace', 'Workspace')}

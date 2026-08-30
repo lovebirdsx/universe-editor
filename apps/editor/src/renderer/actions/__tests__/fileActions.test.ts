@@ -93,6 +93,8 @@ import {
 } from '../../../shared/ipc/fileClipboardService.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
+import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
+import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
@@ -732,6 +734,7 @@ function makeHarness(
   services.set(IFileSearchService, fileSearch)
   services.set(IFileWatcherService, makeNoopWatcher())
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
+  services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IWorkspaceService, ws)
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
