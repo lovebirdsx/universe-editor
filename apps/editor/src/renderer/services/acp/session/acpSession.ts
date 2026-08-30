@@ -214,6 +214,16 @@ export function memoryTrimmedNotice(): string {
   )
 }
 
+/**
+ * Notice shown on a tool card the agent surfaced but never settled (the turn
+ * ended without a result). Function rather than a module constant: `localize`
+ * reads the NLS state at call time, and the settled card bakes the resolved text
+ * in at settle time.
+ */
+export function orphanToolCallNotice(): string {
+  return localize('acp.session.toolCallOrphaned', 'No result received (the turn ended).')
+}
+
 /** UTF-16 byte size of a string (`length` code units × 2). */
 function stringBytes(s: string): number {
   return s.length * 2
@@ -280,6 +290,7 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
     ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+    ...(call.settleReason !== undefined ? { settleReason: call.settleReason } : {}),
     ...(children !== undefined && children.length > 0 ? { children } : {}),
   }
 }
@@ -318,6 +329,67 @@ function settleRunning(compaction: AcpCompaction, reason: string): AcpCompaction
       ? { expectedDurationMs: compaction.expectedDurationMs }
       : {}),
   }
+}
+
+/**
+ * A tool card in one of these statuses has reached an outcome: the stopwatch
+ * freezes and the orphan sweep leaves it alone. `cancelled` is our own local
+ * terminal state (see {@link settleOrphanToolCall}).
+ */
+function isSettledToolCallStatus(status: AcpToolCallStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+}
+
+/**
+ * Flip a tool card that never settled to `cancelled`, freezing the stopwatch and
+ * recording why. Only top-level cards carry `startedAt` (see the `tool_call`
+ * case), so a child card simply changes status. Recurses into `children` — a
+ * sub-agent's cards spin on exactly the same missing update.
+ *
+ * An already-settled card keeps its own outcome and only has its children
+ * swept: a parent that legitimately completed while one sub-agent card lost its
+ * update must not be downgraded to "no result received".
+ */
+function settleOrphanToolCall(call: AcpToolCall, reason: string): AcpToolCall {
+  const children = call.children?.map(
+    (child): AcpChildItem =>
+      child.kind === 'toolCall' && hasUnsettledToolCall(child.call)
+        ? { kind: 'toolCall', id: child.id, call: settleOrphanToolCall(child.call, reason) }
+        : child,
+  )
+  const startedAt = call.startedAt
+  return {
+    ...call,
+    ...(isSettledToolCallStatus(call.status)
+      ? {}
+      : {
+          status: 'cancelled' as const,
+          settleReason: reason,
+          ...(startedAt !== undefined
+            ? { durationMs: call.durationMs ?? Math.max(0, Date.now() - startedAt) }
+            : {}),
+        }),
+    ...(children !== undefined ? { children } : {}),
+  }
+}
+
+/** True when this card, or any of its sub-agent cards, is still spinning. */
+function hasUnsettledToolCall(call: AcpToolCall): boolean {
+  if (!isSettledToolCallStatus(call.status)) return true
+  return call.children?.some((c) => c.kind === 'toolCall' && hasUnsettledToolCall(c.call)) === true
+}
+
+/**
+ * The cards {@link settleOrphanToolCall} would actually flip, flattened. A
+ * settled parent holding an unsettled sub-agent card contributes the child only,
+ * so diagnostics name the card that really lost its result.
+ */
+function collectUnsettledToolCalls(call: AcpToolCall): AcpToolCall[] {
+  const found = isSettledToolCallStatus(call.status) ? [] : [call]
+  for (const child of call.children ?? []) {
+    if (child.kind === 'toolCall') found.push(...collectUnsettledToolCalls(child.call))
+  }
+  return found
 }
 
 /**
@@ -447,7 +519,23 @@ const AGENT_OUTPUT_UPDATE_KINDS: ReadonlySet<SessionUpdate['sessionUpdate']> = n
  * filter matches on it when skipping a retracted turn's trailing marker.
  */
 const INTERRUPTED_MARKER_TEXT = '[Request interrupted by user]'
+/**
+ * How long after a turn ends to wait before declaring a still-pending tool card
+ * orphaned. Covers the two post-turn arrivals we see on the wire: the
+ * `autonomousTurn:false` background-activity notification, and a last background
+ * task's terminal `tool_call_update` degraded to post-turn delivery. Generous on
+ * purpose — settling a live card early is far worse than a few seconds of extra
+ * spinner on a dead one.
+ */
+const ORPHAN_TOOL_CALL_SWEEP_GRACE_MS = 5_000
 
+/**
+ * How many grace windows the sweep waits out background work before giving up.
+ * Only the "still busy" skips retry (see {@link AcpSession._scheduleOrphanToolCallSweep});
+ * ~30s total, long enough for a trailing background task, short enough that a
+ * card wedged by work that never reports still settles on its own.
+ */
+const ORPHAN_TOOL_CALL_SWEEP_MAX_ATTEMPTS = 6
 /**
  * How many superseded durable ids a session remembers (see
  * {@link AcpSession._priorAgentSessionIds}). Only ids a not-yet-re-persisted
@@ -559,6 +647,12 @@ export class AcpSession extends Disposable implements IAcpSession {
   // synchronously (set(v, tx) writes _value before tx.finish()).
   private _pendingTx: TransactionImpl | undefined
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Grace-window timer for the orphan-tool-call sweep — see
+   * {@link _scheduleOrphanToolCallSweep} for why the sweep is deferred.
+   */
+  private _orphanSweepTimer: ReturnType<typeof setTimeout> | undefined
 
   private readonly _streamingIds = new Set<string>()
 
@@ -1244,6 +1338,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     const hadPendingInteraction =
       this.pendingElicitation.get() !== undefined || this.pendingPermission.get() !== undefined
     this._commitBatchedTx()
+    // The reconnect owns any unsettled tool card: the agent replays its result
+    // after resume, so a sweep armed by the interrupted turn must not fire.
+    this._cancelOrphanToolCallSweep()
     this._finalizeRunningSegment()
     this._cancelPending()
     this._turnInterrupted = this._inFlight.size > 0
@@ -1481,6 +1578,11 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._replayOverflow = false
       this._appendMessage('agent', replayHistoryOverflowNotice())
     }
+    // A card the agent never settled is replayed as pending again, so without
+    // this the original symptom returns on every reopen and only clears once the
+    // user sends another prompt. The window also covers the fork's tail-end
+    // backfill of tool results that fell off the transcript's display chain.
+    this._scheduleOrphanToolCallSweep('history replayed')
   }
 
   suppressReplayToTimeline(anchorMessageId?: string): void {
@@ -1836,6 +1938,9 @@ export class AcpSession extends Disposable implements IAcpSession {
         // vendor's stream, so a slot still running here lost its settle — stop
         // the card from spinning forever.
         this._settleOrphanCompactions('interrupted')
+        // Tool cards can outlive the prompt RPC legitimately, so this one is
+        // deferred rather than settled here — see the scheduler's notes.
+        this._scheduleOrphanToolCallSweep('turn ended')
         return
       } catch (err) {
         if (err instanceof AcpAbortError) {
@@ -1843,7 +1948,10 @@ export class AcpSession extends Disposable implements IAcpSession {
           // A reconnect aborts in-flight prompts too, but that path is an
           // interruption, not a cancellation: the orphan compaction must stay
           // `running` so the restarted compaction's `start` can merge it.
-          if (!this._reconnecting) this._settleOrphanCompactions('cancelled')
+          if (!this._reconnecting) {
+            this._settleOrphanCompactions('cancelled')
+            this._scheduleOrphanToolCallSweep('turn cancelled')
+          }
           return
         }
         failure = err as Error
@@ -1889,7 +1997,10 @@ export class AcpSession extends Disposable implements IAcpSession {
           this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
           // Same guard as the abort branch above: a mid-backoff reconnect owns
           // the orphan compaction, don't settle it here.
-          if (!this._reconnecting) this._settleOrphanCompactions('cancelled')
+          if (!this._reconnecting) {
+            this._settleOrphanCompactions('cancelled')
+            this._scheduleOrphanToolCallSweep('turn cancelled')
+          }
           return
         }
         continue
@@ -1940,6 +2051,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         error: failure.message,
       })
       this._settleOrphanCompactions('turn failed')
+      this._scheduleOrphanToolCallSweep('turn failed')
       if (isAuthRequiredError(failure)) this._onDidRequireAuth.fire()
       return
     }
@@ -2399,6 +2511,16 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (sid !== undefined) this._applyHistoryFirstPrompt(sid, source)
   }
 
+  /**
+   * Sessions are normally torn down via {@link close}, but a bare dispose (test
+   * teardown, service-level cleanup) must not leave the sweep timer armed on a
+   * dead session.
+   */
+  override dispose(): void {
+    this._cancelOrphanToolCallSweep()
+    super.dispose()
+  }
+
   private _applyHistoryFirstPrompt(sessionIdOnAgent: string, text: string): void {
     this._history?.setHistoryFirstPrompt(sessionIdOnAgent, text)
   }
@@ -2442,6 +2564,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   async close(): Promise<void> {
     this._commitBatchedTx()
+    this._cancelOrphanToolCallSweep()
     this._finalizeRunningSegment()
     // A user-initiated close is terminal: clear the dormant flag so a session
     // closed while asleep can never be revived by a wake (see {@link isDormant}).
@@ -2795,11 +2918,16 @@ export class AcpSession extends Disposable implements IAcpSession {
         const startedAt = existing?.startedAt
         const status =
           (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending'
-        const settled = status === 'completed' || status === 'failed'
+        const settled = isSettledToolCallStatus(status)
         const durationMs =
           settled && startedAt !== undefined
             ? (existing?.durationMs ?? Math.max(0, Date.now() - startedAt))
             : existing?.durationMs
+        // A `_meta`-only restamp (e.g. the fork's post-load subagent stats) omits
+        // `status`, so it inherits `cancelled` from `existing` — carry the reason
+        // with it or the card's notice would blink off. A real terminal update
+        // drops it: the result did arrive after all.
+        const settleReason = status === 'cancelled' ? existing?.settleReason : undefined
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
@@ -2815,6 +2943,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(subagentStats !== undefined ? { subagentStats } : {}),
           ...(startedAt !== undefined ? { startedAt } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(settleReason !== undefined ? { settleReason } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed') {
@@ -3385,6 +3514,117 @@ export class AcpSession extends Disposable implements IAcpSession {
     const tx = this._batchedTx()
     this.timeline.set(this._timeline, tx)
     this._commitBatchedTx()
+  }
+
+  /**
+   * Arm the orphan-tool-call sweep after a grace window.
+   *
+   * Deliberately NOT synchronous, unlike {@link _settleOrphanCompactions}. Two
+   * reasons, both observed on the wire:
+   *
+   * 1. `_universe/background_activity` with `autonomousTurn:false` can arrive
+   *    AFTER the `session/prompt` response. Since an active autonomous turn is a
+   *    hard skip condition below, sweeping synchronously would read the stale
+   *    `true` and never settle anything on exactly the timeline this fixes.
+   * 2. The fork degrades a last background task's terminal `tool_call_update` to
+   *    post-turn delivery (see its `Turn.deferredSettle` notes). A late but
+   *    legitimate update lands inside the window, settles its card normally, and
+   *    the sweep then finds nothing to do — no false positives.
+   *
+   * Re-arming resets the window; only one timer is ever outstanding.
+   */
+  private _scheduleOrphanToolCallSweep(reason: string, attempt = 0): void {
+    if (this.readOnly) return
+    if (this._orphanSweepTimer !== undefined) clearTimeout(this._orphanSweepTimer)
+    this._orphanSweepTimer = setTimeout(() => {
+      this._orphanSweepTimer = undefined
+      if (this._settleOrphanToolCalls(reason) !== 'wait') return
+      // Out-of-band work outlived the window. Nothing else re-arms this sweep
+      // (unlike the in-flight/replay skips, which end in a fresh turn or in
+      // `endHistoryReplay`), so keep checking back — bounded, because a card
+      // held by work that never reports is exactly what this sweep is for.
+      if (attempt + 1 < ORPHAN_TOOL_CALL_SWEEP_MAX_ATTEMPTS) {
+        this._scheduleOrphanToolCallSweep(reason, attempt + 1)
+      }
+    }, ORPHAN_TOOL_CALL_SWEEP_GRACE_MS)
+  }
+
+  private _cancelOrphanToolCallSweep(): void {
+    if (this._orphanSweepTimer === undefined) return
+    clearTimeout(this._orphanSweepTimer)
+    this._orphanSweepTimer = undefined
+  }
+
+  /**
+   * Settle tool cards the agent never finished as `cancelled`.
+   *
+   * A card leaves `pending`/`in_progress` only via a terminal `tool_call_update`.
+   * When the agent surfaces a `tool_call` and then ends the turn without ever
+   * settling it (observed: a `Write` announced, then `stopReason:"end_turn"`, no
+   * further update for that id — ever), the card spins and its stopwatch ticks
+   * forever, so the user waits on work that already stopped.
+   *
+   * Every skip below marks a case where a pending card is legitimate and a
+   * terminal update is still expected; only when all of them are clear can a
+   * still-pending card be called orphaned. Notably NOT called on connection loss:
+   * the reconnect owns those cards and the agent replays their results.
+   *
+   * Returns `'wait'` when out-of-band work is still running — the only skip the
+   * caller retries, because nothing else will re-arm the sweep for it.
+   */
+  private _settleOrphanToolCalls(reason: string): 'done' | 'skipped' | 'wait' {
+    if (this.readOnly) return 'skipped'
+    // Concurrent steering means several prompts share one card list with no
+    // per-turn attribution, so one turn's orphan is indistinguishable from
+    // another's live card. Also covers "the user sent a new prompt during the
+    // grace window", which correctly voids this sweep.
+    if (this._inFlight.size > 0) return 'skipped'
+    if (this._reconnecting) return 'skipped'
+    // Replay builds cards as pending first and settles them moments later.
+    if (this.isReplayingHistory.get()) return 'skipped'
+    // A card waiting on the user's permission/elicitation answer is meant to be
+    // pending, and the fork settles it once the answer lands.
+    if (this.pendingPermission.get() !== undefined) return 'skipped'
+    if (this.pendingElicitation.get() !== undefined) return 'skipped'
+    // Work continues past the prompt RPC; its terminal updates are still coming.
+    if (this.backgroundTaskCount.get() > 0 || this._autonomousTurnActive) return 'wait'
+
+    const orphans = this._timeline.flatMap((it) =>
+      it.kind === 'toolCall' ? collectUnsettledToolCalls(it.call) : [],
+    )
+    if (orphans.length === 0) return 'done'
+
+    const notice = orphanToolCallNotice()
+    this._timeline = this._timeline.map((it) =>
+      it.kind === 'toolCall' && hasUnsettledToolCall(it.call)
+        ? { kind: 'toolCall', id: it.id, call: settleOrphanToolCall(it.call, notice) }
+        : it,
+    )
+    this._toolCalls = this._toolCalls.map((call) =>
+      hasUnsettledToolCall(call) ? settleOrphanToolCall(call, notice) : call,
+    )
+    const tx = this._batchedTx()
+    this.toolCalls.set(this._toolCalls, tx)
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
+
+    for (const call of orphans) {
+      const elapsedMs = call.startedAt !== undefined ? Date.now() - call.startedAt : undefined
+      console.warn(
+        `[acp-tool] orphaned tool call settled: title=${call.title} kind=${call.kind} ` +
+          `elapsedMs=${elapsedMs ?? 'unknown'} reason=${reason} session=${this.id}`,
+      )
+      // publicLog, not publicLogError: a result that never arrived is not a tool
+      // failure and must not pollute the `acp.tool_call_failed` error metric.
+      this._telemetry.publicLog('acp.tool_call_orphaned', {
+        sessionId: this.id,
+        agentId: this.agentId,
+        kind: call.kind,
+        reason,
+        ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+      })
+    }
+    return 'done'
   }
 
   /**

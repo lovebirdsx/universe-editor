@@ -771,6 +771,9 @@
 .toolCallStatusIcon_failed {
   color: var(--vscode-badge-errorBackground, #f14c4c);
 }
+.toolCallStatusIcon_cancelled {
+  color: var(--vscode-descriptionForeground, #8a8a92);
+}
 
 .toolCallHeaderButton {
   width: 100%;
@@ -818,8 +821,9 @@
   color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
-/* 内存保护修剪后的工具卡片占位提示（live 驻留预算释放了旧内容）。 */
-.toolCallMemoryTrimmed {
+/* 卡片内的短提示条：内存保护修剪后的占位提示 / 本地 settle 说明（cancelled）。 */
+.toolCallMemoryTrimmed,
+.toolCallSettleReason {
   margin: 4px 0 0;
   padding: 6px 8px;
   border-radius: 4px;

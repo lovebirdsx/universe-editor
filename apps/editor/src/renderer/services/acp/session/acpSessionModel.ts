@@ -61,7 +61,14 @@ export interface AcpMessage {
   readonly memoryTrimmed?: boolean
 }
 
-export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+/**
+ * `cancelled` is local-only: the agent never reports it. It means "the turn
+ * ended without this call ever settling" — see
+ * `AcpSession._settleOrphanToolCalls`. Deliberately distinct from `failed`
+ * (which the agent reported and which feeds the `acp.tool_call_failed` error
+ * metric), because a missing result is not a tool failure.
+ */
+export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
 
 export interface AcpToolCallDiff {
   readonly path: string
@@ -144,8 +151,15 @@ export interface AcpToolCall {
    * for live turns — history replay carries no wall-clock, so it stays absent.
    */
   readonly startedAt?: number
-  /** Elapsed ms at settle (`completed`/`failed`), computed from {@link startedAt}. */
+  /** Elapsed ms at settle (`completed`/`failed`/`cancelled`), computed from {@link startedAt}. */
   readonly durationMs?: number
+  /**
+   * Why this card was settled locally rather than by the agent. Only set on
+   * `cancelled` cards (see `AcpSession._settleOrphanToolCalls`); the UI renders
+   * it as a short notice on the card so a result that never arrived reads as an
+   * outcome instead of an eternal spinner.
+   */
+  readonly settleReason?: string
   /**
    * True when this card's heavy content (text / blocks / diffs / raw input /
    * terminal accumulator) was released by the live resident budget

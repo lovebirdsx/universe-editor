@@ -12,9 +12,18 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactElement,
   type ReactNode,
 } from 'react'
-import { Check, ChevronDown, ChevronRight, ChevronUp, CircleX, Loader2 } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  CircleSlash,
+  CircleX,
+  Loader2,
+} from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
 import type { AcpToolCallStatus } from '../../services/acp/session/acpSessionService.js'
@@ -164,7 +173,7 @@ function AnsiSpan({ segment }: { segment: AnsiSegment }) {
   return <span style={style}>{segment.text}</span>
 }
 
-export function ToolCallStatusIcon({ status }: { status: AcpToolCallStatus }) {
+export function ToolCallStatusIcon({ status }: { status: AcpToolCallStatus }): ReactElement {
   const className = `${styles['toolCallStatusIcon']} ${styles[`toolCallStatusIcon_${status}`] ?? ''}`
   const common = { size: 14, 'aria-label': status, role: 'img' as const }
   switch (status) {
@@ -175,5 +184,11 @@ export function ToolCallStatusIcon({ status }: { status: AcpToolCallStatus }) {
       return <Check {...common} className={className} />
     case 'failed':
       return <CircleX {...common} className={className} />
+    case 'cancelled':
+      return <CircleSlash {...common} className={className} />
   }
+  // `noImplicitReturns` is off, so the switch above would silently fall through
+  // and render no icon at all if a status were added. This makes it fail to compile.
+  const exhaustiveCheck: never = status
+  return exhaustiveCheck
 }

@@ -71,6 +71,7 @@ import {
   PLAN_AUTO_EXECUTE_DELAY_MS,
   REWIND_SESSION_METHOD,
   SIDE_TASK_ROLE_PROMPT,
+  orphanToolCallNotice,
 } from '../acpSession.js'
 import type { AcpPendingElicitation, AcpPendingPermission } from '../acpSessionModel.js'
 import { ACP_CAPABILITIES_META_KEY, SUBAGENT_TRANSCRIPT_CAPABILITY } from '../acpExtMethods.js'
@@ -5478,5 +5479,545 @@ describe('AcpSessionService extra model candidates injection', () => {
     } finally {
       svc.dispose()
     }
+  })
+})
+
+describe('AcpSessionService — orphan tool-call sweep', () => {
+  const SWEEP_GRACE_MS = 5_000
+
+  function makeService(
+    client: FakeAcpClientService = new FakeAcpClientService(),
+  ): AcpSessionService {
+    const notifications = new StubNotificationService()
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      notifications,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+    )
+  }
+
+  /**
+   * A session whose agent announced `tc-1` (pending) and then answered with
+   * `end_turn` — the sweep timer is armed, the card is still spinning.
+   */
+  async function turnEndedWithPendingTool(
+    client: FakeAcpClientService,
+  ): Promise<{ svc: AcpSessionService; session: AcpSession; conn: ConnectedSession }> {
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await prompt
+    return { svc, session, conn }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it('settles a still-pending tool card as cancelled once the grace window elapses', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    expect(call?.durationMs).toBeTypeOf('number')
+
+    const slot = session.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'tc-1')
+    expect(slot?.kind).toBe('toolCall')
+    if (slot?.kind !== 'toolCall') throw new Error('expected the tool-call slot')
+    expect(slot.call.status).toBe('cancelled')
+    svc.dispose()
+  })
+
+  it('settles the card when the autonomousTurn:false activity lands after the turn (real-world ordering)', async () => {
+    // Production logs: the agent's `autonomousTurn:false` background-activity
+    // notification arrives AFTER the session/prompt response. A synchronous
+    // sweep at turn end would read the stale `autonomousTurn === true` and skip
+    // forever — this test fails against that implementation, pinning the
+    // deferred grace-window behaviour that fixes the bug.
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: true })
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await prompt
+    // The late notification: the turn already ended, only now does the agent
+    // report that no autonomous turn is active.
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: false })
+
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    expect(call?.durationMs).toBeTypeOf('number')
+    svc.dispose()
+  })
+
+  it('keeps a card settled by a terminal update that arrives inside the grace window', async () => {
+    const { svc, session, conn } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-1',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: 'done' } }],
+      },
+    })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('completed')
+    expect(call?.settleReason).toBeUndefined()
+    expect(call?.durationMs).toBeTypeOf('number')
+    svc.dispose()
+  })
+
+  it('leaves a card alone while background tasks are still running', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.applyBackgroundActivity({ backgroundTasks: 1, autonomousTurn: false })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('leaves a card alone while an autonomous turn is still active', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: true })
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await prompt
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('leaves a card alone during a history replay', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.beginHistoryReplay()
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    session.endHistoryReplay()
+    svc.dispose()
+  })
+
+  it('leaves a card alone while a permission request is pending', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.presentPermission({
+      toolCallId: 'tc-1',
+      title: 'run command',
+      options: [{ optionId: 'allow', name: 'Allow' }],
+      resolve: () => {},
+      cancel: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('settles a still-pending tool card as cancelled after cancelTurn', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+
+    await session.cancelTurn()
+    await prompt
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    expect(call?.durationMs).toBeTypeOf('number')
+    svc.dispose()
+  })
+
+  it('settles nested sub-agent tool cards along with their parent', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-parent',
+        title: 'Run agent',
+        kind: 'other',
+        status: 'pending',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-child',
+        title: 'Read file',
+        kind: 'read',
+        status: 'pending',
+        _meta: { claudeCode: { parentToolUseId: 'tc-parent' } },
+      },
+    })
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await prompt
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const slot = session.timeline
+      .get()
+      .find((it) => it.kind === 'toolCall' && it.id === 'tc-parent')
+    expect(slot?.kind).toBe('toolCall')
+    if (slot?.kind !== 'toolCall') throw new Error('expected the parent tool-call slot')
+    expect(slot.call.status).toBe('cancelled')
+    expect(slot.call.settleReason).toBe(orphanToolCallNotice())
+    expect(slot.call.durationMs).toBeTypeOf('number')
+
+    // Child cards carry no startedAt (only top-level cards are timed), so they
+    // flip status alone — asserting durationMs here would be wrong.
+    const child = slot.call.children?.[0]
+    expect(child?.kind).toBe('toolCall')
+    if (child?.kind !== 'toolCall') throw new Error('expected the nested tool call')
+    expect(child.call.status).toBe('cancelled')
+    expect(child.call.settleReason).toBe(orphanToolCallNotice())
+    expect(child.call.durationMs).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('close right after the turn cancels the pending sweep (no timer fires on a dead session)', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    await session.close()
+    expect(session.timeline.get()).toEqual([])
+
+    // The sweep timer was cancelled with the session — advancing past the grace
+    // window must neither settle anything nor throw on the disposed session.
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    expect(session.timeline.get()).toEqual([])
+    expect(session.toolCalls.get()).toEqual([])
+    svc.dispose()
+  })
+
+  it('skips the sweep while a follow-up prompt is in flight', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await session.cancelTurn()
+    await prompt
+
+    // A new prompt lands 3s into the grace window and is still hanging when
+    // the timer fires — its card is live work, not an orphan.
+    await vi.advanceTimersByTimeAsync(3000)
+    const followUp = session.sendPrompt('keep going')
+    await vi.advanceTimersByTimeAsync(10)
+
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+
+    await session.cancelTurn()
+    await followUp
+    svc.dispose()
+  })
+
+  it('leaves a card alone while an elicitation request is pending', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.presentElicitation({
+      request: {
+        mode: 'form',
+        message: 'Pick a language',
+        requestedSchema: { type: 'object', properties: { lang: { type: 'string' } }, required: [] },
+        sessionId: 'agent-1',
+      },
+      resolve: () => {},
+      cancel: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('keeps a completed parent card while sweeping its unsettled sub-agent card', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-parent',
+        title: 'Run agent',
+        kind: 'other',
+        status: 'pending',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-child',
+        title: 'Read file',
+        kind: 'read',
+        status: 'pending',
+        _meta: { claudeCode: { parentToolUseId: 'tc-parent' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-parent',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: 'done' } }],
+      },
+    })
+
+    const prompt = session.sendPrompt('do the thing')
+    await vi.advanceTimersByTimeAsync(10)
+    await prompt
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const slot = session.timeline
+      .get()
+      .find((it) => it.kind === 'toolCall' && it.id === 'tc-parent')
+    expect(slot?.kind).toBe('toolCall')
+    if (slot?.kind !== 'toolCall') throw new Error('expected the parent tool-call slot')
+    expect(slot.call.status).toBe('completed')
+    expect(slot.call.settleReason).toBeUndefined()
+
+    const child = slot.call.children?.[0]
+    expect(child?.kind).toBe('toolCall')
+    if (child?.kind !== 'toolCall') throw new Error('expected the nested tool call')
+    expect(child.call.status).toBe('cancelled')
+    expect(child.call.settleReason).toBe(orphanToolCallNotice())
+    svc.dispose()
+  })
+
+  it('drops settleReason when a real terminal update arrives after the sweep', async () => {
+    const { svc, session, conn } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    expect(session.toolCalls.get()[0]?.status).toBe('cancelled')
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-1',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: 'done' } }],
+      },
+    })
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('completed')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('keeps the cancelled notice when a meta-only restamp lands after the sweep', async () => {
+    const { svc, session, conn } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    expect(session.toolCalls.get()[0]?.status).toBe('cancelled')
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-1',
+        _meta: { '_universe/subagentStats': { inputTokens: 123, outputTokens: 45 } },
+      },
+    })
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    expect(call?.subagentStats?.inputTokens).toBe(123)
+    svc.dispose()
+  })
+
+  it('arms the sweep when a history replay ends with an unsettled card', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+    session.beginHistoryReplay()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        title: 'Write src/a.ts',
+        kind: 'edit',
+        status: 'pending',
+      },
+    })
+    session.endHistoryReplay()
+
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    svc.dispose()
+  })
+
+  it('retries the sweep while background tasks run, then settles once they finish', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.applyBackgroundActivity({ backgroundTasks: 1, autonomousTurn: false })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const pending = session.toolCalls.get()[0]
+    expect(pending?.status).toBe('pending')
+    expect(pending?.settleReason).toBeUndefined()
+
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: false })
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('cancelled')
+    expect(call?.settleReason).toBe(orphanToolCallNotice())
+    svc.dispose()
+  })
+
+  it('dispose cancels the pending sweep instead of settling on a dead session', async () => {
+    const { svc, session } = await turnEndedWithPendingTool(new FakeAcpClientService())
+    session.dispose()
+
+    // Unlike close(), dispose keeps the arrays — a sweep that still fired
+    // would flip the card, so only a genuinely cancelled timer stays pending.
+    await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
+    const call = session.toolCalls.get()[0]
+    expect(call?.status).toBe('pending')
+    expect(call?.settleReason).toBeUndefined()
+    svc.dispose()
   })
 })

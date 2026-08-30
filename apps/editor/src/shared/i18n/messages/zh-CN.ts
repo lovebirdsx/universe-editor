@@ -1849,6 +1849,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.permission.steer.placeholder': '告诉 Claude 应该怎么做…',
   'acp.permission.steer.submit': '发送',
   'acp.session.forkTitle': '{title}（分叉）',
+  'acp.session.toolCallOrphaned': '未收到结果（本轮已结束）。',
   'acp.sessionTitle.noModelHint':
     '未配置会话标题模型，AI 会话将使用首条消息作为标题。选择一个模型可自动生成更贴切的标题。',
   'acp.sessionTitle.selectModel': '选择模型',

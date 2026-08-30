@@ -162,13 +162,24 @@ describe('ToolCallCard', () => {
     expect(screen.getByTestId('acp-markdown')).toBeTruthy()
   })
 
-  it.each<AcpToolCallStatus>(['pending', 'in_progress', 'completed', 'failed'])(
+  it.each<AcpToolCallStatus>(['pending', 'in_progress', 'completed', 'failed', 'cancelled'])(
     'renders a status icon labelled %s',
     (status) => {
       renderCard(makeCall({ status }))
       expect(screen.getByLabelText(status)).toBeTruthy()
     },
   )
+
+  it('renders the settle-reason notice on a card the session cancelled locally', () => {
+    renderCard(
+      makeCall({
+        status: 'cancelled',
+        settleReason: 'No result received (the turn ended).',
+      }),
+    )
+    const notice = screen.getByTestId('acp-toolcall-settle-reason')
+    expect(notice.textContent).toContain('No result received (the turn ended).')
+  })
 
   it('renders a sub-agent timeline (message + nested tool call) inside the parent card', () => {
     // kind 'other' renders expanded standalone, so the folded children show.

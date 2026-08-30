@@ -429,6 +429,14 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
+  // The turn ended before this tool ever returned a result — the state machine
+  // settled the card locally and baked a user-facing reason into `settleReason`.
+  const settleNotice = call.settleReason !== undefined && (
+    <div className={styles['toolCallSettleReason']} data-testid="acp-toolcall-settle-reason">
+      {call.settleReason}
+    </div>
+  )
+
   return (
     <CollapsibleSlot
       as="li"
@@ -450,6 +458,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       }}
     >
       {call.memoryTrimmed ? trimmedNotice : body}
+      {settleNotice}
       {childTimeline}
     </CollapsibleSlot>
   )
