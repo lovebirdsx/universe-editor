@@ -198,6 +198,7 @@ function reconcileGroup(): { resourceStates: unknown[] } | undefined {
 async function makeClient(
   store: ReconcileStore,
   opts: RespondOptions = {},
+  log?: (msg: string) => void,
 ): Promise<PerforceClientInstance> {
   respond(opts)
   const client = await PerforceClient.create(
@@ -205,7 +206,7 @@ async function makeClient(
     {},
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000 },
-    undefined,
+    log,
     store,
   )
   expect(client).toBeDefined()
@@ -306,8 +307,11 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(client.status.reconcileCount).toBe(1)
     calls.length = 0
 
-    // Ordinary refresh (no `reconcile: true`) → cheap re-verify path.
+    // Ordinary refresh (no `reconcile: true`) → cheap re-verify path. The
+    // opened-set filter lands synchronously, but the disk re-verify is deferred to
+    // the background now, so the now-clean entry only drops after it settles.
     await client.refresh()
+    await client.whenBackgroundReverifySettled()
 
     expect(client.status.reconcileCount).toBe(0)
     const scans = reconcileScans()
@@ -333,6 +337,9 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(client.status.reconcileCount).toBe(1)
 
     await client.refresh()
+    // The still-diverged entry survives the deferred re-verify; settle it so the
+    // assertion reads against the committed post-verify state.
+    await client.whenBackgroundReverifySettled()
 
     expect(client.status.reconcileCount).toBe(1)
     const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
@@ -739,5 +746,198 @@ describe('PerforceClient reconcile scope', () => {
     client.setReconcileScope([`${LOCAL}/Client/`]) // same dir, trailing slash
     expect(changes).toBe(0)
     expect(client.status.reconcileCount).toBe(1)
+  })
+})
+
+describe('PerforceClient reconcile re-verify threshold (W4)', () => {
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    calls.length = 0
+    createdGroups.length = 0
+  })
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('skips the disk re-verify entirely when candidates exceed the threshold', async () => {
+    // The minutes-long wedge: 9115 candidates → ~114 `reconcile -n` batches fanned
+    // through the shared gate. Above the threshold the re-verify must be skipped
+    // outright — never fan that many batches — and logged (never silent).
+    const files: ReconcilePersistState['files'][number][] = Array.from(
+      { length: 1501 },
+      (_, i) => ({
+        depotFile: `//depot/f${i}.txt`,
+        clientFile: `${LOCAL}/f${i}.txt`,
+        action: 'edit',
+        rev: '1',
+      }),
+    )
+    const store = memStore({ files, dismissed: [] })
+    const logs: string[] = []
+    const client = await makeClient(store, {}, (m) => logs.push(m))
+    client.restoreReconcile()
+    expect(client.status.reconcileCount).toBe(1501)
+    calls.length = 0
+
+    await client.refresh()
+    await client.whenBackgroundReverifySettled()
+
+    expect(reconcileScans()).toHaveLength(0)
+    expect(logs.some((l) => l.includes('skipped'))).toBe(true)
+    // The opened-set filter still landed (nothing was opened, so all survive).
+    expect(client.status.reconcileCount).toBe(1501)
+  })
+
+  it('still applies the opened-set filter when the re-verify is skipped', async () => {
+    // A candidate that was just collected (now opened) must leave the group on the
+    // same refresh even though the disk re-verify is skipped for the huge set.
+    const files: ReconcilePersistState['files'][number][] = Array.from(
+      { length: 1501 },
+      (_, i) => ({
+        depotFile: `//depot/f${i}.txt`,
+        clientFile: `${LOCAL}/f${i}.txt`,
+        action: 'edit',
+        rev: '1',
+      }),
+    )
+    const store = memStore({ files, dismissed: [] })
+    const client = await makeClient(store, {
+      opened: () => [{ rel: 'f0.txt' }],
+    })
+    client.restoreReconcile()
+    expect(client.status.reconcileCount).toBe(1501)
+    calls.length = 0
+
+    await client.refresh()
+
+    expect(reconcileScans()).toHaveLength(0)
+    // f0.txt was opened → filtered out synchronously; the other 1500 survive.
+    expect(client.status.reconcileCount).toBe(1500)
+    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
+    expect(states.some((s) => (s.resourceUri ?? '').includes('f0.txt'))).toBe(false)
+    expect(states.some((s) => (s.resourceUri ?? '').includes('f1.txt'))).toBe(true)
+  })
+
+  it('re-verifies candidates below the threshold in the background', async () => {
+    const store = memStore({
+      files: [
+        { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
+      ],
+      dismissed: [],
+    })
+    const client = await makeClient(store, { reconcile: () => [] })
+    client.restoreReconcile()
+    calls.length = 0
+
+    await client.refresh()
+    // The disk re-verify is deferred: no scan on the awaited refresh path…
+    expect(reconcileScans()).toHaveLength(0)
+    // …and it runs once the background re-verify settles.
+    await client.whenBackgroundReverifySettled()
+    expect(reconcileScans().length).toBeGreaterThan(0)
+  })
+
+  it('schedules only one background re-verify across overlapping refreshes', async () => {
+    const store = memStore({
+      files: [
+        { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
+        { depotFile: '//depot/b.txt', clientFile: `${LOCAL}/b.txt`, action: 'edit', rev: '1' },
+      ],
+      dismissed: [],
+    })
+    const client = await makeClient(store, { reconcile: () => [] })
+    client.restoreReconcile()
+    calls.length = 0
+
+    // Two refreshes back-to-back (coalesced into two rounds) must not stack a
+    // second re-verify behind the first — the guard drops the redundant request.
+    await Promise.all([client.refresh(), client.refresh()])
+    await client.whenBackgroundReverifySettled()
+
+    expect(reconcileScans()).toHaveLength(1)
+  })
+})
+
+describe('PerforceClient reconcile stage label (W4)', () => {
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    calls.length = 0
+    createdGroups.length = 0
+  })
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+  })
+
+  it('reports `reconcile(skipped)` when the re-verify is skipped above the threshold', async () => {
+    // The stage label is the only way a later operator can tell "deferred to the
+    // background" from "skipped entirely" — a skipped re-verify must never log as
+    // deferred, or troubleshooting reads a skipped tail as a pending background job.
+    const files: ReconcilePersistState['files'][number][] = Array.from(
+      { length: 1501 },
+      (_, i) => ({
+        depotFile: `//depot/f${i}.txt`,
+        clientFile: `${LOCAL}/f${i}.txt`,
+        action: 'edit',
+        rev: '1',
+      }),
+    )
+    const store = memStore({ files, dismissed: [] })
+    const logs: string[] = []
+    const client = await makeClient(store, {}, (m) => logs.push(m))
+    client.restoreReconcile()
+    calls.length = 0
+    logs.length = 0
+
+    await client.refresh()
+    await client.whenBackgroundReverifySettled()
+
+    expect(logs.some((l) => l.includes('refresh/reconcile(skipped)'))).toBe(true)
+    expect(logs.some((l) => l.includes('refresh/reconcile(deferred)'))).toBe(false)
+  })
+
+  it('reports `reconcile(deferred)` when the re-verify is scheduled in the background', async () => {
+    const store = memStore({
+      files: [
+        { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
+      ],
+      dismissed: [],
+    })
+    const logs: string[] = []
+    const client = await makeClient(store, { reconcile: () => [] }, (m) => logs.push(m))
+    client.restoreReconcile()
+    logs.length = 0
+
+    await client.refresh()
+
+    expect(logs.some((l) => l.includes('refresh/reconcile(deferred)'))).toBe(true)
+    await client.whenBackgroundReverifySettled()
+  })
+
+  it('reports `reconcile` after a full-scan (Clean Refresh) walk', async () => {
+    const logs: string[] = []
+    const client = await makeClient(memStore(), { reconcile: () => [] }, (m) => logs.push(m))
+    logs.length = 0
+
+    await client.refresh({ reconcile: true })
+
+    expect(logs.some((l) => l.includes('refresh/reconcile '))).toBe(true)
+    expect(logs.some((l) => l.includes('refresh/reconcile(deferred)'))).toBe(false)
+    expect(logs.some((l) => l.includes('refresh/reconcile(skipped)'))).toBe(false)
+  })
+
+  it('reports `reconcile(none)` when reconcile discovery is off (zero p4 work)', async () => {
+    const logs: string[] = []
+    // No restore: `_reconcileActive` stays false, so the reconcile stage clears
+    // the group without any p4 call — neither a scan, a defer, nor a skip.
+    const client = await makeClient(memStore(), {}, (m) => logs.push(m))
+    logs.length = 0
+
+    await client.refresh()
+
+    expect(logs.some((l) => l.includes('refresh/reconcile(none)'))).toBe(true)
+    expect(logs.some((l) => l.includes('refresh/reconcile(deferred)'))).toBe(false)
+    expect(logs.some((l) => l.includes('refresh/reconcile(skipped)'))).toBe(false)
   })
 })

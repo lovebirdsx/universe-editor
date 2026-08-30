@@ -23,7 +23,15 @@ import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
-import { P4Service, chunkByLength, type P4Connection, type P4ExecResult } from './p4Service.js'
+import {
+  INTERACTIVE_CONTENT_EXEC,
+  INTERACTIVE_EXEC,
+  P4Service,
+  chunkByLength,
+  type P4Connection,
+  type P4ExecOptions,
+  type P4ExecResult,
+} from './p4Service.js'
 import { discoverClient, connectionFor, type DiscoveredClient } from './clientDiscovery.js'
 import { parseOpened, parsePending } from './openedParser.js'
 import {
@@ -42,7 +50,7 @@ import {
   toReconcileResourceStates,
 } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
-import { parseFstat, type FstatInfo } from './fstatParser.js'
+import { type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import {
   parseReconcile,
@@ -147,6 +155,28 @@ const SHELVED_DESCRIBE_TIMEOUT_MS = 30_000
  */
 const MAX_FILE_SCOPED_INVALIDATIONS = 64
 
+/**
+ * Above this many surviving reconcile candidates, the cheap path's disk re-verify
+ * is skipped instead of fanning dozens of `reconcile -n` batches through the
+ * ConcurrencyGate. The opened-set filter still runs; the skipped tail converges
+ * via file-watcher incrementals and an explicit Clean Refresh.
+ */
+const RECONCILE_REVERIFY_MAX_PATHS = 1500
+
+/**
+ * What the reconcile stage of a refresh actually did, so the per-stage timing
+ * label stays honest: a skipped re-verify must never log as "deferred".
+ * `none` = zero reconcile p4 work (discovery off, or no surviving candidates).
+ */
+type ReconcileOutcome = 'scanned' | 'deferred' | 'skipped' | 'none'
+
+const RECONCILE_STAGE_LABELS: Record<ReconcileOutcome, string> = {
+  scanned: 'reconcile',
+  deferred: 'reconcile(deferred)',
+  skipped: 'reconcile(skipped)',
+  none: 'reconcile(none)',
+}
+
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
 function isSpreadsheetPath(path: string): boolean {
   const lower = path.toLowerCase()
@@ -224,10 +254,6 @@ export class PerforceClient {
   /** One-shot request for a full reconcile walk on the next refresh (set by a
    *  clean refresh); consumed and cleared inside `_doRefresh`. */
   private _fullScanRequested = false
-  /** One-shot request to move the next refresh's reconcile re-verify off the
-   *  awaited path (set by the collect operations); consumed inside `_doRefresh`.
-   *  See {@link _refreshReconcile} for why collecting doesn't need to block on it. */
-  private _deferReverify = false
   /** In-flight background re-verify, so `dispose` and tests can await it. */
   private _backgroundReverify: Promise<void> | undefined
   /** Depot/local scopes (p4 filespecs) the reconcile-discovery pass covers.
@@ -392,26 +418,20 @@ export class PerforceClient {
    * rebuild the groups. Lightweight by default — server metadata queries only.
    *
    * When reconcile discovery is active (after a clean refresh / collect, or with
-   * `perforce.autoReconcile`), a `p4 reconcile -n` pass also runs to populate the
-   * "changes to reconcile" group. That pass can be heavy on a large workspace, so
-   * ordinary post-mutation refreshes leave it off unless it's already sticky.
-   * Pass `{ reconcile: true }` to force the pass on (and make it sticky).
+   * `perforce.autoReconcile`), the "changes to reconcile" group is rebuilt too. A
+   * full `p4 reconcile -n` walk only runs when `{ reconcile: true }` forces it (and
+   * makes it sticky) — that walk is heavy on a large workspace, so ordinary
+   * post-mutation refreshes leave it off. The cheap path re-filters the cached list
+   * against the freshly fetched opened set and defers its disk re-verify to the
+   * background, so the caller's promise (and the status-bar spinner riding on it)
+   * settles once the groups are rebuilt (see {@link _refreshReconcile}).
    * Coalesces concurrent calls.
-   *
-   * `deferReconcileReverify` moves the cheap path's disk re-verify off the awaited
-   * work, so the caller's promise (and the status-bar spinner riding on it) settles
-   * once the groups are rebuilt. Only the collect operations use it — see
-   * {@link _refreshReconcile}.
    */
-  async refresh(options?: {
-    reconcile?: boolean
-    deferReconcileReverify?: boolean
-  }): Promise<void> {
+  async refresh(options?: { reconcile?: boolean }): Promise<void> {
     if (options?.reconcile) {
       this._reconcileActive = true
       this._fullScanRequested = true
     }
-    if (options?.deferReconcileReverify) this._deferReverify = true
     if (this._refreshing) {
       this._queued = true
       // Resolve only once the in-flight pass (which observes the queued flag and
@@ -606,12 +626,9 @@ export class PerforceClient {
     )
     const fullScan = this._fullScanRequested || this._autoReconcile
     this._fullScanRequested = false
-    // A full walk is an explicit, user-requested scan — never deferred.
-    const deferReverify = this._deferReverify && !fullScan
-    this._deferReverify = false
-    await this._refreshReconcile(fullScan, deferReverify)
+    const reconcile = await this._refreshReconcile(fullScan)
     if (this._disposed) return
-    stage(deferReverify ? 'reconcile(deferred)' : 'reconcile', mark)
+    stage(RECONCILE_STAGE_LABELS[reconcile], mark)
     this._log?.(`[perforce] refresh total ${Date.now() - started}ms`)
     this._openedCount = countOpened(groups)
     this._sc.count = this._openedCount
@@ -688,56 +705,62 @@ export class PerforceClient {
    *
    * When discovery is inactive the group is emptied (hidden). With `fullScan` on
    * (clean refresh / `perforce.autoReconcile`) it runs a full `reconcile -n -a -e -d
-   * <scope>` walk — heavy on large trees, so only on demand. Otherwise (an ordinary
+   * <scope>` walk — heavy on large trees, so only on demand, and never deferred
+   * (it's the explicit scan the user asked for). Otherwise (an ordinary
    * post-mutation refresh) it re-filters the cached list against the freshly fetched
    * opened set AND re-verifies each surviving entry against disk with an incremental
    * `reconcile -n` over just those paths — so an entry whose change was discarded
    * (edited back / disk-add deleted / disk-delete restored) drops out without
    * walking the whole tree.
    *
-   * With `deferReverify` the opened-set filter still happens synchronously (so a
-   * just-collected file leaves the group immediately) but the disk re-verify runs in
-   * the background: collecting one file is no reason to make the user wait on a scan
-   * of every *other* candidate, and those entries are re-verified anyway by the file
-   * watcher when they actually change, by the next ordinary refresh, or by a Clean
-   * Refresh. Trades a few seconds of a possibly-stale sibling entry for a spinner
-   * that tracks the operation the user actually asked for.
+   * The cheap path's opened-set filter happens synchronously (so a just-collected
+   * file leaves the group immediately), but the disk re-verify is *always* deferred
+   * to the background: re-scanning every other candidate is no reason to make the
+   * user wait on an O(1) collect, and those entries are re-verified anyway by the
+   * file watcher when they actually change, by the next ordinary refresh, or by a
+   * Clean Refresh. Trades a few seconds of a possibly-stale sibling entry for a
+   * spinner that tracks the operation the user actually asked for. When the surviving
+   * candidate set is huge the background re-verify is skipped outright instead of
+   * fanning dozens of `reconcile -n` batches through the ConcurrencyGate (see
+   * {@link RECONCILE_REVERIFY_MAX_PATHS}) — the opened-set filter still lands, and
+   * the skipped tail converges via the watcher + Clean Refresh.
    *
    * `p4 reconcile -n` is a dry run — it never mutates server state (collecting a
    * file is a separate real `reconcile`). Files already opened are filtered out
    * (their disk edits are tracked in a changelist group). A failed walk logs and
    * clears the group rather than sinking the whole refresh.
    */
-  private async _refreshReconcile(fullScan: boolean, deferReverify = false): Promise<void> {
+  private async _refreshReconcile(fullScan: boolean): Promise<ReconcileOutcome> {
     if (!this._reconcileActive) {
       this._setReconcileFiles([])
-      return
+      return 'none'
     }
     if (!fullScan) {
       // Cheap path: no whole-tree walk. First drop cached entries that are now
-      // opened (e.g. just collected). Then re-verify the surviving entries against
-      // disk with an incremental `reconcile -n` over just those paths (O(list
-      // size), not O(tree)) so an entry whose change was discarded — edited back
-      // to the have revision, a disk-add deleted, a disk-delete restored — drops
-      // out automatically. An empty list makes zero p4 calls.
+      // opened (e.g. just collected) and commit that filtered list immediately, so
+      // a just-collected file leaves the group on this pass. Then re-verify the
+      // surviving entries against disk — deferred to the background, or skipped
+      // outright when the set is so large the re-verify would flood the
+      // ConcurrencyGate (see _scheduleBackgroundReverify / _rescanReconcilePaths).
       const candidates = this._reconcileFiles.filter(
         (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
       )
       const paths = candidates.map((f) => f.clientFile).filter((p): p is string => p !== undefined)
       if (paths.length === 0) {
         this._setReconcileFiles(candidates)
-        return
+        return 'none'
       }
-      if (deferReverify) {
-        // Commit the filtered list now, then re-verify off the awaited path.
+      if (paths.length > RECONCILE_REVERIFY_MAX_PATHS) {
         this._setReconcileFiles(candidates)
-        this._scheduleBackgroundReverify(paths)
-        return
+        this._log?.(
+          `[perforce] reconcile re-verify skipped: ${paths.length} candidates exceed ` +
+            `${RECONCILE_REVERIFY_MAX_PATHS}; relying on watcher incrementals + Clean Refresh`,
+        )
+        return 'skipped'
       }
-      const { scanned, fresh } = await this._rescanReconcilePaths(paths)
-      if (this._disposed) return
-      this._setReconcileFiles(mergeReconcile(candidates, scanned, fresh))
-      return
+      this._setReconcileFiles(candidates)
+      this._scheduleBackgroundReverify(paths)
+      return 'deferred'
     }
     const res = await this._p4.execRecords([
       'reconcile',
@@ -747,7 +770,7 @@ export class PerforceClient {
       '-d',
       ...this._reconcileScopes,
     ])
-    if (this._disposed) return
+    if (this._disposed) return 'scanned'
     if (res.result.exitCode !== 0) {
       // `reconcile -n` exits non-zero with "no file(s) to reconcile" when the
       // tree is clean — that's not an error, just an empty result.
@@ -767,13 +790,14 @@ export class PerforceClient {
         )
       } else {
         this._setReconcileFiles([])
-        return
+        return 'scanned'
       }
     }
     const files = parseReconcile(res.records, this.root).filter(
       (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
     )
     this._setReconcileFiles(files)
+    return 'scanned'
   }
 
   /**
@@ -789,8 +813,18 @@ export class PerforceClient {
    * Deliberately fire-and-forget: nothing awaits the returned promise except
    * {@link whenBackgroundReverifySettled}. The `.catch` is mandatory, not defensive
    * — an unhandled rejection from a floating promise takes down the extension host.
+   *
+   * Re-entrant calls while one is already in flight are dropped (see the guard).
    */
   private _scheduleBackgroundReverify(paths: readonly string[]): void {
+    // If a re-verify is already queued/in flight, drop this request: stacking a new
+    // serial pass per refresh would pile up N redundant full rescans behind the
+    // ConcurrencyGate. Safe because the discarded path set is a subset of the
+    // in-flight one — an ordinary refresh only shrinks the candidate list as
+    // `opened` grows, and that opened-set filter has already committed + persisted
+    // synchronously. Real file changes aren't lost either: the watcher's incremental
+    // path is `refreshReconcilePaths`, which bypasses this guard.
+    if (this._backgroundReverify) return
     const run = (async () => {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 0)
@@ -1017,17 +1051,13 @@ export class PerforceClient {
   /**
    * Run a mutating p4 command, surface a toast on failure, and always refresh
    * afterwards so the SCM view reflects the new server state. Returns whether it
-   * succeeded. Empty `paths` is a no-op (nothing selected).
-   *
-   * `deferReconcileReverify` keeps the post-mutation reconcile re-verify off the
-   * awaited path — only the collect operations pass it (see
-   * {@link _refreshReconcile}); every other mutation re-verifies inline as before.
+   * succeeded. Empty `paths` is a no-op (nothing selected). The post-mutation
+   * reconcile re-verify is deferred to the background (see {@link _refreshReconcile}).
    */
   private async _mutate(
     label: string,
     args: readonly string[],
     paths: readonly string[] = [],
-    options?: { deferReconcileReverify?: boolean },
   ): Promise<boolean> {
     if (args.length === 0) return false
     return this._withBusy(this._busyLabel(label), async () => {
@@ -1038,16 +1068,16 @@ export class PerforceClient {
         // The user asked for this — report it in the log, not as an error toast,
         // and still refresh so the view reflects whatever did land.
         this._log?.(`[perforce] ${label} cancelled by user`)
-        await this._refreshAfterMutation(options)
+        await this._refreshAfterMutation()
         return false
       }
       if (result.exitCode !== 0) {
         await notifyP4Failure(label, result)
-        await this._refreshAfterMutation(options)
+        await this._refreshAfterMutation()
         return false
       }
       this._invalidateAfterMutation(paths)
-      await this._refreshAfterMutation(options)
+      await this._refreshAfterMutation()
       return true
     })
   }
@@ -1055,15 +1085,8 @@ export class PerforceClient {
   /** The post-mutation refresh, under its own busy label. The p4 command itself is
    *  done by now, so the status bar should say so instead of leaving the operation's
    *  label up for the whole refresh (`_busyOps` is a stack — the top one shows). */
-  private async _refreshAfterMutation(options?: {
-    deferReconcileReverify?: boolean
-  }): Promise<void> {
-    const refreshOptions = options?.deferReconcileReverify
-      ? { deferReconcileReverify: true }
-      : undefined
-    await this._withBusy(localize('perforce.busy.refresh', 'Refreshing'), () =>
-      this.refresh(refreshOptions),
-    )
+  private async _refreshAfterMutation(): Promise<void> {
+    await this._withBusy(localize('perforce.busy.refresh', 'Refreshing'), () => this.refresh())
   }
 
   /**
@@ -1080,6 +1103,9 @@ export class PerforceClient {
    *    mutations pass no paths → they take the full-clear branch.
    *  - `shelvedDescribe` is keyed by changelist id, and shelve/unshelve likewise
    *    pass no paths → full clear.
+   *  - `fstat` is a ttl namespace keyed by `norm(localPath)`, so it's covered by
+   *    the `invalidateFile` needles above (and the full-clear branch) — no special
+   *    case needed.
    * `invalidateFile` matches by substring, so a needle can over-match a similarly
    * named key; that only costs one extra fetch, never correctness.
    */
@@ -1154,9 +1180,7 @@ export class PerforceClient {
     if (paths.length === 0) return false
     this._reconcileActive = true
     this._undismiss(paths)
-    return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths, {
-      deferReconcileReverify: true,
-    })
+    return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths)
   }
 
   /**
@@ -1175,7 +1199,7 @@ export class PerforceClient {
       changelist === 'default'
         ? ['reconcile', '-a', '-e', '-d']
         : ['reconcile', '-a', '-e', '-d', '-c', changelist]
-    return this._mutate('reconcile', args, paths, { deferReconcileReverify: true })
+    return this._mutate('reconcile', args, paths)
   }
 
   /** Collect every currently discovered reconcile candidate at once. */
@@ -1187,9 +1211,7 @@ export class PerforceClient {
       // Nothing discovered yet — run a whole-tree reconcile so "collect all"
       // works even before an explicit scan populated the group.
       this._reconcileActive = true
-      return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d', '//...'], [], {
-        deferReconcileReverify: true,
-      })
+      return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d', '//...'])
     }
     return this.reconcile(paths)
   }
@@ -1770,33 +1792,54 @@ export class PerforceClient {
   /**
    * Open a diff of `localPath`: left = the have-revision content from the depot,
    * right = the local file content. Falls back to just opening the file when
-   * there's no have revision (e.g. open-for-add).
+   * there's no have revision (e.g. open-for-add). A *failed* fstat/print toasts
+   * instead of silently opening the plain file, so the user knows the diff didn't
+   * come up rather than mistaking "diff became a plain editor" for normal.
    */
   async openChange(localPath: string, pinned = false, preserveFocus = false): Promise<void> {
-    if (isSpreadsheetPath(localPath)) {
-      await this._openSpreadsheetChange(localPath, pinned, preserveFocus)
-      return
-    }
-    const baseline = await this._baseline.getHaveContent(localPath)
-    if (baseline === undefined) {
-      await commands.executeCommand('_workbench.openFile', localPath)
-      return
-    }
-    let modified = ''
-    try {
-      modified = await readFile(localPath, 'utf8')
-    } catch {
-      modified = '' // deleted on disk
-    }
-    await commands.executeCommand('_workbench.openDiff', {
-      title: `${basename(localPath)} (Perforce)`,
-      originalUri: pathToFileURL(localPath).href,
-      original: baseline,
-      modified,
-      pinned,
-      preserveFocus,
-      openableUri: pathToFileURL(localPath).href,
-      liveModified: true,
+    await this._withBusy(localize('perforce.busy.openChange', 'Opening Changes'), async () => {
+      if (isSpreadsheetPath(localPath)) {
+        await this._openSpreadsheetChange(localPath, pinned, preserveFocus)
+        return
+      }
+      const started = Date.now()
+      const baseline = await this._baseline.getHaveContentResult(localPath)
+      if (baseline.error) {
+        await notifyP4Failure(
+          localize('perforce.command.openChange.title', 'Open Changes'),
+          baseline.error,
+        )
+        this._log?.(`[perforce] openChange failed after ${Date.now() - started}ms`)
+        return
+      }
+      if (baseline.content === undefined) {
+        // No have revision (open-for-add / not under depot control) — opening the
+        // file is the correct fallback, there's no depot side to diff against.
+        await commands.executeCommand('_workbench.openFile', localPath)
+        return
+      }
+      const readStart = Date.now()
+      let modified = ''
+      try {
+        modified = await readFile(localPath, 'utf8')
+      } catch {
+        modified = '' // deleted on disk
+      }
+      const readMs = Date.now() - readStart
+      this._log?.(
+        `[perforce] openChange fstat ${baseline.timings.fstatMs}ms / print ${baseline.timings.printMs}ms` +
+          `${baseline.timings.printCached ? '(cached)' : ''} / read ${readMs}ms / total ${Date.now() - started}ms`,
+      )
+      await commands.executeCommand('_workbench.openDiff', {
+        title: `${basename(localPath)} (Perforce)`,
+        originalUri: pathToFileURL(localPath).href,
+        original: baseline.content,
+        modified,
+        pinned,
+        preserveFocus,
+        openableUri: pathToFileURL(localPath).href,
+        liveModified: true,
+      })
     })
   }
 
@@ -1810,8 +1853,18 @@ export class PerforceClient {
     pinned = false,
     preserveFocus = false,
   ): Promise<void> {
-    const baseline = await this._baseline.getHaveContentBytes(localPath)
-    if (baseline === undefined) {
+    const started = Date.now()
+    const baseline = await this._baseline.getHaveContentBytesResult(localPath)
+    if (baseline.error) {
+      await notifyP4Failure(
+        localize('perforce.command.openChange.title', 'Open Changes'),
+        baseline.error,
+      )
+      this._log?.(`[perforce] openChange(spreadsheet) failed after ${Date.now() - started}ms`)
+      return
+    }
+    if (baseline.content === undefined) {
+      // No have revision — open the file directly (see openChange).
       await commands.executeCommand('_workbench.openFile', localPath)
       return
     }
@@ -1821,12 +1874,13 @@ export class PerforceClient {
     } catch {
       modified = Buffer.alloc(0) // deleted on disk
     }
+    this._log?.(`[perforce] openChange(spreadsheet) total ${Date.now() - started}ms`)
     await commands.executeCommand('_workbench.openWebviewDiff', {
       viewType: 'universe.excel',
       title: `${basename(localPath)} (Perforce)`,
       leftUri: pathToFileURL(localPath).href,
       rightUri: pathToFileURL(localPath).href,
-      leftBase64: baseline.toString('base64'),
+      leftBase64: baseline.content.toString('base64'),
       rightBase64: modified.toString('base64'),
       pinned,
       preserveFocus,
@@ -1861,7 +1915,10 @@ export class PerforceClient {
    * `changes -l <file>` is bounded by the file's own history and sub-second.
    */
   async getBlame(localPath: string): Promise<P4BlameResult | null> {
-    const annotate = await this._p4.execTagged(['annotate', '-c', '-q', localPath])
+    const annotate = await this._p4.execTagged(
+      ['annotate', '-c', '-q', localPath],
+      INTERACTIVE_EXEC,
+    )
     if (annotate.result.exitCode !== 0) return null
     const lines = parseAnnotate(annotate.records)
     if (lines.length === 0) return null
@@ -1871,7 +1928,7 @@ export class PerforceClient {
       P4CacheNs.changesSubmitted,
       `blame:${localPath}`,
       async () => {
-        const changes = await this._p4.execTagged(['changes', '-l', localPath])
+        const changes = await this._p4.execTagged(['changes', '-l', localPath], INTERACTIVE_EXEC)
         if (changes.result.exitCode !== 0) return undefined
         return JSON.stringify(parseChangesList(changes.records))
       },
@@ -1946,13 +2003,22 @@ export class PerforceClient {
     const ns = immutable ? P4CacheNs.archiveDescribe : P4CacheNs.shelvedDescribe
     if (force && !immutable) this._cache.invalidate(P4CacheNs.shelvedDescribe, change)
     const cached = await this._cache.wrap(ns, change, async () => {
-      const res = await this._p4.execRecords(['describe', '-S', '-s', change])
+      // Expanding a Swarm review's file list is a click-triggered read, but
+      // `describe -S -s` lists every file in the CL (GB-scale on a giant branch
+      // CL) — priority-only, so it keeps the 600s budget rather than a 30s cap.
+      const res = await this._p4.execRecords(
+        ['describe', '-S', '-s', change],
+        INTERACTIVE_CONTENT_EXEC,
+      )
       if (res.result.exitCode !== 0) return undefined
       const record = res.records[0]
       if (!record) return undefined
       const detail = parseChangeDescribe(record)
       if (!detail) return undefined
-      const localPaths = await this._whereLocalPaths(detail.files.map((file) => file.depotFile))
+      const localPaths = await this._whereLocalPaths(
+        detail.files.map((file) => file.depotFile),
+        INTERACTIVE_EXEC,
+      )
       // `describe -S` reports each file's `rev` with a state-dependent meaning
       // (confirmed against a real server): for a SUBMITTED change the rev is the
       // revision that CONTAINS this edit (e.g. #18), so the pre-edit base is
@@ -2002,15 +2068,10 @@ export class PerforceClient {
       P4CacheNs.changesSubmitted,
       `${scope}:${maxChanges}`,
       async () => {
-        const res = await this._p4.execRecords([
-          'changes',
-          '-s',
-          'submitted',
-          '-l',
-          '-m',
-          String(maxChanges + 1),
-          scope,
-        ])
+        const res = await this._p4.execRecords(
+          ['changes', '-s', 'submitted', '-l', '-m', String(maxChanges + 1), scope],
+          INTERACTIVE_EXEC,
+        )
         if (res.result.exitCode !== 0) return undefined
         return JSON.stringify(parseChangesList(res.records))
       },
@@ -2030,9 +2091,7 @@ export class PerforceClient {
    * as "not ours" and stays silent for the file.
    */
   async fstat(localPath: string): Promise<FstatInfo | undefined> {
-    const res = await this._p4.execRecords(['fstat', localPath])
-    if (res.result.exitCode !== 0) return undefined
-    return parseFstat(res.records)[0]
+    return this._baseline.getFstatInfo(localPath)
   }
 
   /**
@@ -2047,7 +2106,7 @@ export class PerforceClient {
   async getFilelog(depotFile: string, max: number, fromRev?: number): Promise<FilelogRevision[]> {
     const spec = fromRev !== undefined ? `${depotFile}#${fromRev}` : depotFile
     const json = await this._cache.wrap(P4CacheNs.filelog, `${spec}:${max}`, async () => {
-      const res = await this._p4.execRecords(['filelog', '-m', String(max), spec])
+      const res = await this._p4.execRecords(['filelog', '-m', String(max), spec], INTERACTIVE_EXEC)
       if (res.result.exitCode !== 0) return undefined
       return JSON.stringify(parseFilelog(res.records))
     })
@@ -2061,7 +2120,7 @@ export class PerforceClient {
    * fstat action already says so); an unopened clean file prints nothing.
    */
   async differsFromHave(localPath: string): Promise<boolean> {
-    const res = await this._p4.exec(['diff', '-se', localPath])
+    const res = await this._p4.exec(['diff', '-se', localPath], INTERACTIVE_EXEC)
     return res.exitCode === 0 && res.stdout.trim().length > 0
   }
 
@@ -2079,7 +2138,10 @@ export class PerforceClient {
     }[]
   > {
     const opened = await this._openedFiles()
-    const localByDepot = await this._whereLocalPaths(opened.map((f) => f.depotFile))
+    const localByDepot = await this._whereLocalPaths(
+      opened.map((f) => f.depotFile),
+      INTERACTIVE_EXEC,
+    )
     return opened.map((f) => ({
       depotFile: f.depotFile,
       action: f.action,
@@ -2092,7 +2154,9 @@ export class PerforceClient {
    *  count and the file list share one round-trip. */
   private async _openedFiles(): Promise<ReturnType<typeof parseOpened>> {
     const json = await this._cache.wrap(P4CacheNs.opened, 'all', async () => {
-      const res = await this._p4.execRecords(['opened'])
+      // Only the graph's pending-node consumers reach here (the refresh issues its
+      // own `opened`), so this is always a click-triggered read.
+      const res = await this._p4.execRecords(['opened'], INTERACTIVE_EXEC)
       if (res.result.exitCode !== 0) return undefined
       return JSON.stringify(parseOpened(res.records, this.root))
     })
@@ -2114,7 +2178,9 @@ export class PerforceClient {
     id: string,
   ): Promise<(GraphDescribe & { localPaths: Map<string, string> }) | null> {
     const json = await this._cache.wrap(P4CacheNs.describe, id, async () => {
-      const res = await this._p4.execRecords(['describe', '-s', id])
+      // `describe -s` lists every file in the CL — GB-scale on a giant branch CL —
+      // so priority-only: a 30s interactive cap would kill a legitimate large change.
+      const res = await this._p4.execRecords(['describe', '-s', id], INTERACTIVE_CONTENT_EXEC)
       if (res.result.exitCode !== 0) return undefined
       const record = res.records[0]
       if (!record) return undefined
@@ -2140,15 +2206,21 @@ export class PerforceClient {
   ): Promise<Map<string, string>> {
     if (depotFiles.length === 0) return new Map()
     const json = await this._cache.wrap(P4CacheNs.changeDetailPaths, id, async () => {
-      const map = await this._whereLocalPaths(depotFiles)
+      const map = await this._whereLocalPaths(depotFiles, INTERACTIVE_EXEC)
       return JSON.stringify([...map])
     })
     return json === undefined ? new Map() : new Map(JSON.parse(json) as [string, string][])
   }
 
   /** Resolve depot → local paths for a batch of files (`p4 where`). Cached (ttl)
-   *  keyed on the sorted depot-file set so repeated lookups reuse one query. */
-  private async _whereLocalPaths(depotFiles: readonly string[]): Promise<Map<string, string>> {
+   *  keyed on the sorted depot-file set so repeated lookups reuse one query.
+   *  Defaults to background priority — the one background caller is the
+   *  apply-committed-change mutation; the graph/Swarm read callers pass
+   *  {@link INTERACTIVE_EXEC} (a sub-second metadata read). */
+  private async _whereLocalPaths(
+    depotFiles: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<Map<string, string>> {
     if (depotFiles.length === 0) return new Map()
     const key = [...depotFiles].sort().join('\n')
     const json = await this._cache.wrap(P4CacheNs.where, key, async () => {
@@ -2157,7 +2229,7 @@ export class PerforceClient {
       // batch's records merge into one map. A failed batch fails the whole lookup.
       const merged = new Map<string, string>()
       for (const batch of chunkByLength(depotFiles)) {
-        const res = await this._p4.execRecords(['where', ...batch])
+        const res = await this._p4.execRecords(['where', ...batch], options)
         if (res.result.exitCode !== 0) return undefined
         for (const [depot, local] of parseWhereLocalPaths(res.records)) merged.set(depot, local)
       }
@@ -2194,7 +2266,10 @@ export class PerforceClient {
     // case. A shelf spec (`@=change`) can be re-shelved in place, so it bypasses
     // the persistent cache; a concrete `#revision` is immutable and cached.
     if (!immutable && spec.includes('@=')) {
-      const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
+      const res = await this._p4.exec(['print', '-q', spec], {
+        ...INTERACTIVE_CONTENT_EXEC,
+        noClient: true,
+      })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
         return {
@@ -2204,21 +2279,22 @@ export class PerforceClient {
       }
       return { content: res.stdout }
     }
-    let fetchError: string | undefined
-    const value = await this._cache.wrap(P4CacheNs.print, spec, async () => {
+    const { value, error } = await this._cache.wrapWithError(P4CacheNs.print, spec, async () => {
       this._log?.(`[perforce] print ${spec} (cache miss, p4 print)`)
-      const res = await this._p4.exec(['print', '-q', spec], { noClient: true })
+      const res = await this._p4.exec(['print', '-q', spec], {
+        ...INTERACTIVE_CONTENT_EXEC,
+        noClient: true,
+      })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
         // Failures stay out of the print cache — a transient p4 failure must be
         // retried on the next request, not replayed forever.
-        fetchError = firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`
-        return undefined
+        return { error: firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})` }
       }
-      return res.stdout
+      return { value: res.stdout }
     })
     if (value !== undefined) return { content: value }
-    return { content: '', error: fetchError ?? 'p4 print failed' }
+    return { content: '', error: error ?? 'p4 print failed' }
   }
 
   /**
@@ -2242,30 +2318,37 @@ export class PerforceClient {
     spec: string,
     immutable = false,
   ): Promise<{ bytes: Buffer; error?: string }> {
-    let fetchError: string | undefined
-    const fetch = async (): Promise<Buffer | undefined> => {
-      const res = await this._p4.execBinary(['print', '-q', spec], { noClient: true })
+    const fetch = async (): Promise<{ bytes?: Buffer; error?: string }> => {
+      const res = await this._p4.execBinary(['print', '-q', spec], {
+        ...INTERACTIVE_CONTENT_EXEC,
+        noClient: true,
+      })
       if (res.exitCode !== 0) {
         this._log?.(`[perforce] print ${spec} failed (exit ${res.exitCode}): ${res.stderr.trim()}`)
         // Failures stay out of the print cache — a transient p4 failure must be
         // retried on the next request, not replayed forever.
-        fetchError = firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`
-        return undefined
+        return { error: firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})` }
       }
-      return res.stdout
+      return { bytes: res.stdout }
     }
     if (!immutable && spec.includes('@=')) {
-      const bytes = await fetch()
-      if (bytes === undefined)
-        return { bytes: Buffer.alloc(0), error: fetchError ?? 'p4 print failed' }
+      const { bytes, error } = await fetch()
+      if (error !== undefined || bytes === undefined)
+        return { bytes: Buffer.alloc(0), error: error ?? 'p4 print failed' }
       return { bytes }
     }
-    const value = await this._cache.wrap(P4CacheNs.print, `bytes:${spec}`, async () => {
-      this._log?.(`[perforce] print ${spec} (cache miss, p4 print bytes)`)
-      return (await fetch())?.toString('base64')
-    })
-    if (value === undefined)
-      return { bytes: Buffer.alloc(0), error: fetchError ?? 'p4 print failed' }
+    const { value, error } = await this._cache.wrapWithError(
+      P4CacheNs.print,
+      `bytes:${spec}`,
+      async () => {
+        this._log?.(`[perforce] print ${spec} (cache miss, p4 print bytes)`)
+        const { bytes, error: fetchError } = await fetch()
+        if (fetchError !== undefined || bytes === undefined)
+          return { error: fetchError ?? 'p4 print failed' }
+        return { value: bytes.toString('base64') }
+      },
+    )
+    if (value === undefined) return { bytes: Buffer.alloc(0), error: error ?? 'p4 print failed' }
     return { bytes: Buffer.from(value, 'base64') }
   }
 

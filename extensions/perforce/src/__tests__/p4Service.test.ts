@@ -51,7 +51,13 @@ class FakeChildProcess extends EventEmitter {
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
-const { P4Service, DEFAULT_MAX_OUTPUT_BYTES } = await import('../p4Service.js')
+const {
+  P4Service,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  INTERACTIVE_COMMAND_TIMEOUT_MS,
+  INTERACTIVE_EXEC,
+  INTERACTIVE_CONTENT_EXEC,
+} = await import('../p4Service.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
 function makeService() {
@@ -353,5 +359,184 @@ describe('P4Service._spawn cancellation via AbortSignal', () => {
     // The listener was detached on close — a later abort must not kill anything.
     source.abort()
     expect(child.killed).toBe(false)
+  })
+})
+
+// End-to-end threading of `P4ExecOptions.priority` through the gate. The
+// minutes-long diff-open wedge was that every p4 command shares one FIFO gate, so
+// a reconcile disk re-verify fanning ~114 `reconcile -n` batches filled it and the
+// user's click (fstat + print) queued at the tail. Interactive commands may use the
+// reserved slot and skip ahead; background is hard-capped at `max - reserve`.
+describe('P4Service concurrency priority + queued logging', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('an interactive command spawns immediately while background batches hold their slots', async () => {
+    const gate = new ConcurrencyGate(4, 1) // backgroundCap = 3
+    const svc = new P4Service('/repo', gate, undefined)
+
+    // Fill the three background slots with hung reconcile batches.
+    const holders: FakeChildProcess[] = []
+    for (let i = 0; i < 3; i++) {
+      const c = new FakeChildProcess()
+      holders.push(c)
+      spawnMock.mockReturnValueOnce(c)
+      void svc.exec(['reconcile', '-n', '-a', '-e', '-d', `batch${i}`])
+    }
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(3)
+
+    // The user's click arrives while the batch is still running — it must spawn
+    // now (into the reserved slot), not queue behind the reconcile batch.
+    const interactive = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(interactive)
+    void svc.exec(['fstat', 'file.txt'], { priority: 'interactive' })
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(4)
+    expect(spawnMock.mock.calls[3]![1]).toEqual(['fstat', 'file.txt'])
+
+    holders.forEach((c) => c.emit('close', 0))
+    interactive.emit('close', 0)
+    await flush()
+  })
+
+  it('logs a queued line only when a command waited >= 250ms for a slot', async () => {
+    const logs: string[] = []
+    const gate = new ConcurrencyGate(1, 1)
+    const svc = new P4Service('/repo', gate, undefined, (m) => logs.push(m))
+
+    const holder = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(holder)
+    const hold = svc.exec(['opened'])
+    await flush()
+
+    const queued = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(queued)
+    const q = svc.exec(['tickets'])
+    await new Promise((r) => setTimeout(r, 300)) // long enough to cross 250ms
+    holder.emit('close', 0)
+    await hold
+    await flush()
+    queued.emit('close', 0)
+    await q
+
+    expect(logs.some((l) => l.includes('queued'))).toBe(true)
+  })
+
+  it('does not log a queued line for a brief wait', async () => {
+    const logs: string[] = []
+    const gate = new ConcurrencyGate(1, 1)
+    const svc = new P4Service('/repo', gate, undefined, (m) => logs.push(m))
+
+    const holder = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(holder)
+    const hold = svc.exec(['opened'])
+    await flush()
+
+    const queued = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(queued)
+    const q = svc.exec(['tickets'])
+    await new Promise((r) => setTimeout(r, 20)) // short — must not flood the log
+    holder.emit('close', 0)
+    await hold
+    await flush()
+    queued.emit('close', 0)
+    await q
+
+    expect(logs.some((l) => l.includes('queued'))).toBe(false)
+  })
+
+  it('execRecords carries priority through the -Mj → -ztag retry', async () => {
+    const gate = new ConcurrencyGate(4, 1) // backgroundCap = 3
+    const svc = new P4Service('/repo', gate, undefined)
+
+    // Fill the background slots with hung commands.
+    const holders: FakeChildProcess[] = []
+    for (let i = 0; i < 3; i++) {
+      const c = new FakeChildProcess()
+      holders.push(c)
+      spawnMock.mockReturnValueOnce(c)
+      void svc.exec(['reconcile', '-n', '-a', '-e', '-d', `batch${i}`])
+    }
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(3)
+
+    // `-Mj` collapses to a data blob → execRecords retries with `-ztag`. Both legs
+    // are interactive, so both must spawn immediately without waiting on the batch.
+    const mj = new FakeChildProcess()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj).mockReturnValueOnce(ztag)
+    const p = svc.execRecords(['changes', '-s', 'pending'], { priority: 'interactive' })
+    await flush()
+    // The `-Mj` leg spawned immediately while the batch still holds its slots.
+    expect(spawnMock).toHaveBeenCalledTimes(4)
+    expect(spawnMock.mock.calls[3]![1]).toEqual(['-Mj', 'changes', '-s', 'pending'])
+
+    // Collapsed output → the retry must also spawn immediately (a dropped priority
+    // would fall back to background and queue behind the full background cap).
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj.emit('close', 0)
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(5)
+    expect(spawnMock.mock.calls[4]![1]).toEqual(['-ztag', 'changes', '-s', 'pending'])
+
+    ztag.stdout.emit('data', Buffer.from('... change 42\n\n'))
+    ztag.emit('close', 0)
+    const res = await p
+    expect(res.records).toEqual([{ change: '42' }])
+
+    holders.forEach((c) => c.emit('close', 0))
+    await flush()
+  })
+})
+
+// W3: user-interactive reads (open diff / gutter / blame) share a tight per-call
+// timeout (`INTERACTIVE_EXEC.timeoutMs = 30s`) so a hung interactive command
+// fails fast with a toast instead of wedging its gate slot. Pinned here at the
+// p4Service level: the constant relationship, and that a hung interactive command
+// is killed at its timeoutMs and resolves a failure result (never rejects — the
+// async close handler has no catcher, so a rejection would take down the host).
+describe('interactive command tight timeout', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('INTERACTIVE_EXEC pins interactive priority + the 30s tight timeout', () => {
+    expect(INTERACTIVE_COMMAND_TIMEOUT_MS).toBe(30_000)
+    expect(INTERACTIVE_EXEC.priority).toBe('interactive')
+    expect(INTERACTIVE_EXEC.timeoutMs).toBe(INTERACTIVE_COMMAND_TIMEOUT_MS)
+  })
+
+  it('INTERACTIVE_CONTENT_EXEC keeps the reserved slot but drops the tight timeout', () => {
+    // `p4 print` streams whole file contents, so its duration scales with size —
+    // it jumps the gate but keeps the generous `perforce.commandTimeout` budget.
+    expect(INTERACTIVE_CONTENT_EXEC.priority).toBe('interactive')
+    expect(INTERACTIVE_CONTENT_EXEC.timeoutMs).toBeUndefined()
+  })
+
+  it('a hung interactive command is killed at its timeoutMs and resolves a failure', async () => {
+    const svc = makeService()
+    // Same options shape as the baseline/gutter read paths, with a small timeout
+    // so the hang reproduces fast; the watchdog adoption is what's under test.
+    const p = svc.exec(['fstat', 'file.txt'], { ...INTERACTIVE_EXEC, timeoutMs: 30 })
+    await flush()
+    await new Promise((r) => setTimeout(r, 60))
+    expect(child.killed).toBe(true)
+    // Resolves a failure result, never rejects (the host-crash red line).
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/timed out after 30ms/)
   })
 })

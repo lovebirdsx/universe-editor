@@ -47,10 +47,23 @@ interface Entry {
   readonly expiresAt: number | undefined
 }
 
+/** A {@link P4Cache.wrapWithError} fetch result: either a value to cache, or an
+ *  error that must never be cached but still reaches every concurrent awaiter of
+ *  the same in-flight fetch (a `wrap` fetch returns `undefined` on failure, which
+ *  only the fetch's own caller can observe — see the in-flight dedup note). */
+export interface P4CacheFetchResult<E> {
+  readonly value?: string
+  readonly error?: E
+}
+
 export class P4Cache {
   private readonly _policies = new Map<string, P4CachePolicy>()
   private readonly _store = new Map<string, Map<string, Entry>>()
   private readonly _inFlight = new Map<string, Map<string, Promise<string | undefined>>>()
+  private readonly _errorInFlight = new Map<
+    string,
+    Map<string, Promise<P4CacheFetchResult<unknown>>>
+  >()
   private readonly _namespaceGenerations = new Map<string, number>()
   private readonly _keyGenerations = new Map<string, Map<string, number>>()
   private _generation = 0
@@ -125,6 +138,61 @@ export class P4Cache {
     }
   }
 
+  /**
+   * {@link wrap} with a first-class error channel. A failed fetch is never
+   * cached (same red line: a `print`/`fstat` failure must retry, not replay
+   * forever), but unlike {@link wrap}'s `undefined` the error rides the in-flight
+   * promise itself — so when two concurrent callers share one `(ns, key)` fetch,
+   * BOTH see the error instead of the second one reading "no value" as a benign
+   * miss. The fetch returns `{ value? }` on success or `{ error? }` on failure.
+   */
+  async wrapWithError<E>(
+    ns: string,
+    key: string,
+    fetch: () => Promise<P4CacheFetchResult<E>>,
+  ): Promise<P4CacheFetchResult<E>> {
+    if (!this._enabled) return fetch()
+    const policy = this._policies.get(ns)
+    if (!policy) throw new Error(`p4Cache: unknown namespace '${ns}'`)
+
+    const hit = this._read(ns, key, policy)
+    if (hit !== undefined) return { value: hit }
+
+    const existing = this._errorInFlight.get(ns)?.get(key)
+    if (existing) return existing as Promise<P4CacheFetchResult<E>>
+
+    const generation = this._generation
+    const namespaceGeneration = this._namespaceGenerations.get(ns) ?? 0
+    const keyGeneration = this._keyGenerations.get(ns)?.get(key) ?? 0
+    const promise: Promise<P4CacheFetchResult<E>> = (async () => {
+      const result = await fetch()
+      if (result.error !== undefined) return { error: result.error }
+      if (result.value === undefined) return {}
+      if (
+        this._enabled &&
+        generation === this._generation &&
+        namespaceGeneration === (this._namespaceGenerations.get(ns) ?? 0) &&
+        keyGeneration === (this._keyGenerations.get(ns)?.get(key) ?? 0)
+      ) {
+        this._write(ns, key, result.value, policy)
+      }
+      return { value: result.value }
+    })()
+    let inFlight = this._errorInFlight.get(ns)
+    if (!inFlight) {
+      inFlight = new Map()
+      this._errorInFlight.set(ns, inFlight)
+    }
+    inFlight.set(key, promise)
+    try {
+      return await promise
+    } finally {
+      if (this._errorInFlight.get(ns)?.get(key) === promise) {
+        this._errorInFlight.get(ns)?.delete(key)
+      }
+    }
+  }
+
   /** Drop one exact entry without disturbing unrelated data in the namespace. */
   invalidate(ns: string, key: string): void {
     this._store.get(ns)?.delete(key)
@@ -135,6 +203,7 @@ export class P4Cache {
     }
     generations.set(key, (generations.get(key) ?? 0) + 1)
     this._inFlight.get(ns)?.delete(key)
+    this._errorInFlight.get(ns)?.delete(key)
   }
 
   /** Drop every entry in one namespace. */
@@ -143,6 +212,7 @@ export class P4Cache {
     this._namespaceGenerations.set(ns, (this._namespaceGenerations.get(ns) ?? 0) + 1)
     this._keyGenerations.delete(ns)
     this._inFlight.delete(ns)
+    this._errorInFlight.delete(ns)
   }
 
   /** Drop every entry in `ttl` namespaces (post-mutation refresh). Immutable
@@ -161,6 +231,7 @@ export class P4Cache {
       const keys = new Set([
         ...(this._store.get(ns)?.keys() ?? []),
         ...(this._inFlight.get(ns)?.keys() ?? []),
+        ...(this._errorInFlight.get(ns)?.keys() ?? []),
       ])
       for (const key of keys) {
         if (key.includes(needle)) this.invalidate(ns, key)
@@ -172,6 +243,7 @@ export class P4Cache {
   clear(): void {
     this._store.clear()
     this._inFlight.clear()
+    this._errorInFlight.clear()
     this._namespaceGenerations.clear()
     this._keyGenerations.clear()
     this._generation++
@@ -243,6 +315,12 @@ export const P4CacheNs = {
   /** `filelog -m N <depot>[#rev]` — one file's revision history (the Timeline
    *  view's page source). Grows on submit/sync, so TTL like the graph list. */
   filelog: 'filelog',
+  /** `fstat <localPath>` — one file's depot path + have/head revs + open action,
+   *  keyed by `norm(localPath)`. TTL, never immutable: `haveRev` changes on
+   *  `p4 sync`, so an immutable entry would keep serving a stale `depotFile#haveRev`
+   *  and mis-diff the left side forever. Short window only absorbs tab-switch /
+   *  repeated-click bursts; cleared per-file after mutations. */
+  fstat: 'fstat',
 } as const
 
 export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
@@ -265,4 +343,5 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
     kind: 'ttl',
     ttlMs: Math.max(workspaceTtlMs, 20_000),
   })
+  cache.register(P4CacheNs.fstat, { kind: 'ttl', ttlMs: Math.max(workspaceTtlMs, 15_000) })
 }

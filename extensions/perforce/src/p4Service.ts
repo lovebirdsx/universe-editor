@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ConcurrencyGate } from './concurrency.js'
+import type { ConcurrencyGate, P4Priority } from './concurrency.js'
 import { parseMarshalJson, parseZtag, parseZtagAsMarshal, type P4Record } from './p4Output.js'
 
 export interface P4ExecResult {
@@ -62,6 +62,12 @@ export interface P4ExecOptions {
    * unaffected; a command that never started is never spawned.
    */
   readonly signal?: AbortSignal
+  /**
+   * Queue priority: `'interactive'` (user-triggered) may use the gate's reserved
+   * slot and skips ahead of `'background'` (scans/refreshes). Defaults to
+   * background when omitted.
+   */
+  readonly priority?: P4Priority
 }
 
 /**
@@ -82,6 +88,32 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
  * Tiny read-only commands pass a much tighter per-call `timeoutMs`.
  */
 export const DEFAULT_P4_COMMAND_TIMEOUT_MS = 600_000
+
+/**
+ * Tight per-command timeout for user-interactive reads (open diff / dirty-diff
+ * gutter / blame / timeline). The 600s default guards against "hung forever";
+ * an interactive command that can't answer in this window should fail fast with
+ * a toast instead of leaving the user staring at a dead UI.
+ */
+export const INTERACTIVE_COMMAND_TIMEOUT_MS = 30_000
+
+/** Shared options for user-interactive p4 reads: the gate's reserved slot plus a
+ *  tight timeout. Callers that need their own extras spread and merge (e.g. a
+ *  `noClient` depot-syntax print). */
+export const INTERACTIVE_EXEC: P4ExecOptions = {
+  priority: 'interactive',
+  timeoutMs: INTERACTIVE_COMMAND_TIMEOUT_MS,
+}
+
+/**
+ * Interactive priority *without* the tight timeout, for reads whose duration
+ * legitimately scales with payload size (`p4 print` streams whole file
+ * contents). They still jump the gate's queue — but a 5MB file over a slow VPN
+ * taking 40s is normal, not a hang, so they keep the generous
+ * `perforce.commandTimeout` budget. Omitting `timeoutMs` falls back to the
+ * service's default (`options?.timeoutMs ?? this._defaultTimeoutMs` in `_spawn`).
+ */
+export const INTERACTIVE_CONTENT_EXEC: P4ExecOptions = { priority: 'interactive' }
 
 /** Module-level default applied to every new P4Service (set once at activate
  *  from `perforce.commandTimeout`; tests omit it and get the constant). */
@@ -319,7 +351,20 @@ export class P4Service {
   exec(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
     const globals = options?.noConnection ? [] : connectionArgs(this._connection, options?.noClient)
     const full = [...globals, ...args]
-    return this._gate.run(() => this._spawn(full, options))
+    return this._gate.run(
+      () => this._spawn(full, options),
+      options?.priority,
+      (waitedMs) => {
+        // A log write must never fail the command it describes — the gate now
+        // surfaces a throwing onStart as a task rejection.
+        if (waitedMs < 250) return
+        try {
+          this._log?.(`  (queued ${waitedMs}ms for a concurrency slot)`)
+        } catch {
+          // best-effort
+        }
+      },
+    )
   }
 
   /** Run with `-Mj` and parse each JSON line. */
@@ -418,6 +463,17 @@ export class P4Service {
             })
           })
         }),
+      options?.priority,
+      (waitedMs) => {
+        // A log write must never fail the command it describes — the gate now
+        // surfaces a throwing onStart as a task rejection.
+        if (waitedMs < 250) return
+        try {
+          this._log?.(`  (queued ${waitedMs}ms for a concurrency slot)`)
+        } catch {
+          // best-effort
+        }
+      },
     )
   }
 

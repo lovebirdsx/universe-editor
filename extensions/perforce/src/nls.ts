@@ -27,11 +27,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.busy.deleteChangelist': '正在删除 changelist',
   'perforce.busy.deleteShelved': '正在删除搁置的文件',
   'perforce.busy.refresh': '正在刷新',
+  'perforce.busy.openChange': '正在打开更改',
   'perforce.busy.generic': '正在处理',
   // command titles reused at runtime
   'perforce.command.commit': '提交',
   'perforce.command.submit.title': '提交',
   'perforce.command.revertUnchanged.title': '还原未改动的文件',
+  'perforce.command.openChange.title': '打开更改',
   // login prompt
   'perforce.login.prompt': 'Perforce 密码 / ticket',
   // mutating command confirmations + buttons
@@ -62,6 +64,12 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.btn.deleteShelved': '删除搁置',
   'perforce.deleteShelved.confirm': '删除 changelist #{0} 中已搁置的文件？',
   'perforce.deleteShelved.confirmFile': '删除已搁置的文件 “{0}”？',
+  'perforce.btn.deleteChangelist': '删除 Changelist',
+  'perforce.deleteChangelist.notEmpty':
+    'Changelist #{0} 仍有已打开的文件。请先移动或还原它们再删除。',
+  'perforce.deleteChangelist.confirm': '删除 changelist #{0}？其中已搁置的文件也会被删除。',
+  'perforce.revertReconcile.confirm': '放弃 “{0}” 的工作区改动？此操作不可撤销。',
+  'perforce.revertReconcile.confirmMany': '放弃 {0} 个文件的工作区改动？此操作不可撤销。',
   // p4Error.ts
   'perforce.btn.openOutput': '打开 Perforce 输出',
   'perforce.error.offline': 'Perforce 服务器不可达——请检查连接与 P4PORT',
@@ -86,6 +94,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.timeline.monthsAgo': '{0} 个月前',
   'perforce.timeline.yearsAgo': '{0} 年前',
   // swarm (P4 Code Review)
+  'perforce.command.swarm.requestReview.title': '发起新的 Swarm 审核…',
   'perforce.swarm.notConfigured':
     '尚未配置 Swarm。请设置 perforce.swarm.enabled 与 perforce.swarm.url。',
   'perforce.swarm.ping.ok': '已连接到 Swarm：{0}。',

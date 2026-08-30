@@ -140,6 +140,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Bounds "hung forever", not "slow": a p4 stuck on a frozen network drive /
   // half-open gateway TCP holds its gate slot until killed (the poll wedge).
   setP4CommandTimeoutSeconds(await cfg.get('commandTimeout', 600))
+  // `maxConcurrent` was read once above; keep the gate's cap in sync so a change
+  // applies without a reload (the background reserve is derived from it).
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.maxConcurrent')) return
+      void cfg.get('maxConcurrent', 4).then((n) => gate.setMax(n))
+    }),
+  )
   const fallback = await readFallbackConnection()
 
   // Result caching (server round-trips are expensive). Immutable data (submitted

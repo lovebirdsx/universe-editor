@@ -217,3 +217,49 @@ describe('registerP4CacheNamespaces', () => {
     }
   })
 })
+
+describe('P4Cache.wrapWithError', () => {
+  it('propagates the error to every concurrent awaiter of the same key', async () => {
+    const cache = new P4Cache()
+    cache.register('ns', { kind: 'ttl', ttlMs: 1000 })
+    let resolve!: (r: { error: string }) => void
+    let fetches = 0
+    const fetch = (): Promise<{ error: string }> => {
+      fetches++
+      return new Promise((r) => (resolve = r))
+    }
+
+    const first = cache.wrapWithError('ns', 'k', fetch)
+    const second = cache.wrapWithError('ns', 'k', fetch)
+    expect(fetches).toBe(1)
+    resolve({ error: 'boom' })
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { error: 'boom' },
+      { error: 'boom' },
+    ])
+  })
+
+  it('does not cache a failed fetch (retries on the next call)', async () => {
+    const cache = new P4Cache()
+    cache.register('ns', { kind: 'immutable' })
+    let n = 0
+    const fetch = async () => {
+      n++
+      return n === 1 ? { error: 'boom' } : { value: 'ok' }
+    }
+    expect(await cache.wrapWithError('ns', 'k', fetch)).toEqual({ error: 'boom' })
+    expect(await cache.wrapWithError('ns', 'k', fetch)).toEqual({ value: 'ok' })
+    expect(n).toBe(2)
+  })
+
+  it('caches a successful value (immutable hit on the second read)', async () => {
+    const cache = new P4Cache()
+    cache.register('ns', { kind: 'immutable' })
+    let n = 0
+    const fetch = async () => ({ value: `v${++n}` })
+    expect(await cache.wrapWithError('ns', 'k', fetch)).toEqual({ value: 'v1' })
+    expect(await cache.wrapWithError('ns', 'k', fetch)).toEqual({ value: 'v1' })
+    expect(n).toBe(1)
+  })
+})
