@@ -65,7 +65,7 @@ import styles from './ExplorerView.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
   'emptyScmDecorations',
-  { files: new Map(), folders: new Map() },
+  { files: new Map(), folders: new Map(), supplementary: new Map() },
 )
 
 const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
@@ -193,6 +193,8 @@ export function ExplorerView() {
     // 无 git 状态装饰时，被 gitignore 忽略的文件/文件夹变暗（VSCode 对标）。
     const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
     const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
+    // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。
+    const supp = !entry.isDirectory ? scmDecorations?.getSupplementary(entry.resource) : undefined
     return (
       <ExplorerTreeNode
         key={key}
@@ -214,6 +216,8 @@ export function ExplorerView() {
         {...(deco?.letter !== undefined ? { decoLetter: deco.letter } : {})}
         {...(deco?.strikeThrough ? { decoStrike: true } : {})}
         {...(deco?.tooltip !== undefined ? { decoTooltip: deco.tooltip } : {})}
+        {...(supp !== undefined ? { decoDescription: supp.description } : {})}
+        {...(supp?.tooltip !== undefined ? { decoDescriptionTooltip: supp.tooltip } : {})}
         tree={tree}
         onOpenFile={openFile}
         onContextMenu={onRowContextMenu}

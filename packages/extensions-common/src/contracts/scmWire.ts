@@ -59,6 +59,21 @@ export interface ISourceControlGroupFeaturesDto {
 }
 
 /**
+ * One change to the provider's supplementary decorations (server-side condition
+ * of a file: behind / held by someone else). The extension side sets whole sets;
+ * the host diffs them so a steady state sends nothing.
+ *
+ * `description: null` means "remove this file's decoration" — a distinct value
+ * rather than an omitted key, because ProxyChannel strips trailing `undefined`
+ * and a middle `undefined` becomes `null` in JSON anyway.
+ */
+export interface ISupplementaryDecorationDeltaDto {
+  resourceUri: string
+  description: string | null
+  tooltip?: string
+}
+
+/**
  * Renderer ← host: the SCM model feeding the built-in view. The host's
  * ChannelClient calls these on the renderer's ChannelServer.
  */
@@ -79,6 +94,11 @@ export interface IMainThreadScm {
     resources: ISourceControlResourceStateDto[],
   ): Promise<void>
   $unregisterGroup(groupHandle: number): Promise<void>
+  /** Apply supplementary-decoration changes; never called with an empty delta. */
+  $updateSupplementaryDecorations(
+    sourceControlHandle: number,
+    deltas: ISupplementaryDecorationDeltaDto[],
+  ): Promise<void>
   $setInputBoxValue(sourceControlHandle: number, value: string): Promise<void>
   $setInputBoxPlaceholder(sourceControlHandle: number, placeholder: string): Promise<void>
 }

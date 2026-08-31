@@ -33,3 +33,29 @@
   border: none;
   border-top: 1px solid var(--vscode-menu-separatorBackground, #3c3c3c);
 }
+
+.submenuItem {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* The chevron is drawn rather than imported: this package takes icons through
+   props and must not depend on an application icon library. */
+.submenuItem::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-top: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.7;
+}
+
+/* `fixed`, not `absolute`: the parent `.menu` scrolls (overflow: auto) and would
+   clip an absolutely positioned child. Positioned in viewport coordinates by
+   SubmenuPanel. */
+.submenu {
+  position: fixed;
+  z-index: 1;
+}

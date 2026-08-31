@@ -5,8 +5,11 @@
  * field-name quirks of p4's output are unit-tested in isolation.
  *
  * `p4 opened` JSON fields of interest: `depotFile`, `clientFile`, `change`
- * ('default' or a number), `action`, `rev`, and `unresolved` (present when the
- * file needs resolving). `p4 changes -s pending` adds `change`, `desc` and a bare
+ * ('default' or a number), `action`, `rev`, and `unresolved`. NOTE: measured on
+ * P4D 2024.2, `p4 opened` NEVER carries `unresolved` — the authoritative signal
+ * lives in `p4 fstat -Ru` (see fstatParser / PROBE-FINDINGS §11.5); the read
+ * below is kept as defense for other server versions and is OR'd with the fstat
+ * probe by the client. `p4 changes -s pending` adds `change`, `desc` and a bare
  * `shelved` key (present only when the changelist has shelved files). Field
  * presence varies by server version, so every read is defensive.
  */
@@ -52,15 +55,22 @@ export function parseOpenedRecord(
   const rawClientFile = asString(record['clientFile'])
   const clientFile =
     rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
+  const openedByUser = asString(record['user'])
+  const openedByClient = asString(record['client'])
   return {
     depotFile,
     clientFile,
     changelist: change === 'default' ? 'default' : change,
     action: normalizeAction(asString(record['action'])),
     rev: asString(record['rev']),
-    // p4 reports unresolved either as an `unresolved` field or an `ourLock`/
-    // resolve marker; the plain `unresolved` field is the portable signal.
+    // Kept even though P4D 2024.2 never emits this key (see the module
+    // comment): other server versions may, and the client ORs it with the
+    // fstat -Ru probe before deciding what needs resolving.
     unresolved: record['unresolved'] !== undefined,
+    // `user`/`client` only appear in `p4 opened -a` output; a plain `opened`
+    // record reads undefined here on purpose, so the fields don't drift.
+    ...(openedByUser !== undefined ? { openedByUser } : {}),
+    ...(openedByClient !== undefined ? { openedByClient } : {}),
   }
 }
 
@@ -74,6 +84,30 @@ export function parseOpened(
     if (file) out.push(file)
   }
   return out
+}
+
+/**
+ * Keep only the files someone *else* has open. `myClientName` is this client's
+ * name as `p4 info` reports it.
+ *
+ * Compared by **client**, not by user: the same person working from two
+ * workspaces still blocks themselves in the other one, and for a binary game
+ * asset that is exactly the collision worth warning about.
+ *
+ * Records with no `openedByClient` (a plain `p4 opened` without `-a`) are
+ * dropped rather than assumed to be someone else's — a missing field is not
+ * evidence of a conflict.
+ */
+export function filterOpenedByOthers(
+  files: readonly OpenedFile[],
+  myClientName: string,
+): OpenedFile[] {
+  if (!myClientName) return []
+  const mine = myClientName.toLowerCase()
+  return files.filter((f) => {
+    const owner = f.openedByClient
+    return owner !== undefined && owner.toLowerCase() !== mine
+  })
 }
 
 /** Parse one `p4 changes -s pending` JSON record into a PendingChangelist.

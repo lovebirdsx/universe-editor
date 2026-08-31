@@ -73,4 +73,50 @@ describe('MergeEditorInput', () => {
     expect(written[0]?.toString()).toBe('remote-ssh://auth/ws/a.ts')
     expect(staged).toEqual([['git.stage', { resourceUri: '/ws/a.ts' }]])
   })
+
+  it('runs the provider follow-up command instead of git.stage when set', async () => {
+    const fileService = { writeFile: async () => {} } as unknown as IFileService
+    const executed: unknown[][] = []
+    const commandService = {
+      executeCommand: async (...args: unknown[]) => {
+        executed.push(args)
+      },
+    } as unknown as ICommandService
+    const input = new MergeEditorInput(
+      {
+        ...contents('/ws/a.ts'),
+        saveCommand: {
+          command: 'perforce.acceptResolved',
+          arguments: [{ resourceUri: '/ws/a.ts' }],
+        },
+      },
+      fileService,
+      commandService,
+      makeWorkspace(URI.file('/ws')),
+    )
+
+    await input.save()
+
+    expect(executed).toEqual([['perforce.acceptResolved', { resourceUri: '/ws/a.ts' }]])
+  })
+
+  it('runs a follow-up command that takes no arguments', async () => {
+    const fileService = { writeFile: async () => {} } as unknown as IFileService
+    const executed: unknown[][] = []
+    const commandService = {
+      executeCommand: async (...args: unknown[]) => {
+        executed.push(args)
+      },
+    } as unknown as ICommandService
+    const input = new MergeEditorInput(
+      { ...contents('/ws/a.ts'), saveCommand: { command: 'noop.finish' } },
+      fileService,
+      commandService,
+      makeWorkspace(URI.file('/ws')),
+    )
+
+    await input.save()
+
+    expect(executed).toEqual([['noop.finish']])
+  })
 })

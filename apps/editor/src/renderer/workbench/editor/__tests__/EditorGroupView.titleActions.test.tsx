@@ -161,12 +161,14 @@ function scmDecorationsFor(resource: URI): IScmDecorationsServiceType {
   const snapshot = observableValue('testScmDecorations', {
     files: new Map([[scmPathKey(resource.fsPath), { color: '#e2c08d', letter: 'M' }]]),
     folders: new Map(),
+    supplementary: new Map(),
   })
   return {
     _serviceBrand: undefined,
     decorations: snapshot,
     getFile: (uri) => snapshot.get().files.get(scmPathKey(uri.fsPath)),
     getFolder: (uri) => snapshot.get().folders.get(scmPathKey(uri.fsPath)),
+    getSupplementary: (uri) => snapshot.get().supplementary.get(scmPathKey(uri.fsPath)),
   }
 }
 

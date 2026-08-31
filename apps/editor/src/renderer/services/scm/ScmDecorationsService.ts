@@ -34,9 +34,25 @@ export interface IScmDecoration {
   readonly letter?: string
 }
 
+/**
+ * A file's server-side condition, pushed by the provider outside any resource
+ * group (see `SourceControlSupplementaryDecoration`). Rendered as trailing grey
+ * text on the Explorer row.
+ *
+ * Deliberately a separate map from `files` rather than extra fields on
+ * IScmDecoration: `getFile(...) !== undefined` is the established test for "this
+ * file has local changes" (dirty-diff gating in useEditorGroupScopedContextKey
+ * and dirtyDiffActions), and a clean-but-behind file must not answer yes.
+ */
+export interface IScmSupplementary {
+  readonly description: string
+  readonly tooltip?: string
+}
+
 export interface IScmDecorationsSnapshot {
   readonly files: ReadonlyMap<string, IScmDecoration>
   readonly folders: ReadonlyMap<string, IScmDecoration>
+  readonly supplementary: ReadonlyMap<string, IScmSupplementary>
 }
 
 export interface IScmDecorationsService {
@@ -44,6 +60,7 @@ export interface IScmDecorationsService {
   readonly decorations: IObservable<IScmDecorationsSnapshot>
   getFile(resource: URI): IScmDecoration | undefined
   getFolder(resource: URI): IScmDecoration | undefined
+  getSupplementary(resource: URI): IScmSupplementary | undefined
 }
 
 export const IScmDecorationsService =
@@ -106,6 +123,7 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
       // Track the winning weight per folder so a stronger descendant overrides.
       const folders = new Map<string, IScmDecoration>()
       const folderWeight = new Map<string, number>()
+      const supplementary = new Map<string, IScmSupplementary>()
 
       for (const sc of this._scm.sourceControls.read(reader)) {
         const root = sc.rootUri !== undefined ? scmPathKey(sc.rootUri) : undefined
@@ -140,9 +158,21 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
             }
           }
         }
+
+        // Supplementary lives alongside the group-derived maps, never merged
+        // into them: the two answer different questions ("what I did" vs "what
+        // the server says"), and both can be true for the same file. Folders get
+        // nothing — grey text is a per-file hint and would be meaningless
+        // aggregated up a tree.
+        for (const deco of sc.supplementary.read(reader).values()) {
+          supplementary.set(scmPathKey(deco.resourceUri), {
+            description: deco.description,
+            ...(deco.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
+          })
+        }
       }
 
-      return { files, folders }
+      return { files, folders, supplementary }
     })
   }
 
@@ -154,6 +184,11 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
   getFolder(resource: URI): IScmDecoration | undefined {
     const key = this._key(resource)
     return key !== undefined ? this.decorations.get().folders.get(key) : undefined
+  }
+
+  getSupplementary(resource: URI): IScmSupplementary | undefined {
+    const key = this._key(resource)
+    return key !== undefined ? this.decorations.get().supplementary.get(key) : undefined
   }
 
   /** Decoration key for a resource, or undefined when it is off the SCM host. */

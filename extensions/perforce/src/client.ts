@@ -12,12 +12,14 @@
 import {
   commands,
   scm,
+  window,
   type Command,
   type Disposable,
   type QuickPickItem,
   type SourceControl,
   type SourceControlResourceGroup,
   type SourceControlResourceState,
+  type SourceControlSupplementaryDecoration,
 } from '@universe-editor/extension-api'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -32,8 +34,14 @@ import {
   type P4ExecOptions,
   type P4ExecResult,
 } from './p4Service.js'
-import { discoverClient, connectionFor, type DiscoveredClient } from './clientDiscovery.js'
-import { parseOpened, parsePending } from './openedParser.js'
+import {
+  discoverClient,
+  connectionFor,
+  parseClientsList,
+  type DiscoveredClient,
+  type P4ClientEntry,
+} from './clientDiscovery.js'
+import { parseOpened, parsePending, filterOpenedByOthers } from './openedParser.js'
 import {
   groupChangelists,
   countOpened,
@@ -41,6 +49,7 @@ import {
   descriptionFirstLine,
   shelvedGroupId,
   RECONCILE_GROUP_ID,
+  RESOLVE_GROUP_ID,
   type PendingChangelist,
   type P4Action,
 } from './changelist.js'
@@ -50,7 +59,7 @@ import {
   toReconcileResourceStates,
 } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
-import { type FstatInfo } from './fstatParser.js'
+import { parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import {
   parseReconcile,
@@ -60,6 +69,14 @@ import {
   type ReconcileFile,
 } from './reconcileParser.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
+import {
+  parseSyncOutput,
+  parseSyncPreview,
+  parseSyncPreviewTotal,
+  parseResolveOutput,
+  type SyncPreviewFile,
+  type SyncRunSummary,
+} from './syncParser.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
@@ -78,7 +95,14 @@ import {
   registerP4CacheNamespaces,
   type P4CacheDiskBackend,
 } from './p4Cache.js'
-import { classifyP4Error, notifyP4Failure, type P4FailureKind } from './p4Error.js'
+import {
+  classifyP4Error,
+  classifySyncError,
+  notifyP4Failure,
+  p4ErrorText,
+  type P4FailureKind,
+  type SyncErrorKind,
+} from './p4Error.js'
 import { localize } from './nls.js'
 
 /** A group the SCM view should show this refresh: opened or shelved. Fed to
@@ -102,6 +126,16 @@ export interface ClientStatus {
   readonly openedCount: number
   /** Files discovered as diverged-but-not-opened (the reconcile group size). */
   readonly reconcileCount: number
+  /**
+   * Files the server has newer revisions of than this client holds — "you are
+   * behind by N". Undefined until the first behind-check completes, which is
+   * distinct from `0` ("checked, nothing to get"): the status bar shows nothing
+   * for undefined rather than a reassuring zero it hasn't earned.
+   */
+  readonly syncBehindCount: number | undefined
+  /** Whether {@link syncBehindCount} passed the decoration cap (the count is a
+   *  floor, not a total — the status bar renders it as "500+"). */
+  readonly syncBehindCapped: boolean
   /** Label of a long-running p4 operation in flight (e.g. "Submitting"), or
    *  undefined when idle. Drives the status-bar spinner. */
   readonly busy: string | undefined
@@ -164,6 +198,95 @@ const MAX_FILE_SCOPED_INVALIDATIONS = 64
 const RECONCILE_REVERIFY_MAX_PATHS = 1500
 
 /**
+ * Above this many behind files, the grey "可更新" markers are dropped and only the
+ * count survives. Rendering ten thousand Explorer decorations helps nobody, and
+ * the status-bar number stays exact either way — but the skip is always logged,
+ * never silent, or the empty Explorer reads as "I'm up to date".
+ */
+const SYNC_PREVIEW_MAX_DECORATIONS = 500
+
+/**
+ * Floor between two behind-checks. Even with the cheap gate in front, the check
+ * must not run once per save — the interval is the outer guard, the re-entry flag
+ * only stops overlap.
+ */
+const SYNC_PREVIEW_MIN_INTERVAL_MS = 30_000
+
+/**
+ * Hard ceiling on the expensive `sync -n` pass.
+ *
+ * Measured on a 450k-file game workspace: `sync -n -m 501` over the client root
+ * produces **zero bytes in 120s** — `-m` caps how many records come back, not how
+ * much of the client view the server walks. Without this ceiling a background
+ * behind-check would hold a ConcurrencyGate slot for the full 600s command budget,
+ * which is precisely the "shared FIFO gate flooded → clicks queue for minutes"
+ * pathology this extension already had to fix once.
+ *
+ * A behind count is a nicety; a responsive editor is not. Timing out here loses
+ * the per-file markers for this round and nothing else.
+ */
+const SYNC_PREVIEW_TIMEOUT_MS = 20_000
+
+/**
+ * Tight ceiling on the cheap gate. Measured at ~130ms even at client-root scope, so
+ * ten seconds is two orders of magnitude of headroom: if it hasn't answered by then
+ * it is hung, not slow, and the caller should fall through to the real check rather
+ * than wait. Same reasoning as the credential-probe timeout.
+ */
+const SYNC_PREVIEW_GATE_TIMEOUT_MS = 10_000
+
+/**
+ * Gate marker standing for "this scope has no submitted changes at all". A real
+ * marker is a changelist id list, so this can never collide with one; it exists so
+ * that state is comparable across checks instead of being indistinguishable from
+ * "the gate told us nothing".
+ */
+const GATE_MARKER_NO_CHANGES = 'none'
+
+/**
+ * Above this many files opened by others, the grey "他人占用" markers are
+ * dropped and only the count survives. Same reasoning as the behind-check cap —
+ * but smaller, because "in use by others" is a per-file warning the user acts on
+ * one file at a time, and the skip is always logged, never silent.
+ */
+const OPENED_BY_OTHERS_MAX_DECORATIONS = 300
+
+/**
+ * Floor between two opened-by-others scans. Kept separate from the behind-check
+ * floor: the two scans answer different questions and change at different rates
+ * (an open set churns far more often than a submitted changelist does).
+ */
+const OPENED_BY_OTHERS_MIN_INTERVAL_MS = 30_000
+
+/**
+ * Hard ceiling on the `p4 opened -a` pass.
+ *
+ * Unlike `sync -n`, `opened` reads the open table (db.opened) instead of walking
+ * the client view, so its cost scales with how many files are open anywhere
+ * rather than with workspace size — it has no 450k-file-workspace pathology, and
+ * there is no changes-table signal a cheap gate could use either. What stays
+ * unbounded is the reply on a busy shared server (`-m` bounds the records, not
+ * the table scan), so the ceiling stays tight: a timed-out scan loses this
+ * round's markers and nothing else, while a hung one would otherwise hold a
+ * background ConcurrencyGate slot for the full 600s command budget.
+ */
+const OPENED_BY_OTHERS_TIMEOUT_MS = 20_000
+
+/**
+ * Hard ceiling on the `p4 fstat -Ru //...` unresolved probe inside refresh.
+ *
+ * Measured on a 450k-file workspace with nothing open: 1165ms. `-Ru` walks the
+ * opened/have table (like `opened -a`, ~850ms) instead of the client view, so
+ * there is no giant-workspace pathology, and it only runs when something is
+ * open at all — the zero-opened refresh skips it entirely. 20s (the same
+ * ceiling as the opened-by-others scan, which reads the same table) is two
+ * orders of magnitude past the measured normal; a timed-out probe keeps the
+ * previous unresolved set, which costs a stale badge at worst, never a wrong
+ * "nothing to resolve".
+ */
+const FSTAT_UNRESOLVED_TIMEOUT_MS = 20_000
+
+/**
  * What the reconcile stage of a refresh actually did, so the per-stage timing
  * label stays honest: a skipped re-verify must never log as "deferred".
  * `none` = zero reconcile p4 work (discovery off, or no surviving candidates).
@@ -197,6 +320,38 @@ function sameScopeDirs(a: readonly string[], b: readonly string[]): boolean {
   return a.every((dir, i) => scopeKey(dir) === scopeKey(b[i] ?? ''))
 }
 
+/**
+ * Normalize a caller-supplied scope into the directories a p4 scan should cover:
+ * trailing separators stripped, case-insensitive duplicates collapsed, and any
+ * directory nested under another dropped (the shallower one already covers its
+ * files, and an overlap would make p4 visit them twice).
+ *
+ * Keyed via {@link scopeKey} so `Client` and `client` are one entry on Windows —
+ * two survivors differing only by case would each look nested under the other
+ * and both get dropped, silently widening the scan back to the whole client.
+ *
+ * Shared by the reconcile and sync scopes; pure.
+ */
+function normalizeScopeDirs(paths: readonly string[]): string[] {
+  const trimmed = paths.map((p) => p.replace(/[/\\]+$/, ''))
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const dir of trimmed) {
+    const key = scopeKey(dir)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(dir)
+  }
+  return unique.filter((dir) => !unique.some((other) => other !== dir && isUnderAny(dir, [other])))
+}
+
+/** Coerce the `readonly string[] | string | undefined` a scope setter accepts
+ *  into a plain list. */
+function asScopeList(localPaths: readonly string[] | string | undefined): readonly string[] {
+  if (localPaths === undefined) return []
+  return typeof localPaths === 'string' ? [localPaths] : localPaths
+}
+
 export class PerforceClient {
   private readonly _p4: P4Service
   private readonly _sc: SourceControl
@@ -208,6 +363,11 @@ export class PerforceClient {
    *  analogue). Created first so it renders at the top; kept out of {@link _groups}
    *  so the reconcile pass owns it and `_applyGroups` never disposes it. */
   private readonly _reconcileGroup: SourceControlResourceGroup
+  /** The pinned "needs resolve" group, created second (right below the reconcile
+   *  group — the SCM view renders groups in creation order). Same lifecycle rules
+   *  as the reconcile group: hidden when empty, never in {@link _groups}, released
+   *  in dispose(). */
+  private readonly _resolveGroup: SourceControlResourceGroup
   /** Last reconcile discovery (files whose working tree diverged, not yet opened).
    *  Re-filtered against the opened set on every refresh so a just-collected file
    *  drops out without a full re-scan. */
@@ -221,6 +381,9 @@ export class PerforceClient {
    *  filter incremental (watcher-driven) reconcile scans without a fresh `opened`
    *  round-trip. */
   private _openedPaths: ReadonlySet<string> = new Set()
+  /** Normalized client paths the server still reports unresolved, from the last
+   *  refresh. The authoritative "what's left to resolve" after a resolve run. */
+  private _unresolvedPaths: ReadonlySet<string> = new Set()
   /** Normalized client path → the changelist it's open in ('default' or a numbered
    *  id), from the last refresh. Lets file-scoped shelve resolve which changelist a
    *  clicked row belongs to without another `p4 opened` round-trip. */
@@ -265,6 +428,60 @@ export class PerforceClient {
    *  the whole-client default — kept separately rather than re-derived from the
    *  filespecs above so the `/...` suffix is never parsed back off. */
   private _reconcileScopeDirs: readonly string[] = []
+  /** Filespecs a scope-less `sync` covers. Separate from the reconcile scope on
+   *  purpose (see {@link setSyncScope}). */
+  private _syncScopes: readonly string[] = ['//...']
+  private _syncScopeDirs: readonly string[] = []
+  /** In-flight behind-check, so it can't overlap itself and tests can await it. */
+  private _backgroundSyncPreview: Promise<void> | undefined
+  /** `_now()` of the last behind-check that actually ran p4, for the interval floor. */
+  private _lastSyncPreviewAt = 0
+  /** Behind count from the last completed check; undefined = never checked. */
+  private _syncBehindCount: number | undefined
+  /**
+   * Whether {@link _syncBehindCount} is the decoration cap rather than a true
+   * total. Remembered rather than recomputed so a gate-skipped result reports the
+   * same "500+" the scan reported, instead of downgrading it to an exact 500.
+   */
+  private _syncBehindCapped = false
+  /**
+   * Highest submitted changelist per sync scope at the last check — the cheap
+   * gate's memory. Unchanged marker ⇒ nothing was submitted here ⇒ we cannot have
+   * become newly behind, so the expensive pass is skipped entirely.
+   */
+  private _lastDepotMarker: string | undefined
+  /** Whether behind-checks run automatically (`perforce.syncPreview.autoCheck`). */
+  private _syncPreviewAutoCheck = false
+  /** Configured floor between automatic behind-checks, in ms. */
+  private _syncPreviewIntervalMs = SYNC_PREVIEW_MIN_INTERVAL_MS
+  /** In-flight opened-by-others scan, so it can't overlap itself and tests can
+   *  await it. */
+  private _backgroundOpenedByOthers: Promise<void> | undefined
+  /** `_now()` of the last opened-by-others scan that actually ran p4, for the
+   *  interval floor. */
+  private _lastOpenedByOthersAt = 0
+  /** Count of files other clients have open, from the last completed scan;
+   *  undefined = never scanned. */
+  private _openedByOthersCount: number | undefined
+  /** Whether {@link _openedByOthersCount} is the decoration cap rather than a
+   *  true total. */
+  private _openedByOthersCapped = false
+  /** Whether opened-by-others scans run automatically
+   *  (`perforce.openedByOthers.autoCheck`). */
+  private _openedByOthersAutoCheck = false
+  /** Configured floor between automatic opened-by-others scans, in ms. */
+  private _openedByOthersIntervalMs = OPENED_BY_OTHERS_MIN_INTERVAL_MS
+  /**
+   * Grey Explorer markers this client currently publishes, keyed by
+   * {@link scopeKey}'d local path. Held so the two independent producers — behind
+   * files (this phase) and files others have open — can each rewrite their own
+   * slice without erasing the other's, then publish the union.
+   */
+  private readonly _behindDecorations = new Map<string, SourceControlSupplementaryDecoration>()
+  /** Grey "他人占用" markers (files other clients have open), keyed like
+   *  {@link _behindDecorations} so {@link _publishSupplementaryDecorations} can
+   *  publish the union of both. */
+  private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
   /** Whether Swarm is enabled + configured, so the commit bar offers "Request New
@@ -275,6 +492,8 @@ export class PerforceClient {
   private readonly _busyOps: string[] = []
   /** Abort sources for in-flight cancellable operations (see {@link cancelBusy}). */
   private readonly _cancelSources: AbortController[] = []
+  /** Clock shared with the cache, so a test that advances one advances both. */
+  private readonly _now: () => number
 
   private constructor(
     readonly root: string,
@@ -286,7 +505,8 @@ export class PerforceClient {
     private readonly _store?: ReconcileStore,
   ) {
     this._p4 = new P4Service(root, gate, connection, _log)
-    this._cache = new P4Cache(cacheOptions.now ?? Date.now, cacheOptions.disk, cacheOptions.enabled)
+    this._now = cacheOptions.now ?? Date.now
+    this._cache = new P4Cache(this._now, cacheOptions.disk, cacheOptions.enabled)
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
     this._baseline = new BaselineProvider(this._p4, this._cache)
     this._sc = scm.createSourceControl('perforce', `Perforce: ${_clientName}`, root)
@@ -297,6 +517,13 @@ export class PerforceClient {
       localize('perforce.group.reconcile', 'Changes to Reconcile'),
     )
     this._reconcileGroup.hideWhenEmpty = true
+    // Second, so it renders right below the reconcile group. Same rules as the
+    // reconcile group: hideWhenEmpty, never in _groups, disposed separately.
+    this._resolveGroup = this._sc.createResourceGroup(
+      RESOLVE_GROUP_ID,
+      localize('perforce.group.resolve', 'Needs Resolve'),
+    )
+    this._resolveGroup.hideWhenEmpty = true
     this._sc.inputBox.placeholder = localize(
       'perforce.input.placeholder',
       'Message for the default changelist',
@@ -327,6 +554,23 @@ export class PerforceClient {
       return undefined
     }
     if (!discovered) return undefined
+    return PerforceClient.createForClient(discovered, fallback, gate, cacheOptions, log, store)
+  }
+
+  /** Build a client for an already-known client name + root (the
+   *  switch-workspace quick-pick), bypassing `p4 info` discovery. The connection
+   *  reuses {@link connectionFor}: `-c` is pinned so the cwd's P4CONFIG can't
+   *  resolve back to the ambient client, and `-p` is passed ONLY when
+   *  `perforce.port` is set explicitly (`p4 info`'s serverAddress is the
+   *  server's own bind address, not routable — see clientDiscovery). */
+  static createForClient(
+    discovered: DiscoveredClient,
+    fallback: P4Connection,
+    gate: ConcurrencyGate,
+    cacheOptions: P4CacheOptions,
+    log?: (msg: string) => void,
+    store?: ReconcileStore,
+  ): PerforceClient {
     const connection = connectionFor(discovered, fallback)
     return new PerforceClient(
       discovered.clientRoot,
@@ -345,6 +589,8 @@ export class PerforceClient {
       connection: this._connection,
       openedCount: this._openedCount,
       reconcileCount: this._reconcileFiles.length,
+      syncBehindCount: this._syncBehindCount,
+      syncBehindCapped: this._syncBehindCapped,
       busy: this._busyOps[this._busyOps.length - 1],
       busyCancellable: this._cancelSources.length > 0,
     }
@@ -501,29 +747,13 @@ export class PerforceClient {
    *  instead of leaving them until the next refresh. Widening cannot bring rows
    *  back — those need an actual scan, which the next refresh does. */
   setReconcileScope(localPaths: readonly string[] | string | undefined): void {
-    const paths =
-      localPaths === undefined ? [] : typeof localPaths === 'string' ? [localPaths] : localPaths
+    const paths = asScopeList(localPaths)
     const previous = this._reconcileScopeDirs
     if (paths.length === 0) {
       this._reconcileScopeDirs = []
       this._reconcileScopes = ['//...']
     } else {
-      const trimmed = paths.map((p) => p.replace(/[/\\]+$/, ''))
-      const seen = new Set<string>()
-      const unique: string[] = []
-      for (const dir of trimmed) {
-        // Keyed the same way the containment test below keys, so `Client` and
-        // `client` are one entry on Windows. Two survivors differing only by
-        // case would each look nested under the other and both get dropped,
-        // silently widening the scan back to the whole client.
-        const key = scopeKey(dir)
-        if (seen.has(key)) continue
-        seen.add(key)
-        unique.push(dir)
-      }
-      this._reconcileScopeDirs = unique.filter(
-        (dir) => !unique.some((other) => other !== dir && isUnderAny(dir, [other])),
-      )
+      this._reconcileScopeDirs = normalizeScopeDirs(paths)
       this._reconcileScopes = this._reconcileScopeDirs.map((dir) => `${dir}/...`)
     }
     if (sameScopeDirs(previous, this._reconcileScopeDirs)) return
@@ -531,6 +761,54 @@ export class PerforceClient {
       this._setReconcileFiles(this._reconcileFiles)
       this._emitChange()
     }
+  }
+
+  /**
+   * Narrow the default `p4 sync` target the same way {@link setReconcileScope}
+   * narrows discovery — a game workspace's client root can map far more than the
+   * folder the user opened, and "get latest" pulling the whole mapping is both
+   * slow and surprising.
+   *
+   * Kept as its own field rather than reusing the reconcile scope: the two are
+   * configured from the same source today (focus folders) but answer different
+   * questions, and a future "reconcile only src/ but sync everything" must not
+   * require untangling one field into two.
+   */
+  setSyncScope(localPaths: readonly string[] | string | undefined): void {
+    const paths = asScopeList(localPaths)
+    const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+    if (sameScopeDirs(this._syncScopeDirs, nextDirs)) return
+    this._syncScopeDirs = nextDirs
+    this._syncScopes = nextDirs.map((dir) => `${dir}/...`)
+    // A different scope is a different question: the behind count, its cap
+    // flag and the cheap gate's marker all describe the OLD scope. Keeping
+    // them would show a stale number, and the marker would make the first
+    // check on the new scope skip itself whenever the same changelist happens
+    // to be the newest here too — one submit batch landing in several focus
+    // dirs is the normal case, so the new scope's count would never appear.
+    // Same for the opened-by-others count: it is a claim about the old scope.
+    // An UNCHANGED scope (the config-change notification fires for unrelated
+    // keys too) clears nothing — that would burn one expensive pass for no
+    // new information.
+    this._syncBehindCount = undefined
+    this._syncBehindCapped = false
+    this._lastDepotMarker = undefined
+    this._openedByOthersCount = undefined
+    this._openedByOthersCapped = false
+    if (this._behindDecorations.size > 0 || this._othersDecorations.size > 0) {
+      this._behindDecorations.clear()
+      this._othersDecorations.clear()
+      this._publishSupplementaryDecorations()
+    }
+    this._emitChange()
+  }
+
+  /** The filespecs a scope-less `sync` would target — the configured sync scope
+   *  (focus folders) or the whole client mapping. Exposed so a clobber refusal on
+   *  a scope-less get can collect exactly the range that get covered, rather than
+   *  degrading to a discovery-only refresh that collects nothing. */
+  get syncScopes(): readonly string[] {
+    return this._syncScopes
   }
 
   /** Whether a local path falls inside the current reconcile discovery scope.
@@ -573,13 +851,6 @@ export class PerforceClient {
     const openedFiles = parseOpened(opened.records, this.root)
     const pending = parsePending(changes.records)
     this._pending = pending
-    const groups = groupChangelists(openedFiles, pending, {
-      default: () => localize('perforce.group.defaultShort', 'Default'),
-      numbered: (id, firstLine) =>
-        firstLine
-          ? localize('perforce.group.numbered', '#{0}: {1}', { 0: id, 1: firstLine })
-          : localize('perforce.group.numberedNoDesc', '#{0}', { 0: id }),
-    })
 
     // Fetch shelved files for the pending changelists that report a shelf, and
     // interleave a shelved sub-group after each owning CL. Changelists without a
@@ -587,6 +858,71 @@ export class PerforceClient {
     const shelvedByCl = await this._fetchShelved(pending.filter((c) => c.shelved).map((c) => c.id))
     if (this._disposed) return
     mark = stage('shelved', mark)
+
+    // The unresolved signal. Real servers never put `unresolved` in `p4 opened`
+    // (PROBE-FINDINGS §11.5) — `fstat -Ru` does, as a bare key. Probing is
+    // skipped entirely when nothing is open: with zero opened files there is
+    // nothing to be unresolved, and the common refresh stays at zero extra p4
+    // work. A failed probe is NOT evidence that nothing is unresolved, so the
+    // previous set is kept (same reasoning as runOpenedByOthersScan); an empty
+    // successful probe really does mean zero and clears it.
+    let keepPreviousUnresolved = false
+    let fstatUnresolved: Set<string> | undefined
+    if (openedFiles.length > 0) {
+      // `//...` is bound by the client view — the same scope `p4 resolve`
+      // without a filespec covers. Background priority (refresh fan-out must
+      // never take the interactive slot) with the tight ceiling above.
+      const fstat = await this._p4.execRecords(['fstat', '-Ru', '//...'], {
+        timeoutMs: FSTAT_UNRESOLVED_TIMEOUT_MS,
+      })
+      if (this._disposed) return
+      if (fstat.result.exitCode !== 0) {
+        keepPreviousUnresolved = true
+        this._log?.(
+          `[perforce] fstat -Ru failed (${p4ErrorText(fstat.result)}); keeping the previous unresolved set`,
+        )
+      } else {
+        // fstat's `clientFile` is a LOCAL path (§3 PROBE-FINDINGS) — the one
+        // command where it isn't client syntax — so no clientToLocalPath here;
+        // `norm` only, exactly like the opened-set keys it merges with.
+        fstatUnresolved = new Set(
+          parseFstat(fstat.records)
+            .filter((i) => i.unresolved && i.clientFile)
+            .map((i) => norm(i.clientFile!)),
+        )
+      }
+    }
+    mark = stage('unresolved', mark)
+
+    // Final set = what `opened` still reports (defensive: other server versions
+    // may carry the key) ∪ the fstat probe ∪, on a failed probe, the previous
+    // set. Merging is by normed local path so both sources join on one key.
+    const unresolvedPaths = new Set<string>()
+    if (keepPreviousUnresolved) {
+      for (const p of this._unresolvedPaths) unresolvedPaths.add(p)
+    }
+    for (const f of openedFiles) {
+      if (f.unresolved && f.clientFile) unresolvedPaths.add(norm(f.clientFile))
+    }
+    if (fstatUnresolved) {
+      for (const p of fstatUnresolved) unresolvedPaths.add(p)
+    }
+    this._unresolvedPaths = unresolvedPaths
+
+    // Mark the opened entries the merged set points at. fstat only hands back
+    // paths, so the U rows keep flowing through the OpenedFile chain — row
+    // style, contextValue and multi-select arguments all depend on it.
+    const markedOpenedFiles = openedFiles.map((f) =>
+      f.clientFile && unresolvedPaths.has(norm(f.clientFile)) ? { ...f, unresolved: true } : f,
+    )
+
+    const groups = groupChangelists(markedOpenedFiles, pending, {
+      default: () => localize('perforce.group.defaultShort', 'Default'),
+      numbered: (id, firstLine) =>
+        firstLine
+          ? localize('perforce.group.numbered', '#{0}: {1}', { 0: id, 1: firstLine })
+          : localize('perforce.group.numberedNoDesc', '#{0}', { 0: id }),
+    })
 
     const desired: DesiredGroup[] = []
     for (const group of groups) {
@@ -615,12 +951,18 @@ export class PerforceClient {
 
     this._applyGroups(desired)
     this._openedPaths = new Set(
-      openedFiles
+      markedOpenedFiles
         .map((f) => (f.clientFile ? norm(f.clientFile) : undefined))
         .filter(Boolean) as string[],
     )
+    // U files also stay in their owning changelist group (like git keeping
+    // conflicted files in the working tree) — this pinned group is a shortcut,
+    // not a move. Don't "fix" it by removing them from the changelist groups.
+    this._resolveGroup.resourceStates = toResourceStates(
+      markedOpenedFiles.filter((f) => f.unresolved),
+    )
     this._changelistByPath = new Map(
-      openedFiles
+      markedOpenedFiles
         .filter((f) => f.clientFile)
         .map((f) => [norm(f.clientFile!), f.changelist] as const),
     )
@@ -635,6 +977,12 @@ export class PerforceClient {
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
     this._sc.acceptInputActions = defaultHasFiles ? this._buildAcceptActions() : undefined
     this._emitChange()
+    // Fire-and-forget, and deliberately last: the behind-check and the
+    // opened-by-others scan are scope-wide server reads, so they must never be
+    // part of the refresh the spinner covers. Their own guards decide whether
+    // anything actually runs.
+    this.scheduleSyncPreview()
+    this.scheduleOpenedByOthers()
   }
 
   /** Commit-bar actions for the default changelist. When Swarm is available, the
@@ -1022,8 +1370,25 @@ export class PerforceClient {
     this._reconcileGroup.resourceStates = []
     this._reconcileFiles = []
     this._openedPaths = new Set()
+    this._resolveGroup.resourceStates = []
+    this._unresolvedPaths = new Set()
     this._openedCount = 0
     this._sc.count = 0
+    // A behind count is a claim about the server, so it can't outlive the
+    // connection: "↓12" while disconnected is a number nothing can refresh.
+    this._syncBehindCount = undefined
+    this._syncBehindCapped = false
+    // "Who has what open" is a claim about the server too, so it goes as well.
+    this._openedByOthersCount = undefined
+    this._openedByOthersCapped = false
+    // The gate's memory has to go with it. Keeping it would let the first check
+    // after reconnecting see an unchanged marker, skip the scan, and leave the
+    // count blank until someone happens to submit — the cache is only valid as
+    // long as the count it was gating still exists.
+    this._lastDepotMarker = undefined
+    this._behindDecorations.clear()
+    this._othersDecorations.clear()
+    this._publishSupplementaryDecorations()
     this._log?.(`[perforce] ${this._clientName} → ${this._connection} (${kind})`)
     this._emitChange()
   }
@@ -1608,22 +1973,811 @@ export class PerforceClient {
     return this._mutate('delete shelved', ['shelve', '-d', '-c', changelist, depotFile])
   }
 
+  // --- Sync (get revision) -------------------------------------------------
+
+  /**
+   * Run `p4 sync` and report what actually landed.
+   *
+   * Deliberately not routed through {@link _mutate}: that returns a bare boolean,
+   * and a sync's whole point is the summary — how many files updated, how many
+   * were skipped because they're open, how many now need a resolve. The skeleton
+   * is otherwise identical (busy label, user-cancellable, refresh either way,
+   * cache invalidation on success).
+   *
+   * `spec` is the revision suffix p4 understands (`#head`, `#4`, `@12345`,
+   * `@2026/08/01`), appended to each scope filespec. `force` is `p4 sync -f` —
+   * it re-fetches files p4 thinks you already have, and overwrites writable
+   * local files, so the caller must confirm first.
+   */
+  async sync(
+    spec: string,
+    options?: { scope?: readonly string[]; force?: boolean },
+  ): Promise<{
+    ok: boolean
+    cancelled: boolean
+    summary: SyncRunSummary | undefined
+    error: { kind: SyncErrorKind; suggestion: string } | undefined
+  }> {
+    const targets = this._syncTargets(spec, options?.scope)
+    const args = ['sync', ...(options?.force === true ? ['-f'] : []), ...targets]
+    return this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
+      const { value: result, cancelled } = await this._cancellable((signal) =>
+        this._p4.exec(args, { signal }),
+      )
+      if (cancelled) {
+        // The user asked for this — log it, don't toast it, and still refresh so
+        // the view reflects whatever landed before the abort.
+        this._log?.('[perforce] sync cancelled by user')
+        await this._refreshAfterMutation()
+        return { ok: false, cancelled: true, summary: undefined, error: undefined }
+      }
+      const summary = parseSyncOutput(result.stdout, result.stderr)
+      // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
+      // exit 0**. Checked before the exit code so the outcome is the same however
+      // a given server reports it — a future non-zero variant must not read as a
+      // failure, and this one must not read as "applied 0 files, something's off".
+      if (summary.upToDate && summary.applied === 0) {
+        this._log?.('[perforce] sync: already up to date')
+        return { ok: true, cancelled: false, summary, error: undefined }
+      }
+      if (result.exitCode !== 0) {
+        const error = classifySyncError(result)
+        this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(result)}`)
+        await this._refreshAfterMutation()
+        return { ok: false, cancelled: false, summary, error }
+      }
+      if (summary.unrecognized) {
+        // Exit 0 with output we couldn't account for: never silent — the counts
+        // shown to the user would otherwise read as "nothing happened".
+        this._log?.(
+          `[perforce] sync: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
+        )
+      }
+      this._log?.(
+        `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ${summary.mustResolve} need resolve`,
+      )
+      // A sync rewrites have-revisions across the scope, so every path-keyed
+      // cache entry (fstat/print/filelog) is potentially stale — full clear.
+      this._cache.invalidateWorkspace()
+      await this._refreshAfterMutation()
+      // The behind count is stale by definition now, and the user just acted on
+      // it — `force` skips the interval floor so the status bar doesn't keep
+      // showing the number they clicked to clear for another few minutes.
+      this.scheduleSyncPreview({ force: true })
+      return { ok: true, cancelled: false, summary, error: undefined }
+    })
+  }
+
+  /** Sync a specific set of local paths to `spec` (defaults to `#head`). Used by
+   *  the Explorer's per-file/folder "get latest revision". */
+  async syncFiles(
+    paths: readonly string[],
+    spec = '#head',
+    options?: { force?: boolean },
+  ): Promise<{
+    ok: boolean
+    cancelled: boolean
+    summary: SyncRunSummary | undefined
+    error: { kind: SyncErrorKind; suggestion: string } | undefined
+  }> {
+    if (paths.length === 0) {
+      return { ok: false, cancelled: false, summary: undefined, error: undefined }
+    }
+    return this.sync(spec, {
+      scope: paths,
+      ...(options?.force !== undefined ? { force: options.force } : {}),
+    })
+  }
+
+  /**
+   * Dry-run `p4 sync -n`: what *would* a sync bring in.
+   *
+   * Goes through `execTagged` (`-ztag`) rather than `execRecords`: measured on
+   * P4D 2024.2, `-Mj sync -n` collapses to `{"data":...}` blobs in **both** the
+   * has-updates and the up-to-date case, so `execRecords` would pay for a
+   * guaranteed-useless `-Mj` spawn before falling back every single time.
+   *
+   * Runs at **background** priority — the scope-wide server comparison must never
+   * take the slot a user's click is waiting on. `limit` becomes `-m <n>`, which
+   * bounds how many records come back but — measured, and the whole reason
+   * {@link runSyncPreviewScan} needs a cheap gate in front — **not** how much of the
+   * client view the server walks. Pass `timeoutMs` for any caller that must not
+   * hold a gate slot for the full command budget.
+   */
+  async previewSync(
+    scope?: readonly string[],
+    spec = '#head',
+    limit?: number,
+    options?: { timeoutMs?: number },
+  ): Promise<{
+    ok: boolean
+    files: SyncPreviewFile[]
+    total: number | undefined
+    upToDate: boolean
+  }> {
+    const targets = this._syncTargets(spec, scope)
+    const limitArgs = limit !== undefined && limit > 0 ? ['-m', String(limit)] : []
+    const res = await this._p4.execTagged(
+      ['sync', '-n', ...limitArgs, ...targets],
+      options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : undefined,
+    )
+    // Measured: "up-to-date" arrives on **stderr with exit 0** and no records, so
+    // it has to be tested before the exit code — not only in a failure branch.
+    if (classifySyncError(res.result).kind === 'upToDate') {
+      return { ok: true, files: [], total: undefined, upToDate: true }
+    }
+    if (res.result.exitCode !== 0) {
+      this._log?.(`[perforce] sync -n failed: ${p4ErrorText(res.result)}`)
+      return { ok: false, files: [], total: undefined, upToDate: false }
+    }
+    const files = parseSyncPreview(res.records, this.root)
+    const total = parseSyncPreviewTotal(res.records)
+    return { ok: true, files, total, upToDate: files.length === 0 }
+  }
+
+  /** Append the revision `spec` to each target filespec, falling back to the
+   *  configured sync scope when the caller gives none. Local paths are passed
+   *  through verbatim (p4 accepts them); directories must already carry `/...`. */
+  private _syncTargets(spec: string, scope?: readonly string[]): string[] {
+    const base = scope !== undefined && scope.length > 0 ? scope : this._syncScopes
+    return base.map((target) => `${target}${spec}`)
+  }
+
+  // --- Behind awareness ----------------------------------------------------
+
+  /** Apply `perforce.syncPreview.*`. Turning auto-check off clears what's shown:
+   *  stale "可更新" markers are worse than none, since nothing will refresh them. */
+  setSyncPreviewOptions(options: { autoCheck: boolean; intervalMs: number }): void {
+    this._syncPreviewAutoCheck = options.autoCheck
+    this._syncPreviewIntervalMs = Math.max(SYNC_PREVIEW_MIN_INTERVAL_MS, options.intervalMs)
+    if (!options.autoCheck) {
+      this._syncBehindCount = undefined
+      this._syncBehindCapped = false
+      // Same reason as going offline: a remembered marker would make the first
+      // check after re-enabling skip itself and leave the count blank.
+      this._lastDepotMarker = undefined
+      if (this._behindDecorations.size > 0) {
+        this._behindDecorations.clear()
+        this._publishSupplementaryDecorations()
+      }
+      this._emitChange()
+    }
+  }
+
+  /**
+   * Compare the sync scope against the depot and report how far behind this client
+   * is, publishing a grey "可更新" marker per file.
+   *
+   * **Two tiers, because the obvious one-tier design is unusable.** Measured on a
+   * 450k-file workspace, `sync -n` over the client root returns nothing in 120s —
+   * `-m` bounds the reply, not the server's walk of the client view. So:
+   *
+   * 1. A cheap gate (`changes -m 1 -s submitted <scope>`, ~130ms even at client-root
+   *    scope) asks only "has anything been submitted here since I last looked". In
+   *    the steady state the answer is no and this method stops right here, having
+   *    spent a tenth of a second.
+   * 2. Only when that highest changelist actually moved does the expensive
+   *    `sync -n` run, under {@link SYNC_PREVIEW_TIMEOUT_MS}.
+   *
+   * `force` skips tier 1 — a user who clicked "check now" gets the real comparison
+   * even if the gate would have short-circuited it.
+   *
+   * The count comes from the server's `totalFileCount` when it reports one: that
+   * is the untruncated total of files the sync would act on (measured: it
+   * survives `-m` and counts the plain-line refusals too), so a scope with more
+   * behind files than the decoration cap still gets its real count. Without the
+   * field (older servers) the returned record count is the fallback — logged,
+   * because that count is truncated whenever the reply saturated `-m`.
+   *
+   * `capped` says the count passed the decoration cap: per-file markers are
+   * dropped then, and the count is a floor, not a total.
+   */
+  async runSyncPreviewScan(options?: {
+    force?: boolean
+  }): Promise<{ behind: number; capped: boolean; ok: boolean; skipped: boolean }> {
+    const force = options?.force === true
+    // Held, not committed: the marker may only advance once the expensive pass it
+    // gates has actually produced a result. Advancing it up front means a single
+    // timed-out `sync -n` short-circuits every later check until someone submits
+    // again — the count would sit at a stale value for hours with no way back.
+    let observedMarker: string | undefined
+    if (!force) {
+      const gate = await this._latestSubmittedChange()
+      if (gate.ok && gate.marker !== undefined) {
+        if (gate.marker === this._lastDepotMarker) {
+          // Nothing was submitted in this scope since the last check, so nothing can
+          // have made us newly behind. Skipping is the whole point of the gate.
+          return {
+            behind: this._syncBehindCount ?? 0,
+            capped: this._syncBehindCapped,
+            ok: true,
+            skipped: true,
+          }
+        }
+        observedMarker = gate.marker
+      }
+    }
+    // `-m 501` bounds how many records come back — the cap decision must NOT
+    // trust a saturated reply. `totalFileCount` (measured: one grand total in
+    // the first record, untruncated under `-m`) is the real number; only when
+    // the server doesn't report it do we fall back to the truncated record
+    // count and say so.
+    const probe = SYNC_PREVIEW_MAX_DECORATIONS + 1
+    const res = await this.previewSync(undefined, '#head', probe, {
+      timeoutMs: SYNC_PREVIEW_TIMEOUT_MS,
+    })
+    if (!res.ok) {
+      // Degrade visibly in the log only: a failed or timed-out probe is not
+      // evidence that the client is current, so the previous count and markers
+      // stay exactly as they are — and the marker stays put too, so the next
+      // check retries instead of trusting a gate reading it never acted on.
+      this._log?.('[perforce] behind-check failed; keeping the previous result')
+      return {
+        behind: this._syncBehindCount ?? 0,
+        capped: this._syncBehindCapped,
+        ok: false,
+        skipped: false,
+      }
+    }
+    if (observedMarker !== undefined) this._lastDepotMarker = observedMarker
+    let behind: number
+    let capped: boolean
+    if (res.total !== undefined) {
+      capped = res.total > SYNC_PREVIEW_MAX_DECORATIONS
+      behind = res.total
+    } else {
+      // A reply WITH records but no totalFileCount means the server doesn't
+      // report the field (an empty reply is just "up to date") — say so,
+      // because that record count is truncated whenever `-m` saturated it.
+      if (res.files.length > 0) {
+        this._log?.(
+          '[perforce] behind-check: sync -n reported no totalFileCount; ' +
+            'falling back to the returned record count',
+        )
+      }
+      capped = res.files.length > SYNC_PREVIEW_MAX_DECORATIONS
+      behind = capped ? SYNC_PREVIEW_MAX_DECORATIONS : res.files.length
+    }
+    this._syncBehindCount = behind
+    this._syncBehindCapped = capped
+    this._behindDecorations.clear()
+    if (capped) {
+      // Never silent: an Explorer with no markers plus a number in the status bar
+      // would otherwise read as a contradiction the user can't explain.
+      this._log?.(
+        `[perforce] behind-check: more than ${SYNC_PREVIEW_MAX_DECORATIONS} files behind; ` +
+          `showing the count only, no per-file markers`,
+      )
+    } else {
+      for (const file of res.files) {
+        const local = file.clientFile
+        // No local path means the file isn't in this client's view — there is no
+        // Explorer row to decorate, and the count already includes it.
+        if (!local) continue
+        this._behindDecorations.set(scopeKey(local), {
+          resourceUri: local,
+          description: localize('perforce.deco.behind', 'update available'),
+          tooltip: localize(
+            'perforce.deco.behind.tooltip',
+            'A newer revision is available ({0} #{1}). Use Get Latest Revision to fetch it.',
+            { 0: file.action, 1: file.rev },
+          ),
+        })
+      }
+    }
+    this._publishSupplementaryDecorations()
+    this._emitChange()
+    this._log?.(`[perforce] behind-check: ${behind}${capped ? '+' : ''} file(s) behind`)
+    return { behind, capped, ok: true, skipped: false }
+  }
+
+  /**
+   * The cheap gate: the highest submitted changelist per sync-scope filespec,
+   * joined into one comparable marker.
+   *
+   * `changes -m 1 -s submitted <scope>` is ~1000× cheaper than `sync -n` on the
+   * same scope (130ms vs >120s at client-root scope) because it reads the change
+   * table instead of walking the client view. `-m 1` applies **per filespec**, so a
+   * multi-scope client yields one id each and the joined string changes if any of
+   * them moves.
+   *
+   * Deliberately not `<scope>#have`, which would answer the sharper question "what
+   * do I hold" — measured at 31s, 240× slower than the plain scope, because the
+   * revision modifier forces exactly the per-file walk this gate exists to avoid.
+   */
+  private async _latestSubmittedChange(): Promise<{ ok: boolean; marker: string | undefined }> {
+    const res = await this._p4.execTagged(
+      ['changes', '-m', '1', '-s', 'submitted', ...this._syncScopes],
+      { timeoutMs: SYNC_PREVIEW_GATE_TIMEOUT_MS },
+    )
+    if (res.result.exitCode !== 0) {
+      // An unusable gate must fall through to the real check, never silently
+      // report "nothing changed" — that would freeze the count forever.
+      this._log?.(`[perforce] behind-check gate failed: ${p4ErrorText(res.result)}`)
+      return { ok: false, marker: undefined }
+    }
+    const ids = parseChangesList(res.records).map((c) => c.id)
+    // Zero records on a successful run is itself a stable answer — this scope has
+    // never had a submitted change (an empty depot, or a focus folder that only
+    // exists locally). It has to be a *comparable* marker rather than `undefined`,
+    // or that workspace pays for the expensive pass on every single check while the
+    // gate quietly never applies. A non-mapping filespec exits non-zero and is
+    // already handled above, so this really does mean "nothing here yet".
+    if (ids.length === 0) return { ok: true, marker: GATE_MARKER_NO_CHANGES }
+    return { ok: true, marker: ids.join(',') }
+  }
+
+  /**
+   * Run a behind-check in the background if one is due, and never block a caller.
+   *
+   * Four independent guards, because the expensive tier of a behind-check is the
+   * most expensive read this extension issues: auto-check must be on, no check may
+   * be in flight, the interval floor must have elapsed, and the client must be
+   * connected. `force` (a user-initiated get just landed) skips the interval **and**
+   * the cheap gate — a click deserves the real comparison, but still not two
+   * overlapping scans.
+   */
+  scheduleSyncPreview(options?: { force?: boolean }): void {
+    const force = options?.force === true
+    if (!force && !this._syncPreviewAutoCheck) return
+    if (this._backgroundSyncPreview) return
+    if (this._connection !== 'connected') return
+    const now = this._now()
+    if (!force && now - this._lastSyncPreviewAt < this._syncPreviewIntervalMs) return
+    this._lastSyncPreviewAt = now
+    const run = (async () => {
+      // Cross a macrotask first: chaining alone would still land inside the
+      // caller's awaited window, so the spinner would cover a scan the user
+      // never asked to wait for (same reasoning as _scheduleBackgroundReverify).
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 0)
+        timer.unref?.()
+      })
+      if (this._disposed) return
+      await this.runSyncPreviewScan(force ? { force: true } : undefined)
+    })()
+      // Mandatory, not defensive: an unhandled rejection from a floating promise
+      // takes down the whole extension host.
+      .catch((err: unknown) => {
+        this._log?.(`[perforce] background behind-check failed: ${String(err)}`)
+      })
+      .finally(() => {
+        if (this._backgroundSyncPreview === run) this._backgroundSyncPreview = undefined
+      })
+    this._backgroundSyncPreview = run
+  }
+
+  /** Await any in-flight behind-check (tests; also lets callers settle). */
+  async whenSyncPreviewSettled(): Promise<void> {
+    await this._backgroundSyncPreview
+  }
+
+  // --- Opened-by-others awareness ------------------------------------------
+
+  /** Apply `perforce.openedByOthers.*`. Turning auto-check off clears what's
+   *  shown: stale "他人占用" markers are worse than none, since nothing will
+   *  refresh them. */
+  setOpenedByOthersOptions(options: { autoCheck: boolean; intervalMs: number }): void {
+    this._openedByOthersAutoCheck = options.autoCheck
+    this._openedByOthersIntervalMs = Math.max(OPENED_BY_OTHERS_MIN_INTERVAL_MS, options.intervalMs)
+    if (!options.autoCheck) {
+      this._openedByOthersCount = undefined
+      this._openedByOthersCapped = false
+      if (this._othersDecorations.size > 0) {
+        this._othersDecorations.clear()
+        this._publishSupplementaryDecorations()
+      }
+      this._emitChange()
+    }
+  }
+
+  /**
+   * Ask who has what open: `p4 opened -a` over the sync scope, filtered to other
+   * clients, published as grey "他人占用" markers.
+   *
+   * No cheap gate in front (unlike the behind-check): `opened` reads the
+   * server's *open table* rather than walking the client view, so its cost
+   * scales with how many files are open anywhere, not with workspace size — a
+   * 450k-file workspace doesn't make it slower, and there is no changes-table
+   * signal that would tell us "someone opened something" anyway. What stays
+   * unbounded is the reply on a busy shared server, so the probe always carries
+   * `-m` (cap + 1) plus a tight timeout: a failed or timed-out probe keeps the
+   * previous result, because it is not evidence that nobody has anything open.
+   * The cap is judged on the RAW reply — `-a` includes this client's own
+   * files, so judging on the filtered set would read a self-saturated probe
+   * as "nobody has anything open" (a saturated reply keeps the previous
+   * markers too, same as a failure).
+   *
+   * Local paths come from `p4 where` on the depot paths — NEVER from
+   * translating the records' `clientFile`. Under `-a` that field is the *other*
+   * client's client-syntax path (`//otherclient/...`), and translating it with
+   * this client's root manufactures a local path that doesn't exist — the same
+   * mistranslation as the old "edit renders as whole-file delete" bug.
+   */
+  async runOpenedByOthersScan(): Promise<{ others: number; capped: boolean; ok: boolean }> {
+    const probe = OPENED_BY_OTHERS_MAX_DECORATIONS + 1
+    const res = await this._p4.execRecords(
+      ['opened', '-a', '-m', String(probe), ...this._syncScopes],
+      { timeoutMs: OPENED_BY_OTHERS_TIMEOUT_MS },
+    )
+    if (res.result.exitCode !== 0) {
+      // Degrade visibly in the log only: a failed or timed-out probe is not
+      // evidence that nobody has anything open, so the previous count and
+      // markers stay exactly as they are.
+      this._log?.(`[perforce] opened-by-others scan failed: ${p4ErrorText(res.result)}`)
+      return this._previousOpenedByOthersResult()
+    }
+    // Deliberately parsed WITHOUT this.root: under `-a`, `clientFile` is the
+    // other client's client-syntax path, and the clientRoot translation would
+    // fake a local path that doesn't exist.
+    const others = filterOpenedByOthers(parseOpened(res.records), this._clientName)
+    // The cap must be judged on the RAW reply, not on `others`: `opened -a`
+    // includes this client's own files, so a user with >300 of their own open
+    // can saturate the probe with records that all filter out — reading that
+    // as "nobody has anything open" is exactly the silent-zero trap. A reply
+    // at the probe size is "the open table is bigger than the cap", no matter
+    // whose files happened to come first. (Measured: `opened -a` has no
+    // `totalFileCount`, so the raw record count is all there is to judge by.)
+    const capped = res.records.length >= probe
+    const count = capped ? OPENED_BY_OTHERS_MAX_DECORATIONS : others.length
+    if (capped) {
+      // Never silent, and never clearing: truncation is NOT evidence that
+      // nobody has anything open, so the previous markers stay put (same
+      // semantics as a failed scan) and the log says why.
+      this._openedByOthersCount = count
+      this._openedByOthersCapped = true
+      this._log?.(
+        `[perforce] opened-by-others: the -m ${probe} probe saturated; ` +
+          `showing the count only, keeping the previous markers`,
+      )
+      this._log?.(`[perforce] opened-by-others: ${count}+ file(s)`)
+      this._emitChange()
+      return { others: count, capped: true, ok: true }
+    }
+    let localByDepot: Map<string, string> | undefined
+    if (others.length > 0) {
+      const where = await this._whereLocalPathsResult(others.map((f) => f.depotFile))
+      if (!where.ok) {
+        // The lookup itself failed, so we don't know which files to mark: keep the
+        // previous result rather than publish a fresh count next to markers that
+        // no longer agree with it. Note this is NOT the same as an empty result —
+        // on a real shared server most files opened by others live on branches
+        // outside this client's view, so zero local paths is the normal case, and
+        // treating it as a failure would keep the count blank forever.
+        this._log?.('[perforce] opened-by-others where lookup failed; keeping the previous result')
+        return this._previousOpenedByOthersResult()
+      }
+      localByDepot = where.paths
+    }
+    this._openedByOthersCount = count
+    this._openedByOthersCapped = false
+    this._othersDecorations.clear()
+    if (localByDepot) {
+      for (const file of others) {
+        const local = localByDepot.get(file.depotFile)
+        // No local path means the file isn't in this client's view — there is no
+        // Explorer row to decorate (the count already includes it).
+        if (!local) continue
+        const client = file.openedByClient ?? ''
+        const owner = file.openedByUser ? `${file.openedByUser}@${client}` : client
+        this._othersDecorations.set(scopeKey(local), {
+          resourceUri: local,
+          description: localize('perforce.deco.occupied', 'in use by others'),
+          tooltip: localize('perforce.deco.occupied.tooltip', '{0} has this file open', {
+            0: owner,
+          }),
+        })
+      }
+    }
+    this._publishSupplementaryDecorations()
+    this._emitChange()
+    this._log?.(`[perforce] opened-by-others: ${count} file(s)`)
+    return { others: count, capped: false, ok: true }
+  }
+
+  /** The previous scan's result — what both failure paths report, since a
+   *  failed probe changes nothing. */
+  private _previousOpenedByOthersResult(): { others: number; capped: boolean; ok: boolean } {
+    return { others: this._openedByOthersCount ?? 0, capped: this._openedByOthersCapped, ok: false }
+  }
+
+  /**
+   * Run an opened-by-others scan in the background if one is due, and never
+   * block a caller.
+   *
+   * The same four guards as the behind-check — auto-check on, no scan in flight,
+   * the interval floor elapsed, client connected — kept as independent state
+   * because the two scans have different costs and change at different rates.
+   */
+  scheduleOpenedByOthers(): void {
+    if (!this._openedByOthersAutoCheck) return
+    if (this._backgroundOpenedByOthers) return
+    if (this._connection !== 'connected') return
+    const now = this._now()
+    if (now - this._lastOpenedByOthersAt < this._openedByOthersIntervalMs) return
+    this._lastOpenedByOthersAt = now
+    const run = (async () => {
+      // Cross a macrotask first: chaining alone would still land inside the
+      // caller's awaited window, so the spinner would cover a scan the user
+      // never asked to wait for (same reasoning as _scheduleBackgroundReverify).
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 0)
+        timer.unref?.()
+      })
+      if (this._disposed) return
+      await this.runOpenedByOthersScan()
+    })()
+      // Mandatory, not defensive: an unhandled rejection from a floating promise
+      // takes down the whole extension host.
+      .catch((err: unknown) => {
+        this._log?.(`[perforce] background opened-by-others scan failed: ${String(err)}`)
+      })
+      .finally(() => {
+        if (this._backgroundOpenedByOthers === run) this._backgroundOpenedByOthers = undefined
+      })
+    this._backgroundOpenedByOthers = run
+  }
+
+  /** Await any in-flight opened-by-others scan (tests; also lets callers settle). */
+  async whenOpenedByOthersSettled(): Promise<void> {
+    await this._backgroundOpenedByOthers
+  }
+
+  /**
+   * Publish the union of every supplementary-decoration producer.
+   *
+   * The channel replaces the provider's whole set, so each producer keeps its own
+   * map and this is the single place they merge — a producer that published its
+   * slice directly would silently erase the others'. A file can appear in two
+   * maps at once (behind *and* open by someone else); it publishes as ONE entry
+   * then, because the renderer keys decorations by path and a second entry would
+   * silently overwrite the first.
+   */
+  private _publishSupplementaryDecorations(): void {
+    const merged = new Map<string, SourceControlSupplementaryDecoration>(this._behindDecorations)
+    for (const [key, deco] of this._othersDecorations) {
+      const behind = merged.get(key)
+      if (!behind) {
+        merged.set(key, deco)
+        continue
+      }
+      // Both facts matter and the grey line only fits one short text — join the
+      // descriptions; the tooltip keeps each producer's full detail.
+      const tooltip = [behind.tooltip, deco.tooltip]
+        .filter((t): t is string => t !== undefined)
+        .join('\n')
+      merged.set(key, {
+        resourceUri: deco.resourceUri,
+        description: localize(
+          'perforce.deco.occupiedAndBehind',
+          'in use by others · update available',
+        ),
+        ...(tooltip.length > 0 ? { tooltip } : {}),
+      })
+    }
+    this._sc.setSupplementaryDecorations([...merged.values()])
+  }
+
   // --- Resolve (Phase 3) ---------------------------------------------------
 
   /**
    * Auto-resolve files with the safe merge strategy (`p4 resolve -am`): accepts
-   * clean automatic merges, leaves genuine conflicts open for manual handling
-   * (reported back via the toast + a refresh so the `U` rows stay visible).
+   * clean automatic merges, leaves genuine conflicts open for manual handling.
+   *
+   * Deliberately NOT routed through {@link _mutate}: `-am` exits 0 even when some
+   * files are left unresolved, so exit-code-only handling would silently swallow
+   * the "partially resolved" outcome — the user clicks Resolve and gets nothing.
+   * The skeleton mirrors `_mutate` (busy label, user-cancellable, cache
+   * invalidation, refresh either way), but the outcome is reported from TWO
+   * sources: the merge transcript text is a first signal, and the freshly
+   * refreshed `opened` is authoritative — how many of the resolved paths the
+   * server STILL reports unresolved after the run is what "remaining" means.
+   * The text counts are the fallback when the post-resolve refresh lost the
+   * connection (nothing authoritative exists then).
    */
   async resolve(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
-    return this._mutate('resolve', ['resolve', '-am'], paths)
+    return this._runResolve(['resolve', '-am', ...paths], paths)
+  }
+
+  /**
+   * Shared core for every `-am` entry point. Both the per-row and the whole-group
+   * command must report the partial outcome; the group one is the *more* common
+   * click, so leaving it on the exit-code-only path would have kept the silent
+   * failure exactly where users meet it most.
+   *
+   * `candidates` are the rows this run was expected to resolve — the denominator
+   * for "auto-merged N" and the set re-checked against the refreshed `opened`.
+   */
+  private async _runResolve(
+    args: readonly string[],
+    candidates: readonly string[],
+  ): Promise<boolean> {
+    return this._withBusy(this._busyLabel('resolve'), async () => {
+      const { value: result, cancelled } = await this._cancellable((signal) =>
+        this._p4.exec([...args], { signal }),
+      )
+      if (cancelled) {
+        // The user asked for this — log it, don't toast it, and still refresh so
+        // the view reflects whatever landed before the abort.
+        this._log?.('[perforce] resolve cancelled by user')
+        await this._refreshAfterMutation()
+        return false
+      }
+      if (result.exitCode !== 0) {
+        await notifyP4Failure('resolve', result)
+        await this._refreshAfterMutation()
+        return false
+      }
+      const text = parseResolveOutput(result.stdout)
+      if (text.unrecognized) {
+        // Never silent: exit 0 with output we couldn't account for means the
+        // counts below would otherwise read as "nothing happened".
+        this._log?.(
+          `[perforce] resolve: output not parseable, reporting as unknown — ${result.stdout.trim().slice(0, 500)}`,
+        )
+      }
+      this._invalidateAfterMutation(candidates)
+      await this._refreshAfterMutation()
+      // The refresh is authoritative when the connection survived; the merge
+      // transcript is the fallback when it didn't (the refresh's `opened` may
+      // have gone offline, clearing _unresolvedPaths).
+      const authoritative = this._connection === 'connected'
+      const remaining = authoritative
+        ? candidates.filter((p) => this._unresolvedPaths.has(norm(p))).length
+        : text.remaining
+      const merged = authoritative ? candidates.length - remaining : text.merged
+      if ((text.unrecognized && remaining === 0) || (merged === 0 && remaining === 0)) {
+        // Exit 0 but no source accounts for any effect: the transcript
+        // recognized nothing (logged above) and the server reports nothing
+        // left to resolve (e.g. "no file(s) to resolve" on an already-resolved
+        // row). Never silent, and never fabricate an "auto-merged N".
+        await window.showInformationMessage(
+          localize('perforce.resolve.completed', 'Resolve completed.'),
+        )
+        return true
+      }
+      const message =
+        merged > 0 && remaining > 0
+          ? localize(
+              'perforce.resolve.summary',
+              'Auto-merged {0}; {1} still need manual resolution.',
+              {
+                0: String(merged),
+                1: String(remaining),
+              },
+            )
+          : merged > 0
+            ? localize('perforce.resolve.done', 'Auto-merged {0} file(s).', {
+                0: String(merged),
+              })
+            : localize('perforce.resolve.still', '{0} file(s) still need manual resolution.', {
+                0: String(remaining),
+              })
+      if (remaining > 0) {
+        // Guide the user to what's left: open the 3-way merge editor on the
+        // first file that is still unresolved.
+        const BTN_RESOLVE = localize('perforce.btn.resolveNow', 'Resolve Conflicts')
+        const picked = await window.showWarningMessage(message, BTN_RESOLVE)
+        if (picked === BTN_RESOLVE) {
+          const first = candidates.find((p) => this._unresolvedPaths.has(norm(p)))
+          if (first) await commands.executeCommand('perforce.openMergeEditor', first)
+        }
+        return true
+      }
+      await window.showInformationMessage(message)
+      return true
+    })
+  }
+
+  /** Accept our side of each merge (`p4 resolve -ay`) — discards the incoming
+   *  side, so the command layer confirms first. */
+  async resolveAcceptYours(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    return this._mutate('resolve', ['resolve', '-ay'], paths)
+  }
+
+  /** Accept the incoming side of each merge (`p4 resolve -at`) — discards our
+   *  local edits, so the command layer confirms first. */
+  async resolveAcceptTheirs(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false
+    return this._mutate('resolve', ['resolve', '-at'], paths)
+  }
+
+  /**
+   * Accept the just-saved merge-editor result as "ours" (`p4 resolve -ay`):
+   * the user hand-merged on disk, so saving means "take my content". Backs the
+   * runtime command `perforce.acceptResolved` (the merge editor's saveCommand).
+   * No confirmation — saving the merge editor IS the confirmation.
+   */
+  async acceptResolved(localPath: string): Promise<boolean> {
+    return this._mutate('resolve', ['resolve', '-ay'], [localPath])
+  }
+
+  /**
+   * Open the 3-way merge editor for an unresolved file. base = the have revision
+   * content (`depotFile#haveRev`), incoming = the depot head (`depotFile#headRev`),
+   * current + merged = the on-disk file — its p4 conflict markers are recognized
+   * by the renderer's conflictParser, so the result pane seeds with the raw
+   * conflicted content. Saving the merged result runs `perforce.acceptResolved`
+   * (see MergeEditorInput.saveCommand).
+   *
+   * fstat is a metadata read, so it keeps the interactive tight timeout; the two
+   * prints are whole-file content transfers and keep the generous command budget
+   * (INTERACTIVE_CONTENT_EXEC — a 30s cap would kill a large file on a slow link).
+   */
+  async openMergeEditor(localPath: string): Promise<void> {
+    await this._withBusy(
+      localize('perforce.busy.openMergeEditor', 'Opening Merge Editor'),
+      async () => {
+        const title = localize('perforce.command.openMergeEditor.title', 'Open Merge Editor')
+        const res = await this._p4.execRecords(['fstat', localPath], INTERACTIVE_EXEC)
+        if (res.result.exitCode !== 0) {
+          await notifyP4Failure(title, res.result)
+          return
+        }
+        const info = parseFstat(res.records)[0]
+        if (!info) {
+          // Not under depot control — there is nothing to three-way merge against.
+          await window.showErrorMessage(
+            localize(
+              'perforce.openMergeEditor.notControlled',
+              'The file is not under depot control.',
+            ),
+          )
+          return
+        }
+        // `haveRev` is 'none' for an open-for-add file (no have revision yet) —
+        // the base side is simply empty then, like git's added-on-both-sides merge.
+        const haveRev = info.haveRev && info.haveRev !== 'none' ? info.haveRev : undefined
+        const baseSpec = haveRev ? `${info.depotFile}#${haveRev}` : null
+        const incomingSpec = info.headRev ? `${info.depotFile}#${info.headRev}` : null
+        const [base, incoming] = await Promise.all([
+          this.printRevision(baseSpec),
+          this.printRevision(incomingSpec),
+        ])
+        let current = ''
+        try {
+          current = await readFile(localPath, 'utf8')
+        } catch {
+          current = '' // deleted on disk
+        }
+        const currentLabel = haveRev
+          ? localize('perforce.mergeEditor.yoursRev', 'Yours (have #{0})', { 0: haveRev })
+          : localize('perforce.mergeEditor.yours', 'Yours')
+        const incomingLabel = info.headRev
+          ? localize('perforce.mergeEditor.theirsRev', 'Theirs (head #{0})', {
+              0: info.headRev,
+            })
+          : localize('perforce.mergeEditor.theirs', 'Theirs')
+        await commands.executeCommand('_workbench.openMergeEditor', {
+          path: localPath,
+          base,
+          current,
+          incoming,
+          merged: current,
+          currentLabel,
+          incomingLabel,
+          saveCommand: {
+            command: 'perforce.acceptResolved',
+            arguments: [localPath],
+          },
+        })
+      },
+    )
   }
 
   /** Auto-resolve every unresolved file in a numbered changelist. */
   async resolveChangelist(changelist: string): Promise<boolean> {
-    if (changelist === 'default') return this._mutate('resolve', ['resolve', '-am'])
-    return this._mutate('resolve', ['resolve', '-am', '-c', changelist])
+    // The candidate set has to be captured BEFORE the run: afterwards the
+    // resolved rows are gone from `_changelistByPath`, and an empty denominator
+    // would report every partial merge as "nothing happened".
+    const candidates = this.pathsInChangelist(changelist).filter((p) =>
+      this._unresolvedPaths.has(norm(p)),
+    )
+    const args =
+      changelist === 'default' ? ['resolve', '-am'] : ['resolve', '-am', '-c', changelist]
+    return this._runResolve(args, candidates)
   }
 
   /**
@@ -2095,6 +3249,23 @@ export class PerforceClient {
   }
 
   /**
+   * The user's clients (`p4 clients`), for the switch-workspace quick-pick.
+   * Runs on this client's connection, so the `-u` global pins the user the
+   * client resolved — the cwd P4CONFIG at a foreign root can't re-resolve it.
+   * Empty on failure (offline / not logged in); the caller surfaces that.
+   */
+  async listUserClients(): Promise<P4ClientEntry[]> {
+    const { result, records } = await this._p4.execRecords(['clients'], INTERACTIVE_EXEC)
+    if (result.exitCode !== 0) {
+      this._log?.(
+        `[perforce] p4 clients failed (exit ${result.exitCode})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}; cannot list clients`,
+      )
+      return []
+    }
+    return parseClientsList(records)
+  }
+
+  /**
    * One page of a file's revision history (`p4 filelog -m <max> <depotFile>`,
    * newest-first). `fromRev` bounds the page from above (`<depotFile>#<fromRev>`),
    * which is how the Timeline view pages backwards without re-resolving the
@@ -2221,7 +3392,22 @@ export class PerforceClient {
     depotFiles: readonly string[],
     options?: P4ExecOptions,
   ): Promise<Map<string, string>> {
-    if (depotFiles.length === 0) return new Map()
+    return (await this._whereLocalPathsResult(depotFiles, options)).paths
+  }
+
+  /**
+   * {@link _whereLocalPaths} with the failure surfaced. An empty map is
+   * ambiguous on its own: `where` exits 0 with zero records when none of the
+   * depot paths map into this client's view, which on a real shared server is
+   * the common case rather than an error (files opened by others usually live on
+   * other branches). A caller that treats "no local paths" as a failed lookup
+   * would then never publish anything at all.
+   */
+  private async _whereLocalPathsResult(
+    depotFiles: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<{ paths: Map<string, string>; ok: boolean }> {
+    if (depotFiles.length === 0) return { paths: new Map(), ok: true }
     const key = [...depotFiles].sort().join('\n')
     const json = await this._cache.wrap(P4CacheNs.where, key, async () => {
       // Batch the depot paths so a large set (a changelist with tens of thousands
@@ -2235,7 +3421,8 @@ export class PerforceClient {
       }
       return JSON.stringify([...merged])
     })
-    return json === undefined ? new Map() : new Map(JSON.parse(json) as [string, string][])
+    if (json === undefined) return { paths: new Map(), ok: false }
+    return { paths: new Map(JSON.parse(json) as [string, string][]), ok: true }
   }
 
   /**
@@ -2383,6 +3570,7 @@ export class PerforceClient {
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
     this._reconcileGroup.dispose()
+    this._resolveGroup.dispose()
     this._sc.dispose()
     this._changeListeners.clear()
   }

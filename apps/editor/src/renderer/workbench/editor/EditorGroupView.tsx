@@ -84,7 +84,7 @@ import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
   'emptyScmDecorations',
-  { files: new Map(), folders: new Map() },
+  { files: new Map(), folders: new Map(), supplementary: new Map() },
 )
 
 const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)

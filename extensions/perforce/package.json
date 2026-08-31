@@ -46,6 +46,28 @@
         "icon": "stage-all"
       },
       {
+        "command": "perforce.syncLatest",
+        "title": "%perforce.command.syncLatest.title%",
+        "category": "Perforce",
+        "icon": "cloud-download"
+      },
+      {
+        "command": "perforce.sync",
+        "title": "%perforce.command.sync.title%",
+        "category": "Perforce",
+        "icon": "cloud-download"
+      },
+      {
+        "command": "perforce.previewSync",
+        "title": "%perforce.command.previewSync.title%",
+        "category": "Perforce"
+      },
+      {
+        "command": "perforce.copyDepotPath",
+        "title": "%perforce.command.copyDepotPath.title%",
+        "category": "Perforce"
+      },
+      {
         "command": "perforce.login",
         "title": "%perforce.command.login.title%",
         "category": "Perforce",
@@ -56,6 +78,12 @@
         "title": "%perforce.command.logout.title%",
         "category": "Perforce",
         "icon": "sign-out"
+      },
+      {
+        "command": "perforce.switchClient",
+        "title": "%perforce.command.switchClient.title%",
+        "category": "Perforce",
+        "icon": "arrow-swap"
       },
       {
         "command": "perforce.showOutput",
@@ -220,6 +248,24 @@
         "icon": "merge"
       },
       {
+        "command": "perforce.resolveAcceptYours",
+        "title": "%perforce.command.resolveAcceptYours.title%",
+        "category": "Perforce",
+        "icon": "check"
+      },
+      {
+        "command": "perforce.resolveAcceptTheirs",
+        "title": "%perforce.command.resolveAcceptTheirs.title%",
+        "category": "Perforce",
+        "icon": "arrow-down"
+      },
+      {
+        "command": "perforce.openMergeEditor",
+        "title": "%perforce.command.openMergeEditor.title%",
+        "category": "Perforce",
+        "icon": "merge"
+      },
+      {
         "command": "perforce.swarm.ping",
         "title": "%perforce.command.swarm.ping.title%",
         "category": "Perforce"
@@ -267,6 +313,10 @@
         "id": "perforce.refreshMenu",
         "label": "%perforce.submenu.refresh.label%",
         "icon": "refresh"
+      },
+      {
+        "id": "perforce.explorerMenu",
+        "label": "%perforce.submenu.explorer.label%"
       }
     ],
     "menus": {
@@ -305,6 +355,12 @@
           "when": "scmProvider == perforce",
           "group": "2_connection@2",
           "icon": "sign-out"
+        },
+        {
+          "command": "perforce.switchClient",
+          "when": "scmProvider == perforce",
+          "group": "2_connection@3",
+          "icon": "arrow-swap"
         },
         {
           "command": "perforce.showOutput",
@@ -372,6 +428,24 @@
           "command": "perforce.resolve",
           "when": "scmProvider == perforce && scmResourceState == U",
           "group": "inline@5",
+          "icon": "merge"
+        },
+        {
+          "command": "perforce.resolveAcceptYours",
+          "when": "scmProvider == perforce && scmResourceState == U",
+          "group": "inline@6",
+          "icon": "check"
+        },
+        {
+          "command": "perforce.resolveAcceptTheirs",
+          "when": "scmProvider == perforce && scmResourceState == U",
+          "group": "inline@7",
+          "icon": "arrow-down"
+        },
+        {
+          "command": "perforce.openMergeEditor",
+          "when": "scmProvider == perforce && scmResourceState == U",
+          "group": "inline@8",
           "icon": "merge"
         },
         {
@@ -561,29 +635,69 @@
       ],
       "explorer/context": [
         {
-          "command": "perforce.edit",
-          "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder",
+          "command": "perforce.syncLatest",
+          "when": "resourceScmProvider =~ /\\|perforce\\|/",
           "group": "7_perforce@1"
-        },
-        {
-          "command": "perforce.add",
-          "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder",
-          "group": "7_perforce@2"
-        },
-        {
-          "command": "perforce.delete",
-          "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder",
-          "group": "7_perforce@3"
         },
         {
           "command": "perforce.reconcile",
           "when": "resourceScmProvider =~ /\\|perforce\\|/",
-          "group": "7_perforce@4"
+          "group": "7_perforce@2"
         },
         {
           "command": "perforce.openChange",
           "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder",
-          "group": "7_perforce@5"
+          "group": "7_perforce@3"
+        },
+        {
+          "submenu": "perforce.explorerMenu",
+          "when": "resourceScmProvider =~ /\\|perforce\\|/",
+          "group": "7_perforce@4"
+        }
+      ],
+      "perforce.explorerMenu": [
+        {
+          "command": "perforce.sync",
+          "group": "1_sync@1"
+        },
+        {
+          "command": "perforce.previewSync",
+          "group": "1_sync@2"
+        },
+        {
+          "command": "perforce.copyDepotPath",
+          "when": "!explorerResourceIsFolder",
+          "group": "2_open@1"
+        },
+        {
+          "command": "perforce.edit",
+          "when": "!explorerResourceIsFolder",
+          "group": "3_edit@1"
+        },
+        {
+          "command": "perforce.add",
+          "when": "!explorerResourceIsFolder",
+          "group": "3_edit@2"
+        },
+        {
+          "command": "perforce.delete",
+          "when": "!explorerResourceIsFolder",
+          "group": "3_edit@3"
+        },
+        {
+          "command": "perforce.revert",
+          "when": "!explorerResourceIsFolder",
+          "group": "3_edit@4"
+        },
+        {
+          "command": "perforce-graph.view",
+          "group": "4_visualize@1",
+          "icon": "git-graph"
+        },
+        {
+          "command": "scm.blame.toggleEditorDecoration",
+          "when": "!explorerResourceIsFolder",
+          "group": "4_visualize@2"
         }
       ],
       "editor/title": [
@@ -687,6 +801,28 @@
           "type": "boolean",
           "default": true,
           "description": "%perforce.config.autoRefresh.description%"
+        },
+        "perforce.syncPreview.autoCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.syncPreview.autoCheck.description%"
+        },
+        "perforce.syncPreview.intervalSec": {
+          "type": "number",
+          "default": 300,
+          "minimum": 30,
+          "description": "%perforce.config.syncPreview.intervalSec.description%"
+        },
+        "perforce.openedByOthers.autoCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.openedByOthers.autoCheck.description%"
+        },
+        "perforce.openedByOthers.intervalSec": {
+          "type": "number",
+          "default": 300,
+          "minimum": 30,
+          "description": "%perforce.config.openedByOthers.intervalSec.description%"
         },
         "perforce.timeline.showPending": {
           "type": "boolean",

@@ -917,6 +917,7 @@ async function bootstrapWorkbench(): Promise<void> {
     terminalXtermService: instantiation.invokeFunction((a) => a.get(ITerminalXtermService)),
     scmService,
     scmIgnoredResourcesService,
+    scmDecorationsService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),

@@ -2,11 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  MergeEditorInput — a transient EditorInput driving the 3-way merge editor.
- *  Holds the three git merge stages of a single conflicted file (base / current
- *  / incoming) plus their labels and the working-tree path to write the resolved
+ *  Holds the three merge stages of a single conflicted file (base / current /
+ *  incoming) plus their labels and the working-tree path to write the resolved
  *  result back to. Unlike DiffEditorInput it is editable: the Result pane's text
  *  is owned by the mounted MergeEditor, which calls `setResult` as the user
- *  edits and `save()` to write the file + stage it via the git extension.
+ *  edits and `save()` to write the file + hand off to the provider's
+ *  resolve-completion command.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -37,6 +38,9 @@ export interface MergeEditorContents {
   readonly currentLabel: string
   /** Short label for the incoming side (e.g. `<branch>: <subject>`). */
   readonly incomingLabel: string
+  /** Provider-side follow-up after the merged result is written (e.g. git stage /
+   *  p4 resolve -ay). Falls back to git.stage when unset. */
+  readonly saveCommand?: { readonly command: string; readonly arguments?: readonly unknown[] }
 }
 
 export class MergeEditorInput extends EditorInput {
@@ -114,10 +118,16 @@ export class MergeEditorInput extends EditorInput {
     // typically has no document in the mirror pipeline, so an open will never
     // arrive to order this notification behind.
     DidSaveNotification.notify(this.fileUri, { expectMirrorOpen: false })
-    // Staging the resolved file clears its unmerged state in git.
-    await this._commandService.executeCommand('git.stage', {
-      resourceUri: this._contents.path,
-    })
+    // Let the provider clear the file's unmerged state its own way: git stages
+    // the resolved file, p4 accepts it with `resolve -ay`.
+    const follow = this._contents.saveCommand
+    if (follow) {
+      await this._commandService.executeCommand(follow.command, ...(follow.arguments ?? []))
+    } else {
+      await this._commandService.executeCommand('git.stage', {
+        resourceUri: this._contents.path,
+      })
+    }
     this.setDirty(false)
     return true
   }

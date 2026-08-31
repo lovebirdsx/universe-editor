@@ -141,8 +141,9 @@ describe('groupIconName', () => {
     expect(groupIconName('cl:100918')).toBe('changelist')
   })
 
-  it('distinguishes reconcile and shelved groups', () => {
+  it('distinguishes reconcile, resolve and shelved groups', () => {
     expect(groupIconName('reconcile')).toBe('reconcile')
+    expect(groupIconName('resolve')).toBe('merge')
     expect(groupIconName('shelved:5')).toBe('archive')
   })
 

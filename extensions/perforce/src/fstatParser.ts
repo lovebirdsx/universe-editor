@@ -15,6 +15,13 @@ export interface FstatInfo {
   readonly headRev: string | undefined
   /** Open action if the file is currently open, else undefined. */
   readonly action: string | undefined
+  /**
+   * True when the file has a pending resolve. `fstat` reports this as a bare
+   * `unresolved` key (empty value under both `-Mj` and `-ztag`) and omits it
+   * otherwise — `p4 opened` never carries it on real servers
+   * (PROBE-FINDINGS §11.5), so this is the authoritative signal.
+   */
+  readonly unresolved: boolean
 }
 
 function asString(v: unknown): string | undefined {
@@ -30,6 +37,7 @@ export function parseFstatRecord(record: Record<string, unknown>): FstatInfo | u
     haveRev: asString(record['haveRev']),
     headRev: asString(record['headRev']),
     action: asString(record['action']),
+    unresolved: record['unresolved'] !== undefined,
   }
 }
 

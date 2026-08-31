@@ -3,8 +3,10 @@ import {
   discoverClient,
   rootContains,
   connectionFor,
+  parseClientsList,
   DISCOVERY_PROBE_TIMEOUT_MS,
 } from '../clientDiscovery.js'
+import { parseZtag } from '../p4Output.js'
 import type { P4Service } from '../p4Service.js'
 
 /**
@@ -22,7 +24,7 @@ function fakeP4(routes: {
       const r = cmd === 'clients' ? routes.clients : routes.info
       const stdout = r?.stdout ?? ''
       const exitCode = r?.exitCode ?? (r ? 0 : 1)
-      return { result: { stdout, stderr: '', exitCode }, records: [] }
+      return { result: { stdout, stderr: '', exitCode }, records: parseZtag(stdout) }
     },
   } as unknown as P4Service
 }
@@ -190,6 +192,89 @@ describe('rootContains', () => {
 
   it('does not match an unrelated path', () => {
     expect(rootContains('D:/p4ws/main', 'D:/git/universe-editor')).toBe(false)
+  })
+})
+
+describe('parseClientsList', () => {
+  // PROBE-FINDINGS §5, verbatim field names from `p4 -ztag clients`: ONLY
+  // `client` is lowercase, the rest are capitalized — unlike fstat's
+  // all-lowercase camelCase. Parsers reading lowercase `root` would drop every
+  // entry on a real server.
+  const realZtagClient = [
+    '... client testclient',
+    '... Update 2026/08/11 10:00:00',
+    '... Access 2026/08/11 10:00:00',
+    '... Owner testuser',
+    '... Options noallwrite noclobber nocompress unlocked nomodtime normdir',
+    '... SubmitOptions submitunchanged',
+    '... LineEnd local',
+    '... Root X:\\p4ws\\main',
+    '... Host DESKTOP-TEST',
+    '... Stream //depot/branch_x',
+    '... Type writeable',
+    '... Description Created by testuser.',
+  ].join('\n')
+
+  it('parses the real -ztag shape with capitalized field names', () => {
+    expect(parseClientsList(parseZtag(realZtagClient))).toEqual([
+      {
+        clientName: 'testclient',
+        clientRoot: 'X:\\p4ws\\main',
+        description: 'Created by testuser.',
+      },
+    ])
+  })
+
+  it('parses multiple clients in one output', () => {
+    const ztag = [
+      realZtagClient,
+      [
+        '... client otherclient',
+        '... Update 2026/08/11 10:00:00',
+        '... Owner testuser',
+        '... Root X:\\p4ws\\branch_a',
+        '... Description Branch workspace.',
+      ].join('\n'),
+    ].join('\n\n')
+    expect(parseClientsList(parseZtag(ztag))).toEqual([
+      {
+        clientName: 'testclient',
+        clientRoot: 'X:\\p4ws\\main',
+        description: 'Created by testuser.',
+      },
+      {
+        clientName: 'otherclient',
+        clientRoot: 'X:\\p4ws\\branch_a',
+        description: 'Branch workspace.',
+      },
+    ])
+  })
+
+  it('omits the description key when the record has none', () => {
+    const ztag = ['... client testclient', '... Owner testuser', '... Root X:\\p4ws\\main'].join(
+      '\n',
+    )
+    const [entry] = parseClientsList(parseZtag(ztag))
+    expect(entry?.clientName).toBe('testclient')
+    expect('description' in entry!).toBe(false)
+  })
+
+  it('drops records without a client name', () => {
+    const ztag = ['... Owner testuser', '... Root X:\\p4ws\\main'].join('\n')
+    expect(parseClientsList(parseZtag(ztag))).toEqual([])
+  })
+
+  it('drops records with a missing or literal "null" root', () => {
+    const ztag = [
+      ['... client testclient', '... Root null'].join('\n'),
+      ['... client otherclient', '... Owner testuser'].join('\n'),
+    ].join('\n\n')
+    expect(parseClientsList(parseZtag(ztag))).toEqual([])
+  })
+
+  it('returns an empty list for empty output', () => {
+    expect(parseClientsList([])).toEqual([])
+    expect(parseClientsList(parseZtag(''))).toEqual([])
   })
 })
 

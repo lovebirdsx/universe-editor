@@ -10,6 +10,7 @@ import type {
   IScmService,
   IScmSourceControlModel,
   IScmGroupModel,
+  IScmSupplementaryDecoration,
 } from '../../extensions/ScmService.js'
 import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
 import { ScmDecorationsService, scmPathKey } from '../ScmDecorationsService.js'
@@ -32,13 +33,18 @@ function group(
   } as unknown as IScmGroupModel
 }
 
-function sourceControl(groups: IScmGroupModel[], rootUri = ROOT): IScmSourceControlModel {
+function sourceControl(
+  groups: IScmGroupModel[],
+  rootUri = ROOT,
+  supplementary: IScmSupplementaryDecoration[] = [],
+): IScmSourceControlModel {
   return {
     handle: 1,
     id: 'git',
     label: 'Git',
     rootUri,
     groups: observableValue('g', groups),
+    supplementary: observableValue('supp', new Map(supplementary.map((s) => [s.resourceUri, s]))),
   } as unknown as IScmSourceControlModel
 }
 
@@ -160,5 +166,54 @@ describe('ScmDecorationsService', () => {
       const svc = local([sourceControl([group('changes', 1, [res(`${ROOT}/a.txt`, 'M')])])])
       expect(svc.getFile(remote(`/${ROOT}/a.txt`))).toBeUndefined()
     })
+  })
+
+  it('surfaces a supplementary decoration for a file with no group row', () => {
+    const svc = local([
+      sourceControl([], ROOT, [
+        { resourceUri: `${ROOT}/behind.umap`, description: '可更新', tooltip: '#4 → #7' },
+      ]),
+    ])
+    const snapshot = svc.decorations.get()
+    expect(snapshot.supplementary.get(scmPathKey(`${ROOT}/behind.umap`))).toEqual({
+      description: '可更新',
+      tooltip: '#4 → #7',
+    })
+    // A clean-but-behind file must NOT read as "has local changes": dirty-diff
+    // gating tests exactly that via getFile(...) !== undefined.
+    expect(svc.getFile(URI.file(`${ROOT}/behind.umap`))).toBeUndefined()
+  })
+
+  it('keeps group-derived and supplementary fields independent for one file', () => {
+    const uri = `${ROOT}/Config.ini`
+    const svc = local([
+      sourceControl([group('changes', 1, [res(uri, 'M', '#e2c08d', 'Modified')])], ROOT, [
+        { resourceUri: uri, description: '可更新', tooltip: '#4 → #7' },
+      ]),
+    ])
+    // Letter / colour / tooltip stay group-derived; the grey text is separate.
+    expect(svc.getFile(URI.file(uri))).toEqual({
+      color: '#e2c08d',
+      letter: 'M',
+      tooltip: 'Modified',
+    })
+    expect(svc.decorations.get().supplementary.get(scmPathKey(uri))?.description).toBe('可更新')
+  })
+
+  it('does not propagate supplementary decorations up to folders', () => {
+    const svc = local([
+      sourceControl([], ROOT, [{ resourceUri: `${ROOT}/dir/x.fbx`, description: '他人占用' }]),
+    ])
+    expect(svc.getFolder(URI.file(`${ROOT}/dir`))).toBeUndefined()
+  })
+
+  it('merges supplementary decorations across providers, keyed path-insensitively', () => {
+    const svc = local([
+      sourceControl([], ROOT, [{ resourceUri: `${ROOT}\\A.ts`, description: '可更新' }]),
+      sourceControl([], '/other', [{ resourceUri: '/other/b.ts', description: '他人占用' }]),
+    ])
+    const supp = svc.decorations.get().supplementary
+    expect(supp.get(scmPathKey(`${ROOT}/a.ts`))?.description).toBe('可更新')
+    expect(supp.get('/other/b.ts')?.description).toBe('他人占用')
   })
 })

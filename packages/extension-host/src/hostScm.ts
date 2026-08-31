@@ -14,10 +14,12 @@ import type {
   SourceControlResourceGroup,
   SourceControlResourceGroupOptions,
   SourceControlResourceState,
+  SourceControlSupplementaryDecoration,
 } from '@universe-editor/extension-api'
 import type {
   IMainThreadScm,
   ISourceControlResourceStateDto,
+  ISupplementaryDecorationDeltaDto,
 } from '@universe-editor/extensions-common'
 import { toCommandDto, type CommandWireField } from './hostHandles.js'
 
@@ -37,6 +39,40 @@ function toResourceStateDto(state: SourceControlResourceState): ISourceControlRe
       : {}),
     ...(state.decorations !== undefined ? { decorations: { ...state.decorations } } : {}),
   }
+}
+
+/**
+ * Diff two supplementary-decoration sets into the minimal wire delta. Additions
+ * and changes carry the new values; removals carry `description: null`. Returns
+ * an empty array when nothing moved, which the caller uses to skip the RPC
+ * entirely — providers re-set the whole set on every background scan, and a
+ * steady state must cost nothing.
+ *
+ * Removals come first: the renderer applies the delta in order under its own
+ * (case-insensitive) path key, so if a provider reports the same file with
+ * different casing across two scans, an add-then-remove pair would cancel out
+ * the entry that should have survived.
+ *
+ * Exported for unit tests.
+ */
+export function diffSupplementaryDecorations(
+  prev: ReadonlyMap<string, SourceControlSupplementaryDecoration>,
+  next: ReadonlyMap<string, SourceControlSupplementaryDecoration>,
+): ISupplementaryDecorationDeltaDto[] {
+  const deltas: ISupplementaryDecorationDeltaDto[] = []
+  for (const [key, deco] of prev) {
+    if (!next.has(key)) deltas.push({ resourceUri: deco.resourceUri, description: null })
+  }
+  for (const [key, deco] of next) {
+    const before = prev.get(key)
+    if (before?.description === deco.description && before.tooltip === deco.tooltip) continue
+    deltas.push({
+      resourceUri: deco.resourceUri,
+      description: deco.description,
+      ...(deco.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
+    })
+  }
+  return deltas
 }
 
 class HostInputBox implements SourceControlInputBox {
@@ -131,6 +167,8 @@ export class HostSourceControl implements SourceControl {
   private _acceptInputCommand: Command | undefined
   private _acceptInputActions: Command[] | undefined
   private readonly _groups = new Set<HostResourceGroup>()
+  /** Last set pushed to the renderer, keyed by `resourceUri`, for diffing. */
+  private _supplementary = new Map<string, SourceControlSupplementaryDecoration>()
 
   constructor(
     private readonly _handle: number,
@@ -197,6 +235,15 @@ export class HostSourceControl implements SourceControl {
     this._groups.add(group)
     void this._scm.$registerGroup(this._handle, handle, id, label, parentId)
     return group
+  }
+
+  setSupplementaryDecorations(decorations: readonly SourceControlSupplementaryDecoration[]): void {
+    // Last entry wins on a duplicated path, matching resourceStates semantics.
+    const next = new Map(decorations.map((d) => [d.resourceUri, d]))
+    const deltas = diffSupplementaryDecorations(this._supplementary, next)
+    this._supplementary = next
+    if (deltas.length === 0) return
+    void this._scm.$updateSupplementaryDecorations(this._handle, deltas)
   }
 
   dispose(): void {

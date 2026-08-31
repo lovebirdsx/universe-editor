@@ -43,6 +43,7 @@ export class OpenMergeEditorAction extends Action2 {
       merged: payload.merged,
       currentLabel: payload.currentLabel,
       incomingLabel: payload.incomingLabel,
+      ...(payload.saveCommand ? { saveCommand: payload.saveCommand } : {}),
     }
 
     const existing = group.editors.find((e) => e.id === id)

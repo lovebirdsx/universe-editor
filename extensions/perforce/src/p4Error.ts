@@ -50,6 +50,48 @@ export function isMissingCli(err: unknown): boolean {
   return (err as { code?: string } | undefined)?.code === 'ENOENT'
 }
 
+/** What a `p4 sync` failure means for the user and how to react. */
+export type SyncErrorKind = 'clobber' | 'mustResolve' | 'upToDate' | 'noSuchFile' | 'other'
+
+const SYNC_CLOBBER = localize(
+  'perforce.error.clobber',
+  'The file has uncollected local changes. Force-syncing would overwrite them (those changes would be lost) — collect the changes first if you want to keep them.',
+)
+const SYNC_MUST_RESOLVE = localize(
+  'perforce.error.mustResolve',
+  'The file has unresolved conflicts. Resolve them before syncing.',
+)
+const SYNC_UP_TO_DATE = localize('perforce.error.upToDate', 'File(s) already up to date.')
+const SYNC_NO_SUCH_FILE = localize(
+  'perforce.error.noSuchFile',
+  'The file is not in the depot or not in the current client view.',
+)
+
+/**
+ * Classify a `p4 sync` result into a user-facing kind + guidance. `upToDate` is
+ * not an error — p4 reports it on stderr with exit 0 — so callers must treat
+ * it as information, not a toast-worthy failure.
+ */
+export function classifySyncError(res: P4ExecResult): {
+  kind: SyncErrorKind
+  suggestion: string
+} {
+  const msg = `${res.stderr}\n${res.stdout}`.toLowerCase()
+  if (msg.includes("can't clobber writable file")) {
+    return { kind: 'clobber', suggestion: SYNC_CLOBBER }
+  }
+  if (msg.includes('must resolve') || msg.includes('must be resolved')) {
+    return { kind: 'mustResolve', suggestion: SYNC_MUST_RESOLVE }
+  }
+  if (msg.includes('file(s) up-to-date')) {
+    return { kind: 'upToDate', suggestion: SYNC_UP_TO_DATE }
+  }
+  if (msg.includes('no such file(s)') || msg.includes('not in client view')) {
+    return { kind: 'noSuchFile', suggestion: SYNC_NO_SUCH_FILE }
+  }
+  return { kind: 'other', suggestion: p4ErrorText(res) }
+}
+
 /** Opens the Perforce output channel; wired up by `activate`. */
 let showOutput: (() => void) | undefined
 

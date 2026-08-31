@@ -124,6 +124,45 @@ describe('P4Service._spawn output cap', () => {
 // argument arrives untranslatable and p4 exits 1 with "No Translation for
 // parameter". The fix routes such arguments through `p4 -x <argfile>`: a UTF-8
 // temp file p4 reads arguments from, bypassing the ANSI argv conversion entirely.
+describe('P4Service env sanitization', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('strips PWD so p4 resolves P4CONFIG from the client root cwd, not an inherited shell path', async () => {
+    // Verified against a real p4 on Windows: with cwd inside one client's root
+    // but `PWD` pointing elsewhere, `p4 info` reports a COMPLETELY DIFFERENT
+    // client and root — p4 walks up from `PWD` when it is set and ignores the
+    // process cwd. This service spawns with the client root as cwd precisely so
+    // p4 resolves the right connection, so a `PWD` inherited from a msys/WSL
+    // parent shell would silently point every command at the wrong client.
+    const prev = process.env.PWD
+    process.env.PWD = '/some/other/place'
+    process.env.NODE_OPTIONS = '--inspect'
+    try {
+      const svc = makeService()
+      const p = svc.exec(['info'])
+      await flush()
+      child.emit('close', 0)
+      await p
+
+      const options = spawnMock.mock.calls.at(-1)?.[2] as { env: NodeJS.ProcessEnv; cwd?: string }
+      expect(options.env.PWD).toBeUndefined()
+      expect(options.env.NODE_OPTIONS).toBeUndefined()
+      expect(options.cwd).toBe('/repo')
+    } finally {
+      if (prev === undefined) delete process.env.PWD
+      else process.env.PWD = prev
+      delete process.env.NODE_OPTIONS
+    }
+  })
+})
+
 describe('P4Service non-ASCII args go through -x argfile', () => {
   const CN_SPEC = '//depot/资源库/资源表.csv#47'
   let child: FakeChildProcess

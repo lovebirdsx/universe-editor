@@ -33,7 +33,7 @@
 **interactive 标记判据（最终清单，加新 p4 命令照此办）**：用户点击/悬停触发的读、且用户要等它才能看到东西 = interactive；扫描 / 轮询 / 批量（reconcile 复核、refresh、后台扇出）= background（默认）。**超时选用**：能断言「正常该多快」的元数据读 → `INTERACTIVE_EXEC`（30s 紧超时）；耗时随数据量线性增长的内容传输（`print`，以及巨型 CL 上 GB 级输出的 `describe -s`/`describe -S -s`）→ `INTERACTIVE_CONTENT_EXEC`（只提优先级，保留 600s 预算）。
 
 - **interactive（已标）**：`fstat`（gutter/Timeline/openChange diff）、`print`（diff/baseline 内容，CONTENT）、`annotate` + `changes -l`（blame）、`diff -se`（timeline pending 探针）、`filelog`（Timeline 视图/切活动编辑器）、`changes -s submitted`（开图谱）、`describe -s`（点图谱节点，CONTENT）、`opened` 经 `_openedFiles`（图谱 pending 节点）、`where` 经 `_whereLocalPaths`（图谱/Swarm 读调用方）、`describe -S -s` 经 `describeChangeFiles`（展开 Swarm review，CONTENT）。
-- **刻意不标（background 默认）**：refresh 的 `opened`/`changes -s pending`、`_fetchShelved` 的 `describe -S -s`（带 30s 紧超时）、`reconcile -n` 全扫/增量批、`deleteChangelist` 的 `describe -S -s`、`_applyCommittedChange` 的 `print`/`where`——这些是 mutation 或后台扇出，不是点击读。
+- **刻意不标（background 默认）**：refresh 的 `opened`/`changes -s pending`、`_fetchShelved` 的 `describe -S -s`（带 30s 紧超时）、`reconcile -n` 全扫/增量批、`deleteChangelist` 的 `describe -S -s`、`_applyCommittedChange` 的 `print`/`where`、他人占用扫描的 `opened -a`（带 20s 紧超时，见下「他人占用」节）——这些是 mutation 或后台扇出，不是点击读。
 - **共享 helper 的处理**：`_whereLocalPaths` 同时被 mutation（`_applyCommittedChange`）和 graph/Swarm 读调用，故默认 background、加可选 `options` 参数由调用方定优先级（读调用方显式传 `INTERACTIVE_EXEC`）；`_openedFiles` 只有图谱 pending 两个消费方（refresh 自己跑 `opened`，不经过它），故直接标 `INTERACTIVE_EXEC`。
 - **以后加任何批量 p4 命令都要想**：它会不会把门灌满、把交互命令挡在队尾——批量命令一律 background，用户读一律显式标 interactive。
 
@@ -81,9 +81,21 @@
 
 **修法**：纯函数 `pathUtil.ts` `clientToLocalPath(clientFile, clientRoot)`——client 语法**天然以 client root 为根**，故只需前缀替换（去掉 `//客户端名/` 拼到 `clientRoot`），**无需 `p4 where` 往返**；已是本地路径（非 `//` 开头）原样返回，可无条件套用。`parseOpened`/`parseReconcile` 加可选 `clientRoot` 参数（`client.ts` 传 `this.root`；测试省略则保持 verbatim）。`getOpenedForGraph` 因此也顺带修好（`f.clientFile` 现在是本地路径，`where` 只兜底缺失项）。
 
+- **⚠️ `opened -a` 是这条坑的镜像（他人占用扫描踩点）**：`-a` 输出的 `clientFile` 是**别人 client** 的 client 语法（`//otherclient/Source/...`），用自己的 clientRoot 翻译会拼出本地不存在的假路径——「他人占用」灰字的本地路径**必须从 `depotFile` 走 `_whereLocalPaths` 反查**（`runOpenedByOthersScan` 里 `parseOpened` 刻意**不传** `this.root`，且别人 client 的语法路径绝不回传给任何 p4 命令）。真机输出形态见 `e2e/fixtures/PROBE-FINDINGS.md` §4。
+
 - **fake-p4 也要对齐**：`fake-p4.mjs` 原来 `opened`/`reconcile` emit 本地路径 → 掩盖了这个 bug。现在 `clientSyntaxOf()` emit client 语法（`//client/rel`），并补了 `fstat`/`print`（baseline diff 需要）+ `toDepotFile()`（吃本地/depot/client 三种语法）。
 - **回归护栏**：`smoke.perforceCollectChanges.spec.ts` 的 `phantom delete @regression`——点 reconcile 行 → 断言 diff 的 modified 侧 == 真实盘上内容（不是空）。改坏 `clientToLocalPath` 会红。单测见 `pathUtil.test.ts`/`openedParser.test.ts`/`reconcileParser.test.ts`。
 
+## ⚠️ unresolved 信号只认 `fstat -Ru`——`opened` 从不报（真机实测）
+
+P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresolved` 键（`p4 help opened` 也不文档化），「需要合并」信号只在 `fstat` 的裸键 `unresolved` 与 `fstat -Ru <scope>`（只列有 unresolved 整合记录的文件；走 opened/have 表，45 万文件工作区 ~1.2s）里。
+
+- `client._doRefresh` 仅在 `openedFiles.length > 0` 时跑 `fstat -Ru //...`（零 opened 整个跳过，绝大多数刷新零额外 p4 工作）；**失败保留上一次集合**（失败 ≠ 零 unresolved，参照 `runOpenedByOthersScan` 先例），成功零记录才真的清空。`openedParser.unresolved` 保留作防御并与 fstat 集合 OR；U 行由合并集合**标记 `OpenedFile`**（`{...f, unresolved: true}`）后喂 changelist 组 + resolve 置顶组。
+- 探针是 background 优先级 + `FSTAT_UNRESOLVED_TIMEOUT_MS`（20s）紧超时——它在 refresh 链路里，绝不能占 interactive 预留槽或 600s 预算。
+- 零 opened 时真机输出 `<scope> - file(s) not opened on this client.` exit 0（-Mj 下塌 data blob → `execRecords` 自动回退 -ztag → 解析成**零记录**，不是假记录）。
+- fstat 的 `clientFile` 是本地路径（见下节）——探针结果直接 `norm()` 建集合，绝不再翻译。
+- e2e 死链已修：fake-p4 的 `opened` **不** emit unresolved、`fstat -Ru` 才 emit 裸键——`perforceResolve.spec.ts` 的 U 组断言因此真守这条链（revert 掉 client 探针 5 条全红）。
+- `parseResolveOutput` 真机四形态（`- merging` / `Diff chunks:` / `- merge from` / `- ignored`）已识别，见 syncParser 注释与单测。
 
 ## ⚠️ 巨量 stdout 会撑爆 V8 字符串上限 → 扩展宿主崩溃（踩过）
 
@@ -232,7 +244,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`syncPreview.autoCheck/intervalSec`(300s，最小 30s，落后感知两级探针)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s，最小 30s，他人占用灰字)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 

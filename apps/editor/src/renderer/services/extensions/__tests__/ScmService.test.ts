@@ -100,9 +100,56 @@ describe('ScmService', () => {
   })
 })
 
+describe('ScmService supplementary decorations', () => {
+  it('applies add / change / remove deltas to the per-provider map', async () => {
+    const { scm } = make()
+    await scm.$registerSourceControl(0, 'perforce', 'Perforce')
+    const sc = scm.sourceControls.get()[0]!
+
+    await scm.$updateSupplementaryDecorations(0, [
+      { resourceUri: 'D:/ws/a.ts', description: '可更新', tooltip: '#4 → #7' },
+      { resourceUri: 'D:/ws/b.ts', description: '他人占用' },
+    ])
+    expect(sc.supplementary.get().get('D:/ws/a.ts')).toEqual({
+      resourceUri: 'D:/ws/a.ts',
+      description: '可更新',
+      tooltip: '#4 → #7',
+    })
+    expect(sc.supplementary.get().get('D:/ws/b.ts')?.tooltip).toBeUndefined()
+
+    // A later delta changes one entry and removes the other.
+    await scm.$updateSupplementaryDecorations(0, [
+      { resourceUri: 'D:/ws/a.ts', description: '可更新', tooltip: '#4 → #9' },
+      { resourceUri: 'D:/ws/b.ts', description: null },
+    ])
+    expect(sc.supplementary.get().get('D:/ws/a.ts')?.tooltip).toBe('#4 → #9')
+    expect(sc.supplementary.get().has('D:/ws/b.ts')).toBe(false)
+  })
+
+  it('keeps each provider’s decorations separate', async () => {
+    const { scm } = make()
+    await scm.$registerSourceControl(0, 'perforce', 'Perforce')
+    await scm.$registerSourceControl(1, 'git', 'Git')
+    await scm.$updateSupplementaryDecorations(0, [
+      { resourceUri: 'D:/ws/a.ts', description: '可更新' },
+    ])
+
+    const [p4, git] = scm.sourceControls.get()
+    expect(p4!.supplementary.get().size).toBe(1)
+    expect(git!.supplementary.get().size).toBe(0)
+  })
+
+  it('ignores a delta for an unknown handle', async () => {
+    const { scm } = make()
+    await expect(
+      scm.$updateSupplementaryDecorations(42, [{ resourceUri: 'D:/x.ts', description: 'x' }]),
+    ).resolves.toBeUndefined()
+  })
+})
+
 describe('resolveScmProviderId(s)', () => {
   const model = (id: string, rootUri: string): IScmSourceControlModel =>
-    ({ id, rootUri }) as IScmSourceControlModel
+    ({ id, rootUri }) as unknown as IScmSourceControlModel
 
   it('resolveScmProviderId picks the single most-specific owner', () => {
     const controls = [model('perforce', '/depot/client'), model('git', '/depot/client/app')]

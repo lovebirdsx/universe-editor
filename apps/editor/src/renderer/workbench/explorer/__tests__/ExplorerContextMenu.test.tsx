@@ -52,6 +52,7 @@ function scmModel(id: string, rootUri: string): IScmSourceControlModel {
     acceptCommand: observableValue('ac', undefined),
     acceptActions: observableValue('aa', undefined),
     groups: observableValue('g', []),
+    supplementary: observableValue('supp', new Map()),
   }
 }
 

@@ -65,6 +65,7 @@ export class WorkspaceWatchController {
   private readonly _watchers: FileSystemWatcher[] = []
   private _timer: ReturnType<typeof setTimeout> | undefined
   private _disposed = false
+  private _paused = false
   /** Absolute paths reported changed since the last debounced flush. */
   private readonly _dirty = new Set<string>()
 
@@ -74,6 +75,26 @@ export class WorkspaceWatchController {
     private readonly _createWatcher: WatcherFactory = (folder) =>
       workspace.createFileSystemWatcher(new RelativePattern(folder, '**/*')),
   ) {}
+
+  /**
+   * Stop reacting to disk events until {@link resume}. A `p4 sync` writes every
+   * file it brings in, so without this a ten-thousand-file sync would feed ten
+   * thousand paths into incremental reconcile — the user's experience is "it
+   * finished, then froze for a long time".
+   *
+   * Pending paths are dropped, not queued: they are the sync's own writes, and
+   * the caller runs an explicit refresh once it's done.
+   */
+  pause(): void {
+    this._paused = true
+    if (this._timer) clearTimeout(this._timer)
+    this._timer = undefined
+    this._dirty.clear()
+  }
+
+  resume(): void {
+    this._paused = false
+  }
 
   /** Start watching `folder` (the opened workspace directory). Events reconcile
    *  only the exact changed paths (O(changes)); the full-scan scope is owned by
@@ -89,13 +110,14 @@ export class WorkspaceWatchController {
 
     // Incremental: reconcile only the exact changed paths (O(changes)).
     const triggerIncremental = (absPath: string): void => {
+      if (this._paused) return
       this._dirty.add(absPath)
       if (this._timer) clearTimeout(this._timer)
       this._timer = setTimeout(() => {
         this._timer = undefined
         const paths = [...this._dirty]
         this._dirty.clear()
-        if (!this._disposed) void client.refreshReconcilePaths(paths)
+        if (!this._disposed && !this._paused) void client.refreshReconcilePaths(paths)
       }, DEBOUNCE_MS)
     }
 

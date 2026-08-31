@@ -38,10 +38,36 @@ const { appRoot: APP_ROOT, mainEntry: MAIN_ENTRY } = resolveEditorBuild()
 // the cold launch lean and free of unrelated warmup flake.
 const PERFORCE_EXTENSIONS = ['@universe-editor/perforce'] as const
 
-/** A depot file the fake p4 knows about: its content is the have-revision. */
+/** A depot file the fake p4 knows about: its content is what the workspace has
+ *  synced (the have revision), and it is written to disk as-is. */
 export interface SeedFile {
   readonly relPath: string
   readonly content: string
+  /** Depot head is ahead of the synced revision: `headRev`/`headContent` become
+   *  the depot head (`p4 sync -n` then reports the file), while the seeded
+   *  `content` stays the have revision at #1. */
+  readonly headRev?: number
+  readonly headContent?: string
+  /** Fault injection: a real `p4 sync` without `-f` refuses to overwrite this
+   *  file (`can't clobber writable file`, exit 1); `-f` overrides. */
+  readonly clobber?: boolean
+  /** The file is already open in this client. `resolve` seeds a needs-resolve
+   *  state that `p4 resolve -am` either auto-lands ('merge') or leaves open
+   *  with `resolve skipped` ('conflict'). */
+  readonly opened?: {
+    readonly action?: 'edit' | 'add' | 'delete'
+    readonly change?: string
+    readonly rev?: number
+    readonly resolve?: 'merge' | 'conflict'
+  }
+  /** Open for edit/add in ANOTHER client — `p4 opened -a` reports it with the
+   *  other client's client-syntax `clientFile` (the "in use by others" marker). */
+  readonly openedBy?: {
+    readonly user: string
+    readonly client: string
+    readonly action?: 'edit' | 'add'
+    readonly rev?: number
+  }
 }
 
 export interface PerforceHarness {
@@ -59,8 +85,31 @@ interface FakeState {
   client: string
   clientRoot: string
   depotPrefix: string
-  files: Record<string, { rev: number; content: string }>
-  opened: Record<string, unknown>
+  /** Depot files. `rev`/`content` are the HEAD revision+content; `haveRev`/
+   *  `haveContent`, when present, are what the client has synced. */
+  files: Record<
+    string,
+    {
+      rev: number
+      content: string
+      revisions?: Record<string, string>
+      haveRev?: number
+      haveContent?: string
+      clobber?: boolean
+    }
+  >
+  opened: Record<
+    string,
+    {
+      action: string
+      change: string
+      rev: number
+      unresolved?: boolean
+      resolveOutcome?: 'merge' | 'conflict'
+    }
+  >
+  /** Files someone ELSE has open (`p4 opened -a` source). */
+  openedByOthers?: Record<string, { user: string; client: string; action: string; rev: number }>
   changelists?: Record<string, { description: string }>
   changeMeta?: Record<string, { user: string; time: string; desc: string }>
   /** Submitted changelists with their file sets (`describe -s` source), keyed by
@@ -83,11 +132,42 @@ function seedWorkspace(
   const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-p4-ws-'))
   const depotPrefix = '//depot'
   const files: FakeState['files'] = {}
+  const opened: FakeState['opened'] = {}
+  const openedByOthers: NonNullable<FakeState['openedByOthers']> = {}
   for (const seed of seeds) {
     const abs = join(workspaceDir, seed.relPath)
     mkdirSync(dirname(abs), { recursive: true })
     writeFileSync(abs, seed.content, 'utf8')
-    files[`${depotPrefix}/${toPosix(seed.relPath)}`] = { rev: 1, content: seed.content }
+    const depotFile = `${depotPrefix}/${toPosix(seed.relPath)}`
+    const entry: FakeState['files'][string] =
+      seed.headRev !== undefined
+        ? {
+            rev: seed.headRev,
+            content: seed.headContent ?? seed.content,
+            haveRev: 1,
+            haveContent: seed.content,
+            ...(seed.clobber === true ? { clobber: true } : {}),
+          }
+        : { rev: 1, content: seed.content, ...(seed.clobber === true ? { clobber: true } : {}) }
+    files[depotFile] = entry
+    if (seed.opened) {
+      opened[depotFile] = {
+        action: seed.opened.action ?? 'edit',
+        change: seed.opened.change ?? 'default',
+        rev: seed.opened.rev ?? entry.haveRev ?? entry.rev,
+        ...(seed.opened.resolve !== undefined
+          ? { unresolved: true, resolveOutcome: seed.opened.resolve }
+          : {}),
+      }
+    }
+    if (seed.openedBy) {
+      openedByOthers[depotFile] = {
+        user: seed.openedBy.user,
+        client: seed.openedBy.client,
+        action: seed.openedBy.action ?? 'edit',
+        rev: seed.openedBy.rev ?? entry.rev,
+      }
+    }
   }
   const stateDir = mkdtempSync(join(tmpdir(), 'ue2-p4-state-'))
   const stateFile = join(stateDir, 'state.json')
@@ -112,7 +192,8 @@ function seedWorkspace(
     clientRoot: workspaceDir,
     depotPrefix,
     files,
-    opened: {},
+    opened,
+    ...(Object.keys(openedByOthers).length > 0 ? { openedByOthers } : {}),
     ...(Object.keys(changelists).length > 0
       ? {
           changelists: Object.fromEntries(

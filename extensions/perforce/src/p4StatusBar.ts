@@ -1,25 +1,66 @@
 /**
- * The Perforce status-bar entry: client name + connection state. A single item
- * renders whichever client is active — switching the SCM selection re-points it,
- * mirroring VSCode's single-repo status bar (and git's GitStatusBarController).
- * Clicking opens the Perforce graph.
+ * The Perforce status-bar entries: the main client name + connection state item,
+ * plus a behind-count item ("N files behind") that appears only once a
+ * behind-check has actually run, plus a revision chip (`#have / #head`) for the
+ * active editor's file. All render whichever client is active — switching the
+ * SCM selection re-points them, mirroring VSCode's single-repo status bar (and
+ * git's GitStatusBarController). Clicking the main item opens the Perforce
+ * graph; clicking the behind item syncs to latest.
+ *
+ * The revision chip re-reads the active editor on every tab switch
+ * (`onDidChangeActiveTextEditor`) and routes the file through
+ * `ClientManager.resolveContaining` (NO active-client fallback — a data query,
+ * not a command route, so a file outside every client root must not read the
+ * active client's fstat). The fstat itself goes through the BaselineProvider's
+ * short-TTL cache + negative-result sentinel, so tab-switch bursts collapse
+ * into at most one server round-trip per file per 15s.
  */
 import {
   window,
   StatusBarAlignment,
   type Disposable,
   type StatusBarItem,
+  type TextEditor,
 } from '@universe-editor/extension-api'
+import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
+import { uriToFsPath } from './pathUtil.js'
+import type { FstatInfo } from './fstatParser.js'
 import { localize } from './nls.js'
+
+/** A revision string p4 reported, as a number — `'none'` (open-for-add has no
+ *  have revision, PROBE-FINDINGS §3) and anything else non-integer yield
+ *  undefined rather than NaN. */
+function asRev(v: string | undefined): number | undefined {
+  if (!v || v === 'none') return undefined
+  const n = Number(v)
+  return Number.isInteger(n) ? n : undefined
+}
 
 export class P4StatusBarController {
   private readonly _item: StatusBarItem
+  private readonly _behindItem: StatusBarItem
+  private readonly _revItem: StatusBarItem
   private _clientSub: Disposable | undefined
+  private _editorSub: Disposable | undefined
+  /** Generation guard so a slow fstat can't paint over a newer editor's chip. */
+  private _revToken = 0
 
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
     this._item.command = 'perforce-graph.view'
+    // Lower priority puts it to the right of the main item.
+    this._behindItem = window.createStatusBarItem(StatusBarAlignment.Left, 90)
+    this._behindItem.command = 'perforce.syncLatest'
+    this._behindItem.tooltip = localize(
+      'perforce.status.behind.tooltip',
+      'Click to sync the whole scope to the latest revision',
+    )
+    // Lowest priority sits left of both: `#have / #head` for the active editor's
+    // file, its own signal next to (not merged into) the behind count.
+    this._revItem = window.createStatusBarItem(StatusBarAlignment.Left, 80)
+    this._editorSub = window.onDidChangeActiveTextEditor((editor) => this._renderRev(editor))
+    this._renderRev()
   }
 
   /** Re-point at the active client and re-render. Call after the active client
@@ -27,12 +68,22 @@ export class P4StatusBarController {
   refresh(): void {
     const client = this._mgr.active
     this._clientSub?.dispose()
-    this._clientSub = client?.onDidChange(() => this._render())
+    this._clientSub = client?.onDidChange(() => {
+      this._render()
+      // A refresh invalidates the fstat cache after mutations, so re-read the
+      // chip too — that's what picks up a new haveRev after a sync. The cached
+      // fstat absorbs the busy push/pop bursts.
+      this._renderRev()
+    })
     this._render()
+    this._renderRev()
   }
 
   private _render(): void {
     const client = this._mgr.active
+    // Before the four-state branches, so no early return can skip it and leave
+    // a stale behind count on screen.
+    this._renderBehind(client)
     if (!client) {
       this._item.hide()
       return
@@ -72,12 +123,146 @@ export class P4StatusBarController {
         reconcileCount > 0 ? ` ${openedCount} $(edit) ${reconcileCount} $(diff)` : ` ${openedCount}`
       this._item.text = `$(server) ${clientName}${counts}`
     }
-    this._item.tooltip = 'Open Perforce Graph'
+    // The counts are glyphs in the label, so spell them out here — plus the graph
+    // is what a click opens, which the label alone doesn't say.
+    this._item.tooltip = `${localize(
+      'perforce.status.tooltip',
+      'Perforce: {0} · {1} opened, {2} to collect',
+      {
+        0: clientName,
+        1: String(openedCount),
+        2: String(reconcileCount),
+      },
+    )}\n${localize('perforce.status.openGraph', 'Open Perforce Graph')}`
     this._item.show()
+  }
+
+  private _renderBehind(client: PerforceClient | undefined): void {
+    const behind = client?.status.syncBehindCount
+    // undefined = the first behind-check hasn't completed — hiding beats a
+    // reassuring zero the client hasn't earned. 0 = checked, nothing to get.
+    // The connection gate is explicit even though going offline clears the
+    // count upstream: the number means nothing while disconnected, and not
+    // relying on the upstream cleanup keeps both sides honest.
+    if (!client || !behind || client.status.connection !== 'connected') {
+      this._behindItem.hide()
+      return
+    }
+    const capped = client.status.syncBehindCapped
+    const text = localize(
+      capped ? 'perforce.status.behind.capped' : 'perforce.status.behind',
+      capped ? 'more than {0} files behind' : '{0} files behind',
+      { 0: behind },
+    )
+    this._behindItem.text = `$(cloud-download) ${text}`
+    this._behindItem.show()
+  }
+
+  /** Re-render the revision chip for the active editor's file. `editor` comes
+   *  from the subscription event when available; a bare call re-fetches the
+   *  active editor itself (initial render, client refresh). */
+  private _renderRev(editor?: TextEditor | undefined): void {
+    const token = ++this._revToken
+    void (async () => {
+      const ed = editor ?? (await window.getActiveTextEditor())
+      if (token !== this._revToken) return
+      // Non-file scheme (untitled, custom editors) has no depot identity.
+      const fsPath = ed ? uriToFsPath(ed.document.uri) : undefined
+      if (!fsPath) {
+        this._revItem.hide()
+        return
+      }
+      const client = this._mgr.resolveContaining(fsPath)
+      if (!client) {
+        this._revItem.hide()
+        return
+      }
+      let info: FstatInfo | undefined
+      try {
+        info = await client.fstat(fsPath)
+      } catch {
+        // fstat rejects when p4 can't spawn — the chip is best-effort, and this
+        // async path must never surface an unhandled rejection.
+        info = undefined
+      }
+      if (token !== this._revToken) return
+      this._renderRevInfo(info)
+    })()
+  }
+
+  private _renderRevInfo(info: FstatInfo | undefined): void {
+    // undefined covers both "fstat failed" and the NOT_CONTROLLED sentinel — an
+    // empty `#/#` would claim knowledge we don't have.
+    if (!info) {
+      this._revItem.hide()
+      return
+    }
+    if (info.action === 'add' || info.haveRev === 'none') {
+      // Open for add: there is no have revision yet, so a `#/#` pair would be
+      // noise — and on a re-add it would show the deleted file's head revision,
+      // which is actively misleading. A marked "new" says what the user needs.
+      //
+      // Keyed on `action` rather than only `haveRev`: on a real server (P4D
+      // 2024.2) fstat OMITS `haveRev` entirely for an open-for-add file — the
+      // string `'none'` shows up in `opened` records, not fstat (PROBE-FINDINGS
+      // §10). The `'none'` check stays as defence for servers that do report it.
+      this._revItem.text = `$(diff-added) ${localize('perforce.status.revAdded', 'new')}`
+      this._revItem.command = undefined
+      this._revItem.tooltip = localize(
+        'perforce.status.revAddedTooltip',
+        'New file, not in the depot yet',
+      )
+      this._revItem.show()
+      return
+    }
+    const have = asRev(info.haveRev)
+    const head = asRev(info.headRev)
+    if (have === undefined && head === undefined) {
+      this._revItem.hide()
+      return
+    }
+    if (have === undefined) {
+      // Controlled but with no have revision reported — show what we do know.
+      this._revItem.text = `#${head}`
+      this._revItem.command = undefined
+      this._revItem.tooltip = localize('perforce.status.revHeadTooltip', 'Head revision {0}', {
+        0: `#${head}`,
+      })
+      this._revItem.show()
+      return
+    }
+    if (head === undefined) {
+      // A synced file with no head reported — the have revision alone.
+      this._revItem.text = `#${have}`
+      this._revItem.command = undefined
+      this._revItem.tooltip = localize('perforce.status.revHaveTooltip', 'Have revision #{0}', {
+        0: have,
+      })
+      this._revItem.show()
+      return
+    }
+    const behind = have < head
+    this._revItem.text = behind ? `#${have} / ↓#${head}` : `#${have} / #${head}`
+    // Behind is actionable (click gets the file's latest); current is not.
+    this._revItem.command = behind ? 'perforce.syncLatest' : undefined
+    this._revItem.tooltip = behind
+      ? localize(
+          'perforce.status.revTooltipBehind',
+          'Have revision #{0}, head is #{1} — click to sync the whole scope to the latest revision',
+          { 0: have, 1: head },
+        )
+      : localize('perforce.status.revTooltip', 'Have revision #{0}, head revision #{1}', {
+          0: have,
+          1: head,
+        })
+    this._revItem.show()
   }
 
   dispose(): void {
     this._clientSub?.dispose()
+    this._editorSub?.dispose()
     this._item.dispose()
+    this._behindItem.dispose()
+    this._revItem.dispose()
   }
 }

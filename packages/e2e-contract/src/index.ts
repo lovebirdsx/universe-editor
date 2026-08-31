@@ -117,6 +117,29 @@ export interface E2EDirtyDiffDecoration {
   readonly minimapColor?: string
 }
 
+/**
+ * A file's full SCM decoration as painted on its Explorer row: the badge
+ * letter/colour derived from its resource group (local changes) plus the
+ * supplementary grey-text description pushed by the provider (server-side
+ * condition). The probe returns null when the file has no decoration at all —
+ * a clean file asserting zero decoration is itself a scenario — and an object
+ * without `description` when it has a letter but no grey text.
+ */
+export interface E2EScmDecoration {
+  /** Badge letter (files only; untracked reads as 'U'). */
+  readonly letter?: string
+  /** Supplementary grey text rendered after the label (server-side condition). */
+  readonly description?: string
+  /** Tooltip contributed by the resource group decoration (local changes). */
+  readonly tooltip?: string
+  /** Tooltip contributed by the supplementary grey text. Kept separate from
+   *  `tooltip` because the row renders both — a file can be locally changed AND
+   *  in a server-side condition, and each producer keeps its own detail. */
+  readonly descriptionTooltip?: string
+  /** Concrete CSS color the file name/badge is painted with. */
+  readonly color?: string
+}
+
 /** One top-level node of an extension-contributed tree view. */
 export interface E2ETreeItem {
   readonly label: string
@@ -989,6 +1012,17 @@ export interface E2EProbe {
    * settles. Off-host resources answer `false`.
    */
   isResourceGitIgnored(uri: string): boolean | undefined
+  /**
+   * Complete SCM decoration for the file whose path ends with `suffix` (same
+   * case-insensitive, separator-agnostic matching as `getScmGroupIdsForResource`):
+   * badge letter/colour plus the supplementary grey-text description. Returns
+   * null when the file has no decoration at all — a clean file asserting zero
+   * decoration is itself a scenario — and an object without `description` when
+   * it has a letter but no grey text. Reads the decorations service, not the
+   * DOM, so a spec can tell the grey text apart from a coincidental substring
+   * of the label.
+   */
+  getScmDecorationForResource(suffix: string): E2EScmDecoration | null
   // -- Extension management probe -------------------------------------------
   /**
    * Install a local `.vsix`, returning the installed extension's identifier.

@@ -179,4 +179,41 @@ describe('WorkspaceWatchController', () => {
     expect(fake.isDisposed()).toBe(true)
     expect(client.refreshReconcilePaths).not.toHaveBeenCalled()
   })
+
+  it('ignores events while paused, and drops what was already pending', () => {
+    vi.useFakeTimers()
+    const fake = createFakeWatcher()
+    const { client, controller } = makeController(() => fake.watcher)
+
+    controller.start(true, ROOT)
+    // Already accumulating when the sync starts: these are pre-sync edits, but a
+    // sync's own writes would be indistinguishable, so the batch is dropped and
+    // the caller's post-sync refresh is what re-establishes truth.
+    fake.emitChange(FILE_A)
+    controller.pause()
+    // Ten thousand files written by `p4 sync` land here — none may become a
+    // reconcile path, or the user sees "it finished, then froze".
+    fake.emitChange(FILE_B)
+    fake.emitCreate(join(ROOT, 'c.txt'))
+    vi.advanceTimersByTime(400)
+
+    expect(client.refreshReconcilePaths).not.toHaveBeenCalled()
+  })
+
+  it('reacts again after resume', () => {
+    vi.useFakeTimers()
+    const fake = createFakeWatcher()
+    const { client, controller } = makeController(() => fake.watcher)
+
+    controller.start(true, ROOT)
+    controller.pause()
+    fake.emitChange(FILE_A)
+    controller.resume()
+    fake.emitChange(FILE_B)
+    vi.advanceTimersByTime(400)
+
+    // Only the post-resume path — the paused one was never recorded.
+    expect(client.refreshReconcilePaths).toHaveBeenCalledTimes(1)
+    expect(client.refreshReconcilePaths).toHaveBeenCalledWith([FILE_B])
+  })
 })

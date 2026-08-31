@@ -124,6 +124,16 @@
   text-overflow: ellipsis;
 }
 
+/* Server-side condition (可更新 / 他人占用) — grey, never truncated: the file
+   name gives up width first, since the hint is short and the point of it. */
+.scmDescription {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
 /* Git status letter (M / A / D / U …); inherits the row's deco colour. */
 .scmBadge {
   flex-shrink: 0;

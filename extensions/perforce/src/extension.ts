@@ -42,6 +42,7 @@ import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
+import { switchClient, wireSwitchedClient } from './switchClient.js'
 import { localize } from './nls.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -99,6 +100,91 @@ async function readFallbackConnection(): Promise<P4Connection> {
     ...(user ? { user } : {}),
     ...(client ? { client } : {}),
   }
+}
+
+/** The filespec a sync should target for an Explorer/SCM argument: a folder
+ *  becomes p4's recursive `<dir>/...`, a file is passed through. Same
+ *  `isDirectory` flag the Explorer attaches for `perforce.reconcile`. */
+function syncTargetOf(arg: unknown, path: string): string {
+  const isDirectory = (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
+  return isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
+}
+
+/** Last path segment, for a quick-pick label that isn't a wall of directories. */
+function displayName(path: string): string {
+  return (
+    path
+      .replace(/[/\\]+$/, '')
+      .split(/[/\\]/)
+      .pop() ?? path
+  )
+}
+
+/**
+ * The four ways P4V lets you name a revision, as a quick-pick. Returns the p4
+ * revision suffix to append to each filespec, or undefined when cancelled.
+ *
+ * `#head` is separate from the plain "latest" command because this one can also
+ * force; the other three ask for a value.
+ */
+async function pickSyncSpec(): Promise<{ spec: string; force: boolean } | undefined> {
+  const picks = [
+    {
+      id: 'head',
+      label: localize('perforce.syncPick.head', 'Latest revision'),
+      description: '#head',
+    },
+    {
+      id: 'changelist',
+      label: localize('perforce.syncPick.changelist', 'As of a changelist…'),
+      description: '@12345',
+    },
+    {
+      id: 'date',
+      label: localize('perforce.syncPick.date', 'As of a date…'),
+      description: '@2026/08/01',
+    },
+    {
+      id: 'rev',
+      label: localize('perforce.syncPick.rev', 'A specific revision…'),
+      description: '#4',
+    },
+    {
+      id: 'force',
+      label: localize('perforce.syncPick.force', 'Force-get latest (overwrite local files)'),
+      description: '#head -f',
+    },
+  ]
+  const choice = await window.showQuickPick(picks, {
+    placeHolder: localize('perforce.syncPick.placeholder', 'Which revision do you want?'),
+  })
+  if (!choice) return undefined
+  if (choice.id === 'head') return { spec: '#head', force: false }
+  if (choice.id === 'force') return { spec: '#head', force: true }
+
+  const prompts: Record<string, { prompt: string; placeHolder: string }> = {
+    changelist: {
+      prompt: localize('perforce.syncPrompt.changelist', 'Changelist number'),
+      placeHolder: '12345',
+    },
+    date: {
+      prompt: localize('perforce.syncPrompt.date', 'Date (yyyy/mm/dd, optionally with time)'),
+      placeHolder: '2026/08/01',
+    },
+    rev: {
+      prompt: localize('perforce.syncPrompt.rev', 'Revision number'),
+      placeHolder: '4',
+    },
+  }
+  const ask = prompts[choice.id]
+  if (!ask) return undefined
+  const raw = await window.showInputBox(ask)
+  const value = raw?.trim()
+  if (!value) return undefined
+  // `@` selects "the state as of", `#` selects a numbered revision — a leading
+  // sigil the user typed themselves is honoured rather than doubled.
+  if (/^[@#]/.test(value)) return { spec: value, force: false }
+  return { spec: choice.id === 'rev' ? `#${value}` : `@${value}`, force: false }
 }
 
 /** Build a per-client {@link ReconcileStore} backed by the extension's
@@ -216,15 +302,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // same `_setReconcileFiles` funnel, so setting the scope first is what drops
   // entries a since-narrowed focus no longer covers, instead of rendering them
   // until the next refresh.
-  const applyReconcileScope = async (): Promise<void> => {
+  const applyReconcileScope = async (target: PerforceClient): Promise<void> => {
     const scopeCfg = workspace.getConfiguration('workspace')
     const enabled = await scopeCfg.get('focusEnabled', false)
     const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
     const dirs = resolveFocusScopeDirs({ enabled, folders }, root)
-    client.setReconcileScope(dirs.length > 0 ? dirs : root)
+    target.setReconcileScope(dirs.length > 0 ? dirs : root)
+    // A scope-less "get latest" follows the same folders: pulling the whole
+    // client mapping when the user only opened one subtree is both slow and
+    // surprising. Per-file/folder gets pass their own scope and ignore this.
+    target.setSyncScope(dirs.length > 0 ? dirs : root)
     log(`[perforce] reconcile scope: ${dirs.length > 0 ? dirs.join(', ') : '<opened folder>'}`)
   }
-  await applyReconcileScope()
+  const applyReconcileScopeAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applyReconcileScope(c)
+  }
+  await applyReconcileScope(client)
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((e) => {
       if (
@@ -233,7 +326,58 @@ export async function activate(context: ExtensionContext): Promise<void> {
       ) {
         return
       }
-      void applyReconcileScope()
+      void applyReconcileScopeAll()
+    }),
+  )
+
+  /**
+   * Behind awareness: how often the client may ask the server "what am I missing".
+   * `sync -n` over a game workspace is the most expensive read here, so the
+   * interval is a real floor, not a hint — the client clamps anything under 30s.
+   *
+   * Applied **before** the first refresh: the refresh tail schedules a behind-check
+   * that reads these options, so configuring them afterwards would let the very
+   * first check silently skip on a workspace the user has auto-check enabled for.
+   */
+  const applySyncPreviewOptions = async (target: PerforceClient): Promise<void> => {
+    const autoCheck = await cfg.get('syncPreview.autoCheck', true)
+    const intervalSec = await cfg.get('syncPreview.intervalSec', 300)
+    target.setSyncPreviewOptions({ autoCheck, intervalMs: intervalSec * 1000 })
+  }
+  const applySyncPreviewOptionsAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applySyncPreviewOptions(c)
+  }
+  await applySyncPreviewOptions(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.syncPreview')) return
+      void applySyncPreviewOptionsAll()
+    }),
+  )
+
+  /**
+   * Opened-by-others awareness: how often the client may ask "who has what
+   * open". Unlike the behind-check this reads the server's open table rather
+   * than walking the client view, but it is still a scope-wide background scan,
+   * so the interval is a real floor too.
+   *
+   * Applied **before** the first refresh: the refresh tail schedules the scan
+   * and reads these options, so configuring them afterwards would let the very
+   * first scan silently skip on a workspace the user has auto-check enabled for.
+   */
+  const applyOpenedByOthersOptions = async (target: PerforceClient): Promise<void> => {
+    const autoCheck = await cfg.get('openedByOthers.autoCheck', true)
+    const intervalSec = await cfg.get('openedByOthers.intervalSec', 300)
+    target.setOpenedByOthersOptions({ autoCheck, intervalMs: intervalSec * 1000 })
+  }
+  const applyOpenedByOthersOptionsAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applyOpenedByOthersOptions(c)
+  }
+  await applyOpenedByOthersOptions(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.openedByOthers')) return
+      void applyOpenedByOthersOptionsAll()
     }),
   )
 
@@ -269,6 +413,94 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(watcher)
   watcher.start(await cfg.get('autoRefresh', true), root)
 
+  /**
+   * Run a sync and report the outcome.
+   *
+   * The watcher is paused for the duration: a sync writes every file it brings
+   * in, and letting those writes flow into incremental reconcile would turn a
+   * ten-thousand-file get into ten thousand queued `reconcile -n` paths — the
+   * user's experience being "it finished, then hung". `client.sync` refreshes
+   * afterwards regardless of outcome, so nothing is lost by dropping them.
+   */
+  const runSync = async (
+    target: PerforceClient,
+    spec: string,
+    options: { scope?: readonly string[]; force?: boolean },
+  ): Promise<void> => {
+    watcher.pause()
+    let res: Awaited<ReturnType<PerforceClient['sync']>>
+    try {
+      res = await target.sync(spec, options)
+    } finally {
+      watcher.resume()
+    }
+    if (res.cancelled) return
+    if (!res.ok) {
+      const suggestion = res.error?.suggestion
+      const message = localize('perforce.sync.failed', 'Get revision failed. {0}', {
+        0: suggestion ?? '',
+      }).trim()
+      // A clobber refusal is the one failure with an obvious next step: the local
+      // file has work in it that nobody has collected yet.
+      if (res.error?.kind === 'clobber') {
+        const BTN_COLLECT = localize('perforce.btn.collectChanges', 'Collect Changes')
+        const picked = await window.showErrorMessage(message, BTN_COLLECT)
+        if (picked === BTN_COLLECT) {
+          // Collect exactly what this get was refused on. Falling back to a clean
+          // refresh would only *discover* the drift and leave the files still
+          // uncollected — a button labelled "Collect Changes" that collects
+          // nothing is how a user concludes the get is simply broken. A
+          // scope-less get (the status-bar entry, the most common one) is refused
+          // over its own default range, so collect that range rather than
+          // degrading the far more frequent path to discovery-only.
+          const scope = options.scope
+          const targets = scope !== undefined && scope.length > 0 ? scope : target.syncScopes
+          await target.reconcile(targets)
+        }
+        return
+      }
+      await window.showErrorMessage(message)
+      return
+    }
+    const summary = res.summary
+    if (
+      !summary ||
+      (summary.applied === 0 && summary.keptOpen === 0 && summary.mustResolve === 0)
+    ) {
+      await window.showInformationMessage(
+        localize('perforce.sync.upToDate', 'Already at the latest revision.'),
+      )
+      return
+    }
+    const parts = [
+      localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
+    ]
+    if (summary.keptOpen > 0) {
+      parts.push(
+        localize('perforce.sync.keptOpen', '{0} skipped (open for edit)', {
+          0: String(summary.keptOpen),
+        }),
+      )
+    }
+    if (summary.mustResolve > 0) {
+      parts.push(
+        localize('perforce.sync.mustResolve', '{0} need merging', {
+          0: String(summary.mustResolve),
+        }),
+      )
+    }
+    const message = parts.join(' · ')
+    if (summary.mustResolve > 0) {
+      const BTN_RESOLVE = localize('perforce.btn.resolveNow', 'Resolve Conflicts')
+      const picked = await window.showWarningMessage(message, BTN_RESOLVE)
+      if (picked === BTN_RESOLVE) {
+        await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
+      }
+      return
+    }
+    await window.showInformationMessage(message)
+  }
+
   // Swarm (P4 Code Review) commands. Registered unconditionally — the handlers
   // themselves read `perforce.swarm.enabled` / `.url` at call time and no-op with
   // a friendly toast when unconfigured, so toggling config takes effect without a
@@ -288,12 +520,72 @@ export async function activate(context: ExtensionContext): Promise<void> {
   client.setSwarmAvailable(Boolean(swarmEnabled) && swarmUrl.length > 0)
   void client.refresh()
 
+  /**
+   * Wire a freshly created client in (the switch-workspace quick-pick), applying
+   * the same sequence `activate` used for the first client — see
+   * {@link wireSwitchedClient} for why the order matters.
+   */
+  const wireClient = async (newClient: PerforceClient): Promise<void> => {
+    const refreshInterval = await cfg.get('refreshInterval', 0)
+    const autoReconcile = await cfg.get('autoReconcile', false)
+    const swarmOn = await cfg.get('swarm.enabled', true)
+    const swarmUrlOn = ((await cfg.get('swarm.url', '')) as string).trim()
+    await wireSwitchedClient(
+      newClient,
+      {
+        refreshIntervalSec: refreshInterval,
+        autoReconcile,
+        swarmAvailable: Boolean(swarmOn) && swarmUrlOn.length > 0,
+      },
+      {
+        add: (c) => mgr.add(c),
+        setActive: (r) => mgr.setActive(r),
+        statusBarRefresh: () => statusBar.refresh(),
+        trackClient: (c) => {
+          context.subscriptions.push(timelineProvider.trackClient(c))
+        },
+        applyScopes: applyReconcileScope,
+        applySyncPreviewOptions,
+        applyOpenedByOthersOptions,
+        startPolling: (c, seconds) => c.startPolling(seconds),
+        setAutoReconcile: (c, enabled) => c.setAutoReconcile(enabled),
+        setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
+      },
+    )
+  }
+
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the
     // renderer's ActiveRepoSyncContribution as `<providerId>.setActiveRepo`.
     commands.registerCommand('perforce.setActiveRepo', (...args: unknown[]) => {
       mgr.setActive(args[0] as string | undefined)
       statusBar.refresh()
+    }),
+
+    // Switch the active workspace (client): list the user's clients, pick one,
+    // and wire the freshly created client in. The old client stays registered
+    // (multiple providers coexist); `mgr.add` dedupes by root.
+    commands.registerCommand('perforce.switchClient', () => {
+      const current = mgr.active
+      if (!current) return
+      return switchClient({
+        mgr,
+        log,
+        createClient: (entry) =>
+          PerforceClient.createForClient(
+            {
+              clientName: entry.clientName,
+              clientRoot: entry.clientRoot,
+              ...(current.user !== undefined ? { userName: current.user } : {}),
+            },
+            fallback,
+            gate,
+            cacheOptions,
+            log,
+            createReconcileStore(context, entry.clientRoot),
+          ),
+        wire: wireClient,
+      })
     }),
 
     commands.registerCommand('perforce.refresh', (arg) => mgr.resolveClient(arg)?.refresh()),
@@ -321,6 +613,107 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('perforce.reconcileAll', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       await target?.reconcileAll()
+    }),
+
+    // --- Sync (get revision) ------------------------------------------------
+
+    // Get the latest revision, no prompt. From the Explorer / editor this targets
+    // the clicked file or folder; from the status bar (no argument) it targets the
+    // configured sync scope, which follows the workspace focus folders.
+    commands.registerCommand('perforce.syncLatest', async (...args: unknown[]) => {
+      const path = await resolveTargetPath(args[0])
+      const target = path
+        ? mgr.resolveClient({ resourceUri: path })
+        : (mgr.resolveClient(args[0]) ?? mgr.active)
+      if (!target) return
+      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      await runSync(target, '#head', scope !== undefined ? { scope } : {})
+    }),
+
+    // Get a specific revision: four ways to name one, matching what P4V offers.
+    commands.registerCommand('perforce.sync', async (...args: unknown[]) => {
+      const path = await resolveTargetPath(args[0])
+      const target = path
+        ? mgr.resolveClient({ resourceUri: path })
+        : (mgr.resolveClient(args[0]) ?? mgr.active)
+      if (!target) return
+      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      const spec = await pickSyncSpec()
+      if (spec === undefined) return
+      // `-f` re-fetches files p4 believes are already current and overwrites
+      // writable local copies, so it can silently discard uncollected work.
+      // Never run it without an explicit confirmation.
+      if (spec.force) {
+        const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
+        const confirm = await window.showWarningMessage(
+          localize(
+            'perforce.sync.forceConfirm',
+            'Force-get overwrites local files even when Perforce thinks they are current. Uncollected changes in them will be lost. This cannot be undone.',
+          ),
+          BTN_FORCE,
+        )
+        if (confirm !== BTN_FORCE) return
+      }
+      await runSync(target, spec.spec, {
+        ...(scope !== undefined ? { scope } : {}),
+        ...(spec.force ? { force: true } : {}),
+      })
+    }),
+
+    // Dry-run: what would a get bring in. Read-only, so no confirmation.
+    commands.registerCommand('perforce.previewSync', async (...args: unknown[]) => {
+      const path = await resolveTargetPath(args[0])
+      const target = path
+        ? mgr.resolveClient({ resourceUri: path })
+        : (mgr.resolveClient(args[0]) ?? mgr.active)
+      if (!target) return
+      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      const res = await target.previewSync(scope)
+      if (!res.ok) {
+        await window.showErrorMessage(
+          localize('perforce.previewSync.failed', 'Could not preview what would be fetched.'),
+        )
+        return
+      }
+      if (res.upToDate) {
+        await window.showInformationMessage(
+          localize('perforce.sync.upToDate', 'Already at the latest revision.'),
+        )
+        return
+      }
+      const picks = res.files.map((f) => ({
+        id: f.depotFile,
+        label: displayName(f.clientFile ?? f.depotFile),
+        description: `${f.action}${f.rev ? ` #${f.rev}` : ''}`,
+        detail: f.depotFile,
+      }))
+      const choice = await window.showQuickPick(picks, {
+        placeHolder: localize(
+          'perforce.previewSync.placeholder',
+          '{0} file(s) would be fetched — pick one to open it',
+          { 0: String(res.files.length) },
+        ),
+      })
+      if (!choice) return
+      const local = res.files.find((f) => f.depotFile === choice.id)?.clientFile
+      if (local) await commands.executeCommand('_workbench.openFile', local)
+    }),
+
+    // Copy a file's depot path — the identifier every P4V dialog and Swarm URL
+    // wants, and there is no other way to get at it from the editor.
+    commands.registerCommand('perforce.copyDepotPath', async (...args: unknown[]) => {
+      const path = await resolveTargetPath(args[0])
+      if (!path) return
+      const target = mgr.resolveClient({ resourceUri: path })
+      if (!target) return
+      const info = await target.fstat(path)
+      if (!info) {
+        await window.showWarningMessage(
+          localize('perforce.copyDepotPath.notControlled', 'This file is not in the depot.'),
+        )
+        return
+      }
+      await commands.executeCommand('_workbench.writeClipboard', info.depotFile)
     }),
 
     commands.registerCommand('perforce.showOutput', () => out.show()),
@@ -866,6 +1259,75 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('perforce.resolveChangelist', async (arg) => {
       const target = mgr.resolveClient(arg) ?? mgr.active
       await target?.resolveChangelist(groupChangelistId(arg) ?? 'default')
+    }),
+
+    // Accept our side of the merge for each file (`resolve -ay`): discards the
+    // incoming side. Destructive — confirm first, like revert/delete.
+    commands.registerCommand('perforce.resolveAcceptYours', async (...args: unknown[]) => {
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
+      if (!target) return
+      const BTN_ACCEPT = localize('perforce.btn.acceptYours', 'Accept Yours')
+      const message =
+        paths.length === 1
+          ? localize(
+              'perforce.resolveAcceptYours.confirm',
+              "Resolve '{0}' by accepting your version? The incoming changes will be discarded.",
+              { 0: paths[0]! },
+            )
+          : localize(
+              'perforce.resolveAcceptYours.confirmMany',
+              'Resolve {0} files by accepting your version? The incoming changes will be discarded.',
+              { 0: String(paths.length) },
+            )
+      const confirm = await window.showWarningMessage(message, BTN_ACCEPT)
+      if (confirm !== BTN_ACCEPT) return
+      await target.resolveAcceptYours(paths)
+    }),
+
+    // Accept the incoming side of the merge (`resolve -at`): discards our local
+    // edits. Destructive — confirm first.
+    commands.registerCommand('perforce.resolveAcceptTheirs', async (...args: unknown[]) => {
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
+      if (!target) return
+      const BTN_ACCEPT = localize('perforce.btn.acceptTheirs', 'Accept Theirs')
+      const message =
+        paths.length === 1
+          ? localize(
+              'perforce.resolveAcceptTheirs.confirm',
+              "Resolve '{0}' by accepting the incoming version? Your local changes will be discarded.",
+              { 0: paths[0]! },
+            )
+          : localize(
+              'perforce.resolveAcceptTheirs.confirmMany',
+              'Resolve {0} files by accepting the incoming version? Your local changes will be discarded.',
+              { 0: String(paths.length) },
+            )
+      const confirm = await window.showWarningMessage(message, BTN_ACCEPT)
+      if (confirm !== BTN_ACCEPT) return
+      await target.resolveAcceptTheirs(paths)
+    }),
+
+    // Open the 3-way merge editor for an unresolved file (base = have revision,
+    // incoming = depot head, result seed = the on-disk file with p4 conflict
+    // markers). Saving runs `perforce.acceptResolved` (`resolve -ay`).
+    commands.registerCommand('perforce.openMergeEditor', async (...args: unknown[]) => {
+      const path = resourcePath(args[0]) ?? (typeof args[0] === 'string' ? args[0] : undefined)
+      if (!path) return
+      await mgr.resolveClient({ resourceUri: path })?.openMergeEditor(path)
+    }),
+
+    // Runtime command — NOT declared in contributes.commands (a declared
+    // same-name command without a handler would shadow this one and silently
+    // no-op). The merge editor's save follow-up: the user hand-merged on disk,
+    // so saving accepts that content as the resolution (`resolve -ay`).
+    commands.registerCommand('perforce.acceptResolved', async (...args: unknown[]) => {
+      const path = resourcePath(args[0]) ?? (typeof args[0] === 'string' ? args[0] : undefined)
+      if (!path) return
+      await mgr.resolveClient({ resourceUri: path })?.acceptResolved(path)
     }),
 
     // --- Perforce Graph (read-only submitted-change history) ----------------

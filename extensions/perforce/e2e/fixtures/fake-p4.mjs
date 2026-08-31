@@ -23,7 +23,7 @@
  *  in the extension host with no build step.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join, relative, sep, dirname } from 'node:path'
 
 const STATE_PATH = process.env.UNIVERSE_P4_FAKE_STATE
@@ -33,13 +33,25 @@ if (!STATE_PATH) {
 }
 
 /**
- * @typedef {{ rev: number, content: string }} DepotFile
- * @typedef {{ action: string, change: string, rev: number }} OpenedEntry
+ * @typedef {{ rev: number, content: string, revisions?: Record<string, string>,
+ *   haveRev?: number, haveContent?: string, clobber?: boolean }} DepotFile
+ *   `rev`/`content` are the depot HEAD (matching the pre-existing revision-history
+ *   seeds); `haveRev`/`haveContent`, when present, are what the client has synced —
+ *   absent means have == head. `clobber` is fault injection: a plain `p4 sync`
+ *   (no `-f`) on that file fails with "can't clobber writable file" (exit 1).
+ * @typedef {{ action: string, change: string, rev: number,
+ *   unresolved?: boolean, resolveOutcome?: 'merge' | 'conflict' }} OpenedEntry
+ *   `unresolved` is the internal needs-resolve flag — real `p4 opened` NEVER
+ *   emits it (§11.5), so only `fstat` / `fstat -Ru` surface it as a bare key;
+ *   `resolveOutcome` decides what `p4 resolve -am` does: 'merge' lands it,
+ *   'conflict' leaves it open with `resolve skipped`.
+ * @typedef {{ user: string, client: string, action: string, rev: number }} OthersEntry
  * @typedef {{
  *   port?: string, user: string, client: string, clientRoot: string,
  *   depotPrefix: string,
  *   files: Record<string, DepotFile>,
  *   opened: Record<string, OpenedEntry>,
+ *   openedByOthers?: Record<string, OthersEntry>,
  *   changelists?: Record<string, { description: string }>,
  *   changeMeta?: Record<string, { user: string, time: string, desc: string }>,
  *   annotateCl?: string,
@@ -57,6 +69,7 @@ function loadState() {
   state.shelved ??= {}
   state.submitted ??= {}
   state.nextChange ??= 1000
+  state.openedByOthers ??= {}
   return state
 }
 
@@ -94,9 +107,13 @@ function clientOf(state, depotFile) {
  *  Real `p4 opened` / `reconcile -n` report `clientFile` in client syntax, not a
  *  local path (only `fstat` gives a local path). Mirroring that here guards the
  *  extension's client→local conversion end-to-end. */
-function clientSyntaxOf(state, depotFile) {
+function clientSyntaxFor(clientName, state, depotFile) {
   const rel = depotFile.slice(state.depotPrefix.length + 1)
-  return `//${state.client}/${rel}`
+  return `//${clientName}/${rel}`
+}
+
+function clientSyntaxOf(state, depotFile) {
+  return clientSyntaxFor(state.client, state, depotFile)
 }
 
 /** Any file arg (local OS path, depot syntax `//depot/…`, or client syntax
@@ -111,6 +128,64 @@ function toDepotFile(state, f) {
   }
   if (f.startsWith('//')) return f // some other depot/client spec: best-effort
   return depotOf(state, f)
+}
+
+/** Head revision of a depot file — `entry.rev` IS head (see the State typedef). */
+const headRevOf = (known) => known.rev
+
+/** Revision the client has synced; defaults to head (a seeded file is current). */
+const haveRevOf = (known) => known.haveRev ?? known.rev
+
+/** Content at the synced revision; defaults to head content. */
+const haveContentOf = (known) => known.haveContent ?? known.content
+
+/** Filespec revision suffix (`#head`/`#N`/`@cl`/`@date`) → target revision, or
+ *  undefined when unparseable. `@cl`/`@date` resolve to head — the fake has no
+ *  CL/date content model to resolve against. */
+function syncTargetRev(spec, headRev) {
+  if (!spec || spec === '#head') return headRev
+  const hash = /^#(\d+)$/.exec(spec)
+  if (hash) return Number(hash[1])
+  if (spec.startsWith('@')) return headRev
+  return undefined
+}
+
+/** Content at a given revision: the explicit `revisions` history, or the entry's
+ *  own head/have contents. Unknown revisions fall back to head content. */
+function contentAt(known, rev) {
+  const hist = known.revisions?.[String(rev)]
+  if (hist !== undefined) return hist
+  if (rev === known.rev) return known.content
+  if (rev === known.haveRev) return known.haveContent ?? known.content
+  return known.content
+}
+
+/** True when a depot file falls under the given `opened` filespecs (`//...`,
+ *  `<dir>/...`, or explicit paths). No specs = whole client. */
+function openedInScope(state, scopes, depotFile) {
+  if (scopes.length === 0) return true
+  if (scopes.some((f) => f === '//...' || f === `${state.depotPrefix}/...`)) return true
+  const abs = normPath(clientOf(state, depotFile))
+  const dirScopes = scopes
+    .filter((f) => f.endsWith('/...'))
+    .map((f) => normPath(f.slice(0, -'/...'.length)))
+  if (dirScopes.length > 0) return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
+  return scopes.some((f) => toDepotFile(state, f) === depotFile || normPath(f) === abs)
+}
+
+/** Write a sync plan's content to disk and advance the client's have state. */
+function writeSync(state, p) {
+  const known = state.files[p.depotFile]
+  mkdirSync(dirname(p.local), { recursive: true })
+  writeFileSync(p.local, p.toWrite)
+  if (p.toRev === known.rev) {
+    // Synced to head: back to the plain current-file shape.
+    delete known.haveRev
+    delete known.haveContent
+  } else {
+    known.haveRev = p.toRev
+    known.haveContent = p.toWrite
+  }
 }
 
 /** Every file on disk under the client root (abs OS paths), skipping VCS/state dirs. */
@@ -215,12 +290,12 @@ function computeReconcile(state) {
       results.push({ depotFile, clientFile: clientSyntaxOf(state, depotFile), action: 'add' })
     } else {
       const diskContent = readFileSync(clientFile, 'utf8')
-      if (diskContent !== known.content) {
+      if (diskContent !== haveContentOf(known)) {
         results.push({
           depotFile,
           clientFile: clientSyntaxOf(state, depotFile),
           action: 'edit',
-          rev: String(known.rev),
+          rev: String(haveRevOf(known)),
         })
       }
     }
@@ -233,7 +308,7 @@ function computeReconcile(state) {
         depotFile,
         clientFile: clientSyntaxOf(state, depotFile),
         action: 'delete',
-        rev: String(known.rev),
+        rev: String(haveRevOf(known)),
       })
     }
   }
@@ -284,19 +359,78 @@ function main() {
     }
 
     case 'clients': {
-      emit([{ client: state.client, Root: state.clientRoot }])
+      // §5 (PROBE-FINDINGS): `-Mj` collapses to a `{"data":…}` blob, so
+      // `execRecords` must actually take its `-ztag` fallback; in `-ztag` only
+      // `client` is lowercase — every other field is capitalized, which is what
+      // `parseClientsList` reads.
+      const plain = `Client ${state.client} 2026/08/11 root ${state.clientRoot} 'Created by ${state.user}. '`
+      if (mode === 'mj') {
+        emitMj([{ data: plain, level: 0 }])
+      } else if (mode === 'ztag') {
+        emitZtag([
+          {
+            client: state.client,
+            Update: '2026/08/11 10:00:00',
+            Access: '2026/08/11 10:00:00',
+            Owner: state.user,
+            Options: 'noallwrite noclobber nocompress unlocked nomodtime rmdir',
+            SubmitOptions: 'submitunchanged',
+            LineEnd: 'local',
+            Root: state.clientRoot,
+            Host: 'DESKTOP-TEST',
+            Type: 'writeable',
+            Description: `Created by ${state.user}. `,
+          },
+        ])
+      } else {
+        process.stdout.write(`${plain}\n`)
+      }
       return 0
     }
 
     case 'opened': {
-      const records = Object.entries(state.opened).map(([depotFile, o]) => ({
-        depotFile,
-        clientFile: clientSyntaxOf(state, depotFile),
-        change: o.change,
-        action: o.action,
-        rev: String(o.rev),
-      }))
-      emit(records)
+      const all = rest.includes('-a')
+      const max = argAfter(rest, '-m')
+      const scopes = rest.filter((a, idx) => {
+        if (a.startsWith('-')) return false
+        const prev = rest[idx - 1]
+        return prev !== '-m' && prev !== '-c'
+      })
+      const records = []
+      for (const [depotFile, o] of Object.entries(state.opened)) {
+        if (!openedInScope(state, scopes, depotFile)) continue
+        records.push({
+          depotFile,
+          clientFile: clientSyntaxOf(state, depotFile),
+          change: o.change,
+          action: o.action,
+          rev: String(o.rev),
+          // §11.5: real `opened` never carries `unresolved` — only fstat does.
+          // §4 (PROBE-FINDINGS): only `-a` carries `user`/`client`.
+          ...(all ? { user: state.user, client: state.client } : {}),
+        })
+      }
+      if (all) {
+        for (const [depotFile, o] of Object.entries(state.openedByOthers)) {
+          if (!openedInScope(state, scopes, depotFile)) continue
+          records.push({
+            depotFile,
+            // §4: the OTHER client's client-syntax path — translating it with our
+            // own clientRoot would manufacture a local path that doesn't exist.
+            clientFile: clientSyntaxFor(o.client, state, depotFile),
+            action: o.action,
+            rev: String(o.rev),
+            // §4: a literal `none` string for open-for-add (no have revision).
+            haveRev: o.action === 'add' ? 'none' : String(o.rev),
+            change: 'default', // §4: 'default', not a number
+            type: 'binary', // §4 verbatim
+            user: o.user,
+            client: o.client,
+          })
+        }
+      }
+      const limited = max !== undefined ? records.slice(0, Number(max)) : records
+      emit(limited)
       return 0
     }
 
@@ -424,6 +558,43 @@ function main() {
     }
 
     case 'fstat': {
+      // §11.5 (PROBE-FINDINGS): the unresolved signal lives HERE on real
+      // servers — `opened` never carries it. `-Ru` lists only the opened files
+      // with an unresolved integration record, over the given scope, each
+      // carrying a bare `unresolved` key. With none, real p4 prints
+      // "<scope> - file(s) not opened on this client." exit 0 (§7): a data
+      // blob under -Mj (which makes the extension's execRecords fall back to
+      // -ztag) and a plain non-tagged line under -ztag that parses to zero
+      // records — never a phantom record.
+      if (rest.includes('-Ru')) {
+        const scopes = rest.filter((a) => !a.startsWith('-'))
+        const records = []
+        for (const [depotFile, o] of Object.entries(state.opened)) {
+          if (!o.unresolved) continue
+          if (!openedInScope(state, scopes, depotFile)) continue
+          records.push({
+            depotFile,
+            // §3 (PROBE-FINDINGS): fstat's `clientFile` is a LOCAL path — the
+            // one command whose clientFile differs from opened/reconcile's
+            // client syntax.
+            clientFile: clientOf(state, depotFile),
+            action: o.action,
+            rev: String(o.rev),
+            unresolved: '',
+          })
+        }
+        if (records.length === 0) {
+          const scope = scopes[0] ?? '//...'
+          if (mode === 'ztag') {
+            process.stdout.write(`${scope} - file(s) not opened on this client.\n`)
+          } else {
+            emitMj([{ data: `${scope} - file(s) not opened on this client.\n` }])
+          }
+          return 0
+        }
+        emit(records)
+        return 0
+      }
       // Per-file metadata. The diff baseline (BaselineProvider) reads `depotFile`
       // + `haveRev` from here, then `print`s that revision. Args are file paths
       // (local, depot, or client syntax).
@@ -435,9 +606,13 @@ function main() {
         if (!known) continue
         records.push({
           depotFile,
-          clientFile: clientSyntaxOf(state, depotFile),
-          haveRev: String(known.rev),
-          headRev: String(known.rev),
+          // §3 (PROBE-FINDINGS): fstat's `clientFile` is a LOCAL path — the one
+          // command whose clientFile differs from opened/reconcile's client syntax.
+          clientFile: clientOf(state, depotFile),
+          haveRev: String(haveRevOf(known)),
+          headRev: String(headRevOf(known)),
+          // §11.4: a real fstat of an unresolved file carries the bare key too.
+          ...(state.opened[depotFile]?.unresolved ? { unresolved: '' } : {}),
         })
       }
       emit(records)
@@ -477,19 +652,152 @@ function main() {
         return 1
       }
       // A specific `#<rev>` reads that revision's historical content when the file
-      // models a revision history (`revisions: {17: '…', 18: '…'}`); otherwise the
-      // single head content. Lets a submitted-change diff show base (#rev-1) vs the
-      // edit (#rev / shelf).
+      // models a revision history (`revisions: {17: '…', 18: '…'}`) or a synced
+      // revision below head (`haveRev`); otherwise the single head content. Lets a
+      // submitted-change diff show base (#rev-1) vs the edit (#rev / shelf).
       const askedRev = /#(\d+)$/.exec(spec)?.[1]
-      if (askedRev && known.revisions?.[askedRev] !== undefined) {
-        process.stdout.write(known.revisions[askedRev])
-        return 0
+      if (askedRev) {
+        const hist =
+          known.revisions?.[askedRev] ??
+          (askedRev === String(known.haveRev) ? known.haveContent : undefined)
+        if (hist !== undefined) {
+          process.stdout.write(hist)
+          return 0
+        }
       }
       if (known.contentBase64 !== undefined) {
         process.stdout.write(Buffer.from(known.contentBase64, 'base64'))
         return 0
       }
       process.stdout.write(known.content)
+      return 0
+    }
+
+    case 'sync': {
+      // §1/§2 (PROBE-FINDINGS): `sync -n` records carry `clientFile` as a LOCAL
+      // path (the opposite of opened/reconcile — do NOT client-syntax it), and
+      // "file(s) up-to-date." arrives on **stderr with exit 0**, never non-zero.
+      // A real sync prints one plain line per file, `<depot>#<rev> - <verb> as
+      // <local>`; `-f` forces it over unchanged/writable/open files.
+      const dryRun = rest.includes('-n')
+      const force = rest.includes('-f')
+      const max = argAfter(rest, '-m')
+      const targets = rest.filter((a, idx) => {
+        if (a.startsWith('-')) return false
+        const prev = rest[idx - 1]
+        return prev !== '-m' && prev !== '-c'
+      })
+      const scopes = targets.map((t) => t.replace(/[#@].*$/, ''))
+      const inScope = (depotFile) => {
+        if (scopes.length === 0) return true
+        if (scopes.some((f) => f === '//...' || f === `${state.depotPrefix}/...`)) return true
+        const abs = normPath(clientOf(state, depotFile))
+        const dirScopes = scopes
+          .filter((f) => f.endsWith('/...'))
+          .map((f) => normPath(f.slice(0, -'/...'.length)))
+        if (dirScopes.length > 0) return dirScopes.some((s) => abs === s || abs.startsWith(`${s}/`))
+        return scopes.some((f) => toDepotFile(state, f) === depotFile || normPath(f) === abs)
+      }
+      const specTarget = targets.find((t) => /[#@]/.test(t))
+      const spec = specTarget ? /[#@].*$/.exec(specTarget)[0] : '#head'
+      const plans = []
+      for (const [depotFile, known] of Object.entries(state.files)) {
+        if (!inScope(depotFile)) continue
+        const toRev = syncTargetRev(spec, headRevOf(known))
+        if (toRev === undefined) continue
+        const haveRev = haveRevOf(known)
+        const local = clientOf(state, depotFile)
+        let action
+        if (!existsSync(local)) action = 'added'
+        else if (toRev > haveRev) action = 'updated'
+        else if (toRev < haveRev && force) action = 'updated'
+        else if (toRev === haveRev && force) action = 'refreshing'
+        else continue
+        plans.push({ depotFile, local, toRev, action, toWrite: contentAt(known, toRev) })
+      }
+      if (dryRun) {
+        if (plans.length === 0) {
+          const scope = targets.length > 0 ? scopes[0] : '//...'
+          process.stderr.write(`${scope} - file(s) up-to-date.\n`)
+          return 0
+        }
+        const listed = max !== undefined ? plans.slice(0, Number(max)) : plans
+        const totalSize = plans.reduce((n, p) => n + p.toWrite.length, 0)
+        const change = Math.max(...Object.keys(state.changeMeta ?? {}).map(Number), 0)
+        // §12.3.0 (PROBE-FINDINGS) measured shape: `totalFileSize` /
+        // `totalFileCount` / `change` ride in the FIRST file record only, as
+        // ONE grand total across all filespecs — and `totalFileCount` is the
+        // UNTRUNCATED total, never the `-m`-capped `listed` count.
+        emit(
+          listed.map((p, i) => ({
+            depotFile: p.depotFile,
+            clientFile: p.local, // §1: local path
+            rev: String(p.toRev),
+            action: p.action,
+            ...(i === 0
+              ? {
+                  totalFileSize: String(totalSize),
+                  totalFileCount: String(plans.length),
+                  change: String(change),
+                }
+              : {}),
+          })),
+        )
+        return 0
+      }
+      // Real sync. The clobber fault aborts the whole run like real p4 (exit 1);
+      // `-f` overrides it.
+      const clobber = plans.find((p) => state.files[p.depotFile].clobber === true)
+      if (clobber && !force) {
+        process.stderr.write(
+          `${clobber.depotFile} - can't clobber writable file ${clobber.local}\n`,
+        )
+        return 1
+      }
+      const lines = []
+      for (const p of plans) {
+        const opened = state.opened[p.depotFile]
+        const known = state.files[p.depotFile]
+        if (opened) {
+          // §11.3: a sync never rewrites an opened file. When it is behind, the
+          // have revision is bumped to the target and a resolve is scheduled in
+          // place — the opened record advances to the head rev and becomes
+          // unresolved, `resolve -n` then reports `merging`. A forced sync over
+          // an already-bumped file has nothing left to do (the real server
+          // answers `file(s) up-to-date.` exit 0 — the old fake-only
+          // "updates + needs-resolve" model never happens).
+          if (p.toRev <= haveRevOf(known)) continue
+          opened.rev = p.toRev
+          opened.unresolved = true
+          opened.resolveOutcome = 'merge'
+          if (p.toRev === known.rev) {
+            delete known.haveRev
+            delete known.haveContent
+          } else {
+            known.haveRev = p.toRev
+            known.haveContent = contentAt(known, p.toRev)
+          }
+          lines.push(`${p.depotFile}#${p.toRev} - is opened and not being changed`)
+          lines.push(`... ${p.depotFile} - must resolve #${p.toRev} before submitting`)
+          continue
+        }
+        writeSync(state, p)
+        const verb =
+          p.action === 'added'
+            ? 'added as'
+            : p.action === 'refreshing'
+              ? 'refreshing'
+              : 'updated as'
+        lines.push(`${p.depotFile}#${p.toRev} - ${verb} ${p.local}`)
+      }
+      if (lines.length === 0) {
+        // §11.1/§11.3: an all-up-to-date sync reports on stderr with exit 0.
+        const scope = targets.length > 0 ? scopes[0] : '//...'
+        process.stderr.write(`${scope} - file(s) up-to-date.\n`)
+      } else {
+        process.stdout.write(lines.join('\n') + '\n')
+      }
+      saveState(state)
       return 0
     }
 
@@ -670,6 +978,69 @@ function main() {
       }
       saveState(state)
       emit(records)
+      return 0
+    }
+
+    case 'resolve': {
+      // §6 (PROBE-FINDINGS): "no file(s) to resolve." on **stdout with exit 0**.
+      // `-am` exits 0 even when files are left unresolved — the silent-failure
+      // trap this fixture must reproduce — with a transcript that mixes landed
+      // (`- copy from`) and skipped (`resolve skipped`) lines.
+      const dryRun = rest.includes('-n')
+      const acceptYours = rest.includes('-ay')
+      const acceptTheirs = rest.includes('-at')
+      const cl = argAfter(rest, '-c')
+      const files = rest.filter((a, idx) => {
+        if (a.startsWith('-')) return false
+        const prev = rest[idx - 1]
+        return prev !== '-c'
+      })
+      const pending = Object.entries(state.opened).filter(([depotFile, o]) => {
+        if (!o.unresolved) return false
+        if (cl !== undefined && o.change !== cl) return false
+        // A bare `//...` filespec means the whole client view, like real p4
+        // (`resolve -n //...` lists every needs-resolve file).
+        if (files.some((f) => f === '//...' || f === `${state.depotPrefix}/...`)) return true
+        return files.length === 0 || files.some((f) => toDepotFile(state, f) === depotFile)
+      })
+      if (pending.length === 0) {
+        process.stdout.write(`${files[0] ?? '//...'} - no file(s) to resolve.\n`)
+        return 0
+      }
+      const lines = []
+      for (const [depotFile, o] of pending) {
+        const known = state.files[depotFile]
+        // A needs-resolve entry can be open-for-add (no depot revision yet).
+        const headRev = known ? headRevOf(known) : o.rev
+        const local = clientOf(state, depotFile)
+        lines.push(`${toPosix(local)} - merging ${depotFile}#${headRev}`)
+        if (dryRun) continue // predict only, touch nothing
+        if (o.resolveOutcome === 'conflict' && !acceptYours && !acceptTheirs) {
+          // -am leaves genuine conflicts open — and still exits 0.
+          lines.push('Diff chunks: 0 yours + 0 theirs + 0 both + 2 conflicting')
+          lines.push(`${depotFile} - resolve skipped.`)
+          continue
+        }
+        // Landed (auto-merge, or -ay/-at picking a side): the merged content is
+        // the incoming head — the fake has no 3-way merge engine.
+        if (acceptTheirs && known) writeFileSync(local, contentAt(known, headRev))
+        else if (known && !acceptYours) writeFileSync(local, contentAt(known, headRev))
+        delete o.unresolved
+        delete o.resolveOutcome
+        lines.push('Diff chunks: 2 yours + 3 theirs + 0 both + 0 conflicting')
+        // §11.4: the landed line differs by strategy on the real server —
+        // `-am` auto-merge reports `- merge from`, accepting a side reports
+        // `- ignored` (yours) / `- copy from` (theirs).
+        lines.push(
+          acceptYours
+            ? `${depotFile} - ignored ${depotFile}`
+            : acceptTheirs
+              ? `${depotFile} - copy from ${depotFile}`
+              : `${depotFile} - merge from ${depotFile}`,
+        )
+      }
+      saveState(state)
+      process.stdout.write(lines.join('\n') + '\n')
       return 0
     }
 

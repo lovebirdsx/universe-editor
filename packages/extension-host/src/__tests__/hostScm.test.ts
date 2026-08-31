@@ -46,18 +46,21 @@ function recordingScm(): IMainThreadScm & {
   updateSourceControl: ReturnType<typeof vi.fn>
   updateGroupResourceStates: ReturnType<typeof vi.fn>
   setInputBoxValue: ReturnType<typeof vi.fn>
+  updateSupplementary: ReturnType<typeof vi.fn>
 } {
   const registerSourceControl = vi.fn().mockResolvedValue(undefined)
   const registerGroup = vi.fn().mockResolvedValue(undefined)
   const updateSourceControl = vi.fn().mockResolvedValue(undefined)
   const updateGroupResourceStates = vi.fn().mockResolvedValue(undefined)
   const setInputBoxValue = vi.fn().mockResolvedValue(undefined)
+  const updateSupplementary = vi.fn().mockResolvedValue(undefined)
   return {
     registerSourceControl,
     registerGroup,
     updateSourceControl,
     updateGroupResourceStates,
     setInputBoxValue,
+    updateSupplementary,
     $registerSourceControl: registerSourceControl,
     $updateSourceControl: updateSourceControl,
     $unregisterSourceControl: () => Promise.resolve(),
@@ -65,6 +68,7 @@ function recordingScm(): IMainThreadScm & {
     $updateGroup: () => Promise.resolve(),
     $updateGroupResourceStates: updateGroupResourceStates,
     $unregisterGroup: () => Promise.resolve(),
+    $updateSupplementaryDecorations: updateSupplementary,
     $setInputBoxValue: setInputBoxValue,
     $setInputBoxPlaceholder: () => Promise.resolve(),
   }
@@ -142,5 +146,88 @@ describe('host SCM bridge', () => {
     sc.acceptInputActions = undefined
     const cleared = scm.updateSourceControl.mock.calls.at(-1)![1]
     expect(cleared.acceptInputActions).toEqual([])
+  })
+})
+
+describe('supplementary decorations', () => {
+  it('sends the initial set and stays silent when nothing changed', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const sc = service.createSourceControl('perforce', 'Perforce')
+
+    sc.setSupplementaryDecorations([
+      { resourceUri: '/ws/a.ts', description: '可更新', tooltip: '#4 → #7' },
+      { resourceUri: '/ws/b.fbx', description: '他人占用' },
+    ])
+    expect(scm.updateSupplementary).toHaveBeenCalledTimes(1)
+    const [handle, deltas] = scm.updateSupplementary.mock.calls[0]!
+    expect(handle).toBe(0)
+    expect(deltas).toEqual([
+      { resourceUri: '/ws/a.ts', description: '可更新', tooltip: '#4 → #7' },
+      { resourceUri: '/ws/b.fbx', description: '他人占用' },
+    ])
+
+    // A background scan that finds the same thing must cost no RPC: providers
+    // re-set the whole set on every poll.
+    sc.setSupplementaryDecorations([
+      { resourceUri: '/ws/a.ts', description: '可更新', tooltip: '#4 → #7' },
+      { resourceUri: '/ws/b.fbx', description: '他人占用' },
+    ])
+    expect(scm.updateSupplementary).toHaveBeenCalledTimes(1)
+  })
+
+  it('diffs to the minimal delta, removals first', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const sc = service.createSourceControl('perforce', 'Perforce')
+
+    sc.setSupplementaryDecorations([
+      { resourceUri: '/ws/a.ts', description: '可更新' },
+      { resourceUri: '/ws/b.fbx', description: '他人占用' },
+      { resourceUri: '/ws/c.ini', description: '可更新' },
+    ])
+    // b disappears, c's tooltip appears, a is untouched, d is new.
+    sc.setSupplementaryDecorations([
+      { resourceUri: '/ws/a.ts', description: '可更新' },
+      { resourceUri: '/ws/c.ini', description: '可更新', tooltip: '#1 → #2' },
+      { resourceUri: '/ws/d.cs', description: '他人占用' },
+    ])
+
+    const deltas = scm.updateSupplementary.mock.calls.at(-1)![1]
+    expect(deltas).toEqual([
+      { resourceUri: '/ws/b.fbx', description: null },
+      { resourceUri: '/ws/c.ini', description: '可更新', tooltip: '#1 → #2' },
+      { resourceUri: '/ws/d.cs', description: '他人占用' },
+    ])
+  })
+
+  it('clears everything with an empty set', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const sc = service.createSourceControl('perforce', 'Perforce')
+
+    sc.setSupplementaryDecorations([{ resourceUri: '/ws/a.ts', description: '可更新' }])
+    sc.setSupplementaryDecorations([])
+    expect(scm.updateSupplementary.mock.calls.at(-1)![1]).toEqual([
+      { resourceUri: '/ws/a.ts', description: null },
+    ])
+
+    // Already empty — no further traffic.
+    sc.setSupplementaryDecorations([])
+    expect(scm.updateSupplementary).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a tooltip that goes away', () => {
+    const scm = recordingScm()
+    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
+    const sc = service.createSourceControl('perforce', 'Perforce')
+
+    sc.setSupplementaryDecorations([
+      { resourceUri: '/ws/a.ts', description: '可更新', tooltip: '#4 → #7' },
+    ])
+    sc.setSupplementaryDecorations([{ resourceUri: '/ws/a.ts', description: '可更新' }])
+    expect(scm.updateSupplementary.mock.calls.at(-1)![1]).toEqual([
+      { resourceUri: '/ws/a.ts', description: '可更新' },
+    ])
   })
 })

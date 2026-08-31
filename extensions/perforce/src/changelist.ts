@@ -36,6 +36,10 @@ export interface OpenedFile {
   readonly rev: string | undefined
   /** True when the file needs `p4 resolve` (unresolved integration/merge). */
   readonly unresolved: boolean
+  /** Owning user, only reported by `p4 opened -a`. */
+  readonly openedByUser?: string
+  /** Owning client (workspace), only reported by `p4 opened -a`. */
+  readonly openedByClient?: string
 }
 
 /** A pending changelist's metadata (from `p4 changes -s pending`). */
@@ -71,6 +75,11 @@ export const DEFAULT_GROUP_ID = 'default'
  *  state has diverged from the depot but that aren't opened yet (git's untracked/
  *  modified analogue). Always at the top, hidden when empty. */
 export const RECONCILE_GROUP_ID = 'reconcile'
+
+/** Fixed group id for the "needs resolve" group — opened files the server still
+ *  reports unresolved. Pinned second, right below the reconcile group, hidden
+ *  when empty. */
+export const RESOLVE_GROUP_ID = 'resolve'
 
 /** Build the `cl:<n>` group id for a numbered changelist. */
 export function numberedGroupId(id: string): string {

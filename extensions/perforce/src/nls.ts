@@ -12,6 +12,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.group.numberedNoDesc': '#{0}',
   'perforce.group.shelved': '已搁置的文件',
   'perforce.group.reconcile': '待收集的改动',
+  'perforce.group.resolve': '需要合并',
   // status-bar busy labels (spinner text during long p4 operations)
   'perforce.busy.edit': '正在签出',
   'perforce.busy.add': '正在标记新增',
@@ -28,12 +29,15 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.busy.deleteShelved': '正在删除搁置的文件',
   'perforce.busy.refresh': '正在刷新',
   'perforce.busy.openChange': '正在打开更改',
+  'perforce.busy.openMergeEditor': '正在打开合并编辑器',
+  'perforce.busy.sync': '正在拉取',
   'perforce.busy.generic': '正在处理',
   // command titles reused at runtime
   'perforce.command.commit': '提交',
   'perforce.command.submit.title': '提交',
   'perforce.command.revertUnchanged.title': '还原未改动的文件',
   'perforce.command.openChange.title': '打开更改',
+  'perforce.command.openMergeEditor.title': '在合并编辑器中解决',
   // login prompt
   'perforce.login.prompt': 'Perforce 密码 / ticket',
   // mutating command confirmations + buttons
@@ -70,6 +74,56 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.deleteChangelist.confirm': '删除 changelist #{0}？其中已搁置的文件也会被删除。',
   'perforce.revertReconcile.confirm': '放弃 “{0}” 的工作区改动？此操作不可撤销。',
   'perforce.revertReconcile.confirmMany': '放弃 {0} 个文件的工作区改动？此操作不可撤销。',
+  // resolve（解决冲突）
+  'perforce.btn.acceptYours': '接受我的版本',
+  'perforce.btn.acceptTheirs': '接受对方的版本',
+  'perforce.resolveAcceptYours.confirm': '接受我的版本解决 “{0}”？对方的改动将被丢弃。',
+  'perforce.resolveAcceptYours.confirmMany': '接受我的版本解决 {0} 个文件？对方的改动将被丢弃。',
+  'perforce.resolveAcceptTheirs.confirm': '接受对方的版本解决 “{0}”？你的本地改动将被丢弃。',
+  'perforce.resolveAcceptTheirs.confirmMany':
+    '接受对方的版本解决 {0} 个文件？你的本地改动将被丢弃。',
+  'perforce.resolve.summary': '已自动合并 {0} 个，{1} 个仍需手动解决。',
+  'perforce.resolve.done': '已自动合并 {0} 个文件。',
+  'perforce.resolve.still': '{0} 个文件仍需手动解决。',
+  'perforce.resolve.completed': '解决冲突完成。',
+  'perforce.openMergeEditor.notControlled': '该文件不在 depot 中，无法进行三方合并。',
+  'perforce.mergeEditor.yours': '我的版本',
+  'perforce.mergeEditor.yoursRev': '我的版本（have #{0}）',
+  'perforce.mergeEditor.theirs': '对方的版本',
+  'perforce.mergeEditor.theirsRev': '对方的版本（head #{0}）',
+  // sync（拉取版本）
+  'perforce.syncPick.placeholder': '要拉取哪个版本？',
+  'perforce.syncPick.head': '最新版本',
+  'perforce.syncPick.changelist': '指定 changelist 时的版本…',
+  'perforce.syncPick.date': '指定日期时的版本…',
+  'perforce.syncPick.rev': '指定修订号…',
+  'perforce.syncPick.force': '强制拉取最新版本（覆盖本地文件）',
+  'perforce.syncPrompt.changelist': 'Changelist 编号',
+  'perforce.syncPrompt.date': '日期（yyyy/mm/dd，可带时间）',
+  'perforce.syncPrompt.rev': '修订号',
+  'perforce.btn.forceSync': '强制拉取',
+  'perforce.sync.forceConfirm':
+    '强制拉取会覆盖本地文件，即使 Perforce 认为它们已是最新。其中未收集的改动将丢失，且此操作不可撤销。',
+  'perforce.sync.failed': '拉取版本失败。{0}',
+  'perforce.btn.collectChanges': '收集改动',
+  'perforce.sync.upToDate': '已是最新版本。',
+  'perforce.sync.applied': '已更新 {0} 个文件',
+  'perforce.sync.keptOpen': '{0} 个已跳过（正在签出中）',
+  'perforce.sync.mustResolve': '{0} 个需要合并',
+  'perforce.btn.resolveNow': '解决冲突',
+  'perforce.previewSync.failed': '无法预览将要拉取的内容。',
+  'perforce.previewSync.placeholder': '共有 {0} 个文件将被拉取——选择一个可直接打开',
+  'perforce.copyDepotPath.notControlled': '该文件不在 depot 中。',
+  // 落后感知（Explorer 灰字 + 状态栏）
+  'perforce.deco.behind': '可更新',
+  'perforce.deco.behind.tooltip': '服务器上有更新版本（{0} #{1}）。用「拉取最新版本」获取。',
+  'perforce.status.behind': '{0} 个可更新',
+  'perforce.status.behind.capped': '超过 {0} 个可更新',
+  'perforce.status.behind.tooltip': '点击拉取整个作用域的最新版本',
+  // 他人占用（Explorer 灰字）
+  'perforce.deco.occupied': '他人占用',
+  'perforce.deco.occupied.tooltip': '{0} 打开着此文件',
+  'perforce.deco.occupiedAndBehind': '他人占用 · 可更新',
   // p4Error.ts
   'perforce.btn.openOutput': '打开 Perforce 输出',
   'perforce.error.offline': 'Perforce 服务器不可达——请检查连接与 P4PORT',
@@ -77,11 +131,29 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.error.notLoggedIn': '尚未登录 Perforce 服务器',
   'perforce.error.noClient': '未找到 Perforce 工作区（client）——请检查 P4CLIENT / P4CONFIG',
   'perforce.error.noCli': '未找到 p4 命令行工具——请安装 Helix Core CLI 后重试',
+  // sync / resolve guidance (classifySyncError)
+  'perforce.error.clobber':
+    '文件有未收集的本地修改。可以用强制拉取覆盖（会丢失这些修改），或者先收集修改',
+  'perforce.error.mustResolve': '文件存在未解决的冲突，请先解决冲突后再同步',
+  'perforce.error.upToDate': '已是最新版本',
+  'perforce.error.noSuchFile': '文件不在 depot 中或不在当前 client 视图内',
   // status bar
   'perforce.status.offline': '离线',
   'perforce.status.notLoggedIn': '未登录',
   'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开，{2} 个待收集',
+  'perforce.status.openGraph': '打开 Perforce 图谱',
   'perforce.status.cancelTooltip': '{0} —— 点击可取消',
+  // 状态栏修订（#have / #head）
+  'perforce.status.revAdded': '新增',
+  'perforce.status.revAddedTooltip': '新文件，尚未提交到 depot',
+  'perforce.status.revTooltip': '本机修订 #{0}，服务器 head 修订 #{1}',
+  'perforce.status.revTooltipBehind':
+    '本机修订 #{0}，服务器已到 #{1} —— 点击拉取整个作用域的最新版本',
+  'perforce.status.revHeadTooltip': '服务器 head 修订 {0}',
+  'perforce.status.revHaveTooltip': '本机修订 #{0}',
+  // 切换工作区（client）
+  'perforce.switchClient.placeholder': '切换到 Perforce 工作区（client）',
+  'perforce.switchClient.none': '无法列出 Perforce client。请检查连接并先登录。',
   // timeline (file history)
   'perforce.timeline.providerLabel': 'Perforce 历史',
   'perforce.timeline.pendingChanges': '待定更改',

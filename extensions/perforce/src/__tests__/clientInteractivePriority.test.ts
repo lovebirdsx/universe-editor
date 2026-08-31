@@ -47,6 +47,7 @@ function installScmBridge(): void {
       }),
       dispose() {},
     }),
+    executeCommand: () => Promise.resolve(undefined),
   }
 }
 
@@ -200,6 +201,11 @@ const cases: Case[] = [
     interactive: ['fstat'],
   },
   {
+    name: 'listUserClients (switch-workspace quick-pick)',
+    invoke: (c) => c.listUserClients(),
+    interactive: ['clients'],
+  },
+  {
     name: 'printRevision (file revision content for a diff)',
     invoke: (c) => c.printRevision(`${DEPOT}#3`),
     interactive: ['print'],
@@ -207,6 +213,12 @@ const cases: Case[] = [
   {
     name: 'getHeadContent (dirty-diff baseline: fstat + print)',
     invoke: (c) => c.getHeadContent(FILE),
+    interactive: ['fstat', 'print'],
+    seed: { fstat: FSTAT_JSON },
+  },
+  {
+    name: 'openMergeEditor (3-way merge editor open: fstat + print)',
+    invoke: (c) => c.openMergeEditor(FILE),
     interactive: ['fstat', 'print'],
     seed: { fstat: FSTAT_JSON },
   },

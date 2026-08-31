@@ -98,12 +98,14 @@ import {
   type E2EInstalledExtension,
   type E2EMarker,
   type E2ENotification,
+  type E2EScmDecoration,
   type E2ETerminalLink,
   type E2ETimelineItem,
   type E2ETreeItem,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IScmIgnoredResourcesService } from '../services/scm/ScmIgnoredResourcesService.js'
+import type { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -144,6 +146,7 @@ export interface E2EProbeServices {
   readonly terminalXtermService: ITerminalXtermService
   readonly scmService: IScmService
   readonly scmIgnoredResourcesService: IScmIgnoredResourcesService
+  readonly scmDecorationsService: IScmDecorationsService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly timelineService: ITimelineService
@@ -238,6 +241,17 @@ function severityName(severity: Severity): 'info' | 'warning' | 'error' {
     default:
       return 'info'
   }
+}
+
+/**
+ * SCM-domain suffix matcher: normalize separators + case just to compare a
+ * resource path tail against a spec-provided `suffix` (mirrors ScmView's
+ * pathKey). Not a persisted identity key, so the base path util is unnecessary
+ * here.
+ */
+function normalizeScmPath(p: string): string {
+  // eslint-disable-next-line no-restricted-syntax -- SCM-domain suffix compare only
+  return p.replace(/\\/g, '/').toLowerCase()
 }
 
 function toE2EMarker(m: monaco.editor.IMarker): E2EMarker {
@@ -924,16 +938,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     // (case-insensitive, separator-agnostic). Lets specs assert which changelist /
     // reconcile group a file landed in after a drag-and-drop move.
     getScmGroupIdsForResource: (suffix: string): readonly string[] => {
-      // SCM-domain suffix match: normalize separators + case just to compare a
-      // resource path tail against `suffix` (mirrors ScmView's pathKey). Not a
-      // persisted identity key, so the base path util is unnecessary here.
-      // eslint-disable-next-line no-restricted-syntax -- SCM-domain suffix compare only
-      const normalize = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
-      const needle = normalize(suffix)
+      const needle = normalizeScmPath(suffix)
       const out: string[] = []
       for (const sc of services.scmService.sourceControls.get()) {
         for (const g of sc.groups.get()) {
-          const hit = g.resources.get().some((r) => normalize(r.resourceUri).endsWith(needle))
+          const hit = g.resources
+            .get()
+            .some((r) => normalizeScmPath(r.resourceUri).endsWith(needle))
           if (hit) out.push(g.id)
         }
       }
@@ -944,6 +955,29 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     // check-ignore is still in flight, so specs poll until it settles.
     isResourceGitIgnored: (uri: string): boolean | undefined =>
       services.scmIgnoredResourcesService.isIgnored(URI.parse(uri)),
+    getScmDecorationForResource: (suffix: string): E2EScmDecoration | null => {
+      const needle = normalizeScmPath(suffix)
+      const { files, supplementary } = services.scmDecorationsService.decorations.get()
+      // Both maps are keyed by the same SCM path key, so the same suffix match
+      // finds the file in either. A file can sit in both (locally changed AND
+      // behind), so merge them into one record — the spec gets everything at
+      // once and can still tell "letter without grey text" apart.
+      const fileKey = [...files.keys()].find((k) => k.endsWith(needle))
+      const suppKey = [...supplementary.keys()].find((k) => k.endsWith(needle))
+      if (fileKey === undefined && suppKey === undefined) return null
+      const deco = fileKey !== undefined ? files.get(fileKey) : undefined
+      const supp = suppKey !== undefined ? supplementary.get(suppKey) : undefined
+      // The two tooltips stay separate because the row shows BOTH (ExplorerTreeNode
+      // joins them with ' • '). Folding them with ?? would let a group tooltip hide
+      // the supplementary one, which is exactly the overlap a spec needs to assert.
+      return {
+        ...(deco?.letter !== undefined ? { letter: deco.letter } : {}),
+        ...(supp !== undefined ? { description: supp.description } : {}),
+        ...(deco?.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
+        ...(supp?.tooltip !== undefined ? { descriptionTooltip: supp.tooltip } : {}),
+        ...(deco?.color !== undefined ? { color: deco.color } : {}),
+      }
+    },
     installVsixExtension: async (vsixPath: string, authority?: string): Promise<string> => {
       const local = await services.extensionManagementService.installVSIX(vsixPath, authority)
       return local.identifier

@@ -41,6 +41,26 @@ export interface SourceControlResourceState {
   readonly contextValue?: string
 }
 
+/**
+ * A hint about a file's *server-side* condition, independent of whether the user
+ * changed it. Rendered as trailing grey text on the Explorer row, so a provider
+ * can flag "you are behind on this file" or "someone else has it checked out"
+ * without putting the file in a resource group — those files are not the user's
+ * changes, and at workspace scale there can be thousands of them.
+ *
+ * Resource-group decorations still own the status letter / colour ("what I
+ * did"); this channel only owns the grey description ("what's happening on the
+ * server"). The two merge per-field and never contend.
+ */
+export interface SourceControlSupplementaryDecoration {
+  /** Filesystem path of the file (absolute). Folders are ignored. */
+  readonly resourceUri: string
+  /** Short grey text after the file name, e.g. "可更新" / "他人占用". */
+  readonly description: string
+  /** Appended to the row's hover tooltip, e.g. the concrete revisions. */
+  readonly tooltip?: string
+}
+
 /** Options for {@link SourceControl.createResourceGroup}. */
 export interface SourceControlResourceGroupOptions {
   /**
@@ -102,6 +122,14 @@ export interface SourceControl {
     label: string,
     options?: SourceControlResourceGroupOptions,
   ): SourceControlResourceGroup
+  /**
+   * Replace the provider's whole set of supplementary decorations (see
+   * {@link SourceControlSupplementaryDecoration}). Whole-set semantics keep the
+   * extension side trivial — pass everything you currently know, and anything
+   * absent is cleared. The host diffs against the previous set, so a steady
+   * state costs no RPC traffic.
+   */
+  setSupplementaryDecorations(decorations: readonly SourceControlSupplementaryDecoration[]): void
   dispose(): void
 }
 

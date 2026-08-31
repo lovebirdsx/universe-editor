@@ -60,6 +60,9 @@ interface Props {
   readonly decoLetter?: string
   readonly decoStrike?: boolean
   readonly decoTooltip?: string
+  /** Server-side condition as grey text after the name (e.g. 可更新 / 他人占用). */
+  readonly decoDescription?: string
+  readonly decoDescriptionTooltip?: string
   readonly style?: CSSProperties
 }
 
@@ -84,6 +87,8 @@ function ExplorerTreeNodeImpl({
   decoLetter,
   decoStrike,
   decoTooltip,
+  decoDescription,
+  decoDescriptionTooltip,
   style,
 }: Props) {
   const indent = { paddingLeft: `${indentPadding}px` }
@@ -188,9 +193,11 @@ function ExplorerTreeNodeImpl({
         }
       : undefined
 
-  // Hover tooltip: full path first (VSCode parity), git decoration tooltip appended.
+  // Hover tooltip: full path first (VSCode parity), then the SCM decoration
+  // tooltip, then the server-side condition — both can apply to one row (a file
+  // I checked out that is also behind).
   const fullPathTooltip = (uri: URI): string =>
-    decoTooltip ? `${uri.fsPath} • ${decoTooltip}` : uri.fsPath
+    [uri.fsPath, decoTooltip, decoDescriptionTooltip].filter(Boolean).join(' • ')
 
   return (
     <div
@@ -274,6 +281,11 @@ function ExplorerTreeNodeImpl({
           data-tooltip={fullPathTooltip(resource)}
         >
           {name}
+        </span>
+      )}
+      {decoDescription && (
+        <span className={styles['scmDescription']} aria-hidden="true">
+          {decoDescription}
         </span>
       )}
       {decoLetter && (

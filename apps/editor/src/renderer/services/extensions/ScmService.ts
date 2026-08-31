@@ -24,6 +24,7 @@ import type {
   ISourceControlFeaturesDto,
   ISourceControlGroupFeaturesDto,
   ISourceControlResourceStateDto,
+  ISupplementaryDecorationDeltaDto,
 } from '@universe-editor/extensions-common'
 
 export interface IScmGroupModel {
@@ -34,6 +35,17 @@ export interface IScmGroupModel {
   readonly label: IObservable<string>
   readonly hideWhenEmpty: IObservable<boolean>
   readonly resources: IObservable<readonly ISourceControlResourceStateDto[]>
+}
+
+/**
+ * A file's server-side condition as reported by the provider outside any
+ * resource group (behind on this file / held open by someone else). Keyed by the
+ * raw `resourceUri` the provider sent; the decorations service normalizes it.
+ */
+export interface IScmSupplementaryDecoration {
+  readonly resourceUri: string
+  readonly description: string
+  readonly tooltip?: string
 }
 
 export interface IScmSourceControlModel {
@@ -49,6 +61,8 @@ export interface IScmSourceControlModel {
   readonly acceptCommand: IObservable<ICommandDto | undefined>
   readonly acceptActions: IObservable<readonly ICommandDto[] | undefined>
   readonly groups: IObservable<readonly IScmGroupModel[]>
+  /** Supplementary decorations, by `resourceUri` exactly as the provider sent it. */
+  readonly supplementary: IObservable<ReadonlyMap<string, IScmSupplementaryDecoration>>
 }
 
 export interface IScmService {
@@ -184,6 +198,10 @@ class ScmSourceControlModel implements IScmSourceControlModel {
     undefined,
   )
   readonly groups = observableValue<readonly IScmGroupModel[]>('scmGroups', [])
+  readonly supplementary = observableValue<ReadonlyMap<string, IScmSupplementaryDecoration>>(
+    'scmSupplementary',
+    new Map(),
+  )
   /** Live groups in registration order; `groups` observable mirrors this. */
   readonly groupOrder: ScmGroupModel[] = []
 
@@ -302,6 +320,29 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
     resources: ISourceControlResourceStateDto[],
   ): Promise<void> {
     this._groupsByHandle.get(groupHandle)?.group.resources.set(resources, undefined)
+    return Promise.resolve()
+  }
+
+  $updateSupplementaryDecorations(
+    sourceControlHandle: number,
+    deltas: ISupplementaryDecorationDeltaDto[],
+  ): Promise<void> {
+    const model = this._byHandle.get(sourceControlHandle)
+    if (model) {
+      const next = new Map(model.supplementary.get())
+      for (const delta of deltas) {
+        if (delta.description === null) {
+          next.delete(delta.resourceUri)
+        } else {
+          next.set(delta.resourceUri, {
+            resourceUri: delta.resourceUri,
+            description: delta.description,
+            ...(delta.tooltip !== undefined ? { tooltip: delta.tooltip } : {}),
+          })
+        }
+      }
+      model.supplementary.set(next, undefined)
+    }
     return Promise.resolve()
   }
 

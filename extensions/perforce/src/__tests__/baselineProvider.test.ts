@@ -154,6 +154,30 @@ describe('BaselineProvider getHaveContentResult', () => {
     expect(success.content).toBe('content')
   })
 
+  it("treats haveRev 'none' (open-for-add) as no baseline and never prints #none", async () => {
+    // `'none'` is a real value p4 reports (PROBE-FINDINGS §3) and it is truthy —
+    // a bare falsy check would send `p4 print -q //depot/a.txt#none`, which fails
+    // and turns a normal open-for-add into a toast-worthy error.
+    const text = makeProvider()
+    text.execRecords.mockResolvedValue(
+      ok([{ depotFile: DEPOT, clientFile: LOCAL, haveRev: 'none' }]),
+    )
+    text.exec.mockResolvedValue(print('should never be fetched'))
+    const res = await text.provider.getHaveContentResult(LOCAL)
+    expect(res.content).toBeUndefined()
+    expect(res.error).toBeUndefined()
+    expect(text.exec).not.toHaveBeenCalled()
+
+    const bytes = makeProvider()
+    bytes.execRecords.mockResolvedValue(
+      ok([{ depotFile: DEPOT, clientFile: LOCAL, haveRev: 'none' }]),
+    )
+    const bytesRes = await bytes.provider.getHaveContentBytesResult(LOCAL)
+    expect(bytesRes.content).toBeUndefined()
+    expect(bytesRes.error).toBeUndefined()
+    expect(bytes.execBinary).not.toHaveBeenCalled()
+  })
+
   it('does not cache a failed print (the immutable print cache is never poisoned)', async () => {
     const { provider, execRecords, exec } = makeProvider()
     execRecords.mockResolvedValue(ok([FSTAT_RECORD]))

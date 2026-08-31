@@ -35,6 +35,7 @@ const scmDecorations = (hasChanges: boolean): IScmDecorationsServiceType => ({
   } as never,
   getFile: () => (hasChanges ? { color: '#e2c08d', letter: 'M' } : undefined),
   getFolder: () => undefined,
+  getSupplementary: () => undefined,
 })
 
 /** A minimal IScmService exposing one `git` provider rooted at `D:/repo`. */

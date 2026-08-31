@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { parseOpened, parseOpenedRecord, parsePending } from '../openedParser.js'
+import type { OpenedFile } from '../changelist.js'
+import {
+  filterOpenedByOthers,
+  parseOpened,
+  parseOpenedRecord,
+  parsePending,
+} from '../openedParser.js'
 
 describe('parseOpenedRecord', () => {
   it('maps a default-changelist edit', () => {
@@ -91,6 +97,32 @@ describe('parseOpenedRecord', () => {
     })
     expect(file?.clientFile).toBe('//ws/a.txt')
   })
+
+  it('maps the owning user/client reported by `opened -a`', () => {
+    const file = parseOpenedRecord({
+      depotFile: '//depot/branch_x/Assets/foo.bin',
+      clientFile: '//branch_x_commit/Assets/foo.bin',
+      change: 'default',
+      action: 'add',
+      rev: '4',
+      user: 'otheruser',
+      client: 'branch_x_commit',
+    })
+    expect(file?.openedByUser).toBe('otheruser')
+    expect(file?.openedByClient).toBe('branch_x_commit')
+  })
+
+  it('leaves the owner fields undefined for a plain `opened` record', () => {
+    const file = parseOpenedRecord({
+      depotFile: '//depot/branch_x/Assets/bar.bin',
+      clientFile: 'D:/work/bar.bin',
+      change: 'default',
+      action: 'edit',
+      rev: '4',
+    })
+    expect(file?.openedByUser).toBeUndefined()
+    expect(file?.openedByClient).toBeUndefined()
+  })
 })
 
 describe('parseOpened / parsePending', () => {
@@ -126,6 +158,52 @@ describe('parseOpened / parsePending', () => {
     expect(pending.map((c) => [c.id, c.shelved])).toEqual([
       ['100', true],
       ['101', false],
+    ])
+  })
+})
+
+describe('filterOpenedByOthers', () => {
+  function opened(depotFile: string, openedByClient?: string): OpenedFile {
+    return {
+      depotFile,
+      clientFile: 'X:/p4ws/main/' + depotFile,
+      changelist: 'default',
+      action: 'edit',
+      rev: '3',
+      unresolved: false,
+      ...(openedByClient !== undefined ? { openedByClient } : {}),
+    }
+  }
+
+  it('keeps only the files someone else has open', () => {
+    const files = [
+      opened('//depot/branch_x/a.bin', 'testclient'),
+      opened('//depot/branch_x/b.bin', 'branch_x_commit'),
+      opened('//depot/branch_x/c.bin', 'otherclient'),
+    ]
+    expect(filterOpenedByOthers(files, 'testclient').map((f) => f.depotFile)).toEqual([
+      '//depot/branch_x/b.bin',
+      '//depot/branch_x/c.bin',
+    ])
+  })
+
+  it('treats client names case-insensitively', () => {
+    const files = [opened('//depot/branch_x/a.bin', 'TestClient')]
+    expect(filterOpenedByOthers(files, 'testclient')).toEqual([])
+  })
+
+  it('returns nothing when my own client name is empty', () => {
+    const files = [opened('//depot/branch_x/a.bin', 'otherclient')]
+    expect(filterOpenedByOthers(files, '')).toEqual([])
+  })
+
+  it('drops records with no openedByClient', () => {
+    const files = [
+      opened('//depot/branch_x/a.bin'),
+      opened('//depot/branch_x/b.bin', 'otherclient'),
+    ]
+    expect(filterOpenedByOthers(files, 'testclient').map((f) => f.depotFile)).toEqual([
+      '//depot/branch_x/b.bin',
     ])
   })
 })

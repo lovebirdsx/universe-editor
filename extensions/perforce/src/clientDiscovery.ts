@@ -36,12 +36,41 @@ export interface DiscoveredClient {
   readonly userName?: string
 }
 
-function field(
-  record: Record<string, string | string[]> | undefined,
-  key: string,
-): string | undefined {
+/** One entry of `p4 clients -u <user>`, for the switch-workspace quick-pick. */
+export interface P4ClientEntry {
+  readonly clientName: string
+  readonly clientRoot: string
+  readonly description?: string
+}
+
+function field(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const v = record?.[key]
   return typeof v === 'string' && v ? v : undefined
+}
+
+/**
+ * Parse `p4 -ztag clients` records. Real-server shape (PROBE-FINDINGS §5):
+ * only `client` is lowercase, the rest are capitalized (`Root` / `Update` /
+ * `Access` / `Owner` / `Description` / … — unlike fstat's all-lowercase
+ * camelCase). `-Mj` collapses to a single `{"data": …}` blob on these servers,
+ * so callers must feed `-ztag` records (via execRecords / execTagged, never
+ * execJson). Entries without a usable name or root (including a literal
+ * `null` root) are dropped.
+ */
+export function parseClientsList(records: readonly Record<string, unknown>[]): P4ClientEntry[] {
+  const out: P4ClientEntry[] = []
+  for (const rec of records) {
+    const clientName = field(rec, 'client')
+    const clientRoot = field(rec, 'Root')
+    if (!clientName || !clientRoot || clientRoot.toLowerCase() === 'null') continue
+    const description = field(rec, 'Description')
+    out.push({
+      clientName,
+      clientRoot,
+      ...(description !== undefined ? { description } : {}),
+    })
+  }
+  return out
 }
 
 /**
@@ -128,7 +157,7 @@ async function findClientForFolder(
   log?: (msg: string) => void,
 ): Promise<{ clientName: string; clientRoot: string } | undefined> {
   const args = owner ? ['clients', '-u', owner] : ['clients']
-  const { result } = await p4.execTagged(args, {
+  const { result, records } = await p4.execTagged(args, {
     noConnection: true,
     timeoutMs: DISCOVERY_PROBE_TIMEOUT_MS,
   })
@@ -140,14 +169,11 @@ async function findClientForFolder(
   }
   let best: { clientName: string; clientRoot: string } | undefined
   let bestLen = -1
-  for (const rec of parseZtag(result.stdout)) {
-    const name = field(rec, 'client')
-    const root = field(rec, 'Root')
-    if (!name || !root || root.toLowerCase() === 'null') continue
-    if (!rootContains(root, folder)) continue
-    const len = norm(root).length
+  for (const { clientName, clientRoot } of parseClientsList(records)) {
+    if (!rootContains(clientRoot, folder)) continue
+    const len = norm(clientRoot).length
     if (len > bestLen) {
-      best = { clientName: name, clientRoot: root }
+      best = { clientName, clientRoot }
       bestLen = len
     }
   }

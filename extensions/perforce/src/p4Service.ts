@@ -213,6 +213,14 @@ const ENV_DENYLIST: readonly string[] = [
   'ELECTRON_ENABLE_LOGGING',
   'ELECTRON_ENABLE_STACK_DUMPING',
   'NODE_OPTIONS',
+  // p4 resolves P4CONFIG by walking up from `PWD` when that variable is set,
+  // ignoring the process's actual working directory (verified on Windows: with
+  // cwd inside one client's root but `PWD` pointing elsewhere, `p4 info` reports
+  // a completely different client and root). This service deliberately spawns
+  // with the client root as cwd so p4 resolves the right connection — a `PWD`
+  // inherited from a msys/WSL parent shell would silently hijack that and every
+  // command would run against the wrong client.
+  'PWD',
 ]
 
 function sanitizeEnv(): NodeJS.ProcessEnv {

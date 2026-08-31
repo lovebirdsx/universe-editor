@@ -150,7 +150,14 @@ export class PerforceTimelineProvider implements TimelineProvider {
       // No depot file → not under Perforce control; stay silent for the file.
       if (!info) return undefined
       depotFile = info.depotFile
-      const pending = await this._pendingItem(client, absPath, info)
+      // `'none'` is a revision p4 reports for a file with no have revision
+      // (open-for-add). It is a truthy string, so it would ride through to
+      // `print depotFile#none` and fail; normalize it away at the source rather
+      // than at every consumer.
+      const pending = await this._pendingItem(client, absPath, {
+        ...info,
+        haveRev: info.haveRev === 'none' ? undefined : info.haveRev,
+      })
       if (pending) items.push(pending)
     }
     if (!depotFile) return undefined

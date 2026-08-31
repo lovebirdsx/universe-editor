@@ -25,6 +25,14 @@ import { norm } from './pathUtil.js'
  *  (those always begin with '{'). */
 const NOT_CONTROLLED = ''
 
+/** Whether an fstat reported a usable have revision. `'none'` is a real value p4
+ *  reports for an open-for-add file (PROBE-FINDINGS §3) and is truthy, so a bare
+ *  falsy check would build the spec `depotFile#none` and print would fail — the
+ *  same guard the status bar and the merge-editor base already apply. */
+function hasHaveRev(info: FstatInfo): boolean {
+  return info.haveRev !== undefined && info.haveRev !== 'none'
+}
+
 /** A have-content read with its failure surfaced (`error`) and per-stage timings,
  *  so a caller can tell "no have revision" (fall back to opening the file) from
  *  "the fstat/print actually failed" (show a toast). */
@@ -102,7 +110,7 @@ export class BaselineProvider {
     const { info, error } = await this._getFstatInfoResult(localPath)
     const fstatMs = Date.now() - fstatStart
     if (error) return { error, timings: { fstatMs, printMs: 0, printCached: true } }
-    if (!info || !info.haveRev) return { timings: { fstatMs, printMs: 0, printCached: true } }
+    if (!info || !hasHaveRev(info)) return { timings: { fstatMs, printMs: 0, printCached: true } }
 
     const spec = `${info.depotFile}#${info.haveRev}`
     // The print error rides the in-flight promise (not a caller closure), so a
@@ -144,7 +152,7 @@ export class BaselineProvider {
   }> {
     const { info, error } = await this._getFstatInfoResult(localPath)
     if (error) return { error }
-    if (!info || !info.haveRev) return {}
+    if (!info || !hasHaveRev(info)) return {}
     const spec = `${info.depotFile}#${info.haveRev}`
     const print = await this._p4.execBinary(['print', '-q', spec], INTERACTIVE_CONTENT_EXEC)
     if (print.exitCode !== 0) {
