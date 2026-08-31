@@ -99,6 +99,7 @@
 
 - [win32 spawnSync shell:true 吞 ^](win32-spawnsync-cmd-caret-escaping.md) — cmd 元字符参数须包双引号；turbo `pkg^...` 静默变 `pkg...`
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — 禁手写 fsPath 折叠/路径身份键；flat config 替换非合并
+- [SCM 门控须按主机作用域](scm-host-scoped-path-gating.md) — 线上契约是裸 host 路径；一律走 scmHostPath，禁裸 scheme==='file' 门控与裸 fsPath 查表（曾致远程 gitignore 变暗失效 + 跨主机误命中）
 - [UriComponents path 须带前导斜杠](uri-components-canonical-path-leading-slash.md) — 手写 'C:/...' 致 file://C:/ parse 不稳、URI 身份断裂；e2e 渲染日志在 userData/logs/window-N/console.log
 - [Action2 async accessor 失效](action2-async-accessor-invalidation.md) — await 前同步取完所有 service；持久 accessor 测试假绿
 - [when 不提权，weight 定胜负](keybinding-when-not-priority-weight-wins.md) — scoped 快捷键压全局同键必须显式加 weight

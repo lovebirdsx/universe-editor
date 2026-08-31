@@ -62,9 +62,9 @@ import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { isFileSystemUri } from '../../services/files/fileSystemScheme.js'
 import {
   IScmDecorationsService,
-  scmPathKey,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
 import {
@@ -307,24 +307,21 @@ const EditorTab = memo(function EditorTab({
   const resource = input.resource
   const iconId = input.getIconId?.()
   const showsFileIcon =
-    !iconId && resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
+    !iconId && resource && (isFileSystemUri(resource) || resource.scheme === 'untitled')
   const languageId =
     'language' in input && typeof input.language === 'string' ? input.language : undefined
 
   const scmDecorations = useOptionalService(IScmDecorationsService)
-  const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  // Re-render the tab when the SCM model changes; the lookup goes through getFile.
+  useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
   // Re-render the tab once a check-ignore batch resolves so the cached answer re-applies.
   useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
-  const deco =
-    resource && resource.scheme === 'file'
-      ? decorations.files.get(scmPathKey(resource.fsPath))
-      : undefined
+  const deco = resource ? scmDecorations?.getFile(resource) : undefined
   // 无 git 状态装饰时，被 gitignore 忽略的文件标签变暗（VSCode 对标）。
   const ignored =
     deco === undefined &&
     resource !== undefined &&
-    resource.scheme === 'file' &&
     scmIgnoredResources?.isIgnored(resource) === true
   const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
   const labelStyle =
@@ -341,7 +338,7 @@ const EditorTab = memo(function EditorTab({
       sourceGroupId: groupId,
     },
     {
-      uriList: () => (resource && resource.scheme === 'file' ? [resource.toString()] : []),
+      uriList: () => (resource && isFileSystemUri(resource) ? [resource.toString()] : []),
     },
   )
   const { hoverProps, HoverPopup } = useHover()

@@ -6,16 +6,25 @@
  *  `files` (the file's own status) and `folders` (status propagated up to every
  *  ancestor directory, so a changed file tints its enclosing folders). Both the
  *  Explorer rows and the editor tabs consume it to colour file names.
+ *
+ *  Both maps are keyed by SCM-host path, so `getFile`/`getFolder` are the only
+ *  supported lookup path: they resolve the resource host-scopedly (see
+ *  scmHostPath) and miss for off-host resources. Do not key into `decorations`
+ *  with a hand-built path — a remote window also holds local `file:` editors.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
   Disposable,
   derived,
+  IWorkspaceService,
+  observableValue,
   type IObservable,
   type URI,
 } from '@universe-editor/platform'
-import type { IScmService } from '../extensions/ScmService.js'
+import { IScmService } from '../extensions/ScmService.js'
+import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
+import { scmHostPath } from './scmHostPath.js'
 
 export interface IScmDecoration {
   readonly color: string
@@ -75,9 +84,24 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
 
   readonly decorations: IObservable<IScmDecorationsSnapshot>
 
-  constructor(private readonly _scm: IScmService) {
+  constructor(
+    @IScmService private readonly _scm: IScmService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
+  ) {
     super()
+    // `_key` resolves the host imperatively, so switching workspaces silently
+    // changes what every lookup answers. Feed that into `decorations` so a
+    // consumer subscribed to it re-runs its lookups — without this the snapshot
+    // is unchanged (same providers) and stale colours stick until the next
+    // resourceStates push.
+    const workspaceEpoch = observableValue<number>('scmDecorationsWorkspaceEpoch', 0)
+    this._register(
+      this._workspace.onDidChangeWorkspace(() =>
+        workspaceEpoch.set(workspaceEpoch.get() + 1, undefined),
+      ),
+    )
     this.decorations = derived((reader) => {
+      workspaceEpoch.read(reader)
       const files = new Map<string, IScmDecoration>()
       // Track the winning weight per folder so a stronger descendant overrides.
       const folders = new Map<string, IScmDecoration>()
@@ -123,11 +147,19 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
   }
 
   getFile(resource: URI): IScmDecoration | undefined {
-    return this.decorations.get().files.get(scmPathKey(resource.fsPath))
+    const key = this._key(resource)
+    return key !== undefined ? this.decorations.get().files.get(key) : undefined
   }
 
   getFolder(resource: URI): IScmDecoration | undefined {
-    return this.decorations.get().folders.get(scmPathKey(resource.fsPath))
+    const key = this._key(resource)
+    return key !== undefined ? this.decorations.get().folders.get(key) : undefined
+  }
+
+  /** Decoration key for a resource, or undefined when it is off the SCM host. */
+  private _key(resource: URI): string | undefined {
+    const fsPath = scmHostPath(resource, currentRemoteAuthority(this._workspace.current))
+    return fsPath !== undefined ? scmPathKey(fsPath) : undefined
   }
 }
 

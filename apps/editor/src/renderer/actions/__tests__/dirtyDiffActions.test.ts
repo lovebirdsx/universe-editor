@@ -3,9 +3,12 @@ import {
   ICommandService,
   IEditorGroupsService,
   InstantiationService,
+  IWorkspaceService,
+  REMOTE_SCHEME,
   ServiceCollection,
   URI,
   type ICommandService as ICommandServiceType,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { OpenActiveFileChangesAction } from '../dirtyDiffActions.js'
@@ -43,6 +46,12 @@ const scmService = (): IScmServiceType =>
       read: () => [{ id: 'git', rootUri: 'D:/repo' }],
     },
   }) as never
+
+/** Workspace stub; a `remote-ssh` folder makes the window a remote one. */
+const workspaceOf = (folder: URI): IWorkspaceServiceType =>
+  ({ current: { folder } }) as unknown as IWorkspaceServiceType
+
+const localWorkspace = (): IWorkspaceServiceType => workspaceOf(URI.file('D:/repo'))
 
 async function runActionWithServices(services: ServiceCollection): Promise<void> {
   const instantiationService = new InstantiationService(services)
@@ -101,6 +110,7 @@ describe('OpenActiveFileChangesAction', () => {
         [ICommandService, commandService],
         [IScmDecorationsService, scmDecorations(true)],
         [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
       ),
     )
 
@@ -130,6 +140,7 @@ describe('OpenActiveFileChangesAction', () => {
         [ICommandService, commandService],
         [IScmDecorationsService, scmDecorations(false)],
         [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
       ),
     )
 
@@ -166,6 +177,7 @@ describe('OpenActiveFileChangesAction', () => {
         [ICommandService, commandService],
         [IScmDecorationsService, scmDecorations(false)],
         [IScmService, scm],
+        [IWorkspaceService, localWorkspace()],
       )
 
     // No selection → longest prefix wins (the nested git repo).
@@ -183,5 +195,35 @@ describe('OpenActiveFileChangesAction', () => {
       dirtyDiffCommandId('perforce', 'getHeadContent'),
       input.resource.fsPath,
     )
+  })
+
+  it('never fetches HEAD for a client-local file opened in a remote window', async () => {
+    // The remote git would read the client's path as one of its own, diffing
+    // against an unrelated file that happens to share the path.
+    const groups = new EditorGroupsService()
+    const input = new FileEditorInput(URI.file('D:/repo/file.ts'), {} as never)
+    groups.activeGroup.openEditor(input)
+
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(false)],
+        [IScmService, scmService()],
+        [
+          IWorkspaceService,
+          workspaceOf(
+            URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/home/u/repo' }),
+          ),
+        ],
+      ),
+    )
+
+    expect(commandService.executeCommand).not.toHaveBeenCalled()
   })
 })

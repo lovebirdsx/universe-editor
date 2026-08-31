@@ -10,6 +10,7 @@ import {
   Action2,
   ICommandService,
   IEditorGroupsService,
+  IWorkspaceService,
   KeybindingWeight,
   localize,
   localize2,
@@ -23,6 +24,8 @@ import {
   findAdjacentChange,
 } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { scmHostPath } from '../services/scm/scmHostPath.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
@@ -108,18 +111,22 @@ export class OpenActiveFileChangesAction extends Action2 {
     const commandService = accessor.get(ICommandService)
     const scmDecorations = accessor.get(IScmDecorationsService)
     const scm = accessor.get(IScmService)
+    const workspaceService = accessor.get(IWorkspaceService)
     const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
-    const providerId = resolveScmProviderId(
-      scm.sourceControls.get(),
-      active.resource.fsPath,
-      scmViewState.selectedRepo.get(),
-    )
-    const head = providerId
-      ? await commandService.executeCommand<string | null>(
-          dirtyDiffCommandId(providerId, 'getHeadContent'),
-          active.resource.fsPath,
-        )
-      : null
+    // The HEAD fetch runs on the SCM host, so an off-host editor (a local file in
+    // a remote window) has no HEAD here — a bare fsPath would route the client's
+    // path to the remote git and diff against an unrelated file.
+    const hostPath = scmHostPath(active.resource, currentRemoteAuthority(workspaceService.current))
+    const providerId = hostPath
+      ? resolveScmProviderId(scm.sourceControls.get(), hostPath, scmViewState.selectedRepo.get())
+      : undefined
+    const head =
+      providerId && hostPath
+        ? await commandService.executeCommand<string | null>(
+            dirtyDiffCommandId(providerId, 'getHeadContent'),
+            hostPath,
+          )
+        : null
     if (head == null && !hasScmChanges) return
 
     const model =

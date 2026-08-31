@@ -791,7 +791,9 @@ async function bootstrapWorkbench(): Promise<void> {
 
   // Git status decorations derived from the SCM model; colours Explorer rows and
   // editor tabs by file change state.
-  const scmDecorationsService = workbenchStore.add(new ScmDecorationsService(scmService))
+  const scmDecorationsService = workbenchStore.add(
+    instantiation.createInstance(ScmDecorationsService),
+  )
   services.set(IScmDecorationsService, scmDecorationsService)
 
   // Git-ignored files/folders render dimmed in the Explorer and editor tabs; a
@@ -914,6 +916,7 @@ async function bootstrapWorkbench(): Promise<void> {
     terminalManagerService,
     terminalXtermService: instantiation.invokeFunction((a) => a.get(ITerminalXtermService)),
     scmService,
+    scmIgnoredResourcesService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),

@@ -28,7 +28,9 @@ import {
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { IScmService, resolveScmProviderId } from '../extensions/ScmService.js'
+import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { scmPathKey } from './ScmDecorationsService.js'
+import { scmHostPath } from './scmHostPath.js'
 
 /** Inline colour for ignored resources; the token is registered in universeColorIds. */
 export const IGNORED_RESOURCE_FOREGROUND = 'var(--vscode-gitDecoration-ignoredResourceForeground)'
@@ -65,7 +67,7 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
     @IScmService private readonly _scm: IScmService,
     @ICommandService private readonly _commands: ICommandService,
     @IFileWatcherService watcher: IFileWatcherService,
-    @IWorkspaceService workspace: IWorkspaceService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -75,7 +77,7 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
       new NullLogger()
 
     this._register(watcher.onDidChangeFiles((events) => this._onFileEvents(events)))
-    this._register(workspace.onDidChangeWorkspace(() => this._invalidate()))
+    this._register(this._workspace.onDidChangeWorkspace(() => this._invalidate()))
 
     let first = true
     this._register(
@@ -96,8 +98,8 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
   }
 
   isIgnored(resource: URI): boolean | undefined {
-    if (resource.scheme !== 'file') return false
-    const fsPath = resource.fsPath
+    const fsPath = this._hostPath(resource)
+    if (fsPath === undefined) return false
     const key = scmPathKey(fsPath)
     const cached = this._cache.get(key)
     if (cached !== undefined) return cached
@@ -106,10 +108,16 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
     return undefined
   }
 
+  /** The path a resource has on the SCM host, or undefined when it is off-host. */
+  private _hostPath(resource: URI): string | undefined {
+    return scmHostPath(resource, currentRemoteAuthority(this._workspace.current))
+  }
+
   private _onFileEvents(events: readonly IFileChangeEvent[]): void {
     for (const ev of events) {
-      if (ev.resource.scheme !== 'file') continue
-      if (isGitIgnoreOrExclude(ev.resource.fsPath)) {
+      const fsPath = this._hostPath(ev.resource)
+      if (fsPath === undefined) continue
+      if (isGitIgnoreOrExclude(fsPath)) {
         this._invalidate()
         return
       }

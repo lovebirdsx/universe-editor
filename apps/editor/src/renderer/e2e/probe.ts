@@ -103,6 +103,7 @@ import {
   type E2ETreeItem,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
+import type { IScmIgnoredResourcesService } from '../services/scm/ScmIgnoredResourcesService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -142,6 +143,7 @@ export interface E2EProbeServices {
   readonly terminalManagerService: ITerminalManagerService
   readonly terminalXtermService: ITerminalXtermService
   readonly scmService: IScmService
+  readonly scmIgnoredResourcesService: IScmIgnoredResourcesService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly timelineService: ITimelineService
@@ -937,6 +939,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
       return out
     },
+    // Cached git-ignored answer for a resource, exactly as the Explorer rows and
+    // editor tabs read it when deciding to dim a label. undefined while the batch
+    // check-ignore is still in flight, so specs poll until it settles.
+    isResourceGitIgnored: (uri: string): boolean | undefined =>
+      services.scmIgnoredResourcesService.isIgnored(URI.parse(uri)),
     installVsixExtension: async (vsixPath: string, authority?: string): Promise<string> => {
       const local = await services.extensionManagementService.installVSIX(vsixPath, authority)
       return local.identifier

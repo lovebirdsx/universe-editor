@@ -982,6 +982,13 @@ export interface E2EProbe {
    * reconcile group a file landed in after a drag-and-drop move.
    */
   getScmGroupIdsForResource(suffix: string): readonly string[]
+  /**
+   * Cached "is this resource git-ignored?" answer for a resource URI string, as
+   * the Explorer rows and editor tabs read it when deciding to dim a label.
+   * `undefined` means the answer is still being batch-resolved — poll until it
+   * settles. Off-host resources answer `false`.
+   */
+  isResourceGitIgnored(uri: string): boolean | undefined
   // -- Extension management probe -------------------------------------------
   /**
    * Install a local `.vsix`, returning the installed extension's identifier.

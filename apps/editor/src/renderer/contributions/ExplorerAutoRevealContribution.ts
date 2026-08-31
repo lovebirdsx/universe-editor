@@ -19,6 +19,7 @@ import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from '../services/explorer/ExplorerTreeService.js'
+import { isFileSystemUri } from '../services/files/fileSystemScheme.js'
 
 export class ExplorerAutoRevealContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -30,8 +31,11 @@ export class ExplorerAutoRevealContribution extends Disposable implements IWorkb
     this._register(
       autorun((reader) => {
         const editor = editorService.activeEditor.read(reader)
+        // Any filesystem-backed editor (local or remote) has an Explorer row;
+        // virtual schemes (markdown-preview:, universe:) do not. The tree itself
+        // ignores a resource outside its root, so no extra host check is needed.
         const resource: URI | null =
-          editor instanceof FileEditorInput && editor.resource.scheme === 'file'
+          editor instanceof FileEditorInput && isFileSystemUri(editor.resource)
             ? editor.resource
             : null
         tree.setActiveEditorResource(resource)

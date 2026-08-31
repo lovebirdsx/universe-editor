@@ -34,6 +34,7 @@ import {
   IEditorService,
   ILoggerService,
   IThemeService,
+  IWorkspaceService,
   ThrottledDelayer,
   autorun,
   type IContextKey,
@@ -46,6 +47,8 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService, scmPathKey } from '../services/scm/ScmDecorationsService.js'
+import { scmHostPath } from '../services/scm/scmHostPath.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
@@ -156,6 +159,7 @@ export class DirtyDiffContribution
     @ILoggerService loggerService: ILoggerService,
     @IThemeService private readonly _themeService: IThemeService,
     @IConfigurationService private readonly _configurationService: IConfigurationService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
 
@@ -263,8 +267,17 @@ export class DirtyDiffContribution
   }
 
   private _bind(input: FileEditorInput): void {
+    // Every downstream use of _activePath (provider arbitration, getHeadContent,
+    // cache keys) speaks SCM-host paths, so an off-host editor (a local file in a
+    // remote window) gets no dirty diff at all rather than a client path the
+    // remote git would misread as its own.
+    const hostPath = scmHostPath(input.resource, currentRemoteAuthority(this._workspace.current))
+    if (hostPath === undefined) {
+      this._clear()
+      return
+    }
     this._activeResource = input.resource
-    this._activePath = input.resource.fsPath
+    this._activePath = hostPath
     // The new document's diff is async (throttled + a HEAD fetch), so drop the
     // previous file's regions right away: until `_render` publishes fresh ones,
     // any repaint (theme / setting change) would paint stale line numbers here.

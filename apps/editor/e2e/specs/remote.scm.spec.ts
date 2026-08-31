@@ -127,4 +127,72 @@ test.describe('remote scm', () => {
       )
       .toContain('workingTree')
   })
+
+  test('gitignored files under a remote repo report as ignored (Explorer dimming) @regression', async ({
+    workbench,
+    scratchDir,
+  }) => {
+    // Cold boot + remote host + git extension activation is heavy.
+    test.setTimeout(180_000)
+    await workbench.waitForRestored()
+
+    // Guards the bug where the whole ignore-dim chain was gated on
+    // `scheme === 'file'`, so remote resources never reached git.checkIgnore and
+    // ignored files/folders rendered at normal brightness in the Explorer.
+    const tmpDir = scratchDir('ue2-remote-ignore-')
+
+    git(tmpDir, 'init')
+    git(tmpDir, 'config', 'user.email', 'e2e@example.com')
+    git(tmpDir, 'config', 'user.name', 'E2E')
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'ignored/\n*.log\n')
+    fs.mkdirSync(path.join(tmpDir, 'ignored'), { recursive: true })
+    const ignoredFile = path.join(tmpDir, 'ignored', 'blob.txt')
+    const ignoredLog = path.join(tmpDir, 'debug.log')
+    const trackedFile = path.join(tmpDir, 'a.txt')
+    fs.writeFileSync(ignoredFile, 'noise\n')
+    fs.writeFileSync(ignoredLog, 'noise\n')
+    fs.writeFileSync(trackedFile, 'hello\n')
+    git(tmpDir, 'add', '-A')
+    git(tmpDir, 'commit', '-m', 'init')
+
+    const rootUri = remoteUri(tmpDir)
+
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 15_000,
+      })
+      .toBe(rootUri)
+
+    // The ignore lookup routes through the owning provider's checkIgnore command,
+    // so the remote git SourceControl has to be registered first.
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
+        timeout: 60_000,
+      })
+      .toBeGreaterThan(0)
+
+    // isIgnored is a pull-style cache: the first read enqueues and answers
+    // undefined, so poll until the batch resolves.
+    const isIgnored = (fsPath: string): Promise<boolean | undefined> =>
+      workbench.page.evaluate((uri) => window.__E2E__!.isResourceGitIgnored(uri), remoteUri(fsPath))
+
+    for (const [label, target] of [
+      ['ignored folder', path.join(tmpDir, 'ignored')],
+      ['file inside an ignored folder', ignoredFile],
+      ['file matching a *.log rule', ignoredLog],
+    ] as const) {
+      await expect
+        .poll(() => isIgnored(target), { timeout: 30_000, message: `${label} should be ignored` })
+        .toBe(true)
+    }
+
+    // A tracked file must stay bright — a blanket "true" would dim the whole tree.
+    await expect
+      .poll(() => isIgnored(trackedFile), {
+        timeout: 30_000,
+        message: 'tracked file should not be ignored',
+      })
+      .toBe(false)
+  })
 })

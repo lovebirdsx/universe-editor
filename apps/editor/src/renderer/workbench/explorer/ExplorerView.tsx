@@ -49,7 +49,6 @@ import {
 import { IExplorerFileOperationService } from '../../services/explorer/ExplorerFileOperationService.js'
 import {
   IScmDecorationsService,
-  scmPathKey,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
 import {
@@ -82,7 +81,8 @@ export function ExplorerView() {
   const tree = useService(IExplorerTreeService)
   const fileOps = useService(IExplorerFileOperationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
-  const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  // Re-render rows when the SCM model changes; renderRow reads via getFile/getFolder.
+  useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
   // Re-render rows once a check-ignore batch resolves so cached answers re-apply.
   useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
@@ -185,19 +185,13 @@ export function ExplorerView() {
   const renderRow = (ctx: ITreeRowRenderContext<IExplorerEntry>) => {
     const entry = ctx.node.element
     const key = ctx.node.id
-    // SCM 装饰是本机 git/perforce 概念；非 file: 资源（未来远端 provider）无装饰。
-    const decoKey = entry.resource.scheme === 'file' ? scmPathKey(entry.resource.fsPath) : undefined
-    const deco =
-      decoKey !== undefined
-        ? entry.isDirectory
-          ? decorations.folders.get(decoKey)
-          : decorations.files.get(decoKey)
-        : undefined
+    // getFile/getFolder resolve the row host-scopedly, so a remote workspace's
+    // rows decorate from the remote git state while stray local editors don't.
+    const deco = entry.isDirectory
+      ? scmDecorations?.getFolder(entry.resource)
+      : scmDecorations?.getFile(entry.resource)
     // 无 git 状态装饰时，被 gitignore 忽略的文件/文件夹变暗（VSCode 对标）。
-    const ignored =
-      deco === undefined &&
-      decoKey !== undefined &&
-      scmIgnoredResources?.isIgnored(entry.resource) === true
+    const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
     const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
     return (
       <ExplorerTreeNode

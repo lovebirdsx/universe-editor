@@ -23,6 +23,8 @@ import {
   resolveScmProviderIds,
   type IScmSourceControlModel,
 } from '../../services/extensions/ScmService.js'
+import { scmHostPath } from '../../services/scm/scmHostPath.js'
+import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import { useObservable, useOptionalService } from '../useService.js'
 
 const EMPTY_SOURCE_CONTROLS: IObservable<readonly IScmSourceControlModel[]> = observableValue(
@@ -88,9 +90,11 @@ export function ExplorerContextMenu({
   // the app core stays free of any single SCM's name.
   const scmService = useOptionalService(IScmService)
   const sourceControls = useObservable(scmService?.sourceControls ?? EMPTY_SOURCE_CONTROLS)
+  const remoteAuthority = useRemoteAuthority()
+  const scmPath = scmHostPath(resource, remoteAuthority)
   const resourceScmProvider =
-    resourceScheme === 'file'
-      ? encodeScmProviderIds(resolveScmProviderIds(sourceControls, resource.fsPath))
+    scmPath !== undefined
+      ? encodeScmProviderIds(resolveScmProviderIds(sourceControls, scmPath))
       : ''
 
   // Whether the clicked directory is itself a configured focus folder — swaps

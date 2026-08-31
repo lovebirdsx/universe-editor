@@ -27,6 +27,8 @@ import {
   encodeScmProviderIds,
   resolveScmProviderIds,
 } from '../../services/extensions/ScmService.js'
+import { scmHostPath } from '../../services/scm/scmHostPath.js'
+import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import { useOptionalService, useService } from '../useService.js'
 
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
@@ -35,6 +37,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
   const dirtyDiff = useOptionalService(IDirtyDiffNavigationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
   const scmService = useOptionalService(IScmService)
+  const remoteAuthority = useRemoteAuthority()
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
@@ -71,11 +74,13 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
         dirtyDiff.regions.length > 0
       const hasScmChanges =
         active instanceof FileEditorInput && scmDecorations?.getFile(active.resource) !== undefined
+      const scmPath =
+        active instanceof FileEditorInput
+          ? scmHostPath(active.resource, remoteAuthority)
+          : undefined
       const scmProvider =
-        active instanceof FileEditorInput && scmService
-          ? encodeScmProviderIds(
-              resolveScmProviderIds(scmService.sourceControls.get(), active.resource.fsPath),
-            )
+        scmPath !== undefined && scmService
+          ? encodeScmProviderIds(resolveScmProviderIds(scmService.sourceControls.get(), scmPath))
           : ''
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
       s.set('hasActiveEditor', active !== undefined)
@@ -133,7 +138,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       scopedRef.current?.dispose()
       scopedRef.current = null
     }
-  }, [dirtyDiff, group, rootCtx, scmDecorations, scmService, uriIdentity])
+  }, [dirtyDiff, group, remoteAuthority, rootCtx, scmDecorations, scmService, uriIdentity])
 
   return scopedRef.current
 }

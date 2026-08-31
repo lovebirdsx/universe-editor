@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, observableValue, URI } from '@universe-editor/platform'
+import { Emitter, observableValue, REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import type {
   ICommandService,
   IFileChangeEvent,
@@ -17,6 +17,13 @@ import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmSe
 import { ScmIgnoredResourcesService } from '../ScmIgnoredResourcesService.js'
 
 const ROOT = 'D:/repo'
+const REMOTE_AUTHORITY = 'myhost'
+const REMOTE_ROOT = '/home/u/repo'
+
+/** `remote-ssh://<authority>/<path>`. */
+function remote(path: string, authority = REMOTE_AUTHORITY): URI {
+  return URI.from({ scheme: REMOTE_SCHEME, authority, path })
+}
 
 function gitSourceControl(rootUri = ROOT): IScmSourceControlModel {
   return { id: 'git', rootUri } as unknown as IScmSourceControlModel
@@ -34,11 +41,19 @@ interface Harness {
   logger: { warn: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> }
 }
 
-function makeService(executeCommand: ReturnType<typeof vi.fn>, scm?: IScmService): Harness {
+function makeService(
+  executeCommand: ReturnType<typeof vi.fn>,
+  scm?: IScmService,
+  /** Workspace folder; a remote folder makes the window remote-scoped. */
+  folder: URI = URI.file(ROOT),
+): Harness {
   const fileEvents = new Emitter<readonly IFileChangeEvent[]>()
   const workspaceEvents = new Emitter<IWorkspace | null>()
   const watcher = { onDidChangeFiles: fileEvents.event } as unknown as IFileWatcherService
-  const workspace = { onDidChangeWorkspace: workspaceEvents.event } as unknown as IWorkspaceService
+  const workspace = {
+    onDidChangeWorkspace: workspaceEvents.event,
+    current: { folder },
+  } as unknown as IWorkspaceService
   const logger = { warn: vi.fn(), debug: vi.fn() }
   const loggerService = { createLogger: () => logger } as unknown as ILoggerService
   const commands = { executeCommand } as unknown as ICommandService
@@ -186,5 +201,74 @@ describe('ScmIgnoredResourcesService', () => {
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBe(false)
     expect(exec).toHaveBeenCalledTimes(2)
+  })
+
+  describe('remote workspace', () => {
+    /** Harness scoped to a remote workspace with a remote git root. */
+    function makeRemote(executeCommand: ReturnType<typeof vi.fn>): Harness {
+      return makeService(
+        executeCommand,
+        scmOf([gitSourceControl(REMOTE_ROOT)]),
+        remote(REMOTE_ROOT),
+      )
+    }
+
+    it('resolves remote resources through check-ignore with host paths', async () => {
+      // The remote git extension reports bare host paths, so the command must be
+      // called with `/home/u/repo/...`, never a remote-ssh URI string.
+      const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/node_modules`])
+      const { service, executeCommand: exec } = makeRemote(executeCommand)
+
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/node_modules`))).toBeUndefined()
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/src.ts`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('git.checkIgnore', [
+        `${REMOTE_ROOT}/node_modules`,
+        `${REMOTE_ROOT}/src.ts`,
+      ])
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/node_modules`))).toBe(true)
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/src.ts`))).toBe(false)
+    })
+
+    it('reports an off-host resource as not ignored without querying', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([])
+      const { service, executeCommand: exec } = makeRemote(executeCommand)
+
+      // A client-local editor and another host's resource are both off-host.
+      expect(service.isIgnored(URI.file(`${ROOT}/node_modules`))).toBe(false)
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/node_modules`, 'otherhost'))).toBe(false)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).not.toHaveBeenCalled()
+    })
+
+    it('invalidates when a remote .gitignore changes', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/cache`])
+      const { service, fileEvents, executeCommand: exec } = makeRemote(executeCommand)
+
+      service.isIgnored(remote(`${REMOTE_ROOT}/cache`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBe(true)
+
+      // Remote watcher events arrive as remote-ssh URIs (authority reattached).
+      fileEvents.fire([{ type: 'modified', resource: remote(`${REMOTE_ROOT}/.gitignore`) }])
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledTimes(2)
+    })
+
+    it('ignores an off-host .gitignore event', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${REMOTE_ROOT}/cache`])
+      const { service, fileEvents, executeCommand: exec } = makeRemote(executeCommand)
+
+      service.isIgnored(remote(`${REMOTE_ROOT}/cache`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBe(true)
+
+      fileEvents.fire([{ type: 'modified', resource: URI.file(`${ROOT}/.gitignore`) }])
+      // Cache survives: a local .gitignore says nothing about the remote repo.
+      expect(service.isIgnored(remote(`${REMOTE_ROOT}/cache`))).toBe(true)
+      expect(exec).toHaveBeenCalledTimes(1)
+    })
   })
 })

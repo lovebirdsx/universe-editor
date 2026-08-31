@@ -60,6 +60,7 @@ import { FileIcon } from '../files/fileIconTheme.js'
 import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
+import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
@@ -677,6 +678,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
   revision: number
 }) {
   const commandService = useService(ICommandService)
+  const authority = useRemoteAuthority()
   const groupScope = useMemo(
     () => ({ scmProvider: providerId, scmResourceGroup: node.groupId }),
     [providerId, node.groupId],
@@ -716,10 +718,14 @@ const ScmGroupRow = memo(function ScmGroupRow({
   const { dropTargetProps } = useDropTarget<unknown>((_payload, e) => {
     setDropActive(false)
     if (!acceptsDrop) return
-    const resources = readDroppedResources(e).map((u) => ({
-      resourceUri: u.fsPath,
-      scmResourceGroupId: node.groupId,
-    }))
+    // The reopen-to command runs on the provider's host, so only dropped
+    // resources living there carry a path it can act on.
+    const resources = readDroppedResources(e).flatMap((u) => {
+      const hostPath = scmHostPath(u, authority)
+      return hostPath !== undefined
+        ? [{ resourceUri: hostPath, scmResourceGroupId: node.groupId }]
+        : []
+    })
     if (resources.length === 0) return
     void commandService.executeCommand(
       reopenTo,

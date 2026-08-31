@@ -9,6 +9,7 @@ import {
   IEditorGroupsService,
   ILayoutService,
   IViewsService,
+  IWorkspaceService,
   MenuId,
   PartId,
   ViewContainerLocation,
@@ -19,6 +20,8 @@ import {
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
+import { scmHostPath } from '../services/scm/scmHostPath.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
 import {
   SIDEBAR_MIN,
@@ -216,14 +219,20 @@ export class ShowScmAction extends Action2 {
     }
     // Reveal the active file's row (if any) before focusing, so opening from an
     // editor/diff lands on its change. The diff input maps back to its real file.
+    // The changes list is keyed by SCM-host path, so an off-host editor reveals
+    // nothing rather than matching a same-named row on the other host.
     const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+    const workspaceService = accessor.get(IWorkspaceService)
     const fileUri =
       active instanceof FileEditorInput
         ? active.resource
         : active instanceof DiffEditorInput
           ? active.originalUri
           : undefined
-    scmViewState.requestReveal(fileUri?.scheme === 'file' ? fileUri.fsPath : null)
+    const hostPath = fileUri
+      ? scmHostPath(fileUri, currentRemoteAuthority(workspaceService.current))
+      : undefined
+    scmViewState.requestReveal(hostPath ?? null)
     await layoutService.focusView('workbench.view.scm.main', { source: 'command' })
   }
 }
