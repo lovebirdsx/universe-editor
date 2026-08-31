@@ -5,7 +5,9 @@
  *  and the usage source build on these so a gateway failure stays a silent no-op.
  *--------------------------------------------------------------------------------------------*/
 
+import { DisposableStore } from '@universe-editor/platform'
 import type { AiSourceFetchContext, CancellationToken } from '@universe-editor/platform'
+import { toAbortSignal } from '../providers/retry.js'
 
 export interface HttpJsonOptions {
   /** Path appended to the baseUrl. */
@@ -79,18 +81,24 @@ export async function fetchJson(
   timeoutMs: number,
 ): Promise<unknown | undefined> {
   if (token.isCancellationRequested) return undefined
-  const controller = new AbortController()
-  const listener = token.onCancellationRequested(() => controller.abort())
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // The cancellation listener lives in `store`, which `toAbortSignal` tears down
+  // synchronously when the token fires — a shutdown-time cancel must not wait for
+  // the `finally` below, which only runs a microtask later (after the leak check).
+  const store = new DisposableStore()
+  const timeout = new AbortController()
+  const timer = setTimeout(() => timeout.abort(), timeoutMs)
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal })
+    const response = await fetch(url, {
+      ...init,
+      signal: AbortSignal.any([toAbortSignal(token, store), timeout.signal]),
+    })
     if (!response.ok) return undefined
     return (await response.json()) as unknown
   } catch {
     return undefined
   } finally {
     clearTimeout(timer)
-    listener.dispose()
+    store.dispose()
   }
 }
 
