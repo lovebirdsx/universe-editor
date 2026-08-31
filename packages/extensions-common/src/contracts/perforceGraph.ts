@@ -51,6 +51,9 @@ export interface P4GraphLoadOptions {
    * the user actually has open.
    */
   wholeRepo?: boolean
+  /** 把历史限定到该 host 路径（文件或目录）。存在时忽略 wholeRepo。 */
+  scopePath?: string
+  scopeIsDirectory?: boolean
 }
 
 /** Result of `perforce-graph.getChanges`. */

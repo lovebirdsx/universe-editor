@@ -9,8 +9,13 @@
  *  Clicking a row selects the change and pushes its changed files into the
  *  Commit Changes sidebar view (via the `_workbench.showCommitChanges` bridge);
  *  clicking the synthetic "pending changes" node at the top reveals the SCM main
- *  view. View state is cached in `perforceGraphViewState` so re-activating the
- *  tab is instant.
+ *  view. View state is cached in `perforceGraphViewState` (bucketed by input id)
+ *  so re-activating the tab is instant.
+ *
+ *  A scoped input (`PerforceGraphEditorInput` carrying a `scope`) shows history
+ *  for a single file/folder: the query is fixed to that path, the whole-repo
+ *  toggle and client switcher are hidden, and nothing (scope toggle, last
+ *  selected change) is persisted — it is a one-shot view.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -49,7 +54,7 @@ import {
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import { useService, useObservable, useOptionalService } from '../useService.js'
-import { IScmService } from '../../services/extensions/ScmService.js'
+import { IScmService, scmProviderPathKey } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import {
   PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID,
@@ -58,9 +63,11 @@ import {
   type IGraphOutlineController,
 } from '../../services/gitGraph/graphOutline.js'
 import {
-  perforceGraphViewState,
+  GLOBAL_PERFORCE_GRAPH_KEY,
+  getPerforceGraphViewState,
   PERFORCE_GRAPH_PAGE_SIZE,
 } from '../../services/perforceGraph/perforceGraphViewState.js'
+import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
 import { scmViewState } from '../scm/scmViewState.js'
 import {
   FocusCommitChangesAction,
@@ -165,7 +172,14 @@ const ChangeRow = memo(function ChangeRow({
   )
 })
 
-export function PerforceGraphEditor(_props: { input: IEditorInput }) {
+export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
+  // The component is always mounted with a PerforceGraphEditorInput in
+  // production; the instanceof guard keeps the module-level global bucket as the
+  // fallback for a wide/legacy input (and the renderer-dom tests that pass a
+  // bare `{}`), instead of silently keying an `undefined` bucket.
+  const inputId = input instanceof PerforceGraphEditorInput ? input.id : GLOBAL_PERFORCE_GRAPH_KEY
+  const scope = input instanceof PerforceGraphEditorInput ? input.scope : undefined
+  const view = useMemo(() => getPerforceGraphViewState(inputId), [inputId])
   const commands = useService(ICommandService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
@@ -176,14 +190,12 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     () => loggerService?.createLogger({ id: 'perforceGraph', name: 'Perforce Graph' }) ?? null,
     [loggerService],
   )
-  const [result, setResult] = useState<P4GraphLoadResult | null>(
-    () => perforceGraphViewState.result,
-  )
+  const [result, setResult] = useState<P4GraphLoadResult | null>(() => view.result)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(() => perforceGraphViewState.result === null)
+  const [loading, setLoading] = useState(() => view.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
 
-  const [selection, setSelection] = useState<string[]>(() => perforceGraphViewState.selection)
+  const [selection, setSelection] = useState<string[]>(() => view.selection)
   // Ref mirror so onRowClick stays referentially stable across selection
   // changes — a fresh callback identity would bust ChangeRow's memo and
   // re-render the whole list before the new highlight paints.
@@ -193,20 +205,25 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   // most recent dispatch supersedes anything still in flight.
   const graphSyncSeqRef = useRef(0)
 
-  const [limit, setLimit] = useState(() => perforceGraphViewState.limit)
+  const [limit, setLimit] = useState(() => view.limit)
   const [columnWidths, setColumnWidths] = useState(() => ({
-    ...perforceGraphViewState.columnWidths,
+    ...view.columnWidths,
   }))
-  const [repos, setRepos] = useState<P4GraphRepoDto[]>(() => perforceGraphViewState.repos)
-  const [selectedRepo, setSelectedRepo] = useState<string | null>(
-    () => perforceGraphViewState.selectedRepo,
-  )
-  const [searchQuery, setSearchQuery] = useState(() => perforceGraphViewState.searchQuery)
+  const [repos, setRepos] = useState<P4GraphRepoDto[]>(() => view.repos)
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(() => view.selectedRepo)
+  const [searchQuery, setSearchQuery] = useState(() => view.searchQuery)
   const deferredQuery = useDeferredValue(searchQuery)
-  const [wholeRepo, setWholeRepo] = useState(() => perforceGraphViewState.wholeRepo)
+  const [wholeRepo, setWholeRepo] = useState(() => view.wholeRepo)
 
-  const queryRef = useRef<P4GraphLoadOptions>({ maxChanges: limit, wholeRepo })
-  queryRef.current = { maxChanges: limit, wholeRepo }
+  const queryRef = useRef<P4GraphLoadOptions>(
+    scope !== undefined
+      ? { maxChanges: limit, scopePath: scope.path, scopeIsDirectory: scope.isDirectory }
+      : { maxChanges: limit, wholeRepo },
+  )
+  queryRef.current =
+    scope !== undefined
+      ? { maxChanges: limit, scopePath: scope.path, scopeIsDirectory: scope.isDirectory }
+      : { maxChanges: limit, wholeRepo }
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -222,30 +239,30 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   const pendingScrollRef = useRef<string | null>(null)
 
   useEffect(() => {
-    perforceGraphViewState.focusSearch = () => {
+    view.focusSearch = () => {
       searchInputRef.current?.focus()
       searchInputRef.current?.select()
     }
     return () => {
-      perforceGraphViewState.focusSearch = null
+      view.focusSearch = null
     }
-  }, [])
+  }, [view])
 
   // Layout effect on purpose: EditorGroupView's activation focus runs in a
   // layout effect as well, so a passive registration would miss the first
   // PerforceGraphEditorInput.focus() call on open.
   const focusRequestedRef = useRef(false)
   useLayoutEffect(() => {
-    perforceGraphViewState.focusRows = () => {
+    view.focusRows = () => {
       // The first open arrives while the loading state is still up and the
       // listbox isn't in the DOM yet — defer to the effect below.
       focusRequestedRef.current = true
       scrollRef.current?.focus()
     }
     return () => {
-      perforceGraphViewState.focusRows = null
+      view.focusRows = null
     }
-  }, [])
+  }, [view])
 
   useLayoutEffect(() => {
     if (!focusRequestedRef.current || !scrollRef.current) return
@@ -255,32 +272,34 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
 
   // Mirror state into the module-level store so it survives unmount.
   useEffect(() => {
-    perforceGraphViewState.result = result
-  }, [result])
+    view.result = result
+  }, [result, view])
   useEffect(() => {
-    perforceGraphViewState.selection = selection
-  }, [selection])
+    view.selection = selection
+  }, [selection, view])
   useEffect(() => {
-    perforceGraphViewState.limit = limit
-  }, [limit])
+    view.limit = limit
+  }, [limit, view])
   useEffect(() => {
-    perforceGraphViewState.columnWidths = columnWidths
-  }, [columnWidths])
+    view.columnWidths = columnWidths
+  }, [columnWidths, view])
   useEffect(() => {
-    perforceGraphViewState.selectedRepo = selectedRepo
-  }, [selectedRepo])
+    view.selectedRepo = selectedRepo
+  }, [selectedRepo, view])
   useEffect(() => {
-    perforceGraphViewState.searchQuery = searchQuery
-  }, [searchQuery])
+    view.searchQuery = searchQuery
+  }, [searchQuery, view])
   useEffect(() => {
-    perforceGraphViewState.wholeRepo = wholeRepo
-  }, [wholeRepo])
+    view.wholeRepo = wholeRepo
+  }, [wholeRepo, view])
 
   // Persist the scope toggle per-workspace so it's remembered across restarts.
+  // Scoped tabs skip both the read and the write: the toggle is fixed there.
   const wholeRepoLoadedRef = useRef(false)
   useEffect(() => {
+    if (scope !== undefined) return
     void storage.get<boolean>(WHOLE_REPO_KEY, StorageScope.WORKSPACE).then((stored) => {
-      if (typeof stored === 'boolean' && stored !== perforceGraphViewState.wholeRepo) {
+      if (typeof stored === 'boolean' && stored !== view.wholeRepo) {
         setWholeRepo(stored)
       }
       wholeRepoLoadedRef.current = true
@@ -288,9 +307,10 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
+    if (scope !== undefined) return
     if (!wholeRepoLoadedRef.current) return
     void storage.set(WHOLE_REPO_KEY, wholeRepo, StorageScope.WORKSPACE)
-  }, [wholeRepo, storage])
+  }, [wholeRepo, storage, scope])
 
   const load = useCallback(() => {
     let cancelled = false
@@ -306,10 +326,12 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         setSelection([])
         if (!r)
           setError(
-            localize(
-              'perforceGraph.unavailable',
-              'Perforce Graph is unavailable — is this folder inside a Perforce workspace?',
-            ),
+            scope !== undefined
+              ? localize('perforceGraph.scopedEmpty', 'No submitted changes affect this path.')
+              : localize(
+                  'perforceGraph.unavailable',
+                  'Perforce Graph is unavailable — is this folder inside a Perforce workspace?',
+                ),
           )
       })
       .catch((e: unknown) => {
@@ -322,14 +344,14 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [commands])
+  }, [commands, scope])
 
   useEffect(() => {
-    perforceGraphViewState.refresh = () => load()
+    view.refresh = () => load()
     return () => {
-      perforceGraphViewState.refresh = null
+      view.refresh = null
     }
-  }, [load])
+  }, [load, view])
 
   const scrollPendingReveal = useCallback(() => {
     const id = pendingScrollRef.current
@@ -389,7 +411,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   )
 
   // Reveal entry point (timeline / blame / Commit Changes → the observable
-  // `perforceGraphViewState.pendingReveal`):
+  // `view.pendingReveal`):
   // select the change and scroll it into view, paging in older history until it
   // is loaded. The loop stops on a hit, on `moreAvailable === false`, or at the
   // page cap (unknown id → silently no-op).
@@ -401,7 +423,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       // resolved first. The pendingReveal effect re-dispatches once the first
       // page lands.
       if (result === null) {
-        perforceGraphViewState.pendingReveal.set(id, undefined)
+        view.pendingReveal.set(id, undefined)
         return
       }
       void (async () => {
@@ -439,25 +461,25 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
         }
       })()
     },
-    [commands, result, limit, scrollPendingReveal, followCommitChanges],
+    [commands, result, limit, scrollPendingReveal, followCommitChanges, view.pendingReveal],
   )
 
   useEffect(() => {
-    perforceGraphViewState.revealCommit = revealCommit
+    view.revealCommit = revealCommit
     return () => {
-      perforceGraphViewState.revealCommit = null
+      view.revealCommit = null
     }
-  }, [revealCommit])
+  }, [revealCommit, view])
 
   // Reveal requests land in the observable pendingReveal (the bridge action
   // writes it, possibly before this instance mounted); consume it reactively,
   // once the first page is in.
-  const pendingReveal = useObservable(perforceGraphViewState.pendingReveal)
+  const pendingReveal = useObservable(view.pendingReveal)
   useEffect(() => {
     if (pendingReveal === null || result === null) return
-    perforceGraphViewState.pendingReveal.set(null, undefined)
+    view.pendingReveal.set(null, undefined)
     revealCommit(pendingReveal)
-  }, [pendingReveal, result, revealCommit])
+  }, [pendingReveal, result, revealCommit, view])
 
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its change still exists.
@@ -484,28 +506,31 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
 
   useEffect(() => {
     const start = (): (() => void) | undefined => {
-      if (perforceGraphViewState.result) {
+      if (view.result) {
         revalidate()
         return undefined
       }
       return load()
     }
-    const initialRepo = perforceGraphViewState.selectedRepo
+    // A scoped tab never touches the shared client selection (setRepo writes the
+    // global graph state); its client is implied by the scope path.
+    if (scope !== undefined) return start()
+    const initialRepo = view.selectedRepo
     if (initialRepo) {
       void commands.executeCommand(PerforceGraphCommands.setRepo, initialRepo).then(start)
       return
     }
     return start()
-  }, [commands, load, revalidate])
+  }, [commands, load, revalidate, view, scope])
 
   useEffect(() => {
     void commands.executeCommand<P4GraphRepoDto[]>(PerforceGraphCommands.getRepos).then((r) => {
       if (r) {
         setRepos(r)
-        perforceGraphViewState.repos = r
+        view.repos = r
       }
     })
-  }, [commands])
+  }, [commands, view])
 
   const firstQuery = useRef(true)
   useEffect(() => {
@@ -541,6 +566,9 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   // Mirror the SCM-selected repo into the graph.
   const scmSelectedRepo = useObservable(scmViewState.selectedRepo)
   useEffect(() => {
+    // A scoped tab's client is fixed by the scope path, so the SCM selection
+    // must not re-target it (which would also write the shared setRepo state).
+    if (scope !== undefined) return
     if (!scmSelectedRepo) return
     if (repos.length === 0) return
     if (!repos.find((r) => r.root === scmSelectedRepo)) return
@@ -550,15 +578,18 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       return
     }
     onSelectRepo(scmSelectedRepo)
-  }, [scmSelectedRepo, repos, selectedRepo, onSelectRepo])
+  }, [scmSelectedRepo, repos, selectedRepo, onSelectRepo, scope])
 
-  const adjustColumn = useCallback((col: 'author' | 'date', deltaX: number) => {
-    setColumnWidths((prev) => {
-      const next = { ...prev, [col]: Math.max(MIN_COL_WIDTH, prev[col] - deltaX) }
-      perforceGraphViewState.columnWidths = next
-      return next
-    })
-  }, [])
+  const adjustColumn = useCallback(
+    (col: 'author' | 'date', deltaX: number) => {
+      setColumnWidths((prev) => {
+        const next = { ...prev, [col]: Math.max(MIN_COL_WIDTH, prev[col] - deltaX) }
+        view.columnWidths = next
+        return next
+      })
+    },
+    [view],
+  )
 
   // Auto-refresh: any SCM change (open/submit/revert) re-runs `p4 opened`, which
   // the SCM service mirrors as fresh resource arrays. Observe those to debounce a
@@ -585,8 +616,8 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
   }, [scm, revalidate])
 
   useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = perforceGraphViewState.scrollTop
-  }, [])
+    if (scrollRef.current) scrollRef.current.scrollTop = view.scrollTop
+  }, [view])
 
   // Selection entry shared by mouse and keyboard: applies the new selection and
   // pushes the change's files into the Commit Changes view; a deselect or the
@@ -627,6 +658,36 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     [applySelection],
   )
 
+  // Single-file scope: open the diff of the scoped file at the given change.
+  // Falls back to selecting the row (whole-CL file list in Commit Changes) when
+  // the change's file list has no entry for the scoped path — possible only when
+  // the client view no longer maps it.
+  const openScopedFileDiff = useCallback(
+    async (id: string) => {
+      if (scope === undefined) return
+      const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
+        PerforceGraphCommands.getChangeDetails,
+        id,
+      )
+      const scopeKey = scmProviderPathKey(scope.path)
+      const file = details?.files.find(
+        (f) => f.localPath !== null && scmProviderPathKey(f.localPath) === scopeKey,
+      )
+      if (!file) {
+        logger?.warn(`open changes: change ${id} has no entry for ${scope.path}, showing the CL`)
+        applySelection([id])
+        return
+      }
+      await commands.executeCommand(PerforceGraphCommands.openFileDiff, {
+        depotFile: file.depotFile,
+        status: file.status,
+        rev: file.rev,
+        ...(file.localPath !== null ? { localPath: file.localPath } : {}),
+      })
+    },
+    [applySelection, commands, logger, scope],
+  )
+
   const openChangeMenu = useCallback(
     (change: P4GraphChangeDto, e: MouseEvent) => {
       e.preventDefault()
@@ -654,9 +715,23 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
             }),
         },
       ]
+      // Single-file scope: every listed change touched the scoped path (that is
+      // what `p4 changes <file>` returns), so the item is always offered and the
+      // file entry is resolved on click. Resolving it up front would block the
+      // menu on `describe -s`, which is GB-scale on a giant branch CL.
+      if (scope !== undefined && !scope.isDirectory) {
+        items.push(
+          { kind: 'sep' },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.openChanges', 'Open Changes'),
+            run: () => void openScopedFileDiff(id),
+          },
+        )
+      }
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [commands],
+    [commands, openScopedFileDiff, scope],
   )
 
   // Pending changes node, followed by the real changes.
@@ -740,10 +815,13 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
     selection,
     effectiveRepo: selectedRepo ?? repos[0]?.root ?? null,
     result,
-    pendingReveal: perforceGraphViewState.pendingReveal,
+    pendingReveal: view.pendingReveal,
     excludedIds: PERSISTENCE_EXCLUDED_IDS,
     defaultRowId: rowKeys.find((k) => k !== PENDING_ID) ?? null,
     selectDefault: selectFromKeyboard,
+    // A scoped tab is a one-shot view: persisting would pollute workspace
+    // storage and grow the per-repo key map without bound for every path viewed.
+    persist: scope === undefined,
   })
   const onRowsKeyDown = useGraphKeyboardNav({
     rows: rowKeys,
@@ -806,16 +884,23 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
       },
       onDidChangeSelection: onDidChangeOutlineSelection.event,
     }
-    GraphOutlineRegistry.register(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller)
+    GraphOutlineRegistry.register(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller, inputId)
     return () => {
       GraphOutlineRegistry.unregister(PERFORCE_GRAPH_OUTLINE_LANGUAGE_ID, controller)
     }
-  }, [outlineCommits, onDidChangeOutlineSelection, applySelection, scrollPendingReveal])
+  }, [outlineCommits, onDidChangeOutlineSelection, applySelection, scrollPendingReveal, inputId])
 
   return (
     <div className={styles['gitGraph']} data-testid="perforceGraph-editor">
       <div className={styles['toolbar']}>
-        <span className={styles['title']}>{localize('perforceGraph.title', 'Perforce Graph')}</span>
+        <span
+          className={styles['title']}
+          data-tooltip={scope !== undefined ? scope.path : undefined}
+        >
+          {scope !== undefined
+            ? localize('perforceGraph.scopedTitle', 'History: {label}', { label: scope.label })
+            : localize('perforceGraph.title', 'Perforce Graph')}
+        </span>
         {result && (
           <span className={styles['count']}>
             {localize('perforceGraph.changeCount', '{count} changes{more}', {
@@ -837,7 +922,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label={localize('perforceGraph.search.placeholder', 'Search changes…')}
         />
-        {repos.length > 1 && (
+        {scope === undefined && repos.length > 1 && (
           <select
             className={styles['repoSelect']}
             value={selectedRepo ?? repos[0]?.root ?? ''}
@@ -851,20 +936,22 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
             ))}
           </select>
         )}
-        <button
-          type="button"
-          className={`${styles['toolBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
-          onClick={() => setWholeRepo((v) => !v)}
-          data-tooltip={
-            wholeRepo
-              ? localize('perforceGraph.scope.showFolder', 'Show current folder changes only')
-              : localize('perforceGraph.scope.showWholeRepo', 'Show whole repository changes')
-          }
-          aria-label={localize('perforceGraph.scope.toggle', 'Toggle repository scope')}
-          aria-pressed={wholeRepo}
-        >
-          <Globe size={14} />
-        </button>
+        {scope === undefined && (
+          <button
+            type="button"
+            className={`${styles['toolBtn']} ${wholeRepo ? styles['toolBtnActive'] : ''}`}
+            onClick={() => setWholeRepo((v) => !v)}
+            data-tooltip={
+              wholeRepo
+                ? localize('perforceGraph.scope.showFolder', 'Show current folder changes only')
+                : localize('perforceGraph.scope.showWholeRepo', 'Show whole repository changes')
+            }
+            aria-label={localize('perforceGraph.scope.toggle', 'Toggle repository scope')}
+            aria-pressed={wholeRepo}
+          >
+            <Globe size={14} />
+          </button>
+        )}
         <button
           type="button"
           className={styles['toolBtn']}
@@ -889,7 +976,7 @@ export function PerforceGraphEditor(_props: { input: IEditorInput }) {
           data-testid="perforceGraph-scrollBody"
           onKeyDown={onRowsKeyDown}
           onScroll={(e) => {
-            perforceGraphViewState.scrollTop = e.currentTarget.scrollTop
+            view.scrollTop = e.currentTarget.scrollTop
           }}
         >
           <div className={styles['header']}>

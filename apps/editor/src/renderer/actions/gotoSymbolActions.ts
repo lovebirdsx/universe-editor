@@ -49,7 +49,7 @@ export class GoToFileSymbolAction extends Action2 {
         { primary: 'ctrl+r', when: '!terminalFocus' },
         {
           primary: 'ctrl+r',
-          when: "activeEditorId == 'universe:/gitGraph' || activeEditorId == 'universe:/perforceGraph'",
+          when: "activeEditorId == 'universe:/gitGraph' || activeEditorType == 'perforceGraph'",
           weight: KeybindingWeight.WorkbenchContrib + 50,
         },
       ],

@@ -2,14 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  IEditorService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
+  observableValue,
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
 import { gitGraphViewState } from '../../services/gitGraph/gitGraphViewState.js'
 import { perforceGraphViewState } from '../../services/perforceGraph/perforceGraphViewState.js'
+import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
 import { GitGraphRefreshAction } from '../gitGraphActions.js'
 import { GoToFileSymbolAction } from '../gotoSymbolActions.js'
 import { PerforceGraphRefreshAction } from '../perforceGraphActions.js'
@@ -47,7 +50,15 @@ describe('graph refresh actions', () => {
     const refresh = vi.fn()
     perforceGraphViewState.refresh = refresh
 
-    await runCommand(PerforceGraphRefreshAction.ID)
+    const services = new ServiceCollection()
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('t.activeEditor', new PerforceGraphEditorInput()),
+    } as unknown as IEditorService)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction(async (accessor) => {
+      await CommandsRegistry.getCommand(PerforceGraphRefreshAction.ID)!.handler(accessor)
+    })
 
     expect(refresh).toHaveBeenCalledTimes(1)
   })
@@ -56,18 +67,21 @@ describe('graph refresh actions', () => {
     disposables.push(registerAction2(GitGraphRefreshAction))
     disposables.push(registerAction2(PerforceGraphRefreshAction))
     const ctx = new ContextKeyService()
-    ctx.createKey('activeEditorId', 'universe:/gitGraph')
+    const activeEditorId = ctx.createKey<string>('activeEditorId', undefined)
+    const activeEditorType = ctx.createKey<string>('activeEditorType', undefined)
     try {
+      activeEditorId.set('universe:/gitGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
         kind: 'execute',
         command: GitGraphRefreshAction.ID,
       })
-      ctx.createKey('activeEditorId', 'universe:/perforceGraph')
+      activeEditorId.reset()
+      activeEditorType.set('perforceGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx)).toMatchObject({
         kind: 'execute',
         command: PerforceGraphRefreshAction.ID,
       })
-      ctx.createKey('activeEditorId', 'default')
+      activeEditorType.reset()
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+r', ctx).kind).not.toBe('execute')
     } finally {
       ctx.dispose()
@@ -78,18 +92,21 @@ describe('graph refresh actions', () => {
     disposables.push(registerAction2(GoToFileSymbolAction))
     disposables.push(registerAction2(OpenRecentAction))
     const ctx = new ContextKeyService()
-    ctx.createKey('activeEditorId', 'universe:/gitGraph')
+    const activeEditorId = ctx.createKey<string>('activeEditorId', undefined)
+    const activeEditorType = ctx.createKey<string>('activeEditorType', undefined)
     try {
+      activeEditorId.set('universe:/gitGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
         command: GoToFileSymbolAction.ID,
       })
-      ctx.createKey('activeEditorId', 'universe:/perforceGraph')
+      activeEditorId.reset()
+      activeEditorType.set('perforceGraph')
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
         command: GoToFileSymbolAction.ID,
       })
-      ctx.createKey('activeEditorId', 'default')
+      activeEditorType.reset()
       expect(KeybindingsRegistry.resolveKeystroke('ctrl+r', ctx)).toMatchObject({
         kind: 'execute',
         command: OpenRecentAction.ID,

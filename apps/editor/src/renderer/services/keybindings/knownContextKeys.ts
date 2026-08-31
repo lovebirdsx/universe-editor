@@ -102,6 +102,9 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'activeEditorGroupLocked',
   'workbenchReady',
   'workbenchRestored',
+  // Editor group-scoped keys (useEditorGroupScopedContextKey) — per editor group,
+  // unlike the root `activeEditorTypeId` which reflects only the active group.
+  'activeEditorType',
   // FocusContextKeyContribution
   'focusedPart',
   'focusedView',

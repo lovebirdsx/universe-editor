@@ -32,6 +32,7 @@ interface HarnessProps {
   readonly pendingReveal: ISettableObservable<string | null>
   readonly defaultRowId: string | null
   readonly selectDefault: (id: string) => void
+  readonly persist?: boolean
 }
 
 function Harness(props: HarnessProps) {
@@ -257,5 +258,34 @@ describe('usePersistedGraphSelection write-back', () => {
     update({ result: { commits: [] }, effectiveRepo: REPO, selection: ['h2'] })
     await flush()
     expect(set).toHaveBeenCalledWith(KEY, { [REPO]: 'h2' }, StorageScope.WORKSPACE)
+  })
+})
+
+describe('usePersistedGraphSelection persist=false', () => {
+  it('skips the storage read/write but still selects the default row', async () => {
+    const { get, set, selectDefault, update } = setup(
+      { [REPO]: 'hash1' },
+      {
+        persist: false,
+        defaultRowId: 'first',
+      },
+    )
+    update({ result: { commits: [] }, effectiveRepo: REPO, defaultRowId: 'first' })
+    await flush()
+
+    // A stored commit would normally be restored; persist=false skips the read.
+    expect(get).not.toHaveBeenCalled()
+    // The default selection still runs (restoreState starts at 'none').
+    expect(selectDefault).toHaveBeenCalledWith('first')
+
+    // A single selection must not be written back either.
+    update({
+      result: { commits: [] },
+      effectiveRepo: REPO,
+      defaultRowId: 'first',
+      selection: ['h1'],
+    })
+    await flush()
+    expect(set).not.toHaveBeenCalled()
   })
 })

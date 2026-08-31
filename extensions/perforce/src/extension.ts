@@ -19,6 +19,7 @@ import {
 } from '@universe-editor/extension-api'
 import type {
   P4GraphChangeDto,
+  P4GraphLoadOptions,
   P4GraphLoadResult,
   P4GraphChangeDetailsDto,
   P4GraphFileChangeDto,
@@ -46,6 +47,7 @@ import {
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
 import { uriToFsPath, norm } from './pathUtil.js'
+import { buildScopeFilespec } from './p4Filespec.js'
 import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
@@ -1718,7 +1720,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // Default graph scope: the opened workspace folder as a p4 filespec
       // (`<path>/...`), so the graph mirrors what the user actually has open
       // rather than the whole client depot. `wholeRepo` widens it to `//...`.
-      const workspaceScope = `${root.replace(/[/\\]+$/, '')}/...`
+      const workspaceScope = buildScopeFilespec(root, true)
 
       return [
         commands.registerCommand('perforce-graph.getRepos', () =>
@@ -1730,14 +1732,31 @@ export async function activate(context: ExtensionContext): Promise<void> {
           return true
         }),
         commands.registerCommand('perforce-graph.getChanges', async (...args: unknown[]) => {
-          const opts = (args[0] ?? {}) as { maxChanges?: number; wholeRepo?: boolean }
+          const opts = (args[0] ?? {}) as P4GraphLoadOptions
           const max = opts.maxChanges ?? DEFAULT_MAX
-          const scope = opts.wholeRepo ? '//...' : workspaceScope
-          const target = graphClient()
+
+          // Scoped query: resolve the client by strict longest prefix (data-query
+          // semantics, no active fallback — mirrors the timeline provider) and build
+          // a path filespec. Never touches `graphRoot`, the graph's shared mutable
+          // state, so a scoped read can't leak into the whole-graph view.
+          let target: PerforceClient | undefined
+          let scope: string
+          let pendingScope: { path: string; isDirectory: boolean } | undefined
+          if (opts.scopePath) {
+            target = mgr.resolveContaining(opts.scopePath)
+            scope = buildScopeFilespec(opts.scopePath, opts.scopeIsDirectory === true)
+            pendingScope = { path: opts.scopePath, isDirectory: opts.scopeIsDirectory === true }
+            log(`[perforce] graph scoped to ${scope}`)
+          } else {
+            target = graphClient()
+            scope = opts.wholeRepo ? '//...' : workspaceScope
+            pendingScope = undefined
+          }
           if (!target) return null
+
           const [changes, pendingCount] = await Promise.all([
             target.getGraphChanges(max, scope),
-            target.getPendingCount(),
+            target.getPendingCount(pendingScope),
           ])
           if (!changes) return null
           const moreAvailable = changes.length > max

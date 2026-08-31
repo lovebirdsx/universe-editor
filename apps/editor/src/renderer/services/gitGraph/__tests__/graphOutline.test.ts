@@ -98,4 +98,30 @@ describe('GraphOutlineRegistry', () => {
     ).not.toThrow()
     expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID)).toBeUndefined()
   })
+
+  it('routes get(kind, key) to the controller registered under that key', () => {
+    const a = makeController()
+    const b = makeController()
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, a, 'keyA')
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, b, 'keyB')
+
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID, 'keyA')).toBe(a)
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID, 'keyB')).toBe(b)
+    // An unknown key falls back to the last-registered controller.
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID, 'nope')).toBe(b)
+    // No key keeps the existing last-wins behaviour.
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID)).toBe(b)
+  })
+
+  it('clears the key on unregister so it cannot resurrect', () => {
+    const a = makeController()
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, a, 'keyA')
+    GraphOutlineRegistry.unregister(GIT_GRAPH_OUTLINE_LANGUAGE_ID, a)
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID, 'keyA')).toBeUndefined()
+
+    const b = makeController()
+    GraphOutlineRegistry.register(GIT_GRAPH_OUTLINE_LANGUAGE_ID, b)
+    // The old key must not resolve to the newly-registered (keyless) controller.
+    expect(GraphOutlineRegistry.get(GIT_GRAPH_OUTLINE_LANGUAGE_ID, 'keyA')).toBe(b)
+  })
 })

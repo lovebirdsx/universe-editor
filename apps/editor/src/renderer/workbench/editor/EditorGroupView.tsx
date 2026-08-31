@@ -62,6 +62,7 @@ import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
 import { isFileSystemUri } from '../../services/files/fileSystemScheme.js'
 import {
   IScmDecorationsService,
@@ -822,15 +823,17 @@ export const EditorGroupView = memo(function EditorGroupView({
     }
     // Most editors (FileEditor especially) are built to reuse one instance
     // across input swaps — switching tabs is a cheap setModel, not a rebuild.
-    // The markdown preview, doc center and Swarm review detail are the exception:
-    // navigating A→B reuses the same slot, and instance reuse would keep A's
-    // per-input state (scroll position / cached detail) and leave title actions
-    // bound to A's stale DOM. Key them by input id so an in-place swap remounts a
-    // clean surface.
+    // The markdown preview, doc center, Swarm review detail and Perforce graph
+    // are the exception: navigating A→B reuses the same slot, and instance reuse
+    // would keep A's per-input state (scroll position / cached detail / the
+    // graph's per-scope result and selection, whose useState initializers only
+    // run on mount) and leave title actions bound to A's stale DOM. Key them by
+    // input id so an in-place swap remounts a clean surface.
     if (
       provider.componentKey === 'markdown.preview' ||
       provider.componentKey === 'doc' ||
-      provider.componentKey === 'swarmReview'
+      provider.componentKey === 'swarmReview' ||
+      provider.componentKey === PerforceGraphEditorInput.TYPE_ID
     ) {
       return (
         <EditorGroupContext.Provider value={group}>

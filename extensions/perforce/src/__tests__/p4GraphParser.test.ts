@@ -6,6 +6,7 @@ import {
   fileDiffRevs,
   parseWhereLocalPaths,
   displayPath,
+  openedUnderScope,
 } from '../p4GraphParser.js'
 
 describe('parseChangesList', () => {
@@ -129,5 +130,58 @@ describe('parseWhereLocalPaths', () => {
 describe('displayPath', () => {
   it('strips the leading depot slashes', () => {
     expect(displayPath('//depot/main/a.txt')).toBe('depot/main/a.txt')
+  })
+})
+
+describe('openedUnderScope', () => {
+  const opened = [
+    { clientFile: 'X:/p4ws/main/A/x.txt' },
+    { clientFile: 'X:/p4ws/main/A/deep/y.txt' },
+    { clientFile: 'X:/p4ws/main/AB/z.txt' },
+    { clientFile: 'X:/p4ws/main/root.txt' },
+    { clientFile: undefined },
+  ]
+
+  it('matches a directory scope recursively', () => {
+    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/A', isDirectory: true })
+    expect(out.map((f) => f.clientFile)).toEqual([
+      'X:/p4ws/main/A/x.txt',
+      'X:/p4ws/main/A/deep/y.txt',
+    ])
+  })
+
+  it('matches a file scope exactly', () => {
+    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/root.txt', isDirectory: false })
+    expect(out.map((f) => f.clientFile)).toEqual(['X:/p4ws/main/root.txt'])
+  })
+
+  it('respects the directory boundary (A never matches AB)', () => {
+    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/A', isDirectory: true })
+    expect(out.some((f) => f.clientFile === 'X:/p4ws/main/AB/z.txt')).toBe(false)
+  })
+
+  it('drops entries without a clientFile', () => {
+    const out = openedUnderScope(
+      [{ clientFile: undefined }, { clientFile: 'X:/p4ws/main/A/x.txt' }],
+      {
+        path: 'X:/p4ws/main/A',
+        isDirectory: true,
+      },
+    )
+    expect(out).toEqual([{ clientFile: 'X:/p4ws/main/A/x.txt' }])
+  })
+
+  it('follows the host case policy for path segments', () => {
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    const out = openedUnderScope([{ clientFile: 'X:/p4ws/MAIN/a.txt' }], {
+      path: 'X:/p4ws/main',
+      isDirectory: true,
+    })
+    expect(out.length).toBe(insensitive ? 1 : 0)
+    const fileOut = openedUnderScope([{ clientFile: 'X:/p4ws/MAIN/a.txt' }], {
+      path: 'X:/p4ws/main/a.txt',
+      isDirectory: false,
+    })
+    expect(fileOut.length).toBe(insensitive ? 1 : 0)
   })
 })

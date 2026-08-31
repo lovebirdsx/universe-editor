@@ -32,6 +32,7 @@ import {
   GitBranchPlus,
   GitGraph,
   GitMerge,
+  History,
   KeyRound,
   List,
   ListChecks,
@@ -67,6 +68,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // SCM / Git actions and view controls.
   'git-commit': Check,
   'git-graph': GitGraph,
+  history: History,
   add: Plus,
   remove: Minus,
   discard: Undo2,

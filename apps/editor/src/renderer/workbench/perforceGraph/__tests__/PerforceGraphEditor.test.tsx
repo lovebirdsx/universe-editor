@@ -27,6 +27,7 @@ import {
 } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
 import { perforceGraphViewState } from '../../../services/perforceGraph/perforceGraphViewState.js'
+import { PerforceGraphEditorInput } from '../../../services/editor/PerforceGraphEditorInput.js'
 import { scmViewState } from '../../scm/scmViewState.js'
 import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
@@ -337,5 +338,163 @@ describe('PerforceGraphEditor', () => {
     fireEvent.contextMenu(row!)
 
     expect(screen.queryByRole('menu')).toBeNull()
+  })
+})
+
+describe('PerforceGraphEditor scoped history', () => {
+  function makeScopedCommandService(details?: P4GraphChangeDetailsDto): ICommandService {
+    return {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string) => {
+        switch (id) {
+          case PerforceGraphCommands.getChanges:
+            return makeResult()
+          case PerforceGraphCommands.getRepos:
+            return [REPO, { root: 'X:/p4ws/other', name: 'other-ws' }]
+          case PerforceGraphCommands.getChangeDetails:
+            return details ?? makeDetails()
+          default:
+            return undefined
+        }
+      }),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService
+  }
+
+  function renderScoped(
+    scope: { path: string; isDirectory: boolean; label: string },
+    details?: P4GraphChangeDetailsDto,
+  ) {
+    const commandService = makeScopedCommandService(details)
+    const storageService = makeStorageService()
+    const services = new ServiceCollection()
+    services.set(ICommandService, commandService)
+    services.set(IScmService, makeScmService())
+    services.set(IStorageService, storageService)
+    makeViewServices(services)
+    const utils = render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <PerforceGraphEditor input={new PerforceGraphEditorInput(scope)} />
+      </ServicesContext.Provider>,
+    )
+    return { commandService, storageService, ...utils }
+  }
+
+  it('scopes the query to the path and drops the whole-repo chrome', async () => {
+    const { commandService, container } = renderScoped({
+      path: 'X:/p4ws/main',
+      isDirectory: true,
+      label: 'main',
+    })
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getChanges,
+      expect.objectContaining({ scopePath: 'X:/p4ws/main', scopeIsDirectory: true }),
+    )
+    const getChangesCalls = (
+      commandService.executeCommand as ReturnType<typeof vi.fn>
+    ).mock.calls.filter((c) => c[0] === PerforceGraphCommands.getChanges)
+    for (const call of getChangesCalls) {
+      expect(call[1]).not.toHaveProperty('wholeRepo')
+    }
+
+    expect(screen.queryByLabelText('Toggle repository scope')).toBeNull()
+    expect(container.querySelector('select')).toBeNull()
+    expect(screen.getByText('History: main')).toBeTruthy()
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(
+      PerforceGraphCommands.setRepo,
+      expect.anything(),
+    )
+  })
+
+  it('single-file scope adds an "Open Changes" menu item for the matching file', async () => {
+    const details: P4GraphChangeDetailsDto = {
+      ...makeDetails(),
+      files: [
+        {
+          status: 'M',
+          path: 'depot/branch_x/a.txt',
+          oldPath: null,
+          depotFile: '//depot/branch_x/a.txt',
+          rev: '3',
+          localPath: 'X:/p4ws/main/a.txt',
+        },
+      ],
+    }
+    const { commandService, container } = renderScoped(
+      { path: 'X:/p4ws/main/a.txt', isDirectory: false, label: 'a.txt' },
+      details,
+    )
+    await flush()
+
+    const row = container.querySelector('[data-id="4521"]')
+    expect(row).toBeTruthy()
+    fireEvent.contextMenu(row!)
+    await flush()
+
+    expect(screen.getByText('Open Changes')).toBeTruthy()
+    fireEvent.click(screen.getByText('Open Changes'))
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.openFileDiff,
+      expect.objectContaining({ depotFile: '//depot/branch_x/a.txt', rev: '3', status: 'M' }),
+    )
+  })
+
+  it('offers "Open Changes" without describing the change first', async () => {
+    const { commandService, container } = renderScoped({
+      path: 'X:/p4ws/main/a.txt',
+      isDirectory: false,
+      label: 'a.txt',
+    })
+    await flush()
+    ;(commandService.executeCommand as ReturnType<typeof vi.fn>).mockClear()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+
+    // The item is up on the same tick as the right-click: `describe -s` is
+    // GB-scale on a giant branch CL and must never gate the menu.
+    expect(screen.getByText('Open Changes')).toBeTruthy()
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(
+      PerforceGraphCommands.getChangeDetails,
+      expect.anything(),
+    )
+  })
+
+  it('falls back to showing the whole change when the scoped file is not in it', async () => {
+    const details: P4GraphChangeDetailsDto = {
+      ...makeDetails(),
+      files: [
+        {
+          status: 'M',
+          path: 'depot/branch_x/other.txt',
+          oldPath: null,
+          depotFile: '//depot/branch_x/other.txt',
+          rev: '1',
+          localPath: 'X:/p4ws/main/other.txt',
+        },
+      ],
+    }
+    const { commandService, container } = renderScoped(
+      { path: 'X:/p4ws/main/a.txt', isDirectory: false, label: 'a.txt' },
+      details,
+    )
+    await flush()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    fireEvent.click(screen.getByText('Open Changes'))
+    await flush()
+
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(
+      PerforceGraphCommands.openFileDiff,
+      expect.anything(),
+    )
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      ShowCommitChangesAction.ID,
+      expect.anything(),
+    )
   })
 })

@@ -14,7 +14,9 @@
  *  live-preview only scrolls.
  *
  *  Shared by both graphs (like graphLayout.ts): the registry is keyed by the
- *  editor input's TYPE_ID, since each graph editor is a singleton.
+ *  editor input's TYPE_ID, and — for editors that can mount more than one
+ *  instance at once (scoped Perforce Graphs in a split view) — additionally by
+ *  an instance key so Go to Symbol reaches the right instance.
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, type IObservable } from '@universe-editor/platform'
@@ -63,13 +65,21 @@ export type GraphOutlineKind =
 
 class GraphOutlineRegistryImpl {
   private readonly _map = new Map<GraphOutlineKind, IGraphOutlineController[]>()
+  /** instanceKey → controller, for routing multi-instance graph editors. */
+  private readonly _keys = new Map<IGraphOutlineController, string>()
   private readonly _onDidChange = new Emitter<GraphOutlineKind>()
   readonly onDidChange = this._onDidChange.event
 
-  register(kind: GraphOutlineKind, controller: IGraphOutlineController): void {
+  register(
+    kind: GraphOutlineKind,
+    controller: IGraphOutlineController,
+    instanceKey?: string,
+  ): void {
     const list = this._map.get(kind) ?? []
     list.push(controller)
     this._map.set(kind, list)
+    if (instanceKey !== undefined) this._keys.set(controller, instanceKey)
+    else this._keys.delete(controller)
     this._onDidChange.fire(kind)
   }
 
@@ -79,18 +89,24 @@ class GraphOutlineRegistryImpl {
     const index = list.indexOf(controller)
     if (index === -1) return
     list.splice(index, 1)
+    this._keys.delete(controller)
     if (list.length === 0) this._map.delete(kind)
     this._onDidChange.fire(kind)
   }
 
-  get(kind: GraphOutlineKind): IGraphOutlineController | undefined {
+  get(kind: GraphOutlineKind, instanceKey?: string): IGraphOutlineController | undefined {
     const list = this._map.get(kind)
     if (!list || list.length === 0) return undefined
+    if (instanceKey !== undefined) {
+      const exact = list.find((controller) => this._keys.get(controller) === instanceKey)
+      if (exact) return exact
+    }
     return list[list.length - 1]
   }
 
   _resetForTests(): void {
     this._map.clear()
+    this._keys.clear()
   }
 }
 

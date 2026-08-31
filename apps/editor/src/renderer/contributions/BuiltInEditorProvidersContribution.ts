@@ -275,7 +275,7 @@ export class BuiltInEditorProvidersContribution
       registerEditorWithComponent(
         {
           typeId: PerforceGraphEditorInput.TYPE_ID,
-          deserialize: () => PerforceGraphEditorInput.deserialize(),
+          deserialize: (data) => PerforceGraphEditorInput.deserialize(data),
         },
         PerforceGraphEditor,
       ),

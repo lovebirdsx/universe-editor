@@ -393,9 +393,18 @@ Perforce Graph 大量复用 git graph 的成熟部件——加功能前先看能
 
 1. `contributions/BuiltInEditorProvidersContribution.ts` —— `EditorRegistry.registerEditorProvider({ typeId, componentKey, deserialize })`
 2. `workbench/editor/EditorArea.tsx` —— `editorComponentMap.set('perforceGraph', PerforceGraphEditor)`
-3. `services/editor/PerforceGraphEditorInput.ts` —— `EditorInput` 子类，固定 URI `universe:/perforceGraph`
+3. `services/editor/PerforceGraphEditorInput.ts` —— `EditorInput` 子类，无 scope 时固定 URI `universe:/perforceGraph`；带 `PerforceGraphScope` 时 resource = `universe:/perforceGraph?<query>`（scope 编码进 query → 每个路径一个独立 tab、可序列化恢复），`deserialize` 已带参（见下「文件/文件夹历史」节）
 
 Action2 在 `actions/index.ts` `registerAction2`。
+
+### 文件/文件夹历史（scoped graph）
+
+图谱可限定到**单个文件/文件夹**：`perforce-graph.viewFileHistory`（renderer Action2，命令面板 + Explorer 右键 `4_visualize@2` + SCM 文件行 `1_open`）打开带 `PerforceGraphScope { path, isDirectory, label }` 的 `PerforceGraphEditorInput`，历史只列影响该路径的已提交 changelist。
+
+- **`getChanges` 的 scope 参数**（`P4GraphLoadOptions`）：`scopePath` + `scopeIsDirectory`。存在时忽略 `wholeRepo`——scoped 分支用 `mgr.resolveContaining(scopePath)`（严格最长前缀、无 active fallback，数据查询语义，镜像 timeline）定位 client，`buildScopeFilespec` 拼 filespec；pending 计数经 `openedUnderScope` 过滤（`client.ts getPendingCount`）。
+- **为什么 scoped 分支用 `resolveContaining` 而不是 `graphClient()`**：`graphRoot` 是整图谱共享的可变状态（`perforce-graph.setRepo` 写它），scoped 查询是「按路径定位数据」的只读语义，绝不能读/写它——否则限定到某文件的标签页会污染整图谱视图的选中 client，反之亦然。
+- **红线：任何拼进 p4 命令行的路径都必须过 `buildScopeFilespec` / `escapeFilespecPath`**（`src/p4Filespec.ts`）。`@ # * %` 是 p4 filespec 元字符（revision range / 通配 / 百分号转义引入符），路径里的字面 `@`/`#`/`*`/`%` 会被服务器重新解释、静默改变作用域含义，必须百分号编码（`%` 先转，避免把其它转义引入的 `%` 二次转义）。目录 scope 走 `<dir>/...`（先剥尾斜杠再拼）。
+- **scoped UI 差异**：隐藏 Globe（whole-repo 开关）与 client 下拉、不写全局 `setRepo`、不持久化选中行；单文件 scope 的行右键多一项「Open Changes」。view state 按 `input.id` 分桶（有界 LRU cap 12，全局桶永不淘汰），多个历史 tab 各自独立。
 
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 

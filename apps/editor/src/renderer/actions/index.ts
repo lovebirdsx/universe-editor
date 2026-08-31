@@ -232,6 +232,7 @@ import {
   PerforceGraphFocusSearchAction,
   PerforceGraphRefreshAction,
   OpenPerforceGraphFromExtensionAction,
+  ViewPerforceFileHistoryAction,
 } from './perforceGraphActions.js'
 import { SwitchScmRepoAction } from './scmActions.js'
 import {
@@ -662,6 +663,7 @@ registerAction2(GitGraphToggleRemoteBranchesAction)
 registerAction2(ViewPerforceGraphAction)
 registerAction2(PerforceGraphFocusSearchAction)
 registerAction2(PerforceGraphRefreshAction)
+registerAction2(ViewPerforceFileHistoryAction)
 
 // Source Control
 registerAction2(SwitchScmRepoAction)

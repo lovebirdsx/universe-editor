@@ -14,6 +14,7 @@
  * `-Mj` is safe here.
  */
 import { descriptionFirstLine } from './changelist.js'
+import { isUnderAny, scopeKey } from './pathUtil.js'
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined
@@ -174,4 +175,28 @@ export function parseWhereLocalPaths(
 /** Depot path without the leading `//`, for display in the file tree. */
 export function displayPath(depotFile: string): string {
   return depotFile.replace(/^\/\//, '')
+}
+
+/**
+ * Keep the `p4 opened` entries whose `clientFile` (already a local path — the
+ * client translated it via `clientToLocalPath`) falls inside `scope`. A directory
+ * scope matches recursively (directory-boundary aware via `isUnderAny`); a file
+ * scope matches exactly (via `scopeKey`, so it honours the host case policy).
+ * Entries with no `clientFile` are dropped.
+ */
+export function openedUnderScope<T extends { clientFile: string | undefined }>(
+  files: readonly T[],
+  scope: { path: string; isDirectory: boolean },
+): T[] {
+  const out: T[] = []
+  for (const f of files) {
+    const cf = f.clientFile
+    if (cf === undefined) continue
+    if (scope.isDirectory) {
+      if (isUnderAny(cf, [scope.path])) out.push(f)
+    } else if (scopeKey(cf) === scopeKey(scope.path)) {
+      out.push(f)
+    }
+  }
+  return out
 }

@@ -479,6 +479,12 @@
           "icon": "go-to-file"
         },
         {
+          "command": "perforce-graph.viewFileHistory",
+          "when": "scmProvider == perforce",
+          "group": "1_open@3",
+          "icon": "history"
+        },
+        {
           "command": "perforce.edit",
           "when": "scmProvider == perforce && scmResourceState == RC",
           "group": "1_open@3",
@@ -695,9 +701,14 @@
           "icon": "git-graph"
         },
         {
+          "command": "perforce-graph.viewFileHistory",
+          "group": "4_visualize@2",
+          "icon": "history"
+        },
+        {
           "command": "scm.blame.toggleEditorDecoration",
           "when": "!explorerResourceIsFolder",
-          "group": "4_visualize@2"
+          "group": "4_visualize@3"
         }
       ],
       "editor/title": [

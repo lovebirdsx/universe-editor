@@ -90,6 +90,7 @@ import {
   parseWhereLocalPaths,
   statusFromAction,
   displayPath,
+  openedUnderScope,
   type GraphChangeMeta,
   type GraphDescribe,
 } from './p4GraphParser.js'
@@ -3565,9 +3566,11 @@ export class PerforceClient {
     return json === undefined ? null : (JSON.parse(json) as GraphChangeMeta[])
   }
 
-  /** Count files currently open in the workspace (the synthetic pending node). */
-  async getPendingCount(): Promise<number> {
-    return (await this._openedFiles()).length
+  /** Count files currently open in the workspace (the synthetic pending node),
+   *  optionally restricted to `scope` (a local path, file or directory). */
+  async getPendingCount(scope?: { path: string; isDirectory: boolean }): Promise<number> {
+    const opened = await this._openedFiles()
+    return (scope ? openedUnderScope(opened, scope) : opened).length
   }
 
   /**

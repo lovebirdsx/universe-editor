@@ -42,6 +42,11 @@ export interface UsePersistedGraphSelectionOptions {
   readonly defaultRowId: string | null
   /** Select the default row, with the same semantics as clicking it. */
   readonly selectDefault: (id: string) => void
+  /** When false, skip the storage read/write (restore starts at 'none') — a
+   *  one-shot view (e.g. a scoped Perforce Graph tab) must not pollute workspace
+   *  storage or grow a per-path key map without bound. The default-row selection
+   *  is unaffected. Defaults to true. */
+  readonly persist?: boolean
 }
 
 /** Restore decision, in state (not a ref) so the default-selection effect
@@ -57,6 +62,7 @@ export function usePersistedGraphSelection({
   excludedIds,
   defaultRowId,
   selectDefault,
+  persist = true,
 }: UsePersistedGraphSelectionOptions): void {
   const storage = useService(IStorageService)
 
@@ -66,9 +72,12 @@ export function usePersistedGraphSelection({
   // writes always merge onto the stored map instead of clobbering the other
   // repos' entries.
   const [storedMap, setStoredMap] = useState<Record<string, string> | null>(null)
-  const [restoreState, setRestoreState] = useState<RestoreState>(freshSession ? 'pending' : 'none')
+  const [restoreState, setRestoreState] = useState<RestoreState>(
+    freshSession && persist ? 'pending' : 'none',
+  )
 
   useEffect(() => {
+    if (!persist) return
     let cancelled = false
     void storage.get<Record<string, string>>(storageKey, StorageScope.WORKSPACE).then((stored) => {
       if (!cancelled) setStoredMap(stored ?? {})
@@ -76,7 +85,7 @@ export function usePersistedGraphSelection({
     return () => {
       cancelled = true
     }
-  }, [storage, storageKey])
+  }, [storage, storageKey, persist])
 
   // Restore attempt (fresh sessions only). The repo key can resolve after the
   // first page (the repos discovery and the SCM repo mirror land in later
@@ -123,6 +132,7 @@ export function usePersistedGraphSelection({
   // Write-back: single selections persist per repo, a deselect clears the
   // repo's entry, and a two-commit compare leaves the persisted focus as is.
   useEffect(() => {
+    if (!persist) return
     if (storedMap === null) return
     const key = effectiveRepo ?? ''
     if (selection.length === 1 && !excludedIds.includes(selection[0]!)) {
@@ -138,5 +148,5 @@ export function usePersistedGraphSelection({
       setStoredMap(next)
       void storage.set(storageKey, next, StorageScope.WORKSPACE)
     }
-  }, [selection, effectiveRepo, storedMap, storage, storageKey, excludedIds])
+  }, [selection, effectiveRepo, storedMap, storage, storageKey, excludedIds, persist])
 }

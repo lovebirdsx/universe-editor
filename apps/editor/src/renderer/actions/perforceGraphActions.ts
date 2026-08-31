@@ -6,14 +6,54 @@
 import {
   Action2,
   IEditorService,
+  IWorkspaceService,
   KeybindingWeight,
+  URI,
+  basename,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
-import { perforceGraphViewState } from '../services/perforceGraph/perforceGraphViewState.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
+import { scmHostPath } from '../services/scm/scmHostPath.js'
+import {
+  getPerforceGraphViewState,
+  perforceGraphViewState,
+} from '../services/perforceGraph/perforceGraphViewState.js'
 
 const CATEGORY = localize2('command.category.perforceGraph', 'Perforce Graph')
+
+function reviveScopeResource(value: unknown): URI | undefined {
+  if (!URI.isUri(value)) return undefined
+  return URI.revive(value) ?? undefined
+}
+
+/**
+ * Resolve the target of `perforce-graph.viewFileHistory` from its command arg.
+ * Handles the two concrete call sites plus the no-arg command palette:
+ *   - Explorer context menu → `{ resource: URI, isDirectory }` (a live URI instance)
+ *   - SCM file row → `{ resourceUri: string, ... }` (a bare host fs-path)
+ * `URI.isUri` also accepts a degraded `UriComponents` so an IPC round-trip is fine.
+ */
+export function resolveGraphScopeArg(arg: unknown): { uri: URI; isDirectory: boolean } | undefined {
+  if (arg === null || typeof arg !== 'object' || Array.isArray(arg)) return undefined
+  const a = arg as Record<string, unknown>
+  const isDirectory = a['isDirectory'] === true
+
+  const resource = a['resource']
+  if (resource !== undefined) {
+    const uri = reviveScopeResource(resource)
+    return uri ? { uri, isDirectory } : undefined
+  }
+
+  const resourceUri = a['resourceUri']
+  if (typeof resourceUri === 'string' && resourceUri !== '') {
+    return { uri: URI.file(resourceUri), isDirectory: false }
+  }
+
+  return undefined
+}
 
 export class ViewPerforceGraphAction extends Action2 {
   static readonly ID = 'perforce-graph.view'
@@ -29,6 +69,46 @@ export class ViewPerforceGraphAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     await accessor.get(IEditorService).openEditor(new PerforceGraphEditorInput())
+  }
+}
+
+export class ViewPerforceFileHistoryAction extends Action2 {
+  static readonly ID = 'perforce-graph.viewFileHistory'
+
+  constructor() {
+    super({
+      id: ViewPerforceFileHistoryAction.ID,
+      title: localize2('action.perforceGraph.viewFileHistory', 'View File History'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const editorService = accessor.get(IEditorService)
+    const workspaceService = accessor.get(IWorkspaceService)
+
+    let scope = resolveGraphScopeArg(arg)
+    if (!scope) {
+      const active = editorService.activeEditor.get()
+      if (active instanceof FileEditorInput) {
+        scope = { uri: active.resource, isDirectory: false }
+      }
+    }
+    if (!scope) return
+
+    // File history runs on the SCM host; an off-host resource (a local file in a
+    // remote window) has no history there — mirroring dirty-diff's scmHostPath gate.
+    const hostPath = scmHostPath(scope.uri, currentRemoteAuthority(workspaceService.current))
+    if (hostPath === undefined) return
+
+    await editorService.openEditor(
+      new PerforceGraphEditorInput({
+        path: hostPath,
+        isDirectory: scope.isDirectory,
+        label: basename(hostPath),
+      }),
+    )
   }
 }
 
@@ -66,14 +146,16 @@ export class PerforceGraphFocusSearchAction extends Action2 {
       id: PerforceGraphFocusSearchAction.ID,
       title: localize2('action.perforceGraph.focusSearch', 'Focus Search'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+f', when: "activeEditorId == 'universe:/perforceGraph'" },
-      precondition: "activeEditorId == 'universe:/perforceGraph'",
+      keybinding: { primary: 'ctrl+f', when: "activeEditorType == 'perforceGraph'" },
+      precondition: "activeEditorType == 'perforceGraph'",
       f1: true,
     })
   }
 
-  override run(): void {
-    perforceGraphViewState.focusSearch?.()
+  override run(accessor: ServicesAccessor): void {
+    const active = accessor.get(IEditorService).activeEditor.get()
+    if (!(active instanceof PerforceGraphEditorInput)) return
+    getPerforceGraphViewState(active.id).focusSearch?.()
   }
 }
 
@@ -89,15 +171,17 @@ export class PerforceGraphRefreshAction extends Action2 {
       // (unscoped) so the graph's change list is reachable through it.
       keybinding: {
         primary: 'ctrl+shift+r',
-        when: "activeEditorId == 'universe:/perforceGraph'",
+        when: "activeEditorType == 'perforceGraph'",
         weight: KeybindingWeight.WorkbenchContrib + 50,
       },
-      precondition: "activeEditorId == 'universe:/perforceGraph'",
+      precondition: "activeEditorType == 'perforceGraph'",
       f1: true,
     })
   }
 
-  override run(): void {
-    perforceGraphViewState.refresh?.()
+  override run(accessor: ServicesAccessor): void {
+    const active = accessor.get(IEditorService).activeEditor.get()
+    if (!(active instanceof PerforceGraphEditorInput)) return
+    getPerforceGraphViewState(active.id).refresh?.()
   }
 }

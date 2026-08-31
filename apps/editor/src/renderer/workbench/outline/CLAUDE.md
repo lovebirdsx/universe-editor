@@ -22,7 +22,7 @@ OutlineService  ── outline / activeSymbol (两条 observable，抽象主干)
   │     ├─ FileEditorInput   → FileEditorRegistry.get() → Monaco editor
   │     ├─ MarkdownPreviewInput → MarkdownPreviewRegistry.get() → IMarkdownPreviewController
   │     ├─ AcpSessionEditorInput → AcpSessionOutlineRegistry.get() → IAcpSessionOutlineController
-  │     └─ GitGraphEditorInput / PerforceGraphEditorInput → GraphOutlineRegistry.get(kind) → IGraphOutlineController
+  │     └─ GitGraphEditorInput / PerforceGraphEditorInput → GraphOutlineRegistry.get(kind, instanceKey) → IGraphOutlineController
   ▼
 OutlineView (Tree) ──读 outlineViewState（排序/过滤/折叠/跟随光标）
   │  点击/回车 → outlineService.revealSymbol(symbol)
@@ -47,7 +47,7 @@ OutlineView (Tree) ──读 outlineViewState（排序/过滤/折叠/跟随光�
   - `_attachActiveEditor()`——按输入类型分流到 `_attachFileEditor`（Monaco）/ `_attachPreview`（预览）/ session / `_attachGraph`（git/p4 图谱）。
   - 文件分支：`FileEditorRegistry.get(input)` 拿编辑器，符号从 `editor.getModel()`/markers 拉，活动符号靠 `editor.getPosition()` + `onDidChangeCursorPosition`。
   - 预览分支：`MonacoModelRegistry.peek(preview.sourceUri)` 拿**源文件共享 model**（预览本身无 Monaco），活动符号靠 `controller.getTopVisibleLine()` + `controller.onDidScroll`。
-  - graph 分支：`GraphOutlineRegistry.get(kind)` 拿 controller，符号由 `controller.commits` observable 合成，活动符号靠 `controller.getSelectedHash()` + `onDidChangeSelection`。
+  - graph 分支：`GraphOutlineRegistry.get(kind, instanceKey)` 拿 controller（`instanceKey` = 编辑器 input 的 `resource.toString()`，用于多实例图谱——如分屏里的多个 scoped Perforce Graph——按实例路由，缺省时回退最近注册的实例），符号由 `controller.commits` observable 合成，活动符号靠 `controller.getSelectedHash()` + `onDidChangeSelection`。
 - **`revealSymbol` 两分支必须对称**：file 分支 `setPosition + revealLineInCenterIfOutsideViewport + focus`；preview 分支 `controller.scrollToLine + controller.focus`。**任一分支漏掉 focus 都是「点了大纲焦点不回编辑器」的 bug**（已修，勿回退）。
 - **冷启动重试退避**：语言服务器冷启动时 `roots` 可能暂时为空。`_attachGeneration` 计数器 + 指数退避（`INITIAL_PULL_RETRY_MS=250` → `MAX_PULL_RETRY_MS=2000`，总预算 `PULL_RETRY_BUDGET_MS=180_000`）。切文件时 generation 递增以作废旧的重试链。`onDidChangeMarkers`（诊断到达 ≈ 语言服务器就绪）也会触发重拉。
 - **DI 注册**：`renderer/main.tsx`——`createInstance(OutlineService)` → `services.set(IOutlineService, …)`。

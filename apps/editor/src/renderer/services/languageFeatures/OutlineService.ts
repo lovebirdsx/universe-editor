@@ -166,6 +166,8 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _sessionOutline: TimelineOutline | undefined
   /** Which graph editor (git / perforce) the current outline is derived from. */
   private _currentGraph: GraphOutlineKind | undefined
+  /** Instance key (the graph input's resource string) routing multi-instance graphs. */
+  private _currentGraphUri: string | undefined
   /** Hash↔pseudo-line maps for the current graph outline. */
   private _graphOutline: GraphOutline | undefined
   private _currentModel: monaco.editor.ITextModel | undefined
@@ -324,6 +326,7 @@ export class OutlineService extends Disposable implements IOutlineService {
     this._currentDoc = docInput
     this._currentSession = sessionInput
     this._currentGraph = graphKind
+    this._currentGraphUri = graphInput !== undefined ? graphInput.resource.toString() : undefined
     if (!sessionInput) this._sessionOutline = undefined
     if (graphKind === undefined) this._graphOutline = undefined
 
@@ -528,7 +531,7 @@ export class OutlineService extends Disposable implements IOutlineService {
     this._currentModel = undefined
     this._clearRetry()
 
-    const controller = GraphOutlineRegistry.get(kind)
+    const controller = GraphOutlineRegistry.get(kind, uri)
     if (!controller) {
       // Graph component not mounted yet; GraphOutlineRegistry.onDidChange re-attaches.
       this._graphOutline = undefined
@@ -546,7 +549,7 @@ export class OutlineService extends Disposable implements IOutlineService {
   }
 
   private _recomputeGraphOutline(kind: GraphOutlineKind, uri: string): void {
-    const controller = GraphOutlineRegistry.get(kind)
+    const controller = GraphOutlineRegistry.get(kind, uri)
     if (!controller || this._currentGraph !== kind) return
     const built = graphCommitsToOutline(controller.commits.get())
     this._graphOutline = built
@@ -742,7 +745,10 @@ export class OutlineService extends Disposable implements IOutlineService {
         this._activeSymbol.set(undefined, undefined)
         return
       }
-      const hash = GraphOutlineRegistry.get(this._currentGraph)?.getSelectedHash()
+      const hash = GraphOutlineRegistry.get(
+        this._currentGraph,
+        this._currentGraphUri,
+      )?.getSelectedHash()
       const line = hash !== undefined ? built.lineByKey.get(hash) : undefined
       this._activeSymbol.set(
         line !== undefined ? findSymbolAtLine(roots, line) : undefined,
@@ -808,7 +814,7 @@ export class OutlineService extends Disposable implements IOutlineService {
       // and moves focus back to the graph.
       const hash = this._graphOutline?.keyByLine.get(symbol.selectionRange.startLineNumber)
       if (hash === undefined) return
-      GraphOutlineRegistry.get(this._currentGraph)?.selectCommit(hash)
+      GraphOutlineRegistry.get(this._currentGraph, this._currentGraphUri)?.selectCommit(hash)
       return
     }
     const readerUri = this._currentPreview?.sourceUri ?? this._currentDoc?.resource
@@ -843,7 +849,7 @@ export class OutlineService extends Disposable implements IOutlineService {
       // so browsing the list never fires a changes-payload fetch.
       const hash = this._graphOutline?.keyByLine.get(symbol.selectionRange.startLineNumber)
       if (hash === undefined) return
-      GraphOutlineRegistry.get(this._currentGraph)?.scrollToCommit(hash)
+      GraphOutlineRegistry.get(this._currentGraph, this._currentGraphUri)?.scrollToCommit(hash)
       return
     }
     const input = this._currentInput
