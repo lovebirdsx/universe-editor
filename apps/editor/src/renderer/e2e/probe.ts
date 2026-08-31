@@ -28,6 +28,7 @@ import {
   type ICommandService,
   type IConfigurationService,
   type IContextKeyService,
+  type IDirectoryEntry,
   type IEditorGroupsService,
   type IEditorResolverService,
   type IEditorService,
@@ -102,10 +103,12 @@ import {
   type E2ETerminalLink,
   type E2ETimelineItem,
   type E2ETreeItem,
+  type E2EWorkingTreeHint,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IScmIgnoredResourcesService } from '../services/scm/ScmIgnoredResourcesService.js'
 import type { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import type { IScmWorkingTreeHintService } from '../services/scm/ScmWorkingTreeHintService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -147,6 +150,7 @@ export interface E2EProbeServices {
   readonly scmService: IScmService
   readonly scmIgnoredResourcesService: IScmIgnoredResourcesService
   readonly scmDecorationsService: IScmDecorationsService
+  readonly scmWorkingTreeHintService: IScmWorkingTreeHintService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly timelineService: ITimelineService
@@ -396,6 +400,34 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     }),
   )
   let remoteSearchSeq = 0
+
+  /**
+   * Walk the workspace folder to find the file whose path ends with `suffix`
+   * (same case-insensitive, separator-agnostic match as `normalizeScmPath`), so
+   * the hint probe can hand the on-demand `getHint` a concrete resource URI
+   * rather than a bare path tail.
+   */
+  async function findWorkspaceResourceEndingWith(suffix: string): Promise<URI | undefined> {
+    const root = services.workspaceService.current?.folder
+    if (!root) return undefined
+    const needle = normalizeScmPath(suffix)
+    const queue: URI[] = [root]
+    while (queue.length > 0) {
+      const dir = queue.shift()!
+      let entries: IDirectoryEntry[]
+      try {
+        entries = await services.fileService.list(dir)
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        const child = URI.joinPath(dir, entry.name)
+        if (entry.isDirectory) queue.push(child)
+        else if (entry.isFile && normalizeScmPath(child.fsPath).endsWith(needle)) return child
+      }
+    }
+    return undefined
+  }
 
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
@@ -976,6 +1008,20 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(deco?.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
         ...(supp?.tooltip !== undefined ? { descriptionTooltip: supp.tooltip } : {}),
         ...(deco?.color !== undefined ? { color: deco.color } : {}),
+      }
+    },
+    getScmWorkingTreeHintForResource: async (
+      suffix: string,
+    ): Promise<E2EWorkingTreeHint | null> => {
+      const resource = await findWorkspaceResourceEndingWith(suffix)
+      if (resource === undefined) return null
+      const hint = services.scmWorkingTreeHintService.getHint(resource)
+      if (hint === undefined) return null
+      return {
+        color: hint.color,
+        letter: hint.letter,
+        ...(hint.tooltip !== undefined ? { tooltip: hint.tooltip } : {}),
+        ...(hint.strikeThrough ? { strikeThrough: true } : {}),
       }
     },
     installVsixExtension: async (vsixPath: string, authority?: string): Promise<string> => {

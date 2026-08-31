@@ -32,7 +32,35 @@ export const DirtyDiffCapabilities = {
    * `.eslintcache` that would otherwise surface as a spurious "created" row.
    */
   checkIgnore: 'checkIgnore',
+  /**
+   * Filter a batch of paths down to those with working-tree changes the provider
+   * does NOT already publish through its resource groups. Args:
+   * `(fsPaths: string[])`; returns one {@link WorkingTreeChangeDto} per changed
+   * path, each `path` identical to the input string it came from.
+   *
+   * This exists because a provider's resource groups can be an incomplete picture
+   * of the disk: Perforce only knows about files you explicitly opened, and its
+   * `reconcile` discovery of everything else is a server round-trip too costly to
+   * run eagerly. Providers whose groups already are the disk truth (git) don't
+   * register it, and the host falls back to publishing nothing.
+   */
+  checkWorkingTree: 'checkWorkingTree',
 } as const
+
+/**
+ * One changed path from {@link DirtyDiffCapabilities.checkWorkingTree}, carrying
+ * the same presentation fields a resource state would — so the row looks
+ * identical whether the status arrived on demand or through a resource group.
+ */
+export interface WorkingTreeChangeDto {
+  /** Local path, byte-identical to the input string it was resolved from. */
+  readonly path: string
+  /** Single status letter for the row badge. */
+  readonly letter: string
+  readonly color: string
+  readonly tooltip?: string
+  readonly strikeThrough?: boolean
+}
 
 /** Build a provider-scoped dirty-diff command id, e.g. `('git','getHeadContent')
  *  → 'git.getHeadContent'`. */

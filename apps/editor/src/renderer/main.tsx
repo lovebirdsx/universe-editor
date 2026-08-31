@@ -215,6 +215,10 @@ import {
   ScmIgnoredResourcesService,
 } from './services/scm/ScmIgnoredResourcesService.js'
 import {
+  IScmWorkingTreeHintService,
+  ScmWorkingTreeHintService,
+} from './services/scm/ScmWorkingTreeHintService.js'
+import {
   IDirtyDiffNavigationService,
   DirtyDiffNavigationService,
 } from './services/scm/DirtyDiffNavigationService.js'
@@ -803,6 +807,13 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(IScmIgnoredResourcesService, scmIgnoredResourcesService)
 
+  // On-disk-but-unpublished changes (p4 files modified but never `p4 edit`), resolved
+  // on demand through the owning provider's checkWorkingTree command.
+  const scmWorkingTreeHintService = workbenchStore.add(
+    instantiation.createInstance(ScmWorkingTreeHintService),
+  )
+  services.set(IScmWorkingTreeHintService, scmWorkingTreeHintService)
+
   // Holds the active editor's dirty-diff regions and the `quickDiffDecorationCount`
   // context key; consumed by the "go to next/previous change" commands. Eager so the
   // context key is seeded before any when-clause evaluates.
@@ -918,6 +929,7 @@ async function bootstrapWorkbench(): Promise<void> {
     scmService,
     scmIgnoredResourcesService,
     scmDecorationsService,
+    scmWorkingTreeHintService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),

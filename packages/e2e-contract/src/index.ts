@@ -140,6 +140,22 @@ export interface E2EScmDecoration {
   readonly color?: string
 }
 
+/**
+ * One on-demand working-tree hint — the "uncollected changes" badge an Explorer
+ * row carries for disk changes the provider hasn't published through its resource
+ * groups yet (e.g. a Perforce file modified but never `p4 edit`-ed). Mirrors
+ * `IWorkingTreeHint`. The probe returns null when the file has no hint: either
+ * it is clean/off-host or the on-demand query hasn't resolved yet (specs poll).
+ */
+export interface E2EWorkingTreeHint {
+  /** Badge letter (Perforce reconcile drift reads as 'RC'). */
+  readonly letter: string
+  /** Concrete CSS color the file name/badge is painted with. */
+  readonly color: string
+  readonly tooltip?: string
+  readonly strikeThrough?: boolean
+}
+
 /** One top-level node of an extension-contributed tree view. */
 export interface E2ETreeItem {
   readonly label: string
@@ -1023,6 +1039,17 @@ export interface E2EProbe {
    * of the label.
    */
   getScmDecorationForResource(suffix: string): E2EScmDecoration | null
+  /**
+   * The on-demand working-tree hint for the file whose path ends with `suffix`
+   * (same case-insensitive, separator-agnostic matching as
+   * `getScmDecorationForResource`): the badge an Explorer row shows for disk
+   * changes the provider hasn't discovered yet. Reads the
+   * `IScmWorkingTreeHintService.getHint` cache, which resolves asynchronously —
+   * the first call only enqueues the path, so specs must `expect.poll`. Returns
+   * null when the resource isn't in the workspace, or when the answer is clean /
+   * still unknown.
+   */
+  getScmWorkingTreeHintForResource(suffix: string): Promise<E2EWorkingTreeHint | null>
   // -- Extension management probe -------------------------------------------
   /**
    * Install a local `.vsix`, returning the installed extension's identifier.

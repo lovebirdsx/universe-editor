@@ -21,6 +21,7 @@ import {
   type SourceControlResourceState,
   type SourceControlSupplementaryDecoration,
 } from '@universe-editor/extension-api'
+import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -57,6 +58,7 @@ import {
   toResourceStates,
   toShelvedResourceStates,
   toReconcileResourceStates,
+  toWorkingTreeHint,
 } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
 import { parseFstat, type FstatInfo } from './fstatParser.js'
@@ -1307,6 +1309,63 @@ export class PerforceClient {
       this._setReconcileFiles(mergeReconcile(this._reconcileFiles, scanned, fresh))
       this._emitChange()
     })
+  }
+
+  /**
+   * Which of `paths` have working-tree drift that isn't visible anywhere else —
+   * the on-demand channel behind the Explorer's per-row hint (the
+   * `checkWorkingTree` capability). Whole-scope discovery is too expensive to run
+   * eagerly (see the `_reconcileActive` gate), so the host asks about the rows it
+   * is actually rendering and this answers just those.
+   *
+   * **Read-only by construction**: it never enables discovery, never writes
+   * `_reconcileFiles`, never persists and never emits a change. Turning it into a
+   * discovery side-channel would resurrect the whole-scope walk it exists to
+   * avoid, and would quietly turn scrolling the Explorer into state that sticks
+   * around forever.
+   *
+   * Shares the reconcile group's three predicates so a row can never say something
+   * the group would contradict: already opened (the changelist decoration is the
+   * authority), outside the discovery scope, or dismissed. When they filter
+   * everything out we return without spawning p4 at all.
+   *
+   * Results echo back the caller's own path strings — the scan reports paths
+   * translated from client syntax against `this.root`, which need not be spelled
+   * the way the host spelled them. Echoing also drops anything we weren't asked
+   * about (the other half of a rename pair, say) rather than reporting it against
+   * a row that doesn't exist.
+   *
+   * The echo map keys on {@link scopeKey}, not {@link norm}: its two sides come
+   * from different places — the request is spelled the way the user opened the
+   * folder, the answer is spelled the way `p4 info` reports the client root — so
+   * on Windows/macOS they can differ in case while naming the same file. `norm`
+   * (drive letter only) is still right for the `_openedPaths` / `_dismissed`
+   * lookups below, whose keys are p4-reported like the values we compare them to.
+   */
+  async checkWorkingTree(paths: readonly string[]): Promise<WorkingTreeChangeDto[]> {
+    if (this._disposed || paths.length === 0) return []
+    const requested = new Map<string, string>()
+    for (const p of paths) {
+      const key = norm(p)
+      if (this._openedPaths.has(key)) continue
+      if (!this._isInReconcileScope(p)) continue
+      if (this._dismissed.has(key)) continue
+      requested.set(scopeKey(p), p)
+    }
+    if (requested.size === 0) return []
+
+    const { fresh } = await this._rescanReconcilePaths([...requested.values()])
+    if (this._disposed) return []
+
+    const hints: WorkingTreeChangeDto[] = []
+    for (const file of fresh) {
+      if (!file.clientFile) continue
+      const asAsked = requested.get(scopeKey(file.clientFile))
+      if (asAsked === undefined) continue
+      const hint = toWorkingTreeHint(file)
+      if (hint) hints.push({ ...hint, path: asAsked })
+    }
+    return hints
   }
 
   /**

@@ -9,6 +9,7 @@
  * tooltip for humans.
  */
 import type { SourceControlResourceState } from '@universe-editor/extension-api'
+import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
 import type { OpenedFile, P4Action } from './changelist.js'
 import type { ReconcileFile } from './reconcileParser.js'
 import type { ShelvedFile } from './shelveParser.js'
@@ -151,4 +152,30 @@ export function toReconcileResourceStates(
     if (state) out.push(state)
   }
   return out
+}
+
+/**
+ * The same reconcile row as an Explorer working-tree hint (the on-demand channel
+ * the host queries per visible row, see `checkWorkingTree`).
+ *
+ * Derived from {@link toReconcileResourceState} rather than mapping the action a
+ * second time: both channels can describe the same file — the group when
+ * discovery has run, the hint before it has — and a file must not change badge
+ * or colour depending on which one got there first.
+ */
+export function toWorkingTreeHint(file: ReconcileFile): WorkingTreeChangeDto | undefined {
+  const state = toReconcileResourceState(file)
+  if (!state) return undefined
+  const deco = state.decorations
+  // No colour means no hint. Substituting a default here would put a badge on the
+  // row in a colour the resource group would never use, which is exactly the
+  // before/after inconsistency deriving from one source is meant to prevent.
+  if (deco?.color === undefined) return undefined
+  return {
+    path: state.resourceUri,
+    letter: state.contextValue ?? 'RC',
+    color: deco.color,
+    ...(deco.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
+    ...(deco.strikeThrough ? { strikeThrough: true } : {}),
+  }
 }

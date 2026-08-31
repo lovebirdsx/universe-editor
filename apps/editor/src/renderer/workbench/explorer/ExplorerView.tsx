@@ -51,10 +51,9 @@ import {
   IScmDecorationsService,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
-import {
-  IGNORED_RESOURCE_FOREGROUND,
-  IScmIgnoredResourcesService,
-} from '../../services/scm/ScmIgnoredResourcesService.js'
+import { IScmIgnoredResourcesService } from '../../services/scm/ScmIgnoredResourcesService.js'
+import { IScmWorkingTreeHintService } from '../../services/scm/ScmWorkingTreeHintService.js'
+import { resolveRowDecoration } from '../../services/scm/rowDecoration.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmOpenFile } from '../../services/editor/largeFileGuard.js'
@@ -69,6 +68,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
 )
 
 const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
+
+const EMPTY_HINT_VERSION: IObservable<number> = observableValue('emptyScmWorkingTreeHintVersion', 0)
 
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
@@ -86,6 +87,9 @@ export function ExplorerView() {
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
   // Re-render rows once a check-ignore batch resolves so cached answers re-apply.
   useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
+  const scmWorkingTreeHints = useOptionalService(IScmWorkingTreeHintService)
+  // Same for the on-demand working-tree hints (see renderRow).
+  useObservable(scmWorkingTreeHints?.version ?? EMPTY_HINT_VERSION)
 
   // Re-render when selection / active-editor change so renderRow closes over a
   // fresh active-editor key. Structure changes are handled inside <Tree>.
@@ -192,7 +196,14 @@ export function ExplorerView() {
       : scmDecorations?.getFile(entry.resource)
     // 无 SCM 状态装饰时，被 ignore 规则忽略的文件/文件夹变暗（VSCode 对标，git / p4 通用）。
     const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
-    const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
+    // 按需软信号：文件在磁盘上改了但 provider 还没发现它（p4 未收集的改动）。只问
+    // 文件行——按需模型对未展开的子树一无所知，给目录染色只会是个下界，展开一下就
+    // 变，来回闪烁比不显示更糟；目录仍由 getFolder 的祖先冒泡负责。
+    const hint =
+      !entry.isDirectory && deco === undefined && !ignored
+        ? scmWorkingTreeHints?.getHint(entry.resource)
+        : undefined
+    const row = resolveRowDecoration(deco, ignored, hint)
     // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。
     const supp = !entry.isDirectory ? scmDecorations?.getSupplementary(entry.resource) : undefined
     return (
@@ -212,10 +223,10 @@ export function ExplorerView() {
         isCut={
           tree.isCut(entry.resource) || (entry.compactRoot ? tree.isCut(entry.compactRoot) : false)
         }
-        {...(decoColor !== undefined ? { decoColor } : {})}
-        {...(deco?.letter !== undefined ? { decoLetter: deco.letter } : {})}
-        {...(deco?.strikeThrough ? { decoStrike: true } : {})}
-        {...(deco?.tooltip !== undefined ? { decoTooltip: deco.tooltip } : {})}
+        {...(row.color !== undefined ? { decoColor: row.color } : {})}
+        {...(row.letter !== undefined ? { decoLetter: row.letter } : {})}
+        {...(row.strikeThrough ? { decoStrike: true } : {})}
+        {...(row.tooltip !== undefined ? { decoTooltip: row.tooltip } : {})}
         {...(supp !== undefined ? { decoDescription: supp.description } : {})}
         {...(supp?.tooltip !== undefined ? { decoDescriptionTooltip: supp.tooltip } : {})}
         tree={tree}

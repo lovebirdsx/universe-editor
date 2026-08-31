@@ -813,6 +813,11 @@
           "default": true,
           "description": "%perforce.config.autoRefresh.description%"
         },
+        "perforce.reconcileHint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%perforce.config.reconcileHint.enabled.description%"
+        },
         "perforce.syncPreview.autoCheck": {
           "type": "boolean",
           "default": true,

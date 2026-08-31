@@ -23,6 +23,7 @@ import type {
   P4GraphLoadResult,
   P4GraphChangeDetailsDto,
   P4GraphFileChangeDto,
+  WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
@@ -1182,6 +1183,50 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const path = typeof args[0] === 'string' ? args[0] : undefined
       if (!path) return null
       return (await mgr.resolveClient({ resourceUri: path })?.getBlame(path)) ?? null
+    }),
+
+    // Explorer working-tree hints: which of these visible rows have local drift
+    // that isn't opened yet (host addresses this as `<providerId>.checkWorkingTree`).
+    // A batch can span several p4 clients in a multi-root workspace, so paths are
+    // grouped by owning client rather than routed off the first one; a path no
+    // client owns is simply left out of the answer.
+    commands.registerCommand('perforce.checkWorkingTree', async (...args: unknown[]) => {
+      const paths = Array.isArray(args[0])
+        ? (args[0] as unknown[]).filter((p): p is string => typeof p === 'string')
+        : []
+      if (paths.length === 0) return []
+      const enabled = await workspace
+        .getConfiguration('perforce')
+        .get('reconcileHint.enabled', true)
+      if (!enabled) return []
+
+      const byClient = new Map<PerforceClient, string[]>()
+      for (const path of paths) {
+        // `resolveContaining`, not `resolveClient`: this is a data query, so a
+        // path no client owns must be left out of the answer rather than fall
+        // back to the active client, which would scan the wrong workspace.
+        const client = mgr.resolveContaining(path)
+        if (!client) continue
+        const list = byClient.get(client)
+        if (list) list.push(path)
+        else byClient.set(client, [path])
+      }
+      if (byClient.size === 0) return []
+
+      // One rejected client must not sink the whole batch — the remaining rows
+      // still deserve their hints, and this runs on a render path where throwing
+      // would surface as an unhandled rejection in the host.
+      const perClient = await Promise.all(
+        [...byClient].map(async ([client, owned]): Promise<WorkingTreeChangeDto[]> => {
+          try {
+            return await client.checkWorkingTree(owned)
+          } catch (err) {
+            log(`[perforce] checkWorkingTree failed for ${client.root}: ${String(err)}`)
+            return []
+          }
+        }),
+      )
+      return perClient.flat()
     }),
 
     // --- Mutating operations (Phase 2) -------------------------------------

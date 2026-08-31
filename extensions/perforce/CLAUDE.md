@@ -207,6 +207,23 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 - **移出列表（永久忽略 = dismissed）**：`_dismissed: Set<string>`（normalized clientFile）。`dismissReconcile(paths)` 加入并落盘；`filterDismissed`（`reconcileParser.ts` 纯函数）在 `_setReconcileFiles` 末端统一过滤 → 即使 Clean Refresh 全量扫到也不冒出来。文件夹/组目标经 `expandDismissPaths`（纯函数，按 `norm` 前缀展开成当前列表里的具体条目；组头传 `<root>/...`）。`clearDismissed()` = 逃生阀（清空 + `refresh({reconcile:true})`）。**收集/移出会解除 dismiss**：`reconcile()`/`moveToReconcile()` 成功前调 `_undismiss(paths)`（显式重新纳入视野）。命令 `perforce.dismissReconcile`（icon `eye-off`，挂 RC 行 inline + reconcile 组/文件夹）、`perforce.clearDismissed`（reconcile 组头）。
 - **move out 增量化（去卡顿）**：`moveToReconcile`/`revertReconcile` **不再** `_fullScanRequested=true` 跑全量 `reconcile -n <scope>`，改为对已知 path 调 `refreshReconcilePaths(paths)`（O(改动数)）。目录版先 `_concreteReconcilePaths`（剥 `/...` 后缀 + `expandDismissPaths`）展开成具体条目再增量扫。测试 `clientReconcilePersist.test.ts` 断言移出后所有 `reconcile -n` argv **不含** `//...` / `<root>/...`。
 
+### Explorer 按需 hint 通道（`checkWorkingTree`）
+
+上面那个 `_reconcileActive` 粘性开关有个用户可见后果：**冷启动且无持久化快照时它是 false → reconcile 组恒空 → Explorer 里「改了但没签出」的文件零提示**（git 侧同类文件是有的）。补法**不是**打开全量扫描（那正是「点击几分钟打不开 diff」的根因），而是加一条**由 Explorer 当前渲染出来的文件行驱动**的按需查询通道——成本与可见行数同阶，与 depot 规模无关。
+
+链路：renderer `ScmWorkingTreeHintService`（pull 式，骨架照抄同目录 `ScmIgnoredResourcesService`：render 期问 → 150ms 去抖批量 → 缓存 + LRU 4096 → `version` observable 触发重渲染）→ capability 命令 `perforce.checkWorkingTree`（**运行时注册，绝不进 `contributes.commands`**，同头号坑）→ `client.checkWorkingTree(paths)` → 复用 `_rescanReconcilePaths` 的分批/并发/client 语法翻译。配置项 `perforce.reconcileHint.enabled`（默认开）可整体关掉。
+
+四条决策，改这条通道前先对照：
+
+- **不喂进 `ScmDecorationsService`**：`getFile(...) !== undefined` 是既有的「该文件有本地改动」判据，被 dirty-diff 门控与 `dirtyDiffActions` 依赖；塞进去还会连带走 SCM `resourceStates` → 触发 `_reconcileActive` sticky / 持久化 / dismissed 三连锁。新服务只服务 Explorer 行。
+- **徽标从 `toReconcileResourceState` 派生**（`p4Decoration.ts` `toWorkingTreeHint`）：letter 必须是 `RC`，不是动作字母 E/A/D。两条通道（组 / hint）可能先后描述同一个文件，各写一份 style 映射会让同一文件在 Clean Refresh 前后徽标跳变。单测 `clientWorkingTreeHint.test.ts` 直接与 `toReconcileResourceState` 的返回值逐字段比对，改坏派生关系即红。
+- **只给文件行，目录不染色**：按需模型对未展开子树一无所知，目录颜色只会是个下界，展开即变——来回闪烁比不显示更糟。push 态的祖先冒泡（`ScmDecorationsService.folders`）在用户跑过 Clean Refresh 后照常工作，两套目录真相不混用。
+- **只读派生（最容易被"顺手优化"破坏）**：`checkWorkingTree` 绝不置 `_reconcileActive`、绝不写 `_reconcileFiles`、绝不 `_persistReconcile()`、绝不 `_emitChange()`。一旦有人想「既然都扫了不如存下来」，这条通道就退化成它要规避的 sticky 全量发现。护栏 = store save spy + 组 `resourceStates` 身份 + `onDidChange` 计数 + 直读 `_reconcileActive`。
+
+另两处易踩：hint 与组共用三个谓词（已 opened / scope 外 / dismissed），全被过滤掉则**零 p4 spawn**；返回值**回显调用方自己的路径字符串**（扫描报的是从 client 语法翻译来的路径，拼法未必与 host 一致，不回显会让 renderer 缓存键对不上，还会把没问过的路径——比如 rename 的另一半——报到不存在的行上）。
+
+回显那张 map 的 key 必须是 `scopeKey` 而非 `norm`——它两侧**不同源**：请求方按用户打开目录的拼法给，答案按 `p4 info` 报的 clientRoot 拼，Windows/macOS 上两者可以只差大小写却指同一个文件（`norm` 只折盘符，会漏配 → hint 静默消失，Clean Refresh 后又冒出来）。同一个方法里查 `_openedPaths` / `_dismissed` 仍用 `norm`，因为那两个 set 的键与被比较的值同源（都由 p4 报）。`pathUtil.ts` 里 `scopeKey` 的注释就是这条判据的出处。路由用 `resolveContaining`（严格最长前缀）而非 `resolveClient`——后者的 active 回退是命令路由语义，数据查询用它会把不归任何 client 的路径扔给 active client 扫。
+
 ## 命令路由（一 id 多 client）
 
 所有 p4 source control 共享 id `perforce`，靠**每个 client 唯一的 root** 路由（`clientManager.ts`）：
@@ -305,7 +322,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`syncPreview.autoCheck/intervalSec`(300s，最小 30s，落后感知两级探针)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s，最小 30s，他人占用灰字)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`autoReconcile`(false，每次 refresh 带 reconcile 发现)、`autoRefresh`(true，文件监视触发带 reconcile 发现的自动刷新)、`reconcileHint.enabled`(true，Explorer 按需 hint 通道总开关，见上文「Explorer 按需 hint 通道」)、`syncPreview.autoCheck/intervalSec`(300s，最小 30s，落后感知两级探针)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s，最小 30s，他人占用灰字)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 
