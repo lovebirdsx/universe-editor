@@ -12,7 +12,7 @@
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸；坑=变更源须区分
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — 引用=decoration 追踪 by-range 药丸，含空格 label 安全，提交读 range 不分词
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — IUriIdentityService 单一入口+ResourceMap；MonacoModelKey/SCM 键为刻意独立身份域
-- [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 须覆写 id，matches 只比 id；id 去重≠数量不变量；dirty per-input
+- [编辑器身份隔离约定](editor-input-identity-isolation.md) — 多视图 EditorInput 须覆写 id，matches 只比 id；id 去重≠数量不变量；dirty per-input；单例改多实例须同时登记 EditorGroupView keyed remount 名单
 - [AI 基础服务层](ai-service-foundation-progress.md) — platform 契约+main 实现+renderer 门面，单层 providers[]；密钥存 aiSettings.json 不进日志/Debug
 - [AI Providers 可视化编辑](ai-providers-visual-editing.md) — 连通性改自动探测(useAutoVerify)；五条教训含全量替换写 API 须串行化、探测触发用指纹非 reloadToken
 - [AI 费率解析与成本分离](ai-pricing-no-guess-cost-separation.md) — 费率单一来源=provider 自己的 pricingSource，绝不跨 provider 套官方价；会话开销与账号费用绝不互相兜底

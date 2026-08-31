@@ -22,4 +22,6 @@ metadata:
 
 **dirty 是 per-input 的，dispose 前必须转移**：`FileEditorInput` 无 `updateFrom`，dirty 标志不在共享 Monaco model 上。retarget 时若 toggle 预览持有的 dirty 源要被丢弃（组内已有该文件 tab），必须先 `shown.setDirty(true)`——留下的 tab 是在编辑落地**之后**才 resolveModel 的，自认 clean，丢了标志就关闭无提示 + 不进 backup + 外部变更静默 reload，未保存编辑三条路都会没。
 
+**单例编辑器改多实例＝两处必改，漏第二处状态串扰**（2026-08 Perforce 文件历史得到）：把一个「全局单例」编辑器（Perforce Graph）泛化成带参多 tab 时，除了 ① 模块级 view state 单例改按 `input.id` 分桶，还必须 ② 在 `workbench/editor/EditorGroupView.tsx` 的 **keyed remount 名单**（`markdown.preview` / `doc` / `swarmReview` / `perforceGraph`）里登记该 `componentKey`。默认路径是 `<Component input={active} />` **无 key** ——同组 A→B 切 tab 复用同一实例只换 prop，而组件的 `useState(() => view.xxx)` 惰性初始器只在挂载时跑一次，于是 B 显示 A 的数据，且镜像 effect 反手把 A 的 result/selection 写进 B 的桶。回归护栏写法：`ProbeX` 用空依赖 `useEffect` 计数挂载次数，断言换 input 后新 id 计数为 1（`EditorGroupView.perforceGraphScopeSwap.test.tsx`）。
+
 关联 [[path-comparison-convergence]]（同源异层：文件系统身份键 vs 编辑器身份键）、[[editor-text-focus-stuck-swallows-keys]]。e2e：`smoke.imageEditor`、`smoke.markdownPreview`。
