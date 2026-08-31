@@ -1595,6 +1595,17 @@ describe('ChatBody — side task affordances', () => {
     }
   }
 
+  function makeRow(sessionIdOnAgent: string, lastUsedAt: number): AcpSessionHistoryEntry {
+    return {
+      id: sessionIdOnAgent,
+      agentId: 'fake',
+      sessionIdOnAgent,
+      title: `parent ${sessionIdOnAgent}`,
+      createdAt: lastUsedAt,
+      lastUsedAt,
+    }
+  }
+
   function makeHistory(entries: AcpSessionHistoryEntry[]): Partial<IAcpSessionHistoryServiceType> {
     return {
       entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.sessionHistory', entries),
@@ -1645,8 +1656,9 @@ describe('ChatBody — side task affordances', () => {
       expect(container.querySelector('[data-testid="acp-side-tasks-trigger"]')).toBeNull()
     })
 
-    it('is hidden on a side-task chat itself (its quote chip renders instead)', () => {
+    it('shows the parent chip, quote chip and side-tasks trigger on a nested side task', () => {
       const rows = [
+        makeRow('s1', 4000),
         makeSideTaskRow('side-1', 's1', 1000),
         makeSideTaskRow('side-2', 's1', 2000),
         makeSideTaskRow('grand-1', 'side-1', 3000),
@@ -1657,10 +1669,29 @@ describe('ChatBody — side task affordances', () => {
           <ChatBody session={makeSession('side-1', items)} />
         </ServicesContext.Provider>,
       )
-      expect(container.querySelector('[data-testid="acp-side-tasks-trigger"]')).toBeNull()
-      const chip = container.querySelector('[data-testid="acp-side-task-quote"]')
-      expect(chip).not.toBeNull()
-      expect(chip?.getAttribute('data-tooltip')).toBe('quote side-1')
+      const trigger = container.querySelector('[data-testid="acp-side-tasks-trigger"]')
+      expect(trigger).not.toBeNull()
+      // Only grand-1 hangs off side-1, so the trigger counts one child.
+      expect(trigger?.textContent).toContain('(1)')
+      expect(
+        container
+          .querySelector('[data-testid="acp-side-task-quote"]')
+          ?.getAttribute('data-tooltip'),
+      ).toBe('quote side-1')
+      expect(container.querySelector('[data-testid="acp-side-task-parent"]')).not.toBeNull()
+    })
+
+    it('omits the parent chip when the parent row is gone', () => {
+      const rows = [makeSideTaskRow('side-1', 's1', 1000)]
+      const inst = makeInstantiation(undefined, undefined, { history: makeHistory(rows) })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('side-1', items)} />
+        </ServicesContext.Provider>,
+      )
+      expect(container.querySelector('[data-testid="acp-side-task-parent"]')).toBeNull()
+      // The quote chip is gated independently and still renders.
+      expect(container.querySelector('[data-testid="acp-side-task-quote"]')).not.toBeNull()
     })
 
     it('opens the picked side task in a right-split editor tab', () => {

@@ -88,7 +88,7 @@ export async function revealChat(services: RevealServices, sessionId: string): P
 }
 
 /** Locate an already-open session editor (and its group) across all groups. */
-function findSessionEditor(groups: IEditorGroupsService, sessionId: string) {
+export function findSessionEditor(groups: IEditorGroupsService, sessionId: string) {
   for (const group of groups.groups) {
     for (const editor of group.editors) {
       if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {

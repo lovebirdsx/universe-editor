@@ -5,23 +5,28 @@
  *  popover listing every history row forked from this session
  *  (`sideTaskOf === this session`). Picking a row opens (or focuses) that side
  *  task in a right-split editor tab; a not-yet-live row auto-resumes through
- *  AcpSessionEditor's resumer. Renders nothing for side tasks themselves (the
- *  quote chip is SideTaskQuoteBar's job) or when there are no children.
+ *  AcpSessionEditor's resumer. Renders for any session that has children —
+ *  including sessions that are themselves side tasks (a side task can fork its
+ *  own side task) — and renders nothing only when there are no children.
  *
  *  SideTaskQuoteBar — the chip a side-task chat shows at its top, replaying the
  *  text selection it was created from (`sideTaskQuote` on its history row).
+ *
+ *  SideTaskParentBar — a side-task chat's entry back to its owning session;
+ *  renders nothing when the parent row is missing.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef, useState } from 'react'
 import {
   ConfigurationTarget,
+  GroupDirection,
   IConfigurationService,
   IDialogService,
   IEditorGroupsService,
   IInstantiationService,
   localize,
 } from '@universe-editor/platform'
-import { GitBranch, TextQuote, Trash2 } from 'lucide-react'
+import { CornerUpLeft, GitBranch, TextQuote, Trash2 } from 'lucide-react'
 import { useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -32,7 +37,7 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/session/acpSessionHistory.js'
-import { openSessionInRightSplit } from '../../actions/agentSessionActions.js'
+import { openSessionInRightSplit, revealSessionEditor } from '../../actions/agentSessionActions.js'
 import { relativeTime } from '../../relativeTime.js'
 import styles from './agents.module.css'
 
@@ -49,7 +54,6 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
 
-  const entry = history.get(sid)
   const sideTasks = entries
     .filter((e) => e.sideTaskOf !== undefined && e.sideTaskOf === sid)
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
@@ -78,7 +82,7 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
     }
   }, [open])
 
-  if (entry?.sideTaskOf !== undefined || sideTasks.length === 0) return null
+  if (sideTasks.length === 0) return null
 
   const openSideTask = (sessionId: string): void => {
     setOpen(false)
@@ -206,15 +210,45 @@ export function SideTaskQuoteBar({ session }: { session: IAcpSession }) {
   const entry = history.get(sid)
   if (entry?.sideTaskOf === undefined || entry.sideTaskQuote === undefined) return null
   return (
-    <div className={styles['sideTaskQuoteBar']}>
-      <span
-        className={styles['sideTaskQuoteChip']}
-        data-testid="acp-side-task-quote"
-        data-tooltip={entry.sideTaskQuote}
-      >
-        <TextQuote size={12} strokeWidth={1.75} aria-hidden="true" />
-        {localize('acp.sideTask.quoteChip', '{count} selected text fragment(s)', { count: 1 })}
-      </span>
-    </div>
+    <span
+      className={styles['sideTaskQuoteChip']}
+      data-testid="acp-side-task-quote"
+      data-tooltip={entry.sideTaskQuote}
+    >
+      <TextQuote size={12} strokeWidth={1.75} aria-hidden="true" />
+      {localize('acp.sideTask.quoteChip', '{count} selected text fragment(s)', { count: 1 })}
+    </span>
+  )
+}
+
+export function SideTaskParentBar({ session }: { session: IAcpSession }) {
+  const history = useService(IAcpSessionHistoryService)
+  const sessions = useService(IAcpSessionService)
+  const groups = useService(IEditorGroupsService)
+  const inst = useService(IInstantiationService)
+  useObservable(history.entries)
+  const sid = useObservable(session.sessionIdOnAgent) ?? session.id
+  const parentId = history.get(sid)?.sideTaskOf
+  const parent = parentId !== undefined ? history.get(parentId) : undefined
+  if (parent === undefined) return null
+  return (
+    <button
+      type="button"
+      className={styles['sideTaskParentChip']}
+      data-testid="acp-side-task-parent"
+      data-tooltip={parent.title}
+      onClick={() => {
+        const live = sessions.getById(parent.id)
+        revealSessionEditor(
+          groups,
+          inst,
+          live ?? { id: parent.id, agentId: parent.agentId },
+          GroupDirection.Left,
+        )
+      }}
+    >
+      <CornerUpLeft size={12} strokeWidth={1.75} aria-hidden="true" />
+      {localize('acp.sideTask.parent', 'Parent Session')}
+    </button>
   )
 }

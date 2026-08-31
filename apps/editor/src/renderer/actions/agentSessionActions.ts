@@ -47,6 +47,7 @@ import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
+import { findSessionEditor } from './_agentChatTarget.js'
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
@@ -892,6 +893,21 @@ function closeDuplicateSessionEditors(
   }
 }
 
+function openSessionInSplit(
+  groups: IEditorGroupsService,
+  inst: IInstantiationService,
+  session: { id: string; agentId: string | undefined },
+  direction: GroupDirection,
+): void {
+  const source = groups.activeGroup
+  let target = groups.findGroup({ direction }, source) ?? source
+  if (target === source) target = groups.addGroup(source, direction)
+  groups.activateGroup(target)
+  const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
+  openSessionEditorInGroup(target, input, undefined)
+  closeDuplicateSessionEditors(groups, target, session.id)
+}
+
 /**
  * Open (or focus) a session chat in the editor group to the RIGHT of the active
  * one, creating the split when none exists. Shared by the side-task flows (the
@@ -902,13 +918,28 @@ export function openSessionInRightSplit(
   inst: IInstantiationService,
   session: { id: string; agentId: string | undefined },
 ): void {
-  const source = groups.activeGroup
-  let target = groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
-  if (target === source) target = groups.addGroup(source, GroupDirection.Right)
-  groups.activateGroup(target)
-  const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
-  openSessionEditorInGroup(target, input, undefined)
-  closeDuplicateSessionEditors(groups, target, session.id)
+  openSessionInSplit(groups, inst, session, GroupDirection.Right)
+}
+
+/**
+ * Focus the session's existing tab wherever it already lives, and only fall back
+ * to opening a split in `direction` when no tab exists. Used by the side task's
+ * parent-session chip: the parent is almost always already open, and stealing it
+ * into a fresh split would shuffle the user's layout on every click.
+ */
+export function revealSessionEditor(
+  groups: IEditorGroupsService,
+  inst: IInstantiationService,
+  session: { id: string; agentId: string | undefined },
+  direction: GroupDirection,
+): void {
+  const found = findSessionEditor(groups, session.id)
+  if (found) {
+    groups.activateGroup(found.group)
+    found.group.setActive(found.editor)
+    return
+  }
+  openSessionInSplit(groups, inst, session, direction)
 }
 
 /** Hard cap for a captured selection; longer quotes are truncated (logged). */

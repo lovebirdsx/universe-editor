@@ -71,7 +71,7 @@ import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
-import { SideTasksBar, SideTaskQuoteBar } from './SideTasksBar.js'
+import { SideTasksBar, SideTaskQuoteBar, SideTaskParentBar } from './SideTasksBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
 import { ForkTipFooter } from './ForkTipFooter.js'
@@ -391,8 +391,11 @@ function ChatSessionBody({
             handleRef={handleRef}
             onFocusSlot={(key) => handleRef.current.setFocusedKey(key)}
           />
-          <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
-          <SideTasksBar key={`sideTasks:${session.id}`} session={session} />
+          <div className={styles['sideTaskChips']}>
+            <SideTaskParentBar key={`parent:${session.id}`} session={session} />
+            <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
+            <SideTasksBar key={`sideTasks:${session.id}`} session={session} />
+          </div>
           <StickyPlanBar
             key={`plan:${session.id}`}
             session={session}

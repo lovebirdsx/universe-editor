@@ -2092,6 +2092,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sideTask.badge': '侧边任务',
   'acp.sideTask.bar': '侧边任务',
   'acp.sideTask.forkFailed': '创建侧边聊天失败：{message}',
+  'acp.sideTask.parent': '父会话',
   'acp.sideTask.quoteChip': '{count} 个已选文本片段',
   'acp.sideTask.remove': '删除侧边任务',
   'acp.sideTask.removeConfirm': '删除这个侧边任务？',

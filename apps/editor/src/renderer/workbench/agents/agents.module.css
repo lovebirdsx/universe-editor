@@ -19,10 +19,8 @@
   box-sizing: border-box;
 }
 
-/* Keep the centered empty-session hint clear of the floating side-tasks chip
-   (parent chat) / quote chip (side-task chat). */
-.chatEmptySession:has(> .sideTasksBar),
-.chatEmptySession:has(> .sideTaskQuoteBar) {
+/* Keep the centered empty-session hint clear of the floating side-task chips. */
+.chatEmptySession:has(> .sideTaskChips > *) {
   padding-top: 40px;
 }
 
@@ -2195,15 +2193,24 @@
   border-bottom: 1px solid var(--vscode-workbench-border, #333);
 }
 
-/* Floating chip pinned to the chat's top-right corner — stays above the sticky
-   overlays (z-index 5) without taking any layout space. The right offset clears
-   the collapse toggle pinned at the top row's right edge (bar padding 12px +
-   header padding + the toggle's own width). */
-.sideTasksBar {
+/* Shared top-right slot for the side-task chips (parent link / quote / side
+   tasks trigger), floating above the sticky overlays (z-index 5) without taking
+   any layout space. The right offset clears the collapse toggle pinned at the
+   top row's right edge. */
+.sideTaskChips {
   position: absolute;
   top: 6px;
   right: 46px;
   z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Positioned only so .sideTasksPopover anchors to the trigger; .sideTaskChips
+   owns the top-right slot. */
+.sideTasksBar {
+  position: relative;
 }
 
 .sideTasksTrigger {
@@ -2307,16 +2314,6 @@
   color: var(--vscode-errorForeground, #f85149);
 }
 
-/* Floating quote chip in the side-task chat — same top-right slot the parent's
-   SideTasksBar occupies (the two never co-render: a chat is either the parent
-   or the side task), marking the child as a side task without layout cost. */
-.sideTaskQuoteBar {
-  position: absolute;
-  top: 6px;
-  right: 46px;
-  z-index: 20;
-}
-
 .sideTaskQuoteChip {
   display: inline-flex;
   align-items: center;
@@ -2329,6 +2326,17 @@
   font-size: calc(var(--agent-font-size, 12px) - 1px);
   cursor: default;
   box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+
+.sideTaskParentChip {
+  composes: sideTaskQuoteChip;
+  border-color: var(--vscode-workbench-border, #333);
+  cursor: pointer;
+}
+
+.sideTaskParentChip:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  color: inherit;
 }
 
 /* Side-task chats tint the prompt border so the child reads differently from a

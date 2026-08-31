@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import {
   ConfigurationTarget,
+  GroupDirection,
   IConfigurationService,
   IDialogService,
   IEditorGroupsService,
@@ -19,9 +20,10 @@ import {
   type IConfigurationService as IConfigurationServiceType,
   type IDialogService as IDialogServiceType,
 } from '@universe-editor/platform'
-import { SideTasksBar } from '../SideTasksBar.js'
+import { SideTasksBar, SideTaskParentBar } from '../SideTasksBar.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
@@ -49,6 +51,17 @@ function row(id: string, sideTaskOf: string, lastUsedAt = 1000): AcpSessionHisto
   }
 }
 
+function plainRow(id: string, lastUsedAt = 1000): AcpSessionHistoryEntry {
+  return {
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: `session ${id}`,
+    createdAt: lastUsedAt,
+    lastUsedAt,
+  }
+}
+
 interface Harness {
   readonly container: HTMLElement
   readonly confirm: ReturnType<typeof vi.fn>
@@ -65,6 +78,8 @@ interface Harness {
 function renderBar(
   options: {
     entries?: AcpSessionHistoryEntry[]
+    /** Which session the bar is rendered for; defaults to the parent. */
+    sessionId?: string
     /** `undefined` (the default) means the confirm dialog is enabled. */
     confirmDelete?: boolean
     confirmResult?: { confirmed: boolean; neverAskAgain?: boolean }
@@ -132,10 +147,11 @@ function renderBar(
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
 
+  const sid = options.sessionId ?? PARENT
   const session = {
-    id: PARENT,
+    id: sid,
     agentId: 'fake',
-    sessionIdOnAgent: observableValue<string | undefined>('t.sid', PARENT),
+    sessionIdOnAgent: observableValue<string | undefined>('t.sid', sid),
   } as unknown as IAcpSession
 
   const { container } = render(
@@ -161,6 +177,71 @@ function renderBar(
     openPopover,
     deleteButtons,
   }
+}
+
+interface ParentHarness {
+  readonly container: HTMLElement
+  readonly groups: EditorGroupsService
+}
+
+function renderParentBar(
+  options: {
+    /** Which side-task session the parent chip renders for; defaults to 'side-1'. */
+    sessionId?: string
+    entries?: AcpSessionHistoryEntry[]
+    /** Preset the parent session as an already-open tab in a second group. */
+    parentTabOpen?: boolean
+  } = {},
+): ParentHarness {
+  const sid = options.sessionId ?? 'side-1'
+  const entries = options.entries ?? [plainRow(PARENT, 2000), row('side-1', PARENT, 1000)]
+  const entriesObs = observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', entries)
+  const history = {
+    _serviceBrand: undefined,
+    entries: entriesObs,
+    get: (id: string) => entries.find((e) => e.id === id),
+  } as unknown as IAcpSessionHistoryServiceType
+
+  const sessions = {
+    _serviceBrand: undefined,
+    getById: () => undefined,
+  } as unknown as IAcpSessionService
+
+  const groups = new EditorGroupsService()
+
+  const services = new ServiceCollection()
+  services.set(IAcpSessionHistoryService, history)
+  services.set(IAcpSessionService, sessions)
+  services.set(IEditorGroupsService, groups)
+  services.set(IAcpChatWidgetService, {
+    _serviceBrand: undefined,
+    register: () => ({ dispose() {} }),
+    lastFocusedWidget: undefined,
+  } as unknown as IAcpChatWidgetService)
+  const inst = new InstantiationService(services)
+  services.set(IInstantiationService, inst)
+
+  if (options.parentTabOpen) {
+    const group = groups.addGroup(groups.activeGroup, GroupDirection.Right)
+    group.openEditor(inst.createInstance(AcpSessionEditorInput, PARENT, 'fake', undefined), {
+      activate: true,
+      pinned: true,
+    })
+  }
+
+  const session = {
+    id: sid,
+    agentId: 'fake',
+    sessionIdOnAgent: observableValue<string | undefined>('t.sid', sid),
+  } as unknown as IAcpSession
+
+  const { container } = render(
+    <ServicesContext.Provider value={inst}>
+      <SideTaskParentBar session={session} />
+    </ServicesContext.Provider>,
+  )
+
+  return { container, groups }
 }
 
 /**
@@ -327,5 +408,70 @@ describe('SideTasksBar delete button', () => {
     await settle()
 
     expect(document.activeElement).toBe(trigger)
+  })
+})
+
+describe('SideTasksBar on a side-task session', () => {
+  it('renders the trigger when the session is itself a side task with children', () => {
+    const h = renderBar({
+      sessionId: 'side-1',
+      entries: [row('side-1', PARENT, 2000), row('grand-1', 'side-1', 1000)],
+    })
+    const trigger = h.container.querySelector('[data-testid="acp-side-tasks-trigger"]')
+    expect(trigger).not.toBeNull()
+    expect(trigger?.textContent).toContain('(1)')
+  })
+
+  it('opens a nested (grand) side task in a right split from the side-task chat', () => {
+    const h = renderBar({
+      sessionId: 'side-1',
+      entries: [row('side-1', PARENT, 2000), row('grand-1', 'side-1', 1000)],
+    })
+    h.openPopover()
+    fireEvent.click(h.container.querySelector('[data-testid="acp-side-task-row"]')!)
+    expect(h.groups.groups.length).toBe(2)
+    const active = h.groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(AcpSessionEditorInput)
+    expect((active as AcpSessionEditorInput).sessionId).toBe('grand-1')
+  })
+})
+
+describe('SideTaskParentBar', () => {
+  it('renders the parent chip with the parent title as tooltip', () => {
+    const h = renderParentBar()
+    const chip = h.container.querySelector('[data-testid="acp-side-task-parent"]')
+    expect(chip).not.toBeNull()
+    expect(chip?.getAttribute('data-tooltip')).toBe('session parent-1')
+  })
+
+  it('renders nothing when the parent row is missing', () => {
+    const h = renderParentBar({ entries: [row('side-1', PARENT)] })
+    expect(h.container.querySelector('[data-testid="acp-side-task-parent"]')).toBeNull()
+  })
+
+  it('renders nothing when the current session is not a side task', () => {
+    const h = renderParentBar({
+      sessionId: 'main-1',
+      entries: [plainRow('main-1'), plainRow(PARENT)],
+    })
+    expect(h.container.querySelector('[data-testid="acp-side-task-parent"]')).toBeNull()
+  })
+
+  it('focuses the already-open parent tab without adding a group', () => {
+    const h = renderParentBar({ parentTabOpen: true })
+    fireEvent.click(h.container.querySelector('[data-testid="acp-side-task-parent"]')!)
+    const active = h.groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(AcpSessionEditorInput)
+    expect((active as AcpSessionEditorInput).sessionId).toBe(PARENT)
+    expect(h.groups.groups.length).toBe(2)
+  })
+
+  it('opens the parent in a left split when no tab exists', () => {
+    const h = renderParentBar()
+    fireEvent.click(h.container.querySelector('[data-testid="acp-side-task-parent"]')!)
+    expect(h.groups.groups.length).toBe(2)
+    const active = h.groups.activeGroup.activeEditor
+    expect(active).toBeInstanceOf(AcpSessionEditorInput)
+    expect((active as AcpSessionEditorInput).sessionId).toBe(PARENT)
   })
 })
