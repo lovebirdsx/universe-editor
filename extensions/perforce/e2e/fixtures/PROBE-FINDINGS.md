@@ -377,3 +377,48 @@
 - C3b：others cap log ✓（+~2.8s 出现）、behind cap 不可达、others 样本 4/6 干净、状态栏 `Focus: 3 folders | 462 files behind | testclient 0`。
 - 探针路径竞态命中率：5 轮 launch 中 2 轮首开 focusEnabled=false，close+reopen 后 100% 收敛。
 - 12.3.0 受控矩阵复核（2026-08-31，同一时刻、真实 scope、只改一个变量）：单 TS#head 无 -m=259/totalFileCount 297；单 kV#head 无 -m=1644/1644；双 filespec 无 -m=1903/1941；`-m 501` 双 filespec=463/1941（产品形态）；换序=463/1941；`-m 100000`=1903/1941；单 kV `-m 501`=501/1644；三 filespec `-m 1000`=961/1942。耗时：无 -m 2171ms vs `-m 501` 2285ms vs `-m 100000` 2292ms（`-m` 只省输出不省枚举）。
+
+## 13. 2026-08-31 `allwrite noclobber` 的逐文件拒绝形态（只读实测，验收 bug 根因）
+
+验收 bug：某文件状态栏显示 `#68 / ↓#69`，点击拉取却弹「Already at the latest revision」且状态栏纹丝不动。真机只读探测（`p4 info` / `client -o` / `fstat` / `opened` / `diff -se` / `sync -n` 的 `-Mj`/`-ztag`/裸三形态；**未跑任何写操作**）定位到一个**从未被解析过的拒绝形态**。
+
+### 13.1 形态本体（P4D 2024.2 + P4P 2025.2）
+
+前提：client `Options: allwrite noclobber`（游戏项目常见），目标文件 haveRev 68 / headRev 69，**可写、内容已偏离 have、但未 `opened`**（`p4 opened` 报 not opened，`p4 diff -se` 报它偏离 have）。
+
+| 通道 | 内容 |
+|---|---|
+| stdout | `<depot>#69 - can't update modified file <local>` |
+| stderr | **空** |
+| exit code | **0** |
+| `-Mj` | 塌成 `{"data":"...can't update modified file...","level":0}`，**无结构化记录** |
+| `-ztag` | 行**照样出现在 raw stdout**，但被 `parseZtag` 丢弃（无 `... key value` 前缀）→ **零结构化记录**。已复测确认（`p4 -ztag sync -n <file>#head` 的 stdout 与 plain 形态逐字相同）——这是 `previewSync` 能从 `res.result.stdout` 把它捞回来的前提 |
+| 后续文件 | **继续处理**（逐文件跳过，不中断整批） |
+
+### 13.2 与 clobber 是两个形态，两者都必须解析（红线）
+
+| | `allwrite noclobber`（本节） | `noallwrite` clobber（§11.2/§11.8） |
+|---|---|---|
+| 通道 | **stdout** | **stderr** |
+| exit | **0** | **1** |
+| 范围 | **只跳过该文件**，其余照常更新 | **中断整次 run** |
+| 文案 | `can't update modified file` | `Can't clobber writable file` |
+
+所以 allwrite client 上永远走不进既有的 clobber 分支。修前的故障链：`parseSyncOutput` 四个正则全不命中（`APPLIED_LINE` 要求 ` - ` 后紧跟 `updated`/`updating`/…，实际紧跟 `can't`）→ 全零 summary + `unrecognized` → `runSync` 的「applied/keptOpen/mustResolve 全零」分支弹「已是最新」= **假成功**。`previewSync` 走 `execTagged` 则拿到零记录 → `upToDate=true`，窄作用域下落后计数与 Explorer 灰字一并消失，与 rev chip 的 `↓#69` 自相矛盾。
+
+**状态栏不变本身是对的**：p4 确实拒绝了，haveRev 真的还是 68 —— 要修的是「谎报 + 不给下一步」，不是缓存。
+
+### 13.3 已落地的解析与产品行为
+
+- `syncParser.ts`：`REFUSED_MODIFIED_LINE` 计入 `SyncRunSummary.refusedModified` 并使 `unrecognized` 转假；纯函数 `parseSyncRefused` 把这些 plain 行折回结构化 `SyncPreviewFile[]`（`action: 'not updated'`）。
+- `previewSync` 把它们并进 `files`（`total` 仍只读 records —— `totalFileCount` 已含拒绝行，见 §12.3.0/§1，避免重复计数），于是落后计数 + 灰字 + rev chip 三处信号一致。
+- `runSync` 的 `refusedModified > 0` 分支**排在 upToDate 之前**（一次多 filespec run 可同时产生两者，报被拒绝的更有行动价值），给「收集改动」+「查看差异」两个按钮。**绝不提供 `-f`**：p4 拒绝的原因正是文件里有未收集的工作，force-get 会永久销毁它（§11.2 已实测 `-f` 确实覆盖本地草稿）。
+
+### 13.4 fake-p4 对齐
+
+`SeedFile.refused` 故障注入与 `clobber` 并列但语义相反：dry-run 的结构化记录只 emit 未被拒绝的文件、`totalFileCount` 记**含**拒绝行的总数，随后把 plain 拒绝行写 stdout；真 sync 循环命中即 push 同款 plain 行 + `continue`（不写盘、haveRev 不动）。回归护栏 = `perforceSync.spec.ts` 的 `locally-modified refusal` journey。
+
+### 13.5 未验证
+
+- **真实写 sync 的逐字文案未实测**：只跑了只读的 `sync -n`（真 sync 会改用户工作区的盘）。`-n` 与真 sync 同款是文档化行为，且 `REFUSED_MODIFIED_LINE` 不带行首锚定、对两者都成立；若真机措辞不同，只需调正则，控制流不变。
+- 不带 `#<rev>` 的拒绝行（若某服务器如此）：`parseSyncRefused` 会漏折一行，但 `parseSyncOutput` 的无锚定计数仍兜底 → 「不谎报已是最新」不受影响。

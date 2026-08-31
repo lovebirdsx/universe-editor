@@ -129,7 +129,7 @@ describe('P4StatusBarController behind item', () => {
     controller.dispose()
   })
 
-  it('shows the count and wires the sync command', () => {
+  it('shows the count and wires the whole-scope sync command', () => {
     const controller = new P4StatusBarController({
       active: makeClient({ syncBehindCount: 12 }),
     } as never)
@@ -138,7 +138,9 @@ describe('P4StatusBarController behind item', () => {
     expect(mocks.behindItem.show).toHaveBeenCalled()
     expect(mocks.behindItem.text).toContain('$(cloud-download)')
     expect(mocks.behindItem.text).toContain('12')
-    expect(mocks.behindItem.command).toBe('perforce.syncLatest')
+    // Scope-level, NOT perforce.syncLatest: that one falls back to the active
+    // editor's file, so this item would fetch one file while promising 12.
+    expect(mocks.behindItem.command).toBe('perforce.syncScope')
     controller.dispose()
   })
 
@@ -274,7 +276,11 @@ describe('P4StatusBarController revision chip', () => {
     controller.refresh()
 
     await vi.waitFor(() => expect(mocks.revItem.text).toBe('#3 / ↓#5'))
+    // The chip describes ONE file, so it stays file-scoped — and must say so:
+    // promising the whole scope here is what made a one-file get look broken.
     expect(mocks.revItem.command).toBe('perforce.syncLatest')
+    expect(mocks.revItem.tooltip).toContain('this file')
+    expect(mocks.revItem.tooltip).not.toContain('whole scope')
     controller.dispose()
   })
 

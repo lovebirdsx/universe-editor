@@ -34,11 +34,15 @@ if (!STATE_PATH) {
 
 /**
  * @typedef {{ rev: number, content: string, revisions?: Record<string, string>,
- *   haveRev?: number, haveContent?: string, clobber?: boolean }} DepotFile
+ *   haveRev?: number, haveContent?: string, clobber?: boolean, refused?: boolean }} DepotFile
  *   `rev`/`content` are the depot HEAD (matching the pre-existing revision-history
  *   seeds); `haveRev`/`haveContent`, when present, are what the client has synced —
- *   absent means have == head. `clobber` is fault injection: a plain `p4 sync`
- *   (no `-f`) on that file fails with "can't clobber writable file" (exit 1).
+ *   absent means have == head. Two independent sync-refusal faults, matching the
+ *   two real client configurations: `clobber` is a `noallwrite` client, where a
+ *   plain `p4 sync` (no `-f`) fails with "can't clobber writable file" and aborts
+ *   the WHOLE run (exit 1); `refused` is an `allwrite noclobber` client, where
+ *   sync skips just that file with "can't update modified file" on **stdout**,
+ *   exits **0**, and carries on with the rest (§13).
  * @typedef {{ action: string, change: string, rev: number,
  *   unresolved?: boolean, resolveOutcome?: 'merge' | 'conflict' }} OpenedEntry
  *   `unresolved` is the internal needs-resolve flag — real `p4 opened` NEVER
@@ -715,19 +719,33 @@ function main() {
         else continue
         plans.push({ depotFile, local, toRev, action, toWrite: contentAt(known, toRev) })
       }
+      // §13: on an `allwrite noclobber` client p4 refuses each locally-modified
+      // file individually — a plain line on stdout, exit 0, and the run continues.
+      // `-f` overrides the refusal. Split here so both the dry run and the real
+      // sync report the same set (the editor parses the plain lines out of both).
+      const refusedPlans = force
+        ? []
+        : plans.filter((p) => state.files[p.depotFile].refused === true)
+      const activePlans = force
+        ? plans
+        : plans.filter((p) => state.files[p.depotFile].refused !== true)
+      const refusalLines = refusedPlans.map(
+        (p) => `${p.depotFile}#${p.toRev} - can't update modified file ${p.local}`,
+      )
       if (dryRun) {
         if (plans.length === 0) {
           const scope = targets.length > 0 ? scopes[0] : '//...'
           process.stderr.write(`${scope} - file(s) up-to-date.\n`)
           return 0
         }
-        const listed = max !== undefined ? plans.slice(0, Number(max)) : plans
-        const totalSize = plans.reduce((n, p) => n + p.toWrite.length, 0)
+        const listed = max !== undefined ? activePlans.slice(0, Number(max)) : activePlans
+        const totalSize = activePlans.reduce((n, p) => n + p.toWrite.length, 0)
         const change = Math.max(...Object.keys(state.changeMeta ?? {}).map(Number), 0)
         // §12.3.0 (PROBE-FINDINGS) measured shape: `totalFileSize` /
         // `totalFileCount` / `change` ride in the FIRST file record only, as
         // ONE grand total across all filespecs — and `totalFileCount` is the
-        // UNTRUNCATED total, never the `-m`-capped `listed` count.
+        // UNTRUNCATED total, never the `-m`-capped `listed` count. It counts the
+        // refused files too: they are part of what the sync would act on.
         emit(
           listed.map((p, i) => ({
             depotFile: p.depotFile,
@@ -743,6 +761,9 @@ function main() {
               : {}),
           })),
         )
+        // The plain refusal lines ride alongside the structured records, exactly
+        // as the real server prints them — `-ztag` gives them no key prefix.
+        if (refusalLines.length > 0) process.stdout.write(refusalLines.join('\n') + '\n')
         return 0
       }
       // Real sync. The clobber fault aborts the whole run like real p4 (exit 1);
@@ -758,6 +779,12 @@ function main() {
       for (const p of plans) {
         const opened = state.opened[p.depotFile]
         const known = state.files[p.depotFile]
+        if (known.refused === true && !force) {
+          // §13: skipped, not applied — the file keeps its have revision and
+          // its local content, and the run walks on to the next file.
+          lines.push(`${p.depotFile}#${p.toRev} - can't update modified file ${p.local}`)
+          continue
+        }
         if (opened) {
           // §11.3: a sync never rewrites an opened file. When it is behind, the
           // have revision is bumped to the target and a resolve is scheduled in

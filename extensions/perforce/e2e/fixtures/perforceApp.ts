@@ -51,6 +51,10 @@ export interface SeedFile {
   /** Fault injection: a real `p4 sync` without `-f` refuses to overwrite this
    *  file (`can't clobber writable file`, exit 1); `-f` overrides. */
   readonly clobber?: boolean
+  /** Fault injection, the `allwrite noclobber` counterpart of {@link clobber}:
+   *  sync skips just this file (`can't update modified file` on **stdout**,
+   *  exit **0**) and carries on with the rest; `-f` overrides. */
+  readonly refused?: boolean
   /** The file is already open in this client. `resolve` seeds a needs-resolve
    *  state that `p4 resolve -am` either auto-lands ('merge') or leaves open
    *  with `resolve skipped` ('conflict'). */
@@ -96,6 +100,7 @@ interface FakeState {
       haveRev?: number
       haveContent?: string
       clobber?: boolean
+      refused?: boolean
     }
   >
   opened: Record<
@@ -139,6 +144,10 @@ function seedWorkspace(
     mkdirSync(dirname(abs), { recursive: true })
     writeFileSync(abs, seed.content, 'utf8')
     const depotFile = `${depotPrefix}/${toPosix(seed.relPath)}`
+    const faults = {
+      ...(seed.clobber === true ? { clobber: true } : {}),
+      ...(seed.refused === true ? { refused: true } : {}),
+    }
     const entry: FakeState['files'][string] =
       seed.headRev !== undefined
         ? {
@@ -146,9 +155,9 @@ function seedWorkspace(
             content: seed.headContent ?? seed.content,
             haveRev: 1,
             haveContent: seed.content,
-            ...(seed.clobber === true ? { clobber: true } : {}),
+            ...faults,
           }
-        : { rev: 1, content: seed.content, ...(seed.clobber === true ? { clobber: true } : {}) }
+        : { rev: 1, content: seed.content, ...faults }
     files[depotFile] = entry
     if (seed.opened) {
       opened[depotFile] = {

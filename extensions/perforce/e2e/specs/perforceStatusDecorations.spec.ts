@@ -6,9 +6,9 @@
  *  resource group. Four journeys, one cold launch each, against the fake p4:
  *
  *  1. A file behind the depot head (`headRev` > have) carries grey
- *     "update available" text with a tooltip naming the pending revision —
+ *     "↓" text with a tooltip naming the pending revision —
  *     produced by the behind-check (two-tier probe) that runs at startup.
- *  2. A file open in ANOTHER client carries grey "in use by others" text with a
+ *  2. A file open in ANOTHER client carries grey "✎" text with a
  *     `user@client` tooltip. The local path must come from reversing the depot
  *     path (`p4 where`) — under `opened -a` the record's `clientFile` is the
  *     OTHER client's client-syntax path (`//otherclient/…`), and translating it
@@ -82,7 +82,7 @@ test.describe('@p1 perforce status decorations', () => {
   test.describe('behind grey text', () => {
     test.use({ p4Seeds: { files: [behindFile, cleanFile] } })
 
-    test('a file behind the depot head shows grey "update available" text @regression', async ({
+    test('a file behind the depot head shows grey "↓" text @regression', async ({
       page,
       workbench,
       perforce,
@@ -95,11 +95,11 @@ test.describe('@p1 perforce status decorations', () => {
       await expect
         .poll(() => decoFor(page, 'behind.txt'), {
           timeout: 60_000,
-          message: 'the behind file should carry the grey "update available" marker',
+          message: 'the behind file should carry the grey "↓" marker',
         })
         .toEqual(
           expect.objectContaining({
-            description: 'update available',
+            description: '↓',
             descriptionTooltip: expect.stringContaining('updated #2'),
           }),
         )
@@ -109,7 +109,7 @@ test.describe('@p1 perforce status decorations', () => {
   test.describe('opened-by-others grey text', () => {
     test.use({ p4Seeds: { files: [occupiedFile, cleanFile] } })
 
-    test('a file open in another client shows grey "in use by others" text @regression', async ({
+    test('a file open in another client shows grey "✎" text @regression', async ({
       page,
       workbench,
       perforce,
@@ -125,11 +125,11 @@ test.describe('@p1 perforce status decorations', () => {
       await expect
         .poll(() => decoFor(page, 'occupied.txt'), {
           timeout: 60_000,
-          message: 'the occupied file should carry the grey "in use by others" marker',
+          message: 'the occupied file should carry the grey "✎" marker',
         })
         .toEqual(
           expect.objectContaining({
-            description: 'in use by others',
+            description: '✎',
             descriptionTooltip: expect.stringContaining('testuser@otherclient'),
           }),
         )
@@ -160,7 +160,7 @@ test.describe('@p1 perforce status decorations', () => {
           timeout: 60_000,
           message: 'the merged marker should replace the two single-fact markers',
         })
-        .toBe('in use by others · update available')
+        .toBe('✎ ↓')
 
       // Both producers keep their full detail in the merged tooltip (joined by
       // a newline), so neither fact is lost by the merge.
@@ -189,7 +189,7 @@ test.describe('@p1 perforce status decorations', () => {
           timeout: 60_000,
           message: 'the behind file should get its decoration in the same run',
         })
-        .toEqual(expect.objectContaining({ description: 'update available' }))
+        .toEqual(expect.objectContaining({ description: '↓' }))
 
       // The real assertion: a file that is current, unoccupied and locally
       // unchanged carries nothing.

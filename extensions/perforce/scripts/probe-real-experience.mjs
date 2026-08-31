@@ -388,7 +388,7 @@ async function discover() {
     )
   }
 
-  // Others in each scope (the grey "in use by others" source).
+  // Others in each scope (the grey "✎" source).
   for (const s of [small, big, cap].filter(Boolean)) {
     const r = await runP4(['-ztag', 'opened', '-a', '-m', String(OTHERS_PROBE), `${s.dir}/...`], {
       timeoutMs: 60_000,
@@ -1261,17 +1261,17 @@ async function scenarioC3a(disco) {
     const syncExit = await ctx.waitCount(/sync -n -m \d+/, -1)
     if (syncExit) console.log(`  sync -n command: ${syncExit.line.slice(0, 140)}`)
 
-    // Decorations: uncapped → every discovered behind file carries 'update
-    // available'; capped → the cap path cleared them all (must be null).
-    const expectDeco = focus.capped ? null : 'update available'
+    // Decorations: uncapped → every discovered behind file carries '↓'; capped
+    // → the cap path cleared them all (must be null).
+    const expectDeco = focus.capped ? null : '↓'
     const behindSample = focus.clientFiles.slice(0, 8)
     let decoOk = 0
     for (const local of behindSample) {
       const d = await ctx.decoFor(basename(local))
-      const good = expectDeco === null ? d === null : d?.description === 'update available'
+      const good = expectDeco === null ? d === null : d?.description === '↓'
       if (good) decoOk++
       console.log(
-        `  deco(${basename(local).slice(0, 64)}): ${good ? `${expectDeco === null ? 'null (cap cleared) ✓' : 'update available ✓'}` : `MISSING/STRAY (${JSON.stringify(d)})`}`,
+        `  deco(${basename(local).slice(0, 64)}): ${good ? `${expectDeco === null ? 'null (cap cleared) ✓' : '↓ ✓'}` : `MISSING/STRAY (${JSON.stringify(d)})`}`,
       )
     }
     // Negative samples from the widest dir: files on disk that sync -n did NOT
@@ -1319,11 +1319,11 @@ async function scenarioC3a(disco) {
     }
     await sleep(2_500)
     const decoratedRows = await page
-      .locator('[role="treeitem"]', { hasText: 'update available' })
+      .locator('[role="treeitem"]', { hasText: '↓' })
       .count()
     const visibleRows = await page.locator('[role="treeitem"]').count()
     console.log(
-      `  explorer after reveal: ${visibleRows} rendered rows, ${decoratedRows} carrying grey 'update available'`,
+      `  explorer after reveal: ${visibleRows} rendered rows, ${decoratedRows} carrying grey '↓'`,
     )
 
     // Scroll the several-thousand-row directory a few pages and watch interaction perf.
@@ -1376,11 +1376,11 @@ async function scenarioC3a(disco) {
       await page.evaluate((f) => window.__E2E__.openFileUri(f), rel(densestFile))
       await sleep(2_500)
       const greyRows = await page
-        .locator('[role="treeitem"]', { hasText: 'update available' })
+        .locator('[role="treeitem"]', { hasText: '↓' })
         .count()
       const rowsNow = await page.locator('[role="treeitem"]').count()
       console.log(
-        `  explorer in behind dir: ${rowsNow} rendered rows, ${greyRows} carrying grey 'update available' (dir has ${densest.count} behind)`,
+        `  explorer in behind dir: ${rowsNow} rendered rows, ${greyRows} carrying grey '↓' (dir has ${densest.count} behind)`,
       )
       return {
         behindText: behind?.text,
@@ -1464,7 +1464,7 @@ async function scenarioC3b(disco) {
     )
     // Others: the scan's depotFile entries must be translated to local paths
     // (p4 where — same as the product's _whereLocalPaths) before checking the
-    // Explorer. Capped → all null; uncapped → 'in use by others'.
+    // Explorer. Capped → all null; uncapped → '✎'.
     let othersCleared = 0
     let othersLocal = 0
     if (focus.othersDepotFiles.length > 0) {

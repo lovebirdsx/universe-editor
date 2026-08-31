@@ -124,7 +124,7 @@
   text-overflow: ellipsis;
 }
 
-/* Server-side condition (可更新 / 他人占用) — grey, never truncated: the file
+/* Server-side condition (↓ / ✎) — grey, never truncated: the file
    name gives up width first, since the hint is short and the point of it. */
 .scmDescription {
   flex-shrink: 0;

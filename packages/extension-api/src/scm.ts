@@ -55,7 +55,7 @@ export interface SourceControlResourceState {
 export interface SourceControlSupplementaryDecoration {
   /** Filesystem path of the file (absolute). Folders are ignored. */
   readonly resourceUri: string
-  /** Short grey text after the file name, e.g. "可更新" / "他人占用". */
+  /** Short grey text after the file name, e.g. "↓" / "✎". */
   readonly description: string
   /** Appended to the row's hover tooltip, e.g. the concrete revisions. */
   readonly tooltip?: string

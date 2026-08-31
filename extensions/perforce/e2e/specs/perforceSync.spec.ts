@@ -3,11 +3,11 @@
  *
  *  Covers the pull (sync) chain end to end against the fake p4 (fixtures/
  *  fake-p4.mjs): a depot file seeded ahead of the synced revision (`headRev` >
- *  have) models "the server has newer revisions". Five journeys, one cold launch
+ *  have) models "the server has newer revisions". Six journeys, one cold launch
  *  each:
  *
  *  1. The two-tier behind-check (cheap `changes -m 1 -s submitted` gate → expensive
- *     `sync -n`) surfaces a status-bar count + grey "update available" marker;
+ *     `sync -n`) surfaces a status-bar count + grey "↓" marker;
  *     clicking the count pulls to head and zeroes both.
  *  2. The Explorer right-click "Get Latest Revision" targets a single file or a
  *     folder subtree (`<dir>/...`), leaving the rest of the client alone.
@@ -20,6 +20,12 @@
  *     to discovery-only.
  *  5. `perforce.previewSync` quick-picks the files a get would bring in, and
  *     reports "already at the latest" when nothing is pending.
+ *  6. The OTHER refusal shape — an `allwrite noclobber` client skipping a
+ *     locally-modified file on stdout with exit 0 — is reported as such by both
+ *     the preview and the get, a run that both refuses and updates reports BOTH
+ *     counts, and the Collect Changes button really collects. Unparsed, that
+ *     shape made the get claim "already at the latest revision" for a file
+ *     several revisions behind.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -55,6 +61,18 @@ const clobbered: SeedFile = {
   headRev: 2,
   headContent: 'head draft\n',
   clobber: true,
+}
+// The other refusal shape: an `allwrite noclobber` client skips just this file
+// (`can't update modified file` on stdout, exit 0) and carries on. Unparsed, the
+// get "succeeded" with nothing applied and the user was told the stale file was
+// already at the latest revision.
+const REFUSED_DRAFT = 'my uncollected refused work\n'
+const refused: SeedFile = {
+  relPath: 'refused.txt',
+  content: 'have refused\n',
+  headRev: 2,
+  headContent: 'head refused\n',
+  refused: true,
 }
 
 /** Open the seeded workspace, wait for the provider + command registration. */
@@ -106,14 +124,16 @@ test.describe('@p1 perforce sync', () => {
             () => page.evaluate(() => window.__E2E__!.getScmDecorationForResource('behind.txt')),
             {
               timeout: 30_000,
-              message: 'the behind file should carry the grey "update available" marker',
+              message: 'the behind file should carry the grey "↓" marker',
             },
           )
-          .toEqual(expect.objectContaining({ description: 'update available' }))
+          .toEqual(expect.objectContaining({ description: '↓' }))
       })
 
       await test.step('clicking the behind status-bar item pulls to head and clears both', async () => {
-        // The behind item's command is `perforce.syncLatest` (whole sync scope).
+        // The behind item's command is `perforce.syncScope` (whole sync scope) —
+        // deliberately not the file-scoped `perforce.syncLatest`, which would
+        // fetch only the active editor's file while the label promises N.
         const behindItem = page.locator('[data-testid="part-statusbar"] button', {
           hasText: /files behind/,
         })
@@ -385,6 +405,121 @@ test.describe('@p1 perforce sync', () => {
             .locator('[data-testid="notification-toast-item"]')
             .filter({ hasText: 'Already at the latest revision' }),
         ).toBeVisible({ timeout: 30_000 })
+      })
+    })
+  })
+
+  test.describe('locally-modified refusal', () => {
+    test.use({ p4Seeds: { files: [refused, behind] } })
+
+    test('a get p4 refused for uncollected local changes says so instead of claiming up-to-date @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await openSyncWorkspace(page, workbench, perforce.openDir)
+
+      const groupIds = (suffix: string) =>
+        page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), suffix)
+      const upToDateToast = page
+        .locator('[data-testid="notification-toast-item"]')
+        .filter({ hasText: 'Already at the latest revision' })
+
+      await test.step('the uncollected local work surfaces in Changes to Reconcile', async () => {
+        // The refusal is p4 protecting local work that nobody collected, so the
+        // drift has to exist on disk for Collect Changes to have anything to
+        // collect — same setup as the clobber journeys above.
+        writeFileSync(perforce.file(refused.relPath), REFUSED_DRAFT, 'utf8')
+        await expect
+          .poll(
+            async () => {
+              const ids = await groupIds(refused.relPath)
+              if (!ids.includes('reconcile')) {
+                writeFileSync(perforce.file(refused.relPath), REFUSED_DRAFT, 'utf8')
+              }
+              return ids
+            },
+            {
+              timeout: 30_000,
+              intervals: [500, 1000],
+              message: 'the drift should surface in the reconcile group',
+            },
+          )
+          .toEqual(expect.arrayContaining(['reconcile']))
+      })
+
+      await test.step('the preview lists the refused file rather than reporting up-to-date', async () => {
+        // THE first guard: the refusal is a plain stdout line that `-ztag` drops,
+        // so a single-file preview came back with zero records and reported "up to
+        // date" — the same lie as the get itself.
+        void page
+          .evaluate(
+            (p) => void window.__E2E__!.runCommand('perforce.previewSync', { resourceUri: p }),
+            perforce.file(refused.relPath),
+          )
+          .catch(() => {})
+
+        const quickInput = page.getByTestId('quick-input')
+        await expect(quickInput).toBeVisible({ timeout: 30_000 })
+        await expect(quickInput.getByText('refused.txt', { exact: true })).toBeVisible()
+        // description = `<action> #<rev>`; the action reads as prose because it
+        // also lands in the Explorer badge tooltip.
+        await expect(quickInput.getByText('not updated #2', { exact: true })).toBeVisible()
+        await expect(upToDateToast).toHaveCount(0)
+        await page.keyboard.press('Escape')
+        await workbench.quickInput.waitForHidden()
+      })
+
+      await test.step('the get reports the refusal instead of claiming up-to-date', async () => {
+        // THE main guard: this used to pop "Already at the latest revision" while
+        // the file sat a revision behind and the status bar never changed.
+        void page
+          .evaluate(
+            (p) => void window.__E2E__!.runCommand('perforce.syncLatest', { resourceUri: p }),
+            perforce.file(refused.relPath),
+          )
+          .catch(() => {})
+
+        const dialog = page.getByRole('dialog')
+        await expect(dialog).toBeVisible({ timeout: 30_000 })
+        await expect(dialog).toContainText('not updated')
+        await expect(upToDateToast).toHaveCount(0)
+        // Nothing landed on disk: p4 refused, so the local work is still there
+        // untouched (a force-get would have destroyed exactly this).
+        expect(readFileSync(perforce.file(refused.relPath), 'utf8')).toBe(REFUSED_DRAFT)
+        // Dismiss without collecting: the collect button is exercised by the
+        // mixed-run step below, which needs the drift still uncollected.
+        await page.keyboard.press('Escape')
+        await expect(dialog).toHaveCount(0)
+      })
+
+      await test.step('a run that both refuses and updates reports both counts, and Collect Changes really collects', async () => {
+        // THE third guard: leading with the refusal must not swallow what landed.
+        // A scope-wide get here refuses refused.txt and updates behind.txt in the
+        // same exit-0 run; reporting only the refusal would leave the user
+        // believing nothing was fetched (and the docs promise otherwise).
+        void page
+          .evaluate(() => void window.__E2E__!.runCommand('perforce.syncScope'))
+          .catch(() => {})
+
+        const dialog = page.getByRole('dialog')
+        await expect(dialog).toBeVisible({ timeout: 30_000 })
+        await expect(dialog).toContainText('not updated')
+        await expect(dialog).toContainText('Updated 1 file(s)')
+        await expect(upToDateToast).toHaveCount(0)
+        // The other file really did land, which is what the count claims.
+        expect(readFileSync(perforce.file(behind.relPath), 'utf8')).toBe(BEHIND_HEAD)
+        expect(readFileSync(perforce.file(refused.relPath), 'utf8')).toBe(REFUSED_DRAFT)
+
+        await dialog.getByRole('button', { name: 'Collect Changes' }).click()
+        await expect
+          .poll(() => groupIds(refused.relPath), {
+            timeout: 30_000,
+            message:
+              'the collect button should open (collect) the file into the default changelist',
+          })
+          .toEqual(['default'])
       })
     })
   })

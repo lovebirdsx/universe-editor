@@ -73,6 +73,7 @@ import {
   parseSyncOutput,
   parseSyncPreview,
   parseSyncPreviewTotal,
+  parseSyncRefused,
   parseResolveOutput,
   type SyncPreviewFile,
   type SyncRunSummary,
@@ -198,7 +199,7 @@ const MAX_FILE_SCOPED_INVALIDATIONS = 64
 const RECONCILE_REVERIFY_MAX_PATHS = 1500
 
 /**
- * Above this many behind files, the grey "可更新" markers are dropped and only the
+ * Above this many behind files, the grey ↓ markers are dropped and only the
  * count survives. Rendering ten thousand Explorer decorations helps nobody, and
  * the status-bar number stays exact either way — but the skip is always logged,
  * never silent, or the empty Explorer reads as "I'm up to date".
@@ -244,7 +245,7 @@ const SYNC_PREVIEW_GATE_TIMEOUT_MS = 10_000
 const GATE_MARKER_NO_CHANGES = 'none'
 
 /**
- * Above this many files opened by others, the grey "他人占用" markers are
+ * Above this many files opened by others, the grey ✎ markers are
  * dropped and only the count survives. Same reasoning as the behind-check cap —
  * but smaller, because "in use by others" is a per-file warning the user acts on
  * one file at a time, and the skip is always logged, never silent.
@@ -298,6 +299,22 @@ const RECONCILE_STAGE_LABELS: Record<ReconcileOutcome, string> = {
   deferred: 'reconcile(deferred)',
   skipped: 'reconcile(skipped)',
   none: 'reconcile(none)',
+}
+
+/** What a `p4 sync` run reports back — see {@link PerforceClient.sync}. */
+export interface SyncRunResult {
+  readonly ok: boolean
+  readonly cancelled: boolean
+  readonly summary: SyncRunSummary | undefined
+  /**
+   * The files an `allwrite noclobber` client refused because they hold
+   * uncollected local work (`summary.refusedModified` is their count). Carried
+   * out so the caller can offer to diff them: the refusal already names every
+   * path, and re-deriving them with a second p4 call would be both slower and
+   * free to disagree with the run the user is being told about.
+   */
+  readonly refusedFiles: readonly SyncPreviewFile[]
+  readonly error: { kind: SyncErrorKind; suggestion: string } | undefined
 }
 
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
@@ -478,7 +495,7 @@ export class PerforceClient {
    * slice without erasing the other's, then publish the union.
    */
   private readonly _behindDecorations = new Map<string, SourceControlSupplementaryDecoration>()
-  /** Grey "他人占用" markers (files other clients have open), keyed like
+  /** Grey ✎ markers (files other clients have open), keyed like
    *  {@link _behindDecorations} so {@link _publishSupplementaryDecorations} can
    *  publish the union of both. */
   private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
@@ -1992,12 +2009,7 @@ export class PerforceClient {
   async sync(
     spec: string,
     options?: { scope?: readonly string[]; force?: boolean },
-  ): Promise<{
-    ok: boolean
-    cancelled: boolean
-    summary: SyncRunSummary | undefined
-    error: { kind: SyncErrorKind; suggestion: string } | undefined
-  }> {
+  ): Promise<SyncRunResult> {
     const targets = this._syncTargets(spec, options?.scope)
     const args = ['sync', ...(options?.force === true ? ['-f'] : []), ...targets]
     return this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
@@ -2009,22 +2021,29 @@ export class PerforceClient {
         // the view reflects whatever landed before the abort.
         this._log?.('[perforce] sync cancelled by user')
         await this._refreshAfterMutation()
-        return { ok: false, cancelled: true, summary: undefined, error: undefined }
+        return {
+          ok: false,
+          cancelled: true,
+          summary: undefined,
+          refusedFiles: [],
+          error: undefined,
+        }
       }
       const summary = parseSyncOutput(result.stdout, result.stderr)
+      const refusedFiles = parseSyncRefused(result.stdout, this.root)
       // Measured on P4D 2024.2: "file(s) up-to-date." arrives on **stderr with
       // exit 0**. Checked before the exit code so the outcome is the same however
       // a given server reports it — a future non-zero variant must not read as a
       // failure, and this one must not read as "applied 0 files, something's off".
-      if (summary.upToDate && summary.applied === 0) {
+      if (summary.upToDate && summary.applied === 0 && summary.refusedModified === 0) {
         this._log?.('[perforce] sync: already up to date')
-        return { ok: true, cancelled: false, summary, error: undefined }
+        return { ok: true, cancelled: false, summary, refusedFiles, error: undefined }
       }
       if (result.exitCode !== 0) {
         const error = classifySyncError(result)
         this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(result)}`)
         await this._refreshAfterMutation()
-        return { ok: false, cancelled: false, summary, error }
+        return { ok: false, cancelled: false, summary, refusedFiles, error }
       }
       if (summary.unrecognized) {
         // Exit 0 with output we couldn't account for: never silent — the counts
@@ -2034,7 +2053,8 @@ export class PerforceClient {
         )
       }
       this._log?.(
-        `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ${summary.mustResolve} need resolve`,
+        `[perforce] sync ${spec}: ${summary.applied} applied, ${summary.keptOpen} kept open, ` +
+          `${summary.mustResolve} need resolve, ${summary.refusedModified} refused (locally modified)`,
       )
       // A sync rewrites have-revisions across the scope, so every path-keyed
       // cache entry (fstat/print/filelog) is potentially stale — full clear.
@@ -2044,7 +2064,7 @@ export class PerforceClient {
       // it — `force` skips the interval floor so the status bar doesn't keep
       // showing the number they clicked to clear for another few minutes.
       this.scheduleSyncPreview({ force: true })
-      return { ok: true, cancelled: false, summary, error: undefined }
+      return { ok: true, cancelled: false, summary, refusedFiles, error: undefined }
     })
   }
 
@@ -2054,14 +2074,9 @@ export class PerforceClient {
     paths: readonly string[],
     spec = '#head',
     options?: { force?: boolean },
-  ): Promise<{
-    ok: boolean
-    cancelled: boolean
-    summary: SyncRunSummary | undefined
-    error: { kind: SyncErrorKind; suggestion: string } | undefined
-  }> {
+  ): Promise<SyncRunResult> {
     if (paths.length === 0) {
-      return { ok: false, cancelled: false, summary: undefined, error: undefined }
+      return { ok: false, cancelled: false, summary: undefined, refusedFiles: [], error: undefined }
     }
     return this.sync(spec, {
       scope: paths,
@@ -2101,16 +2116,28 @@ export class PerforceClient {
       ['sync', '-n', ...limitArgs, ...targets],
       options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : undefined,
     )
+    // `-ztag` drops the plain refusal lines an `allwrite noclobber` client emits
+    // for locally-modified files, and those files ARE behind — folding them back
+    // in is what stops a single-file preview (no structured records at all) from
+    // reporting "up to date" while the revision chip shows `↓`.
+    const refused = parseSyncRefused(res.result.stdout, this.root)
     // Measured: "up-to-date" arrives on **stderr with exit 0** and no records, so
     // it has to be tested before the exit code — not only in a failure branch.
-    if (classifySyncError(res.result).kind === 'upToDate') {
+    // Refusals outrank it: a multi-filespec run can report one scope up to date
+    // while refusing files in another, and answering "up to date" there would
+    // hide exactly the files the user needs to act on.
+    if (refused.length === 0 && classifySyncError(res.result).kind === 'upToDate') {
       return { ok: true, files: [], total: undefined, upToDate: true }
     }
     if (res.result.exitCode !== 0) {
       this._log?.(`[perforce] sync -n failed: ${p4ErrorText(res.result)}`)
       return { ok: false, files: [], total: undefined, upToDate: false }
     }
-    const files = parseSyncPreview(res.records, this.root)
+    const files = [...parseSyncPreview(res.records, this.root), ...refused]
+    // `total` stays record-derived on purpose: measured, `totalFileCount` already
+    // counts the refusal lines, so adding them again would double-count on a wide
+    // scope. Where the server omits it, the caller falls back to `files.length`,
+    // which now includes them.
     const total = parseSyncPreviewTotal(res.records)
     return { ok: true, files, total, upToDate: files.length === 0 }
   }
@@ -2126,7 +2153,7 @@ export class PerforceClient {
   // --- Behind awareness ----------------------------------------------------
 
   /** Apply `perforce.syncPreview.*`. Turning auto-check off clears what's shown:
-   *  stale "可更新" markers are worse than none, since nothing will refresh them. */
+   *  stale ↓ markers are worse than none, since nothing will refresh them. */
   setSyncPreviewOptions(options: { autoCheck: boolean; intervalMs: number }): void {
     this._syncPreviewAutoCheck = options.autoCheck
     this._syncPreviewIntervalMs = Math.max(SYNC_PREVIEW_MIN_INTERVAL_MS, options.intervalMs)
@@ -2146,7 +2173,7 @@ export class PerforceClient {
 
   /**
    * Compare the sync scope against the depot and report how far behind this client
-   * is, publishing a grey "可更新" marker per file.
+   * is, publishing a grey ↓ marker per file.
    *
    * **Two tiers, because the obvious one-tier design is unusable.** Measured on a
    * 450k-file workspace, `sync -n` over the client root returns nothing in 120s —
@@ -2256,10 +2283,10 @@ export class PerforceClient {
         if (!local) continue
         this._behindDecorations.set(scopeKey(local), {
           resourceUri: local,
-          description: localize('perforce.deco.behind', 'update available'),
+          description: localize('perforce.deco.behind', '↓'),
           tooltip: localize(
             'perforce.deco.behind.tooltip',
-            'A newer revision is available ({0} #{1}). Use Get Latest Revision to fetch it.',
+            'Update available — the server has a newer revision ({0} #{1}). Use Get Latest Revision to fetch it.',
             { 0: file.action, 1: file.rev },
           ),
         })
@@ -2355,7 +2382,7 @@ export class PerforceClient {
   // --- Opened-by-others awareness ------------------------------------------
 
   /** Apply `perforce.openedByOthers.*`. Turning auto-check off clears what's
-   *  shown: stale "他人占用" markers are worse than none, since nothing will
+   *  shown: stale ✎ markers are worse than none, since nothing will
    *  refresh them. */
   setOpenedByOthersOptions(options: { autoCheck: boolean; intervalMs: number }): void {
     this._openedByOthersAutoCheck = options.autoCheck
@@ -2373,7 +2400,7 @@ export class PerforceClient {
 
   /**
    * Ask who has what open: `p4 opened -a` over the sync scope, filtered to other
-   * clients, published as grey "他人占用" markers.
+   * clients, published as grey ✎ markers.
    *
    * No cheap gate in front (unlike the behind-check): `opened` reads the
    * server's *open table* rather than walking the client view, so its cost
@@ -2462,10 +2489,14 @@ export class PerforceClient {
         const owner = file.openedByUser ? `${file.openedByUser}@${client}` : client
         this._othersDecorations.set(scopeKey(local), {
           resourceUri: local,
-          description: localize('perforce.deco.occupied', 'in use by others'),
-          tooltip: localize('perforce.deco.occupied.tooltip', '{0} has this file open', {
-            0: owner,
-          }),
+          description: localize('perforce.deco.occupied', '✎'),
+          tooltip: localize(
+            'perforce.deco.occupied.tooltip',
+            'In use by others — {0} has this file open',
+            {
+              0: owner,
+            },
+          ),
         })
       }
     }
@@ -2541,17 +2572,16 @@ export class PerforceClient {
         merged.set(key, deco)
         continue
       }
-      // Both facts matter and the grey line only fits one short text — join the
-      // descriptions; the tooltip keeps each producer's full detail.
-      const tooltip = [behind.tooltip, deco.tooltip]
+      // Both facts matter and the grey line only fits two glyphs — join the
+      // descriptions; the tooltip keeps each producer's full detail. Tooltip
+      // order follows the glyph order (✎ then ↓) so the hover reads in the same
+      // sequence the row does.
+      const tooltip = [deco.tooltip, behind.tooltip]
         .filter((t): t is string => t !== undefined)
         .join('\n')
       merged.set(key, {
         resourceUri: deco.resourceUri,
-        description: localize(
-          'perforce.deco.occupiedAndBehind',
-          'in use by others · update available',
-        ),
+        description: localize('perforce.deco.occupiedAndBehind', '✎ ↓'),
         ...(tooltip.length > 0 ? { tooltip } : {}),
       })
     }

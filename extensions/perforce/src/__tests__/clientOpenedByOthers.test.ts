@@ -71,7 +71,6 @@ function installBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
-const { localize } = await import('../nls.js')
 import type { PerforceClient as PerforceClientType } from '../client.js'
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
@@ -288,7 +287,7 @@ describe('opened-by-others markers', () => {
     for (const [i, d] of decorations.entries()) {
       expect(d.resourceUri.startsWith('//')).toBe(false)
       expect(d.resourceUri.replace(/\\/g, '/')).toBe(`${ROOT_FWD}/Source/f${i + 1}.txt`)
-      expect(d.description).toBe(localize('perforce.deco.occupied', 'in use by others'))
+      expect(d.description).toBe('✎')
       expect(d.tooltip).toContain('testuser@otherclient')
     }
   })
@@ -735,14 +734,16 @@ describe('union with the behind markers', () => {
     expect(decorations).toHaveLength(3)
     const byUri = new Map(decorations.map((d) => [d.resourceUri.replace(/\\/g, '/'), d]))
     const merged = byUri.get(`${ROOT_FWD}/Source/f1.txt`)!
-    expect(merged.description).toBe(
-      localize('perforce.deco.occupiedAndBehind', 'in use by others · update available'),
-    )
+    // Literal glyphs, not `localize(key, glyph)`: the grey text is a symbol the
+    // user has to recognize, so the assertion has to pin the code point. Routing
+    // it through localize would just echo whatever client.ts passes as its own
+    // default (U+270E vs the emoji U+270F would both pass).
+    expect(merged.description).toBe('✎ ↓')
     expect(merged.tooltip).toContain('testuser@otherclient')
     expect(merged.tooltip).toContain('#3')
     const behindOnly = byUri.get(`${ROOT_FWD}/Source/f2.txt`)!
-    expect(behindOnly.description).toBe(localize('perforce.deco.behind', 'update available'))
+    expect(behindOnly.description).toBe('↓')
     const othersOnly = byUri.get(`${ROOT_FWD}/Source/f3.txt`)!
-    expect(othersOnly.description).toBe(localize('perforce.deco.occupied', 'in use by others'))
+    expect(othersOnly.description).toBe('✎')
   })
 })

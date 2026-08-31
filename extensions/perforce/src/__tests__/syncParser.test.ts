@@ -5,6 +5,7 @@ import {
   parseSyncPreview,
   parseSyncPreviewRecord,
   parseSyncPreviewTotal,
+  parseSyncRefused,
 } from '../syncParser.js'
 
 describe('parseSyncPreviewRecord', () => {
@@ -163,6 +164,7 @@ describe('parseSyncOutput', () => {
       applied: 4,
       keptOpen: 1,
       mustResolve: 1,
+      refusedModified: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -173,6 +175,7 @@ describe('parseSyncOutput', () => {
       applied: 0,
       keptOpen: 0,
       mustResolve: 0,
+      refusedModified: 0,
       upToDate: true,
       unrecognized: false,
     })
@@ -183,6 +186,7 @@ describe('parseSyncOutput', () => {
       applied: 0,
       keptOpen: 0,
       mustResolve: 0,
+      refusedModified: 0,
       upToDate: false,
       unrecognized: false,
     })
@@ -194,6 +198,7 @@ describe('parseSyncOutput', () => {
       applied: 0,
       keptOpen: 0,
       mustResolve: 0,
+      refusedModified: 0,
       upToDate: false,
       unrecognized: true,
     })
@@ -225,6 +230,78 @@ describe('parseSyncOutput', () => {
     const summary = parseSyncOutput(out, '')
     expect(summary.applied).toBe(2)
     expect(summary.keptOpen).toBe(1)
+  })
+
+  // An `allwrite noclobber` client refuses a locally-modified file per file, on
+  // stdout, with exit 0. Left uncounted this reads as "nothing to do" and the
+  // caller tells the user the file is already current — the bug this guards.
+  it('counts an allwrite-noclobber refusal and does not call it unrecognized', () => {
+    const out = "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json"
+    expect(parseSyncOutput(out, '')).toEqual({
+      applied: 0,
+      keptOpen: 0,
+      mustResolve: 0,
+      refusedModified: 1,
+      upToDate: false,
+      unrecognized: false,
+    })
+  })
+
+  it('counts refusals alongside applied lines in one run', () => {
+    const out = [
+      '//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp',
+      "//depot/branch_x/b.json#69 - can't update modified file X:/p4ws/main/b.json",
+    ].join('\n')
+    const summary = parseSyncOutput(out, '')
+    expect(summary.applied).toBe(1)
+    expect(summary.refusedModified).toBe(1)
+    expect(summary.unrecognized).toBe(false)
+  })
+
+  it('does not mistake a refusal line for an applied one', () => {
+    // ` - ` is followed by `can't`, not by `update`, so APPLIED_LINE must miss it.
+    const summary = parseSyncOutput(
+      "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+      '',
+    )
+    expect(summary.applied).toBe(0)
+  })
+})
+
+describe('parseSyncRefused', () => {
+  const LINE = "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json"
+
+  it('extracts the depot path, revision and local path', () => {
+    expect(parseSyncRefused(LINE)).toEqual([
+      {
+        depotFile: '//depot/branch_x/a.json',
+        clientFile: 'X:/p4ws/main/a.json',
+        action: 'not updated',
+        rev: '69',
+      },
+    ])
+  })
+
+  it('returns an empty list when nothing was refused', () => {
+    expect(parseSyncRefused('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp')).toEqual([])
+    expect(parseSyncRefused('')).toEqual([])
+    expect(parseSyncRefused('X:/p4ws/main/... - file(s) up-to-date.')).toEqual([])
+  })
+
+  it('tolerates CRLF and surrounding whitespace, and collects every refusal', () => {
+    const out = [
+      `  ${LINE}  `,
+      "\t//depot/branch_x/b.ini#4 - can't update modified file X:/p4ws/main/b.ini",
+    ].join('\r\n')
+    const files = parseSyncRefused(out)
+    expect(files.map((f) => f.rev)).toEqual(['69', '4'])
+  })
+
+  it('keeps a windows local path verbatim when no client root is given', () => {
+    const files = parseSyncRefused(
+      "//depot/branch_x/a.json#69 - can't update modified file X:\\p4ws\\main\\a.json",
+    )
+    expect(files[0]?.clientFile).toBe('X:\\p4ws\\main\\a.json')
   })
 })
 

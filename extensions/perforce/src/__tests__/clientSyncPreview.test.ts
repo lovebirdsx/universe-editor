@@ -296,6 +296,26 @@ describe('behind decorations and count', () => {
     expect(client.status.syncBehindCount).toBe(0)
     expect(publishedDecorations()).toEqual([])
   })
+
+  // On an `allwrite noclobber` client a behind file that has uncollected local
+  // changes is reported as a plain `- can't update modified file` line, which
+  // `-ztag` drops. That left the count at 0 and the Explorer bare while the
+  // status-bar revision chip showed `↓` for the very same file.
+  it('counts and decorates a behind file p4 refused for local changes', async () => {
+    const client = await makeClient(() => ({
+      stdout: `//depot/branch_x/f1.cpp#7 - can't update modified file ${localPath('f1.cpp')}\n`,
+    }))
+
+    const res = await client.runSyncPreviewScan()
+
+    expect(res).toEqual({ behind: 1, capped: false, ok: true, skipped: false })
+    expect(client.status.syncBehindCount).toBe(1)
+    const decorations = publishedDecorations()
+    expect(decorations).toHaveLength(1)
+    expect(decorations[0]!.resourceUri.startsWith('//')).toBe(false)
+    expect(decorations[0]!.resourceUri.replace(/\\/g, '/')).toBe(`${ROOT_FWD}/f1.cpp`)
+    expect(decorations[0]!.tooltip).toContain('#7')
+  })
 })
 
 describe('decoration cap', () => {

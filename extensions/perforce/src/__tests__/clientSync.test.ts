@@ -127,6 +127,15 @@ function lastSyncArgv(): string[] | undefined {
   return argv.slice(argv.indexOf('sync'))
 }
 
+/** Whether a refresh ran after the real `p4 sync` — the observable difference
+ *  between the up-to-date early return (nothing landed, so nothing to refresh)
+ *  and a run that changed something. */
+function refreshedAfterSync(): boolean {
+  const at = spawned.findIndex((a) => subcommand(a) === 'sync' && !a.includes('-n'))
+  if (at < 0) return false
+  return spawned.slice(at + 1).some((a) => subcommand(a) === 'opened')
+}
+
 beforeEach(() => {
   installBridge()
   spawnMock.mockReset()
@@ -281,6 +290,79 @@ describe('PerforceClient.sync', () => {
     expect(log.mock.calls.flat().join('\n')).toContain('not parseable')
   })
 
+  // An `allwrite noclobber` client (measured on P4D 2024.2) refuses each
+  // locally-modified file on **stdout with exit 0** and walks on. Unparsed, the
+  // run reported all-zero counts and the caller told the user the file was
+  // already at the latest revision while it sat several revisions behind.
+  it('counts a locally-modified refusal instead of reporting nothing to do', async () => {
+    const log = vi.fn<(msg: string) => void>()
+    respond(
+      makeHandler(() => ({
+        stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n`,
+        exit: 0,
+      })),
+    )
+    const client = await PerforceClient.create(
+      ROOT,
+      {},
+      new ConcurrencyGate(4),
+      { enabled: true, workspaceTtlMs: 4000 },
+      log,
+    )
+    expect(client).toBeDefined()
+
+    const res = await client!.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(res.error).toBeUndefined()
+    expect(res.summary?.refusedModified).toBe(1)
+    expect(res.summary?.applied).toBe(0)
+    // Recognized now, so it must not be filed under "we don't know what happened".
+    expect(res.summary?.unrecognized).toBe(false)
+    expect(res.summary?.upToDate).toBe(false)
+    expect(log.mock.calls.flat().join('\n')).not.toContain('not parseable')
+  })
+
+  it('carries the refused paths out so the caller can offer to diff them', async () => {
+    const client = await makeClient(() => ({
+      stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n`,
+    }))
+
+    const res = await client.sync('#head')
+
+    expect(res.refusedFiles).toHaveLength(1)
+    expect(res.refusedFiles[0]).toMatchObject({
+      depotFile: '//depot/branch_x/a.json',
+      rev: '69',
+      action: 'not updated',
+    })
+    expect(res.refusedFiles[0]!.clientFile?.replace(/\\/g, '/')).toBe(LOCAL)
+  })
+
+  it('does not let an up-to-date notice bury a refusal in the same run', async () => {
+    // A multi-filespec get can report one scope current while refusing files in
+    // another. Answering "already at the latest revision" there would hide the
+    // files the user actually has to act on.
+    const client = await makeClient(() => ({
+      stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n`,
+      stderr: `${ROOT_FWD}/other/... - file(s) up-to-date.`,
+    }))
+
+    const res = await client.sync('#head')
+
+    expect(res.ok).toBe(true)
+    expect(res.summary?.refusedModified).toBe(1)
+    expect(res.refusedFiles).toHaveLength(1)
+    // THE guard on the early return itself: taking it would skip the refresh and
+    // the forced behind re-scan, leaving the status bar showing the count the
+    // user just clicked. Without this, dropping `refusedModified === 0` from the
+    // early-return condition still passes every assertion above.
+    expect(refreshedAfterSync()).toBe(true)
+    await client.whenSyncPreviewSettled()
+    const dryRuns = spawned.filter((a) => subcommand(a) === 'sync' && a.includes('-n'))
+    expect(dryRuns.length).toBeGreaterThan(0)
+  })
+
   it('reports cancellation without an error and still refreshes', async () => {
     const client = await makeClient((argv) => {
       // Abort while the sync is in flight; the service resolves a failure result
@@ -410,5 +492,68 @@ describe('PerforceClient.previewSync', () => {
     expect(res.ok).toBe(true)
     expect(res.upToDate).toBe(true)
     expect(res.files).toEqual([])
+  })
+
+  // A refused-modified file yields a plain line that `-ztag` drops entirely, so
+  // a single-file preview came back with zero records and reported "up to date"
+  // — the same false answer as the real get, and the reason the behind count and
+  // the Explorer badge vanished on a narrow scope while the chip showed `↓`.
+  it('folds a refused-modified line into the files instead of reporting up to date', async () => {
+    const client = await makeClient((argv) => {
+      if (!argv.includes('-n')) return { stdout: '' }
+      return { stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n` }
+    })
+
+    const res = await client.previewSync([LOCAL])
+
+    expect(res.ok).toBe(true)
+    expect(res.upToDate).toBe(false)
+    expect(res.files).toHaveLength(1)
+    expect(res.files[0]).toMatchObject({
+      depotFile: '//depot/branch_x/a.json',
+      rev: '69',
+      action: 'not updated',
+    })
+    expect(res.files[0]!.clientFile?.replace(/\\/g, '/')).toBe(LOCAL)
+  })
+
+  it('reports refusals even when another filespec is up to date', async () => {
+    const client = await makeClient((argv) => {
+      if (!argv.includes('-n')) return { stdout: '' }
+      return {
+        stdout: `//depot/branch_x/a.json#69 - can't update modified file ${LOCAL}\n`,
+        stderr: `${ROOT_FWD}/other/... - file(s) up-to-date.`,
+        exit: 0,
+      }
+    })
+
+    const res = await client.previewSync()
+
+    expect(res.upToDate).toBe(false)
+    expect(res.files).toHaveLength(1)
+  })
+
+  it('keeps totalFileCount authoritative rather than adding refusals on top', async () => {
+    // Measured: totalFileCount already counts the plain refusal lines, so the
+    // grand total must not be inflated by folding them in a second time.
+    const client = await makeClient((argv) => {
+      if (!argv.includes('-n')) return { stdout: '' }
+      return {
+        stdout: [
+          '... depotFile //depot/branch_x/a.cpp',
+          `... clientFile ${LOCAL}`,
+          '... rev 3',
+          '... action updated',
+          '... totalFileCount 2',
+          '',
+          `//depot/branch_x/b.json#69 - can't update modified file ${ROOT_FWD}/b.json`,
+        ].join('\n'),
+      }
+    })
+
+    const res = await client.previewSync()
+
+    expect(res.total).toBe(2)
+    expect(res.files).toHaveLength(2)
   })
 })

@@ -107,6 +107,11 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.failed': '拉取版本失败。{0}',
   'perforce.btn.collectChanges': '收集改动',
   'perforce.sync.upToDate': '已是最新版本。',
+  'perforce.sync.refusedModified': '{0} 个文件未更新——它们有尚未收集的本地修改',
+  'perforce.btn.viewRefusedDiff': '查看差异',
+  'perforce.sync.refusedPickDiff': '选择一个文件查看它未收集的本地修改',
+  'perforce.sync.refusedNoLocalPath': '无法显示差异：被跳过的文件没有映射到当前工作区。',
+  'perforce.sync.unrecognized': '拉取版本没有返回可识别的结果，详情请查看 Perforce 输出。',
   'perforce.sync.applied': '已更新 {0} 个文件',
   'perforce.sync.keptOpen': '{0} 个已跳过（正在签出中）',
   'perforce.sync.mustResolve': '{0} 个需要合并',
@@ -115,15 +120,14 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.previewSync.placeholder': '共有 {0} 个文件将被拉取——选择一个可直接打开',
   'perforce.copyDepotPath.notControlled': '该文件不在 depot 中。',
   // 落后感知（Explorer 灰字 + 状态栏）
-  'perforce.deco.behind': '可更新',
-  'perforce.deco.behind.tooltip': '服务器上有更新版本（{0} #{1}）。用「拉取最新版本」获取。',
+  // 三条 deco 描述是语言无关的符号（↓ / ✎），无需翻译；tooltip 仍按语言翻译。
+  'perforce.deco.behind.tooltip':
+    '可更新——服务器上有更新版本（{0} #{1}）。用「拉取最新版本」获取。',
   'perforce.status.behind': '{0} 个可更新',
   'perforce.status.behind.capped': '超过 {0} 个可更新',
   'perforce.status.behind.tooltip': '点击拉取整个作用域的最新版本',
   // 他人占用（Explorer 灰字）
-  'perforce.deco.occupied': '他人占用',
-  'perforce.deco.occupied.tooltip': '{0} 打开着此文件',
-  'perforce.deco.occupiedAndBehind': '他人占用 · 可更新',
+  'perforce.deco.occupied.tooltip': '他人占用——{0} 打开着此文件',
   // p4Error.ts
   'perforce.btn.openOutput': '打开 Perforce 输出',
   'perforce.error.offline': 'Perforce 服务器不可达——请检查连接与 P4PORT',
@@ -147,8 +151,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.revAdded': '新增',
   'perforce.status.revAddedTooltip': '新文件，尚未提交到 depot',
   'perforce.status.revTooltip': '本机修订 #{0}，服务器 head 修订 #{1}',
-  'perforce.status.revTooltipBehind':
-    '本机修订 #{0}，服务器已到 #{1} —— 点击拉取整个作用域的最新版本',
+  'perforce.status.revTooltipBehind': '本机修订 #{0}，服务器已到 #{1} —— 点击拉取此文件的最新版本',
   'perforce.status.revHeadTooltip': '服务器 head 修订 {0}',
   'perforce.status.revHaveTooltip': '本机修订 #{0}',
   // 切换工作区（client）

@@ -6,6 +6,13 @@
  * merge transcripts that mix landed and skipped files even when it exits 0 —
  * hence the two counters in {@link ResolveRunSummary}.
  *
+ * Two refusal shapes exist and neither may be dropped on the floor: an
+ * `allwrite noclobber` client refuses a locally-modified file per file
+ * (`- can't update modified file`, stdout, exit 0, run continues — counted by
+ * {@link SyncRunSummary.refusedModified} and extracted by
+ * {@link parseSyncRefused}), while a `noallwrite` client aborts the whole run
+ * (`can't clobber writable file`, stderr, exit 1 — classified in `p4Error.ts`).
+ *
  * Verified against P4D 2024.2 (see `e2e/fixtures/PROBE-FINDINGS.md`).
  */
 
@@ -103,6 +110,16 @@ export interface SyncRunSummary {
   /** Files p4 reported as needing a resolve first (`must resolve`). */
   readonly mustResolve: number
   /**
+   * Files p4 skipped because they are locally modified but NOT opened — an
+   * `allwrite noclobber` client's per-file refusal (`- can't update modified
+   * file`). Measured on P4D 2024.2: **stdout with exit 0**, and the sync walks
+   * on past them. A clobber refusal (`noallwrite`) is the other shape entirely:
+   * stderr, exit 1, whole run aborted — see {@link classifySyncError}. Both
+   * exist, both must be counted; an unparsed refusal reads as "nothing to do"
+   * and the caller reports the file as already current when it is not.
+   */
+  readonly refusedModified: number
+  /**
    * True when p4 reported `file(s) up-to-date.`. Measured on P4D 2024.2: this
    * arrives on **stderr with exit 0** — nothing to do, not a failure.
    */
@@ -121,22 +138,64 @@ const APPLIED_LINE = / - (updated|added|deleted|refreshing|refreshed|updating)( 
 const KEPT_OPEN_LINE = /is opened and (can't be replaced|not being changed)/i
 const MUST_RESOLVE_LINE = / must resolve /i
 const UP_TO_DATE_LINE = /file\(s\) up-to-date/i
+// The `allwrite noclobber` per-file refusal. Does NOT collide with APPLIED_LINE:
+// that one needs `updated`/`updating`/… right after ` - `, and here the word
+// there is `can't`.
+const REFUSED_MODIFIED_LINE = / - can't update modified file /i
 
 export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary {
   let applied = 0
   let keptOpen = 0
   let mustResolve = 0
+  let refusedModified = 0
   for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
     if (APPLIED_LINE.test(line)) applied++
     else if (KEPT_OPEN_LINE.test(line)) keptOpen++
     else if (MUST_RESOLVE_LINE.test(line)) mustResolve++
+    else if (REFUSED_MODIFIED_LINE.test(line)) refusedModified++
   }
   const upToDate = UP_TO_DATE_LINE.test(`${stdout}\n${stderr}`)
   const unrecognized =
-    stdout.trim() !== '' && applied === 0 && keptOpen === 0 && mustResolve === 0 && !upToDate
-  return { applied, keptOpen, mustResolve, upToDate, unrecognized }
+    stdout.trim() !== '' &&
+    applied === 0 &&
+    keptOpen === 0 &&
+    mustResolve === 0 &&
+    refusedModified === 0 &&
+    !upToDate
+  return { applied, keptOpen, mustResolve, refusedModified, upToDate, unrecognized }
+}
+
+/**
+ * The refused-modified lines as structured files.
+ *
+ * Both output modes lose these: `-ztag` drops them (no `... key value` prefix)
+ * and `-Mj` collapses them into a `{"data":…}` blob. Yet each one means "this
+ * file is behind AND has uncollected local work" — folding them back in is what
+ * keeps `previewSync`'s up-to-date verdict, the behind count, and the revision
+ * chip's `↓` from contradicting one another on a narrow scope. It is also where
+ * the "View Diff" remedy on a refused get gets its paths.
+ *
+ * `action` is the literal shown in the preview quick-pick and the Explorer
+ * badge tooltip, so it reads as prose there, not as a p4 verb.
+ */
+const REFUSED_EXTRACT = /^(.*?)#(\d+) - can't update modified file (.*)$/i
+
+export function parseSyncRefused(stdout: string, clientRoot?: string): SyncPreviewFile[] {
+  const out: SyncPreviewFile[] = []
+  for (const raw of stdout.split(/\r?\n/)) {
+    const match = REFUSED_EXTRACT.exec(raw.trim())
+    if (!match) continue
+    const depotFile = match[1]
+    const rev = match[2]
+    if (!depotFile || !rev) continue
+    const rawClientFile = match[3] ?? ''
+    const clientFile =
+      rawClientFile && clientRoot ? clientToLocalPath(rawClientFile, clientRoot) : rawClientFile
+    out.push({ depotFile, clientFile, action: 'not updated', rev })
+  }
+  return out
 }
 
 /**

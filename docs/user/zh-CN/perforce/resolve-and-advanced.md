@@ -48,7 +48,7 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.autoReconcile` | 每次刷新时扫描[待收集的改动](./daily-workflow.md#收集改动reconcile)（大工作区可能较慢） | 关 |
 | `perforce.autoRefresh` | 监视工作区磁盘，文件变化时自动刷新并扫描待收集改动（去抖） | 开 |
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
-| `perforce.syncPreview.autoCheck` | 后台落后检查：灰字「可更新」+ 状态栏计数（超大型 depot 建议关闭，见[性能与配置](./sync-and-status.md#性能与配置)） | 开 |
+| `perforce.syncPreview.autoCheck` | 后台落后检查：灰字 `↓` + 状态栏计数（超大型 depot 建议关闭，见[性能与配置](./sync-and-status.md#性能与配置)） | 开 |
 | `perforce.syncPreview.intervalSec` | 两次落后检查的最小间隔秒数（最小 30） | 300 |
 | `perforce.openedByOthers.autoCheck` | 后台「他人占用」扫描 + 灰字 | 开 |
 | `perforce.openedByOthers.intervalSec` | 两次「他人占用」扫描的最小间隔秒数（最小 30） | 300 |

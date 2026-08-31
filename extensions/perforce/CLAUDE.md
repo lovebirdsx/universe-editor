@@ -86,6 +86,29 @@
 - **fake-p4 也要对齐**：`fake-p4.mjs` 原来 `opened`/`reconcile` emit 本地路径 → 掩盖了这个 bug。现在 `clientSyntaxOf()` emit client 语法（`//client/rel`），并补了 `fstat`/`print`（baseline diff 需要）+ `toDepotFile()`（吃本地/depot/client 三种语法）。
 - **回归护栏**：`smoke.perforceCollectChanges.spec.ts` 的 `phantom delete @regression`——点 reconcile 行 → 断言 diff 的 modified 侧 == 真实盘上内容（不是空）。改坏 `clientToLocalPath` 会红。单测见 `pathUtil.test.ts`/`openedParser.test.ts`/`reconcileParser.test.ts`。
 
+## ⚠️ sync 拒绝有**两个**形态，只解析一个就会谎报「已是最新」（踩过）
+
+`p4 sync` 拒绝更新本地已改动的文件时，形态**取决于 client 的 `Options`**，两者结构完全不同，**必须都解析**（真机实测见 PROBE-FINDINGS §13）：
+
+| | `allwrite noclobber`（游戏项目常见） | `noallwrite` clobber |
+|---|---|---|
+| 文案 | `can't update modified file` | `Can't clobber writable file` |
+| 通道 | **stdout** | **stderr** |
+| exit | **0** | **1** |
+| 范围 | **只跳过该文件**，其余照常更新 | **中断整次 run** |
+| `-ztag` | 行**照样在 raw stdout**，只是没有结构化记录（无 `... key value` 前缀，被 `parseZtag` 丢弃）——`previewSync` 因此能从 `result.stdout` 捞回来 | 走 stderr，不受影响 |
+| `-Mj` | 塌成 `{"data":…}` blob | 同上 |
+
+- **曾经的 bug**：只有 clobber 被解析 → allwrite client 上 `parseSyncOutput` 四个正则全不命中（`APPLIED_LINE` 要求 ` - ` 后紧跟 `updated`/`updating`/…，实际紧跟 `can't`）→ 全零 summary → `runSync` 弹「已是最新版本」= **假成功**，用户被送走时以为落后的文件已是最新。同一根因让 `previewSync`（走 `execTagged`）拿到零记录报 `upToDate`，窄作用域下落后计数与 Explorer 灰字一并消失，与 rev chip 的 `↓#head` 自相矛盾。
+- **现行**：`REFUSED_MODIFIED_LINE` → `SyncRunSummary.refusedModified`（并使 `unrecognized` 转假）；纯函数 `parseSyncRefused` 把 plain 行折回 `SyncPreviewFile[]`（`action: 'not updated'`），`previewSync` 并进 `files` 使三处信号一致（`total` 仍只读 records —— `totalFileCount` 已含拒绝行，别叠加）。`sync()` 顺带把 `refusedFiles` 带出来供「查看差异」用，避免再跑一条可能与用户所见不一致的 p4 命令。
+- **分支顺序即优先级**：`refusedModified > 0` 排在 `upToDate` 之前（一次多 filespec run 可同时产生两者，报被拒绝的更有行动价值）。**「什么都没解析出来」绝不能再回落成「已是最新」**——那是最坏的答案（与成功不可区分），现在报「没有返回可识别的结果」+ 打开输出频道按钮。
+- **红线：拒绝的补救绝不给 `-f`**。p4 拒绝的唯一原因就是文件里有未收集的工作，而 `sync -f` 会永久销毁它（§11.2 已实测覆盖本地草稿）。按钮只给「收集改动」（收集后再拉，p4 会排合并、两边都不丢）与「查看差异」。
+- **加任何新的 sync 输出解析前**：先想「这条行走 stdout 还是 stderr、exit 几、中断还是跳过」四问，四个答案都不同就是两个形态。
+
+## ⚠️ 状态栏条目无法传参 → 作用域级与文件级拉取必须是两个命令
+
+`StatusBarItem`（`packages/extension-api/src/index.ts`）只有 `command: string | undefined`，**没有 arguments 字段**。behind 项（「N 个可更新」）曾复用 `perforce.syncLatest`，而后者无参时回退到活动编辑器文件 → **说「N 个可更新、拉整个作用域」，实际只拉一个文件**；若活动文件恰好不落后还会弹「已是最新」而那 N 个仍然落后。现在 behind 项指向独立的运行时命令 `perforce.syncScope`（无菜单/命令面板入口，与 `perforce.cancelBusy`/`reopenTo` 同款先例，规避 renderer Action2 遮蔽坑），rev chip 保持 `perforce.syncLatest`（per-file 语义，回退活动编辑器恰是它描述的那个文件）。**给状态栏加需要「同一动作不同作用域」的入口时，一律加命令，别想着传参。**
+
 ## ⚠️ unresolved 信号只认 `fstat -Ru`——`opened` 从不报（真机实测）
 
 P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresolved` 键（`p4 help opened` 也不文档化），「需要合并」信号只在 `fstat` 的裸键 `unresolved` 与 `fstat -Ru <scope>`（只列有 unresolved 整合记录的文件；走 opened/have 表，45 万文件工作区 ~1.2s）里。

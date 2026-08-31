@@ -60,7 +60,7 @@ interface Props {
   readonly decoLetter?: string
   readonly decoStrike?: boolean
   readonly decoTooltip?: string
-  /** Server-side condition as grey text after the name (e.g. 可更新 / 他人占用). */
+  /** Server-side condition as grey text after the name (e.g. ↓ / ✎). */
   readonly decoDescription?: string
   readonly decoDescriptionTooltip?: string
   readonly style?: CSSProperties

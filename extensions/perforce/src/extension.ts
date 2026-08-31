@@ -24,6 +24,7 @@ import {
   type ReconcileStore,
   type ReconcilePersistState,
 } from './client.js'
+import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
@@ -414,6 +415,50 @@ export async function activate(context: ExtensionContext): Promise<void> {
   watcher.start(await cfg.get('autoRefresh', true), root)
 
   /**
+   * Open the local-vs-have diff for a file a get refused, so the user can see
+   * the uncollected work before deciding whether to collect it or discard it.
+   * With several refusals, pick one first — a burst of diff tabs helps nobody.
+   */
+  const openRefusedDiff = async (refused: readonly SyncPreviewFile[]): Promise<void> => {
+    // A file outside the client view has no local path, so there is nothing to
+    // diff against. Practically unreachable (p4 only refuses files it mapped), but
+    // a button that silently does nothing reads as a broken editor — say so.
+    const withLocal = refused.filter((f) => f.clientFile !== undefined && f.clientFile !== '')
+    const first = withLocal[0]
+    if (!first) {
+      log(`[perforce] view diff: none of the ${refused.length} refused file(s) have a local path`)
+      await window.showWarningMessage(
+        localize(
+          'perforce.sync.refusedNoLocalPath',
+          'Cannot show the differences: the skipped file(s) are not mapped into this workspace.',
+        ),
+      )
+      return
+    }
+    if (withLocal.length === 1) {
+      await commands.executeCommand('perforce.openChange', first.clientFile)
+      return
+    }
+    const choice = await window.showQuickPick(
+      withLocal.map((f) => ({
+        id: f.depotFile,
+        label: displayName(f.clientFile ?? f.depotFile),
+        description: `#${f.rev}`,
+        detail: f.depotFile,
+      })),
+      {
+        placeHolder: localize(
+          'perforce.sync.refusedPickDiff',
+          'Pick a file to see its uncollected local changes',
+        ),
+      },
+    )
+    if (!choice) return
+    const local = withLocal.find((f) => f.depotFile === choice.id)?.clientFile
+    if (local) await commands.executeCommand('perforce.openChange', local)
+  }
+
+  /**
    * Run a sync and report the outcome.
    *
    * The watcher is paused for the duration: a sync writes every file it brings
@@ -435,6 +480,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
       watcher.resume()
     }
     if (res.cancelled) return
+    // Collect exactly what this get was refused on. Falling back to a clean
+    // refresh would only *discover* the drift and leave the files still
+    // uncollected — a button labelled "Collect Changes" that collects nothing is
+    // how a user concludes the get is simply broken. A scope-less get (the
+    // status-bar entry, the most common one) is refused over its own default
+    // range, so collect that range rather than degrading the far more frequent
+    // path to discovery-only.
+    const collectScope = async (): Promise<void> => {
+      const scope = options.scope
+      const targets = scope !== undefined && scope.length > 0 ? scope : target.syncScopes
+      await target.reconcile(targets)
+    }
     if (!res.ok) {
       const suggestion = res.error?.suggestion
       const message = localize('perforce.sync.failed', 'Get revision failed. {0}', {
@@ -445,36 +502,66 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (res.error?.kind === 'clobber') {
         const BTN_COLLECT = localize('perforce.btn.collectChanges', 'Collect Changes')
         const picked = await window.showErrorMessage(message, BTN_COLLECT)
-        if (picked === BTN_COLLECT) {
-          // Collect exactly what this get was refused on. Falling back to a clean
-          // refresh would only *discover* the drift and leave the files still
-          // uncollected — a button labelled "Collect Changes" that collects
-          // nothing is how a user concludes the get is simply broken. A
-          // scope-less get (the status-bar entry, the most common one) is refused
-          // over its own default range, so collect that range rather than
-          // degrading the far more frequent path to discovery-only.
-          const scope = options.scope
-          const targets = scope !== undefined && scope.length > 0 ? scope : target.syncScopes
-          await target.reconcile(targets)
-        }
+        if (picked === BTN_COLLECT) await collectScope()
         return
       }
       await window.showErrorMessage(message)
       return
     }
     const summary = res.summary
-    if (
+    // "Nothing happened" has to account for refusals too, or a run that only
+    // refused files reads as an unparseable no-op.
+    const nothingHappened =
       !summary ||
-      (summary.applied === 0 && summary.keptOpen === 0 && summary.mustResolve === 0)
-    ) {
+      (summary.applied === 0 &&
+        summary.keptOpen === 0 &&
+        summary.mustResolve === 0 &&
+        summary.refusedModified === 0)
+    if (summary?.upToDate && nothingHappened) {
       await window.showInformationMessage(
         localize('perforce.sync.upToDate', 'Already at the latest revision.'),
       )
       return
     }
-    const parts = [
-      localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
-    ]
+    if (nothingHappened) {
+      // Exit 0, nothing applied, and p4 never said "up-to-date" — we genuinely
+      // don't know what happened. Claiming the file is current (what this branch
+      // used to do) is the worst possible answer: it is indistinguishable from
+      // success and sends the user away believing a stale file is fresh. Point at
+      // the output channel, where `sync()` logged the raw text.
+      const BTN_OUTPUT = localize('perforce.btn.openOutput', 'Open Perforce Output')
+      const picked = await window.showWarningMessage(
+        localize(
+          'perforce.sync.unrecognized',
+          'Get revision returned no recognized result. Check the Perforce output for details.',
+        ),
+        BTN_OUTPUT,
+      )
+      if (picked === BTN_OUTPUT) out.show()
+      return
+    }
+    // One get can refuse some files and update others: an `allwrite noclobber`
+    // client refuses locally-modified files one by one and still exits 0
+    // (measured on P4D 2024.2), walking on past them. So every count gets
+    // reported — leading with the refusal, which is the outcome with uncollected
+    // work at stake, but never at the price of hiding what did land.
+    const parts: string[] = []
+    if (summary.refusedModified > 0) {
+      parts.push(
+        localize(
+          'perforce.sync.refusedModified',
+          '{0} file(s) not updated — they have local changes that have not been collected',
+          { 0: String(summary.refusedModified) },
+        ),
+      )
+    }
+    // "Updated 0 file(s)" is worth saying on its own, but next to a refusal it is
+    // noise — there the refusal already is the story.
+    if (summary.applied > 0 || summary.refusedModified === 0) {
+      parts.push(
+        localize('perforce.sync.applied', 'Updated {0} file(s)', { 0: String(summary.applied) }),
+      )
+    }
     if (summary.keptOpen > 0) {
       parts.push(
         localize('perforce.sync.keptOpen', '{0} skipped (open for edit)', {
@@ -490,15 +577,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
       )
     }
     const message = parts.join(' · ')
-    if (summary.mustResolve > 0) {
-      const BTN_RESOLVE = localize('perforce.btn.resolveNow', 'Resolve Conflicts')
-      const picked = await window.showWarningMessage(message, BTN_RESOLVE)
-      if (picked === BTN_RESOLVE) {
-        await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
-      }
+    // Never offer `-f` as the remedy for a refusal: the whole reason p4 refused is
+    // that the file holds work nobody has collected, and a force-get would destroy
+    // it. Collecting first is what lets a re-get schedule a resolve instead.
+    const BTN_COLLECT = localize('perforce.btn.collectChanges', 'Collect Changes')
+    const BTN_DIFF = localize('perforce.btn.viewRefusedDiff', 'View Diff')
+    const BTN_RESOLVE = localize('perforce.btn.resolveNow', 'Resolve Conflicts')
+    const items = [
+      ...(summary.refusedModified > 0 ? [BTN_COLLECT, BTN_DIFF] : []),
+      ...(summary.mustResolve > 0 ? [BTN_RESOLVE] : []),
+    ]
+    if (items.length === 0) {
+      await window.showInformationMessage(message)
       return
     }
-    await window.showInformationMessage(message)
+    const picked = await window.showWarningMessage(message, ...items)
+    if (picked === BTN_COLLECT) await collectScope()
+    else if (picked === BTN_DIFF) await openRefusedDiff(res.refusedFiles)
+    else if (picked === BTN_RESOLVE) {
+      await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
+    }
   }
 
   // Swarm (P4 Code Review) commands. Registered unconditionally — the handlers
@@ -618,8 +716,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // --- Sync (get revision) ------------------------------------------------
 
     // Get the latest revision, no prompt. From the Explorer / editor this targets
-    // the clicked file or folder; from the status bar (no argument) it targets the
-    // configured sync scope, which follows the workspace focus folders.
+    // the clicked file or folder; with no argument it targets the active editor's
+    // file — the revision chip in the status bar is per-file, and that is the file
+    // it describes. For the whole configured sync scope, see perforce.syncScope.
     commands.registerCommand('perforce.syncLatest', async (...args: unknown[]) => {
       const path = await resolveTargetPath(args[0])
       const target = path
@@ -628,6 +727,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (!target) return
       const scope = path ? [syncTargetOf(args[0], path)] : undefined
       await runSync(target, '#head', scope !== undefined ? { scope } : {})
+    }),
+
+    // Get the latest revision over the whole configured sync scope (which follows
+    // the workspace focus folders). Registered at runtime only — it has no menu
+    // or command-palette entry; its one caller is the "N files behind" status-bar
+    // item, which counts the whole scope and must therefore get the whole scope.
+    // It cannot share perforce.syncLatest: that one falls back to the active
+    // editor's file, so the behind item would fetch a single file while promising
+    // N — and StatusBarItem carries only a command string, with no arguments to
+    // distinguish the two intents.
+    commands.registerCommand('perforce.syncScope', async (arg: unknown) => {
+      const target = mgr.resolveClient(arg) ?? mgr.active
+      if (!target) return
+      await runSync(target, '#head', {})
     }),
 
     // Get a specific revision: four ways to name one, matching what P4V offers.

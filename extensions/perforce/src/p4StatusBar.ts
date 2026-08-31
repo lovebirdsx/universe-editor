@@ -5,7 +5,8 @@
  * active editor's file. All render whichever client is active — switching the
  * SCM selection re-points them, mirroring VSCode's single-repo status bar (and
  * git's GitStatusBarController). Clicking the main item opens the Perforce
- * graph; clicking the behind item syncs to latest.
+ * graph; clicking the behind item syncs the whole scope, while the revision chip
+ * syncs just the file it describes.
  *
  * The revision chip re-reads the active editor on every tab switch
  * (`onDidChangeActiveTextEditor`) and routes the file through
@@ -51,7 +52,10 @@ export class P4StatusBarController {
     this._item.command = 'perforce-graph.view'
     // Lower priority puts it to the right of the main item.
     this._behindItem = window.createStatusBarItem(StatusBarAlignment.Left, 90)
-    this._behindItem.command = 'perforce.syncLatest'
+    // Scope-level, not file-level: this item counts every behind file in the sync
+    // scope, so it must get all of them. `perforce.syncLatest` would fall back to
+    // the active editor's file and fetch one while the label promises N.
+    this._behindItem.command = 'perforce.syncScope'
     this._behindItem.tooltip = localize(
       'perforce.status.behind.tooltip',
       'Click to sync the whole scope to the latest revision',
@@ -243,12 +247,14 @@ export class P4StatusBarController {
     }
     const behind = have < head
     this._revItem.text = behind ? `#${have} / ↓#${head}` : `#${have} / #${head}`
-    // Behind is actionable (click gets the file's latest); current is not.
+    // Behind is actionable (click gets the file's latest); current is not. This
+    // chip describes ONE file, so it stays on the file-scoped command — the
+    // whole-scope get belongs to the behind-count item next to it.
     this._revItem.command = behind ? 'perforce.syncLatest' : undefined
     this._revItem.tooltip = behind
       ? localize(
           'perforce.status.revTooltipBehind',
-          'Have revision #{0}, head is #{1} — click to sync the whole scope to the latest revision',
+          'Have revision #{0}, head is #{1} — click to sync this file to the latest revision',
           { 0: have, 1: head },
         )
       : localize('perforce.status.revTooltip', 'Have revision #{0}, head revision #{1}', {
