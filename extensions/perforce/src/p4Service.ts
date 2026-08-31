@@ -68,6 +68,13 @@ export interface P4ExecOptions {
    * background when omitted.
    */
   readonly priority?: P4Priority
+  /**
+   * Called once per complete stdout line as it arrives. Best-effort UI signal
+   * only — the authoritative output is still the buffered result. A throwing
+   * callback is swallowed and logged, never re-thrown, so it can't crash the
+   * extension host from the async data/close handlers.
+   */
+  readonly onStdoutLine?: (line: string) => void
 }
 
 /**
@@ -631,6 +638,11 @@ export class P4Service {
       const stderr: Buffer[] = []
       let stdoutBytes = 0
       let overflowed = false
+      // Per-line stdout streaming for progress UI. Best-effort only: the buffered
+      // result stays authoritative. `carry` holds the bytes since the last newline
+      // so a line split across chunks isn't emitted until it completes.
+      const onStdoutLine = options?.onStdoutLine
+      let carry = ''
       // Cancellation: kill the child and remember why, so `close` can resolve a
       // cancelled failure instead of a confusing "killed with no output" result.
       // Same red line as the watchdog — this callback is async, so it never throws.
@@ -654,10 +666,26 @@ export class P4Service {
           // child so p4 stops streaming; the `close` handler resolves the error.
           overflowed = true
           stdout.length = 0
+          carry = ''
           proc.kill()
           return
         }
         stdout.push(chunk)
+        if (onStdoutLine) {
+          carry += chunk.toString('utf8')
+          const lines = carry.split(/\r?\n/)
+          carry = lines.pop() ?? ''
+          for (const line of lines) {
+            if (line === '') continue
+            try {
+              onStdoutLine(line)
+            } catch (err) {
+              // Async data handler — a throwing consumer must never escape into
+              // an uncaught exception (host-crash red line). Log and move on.
+              this._log?.(`  onStdoutLine callback threw: ${(err as Error).message}`)
+            }
+          }
+        }
       })
       proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
       proc.on('error', (err) => {
@@ -693,6 +721,15 @@ export class P4Service {
           this._log?.(`  ${msg}`)
           resolve({ stdout: '', stderr: msg, exitCode: code ?? 1 })
           return
+        }
+        if (onStdoutLine && carry !== '') {
+          try {
+            onStdoutLine(carry)
+          } catch (err) {
+            // Same red line: the async close handler must never let a throwing
+            // consumer escape into an uncaught exception.
+            this._log?.(`  onStdoutLine callback threw: ${(err as Error).message}`)
+          }
         }
         let result: P4ExecResult
         try {

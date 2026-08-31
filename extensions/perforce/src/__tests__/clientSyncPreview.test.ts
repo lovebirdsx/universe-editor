@@ -802,3 +802,51 @@ describe('setSyncScope', () => {
     expect(client.status.syncBehindCount).toBeUndefined()
   })
 })
+
+describe('PerforceClient.previewSyncTotal', () => {
+  it('returns the untruncated totalFileCount and probes with -m 1', async () => {
+    const client = await makeClient((argv) => {
+      if (!argv.includes('-n')) return { stdout: '' }
+      return {
+        stdout: [
+          '... depotFile //depot/branch_x/a.cpp',
+          `... clientFile ${localPath('a.cpp')}`,
+          '... rev 3',
+          '... action updated',
+          '... totalFileCount 147',
+          '',
+        ].join('\n'),
+      }
+    })
+
+    const total = await client.previewSyncTotal('#head')
+
+    expect(total).toBe(147)
+    const argv = syncPreviewArgvs().at(-1)!
+    const at = argv.indexOf('-m')
+    expect(at).toBeGreaterThan(-1)
+    expect(argv[at + 1]).toBe('1')
+  })
+
+  it('returns 0 for an up-to-date client', async () => {
+    const client = await makeClient(() => ({
+      stderr: `${ROOT_FWD}/... - file(s) up-to-date.`,
+      exit: 0,
+    }))
+
+    const total = await client.previewSyncTotal('#head')
+
+    expect(total).toBe(0)
+  })
+
+  it('returns undefined when the probe fails', async () => {
+    const client = await makeClient(() => ({
+      stderr: `//depot/branch_x/... - must refer to client 'testclient'.`,
+      exit: 1,
+    }))
+
+    const total = await client.previewSyncTotal('#head')
+
+    expect(total).toBeUndefined()
+  })
+})

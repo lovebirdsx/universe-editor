@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  classifySyncLine,
   parseResolveOutput,
   parseSyncOutput,
   parseSyncPreview,
   parseSyncPreviewRecord,
   parseSyncPreviewTotal,
   parseSyncRefused,
+  syncLineFile,
 } from '../syncParser.js'
 
 describe('parseSyncPreviewRecord', () => {
@@ -265,6 +267,78 @@ describe('parseSyncOutput', () => {
       '',
     )
     expect(summary.applied).toBe(0)
+  })
+})
+
+describe('classifySyncLine', () => {
+  it('classifies the four sync line kinds', () => {
+    expect(classifySyncLine('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp')).toBe(
+      'applied',
+    )
+    expect(classifySyncLine("//depot/branch_x/e.ini - is opened and can't be replaced.")).toBe(
+      'keptOpen',
+    )
+    expect(classifySyncLine('//depot/branch_x/f.cpp - must resolve #4 before submitting')).toBe(
+      'mustResolve',
+    )
+    expect(
+      classifySyncLine(
+        "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+      ),
+    ).toBe('refused')
+  })
+
+  it('returns undefined for an unrecognized line', () => {
+    expect(classifySyncLine('garbage output')).toBeUndefined()
+  })
+
+  it('returns undefined for an empty line', () => {
+    expect(classifySyncLine('')).toBeUndefined()
+    expect(classifySyncLine('   ')).toBeUndefined()
+  })
+
+  it('trims surrounding whitespace before classifying', () => {
+    expect(classifySyncLine('  //depot/branch_x/a.cpp#3 - added as X:/p4ws/main/a.cpp  ')).toBe(
+      'applied',
+    )
+    expect(classifySyncLine('\t//depot/branch_x/b.h - must resolve #2 before submitting')).toBe(
+      'mustResolve',
+    )
+  })
+
+  it('does not mistake a refusal line for an applied one', () => {
+    expect(
+      classifySyncLine(
+        "//depot/branch_x/a.json#69 - can't update modified file X:/p4ws/main/a.json",
+      ),
+    ).toBe('refused')
+  })
+})
+
+describe('syncLineFile', () => {
+  it('returns the last depot segment across the six line shapes', () => {
+    expect(syncLineFile('//depot/branch_x/a.cpp#3 - updated as X:/p4ws/main/a.cpp')).toBe('a.cpp')
+    expect(syncLineFile('//depot/branch_x/a.cpp#3 - added as X:/p4ws/main/a.cpp')).toBe('a.cpp')
+    expect(syncLineFile('//depot/branch_x/a.cpp#3 - refreshing X:/p4ws/main/a.cpp')).toBe('a.cpp')
+    expect(
+      syncLineFile("//depot/branch_x/a.cpp#3 - can't update modified file X:/p4ws/main/a.cpp"),
+    ).toBe('a.cpp')
+    expect(syncLineFile('//depot/branch_x/a.cpp#3 - is opened and not being changed')).toBe('a.cpp')
+    expect(syncLineFile('... //depot/branch_x/a.cpp - must resolve #3 before submitting')).toBe(
+      'a.cpp',
+    )
+  })
+
+  it('returns a chinese-named file verbatim', () => {
+    expect(
+      syncLineFile('//depot/branch_x/中文/文件.cpp#2 - updated as X:/p4ws/main/中文/文件.cpp'),
+    ).toBe('文件.cpp')
+  })
+
+  it('returns undefined for a line without a depot path', () => {
+    expect(syncLineFile('X:/p4ws/main/... - file(s) up-to-date.')).toBeUndefined()
+    expect(syncLineFile('garbage')).toBeUndefined()
+    expect(syncLineFile('')).toBeUndefined()
   })
 })
 

@@ -837,3 +837,95 @@ describe('interactive command tight timeout', () => {
     expect(result.stderr).toMatch(/timed out after 30ms/)
   })
 })
+
+// Per-line stdout streaming for `p4 sync` progress. Best-effort UI signal only:
+// the buffered result stays authoritative, so every case below also asserts the
+// full stdout is intact. The callback runs from the async data/close handlers, so
+// a throwing consumer must be swallowed — never let it escape into an uncaught
+// exception (host-crash red line).
+describe('P4Service._spawn onStdoutLine streaming', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  it('calls back once per complete line, without the newline', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.exec(['sync'], { onStdoutLine: (l) => lines.push(l) })
+    await flush()
+    child.stdout.emit('data', Buffer.from('file1.txt\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(lines).toEqual(['file1.txt'])
+    expect(result.stdout).toBe('file1.txt\n')
+  })
+
+  it('reassembles a line split across chunks before calling back once', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.exec(['sync'], { onStdoutLine: (l) => lines.push(l) })
+    await flush()
+    child.stdout.emit('data', Buffer.from('hel'))
+    child.stdout.emit('data', Buffer.from('lo world\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(lines).toEqual(['hello world'])
+    expect(result.stdout).toBe('hello world\n')
+  })
+
+  it('strips a \\r\\n line ending', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.exec(['sync'], { onStdoutLine: (l) => lines.push(l) })
+    await flush()
+    child.stdout.emit('data', Buffer.from('a\r\nb\r\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(lines).toEqual(['a', 'b'])
+    expect(result.stdout).toBe('a\r\nb\r\n')
+  })
+
+  it('flushes a trailing line without a newline on close', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.exec(['sync'], { onStdoutLine: (l) => lines.push(l) })
+    await flush()
+    child.stdout.emit('data', Buffer.from('done\nlast'))
+    child.emit('close', 0)
+    const result = await p
+    expect(lines).toEqual(['done', 'last'])
+    expect(result.stdout).toBe('done\nlast')
+  })
+
+  it('a throwing callback does not break exec — it still resolves with full stdout', async () => {
+    const logs: string[] = []
+    const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, (m) => logs.push(m))
+    const p = svc.exec(['sync'], {
+      onStdoutLine: () => {
+        throw new Error('boom')
+      },
+    })
+    await flush()
+    child.stdout.emit('data', Buffer.from('line1\nline2\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('line1\nline2\n')
+    expect(logs.some((l) => l.includes('boom'))).toBe(true)
+  })
+
+  it('behaves as before when onStdoutLine is omitted (no callback, full stdout)', async () => {
+    const svc = makeService()
+    const p = svc.exec(['sync'])
+    await flush()
+    child.stdout.emit('data', Buffer.from('a\nb\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(result.stdout).toBe('a\nb\n')
+  })
+})

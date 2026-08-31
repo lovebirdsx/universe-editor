@@ -143,18 +143,43 @@ const UP_TO_DATE_LINE = /file\(s\) up-to-date/i
 // there is `can't`.
 const REFUSED_MODIFIED_LINE = / - can't update modified file /i
 
+/**
+ * What one line of `p4 sync` stdout means. `file(s) up-to-date.` has no kind
+ * here — that is a whole-run verdict spanning stdout + stderr, not a line
+ * outcome.
+ */
+export type SyncLineKind = 'applied' | 'keptOpen' | 'mustResolve' | 'refused'
+
+/**
+ * Classify one line of `p4 sync` stdout, or undefined when nothing matches.
+ *
+ * Applies the four counting patterns in the same order
+ * {@link parseSyncOutput} uses (applied → keptOpen → mustResolve → refused),
+ * so a streaming progress counter and the final summary share one source of
+ * truth instead of each writing its own copy of the rules. The line is
+ * trimmed here — callers may pass raw, unterminated chunks.
+ */
+export function classifySyncLine(line: string): SyncLineKind | undefined {
+  const trimmed = line.trim()
+  if (!trimmed) return undefined
+  if (APPLIED_LINE.test(trimmed)) return 'applied'
+  if (KEPT_OPEN_LINE.test(trimmed)) return 'keptOpen'
+  if (MUST_RESOLVE_LINE.test(trimmed)) return 'mustResolve'
+  if (REFUSED_MODIFIED_LINE.test(trimmed)) return 'refused'
+  return undefined
+}
+
 export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary {
   let applied = 0
   let keptOpen = 0
   let mustResolve = 0
   let refusedModified = 0
   for (const raw of stdout.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line) continue
-    if (APPLIED_LINE.test(line)) applied++
-    else if (KEPT_OPEN_LINE.test(line)) keptOpen++
-    else if (MUST_RESOLVE_LINE.test(line)) mustResolve++
-    else if (REFUSED_MODIFIED_LINE.test(line)) refusedModified++
+    const kind = classifySyncLine(raw)
+    if (kind === 'applied') applied++
+    else if (kind === 'keptOpen') keptOpen++
+    else if (kind === 'mustResolve') mustResolve++
+    else if (kind === 'refused') refusedModified++
   }
   const upToDate = UP_TO_DATE_LINE.test(`${stdout}\n${stderr}`)
   const unrecognized =
@@ -165,6 +190,27 @@ export function parseSyncOutput(stdout: string, stderr: string): SyncRunSummary 
     refusedModified === 0 &&
     !upToDate
   return { applied, keptOpen, mustResolve, refusedModified, upToDate, unrecognized }
+}
+
+// The depot path leads every sync line (`//depot/branch_x/a.cpp[#3]`, with a
+// `... ` prefix on must-resolve previews), while the local path appears only
+// on some shapes and may contain spaces — so the last depot segment is the
+// only stable file anchor.
+const SYNC_DEPOT_LEAD = /^(?:\.\.\.\s+)?\/\/(\S+)/
+
+/**
+ * The file a sync line refers to, as a display name — the last depot path
+ * segment without its `#rev` suffix (e.g. `a.cpp`), or undefined when the
+ * line carries no recognizable depot path.
+ */
+export function syncLineFile(line: string): string | undefined {
+  const depot = SYNC_DEPOT_LEAD.exec(line.trim())?.[1]
+  if (!depot) return undefined
+  const hashIdx = depot.indexOf('#')
+  const path = hashIdx === -1 ? depot : depot.slice(0, hashIdx)
+  const slashIdx = path.lastIndexOf('/')
+  const name = slashIdx === -1 ? path : path.slice(slashIdx + 1)
+  return name || undefined
 }
 
 /**

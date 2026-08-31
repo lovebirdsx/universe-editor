@@ -59,6 +59,7 @@ function installBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
+const { P4Service } = await import('../p4Service.js')
 
 const ROOT = process.platform === 'win32' ? 'C:\\ws' : '/ws'
 const ROOT_FWD = process.platform === 'win32' ? 'C:/ws' : '/ws'
@@ -555,5 +556,76 @@ describe('PerforceClient.previewSync', () => {
 
     expect(res.total).toBe(2)
     expect(res.files).toHaveLength(2)
+  })
+})
+
+describe('PerforceClient.sync onProgress', () => {
+  it('fires once per recognized line with done and the depot file segment', async () => {
+    const client = await makeClient(() => ({
+      stdout: [
+        `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp`,
+        '//depot/branch_x/b.h#7 - is opened and not being changed',
+        '//depot/branch_x/c.cpp#5 - must resolve #4 before submitting',
+        `//depot/branch_x/d.json#69 - can't update modified file ${ROOT_FWD}/d.json`,
+      ].join('\n'),
+    }))
+
+    const calls: { done: number; file: string | undefined }[] = []
+    await client.sync('#head', { onProgress: (p) => calls.push(p) })
+
+    expect(calls).toEqual([
+      { done: 1, file: 'a.cpp' },
+      { done: 2, file: 'b.h' },
+      { done: 3, file: 'c.cpp' },
+      { done: 4, file: 'd.json' },
+    ])
+  })
+
+  it('does not count a line classifySyncLine cannot recognize', async () => {
+    const client = await makeClient(() => ({
+      stdout: [
+        `//depot/branch_x/a.cpp#3 - updated as ${ROOT_FWD}/a.cpp`,
+        'something entirely unexpected',
+        '//depot/branch_x/b.h#7 - is opened and not being changed',
+      ].join('\n'),
+    }))
+
+    const calls: { done: number; file: string | undefined }[] = []
+    await client.sync('#head', { onProgress: (p) => calls.push(p) })
+
+    expect(calls).toEqual([
+      { done: 1, file: 'a.cpp' },
+      { done: 2, file: 'b.h' },
+    ])
+  })
+
+  it('passes onStdoutLine to the exec when onProgress is given', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+    const spy = vi.spyOn(P4Service.prototype, 'exec')
+    try {
+      await client.sync('#head', { onProgress: () => {} })
+
+      const call = spy.mock.calls.find(([args]) => Array.isArray(args) && args[0] === 'sync')
+      expect(call).toBeDefined()
+      const opts = call![1]
+      expect(opts).toHaveProperty('onStdoutLine')
+      expect(typeof opts?.onStdoutLine).toBe('function')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('omits onStdoutLine from the exec when onProgress is not given', async () => {
+    const client = await makeClient(() => ({ stdout: '' }))
+    const spy = vi.spyOn(P4Service.prototype, 'exec')
+    try {
+      await client.sync('#head')
+
+      const call = spy.mock.calls.find(([args]) => Array.isArray(args) && args[0] === 'sync')
+      expect(call).toBeDefined()
+      expect(call![1]).not.toHaveProperty('onStdoutLine')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

@@ -59,11 +59,12 @@ if (!STATE_PATH) {
  *   openedByOthers?: Record<string, OthersEntry>,
  *   ignored?: string[],
  *   changelists?: Record<string, { description: string }>,
- *   changeMeta?: Record<string, { user: string, time: string, desc: string }>,
+ *   changeMeta?: Record<string, { user: string, time: string, desc: string, rev?: number }>,
  *   annotateCl?: string,
  *   shelved?: Record<string, Record<string, { action: string, rev: number, content?: string }>>,
  *   unshelveRefuse?: string[],
  *   nextChange?: number,
+ *   cstat?: Record<string, 'have'|'need'|'partial'>,
  * }} State
  */
 
@@ -148,11 +149,23 @@ const haveContentOf = (known) => known.haveContent ?? known.content
 
 /** Filespec revision suffix (`#head`/`#N`/`@cl`/`@date`) → target revision, or
  *  undefined when unparseable. `@cl`/`@date` resolve to head — the fake has no
- *  CL/date content model to resolve against. */
-function syncTargetRev(spec, headRev) {
+ *  CL/date content model to resolve against — EXCEPT a numeric `@<cl>` whose
+ *  `changeMeta` entry carries a `rev`: that is the revision the changelist
+ *  produced, which is what a real `sync @<cl>` would land on. */
+function syncTargetRev(spec, headRev, state, depotFile) {
   if (!spec || spec === '#head') return headRev
   const hash = /^#(\d+)$/.exec(spec)
   if (hash) return Number(hash[1])
+  const atCl = /^@(\d+)$/.exec(spec)
+  if (atCl) {
+    const rev = state.changeMeta?.[atCl[1]]?.rev
+    if (typeof rev === 'number') return rev
+    // A submitted change seeded with a file set but no meta `rev` still names
+    // the revision it created for this file (`describe -s` source).
+    const sub = state.submitted?.[atCl[1]]?.[depotFile]
+    if (sub) return sub.rev
+    return headRev
+  }
   if (spec.startsWith('@')) return headRev
   return undefined
 }
@@ -442,19 +455,27 @@ function main() {
     }
 
     case 'changes': {
-      // Blame metadata pass (`changes -l <file>`): the file's submitted history,
-      // sourced from the seeded changeMeta. A trailing file argument (not a flag
-      // value) distinguishes this from the SCM view's pending-changelist query
-      // (`changes -s pending`).
+      // Submitted history (`changes -s submitted [-l] [-m N] <scope>` for the
+      // behind-list / graph, and `changes -l <file>` for blame): newest-first by
+      // change id, truncated by `-m`. The blame pass carries no `-s`, so its lone
+      // file arg routes it here too — sorting/truncation are harmless to it (a
+      // single seeded changeMeta entry). `-s pending` (or bare `changes`) stays
+      // the pending-changelist query below.
+      const status = argAfter(rest, '-s')
       const file = rest.filter((a, idx) => {
         if (a.startsWith('-')) return false
         const prev = rest[idx - 1]
         return prev !== '-s' && prev !== '-c' && prev !== '-m'
       })[0]
-      if (file) {
+      if (status === 'submitted' || file) {
+        const max = argAfter(rest, '-m')
+        const entries = Object.entries(state.changeMeta ?? {})
+          .map(([id, m]) => ({ id: Number(id), m }))
+          .sort((a, b) => b.id - a.id)
+        const limited = max !== undefined ? entries.slice(0, Number(max)) : entries
         emit(
-          Object.entries(state.changeMeta ?? {}).map(([id, m]) => ({
-            change: id,
+          limited.map(({ id, m }) => ({
+            change: String(id),
             time: m.time,
             user: m.user,
             client: state.client,
@@ -481,6 +502,27 @@ function main() {
           user: state.user,
           ...(Object.keys(state.shelved[id] ?? {}).length > 0 ? { shelved: '' } : {}),
         })),
+      )
+      return 0
+    }
+
+    case 'cstat': {
+      // `cstat <scope>@<low>,#head` classifies each submitted changelist as
+      // have/need/partial. The fake ignores the revision range — it has no real
+      // file set to walk — and emits whatever the seed declares, newest first.
+      //
+      // Real cstat output scales LINEARLY with the files in scope (measured
+      // 2.1s / 279KB for one mid-sized folder, PROBE-FINDINGS §9), which is why
+      // the product always bounds it with a revision range. The fake omits that
+      // bound only because it has no per-file walk to pay for.
+      if (!state.cstat) {
+        process.stderr.write('cstat - unknown command.\n')
+        return 1
+      }
+      emit(
+        Object.entries(state.cstat)
+          .map(([id, stat]) => ({ change: id, status: stat }))
+          .sort((a, b) => Number(b.change) - Number(a.change)),
       )
       return 0
     }
@@ -752,7 +794,7 @@ function main() {
       const plans = []
       for (const [depotFile, known] of Object.entries(state.files)) {
         if (!inScope(depotFile)) continue
-        const toRev = syncTargetRev(spec, headRevOf(known))
+        const toRev = syncTargetRev(spec, headRevOf(known), state, depotFile)
         if (toRev === undefined) continue
         const haveRev = haveRevOf(known)
         const local = clientOf(state, depotFile)

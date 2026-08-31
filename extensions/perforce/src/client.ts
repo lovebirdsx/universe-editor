@@ -71,14 +71,17 @@ import {
 } from './reconcileParser.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
 import {
+  classifySyncLine,
   parseSyncOutput,
   parseSyncPreview,
   parseSyncPreviewTotal,
   parseSyncRefused,
   parseResolveOutput,
+  syncLineFile,
   type SyncPreviewFile,
   type SyncRunSummary,
 } from './syncParser.js'
+import { parseCstat, type CstatStatus } from './cstatParser.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
@@ -246,6 +249,18 @@ const SYNC_PREVIEW_GATE_TIMEOUT_MS = 10_000
 const GATE_MARKER_NO_CHANGES = 'none'
 
 /**
+ * How many submitted changelists the "which revision do you want" picker offers.
+ *
+ * The list is the cheap half of {@link PerforceClient.listBehindChangelists}
+ * (`changes -l -m N`, measured at 97–500ms); the cap exists for the expensive
+ * half — it bounds the revision range `cstat` has to classify, whose output
+ * grows linearly with the files those changelists touch. Fifty entries is
+ * already more history than a picker can usefully show, and anything older is
+ * reachable by typing the number.
+ */
+const BEHIND_CHANGELIST_MAX = 50
+
+/**
  * Above this many files opened by others, the grey ✎ markers are
  * dropped and only the count survives. Same reasoning as the behind-check cap —
  * but smaller, because "in use by others" is a per-file warning the user acts on
@@ -325,6 +340,31 @@ export interface SyncRunResult {
    */
   readonly refusedFiles: readonly SyncPreviewFile[]
   readonly error: { kind: SyncErrorKind; suggestion: string } | undefined
+}
+
+/**
+ * A submitted changelist offered as a sync target, with what this client holds
+ * of it. `unknown` means the classification pass didn't run or didn't answer —
+ * see {@link BehindChangelistResult.classified}.
+ */
+export interface BehindChangelist extends GraphChangeMeta {
+  readonly status: CstatStatus | 'unknown'
+}
+
+/** What {@link PerforceClient.listBehindChangelists} found. */
+export interface BehindChangelistResult {
+  /** Newest first. Filtered to need/partial when `classified`, else everything. */
+  readonly changes: readonly BehindChangelist[]
+  /** The scope has submitted changelists older than the ones listed. */
+  readonly hasMore: boolean
+  /**
+   * `p4 cstat` answered, so `changes` really is "what this client is missing".
+   * False means the list is "the most recent changelists" and the caller must
+   * say so rather than imply the client is behind on all of them.
+   */
+  readonly classified: boolean
+  /** False when even the cheap `changes` listing failed — nothing to show. */
+  readonly ok: boolean
 }
 
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
@@ -2024,16 +2064,35 @@ export class PerforceClient {
    * `@2026/08/01`), appended to each scope filespec. `force` is `p4 sync -f` —
    * it re-fetches files p4 thinks you already have, and overwrites writable
    * local files, so the caller must confirm first.
+   *
+   * `onProgress` fires per output line p4 emits while the sync runs, for a live
+   * progress bar. It is a **UI signal only**: the authoritative counts still come
+   * from `parseSyncOutput` over the complete output, and both sides classify
+   * lines with the same {@link classifySyncLine}, so the bar can never drift
+   * from the summary the user is shown at the end.
    */
   async sync(
     spec: string,
-    options?: { scope?: readonly string[]; force?: boolean },
+    options?: {
+      scope?: readonly string[]
+      force?: boolean
+      onProgress?: (progress: { done: number; file: string | undefined }) => void
+    },
   ): Promise<SyncRunResult> {
     const targets = this._syncTargets(spec, options?.scope)
     const args = ['sync', ...(options?.force === true ? ['-f'] : []), ...targets]
+    const onProgress = options?.onProgress
     return this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
+      let done = 0
+      const onStdoutLine = onProgress
+        ? (line: string): void => {
+            if (!classifySyncLine(line)) return
+            done++
+            onProgress({ done, file: syncLineFile(line) })
+          }
+        : undefined
       const { value: result, cancelled } = await this._cancellable((signal) =>
-        this._p4.exec(args, { signal }),
+        this._p4.exec(args, { signal, ...(onStdoutLine ? { onStdoutLine } : {}) }),
       )
       if (cancelled) {
         // The user asked for this — log it, don't toast it, and still refresh so
@@ -2167,6 +2226,22 @@ export class PerforceClient {
   private _syncTargets(spec: string, scope?: readonly string[]): string[] {
     const base = scope !== undefined && scope.length > 0 ? scope : this._syncScopes
     return base.map((target) => `${target}${spec}`)
+  }
+
+  /**
+   * How many files a sync to `spec` would touch, for a progress bar's
+   * denominator. Undefined when the server didn't say or the probe failed —
+   * callers must degrade to an indeterminate bar rather than invent a total.
+   *
+   * `-m 1` keeps the reply to a single record: `totalFileCount` is the
+   * untruncated grand total and survives the limit (see {@link previewSync}),
+   * so this asks for the number without paying to transfer the file list.
+   */
+  async previewSyncTotal(spec: string, scope?: readonly string[]): Promise<number | undefined> {
+    const res = await this.previewSync(scope, spec, 1, { timeoutMs: SYNC_PREVIEW_TIMEOUT_MS })
+    if (!res.ok) return undefined
+    if (res.upToDate) return 0
+    return res.total
   }
 
   // --- Behind awareness ----------------------------------------------------
@@ -2351,6 +2426,106 @@ export class PerforceClient {
     // already handled above, so this really does mean "nothing here yet".
     if (ids.length === 0) return { ok: true, marker: GATE_MARKER_NO_CHANGES }
     return { ok: true, marker: ids.join(',') }
+  }
+
+  /**
+   * The submitted changelists in the sync scope this client hasn't fully got,
+   * newest first — what the "N files behind" click offers as sync targets.
+   *
+   * Two commands, both interactive (the user clicked and is waiting):
+   *
+   * 1. `changes -s submitted -l -m <N+1> <scope>` lists recent history with
+   *    descriptions. Measured at 97–500ms because it reads the change table
+   *    instead of walking the client view. The `+1` probes whether older
+   *    changelists exist, exactly like the graph's paging.
+   * 2. `cstat <scope>@<oldest listed>,#head` says which of those this client
+   *    already has. **The revision range is not optional**: unbounded `cstat`
+   *    output grows linearly with the files in scope (measured 279KB for one
+   *    mid-sized folder), and bounding it to the window we're about to display
+   *    keeps the work proportional to what those changelists touched.
+   *
+   * `cstat` is the only command that answers "which changelists am I missing" —
+   * `sync -n`'s `change` field is a single grand total for the whole run, not a
+   * per-file changelist, so the existing behind-check can't be reused here.
+   *
+   * When step 2 fails the result degrades to the unfiltered list with
+   * `classified: false`; the caller must then present it as "recent changelists"
+   * rather than "changelists you're missing". Never silent — always logged.
+   */
+  async listBehindChangelists(): Promise<BehindChangelistResult> {
+    return this._withBusy(localize('perforce.busy.behindList', 'Loading changelists'), async () => {
+      const started = this._now()
+      const listed = await this._p4.execTagged(
+        [
+          'changes',
+          '-s',
+          'submitted',
+          '-l',
+          '-m',
+          String(BEHIND_CHANGELIST_MAX + 1),
+          ...this._syncScopes,
+        ],
+        INTERACTIVE_EXEC,
+      )
+      if (listed.result.exitCode !== 0) {
+        this._log?.(`[perforce] behind-list: changes failed: ${p4ErrorText(listed.result)}`)
+        return { changes: [], hasMore: false, classified: false, ok: false }
+      }
+      const all = parseChangesList(listed.records)
+      const hasMore = all.length > BEHIND_CHANGELIST_MAX
+      const recent = all.slice(0, BEHIND_CHANGELIST_MAX)
+      this._log?.(
+        `[perforce] behind-list: ${recent.length} changelist(s) listed in ${this._now() - started}ms` +
+          `${hasMore ? ' (older ones exist)' : ''}`,
+      )
+      const oldest = recent.at(-1)
+      if (!oldest) {
+        return { changes: [], hasMore: false, classified: true, ok: true }
+      }
+      const statuses = await this._cstatStatuses(oldest.id)
+      if (!statuses) {
+        return {
+          changes: recent.map((c) => ({ ...c, status: 'unknown' as const })),
+          hasMore,
+          classified: false,
+          ok: true,
+        }
+      }
+      const behind = recent
+        .map((c) => ({ ...c, status: statuses.get(c.id) ?? ('unknown' as const) }))
+        .filter((c) => c.status !== 'have')
+      this._log?.(`[perforce] behind-list: ${behind.length} of ${recent.length} not fully synced`)
+      return { changes: behind, hasMore, classified: true, ok: true }
+    })
+  }
+
+  /**
+   * `p4 cstat` over the changelist window, or undefined when it can't answer.
+   *
+   * Undefined is a first-class outcome, not an error path: a server without
+   * `cstat`, a timeout, or an empty reply must degrade the picker to "recent
+   * changelists" rather than claim everything is already synced — the worst
+   * possible answer, since it's indistinguishable from being up to date.
+   */
+  private async _cstatStatuses(oldestId: string): Promise<Map<string, CstatStatus> | undefined> {
+    const started = this._now()
+    const targets = this._syncScopes.map((scope) => `${scope}@${oldestId},#head`)
+    const res = await this._p4.execTagged(['cstat', ...targets], INTERACTIVE_EXEC)
+    if (res.result.exitCode !== 0) {
+      this._log?.(
+        `[perforce] behind-list: cstat failed, listing recent changelists unclassified: ${p4ErrorText(res.result)}`,
+      )
+      return undefined
+    }
+    const statuses = parseCstat(res.records)
+    if (statuses.size === 0) {
+      this._log?.('[perforce] behind-list: cstat returned no usable records; leaving unclassified')
+      return undefined
+    }
+    this._log?.(
+      `[perforce] behind-list: cstat classified ${statuses.size} changelist(s) in ${this._now() - started}ms`,
+    )
+    return statuses
   }
 
   /**

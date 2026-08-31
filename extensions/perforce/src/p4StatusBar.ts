@@ -5,8 +5,8 @@
  * active editor's file. All render whichever client is active — switching the
  * SCM selection re-points them, mirroring VSCode's single-repo status bar (and
  * git's GitStatusBarController). Clicking the main item opens the Perforce
- * graph; clicking the behind item syncs the whole scope, while the revision chip
- * syncs just the file it describes.
+ * graph; clicking the behind item pops up a changelist picker to sync the whole
+ * scope to, while the revision chip syncs just the file it describes.
  *
  * The revision chip re-reads the active editor on every tab switch
  * (`onDidChangeActiveTextEditor`) and routes the file through
@@ -53,12 +53,14 @@ export class P4StatusBarController {
     // Lower priority puts it to the right of the main item.
     this._behindItem = window.createStatusBarItem(StatusBarAlignment.Left, 90)
     // Scope-level, not file-level: this item counts every behind file in the sync
-    // scope, so it must get all of them. `perforce.syncLatest` would fall back to
-    // the active editor's file and fetch one while the label promises N.
+    // scope, so its click must offer whole-scope targets. `perforce.syncLatest`
+    // would fall back to the active editor's file and fetch one while the label
+    // promises N; `perforce.syncScope` pops a changelist picker instead of a
+    // one-shot `#head` get — the newest submit is often not the one you want on.
     this._behindItem.command = 'perforce.syncScope'
     this._behindItem.tooltip = localize(
       'perforce.status.behind.tooltip',
-      'Click to sync the whole scope to the latest revision',
+      'Click to pick which changelist to sync this workspace to',
     )
     // Lowest priority sits left of both: `#have / #head` for the active editor's
     // file, its own signal next to (not merged into) the behind count.

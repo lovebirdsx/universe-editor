@@ -32,7 +32,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-harness'
 import type { Page } from '@playwright/test'
-import type { SeedFile } from '../fixtures/perforceApp.js'
+import type { P4ChangeMetaSeed, SeedFile } from '../fixtures/perforceApp.js'
 
 // Depot head is one revision ahead of what the client has synced (`haveRev` 1 vs
 // `headRev` 2/3) — `p4 sync -n` then reports these files, which is what the
@@ -133,12 +133,17 @@ test.describe('@p1 perforce sync', () => {
       await test.step('clicking the behind status-bar item pulls to head and clears both', async () => {
         // The behind item's command is `perforce.syncScope` (whole sync scope) —
         // deliberately not the file-scoped `perforce.syncLatest`, which would
-        // fetch only the active editor's file while the label promises N.
+        // fetch only the active editor's file while the label promises N. The
+        // scope pick now opens first; "Latest revision" is the one-shot head pull.
         const behindItem = page.locator('[data-testid="part-statusbar"] button', {
           hasText: /files behind/,
         })
         await expect(behindItem).toBeVisible({ timeout: 30_000 })
         await behindItem.click()
+
+        const quickInput = page.getByTestId('quick-input')
+        await expect(quickInput).toBeVisible({ timeout: 30_000 })
+        await quickInput.getByRole('option', { name: /Latest revision/ }).click()
 
         // The pull writes the head revision to disk…
         await expect
@@ -209,6 +214,11 @@ test.describe('@p1 perforce sync', () => {
         })
 
         await test.step('a folder get pulls the whole subtree', async () => {
+          // Both gets update exactly one file, so the first step's result toast
+          // would satisfy this step's toast assertion too. Clear the deck so the
+          // toast waited on below can only be this get's.
+          await workbench.runCommand('workbench.action.notifications.clearAll')
+          await expect(page.locator('[data-testid="notification-toast-item"]')).toHaveCount(0)
           // The default layout renders nested folders compact — one row whose
           // label is "src/lib" (the accessible name collapses it to "srclib", but
           // the visible text keeps the separators). Right-click the `src` segment:
@@ -227,6 +237,16 @@ test.describe('@p1 perforce sync', () => {
               message: 'the folder get should update the file under the subtree',
             })
             .toBe(NESTED_HEAD)
+          // p4 writes the file before the get finishes, so the content assertion
+          // alone would let teardown run while the progress notification is still
+          // mounted — and its cancellation subscription is only released once the
+          // host reports the run as ended. The result toast is the first thing
+          // observable after that, so it is what makes teardown leak-free.
+          await expect(
+            page
+              .locator('[data-testid="notification-toast-item"]')
+              .filter({ hasText: 'Updated 1 file(s)' }),
+          ).toBeVisible({ timeout: 30_000 })
         })
       },
     )
@@ -503,6 +523,12 @@ test.describe('@p1 perforce sync', () => {
           .evaluate(() => void window.__E2E__!.runCommand('perforce.syncScope'))
           .catch(() => {})
 
+        // The scope pick opens first; pick "Latest revision" for the #head sync
+        // this journey needs (the seed has no submitted changelists to offer).
+        const quickInput = page.getByTestId('quick-input')
+        await expect(quickInput).toBeVisible({ timeout: 30_000 })
+        await quickInput.getByRole('option', { name: /Latest revision/ }).click()
+
         const dialog = page.getByRole('dialog')
         await expect(dialog).toBeVisible({ timeout: 30_000 })
         await expect(dialog).toContainText('not updated')
@@ -520,6 +546,79 @@ test.describe('@p1 perforce sync', () => {
               'the collect button should open (collect) the file into the default changelist',
           })
           .toEqual(['default'])
+      })
+    })
+  })
+
+  test.describe('sync scope changelist picker', () => {
+    const AT_1002 = 'revision two from change 1002\n'
+    const AT_1003 = 'revision three (head)\n'
+    const behindAt: SeedFile = {
+      relPath: 'behind.txt',
+      content: 'revision one (have)\n',
+      headRev: 3,
+      headContent: AT_1003,
+      revisions: { '2': AT_1002 },
+    }
+    const changeMeta: Readonly<Record<string, P4ChangeMetaSeed>> = {
+      '1001': { user: 'e2e', time: '1760000000', desc: 'already synced', rev: 1 },
+      '1002': { user: 'e2e', time: '1760000100', desc: 'middle change', rev: 2 },
+      '1003': { user: 'e2e', time: '1760000200', desc: 'newest change', rev: 3 },
+    }
+    const cstat: Readonly<Record<string, 'have' | 'need' | 'partial'>> = {
+      '1001': 'have',
+      '1002': 'need',
+      '1003': 'need',
+    }
+
+    test.use({ p4Seeds: { files: [behindAt], changeMeta, cstat } })
+
+    test('picking a changelist syncs the scope to that revision, not head @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await openSyncWorkspace(page, workbench, perforce.openDir)
+
+      // Fire-and-forget: the command parks on the quick pick until a row is chosen.
+      void page
+        .evaluate(() => void window.__E2E__!.runCommand('perforce.syncScope'))
+        .catch(() => {})
+      const quickInput = page.getByTestId('quick-input')
+      await expect(quickInput).toBeVisible({ timeout: 30_000 })
+
+      await test.step('the picker lists latest plus the behind changelists, dropping the already-synced one', async () => {
+        await expect(quickInput.getByText('Latest revision', { exact: true })).toBeVisible()
+        // Newest-first: 1003 then 1002 — the two `need` changelists.
+        await expect(quickInput.getByText('newest change', { exact: true })).toBeVisible()
+        await expect(quickInput.getByText('middle change', { exact: true })).toBeVisible()
+        // 1001 is `have`: cstat classified it as already synced, so it must not be offered.
+        await expect(quickInput.getByText('already synced', { exact: true })).toHaveCount(0)
+      })
+
+      await test.step('picking @1002 syncs the scope to that revision, not head', async () => {
+        await quickInput.getByRole('option', { name: /middle change/ }).click()
+
+        // The run sits in a cancellable notification progress. The bar is
+        // determinate because the @1002 dry-run supplies a total (1 file), and it
+        // stays mounted through the post-sync refresh, so it is observable despite
+        // the fake's instant file writes.
+        await expect(
+          page.locator('[data-testid="notification-progress-determinate"]'),
+        ).toBeVisible({ timeout: 30_000 })
+
+        // Final result toast.
+        await expect(
+          page
+            .locator('[data-testid="notification-toast-item"]')
+            .filter({ hasText: 'Updated 1 file(s)' }),
+        ).toBeVisible({ timeout: 30_000 })
+
+        // On disk: the @1002 revision, not head.
+        await expect
+          .poll(() => readFileSync(perforce.file('behind.txt'), 'utf8'), { timeout: 30_000 })
+          .toBe(AT_1002)
       })
     })
   })
