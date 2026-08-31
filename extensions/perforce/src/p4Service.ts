@@ -169,10 +169,11 @@ class SpawnWatchdog {
  * Budget (in characters) for the variable path list of a single p4 command.
  * Windows caps a whole command line at 32767 chars; a p4 invocation also spends
  * some of that on the executable path, connection globals (`-p/-u/-c`) and the
- * fixed subcommand args, so we keep the path portion well under the limit. A
- * changelist with tens of thousands of files (observed: 70k) otherwise expanded
- * `reconcile`/`where` into one over-long argv and `spawn` threw `ENAMETOOLONG`,
- * surfacing as an unhandled rejection in the extension host.
+ * fixed subcommand args, so we keep the path portion well under the limit. Used
+ * both as the batch budget for read-path `chunkByLength` (`reconcile -n` /
+ * `ignores` / `where`) and as the trigger for spawn-layer `-x` argfile on long
+ * mutation argv (a 17k-file DEFAULT changelist otherwise blew `revert -k` /
+ * `reopen` into `spawn ENAMETOOLONG`).
  */
 export const MAX_PATH_ARGS_CHARS = 8000
 
@@ -238,48 +239,123 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
  * `P4CHARSET=utf8` p4 expects UTF-8 instead, so any non-ASCII argument (a
  * Chinese depot path) arrives untranslatable — p4 exits 1 with "No Translation
  * for parameter" and reads like an empty file (the empty-Swarm-diff bug). The
- * escape hatch is p4's global `-x <argfile>`: arguments in a UTF-8 file bypass
- * the ANSI argv conversion entirely.
+ * same `-x <argfile>` hatch also dodges Windows' ~32767-char CreateProcess
+ * limit, which a changelist of tens of thousands of ASCII paths otherwise
+ * blows (`spawn ENAMETOOLONG` on `revert -k` / `reopen`).
  *
- * Splits at the first non-ASCII argument: everything from there on moves into
- * the argfile (p4 appends file arguments after command-line ones, so order is
- * preserved). Global options and subcommands are always ASCII, so the split
- * never lands before the subcommand. Returns undefined for ASCII-only argv —
- * the common case, which must stay zero-cost.
+ * The cut is `min(first non-ASCII, first index over maxChars)` so a
+ * 17k-file changelist that happens to contain one Chinese path still
+ * gets a bounded command line, and that Chinese path still lands in the
+ * UTF-8 argfile. `reason` is `'encoding'` when the cut is the first
+ * non-ASCII argument, otherwise `'length'`. A single argument over
+ * budget puts the whole argv in the file (`splitAt = 0`). p4 appends
+ * file arguments after command-line ones, so order is preserved.
+ * Returns undefined for short ASCII-only argv — the common case, which
+ * must stay zero-cost.
  */
 export function splitArgsForArgfile(
   args: readonly string[],
-): { argv: string[]; argfileLines: string[] } | undefined {
+  maxChars = MAX_PATH_ARGS_CHARS,
+): { argv: string[]; argfileLines: string[]; reason: 'encoding' | 'length' } | undefined {
   const nonAscii = /[^\x00-\x7f]/
-  const first = args.findIndex((a) => nonAscii.test(a))
-  if (first < 0) return undefined
-  return { argv: args.slice(0, first), argfileLines: args.slice(first) }
+  const firstNonAscii = args.findIndex((a) => nonAscii.test(a))
+  const encodingAt = firstNonAscii >= 0 ? firstNonAscii : args.length
+  let lengthAt = args.length
+  let len = 0
+  for (let i = 0; i < args.length; i++) {
+    const cost = (args[i] ?? '').length + 1
+    if (len + cost > maxChars) {
+      lengthAt = i
+      break
+    }
+    len += cost
+  }
+  const splitAt = Math.min(encodingAt, lengthAt)
+  if (splitAt === args.length) return undefined
+  const reason: 'encoding' | 'length' =
+    encodingAt <= lengthAt && encodingAt < args.length ? 'encoding' : 'length'
+  return { argv: args.slice(0, splitAt), argfileLines: args.slice(splitAt), reason }
+}
+
+const P4_ARGV_LOG_MAX_CHARS = 500
+
+function formatP4ArgvForLog(args: readonly string[]): string {
+  let out = ''
+  for (let i = 0; i < args.length; i++) {
+    const piece = i === 0 ? args[i]! : ` ${args[i]!}`
+    if (out.length + piece.length > P4_ARGV_LOG_MAX_CHARS) {
+      const room = P4_ARGV_LOG_MAX_CHARS - out.length
+      const prefix = room > 0 ? out + piece.slice(0, room) : out
+      return `${prefix}… (${args.length} args)`
+    }
+    out += piece
+  }
+  return out
+}
+
+function argvJoinedChars(args: readonly string[]): number {
+  let n = 0
+  for (const a of args) n += a.length + 1
+  return n
+}
+
+function errorCode(err: unknown): string | undefined {
+  if (typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string') {
+    return err.code
+  }
+  return undefined
+}
+
+function isArgvTooLongError(err: unknown): boolean {
+  const code = errorCode(err)
+  return code === 'ENAMETOOLONG' || code === 'E2BIG'
+}
+
+function argvTooLongMessage(err: unknown): string {
+  const code = errorCode(err) ?? 'ENAMETOOLONG'
+  const detail = err instanceof Error ? err.message : String(err)
+  return `p4 spawn failed: ${code} — command line too long (${detail})`
 }
 
 /**
- * Rewrite argv for spawning: non-ASCII arguments are written to a UTF-8 temp
- * argfile and replaced by a leading `-x <file>` (a global option, valid before
- * the other globals). Callers must invoke `cleanup` once the child has closed.
- * If the temp file can't be written we fall back to the original argv — the
- * command then fails with p4's own translation warning instead of us throwing
- * from an async spawn path (extension-host crash red line).
+ * Rewrite argv for spawning: non-ASCII or over-long arguments are written to
+ * a UTF-8 temp argfile and replaced by a leading `-x <file>` (a global option,
+ * valid before the other globals). Callers must invoke `cleanup` once the
+ * child has closed. `error` set means the caller must not spawn — encoding
+ * write failures still fall back to the original argv when it is short
+ * enough (p4 then reports its own translation warning); once the original
+ * argv is over budget (length cut, or encoding cut of an already-long
+ * list) we must not fall back, because that spawn would ENAMETOOLONG.
+ * Never throws from this path (extension-host crash red line).
  */
 function prepareSpawnArgs(
   args: readonly string[],
   log?: (msg: string) => void,
-): { args: readonly string[]; cleanup: () => void } {
+): { args: readonly string[]; cleanup: () => void; error?: string } {
   const split = splitArgsForArgfile(args)
   if (!split) return { args, cleanup: () => {} }
   const argfile = join(tmpdir(), `universe-p4-args-${randomUUID()}.txt`)
   try {
     writeFileSync(argfile, split.argfileLines.join('\n') + '\n', 'utf8')
   } catch (err) {
+    try {
+      unlinkSync(argfile)
+    } catch {
+      // best-effort: write may have created a partial file
+    }
+    if (split.reason === 'length' || argvJoinedChars(args) > MAX_PATH_ARGS_CHARS) {
+      const msg = `failed to write argfile for long argv (${(err as Error).message}); refusing to spawn an over-long command line`
+      log?.(`  ${msg}`)
+      return { args, cleanup: () => {}, error: msg }
+    }
     log?.(
       `  failed to write argfile for non-ASCII args (${(err as Error).message}); passing argv as-is`,
     )
     return { args, cleanup: () => {} }
   }
-  log?.(`  (non-ASCII args via -x argfile: ${split.argfileLines.join(' | ')})`)
+  const via =
+    split.reason === 'encoding' ? 'non-ASCII args via -x argfile' : 'long argv via -x argfile'
+  log?.(`  (${via}: ${split.argfileLines.length} args)`)
   return {
     args: ['-x', argfile, ...split.argv],
     cleanup: () => {
@@ -355,7 +431,8 @@ export class P4Service {
   }
 
   /** Run `p4 <args>` and resolve with stdout/stderr/exitCode (never rejects on a
-   *  non-zero exit; rejects only if the process can't spawn — e.g. p4 missing). */
+   *  non-zero exit; rejects only if the process can't spawn — e.g. p4 missing.
+   *  ENAMETOOLONG/E2BIG resolve as exit 1 rather than reject). */
   exec(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
     const globals = options?.noConnection ? [] : connectionArgs(this._connection, options?.noClient)
     const full = [...globals, ...args]
@@ -432,16 +509,33 @@ export class P4Service {
       () =>
         new Promise((resolve, reject) => {
           const { command, prefixArgs } = resolveP4Command()
-          this._log?.(`> p4 ${full.join(' ')} (binary)`)
+          this._log?.(`> p4 ${formatP4ArgvForLog(full)} (binary)`)
           const env = sanitizeEnv()
           if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
           const prepared = prepareSpawnArgs(full, this._log)
-          const proc = spawn(command, [...prefixArgs, ...prepared.args], {
-            cwd: this._cwd,
-            env,
-            windowsHide: true,
-            shell: false,
-          })
+          if (prepared.error !== undefined) {
+            resolve({ stdout: Buffer.alloc(0), stderr: prepared.error, exitCode: 1 })
+            return
+          }
+          let proc
+          try {
+            proc = spawn(command, [...prefixArgs, ...prepared.args], {
+              cwd: this._cwd,
+              env,
+              windowsHide: true,
+              shell: false,
+            })
+          } catch (err) {
+            prepared.cleanup()
+            if (isArgvTooLongError(err)) {
+              const msg = argvTooLongMessage(err)
+              this._log?.(`  ${msg}`)
+              resolve({ stdout: Buffer.alloc(0), stderr: msg, exitCode: 1 })
+              return
+            }
+            reject(err)
+            return
+          }
           const watchdog = new SpawnWatchdog(
             proc,
             options?.timeoutMs ?? this._defaultTimeoutMs,
@@ -455,6 +549,12 @@ export class P4Service {
           proc.on('error', (err) => {
             watchdog.dispose()
             prepared.cleanup()
+            if (isArgvTooLongError(err)) {
+              const msg = argvTooLongMessage(err)
+              this._log?.(`  ${msg}`)
+              resolve({ stdout: Buffer.alloc(0), stderr: msg, exitCode: 1 })
+              return
+            }
             reject(err)
           })
           proc.on('close', (code) => {
@@ -488,7 +588,7 @@ export class P4Service {
   private _spawn(args: readonly string[], options?: P4ExecOptions): Promise<P4ExecResult> {
     return new Promise((resolve, reject) => {
       const { command, prefixArgs } = resolveP4Command()
-      this._log?.(`> p4 ${args.join(' ')}`)
+      this._log?.(`> p4 ${formatP4ArgvForLog(args)}`)
       const start = Date.now()
       const env = sanitizeEnv()
       // When the fake p4 is a JS script we run it through this runtime. In the
@@ -497,12 +597,29 @@ export class P4Service {
       // than launching a full Electron app.
       if (command === process.execPath) env.ELECTRON_RUN_AS_NODE = '1'
       const prepared = prepareSpawnArgs(args, this._log)
-      const proc = spawn(command, [...prefixArgs, ...prepared.args], {
-        cwd: this._cwd,
-        env,
-        windowsHide: true,
-        shell: false,
-      })
+      if (prepared.error !== undefined) {
+        resolve({ stdout: '', stderr: prepared.error, exitCode: 1 })
+        return
+      }
+      let proc
+      try {
+        proc = spawn(command, [...prefixArgs, ...prepared.args], {
+          cwd: this._cwd,
+          env,
+          windowsHide: true,
+          shell: false,
+        })
+      } catch (err) {
+        prepared.cleanup()
+        if (isArgvTooLongError(err)) {
+          const msg = argvTooLongMessage(err)
+          this._log?.(`  ${msg}`)
+          resolve({ stdout: '', stderr: msg, exitCode: 1 })
+          return
+        }
+        reject(err)
+        return
+      }
       const maxBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
       const watchdog = new SpawnWatchdog(
         proc,
@@ -547,6 +664,12 @@ export class P4Service {
         watchdog.dispose()
         detachSignal()
         prepared.cleanup()
+        if (isArgvTooLongError(err)) {
+          const msg = argvTooLongMessage(err)
+          this._log?.(`  ${msg}`)
+          resolve({ stdout: '', stderr: msg, exitCode: 1 })
+          return
+        }
         reject(err)
       })
       proc.on('close', (code) => {

@@ -13,6 +13,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { expandP4Argv } from './expandP4Argv.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -80,7 +81,7 @@ const spawned: string[][] = []
 
 function respond(handler: (argv: string[]) => Reply): void {
   spawnMock.mockImplementation((...args: unknown[]) => {
-    const argv = (args[1] as string[]) ?? []
+    const argv = expandP4Argv((args[1] as string[]) ?? [])
     spawned.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {

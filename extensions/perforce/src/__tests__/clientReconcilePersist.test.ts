@@ -12,6 +12,7 @@
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { expandP4Argv } from './expandP4Argv.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -98,7 +99,7 @@ const calls: string[][] = []
 
 function respond(opts: RespondOptions = {}): void {
   spawnMock.mockImplementation((...args: unknown[]) => {
-    const argv = (args[1] as string[]) ?? []
+    const argv = expandP4Argv((args[1] as string[]) ?? [])
     calls.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {
@@ -115,7 +116,7 @@ function subcommand(argv: string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!
     if (a === '-Mj' || a === '-ztag') continue
-    if (a === '-p' || a === '-u' || a === '-c') {
+    if (a === '-p' || a === '-u' || a === '-c' || a === '-x') {
       i++
       continue
     }

@@ -140,13 +140,23 @@ P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresol
 - **P4ExecOptions.timeoutMs** 可按命令覆写（测试用小值复现挂死）。
 
 
-## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码（已修复：`-x` argfile）
+## ⚠️ 中文/非 ASCII 路径经 argv 传给 p4 会乱码；超长 argv 会 ENAMETOOLONG（已修复：`-x` argfile）
 
-**现象（修复前）**：unicode-enabled 服务器 + `P4CHARSET=utf8` 环境下，对含中文的 depotFile 跑 `p4 print`（Swarm review diff、图谱文件 diff 都走它）报 `Perforce client warning: No Translation for parameter ...` exit 1 → `printRevision` 静默 `return ''` → **diff 两侧全空**（纯 ASCII 路径正常，极具迷惑性）。
+**现象（修复前）**：unicode-enabled 服务器 + `P4CHARSET=utf8` 环境下，对含中文的 depotFile 跑 `p4 print`（Swarm review diff、图谱文件 diff 都走它）报 `Perforce client warning: No Translation for parameter ...` exit 1 → `printRevision` 静默 `return ''` → **diff 两侧全空**（纯 ASCII 路径正常，极具迷惑性）。另一条：对含上万文件的 DEFAULT 组头「移出 Changelist」（`revert -k` 展开全部路径）报 `spawn ENAMETOOLONG`，经 RPC 冒成 wire error。
 
-- **根因**：Windows 上 Node `spawn('p4', argv)` 用 `CreateProcessW` 传 UTF-16 argv；p4.exe 的 CRT `main` 按**系统 ANSI 代码页（cp936/GBK）**转回字节。而 `P4CHARSET=utf8` 让 p4 期望 argv 是 UTF-8 → GBK 字节里的中文无法翻译。
-- **已实测的死路**：env 注入 `P4COMMANDCHARSET=winansi`（CP1252 ≠ 系统 ANSI）；`=cp936`（机器相关，不可作通用修复）；清空 `P4CHARSET`（改变用户既有配置语义，副作用大）。
-- **修复（`p4Service.ts`）**：p4 全局选项 **`-x <argfile>`**——`prepareSpawnArgs` 在 `_spawn`/`execBinary` 层统一检测：argv 含非 ASCII 参数时，从**第一个非 ASCII 参数起**整段写入 UTF-8 临时 argfile（p4 会把 argfile 参数追加在命令行参数之后，顺序不变；全局选项/子命令必为 ASCII 故切分点必在子命令后），命令行改写为 `p4 -x <file> <其余参数>`（`-x` 前置，与其它全局选项顺序无关，已实测）。命令结束同步删临时文件；写文件失败回退直传（绝不从异步 spawn 路径 throw——宿主崩溃红线）。纯切分逻辑 `splitArgsForArgfile` 已导出，单测见 `p4Service.test.ts`；e2e 的 fake-p4 已支持 `-x`（`swarmReview.spec.ts` 有中文路径 review diff 回归用例）。ASCII-only 命令零开销不受影响。
+- **乱码根因**：Windows 上 Node `spawn('p4', argv)` 用 `CreateProcessW` 传 UTF-16 argv；p4.exe 的 CRT `main` 按**系统 ANSI 代码页（cp936/GBK）**转回字节。而 `P4CHARSET=utf8` 让 p4 期望 argv 是 UTF-8 → GBK 字节里的中文无法翻译。
+- **超长根因**：Windows `CreateProcess` 命令行上限约 32767 字符。组头操作展开全部路径后一次性 `spawn('p4', ['revert','-k', ...paths])`，ASCII 路径原先不走 `-x`，17k 条轻松超限。Node 常见路径是创建 ChildProcess 后 `error` 事件（也曾同步 throw）；原先 `proc.on('error')` 直接 reject → RPC。
+- **已实测的死路（乱码）**：env 注入 `P4COMMANDCHARSET=winansi`（CP1252 ≠ 系统 ANSI）；`=cp936`（机器相关，不可作通用修复）；清空 `P4CHARSET`（改变用户既有配置语义，副作用大）。
+- **修复（`p4Service.ts`）**：p4 全局选项 **`-x <argfile>`**——`prepareSpawnArgs` 在 `_spawn`/`execBinary` 层统一检测：
+  - 切分点取 `min(首个非 ASCII, 超 `MAX_PATH_ARGS_CHARS`（8000）处)`：非 ASCII 从不留在 argv（进 UTF-8 临时 argfile）；巨型列表即使混入一个中文路径，命令行仍有界。
+  - `reason: 'encoding'` 表示切在首个非 ASCII；`reason: 'length'` 表示切在长度预算。第一项就超则整段进文件。
+  - 短 ASCII 命令零开销，不写临时文件。
+  - p4 把 argfile 参数追加在命令行参数之后，顺序不变；`-x` 前置。命令结束同步删临时文件；写失败也会 best-effort 删半写文件。
+  - **写文件失败**：仅当原 argv 未超 budget（纯 encoding 短命令）才回退直传；原 argv 已超长（length 切，或 encoding 切但列表本身已超）**禁止回退**，调用方不 spawn，resolve exit 1。
+  - **ENAMETOOLONG/E2BIG**（`spawn()` 同步 throw 或 `error` 事件）一律 resolve `{exitCode:1}`，**不 reject**。ENOENT（p4 缺失）仍 reject。异步回调绝不 throw（宿主崩溃红线）。
+  - spawn 日志逐项累计截断（前 500 字符 + 参数个数），禁止把上万路径 `join` 成大字符串。
+  - 纯切分逻辑 `splitArgsForArgfile` 已导出，单测见 `p4Service.test.ts`；e2e 的 fake-p4 已支持 `-x`（`swarmReview.spec.ts` 有中文路径 review diff 回归用例）。
+- **不在 `_mutate` 里按批切 mutation**：`-x` 是 p4 原生大参数通道（一条命令、原子、不灌满 `ConcurrencyGate`）。读路径的 `chunkByLength`（`reconcile -n` / `ignores` / `where`）保持分批，限制单次输出体积。
 
 ## SCM 分组模型（与 git 根本不同）
 
@@ -314,7 +324,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/git/` —— 对照样板（Repository/RepositoryManager/gitError/nls 都是 p4 的镜像来源）
 - 相关 skill：`create-extension`（插件通用套路）；dirty-diff 内联 peek UI 见 `apps/editor/src/renderer/workbench/scm/CLAUDE.md`
 - 相关 memory：`extension-system-progress` / `eslint-path-identity-guardrails` / `dirty-diff-inline-peek-feature` / `path-comparison-convergence` / `perforce-collect-changes-ux`
-- 中文路径 `p4 print` 空 diff（`-x` argfile / `P4COMMANDCHARSET` / `P4CHARSET` 各方案实测对比）已收敛在上文「中文/非 ASCII 路径」节
+- 中文路径 `p4 print` 空 diff / 超长 argv ENAMETOOLONG（`-x` argfile）已收敛在上文「中文/非 ASCII 路径经 argv 传给 p4 会乱码；超长 argv 会 ENAMETOOLONG」节
 
 ## 其它
 

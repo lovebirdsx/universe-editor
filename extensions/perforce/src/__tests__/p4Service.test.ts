@@ -1,11 +1,27 @@
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveP4Command, splitArgsForArgfile } from '../p4Service.js'
+import { MAX_PATH_ARGS_CHARS, resolveP4Command, splitArgsForArgfile } from '../p4Service.js'
 
 const ORIGINAL = process.env.UNIVERSE_P4_PATH
 
+const { fsState } = vi.hoisted(() => ({
+  fsState: { writeFileSyncError: undefined as Error | undefined },
+}))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    writeFileSync: (...args: unknown[]) => {
+      if (fsState.writeFileSyncError) throw fsState.writeFileSyncError
+      return (actual.writeFileSync as (...a: unknown[]) => void)(...args)
+    },
+  }
+})
+
 afterEach(() => {
+  fsState.writeFileSyncError = undefined
   if (ORIGINAL === undefined) delete process.env.UNIVERSE_P4_PATH
   else process.env.UNIVERSE_P4_PATH = ORIGINAL
 })
@@ -183,10 +199,12 @@ describe('P4Service non-ASCII args go through -x argfile', () => {
     expect(splitArgsForArgfile(['print', '-q', CN_SPEC])).toEqual({
       argv: ['print', '-q'],
       argfileLines: [CN_SPEC],
+      reason: 'encoding',
     })
     expect(splitArgsForArgfile(['edit', '-c', '5', '中文A', 'asciiB'])).toEqual({
       argv: ['edit', '-c', '5'],
       argfileLines: ['中文A', 'asciiB'],
+      reason: 'encoding',
     })
     expect(splitArgsForArgfile(['files', '//depot/a.txt'])).toBeUndefined()
   })
@@ -260,6 +278,246 @@ describe('P4Service non-ASCII args go through -x argfile', () => {
     child.emit('close', 0)
     const result = await p
     expect(result.exitCode).toBe(0)
+    expect(existsSync(argfile)).toBe(false)
+  })
+})
+
+// Repro for "Move out of Changelist" on a DEFAULT group with tens of thousands of
+// opened files: ASCII paths skip the encoding -x path, spawn gets a 17k-path argv
+// and Windows CreateProcess throws ENAMETOOLONG, which used to reject the exec
+// promise and surface as an RPC Error. Long argv must take the same -x argfile
+// path; leftover ENAMETOOLONG/E2BIG must resolve as exit 1, never reject.
+describe('P4Service long ASCII argv goes through -x argfile', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  function spawnedArgs(): string[] {
+    const call = spawnMock.mock.calls.at(-1)
+    return (call?.[1] ?? []) as string[]
+  }
+
+  function manyAsciiPaths(count: number): string[] {
+    return Array.from(
+      { length: count },
+      (_, i) => `//depot/game/assets/characters/hero_${i}.uasset`,
+    )
+  }
+
+  it('splitArgsForArgfile splits an over-long ASCII list and keeps a bounded prefix', () => {
+    const paths = manyAsciiPaths(400)
+    const split = splitArgsForArgfile(['revert', '-k', ...paths])
+    expect(split).toBeDefined()
+    expect(split?.reason).toBe('length')
+    const prefixLen = (split?.argv ?? []).reduce((n, a) => n + a.length + 1, 0)
+    expect(prefixLen).toBeLessThanOrEqual(MAX_PATH_ARGS_CHARS)
+    expect(split?.argv[0]).toBe('revert')
+    expect([...(split?.argv ?? []), ...(split?.argfileLines ?? [])]).toEqual([
+      'revert',
+      '-k',
+      ...paths,
+    ])
+    expect(splitArgsForArgfile(['files', '//depot/a.txt'])).toBeUndefined()
+  })
+
+  it('puts the whole argv in the argfile when the first argument already exceeds the budget', () => {
+    const huge = 'x'.repeat(MAX_PATH_ARGS_CHARS + 1)
+    expect(splitArgsForArgfile([huge, 'tail'])).toEqual({
+      argv: [],
+      argfileLines: [huge, 'tail'],
+      reason: 'length',
+    })
+  })
+
+  it('keeps a long ASCII prefix bounded when a non-ASCII path sits at the end', () => {
+    const paths = manyAsciiPaths(400)
+    const cn = '//depot/资源库/资源表.csv'
+    const split = splitArgsForArgfile(['revert', '-k', ...paths, cn])
+    expect(split).toBeDefined()
+    expect(split?.reason).toBe('length')
+    const prefixLen = (split?.argv ?? []).reduce((n, a) => n + a.length + 1, 0)
+    expect(prefixLen).toBeLessThanOrEqual(MAX_PATH_ARGS_CHARS)
+    expect(split?.argfileLines.at(-1)).toBe(cn)
+    expect([...(split?.argv ?? []), ...(split?.argfileLines ?? [])]).toEqual([
+      'revert',
+      '-k',
+      ...paths,
+      cn,
+    ])
+  })
+
+  it('cuts at the first non-ASCII even when the remaining ASCII tail would overflow', () => {
+    const paths = manyAsciiPaths(400)
+    const cn = '//depot/资源库/资源表.csv'
+    const split = splitArgsForArgfile(['revert', '-k', cn, ...paths])
+    expect(split).toEqual({
+      argv: ['revert', '-k'],
+      argfileLines: [cn, ...paths],
+      reason: 'encoding',
+    })
+  })
+
+  it('spawns long ASCII path lists via -x with a bounded command line', async () => {
+    const paths = manyAsciiPaths(3000)
+    const svc = makeService()
+    const p = svc.exec(['revert', '-k', ...paths])
+    await flush()
+    const args = spawnedArgs()
+    expect(args[0]).toBe('-x')
+    const argfile = args[1] as string
+    const prefix = args.slice(2)
+    const prefixLen = prefix.reduce((n, a) => n + a.length + 1, 0)
+    expect(prefixLen).toBeLessThanOrEqual(MAX_PATH_ARGS_CHARS)
+    const fileLines = readFileSync(argfile, 'utf8').trimEnd().split('\n')
+    expect([...prefix, ...fileLines]).toEqual(['revert', '-k', ...paths])
+    child.emit('close', 0)
+    await p
+    expect(existsSync(argfile)).toBe(false)
+  })
+
+  it('truncates the spawn log instead of joining tens of thousands of paths', async () => {
+    const logs: string[] = []
+    const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, (m) => logs.push(m))
+    const paths = manyAsciiPaths(3000)
+    const p = svc.exec(['revert', '-k', ...paths])
+    await flush()
+    child.emit('close', 0)
+    await p
+    const header = logs.find((l) => l.startsWith('> p4 '))
+    expect(header).toBeDefined()
+    expect(header!.length).toBeLessThan(600)
+    expect(header).toMatch(/\d+ args\)/)
+    const argfileLog = logs.find((l) => l.includes('argfile'))
+    expect(argfileLog).toMatch(/\d+ args\)/)
+    expect(argfileLog).not.toContain('hero_100')
+  })
+
+  it('resolves ENAMETOOLONG from a synchronous spawn throw as a failure', async () => {
+    spawnMock.mockImplementation(() => {
+      throw Object.assign(new Error('spawn ENAMETOOLONG'), { code: 'ENAMETOOLONG' })
+    })
+    const svc = makeService()
+    const result = await svc.exec(['revert', '-k', 'a.txt'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/ENAMETOOLONG|too long/)
+  })
+
+  it('resolves E2BIG from a synchronous spawn throw as a failure', async () => {
+    spawnMock.mockImplementation(() => {
+      throw Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG' })
+    })
+    const svc = makeService()
+    const result = await svc.exec(['revert', '-k', 'a.txt'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/E2BIG|too long/)
+  })
+
+  it('resolves ENAMETOOLONG from the child error event as a failure', async () => {
+    const svc = makeService()
+    const p = svc.exec(['info'])
+    await flush()
+    child.emit('error', Object.assign(new Error('spawn ENAMETOOLONG'), { code: 'ENAMETOOLONG' }))
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/ENAMETOOLONG|too long/)
+  })
+
+  it('execBinary also resolves ENAMETOOLONG instead of rejecting', async () => {
+    spawnMock.mockImplementation(() => {
+      throw Object.assign(new Error('spawn ENAMETOOLONG'), { code: 'ENAMETOOLONG' })
+    })
+    const svc = makeService()
+    const result = await svc.execBinary(['print', '-q', 'a.bin'])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/ENAMETOOLONG|too long/)
+    expect(result.stdout).toEqual(Buffer.alloc(0))
+  })
+
+  it('does not spawn the original over-long argv when the length-triggered argfile cannot be written', async () => {
+    fsState.writeFileSyncError = Object.assign(new Error('EACCES: permission denied'), {
+      code: 'EACCES',
+    })
+    const paths = manyAsciiPaths(3000)
+    const svc = makeService()
+    const result = await svc.exec(['revert', '-k', ...paths])
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/argfile|too long|over-long/)
+  })
+
+  it('falls back to passing argv as-is when an encoding-triggered argfile cannot be written', async () => {
+    fsState.writeFileSyncError = Object.assign(new Error('EACCES: permission denied'), {
+      code: 'EACCES',
+    })
+    const svc = makeService()
+    const p = svc.exec(['print', '-q', '//depot/资源库/资源表.csv#47'])
+    await flush()
+    expect(spawnedArgs()).toEqual(['print', '-q', '//depot/资源库/资源表.csv#47'])
+    child.emit('close', 0)
+    await p
+  })
+
+  it('does not spawn when an encoding cut of an already-long argv cannot write the argfile', async () => {
+    fsState.writeFileSyncError = Object.assign(new Error('EACCES: permission denied'), {
+      code: 'EACCES',
+    })
+    const svc = makeService()
+    const result = await svc.exec([
+      'revert',
+      '-k',
+      '//depot/资源库/资源表.csv',
+      ...manyAsciiPaths(3000),
+    ])
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/argfile|too long|over-long/)
+  })
+
+  it('execBinary resolves ENAMETOOLONG from the child error event as a failure', async () => {
+    const svc = makeService()
+    const p = svc.execBinary(['print', '-q', 'a.bin'])
+    await flush()
+    child.emit('error', Object.assign(new Error('spawn ENAMETOOLONG'), { code: 'ENAMETOOLONG' }))
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/ENAMETOOLONG|too long/)
+    expect(result.stdout).toEqual(Buffer.alloc(0))
+  })
+
+  it('deletes the argfile when a long command times out', async () => {
+    const svc = makeService()
+    const p = svc.exec(['revert', '-k', ...manyAsciiPaths(3000)], { timeoutMs: 50 })
+    await flush()
+    const argfile = spawnedArgs()[1] as string
+    expect(spawnedArgs()[0]).toBe('-x')
+    expect(existsSync(argfile)).toBe(true)
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/timed out after 50ms/)
+    expect(existsSync(argfile)).toBe(false)
+  })
+
+  it('deletes the argfile when a long command is cancelled', async () => {
+    const svc = makeService()
+    const source = new AbortController()
+    const p = svc.exec(['revert', '-k', ...manyAsciiPaths(3000)], { signal: source.signal })
+    await flush()
+    const argfile = spawnedArgs()[1] as string
+    expect(spawnedArgs()[0]).toBe('-x')
+    expect(existsSync(argfile)).toBe(true)
+    source.abort()
+    child.emit('close', null)
+    const result = await p
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toMatch(/was cancelled/)
     expect(existsSync(argfile)).toBe(false)
   })
 })
