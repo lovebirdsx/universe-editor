@@ -37,6 +37,11 @@ export interface AnchoredSurfaceProps {
   readonly padding?: number
   /** Called on click-outside or Escape. Omit to disable auto-dismissal. */
   readonly onClose?: () => void
+  /**
+   * Lets the content consume Escape first — return `true` when it handled the
+   * key (e.g. a menu closing its innermost submenu) to keep the surface open.
+   */
+  readonly onEscape?: () => boolean
   /** Extra props merged onto the floating element (className, role, style, …). */
   readonly surfaceProps?: React.HTMLAttributes<HTMLDivElement>
   readonly children: ReactNode
@@ -49,6 +54,7 @@ export function AnchoredSurface({
   offset: offsetPx = 0,
   padding = 8,
   onClose,
+  onEscape,
   surfaceProps,
   children,
 }: AnchoredSurfaceProps) {
@@ -118,11 +124,14 @@ export function AnchoredSurface({
       if (e.key !== 'Escape') return
       e.preventDefault()
       e.stopPropagation()
+      // The content gets first refusal so a nested level can peel off one at a
+      // time instead of the whole surface going down with it.
+      if (onEscape?.() === true) return
       onClose()
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose])
+  }, [onClose, onEscape])
   const { getFloatingProps } = useInteractions([dismiss])
 
   const { style: extraStyle, ...restSurfaceProps } = surfaceProps ?? {}

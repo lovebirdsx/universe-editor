@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   CommandsRegistry,
   type ICommandService,
@@ -9,6 +9,12 @@ import {
 } from '@universe-editor/platform'
 import type { ContextViewAnchor } from '../contextView/IContextViewService.js'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
+import {
+  computeSubmenuPosition,
+  type IViewportSize,
+  type SubmenuDirection,
+} from '../overlay/anchorLayout.js'
+import { useTransformFreePlacement } from '../overlay/useTransformFreePlacement.js'
 import styles from './ContextMenu.module.css'
 
 export interface ContextMenuProps {
@@ -54,12 +60,58 @@ interface MenuSubmenu {
 
 type RowModel = MenuEntry | MenuSeparator | MenuSubmenu
 
-/** Where an open submenu panel is anchored, in viewport coordinates. */
-interface SubmenuState {
-  id: string
-  rows: RowModel[]
-  /** Bounding box of the parent row the panel hangs off. */
-  rect: { top: number; left: number; right: number }
+/**
+ * Hovering a sibling row does not tear the open panel down straight away: a
+ * diagonal sweep from the parent row into its panel passes over siblings, and
+ * closing on the first of those would make the panel unreachable by mouse.
+ */
+const SUBMENU_CLOSE_DELAY_MS = 250
+
+/** The row the keyboard acts on, addressed by its depth and index. */
+interface MenuActive {
+  readonly level: number
+  readonly index: number
+}
+
+interface MenuState {
+  /** Index of the expanded submenu row at each open level, root-first. */
+  readonly open: readonly number[]
+  readonly active: MenuActive | undefined
+}
+
+const INITIAL_STATE: MenuState = { open: [], active: undefined }
+
+/** Rows shown at `level`, walking the open submenu chain. */
+function rowsAtLevel(
+  root: readonly RowModel[],
+  open: readonly number[],
+  level: number,
+): readonly RowModel[] | undefined {
+  let rows: readonly RowModel[] = root
+  for (let k = 0; k < level; k++) {
+    const index = open[k]
+    if (index === undefined) return undefined
+    const row = rows[index]
+    if (row?.kind !== 'submenu') return undefined
+    rows = row.children
+  }
+  return rows
+}
+
+/** Next non-separator row in `delta` direction, wrapping around. */
+function stepIndex(
+  rows: readonly RowModel[],
+  from: number | undefined,
+  delta: 1 | -1,
+): number | undefined {
+  const count = rows.length
+  if (count === 0) return undefined
+  let cursor = from ?? (delta === 1 ? -1 : count)
+  for (let n = 0; n < count; n++) {
+    cursor = (cursor + delta + count) % count
+    if (rows[cursor]?.kind !== 'separator') return cursor
+  }
+  return undefined
 }
 
 export function ContextMenu({
@@ -128,48 +180,249 @@ export function ContextMenu({
     return build(menuId, new Set([menuId]), true)
   }, [menuId, contextKeyService, groupFilter, runCommand])
 
-  const [openSub, setOpenSub] = useState<SubmenuState | null>(null)
+  const uid = useId()
+  const [state, setState] = useState<MenuState>(INITIAL_STATE)
+  const stateRef = useRef(state)
+  stateRef.current = state
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current !== undefined) {
+      clearTimeout(closeTimer.current)
+      closeTimer.current = undefined
+    }
+  }, [])
+
+  useEffect(() => cancelClose, [cancelClose])
+
+  const scheduleClose = useCallback(
+    (level: number) => {
+      cancelClose()
+      closeTimer.current = setTimeout(() => {
+        closeTimer.current = undefined
+        setState((s) => ({
+          open: s.open.slice(0, level),
+          active: s.active && s.active.level > level ? undefined : s.active,
+        }))
+      }, SUBMENU_CLOSE_DELAY_MS)
+    },
+    [cancelClose],
+  )
+
+  const onRowEnter = useCallback(
+    (level: number, index: number, isSubmenu: boolean) => {
+      cancelClose()
+      const open = stateRef.current.open
+      if (isSubmenu) {
+        setState({ open: [...open.slice(0, level), index], active: { level, index } })
+        return
+      }
+      // Keep any deeper panel up for the grace period so a diagonal sweep into
+      // it isn't cut off by the sibling rows it passes over.
+      if (open.length > level) scheduleClose(level)
+      setState({ open, active: { level, index } })
+    },
+    [cancelClose, scheduleClose],
+  )
+
+  /** Level the arrow keys act on: wherever the cursor currently sits. */
+  const activeLevel = (s: MenuState): number => s.active?.level ?? s.open.length
+
+  /**
+   * Deepest level actually on screen. Hovering a submenu row opens its panel
+   * without moving the cursor into it, so this can run ahead of `activeLevel` —
+   * and it is what Escape and ArrowLeft must peel off.
+   */
+  const deepestLevel = (s: MenuState): number => Math.max(s.open.length, s.active?.level ?? 0)
+
+  const collapse = useCallback((): boolean => {
+    const s = stateRef.current
+    const level = deepestLevel(s)
+    if (level === 0) return false
+    const parentIndex = s.open[level - 1]
+    setState({
+      open: s.open.slice(0, level - 1),
+      active: parentIndex === undefined ? undefined : { level: level - 1, index: parentIndex },
+    })
+    return true
+  }, [])
+
+  const expand = useCallback((): boolean => {
+    const s = stateRef.current
+    const level = activeLevel(s)
+    const index = s.active?.index
+    if (index === undefined) return false
+    const row = rowsAtLevel(rowsRef.current, s.open, level)?.[index]
+    if (row?.kind !== 'submenu') return false
+    const first = stepIndex(row.children, undefined, 1)
+    setState({
+      open: [...s.open.slice(0, level), index],
+      active: first === undefined ? undefined : { level: level + 1, index: first },
+    })
+    return true
+  }, [])
+
+  const onEscape = useCallback((): boolean => {
+    cancelClose()
+    return collapse()
+  }, [cancelClose, collapse])
+
+  // Window capture: the workbench keybinding dispatcher listens on *document*
+  // capture, so registering here runs first; stopping propagation also keeps the
+  // arrow keys away from whatever tree or list the menu was opened from.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      // Mid-composition Enter commits an IME candidate; it is not ours to take.
+      if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return
+      const s = stateRef.current
+      const level = activeLevel(s)
+      const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+      if (!levelRows) return
+
+      const move = (next: number | undefined): void => {
+        if (next === undefined) return
+        cancelClose()
+        setState({ open: s.open.slice(0, level), active: { level, index: next } })
+      }
+
+      switch (e.key) {
+        case 'ArrowDown':
+          move(stepIndex(levelRows, s.active?.index, 1))
+          break
+        case 'ArrowUp':
+          move(stepIndex(levelRows, s.active?.index, -1))
+          break
+        case 'Home':
+          move(stepIndex(levelRows, undefined, 1))
+          break
+        case 'End':
+          move(stepIndex(levelRows, undefined, -1))
+          break
+        case 'ArrowRight':
+          cancelClose()
+          if (!expand()) return
+          break
+        case 'ArrowLeft':
+          cancelClose()
+          if (!collapse()) return
+          break
+        case 'Enter':
+        case ' ': {
+          const index = s.active?.index
+          const row = index === undefined ? undefined : levelRows[index]
+          if (row?.kind === 'item') row.run()
+          else if (row?.kind === 'submenu') expand()
+          else return
+          break
+        }
+        default:
+          return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [cancelClose, collapse, expand])
 
   if (rows.length === 0) return null
 
   return (
-    <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose}>
-      <ul role="menu" className={styles['menu']}>
-        {rows.map((row) => {
+    <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose} onEscape={onEscape}>
+      <MenuRows
+        uid={uid}
+        rows={rows}
+        level={0}
+        state={state}
+        direction="right"
+        onRowEnter={onRowEnter}
+        onCancelClose={cancelClose}
+      />
+    </AnchoredSurface>
+  )
+}
+
+interface MenuRowsProps {
+  readonly uid: string
+  readonly rows: readonly RowModel[]
+  readonly level: number
+  readonly state: MenuState
+  readonly direction: SubmenuDirection
+  readonly onRowEnter: (level: number, index: number, isSubmenu: boolean) => void
+  readonly onCancelClose: () => void
+  readonly className?: string | undefined
+  readonly style?: React.CSSProperties | undefined
+  readonly innerRef?: React.Ref<HTMLUListElement> | undefined
+  readonly testId?: string | undefined
+}
+
+const rowElementId = (uid: string, level: number, index: number): string =>
+  `${uid}-${level}-${index}`
+
+/**
+ * One menu level plus, when a submenu row is expanded, the panel for the level
+ * below it. Shared by the root menu and every submenu panel so a nested level
+ * behaves exactly like the top one, to any depth.
+ */
+function MenuRows({
+  uid,
+  rows,
+  level,
+  state,
+  direction,
+  onRowEnter,
+  onCancelClose,
+  className,
+  style,
+  innerRef,
+  testId,
+}: MenuRowsProps) {
+  const openIndex = state.open[level]
+  const active = state.active?.level === level ? state.active.index : undefined
+  const openRow = openIndex === undefined ? undefined : rows[openIndex]
+  const activeId = active === undefined ? undefined : rowElementId(uid, level, active)
+
+  return (
+    <>
+      <ul
+        ref={innerRef}
+        role="menu"
+        aria-activedescendant={activeId}
+        className={className === undefined ? styles['menu'] : `${styles['menu']} ${className}`}
+        {...(style ? { style } : {})}
+        {...(testId === undefined ? {} : { 'data-testid': testId })}
+        onMouseEnter={onCancelClose}
+      >
+        {rows.map((row, index) => {
+          const id = rowElementId(uid, level, index)
           if (row.kind === 'separator') {
             return <li key={row.id} role="separator" className={styles['separator']} />
+          }
+          const isActive = index === active || index === openIndex
+          const common = {
+            id,
+            role: 'menuitem' as const,
+            tabIndex: -1,
+            ...(isActive ? { 'data-active': '' } : {}),
+            onMouseEnter: () => onRowEnter(level, index, row.kind === 'submenu'),
           }
           if (row.kind === 'submenu') {
             return (
               <li
                 key={row.id}
-                role="menuitem"
+                {...common}
                 aria-haspopup="menu"
-                aria-expanded={openSub?.id === row.id}
+                aria-expanded={index === openIndex}
                 className={`${styles['item']} ${styles['submenuItem']}`}
-                tabIndex={-1}
-                onMouseEnter={(e) => {
-                  const r = e.currentTarget.getBoundingClientRect()
-                  setOpenSub({
-                    id: row.id,
-                    rows: row.children,
-                    rect: { top: r.top, left: r.left, right: r.right },
-                  })
-                }}
               >
                 {row.label}
               </li>
             )
           }
           return (
-            <li
-              key={row.id}
-              role="menuitem"
-              className={styles['item']}
-              tabIndex={-1}
-              onMouseEnter={() => setOpenSub(null)}
-              onClick={row.run}
-            >
+            <li key={row.id} {...common} className={styles['item']} onClick={row.run}>
               {row.label}
             </li>
           )
@@ -182,62 +435,68 @@ export function ContextMenu({
         presses within that element, so a panel portalled elsewhere would close
         the whole menu on mousedown and swallow the click.
       */}
-      {openSub && <SubmenuPanel key={openSub.id} rows={openSub.rows} rect={openSub.rect} />}
-    </AnchoredSurface>
+      {openRow?.kind === 'submenu' && openIndex !== undefined && (
+        <SubmenuPanel
+          key={openRow.id}
+          uid={uid}
+          rows={openRow.children}
+          level={level + 1}
+          state={state}
+          direction={direction}
+          parentRowId={rowElementId(uid, level, openIndex)}
+          onRowEnter={onRowEnter}
+          onCancelClose={onCancelClose}
+        />
+      )}
+    </>
   )
 }
 
-function SubmenuPanel({ rows, rect }: { rows: RowModel[]; rect: SubmenuState['rect'] }) {
-  const ref = useRef<HTMLUListElement>(null)
-  // Start off-screen so the pre-measurement frame isn't visible.
-  const [pos, setPos] = useState<{ top: number; left: number } | undefined>(undefined)
+interface SubmenuPanelProps extends Omit<
+  MenuRowsProps,
+  'className' | 'style' | 'innerRef' | 'testId'
+> {
+  readonly parentRowId: string
+}
 
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const { width, height } = el.getBoundingClientRect()
-    const margin = 8
-    // Prefer opening to the right of the parent row; fall back to its left when
-    // that would run off-screen, then clamp both axes into the viewport.
-    let left = rect.right
-    if (left + width > window.innerWidth - margin) left = rect.left - width
-    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin))
-    const top = Math.max(margin, Math.min(rect.top, window.innerHeight - height - margin))
-    setPos({ top, left })
-  }, [rect])
+function SubmenuPanel({ parentRowId, direction, ...rest }: SubmenuPanelProps) {
+  const ref = useRef<HTMLUListElement>(null)
+
+  const compute = useCallback(
+    (panel: IViewportSize, viewport: IViewportSize) => {
+      const el = ref.current
+      // Line the panel's first row up with the parent row rather than with the
+      // parent menu's padding edge.
+      const padding = parseFloat(
+        el?.ownerDocument.defaultView?.getComputedStyle(el).paddingTop ?? '',
+      )
+      const paddingTop = Number.isFinite(padding) ? padding : 0
+      const parent = el?.ownerDocument.getElementById(parentRowId)?.getBoundingClientRect()
+      return computeSubmenuPosition(
+        viewport,
+        panel,
+        {
+          top: (parent?.top ?? 0) - paddingTop,
+          left: parent?.left ?? 0,
+          width: parent?.width ?? 0,
+          height: (parent?.height ?? 0) + 2 * paddingTop,
+        },
+        direction,
+      )
+    },
+    [parentRowId, direction],
+  )
+
+  const { placement, style } = useTransformFreePlacement(ref, compute)
 
   return (
-    <ul
-      ref={ref}
-      role="menu"
-      className={`${styles['menu']} ${styles['submenu']}`}
-      style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: -9999 }}
-    >
-      {rows.map((row) =>
-        row.kind === 'separator' ? (
-          <li key={row.id} role="separator" className={styles['separator']} />
-        ) : row.kind === 'submenu' ? (
-          <li
-            key={row.id}
-            role="menuitem"
-            aria-haspopup="menu"
-            className={`${styles['item']} ${styles['submenuItem']}`}
-            tabIndex={-1}
-          >
-            {row.label}
-          </li>
-        ) : (
-          <li
-            key={row.id}
-            role="menuitem"
-            className={styles['item']}
-            tabIndex={-1}
-            onClick={row.run}
-          >
-            {row.label}
-          </li>
-        ),
-      )}
-    </ul>
+    <MenuRows
+      {...rest}
+      direction={placement?.direction ?? direction}
+      innerRef={ref}
+      className={styles['submenu']}
+      testId="context-menu-submenu"
+      style={style}
+    />
   )
 }

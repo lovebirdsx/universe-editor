@@ -22,8 +22,11 @@
   user-select: none;
 }
 
+/* `data-active` is the cursor shared by mouse and keyboard: navigation uses a
+   virtual focus rather than moving DOM focus, which would blur the tree that
+   opened the menu and dim its selected row. */
 .item:hover,
-.item:focus {
+.item[data-active] {
   background: var(--vscode-menu-selectionBackground, #094771);
   outline: none;
 }
@@ -53,8 +56,9 @@
 }
 
 /* `fixed`, not `absolute`: the parent `.menu` scrolls (overflow: auto) and would
-   clip an absolutely positioned child. Positioned in viewport coordinates by
-   SubmenuPanel. */
+   clip an absolutely positioned child. Note the containing block is the floating
+   surface root (Floating UI puts a `transform` on it), not the viewport — the
+   offset is cancelled in useTransformFreePlacement. */
 .submenu {
   position: fixed;
   z-index: 1;

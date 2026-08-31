@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   CommandsRegistry,
   MenuRegistry,
@@ -29,6 +29,12 @@ function makeContextKeyService(truthy: readonly string[]): IContextKeyService {
       return keys.every((k) => truthy.includes(k))
     },
   } as unknown as IContextKeyService
+}
+
+/** The row the virtual focus points at, read back through the ARIA attribute. */
+function activeLabel(menu: HTMLElement): string | null {
+  const id = menu.getAttribute('aria-activedescendant')
+  return id === null ? null : (menu.ownerDocument.getElementById(id)?.textContent ?? null)
 }
 
 describe('ContextMenu submenus', () => {
@@ -228,5 +234,308 @@ describe('ContextMenu submenus', () => {
     expect(screen.queryByText('Nav')).toBeNull()
     fireEvent.mouseEnter(screen.getByText('More'))
     expect(screen.getByText('Deep')).toBeDefined()
+  })
+
+  it('expands a third level, deeper than the panel that hosts it', () => {
+    const root = asMenuId('test.submenu.deep.root')
+    const mid = asMenuId('test.submenu.deep.mid')
+    const leaf = asMenuId('test.submenu.deep.leaf')
+    track(MenuRegistry.addSubmenuItem(root, { submenu: mid, title: 'Level2' }))
+    track(MenuRegistry.addSubmenuItem(mid, { submenu: leaf, title: 'Level3' }))
+    track(MenuRegistry.addMenuItem(leaf, { command: 'deepest.cmd', title: 'Deepest' }))
+
+    const executed: unknown[][] = []
+    render(
+      <ContextMenu
+        menuId={root}
+        anchor={{ x: 0, y: 0 }}
+        commandService={makeCommandService(executed)}
+        onClose={vi.fn()}
+      />,
+    )
+
+    fireEvent.mouseEnter(screen.getByText('Level2'))
+    expect(screen.queryByText('Deepest')).toBeNull()
+
+    // The nested submenu row used to be a dead end: no hover handler, no panel.
+    fireEvent.mouseEnter(screen.getByText('Level3'))
+    fireEvent.click(screen.getByText('Deepest'))
+    expect(executed).toEqual([['deepest.cmd']])
+  })
+
+  it('positions a submenu panel without crashing on all-zero rects', () => {
+    const root = asMenuId('test.submenu.rects.root')
+    const sub = asMenuId('test.submenu.rects.child')
+    track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+    track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+    render(
+      <ContextMenu
+        menuId={root}
+        anchor={{ x: 0, y: 0 }}
+        commandService={makeCommandService([])}
+        onClose={vi.fn()}
+      />,
+    )
+
+    fireEvent.mouseEnter(screen.getByText('More'))
+    const panel = screen.getByTestId('context-menu-submenu')
+    // Measured, so it is no longer parked behind `visibility: hidden`.
+    expect(panel.style.visibility).toBe('')
+    expect(panel.style.top).toBe('0px')
+    expect(panel.style.left).toBe('0px')
+  })
+
+  it('caps the panel height to the viewport so a tall submenu scrolls', () => {
+    const root = asMenuId('test.submenu.cap.root')
+    const sub = asMenuId('test.submenu.cap.child')
+    track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+    track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+    render(
+      <ContextMenu
+        menuId={root}
+        anchor={{ x: 0, y: 0 }}
+        commandService={makeCommandService([])}
+        onClose={vi.fn()}
+      />,
+    )
+
+    fireEvent.mouseEnter(screen.getByText('More'))
+    const panel = screen.getByTestId('context-menu-submenu')
+    // `.submenu` is `position: fixed`, so no ancestor's maxHeight constrains it —
+    // without this cap a submenu taller than the window spills off the bottom.
+    expect(panel.style.maxHeight).toBe(`${window.innerHeight - 16}px`)
+  })
+
+  describe('close grace period', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    function renderTwoLevels() {
+      const root = asMenuId(`test.submenu.grace.${Math.random().toString(36).slice(2)}`)
+      const sub = asMenuId(`${root}.child`)
+      track(MenuRegistry.addMenuItem(root, { command: 'plain.cmd', title: 'Plain' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      fireEvent.mouseEnter(screen.getByText('More'))
+      expect(screen.getByText('Nested')).toBeDefined()
+    }
+
+    it('keeps the panel open while the pointer sweeps over a sibling row', () => {
+      vi.useFakeTimers()
+      renderTwoLevels()
+
+      fireEvent.mouseEnter(screen.getByText('Plain'))
+      // Still up: a diagonal sweep into the panel crosses sibling rows.
+      expect(screen.getByText('Nested')).toBeDefined()
+
+      fireEvent.mouseEnter(screen.getByTestId('context-menu-submenu'))
+      act(() => vi.advanceTimersByTime(400))
+      expect(screen.getByText('Nested')).toBeDefined()
+    })
+
+    it('closes the panel when the pointer stays on a sibling row', () => {
+      vi.useFakeTimers()
+      renderTwoLevels()
+
+      fireEvent.mouseEnter(screen.getByText('Plain'))
+      act(() => vi.advanceTimersByTime(400))
+      expect(screen.queryByText('Nested')).toBeNull()
+    })
+
+    it('drops the cursor back to the parent level when a deeper panel closes', () => {
+      vi.useFakeTimers()
+      const root = asMenuId('test.submenu.grace.cursor')
+      const sub = asMenuId('test.submenu.grace.cursor.child')
+      track(MenuRegistry.addMenuItem(root, { command: 'plain.cmd', title: 'Plain' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      fireEvent.mouseEnter(screen.getByText('More'))
+      act(() => {
+        fireEvent.keyDown(window, { key: 'ArrowRight' })
+      })
+      const panel = screen.getByTestId('context-menu-submenu')
+      expect(activeLabel(panel)).toBe('Nested')
+
+      // Resting on a sibling tears the panel down; the cursor follows the mouse
+      // to that sibling rather than dangling at a row that no longer exists.
+      fireEvent.mouseEnter(screen.getByText('Plain'))
+      act(() => vi.advanceTimersByTime(400))
+      expect(screen.queryByText('Nested')).toBeNull()
+      expect(activeLabel(screen.getByRole('menu'))).toBe('Plain')
+    })
+  })
+
+  describe('keyboard navigation', () => {
+    const press = (key: string) =>
+      act(() => {
+        fireEvent.keyDown(window, { key })
+      })
+
+    it('moves with the arrow keys, skipping separators and wrapping', () => {
+      const root = asMenuId('test.submenu.keys.move')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      const menu = screen.getByRole('menu')
+
+      press('ArrowDown')
+      expect(activeLabel(menu)).toBe('A')
+      // Index 1 is the group separator, so B is next.
+      press('ArrowDown')
+      expect(activeLabel(menu)).toBe('B')
+      press('ArrowDown')
+      expect(activeLabel(menu)).toBe('A')
+      press('ArrowUp')
+      expect(activeLabel(menu)).toBe('B')
+    })
+
+    it('jumps to the first and last item with Home and End', () => {
+      const root = asMenuId('test.submenu.keys.homeend')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'c.cmd', title: 'C', group: '3_c' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+      const menu = screen.getByRole('menu')
+
+      press('End')
+      expect(activeLabel(menu)).toBe('C')
+      press('Home')
+      expect(activeLabel(menu)).toBe('A')
+    })
+
+    it('leaves a composing Enter to the IME', () => {
+      const root = asMenuId('test.submenu.keys.ime')
+      track(MenuRegistry.addMenuItem(root, { command: 'run.cmd', title: 'Run' }))
+
+      const executed: unknown[][] = []
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          onClose={vi.fn()}
+        />,
+      )
+
+      press('ArrowDown')
+      act(() => {
+        fireEvent.keyDown(window, { key: 'Enter', isComposing: true })
+      })
+      expect(executed).toEqual([])
+
+      press('Enter')
+      expect(executed).toEqual([['run.cmd']])
+    })
+
+    it('opens a submenu with ArrowRight and collapses it with ArrowLeft', () => {
+      const root = asMenuId('test.submenu.keys.expand')
+      const sub = asMenuId('test.submenu.keys.expand.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      press('ArrowDown')
+      press('ArrowRight')
+      const panel = screen.getByTestId('context-menu-submenu')
+      expect(activeLabel(panel)).toBe('Nested')
+
+      press('ArrowLeft')
+      expect(screen.queryByText('Nested')).toBeNull()
+    })
+
+    it('runs the active item on Enter', () => {
+      const root = asMenuId('test.submenu.keys.enter')
+      const sub = asMenuId('test.submenu.keys.enter.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.run', title: 'Run It' }))
+
+      const executed: unknown[][] = []
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          onClose={onClose}
+        />,
+      )
+
+      press('ArrowDown')
+      press('Enter')
+      press('Enter')
+
+      expect(executed).toEqual([['nested.run']])
+      expect(onClose).toHaveBeenCalled()
+    })
+
+    it('peels off one submenu level per Escape before closing the menu', () => {
+      const root = asMenuId('test.submenu.keys.escape')
+      const sub = asMenuId('test.submenu.keys.escape.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={onClose}
+        />,
+      )
+
+      fireEvent.mouseEnter(screen.getByText('More'))
+      press('Escape')
+      expect(screen.queryByText('Nested')).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+
+      press('Escape')
+      expect(onClose).toHaveBeenCalled()
+    })
   })
 })

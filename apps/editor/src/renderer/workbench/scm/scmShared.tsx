@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -15,6 +16,14 @@ import {
 } from 'react'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { createPortal } from 'react-dom'
+import {
+  computePointAnchoredPosition,
+  computeSubmenuPosition,
+  useTransformFreePlacement,
+  type IAnchorRect,
+  type IViewportSize,
+  type SubmenuDirection,
+} from '@universe-editor/workbench-ui'
 import {
   CommandsRegistry,
   ContextKeyExpr,
@@ -195,17 +204,47 @@ export function TitleOverflowMenu({
   anchor,
   rows,
   onClose,
+  parentRow,
+  direction = 'right',
 }: {
   anchor: { x: number; y: number }
   rows: OverflowRow[]
   onClose: () => void
+  /**
+   * The row this level hangs off, when it is a submenu rather than the top
+   * level; `anchor` is then unused. Held as the element, not a measured rect, so
+   * the panel keeps up when the parent menu scrolls.
+   */
+  parentRow?: HTMLElement
+  direction?: SubmenuDirection
 }) {
   const ref = useRef<HTMLUListElement>(null)
   const [openSub, setOpenSub] = useState<{
     id: string
-    anchor: { x: number; y: number }
+    row: HTMLElement
     rows: OverflowRow[]
   } | null>(null)
+
+  // Read off the props so `compute` does not change identity on every render
+  // (the object literal callers pass as `anchor` would).
+  const { x: anchorX, y: anchorY } = anchor
+
+  const compute = useCallback(
+    (panel: IViewportSize, viewport: IViewportSize) => {
+      if (!parentRow) {
+        return {
+          ...computePointAnchoredPosition(viewport, panel, { x: anchorX, y: anchorY }),
+          direction,
+        }
+      }
+      const r = parentRow.getBoundingClientRect()
+      const rect: IAnchorRect = { top: r.top, left: r.left, width: r.width, height: r.height }
+      return computeSubmenuPosition(viewport, panel, rect, direction)
+    },
+    [anchorX, anchorY, parentRow, direction],
+  )
+
+  const { placement, style } = useTransformFreePlacement(ref, compute)
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent): void => {
@@ -231,7 +270,7 @@ export function TitleOverflowMenu({
         role="menu"
         data-overflow-menu=""
         className={styles['overflowMenu']}
-        style={{ top: anchor.y, left: anchor.x }}
+        style={style}
       >
         {rows.map((row) => {
           if (row.kind === 'separator') {
@@ -257,12 +296,7 @@ export function TitleOverflowMenu({
                 className={styles['overflowItem']}
                 tabIndex={-1}
                 onMouseEnter={(e) => {
-                  const r = e.currentTarget.getBoundingClientRect()
-                  setOpenSub({
-                    id: row.id,
-                    anchor: { x: r.right - 4, y: r.top - 4 },
-                    rows: row.children,
-                  })
+                  setOpenSub({ id: row.id, row: e.currentTarget, rows: row.children })
                 }}
               >
                 {iconEl}
@@ -295,7 +329,14 @@ export function TitleOverflowMenu({
         })}
       </ul>
       {openSub && (
-        <TitleOverflowMenu anchor={openSub.anchor} rows={openSub.rows} onClose={onClose} />
+        <TitleOverflowMenu
+          key={openSub.id}
+          anchor={anchor}
+          rows={openSub.rows}
+          parentRow={openSub.row}
+          direction={placement?.direction ?? direction}
+          onClose={onClose}
+        />
       )}
     </>,
     document.body,

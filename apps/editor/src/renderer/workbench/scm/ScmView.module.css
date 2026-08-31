@@ -538,6 +538,9 @@
   margin: 0;
   padding: 4px 0;
   list-style: none;
+  /* Paired with the maxHeight useTransformFreePlacement applies: a menu taller
+     than the viewport scrolls inside its own box instead of spilling off. */
+  overflow: auto;
   background: var(--vscode-dropdown-background, #2f2f35);
   color: var(--vscode-foreground, #c8c8c8);
   border: 1px solid var(--vscode-workbench-border, #454545);
