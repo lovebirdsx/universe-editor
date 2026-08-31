@@ -1,14 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ScmIgnoredResourcesService — pull-style "is this path git-ignored?" cache.
+ *  ScmIgnoredResourcesService — pull-style "is this path ignored by its SCM
+ *  provider?" cache.
  *
- *  The git status parser drops ignored entries, so the SCM decorations can't see
- *  them; instead we batch-resolve unknown paths through the owning provider's
- *  `<providerId>.checkIgnore` command (git check-ignore --stdin -z), mirroring
- *  VSCode's GitIgnoreDecorationProvider. Consumers (Explorer rows, editor tabs)
- *  call `isIgnored` during render: cached answers return synchronously, unknown
- *  paths are enqueued and return undefined, and a version observable bumps when
- *  the batch resolves so the next render picks up the cached answer.
+ *  Providers' status parsers drop ignored entries (git's status does, and p4
+ *  reports them nowhere either), so the SCM decorations can't see them; instead
+ *  we batch-resolve unknown paths through the owning provider's
+ *  `<providerId>.checkIgnore` command (e.g. git check-ignore --stdin -z),
+ *  mirroring VSCode's GitIgnoreDecorationProvider. Consumers (Explorer rows,
+ *  editor tabs) call `isIgnored` during render: cached answers return
+ *  synchronously, unknown paths are enqueued and return undefined, and a
+ *  version observable bumps when the batch resolves so the next render picks up
+ *  the cached answer.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -31,6 +34,10 @@ import { IScmService, resolveScmProviderId } from '../extensions/ScmService.js'
 import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { scmPathKey } from './ScmDecorationsService.js'
 import { scmHostPath } from './scmHostPath.js'
+// services → workbench reverse import: scmViewState is module-level observable
+// state with no view dependency, so a service may read it (precedent:
+// services/acp/commitRefPicker.ts).
+import { scmViewState } from '../../workbench/scm/scmViewState.js'
 
 /** Inline colour for ignored resources; the token is registered in universeColorIds. */
 export const IGNORED_RESOURCE_FOREGROUND = 'var(--vscode-gitDecoration-ignoredResourceForeground)'
@@ -79,10 +86,25 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
     this._register(watcher.onDidChangeFiles((events) => this._onFileEvents(events)))
     this._register(this._workspace.onDidChangeWorkspace(() => this._invalidate()))
 
+    // Re-arbitrate on both inputs. selectedRepo changing re-arbitrates which
+    // provider owns a path, so every cached boolean is now suspect and must be
+    // re-queried. sourceControls must stay observed too: at startup the restored
+    // selectedRepo can point at a provider whose source control isn't registered
+    // yet (extensions activate one by one), so arbitration falls back to the
+    // longest-prefix owner until it registers — re-arbitrate then
+    // (workbench/scm/CLAUDE.md records this race biting twice). Unlike
+    // DirtyDiff/Blame we deliberately don't slot the cache by
+    // `providerId + '\n' + path`: those slot because their cached values are
+    // expensive (HEAD text / annotate) and should survive a repo switch for
+    // instant back-switch; ignored is a boolean resolved by one batched command,
+    // and switching repos is an explicit, low-frequency act, so a full
+    // invalidation matches this service's existing invalidation model and stays
+    // simpler.
     let first = true
     this._register(
       autorun((reader) => {
         this._scm.sourceControls.read(reader)
+        scmViewState.selectedRepo.read(reader)
         if (first) {
           first = false
           return
@@ -117,7 +139,7 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
     for (const ev of events) {
       const fsPath = this._hostPath(ev.resource)
       if (fsPath === undefined) continue
-      if (isGitIgnoreOrExclude(fsPath)) {
+      if (isScmIgnoreRuleFile(fsPath)) {
         this._invalidate()
         return
       }
@@ -140,7 +162,11 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
 
     const byProvider = new Map<string, string[]>()
     for (const [key, fsPath] of entries) {
-      const providerId = resolveScmProviderId(this._scm.sourceControls.get(), fsPath)
+      const providerId = resolveScmProviderId(
+        this._scm.sourceControls.get(),
+        fsPath,
+        scmViewState.selectedRepo.get(),
+      )
       if (providerId === undefined) {
         this._cache.set(key, false)
         continue
@@ -166,12 +192,14 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
         for (const p of paths) this._cache.set(scmPathKey(p), false)
         continue
       }
-      // Invalidation fired while the command was in flight (e.g. a .gitignore save):
-      // the cache/pending were cleared and the version bumped, so discard these
-      // now-stale answers — the consumer's next render re-enqueues them.
+      // Invalidation fired while the command was in flight (e.g. an ignore-rule
+      // file save): the cache/pending were cleared and the version bumped, so
+      // discard these now-stale answers — the consumer's next render re-enqueues
+      // them.
       if (this._generation !== generation) return
-      // undefined = command not registered (extension still activating / non-git
-      // provider) — treat the batch as not ignored so we don't keep re-querying.
+      // undefined = command not registered (extension still activating / a
+      // provider without checkIgnore) — treat the batch as not ignored so we
+      // don't keep re-querying.
       if (ignored === undefined) {
         for (const p of paths) this._cache.set(scmPathKey(p), false)
         continue
@@ -197,9 +225,23 @@ export class ScmIgnoredResourcesService extends Disposable implements IScmIgnore
   }
 }
 
-/** `.gitignore` files (any depth) and the repo-local `.git/info/exclude`. */
-function isGitIgnoreOrExclude(fsPath: string): boolean {
+/**
+ * SCM ignore-rule files whose change invalidates the cache: `.gitignore` (any
+ * depth), the repo-local `.git/info/exclude`, and Perforce's `.p4ignore` /
+ * `p4ignore.txt` (the ignore filename is set by `P4IGNORE`; these two are the
+ * conventional names). Known limitation: `P4IGNORE` can be `p4 set` to any
+ * filename, so a custom name won't trigger invalidation and converges on
+ * workspace switch / reload — git's `core.excludesFile` is missed the same way.
+ * Filenames compare case-insensitively (Windows); `.git/info/exclude` doesn't
+ * need to — it's git's own directory layout, always exactly that on disk.
+ */
+function isScmIgnoreRuleFile(fsPath: string): boolean {
   const p = fsPath.replace(/\\/g, '/')
-  const name = p.slice(p.lastIndexOf('/') + 1)
-  return name === '.gitignore' || p.endsWith('/.git/info/exclude')
+  const name = p.slice(p.lastIndexOf('/') + 1).toLowerCase()
+  return (
+    name === '.gitignore' ||
+    name === '.p4ignore' ||
+    name === 'p4ignore.txt' ||
+    p.endsWith('/.git/info/exclude')
+  )
 }

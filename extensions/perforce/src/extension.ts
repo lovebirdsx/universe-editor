@@ -283,6 +283,43 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(mgr)
   mgr.add(client)
 
+  // Ignore-rule capability (host addresses this as `<providerId>.checkIgnore`),
+  // registered HERE and not with the other runtime commands far below —
+  // deliberately, and this ordering is the whole point:
+  //
+  // `PerforceClient.create` already published the SourceControl, so from that
+  // moment the host's `ScmIgnoredResourcesService` routes ignore lookups to
+  // `perforce.checkIgnore`. A lookup that lands before the command exists reads
+  // `undefined` and the host caches "not ignored" for that whole batch —
+  // permanently, since nothing invalidates again until the workspace changes or
+  // an ignore-rule file is saved. Registering it with the rest of the commands
+  // leaves several `await`s of window for exactly that (the host's batch debounce
+  // is only 150ms), so it goes in the first synchronous slot after the manager
+  // exists. The other capabilities tolerate the window because their consumers
+  // re-query; this one does not.
+  context.subscriptions.push(
+    commands.registerCommand('perforce.checkIgnore', async (...args: unknown[]) => {
+      const paths = Array.isArray(args[0]) ? (args[0] as string[]) : []
+      if (paths.length === 0) return []
+      // Data query, not command routing: group by the containing client via
+      // `resolveContaining` (no active fallback), dropping paths outside every
+      // root — mirrors git's `if (!repo) continue`.
+      const byClient = new Map<PerforceClient, string[]>()
+      for (const p of paths) {
+        const owner = mgr.resolveContaining(p)
+        if (!owner) continue
+        const list = byClient.get(owner)
+        if (list) list.push(p)
+        else byClient.set(owner, [p])
+      }
+      const ignored: string[] = []
+      for (const [owner, list] of byClient) {
+        ignored.push(...(await owner.checkIgnore(list)))
+      }
+      return ignored
+    }),
+  )
+
   // Timeline — per-file revision history (p4 filelog) for the Explorer Timeline
   // view, the Perforce counterpart of the git extension's provider.
   const timelineProvider = new PerforceTimelineProvider(mgr, log)

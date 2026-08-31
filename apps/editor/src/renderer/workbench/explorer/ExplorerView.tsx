@@ -190,7 +190,7 @@ export function ExplorerView() {
     const deco = entry.isDirectory
       ? scmDecorations?.getFolder(entry.resource)
       : scmDecorations?.getFile(entry.resource)
-    // 无 git 状态装饰时，被 gitignore 忽略的文件/文件夹变暗（VSCode 对标）。
+    // 无 SCM 状态装饰时，被 ignore 规则忽略的文件/文件夹变暗（VSCode 对标，git / p4 通用）。
     const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
     const decoColor = deco?.color ?? (ignored ? IGNORED_RESOURCE_FOREGROUND : undefined)
     // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。

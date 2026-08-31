@@ -72,6 +72,11 @@ export interface SeedFile {
     readonly action?: 'edit' | 'add'
     readonly rev?: number
   }
+  /** Write the file to the workspace but keep it OUT of the depot — a local-only
+   *  file, which is the only kind `.p4ignore` rules are meant to hide. Seeding an
+   *  ignored file as a depot file instead would make the checkIgnore depot filter
+   *  legitimately drop it and the spec would assert the wrong thing. */
+  readonly untracked?: boolean
 }
 
 export interface PerforceHarness {
@@ -115,6 +120,8 @@ interface FakeState {
   >
   /** Files someone ELSE has open (`p4 opened -a` source). */
   openedByOthers?: Record<string, { user: string; client: string; action: string; rev: number }>
+  /** Ignore rules (`p4 ignores -i` source): client-root-relative paths / dirs. */
+  ignored?: string[]
   changelists?: Record<string, { description: string }>
   changeMeta?: Record<string, { user: string; time: string; desc: string }>
   /** Submitted changelists with their file sets (`describe -s` source), keyed by
@@ -130,6 +137,7 @@ function seedWorkspace(
   changelists: Readonly<Record<string, string>> = {},
   annotate?: P4AnnotateSeed,
   submitted?: P4SubmittedSeed,
+  ignored?: readonly string[],
 ): {
   workspaceDir: string
   stateFile: string
@@ -143,6 +151,7 @@ function seedWorkspace(
     const abs = join(workspaceDir, seed.relPath)
     mkdirSync(dirname(abs), { recursive: true })
     writeFileSync(abs, seed.content, 'utf8')
+    if (seed.untracked === true) continue
     const depotFile = `${depotPrefix}/${toPosix(seed.relPath)}`
     const faults = {
       ...(seed.clobber === true ? { clobber: true } : {}),
@@ -224,6 +233,7 @@ function seedWorkspace(
           },
         }
       : {}),
+    ...(ignored && ignored.length > 0 ? { ignored: [...ignored] } : {}),
   }
   writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8')
   return { workspaceDir, stateFile }
@@ -257,6 +267,9 @@ export interface P4SeedConfig {
   /** A submitted changelist with a real file set (`describe -s` + `changes -l`
    *  source). Backs "Open Commit" (multi-diff) and graph details assertions. */
   readonly submitted?: P4SubmittedSeed
+  /** Ignore rules for `p4 ignores -i` (checkIgnore e2e): client-root-relative
+   *  paths or directory prefixes. */
+  readonly ignored?: readonly string[]
 }
 
 /** Blame seed: the changelist annotate reports + the metadata `changes -l` returns. */
@@ -297,6 +310,7 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       p4Seeds.changelists,
       p4Seeds.annotate,
       p4Seeds.submitted,
+      p4Seeds.ignored,
     )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
     await use({

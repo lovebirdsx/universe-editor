@@ -14,6 +14,7 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmService.js'
+import { scmViewState } from '../../../workbench/scm/scmViewState.js'
 import { ScmIgnoredResourcesService } from '../ScmIgnoredResourcesService.js'
 
 const ROOT = 'D:/repo'
@@ -27,6 +28,10 @@ function remote(path: string, authority = REMOTE_AUTHORITY): URI {
 
 function gitSourceControl(rootUri = ROOT): IScmSourceControlModel {
   return { id: 'git', rootUri } as unknown as IScmSourceControlModel
+}
+
+function p4SourceControl(rootUri = ROOT): IScmSourceControlModel {
+  return { id: 'perforce', rootUri } as unknown as IScmSourceControlModel
 }
 
 function scmOf(controls: readonly IScmSourceControlModel[]): IScmService {
@@ -70,9 +75,13 @@ function makeService(
 describe('ScmIgnoredResourcesService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    // scmViewState is a module-level singleton; reset it so a selectedRepo left
+    // by a previous test can't leak into this one's arbitration.
+    scmViewState.setSelectedRepo(undefined)
   })
 
   afterEach(() => {
+    scmViewState.setSelectedRepo(undefined)
     vi.useRealTimers()
   })
 
@@ -201,6 +210,112 @@ describe('ScmIgnoredResourcesService', () => {
     await vi.advanceTimersByTimeAsync(200)
     expect(service.isIgnored(URI.file(`${ROOT}/cache`))).toBe(false)
     expect(exec).toHaveBeenCalledTimes(2)
+  })
+
+  describe('perforce / multi-provider arbitration', () => {
+    const P4_ROOT = 'D:/p4ws'
+    const GIT_ROOT = 'D:/p4ws/sub'
+
+    function nestedControls(): IScmSourceControlModel[] {
+      return [p4SourceControl(P4_ROOT), gitSourceControl(GIT_ROOT)]
+    }
+
+    it('routes a perforce-owned path to perforce.checkIgnore', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${P4_ROOT}/node_modules`])
+      const { service, executeCommand: exec } = makeService(
+        executeCommand,
+        scmOf([p4SourceControl(P4_ROOT)]),
+      )
+
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/node_modules`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('perforce.checkIgnore', [`${P4_ROOT}/node_modules`])
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/node_modules`))).toBe(true)
+    })
+
+    it('arbitrates to p4 when the outer workspace is selected', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${GIT_ROOT}/a.txt`])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      scmViewState.setSelectedRepo(P4_ROOT)
+      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('perforce.checkIgnore', [`${GIT_ROOT}/a.txt`])
+    })
+
+    it('arbitrates to git when the nested repo is selected', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${GIT_ROOT}/a.txt`])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('git.checkIgnore', [`${GIT_ROOT}/a.txt`])
+    })
+
+    it('falls back to the longest-prefix owner (git) when nothing is selected', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${GIT_ROOT}/a.txt`])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('git.checkIgnore', [`${GIT_ROOT}/a.txt`])
+    })
+
+    it('re-queries when selectedRepo changes', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${GIT_ROOT}/a.txt`])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))).toBe(true)
+
+      scmViewState.setSelectedRepo(P4_ROOT)
+      expect(service.isIgnored(URI.file(`${GIT_ROOT}/a.txt`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledTimes(2)
+    })
+
+    it('invalidates when a .p4ignore changes', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${P4_ROOT}/cache`])
+      const {
+        service,
+        fileEvents,
+        executeCommand: exec,
+      } = makeService(executeCommand, scmOf([p4SourceControl(P4_ROOT)]))
+
+      service.isIgnored(URI.file(`${P4_ROOT}/cache`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBe(true)
+
+      fileEvents.fire([{ type: 'modified', resource: URI.file(`${P4_ROOT}/.p4ignore`) }])
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledTimes(2)
+    })
+
+    it('invalidates when a p4ignore.txt changes', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([`${P4_ROOT}/cache`])
+      const {
+        service,
+        fileEvents,
+        executeCommand: exec,
+      } = makeService(executeCommand, scmOf([p4SourceControl(P4_ROOT)]))
+
+      service.isIgnored(URI.file(`${P4_ROOT}/cache`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBe(true)
+
+      fileEvents.fire([{ type: 'modified', resource: URI.file(`${P4_ROOT}/p4ignore.txt`) }])
+      expect(service.isIgnored(URI.file(`${P4_ROOT}/cache`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledTimes(2)
+    })
   })
 
   describe('remote workspace', () => {

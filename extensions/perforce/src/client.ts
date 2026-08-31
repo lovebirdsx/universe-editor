@@ -61,6 +61,7 @@ import {
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
 import { parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
+import { parseIgnores } from './ignoresParser.js'
 import {
   parseReconcile,
   mergeReconcile,
@@ -286,6 +287,15 @@ const OPENED_BY_OTHERS_TIMEOUT_MS = 20_000
  * "nothing to resolve".
  */
 const FSTAT_UNRESOLVED_TIMEOUT_MS = 20_000
+
+/**
+ * Hard ceiling on a `p4 ignores -i` batch and the `fstat` depot filter that
+ * follows it. Both batches are already capped by `chunkByLength`, so their cost
+ * does not grow with the data set — a batch that hasn't answered in 20s is
+ * hung, not slow (the same "we can assert how fast it should be" reasoning as
+ * the opened-by-others / unresolved-probe ceilings).
+ */
+const CHECK_IGNORE_TIMEOUT_MS = 20_000
 
 /**
  * What the reconcile stage of a refresh actually did, so the per-stage timing
@@ -3128,6 +3138,114 @@ export class PerforceClient {
     }
 
     return buildBlameResult(lines, summaries)
+  }
+
+  /**
+   * The subset of `paths` the client's ignore rules exclude, returned in the
+   * exact input string form (the host keys the dimmed Explorer rows / editor
+   * tabs against the input strings). Contributed to the host as
+   * `perforce.checkIgnore`. Degrades to "nothing ignored" (empty array) on any
+   * failure — the caller must never filter a row out on a broken answer.
+   *
+   * Runs `p4 ignores -i <paths…>` (a pure rule evaluator — p4 documents it as
+   * a debugging aid for add/reconcile), then filters the survivors through
+   * `p4 fstat` to drop files already under depot control (see the filter's
+   * comment).
+   */
+  async checkIgnore(paths: readonly string[]): Promise<string[]> {
+    // Connection guard first: this is a passive batch read the host fires while
+    // scrolling the Explorer / switching editor tabs, so an offline client must
+    // answer "nothing is ignored" without spawning a command that is doomed to
+    // fail (which would flood the output channel on every scroll).
+    if (this._connection !== 'connected') return []
+    // No `-i` args sends `p4 ignores` into listing mode — a completely different
+    // output — so the empty request never reaches the command.
+    if (paths.length === 0) return []
+
+    const candidates: string[] = []
+    for (const batch of chunkByLength(paths)) {
+      // Background priority (omitted), never interactive: this is a scroll-driven
+      // batch decoration read, not a click waiting for a result. Marking it
+      // interactive would consume the ConcurrencyGate's statically reserved slot
+      // and queue real clicks (open diff) behind a scroll fan-out — the exact
+      // "shared FIFO gate flooded → clicks queue for minutes" pathology this
+      // extension already fixed once.
+      let res: P4ExecResult
+      try {
+        res = await this._p4.exec(['ignores', '-i', ...batch], {
+          timeoutMs: CHECK_IGNORE_TIMEOUT_MS,
+        })
+      } catch {
+        // spawn failure (p4 missing) — degrade to "nothing ignored".
+        return candidates
+      }
+      if (this._disposed) return candidates
+      if (res.exitCode !== 0) {
+        const kind = classifyP4Error(res)
+        if (kind === 'offline' || kind === 'session-expired' || kind === 'not-logged-in') {
+          this._goOffline(kind)
+          // Abort the remaining batches: the connection is gone, they'd all fail
+          // the same way.
+          return candidates
+        }
+        // An unrelated per-batch failure must not sink the other batches, and
+        // must never toast — this is not a user action.
+        this._log?.(`[perforce] ignores failed (exit ${res.exitCode}): ${p4ErrorText(res)}`)
+        continue
+      }
+      candidates.push(...parseIgnores(res.stdout, batch))
+    }
+    if (candidates.length === 0) return []
+
+    // Depot filter: `p4 ignores -i` is a pure rule evaluator, so it may report a
+    // file that is already in the depot (git's `check-ignore` consults the index
+    // and never does). The renderer only dims rows that have no SCM decoration,
+    // which a synced, unmodified controlled file also has — so without this pass
+    // whole regions of the depot would dim. Drop every candidate that fstat shows
+    // as in-depot with a non-delete head action; anything fstat doesn't answer for
+    // keeps the candidate, because the ignore rule already matched and this pass
+    // only refines it.
+    const inDepot = new Set<string>()
+    for (const batch of chunkByLength(candidates)) {
+      let res: { result: P4ExecResult; records: Record<string, unknown>[] }
+      try {
+        res = await this._p4.execRecords(['fstat', '-T', 'clientFile,headAction', ...batch], {
+          timeoutMs: CHECK_IGNORE_TIMEOUT_MS,
+        })
+      } catch (err) {
+        this._log?.(`[perforce] fstat filter failed: ${String(err)}`)
+        return candidates
+      }
+      if (this._disposed) return candidates
+      if (res.result.exitCode !== 0) {
+        const kind = classifyP4Error(res.result)
+        if (kind === 'offline' || kind === 'session-expired' || kind === 'not-logged-in') {
+          // The connection died between the two passes. Report nothing rather
+          // than the unfiltered candidates: an unfiltered list dims controlled
+          // files and the renderer caches that until the next invalidation.
+          this._goOffline(kind)
+          return []
+        }
+        // 🔴 A non-zero exit here is the NORMAL case, not a failure: this batch is
+        // mostly local-only files and `p4 fstat` exits non-zero as soon as one
+        // argument matches nothing (`no such file(s).`). The records for the files
+        // it DID know are still on stdout, so keep filtering with them — an early
+        // return would make the whole depot filter dead on a real server.
+        this._log?.(
+          `[perforce] fstat filter partial (exit ${res.result.exitCode}): ${p4ErrorText(res.result)}`,
+        )
+      }
+      for (const r of res.records) {
+        const clientFile = typeof r['clientFile'] === 'string' ? r['clientFile'] : undefined
+        const headAction = typeof r['headAction'] === 'string' ? r['headAction'] : undefined
+        // `clientFile` from fstat is a LOCAL path (the one command where it isn't
+        // client syntax) — directly comparable to the candidates via scopeKey.
+        if (clientFile && headAction && !headAction.includes('delete')) {
+          inDepot.add(scopeKey(clientFile))
+        }
+      }
+    }
+    return candidates.filter((p) => !inDepot.has(scopeKey(p)))
   }
 
   // --- Perforce Graph (read-only history view) -----------------------------

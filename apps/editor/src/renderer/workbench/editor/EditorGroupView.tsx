@@ -318,7 +318,7 @@ const EditorTab = memo(function EditorTab({
   // Re-render the tab once a check-ignore batch resolves so the cached answer re-applies.
   useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
   const deco = resource ? scmDecorations?.getFile(resource) : undefined
-  // 无 git 状态装饰时，被 gitignore 忽略的文件标签变暗（VSCode 对标）。
+  // 无 SCM 状态装饰时，被 ignore 规则忽略的文件标签变暗（VSCode 对标，git / p4 通用）。
   const ignored =
     deco === undefined &&
     resource !== undefined &&

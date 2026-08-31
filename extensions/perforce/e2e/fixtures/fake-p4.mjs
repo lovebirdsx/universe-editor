@@ -34,7 +34,8 @@ if (!STATE_PATH) {
 
 /**
  * @typedef {{ rev: number, content: string, revisions?: Record<string, string>,
- *   haveRev?: number, haveContent?: string, clobber?: boolean, refused?: boolean }} DepotFile
+ *   haveRev?: number, haveContent?: string, headAction?: string,
+ *   clobber?: boolean, refused?: boolean }} DepotFile
  *   `rev`/`content` are the depot HEAD (matching the pre-existing revision-history
  *   seeds); `haveRev`/`haveContent`, when present, are what the client has synced —
  *   absent means have == head. Two independent sync-refusal faults, matching the
@@ -56,6 +57,7 @@ if (!STATE_PATH) {
  *   files: Record<string, DepotFile>,
  *   opened: Record<string, OpenedEntry>,
  *   openedByOthers?: Record<string, OthersEntry>,
+ *   ignored?: string[],
  *   changelists?: Record<string, { description: string }>,
  *   changeMeta?: Record<string, { user: string, time: string, desc: string }>,
  *   annotateCl?: string,
@@ -74,6 +76,7 @@ function loadState() {
   state.submitted ??= {}
   state.nextChange ??= 1000
   state.openedByOthers ??= {}
+  state.ignored ??= []
   return state
 }
 
@@ -561,6 +564,29 @@ function main() {
       return 0
     }
 
+    case 'ignores': {
+      // `p4 ignores -i <path…>` is a pure ignore-rule evaluator: it echoes each
+      // input path a rule excludes as `<abs path> ignored` (plain text — no
+      // -Mj/-ztag structure) and prints nothing for the rest. Rules are seeded
+      // as client-root-relative paths / directory prefixes; a path matches when
+      // it equals an entry or sits under a directory entry.
+      if (rest.includes('-i')) {
+        const rules = state.ignored ?? []
+        const paths = rest.filter((a) => !a.startsWith('-'))
+        for (const abs of paths) {
+          const rel = toPosix(relative(state.clientRoot, abs))
+          const hit = rules.some((entry) => {
+            const e = toPosix(entry).replace(/\/+$/, '')
+            return rel === e || rel.startsWith(`${e}/`)
+          })
+          if (hit) process.stdout.write(`${abs} ignored\n`)
+        }
+        return 0
+      }
+      // listing mode (no -i): nothing to report.
+      return 0
+    }
+
     case 'fstat': {
       // §11.5 (PROBE-FINDINGS): the unresolved signal lives HERE on real
       // servers — `opened` never carries it. `-Ru` lists only the opened files
@@ -601,13 +627,28 @@ function main() {
       }
       // Per-file metadata. The diff baseline (BaselineProvider) reads `depotFile`
       // + `haveRev` from here, then `print`s that revision. Args are file paths
-      // (local, depot, or client syntax).
-      const files = rest.filter((a) => !a.startsWith('-'))
+      // (local, depot, or client syntax); `-T clientFile,headAction` (the
+      // checkIgnore depot filter) selects fields and its value is not a path.
+      const files = rest.filter((a, idx) => {
+        if (a.startsWith('-')) return false
+        if (rest[idx - 1] === '-T') return false
+        return true
+      })
       const records = []
+      let missing = 0
       for (const f of files) {
         const depotFile = toDepotFile(state, f)
         const known = state.files[depotFile]
-        if (!known) continue
+        if (!known) {
+          // Real p4 reports every unmatched spec and exits non-zero even when it
+          // answered for the other args. checkIgnore's depot filter feeds it a
+          // batch that is mostly local-only files, so this is its NORMAL result —
+          // modelling it as a silent `return 0` would let a regression that
+          // early-returns on the exit code sail through the e2e.
+          process.stderr.write(`${f} - no such file(s).\n`)
+          missing++
+          continue
+        }
         records.push({
           depotFile,
           // §3 (PROBE-FINDINGS): fstat's `clientFile` is a LOCAL path — the one
@@ -615,12 +656,16 @@ function main() {
           clientFile: clientOf(state, depotFile),
           haveRev: String(haveRevOf(known)),
           headRev: String(headRevOf(known)),
+          // A head revision always carries the action that produced it. The
+          // checkIgnore depot filter reads exactly this field to tell "the rules
+          // match it but it's controlled" from "purely local".
+          headAction: known.headAction ?? 'edit',
           // §11.4: a real fstat of an unresolved file carries the bare key too.
           ...(state.opened[depotFile]?.unresolved ? { unresolved: '' } : {}),
         })
       }
       emit(records)
-      return 0
+      return missing > 0 ? 1 : 0
     }
 
     case 'print': {
