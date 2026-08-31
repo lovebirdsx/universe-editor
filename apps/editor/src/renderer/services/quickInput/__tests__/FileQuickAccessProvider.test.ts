@@ -497,6 +497,7 @@ describe('FileQuickAccessProvider', () => {
       isExcluded: () => false,
       getDirNameIgnores: () => ['node_modules'],
       getSearchExcludeGlobs: () => ['**/*.min.js'],
+      getUseIgnoreFiles: () => true,
     }
     const { provider, fileSearch } = setup({ exclude })
     // 600 files all matching 'x' — filtering must cap the visible list at 512.

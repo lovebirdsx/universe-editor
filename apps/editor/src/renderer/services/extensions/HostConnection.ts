@@ -319,6 +319,7 @@ export class HostConnection extends Disposable {
       deps.files,
       deps.fileSearch,
       () => deps.exclude.getSearchExcludeGlobs(),
+      () => deps.exclude.getUseIgnoreFiles(),
       deps.logger,
       deps.platform,
       deps.remoteStatus,

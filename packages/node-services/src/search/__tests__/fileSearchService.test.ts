@@ -136,6 +136,39 @@ describe('FileSearchService', () => {
     expect(listings).toHaveLength(2)
   })
 
+  it('uses a distinct listing cache key per useIgnoreFiles value', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'a.ts')
+
+    const cacheDir = path.join(await makeRoot(), 'listings')
+    const service = new FileSearchService(undefined, { cacheDir })
+    services.push(service)
+
+    const query = { root: URI.file(root), pattern: 'a', maxResults: 10 }
+    await service.search({ ...query, useIgnoreFiles: true })
+    await service.search({ ...query, useIgnoreFiles: false })
+
+    // Sharing one listing between the two settings would serve the other
+    // setting's file set for the whole TTL.
+    const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
+    expect(listings).toHaveLength(2)
+  })
+
+  it('honours .gitignore only when useIgnoreFiles is set', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'keep.ts')
+    await writeFile(root, 'build/ignored.ts')
+    await fs.writeFile(path.join(root, '.gitignore'), 'build/\n')
+
+    const query = { root: URI.file(root), pattern: '', matchAll: true, maxResults: 50 }
+
+    const honouring = await (await makeService()).search({ ...query, useIgnoreFiles: true })
+    expect(honouring.results.map((r) => r.relativePath)).not.toContain('build/ignored.ts')
+
+    const ignoring = await (await makeService()).search({ ...query, useIgnoreFiles: false })
+    expect(ignoring.results.map((r) => r.relativePath)).toContain('build/ignored.ts')
+  })
+
   it('enumerates only the given scan paths for matchAll', async () => {
     const root = await makeRoot()
     await writeFile(root, 'Client/a.ts')

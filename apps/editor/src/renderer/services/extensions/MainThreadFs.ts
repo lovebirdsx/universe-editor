@@ -80,6 +80,8 @@ export class MainThreadFs implements IMainThreadFs {
     private readonly _fileSearch: IFileSearchService,
     /** The configured default search excludes (files.exclude ∪ search.exclude). */
     private readonly _defaultExcludes: () => readonly string[],
+    /** Whether searches honour .gitignore / .ignore (`search.useIgnoreFiles`). */
+    private readonly _useIgnoreFiles: () => boolean,
     private readonly _logger: ILogger,
     private readonly _platform: HostPlatform,
     private readonly _remoteStatus: IRemoteStatusService,
@@ -301,6 +303,7 @@ export class MainThreadFs implements IMainThreadFs {
         pattern: '',
         matchAll: true,
         excludes: engineExcludes,
+        useIgnoreFiles: this._useIgnoreFiles(),
         maxResults: FIND_FILES_ENUMERATION_CAP,
       },
       token,

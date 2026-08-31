@@ -36,6 +36,11 @@ export interface MentionFileEntry {
 export interface MentionFileFilter {
   readonly dirNames: readonly string[]
   readonly excludeGlobs?: readonly string[]
+  /**
+   * Honour .gitignore / .ignore during the walk (`search.useIgnoreFiles`).
+   * Absent = false, matching the behaviour from before the setting existed.
+   */
+  readonly useIgnoreFiles?: boolean
 }
 
 /**
@@ -91,9 +96,20 @@ function cacheKey(
   dirNames: readonly string[],
   excludeGlobs: readonly string[],
   fingerprint: string,
+  useIgnoreFiles: boolean,
 ): string {
   return (
-    root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',') + '|' + fingerprint
+    root.toString() +
+    '|' +
+    dirNames.join(',') +
+    '|' +
+    excludeGlobs.join(',') +
+    '|' +
+    fingerprint +
+    // Part of the key: the two settings yield different file sets, so one cached
+    // listing must not be shared across them.
+    '|' +
+    String(useIgnoreFiles)
   )
 }
 
@@ -114,7 +130,8 @@ export async function loadWorkspaceFiles(
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
   const fingerprint = focus?.fingerprint ?? ''
-  const key = cacheKey(root, dirNames, excludeGlobs, fingerprint)
+  const useIgnoreFiles = filter?.useIgnoreFiles === true
+  const key = cacheKey(root, dirNames, excludeGlobs, fingerprint, useIgnoreFiles)
   const now = Date.now()
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.listing
@@ -127,6 +144,7 @@ export async function loadWorkspaceFiles(
       excludes: excludeGlobs,
       ignore: dirNames,
       maxResults: MAX_FILES,
+      useIgnoreFiles,
       ...(focus?.scanPaths && focus.scanPaths.length > 0 ? { scanPaths: focus.scanPaths } : {}),
       ...(focus ? { rootFilesInScope: focus.rootFilesInScope } : {}),
     },
@@ -162,7 +180,9 @@ export function peekWorkspaceFiles(
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
   const excludeGlobs = filter?.excludeGlobs ?? []
   const fingerprint = focus?.fingerprint ?? ''
-  return _cache.get(cacheKey(root, dirNames, excludeGlobs, fingerprint))?.listing
+  return _cache.get(
+    cacheKey(root, dirNames, excludeGlobs, fingerprint, filter?.useIgnoreFiles === true),
+  )?.listing
 }
 
 /** Invalidate the cache — exposed for tests and for explicit refresh actions. */

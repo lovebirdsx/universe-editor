@@ -740,6 +740,44 @@ describe('QuickPickPanel active item (live preview)', () => {
     )
     expect(onActiveChange).not.toHaveBeenCalledWith(folderB[1])
   })
+
+  it('keeps the host-requested row focused when a growing list is rebuilt', () => {
+    // Streaming search (quick search) rebuilds `items` every ~100ms while ripgrep
+    // is still walking. The reset effect would drag focus back to row 1 on every
+    // batch, so the host re-asserts the user's row through activeItems — that only
+    // works because the activeItems effect is declared after the reset effect and
+    // therefore wins in the same commit. This test fails if they are reordered.
+    const onActiveChange = vi.fn()
+    const batch1 = [
+      { id: 'hit.a', label: 'a.ts' },
+      { id: 'hit.b', label: 'b.ts' },
+    ]
+    const { rerender } = render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: batch1, onActiveChange })}
+        onClose={() => undefined}
+      />,
+    )
+    // The user arrows down to the second hit.
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'ArrowDown' })
+    expect(onActiveChange).toHaveBeenLastCalledWith(batch1[1])
+
+    const batch2 = [...batch1, { id: 'hit.c', label: 'c.ts' }]
+    rerender(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: batch2,
+          activeItems: [batch1[1]!],
+          onActiveChange,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(onActiveChange).toHaveBeenLastCalledWith(batch1[1])
+    expect(onActiveChange).not.toHaveBeenLastCalledWith(batch2[0])
+  })
 })
 
 describe('QuickPickPanel simple-file-dialog extras', () => {

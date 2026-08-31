@@ -18,7 +18,12 @@ export interface ITextSearchQuery {
   readonly matchWholeWord: boolean
   /** Glob patterns; empty means "include everything". */
   readonly includes: readonly string[]
-  /** Glob patterns; checked after the hard-coded base ignores (node_modules, .git, ...). */
+  /**
+   * Glob patterns to exclude, on top of the configured files.exclude /
+   * search.exclude globs the caller passes down. There are no other built-in
+   * exclusions: whether .gitignore / .ignore files are honoured is governed
+   * solely by the `search.useIgnoreFiles` setting.
+   */
   readonly excludes: readonly string[]
   /** Total match cap across the whole search. Default 10000. */
   readonly maxResults?: number
@@ -71,7 +76,10 @@ export interface ITextSearchOptions {
   readonly signal?: AbortSignal
   /**
    * Apply the configured files.exclude / search.exclude globs (default true).
-   * false searches everything except the hard-coded base ignores.
+   * false searches everything those globs would have hidden, and also stops
+   * honouring .gitignore / .ignore regardless of `search.useIgnoreFiles` — the
+   * search view surfaces both halves under one "use exclude settings and ignore
+   * files" toggle.
    */
   readonly useExcludeSettings?: boolean
 }

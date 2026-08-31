@@ -365,6 +365,23 @@ describe('TextSearchService', () => {
     expect(afterDash).toEqual(['token', '.'])
   })
 
+  it('lets ripgrep honour ignore files when useIgnoreFiles is on', () => {
+    const args = buildRgArgs({ ...baseQuery('/ws', 'token'), useIgnoreFiles: true })
+    expect(args).not.toContain('--no-ignore')
+    expect(args).not.toContain('--no-ignore-global')
+  })
+
+  it('disables ignore files when useIgnoreFiles is off or absent', () => {
+    for (const query of [
+      { ...baseQuery('/ws', 'token'), useIgnoreFiles: false },
+      baseQuery('/ws', 'token'),
+    ]) {
+      const args = buildRgArgs(query)
+      expect(args).toContain('--no-ignore')
+      expect(args).toContain('--no-ignore-global')
+    }
+  })
+
   it('searches only the given scan paths', async () => {
     const root = await makeTempRoot()
     await mkdir(path.join(root, 'Client'), { recursive: true })
@@ -385,6 +402,32 @@ describe('TextSearchService', () => {
     } finally {
       svc.dispose()
     }
+  }, 15_000)
+
+  it('honours .gitignore only when useIgnoreFiles is set', async () => {
+    const root = await makeTempRoot()
+    await mkdir(path.join(root, 'build'), { recursive: true })
+    await writeFile(path.join(root, 'keep.ts'), 'gitignore-token\n')
+    await writeFile(path.join(root, 'build', 'ignored.ts'), 'gitignore-token\n')
+    await writeFile(path.join(root, '.gitignore'), 'build/\n')
+
+    const relPaths = async (useIgnoreFiles: boolean): Promise<string[]> => {
+      const svc = new TextSearchService()
+      try {
+        const complete = await svc.search({
+          ...baseQuery(root, 'gitignore-token'),
+          useIgnoreFiles,
+        })
+        return complete.results.map((fm) =>
+          path.relative(root, URI.revive(fm.resource)!.fsPath).replace(/\\/g, '/'),
+        )
+      } finally {
+        svc.dispose()
+      }
+    }
+
+    expect(await relPaths(true)).toEqual(['keep.ts'])
+    expect((await relPaths(false)).sort()).toEqual(['build/ignored.ts', 'keep.ts'])
   }, 15_000)
 
   it('covers root files with rootFilesInScope without widening the scan', async () => {

@@ -281,6 +281,42 @@ describe('loadWorkspaceFiles', () => {
     expect(seenQueries[1]).toEqual({ scanPaths: ['Engine'], rootFilesInScope: false })
   })
 
+  it('partitions the cache by useIgnoreFiles and forwards it to the walk', async () => {
+    const root = URI.file('/repo')
+    const seen: (boolean | undefined)[] = []
+    let calls = 0
+    const fs = {
+      _serviceBrand: undefined,
+      async search(query) {
+        calls++
+        seen.push(query.useIgnoreFiles)
+        return {
+          results: [],
+          limitHit: false,
+          filesWalked: 0,
+          directoriesWalked: 0,
+          durationMs: 0,
+        }
+      },
+    } satisfies IFileSearchService
+
+    const honouring = { dirNames: [], excludeGlobs: [], useIgnoreFiles: true }
+    const ignoring = { dirNames: [], excludeGlobs: [], useIgnoreFiles: false }
+
+    await loadWorkspaceFiles(root, fs, honouring)
+    await loadWorkspaceFiles(root, fs, honouring)
+    expect(calls).toBe(1)
+
+    // Sharing one cache entry between the two settings would serve the other
+    // setting's file set for the whole TTL.
+    await loadWorkspaceFiles(root, fs, ignoring)
+    expect(calls).toBe(2)
+    expect(seen).toEqual([true, false])
+
+    expect(peekWorkspaceFiles(root, honouring)).toBeDefined()
+    expect(peekWorkspaceFiles(root, ignoring)).toBeDefined()
+  })
+
   it('does not narrow the walk when no focus is given', async () => {
     const root = URI.file('/repo')
     let seenScanPaths: readonly string[] | undefined = ['sentinel']

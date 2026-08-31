@@ -67,6 +67,7 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
       {
         dirNames: this._exclude.getDirNameIgnores(),
         excludeGlobs: this._exclude.getSearchExcludeGlobs(),
+        useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
       },
       this._prewarmCts.token,
       focusScopeForMention(this._focus),

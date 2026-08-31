@@ -28,6 +28,12 @@ export interface ITextSearchMainQuery extends ITextSearchQuery {
   readonly rootFilesInScope?: boolean
   /** Ripgrep `--max-depth`; only meaningful for shallow passes. */
   readonly maxDepth?: number
+  /**
+   * Honour .gitignore / .ignore files (`search.useIgnoreFiles`). Absent = false,
+   * which keeps the pre-setting behaviour for a remote server that predates this
+   * field: it simply ignores the unknown key and scans everything.
+   */
+  readonly useIgnoreFiles?: boolean
 }
 
 export interface ITextSearchMainProgressEvent {

@@ -166,6 +166,7 @@ interface ListingSpec {
   readonly maxDepth: number
   readonly scanPaths: readonly string[]
   readonly rootFilesInScope: boolean
+  readonly useIgnoreFiles: boolean
 }
 
 interface RgCollectExit {
@@ -175,19 +176,20 @@ interface RgCollectExit {
 }
 
 function fileListArgs(spec: ListingSpec): string[] {
-  const args = [
-    '--files',
-    '--hidden',
-    '--no-require-git',
-    '--no-ignore',
-    '--no-ignore-global',
+  const args = ['--files', '--hidden', '--no-require-git']
+  // See buildRgArgs: the file-name listing follows the same search.useIgnoreFiles
+  // setting so Ctrl+P and text search agree on what is part of the workspace.
+  if (!spec.useIgnoreFiles) {
+    args.push('--no-ignore', '--no-ignore-global')
+  }
+  args.push(
     '--no-config',
     '--follow',
     '--max-depth',
     String(spec.maxDepth),
     '--threads',
     String(resolveSearchThreads(undefined)),
-  ]
+  )
   for (const exclude of spec.excludes.flatMap(expandExcludeGlob)) {
     args.push('-g', `!${exclude}`)
   }
@@ -208,6 +210,9 @@ function listingKey(spec: ListingSpec): string {
     maxDepth: spec.maxDepth,
     scanPaths: [...spec.scanPaths].sort(),
     rootFilesInScope: spec.rootFilesInScope,
+    // Part of the key: the two settings produce different file sets, so sharing
+    // one cached listing between them would serve the previous setting's result.
+    useIgnoreFiles: spec.useIgnoreFiles,
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
 }
@@ -269,6 +274,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       maxDepth: query.maxDepth ?? DEFAULT_MAX_DEPTH,
       scanPaths: query.scanPaths ?? [],
       rootFilesInScope: query.rootFilesInScope === true,
+      useIgnoreFiles: query.useIgnoreFiles === true,
     }
 
     let stopReason: StopReason | null = null

@@ -362,6 +362,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const filter: MentionFileFilter = {
       dirNames: this._exclude.getDirNameIgnores(),
       excludeGlobs: this._exclude.getSearchExcludeGlobs(),
+      useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
     }
 
     // Open editors (all types, MRU order) participate both as the head of the
@@ -537,6 +538,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
               maxResults: GO_TO_FILE_MAX_RESULTS,
               excludes: filter.excludeGlobs ?? [],
               ignore: filter.dirNames,
+              useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
               ...(focus.scanPaths ? { scanPaths: focus.scanPaths } : {}),
               rootFilesInScope: focus.rootFilesInScope,
             },

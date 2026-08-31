@@ -148,6 +148,7 @@ export function useMarkdownFileLink(
             ? {
                 excludes: excludeService.getSearchExcludeGlobs(),
                 ignore: excludeService.getDirNameIgnores(),
+                useIgnoreFiles: excludeService.getUseIgnoreFiles(),
               }
             : {}),
         })

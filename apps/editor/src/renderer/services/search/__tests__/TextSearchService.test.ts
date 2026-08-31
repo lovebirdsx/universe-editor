@@ -125,6 +125,7 @@ function makeService(
   focus = new FakeFocusScopeService(),
 ): {
   readonly main: FakeMainSearch
+  readonly exclude: FakeSearchExcludeService
   readonly service: TextSearchService
 } {
   const exclude = new FakeSearchExcludeService()
@@ -135,6 +136,7 @@ function makeService(
   } as unknown as IConfigurationService
   return {
     main,
+    exclude,
     service: new TextSearchService(
       new FakeWorkspace(root),
       main,
@@ -195,6 +197,49 @@ describe('TextSearchService renderer adapter', () => {
       excludes: [],
     })
     expect(automatic.main.queries[0]!.threads).toBe(0)
+  })
+
+  it('forwards the search.useIgnoreFiles setting to the main query', async () => {
+    const query = {
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: true,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    }
+
+    const on = makeService(URI.file('/ws'))
+    on.exclude.useIgnoreFiles = true
+    await on.service.search(query)
+    expect(on.main.queries[0]!.useIgnoreFiles).toBe(true)
+
+    const off = makeService(URI.file('/ws'))
+    off.exclude.useIgnoreFiles = false
+    await off.service.search(query)
+    expect(off.main.queries[0]!.useIgnoreFiles).toBe(false)
+  })
+
+  it('drops the ignore files too when exclude settings are turned off', async () => {
+    // The search view exposes one toggle labelled "use exclude settings and
+    // ignore files" — turning it off has to disable both halves.
+    const { main, exclude, service } = makeService(URI.file('/ws'))
+    exclude.useIgnoreFiles = true
+
+    await service.search(
+      {
+        pattern: 'foo',
+        isRegex: false,
+        matchCase: true,
+        matchWholeWord: false,
+        includes: [],
+        excludes: [],
+      },
+      { useExcludeSettings: false },
+    )
+
+    expect(main.queries[0]!.configurationExcludes).toEqual([])
+    expect(main.queries[0]!.useIgnoreFiles).toBe(false)
   })
 
   it('routes progress events for the current search session', async () => {

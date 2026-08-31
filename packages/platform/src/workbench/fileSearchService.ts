@@ -29,6 +29,12 @@ export interface IFileSearchQuery {
    * the walk — the root's own files live outside every scan path.
    */
   readonly rootFilesInScope?: boolean
+  /**
+   * Honour .gitignore / .ignore files (`search.useIgnoreFiles`). Absent = false,
+   * matching the behaviour from before the setting existed. Part of the disk
+   * listing cache key, so flipping it never serves a stale listing.
+   */
+  readonly useIgnoreFiles?: boolean
 }
 
 export interface IFileSearchMatch {

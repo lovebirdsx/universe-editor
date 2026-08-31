@@ -91,6 +91,11 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidChangeValue.fire(value)
   }
 
+  /** Simulate the panel reporting a newly focused row (arrow keys / mouse). */
+  fireActive(item: T | undefined): void {
+    this._onDidChangeActive.fire(item)
+  }
+
   accept(item: T): void {
     this._onDidAccept.fire([item])
   }
@@ -210,6 +215,22 @@ function makeMatch(path: string, preview = 'const needle = true'): IFileMatch {
       },
     ],
   }
+}
+
+/** A file match with one hit per given line, so tests have several rows to focus. */
+function makeMultiLineMatch(path: string, lineNumbers: readonly number[]): IFileMatch {
+  return {
+    resource: URI.file(path),
+    matches: lineNumbers.map((lineNumber) => ({
+      lineNumber,
+      preview: `const needle = ${lineNumber}`,
+      ranges: [{ startColumn: 7, endColumn: 13 }],
+    })),
+  }
+}
+
+function matchPicks(picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] {
+  return picker.items.filter((item): item is IQuickPickItem => !('type' in item))
 }
 
 function flushPromises(): Promise<void> {
@@ -381,6 +402,118 @@ describe('QuickTextSearchService', () => {
 
     expect(picker.items[0]?.label).toBe('Open a folder to search across files.')
     expect(textSearch.calls).toHaveLength(0)
+
+    picker.hide()
+    await promise
+  })
+
+  it('renders streamed batches before the search settles', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch } = setup()
+    // The search never settles here: this is the regression this fixes — ripgrep
+    // walks the whole tree before exiting, so waiting for the promise means the
+    // picker stays empty long after the first hit is known.
+    textSearch.deferred = true
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    expect(textSearch.calls).toHaveLength(1)
+    // Cleared on start, so the previous query's rows can't pose as new results.
+    expect(picker.items).toEqual([])
+    expect(picker.busy).toBe(true)
+
+    textSearch.calls[0]!.opts?.onResults?.([makeMatch('/repo/src/a.ts')])
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(picker.items[0]).toMatchObject({ type: 'separator', label: 'a.ts' })
+    expect(picker.items[1]).toMatchObject({ label: 'const needle = true', description: '3:7' })
+    // Still scanning: no "no results" claim, and the progress bar stays up.
+    expect(picker.busy).toBe(true)
+
+    textSearch.resolveAll([makeMatch('/repo/src/a.ts')])
+    picker.hide()
+    await promise
+  })
+
+  it('keeps the focused row when a later batch rebuilds the list', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch } = setup()
+    textSearch.deferred = true
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    const onResults = textSearch.calls[0]!.opts?.onResults
+    onResults?.([makeMultiLineMatch('/repo/src/a.ts', [3, 8, 12])])
+    await vi.advanceTimersByTimeAsync(100)
+
+    // User arrows down to the second hit.
+    const second = matchPicks(picker)[1]!
+    picker.fireActive(second)
+
+    // A later batch adds another file, forcing a full items rebuild.
+    onResults?.([makeMatch('/repo/src/b.ts')])
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(matchPicks(picker).length).toBeGreaterThan(3)
+    // Without the activeItems restore the panel would have snapped back to row 1.
+    expect(picker.activeItems.map((item) => item.id)).toEqual([second.id])
+
+    textSearch.resolveAll([])
+    picker.hide()
+    await promise
+  })
+
+  it('ignores streamed batches from a superseded query', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch } = setup()
+    textSearch.deferred = true
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+
+    picker.fireValue('first')
+    await vi.advanceTimersByTimeAsync(75)
+    const staleOnResults = textSearch.calls[0]!.opts?.onResults
+
+    picker.fireValue('second')
+    await vi.advanceTimersByTimeAsync(75)
+    expect(textSearch.calls).toHaveLength(2)
+
+    // The aborted first search can still emit a batch already in flight.
+    staleOnResults?.([makeMatch('/repo/src/stale.ts')])
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(picker.items).toEqual([])
+
+    textSearch.resolveAll([])
+    picker.hide()
+    await promise
+  })
+
+  it('reports no results only once the search has settled', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch } = setup()
+    textSearch.deferred = true
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    // Mid-scan an empty accumulator means "not yet", never "nothing matches".
+    expect(picker.items).toEqual([])
+
+    textSearch.resolveAll([])
+    await flushPromises()
+
+    expect(picker.items[0]?.label).toBe('No matching results')
+    expect(picker.busy).toBe(false)
 
     picker.hide()
     await promise

@@ -136,6 +136,11 @@ export class TextSearchService implements ITextSearchService {
         configurationExcludes:
           opts.useExcludeSettings === false ? [] : this._exclude.getSearchExcludeGlobs(),
         threads: this._config.get<number>('search.threads', 0) ?? 0,
+        // The search view's toggle is labelled "use exclude settings and ignore
+        // files", so turning it off has to drop the ignore files too — not just
+        // the globs.
+        useIgnoreFiles:
+          opts.useExcludeSettings === false ? false : this._exclude.getUseIgnoreFiles(),
         ...(this._focus.active ? { scanPaths: [...this._focus.folders] } : {}),
         rootFilesInScope: this._focus.rootFilesInScope,
       })

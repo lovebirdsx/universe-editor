@@ -30,6 +30,13 @@ export class FakeExcludeService implements IExcludeService {
     return []
   }
 
+  getUseIgnoreFiles(): boolean {
+    return this.useIgnoreFiles
+  }
+
+  /** Mutable so a test can flip the setting without rebuilding the fake. */
+  useIgnoreFiles = true
+
   fireChange(): void {
     this._onDidChange.fire()
   }

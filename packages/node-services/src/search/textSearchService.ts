@@ -93,7 +93,13 @@ function reviveUri(value: URI | UriComponents | string): URI {
 }
 
 export function buildRgArgs(query: ITextSearchMainQuery): string[] {
-  const args = ['--hidden', '--no-require-git', '--no-ignore', '--no-ignore-global', '--json']
+  const args = ['--hidden', '--no-require-git', '--json']
+  // Honouring .gitignore is the VSCode default: without it every search also
+  // walks .git/ and whatever the ignore files list, which dominates the scan
+  // time on large repos (the configured excludes do not cover .git).
+  if (query.useIgnoreFiles !== true) {
+    args.push('--no-ignore', '--no-ignore-global')
+  }
   args.push('--follow')
   args.push(query.matchCase ? '--case-sensitive' : '--ignore-case')
   args.push('--crlf')

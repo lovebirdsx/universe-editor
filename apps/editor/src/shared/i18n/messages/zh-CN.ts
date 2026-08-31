@@ -753,6 +753,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.search.exclude.description':
     '配置搜索和快速打开时要排除的文件和文件夹 glob 模式。继承 files.exclude。',
   'settings.search.threads.description': '全局搜索使用的线程数。0 表示自动（CPU 内核数减 2）。',
+  'settings.search.useIgnoreFiles.description':
+    '搜索文本和文件名时是否遵循 .gitignore 与 .ignore 文件。关闭后会连同被忽略的文件一起搜索，例如构建产物和 .git 目录。',
   'settings.search.searchOnType.description':
     '输入时即搜索全部文件。关闭后仅在按下 Enter 时执行搜索。',
   'settings.search.searchOnTypeDebouncePeriod.description':

@@ -11,6 +11,11 @@
  *    - Explorer            → files.exclude              (kind: 'files')
  *    - Search / QuickOpen  → files.exclude ∪ search.exclude (kind: 'search')
  *    - File watcher (main) → files.watcherExclude       (pushed via setExcludes)
+ *
+ *  Also carries `search.useIgnoreFiles`, the other half of "what counts as part
+ *  of the workspace": the glob sets above are what we exclude ourselves, that
+ *  flag is whether ripgrep additionally honours .gitignore / .ignore. Both text
+ *  search and file-name search read it from here so they cannot disagree.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -36,6 +41,7 @@ export type ExcludeKind = 'files' | 'search'
 const FILES_EXCLUDE = 'files.exclude'
 const SEARCH_EXCLUDE = 'search.exclude'
 const WATCHER_EXCLUDE = 'files.watcherExclude'
+const USE_IGNORE_FILES = 'search.useIgnoreFiles'
 
 export interface IExcludeService {
   readonly _serviceBrand: undefined
@@ -57,10 +63,16 @@ export interface IExcludeService {
   /** Active glob patterns for files.exclude ∪ search.exclude. */
   getSearchExcludeGlobs(): string[]
 
+  /**
+   * Whether searches should honour .gitignore / .ignore files
+   * (`search.useIgnoreFiles`, default true — VSCode's default).
+   */
+  getUseIgnoreFiles(): boolean
+
   /** Currently-active `files.watcherExclude` globs, for seeding watch(). */
   readonly currentWatcherGlobs: readonly string[]
 
-  /** Fires after any of the three exclude settings is recomputed. */
+  /** Fires after any of the watched exclude settings is recomputed. */
   readonly onDidChange: Event<void>
 }
 
@@ -76,6 +88,7 @@ export class ExcludeService extends Disposable implements IExcludeService {
   private _watcherGlobs: string[] = []
   private _searchGlobs: string[] = []
   private _dirNameIgnores: string[] = []
+  private _useIgnoreFiles = true
 
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
@@ -93,7 +106,8 @@ export class ExcludeService extends Disposable implements IExcludeService {
         if (
           e.affectsConfiguration(FILES_EXCLUDE) ||
           e.affectsConfiguration(SEARCH_EXCLUDE) ||
-          e.affectsConfiguration(WATCHER_EXCLUDE)
+          e.affectsConfiguration(WATCHER_EXCLUDE) ||
+          e.affectsConfiguration(USE_IGNORE_FILES)
         ) {
           this._recompute(true)
         }
@@ -112,6 +126,10 @@ export class ExcludeService extends Disposable implements IExcludeService {
 
   getSearchExcludeGlobs(): string[] {
     return this._searchGlobs
+  }
+
+  getUseIgnoreFiles(): boolean {
+    return this._useIgnoreFiles
   }
 
   get currentWatcherGlobs(): readonly string[] {
@@ -133,6 +151,7 @@ export class ExcludeService extends Disposable implements IExcludeService {
     this._watcherGlobs = nextWatcherGlobs
     this._searchGlobs = activeKeys(searchRules)
     this._dirNameIgnores = uniqueDefined(this._searchGlobs.map(extractPrunableDirName))
+    this._useIgnoreFiles = this._config.get<boolean>(USE_IGNORE_FILES, true) ?? true
 
     if (push && watcherChanged) {
       void this._watcher.setExcludes(this._watcherGlobs).catch((err) => {

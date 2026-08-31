@@ -44,6 +44,12 @@ const MAX_RESULTS_PER_FILE = 10
 const MAX_RESULTS = 500
 const DEBOUNCE_DELAY_MS = 75
 const SEED_TEXT_MAX_LENGTH = 200
+// Coalesce incremental result batches into the picker, the way the search view
+// coalesces them into React state. Without streaming, the picker stayed empty
+// until ripgrep finished walking the whole tree — for a rare symbol in a huge
+// workspace that is far longer than the first hit takes to arrive, because
+// MAX_RESULTS is never reached and nothing kills the scan early.
+const RESULTS_REFRESH_MS = 100
 
 type QuickTextSearchPickKind = 'match' | 'message'
 
@@ -207,6 +213,17 @@ function nextFrame(): Promise<void> {
   return Promise.resolve()
 }
 
+function findPickById(
+  picks: readonly QuickTextSearchInput[],
+  id: string | undefined,
+): QuickTextSearchPick | undefined {
+  if (id === undefined) return undefined
+  for (const pick of picks) {
+    if (!('type' in pick) && pick.id === id) return pick
+  }
+  return undefined
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -262,10 +279,22 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     await new Promise<void>((resolve) => {
       const store = new DisposableStore()
       let timer: ReturnType<typeof setTimeout> | undefined
+      let flushTimer: ReturnType<typeof setTimeout> | undefined
       let requestSeq = 0
       let activeController: AbortController | undefined
       let accepted = false
       let didResolve = false
+      // The row the user has navigated to. Re-assigning `picker.items` resets the
+      // panel's focus to the first row, so every streamed refresh would yank the
+      // highlight away mid-typing; the id lets us put it back.
+      let activeId: string | undefined
+
+      const clearFlushTimer = (): void => {
+        if (flushTimer !== undefined) {
+          clearTimeout(flushTimer)
+          flushTimer = undefined
+        }
+      }
 
       const cleanup = (): void => {
         requestSeq++
@@ -273,6 +302,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
           clearTimeout(timer)
           timer = undefined
         }
+        clearFlushTimer()
         activeController?.abort()
         activeController = undefined
         store.dispose()
@@ -301,6 +331,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         const seq = ++requestSeq
         activeController?.abort()
         activeController = undefined
+        clearFlushTimer()
 
         if (pattern.length === 0) {
           picker.busy = false
@@ -319,7 +350,36 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         const controller = new AbortController()
         activeController = controller
         let limitHit = false
+        // Incremental batches accumulate here (append-only, keyed by resource) and
+        // are coalesced into the picker on a timer, so hits show up while ripgrep
+        // is still walking the tree instead of only once it exits.
+        const accum = new Map<string, IFileMatch>()
+
+        // Drop whatever the previous query left on screen: stale rows would read
+        // as results for the new pattern. The "no results" message is deliberately
+        // not shown here — an empty accumulator mid-scan means "not yet", and only
+        // the settled promise can say there is genuinely nothing.
+        picker.items = []
         picker.busy = true
+
+        const render = (results: readonly IFileMatch[]): void => {
+          const keepId = activeId
+          const picks = toPicks(root, results, this._getActiveFileResource(), limitHit)
+          picker.items = picks
+          // Runs after the panel's focus-reset effect, so this wins for the commit
+          // in which both fire. When the row is gone (or the previous highlight was
+          // the placeholder message) we leave activeItems alone and let the panel
+          // fall back to focusing the first row.
+          const keep = findPickById(picks, keepId)
+          if (keep) picker.activeItems = [keep]
+        }
+
+        const flush = (): void => {
+          flushTimer = undefined
+          if (seq !== requestSeq) return
+          render([...accum.values()])
+        }
+
         try {
           const results = await this._textSearch.search(
             {
@@ -337,12 +397,26 @@ export class QuickTextSearchService implements IQuickTextSearchService {
               onProgress: (progress) => {
                 if (progress.limitHit !== undefined) limitHit = true
               },
+              onResults: (batch) => {
+                // In-flight batches from a query the user has already moved past
+                // must not paint over the current one.
+                if (seq !== requestSeq) return
+                for (const fileMatch of batch) {
+                  accum.set(fileMatch.resource.toString(), fileMatch)
+                }
+                if (flushTimer === undefined) flushTimer = setTimeout(flush, RESULTS_REFRESH_MS)
+              },
             },
           )
           if (seq !== requestSeq) return
-          picker.items = toPicks(root, results, this._getActiveFileResource(), limitHit)
+          clearFlushTimer()
+          // The settled result is authoritative: unlike the accumulated batches
+          // it is deduplicated, with in-memory buffer hits overriding the stale
+          // on-disk snapshot of the same file.
+          render(results)
         } catch {
           if (seq !== requestSeq) return
+          clearFlushTimer()
           picker.items = [
             makeMessagePick(
               'searchFailed',
@@ -370,6 +444,11 @@ export class QuickTextSearchService implements IQuickTextSearchService {
       }
 
       store.add(picker.onDidChangeValue(scheduleSearch))
+      store.add(
+        picker.onDidChangeActive((item) => {
+          activeId = item?.id
+        }),
+      )
       store.add(
         picker.onDidAccept((items) => {
           const pick = items[0]

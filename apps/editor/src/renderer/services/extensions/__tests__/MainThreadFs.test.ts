@@ -109,6 +109,7 @@ function makeFs(
   platform: HostPlatform = 'linux',
   authority: string | undefined = undefined,
   remoteStatus: IRemoteStatusService = fakeRemoteStatus(null),
+  useIgnoreFiles: () => boolean = () => true,
 ): MainThreadFs {
   return new MainThreadFs(
     cwd,
@@ -117,6 +118,7 @@ function makeFs(
     files,
     fileSearch,
     defaultExcludes,
+    useIgnoreFiles,
     logger,
     platform,
     remoteStatus,

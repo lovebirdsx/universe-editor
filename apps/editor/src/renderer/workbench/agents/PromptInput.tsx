@@ -685,6 +685,7 @@ export function PromptInput({
       {
         dirNames: exclude.getDirNameIgnores(),
         excludeGlobs: exclude.getSearchExcludeGlobs(),
+        useIgnoreFiles: exclude.getUseIgnoreFiles(),
       },
       undefined,
       focusScopeForMention(focusScope),

@@ -464,6 +464,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Search all files as you type. When disabled, the search runs only when you press Enter.',
             ),
           },
+          'search.useIgnoreFiles': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.search.useIgnoreFiles.description',
+              'Controls whether to use .gitignore and .ignore files when searching for text and file names. Disable to also search ignored files such as build output and the .git folder.',
+            ),
+          },
           'search.searchOnTypeDebouncePeriod': {
             type: 'number',
             default: 300,
