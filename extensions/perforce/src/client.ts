@@ -555,10 +555,7 @@ export class PerforceClient {
       'perforce.input.placeholder',
       'Message for the default changelist',
     )
-    this._sc.acceptInputCommand = {
-      command: 'perforce.submitDefault',
-      title: localize('perforce.command.submit.title', 'Submit'),
-    }
+    this._setAcceptInput(false)
   }
 
   /** Discover the client for `folder` and build a PerforceClient, or undefined
@@ -1002,7 +999,7 @@ export class PerforceClient {
     this._openedCount = countOpened(groups)
     this._sc.count = this._openedCount
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
-    this._sc.acceptInputActions = defaultHasFiles ? this._buildAcceptActions() : undefined
+    this._setAcceptInput(defaultHasFiles)
     this._emitChange()
     // Fire-and-forget, and deliberately last: the behind-check and the
     // opened-by-others scan are scope-wide server reads, so they must never be
@@ -1010,6 +1007,17 @@ export class PerforceClient {
     // anything actually runs.
     this.scheduleSyncPreview()
     this.scheduleOpenedByOthers()
+  }
+
+  /** Wire the commit-bar Submit: enabled only when the default changelist has
+   *  files to submit, mirroring git's disabled commit button when empty. */
+  private _setAcceptInput(defaultHasFiles: boolean): void {
+    this._sc.acceptInputCommand = {
+      command: 'perforce.submitDefault',
+      title: localize('perforce.command.submit.title', 'Submit'),
+      disabled: !defaultHasFiles,
+    }
+    this._sc.acceptInputActions = defaultHasFiles ? this._buildAcceptActions() : undefined
   }
 
   /** Commit-bar actions for the default changelist. When Swarm is available, the
@@ -1401,6 +1409,7 @@ export class PerforceClient {
     this._unresolvedPaths = new Set()
     this._openedCount = 0
     this._sc.count = 0
+    this._setAcceptInput(false)
     // A behind count is a claim about the server, so it can't outlive the
     // connection: "↓12" while disconnected is a number nothing can refresh.
     this._syncBehindCount = undefined
