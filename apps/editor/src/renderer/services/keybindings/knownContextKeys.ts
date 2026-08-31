@@ -69,6 +69,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'activeEditorLanguageId',
   'activeEditorTypeId',
   'isInDiffEditor',
+  'diffEditorHasOpenableFile',
   'isInMergeEditor',
   'inKeybindings',
   'textCompareEditorVisible',

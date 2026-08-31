@@ -16,7 +16,7 @@ import {
   CloseDirtyDiffPeekAction,
   GoToNextChangeAction,
   GoToPreviousChangeAction,
-  OpenActiveFileChangesAction,
+  OpenChangesAction,
   ShowChangeAtCursorAction,
 } from './dirtyDiffActions.js'
 import {
@@ -719,7 +719,7 @@ registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)
 
 // Editor — dirty-diff navigation (next/previous change vs git HEAD)
-registerAction2(OpenActiveFileChangesAction)
+registerAction2(OpenChangesAction)
 registerAction2(GoToNextChangeAction)
 registerAction2(GoToPreviousChangeAction)
 registerAction2(ShowChangeAtCursorAction)

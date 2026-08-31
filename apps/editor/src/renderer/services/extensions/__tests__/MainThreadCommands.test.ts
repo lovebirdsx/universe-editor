@@ -79,17 +79,4 @@ describe('MainThreadCommands', () => {
 
     expect(executeCommand).toHaveBeenCalledWith('revealInExplorer', { resourceUri: '/ws/a.ts' })
   })
-
-  it('allows the SCM-fallback built-in commands from the host', async () => {
-    const executeCommand = vi.fn().mockResolvedValue('ok')
-    const mt = new MainThreadCommands(fakeExtHost().service, {
-      executeCommand,
-    } as unknown as ICommandService)
-
-    await expect(
-      mt.$executeCommand('workbench.action.editor.openActiveFileChanges', []),
-    ).resolves.toBe('ok')
-
-    expect(executeCommand).toHaveBeenCalledWith('workbench.action.editor.openActiveFileChanges')
-  })
 })

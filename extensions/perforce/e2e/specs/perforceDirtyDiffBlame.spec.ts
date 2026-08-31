@@ -93,7 +93,7 @@ test.describe('@p1 perforce editor visualizations', () => {
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
           timeout: 30_000,
-          message: 'openActiveFileChanges should switch the active editor to a diff',
+          message: 'Open Changes should switch the active editor to a diff',
         })
         .toBe('diff')
       // Left = have revision (the seeded content via perforce.getHeadContent),

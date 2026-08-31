@@ -43,6 +43,7 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
+import { OpenChangesAction } from '../actions/dirtyDiffActions.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
@@ -690,11 +691,10 @@ export class DirtyDiffContribution
   }
 
   private async _openChanges(): Promise<void> {
-    const path = this._activePath
-    const providerId = path ? this._resolveProviderId(path) : undefined
-    if (!providerId) return
+    const resource = this._activeResource
+    if (!resource) return
     await this._commandService
-      .executeCommand(dirtyDiffCommandId(providerId, 'openChange'), undefined, { pinned: true })
+      .executeCommand(OpenChangesAction.ID, resource, { pinned: true })
       .catch(() => undefined)
   }
 

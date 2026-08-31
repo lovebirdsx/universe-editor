@@ -111,6 +111,15 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
     const activeEditorTypeId = contextKeyService.createKey<string>('activeEditorTypeId', '')
     const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
+    // Mirrors the per-group scoped key of the same name (useEditorGroupScopedContextKey).
+    // Menu `when` resolves against that scoped service, but keybindings and
+    // preconditions resolve against this root one — a scoped-only key reads as
+    // unset there, which silently kills the shortcut while the title-bar button
+    // keeps working.
+    const diffEditorHasOpenableFile = contextKeyService.createKey<boolean>(
+      'diffEditorHasOpenableFile',
+      false,
+    )
     const isInMergeEditor = contextKeyService.createKey<boolean>('isInMergeEditor', false)
     // True while the Keyboard Shortcuts editor is the active editor.
     const inKeybindings = contextKeyService.createKey<boolean>('inKeybindings', false)
@@ -135,6 +144,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         )
         const isDiff = editor instanceof DiffEditorInput
         isInDiffEditor.set(isDiff)
+        diffEditorHasOpenableFile.set(isDiff && editor.openableResource !== undefined)
         isInMergeEditor.set(editor instanceof MergeEditorInput)
         textCompareEditorVisible.set(isDiff)
       }),

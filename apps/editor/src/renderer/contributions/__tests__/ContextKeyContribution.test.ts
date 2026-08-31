@@ -11,6 +11,7 @@ import {
   type HostPlatform,
 } from '@universe-editor/platform'
 import { ContextKeyContribution } from '../ContextKeyContribution.js'
+import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 
 function makeLayoutStub(initial?: Partial<Record<PartId, boolean>>) {
@@ -295,6 +296,65 @@ describe('ContextKeyContribution', () => {
     editor.activeEditor.set({ id: 'file:///a.lua' }, undefined)
     expect(ctx.get('hasActiveEditor')).toBe(true)
     expect(ctx.get('activeEditorId')).toBe('file:///a.lua')
+    ctx.dispose()
+  })
+
+  it('exposes diffEditorHasOpenableFile on the root service for keybindings', () => {
+    // The per-group scoped service sets this key too, but keybinding `when` and
+    // Action2 preconditions resolve against the root one — a scoped-only key
+    // reads as unset there and the shortcut silently never fires.
+    const ctx = new ContextKeyService()
+    const editor = makeEditorStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
+
+    const openable = URI.file('/repo/a.ts')
+    editor.activeEditor.set(
+      new DiffEditorInput(openable, 'head', 'work', undefined, openable, true, makeFileService()),
+      undefined,
+    )
+    expect(ctx.get('isInDiffEditor')).toBe(true)
+    expect(ctx.get('diffEditorHasOpenableFile')).toBe(true)
+    ctx.dispose()
+  })
+
+  it('leaves diffEditorHasOpenableFile false for a diff with no source file', () => {
+    // Depot / revision blob diffs and Explorer cross-file compares have no
+    // openable resource — "Open File" must stay unavailable for them.
+    const ctx = new ContextKeyService()
+    const editor = makeEditorStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+
+    const blob = URI.parse('perforce://depot/a.ts@3')
+    editor.activeEditor.set(
+      new DiffEditorInput(blob, 'r3', 'r4', undefined, undefined, false, makeFileService()),
+      undefined,
+    )
+    expect(ctx.get('isInDiffEditor')).toBe(true)
+    expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
+
+    // Switching back to a plain file clears it rather than leaving it stuck on.
+    editor.activeEditor.set({ id: 'file:///repo/a.ts' }, undefined)
+    expect(ctx.get('isInDiffEditor')).toBe(false)
+    expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
     ctx.dispose()
   })
 

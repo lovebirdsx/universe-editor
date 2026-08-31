@@ -638,17 +638,10 @@ function registerGitCommands(
         ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
       ]
       const path = resourcePath(arg)
-      const repoArg: unknown = arg
-      // Invoked without a SCM resource (keybinding / toolbar): fall back to the
-      // renderer so unsaved editor-buffer changes are included in the diff.
-      if (!path) {
-        return commands.executeCommand('workbench.action.editor.openActiveFileChanges')
-      }
-      return path
-        ? mgr
-            .resolveRepo(repoArg)
-            ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
-        : undefined
+      if (!path) return
+      return mgr
+        .resolveRepo(arg)
+        ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
     }),
 
     register('git.openMergeEditor', async (...args: unknown[]) => {

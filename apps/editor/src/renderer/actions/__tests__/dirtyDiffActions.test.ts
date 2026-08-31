@@ -3,15 +3,17 @@ import {
   ICommandService,
   IEditorGroupsService,
   InstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   REMOTE_SCHEME,
   ServiceCollection,
   URI,
+  UriIdentityService,
   type ICommandService as ICommandServiceType,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
-import { OpenActiveFileChangesAction } from '../dirtyDiffActions.js'
+import { OpenChangesAction } from '../dirtyDiffActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -26,6 +28,7 @@ import {
 } from '../../services/extensions/ScmService.js'
 
 const GET_HEAD = dirtyDiffCommandId('git', 'getHeadContent')
+const OPEN_CHANGE = dirtyDiffCommandId('git', 'openChange')
 
 const scmDecorations = (hasChanges: boolean): IScmDecorationsServiceType => ({
   _serviceBrand: undefined,
@@ -54,11 +57,15 @@ const workspaceOf = (folder: URI): IWorkspaceServiceType =>
 
 const localWorkspace = (): IWorkspaceServiceType => workspaceOf(URI.file('D:/repo'))
 
-async function runActionWithServices(services: ServiceCollection): Promise<void> {
+async function runActionWithServices(
+  services: ServiceCollection,
+  ...args: unknown[]
+): Promise<void> {
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
   const instantiationService = new InstantiationService(services)
   try {
     await instantiationService.invokeFunction((accessor) =>
-      new OpenActiveFileChangesAction().run(accessor),
+      new OpenChangesAction().run(accessor, ...args),
     )
   } finally {
     instantiationService.dispose()
@@ -70,12 +77,12 @@ afterEach(() => {
   scmViewState.setSelectedRepo(undefined)
 })
 
-describe('OpenActiveFileChangesAction', () => {
+describe('OpenChangesAction', () => {
   it('registers the public command id with the shift+alt+y keybinding', () => {
-    const action = new OpenActiveFileChangesAction()
-    expect(OpenActiveFileChangesAction.ID).toBe('workbench.action.editor.openActiveFileChanges')
+    const action = new OpenChangesAction()
+    expect(OpenChangesAction.ID).toBe('workbench.action.scm.openChanges')
     expect(action.desc).toMatchObject({
-      id: 'workbench.action.editor.openActiveFileChanges',
+      id: 'workbench.action.scm.openChanges',
       keybinding: { primary: 'shift+alt+y', when: '!isInDiffEditor' },
       f1: true,
     })
@@ -146,6 +153,38 @@ describe('OpenActiveFileChangesAction', () => {
     )
 
     expect(commandService.executeCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands a changed file with no baseline back to the provider', async () => {
+    // `getHeadContent` returns null both for "no baseline" and "fetching it
+    // failed"; only the provider can tell those apart, so an empty left side
+    // must not be invented here.
+    const groups = new EditorGroupsService()
+    const resource = URI.file('D:/repo/added.ts')
+    const input = new FileEditorInput(resource, {} as never)
+    groups.activeGroup.openEditor(input)
+
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
+    expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, resource.fsPath, {})
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.anything(),
+    )
   })
 
   it('routes getHeadContent to the provider the SCM view has selected', async () => {
@@ -223,6 +262,100 @@ describe('OpenActiveFileChangesAction', () => {
           ),
         ],
       ),
+    )
+
+    expect(commandService.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('delegates to the provider when the explorer target is not the active editor', async () => {
+    const groups = new EditorGroupsService()
+    groups.activeGroup.openEditor(new FileEditorInput(URI.file('D:/repo/other.ts'), {} as never))
+
+    const resource = URI.file('D:/repo/a.ts')
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(false)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      { resource },
+      { pinned: true },
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledTimes(1)
+    expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, resource.fsPath, {
+      pinned: true,
+    })
+    expect(commandService.executeCommand).not.toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
+  })
+
+  it('opens a buffer-aware diff when the bare-URI target is the active editor', async () => {
+    const groups = new EditorGroupsService()
+    const resource = URI.file('D:/repo/file.ts')
+    const input = new FileEditorInput(resource, {} as never)
+    groups.activeGroup.openEditor(input)
+
+    FileEditorRegistry.register(
+      input,
+      { getModel: () => ({ getValue: () => 'unsaved buffer\n' }) } as never,
+      groups.activeGroup.id,
+    )
+
+    let payload: unknown
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string, ...args: unknown[]) => {
+        if (id === GET_HEAD) return 'head content\n'
+        if (id === '_workbench.openDiff') {
+          payload = args[0]
+          return undefined
+        }
+        return undefined
+      }) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      resource,
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
+    expect(payload).toMatchObject({
+      original: 'head content\n',
+      modified: 'unsaved buffer\n',
+      originalUri: resource.toString(),
+    })
+  })
+
+  it('does nothing when no provider owns the target path', async () => {
+    const groups = new EditorGroupsService()
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(false)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      URI.file('X:/elsewhere/a.ts'),
     )
 
     expect(commandService.executeCommand).not.toHaveBeenCalled()

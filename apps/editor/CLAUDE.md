@@ -410,6 +410,7 @@ E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
 - **改了 platform 后**：renderer 看到的是 `packages/platform/dist/`；`pnpm dev` 下 watcher 自动重建，否则手动 `pnpm --filter @universe-editor/platform build`。
 - **新增 platform API**：必须先在 `packages/platform/src/index.ts` re-export，否则 apps 编译不通过。
 - **ContextKey 表达式**：写字符串如 `'hasActiveEditor'` 会在 Action2 内部 `ContextKeyExpr.deserialize`；先确保 key 已在 `ContextKeyContribution` 里 seed。
+- **ContextKey 有两个求值域，别搞混**：菜单 `when`（`MenuId.EditorTitle` 等）走 **per-group scoped** ctx（`useEditorGroupScopedContextKey`），而 keybinding 的 `when` 与 Action2 的 `precondition` 走 **root** ctx（`useGlobalKeybindingHandler` / `CommandsQuickAccessProvider`；precondition 还会被 AND 进 CommandPalette 菜单项）。`ScopedContextKeyService.set()` **只写本地、不外溢到父级**，所以只写 scoped 的 key 在键位解析里恒为 `<unset>`——症状指纹是「标题栏按钮能点、快捷键没反应、命令面板也搜不到」。keybinding 需要的 key 必须在 root 上也 seed 一份（`isInDiffEditor` / `diffEditorHasOpenableFile` 就是双写范例）。e2e 探针 `getContextKey` 读的正是 root，所以这类分裂**只有 e2e 能守住**，单测拿 root 服务直接断言是测不出来的。
 - **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需要 `URI.revive(fm.resource) as URI`。
 - **扩展的 `window.show*Message(msg, ...items)` 走 `IConfirmOptions.buttons`**：`MainThreadWindow.$showMessage` 把每个 item 原样放进 `buttons`，回执读 `IConfirmResult.choiceIndex`。曾经它把 items 拆进 `primaryButton/secondaryButton/cancelButton` 三个槽——第 4 项起被静默丢弃，且两项时点第二项返回 `undefined`（扩展侧的 `picked === BTN_X` 永不成立，按钮看起来「点了没反应」）。给对话框加按钮形态时保持这条：**每个 item 都是动作，取消是额外追加的那一个**。
 

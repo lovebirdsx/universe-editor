@@ -10,8 +10,10 @@ import {
   Action2,
   ICommandService,
   IEditorGroupsService,
+  IUriIdentityService,
   IWorkspaceService,
   KeybindingWeight,
+  MenuId,
   localize,
   localize2,
   type ServicesAccessor,
@@ -24,6 +26,7 @@ import {
   findAdjacentChange,
 } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { resolveOpenChangesTarget } from '../services/scm/openChanges.js'
 import { scmHostPath } from '../services/scm/scmHostPath.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { IScmService, resolveScmProviderId } from '../services/extensions/ScmService.js'
@@ -90,44 +93,111 @@ export class GoToPreviousChangeAction extends Action2 {
   }
 }
 
-export class OpenActiveFileChangesAction extends Action2 {
-  static readonly ID = 'workbench.action.editor.openActiveFileChanges'
+/**
+ * The single "Open Changes" entry point, shared by every SCM provider. Git and
+ * Perforce each contribute a `<providerId>.openChange` capability command, but
+ * the user-facing entries (keybinding, editor title icon, Explorer context menu,
+ * command palette) all funnel through here so there is one command to learn
+ * rather than one per provider.
+ *
+ * Which provider handles a file is arbitrated by `resolveScmProviderId`: the
+ * most specific owner, except that when several own it (a git repo nested in a
+ * Perforce workspace) the repo selected in the SCM view wins.
+ */
+export class OpenChangesAction extends Action2 {
+  static readonly ID = 'workbench.action.scm.openChanges'
 
   constructor() {
     super({
-      id: OpenActiveFileChangesAction.ID,
-      title: localize2('action.editor.openActiveFileChanges.title', 'Open Active File Changes'),
+      id: OpenChangesAction.ID,
+      title: localize2('action.scm.openChanges.title', 'Open Changes'),
       category: localize2('command.category.scm', 'Source Control'),
+      icon: 'compare-changes',
       keybinding: { primary: 'shift+alt+y', when: '!isInDiffEditor' },
       f1: true,
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          order: 2,
+          when: "resourceScmProvider != '' && scmActiveResourceHasChanges && !isInDiffEditor",
+        },
+        {
+          id: MenuId.ExplorerContext,
+          group: '3_compare',
+          order: 4,
+          when:
+            "resourceScmProvider != '' && !explorerResourceIsFolder" +
+            ' && !explorerResourceMultiSelected',
+        },
+      ],
     })
   }
 
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const [arg, options] = args as [
+      unknown,
+      ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
+    ]
+    // Everything the accessor provides has to be read before the first await —
+    // a ServicesAccessor is only valid for the synchronous part of run().
     const group = accessor.get(IEditorGroupsService).activeGroup
-    const active = group.activeEditor
-    if (!(active instanceof FileEditorInput)) return
-
     const commandService = accessor.get(ICommandService)
     const scmDecorations = accessor.get(IScmDecorationsService)
     const scm = accessor.get(IScmService)
-    const workspaceService = accessor.get(IWorkspaceService)
-    const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
-    // The HEAD fetch runs on the SCM host, so an off-host editor (a local file in
-    // a remote window) has no HEAD here — a bare fsPath would route the client's
-    // path to the remote git and diff against an unrelated file.
-    const hostPath = scmHostPath(active.resource, currentRemoteAuthority(workspaceService.current))
+    const uriIdentity = accessor.get(IUriIdentityService)
+    const remoteAuthority = currentRemoteAuthority(accessor.get(IWorkspaceService).current)
+
+    const active = group.activeEditor
+    const target =
+      resolveOpenChangesTarget(arg) ??
+      (active instanceof FileEditorInput ? active.resource : undefined)
+    if (!target) return
+
+    // The baseline fetch runs on the SCM host, so an off-host resource (a local
+    // file in a remote window) has no baseline here — a bare fsPath would route
+    // the client's path to the remote provider and diff an unrelated file.
+    const hostPath = scmHostPath(target, remoteAuthority)
     const providerId = hostPath
       ? resolveScmProviderId(scm.sourceControls.get(), hostPath, scmViewState.selectedRepo.get())
       : undefined
-    const head =
-      providerId && hostPath
-        ? await commandService.executeCommand<string | null>(
-            dirtyDiffCommandId(providerId, 'getHeadContent'),
-            hostPath,
-          )
-        : null
-    if (head == null && !hasScmChanges) return
+    if (!providerId || !hostPath) return
+
+    const passThrough = {
+      ...(options?.pinned !== undefined ? { pinned: options.pinned } : {}),
+      ...(options?.preserveFocus !== undefined ? { preserveFocus: options.preserveFocus } : {}),
+    }
+    const delegate = (): Promise<unknown> =>
+      commandService.executeCommand(
+        dirtyDiffCommandId(providerId, 'openChange'),
+        hostPath,
+        passThrough,
+      )
+
+    // Only the active editor has a live buffer to diff against; anything else
+    // (an Explorer target, a spreadsheet opened in a webview) goes to the owning
+    // provider, which knows how to render its own special cases.
+    const isActiveFile =
+      active instanceof FileEditorInput && uriIdentity.isEqual(active.resource, target)
+    if (!isActiveFile) {
+      await delegate()
+      return
+    }
+
+    const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
+    const head = await commandService.executeCommand<string | null>(
+      dirtyDiffCommandId(providerId, 'getHeadContent'),
+      hostPath,
+    )
+    // A baseline in hand is the only case the buffer-aware path handles correctly.
+    // `getHeadContent` collapses "no baseline" and "fetching it failed" into the
+    // same null, and the provider is the only side that can tell them apart —
+    // Perforce toasts the failure and opens the plain file for an open-for-add,
+    // where diffing against an empty left side would read as "whole file added".
+    if (head == null) {
+      if (hasScmChanges) await delegate()
+      return
+    }
 
     const model =
       FileEditorRegistry.get(active, group.id)?.getModel() ?? active.peekModel() ?? undefined
@@ -136,10 +206,11 @@ export class OpenActiveFileChangesAction extends Action2 {
     await commandService.executeCommand('_workbench.openDiff', {
       title: localize('diff.workingTreeTitle', '{label} (Working Tree)', { label: active.label }),
       originalUri: active.resource.toString(),
-      original: head ?? '',
+      original: head,
       modified,
       openableUri: active.resource.toString(),
       liveModified: true,
+      ...passThrough,
     })
   }
 }

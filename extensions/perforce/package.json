@@ -651,14 +651,9 @@
           "group": "7_perforce@2"
         },
         {
-          "command": "perforce.openChange",
-          "when": "resourceScmProvider =~ /\\|perforce\\|/ && !explorerResourceIsFolder",
-          "group": "7_perforce@3"
-        },
-        {
           "submenu": "perforce.explorerMenu",
           "when": "resourceScmProvider =~ /\\|perforce\\|/",
-          "group": "7_perforce@4"
+          "group": "7_perforce@3"
         }
       ],
       "perforce.explorerMenu": [
@@ -711,14 +706,6 @@
           "group": "4_visualize@3"
         }
       ],
-      "editor/title": [
-        {
-          "command": "perforce.openChange",
-          "when": "resourceScmProvider =~ /\\|perforce\\|/ && scmActiveResourceHasChanges && !isInDiffEditor",
-          "group": "navigation@3",
-          "icon": "compare-changes"
-        }
-      ],
       "timeline/item/context": [
         {
           "command": "perforce.timeline.openDiff",
@@ -747,6 +734,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "perforce.openChange",
+          "when": "false"
+        },
         {
           "command": "perforce.timeline.viewCommit",
           "when": "false"
