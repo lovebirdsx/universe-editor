@@ -20,6 +20,13 @@ describe('redactErrorText — piiPaths', () => {
     expect(out).toContain('<pii>')
     expect(out).not.toContain('ci')
   })
+
+  it('masks JSON-escaped backslashes (windows paths inside jsonl)', () => {
+    const text = '{"resource":"C:\\\\Users\\\\testuser\\\\secret/a.ts"}'
+    const out = redactErrorText(text, { piiPaths: ['C:\\Users\\testuser\\secret'] })
+    expect(out).toContain('<pii>')
+    expect(out).not.toContain('testuser')
+  })
 })
 
 describe('redactErrorText — path anonymization', () => {

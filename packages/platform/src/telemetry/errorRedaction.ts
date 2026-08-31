@@ -52,9 +52,12 @@ function maskPiiPaths(text: string, piiPaths: readonly string[]): string {
   )
   let result = text
   for (const p of sorted) {
-    const withForward = p.replace(/\\/g, '/')
+    const forward = p.replace(/\\/g, '/')
+    // JSONL 输出里 JSON.stringify 把 \ 写成 \\，脱敏要一并覆盖该形态
+    const jsonEscaped = p.replace(/\\/g, '\\\\')
     result = result.split(p).join('<pii>')
-    if (withForward !== p) result = result.split(withForward).join('<pii>')
+    if (forward !== p) result = result.split(forward).join('<pii>')
+    if (jsonEscaped !== p) result = result.split(jsonEscaped).join('<pii>')
   }
   return result
 }

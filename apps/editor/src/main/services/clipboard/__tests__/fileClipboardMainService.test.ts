@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import {
   FileSystemError,
   REMOTE_SCHEME,
@@ -344,11 +344,12 @@ describe('FileClipboardMainService', () => {
     const copied = fileService.copied[0]!
     expect(copied.source).toBe('remote-ssh://test-host/docs/note.txt')
     const targetFsPath = URI.parse(copied.target).fsPath
-    expect(targetFsPath.startsWith(join(materializeRoot, 's1-'))).toBe(true)
+    // fsPath 恒为正斜杠（URI 不做分隔符转换），与 join 出的原生路径比较前先归一化
+    expect(normalize(targetFsPath).startsWith(normalize(join(materializeRoot, 's1-')))).toBe(true)
     expect(targetFsPath.endsWith('/0-note.txt')).toBe(true)
 
     const osPath = backend.writeCalls[0]!.paths[0]!
-    expect(osPath.startsWith(materializeRoot)).toBe(true)
+    expect(normalize(osPath).startsWith(normalize(materializeRoot))).toBe(true)
     expect(osPath.endsWith('0-note.txt')).toBe(true)
 
     const snapshot = await service.readResources()
