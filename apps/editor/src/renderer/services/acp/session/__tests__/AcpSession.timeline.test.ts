@@ -54,7 +54,7 @@ import {
   type SetSessionConfigOptionResponse,
   type SessionUpdate,
 } from '@agentclientprotocol/sdk'
-import { stripSelectionReplayChunk } from '../acpSession.js'
+import { AcpSession, stripSelectionReplayChunk } from '../acpSession.js'
 import {
   DIFF_SIDE_CAP,
   MEDIA_DATA_CAP,
@@ -1628,6 +1628,40 @@ describe('AcpSession.timeline', () => {
       .filter((it) => it.kind === 'message')
       .map((it) => (it.kind === 'message' ? `${it.message.role}:${it.message.text}` : ''))
     expect(texts).toEqual(['user:side-task first prompt', 'agent:side-task answer'])
+
+    s.endHistoryReplay()
+  })
+
+  it('suppression also drops replayed compaction cards (side task baseline)', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    if (!(s instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+
+    s.beginHistoryReplay()
+    s.suppressReplayToTimeline('anchor-msg')
+
+    // Replayed parent-session compaction events are dropped, not stacked. The
+    // fork emits one orphan `success` per compact boundary it replays (that is
+    // what stacked four cards on the side task), so cover that shape too.
+    s.applyCompaction('c-boundary', 'success')
+    s.applyCompaction('c-base', 'running')
+    s.applyCompaction('c-base', 'success')
+    expect(s.timeline.get()).toEqual([])
+
+    // The boundary user chunk lifts the suppression.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'side-task first prompt' },
+        messageId: 'anchor-msg',
+      } as never,
+    })
+
+    // The side task's own compaction lands after the anchor message.
+    s.applyCompaction('c-own', 'running')
+    expect(s.timeline.get().map((it) => it.kind)).toEqual(['message', 'compaction'])
 
     s.endHistoryReplay()
   })

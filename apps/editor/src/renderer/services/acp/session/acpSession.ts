@@ -809,9 +809,10 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /**
    * Side-task gate: while set, replayed updates that would land on the timeline
-   * (messages / tool calls / plan) — and their change-tracker side effects — are
-   * dropped so the forked baseline stays invisible (the fork exists only as
-   * agent-side context). Config / commands / usage updates still apply. Armed by
+   * (messages / tool calls / plan, plus the compaction cards that arrive as
+   * ext-notifications) — and their change-tracker side effects — are dropped so
+   * the forked baseline stays invisible (the fork exists only as agent-side
+   * context). Config / commands / usage updates still apply. Armed by
    * {@link suppressReplayToTimeline}, cleared by {@link endHistoryReplay}.
    */
   private _suppressReplayToTimeline = false
@@ -3423,6 +3424,9 @@ export class AcpSession extends Disposable implements IAcpSession {
    * looks like two compactions. So a new event whose `id` has no slot silently
    * replaces the leftover `running` slot in place (resetting the stopwatch for
    * a start; reusing the orphan's `startedAt` for a terminal phase).
+   *
+   * While replay suppression is armed (the side task's forked parent-session
+   * baseline), these events are dropped — matching {@link applyUpdate}.
    */
   applyCompaction(id: string, phase: AcpCompactionPhase, reason?: string): void {
     if (this.readOnly) return
@@ -3432,6 +3436,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     // compaction would be measured from BEFORE the compaction started and
     // stall the turn the moment the card settles.
     this._lastActivityAt = Date.now()
+    // Deliberately after the bump: a replayed notification is still proof of
+    // life (the idle reaper reads `lastActivityAt` regardless of status).
+    if (this._suppressReplayToTimeline) return
     const slotId = `compaction:${id}`
     const idx = this._timeline.findIndex((it) => it.kind === 'compaction' && it.id === slotId)
     const orphanIdx = this._timeline.findIndex(
