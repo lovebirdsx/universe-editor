@@ -50,12 +50,31 @@ function git(args) {
   return r.stdout
 }
 
-function pnpm(args) {
-  const r = spawnSync('pnpm', args, {
+// Windows 上必须经 cmd 才能找到 pnpm.cmd，但 shell:true + args 触发 DEP0190，且 node
+// 仅拼接不转义（裸 ^ 会被 cmd 当转义符吞成 `pkg...`）。显式走 cmd /d /s /c：cmd 只剥离
+// 命令串首尾引号、中间参数里的引号会字面进入 argv，所以包引号传参不可靠——对 cmd 元
+// 字符做 caret 转义（^ 写成 ^^）；空格无法 caret 转义，受控 args 里出现即显式报错。
+function spawnPnpm(args) {
+  if (process.platform !== 'win32') {
+    return spawnSync('pnpm', args, { cwd: repoRoot, stdio: 'inherit' })
+  }
+  const cmd = ['pnpm', ...args.map(escapeCmdArg)].join(' ')
+  return spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', cmd], {
     cwd: repoRoot,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
   })
+}
+
+function escapeCmdArg(arg) {
+  if (/[\s"]/.test(arg)) {
+    console.error(`test-changed: cannot pass whitespace/quote through cmd: ${JSON.stringify(arg)}`)
+    process.exit(1)
+  }
+  return /[&|<>^]/.test(arg) ? arg.replace(/[&|<>^]/g, (c) => `^${c}`) : arg
+}
+
+function pnpm(args) {
+  const r = spawnPnpm(args)
   if (r.error || r.status !== 0) process.exit(r.status ?? 1)
 }
 
@@ -353,11 +372,7 @@ function runPlans(plans) {
   const failed = []
   for (const p of plans) {
     console.log(`\n▶ ${p.pkgName} [${p.label}] — ${p.desc}`)
-    const r = spawnSync('pnpm', ['--filter', p.pkgName, ...p.args], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    })
+    const r = spawnPnpm(['--filter', p.pkgName, ...p.args])
     if (r.status !== 0) failed.push(`${p.pkgName} [${p.label}]`)
   }
   return failed
@@ -395,11 +410,7 @@ function checkMain() {
   if (cls.plans.length > 0) {
     // targeted/related 绕过 turbo test，丢失 dependsOn ^build 的 dist 新鲜度保证，先补 build
     //（filter 语义见 classifyCheck 注释；前提：所有包的 vitest 均直编 src、不 import 自身 dist）
-    // win32 走 cmd（pnpm() shell:true），裸 ^ 是 cmd 转义符会被吞成 `pkg...`（含自身），
-    // 双引号内 ^ 字面保留，且引号经 pnpm.CMD → node 逐层正确剥除
-    const quoteFilter = (f) =>
-      process.platform === 'win32' ? `"--filter=${f}"` : `--filter=${f}`
-    pnpm(['exec', 'turbo', 'run', 'build', ...cls.buildFilters.map(quoteFilter)])
+    pnpm(['exec', 'turbo', 'run', 'build', ...cls.buildFilters.map((f) => `--filter=${f}`)])
     const failed = runPlans(cls.plans)
     if (failed.length > 0) {
       console.error(`\ntest-changed: FAILED — ${failed.join(', ')}`)
