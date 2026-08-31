@@ -26,12 +26,28 @@ export interface IConfirmOptions {
    *  their final states are echoed in {@link IConfirmResult.checkboxChecked} in
    *  the same order. Independent of `neverAskAgainLabel` — both may coexist. */
   readonly checkboxes?: IConfirmCheckbox[]
+  /** Arbitrary number of buttons, replacing the primary/secondary/cancel shape
+   *  when set. Array order is render order; `buttons[0]` is the primary one
+   *  (confirmed, autofocused). A dismiss button is always appended, so every
+   *  entry here is an action — the caller never has to spend one on "Cancel";
+   *  `primaryButton` / `secondaryButton` / `cancelButton` / `copyButton` are all
+   *  ignored in this shape, and the appended button uses the default label.
+   *  Which button was picked is reported as {@link IConfirmResult.choiceIndex}. */
+  readonly buttons?: readonly string[]
 }
 
 export interface IConfirmResult {
   /** True when the user picked the primary button. */
   readonly confirmed: boolean
+  /** Legacy three-button outcome. Under {@link IConfirmOptions.buttons} it is
+   *  still derived (0 → primary, 1 → secondary, anything beyond → cancel) so a
+   *  caller reading only this field gets a sane value, but that mapping is lossy
+   *  past the second button — `choiceIndex` is the only reliable answer there. */
   readonly choice: 'primary' | 'secondary' | 'cancel'
+  /** Index into {@link IConfirmOptions.buttons} of the button that was picked;
+   *  `undefined` for the legacy three-button shape and whenever the dialog was
+   *  dismissed (Escape / the appended dismiss button). */
+  readonly choiceIndex?: number
   /** True when the user checked the "don't ask again" checkbox. */
   readonly neverAskAgain?: boolean
   /** Final states of {@link IConfirmOptions.checkboxes}, same order, echoed on

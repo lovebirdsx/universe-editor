@@ -27,7 +27,6 @@ import {
   StatusBarAlignment,
   toDisposable,
   fsPathToWorkspaceUri,
-  type IConfirmOptions,
   type IDisposable,
   type IProgress,
   type IProgressStep,
@@ -125,22 +124,13 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       this._notification.notify({ severity: sev, message })
       return Promise.resolve(undefined)
     }
-    // items[0] is guaranteed by the length check above.
-    const primary = items[0]!
-    const second = items[1]
-    const third = items[2]
-    let opts: IConfirmOptions = { message, type: severity, primaryButton: primary }
-    if (third !== undefined && second !== undefined) {
-      opts = { ...opts, secondaryButton: second, cancelButton: third }
-    } else if (second !== undefined) {
-      opts = { ...opts, cancelButton: second }
-    }
-    return this._dialog.confirm(opts).then((result) => {
-      if (result.confirmed) return primary
-      if (result.choice === 'secondary') return second
-      if (result.choice === 'cancel' && third !== undefined) return third
-      return undefined
-    })
+    // Every item is an action the extension can act on, so they all go through
+    // `buttons`: mapping them onto the primary/secondary/cancel triple used to
+    // both silently drop items beyond the third and lose the pick entirely
+    // whenever a two-item message had its second item clicked.
+    return this._dialog
+      .confirm({ message, type: severity, buttons: items })
+      .then((result) => (result.choiceIndex === undefined ? undefined : items[result.choiceIndex]))
   }
 
   $showQuickPick(

@@ -102,7 +102,8 @@
 - **曾经的 bug**：只有 clobber 被解析 → allwrite client 上 `parseSyncOutput` 四个正则全不命中（`APPLIED_LINE` 要求 ` - ` 后紧跟 `updated`/`updating`/…，实际紧跟 `can't`）→ 全零 summary → `runSync` 弹「已是最新版本」= **假成功**，用户被送走时以为落后的文件已是最新。同一根因让 `previewSync`（走 `execTagged`）拿到零记录报 `upToDate`，窄作用域下落后计数与 Explorer 灰字一并消失，与 rev chip 的 `↓#head` 自相矛盾。
 - **现行**：`REFUSED_MODIFIED_LINE` → `SyncRunSummary.refusedModified`（并使 `unrecognized` 转假）；纯函数 `parseSyncRefused` 把 plain 行折回 `SyncPreviewFile[]`（`action: 'not updated'`），`previewSync` 并进 `files` 使三处信号一致（`total` 仍只读 records —— `totalFileCount` 已含拒绝行，别叠加）。`sync()` 顺带把 `refusedFiles` 带出来供「查看差异」用，避免再跑一条可能与用户所见不一致的 p4 命令。
 - **分支顺序即优先级**：`refusedModified > 0` 排在 `upToDate` 之前（一次多 filespec run 可同时产生两者，报被拒绝的更有行动价值）。**「什么都没解析出来」绝不能再回落成「已是最新」**——那是最坏的答案（与成功不可区分），现在报「没有返回可识别的结果」+ 打开输出频道按钮。
-- **红线：拒绝的补救绝不给 `-f`**。p4 拒绝的唯一原因就是文件里有未收集的工作，而 `sync -f` 会永久销毁它（§11.2 已实测覆盖本地草稿）。按钮只给「收集改动」（收集后再拉，p4 会排合并、两边都不丢）与「查看差异」。
+- **`-f` 是逃生阀，不是默认补救**。p4 拒绝的唯一原因就是文件里有未收集的工作，而 `sync -f` 会永久销毁它（§11.2 已实测覆盖本地草稿）。所以三条硬约束缺一不可：① 它只能作为**显式按钮**出现（绝不自动重跑成 `-f`）；② 点击后必须走 `confirmForceGet()` **二次确认**，文案明确「未收集的改动将丢失、不可撤销」；③ 默认路径仍是先收集——按钮顺序固定为 `收集改动 → 查看差异 → 强制拉取`（收集是无损的、p4 会排合并，故领先；force 排在看过 diff 之后）。按钮集由纯函数 `refusedSyncButtons({refusedModified, mustResolve, allowForce})` 拼装（`extension.ts`，带单测）；`allowForce` 在本次 run 已经是 `-f` 时为 false——同样的拒绝再给一次 force 只会原地打转。clobber 分支同样给 force，但**不给「查看差异」**：它走 stderr/exit 1，`refusedFiles` 从 stdout 解析故为空，没有 per-file 本地路径可 diff。
+- **「查看差异」直调 `target.openChange`，不要绕回 `perforce.openChange` 命令**。runSync 已经持有发起这次 get 的 client；命令版会用 `resolveClient` 从路径重新解析，而它在无 root 命中时回退 active repository——那是命令路由语义，对一个我们已知归属的文件是错的。
 - **加任何新的 sync 输出解析前**：先想「这条行走 stdout 还是 stderr、exit 几、中断还是跳过」四问，四个答案都不同就是两个形态。
 
 ## ⚠️ 状态栏条目无法传参 → 作用域级与文件级拉取必须是两个命令

@@ -184,6 +184,91 @@ describe('ConfirmDialog', () => {
   })
 })
 
+describe('ConfirmDialog buttons', () => {
+  const buttons = ['Yes', 'No', 'Maybe', 'Skip']
+
+  it('renders the buttons in order with an appended Cancel', () => {
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={vi.fn()} />)
+    const names = screen.getAllByRole('button').map((b) => b.textContent)
+    expect(names).toEqual([...buttons, 'Cancel'])
+  })
+
+  it('resolves the primary result when buttons[0] is clicked', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={onResolve} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 0,
+      neverAskAgain: false,
+    })
+  })
+
+  it('resolves a cancel-shaped result with the picked index for buttons[2]', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={onResolve} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Maybe' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'cancel',
+      choiceIndex: 2,
+      neverAskAgain: false,
+    })
+  })
+
+  it('resolves without a choiceIndex when the appended Cancel is clicked', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={onResolve} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+    })
+    expect(onResolve.mock.calls[0]![0]).not.toHaveProperty('choiceIndex')
+  })
+
+  it('resolves without a choiceIndex on Escape', () => {
+    const onResolve = vi.fn()
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={onResolve} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+    })
+    expect(onResolve.mock.calls[0]![0]).not.toHaveProperty('choiceIndex')
+  })
+
+  it('autofocuses buttons[0]', () => {
+    render(<ConfirmDialog opts={{ message: 'Pick one', buttons }} onResolve={vi.fn()} />)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Yes' }))
+  })
+
+  it('falls back to the legacy shape for an empty buttons array', () => {
+    render(<ConfirmDialog opts={{ message: 'Sure?', buttons: [] }} onResolve={vi.fn()} />)
+    const names = screen.getAllByRole('button').map((b) => b.textContent)
+    expect(names).toEqual(['OK', 'Cancel'])
+  })
+
+  it('does not render secondary or copy buttons when buttons is set', () => {
+    render(
+      <ConfirmDialog
+        opts={{
+          message: 'Pick one',
+          buttons,
+          secondaryButton: "Don't Save",
+          copyButton: 'Copy',
+        }}
+        onResolve={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: "Don't Save" })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+  })
+})
+
 describe('PromptDialog', () => {
   it('OK resolves with the input value', () => {
     const onResolve = vi.fn()

@@ -411,6 +411,7 @@ E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
 - **新增 platform API**：必须先在 `packages/platform/src/index.ts` re-export，否则 apps 编译不通过。
 - **ContextKey 表达式**：写字符串如 `'hasActiveEditor'` 会在 Action2 内部 `ContextKeyExpr.deserialize`；先确保 key 已在 `ContextKeyContribution` 里 seed。
 - **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需要 `URI.revive(fm.resource) as URI`。
+- **扩展的 `window.show*Message(msg, ...items)` 走 `IConfirmOptions.buttons`**：`MainThreadWindow.$showMessage` 把每个 item 原样放进 `buttons`，回执读 `IConfirmResult.choiceIndex`。曾经它把 items 拆进 `primaryButton/secondaryButton/cancelButton` 三个槽——第 4 项起被静默丢弃，且两项时点第二项返回 `undefined`（扩展侧的 `picked === BTN_X` 永不成立，按钮看起来「点了没反应」）。给对话框加按钮形态时保持这条：**每个 item 都是动作，取消是额外追加的那一个**。
 
 ## 其它
 

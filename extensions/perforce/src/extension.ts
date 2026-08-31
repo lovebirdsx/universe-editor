@@ -131,6 +131,44 @@ function displayName(path: string): string {
   )
 }
 
+/** The remedies a refused get offers, in the order they are presented.
+ *
+ *  Collecting first is the answer that loses nothing (p4 then schedules a
+ *  resolve), so it leads; force-get destroys uncollected work and therefore
+ *  comes after seeing the diff. Pure so the combinations stay covered by unit
+ *  tests rather than by clicking through four kinds of refusal by hand. */
+export type RefusedSyncButton = 'collect' | 'diff' | 'force' | 'resolve'
+
+export function refusedSyncButtons(state: {
+  refusedModified: number
+  mustResolve: number
+  /** False once this run already forced — a second force would refuse the same way. */
+  allowForce: boolean
+}): RefusedSyncButton[] {
+  const out: RefusedSyncButton[] = []
+  if (state.refusedModified > 0) {
+    out.push('collect', 'diff')
+    if (state.allowForce) out.push('force')
+  }
+  if (state.mustResolve > 0) out.push('resolve')
+  return out
+}
+
+/** Confirm a `p4 sync -f`. It re-fetches files p4 believes are already current
+ *  and overwrites writable local copies, so it can silently discard uncollected
+ *  work — it never runs without the user saying so a second time. */
+async function confirmForceGet(): Promise<boolean> {
+  const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
+  const confirm = await window.showWarningMessage(
+    localize(
+      'perforce.sync.forceConfirm',
+      'Force-get overwrites local files even when Perforce thinks they are current. Uncollected changes in them will be lost. This cannot be undone.',
+    ),
+    BTN_FORCE,
+  )
+  return confirm === BTN_FORCE
+}
+
 /**
  * The four ways P4V lets you name a revision, as a quick-pick. Returns the p4
  * revision suffix to append to each filespec, or undefined when cancelled.
@@ -575,12 +613,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
    * Open the local-vs-have diff for a file a get refused, so the user can see
    * the uncollected work before deciding whether to collect it or discard it.
    * With several refusals, pick one first — a burst of diff tabs helps nobody.
+   *
+   * The diff goes straight to the client that ran the get. Routing back through
+   * `perforce.openChange` would re-resolve the client from the path, and that
+   * lookup falls back to the active repository when no root matches — command
+   * semantics, wrong for a file we already know the owner of.
    */
-  const openRefusedDiff = async (refused: readonly SyncPreviewFile[]): Promise<void> => {
+  const openRefusedDiff = async (
+    target: PerforceClient,
+    refused: readonly SyncPreviewFile[],
+  ): Promise<void> => {
     // A file outside the client view has no local path, so there is nothing to
     // diff against. Practically unreachable (p4 only refuses files it mapped), but
     // a button that silently does nothing reads as a broken editor — say so.
-    const withLocal = refused.filter((f) => f.clientFile !== undefined && f.clientFile !== '')
+    const withLocal = refused.filter(
+      (f): f is SyncPreviewFile & { clientFile: string } =>
+        f.clientFile !== undefined && f.clientFile !== '',
+    )
     const first = withLocal[0]
     if (!first) {
       log(`[perforce] view diff: none of the ${refused.length} refused file(s) have a local path`)
@@ -593,7 +642,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return
     }
     if (withLocal.length === 1) {
-      await commands.executeCommand('perforce.openChange', first.clientFile)
+      log(`[perforce] view diff: opening the single refused file ${first.clientFile}`)
+      await target.openChange(first.clientFile, false, false)
       return
     }
     const choice = await window.showQuickPick(
@@ -612,7 +662,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
     )
     if (!choice) return
     const local = withLocal.find((f) => f.depotFile === choice.id)?.clientFile
-    if (local) await commands.executeCommand('perforce.openChange', local)
+    if (local) {
+      log(`[perforce] view diff: opening the picked refused file ${local}`)
+      await target.openChange(local, false, false)
+    }
   }
 
   /**
@@ -752,8 +805,19 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // file has work in it that nobody has collected yet.
       if (res.error?.kind === 'clobber') {
         const BTN_COLLECT = localize('perforce.btn.collectChanges', 'Collect Changes')
-        const picked = await window.showErrorMessage(message, BTN_COLLECT)
+        const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
+        // No "View Diff" here: a clobber comes back on stderr with exit 1, so the
+        // run was interrupted and `refusedFiles` (parsed from stdout) is empty —
+        // there is no per-file local path to diff. Force is offered second and
+        // still behind its own confirmation: it is the only way out for a user
+        // who knows the local copy is disposable, but it destroys that copy.
+        const picked = options.force
+          ? await window.showErrorMessage(message, BTN_COLLECT)
+          : await window.showErrorMessage(message, BTN_COLLECT, BTN_FORCE)
         if (picked === BTN_COLLECT) await collectScope()
+        else if (picked === BTN_FORCE && (await confirmForceGet())) {
+          await runSync(target, spec, { ...options, force: true })
+        }
         return
       }
       await window.showErrorMessage(message)
@@ -828,24 +892,32 @@ export async function activate(context: ExtensionContext): Promise<void> {
       )
     }
     const message = parts.join(' · ')
-    // Never offer `-f` as the remedy for a refusal: the whole reason p4 refused is
-    // that the file holds work nobody has collected, and a force-get would destroy
-    // it. Collecting first is what lets a re-get schedule a resolve instead.
-    const BTN_COLLECT = localize('perforce.btn.collectChanges', 'Collect Changes')
-    const BTN_DIFF = localize('perforce.btn.viewRefusedDiff', 'View Diff')
-    const BTN_RESOLVE = localize('perforce.btn.resolveNow', 'Resolve Conflicts')
-    const items = [
-      ...(summary.refusedModified > 0 ? [BTN_COLLECT, BTN_DIFF] : []),
-      ...(summary.mustResolve > 0 ? [BTN_RESOLVE] : []),
-    ]
-    if (items.length === 0) {
+    // Collecting first is the lossless way out — p4 then schedules a resolve and
+    // neither side is dropped — so it leads. Force-get is offered too (some local
+    // copies really are disposable), but it destroys uncollected work, so it sits
+    // behind the diff and behind its own confirmation.
+    const LABELS: Record<RefusedSyncButton, string> = {
+      collect: localize('perforce.btn.collectChanges', 'Collect Changes'),
+      diff: localize('perforce.btn.viewRefusedDiff', 'View Diff'),
+      force: localize('perforce.btn.forceSync', 'Force Get'),
+      resolve: localize('perforce.btn.resolveNow', 'Resolve Conflicts'),
+    }
+    const kinds = refusedSyncButtons({
+      refusedModified: summary.refusedModified,
+      mustResolve: summary.mustResolve,
+      allowForce: options.force !== true,
+    })
+    if (kinds.length === 0) {
       await window.showInformationMessage(message)
       return
     }
-    const picked = await window.showWarningMessage(message, ...items)
-    if (picked === BTN_COLLECT) await collectScope()
-    else if (picked === BTN_DIFF) await openRefusedDiff(res.refusedFiles)
-    else if (picked === BTN_RESOLVE) {
+    const picked = await window.showWarningMessage(message, ...kinds.map((k) => LABELS[k]))
+    const kind = kinds.find((k) => LABELS[k] === picked)
+    if (kind === 'collect') await collectScope()
+    else if (kind === 'diff') await openRefusedDiff(target, res.refusedFiles)
+    else if (kind === 'force') {
+      if (await confirmForceGet()) await runSync(target, spec, { ...options, force: true })
+    } else if (kind === 'resolve') {
       await commands.executeCommand('perforce.resolveChangelist', { rootUri: target.root })
     }
   }
@@ -1016,20 +1088,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const scope = path ? [syncTargetOf(args[0], path)] : undefined
       const spec = await pickSyncSpec()
       if (spec === undefined) return
-      // `-f` re-fetches files p4 believes are already current and overwrites
-      // writable local copies, so it can silently discard uncollected work.
-      // Never run it without an explicit confirmation.
-      if (spec.force) {
-        const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
-        const confirm = await window.showWarningMessage(
-          localize(
-            'perforce.sync.forceConfirm',
-            'Force-get overwrites local files even when Perforce thinks they are current. Uncollected changes in them will be lost. This cannot be undone.',
-          ),
-          BTN_FORCE,
-        )
-        if (confirm !== BTN_FORCE) return
-      }
+      if (spec.force && !(await confirmForceGet())) return
       await runSync(target, spec.spec, {
         ...(scope !== undefined ? { scope } : {}),
         ...(spec.force ? { force: true } : {}),

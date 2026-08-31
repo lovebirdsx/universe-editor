@@ -8,6 +8,7 @@ import {
   ProgressLocation,
   Severity,
   StatusBarAlignment,
+  type IConfirmResult,
   type IDialogService,
   type IFileDialogService,
   type INotificationService,
@@ -37,11 +38,13 @@ function fakeNotification(): {
   return { service: { notify, prompt } as unknown as INotificationService, notify, prompt }
 }
 
-function fakeDialog(confirmed = true): {
+function fakeDialog(result: Partial<IConfirmResult> = {}): {
   service: IDialogService
   confirm: ReturnType<typeof vi.fn>
 } {
-  const confirm = vi.fn().mockResolvedValue({ confirmed, choice: confirmed ? 'primary' : 'cancel' })
+  const confirm = vi
+    .fn()
+    .mockResolvedValue({ confirmed: false, choice: 'cancel' as const, ...result })
   return { service: { confirm } as unknown as IDialogService, confirm }
 }
 
@@ -126,16 +129,40 @@ describe('MainThreadWindow', () => {
 
   it('resolves to the primary item label when confirmed', async () => {
     const notif = fakeNotification()
-    const dialog = fakeDialog(true)
+    const dialog = fakeDialog({ confirmed: true, choice: 'primary', choiceIndex: 0 })
     const mt = makeWindow({ notification: notif.service, dialog: dialog.service })
     await expect(mt.$showMessage('error', 'pick one', ['Yes', 'No'])).resolves.toBe('Yes')
     expect(dialog.confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ primaryButton: 'Yes', cancelButton: 'No', type: 'error' }),
+      expect.objectContaining({ message: 'pick one', type: 'error', buttons: ['Yes', 'No'] }),
     )
   })
 
+  // Guard for the "View Diff did nothing" bug: a two-item message used to be
+  // mapped onto the primary/cancel pair, and the dialog's cancel resolve carries
+  // no choiceIndex, so clicking the second item dropped the pick entirely.
+  // choiceIndex now reports the clicked button, so items[1] resolves correctly.
+  it('resolves to the second item label via choiceIndex:1', async () => {
+    const dialog = fakeDialog({ choiceIndex: 1 })
+    const mt = makeWindow({ dialog: dialog.service })
+    await expect(mt.$showMessage('warning', 'pick one', ['Yes', 'No'])).resolves.toBe('No')
+  })
+
+  it('resolves to the third item label via choiceIndex:2', async () => {
+    const dialog = fakeDialog({ choiceIndex: 2 })
+    const mt = makeWindow({ dialog: dialog.service })
+    await expect(mt.$showMessage('info', 'pick one', ['A', 'B', 'C'])).resolves.toBe('C')
+  })
+
+  // Guard for the lifted N-button cap: the old primary/secondary/cancel shape
+  // silently dropped items beyond the third, so a fourth pick was unreachable.
+  it('resolves to the fourth item label via choiceIndex:3', async () => {
+    const dialog = fakeDialog({ choiceIndex: 3 })
+    const mt = makeWindow({ dialog: dialog.service })
+    await expect(mt.$showMessage('info', 'pick one', ['A', 'B', 'C', 'D'])).resolves.toBe('D')
+  })
+
   it('resolves to undefined when dialog is dismissed', async () => {
-    const dialog = fakeDialog(false)
+    const dialog = fakeDialog({ confirmed: false, choice: 'cancel' })
     const mt = makeWindow({ dialog: dialog.service })
     await expect(mt.$showMessage('warning', 'confirm?', ['Do it'])).resolves.toBeUndefined()
   })

@@ -3,7 +3,7 @@
  *
  *  Covers the pull (sync) chain end to end against the fake p4 (fixtures/
  *  fake-p4.mjs): a depot file seeded ahead of the synced revision (`headRev` >
- *  have) models "the server has newer revisions". Six journeys, one cold launch
+ *  have) models "the server has newer revisions". Eight journeys, one cold launch
  *  each:
  *
  *  1. The two-tier behind-check (cheap `changes -m 1 -s submitted` gate → expensive
@@ -23,9 +23,15 @@
  *  6. The OTHER refusal shape — an `allwrite noclobber` client skipping a
  *     locally-modified file on stdout with exit 0 — is reported as such by both
  *     the preview and the get, a run that both refuses and updates reports BOTH
- *     counts, and the Collect Changes button really collects. Unparsed, that
- *     shape made the get claim "already at the latest revision" for a file
- *     several revisions behind.
+ *     counts, the View Diff button really opens the have-vs-local diff, and the
+ *     Collect Changes button really collects. Unparsed, that shape made the get
+ *     claim "already at the latest revision" for a file several revisions behind.
+ *  7. The status-bar behind entry's scope pull opens a changelist picker
+ *     (newest-first behind changelists, `cstat`-classified, plus "Latest
+ *     revision"); picking @1002 syncs the scope to that revision, not head.
+ *  8. Force Get is the escape hatch on BOTH refusal shapes: it only runs after a
+ *     second confirmation, and then it really overwrites the uncollected local
+ *     work with the head revision.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -55,11 +61,12 @@ const nestedBehind: SeedFile = {
 // Fault injection: a plain `p4 sync` on this file refuses with "can't clobber
 // writable file" (exit 1) — the file has local work nobody collected yet.
 const LOCAL_DRAFT = 'my local work\n'
+const CLOBBERED_HEAD = 'head draft\n'
 const clobbered: SeedFile = {
   relPath: 'draft.txt',
   content: 'have draft\n',
   headRev: 2,
-  headContent: 'head draft\n',
+  headContent: CLOBBERED_HEAD,
   clobber: true,
 }
 // The other refusal shape: an `allwrite noclobber` client skips just this file
@@ -67,11 +74,13 @@ const clobbered: SeedFile = {
 // get "succeeded" with nothing applied and the user was told the stale file was
 // already at the latest revision.
 const REFUSED_DRAFT = 'my uncollected refused work\n'
+const REFUSED_HAVE = 'have refused\n'
+const REFUSED_HEAD = 'head refused\n'
 const refused: SeedFile = {
   relPath: 'refused.txt',
-  content: 'have refused\n',
+  content: REFUSED_HAVE,
   headRev: 2,
-  headContent: 'head refused\n',
+  headContent: REFUSED_HEAD,
   refused: true,
 }
 
@@ -508,9 +517,19 @@ test.describe('@p1 perforce sync', () => {
         // Nothing landed on disk: p4 refused, so the local work is still there
         // untouched (a force-get would have destroyed exactly this).
         expect(readFileSync(perforce.file(refused.relPath), 'utf8')).toBe(REFUSED_DRAFT)
-        // Dismiss without collecting: the collect button is exercised by the
-        // mixed-run step below, which needs the drift still uncollected.
-        await page.keyboard.press('Escape')
+
+        // THE fourth guard: View Diff used to do nothing at all. The host mapped
+        // a two-item message onto primary/secondary/cancel and then read the pick
+        // back off `choice`, so clicking the second item resolved to undefined and
+        // the extension's `picked === BTN_DIFF` never matched. Opening the diff
+        // also leaves the drift uncollected, which the mixed-run step below needs.
+        await dialog.getByRole('button', { name: 'View Diff' }).click()
+        await expect
+          .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()), {
+            timeout: 30_000,
+            message: 'View Diff should open the have-vs-local diff for the refused file',
+          })
+          .toEqual({ original: REFUSED_HAVE, modified: REFUSED_DRAFT })
         await expect(dialog).toHaveCount(0)
       })
 
@@ -604,9 +623,9 @@ test.describe('@p1 perforce sync', () => {
         // determinate because the @1002 dry-run supplies a total (1 file), and it
         // stays mounted through the post-sync refresh, so it is observable despite
         // the fake's instant file writes.
-        await expect(
-          page.locator('[data-testid="notification-progress-determinate"]'),
-        ).toBeVisible({ timeout: 30_000 })
+        await expect(page.locator('[data-testid="notification-progress-determinate"]')).toBeVisible(
+          { timeout: 30_000 },
+        )
 
         // Final result toast.
         await expect(
@@ -619,6 +638,65 @@ test.describe('@p1 perforce sync', () => {
         await expect
           .poll(() => readFileSync(perforce.file('behind.txt'), 'utf8'), { timeout: 30_000 })
           .toBe(AT_1002)
+      })
+    })
+  })
+
+  test.describe('force get', () => {
+    test.use({ p4Seeds: { files: [refused, clobbered] } })
+
+    test('Force Get overwrites the uncollected work on both refusal shapes, but only after a second confirmation @regression', async ({
+      page,
+      workbench,
+      perforce,
+    }) => {
+      test.setTimeout(120_000)
+      await openSyncWorkspace(page, workbench, perforce.openDir)
+
+      const dialog = page.getByRole('dialog')
+
+      /**
+       * Drive one file's get through refusal → Force Get → confirmation, and
+       * assert the head revision really landed on top of the local draft.
+       * Both refusal shapes reach the same two-step flow, so they share it.
+       */
+      const forceGet = async (
+        relPath: string,
+        refusalText: string,
+        head: string,
+      ): Promise<void> => {
+        writeFileSync(perforce.file(relPath), LOCAL_DRAFT, 'utf8')
+        // Fire-and-forget: the command parks on the refusal dialog.
+        void page
+          .evaluate(
+            (p) => void window.__E2E__!.runCommand('perforce.syncLatest', { resourceUri: p }),
+            perforce.file(relPath),
+          )
+          .catch(() => {})
+
+        await expect(dialog).toBeVisible({ timeout: 30_000 })
+        await expect(dialog).toContainText(refusalText)
+        await dialog.getByRole('button', { name: 'Force Get' }).click()
+
+        // The second confirmation is the whole safety story: `sync -f` silently
+        // discards work p4 just refused to touch, so it never runs off one click.
+        await expect(dialog).toContainText('This cannot be undone', { timeout: 30_000 })
+        await dialog.getByRole('button', { name: 'Force Get' }).click()
+
+        await expect
+          .poll(() => readFileSync(perforce.file(relPath), 'utf8'), {
+            timeout: 30_000,
+            message: 'the forced get should overwrite the local draft with the head revision',
+          })
+          .toBe(head)
+      }
+
+      await test.step('the stdout refusal shape (`can’t update modified file`)', async () => {
+        await forceGet(refused.relPath, 'not updated', REFUSED_HEAD)
+      })
+
+      await test.step('the stderr clobber shape (`Can’t clobber writable file`)', async () => {
+        await forceGet(clobbered.relPath, 'Get revision failed', CLOBBERED_HEAD)
       })
     })
   })

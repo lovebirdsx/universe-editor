@@ -25,6 +25,9 @@ export function ConfirmDialog({
   const primary = opts.primaryButton ?? localize('dialog.default.ok', 'OK')
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
   const secondary = opts.secondaryButton
+  // An empty array carries no more information than "no buttons given", so it
+  // falls back to the legacy shape rather than rendering a dismiss-only dialog.
+  const buttons = opts.buttons?.length ? opts.buttons : undefined
   const [neverAskAgain, setNeverAskAgain] = useState(false)
   const [checkboxChecked, setCheckboxChecked] = useState<boolean[]>(
     opts.checkboxes?.map((c) => c.initiallyChecked ?? false) ?? [],
@@ -36,6 +39,15 @@ export function ConfirmDialog({
     neverAskAgain: false,
     ...echoCheckboxes,
   }
+  // The `buttons` shape reports which entry was picked by index; `choice` is
+  // still derived so a caller reading only the legacy field gets a sane value.
+  const pickResult = (index: number): IConfirmResult => ({
+    confirmed: index === 0,
+    choice: index === 0 ? 'primary' : index === 1 ? 'secondary' : 'cancel',
+    choiceIndex: index,
+    neverAskAgain: index === 0 ? neverAskAgain : false,
+    ...echoCheckboxes,
+  })
   return (
     <FocusScopeOverlay visible onEscape={() => onResolve(cancelResult)}>
       <div
@@ -46,12 +58,16 @@ export function ConfirmDialog({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
             e.preventDefault()
-            onResolve({
-              confirmed: true,
-              choice: 'primary',
-              neverAskAgain,
-              ...echoCheckboxes,
-            })
+            onResolve(
+              buttons
+                ? pickResult(0)
+                : {
+                    confirmed: true,
+                    choice: 'primary',
+                    neverAskAgain,
+                    ...echoCheckboxes,
+                  },
+            )
           }
         }}
       >
@@ -85,22 +101,36 @@ export function ConfirmDialog({
             </label>
           ))}
           <div className={styles['buttons']}>
-            <button
-              type="button"
-              className={styles['btnPrimary']}
-              autoFocus
-              onClick={() =>
-                onResolve({
-                  confirmed: true,
-                  choice: 'primary',
-                  neverAskAgain,
-                  ...echoCheckboxes,
-                })
-              }
-            >
-              {primary}
-            </button>
-            {opts.copyButton ? (
+            {buttons ? (
+              buttons.map((label, i) => (
+                <button
+                  key={`${i}-${label}`}
+                  type="button"
+                  className={i === 0 ? styles['btnPrimary'] : styles['btn']}
+                  autoFocus={i === 0}
+                  onClick={() => onResolve(pickResult(i))}
+                >
+                  {label}
+                </button>
+              ))
+            ) : (
+              <button
+                type="button"
+                className={styles['btnPrimary']}
+                autoFocus
+                onClick={() =>
+                  onResolve({
+                    confirmed: true,
+                    choice: 'primary',
+                    neverAskAgain,
+                    ...echoCheckboxes,
+                  })
+                }
+              >
+                {primary}
+              </button>
+            )}
+            {opts.copyButton && !buttons ? (
               <button
                 type="button"
                 className={styles['btn']}
@@ -109,7 +139,7 @@ export function ConfirmDialog({
                 {opts.copyButton}
               </button>
             ) : null}
-            {secondary ? (
+            {secondary && !buttons ? (
               <button
                 type="button"
                 className={styles['btn']}
@@ -125,8 +155,10 @@ export function ConfirmDialog({
                 {secondary}
               </button>
             ) : null}
+            {/* The dismiss button is always present: with `buttons`, every entry
+                is an action, so closing needs its own exit. */}
             <button type="button" className={styles['btn']} onClick={() => onResolve(cancelResult)}>
-              {cancel}
+              {buttons ? localize('dialog.default.cancel', 'Cancel') : cancel}
             </button>
           </div>
         </div>
