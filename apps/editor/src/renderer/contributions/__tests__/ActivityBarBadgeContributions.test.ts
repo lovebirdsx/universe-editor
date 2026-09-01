@@ -15,23 +15,43 @@ import {
   observableValue,
   setDisposableTracker,
   type ICommandService,
-  type IObservable,
+  type ISettableObservable,
 } from '@universe-editor/platform'
 import { SwarmCommands } from '@universe-editor/extensions-common'
 import { ActivityService } from '../../services/activity/ActivityService.js'
 import type { IScmService, IScmSourceControlModel } from '../../services/extensions/ScmService.js'
 import { swarmNeedsActionCount } from '../../services/swarm/swarmViewState.js'
+import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import {
   ScmActivityContribution,
   SwarmActivityContribution,
 } from '../ActivityBarBadgeContributions.js'
 
-function makeFakeScm(): { service: IScmService; setCount: (count: number | undefined) => void } {
-  const count = observableValue<number | undefined>('count', undefined)
-  const sc = { count } as unknown as IScmSourceControlModel
-  const sourceControls: IObservable<readonly IScmSourceControlModel[]> = observableValue<
-    readonly IScmSourceControlModel[]
-  >('sourceControls', [sc])
+function makeFakeScm(rootUris: readonly string[]): {
+  service: IScmService
+  setCount: (index: number, count: number | undefined) => void
+  addRepo: (rootUri: string) => void
+  removeRepo: (rootUri: string) => void
+} {
+  interface FakeEntry {
+    readonly rootUri: string
+    readonly count: ISettableObservable<number | undefined>
+    readonly model: IScmSourceControlModel
+  }
+  const entries: FakeEntry[] = []
+  const sourceControls = observableValue<readonly IScmSourceControlModel[]>('sourceControls', [])
+  const syncSourceControls = () =>
+    sourceControls.set(
+      entries.map((e) => e.model),
+      undefined,
+    )
+  const addRepo = (rootUri: string) => {
+    const count = observableValue<number | undefined>(`count${entries.length}`, undefined)
+    const model = { rootUri, count } as unknown as IScmSourceControlModel
+    entries.push({ rootUri, count, model })
+    syncSourceControls()
+  }
+  for (const rootUri of rootUris) addRepo(rootUri)
   const service: IScmService = {
     _serviceBrand: undefined,
     sourceControls,
@@ -39,12 +59,121 @@ function makeFakeScm(): { service: IScmService; setCount: (count: number | undef
     setExtHost() {},
     resetSourceControls() {},
   }
-  return { service, setCount: (c) => count.set(c, undefined) }
+  return {
+    service,
+    setCount: (index, c) => entries[index]?.count.set(c, undefined),
+    addRepo,
+    removeRepo: (rootUri) => {
+      const i = entries.findIndex((e) => e.rootUri === rootUri)
+      if (i >= 0) {
+        entries.splice(i, 1)
+        syncSourceControls()
+      }
+    },
+  }
 }
 
 describe('ScmActivityContribution', () => {
   afterEach(() => {
+    // Module-level observable — reset so the next test re-hydrates cleanly.
+    scmViewState.setSelectedRepo(undefined)
     setDisposableTracker(null)
+  })
+
+  it('follows the selected repo instead of summing the workspace', () => {
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    const scm = makeFakeScm(['repo-a', 'repo-b'])
+    store.add(new ScmActivityContribution(scm.service, activityService))
+
+    scm.setCount(0, 3)
+    scm.setCount(1, 7)
+
+    // No selection → falls back to the first repo.
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(3)
+
+    scmViewState.setSelectedRepo('repo-b')
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(7)
+
+    scmViewState.setSelectedRepo('repo-a')
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(3)
+
+    store.dispose()
+  })
+
+  it('falls back to the first repo when selectedRepo points at nothing', () => {
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    const scm = makeFakeScm(['repo-a', 'repo-b'])
+    store.add(new ScmActivityContribution(scm.service, activityService))
+
+    scm.setCount(0, 2)
+    scm.setCount(1, 9)
+
+    scmViewState.setSelectedRepo('does-not-exist')
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(2)
+
+    store.dispose()
+  })
+
+  it('hides the badge when the selected repo has no count, even if others do', () => {
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    const scm = makeFakeScm(['repo-a', 'repo-b'])
+    store.add(new ScmActivityContribution(scm.service, activityService))
+
+    scm.setCount(0, 5)
+    scmViewState.setSelectedRepo('repo-b')
+    expect(activityService.getBadge('workbench.view.scm').get()).toBeUndefined()
+
+    // Setting the selected repo's count brings the badge back.
+    scm.setCount(1, 4)
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(4)
+
+    store.dispose()
+  })
+
+  it('re-resolves when sourceControls registers late (restored selection)', () => {
+    // Restore-from-storage race: selectedRepo hydrates before the owning
+    // extension activates, so the badge must fall back first and re-arbitrate
+    // once the target repo registers.
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    const scm = makeFakeScm(['repo-a'])
+    store.add(new ScmActivityContribution(scm.service, activityService))
+
+    scm.setCount(0, 3)
+    scmViewState.setSelectedRepo('repo-b')
+    // repo-b not yet registered → falls back to first (repo-a).
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(3)
+
+    // The owning extension activates and registers repo-b with its own count.
+    scm.addRepo('repo-b')
+    // The new repo's count is undefined initially → badge hides, doesn't fall back.
+    expect(activityService.getBadge('workbench.view.scm').get()).toBeUndefined()
+
+    scm.setCount(1, 8)
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(8)
+
+    store.dispose()
+  })
+
+  it('falls back when the selected repo is unregistered', () => {
+    const store = new DisposableStore()
+    const activityService = store.add(new ActivityService())
+    const scm = makeFakeScm(['repo-a', 'repo-b'])
+    store.add(new ScmActivityContribution(scm.service, activityService))
+
+    scm.setCount(0, 2)
+    scm.setCount(1, 9)
+    scmViewState.setSelectedRepo('repo-b')
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(9)
+
+    // Selected repo disappears → badge falls back to first.
+    scm.removeRepo('repo-b')
+    expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(2)
+
+    store.dispose()
   })
 
   it('does not leak the badge handle while living under the singleton store', () => {
@@ -55,10 +184,10 @@ describe('ScmActivityContribution', () => {
     // and are never disposed on unload.
     const workbenchStore = markAsSingleton(new DisposableStore())
     const activityService = workbenchStore.add(new ActivityService())
-    const scm = makeFakeScm()
+    const scm = makeFakeScm(['repo-a'])
     workbenchStore.add(new ScmActivityContribution(scm.service, activityService))
 
-    scm.setCount(5)
+    scm.setCount(0, 5)
     expect(activityService.getBadge('workbench.view.scm').get()?.count).toBe(5)
 
     // The contribution is intentionally NOT disposed here. With the badge handle

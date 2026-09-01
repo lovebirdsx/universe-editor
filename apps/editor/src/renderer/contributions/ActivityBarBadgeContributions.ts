@@ -28,6 +28,7 @@ import { SwarmCommands } from '@universe-editor/extensions-common'
 import { IScmService } from '../services/extensions/ScmService.js'
 import { IActivityService } from '../services/activity/ActivityService.js'
 import { swarmNeedsActionCount } from '../services/swarm/swarmViewState.js'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 
 const EXPLORER_CONTAINER_ID = 'workbench.view.explorer'
 const SCM_CONTAINER_ID = 'workbench.view.scm'
@@ -82,16 +83,19 @@ export class ScmActivityContribution extends Disposable implements IWorkbenchCon
 
     this._register(
       autorun((r) => {
-        let total = 0
-        for (const sc of scmService.sourceControls.read(r)) total += sc.count.read(r) ?? 0
-        this._update(total)
+        // Badge mirrors the repo the SCM view is showing, not the workspace sum.
+        const sourceControls = scmService.sourceControls.read(r)
+        const selected =
+          sourceControls.find((sc) => sc.rootUri === scmViewState.selectedRepo.read(r)) ??
+          sourceControls[0]
+        this._update(selected?.count.read(r) ?? 0)
       }),
     )
   }
 
-  private _update(total: number): void {
+  private _update(count: number): void {
     this._badge.value =
-      total > 0 ? this._activityService.showActivity(SCM_CONTAINER_ID, { count: total }) : undefined
+      count > 0 ? this._activityService.showActivity(SCM_CONTAINER_ID, { count }) : undefined
   }
 }
 
