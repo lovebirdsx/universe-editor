@@ -41,7 +41,7 @@ import {
   viewCommit as viewChangelist,
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
-import { uriToFsPath } from './pathUtil.js'
+import { uriToFsPath, norm } from './pathUtil.js'
 import { buildScopeFilespec } from './p4Filespec.js'
 import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
@@ -146,6 +146,25 @@ export function refusedSyncButtons(state: {
   }
   if (state.mustResolve > 0) out.push('resolve')
   return out
+}
+
+/** Split a destructive command's targets by p4 open state and decide how to run
+ *  it. `p4 revert` only affects opened files and `p4 clean` (Discard Uncollected)
+ *  only unopened ones — confirming either over a selection it can't touch promises
+ *  a loss that never happens (the opposite lie is worse: "Local changes will be
+ *  lost" followed by a silent no-op). Each side redirects an out-of-scope
+ *  selection to its sibling command and runs mixed selections on the in-scope
+ *  subset only. Pure so the combinations stay covered by unit tests. */
+export type RevertGuardSide = 'opened' | 'unopened'
+
+export function revertGuardPlan(
+  paths: readonly string[],
+  openState: ReadonlySet<string>,
+  side: RevertGuardSide,
+): { action: 'run'; targets: string[]; skipped: number } | { action: 'misdirect' } {
+  const inScope = paths.filter((p) => openState.has(norm(p)) === (side === 'opened'))
+  if (inScope.length === 0) return { action: 'misdirect' }
+  return { action: 'run', targets: inScope, skipped: paths.length - inScope.length }
 }
 
 /** Confirm a `p4 sync -f`. It re-fetches files p4 believes are already current
@@ -1237,20 +1256,58 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (paths.length === 0) return
       const target = mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
+      // Precheck: revert is a silent no-op on unopened files, so confirm only
+      // over the selection it can actually revert (see revertGuardPlan). Group
+      // targets (SCM changelist headers) are open by definition — skip the
+      // precheck instead of pointing `p4 opened` at a folder path.
+      const opened =
+        groupChangelistId(args[0]) !== undefined ? new Set(paths) : await target.openedAmong(paths)
+      const plan = revertGuardPlan(paths, opened, 'opened')
+      if (plan.action === 'misdirect') {
+        // `p4 revert` would exit 0 here ("not open, not reverted") — say so
+        // instead of promising a loss it would keep, and offer the sibling that
+        // does discard working-tree drift (the button click is its confirm).
+        const BTN_DISCARD = localize(
+          'perforce.btn.discardUncollected',
+          'Discard Uncollected Changes',
+        )
+        const message =
+          paths.length === 1
+            ? localize(
+                'perforce.revert.notOpened',
+                "'{0}' is not open in a changelist, so Revert has nothing to do. Discard its uncollected working-tree changes instead? This cannot be undone.",
+                { 0: paths[0]! },
+              )
+            : localize(
+                'perforce.revert.notOpenedMany',
+                '{0} files are not open in a changelist, so Revert has nothing to do. Discard their uncollected working-tree changes instead? This cannot be undone.',
+                { 0: String(paths.length) },
+              )
+        if ((await window.showWarningMessage(message, BTN_DISCARD)) === BTN_DISCARD) {
+          await target.revertReconcile(paths)
+        }
+        return
+      }
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
       const message =
-        paths.length === 1
-          ? localize('perforce.revert.confirm', "Revert '{0}'? Local changes will be lost.", {
-              0: paths[0]!,
-            })
-          : localize(
-              'perforce.revert.confirmMany',
-              'Revert {0} files? Local changes will be lost.',
-              { 0: String(paths.length) },
+        plan.skipped > 0
+          ? localize(
+              'perforce.revert.confirmPartial',
+              'Revert {0} opened file(s)? Local changes will be lost. {1} unopened file(s) will be skipped — use Discard Uncollected Changes for those.',
+              { 0: String(plan.targets.length), 1: String(plan.skipped) },
             )
+          : paths.length === 1
+            ? localize('perforce.revert.confirm', "Revert '{0}'? Local changes will be lost.", {
+                0: paths[0]!,
+              })
+            : localize(
+                'perforce.revert.confirmMany',
+                'Revert {0} files? Local changes will be lost.',
+                { 0: String(paths.length) },
+              )
       const confirm = await window.showWarningMessage(message, BTN_REVERT)
       if (confirm !== BTN_REVERT) return
-      await target.revert(paths)
+      await target.revert(plan.targets)
     }),
 
     commands.registerCommand('perforce.revertUnchanged', async (arg) => {
@@ -1340,25 +1397,61 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const arg0 = args[0] as { isDirectory?: boolean } | undefined
       const target = mgr.resolveClient({ resourceUri: paths[0]! }) ?? mgr.active
       if (!target) return
+      // Precheck: clean never touches opened files, so confirm only over the
+      // selection it can actually clean (see revertGuardPlan). A directory
+      // target recurses server-side where per-file classification isn't
+      // meaningful — skip the precheck for it.
+      const plan = revertGuardPlan(
+        paths,
+        arg0?.isDirectory === true ? new Set<string>() : await target.openedAmong(paths),
+        'unopened',
+      )
+      if (plan.action === 'misdirect') {
+        // p4 clean skips opened files by design — point at the Revert that owns
+        // them (the button click is its confirm).
+        const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
+        const message =
+          paths.length === 1
+            ? localize(
+                'perforce.revertReconcile.allOpened',
+                "'{0}' is open in a changelist, so uncollected-changes cleanup has nothing to do. Revert it (its checked-out changes will be lost)?",
+                { 0: paths[0]! },
+              )
+            : localize(
+                'perforce.revertReconcile.allOpenedMany',
+                '{0} files are open in a changelist, so uncollected-changes cleanup has nothing to do. Revert them (their checked-out changes will be lost)?',
+                { 0: String(paths.length) },
+              )
+        if ((await window.showWarningMessage(message, BTN_REVERT)) === BTN_REVERT) {
+          await target.revert(paths)
+        }
+        return
+      }
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
       const message =
-        paths.length === 1
+        plan.skipped > 0
           ? localize(
-              'perforce.revertReconcile.confirm',
-              "Discard working-tree changes for '{0}'? This cannot be undone.",
-              { 0: paths[0]! },
+              'perforce.revertReconcile.confirmPartial',
+              'Discard working-tree changes for {0} unopened file(s)? This cannot be undone. {1} opened file(s) will be skipped — use Revert for those.',
+              { 0: String(plan.targets.length), 1: String(plan.skipped) },
             )
-          : localize(
-              'perforce.revertReconcile.confirmMany',
-              'Discard working-tree changes for {0} files? This cannot be undone.',
-              { 0: String(paths.length) },
-            )
+          : paths.length === 1
+            ? localize(
+                'perforce.revertReconcile.confirm',
+                "Discard working-tree changes for '{0}'? This cannot be undone.",
+                { 0: paths[0]! },
+              )
+            : localize(
+                'perforce.revertReconcile.confirmMany',
+                'Discard working-tree changes for {0} files? This cannot be undone.',
+                { 0: String(paths.length) },
+              )
       const confirm = await window.showWarningMessage(message, BTN_REVERT)
       if (confirm !== BTN_REVERT) return
       const targets =
         arg0?.isDirectory === true && paths.length === 1
           ? [`${paths[0]!.replace(/[/\\]+$/, '')}/...`]
-          : paths
+          : plan.targets
       await target.revertReconcile(targets)
     }),
 

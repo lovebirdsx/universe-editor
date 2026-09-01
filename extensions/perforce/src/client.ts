@@ -1372,6 +1372,45 @@ export class PerforceClient {
   }
 
   /**
+   * Which of `paths` are opened in any changelist — the command layer's precheck
+   * behind the Revert / Discard-Uncollected confirmations. Both commands are
+   * silent no-ops on half their nominal targets (`p4 revert` exits 0 with "not
+   * open, not reverted" for unopened files; `p4 clean` never touches opened
+   * ones), so the confirm dialogs need to know which selection the command can
+   * actually affect before promising a loss.
+   *
+   * Cache-first: `_openedPaths` (the last refresh's `p4 opened`) answers with
+   * zero round-trips for the SCM-driven case. Only cache misses go to one live
+   * `p4 opened` for just those paths — an out-of-band `p4 edit` since the last
+   * refresh must not be misreported as unopened. Fails open: a query that
+   * errors (spawn failure, path outside the client view) counts every path as
+   * opened, so the caller keeps the legacy unsplit behavior instead of blocking
+   * a revert on our bookkeeping.
+   */
+  async openedAmong(paths: readonly string[]): Promise<ReadonlySet<string>> {
+    if (paths.length === 0) return new Set()
+    const missed = paths.filter((p) => !this._openedPaths.has(norm(p)))
+    if (missed.length === 0) return new Set(paths)
+    const res = await this._p4
+      .execRecords(['opened', ...missed], INTERACTIVE_EXEC)
+      .catch((err: unknown) => {
+        this._log?.(`[perforce] opened precheck failed: ${String(err)}`)
+        return undefined
+      })
+    if (!res || this._disposed || res.result.exitCode !== 0) return new Set(paths)
+    const live = new Set(
+      parseOpened(res.records, this.root)
+        .map((f) => (f.clientFile ? norm(f.clientFile) : undefined))
+        .filter((p): p is string => p !== undefined),
+    )
+    const out = new Set<string>()
+    for (const p of paths) {
+      if (this._openedPaths.has(norm(p)) || live.has(norm(p))) out.add(p)
+    }
+    return out
+  }
+
+  /**
    * Create a new numbered changelist with `description` and move `paths` into it
    * in one step — the common "group these edits into a new changelist" intent,
    * instead of creating an empty changelist and moving files separately. Returns

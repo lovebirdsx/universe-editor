@@ -46,6 +46,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.btn.revert': '还原',
   'perforce.revert.confirm': '还原 “{0}”？本地更改将丢失。',
   'perforce.revert.confirmMany': '还原 {0} 个文件？本地更改将丢失。',
+  'perforce.revert.confirmPartial':
+    '还原 {0} 个已打开的文件？本地更改将丢失。其余 {1} 个未打开的文件将被跳过——请用「丢弃未收集的改动」处理。',
+  'perforce.revert.notOpened':
+    '“{0}” 未在 changelist 中打开，Revert 无事可做。要改为放弃其未收集的工作区改动吗？此操作不可撤销。',
+  'perforce.revert.notOpenedMany':
+    '{0} 个文件未在 changelist 中打开，Revert 无事可做。要改为放弃它们的未收集工作区改动吗？此操作不可撤销。',
+  'perforce.btn.discardUncollected': '丢弃未收集的改动',
   'perforce.btn.revertAll': '全部还原',
   'perforce.revertChangelist.confirm': '还原 {0} 中的所有文件？本地更改将丢失。',
   'perforce.btn.submit': '提交',
@@ -73,6 +80,12 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.deleteChangelist.confirm': '删除 changelist #{0}？其中已搁置的文件也会被删除。',
   'perforce.revertReconcile.confirm': '放弃 “{0}” 的工作区改动？此操作不可撤销。',
   'perforce.revertReconcile.confirmMany': '放弃 {0} 个文件的工作区改动？此操作不可撤销。',
+  'perforce.revertReconcile.confirmPartial':
+    '放弃 {0} 个未打开文件的工作区改动？此操作不可撤销。其余 {1} 个已打开的文件将被跳过——请用「还原」处理。',
+  'perforce.revertReconcile.allOpened':
+    '“{0}” 已在 changelist 中打开，丢弃未收集的改动无事可做。要改为还原吗？（其已签出的改动将丢失）',
+  'perforce.revertReconcile.allOpenedMany':
+    '{0} 个文件已在 changelist 中打开，丢弃未收集的改动无事可做。要改为还原吗？（其已签出的改动将丢失）',
   // resolve（解决冲突）
   'perforce.btn.acceptYours': '接受我的版本',
   'perforce.btn.acceptTheirs': '接受对方的版本',
