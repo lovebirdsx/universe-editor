@@ -3,8 +3,8 @@
  *
  *  Verifies ActiveRepoSyncContribution broadcasts the SCM view's selected repo
  *  to every provider host via `<providerId>.setActiveRepo`: the selected repo's
- *  owner gets its rootUri, every other provider gets undefined (hide), using
- *  the same selected-or-first fallback as ScmView / ScmViewToolbar.
+ *  owner gets its rootUri, every other provider gets an argument-less call
+ *  (hide), using the same selected-or-first fallback as ScmView / ScmViewToolbar.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -45,7 +45,9 @@ function makeFakeCommands(): { service: ICommandService; calls: Array<[string, u
   const calls: Array<[string, unknown[]]> = []
   const service = {
     executeCommand: (command: string, ...args: unknown[]) => {
-      calls.push([command, args])
+      // JSON round-trip so nested-array semantics show through: across the real
+      // RPC an `undefined` element arrives as null.
+      calls.push([command, JSON.parse(JSON.stringify(args)) as unknown[]])
       return Promise.resolve(undefined)
     },
   } as unknown as ICommandService
@@ -148,7 +150,7 @@ describe('ActiveRepoSyncContribution', () => {
     store.dispose()
   })
 
-  it('broadcasts undefined to every provider whose repo is not selected', () => {
+  it('broadcasts a no-argument call to every provider whose repo is not selected', () => {
     const store = new DisposableStore()
     store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
@@ -159,13 +161,39 @@ describe('ActiveRepoSyncContribution', () => {
     // git is the first repo → selected; perforce must be told it isn't.
     expect(cmd.calls).toEqual([
       ['git.setActiveRepo', ['/repo']],
-      ['perforce.setActiveRepo', [undefined]],
+      ['perforce.setActiveRepo', []],
     ])
 
     // Selecting the p4 repo flips both messages.
     scmViewState.setSelectedRepo('/depot')
-    expect(cmd.calls.at(-2)).toEqual(['git.setActiveRepo', [undefined]])
+    expect(cmd.calls.at(-2)).toEqual(['git.setActiveRepo', []])
     expect(cmd.calls.at(-1)).toEqual(['perforce.setActiveRepo', ['/depot']])
+    store.dispose()
+  })
+
+  it('re-pushes every provider after the model empties and refills', () => {
+    const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
+    store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
+    const gitSc = sc('/repo', 'git')
+    const perforceSc = sc('/depot', 'perforce')
+    const scm = makeFakeScm([gitSc, perforceSc])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    scmViewState.setSelectedRepo('/repo')
+    const initial = cmd.calls.length
+
+    // Host teardown empties the model; re-registering the same providers must
+    // push again — a fresh host's status bar starts visible, and a skipped
+    // re-push would leave both providers' entries showing at once.
+    scm.set([])
+    scm.set([gitSc, perforceSc])
+
+    expect(cmd.calls.slice(initial)).toEqual([
+      ['git.setActiveRepo', ['/repo']],
+      ['perforce.setActiveRepo', []],
+    ])
     store.dispose()
   })
 
@@ -181,7 +209,7 @@ describe('ActiveRepoSyncContribution', () => {
     // One git message (the selected repo), not one per repo.
     expect(cmd.calls).toEqual([
       ['git.setActiveRepo', ['/main']],
-      ['perforce.setActiveRepo', [undefined]],
+      ['perforce.setActiveRepo', []],
       ['git.setActiveRepo', ['/sub']],
     ])
     store.dispose()
@@ -197,9 +225,9 @@ describe('ActiveRepoSyncContribution', () => {
     store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
     expect(cmd.calls).toEqual([['git.setActiveRepo', ['/repo']]])
 
-    // The undefined (hide) push for the unselected provider retries too.
+    // The no-argument (hide) push for the unselected provider retries too.
     store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
-    expect(cmd.calls.at(-1)).toEqual(['perforce.setActiveRepo', [undefined]])
+    expect(cmd.calls.at(-1)).toEqual(['perforce.setActiveRepo', []])
     store.dispose()
   })
 })

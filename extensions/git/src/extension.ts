@@ -263,10 +263,13 @@ function registerGitCommands(
     // Point argument-less commands (command palette, keybindings, status bar) at
     // the repo the SCM view currently shows. Pushed by the renderer on selection.
     register('git.setActiveRepo', (...args: unknown[]) => {
-      const root = args[0] as string | undefined
-      // undefined — or a root this extension doesn't own (the selection is a p4
-      // client in a mixed workspace) — hides the status-bar pair.
-      if (root === undefined || !mgr.has(root)) {
+      // `== null` on purpose: the renderer→host forwarding crosses a nested args
+      // array, where a sandwiched undefined arrives as null (documented platform
+      // convention, proxyChannel.ts) — null must mean "no selection" like undefined.
+      const root = args[0] as string | null | undefined
+      // null/undefined — or a root this extension doesn't own (the selection is
+      // a p4 client in a mixed workspace) — hides the status-bar pair.
+      if (root == null || !mgr.has(root)) {
         statusBar.setVisible(false)
         return
       }
@@ -674,9 +677,10 @@ export function createGitCommandsForTest(
   mgr: RepositoryManager,
   graph: GitGraphTarget,
   env: GitEnv,
+  statusBar: GitStatusBarController = {} as GitStatusBarController,
 ): Map<string, (...args: unknown[]) => unknown> {
   const context = { subscriptions: [] as Disposable[] } as unknown as ExtensionContext
-  return registerGitCommands(context, env, mgr, graph, {} as GitStatusBarController)
+  return registerGitCommands(context, env, mgr, graph, statusBar)
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {

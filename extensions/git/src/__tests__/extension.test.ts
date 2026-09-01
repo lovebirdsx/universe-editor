@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Repository } from '../repository.js'
 import type { RepositoryManager } from '../repositoryManager.js'
+import type { GitStatusBarController } from '../gitStatusBar.js'
 import { createGitCommandsForTest, normalizeUriArg } from '../extension.js'
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +128,83 @@ describe('normalizeUriArg', () => {
     expect(normalizeUriArg(undefined)).toBeUndefined()
     expect(normalizeUriArg({ scheme: 'untitled', path: '/x' })).toBeUndefined()
     expect(normalizeUriArg('https://example.com/x')).toBeUndefined()
+  })
+})
+
+describe('git.setActiveRepo', () => {
+  /** A manager fake with the routing surface the setActiveRepo handler touches. */
+  function makeSetActiveManager(known: ReadonlySet<string>) {
+    const setActive = vi.fn()
+    const mgr = {
+      resolveRepo: vi.fn(() => undefined),
+      submodulesOf: vi.fn(() => []),
+      // Mirror the real RepositoryManager.has, which norm()s the key first —
+      // norm(null) throws. Without this the null case below would pass even
+      // against the pre-fix `root === undefined` guard.
+      has: (root: string) => {
+        if (root == null) throw new TypeError("Cannot read properties of null (reading 'replace')")
+        return known.has(root)
+      },
+      setActive,
+    } as unknown as RepositoryManager
+    return { mgr, setActive }
+  }
+
+  function makeStatusBar() {
+    const setVisible = vi.fn()
+    return { statusBar: { setVisible } as unknown as GitStatusBarController, setVisible }
+  }
+
+  function makeCommandsFor(mgr: RepositoryManager, statusBar: GitStatusBarController) {
+    mocks.registerCommand.mockImplementation(() => ({ dispose: () => undefined }))
+    return createGitCommandsForTest(
+      mgr,
+      { current: ROOT },
+      { root: ROOT, scanOpts: { maxDepth: 0, ignoredFolders: [] }, log: () => undefined },
+      statusBar,
+    )
+  }
+
+  it('hides the status bar when called without a root', () => {
+    const { mgr } = makeSetActiveManager(new Set([ROOT]))
+    const { statusBar, setVisible } = makeStatusBar()
+    const commands = makeCommandsFor(mgr, statusBar)
+
+    commands.get('git.setActiveRepo')?.(undefined)
+
+    expect(setVisible).toHaveBeenCalledWith(false)
+  })
+
+  it('treats null as no selection without throwing (RPC nested-args semantics)', () => {
+    const { mgr, setActive } = makeSetActiveManager(new Set([ROOT]))
+    const { statusBar, setVisible } = makeStatusBar()
+    const commands = makeCommandsFor(mgr, statusBar)
+
+    expect(() => commands.get('git.setActiveRepo')?.(null)).not.toThrow()
+    expect(setVisible).toHaveBeenCalledWith(false)
+    expect(setActive).not.toHaveBeenCalled()
+  })
+
+  it('hides the status bar for a root the manager does not own', () => {
+    const { mgr, setActive } = makeSetActiveManager(new Set([ROOT]))
+    const { statusBar, setVisible } = makeStatusBar()
+    const commands = makeCommandsFor(mgr, statusBar)
+
+    commands.get('git.setActiveRepo')?.(join(ROOT, 'p4client'))
+
+    expect(setVisible).toHaveBeenCalledWith(false)
+    expect(setActive).not.toHaveBeenCalled()
+  })
+
+  it('activates the root and shows the status bar for an owned root', () => {
+    const { mgr, setActive } = makeSetActiveManager(new Set([ROOT]))
+    const { statusBar, setVisible } = makeStatusBar()
+    const commands = makeCommandsFor(mgr, statusBar)
+
+    commands.get('git.setActiveRepo')?.(ROOT)
+
+    expect(setActive).toHaveBeenCalledWith(ROOT)
+    expect(setVisible).toHaveBeenCalledWith(true)
   })
 })
 

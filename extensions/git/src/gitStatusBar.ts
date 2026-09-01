@@ -7,9 +7,10 @@
  * `RepositoryManager.resolveRepo`.
  *
  * In a mixed workspace (git repos nested in a p4 client, say) the renderer
- * pushes `git.setActiveRepo(undefined)` when the selection moves to another
- * provider's repo; `setVisible(false)` hides the pair and keeps it hidden until
- * a git repo is selected again.
+ * pushes `git.setActiveRepo` without arguments (or with null, via the
+ * nested-args RPC convention) when the selection moves to another provider's
+ * repo; `setVisible(false)` hides the pair and keeps it hidden until a git
+ * repo is selected again.
  */
 import {
   window,

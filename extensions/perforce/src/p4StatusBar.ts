@@ -17,9 +17,10 @@
  * into at most one server round-trip per file per 15s.
  *
  * In a mixed workspace (a git repo nested in a p4 client, say) the renderer
- * pushes `perforce.setActiveRepo(undefined)` when the selection moves to
- * another provider's repo; `setVisible(false)` hides all three items and every
- * render short-circuits until a p4 client is selected again.
+ * pushes `perforce.setActiveRepo` without arguments (or with null, via the
+ * nested-args RPC convention) when the selection moves to another provider's
+ * repo; `setVisible(false)` hides all three items and every render
+ * short-circuits until a p4 client is selected again.
  */
 import {
   window,

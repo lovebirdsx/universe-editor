@@ -68,6 +68,27 @@ function groupChangelistId(arg: unknown): string | undefined {
   return id === undefined ? undefined : changelistIdFromGroupId(id)
 }
 
+/** The `perforce.setActiveRepo` handler, exported as a test seam. `root == null`
+ *  is on purpose: the renderer→host forwarding crosses a nested args array,
+ *  where a sandwiched undefined arrives as null (documented platform
+ *  convention, proxyChannel.ts) — null must mean "no selection" like undefined. */
+export function handleSetActiveRepo(
+  mgr: ClientManager,
+  statusBar: P4StatusBarController,
+  root: string | null | undefined,
+): void {
+  // null/undefined — or a root this extension doesn't own (the selection is a
+  // git repo in a mixed workspace) — hides the status-bar entries.
+  if (root == null || !mgr.has(root)) {
+    statusBar.setVisible(false)
+    return
+  }
+  // setActive before setVisible: setVisible(true) re-renders, so the new
+  // active client must already be in place or it would paint the old one first.
+  mgr.setActive(root)
+  statusBar.setVisible(true)
+}
+
 /** Resolve the file a file-scoped command acts on: the resource's path when
  *  invoked from the SCM view (`{ resourceUri }`) or the explorer (`{ resource }`
  *  as a `UriComponents`), else the active editor's file (command-palette /
@@ -976,19 +997,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the
     // renderer's ActiveRepoSyncContribution as `<providerId>.setActiveRepo`.
-    commands.registerCommand('perforce.setActiveRepo', (...args: unknown[]) => {
-      const root = args[0] as string | undefined
-      // undefined — or a root this extension doesn't own (the selection is a
-      // git repo in a mixed workspace) — hides the status-bar entries.
-      if (root === undefined || !mgr.has(root)) {
-        statusBar.setVisible(false)
-        return
-      }
-      // setActive before setVisible: setVisible(true) re-renders, so the new
-      // active client must already be in place or it would paint the old one first.
-      mgr.setActive(root)
-      statusBar.setVisible(true)
-    }),
+    commands.registerCommand('perforce.setActiveRepo', (...args: unknown[]) =>
+      handleSetActiveRepo(mgr, statusBar, args[0] as string | null | undefined),
+    ),
 
     // Switch the active workspace (client): list the user's clients, pick one,
     // and wire the freshly created client in. The old client stays registered
