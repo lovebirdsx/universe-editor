@@ -12,6 +12,13 @@
  *  synchronously, unknown paths are enqueued and return undefined, and a version
  *  observable bumps when a batch resolves (or the cache is invalidated) so the next
  *  render picks up the answer.
+ *
+ *  Folders fold that same cache upward: `getFolderHint` tints a directory while any
+ *  *discovered* descendant file still carries a hint. The aggregate is a lower bound
+ *  by design — paths that were never rendered were never queried, and LRU eviction
+ *  or a save can also take a colour away, so a folder's tint can change as the user
+ *  expands and scrolls. Accepted trade-off: the alternative is eager discovery,
+ *  i.e. exactly the whole-tree scan this service exists to avoid.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -32,7 +39,7 @@ import {
 import { dirtyDiffCommandId, type WorkingTreeChangeDto } from '@universe-editor/extensions-common'
 import { IScmService, resolveScmProviderId } from '../extensions/ScmService.js'
 import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
-import { IScmDecorationsService, scmPathKey } from './ScmDecorationsService.js'
+import { IScmDecorationsService, parentDir, scmPathKey } from './ScmDecorationsService.js'
 import { scmHostPath } from './scmHostPath.js'
 
 export interface IWorkingTreeHint {
@@ -42,12 +49,21 @@ export interface IWorkingTreeHint {
   readonly strikeThrough?: boolean
 }
 
+/** Folder-level hint: colour only — a directory shows no badge letter and no strike. */
+export type IWorkingTreeFolderHint = Omit<IWorkingTreeHint, 'letter'>
+
 export interface IScmWorkingTreeHintService {
   readonly _serviceBrand: undefined
   /** Bumps whenever a batch resolves or the cache is invalidated, so consumers re-render. */
   readonly version: IObservable<number>
   /** Cached hint; undefined while unknown (enqueued for a batch) or clean/off-host. */
   getHint(resource: URI): IWorkingTreeHint | undefined
+  /**
+   * Colour derived from the cached hints of known descendants, or undefined when
+   * none has been discovered. A lower bound: it can gain entries as the user
+   * expands/renders new paths and lose them to eviction or a save.
+   */
+  getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined
 }
 
 export const IScmWorkingTreeHintService = createDecorator<IScmWorkingTreeHintService>(
@@ -56,6 +72,10 @@ export const IScmWorkingTreeHintService = createDecorator<IScmWorkingTreeHintSer
 
 /** Explorer is virtualised: fast scrolling touches thousands of paths, so bound the cache. */
 export const CACHE_LIMIT = 4096
+
+/** Folding file hints into a folder: a delete (strikeThrough) outranks any other drift. */
+const FOLDER_HINT_WEIGHT_DELETE = 4
+const FOLDER_HINT_WEIGHT_CHANGE = 2
 
 export class ScmWorkingTreeHintService extends Disposable implements IScmWorkingTreeHintService {
   declare readonly _serviceBrand: undefined
@@ -85,6 +105,9 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
   /** Bumped on every invalidation so an in-flight flush can drop stale results. */
   private _generation = 0
+  /** Folder aggregates memoised against `_version`; rebuilt lazily when it moves. */
+  private _folderHints: Map<string, IWorkingTreeFolderHint> | undefined
+  private _folderHintsVersion = -1
   private readonly _logger: ILogger
 
   /** Debounce before a batch resolves; overridable in tests. */
@@ -164,6 +187,55 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     }
     this._enqueue(key, fsPath)
     return undefined
+  }
+
+  getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined {
+    const fsPath = this._hostPath(resource)
+    if (fsPath === undefined) return undefined
+    // Every content-changing path of `_cache` bumps `_version` (flush end, file
+    // events, invalidation, and LRU eviction inside `_writeHint` before that
+    // bump). `getHint`'s LRU touch only re-orders entries, which the deterministic
+    // tie-break in `_buildFolderHints` makes irrelevant — so the version is a
+    // sound memo generation for the folder fold.
+    const version = this._version.get()
+    if (this._folderHints === undefined || this._folderHintsVersion !== version) {
+      this._folderHints = this._buildFolderHints()
+      this._folderHintsVersion = version
+    }
+    return this._folderHints.get(scmPathKey(fsPath))
+  }
+
+  /**
+   * Propagate every non-null file hint up its ancestor directories. No provider
+   * root is known here, so propagation runs to the path top — harmless, since
+   * only rendered rows ever look a folder up. A delete outranks any other drift;
+   * ties break by the smaller source key so the colour is deterministic —
+   * `_cache` iterates in LRU order, and a `getHint` hit re-orders entries without
+   * bumping `_version`, so plain first-wins would let an unrelated rebuild flip
+   * a folder between two equal-weight descendants. The folder keeps only the colour.
+   */
+  private _buildFolderHints(): Map<string, IWorkingTreeFolderHint> {
+    const folders = new Map<string, IWorkingTreeFolderHint>()
+    const winners = new Map<string, { weight: number; source: string }>()
+    for (const [key, hint] of this._cache) {
+      if (hint === null) continue
+      const weight =
+        hint.strikeThrough === true ? FOLDER_HINT_WEIGHT_DELETE : FOLDER_HINT_WEIGHT_CHANGE
+      let dir = parentDir(key)
+      while (dir) {
+        const prev = winners.get(dir)
+        if (
+          prev === undefined ||
+          weight > prev.weight ||
+          (weight === prev.weight && key < prev.source)
+        ) {
+          winners.set(dir, { weight, source: key })
+          folders.set(dir, { color: hint.color })
+        }
+        dir = parentDir(dir)
+      }
+    }
+    return folders
   }
 
   /**

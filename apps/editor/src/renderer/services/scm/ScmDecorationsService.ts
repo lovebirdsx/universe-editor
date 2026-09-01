@@ -259,7 +259,8 @@ function ancestors(fileKey: string, root: string | undefined): string[] {
   return out
 }
 
-function parentDir(key: string): string {
+/** Parent directory of an {@link scmPathKey key}, '' once the path top is reached. */
+export function parentDir(key: string): string {
   const i = key.lastIndexOf('/')
   return i <= 0 ? '' : key.slice(0, i)
 }

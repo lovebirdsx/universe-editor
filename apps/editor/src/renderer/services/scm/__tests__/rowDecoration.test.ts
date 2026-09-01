@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import type { IScmDecoration } from '../ScmDecorationsService.js'
 import { IGNORED_RESOURCE_FOREGROUND } from '../ScmIgnoredResourcesService.js'
-import type { IWorkingTreeHint } from '../ScmWorkingTreeHintService.js'
+import type { IWorkingTreeFolderHint, IWorkingTreeHint } from '../ScmWorkingTreeHintService.js'
 import { resolveRowDecoration } from '../rowDecoration.js'
 
 describe('resolveRowDecoration', () => {
@@ -73,6 +73,11 @@ describe('resolveRowDecoration', () => {
       color: '#73c991',
       letter: 'A',
     })
+  })
+
+  it('shows only the colour for a folder hint — no letter badge', () => {
+    const hint: IWorkingTreeFolderHint = { color: '#73c991' }
+    expect(resolveRowDecoration(undefined, false, hint)).toStrictEqual({ color: '#73c991' })
   })
 
   it('returns an empty object (no keys) when there is nothing to show', () => {

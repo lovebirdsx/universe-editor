@@ -196,12 +196,14 @@ export function ExplorerView() {
       : scmDecorations?.getFile(entry.resource)
     // 无 SCM 状态装饰时，被 ignore 规则忽略的文件/文件夹变暗（VSCode 对标，git / p4 通用）。
     const ignored = deco === undefined && scmIgnoredResources?.isIgnored(entry.resource) === true
-    // 按需软信号：文件在磁盘上改了但 provider 还没发现它（p4 未收集的改动）。只问
-    // 文件行——按需模型对未展开的子树一无所知，给目录染色只会是个下界，展开一下就
-    // 变，来回闪烁比不显示更糟；目录仍由 getFolder 的祖先冒泡负责。
+    // 按需软信号：文件在磁盘上改了但 provider 还没发现它（p4 未收集的改动）。文件行
+    // 出 RC 徽标；文件夹行只要有已发现的 RC 后代就染色（无字母徽章）——那是已发现
+    // 改动的下界，未展开的子树查不到，展开/缓存逐出都可能让颜色增减（已接受的权衡）。
     const hint =
-      !entry.isDirectory && deco === undefined && !ignored
-        ? scmWorkingTreeHints?.getHint(entry.resource)
+      deco === undefined && !ignored
+        ? entry.isDirectory
+          ? scmWorkingTreeHints?.getFolderHint(entry.resource)
+          : scmWorkingTreeHints?.getHint(entry.resource)
         : undefined
     const row = resolveRowDecoration(deco, ignored, hint)
     // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。

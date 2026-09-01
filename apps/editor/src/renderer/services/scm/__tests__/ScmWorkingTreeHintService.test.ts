@@ -520,6 +520,150 @@ describe('ScmWorkingTreeHintService', () => {
     expect(exec).not.toHaveBeenCalled()
   })
 
+  describe('folder hints', () => {
+    it('propagates a file hint to its ancestor folders, colour only', async () => {
+      const executeCommand = vi
+        .fn()
+        .mockResolvedValue([dto(`${ROOT}/src/deep/a.ts`, { color: '#111111' })])
+      const { service, executeCommand: exec } = makeService(executeCommand)
+
+      expect(service.getHint(URI.file(`${ROOT}/src/deep/a.ts`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(service.getFolderHint(URI.file(`${ROOT}/src/deep`))).toEqual({ color: '#111111' })
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+      // No provider root is known here, so propagation runs to the path top —
+      // harmless, since only rendered rows look a folder up.
+      expect(service.getFolderHint(URI.file(ROOT))).toEqual({ color: '#111111' })
+      // A directory never shows a badge letter: the aggregate is colour only.
+      expect(service.getFolderHint(URI.file(`${ROOT}/src/deep`))).toStrictEqual({
+        color: '#111111',
+      })
+      expect(service.getFolderHint(URI.file(`${ROOT}/other`))).toBeUndefined()
+      expect(service.getFolderHint(URI.file(`${ROOT}/src/untouched/deeper`))).toBeUndefined()
+      expect(service.getFolderHint(URI.parse('markdown-preview://x/src'))).toBeUndefined()
+
+      // Folders never enqueue their own query — the fold is pure cache derivation.
+      expect(exec).toHaveBeenCalledTimes(1)
+    })
+
+    it('a delete descendant outranks an edit descendant for the folder colour', async () => {
+      const executeCommand = vi
+        .fn()
+        .mockResolvedValue([
+          dto(`${ROOT}/src/edited.ts`),
+          dto(`${ROOT}/src/deleted.ts`, { color: '#c74e39', strikeThrough: true }),
+        ])
+      const { service } = makeService(executeCommand)
+
+      service.getHint(URI.file(`${ROOT}/src/edited.ts`))
+      service.getHint(URI.file(`${ROOT}/src/deleted.ts`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#c74e39' })
+    })
+
+    it('ties keep the first descendant colour', async () => {
+      const executeCommand = vi
+        .fn()
+        .mockResolvedValue([
+          dto(`${ROOT}/src/aaa.ts`, { color: '#111111' }),
+          dto(`${ROOT}/src/bbb.ts`, { color: '#222222' }),
+        ])
+      const { service } = makeService(executeCommand)
+
+      service.getHint(URI.file(`${ROOT}/src/aaa.ts`))
+      service.getHint(URI.file(`${ROOT}/src/bbb.ts`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+    })
+
+    it('ties stay stable when LRU re-ordering precedes an unrelated rebuild', async () => {
+      const executeCommand = vi
+        .fn()
+        .mockResolvedValue([
+          dto(`${ROOT}/src/aaa.ts`, { color: '#111111' }),
+          dto(`${ROOT}/src/bbb.ts`, { color: '#222222' }),
+        ])
+      const { service, fileEvents } = makeService(executeCommand)
+
+      const aaa = URI.file(`${ROOT}/src/aaa.ts`)
+      service.getHint(aaa)
+      service.getHint(URI.file(`${ROOT}/src/bbb.ts`))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+
+      // A cache hit re-orders the LRU (aaa moves to the tail) without bumping
+      // `_version`; the next unrelated bump forces a rebuild on the new order.
+      service.getHint(aaa)
+      fileEvents.fire([{ type: 'modified', resource: URI.file(`${ROOT}/elsewhere.ts`) }])
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+    })
+
+    it('a folder of only clean files has no tint', async () => {
+      // Both files resolve clean (not in the provider's answer set) → null entries.
+      const executeCommand = vi.fn().mockResolvedValue([])
+      const { service } = makeService(executeCommand)
+
+      service.getHint(URI.file(`${ROOT}/src/a.ts`))
+      service.getHint(URI.file(`${ROOT}/src/b.ts`))
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(service.getHint(URI.file(`${ROOT}/src/a.ts`))).toBeUndefined()
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
+    })
+
+    it('evicting the last hinted descendant clears the folder tint', async () => {
+      const hinted = dto(`${ROOT}/00-target/a.ts`, { color: '#111111' })
+      const executeCommand = vi.fn().mockImplementation((...args: unknown[]) => {
+        const paths = args[1] as string[]
+        return Promise.resolve(paths.includes(hinted.path) ? [hinted] : [])
+      })
+      const { service } = makeService(executeCommand)
+
+      service.getHint(URI.file(hinted.path))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/00-target`))).toEqual({ color: '#111111' })
+
+      // Fill the cache past CACHE_LIMIT; the `00-` keys sort first and evict first.
+      for (let i = 0; i < CACHE_LIMIT; i++) {
+        service.getHint(URI.file(`${ROOT}/filler/f${String(i).padStart(5, '0')}.ts`))
+      }
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getHint(URI.file(hinted.path))).toBeUndefined()
+
+      // The eviction bump already rebuilt the fold: no file event needed.
+      expect(service.getFolderHint(URI.file(`${ROOT}/00-target`))).toBeUndefined()
+    })
+
+    it('a file event dropping the only hinted descendant clears the folder colour', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/src/a.ts`)])
+      const { service, fileEvents } = makeService(executeCommand)
+
+      const a = URI.file(`${ROOT}/src/a.ts`)
+      expect(service.getHint(a)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#e2c08d' })
+
+      fileEvents.fire([{ type: 'modified', resource: a }])
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
+    })
+
+    it('clears folder hints on a full invalidation', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/src/a.ts`)])
+      const { service, workspaceEvents } = makeService(executeCommand)
+
+      expect(service.getHint(URI.file(`${ROOT}/src/a.ts`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#e2c08d' })
+
+      workspaceEvents.fire(null)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
+    })
+  })
+
   describe('remote workspace', () => {
     function makeRemote(executeCommand: ReturnType<typeof vi.fn>): Harness {
       return makeService(
