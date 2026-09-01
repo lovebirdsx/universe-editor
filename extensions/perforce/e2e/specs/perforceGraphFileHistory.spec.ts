@@ -50,10 +50,11 @@ test.describe('@p1 perforce graph file history', () => {
   test('opens a file-scoped history tab via the command', async ({ page, workbench, perforce }) => {
     await openSeededWorkspace(page, workbench, perforce.openDir)
 
-    // `perforce.file()` is a forward-slashed host path; the Action2 revives the
-    // arg through URI.revive, so hand it the file scheme's leading-slash path.
+    // Explorer right-click passes a `UriComponents` (`{scheme:'file', path}`) whose
+    // `fsPath` getter is lost over RPC; `perforce.fileUri()` builds one, prepending
+    // the leading slash only when the host path lacks it (POSIX paths already do).
     await workbench.runCommand('perforce-graph.viewFileHistory', {
-      resource: { scheme: 'file', path: '/' + perforce.file('tracked.txt') },
+      resource: perforce.fileUri('tracked.txt'),
       isDirectory: false,
     })
 

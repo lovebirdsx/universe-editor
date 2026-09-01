@@ -36,9 +36,6 @@ const depotMatchedFile: SeedFile = { relPath: 'generated.txt', content: 'control
 // prefix and an exact path.
 const IGNORE_RULES = ['build', 'generated.txt'] as const
 
-/** `perforce.file()` hands back a forward-slashed absolute path (`C:/…` or `/tmp/…`). */
-const fileUri = (abs: string): string => `file:///${abs.replace(/^\/+/, '')}`
-
 test.describe('@p1 perforce ignored files', () => {
   test.use({
     p4Seeds: {
@@ -69,7 +66,7 @@ test.describe('@p1 perforce ignored files', () => {
     // isIgnored is a pull-style cache: the first read enqueues and answers
     // undefined, so poll until the batch resolves.
     const isIgnored = (relPath: string): Promise<boolean | undefined> =>
-      page.evaluate((uri) => window.__E2E__!.isResourceGitIgnored(uri), fileUri(perforce.file(relPath)))
+      page.evaluate((uri) => window.__E2E__!.isResourceGitIgnored(uri), perforce.fileUrl(relPath))
 
     await expect
       .poll(() => isIgnored(ignoredFile.relPath), {

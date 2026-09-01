@@ -100,7 +100,7 @@
 - [win32 spawnSync shell:true 吞 ^](win32-spawnsync-cmd-caret-escaping.md) — shell:true+args 触发 DEP0190 且裸 ^ 被吞；改显式 cmd /d /s /c + caret 转义（^^），中间参数包引号会字面进 argv 不可靠，空格无解须显式报错
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — 禁手写 fsPath 折叠/路径身份键；flat config 替换非合并
 - [SCM 门控须按主机作用域](scm-host-scoped-path-gating.md) — 线上契约是裸 host 路径；一律走 scmHostPath，禁裸 scheme==='file' 门控与裸 fsPath 查表（曾致远程 gitignore 变暗失效 + 跨主机误命中）
-- [UriComponents path 须带前导斜杠](uri-components-canonical-path-leading-slash.md) — 手写 'C:/...' 致 file://C:/ parse 不稳、URI 身份断裂；e2e 渲染日志在 userData/logs/window-N/console.log
+- [UriComponents path 须恰好一个前导斜杠](uri-components-canonical-path-leading-slash.md) — 少一个(Windows 'C:/...')致 parse 不稳；多一个(POSIX 无条件补 '/')致 '//tmp/...' 裸前缀比对失配，只在单一 OS 暴露像 flake
 - [Action2 async accessor 失效](action2-async-accessor-invalidation.md) — await 前同步取完所有 service；持久 accessor 测试假绿
 - [when 不提权，weight 定胜负](keybinding-when-not-priority-weight-wins.md) — scoped 快捷键压全局同键必须显式加 weight
 - [prompt 输入框不冒充全局 editorTextFocus](prompt-input-no-global-editortextfocus.md) — 嵌入式 Monaco 用专用 key；VSCode 导入层 User=1000 压过一切 scoped weight，"输入框失效别处正常"先查导入键位

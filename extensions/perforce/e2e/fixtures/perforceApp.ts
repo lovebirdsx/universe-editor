@@ -28,6 +28,7 @@ import {
   seedBaselineUserData,
   waitForProbe,
 } from '@universe-editor/e2e-harness'
+import type { UriComponents } from '@universe-editor/extension-api'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FAKE_P4 = resolve(__dirname, 'fake-p4.mjs')
@@ -92,6 +93,14 @@ export interface PerforceHarness {
   readonly openDir: string
   /** Absolute path of a file under the client root (forward-slashed). */
   file(relPath: string): string
+  /** `file()` as an explorer-right-click `UriComponents` (`{scheme:'file', path}`).
+   *  POSIX host paths already start with `/`, so only Windows's `C:/…` needs a
+   *  leading slash prepended. */
+  fileUri(relPath: string): UriComponents
+  /** `file()` as a `file:///` URL string, for commands whose arg is a uri string
+   *  rather than `UriComponents`. Raw concatenation, so seed relPaths must stay
+   *  ASCII — anything needing percent-encoding would drift from `fileUri`. */
+  fileUrl(relPath: string): string
 }
 
 interface FakeState {
@@ -356,11 +365,17 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       p4Seeds.cstat,
     )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
+    const abs = (relPath: string) => toPosix(join(workspaceDir, relPath))
     await use({
       clientRoot: workspaceDir,
       openDir,
       stateFile,
-      file: (relPath: string) => toPosix(join(workspaceDir, relPath)),
+      file: abs,
+      fileUri: (relPath: string) => {
+        const p = abs(relPath)
+        return { scheme: 'file', path: p.startsWith('/') ? p : '/' + p }
+      },
+      fileUrl: (relPath: string) => `file:///${abs(relPath).replace(/^\/+/, '')}`,
     })
   },
   electronApp: async ({ p4Workspace }, use) => {
@@ -390,8 +405,8 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
     await use(new WorkbenchPO(page))
   },
   perforce: async ({ p4Workspace }, use) => {
-    const { clientRoot, openDir, file } = p4Workspace
-    await use({ clientRoot, openDir, file })
+    const { clientRoot, openDir, file, fileUri, fileUrl } = p4Workspace
+    await use({ clientRoot, openDir, file, fileUri, fileUrl })
   },
 })
 

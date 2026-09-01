@@ -52,9 +52,12 @@ test.describe('@p1 perforce view commit', () => {
       })
       .toBeGreaterThan(0)
 
+    // `viewCommit` falls back to the graph's client when the uri resolves to
+    // none, so this spec cannot catch a malformed uri on its own — the strict
+    // guard for that is perforceGraphFileHistory.spec.ts (no fallback there).
     await workbench.runCommand(
       'perforce.viewCommit',
-      `file:///${perforce.file(trackedA.relPath)}`,
+      perforce.fileUrl(trackedA.relPath),
       SUBMITTED.changelist,
     )
 
