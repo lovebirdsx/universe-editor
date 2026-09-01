@@ -1017,8 +1017,8 @@ export interface E2EProbe {
   getVisibleScmGroupIds(): readonly string[]
   /**
    * Group ids whose resource list contains a file whose path ends with `suffix`
-   * (case-insensitive, separator-agnostic) — for asserting which changelist /
-   * reconcile group a file landed in after a drag-and-drop move.
+   * (case-insensitive, separator-agnostic) — for asserting which changelist
+   * group a file landed in after a drag-and-drop move.
    */
   getScmGroupIdsForResource(suffix: string): readonly string[]
   /**

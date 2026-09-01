@@ -109,7 +109,7 @@
 
 ## Perforce 用户注意
 
-聚焦对 Perforce 用户有一份额外收益：[收集改动（reconcile）](../perforce/daily-workflow.md#收集改动reconcile)的扫描范围会收窄到聚焦目录——超大 depot 上这是每次刷新的主要耗时来源。
+聚焦对 Perforce 用户有一份额外收益：[收集改动（reconcile）](../perforce/daily-workflow.md#收集改动reconcile)的 RC 徽标检查范围会收窄到聚焦目录——超大 depot 上只查你关心的那部分，扫描成本因此与聚焦范围、而非整个 depot 的规模挂钩。
 
 但 **SCM 操作本身不跟随聚焦**：已签出文件列表（`p4 opened`）、整个 changelist 的还原与搁置仍是全 client 范围，不会因为开了聚焦就变成部分操作。聚焦只影响"扫描"，不影响签出状态的管理。
 

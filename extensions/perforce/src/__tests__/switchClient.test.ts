@@ -1,9 +1,8 @@
 /**
  * The switch-workspace flow is a chain of "easy to miss one step" wirings: a
  * missed `setActive` leaves argument-less commands on the old client, a missed
- * scope application leaves the old focus scope, a missed restoreReconcile
- * leaves the group empty. These tests pin the whole sequence — in order — and
- * the quick-pick flow around it.
+ * scope application leaves the old focus scope. These tests pin the whole
+ * sequence — in order — and the quick-pick flow around it.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PerforceClient } from '../client.js'
@@ -36,7 +35,6 @@ function makeWiring(log: string[]): SwitchClientWiring {
       log.push(`applyOpenedByOthersOptions:${c.root}`)
     },
     startPolling: (c, s) => log.push(`startPolling:${c.root}:${s}`),
-    setAutoReconcile: (c, e) => log.push(`setAutoReconcile:${c.root}:${e}`),
     setSwarmAvailable: (c, a) => log.push(`setSwarmAvailable:${c.root}:${a}`),
   }
 }
@@ -46,7 +44,6 @@ describe('wireSwitchedClient', () => {
     const log: string[] = []
     const client = {
       root: 'X:/p4ws/branch_a',
-      restoreReconcile: vi.fn(() => log.push('restoreReconcile')),
       refresh: vi.fn(() => {
         log.push('refresh')
         return Promise.resolve()
@@ -55,7 +52,7 @@ describe('wireSwitchedClient', () => {
 
     await wireSwitchedClient(
       client,
-      { refreshIntervalSec: 120, autoReconcile: true, swarmAvailable: true },
+      { refreshIntervalSec: 120, swarmAvailable: true },
       makeWiring(log),
     )
 
@@ -64,17 +61,15 @@ describe('wireSwitchedClient', () => {
       'setActive:X:/p4ws/branch_a',
       'statusBarRefresh',
       'trackClient:X:/p4ws/branch_a',
-      // Scopes BEFORE restoreReconcile: the restored snapshot must be filtered
-      // through the new client's scope funnel.
+      // Scopes before the first refresh: the narrowed working-tree-hint scope
+      // must be in place before the client answers any hint query.
       'applyScopes:X:/p4ws/branch_a',
       // Background-check options BEFORE the first refresh: the refresh tail's
       // scheduled checks read them and would silently skip on defaults.
       'applySyncPreviewOptions:X:/p4ws/branch_a',
       'applyOpenedByOthersOptions:X:/p4ws/branch_a',
-      'restoreReconcile',
       'refresh',
       'startPolling:X:/p4ws/branch_a:120',
-      'setAutoReconcile:X:/p4ws/branch_a:true',
       'setSwarmAvailable:X:/p4ws/branch_a:true',
       // The second refresh applies the just-set swarm availability, mirroring
       // activate's setSwarmAvailable + refresh pair.

@@ -73,10 +73,9 @@ test.describe('@p1 perforce working-tree hint', () => {
     // (the first call only enqueues; the debounced batch resolves ~150ms later),
     // so poll instead of reading once. The rewrite re-triggers the file watcher —
     // which drops the cached hint and re-enqueues — in case the cold-start batch
-    // raced the host's command registration (the same arm-window hazard as
-    // perforceCollectChanges). Re-arm a bounded number of times: the hazard is a
-    // startup race, so if a handful of nudges haven't taken, more won't either
-    // and the remaining polls should just observe rather than keep rewriting.
+    // raced the host's command registration. Re-arm a bounded number of times: the
+    // hazard is a startup race, so if a handful of nudges haven't taken, more won't
+    // either and the remaining polls should just observe rather than keep rewriting.
     let rearms = 0
     await expect
       .poll(
@@ -100,5 +99,37 @@ test.describe('@p1 perforce working-tree hint', () => {
         message: 'the clean file should carry no working-tree hint',
       })
       .toBeNull()
+
+    // Repro for "opening a diff for a drifted-but-unopened file shows the edit as
+    // a full delete, and opening the source throws a `//` URI error". Root cause:
+    // `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX (`//client/rel`),
+    // not a local path — so readFile('//client/…') failed (empty modified side =
+    // looks deleted) and the `//` path broke the file: URI. The fake p4 still emits
+    // client syntax for those commands, so the RC hint above and the diff here
+    // together guard the client→local translation end-to-end.
+    await test.step('opening the diff for an RC-hinted file shows the real edit, not a phantom delete', async () => {
+      // The RC badge proves the on-demand reconcile scan found the drift and
+      // translated the client-syntax path back to the real local file. Now open
+      // the diff through the same capability command a drifted row drives, and
+      // assert the modified side is the real on-disk content — NOT empty (what a
+      // broken client→local translation produced, rendering as a full delete).
+      await workbench.runCommand('perforce.openChange', {
+        resourceUri: perforce.file(driftedFile.relPath),
+      })
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveDiffContent()?.modified), {
+          timeout: 30_000,
+          message: 'diff modified side should hold the working-tree content',
+        })
+        .toBe(DRIFTED_CONTENT)
+
+      const diff = await page.evaluate(() => window.__E2E__!.getActiveDiffContent())
+      // Left = have revision (the seeded content), right = the drift. If the
+      // clientFile were still client syntax, modified would be '' and this would
+      // look like a delete.
+      expect(diff?.original).toBe(driftedFile.content)
+      expect(diff?.modified).toBe(DRIFTED_CONTENT)
+    })
   })
 })

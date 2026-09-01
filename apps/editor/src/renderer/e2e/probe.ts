@@ -967,8 +967,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return out
     },
     // Group ids whose resource list contains a file whose path ends with `suffix`
-    // (case-insensitive, separator-agnostic). Lets specs assert which changelist /
-    // reconcile group a file landed in after a drag-and-drop move.
+    // (case-insensitive, separator-agnostic). Lets specs assert which changelist
+    // group a file landed in after a drag-and-drop move.
     getScmGroupIdsForResource: (suffix: string): readonly string[] => {
       const needle = normalizeScmPath(suffix)
       const out: string[] = []

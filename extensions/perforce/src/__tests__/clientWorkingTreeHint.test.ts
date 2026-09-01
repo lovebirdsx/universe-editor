@@ -1,16 +1,16 @@
 /**
  * Unit tests for `PerforceClient.checkWorkingTree` — the on-demand, read-only
- * working-tree hint channel behind the Explorer's per-row drift badge. It answers
- * "which of these visible rows have disk drift that isn't visible anywhere else"
- * without turning on reconcile discovery. This locks in:
- *  1. The two filter predicates the hint shares with the reconcile group
- *     (opened, out-of-scope) each drop their rows.
+ * working-tree hint channel behind the Explorer's per-row drift badge, and the
+ * only channel that surfaces uncollected drift. It answers "which of these
+ * visible rows have disk drift that isn't visible anywhere else" at a cost
+ * proportional to the rows asked about. This locks in:
+ *  1. The two filter predicates (opened, out-of-scope) each drop their rows.
  *  2. Empty input / everything-filtered return `[]` with zero p4 spawns.
  *  3. The returned DTOs are sourced from `toReconcileResourceState`, so a row's
- *     badge can never disagree with the resource group's (letter `RC`, colour,
+ *     badge can never disagree with the SCM decorations (letter `RC`, colour,
  *     tooltip, strike-through).
- *  4. The call is read-only: it never persists, never writes the group, never
- *     emits a change, and never flips the sticky reconcile-discovery switch.
+ *  4. The call is read-only: it never writes shared state (the opened set) and
+ *     never emits a change.
  */
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,15 +28,7 @@ const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
 const BRIDGE_KEY = '__universeExtensionHostBridge__'
-/** Capture every created resource group so the reconcile group's resourceStates
- *  can be inspected (and its identity asserted) after the client mutates them. */
-const createdGroups: { id: string; resourceStates: unknown[] }[] = []
 function installScmBridge(): void {
-  const group = (id: string) => {
-    const g = { id, label: '', hideWhenEmpty: undefined, resourceStates: [], dispose() {} }
-    createdGroups.push(g)
-    return g
-  }
   ;(globalThis as Record<string, unknown>)[BRIDGE_KEY] = {
     createSourceControl: () => ({
       id: 'perforce',
@@ -47,7 +39,13 @@ function installScmBridge(): void {
       commitTemplate: undefined,
       acceptInputCommand: undefined,
       acceptInputActions: undefined,
-      createResourceGroup: (id: string) => group(id),
+      createResourceGroup: (id: string) => ({
+        id,
+        label: '',
+        hideWhenEmpty: undefined,
+        resourceStates: [],
+        dispose() {},
+      }),
       dispose() {},
     }),
   }
@@ -57,33 +55,11 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 const { toReconcileResourceState } = await import('../p4Decoration.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
-type ReconcileStore = import('../client.js').ReconcileStore
-type ReconcilePersistState = import('../client.js').ReconcilePersistState
 type ReconcileFile = import('../reconcileParser.js').ReconcileFile
 
 const ROOT = process.platform === 'win32' ? 'X:\\p4ws\\main' : '/p4ws/main'
 const LOCAL = process.platform === 'win32' ? 'X:/p4ws/main' : '/p4ws/main'
 const CLIENT = 'testclient'
-
-/** In-memory ReconcileStore; records every save so persistence is observable. */
-function memStore(initial?: ReconcilePersistState): ReconcileStore & {
-  saves: ReconcilePersistState[]
-  current: ReconcilePersistState
-} {
-  let current: ReconcilePersistState = initial ?? { files: [] }
-  const saves: ReconcilePersistState[] = []
-  return {
-    saves,
-    get current() {
-      return current
-    },
-    load: () => current,
-    save: (s) => {
-      current = s
-      saves.push(s)
-    },
-  }
-}
 
 interface RespondOptions {
   /** Reconcile candidates returned by any `reconcile -n` scan (as client-syntax rows). */
@@ -173,14 +149,7 @@ function reconcileScans(): string[][] {
   return calls.filter((a) => subcommand(a) === 'reconcile' && a.includes('-n'))
 }
 
-function reconcileGroup(): { resourceStates: unknown[] } | undefined {
-  return createdGroups.find((g) => g.id === 'reconcile')
-}
-
-async function makeClient(
-  store: ReconcileStore,
-  opts: RespondOptions = {},
-): Promise<PerforceClientInstance> {
+async function makeClient(opts: RespondOptions = {}): Promise<PerforceClientInstance> {
   respond(opts)
   const client = await PerforceClient.create(
     ROOT,
@@ -188,7 +157,6 @@ async function makeClient(
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000 },
     undefined,
-    store,
   )
   expect(client).toBeDefined()
   return client!
@@ -199,7 +167,6 @@ describe('PerforceClient.checkWorkingTree', () => {
     installScmBridge()
     spawnMock.mockReset()
     calls.length = 0
-    createdGroups.length = 0
   })
   afterEach(() => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
@@ -208,8 +175,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   // --- ① the two shared predicates ------------------------------------------
 
   it('omits paths already opened (the changelist decoration is authoritative)', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
+    const client = await makeClient({
       opened: () => [{ rel: 'a.txt' }],
       reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }],
     })
@@ -228,8 +194,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   })
 
   it('omits paths outside the reconcile discovery scope', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
+    const client = await makeClient({
       reconcile: () => [{ rel: 'Client/in.txt' }, { rel: 'outside.txt' }],
     })
     client.setReconcileScope([`${LOCAL}/Client`])
@@ -245,8 +210,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   // --- ② zero p4 calls when there is nothing to scan -------------------------
 
   it('returns [] for empty input without spawning p4', async () => {
-    const store = memStore()
-    const client = await makeClient(store)
+    const client = await makeClient()
     calls.length = 0
 
     const result = await client.checkWorkingTree([])
@@ -256,8 +220,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   })
 
   it('returns [] and spawns nothing when every path is filtered out', async () => {
-    const store = memStore()
-    const client = await makeClient(store, { opened: () => [{ rel: 'a.txt' }] })
+    const client = await makeClient({ opened: () => [{ rel: 'a.txt' }] })
     await client.refresh()
     calls.length = 0
 
@@ -270,8 +233,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   // --- ③ badge consistency with the resource group ---------------------------
 
   it('sources its DTOs from toReconcileResourceState (letter RC, colour, tooltip, strike)', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
+    const client = await makeClient({
       reconcile: () => [
         { rel: 'a.txt', action: 'edit' },
         { rel: 'b.txt', action: 'delete' },
@@ -295,7 +257,7 @@ describe('PerforceClient.checkWorkingTree', () => {
       const state = toReconcileResourceState(file)
       expect(state).toBeDefined()
       // Every presentation field must come from the same source as the resource
-      // group, or the badge would jump between Clean Refresh and the hint path.
+      // row, so the badge letter/color/tooltip/strike-through all live in one place.
       expect(dto.color).toBe(state!.decorations?.color)
       expect(dto.tooltip).toBe(state!.decorations?.tooltip)
       expect(dto.strikeThrough).toBe(state!.decorations?.strikeThrough)
@@ -309,12 +271,9 @@ describe('PerforceClient.checkWorkingTree', () => {
 
   // --- ④ read-only -----------------------------------------------------------
 
-  it('is read-only: never saves, never writes the group, never emits a change', async () => {
-    const store = memStore()
-    const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
-    const saveSpy = vi.spyOn(store, 'save')
-    const group = reconcileGroup()!
-    const statesBefore = group.resourceStates
+  it('is read-only: never writes shared state, never emits a change', async () => {
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] })
+    const openedBefore = (client as unknown as { _openedPaths: ReadonlySet<string> })._openedPaths
     let changes = 0
     client.onDidChange(() => {
       changes++
@@ -323,40 +282,19 @@ describe('PerforceClient.checkWorkingTree', () => {
     const result = await client.checkWorkingTree([`${LOCAL}/a.txt`])
 
     expect(result).toHaveLength(1)
-    expect(saveSpy).not.toHaveBeenCalled()
-    expect(group.resourceStates).toBe(statesBefore)
-    expect(group.resourceStates).toHaveLength(0)
     expect(changes).toBe(0)
-  })
-
-  it('does not turn on sticky reconcile discovery', async () => {
-    const store = memStore()
-    const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
-
-    await client.checkWorkingTree([`${LOCAL}/a.txt`])
-
-    // Read the flag directly, on purpose. With an empty file list the two states
-    // are behaviourally identical (`_refreshReconcile` short-circuits to `none`
-    // either way), so a black-box assertion here could not fail — and a guard
-    // that cannot fail is worse than none. The risk being pinned is a later
-    // "while we're scanning anyway, let's remember it" edit turning this
-    // read-only channel into sticky discovery.
-    expect((client as unknown as { _reconcileActive: boolean })._reconcileActive).toBe(false)
-
-    // The observable half of the same guarantee: an ordinary refresh afterwards
-    // still does no reconcile work and leaves the group empty.
-    calls.length = 0
-    await client.refresh()
-    expect(client.status.reconcileCount).toBe(0)
-    expect(reconcileGroup()?.resourceStates).toHaveLength(0)
-    expect(reconcileScans()).toHaveLength(0)
+    // The channel is read-only by construction: it must not grow the opened set,
+    // or a later refresh would treat these scanned paths as already-tracked and
+    // the Explorer badge would silently disappear after one clean refresh.
+    expect((client as unknown as { _openedPaths: ReadonlySet<string> })._openedPaths).toBe(
+      openedBefore,
+    )
   })
 
   // --- extra: only echo back the paths actually asked about -------------------
 
   it('reports only the paths it was asked about (drops an unrequested rename half)', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
+    const client = await makeClient({
       reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }],
     })
 
@@ -370,8 +308,7 @@ describe('PerforceClient.checkWorkingTree', () => {
   it.runIf(process.platform === 'win32')(
     'echoes back the caller spelling when it differs in case from the client root',
     async () => {
-      const store = memStore()
-      const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
+      const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] })
 
       // The host spells the path the way the user opened the folder; the scan
       // spells it from the `p4 info` client root. On a case-insensitive

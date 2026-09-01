@@ -31,14 +31,12 @@ describe('perforce nls localize', () => {
 
   it('returns the English default when no locale is set', async () => {
     const localize = await loadLocalize(undefined)
-    expect(localize('perforce.group.reconcile', 'Changes to Reconcile')).toBe(
-      'Changes to Reconcile',
-    )
+    expect(localize('perforce.group.resolve', 'Needs Resolve')).toBe('Needs Resolve')
   })
 
   it('returns the Chinese surface when locale is zh-CN', async () => {
     const localize = await loadLocalize('zh-CN')
-    expect(localize('perforce.group.reconcile', 'Changes to Reconcile')).toBe('待收集的改动')
+    expect(localize('perforce.group.resolve', 'Needs Resolve')).toBe('需要合并')
   })
 
   // The Explorer's grey text can never be truncated (`.scmDescription` is

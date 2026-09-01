@@ -3,7 +3,7 @@
  * of files whose on-disk state has drifted from what the server knows: locally
  * edited but not opened, newly created, or deleted on disk. Pure — the p4Service
  * runs the command, this shapes the records, and the client turns them into the
- * "changes to reconcile" group.
+ * Explorer working-tree hints (`checkWorkingTree`).
  *
  * `p4 reconcile -n` reports each candidate with the same `depotFile` /
  * `clientFile` / `action` / `rev` fields as `p4 opened`, so the field-reading is
@@ -16,7 +16,7 @@
  * double-lists it.
  */
 import type { P4Action } from './changelist.js'
-import { clientToLocalPath, norm } from './pathUtil.js'
+import { clientToLocalPath } from './pathUtil.js'
 
 const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
   'edit',
@@ -85,72 +85,4 @@ export function parseReconcile(
     if (file) out.push(file)
   }
   return out
-}
-
-/**
- * Merge a fresh incremental `reconcile -n` result into the previously known
- * reconcile list, given the exact set of paths that were just re-scanned.
- *
- * The file watcher only re-scans the files that changed on disk; the rest of the
- * "changes to reconcile" group must be carried over untouched. So the merge is:
- * keep every prior entry whose path was NOT in this scan, then add whatever the
- * scan freshly reported. A file that was in `scanned` but is absent from `fresh`
- * has become clean (edited back / collected / deleted-then-restored) and drops
- * out. Dedupe by normalized `clientFile` so a path can't double-list.
- *
- * `scanned` and `fresh` carry absolute local paths (the same ones passed to
- * `p4 reconcile -n`); comparison is via {@link norm}. Pure — no p4 I/O.
- */
-export function mergeReconcile(
-  prev: readonly ReconcileFile[],
-  scanned: readonly string[],
-  fresh: readonly ReconcileFile[],
-): ReconcileFile[] {
-  const scannedKeys = new Set(scanned.map(norm))
-  const seen = new Set<string>()
-  const out: ReconcileFile[] = []
-  const push = (f: ReconcileFile): void => {
-    const key = f.clientFile ? norm(f.clientFile) : f.depotFile
-    if (seen.has(key)) return
-    seen.add(key)
-    out.push(f)
-  }
-  // Fresh results win for any re-scanned path, so add them first.
-  for (const f of fresh) push(f)
-  for (const f of prev) {
-    if (f.clientFile && scannedKeys.has(norm(f.clientFile))) continue
-    push(f)
-  }
-  return out
-}
-
-/**
- * Expand a reconcile target selection into the concrete local paths it covers.
- * A file target contributes itself; a directory target (folder row / group)
- * contributes every currently-listed reconcile file whose path sits under it.
- * Directories aren't real reconcile entries, so they're matched as a normalized
- * path prefix against the live list. Returns normalized local paths.
- */
-export function expandReconcileTargets(
-  targets: readonly string[],
-  files: readonly ReconcileFile[],
-): string[] {
-  const out = new Set<string>()
-  const listed = files
-    .map((f) => f.clientFile)
-    .filter((p): p is string => p !== undefined)
-    .map(norm)
-  const listedSet = new Set(listed)
-  for (const raw of targets) {
-    const key = norm(raw)
-    if (listedSet.has(key)) {
-      out.add(key)
-      continue
-    }
-    // Not an exact listed file → treat as a directory prefix and pull in every
-    // listed file under it.
-    const prefix = `${key}/`
-    for (const p of listed) if (p.startsWith(prefix)) out.add(p)
-  }
-  return [...out]
 }

@@ -141,8 +141,7 @@ describe('groupIconName', () => {
     expect(groupIconName('cl:100918')).toBe('changelist')
   })
 
-  it('distinguishes reconcile, resolve and shelved groups', () => {
-    expect(groupIconName('reconcile')).toBe('reconcile')
+  it('distinguishes resolve and shelved groups', () => {
     expect(groupIconName('resolve')).toBe('merge')
     expect(groupIconName('shelved:5')).toBe('archive')
   })
@@ -150,5 +149,6 @@ describe('groupIconName', () => {
   it('returns undefined for unrecognized group ids (no icon rendered)', () => {
     expect(groupIconName('workingTree')).toBeUndefined()
     expect(groupIconName('index')).toBeUndefined()
+    expect(groupIconName('reconcile')).toBeUndefined()
   })
 })

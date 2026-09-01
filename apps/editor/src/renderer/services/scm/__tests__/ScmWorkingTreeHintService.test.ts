@@ -242,8 +242,8 @@ describe('ScmWorkingTreeHintService', () => {
     expect(service.getHint(a)).toBeUndefined()
 
     // The file event re-enqueued it on its own: no second render was needed to
-    // notice the gap. (With `perforce.autoRefresh` off there is no later refresh
-    // to fall back on, so self-healing here is the only correction.)
+    // notice the gap. (A quiet workspace may see no later provider refresh at
+    // all, so self-healing here is the only correction.)
     executeCommand.mockResolvedValue([dto(`${ROOT}/a.ts`, { letter: 'FRESH' })])
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).toHaveBeenCalledTimes(2)

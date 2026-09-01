@@ -117,10 +117,10 @@ export function toShelvedResourceStates(
 }
 
 /**
- * A "changes to reconcile" row: a file whose working-tree state diverged from the
- * depot but that isn't opened yet (from `p4 reconcile -n`). The `RC` context
- * value lets menu `when` clauses target these rows (e.g. the inline "collect"
- * action) distinctly from opened rows. Clicking shows the have-vs-local diff for
+ * A file whose working-tree state diverged from the depot but that isn't opened
+ * yet (from `p4 reconcile -n`). The `RC` context value distinguishes it from
+ * opened rows. Feeds the Explorer working-tree hint (see
+ * {@link toWorkingTreeHint}); clicking shows the have-vs-local diff for
  * edit/delete, or just opens the file for add (no depot base yet).
  */
 export function toReconcileResourceState(
@@ -143,33 +143,21 @@ export function toReconcileResourceState(
   }
 }
 
-export function toReconcileResourceStates(
-  files: readonly ReconcileFile[],
-): SourceControlResourceState[] {
-  const out: SourceControlResourceState[] = []
-  for (const f of files) {
-    const state = toReconcileResourceState(f)
-    if (state) out.push(state)
-  }
-  return out
-}
-
 /**
- * The same reconcile row as an Explorer working-tree hint (the on-demand channel
- * the host queries per visible row, see `checkWorkingTree`).
+ * The same reconcile divergence as an Explorer working-tree hint (the on-demand
+ * channel the host queries per visible row, see `checkWorkingTree`).
  *
  * Derived from {@link toReconcileResourceState} rather than mapping the action a
- * second time: both channels can describe the same file — the group when
- * discovery has run, the hint before it has — and a file must not change badge
- * or colour depending on which one got there first.
+ * second time, so the badge letter / colour / strike-through all live in one
+ * place.
  */
 export function toWorkingTreeHint(file: ReconcileFile): WorkingTreeChangeDto | undefined {
   const state = toReconcileResourceState(file)
   if (!state) return undefined
   const deco = state.decorations
   // No colour means no hint. Substituting a default here would put a badge on the
-  // row in a colour the resource group would never use, which is exactly the
-  // before/after inconsistency deriving from one source is meant to prevent.
+  // row in a colour the reconcile row would never use, contradicting the
+  // single-source badge this hint derives from.
   if (deco?.color === undefined) return undefined
   return {
     path: state.resourceUri,

@@ -27,27 +27,21 @@ import type {
 } from '@universe-editor/extensions-common'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
-import {
-  PerforceClient,
-  type P4CacheOptions,
-  type ReconcileStore,
-  type ReconcilePersistState,
-} from './client.js'
+import { PerforceClient, type P4CacheOptions } from './client.js'
 import type { SyncPreviewFile } from './syncParser.js'
 import { P4CacheDisk } from './p4CacheDisk.js'
 import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
-import { WorkspaceWatchController } from './workspaceWatcher.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
-import { changelistIdFromGroupId, RECONCILE_GROUP_ID, type P4Action } from './changelist.js'
+import { changelistIdFromGroupId, type P4Action } from './changelist.js'
 import { statusFromAction, displayPath } from './p4GraphParser.js'
 import {
   openGraphFileDiff,
   viewCommit as viewChangelist,
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
-import { uriToFsPath, norm } from './pathUtil.js'
+import { uriToFsPath } from './pathUtil.js'
 import { buildScopeFilespec } from './p4Filespec.js'
 import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
@@ -346,22 +340,6 @@ async function pickBehindChangelist(
   return /^[@#]/.test(value) ? value : `@${value}`
 }
 
-/** Build a per-client {@link ReconcileStore} backed by the extension's
- *  `workspaceState` Memento (persisted per workspace by the host). Keyed by the
- *  normalized client root so multiple clients in one workspace don't clobber each
- *  other's reconcile snapshot. */
-function createReconcileStore(context: ExtensionContext, root: string): ReconcileStore {
-  const key = `perforce.reconcile.${norm(root)}`
-  return {
-    load(): ReconcilePersistState {
-      return context.workspaceState.get<ReconcilePersistState>(key, { files: [] })
-    },
-    save(state: ReconcilePersistState): void {
-      void context.workspaceState.update(key, state)
-    },
-  }
-}
-
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
@@ -416,14 +394,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
   try {
-    client = await PerforceClient.create(
-      root,
-      fallback,
-      gate,
-      cacheOptions,
-      log,
-      createReconcileStore(context, root),
-    )
+    client = await PerforceClient.create(root, fallback, gate, cacheOptions, log)
   } catch (err) {
     if (isMissingCli(err)) {
       console.info('[perforce] p4 CLI not found; perforce source control disabled')
@@ -489,15 +460,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(statusBar)
   statusBar.refresh()
 
-  // Reconcile discovery scope: the workspace focus folders when focus is enabled
-  // and non-empty, else the opened folder — so a huge depot is never walked as
-  // `//...` on every refresh. Recomputed when the focus config changes; SCM
-  // operations stay whole-client (only reconcile discovery is narrowed).
-  //
-  // Applied BEFORE restoreReconcile(): the restored snapshot goes through the
-  // same `_setReconcileFiles` funnel, so setting the scope first is what drops
-  // entries a since-narrowed focus no longer covers, instead of rendering them
-  // until the next refresh.
+  // Reconcile scope: the workspace focus folders when focus is enabled and
+  // non-empty, else the opened folder — so a huge depot is never walked as
+  // `//...`. This bounds the Explorer working-tree hint channel
+  // (`checkWorkingTree`); SCM operations stay whole-client.
   const applyReconcileScope = async (target: PerforceClient): Promise<void> => {
     const scopeCfg = workspace.getConfiguration('workspace')
     const enabled = await scopeCfg.get('focusEnabled', false)
@@ -577,37 +543,16 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
   )
 
-  // Restore the persisted "changes to reconcile" snapshot so it shows immediately
-  // on reload. This turns reconcile discovery on (sticky) but
-  // does NOT trigger a full `reconcile -n` walk — the first refresh below just
-  // re-filters the restored list against fresh `opened`, keeping startup cheap on
-  // large depots. Use Clean Refresh for an authoritative rescan.
-  client.restoreReconcile()
   void client.refresh()
 
   // Low-frequency background polling (opt-in; server has no FS watcher).
   const refreshInterval = await cfg.get('refreshInterval', 0)
   client.startPolling(refreshInterval)
 
-  // Reconcile discovery: when on, every refresh also scans the working tree for
-  // uncollected drift (edited / created / deleted on disk but not opened). Off by
-  // default — the scan is heavy on large workspaces; use Clean Refresh / Collect
-  // to enable it on demand.
-  if (await cfg.get('autoReconcile', false)) client.setAutoReconcile(true)
-
   // Auto-checkout on edit (opt-in). Disabled config → no subscription.
   const autoEdit = new AutoEditController(mgr, log)
   context.subscriptions.push(autoEdit)
   void autoEdit.start(cfg)
-
-  // Watch the opened workspace folder on disk (default on). A save from the
-  // editor or an edit from an external tool schedules a reconcile-discovery
-  // refresh, so drifted files surface in "changes to reconcile" without a manual
-  // Clean Refresh. We watch the opened folder (not the far larger p4 client root)
-  // — see WorkspaceWatchController.
-  const watcher = new WorkspaceWatchController(mgr, log)
-  context.subscriptions.push(watcher)
-  watcher.start(await cfg.get('autoRefresh', true), root)
 
   /**
    * Open the local-vs-have diff for a file a get refused, so the user can see
@@ -671,12 +616,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
   /**
    * Run a sync and report the outcome.
    *
-   * The watcher is paused for the duration: a sync writes every file it brings
-   * in, and letting those writes flow into incremental reconcile would turn a
-   * ten-thousand-file get into ten thousand queued `reconcile -n` paths — the
-   * user's experience being "it finished, then hung". `client.sync` refreshes
-   * afterwards regardless of outcome, so nothing is lost by dropping them.
-   *
    * The whole run sits inside a cancellable notification progress. `resolveTotal`
    * (when given) supplies the bar's denominator before p4 starts writing — a
    * scope-wide get is minutes of silence otherwise. Without a denominator the
@@ -692,97 +631,91 @@ export async function activate(context: ExtensionContext): Promise<void> {
       resolveTotal?: () => Promise<number | undefined>
     },
   ): Promise<void> => {
-    watcher.pause()
-    let res: Awaited<ReturnType<PerforceClient['sync']>>
-    try {
-      res = await window.withProgress(
-        {
-          location: ProgressLocation.Notification,
-          title:
-            spec === '#head'
-              ? localize('perforce.sync.progressTitleHead', 'Getting the latest revision')
-              : localize('perforce.sync.progressTitle', 'Getting {0}', { 0: spec }),
-          cancellable: true,
-        },
-        async (progress, token) => {
-          // The status-bar spinner already owns cancellation for p4 operations;
-          // routing the notification's button through the same path keeps one
-          // abort mechanism instead of two that can disagree.
-          const cancelSub = token.onCancellationRequested(() => target.cancelBusy())
-          try {
-            let total: number | undefined
-            if (options.resolveTotal) {
-              progress.report({
-                message: localize('perforce.sync.progressChecking', 'Checking what to update…'),
-              })
-              total = await options.resolveTotal()
-              if (token.isCancellationRequested) {
-                return {
-                  ok: false,
-                  cancelled: true,
-                  summary: undefined,
-                  refusedFiles: [],
-                  error: undefined,
-                }
-              }
-            }
-            // p4 prints one line per file; on a ten-thousand-file get, reporting
-            // each one is ten thousand RPC hops for pixels that can't move that
-            // fast. Coalesce to ~7fps and settle up at the end.
-            let reported = 0
-            let reportedAt = 0
-            const report = (done: number, file: string | undefined, force: boolean): void => {
-              const now = Date.now()
-              if (!force && now - reportedAt < PROGRESS_REPORT_INTERVAL_MS) return
-              reportedAt = now
-              // The denominator is a dry-run estimate of the files this get will
-              // touch or refuse; the numerator also counts the "opened and not
-              // being changed" lines the estimate leaves out. So `done` can
-              // overtake `total` — once it does the denominator is provably wrong
-              // and gets dropped rather than clamped, because "8 / 8" while files
-              // are still arriving reads as finished when it isn't.
-              const denominator =
-                total !== undefined && total > 0 && done <= total ? total : undefined
-              const message =
-                denominator !== undefined
-                  ? localize('perforce.sync.progressCount', '{0} / {1}{2}', {
-                      0: String(done),
-                      1: String(denominator),
-                      2: file ? ` · ${file}` : '',
-                    })
-                  : localize('perforce.sync.progressFiles', '{0} file(s){1}', {
-                      0: String(done),
-                      1: file ? ` · ${file}` : '',
-                    })
-              // No usable denominator → message only, which the host renders as an
-              // indeterminate bar.
-              if (denominator !== undefined) {
-                const increment = ((done - reported) / denominator) * 100
-                reported = done
-                progress.report({ message, increment })
-              } else {
-                progress.report({ message })
-              }
-            }
-            let lastDone = 0
-            const run = await target.sync(spec, {
-              ...(options.scope !== undefined ? { scope: options.scope } : {}),
-              ...(options.force !== undefined ? { force: options.force } : {}),
-              onProgress: ({ done, file }) => {
-                lastDone = done
-                report(done, file, false)
-              },
+    const res = await window.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title:
+          spec === '#head'
+            ? localize('perforce.sync.progressTitleHead', 'Getting the latest revision')
+            : localize('perforce.sync.progressTitle', 'Getting {0}', { 0: spec }),
+        cancellable: true,
+      },
+      async (progress, token) => {
+        // The status-bar spinner already owns cancellation for p4 operations;
+        // routing the notification's button through the same path keeps one
+        // abort mechanism instead of two that can disagree.
+        const cancelSub = token.onCancellationRequested(() => target.cancelBusy())
+        try {
+          let total: number | undefined
+          if (options.resolveTotal) {
+            progress.report({
+              message: localize('perforce.sync.progressChecking', 'Checking what to update…'),
             })
-            if (lastDone > reported) report(lastDone, undefined, true)
-            return run
-          } finally {
-            cancelSub.dispose()
+            total = await options.resolveTotal()
+            if (token.isCancellationRequested) {
+              return {
+                ok: false,
+                cancelled: true,
+                summary: undefined,
+                refusedFiles: [],
+                error: undefined,
+              }
+            }
           }
-        },
-      )
-    } finally {
-      watcher.resume()
-    }
+          // p4 prints one line per file; on a ten-thousand-file get, reporting
+          // each one is ten thousand RPC hops for pixels that can't move that
+          // fast. Coalesce to ~7fps and settle up at the end.
+          let reported = 0
+          let reportedAt = 0
+          const report = (done: number, file: string | undefined, force: boolean): void => {
+            const now = Date.now()
+            if (!force && now - reportedAt < PROGRESS_REPORT_INTERVAL_MS) return
+            reportedAt = now
+            // The denominator is a dry-run estimate of the files this get will
+            // touch or refuse; the numerator also counts the "opened and not
+            // being changed" lines the estimate leaves out. So `done` can
+            // overtake `total` — once it does the denominator is provably wrong
+            // and gets dropped rather than clamped, because "8 / 8" while files
+            // are still arriving reads as finished when it isn't.
+            const denominator =
+              total !== undefined && total > 0 && done <= total ? total : undefined
+            const message =
+              denominator !== undefined
+                ? localize('perforce.sync.progressCount', '{0} / {1}{2}', {
+                    0: String(done),
+                    1: String(denominator),
+                    2: file ? ` · ${file}` : '',
+                  })
+                : localize('perforce.sync.progressFiles', '{0} file(s){1}', {
+                    0: String(done),
+                    1: file ? ` · ${file}` : '',
+                  })
+            // No usable denominator → message only, which the host renders as an
+            // indeterminate bar.
+            if (denominator !== undefined) {
+              const increment = ((done - reported) / denominator) * 100
+              reported = done
+              progress.report({ message, increment })
+            } else {
+              progress.report({ message })
+            }
+          }
+          let lastDone = 0
+          const run = await target.sync(spec, {
+            ...(options.scope !== undefined ? { scope: options.scope } : {}),
+            ...(options.force !== undefined ? { force: options.force } : {}),
+            onProgress: ({ done, file }) => {
+              lastDone = done
+              report(done, file, false)
+            },
+          })
+          if (lastDone > reported) report(lastDone, undefined, true)
+          return run
+        } finally {
+          cancelSub.dispose()
+        }
+      },
+    )
     if (res.cancelled) return
     // Collect exactly what this get was refused on. Falling back to a clean
     // refresh would only *discover* the drift and leave the files still
@@ -948,14 +881,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
    */
   const wireClient = async (newClient: PerforceClient): Promise<void> => {
     const refreshInterval = await cfg.get('refreshInterval', 0)
-    const autoReconcile = await cfg.get('autoReconcile', false)
     const swarmOn = await cfg.get('swarm.enabled', true)
     const swarmUrlOn = ((await cfg.get('swarm.url', '')) as string).trim()
     await wireSwitchedClient(
       newClient,
       {
         refreshIntervalSec: refreshInterval,
-        autoReconcile,
         swarmAvailable: Boolean(swarmOn) && swarmUrlOn.length > 0,
       },
       {
@@ -969,7 +900,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
         applySyncPreviewOptions,
         applyOpenedByOthersOptions,
         startPolling: (c, seconds) => c.startPolling(seconds),
-        setAutoReconcile: (c, enabled) => c.setAutoReconcile(enabled),
         setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
       },
     )
@@ -1003,37 +933,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
             gate,
             cacheOptions,
             log,
-            createReconcileStore(context, entry.clientRoot),
           ),
         wire: wireClient,
       })
     }),
 
     commands.registerCommand('perforce.refresh', (arg) => mgr.resolveClient(arg)?.refresh()),
-    // Clean refresh additionally runs the `reconcile -n` discovery pass so the
-    // "changes to reconcile" group reflects working-tree drift (files edited /
-    // created / deleted on disk but not opened yet).
-    commands.registerCommand('perforce.cleanRefresh', (arg) =>
-      mgr.resolveClient(arg)?.refresh({ reconcile: true }),
-    ),
 
-    // Collect (reconcile) a file's working-tree change into open state. From an
-    // SCM "changes to reconcile" row: `{ resourceUri }`; from explorer/editor:
-    // the active file. A directory target (explorer right-click on a folder)
-    // recurses via p4's `<dir>/...` syntax so the whole subtree is collected.
-    // Enables discovery so the group keeps tracking drift.
+    // Collect (reconcile) a file's working-tree change into open state. From
+    // explorer/editor: the active file; a directory target (explorer right-click
+    // on a folder) recurses via p4's `<dir>/...` syntax so the whole subtree is
+    // collected.
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
       const path = await resolveTargetPath(args[0])
       if (!path) return
       const isDirectory = (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true
       const target = isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
       await mgr.resolveClient({ resourceUri: path })?.reconcile([target])
-    }),
-
-    // Collect every discovered reconcile candidate at once (group title action).
-    commands.registerCommand('perforce.reconcileAll', async (arg) => {
-      const target = mgr.resolveClient(arg) ?? mgr.active
-      await target?.reconcileAll()
     }),
 
     // --- Sync (get revision) ------------------------------------------------
@@ -1397,8 +1313,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     // Move file(s) / folder / whole changelist out of their changelist without
     // touching the working tree (`p4 revert -k`): they leave the changelist and
-    // reappear under "Changes to Reconcile". From a group header (moves the whole
-    // changelist), a folder subtree, or a file selection.
+    // become uncollected working-tree drift again. From a group header (moves the
+    // whole changelist), a folder subtree, or a file selection.
     commands.registerCommand('perforce.moveToReconcile', async (...args: unknown[]) => {
       const arg = args[0]
       const groupId = groupChangelistId(arg)
@@ -1521,18 +1437,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
       await target.reopen(choice.id, paths)
     }),
 
-    // Drag-and-drop target: move dropped files directly into the group they were
-    // dropped on — no quick-pick. Bidirectional between changelists and the
-    // "changes to reconcile" group:
-    //  - onto a changelist (default / numbered): already-opened files are moved
-    //    with `reopen -c`; not-yet-opened reconcile files are collected straight
-    //    into it with `reconcile -a -e -d -c`.
-    //  - onto the reconcile group: opened files are moved out with `revert -k`
-    //    (reconcile rows dropped there are already uncollected — a no-op).
-    // Registered at runtime (not in package.json's `commands`) so the SCM host can
-    // probe it via CommandsRegistry to decide a group accepts drops, without a menu
-    // declaration shadowing this handler. args: (groupArg with scmResourceGroupId,
-    // selection).
+    // Drag-and-drop target: move dropped files directly into the changelist group
+    // they were dropped on — no quick-pick. Only the default or a numbered pending
+    // changelist is a valid target (a shelved-files group id also survives
+    // `changelistIdFromGroupId` as a bare number, so reject it by raw id first).
+    // Already-opened files are reopened into the target; not-yet-opened reconcile
+    // files are collected straight into it (`reconcile -a -e -d -c`). Registered at
+    // runtime (not in package.json's `commands`) so the SCM host can probe it via
+    // CommandsRegistry to decide a group accepts drops, without a menu declaration
+    // shadowing this handler. args: (groupArg with scmResourceGroupId, selection).
     commands.registerCommand('perforce.reopenTo', async (...args: unknown[]) => {
       const groupId = (args[0] as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
       const paths = selectionPaths(args[1])
@@ -1540,22 +1453,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const target = mgr.resolveClient(args[0]) ?? mgr.resolveClient({ resourceUri: paths[0]! })
       if (!target) return
 
-      // Dropped onto the reconcile group → move the opened ones out (`revert -k`);
-      // paths already uncollected are skipped (nothing to move out).
-      if (groupId === RECONCILE_GROUP_ID) {
-        const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
-        if (opened.length > 0) await target.moveToReconcile(opened)
-        return
-      }
-
-      // Otherwise a changelist target: only the default or a numbered pending
-      // changelist is valid. A shelved-files group id also survives
-      // `changelistIdFromGroupId` as a bare number, so reject it by raw id first.
       if (groupId.startsWith('shelved:')) return
       const changelist = changelistIdFromGroupId(groupId)
       if (changelist !== 'default' && !/^\d+$/.test(changelist)) return
-      // Split by open state: opened files are reopened into the target; not-yet-
-      // opened reconcile files are collected straight into it.
       const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
       const uncollected = paths.filter((p) => target.changelistOf(p) === undefined)
       if (uncollected.length > 0) await target.reconcileInto(changelist, uncollected)

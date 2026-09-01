@@ -12,7 +12,7 @@
 
 ## 冲突解决（resolve）
 
-当仓库里有了比你 have 版本更新的改动，[拉取](./sync-and-status.md)或[取出搁置](./changelists-and-shelving.md#取出搁置unshelve)时可能需要 **resolve**。待解决的文件会聚到一个置顶的 **需要合并** 组里（紧挨「待收集的改动」之下；没有需要合并的文件时不显示）。
+当仓库里有了比你 have 版本更新的改动，[拉取](./sync-and-status.md)或[取出搁置](./changelists-and-shelving.md#取出搁置unshelve)时可能需要 **resolve**。待解决的文件会聚到一个置顶的 **需要合并** 组里（没有需要合并的文件时不显示）。
 
 三种解决方式，都在该组文件行的行内按钮 / 右键菜单上：
 
@@ -45,9 +45,7 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.user` | 兜底 `P4USER` | 空 |
 | `perforce.client` | 兜底 `P4CLIENT` | 空 |
 | `perforce.autoEdit` | 编辑未签出文件时自动 `p4 edit` | 关 |
-| `perforce.autoReconcile` | 每次刷新时扫描[待收集的改动](./daily-workflow.md#收集改动reconcile)（大工作区可能较慢） | 关 |
-| `perforce.autoRefresh` | 监视工作区磁盘，文件变化时自动刷新并扫描待收集改动（去抖） | 开 |
-| `perforce.reconcileHint.enabled` | 在资源管理器中标记[待收集的改动](./daily-workflow.md#收集改动reconcile)（`RC` 徽标）。只检查当前显示在屏幕上的行，开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录 | 开 |
+| `perforce.reconcileHint.enabled` | 在资源管理器中标记磁盘上改过但未签出的文件（`RC` 徽标），见[收集改动](./daily-workflow.md#收集改动reconcile)。只检查当前显示在屏幕上的行，开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录 | 开 |
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
 | `perforce.syncPreview.autoCheck` | 后台落后检查：灰字 `↓` + 状态栏计数（超大型 depot 建议关闭，见[性能与配置](./sync-and-status.md#性能与配置)） | 开 |
 | `perforce.syncPreview.intervalSec` | 两次落后检查的最小间隔秒数（最小 30） | 300 |
@@ -75,8 +73,8 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 
 - **面板不出现**：确认 `p4` 在 `PATH` 中，且该文件夹在某个 Perforce 客户端根目录下（`p4 info` 能报出 client root）。
 - **提示未登录 / 会话过期**：用面板 ⋯ 菜单的**登录**重新登录。
-- **看不到最新服务器状态**：手动**刷新**；默认开启的文件监视会在磁盘改动时自动刷新（`perforce.autoRefresh`），也可开启 `perforce.refreshInterval` 轮询。
-- **改了文件但面板里没有**：默认的文件监视会把未签出改动收进[待收集的改动](./daily-workflow.md#收集改动reconcile)；若关掉了 `perforce.autoRefresh`，用**刷新（清理）**或[收集改动](./daily-workflow.md#收集改动reconcile)手动收进来。
+- **看不到最新服务器状态**：手动**刷新**，或开启 `perforce.refreshInterval` 轮询。
+- **改了文件但面板里没有**：面板默认只显示**已签出**的文件；未签出的改动在资源管理器以 RC 徽标提示（见[收集改动](./daily-workflow.md#收集改动reconcile)）。想把它收进来，在资源管理器右键 **收集改动** 即可。
 - **想看底层命令**：在面板标题栏 ⋯ 菜单选 **显示输出**，打开 **Perforce 输出**底栏看完整日志。
 
 更多通用问题见[常见问题](../reference/faq.md)与[疑难排查](../reference/troubleshooting.md)。

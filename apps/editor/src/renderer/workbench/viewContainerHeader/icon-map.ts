@@ -90,7 +90,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'arrow-swap': ArrowLeftRight,
   // SCM resource-group header icons (by group kind).
   changelist: ListChecks,
-  reconcile: ListPlus,
   pull: ArrowDown,
   push: ArrowUp,
   sync: RefreshCw,

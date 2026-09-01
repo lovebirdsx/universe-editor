@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  expandReconcileTargets,
-  mergeReconcile,
-  parseReconcile,
-  parseReconcileRecord,
-} from '../reconcileParser.js'
-import type { ReconcileFile } from '../reconcileParser.js'
+import { parseReconcile, parseReconcileRecord } from '../reconcileParser.js'
 
 describe('parseReconcileRecord', () => {
   it('maps a locally edited (unopened) file to edit', () => {
@@ -91,76 +85,5 @@ describe('parseReconcile', () => {
 
   it('returns an empty list for empty output', () => {
     expect(parseReconcile([])).toEqual([])
-  })
-})
-
-describe('mergeReconcile', () => {
-  const edit = (p: string): ReconcileFile => ({
-    depotFile: `//depot/${p}`,
-    clientFile: `D:/work/${p}`,
-    action: 'edit',
-    rev: '1',
-  })
-
-  it('carries over prior entries whose path was not re-scanned', () => {
-    const prev = [edit('a.txt'), edit('b.txt')]
-    const merged = mergeReconcile(prev, ['D:/work/a.txt'], [edit('a.txt')])
-    expect(merged.map((f) => f.clientFile)).toEqual(['D:/work/a.txt', 'D:/work/b.txt'])
-  })
-
-  it('drops a re-scanned path that came back clean (absent from fresh)', () => {
-    const prev = [edit('a.txt'), edit('b.txt')]
-    const merged = mergeReconcile(prev, ['D:/work/a.txt'], [])
-    expect(merged.map((f) => f.clientFile)).toEqual(['D:/work/b.txt'])
-  })
-
-  it('adds a freshly discovered path not seen before', () => {
-    const merged = mergeReconcile([edit('a.txt')], ['D:/work/c.txt'], [edit('c.txt')])
-    expect(merged.map((f) => f.clientFile).sort()).toEqual(['D:/work/a.txt', 'D:/work/c.txt'])
-  })
-
-  it('dedupes by normalized clientFile, fresh winning over prior', () => {
-    const prevAdd: ReconcileFile = {
-      depotFile: '//depot/a.txt',
-      clientFile: 'D:/work/a.txt',
-      action: 'add',
-      rev: undefined,
-    }
-    const merged = mergeReconcile([prevAdd], ['d:/WORK/a.txt'], [edit('a.txt')])
-    expect(merged).toHaveLength(1)
-    expect(merged[0]?.action).toBe('edit')
-  })
-})
-
-describe('expandReconcileTargets', () => {
-  const edit = (p: string): ReconcileFile => ({
-    depotFile: `//depot/${p}`,
-    clientFile: `D:/work/${p}`,
-    action: 'edit',
-    rev: '1',
-  })
-
-  it('returns the file itself for an exact listed target', () => {
-    const files = [edit('a.txt'), edit('sub/b.txt')]
-    expect(expandReconcileTargets(['D:/work/a.txt'], files)).toEqual(['d:/work/a.txt'])
-  })
-
-  it('expands a directory target into every listed file under it', () => {
-    const files = [edit('sub/b.txt'), edit('sub/deep/c.txt'), edit('other.txt')]
-    expect(expandReconcileTargets(['D:/work/sub'], files).sort()).toEqual([
-      'd:/work/sub/b.txt',
-      'd:/work/sub/deep/c.txt',
-    ])
-  })
-
-  it('dedupes overlapping file + directory targets', () => {
-    const files = [edit('sub/b.txt')]
-    expect(expandReconcileTargets(['D:/work/sub', 'D:/work/sub/b.txt'], files)).toEqual([
-      'd:/work/sub/b.txt',
-    ])
-  })
-
-  it('yields nothing for a directory with no listed files under it', () => {
-    expect(expandReconcileTargets(['D:/work/empty'], [edit('a.txt')])).toEqual([])
   })
 })

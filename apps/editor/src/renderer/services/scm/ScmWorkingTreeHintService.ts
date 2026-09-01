@@ -123,10 +123,10 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
     // The decorations snapshot is recomputed on every provider refresh (a new
     // resourceStates push), which is exactly when a hint's answer can change with
-    // no matching file-system event (e.g. a p4 Clean Refresh moving files in or
-    // out of the reconcile group). Revalidate — not invalidate — so visible rows
-    // keep their old hint instead of flickering for the ~150ms round-trip; a
-    // result that matches the old value is not bumped.
+    // no matching file-system event (e.g. a p4 collect moving a file into a
+    // changelist group). Revalidate — not invalidate — so visible rows keep their
+    // old hint instead of flickering for the ~150ms round-trip; a result that
+    // matches the old value is not bumped.
     let firstDecorations = true
     this._register(
       autorun((reader) => {
@@ -203,7 +203,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // longer exists on disk. Drop it on arrival and ask again — otherwise the
       // round-trip lands *after* this event and installs the very hint the event
       // was supposed to correct, with nothing left to fix it until the next
-      // provider refresh (and with `perforce.autoRefresh` off, not even that).
+      // provider refresh (which a quiet workspace may never see).
       if (this._inFlight.delete(key)) {
         this._pending.set(key, fsPath)
         this._scheduleFlush()

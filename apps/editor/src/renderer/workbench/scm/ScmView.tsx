@@ -139,7 +139,6 @@ function reopenToCommandId(providerId: string): string {
  * SCM logic — and returns undefined for unrecognized ids (no icon rendered).
  */
 export function groupIconName(groupId: string): string | undefined {
-  if (groupId === 'reconcile') return 'reconcile'
   if (groupId === 'resolve') return 'merge'
   if (groupId.startsWith('shelved:')) return 'archive'
   // A pending changelist: the default one or a numbered `cl:<n>`.

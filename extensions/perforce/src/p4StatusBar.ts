@@ -94,8 +94,7 @@ export class P4StatusBarController {
       this._item.hide()
       return
     }
-    const { clientName, connection, openedCount, reconcileCount, busy, busyCancellable } =
-      client.status
+    const { clientName, connection, openedCount, busy, busyCancellable } = client.status
     if (busy) {
       // A long-running p4 operation is in flight — show a spinner + its label so
       // the user sees the client isn't stalled (mirrors git's syncing indicator).
@@ -123,23 +122,14 @@ export class P4StatusBarController {
     } else if (connection === 'not-logged-in') {
       this._item.text = `$(server) ${clientName} (${localize('perforce.status.notLoggedIn', 'not logged in')})`
     } else {
-      // Connected: client name + open-file count, and the uncollected count when
-      // reconcile discovery has surfaced any (mirrors git's ahead/behind chips).
-      const counts =
-        reconcileCount > 0 ? ` ${openedCount} $(edit) ${reconcileCount} $(diff)` : ` ${openedCount}`
-      this._item.text = `$(server) ${clientName}${counts}`
+      this._item.text = `$(server) ${clientName} ${openedCount}`
     }
-    // The counts are glyphs in the label, so spell them out here — plus the graph
-    // is what a click opens, which the label alone doesn't say.
-    this._item.tooltip = `${localize(
-      'perforce.status.tooltip',
-      'Perforce: {0} · {1} opened, {2} to collect',
-      {
-        0: clientName,
-        1: String(openedCount),
-        2: String(reconcileCount),
-      },
-    )}\n${localize('perforce.status.openGraph', 'Open Perforce Graph')}`
+    // Spell the count out in words — plus the graph is what a click opens, which
+    // the label alone doesn't say.
+    this._item.tooltip = `${localize('perforce.status.tooltip', 'Perforce: {0} · {1} opened', {
+      0: clientName,
+      1: String(openedCount),
+    })}\n${localize('perforce.status.openGraph', 'Open Perforce Graph')}`
     this._item.show()
   }
 

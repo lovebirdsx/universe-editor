@@ -54,7 +54,6 @@ function makeClient(overrides: Record<string, unknown> = {}): unknown {
       clientName: 'client-1',
       connection: 'connected',
       openedCount: 2,
-      reconcileCount: 0,
       syncBehindCount: undefined,
       busy: undefined,
       busyCancellable: false,

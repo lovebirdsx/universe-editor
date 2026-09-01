@@ -6,15 +6,17 @@
  *
  *  Journey 1 (numbered changelists): a freshly created numbered changelist is
  *  empty and used to vanish from the SCM view (no drop target); files must move
- *  default → cl, cl → reconcile (revert -k keeps the disk edit), reconcile → cl
- *  (reconcile -c collect, files there aren't opened so `reopen` won't do); and
- *  deleting an (empty) changelist must remove its group. The delete target is a
- *  second seeded changelist that stays untouched by the move steps.
+ *  default → cl, and an unopened (revert -k'd) file → cl via the drop command's
+ *  reconcile-into branch (`reconcile -c` collect, an unopened file isn't
+ *  `reopen`-able); and deleting an (empty) changelist must remove its group. The
+ *  delete target is a second seeded changelist that stays untouched by the move
+ *  steps.
  *
  *  Journey 2 (default changelist rows): the move/reopen commands lived in
  *  non-inline menu groups and the file row had no context menu, so they had no
  *  UI entry point — right-click must surface them; and a group-scoped
- *  moveToReconcile must land the file in Changes to Reconcile.
+ *  moveToReconcile must leave the file in no changelist group (revert -k keeps
+ *  the disk edit as uncollected drift).
  *
  *  Backed by the fake p4 (fixtures/fake-p4.mjs), which models numbered
  *  changelists (change -i / changes / reopen). See fixtures/perforceApp.ts.
@@ -56,7 +58,7 @@ test.describe('@p1 perforce changelist', () => {
       },
     })
 
-    test('stay visible when empty and route file moves between default, changelist and reconcile @regression', async ({
+    test('stay visible when empty and route file moves between default and changelist @regression', async ({
       page,
       workbench,
       perforce,
@@ -106,33 +108,26 @@ test.describe('@p1 perforce changelist', () => {
           .toEqual(['cl:1000'])
       })
 
-      await test.step('dropping a changelist file onto the reconcile group moves it out', async () => {
-        // Diverge the file on disk first: `revert -k` keeps the edited content, so
-        // it must reappear as an uncollected (reconcile) change, not vanish.
+      await test.step('dropping an unopened file onto a changelist collects it there', async () => {
+        // Diverge the file on disk, then move it out of cl:1000 without touching
+        // the working tree (`revert -k`): it leaves the changelist and becomes
+        // uncollected drift (changelistOf === undefined).
         writeFileSync(perforce.file(tracked), 'locally edited content\n', 'utf8')
-        await workbench.runCommand('perforce.reopenTo', { scmResourceGroupId: 'reconcile' }, [
-          { resourceUri: perforce.file(tracked), scmResourceGroupId: 'cl:1000' },
-        ])
-        await expect
-          .poll(() => groupIdsFor(tracked), {
-            timeout: 30_000,
-            message: 'the file should move out to the reconcile group',
-          })
-          .toEqual(['reconcile'])
-      })
+        await workbench.runCommand('perforce.moveToReconcile', {
+          resourceUri: perforce.file(tracked),
+        })
 
-      await test.step('dropping a reconcile file onto a changelist collects it there', async () => {
-        // A reconcile file isn't opened, so reopenTo must collect it straight into
-        // cl:1000 (reconcile -a -e -d -c), not `reopen`.
+        // An unopened file isn't `reopen`-able, so the drop command must collect
+        // it straight into cl:1000 (reconcile -a -e -d -c), not `reopen`.
         await workbench.runCommand(
           'perforce.reopenTo',
           { scmResourceGroupId: 'cl:1000', resourceUri: perforce.file(tracked) },
-          [{ resourceUri: perforce.file(tracked), scmResourceGroupId: 'reconcile' }],
+          [{ resourceUri: perforce.file(tracked), scmResourceGroupId: 'default' }],
         )
         await expect
           .poll(() => groupIdsFor(tracked), {
             timeout: 30_000,
-            message: 'the reconcile file should be collected into cl:1000',
+            message: 'the unopened file should be collected into cl:1000',
           })
           .toEqual(['cl:1000'])
       })
@@ -162,7 +157,7 @@ test.describe('@p1 perforce changelist', () => {
     })
   })
 
-  test('a default-changelist file row offers move commands via right-click and moves out to reconcile @regression', async ({
+  test('a default-changelist file row offers move commands via right-click and moves out of its changelist @regression', async ({
     page,
     workbench,
     perforce,
@@ -191,20 +186,23 @@ test.describe('@p1 perforce changelist', () => {
       await expect(menu).toBeHidden()
     })
 
-    await test.step('perforce.moveToReconcile lands the file in Changes to Reconcile', async () => {
+    await test.step('perforce.moveToReconcile leaves the file in no changelist group', async () => {
       // Diverge the working-tree content, then move it out of the changelist:
-      // `revert -k` keeps the edited content on disk, so it must reappear as an
-      // uncollected (reconcile) change.
+      // `revert -k` keeps the edited content on disk, so it becomes uncollected
+      // drift that no changelist group claims.
       writeFileSync(perforce.file(tracked), 'locally edited content\n', 'utf8')
       await workbench.runCommand('perforce.moveToReconcile', {
         scmResourceGroupId: 'default',
       })
       await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getVisibleScmGroupIds()), {
-          timeout: 30_000,
-          message: 'the file should surface under Changes to Reconcile after revert -k',
-        })
-        .toEqual(expect.arrayContaining(['reconcile']))
+        .poll(
+          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), tracked),
+          {
+            timeout: 30_000,
+            message: 'the file should belong to no changelist group after revert -k',
+          },
+        )
+        .toEqual([])
     })
   })
 })

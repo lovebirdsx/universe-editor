@@ -6,8 +6,8 @@
  *
  *  This machine / CI has the real `p4` client but no reachable `p4d`, so the
  *  extension's discovery would fail and disable the provider. The fake stands in
- *  with a real on-disk depot model so the full "edit a file → it appears in
- *  Changes to Reconcile" flow can be exercised deterministically.
+ *  with a real on-disk depot model so the full "edit a file → it shows an RC
+ *  badge in the Explorer" flow can be exercised deterministically.
  *
  *  Each test gets its own workspace dir + state file, exposed via the `perforce`
  *  fixture. Cold-launch (not the shared instance) because opening a workspace

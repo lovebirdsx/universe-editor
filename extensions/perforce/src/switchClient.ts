@@ -7,8 +7,7 @@
  *
  * `wireSwitchedClient` is the wiring sequence as an injectable-step function so
  * a test can assert every step is taken in order — a missed step here shows up
- * as "switched, but the changes-to-reconcile group is empty / the scopes are
- * the old client's" and is otherwise invisible.
+ * as "switched, but the scopes are the old client's" and is otherwise invisible.
  */
 import { window, type QuickPickItem } from '@universe-editor/extension-api'
 import type { PerforceClient } from './client.js'
@@ -28,26 +27,20 @@ export interface SwitchClientWiring {
   applySyncPreviewOptions(client: PerforceClient): Promise<void>
   applyOpenedByOthersOptions(client: PerforceClient): Promise<void>
   startPolling(client: PerforceClient, seconds: number): void
-  setAutoReconcile(client: PerforceClient, enabled: boolean): void
   setSwarmAvailable(client: PerforceClient, available: boolean): void
 }
 
 /** Config values a freshly wired client inherits from the workspace. */
 export interface SwitchedClientConfig {
   readonly refreshIntervalSec: number
-  readonly autoReconcile: boolean
   readonly swarmAvailable: boolean
 }
 
 /**
  * Wire a freshly created client into the manager, mirroring activate's
- * first-client sequence. Order matters:
- *  - scopes are applied BEFORE {@link PerforceClient.restoreReconcile} so the
- *    restored snapshot goes through the same `_setReconcileFiles` funnel and
- *    out-of-scope entries are dropped immediately;
- *  - the background-check options (behind / opened-by-others) are set BEFORE
- *    the first refresh so the checks the refresh tail schedules don't silently
- *    skip on defaulted options.
+ * first-client sequence. Order matters: the background-check options (behind /
+ * opened-by-others) are set BEFORE the first refresh so the checks the refresh
+ * tail schedules don't silently skip on defaulted options.
  */
 export async function wireSwitchedClient(
   client: PerforceClient,
@@ -61,10 +54,8 @@ export async function wireSwitchedClient(
   await wiring.applyScopes(client)
   await wiring.applySyncPreviewOptions(client)
   await wiring.applyOpenedByOthersOptions(client)
-  client.restoreReconcile()
   void client.refresh()
   wiring.startPolling(client, cfg.refreshIntervalSec)
-  wiring.setAutoReconcile(client, cfg.autoReconcile)
   wiring.setSwarmAvailable(client, cfg.swarmAvailable)
   void client.refresh()
 }
@@ -73,7 +64,7 @@ export interface SwitchClientDeps {
   readonly mgr: ClientManager
   readonly log?: (msg: string) => void
   /** Build a PerforceClient for the picked entry (production wires
-   *  `PerforceClient.createForClient` + a per-root reconcile store). */
+   *  `PerforceClient.createForClient`). */
   readonly createClient: (entry: P4ClientEntry) => PerforceClient
   /** Wire the freshly created client in (see {@link wireSwitchedClient}). */
   readonly wire: (client: PerforceClient) => Promise<void>

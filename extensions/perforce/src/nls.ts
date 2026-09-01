@@ -11,7 +11,6 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.group.numbered': '#{0}: {1}',
   'perforce.group.numberedNoDesc': '#{0}',
   'perforce.group.shelved': '已搁置的文件',
-  'perforce.group.reconcile': '待收集的改动',
   'perforce.group.resolve': '需要合并',
   // status-bar busy labels (spinner text during long p4 operations)
   'perforce.busy.edit': '正在签出',
@@ -161,7 +160,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // status bar
   'perforce.status.offline': '离线',
   'perforce.status.notLoggedIn': '未登录',
-  'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开，{2} 个待收集',
+  'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开',
   'perforce.status.openGraph': '打开 Perforce 图谱',
   'perforce.status.cancelTooltip': '{0} —— 点击可取消',
   // 状态栏修订（#have / #head）

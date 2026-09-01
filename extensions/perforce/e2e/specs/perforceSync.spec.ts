@@ -275,28 +275,9 @@ test.describe('@p1 perforce sync', () => {
       const groupIds = (suffix: string) =>
         page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), suffix)
 
-      await test.step('the drift surfaces in Changes to Reconcile', async () => {
-        writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
-        // Watcher arm window: rewrite the same drift to re-trigger discovery.
-        await expect
-          .poll(
-            async () => {
-              const ids = await groupIds(clobbered.relPath)
-              if (!ids.includes('reconcile')) {
-                writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
-              }
-              return ids
-            },
-            {
-              timeout: 30_000,
-              intervals: [500, 1000],
-              message: 'the drift should surface in the reconcile group',
-            },
-          )
-          .toEqual(expect.arrayContaining(['reconcile']))
-      })
-
       await test.step('a clobber-refused get offers Collect Changes, and clicking really opens the file', async () => {
+        // Drift the file on disk so Collect Changes has something to collect.
+        writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
         // Fire-and-forget: the command parks on the error dialog. The host's
         // showErrorMessage-with-items renders as a confirm dialog — the same
         // surface the delete-changelist confirm uses in perforceChangelist.spec.ts.
@@ -313,9 +294,8 @@ test.describe('@p1 perforce sync', () => {
         await dialog.getByRole('button', { name: 'Collect Changes' }).click()
 
         // THE guard: the old implementation ran a clean refresh, which merely
-        // discovers the drift — the file stays listed in the reconcile group and
-        // is never opened. Really collecting opens the file, so it must land in
-        // the default changelist and leave the reconcile group.
+        // discovers the drift — the file stays unopened. Really collecting opens
+        // the file, so it must land in the default changelist.
         await expect
           .poll(() => groupIds(clobbered.relPath), {
             timeout: 30_000,
@@ -341,33 +321,14 @@ test.describe('@p1 perforce sync', () => {
       const groupIds = (suffix: string) =>
         page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), suffix)
 
-      await test.step('the drift surfaces in Changes to Reconcile', async () => {
-        writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
-        // Watcher arm window: rewrite the same drift to re-trigger discovery.
-        await expect
-          .poll(
-            async () => {
-              const ids = await groupIds(clobbered.relPath)
-              if (!ids.includes('reconcile')) {
-                writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
-              }
-              return ids
-            },
-            {
-              timeout: 30_000,
-              intervals: [500, 1000],
-              message: 'the drift should surface in the reconcile group',
-            },
-          )
-          .toEqual(expect.arrayContaining(['reconcile']))
-      })
-
       await test.step('Collect Changes on a scope-less refusal collects over the default sync range', async () => {
+        // Drift the file on disk so Collect Changes has something to collect.
+        writeFileSync(perforce.file(clobbered.relPath), LOCAL_DRAFT, 'utf8')
         // No resource argument — the status-bar entry style whole-range get.
         // Its refusal is over the client's own default sync scope, so the
         // collect must target that range too; the old implementation fell back
         // to a clean refresh, which merely re-discovered the drift and opened
-        // nothing (the file would stay listed in the reconcile group).
+        // nothing (the file would stay unopened).
         void page
           .evaluate(() => void window.__E2E__!.runCommand('perforce.syncLatest'))
           .catch(() => {})
@@ -378,7 +339,7 @@ test.describe('@p1 perforce sync', () => {
         await dialog.getByRole('button', { name: 'Collect Changes' }).click()
 
         // THE guard: really collecting opens the file, so it must land in the
-        // default changelist and leave the reconcile group.
+        // default changelist.
         await expect
           .poll(() => groupIds(clobbered.relPath), {
             timeout: 30_000,
@@ -455,28 +416,10 @@ test.describe('@p1 perforce sync', () => {
         .locator('[data-testid="notification-toast-item"]')
         .filter({ hasText: 'Already at the latest revision' })
 
-      await test.step('the uncollected local work surfaces in Changes to Reconcile', async () => {
-        // The refusal is p4 protecting local work that nobody collected, so the
-        // drift has to exist on disk for Collect Changes to have anything to
-        // collect — same setup as the clobber journeys above.
-        writeFileSync(perforce.file(refused.relPath), REFUSED_DRAFT, 'utf8')
-        await expect
-          .poll(
-            async () => {
-              const ids = await groupIds(refused.relPath)
-              if (!ids.includes('reconcile')) {
-                writeFileSync(perforce.file(refused.relPath), REFUSED_DRAFT, 'utf8')
-              }
-              return ids
-            },
-            {
-              timeout: 30_000,
-              intervals: [500, 1000],
-              message: 'the drift should surface in the reconcile group',
-            },
-          )
-          .toEqual(expect.arrayContaining(['reconcile']))
-      })
+      // The refusal is p4 protecting local work that nobody collected, so the
+      // drift has to exist on disk for Collect Changes (and View Diff) to have
+      // something to show — same setup as the clobber journeys above.
+      writeFileSync(perforce.file(refused.relPath), REFUSED_DRAFT, 'utf8')
 
       await test.step('the preview lists the refused file rather than reporting up-to-date', async () => {
         // THE first guard: the refusal is a plain stdout line that `-ztag` drops,
