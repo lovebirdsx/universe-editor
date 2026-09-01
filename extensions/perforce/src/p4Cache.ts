@@ -35,6 +35,12 @@ export interface P4CacheDiskBackend {
   get(ns: string, key: string): string | undefined
   /** Persist `<ns>/<key>` = value. Never throws (best-effort). */
   set(ns: string, key: string, value: string): void
+  /** Drop `<ns>/<key>` (best-effort; no-op when absent). Optional because an
+   *  invalidation only needs it when the backend refuses to overwrite an
+   *  existing id — see {@link P4CacheDisk.set}. */
+  delete?(ns: string, key: string): void
+  /** Drop every entry in one namespace (best-effort). */
+  deleteNamespace?(ns: string): void
 }
 
 /** Injectable clock so TTL logic is testable without the real `Date.now()`
@@ -193,7 +199,11 @@ export class P4Cache {
     }
   }
 
-  /** Drop one exact entry without disturbing unrelated data in the namespace. */
+  /** Drop one exact entry without disturbing unrelated data in the namespace.
+   *  The disk mirror goes with it: a cold `_read` falls back to the persistent
+   *  backend for immutable namespaces, and a backend that never overwrites an
+   *  existing id (see {@link P4CacheDisk.set}) would keep replaying the dropped
+   *  value forever if only the memory copy went away. */
   invalidate(ns: string, key: string): void {
     this._store.get(ns)?.delete(key)
     let generations = this._keyGenerations.get(ns)
@@ -204,6 +214,7 @@ export class P4Cache {
     generations.set(key, (generations.get(key) ?? 0) + 1)
     this._inFlight.get(ns)?.delete(key)
     this._errorInFlight.get(ns)?.delete(key)
+    this._disk?.delete?.(ns, key)
   }
 
   /** Drop every entry in one namespace. */
@@ -213,6 +224,22 @@ export class P4Cache {
     this._keyGenerations.delete(ns)
     this._inFlight.delete(ns)
     this._errorInFlight.delete(ns)
+    this._disk?.deleteNamespace?.(ns)
+  }
+
+  /** Drop every entry in `ns` whose key satisfies `matches` (memory + disk, via
+   *  {@link invalidate}). Unlike {@link invalidateFile} this is not restricted to
+   *  ttl namespaces — an "immutable" checkpoint that a mutation declared stale
+   *  must be droppable too. */
+  invalidateWhere(ns: string, matches: (key: string) => boolean): void {
+    const keys = new Set([
+      ...(this._store.get(ns)?.keys() ?? []),
+      ...(this._inFlight.get(ns)?.keys() ?? []),
+      ...(this._errorInFlight.get(ns)?.keys() ?? []),
+    ])
+    for (const key of keys) {
+      if (matches(key)) this.invalidate(ns, key)
+    }
   }
 
   /** Drop every entry in `ttl` namespaces (post-mutation refresh). Immutable
@@ -321,6 +348,13 @@ export const P4CacheNs = {
    *  and mis-diff the left side forever. Short window only absorbs tab-switch /
    *  repeated-click bursts; cleared per-file after mutations. */
   fstat: 'fstat',
+  /** Background `reconcile -n` scan result for one directory, keyed by
+   *  `<focus-fingerprint>:<dir>` and persisted so a workspace reopen resumes the
+   *  scan where it stopped (per-directory checkpoints). Immutable only in the
+   *  cache sense — a mismatch between the stored hints and the disk is corrected
+   *  by the renderer's file-event invalidation, and a focus change changes the
+   *  fingerprint so the whole batch is discarded, never reused. */
+  reconcileScan: 'reconcileScan',
 } as const
 
 export type P4CacheNamespace = (typeof P4CacheNs)[keyof typeof P4CacheNs]
@@ -344,4 +378,5 @@ export function registerP4CacheNamespaces(cache: P4Cache, workspaceTtlMs: number
     ttlMs: Math.max(workspaceTtlMs, 20_000),
   })
   cache.register(P4CacheNs.fstat, { kind: 'ttl', ttlMs: Math.max(workspaceTtlMs, 15_000) })
+  cache.register(P4CacheNs.reconcileScan, { kind: 'immutable' })
 }

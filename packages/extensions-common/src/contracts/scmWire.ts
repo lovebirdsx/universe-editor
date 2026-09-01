@@ -9,6 +9,8 @@
  * serialized as filesystem-path strings; `Command`s as `{command,title,args}`.
  */
 
+import type { WorkingTreeChangeDto } from './dirtyDiff.js'
+
 /** Serialized `Command` reference. */
 export interface ICommandDto {
   command: string
@@ -74,6 +76,23 @@ export interface ISupplementaryDecorationDeltaDto {
 }
 
 /**
+ * One directory batch of a provider's background working-tree scan (p4's dry-run
+ * `reconcile -n` walk). The provider pushes these as the scan progresses — each
+ * entry says "this directory was scanned and these changes were found under it".
+ * There is no negative entry: an empty `hints` array carries no information the
+ * renderer acts on, it is the absence of a non-empty entry that reads as clean.
+ * Directory-level on purpose: the renderer folds file hints up into folder tints
+ * before any file row is rendered, which is exactly what a file-level channel
+ * cannot express.
+ */
+export interface IWorkingTreeScanEntryDto {
+  /** Local directory the scan covered (host-side path). */
+  readonly directory: string
+  /** Changes found under it; empty = nothing found (not a clear). */
+  readonly hints: readonly WorkingTreeChangeDto[]
+}
+
+/**
  * Renderer ← host: the SCM model feeding the built-in view. The host's
  * ChannelClient calls these on the renderer's ChannelServer.
  */
@@ -98,6 +117,18 @@ export interface IMainThreadScm {
   $updateSupplementaryDecorations(
     sourceControlHandle: number,
     deltas: ISupplementaryDecorationDeltaDto[],
+  ): Promise<void>
+  /**
+   * Apply one batch of the provider's background working-tree scan. Unlike
+   * resource groups and supplementary decorations, this is not whole-set state:
+   * entries accumulate (merge) as the scan progresses, keyed by the provider
+   * that published them. A clean directory contributes no entry at all, so an
+   * earlier batch's hints for that directory are only superseded by a later
+   * non-empty batch — the renderer never infers "clean" from an empty batch.
+   */
+  $publishWorkingTreeScan(
+    sourceControlHandle: number,
+    entries: IWorkingTreeScanEntryDto[],
   ): Promise<void>
   $setInputBoxValue(sourceControlHandle: number, value: string): Promise<void>
   $setInputBoxPlaceholder(sourceControlHandle: number, placeholder: string): Promise<void>

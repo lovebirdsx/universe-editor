@@ -15,6 +15,7 @@ import type {
   SourceControlResourceGroupOptions,
   SourceControlResourceState,
   SourceControlSupplementaryDecoration,
+  SourceControlWorkingTreeScanEntry,
 } from '@universe-editor/extension-api'
 import type {
   IMainThreadScm,
@@ -244,6 +245,17 @@ export class HostSourceControl implements SourceControl {
     this._supplementary = next
     if (deltas.length === 0) return
     void this._scm.$updateSupplementaryDecorations(this._handle, deltas)
+  }
+
+  publishWorkingTreeScan(entries: readonly SourceControlWorkingTreeScanEntry[]): void {
+    if (entries.length === 0) return
+    void this._scm.$publishWorkingTreeScan(
+      this._handle,
+      entries.map((entry) => ({
+        directory: entry.directory,
+        hints: entry.changes.map((change) => ({ ...change })),
+      })),
+    )
   }
 
   dispose(): void {

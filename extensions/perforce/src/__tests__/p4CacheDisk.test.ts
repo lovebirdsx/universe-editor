@@ -103,4 +103,34 @@ describe('P4CacheDisk', () => {
     expect(existsSync(join(root, 'manifest.json'))).toBe(true)
     expect(existsSync(join(root, 'manifest.json.tmp'))).toBe(false)
   })
+
+  it('delete drops the entry and lets a later set of the same key through', async () => {
+    const disk = P4CacheDisk.open(root, 1024 * 1024)!
+    disk.set('print', 'k', 'stale')
+    disk.delete('print', 'k')
+    expect(disk.get('print', 'k')).toBeUndefined()
+    // The whole point: without delete, an immutable set is a silent no-op and
+    // the stale value would be replayed forever.
+    disk.set('print', 'k', 'fresh')
+    expect(disk.get('print', 'k')).toBe('fresh')
+  })
+
+  it('delete survives a reopen (manifest flush)', async () => {
+    const d1 = P4CacheDisk.open(root, 1024 * 1024)!
+    d1.set('print', 'k', 'stale')
+    d1.delete('print', 'k')
+    await flush()
+
+    const d2 = P4CacheDisk.open(root, 1024 * 1024)!
+    expect(d2.get('print', 'k')).toBeUndefined()
+  })
+
+  it('deleteNamespace drops only that namespace', async () => {
+    const disk = P4CacheDisk.open(root, 1024 * 1024)!
+    disk.set('print', 'k1', 'v1')
+    disk.set('where', 'k2', 'v2')
+    disk.deleteNamespace('print')
+    expect(disk.get('print', 'k1')).toBeUndefined()
+    expect(disk.get('where', 'k2')).toBe('v2')
+  })
 })

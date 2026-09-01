@@ -570,6 +570,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   /**
+   * Background reconcile scan: the per-directory batch ceiling that drives the
+   * adaptive split. Applied before the first refresh so the scan the refresh
+   * tail schedules already sees the configured ceiling.
+   */
+  const applyReconcileScanOptions = async (target: PerforceClient): Promise<void> => {
+    const maxBatchDurationMs = await cfg.get('reconcileScan.maxBatchDurationMs', 10_000)
+    target.setReconcileScanOptions({ maxBatchDurationMs })
+  }
+  const applyReconcileScanOptionsAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applyReconcileScanOptions(c)
+  }
+  await applyReconcileScanOptions(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.reconcileScan')) return
+      void applyReconcileScanOptionsAll()
+    }),
+  )
+
+  /**
    * Behind awareness: how often the client may ask the server "what am I missing".
    * `sync -n` over a game workspace is the most expensive read here, so the
    * interval is a real floor, not a hint — the client clamps anything under 30s.

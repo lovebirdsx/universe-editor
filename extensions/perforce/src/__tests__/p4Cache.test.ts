@@ -25,6 +25,15 @@ function fakeDisk(): P4CacheDiskBackend & { store: Map<string, string>; reads: n
     set(ns: string, key: string, value: string): void {
       store.set(`${ns}/${key}`, value)
     },
+    delete(ns: string, key: string): void {
+      store.delete(`${ns}/${key}`)
+    },
+    deleteNamespace(ns: string): void {
+      const prefix = `${ns}/`
+      for (const k of [...store.keys()]) {
+        if (k.startsWith(prefix)) store.delete(k)
+      }
+    },
   }
   return self
 }
@@ -152,6 +161,45 @@ describe('P4Cache', () => {
     cache.invalidateFile('a.txt')
     expect(await cache.wrap('mut', '//depot/a.txt', async () => `a${++a}`)).toBe('a2')
     expect(await cache.wrap('mut', '//depot/b.txt', async () => `b${++b}`)).toBe('b1')
+  })
+
+  it('invalidateWhere drops matching keys in any namespace (immutable included)', async () => {
+    const cache = new P4Cache()
+    cache.register('imm', { kind: 'immutable' })
+    let a = 0
+    let b = 0
+    await cache.wrap('imm', 'fp:a/x', async () => `a${++a}`)
+    await cache.wrap('imm', 'fp:b/x', async () => `b${++b}`)
+    cache.invalidateWhere('imm', (key) => key.startsWith('fp:a'))
+    expect(await cache.wrap('imm', 'fp:a/x', async () => `a${++a}`)).toBe('a2')
+    expect(await cache.wrap('imm', 'fp:b/x', async () => `b${++b}`)).toBe('b1')
+  })
+
+  it('invalidate also drops the disk mirror so a cold read cannot replay the entry', async () => {
+    const disk = fakeDisk()
+    const c1 = new P4Cache(Date.now, disk)
+    c1.register('imm', { kind: 'immutable' })
+    await c1.wrap('imm', 'k', async () => 'stale')
+    expect(disk.store.has('imm/k')).toBe(true)
+
+    c1.invalidate('imm', 'k')
+    expect(disk.store.has('imm/k')).toBe(false)
+    // A cold cache over the same disk must refetch, not serve the dropped value.
+    const c2 = new P4Cache(Date.now, disk)
+    c2.register('imm', { kind: 'immutable' })
+    expect(await c2.wrap('imm', 'k', async () => 'fresh')).toBe('fresh')
+  })
+
+  it('invalidateNamespace drops the namespace on disk too', async () => {
+    const disk = fakeDisk()
+    const cache = new P4Cache(Date.now, disk)
+    cache.register('imm', { kind: 'immutable' })
+    cache.register('keep', { kind: 'immutable' })
+    await cache.wrap('imm', 'k1', async () => 'v1')
+    await cache.wrap('keep', 'k2', async () => 'v2')
+    cache.invalidateNamespace('imm')
+    expect(disk.store.has('imm/k1')).toBe(false)
+    expect(disk.store.has('keep/k2')).toBe(true)
   })
 
   it('disabled cache always fetches', async () => {

@@ -100,6 +100,49 @@ describe('ScmService', () => {
   })
 })
 
+describe('ScmService working-tree scan', () => {
+  it('fires the scan event with the owning provider id, and never for zero entries', async () => {
+    const { scm } = make()
+    const seen: unknown[] = []
+    scm.onDidPublishWorkingTreeScan((results) => {
+      seen.push(results)
+    })
+    await scm.$registerSourceControl(0, 'perforce', 'Perforce', '/depot')
+
+    await scm.$publishWorkingTreeScan(0, [
+      {
+        directory: '/depot/src',
+        hints: [{ path: '/depot/src/a.ts', letter: 'RC', color: '#e2c08d' }],
+      },
+    ])
+    expect(seen).toEqual([
+      [
+        {
+          sourceControlId: 'perforce',
+          directory: '/depot/src',
+          hints: [{ path: '/depot/src/a.ts', letter: 'RC', color: '#e2c08d' }],
+        },
+      ],
+    ])
+
+    // An empty batch is a no-op (host guards it too — double safety).
+    await scm.$publishWorkingTreeScan(0, [])
+    expect(seen).toHaveLength(1)
+  })
+
+  it('silently ignores a scan for an unknown handle', async () => {
+    const { scm } = make()
+    const seen = vi.fn()
+    scm.onDidPublishWorkingTreeScan(seen)
+    await scm.$registerSourceControl(0, 'git', 'Git')
+
+    await scm.$publishWorkingTreeScan(99, [
+      { directory: '/repo', hints: [{ path: '/repo/x.ts', letter: 'M', color: '#e2c08d' }] },
+    ])
+    expect(seen).not.toHaveBeenCalled()
+  })
+})
+
 describe('ScmService supplementary decorations', () => {
   it('applies add / change / remove deltas to the per-provider map', async () => {
     const { scm } = make()

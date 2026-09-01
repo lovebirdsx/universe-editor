@@ -37,7 +37,11 @@ import {
   type IObservable,
 } from '@universe-editor/platform'
 import { dirtyDiffCommandId, type WorkingTreeChangeDto } from '@universe-editor/extensions-common'
-import { IScmService, resolveScmProviderId } from '../extensions/ScmService.js'
+import {
+  IScmService,
+  resolveScmProviderId,
+  type IScmWorkingTreeScanResult,
+} from '../extensions/ScmService.js'
 import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { IScmDecorationsService, parentDir, scmPathKey } from './ScmDecorationsService.js'
 import { scmHostPath } from './scmHostPath.js'
@@ -77,6 +81,15 @@ export const CACHE_LIMIT = 4096
 const FOLDER_HINT_WEIGHT_DELETE = 4
 const FOLDER_HINT_WEIGHT_CHANGE = 2
 
+/**
+ * Coalescing window for scan-driven version bumps. A provider scan publishes one
+ * batch per directory, and a thousand-directory workspace would otherwise
+ * re-render the Explorer once per batch. Matches the pull channel's flush
+ * debounce: a folder tint lagging one window behind the file cache is invisible,
+ * a full re-render per batch is not.
+ */
+const SCAN_VERSION_BUMP_DELAY_MS = 150
+
 export class ScmWorkingTreeHintService extends Disposable implements IScmWorkingTreeHintService {
   declare readonly _serviceBrand: undefined
 
@@ -109,6 +122,8 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   private _folderHints: Map<string, IWorkingTreeFolderHint> | undefined
   private _folderHintsVersion = -1
   private readonly _logger: ILogger
+  /** Timer of the coalesced scan version bump (see {@link _scheduleScanVersionBump}). */
+  private _scanBumpTimer: ReturnType<typeof setTimeout> | undefined
 
   /** Debounce before a batch resolves; overridable in tests. */
   flushDelayMs = 150
@@ -131,6 +146,13 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
     this._register(watcher.onDidChangeFiles((events) => this._onFileEvents(events)))
     this._register(this._workspace.onDidChangeWorkspace(() => this._invalidate()))
+    // The provider's background reconcile scan: directory-level answers that
+    // arrive ahead of any file row being rendered, so folder tints can appear
+    // before the user expands into a subtree. Merged into the same file-level
+    // cache the pull channel feeds; empty scans write nothing (no hint = clean).
+    this._register(
+      this._scm.onDidPublishWorkingTreeScan((results) => this._acceptScanResults(results)),
+    )
 
     let first = true
     this._register(
@@ -165,6 +187,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
   override dispose(): void {
     if (this._flushTimer !== undefined) clearTimeout(this._flushTimer)
+    if (this._scanBumpTimer !== undefined) clearTimeout(this._scanBumpTimer)
     super.dispose()
   }
 
@@ -388,6 +411,58 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     }
     this._inFlight.delete(key)
     this._stale.delete(key)
+    return this._putHint(key, hint)
+  }
+
+  /**
+   * Merge a provider background-scan batch into the cache. Scan answers are
+   * file-level hints keyed like the pull channel's, so folder tints (and row
+   * badges, if the row is already rendered) appear from the same data. The
+   * scan's path strings come straight from the SCM host — the same host space
+   * {@link _hostPath} maps resources into — so `scmPathKey` alone is the right
+   * key. Nothing is written for a clean directory (an absent hint already means
+   * "no drift", and there is no directory-level negative entry to cache).
+   */
+  private _acceptScanResults(results: readonly IScmWorkingTreeScanResult[]): void {
+    let changed = false
+    for (const result of results) {
+      for (const dto of result.hints) {
+        const hint = toHint(dto)
+        // An answer from the pull channel may be in flight for the same file;
+        // the scan describes what a directory sweep saw, which can be newer than
+        // the point query it races. Both are honest readings of the disk at
+        // their own moment, and the in-flight token guard still applies to the
+        // pull answer when it lands.
+        if (this._putHint(scmPathKey(dto.path), hint)) changed = true
+      }
+    }
+    if (changed) {
+      this._logger.debug(
+        `accepted ${results.length} working-tree scan result(s) from ${results[0]?.sourceControlId ?? 'unknown provider'}`,
+      )
+      this._scheduleScanVersionBump()
+    }
+  }
+
+  /**
+   * Bump `_version` once per coalescing window, no matter how many scan batches
+   * landed in it: a scan publishes one batch per directory, so an unbounded
+   * bump-per-batch would re-render the Explorer once per directory. The cache
+   * writes above are what matter — the next render picks them up regardless of
+   * when the bump fires. `getFolderHint`'s memo keys on the version, so a bump
+   * delayed into the window stays correct: it rebuilds the folder fold against
+   * whatever the cache holds at bump time, never against a stale snapshot.
+   */
+  private _scheduleScanVersionBump(): void {
+    if (this._scanBumpTimer !== undefined) return
+    this._scanBumpTimer = setTimeout(() => {
+      this._scanBumpTimer = undefined
+      this._version.set(this._version.get() + 1, undefined)
+    }, SCAN_VERSION_BUMP_DELAY_MS)
+  }
+
+  /** Store a hint under `key` (LRU-bound), returning whether it changed. */
+  private _putHint(key: string, hint: IWorkingTreeHint | null): boolean {
     const prev = this._cache.get(key)
     if (hintsEqual(prev, hint)) return false
     this._cache.delete(key)

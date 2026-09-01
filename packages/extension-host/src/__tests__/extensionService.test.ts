@@ -109,6 +109,7 @@ const noopScm: IMainThreadScm = {
   $updateGroup: () => Promise.resolve(),
   $updateGroupResourceStates: () => Promise.resolve(),
   $updateSupplementaryDecorations: () => Promise.resolve(),
+  $publishWorkingTreeScan: () => Promise.resolve(),
   $unregisterGroup: () => Promise.resolve(),
   $setInputBoxValue: () => Promise.resolve(),
   $setInputBoxPlaceholder: () => Promise.resolve(),

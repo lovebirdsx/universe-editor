@@ -28,6 +28,7 @@ function makeScm(initial: readonly IScmSourceControlModel[]): {
   const service: IScmService = {
     _serviceBrand: undefined,
     sourceControls,
+    onDidPublishWorkingTreeScan: () => ({ dispose() {} }),
     changeInputBoxValue() {},
     setExtHost() {},
     resetSourceControls() {},

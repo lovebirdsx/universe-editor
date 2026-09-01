@@ -34,6 +34,7 @@ function makeFakeScm(initial: readonly IScmSourceControlModel[]): {
   const service: IScmService = {
     _serviceBrand: undefined,
     sourceControls: sourceControls as IObservable<readonly IScmSourceControlModel[]>,
+    onDidPublishWorkingTreeScan: () => ({ dispose() {} }),
     changeInputBoxValue() {},
     setExtHost() {},
     resetSourceControls() {},

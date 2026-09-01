@@ -30,6 +30,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.busy.openChange': '正在打开更改',
   'perforce.busy.openMergeEditor': '正在打开合并编辑器',
   'perforce.busy.sync': '正在拉取',
+  'perforce.busy.scan': '正在扫描工作区',
   'perforce.busy.generic': '正在处理',
   // command titles reused at runtime
   'perforce.command.commit': '提交',

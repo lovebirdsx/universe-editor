@@ -686,6 +686,12 @@
           "default": true,
           "description": "%perforce.config.reconcileHint.enabled.description%"
         },
+        "perforce.reconcileScan.maxBatchDurationMs": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 1000,
+          "description": "%perforce.config.reconcileScan.maxBatchDurationMs.description%"
+        },
         "perforce.syncPreview.autoCheck": {
           "type": "boolean",
           "default": true,

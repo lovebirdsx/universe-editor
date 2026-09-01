@@ -22,8 +22,9 @@ import {
   type SourceControlSupplementaryDecoration,
 } from '@universe-editor/extension-api'
 import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
-import { chmod, readFile, writeFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { createHash } from 'node:crypto'
+import { chmod, readFile, readdir, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
 import {
@@ -59,6 +60,7 @@ import { parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import { parseIgnores } from './ignoresParser.js'
 import { parseReconcile, type ReconcileFile } from './reconcileParser.js'
+import { buildScopeFilespec } from './p4Filespec.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
 import { type OpenedTarget } from './revertPlan.js'
 import {
@@ -112,6 +114,17 @@ interface DesiredGroup {
   /** Id of the changelist group this one nests under (shelved files under their
    *  owning changelist), or undefined for a top-level group. */
   readonly parentId?: string
+}
+
+/** The checkpoint payload for one scanned directory of the background reconcile
+ *  scan ({@link P4CacheNs.reconcileScan}): what the scan found plus when. A
+ *  `split` entry carries no hints — the parent's batch was split into its
+ *  subdirectories and its own result was already published in the session it
+ *  ran, so a replay only re-enqueues the subdirectories. */
+interface ReconcileScanEntry {
+  readonly completedAt: number
+  readonly hints: WorkingTreeChangeDto[]
+  readonly split?: boolean
 }
 
 export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
@@ -277,6 +290,31 @@ const FSTAT_UNRESOLVED_TIMEOUT_MS = 20_000
  * the opened-by-others / unresolved-probe ceilings).
  */
 const CHECK_IGNORE_TIMEOUT_MS = 20_000
+
+/**
+ * Default ceiling for one directory batch of the background reconcile scan
+ * (`perforce.reconcileScan.maxBatchDurationMs`). A batch that outlasts it is
+ * split into its direct subdirectories, so batches auto-converge to roughly
+ * this duration whatever the tree shape — the server's per-batch cost scales
+ * with the number of files under the filespec.
+ */
+const RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS = 10_000
+/**
+ * Floor for the same ceiling, mirroring `perforce.reconcileScan.maxBatchDurationMs`
+ * `minimum` in the manifest. A hand-edited 0 (or lower) would make every batch
+ * "slow" and split it — a readdir + spawn storm for directories that were never
+ * actually slow.
+ */
+const RECONCILE_SCAN_MIN_BATCH_MS = 1000
+/**
+ * Freshness ceiling for a replayed reconcile-scan checkpoint: older than this
+ * the directory is rescanned rather than served from the persistent cache. The
+ * checkpoint answers "what drift did this directory have when we last walked
+ * it", and a quiet workspace can change on disk between sessions (external
+ * tooling, another user's edit, a revert) — so an unbounded replay would pin a
+ * clean directory clean (or a changed one changed) forever.
+ */
+const RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000
 
 /** What a `p4 sync` run reports back — see {@link PerforceClient.sync}. */
 export interface SyncRunResult {
@@ -450,6 +488,24 @@ export class PerforceClient {
   private _openedByOthersAutoCheck = false
   /** Configured floor between automatic opened-by-others scans, in ms. */
   private _openedByOthersIntervalMs = OPENED_BY_OTHERS_MIN_INTERVAL_MS
+  /** In-flight background reconcile scan, so it can't overlap itself and tests
+   *  can await it. */
+  private _backgroundReconcileScan: Promise<void> | undefined
+  /** Abort source of the in-flight reconcile scan, if any — the one operation
+   *  {@link _goOffline} is allowed to abort (a connection loss makes every
+   *  remaining batch a doomed spawn, but other in-flight cancellable work, like
+   *  a submit, owns its own failure reporting and must not be killed). */
+  private _reconcileScanCancelSource: AbortController | undefined
+  /** Whether the scan for this session has been armed. Set when the scan is
+   *  scheduled and cleared when the connection drops ({@link _goOffline}) — a
+   *  scan that never finished because the server went away must be able to
+   *  re-arm when the connection comes back, because the un-scanned directories
+   *  have no checkpoints to resume from. A user-initiated cancel keeps it set:
+   *  that is a deliberate "stop scanning this session", and completed
+   *  checkpoints survive for the next one. */
+  private _reconcileScanArmed = false
+  /** Configured ceiling for one directory batch (`perforce.reconcileScan.maxBatchDurationMs`). */
+  private _reconcileScanMaxBatchMs = RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS
   /**
    * Grey Explorer markers this client currently publishes, keyed by
    * {@link scopeKey}'d local path. Held so the two independent producers — behind
@@ -595,18 +651,23 @@ export class PerforceClient {
    * report whether it was cancelled so the caller can skip the failure toast.
    *
    * The source is deregistered in `finally` so a completed operation can't be
-   * "cancelled" retroactively.
+   * "cancelled" retroactively. `tag` additionally pins the source so targeted
+   * teardown (going offline) can abort *this* operation without touching the
+   * other in-flight cancellable work sharing {@link _cancelSources}.
    */
   private async _cancellable<T>(
     fn: (signal: AbortSignal) => Promise<T>,
+    tag?: 'reconcile-scan',
   ): Promise<{ value: T; cancelled: boolean }> {
     const source = new AbortController()
+    if (tag === 'reconcile-scan') this._reconcileScanCancelSource = source
     this._cancelSources.push(source)
     this._emitChange()
     try {
       const value = await fn(source.signal)
       return { value, cancelled: source.signal.aborted }
     } finally {
+      if (this._reconcileScanCancelSource === source) this._reconcileScanCancelSource = undefined
       const i = this._cancelSources.indexOf(source)
       if (i !== -1) this._cancelSources.splice(i, 1)
       this._emitChange()
@@ -884,12 +945,13 @@ export class PerforceClient {
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
     this._setAcceptInput(defaultHasFiles)
     this._emitChange()
-    // Fire-and-forget, and deliberately last: the behind-check and the
-    // opened-by-others scan are scope-wide server reads, so they must never be
-    // part of the refresh the spinner covers. Their own guards decide whether
-    // anything actually runs.
+    // Fire-and-forget, and deliberately last: the behind-check, the
+    // opened-by-others scan and the reconcile scan are scope-wide server reads,
+    // so they must never be part of the refresh the spinner covers. Their own
+    // guards decide whether anything actually runs.
     this.scheduleSyncPreview()
     this.scheduleOpenedByOthers()
+    this.scheduleReconcileScan()
   }
 
   /** Wire the commit-bar Submit: enabled only when the default changelist has
@@ -1031,38 +1093,51 @@ export class PerforceClient {
    * Batches go out concurrently — the ConcurrencyGate (`perforce.maxConcurrent`)
    * already bounds how many p4 processes actually run, so awaiting them one by one
    * just left that budget idle. Results are folded back **in batch order** so the
-   * answer is deterministic rather than dependent on completion order. A batch that
-   * throws (spawn failure, e.g. p4 missing) or comes back clean ("no file(s) to
-   * reconcile" / "no such file") is logged where relevant and contributes nothing
-   * rather than sinking the whole scan.
+   * answer is deterministic rather than dependent on completion order. A batch
+   * that fails is logged where relevant and contributes nothing rather than
+   * sinking the whole scan.
    */
   private async _rescanReconcilePaths(paths: readonly string[]): Promise<ReconcileFile[]> {
     const batches = chunkByLength(paths)
     const perBatch = await Promise.all(
       batches.map(async (batch): Promise<ReconcileFile[]> => {
         if (this._disposed) return []
-        let res: Awaited<ReturnType<typeof this._p4.execRecords>>
-        try {
-          res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch])
-        } catch (err) {
-          this._log?.(`[perforce] incremental reconcile -n could not run: ${String(err)}`)
-          return []
-        }
-        if (this._disposed) return []
-        if (res.result.exitCode === 0) {
-          return parseReconcile(res.records, this.root).filter(
-            (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
-          )
-        }
-        const stderr = res.result.stderr.toLowerCase()
-        if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
-          return []
-        }
-        this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
-        return []
+        return (await this._reconcileScanBatch(batch)) ?? []
       }),
     )
     return perBatch.flat()
+  }
+
+  /**
+   * One `reconcile -n -a -e -d` batch, or undefined when the batch could not
+   * run — the distinction a background checkpoint depends on: a clean batch
+   * ("no file(s) to reconcile") IS a result, while a failure (spawn error,
+   * non-zero exit, cancellation) must not read as clean or it would be cached
+   * as "nothing to see" and never retried.
+   */
+  private async _reconcileScanBatch(
+    batch: readonly string[],
+    options?: P4ExecOptions,
+  ): Promise<ReconcileFile[] | undefined> {
+    let res: Awaited<ReturnType<typeof this._p4.execRecords>>
+    try {
+      res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch], options)
+    } catch (err) {
+      this._log?.(`[perforce] incremental reconcile -n could not run: ${String(err)}`)
+      return undefined
+    }
+    if (this._disposed) return undefined
+    if (res.result.exitCode === 0) {
+      return parseReconcile(res.records, this.root).filter(
+        (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+      )
+    }
+    const stderr = res.result.stderr.toLowerCase()
+    if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
+      return []
+    }
+    this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
+    return undefined
   }
 
   /** Reconcile the live ResourceGroups with the freshly computed groups: create
@@ -1118,6 +1193,13 @@ export class PerforceClient {
     this._behindDecorations.clear()
     this._othersDecorations.clear()
     this._publishSupplementaryDecorations()
+    // The background reconcile scan is a scope-wide read: with the server gone,
+    // every batch still queued would be a doomed spawn (a failure storm), and
+    // the in-flight one would hang until the watchdog. Stop it — its completed
+    // checkpoints stay valid — and clear the armed flag so the un-scanned
+    // directories get their scan when the connection comes back.
+    this._reconcileScanCancelSource?.abort()
+    this._reconcileScanArmed = false
     this._log?.(`[perforce] ${this._clientName} → ${this._connection} (${kind})`)
     this._emitChange()
   }
@@ -1201,6 +1283,14 @@ export class PerforceClient {
    *    case needed.
    * `invalidateFile` matches by substring, so a needle can over-match a similarly
    * named key; that only costs one extra fetch, never correctness.
+   *
+   * The reconcile-scan checkpoints are a separate case handled by this method too:
+   * they describe on-disk drift, and a mutation is exactly what invalidates that
+   * description. `invalidateFile` cannot reach them (it only walks ttl namespaces
+   * and the scan keys are *directories*, which a file needle would never
+   * substring-match the right way around), so a narrow mutation drops every
+   * checkpoint whose scanned directory is an ancestor of a mutated path, and the
+   * full-clear branch drops the namespace outright.
    */
   private _invalidateAfterMutation(paths: readonly string[]): void {
     const narrow =
@@ -1208,15 +1298,39 @@ export class PerforceClient {
       paths.length <= MAX_FILE_SCOPED_INVALIDATIONS &&
       !paths.some((p) => p.endsWith('/...'))
     if (!narrow) {
-      this._cache.invalidateWorkspace()
+      this._invalidateWorkspaceState()
       return
     }
     for (const p of paths) {
       this._cache.invalidateFile(p)
       const normalized = norm(p)
       if (normalized !== p) this._cache.invalidateFile(normalized)
+      this._invalidateReconcileScanFor(p)
     }
     this._cache.invalidateNamespace(P4CacheNs.opened)
+  }
+
+  /** Drop the whole ttl layer plus the reconcile-scan checkpoints: the shared
+   *  post-mutation clear for operations that touch the workspace at large
+   *  (submit / sync / unshelve / bulk mutations). The scan namespace is
+   *  "immutable" in the cache sense only — its answers describe drift, which any
+   *  whole-workspace mutation can change, so it must not survive one. */
+  private _invalidateWorkspaceState(): void {
+    this._cache.invalidateWorkspace()
+    this._cache.invalidateNamespace(P4CacheNs.reconcileScan)
+  }
+
+  /** Drop the reconcile-scan checkpoints for every directory whose scan covered
+   *  `path`: the checkpoint key is `<fingerprint>:<dir>`, and the scanned
+   *  directory is everything after the first colon (the fingerprint is hex, so
+   *  the first colon is always the separator). The containment test is
+   *  directory-boundary aware via {@link isUnderAny}, so a mutation in
+   *  `.../sub/x` never drops the checkpoint of `.../sub2`. */
+  private _invalidateReconcileScanFor(path: string): void {
+    this._cache.invalidateWhere(P4CacheNs.reconcileScan, (key) => {
+      const dir = key.slice(key.indexOf(':') + 1)
+      return isUnderAny(path, [dir])
+    })
   }
 
   /** Human-friendly busy label for a raw p4 command label (e.g. `revert -k` →
@@ -1622,7 +1736,7 @@ export class PerforceClient {
         keptOpen = await this._unopenFilesKeepContent(result.applied)
       }
       if (result.applied.length > 0) {
-        this._cache.invalidateWorkspace()
+        this._invalidateWorkspaceState()
         await this.refresh()
       }
       return { ...result, keptOpen }
@@ -1720,7 +1834,7 @@ export class PerforceClient {
       applied.push(depotFile)
     }
     if (applied.length > 0) {
-      this._cache.invalidateWorkspace()
+      this._invalidateWorkspaceState()
       await this.refresh()
     }
     return { applied, skipped, keptOpen: [] }
@@ -1847,7 +1961,7 @@ export class PerforceClient {
       )
       // A sync rewrites have-revisions across the scope, so every path-keyed
       // cache entry (fstat/print/filelog) is potentially stale — full clear.
-      this._cache.invalidateWorkspace()
+      this._invalidateWorkspaceState()
       await this._refreshAfterMutation()
       // The behind count is stale by definition now, and the user just acted on
       // it — `force` skips the interval floor so the status bar doesn't keep
@@ -2457,6 +2571,265 @@ export class PerforceClient {
   /** Await any in-flight opened-by-others scan (tests; also lets callers settle). */
   async whenOpenedByOthersSettled(): Promise<void> {
     await this._backgroundOpenedByOthers
+  }
+
+  // --- Background reconcile scan -------------------------------------------
+
+  /** Apply `perforce.reconcileScan.*`. */
+  setReconcileScanOptions(options: { maxBatchDurationMs: number }): void {
+    this._reconcileScanMaxBatchMs = Math.max(
+      RECONCILE_SCAN_MIN_BATCH_MS,
+      options.maxBatchDurationMs,
+    )
+  }
+
+  /**
+   * Arm the once-per-session background reconcile scan. Called from the refresh
+   * tail like the other background scans, but unlike them it does not re-arm
+   * while armed: the scan checkpoints every completed directory, so a finished
+   * scan (or a user-cancelled one, whose checkpoints survive) has nothing left
+   * to do until the next session. Going offline disarms it ({@link _goOffline})
+   * so the un-scanned directories — which have no checkpoints — are picked up
+   * when the connection comes back.
+   */
+  scheduleReconcileScan(): void {
+    if (this._reconcileScanArmed) return
+    if (this._backgroundReconcileScan) return
+    if (this._connection !== 'connected') return
+    this._reconcileScanArmed = true
+    const run = (async () => {
+      // Cross a macrotask first: chaining alone would still land inside the
+      // caller's awaited window, so the spinner would cover a scan the user
+      // never asked to wait for.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 0)
+        timer.unref?.()
+      })
+      if (this._disposed) return
+      await this.runReconcileScan()
+    })()
+      // Mandatory, not defensive: an unhandled rejection from a floating promise
+      // takes down the whole extension host.
+      .catch((err: unknown) => {
+        this._log?.(`[perforce] background reconcile scan failed: ${String(err)}`)
+      })
+      .finally(() => {
+        if (this._backgroundReconcileScan === run) this._backgroundReconcileScan = undefined
+      })
+    this._backgroundReconcileScan = run
+  }
+
+  /** Await any in-flight reconcile scan (tests; also lets callers settle). */
+  async whenReconcileScanSettled(): Promise<void> {
+    await this._backgroundReconcileScan
+  }
+
+  /**
+   * The background reconcile scan: walk the reconcile scope directory by
+   * directory with `reconcile -n -a -e -d` (dry-run), publishing each batch to
+   * the renderer the moment it lands and checkpointing completed directories
+   * into {@link P4CacheNs.reconcileScan} so the next session resumes instead of
+   * rescanning. A directory whose batch outlasts
+   * `perforce.reconcileScan.maxBatchDurationMs` AND found drift is split into
+   * its direct subdirectories — each split batch is smaller, so batches
+   * auto-converge to roughly the configured duration. (A slow-but-clean
+   * directory is NOT split: its cost is inherent hashing, and splitting would
+   * re-hash the whole subtree per child for zero new information — it
+   * checkpoints clean and lets the freshness ceiling schedule the rescan.) A
+   * batch that outlasts the ceiling and then FAILS (watchdog kill, dropped
+   * connection) is split the same way: re-running the same doomed parent every
+   * session would never converge. The split itself is checkpointed as a marker
+   * (no hints), so a later session resumes at the subdirectories instead of
+   * re-running the same slow parent batch; result checkpoints older than
+   * {@link RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS} are rescanned rather than
+   * replayed.
+   *
+   * Read-only by construction, like {@link checkWorkingTree}: it never writes
+   * server state, never persists anything but the scan's own checkpoint cache,
+   * and never emits a change — it only feeds the Explorer folder tints.
+   * Cancellable via {@link cancelBusy}; the checkpoint of every directory that
+   * already completed survives a cancel. Going offline aborts it (see
+   * {@link _goOffline}). Background priority throughout — the ConcurrencyGate's
+   * static reserve keeps the interactive slot free.
+   */
+  async runReconcileScan(): Promise<void> {
+    const scopeDirs =
+      this._reconcileScopeDirs.length > 0 ? [...this._reconcileScopeDirs] : [this.root]
+    await this._withBusy(localize('perforce.busy.scan', 'Scanning workspace'), async () => {
+      await this._cancellable(async (signal) => {
+        this._log?.(
+          `[perforce] reconcile-scan: ${scopeDirs.length} scope dir(s), ` +
+            `${this._reconcileScanMaxBatchMs}ms batch ceiling`,
+        )
+        const queue: string[] = [...scopeDirs]
+        let batches = 0
+        while (queue.length > 0) {
+          // The connection guard on top of the abort check: going offline aborts
+          // the scan's source (see _goOffline), but this also covers the window
+          // before the abort propagates — without it, a dropped connection would
+          // spawn one doomed p4 per remaining directory.
+          if (this._disposed || signal.aborted || this._connection !== 'connected') return
+          const dir = queue.shift()!
+          const key = this._reconcileScanKey(dir)
+          // Checkpoint probe: a directory scanned by an earlier session is served
+          // from cache — published straight to the renderer, zero p4 spawns.
+          const cached = await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => undefined)
+          if (cached !== undefined) {
+            const entry = JSON.parse(cached) as ReconcileScanEntry
+            if (entry.split) {
+              // A split marker means the parent's slow batch was already split in
+              // an earlier session and its own result was published back then.
+              // Replaying the parent's hints here would double-publish (each
+              // subdirectory checkpoint publishes its own), so the replay only
+              // re-enqueues the subdirectories.
+              const subdirs = await this._listSubdirs(dir)
+              if (subdirs.length > 0) {
+                this._log?.(
+                  `[perforce] reconcile-scan: ${dir} split checkpoint; resuming at ${subdirs.length} subdirectories`,
+                )
+                queue.push(...subdirs)
+                continue
+              }
+              // The directory can no longer be split (gone or unreadable): drop
+              // the marker and fall through to rescan the parent rather than
+              // replaying a split that can never resume.
+              this._cache.invalidate(P4CacheNs.reconcileScan, key)
+            } else if (this._now() - entry.completedAt <= RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS) {
+              this._publishReconcileScanEntry(dir, entry)
+              this._log?.(`[perforce] reconcile-scan: ${dir} served from checkpoint`)
+              continue
+            } else {
+              // A checkpoint past the freshness ceiling proves nothing about the
+              // disk any more: drop it and fall through to rescan now, so a
+              // directory whose drift changed between sessions is corrected this
+              // session instead of replaying a stale "clean"/"changed" answer.
+              this._cache.invalidate(P4CacheNs.reconcileScan, key)
+              this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint expired; rescanning`)
+            }
+          }
+          const started = this._now()
+          const files = await this._reconcileScanBatch([buildScopeFilespec(dir, true)], { signal })
+          if (this._disposed || signal.aborted) return
+          const elapsed = this._now() - started
+          if (files === undefined) {
+            // Failure is not "clean": the directory stays un-checkpointed so the
+            // next session retries it. The single exception is a slow failure —
+            // a batch that already burned the whole ceiling (watchdog kill,
+            // dropped connection) would fail just as slowly next session, so it
+            // is split like a slow success: the subtree is scanned piecemeal now
+            // and a split checkpoint makes later sessions resume at the
+            // subdirectories instead of re-running the same doomed parent batch.
+            const subdirs =
+              elapsed > this._reconcileScanMaxBatchMs ? await this._listSubdirs(dir) : []
+            if (subdirs.length > 0) {
+              this._log?.(
+                `[perforce] reconcile-scan: ${dir} failed after ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
+              )
+              queue.push(...subdirs)
+              await this._writeReconcileScanSplitCheckpoint(key)
+              continue
+            }
+            this._log?.(`[perforce] reconcile-scan: ${dir} failed; leaving un-checkpointed`)
+            continue
+          }
+          const entry: ReconcileScanEntry = {
+            completedAt: this._now(),
+            hints: files
+              .map((file) => toWorkingTreeHint(file))
+              .filter((h): h is WorkingTreeChangeDto => h !== undefined),
+          }
+          this._publishReconcileScanEntry(dir, entry)
+          batches++
+          // Split only a slow batch that FOUND drift. A slow-but-clean directory
+          // (a huge tree whose hashing cost is inherent, not a sign of scattered
+          // drift) would be re-hashed by every child batch if split — the parent
+          // already hashed the whole subtree, so splitting multiplies the total
+          // work by depth for zero new information. Checkpoint it as a result
+          // and let the freshness ceiling schedule the rescan instead.
+          if (entry.hints.length > 0 && elapsed > this._reconcileScanMaxBatchMs) {
+            const subdirs = await this._listSubdirs(dir)
+            if (subdirs.length > 0) {
+              this._log?.(
+                `[perforce] reconcile-scan: ${dir} took ${elapsed}ms — splitting into ${subdirs.length} subdirectories`,
+              )
+              queue.push(...subdirs)
+              // Checkpoint the split itself (no hints — the parent's result was
+              // published just above): the subdirectory checkpoints as they land
+              // are the actual resume points, and the marker makes the next
+              // session enqueue the subdirectories instead of re-running the
+              // same slow parent batch.
+              await this._writeReconcileScanSplitCheckpoint(key)
+              continue
+            }
+          }
+          // Checkpoint: `wrap` with a fetch that just returns the value persists
+          // it (immutable namespace mirrors to disk).
+          await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => JSON.stringify(entry))
+        }
+        if (signal.aborted) {
+          this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
+          return
+        }
+        this._log?.(`[perforce] reconcile-scan complete: ${batches} batch(es)`)
+      }, 'reconcile-scan')
+    })
+  }
+
+  /** The checkpoint key for one scanned directory — the focus fingerprint plus
+   *  the directory itself, so a focus change orphans every old entry at once
+   *  (the fingerprint is part of the key prefix) instead of serving scans that
+   *  answered a different scope. */
+  private _reconcileScanKey(dir: string): string {
+    return `${this._reconcileScanFingerprint()}:${dir}`
+  }
+
+  /** A stable fingerprint of the reconcile scope: the sorted, case-folded scope
+   *  directories hashed, so any focus change invalidates the whole checkpoint
+   *  batch. */
+  private _reconcileScanFingerprint(): string {
+    const scopeDirs = this._reconcileScopeDirs.length > 0 ? this._reconcileScopeDirs : [this.root]
+    const canonical = scopeDirs
+      .map((dir) => scopeKey(dir))
+      .sort()
+      .join('\n')
+    return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
+  }
+
+  /** The direct subdirectories of `dir` (for splitting an over-long batch), or
+   *  [] when the directory can't be listed — a missing dir at this point is not
+   *  an error, the scan just finishes at this level. */
+  private async _listSubdirs(dir: string): Promise<string[]> {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true })
+      return entries.filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name))
+    } catch (err) {
+      this._log?.(`[perforce] reconcile-scan: readdir ${dir} failed: ${String(err)}`)
+      return []
+    }
+  }
+
+  /** Persist a split marker for `key`: hints stays empty (a split parent's own
+   *  result was already published, or — for a slow failure — never produced),
+   *  so the next session resumes at the subdirectories rather than re-running
+   *  the slow parent batch. */
+  private async _writeReconcileScanSplitCheckpoint(key: string): Promise<void> {
+    await this._cache.wrap(P4CacheNs.reconcileScan, key, async () =>
+      JSON.stringify({
+        completedAt: this._now(),
+        hints: [],
+        split: true,
+      } satisfies ReconcileScanEntry),
+    )
+  }
+
+  /**
+   * Push one scanned directory to the renderer. Filtered again at publish time,
+   * not just scan time: a checkpoint replayed on a later session must not
+   * resurrect hints for files collected since the JSON was written.
+   */
+  private _publishReconcileScanEntry(dir: string, entry: ReconcileScanEntry): void {
+    const hints = entry.hints.filter((h) => !this._openedPaths.has(norm(h.path)))
+    this._sc.publishWorkingTreeScan([{ directory: dir, changes: hints }])
   }
 
   /**
@@ -3538,6 +3911,11 @@ export class PerforceClient {
   dispose(): void {
     this._disposed = true
     this.stopPolling()
+    // In-flight cancellable p4 spawns (a held reconcile batch, a submit) would
+    // otherwise outlive the client and hang until the SpawnWatchdog kills them
+    // — abort them so dispose settles them now. The disposed flag makes their
+    // aftermath a no-op.
+    for (const source of this._cancelSources.splice(0)) source.abort()
     this._cache.clear()
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
