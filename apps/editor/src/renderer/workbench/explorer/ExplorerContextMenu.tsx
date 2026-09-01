@@ -15,7 +15,7 @@ import {
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { IObservable, URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
-import { parentOf, relativeTo } from '../../services/explorer/explorerTreeUtils.js'
+import { parentOf, relativeTo, sameUri } from '../../services/explorer/explorerTreeUtils.js'
 import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
 import {
   IScmService,
@@ -69,11 +69,10 @@ export function ExplorerContextMenu({
   const target = state.target ?? { resource: rootResource, isDirectory: true }
 
   // Expose both `resource` (RevealInOSExplorer, Refresh) and `target` (Rename,
-  // Delete, OpenWithDefaultApp), plus `parent` (NewFile, NewFolder): when the
-  // clicked node is a directory use it directly; otherwise strip the filename.
+  // Delete, OpenWithDefaultApp); `parent` (NewFile, NewFolder) is derived in
+  // the args memo below.
   const resource = target.resource
   const isDirectory = target.isDirectory
-  const parent = target.isDirectory ? target.resource : (parentOf(target.resource) ?? rootResource)
   const isRoot = tree?.isRoot(resource) ?? resource.toString() === rootResource.toString()
   const hasClipboard = tree?.hasClipboard ?? false
   const hasCutItems = tree?.hasCutItems ?? false
@@ -104,6 +103,35 @@ export function ExplorerContextMenu({
     isDirectory &&
     !isRoot &&
     (focusScopeService?.isFocusFolder(relativeTo(rootResource, resource)) ?? false)
+
+  // Multi-select support (SCM parity): the second arg mirrors ScmView's
+  // `(primary, selection)` convention — an array of `{ resource, isDirectory }`
+  // so extension commands fan out over the whole selection. Only materialized
+  // for row right-clicks: the empty-area menu acts on the root alone.
+  const contextSelection = useMemo(() => {
+    const t = state.target
+    if (!t) return undefined
+    const primary = t.resource
+    const operations = tree?.getContextResourceOperations(primary) ?? [
+      { resource: primary, isDirectory: t.isDirectory },
+    ]
+    return (
+      operations
+        // The workspace root is never included (resolveContextOperations parity):
+        // the tree auto-selects it on focus, and `<root>/...` would fan a
+        // file-selection command out over the whole workspace.
+        .filter((op) => !tree?.isRoot(op.resource))
+        .map((op) => {
+          // The clicked row's own flag is authoritative (compact-folder middle
+          // segments are not resolvable via tree.isDirectory()), mirroring
+          // resolveContextOperations.
+          const isDirectory = sameUri(op.resource, primary) ? t.isDirectory : op.isDirectory
+          return isDirectory
+            ? { resource: op.resource, isDirectory: true }
+            : { resource: op.resource }
+        })
+    )
+  }, [tree, state.target])
 
   const scopedContext = useMemo(
     () =>
@@ -136,18 +164,22 @@ export function ExplorerContextMenu({
 
   useEffect(() => () => scopedContext?.dispose(), [scopedContext])
 
+  const args = useMemo(() => {
+    // `parent` (NewFile, NewFolder): when the clicked node is a directory use
+    // it directly; otherwise strip the filename. Computed inside the memo —
+    // `parentOf` returns a fresh URI each call, which would defeat the memo.
+    const parent = isDirectory ? resource : (parentOf(resource) ?? rootResource)
+    return [
+      { target: resource, resource, parent, isDirectory },
+      ...(contextSelection ? [contextSelection] : []),
+    ]
+  }, [resource, rootResource, isDirectory, contextSelection])
+
   return (
     <ContextMenu
       menuId={MenuId.ExplorerContext}
       anchor={{ x: state.x, y: state.y }}
-      args={[
-        {
-          target: resource,
-          resource: resource,
-          parent,
-          isDirectory,
-        },
-      ]}
+      args={args}
       commandService={commandService}
       {...(scopedContext ? { contextKeyService: scopedContext } : {})}
       onClose={onClose}

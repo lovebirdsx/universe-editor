@@ -50,8 +50,15 @@ import { createPerforceTimelineCommands, PerforceTimelineProvider } from './time
 import { switchClient, wireSwitchedClient } from './switchClient.js'
 import { localize } from './nls.js'
 
+/** The filesystem path an SCM or Explorer resource argument carries: SCM passes
+ *  a bare `{ resourceUri }` string, the Explorer a `{ resource }` UriComponents
+ *  (its `fsPath` getter is lost over RPC, so reconstruct from scheme + path). */
 function resourcePath(arg: unknown): string | undefined {
-  return (arg as { resourceUri?: string } | undefined)?.resourceUri
+  const a = arg as
+    | { resourceUri?: string; resource?: { scheme?: string; path?: string } }
+    | undefined
+  if (a?.resourceUri) return a.resourceUri
+  return a?.resource ? uriToFsPath(a.resource) : undefined
 }
 
 /** The changelist a group-scoped command targets, from the `scmResourceGroupId`
@@ -61,35 +68,77 @@ function groupChangelistId(arg: unknown): string | undefined {
   return id === undefined ? undefined : changelistIdFromGroupId(id)
 }
 
-/** Resolve the file a file-scoped command acts on: the SCM resource's path when
- *  invoked from the SCM view, else the explorer selection, else the active
- *  editor's file (command-palette / editor-title entry points). Explorer passes
- *  `{ resource }` as a `UriComponents` (its `fsPath` getter is lost over RPC), so
- *  reconstruct the path from scheme + path. */
+/** Resolve the file a file-scoped command acts on: the resource's path when
+ *  invoked from the SCM view (`{ resourceUri }`) or the explorer (`{ resource }`
+ *  as a `UriComponents`), else the active editor's file (command-palette /
+ *  editor-title entry points). */
 async function resolveTargetPath(arg: unknown): Promise<string | undefined> {
   const fromResource = resourcePath(arg)
   if (fromResource) return fromResource
-  const resource = (arg as { resource?: { scheme?: string; path?: string } } | undefined)?.resource
-  const fromExplorer = resource ? uriToFsPath(resource) : undefined
-  if (fromExplorer) return fromExplorer
   return commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile')
 }
 
-/** Pull the file paths out of an SCM multi-selection argument (the second arg the
- *  view passes on inline actions: an array of `{ resourceUri }`). Pure, so the
- *  multi-select fan-out is unit-testable without the command layer. Returns an
- *  empty array when the value isn't a non-empty selection array. */
-export function selectionPaths(selection: unknown): string[] {
-  if (!Array.isArray(selection)) return []
-  return selection.map(resourcePath).filter((p): p is string => !!p)
+/** One entry of a multi-selection argument the host attaches to explorer/SCM
+ *  commands, normalized to a filesystem path plus its directory-ness. */
+export interface SelectionTarget {
+  readonly path: string
+  readonly isDirectory: boolean
 }
 
-/** Resolve every path a file-scoped command should act on. When the SCM view runs
- *  an inline action on a multi-selection it passes the full selection as the second
- *  argument (each `{ resourceUri }`); otherwise this falls back to the single
- *  clicked/active path via {@link resolveTargetPath}. */
+/** Pull the resource entries out of a multi-selection argument (the second arg
+ *  the host passes on explorer/SCM commands): each `{ resourceUri }` (SCM) or
+ *  `{ resource, isDirectory }` (Explorer). Pure, so the multi-select fan-out is
+ *  unit-testable without the command layer. Returns an empty array when the
+ *  value isn't a non-empty selection array. */
+export function selectionTargets(selection: unknown): SelectionTarget[] {
+  if (!Array.isArray(selection)) return []
+  return selection
+    .map((entry) => {
+      const path = resourcePath(entry)
+      if (!path) return undefined
+      const isDirectory = (entry as { isDirectory?: boolean } | undefined)?.isDirectory === true
+      return { path, isDirectory }
+    })
+    .filter((t): t is SelectionTarget => t !== undefined)
+}
+
+/** The plain paths of a multi-selection argument (see {@link selectionTargets}). */
+export function selectionPaths(selection: unknown): string[] {
+  return selectionTargets(selection).map((t) => t.path)
+}
+
+/** Expand directory entries in a target list to p4's recursive `<dir>/...`
+ *  filespec. Pure, so the directory fan-out is unit-testable. */
+export function expandDirectoryTargets(
+  paths: readonly string[],
+  dirPaths: ReadonlySet<string>,
+): string[] {
+  return paths.map((p) => (dirPaths.has(p) ? `${p.replace(/[/\\]+$/, '')}/...` : p))
+}
+
+/** Whether a reconcile invocation should fan out over the multi-selection (one
+ *  filespec per element) instead of the single primary target. SCM folder rows
+ *  must NOT: their `selection` is the subtree's *opened* files, so enumerating
+ *  it would silently drop anything p4 hasn't seen — the folder keeps its single
+ *  recursive `<dir>/...` filespec. Pure, so the fork is unit-testable. */
+export function reconcileUsesSelection(
+  selection: readonly SelectionTarget[],
+  arg0IsDirectory: boolean,
+): boolean {
+  return selection.length > 0 && (selection.some((t) => t.isDirectory) || !arg0IsDirectory)
+}
+
+/** Resolve every path a file-scoped command should act on. When the host runs
+ *  an action on a multi-selection it passes the full selection as the second
+ *  argument; otherwise this falls back to the single clicked/active path via
+ *  {@link resolveTargetPath}. Directory entries are filtered out — file-level
+ *  commands (`p4 edit/add/delete`) can't take bare directory paths; commands
+ *  that do want directories (revertReconcile / reconcile) read the selection
+ *  via {@link selectionTargets} directly. */
 async function resolveTargetPaths(args: readonly unknown[]): Promise<string[]> {
-  const fromSelection = selectionPaths(args[1])
+  const fromSelection = selectionTargets(args[1])
+    .filter((t) => !t.isDirectory)
+    .map((t) => t.path)
   if (fromSelection.length > 0) return fromSelection
   const single = await resolveTargetPath(args[0])
   return single ? [single] : []
@@ -964,9 +1013,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // on a folder) recurses via p4's `<dir>/...` syntax so the whole subtree is
     // collected.
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
+      const arg0 = args[0] as { isDirectory?: boolean } | undefined
+      const selection = selectionTargets(args[1])
+      // Explorer multi-select: one filespec per element, directories as
+      // `<dir>/...`. SCM folder rows keep the single recursive `<dir>/...`
+      // filespec (see reconcileUsesSelection).
+      if (reconcileUsesSelection(selection, arg0?.isDirectory === true)) {
+        const targets = expandDirectoryTargets(
+          selection.map((t) => t.path),
+          new Set(selection.filter((t) => t.isDirectory).map((t) => t.path)),
+        )
+        await mgr.resolveClient({ resourceUri: selection[0]!.path })?.reconcile(targets)
+        return
+      }
       const path = await resolveTargetPath(args[0])
       if (!path) return
-      const isDirectory = (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true
+      const isDirectory = arg0?.isDirectory === true
       const target = isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
       await mgr.resolveClient({ resourceUri: path })?.reconcile([target])
     }),
@@ -1392,9 +1454,19 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // (`p4 clean`). Destructive — confirm first. A directory target recurses via
     // p4's `<dir>/...` syntax.
     commands.registerCommand('perforce.revertReconcile', async (...args: unknown[]) => {
-      const paths = await resolveTargetPaths(args)
-      if (paths.length === 0) return
-      const arg0 = args[0] as { isDirectory?: boolean } | undefined
+      const selection = selectionTargets(args[1])
+      const single = selection.length === 0 ? await resolveTargetPath(args[0]) : undefined
+      if (selection.length === 0 && !single) return
+      const hasDirectory =
+        selection.length > 0
+          ? selection.some((t) => t.isDirectory)
+          : (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true
+      // Directory entries stay raw through the guard and the confirm (per-file
+      // classification isn't meaningful for them) and expand to `<dir>/...`
+      // only in the final p4 invocation — mixed file/dir selections included.
+      const dirPaths = new Set(selection.filter((t) => t.isDirectory).map((t) => t.path))
+      if (selection.length === 0 && hasDirectory && single) dirPaths.add(single)
+      const paths = selection.length > 0 ? selection.map((t) => t.path) : [single!]
       const target = mgr.resolveClient({ resourceUri: paths[0]! }) ?? mgr.active
       if (!target) return
       // Precheck: clean never touches opened files, so confirm only over the
@@ -1403,7 +1475,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // meaningful — skip the precheck for it.
       const plan = revertGuardPlan(
         paths,
-        arg0?.isDirectory === true ? new Set<string>() : await target.openedAmong(paths),
+        hasDirectory ? new Set<string>() : await target.openedAmong(paths),
         'unopened',
       )
       if (plan.action === 'misdirect') {
@@ -1448,10 +1520,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               )
       const confirm = await window.showWarningMessage(message, BTN_REVERT)
       if (confirm !== BTN_REVERT) return
-      const targets =
-        arg0?.isDirectory === true && paths.length === 1
-          ? [`${paths[0]!.replace(/[/\\]+$/, '')}/...`]
-          : plan.targets
+      const targets = expandDirectoryTargets(plan.targets, dirPaths)
       await target.revertReconcile(targets)
     }),
 

@@ -112,6 +112,14 @@ describe('ExplorerContextMenu', () => {
       expect(arg?.resource.path).toBe(target.toJSON().path)
       expect(arg?.parent.path).toBe(URI.joinPath(root, 'src').toJSON().path)
       expect(arg?.isDirectory).toBe(false)
+
+      // Without a tree there is no selection to query — the fallback is a
+      // single-element selection array mirroring the primary target.
+      const selection = commandService.calls[0]?.args[1] as
+        | Array<{ resource: { path: string } }>
+        | undefined
+      expect(selection).toHaveLength(1)
+      expect(selection?.[0]?.resource.path).toBe(target.toJSON().path)
     } finally {
       menuDisposable.dispose()
       cmdDisposable.dispose()
@@ -139,6 +147,7 @@ describe('ExplorerContextMenu', () => {
         hasClipboard: true,
         hasCutItems: false,
         isRoot: (resource: URI) => resource.toString() === root.toString(),
+        getContextResourceOperations: (resource: URI) => [{ resource, isDirectory: false }],
       } as unknown as ExplorerTreeService
 
       const { unmount } = render(
@@ -290,6 +299,183 @@ describe('ExplorerContextMenu', () => {
       expect(screen.getByText('Open for Edit (Perforce)')).toBeDefined()
     } finally {
       contextKeyService.dispose()
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('passes the tree selection as the second arg so extension commands fan out over it', () => {
+    const cmdId = 'test.explorer.delete'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Delete',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Delete',
+    })
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const fileA = URI.joinPath(root, 'a.txt')
+      const fileB = URI.joinPath(root, 'b.txt')
+      const tree = {
+        isRoot: () => false,
+        hasClipboard: false,
+        hasCutItems: false,
+        getContextResourceOperations: () => [
+          { resource: fileA, isDirectory: false },
+          { resource: fileB, isDirectory: false },
+        ],
+      } as unknown as ExplorerTreeService
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: fileA, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          tree={tree}
+          onClose={() => {}}
+        />,
+      )
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      const selection = commandService.calls[0]?.args[1] as
+        | Array<{ resource: { path: string }; isDirectory?: boolean }>
+        | undefined
+      expect(selection).toHaveLength(2)
+      expect(selection?.[0]?.resource.path).toBe(fileA.toJSON().path)
+      expect(selection?.[1]?.resource.path).toBe(fileB.toJSON().path)
+      // File rows carry no isDirectory flag (the extension treats absence as false).
+      expect(selection?.[0]?.isDirectory).toBeUndefined()
+      expect(selection?.[1]?.isDirectory).toBeUndefined()
+    } finally {
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('excludes the workspace root from the selection arg (the tree auto-selects it on focus)', () => {
+    const cmdId = 'test.explorer.delete'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Delete',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Delete',
+    })
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const file = URI.joinPath(root, 'a.txt')
+      const tree = {
+        hasClipboard: false,
+        hasCutItems: false,
+        isRoot: (resource: URI) => resource.toString() === root.toString(),
+        getContextResourceOperations: () => [
+          { resource: root, isDirectory: true },
+          { resource: file, isDirectory: false },
+        ],
+      } as unknown as ExplorerTreeService
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          tree={tree}
+          onClose={() => {}}
+        />,
+      )
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      const selection = commandService.calls[0]?.args[1] as
+        | Array<{ resource: { path: string } }>
+        | undefined
+      expect(selection).toHaveLength(1)
+      expect(selection?.[0]?.resource.path).toBe(file.toJSON().path)
+    } finally {
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('overrides the primary selection entry with the clicked row isDirectory flag', () => {
+    const cmdId = 'test.explorer.delete'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Delete',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Delete',
+    })
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'src')
+      const tree = {
+        isRoot: () => false,
+        hasClipboard: false,
+        hasCutItems: false,
+        // The tree says "file", but the clicked row was a compact-folder middle
+        // segment whose directory-ness only the row itself knows.
+        getContextResourceOperations: () => [{ resource: target, isDirectory: false }],
+      } as unknown as ExplorerTreeService
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: target, isDirectory: true } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          tree={tree}
+          onClose={() => {}}
+        />,
+      )
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      const selection = commandService.calls[0]?.args[1] as
+        | Array<{ resource: { path: string }; isDirectory?: boolean }>
+        | undefined
+      expect(selection).toHaveLength(1)
+      expect(selection?.[0]).toEqual({ resource: target, isDirectory: true })
+    } finally {
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('omits the selection arg when the empty area was right-clicked', () => {
+    const cmdId = 'test.explorer.delete'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Delete',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Delete',
+    })
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: null }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          onClose={() => {}}
+        />,
+      )
+
+      fireEvent.click(screen.getByText('Delete'))
+
+      expect(commandService.calls[0]?.args).toHaveLength(1)
+    } finally {
       menuDisposable.dispose()
       cmdDisposable.dispose()
     }

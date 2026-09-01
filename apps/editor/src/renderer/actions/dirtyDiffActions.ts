@@ -135,10 +135,13 @@ export class OpenChangesAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const [arg, options] = args as [
+    // args[1] from the Explorer context menu is the multi-selection array
+    // (ExplorerContextMenu materializes it for extensions) — not options.
+    const [arg, rawOptions] = args as [
       unknown,
       ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
     ]
+    const options = Array.isArray(rawOptions) ? undefined : rawOptions
     // Everything the accessor provides has to be read before the first await —
     // a ServicesAccessor is only valid for the synchronous part of run().
     const group = accessor.get(IEditorGroupsService).activeGroup

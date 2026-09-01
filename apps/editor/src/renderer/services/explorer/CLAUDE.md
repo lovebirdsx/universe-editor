@@ -95,7 +95,11 @@ ExplorerTreeNode.tsx    单行，React.memo（selection/focus/active/cut 作 pro
                         compact 折叠行每段可独立 hover/右键/落点（各段对应各自目录 URI）。
 ExplorerContextMenu.tsx 薄封装 workbench-ui ContextMenu；菜单项来自 MenuRegistry(ExplorerMenuContribution)。
                         创建 scoped context key(explorerResourceIsFolder/IsRoot/fileCopied/
-                        explorerResourceCut)；args 传 {target,resource,parent,isDirectory}。
+                        explorerResourceCut)；args 传 {target,resource,parent,isDirectory}；
+                        多选时 args[1] = 选区数组（getContextResourceOperations，元素
+                        {resource,isDirectory}，primary 项以点击行 isDirectory 为准；
+                        工作区根不包含——树在获焦时自动选中根，包含它会把
+                        `<root>/...` 扇出整个工作区；空白区右键不加）。
 ExplorerViewToolbar.tsx 标题栏：新建文件/文件夹（命令）、刷新、全部折叠。无 root 时禁用。
 ExplorerView.module.css .row 的 .active(当前编辑器)/.selected/.focused/.cut(剪切变暗) + compact 段样式。
 ```
@@ -183,6 +187,7 @@ actions/index.ts                                     registerAction2 注册全�
 ### 关键架构决策与「为什么」
 
 - **命令目标解析双轨**：文件操作的「作用范围」本质分单/多两类，收敛到 `resolveTarget` vs `resolveContextOperations` 两个 helper + service 端 `getContextResources` 一个裁决点。**新命令只需认领用哪个**，多选语义（选区内→全选区 / 选区外→单行）自动一致。历史 bug（delete、copy-path 漏接多选）都是「本该多选却用了单目标」。
+- **扩展命令的多选注入在菜单期物化（SCM parity）**：扩展命令跑在 extension-host 进程，拿不到 renderer 的 tree 选区——`ExplorerContextMenu` 在菜单弹出时就把选区固化成 `args[1]`（`getContextResourceOperations`，元素 `{resource, isDirectory}`）随命令跨进程传过去。renderer 自己的 Action2 忽略 args[1]、自行走 `resolveContextOperations`（同为 `getContextResourceOperations` 派生，语义一致）。**args[1] 已被多选选区占用**：explorer/context 的命令 handler 不得再把 args[1] 当 options 对象解构——若确需 options（如 `dirtyDiffActions` 的 `{pinned, preserveFocus}`），先 `Array.isArray(args[1])` 守卫剔除选区形态。
 - **树状态委托 TreeModel、不自造**：选择/焦点/展开/虚拟化/键盘导航是通用树能力，放 workbench-ui 的 TreeModel；本 service 只加文件系统特化。所以 explorer 与 outline 等共享同一套 Tree 交互契约。
 - **状态不持久化、切 workspace 全重置**：树是 workspace 的派生视图，换根即弃（对标 VSCode 的轻量策略）。
 - **watcher 冷启动延迟**：递归监听是主进程 CPU 大头，冷启动时 root 展开已够首屏，watcher 推迟到 idle phase arm，避开与 renderer restore 抢 CPU。见构造函数注释。
