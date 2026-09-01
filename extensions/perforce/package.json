@@ -158,18 +158,6 @@
         "icon": "discard"
       },
       {
-        "command": "perforce.dismissReconcile",
-        "title": "%perforce.command.dismissReconcile.title%",
-        "category": "Perforce",
-        "icon": "eye-off"
-      },
-      {
-        "command": "perforce.clearDismissed",
-        "title": "%perforce.command.clearDismissed.title%",
-        "category": "Perforce",
-        "icon": "discard"
-      },
-      {
         "command": "perforce.openShelvedFile",
         "title": "%perforce.command.openShelvedFile.title%",
         "category": "Perforce",
@@ -395,12 +383,6 @@
           "icon": "discard"
         },
         {
-          "command": "perforce.dismissReconcile",
-          "when": "scmProvider == perforce && scmResourceState == RC",
-          "group": "inline@3",
-          "icon": "eye-off"
-        },
-        {
           "command": "perforce.revert",
           "when": "scmProvider == perforce && scmResourceState != S && scmResourceState != RC",
           "group": "inline@1",
@@ -505,18 +487,6 @@
           "icon": "stage-all"
         },
         {
-          "command": "perforce.dismissReconcile",
-          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
-          "group": "inline@2",
-          "icon": "eye-off"
-        },
-        {
-          "command": "perforce.clearDismissed",
-          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
-          "group": "1_reconcile@1",
-          "icon": "discard"
-        },
-        {
           "command": "perforce.submitChangelist",
           "when": "scmProvider == perforce && scmResourceGroup =~ /^cl:/",
           "group": "inline@1",
@@ -607,12 +577,6 @@
           "when": "scmProvider == perforce && scmResourceGroup == reconcile",
           "group": "inline@2",
           "icon": "discard"
-        },
-        {
-          "command": "perforce.dismissReconcile",
-          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
-          "group": "inline@3",
-          "icon": "eye-off"
         },
         {
           "command": "perforce.revert",

@@ -354,7 +354,7 @@ function createReconcileStore(context: ExtensionContext, root: string): Reconcil
   const key = `perforce.reconcile.${norm(root)}`
   return {
     load(): ReconcilePersistState {
-      return context.workspaceState.get<ReconcilePersistState>(key, { files: [], dismissed: [] })
+      return context.workspaceState.get<ReconcilePersistState>(key, { files: [] })
     },
     save(state: ReconcilePersistState): void {
       void context.workspaceState.update(key, state)
@@ -577,8 +577,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
   )
 
-  // Restore the persisted "changes to reconcile" snapshot (+ dismissed set) so it
-  // shows immediately on reload. This turns reconcile discovery on (sticky) but
+  // Restore the persisted "changes to reconcile" snapshot so it shows immediately
+  // on reload. This turns reconcile discovery on (sticky) but
   // does NOT trigger a full `reconcile -n` walk — the first refresh below just
   // re-filters the restored list against fresh `opened`, keeping startup cheap on
   // large depots. Use Clean Refresh for an authoritative rescan.
@@ -1444,33 +1444,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
           ? [`${paths[0]!.replace(/[/\\]+$/, '')}/...`]
           : paths
       await target.revertReconcile(targets)
-    }),
-
-    // Permanently remove file(s) / a folder subtree / the whole group from the
-    // "changes to reconcile" list (dismiss). Non-destructive: the working tree is
-    // untouched; the entries are just hidden and won't reappear (even after a
-    // Clean Refresh) until collected or dismissals are cleared. From the group
-    // header this sweeps every listed reconcile file (root as a directory target).
-    commands.registerCommand('perforce.dismissReconcile', async (...args: unknown[]) => {
-      const arg = args[0]
-      const isGroup = (arg as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
-      const target =
-        mgr.resolveClient(arg) ??
-        (resourcePath(arg) ? mgr.resolveClient({ resourceUri: resourcePath(arg)! }) : undefined) ??
-        mgr.active
-      if (!target) return
-      // Group header (no concrete resource) → sweep the whole list via the root.
-      const paths =
-        isGroup && !resourcePath(arg) ? [`${target.root}/...`] : await resolveTargetPaths(args)
-      if (paths.length === 0) return
-      target.dismissReconcile(paths)
-    }),
-
-    // Clear all dismissals (unignore everything) and rescan so still-diverged
-    // files that were dismissed reappear in the group.
-    commands.registerCommand('perforce.clearDismissed', async (arg) => {
-      const target = mgr.resolveClient(arg) ?? mgr.active
-      await target?.clearDismissed()
     }),
 
     // Submit the default changelist using the SCM input-box description.

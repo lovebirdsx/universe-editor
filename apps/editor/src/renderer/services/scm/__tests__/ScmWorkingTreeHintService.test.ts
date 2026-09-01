@@ -250,6 +250,101 @@ describe('ScmWorkingTreeHintService', () => {
     expect(service.getHint(a)?.letter).toBe('FRESH')
   })
 
+  it('discards an old answer that lands after the re-query was already issued', async () => {
+    // Two overlapping queries for the same key. This is not exotic: any provider
+    // whose round-trip outlasts the 150ms debounce hits it on every save.
+    const resolvers: ((v: readonly WorkingTreeChangeDto[] | undefined) => void)[] = []
+    const executeCommand = vi.fn(
+      () =>
+        new Promise<readonly WorkingTreeChangeDto[] | undefined>((resolve) =>
+          resolvers.push(resolve),
+        ),
+    )
+    const { service, executeCommand: exec, fileEvents } = makeService(executeCommand)
+
+    const a = URI.file(`${ROOT}/a.ts`)
+    expect(service.getHint(a)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+
+    // Save while query #1 is still out: the key is re-enqueued.
+    fileEvents.fire([{ type: 'modified', resource: a }])
+    // Let the debounce elapse so query #2 is actually *issued* before either
+    // answer lands. That is what separates this from the file-event test above:
+    // the second flush re-arms the in-flight marker, so the bookkeeping can no
+    // longer tell query #1's answer from query #2's.
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(2)
+
+    // The pre-save answer arrives first (it was sent first), then the fresh one.
+    resolvers[0]!([])
+    await vi.advanceTimersByTimeAsync(0)
+    resolvers[1]!([dto(`${ROOT}/a.ts`, { letter: 'RC' })])
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Latest query wins. Accepting #1 would pin the file "clean" for good: the
+    // cache holds an entry, so no render re-enqueues it, and `_revalidate` only
+    // walks keys already cached at the time it runs.
+    expect(service.getHint(a)?.letter).toBe('RC')
+  })
+
+  it('does not re-enqueue a key whose query is still in flight', async () => {
+    const executeCommand = vi.fn(
+      () => new Promise<readonly WorkingTreeChangeDto[] | undefined>(() => {}),
+    )
+    const { service, executeCommand: exec } = makeService(executeCommand)
+
+    const a = URI.file(`${ROOT}/a.ts`)
+    expect(service.getHint(a)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+
+    // Still no answer, so the row keeps rendering as unknown. Re-reading it must
+    // not fire a second identical query — Explorer re-renders constantly, and
+    // each duplicate is another p4 spawn queued on the shared concurrency gate.
+    expect(service.getHint(a)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-enqueue a stale cached key whose re-query is still in flight', async () => {
+    let resolveCmd: ((v: readonly WorkingTreeChangeDto[] | undefined) => void) | undefined
+    const executeCommand = vi
+      .fn()
+      .mockResolvedValueOnce([dto(`${ROOT}/a.ts`)])
+      .mockImplementation(
+        () =>
+          new Promise<readonly WorkingTreeChangeDto[] | undefined>(
+            (resolve) => (resolveCmd = resolve),
+          ),
+      )
+    const { service, decorations, executeCommand: exec } = makeService(executeCommand)
+
+    const a = URI.file(`${ROOT}/a.ts`)
+    service.getHint(a)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(1)
+
+    // Stale → the next read re-queries while keeping the old hint on screen.
+    decorations.set(emptySnapshot(), undefined)
+    expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(2)
+
+    // A second refresh marks it stale again before the re-query has landed. The
+    // cached-and-stale path needs the same in-flight guard as the cache-miss one,
+    // or this fires a third query that answers the question already on the wire.
+    decorations.set(emptySnapshot(), undefined)
+    expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exec).toHaveBeenCalledTimes(2)
+
+    // Once it lands the key is released, so a still-stale row queries again.
+    resolveCmd!([dto(`${ROOT}/a.ts`, { letter: 'RC' })])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.getHint(a)?.letter).toBe('RC')
+  })
+
   it('fully invalidates when the workspace changes', async () => {
     const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.ts`)])
     const { service, workspaceEvents } = makeService(executeCommand)

@@ -204,9 +204,8 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 - **固定组生命周期**：reconcile 组在**构造函数里第一个** `createResourceGroup`（SCM 视图按创建序渲染 → 保证置顶），`hideWhenEmpty=true`，**不进 `_groups` Map**（`_applyGroups` 对账不碰它，避免被 dispose），`dispose()` 里单独释放。
 - **行 contextValue = `RC`**（`p4Decoration.ts` `toReconcileResourceState`），与已签出行区分，menu `when` 用 `scmResourceState == RC` 单独挂「收集」inline。
 - **cleanRefresh 正名**：原来与普通 refresh 等价（占位），现在 = 带 reconcile 发现的全量刷新。
-- **持久化 + 启动秒开**：reconcile 组不再是纯派生——`_reconcileFiles` + `_dismissed` 经注入的 `ReconcileStore` 落盘（`extension.ts` 用 `context.workspaceState`，key = `perforce.reconcile.<normRoot>` 按 client root 分 repo）。构造后、首个 refresh 前调 `client.restoreReconcile()`：载入快照 + `_reconcileActive=true` + 渲染，**不设 `_fullScanRequested` → 启动不跑 `reconcile -n`**；首个普通 refresh 走 cheap path 按最新 `opened` 过滤已签出项即可自洽。写入统一收敛在 `_setReconcileFiles`（过滤 dismissed → 存 `_reconcileFiles` → 渲染 → `_persistReconcile`）。`_goOffline` 只清 UI 不清盘。`create`/构造函数新增可选 `store?` 参数，测试省略 = 纯内存 no-op。
-- **移出列表（永久忽略 = dismissed）**：`_dismissed: Set<string>`（normalized clientFile）。`dismissReconcile(paths)` 加入并落盘；`filterDismissed`（`reconcileParser.ts` 纯函数）在 `_setReconcileFiles` 末端统一过滤 → 即使 Clean Refresh 全量扫到也不冒出来。文件夹/组目标经 `expandDismissPaths`（纯函数，按 `norm` 前缀展开成当前列表里的具体条目；组头传 `<root>/...`）。`clearDismissed()` = 逃生阀（清空 + `refresh({reconcile:true})`）。**收集/移出会解除 dismiss**：`reconcile()`/`moveToReconcile()` 成功前调 `_undismiss(paths)`（显式重新纳入视野）。命令 `perforce.dismissReconcile`（icon `eye-off`，挂 RC 行 inline + reconcile 组/文件夹）、`perforce.clearDismissed`（reconcile 组头）。
-- **move out 增量化（去卡顿）**：`moveToReconcile`/`revertReconcile` **不再** `_fullScanRequested=true` 跑全量 `reconcile -n <scope>`，改为对已知 path 调 `refreshReconcilePaths(paths)`（O(改动数)）。目录版先 `_concreteReconcilePaths`（剥 `/...` 后缀 + `expandDismissPaths`）展开成具体条目再增量扫。测试 `clientReconcilePersist.test.ts` 断言移出后所有 `reconcile -n` argv **不含** `//...` / `<root>/...`。
+- **持久化 + 启动秒开**：reconcile 组不再是纯派生——`_reconcileFiles` 经注入的 `ReconcileStore` 落盘（`extension.ts` 用 `context.workspaceState`，key = `perforce.reconcile.<normRoot>` 按 client root 分 repo）。构造后、首个 refresh 前调 `client.restoreReconcile()`：载入快照 + `_reconcileActive=true` + 渲染，**不设 `_fullScanRequested` → 启动不跑 `reconcile -n`**；首个普通 refresh 走 cheap path 按最新 `opened` 过滤已签出项即可自洽。写入统一收敛在 `_setReconcileFiles`（存 `_reconcileFiles` → 渲染 → `_persistReconcile`）。`_goOffline` 只清 UI 不清盘。`create`/构造函数新增可选 `store?` 参数，测试省略 = 纯内存 no-op。
+- **move out 增量化（去卡顿）**：`moveToReconcile`/`revertReconcile` **不再** `_fullScanRequested=true` 跑全量 `reconcile -n <scope>`，改为对已知 path 调 `refreshReconcilePaths(paths)`（O(改动数)）。目录版先 `_concreteReconcilePaths`（剥 `/...` 后缀 + `expandReconcileTargets`）展开成具体条目再增量扫。测试 `clientReconcilePersist.test.ts` 断言移出后所有 `reconcile -n` argv **不含** `//...` / `<root>/...`。
 
 ### Explorer 按需 hint 通道（`checkWorkingTree`）
 
@@ -216,14 +215,16 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 
 四条决策，改这条通道前先对照：
 
-- **不喂进 `ScmDecorationsService`**：`getFile(...) !== undefined` 是既有的「该文件有本地改动」判据，被 dirty-diff 门控与 `dirtyDiffActions` 依赖；塞进去还会连带走 SCM `resourceStates` → 触发 `_reconcileActive` sticky / 持久化 / dismissed 三连锁。新服务只服务 Explorer 行。
+- **不喂进 `ScmDecorationsService`**：`getFile(...) !== undefined` 是既有的「该文件有本地改动」判据，被 dirty-diff 门控与 `dirtyDiffActions` 依赖；塞进去还会连带走 SCM `resourceStates` → 触发 `_reconcileActive` sticky / 持久化 二连锁。新服务只服务 Explorer 行。
 - **徽标从 `toReconcileResourceState` 派生**（`p4Decoration.ts` `toWorkingTreeHint`）：letter 必须是 `RC`，不是动作字母 E/A/D。两条通道（组 / hint）可能先后描述同一个文件，各写一份 style 映射会让同一文件在 Clean Refresh 前后徽标跳变。单测 `clientWorkingTreeHint.test.ts` 直接与 `toReconcileResourceState` 的返回值逐字段比对，改坏派生关系即红。
 - **只给文件行，目录不染色**：按需模型对未展开子树一无所知，目录颜色只会是个下界，展开即变——来回闪烁比不显示更糟。push 态的祖先冒泡（`ScmDecorationsService.folders`）在用户跑过 Clean Refresh 后照常工作，两套目录真相不混用。
 - **只读派生（最容易被"顺手优化"破坏）**：`checkWorkingTree` 绝不置 `_reconcileActive`、绝不写 `_reconcileFiles`、绝不 `_persistReconcile()`、绝不 `_emitChange()`。一旦有人想「既然都扫了不如存下来」，这条通道就退化成它要规避的 sticky 全量发现。护栏 = store save spy + 组 `resourceStates` 身份 + `onDidChange` 计数 + 直读 `_reconcileActive`。
 
-另两处易踩：hint 与组共用三个谓词（已 opened / scope 外 / dismissed），全被过滤掉则**零 p4 spawn**；返回值**回显调用方自己的路径字符串**（扫描报的是从 client 语法翻译来的路径，拼法未必与 host 一致，不回显会让 renderer 缓存键对不上，还会把没问过的路径——比如 rename 的另一半——报到不存在的行上）。
+另两处易踩：hint 与组共用两个谓词（已 opened / scope 外），全被过滤掉则**零 p4 spawn**；返回值**回显调用方自己的路径字符串**（扫描报的是从 client 语法翻译来的路径，拼法未必与 host 一致，不回显会让 renderer 缓存键对不上，还会把没问过的路径——比如 rename 的另一半——报到不存在的行上）。
 
-回显那张 map 的 key 必须是 `scopeKey` 而非 `norm`——它两侧**不同源**：请求方按用户打开目录的拼法给，答案按 `p4 info` 报的 clientRoot 拼，Windows/macOS 上两者可以只差大小写却指同一个文件（`norm` 只折盘符，会漏配 → hint 静默消失，Clean Refresh 后又冒出来）。同一个方法里查 `_openedPaths` / `_dismissed` 仍用 `norm`，因为那两个 set 的键与被比较的值同源（都由 p4 报）。`pathUtil.ts` 里 `scopeKey` 的注释就是这条判据的出处。路由用 `resolveContaining`（严格最长前缀）而非 `resolveClient`——后者的 active 回退是命令路由语义，数据查询用它会把不归任何 client 的路径扔给 active client 扫。
+回显那张 map 的 key 必须是 `scopeKey` 而非 `norm`——它两侧**不同源**：请求方按用户打开目录的拼法给，答案按 `p4 info` 报的 clientRoot 拼，Windows/macOS 上两者可以只差大小写却指同一个文件（`norm` 只折盘符，会漏配 → hint 静默消失，Clean Refresh 后又冒出来）。同一个方法里查 `_openedPaths` 仍用 `norm`，因为那个 set 的键与被比较的值同源（都由 p4 报）。`pathUtil.ts` 里 `scopeKey` 的注释就是这条判据的出处。路由用 `resolveContaining`（严格最长前缀）而非 `resolveClient`——后者的 active 回退是命令路由语义，数据查询用它会把不归任何 client 的路径扔给 active client 扫。
+
+**⚠️ 根因 / 修法（在飞查询竞态）**：renderer 侧 `ScmWorkingTreeHintService` 的在飞标记必须带 per-request 令牌。曾经 `_inFlight` 是无身份的 `Set<string>`：p4 `reconcile -n` 往返 > 150ms 去抖时，同一 key 的两次查询必然重叠——保存文件触发的 `_onFileEvents` 删掉标记意在丢弃旧答案，但第二次 flush 又把它加了回来，于是先返回的旧（保存前）答案被接受写进缓存，后返回的正确答案反而被丢弃。后果是该文件被永久钉死成「干净」：缓存里有条目故不再重新入队，而 `_revalidate()` 只遍历 `_cache.keys()`，标记时还没进缓存的 key 漏标；`_generation` 只在 `_invalidate()` 里 bump 也救不了——症状与真正的「没有改动」完全无法区分。修法：`_inFlight: Map<string, number>` + 单调 `_queryToken`，`_writeHint` 只接受 token 匹配的答案（latest-wins），不匹配打一行 debug 日志；`getHint` 缓存 miss 分支加 `_inFlight.has(key)` 守卫，避免重渲染重复入队灌满 `ConcurrencyGate`。回归护栏在 `apps/editor/src/renderer/services/scm/__tests__/ScmWorkingTreeHintService.test.ts`（两个用例：「旧答案在重新查询已发出后才落地时被丢弃」「在飞期间不重复入队」）。
 
 ## 命令路由（一 id 多 client）
 

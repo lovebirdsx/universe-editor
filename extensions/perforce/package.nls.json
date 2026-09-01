@@ -23,8 +23,6 @@
   "perforce.command.deleteChangelist.title": "Delete Changelist",
   "perforce.command.moveToReconcile.title": "Move out of Changelist",
   "perforce.command.revertReconcile.title": "Revert Changes",
-  "perforce.command.dismissReconcile.title": "Remove from List",
-  "perforce.command.clearDismissed.title": "Show Removed Changes",
   "perforce.command.openShelvedFile.title": "Open Shelved Changes",
   "perforce.command.submit.title": "Submit",
   "perforce.command.submitChangelist.title": "Submit Changelist",

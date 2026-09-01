@@ -3,8 +3,8 @@
  * working-tree hint channel behind the Explorer's per-row drift badge. It answers
  * "which of these visible rows have disk drift that isn't visible anywhere else"
  * without turning on reconcile discovery. This locks in:
- *  1. The three filter predicates the hint shares with the reconcile group
- *     (opened, out-of-scope, dismissed) each drop their rows.
+ *  1. The two filter predicates the hint shares with the reconcile group
+ *     (opened, out-of-scope) each drop their rows.
  *  2. Empty input / everything-filtered return `[]` with zero p4 spawns.
  *  3. The returned DTOs are sourced from `toReconcileResourceState`, so a row's
  *     badge can never disagree with the resource group's (letter `RC`, colour,
@@ -70,7 +70,7 @@ function memStore(initial?: ReconcilePersistState): ReconcileStore & {
   saves: ReconcilePersistState[]
   current: ReconcilePersistState
 } {
-  let current: ReconcilePersistState = initial ?? { files: [], dismissed: [] }
+  let current: ReconcilePersistState = initial ?? { files: [] }
   const saves: ReconcilePersistState[] = []
   return {
     saves,
@@ -205,7 +205,7 @@ describe('PerforceClient.checkWorkingTree', () => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
   })
 
-  // --- ① the three shared predicates ----------------------------------------
+  // --- ① the two shared predicates ------------------------------------------
 
   it('omits paths already opened (the changelist decoration is authoritative)', async () => {
     const store = memStore()
@@ -240,22 +240,6 @@ describe('PerforceClient.checkWorkingTree', () => {
     const paths = result.map((d) => d.path)
     expect(paths).toContain(`${LOCAL}/Client/in.txt`)
     expect(paths).not.toContain(`${LOCAL}/outside.txt`)
-  })
-
-  it('omits paths the user dismissed from the reconcile list', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
-      reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }],
-    })
-    await client.refresh({ reconcile: true })
-    client.dismissReconcile([`${LOCAL}/a.txt`])
-    calls.length = 0
-
-    const result = await client.checkWorkingTree([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
-
-    const paths = result.map((d) => d.path)
-    expect(paths).not.toContain(`${LOCAL}/a.txt`)
-    expect(paths).toContain(`${LOCAL}/b.txt`)
   })
 
   // --- ② zero p4 calls when there is nothing to scan -------------------------

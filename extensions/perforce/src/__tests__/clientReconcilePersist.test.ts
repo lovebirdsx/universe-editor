@@ -1,13 +1,10 @@
 /**
- * The "changes to reconcile" group persists across sessions and supports
- * permanently dismissing entries ("move out of the list"), and respects the
+ * The "changes to reconcile" group persists across sessions and respects the
  * reconcile discovery scope (focus folders). This locks in the behaviours:
  *  1. Moving a file out of a changelist re-scans only that path — never a full
  *     `reconcile -n //...` (or folder-scope) walk (the large-depot slowdown).
- *  2. A dismissed file stays out of the group even after a full Clean Refresh.
- *  3. Restoring at startup renders the persisted list WITHOUT any `reconcile -n`.
- *  4. Collecting a previously dismissed file re-includes it (drops the dismissal).
- *  5. A narrowed scope turns into multiple p4 filespecs (nested ones collapsed),
+ *  2. Restoring at startup renders the persisted list WITHOUT any `reconcile -n`.
+ *  3. A narrowed scope turns into multiple p4 filespecs (nested ones collapsed),
  *     and paths outside it never enter the group, whatever produced them.
  */
 import { EventEmitter } from 'node:events'
@@ -68,7 +65,7 @@ function memStore(initial?: ReconcilePersistState): ReconcileStore & {
   saves: ReconcilePersistState[]
   current: ReconcilePersistState
 } {
-  let current: ReconcilePersistState = initial ?? { files: [], dismissed: [] }
+  let current: ReconcilePersistState = initial ?? { files: [] }
   const saves: ReconcilePersistState[] = []
   return {
     saves,
@@ -214,7 +211,7 @@ async function makeClient(
   return client!
 }
 
-describe('PerforceClient reconcile persistence + dismiss', () => {
+describe('PerforceClient reconcile persistence', () => {
   beforeEach(() => {
     installScmBridge()
     spawnMock.mockReset()
@@ -279,7 +276,6 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
       files: [
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     const client = await makeClient(store)
     calls.length = 0
@@ -300,7 +296,6 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
       files: [
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     // The path now reconciles clean (no rows) — its change was discarded.
     const client = await makeClient(store, { reconcile: () => [] })
@@ -331,7 +326,6 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
       files: [
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
     client.restoreReconcile()
@@ -345,38 +339,6 @@ describe('PerforceClient reconcile persistence + dismiss', () => {
     expect(client.status.reconcileCount).toBe(1)
     const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
     expect(states.some((s) => (s.resourceUri ?? '').includes('a.txt'))).toBe(true)
-  })
-
-  it('a dismissed file stays out of the group even after a full Clean Refresh', async () => {
-    const store = memStore()
-    const client = await makeClient(store, {
-      reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }],
-    })
-    // Populate the group via a clean refresh.
-    await client.refresh({ reconcile: true })
-    expect(client.status.reconcileCount).toBe(2)
-
-    client.dismissReconcile([`${LOCAL}/a.txt`])
-    expect(client.status.reconcileCount).toBe(1)
-    expect(store.current.dismissed).toContain(`${LOCAL.toLowerCase()}/a.txt`)
-
-    // A full Clean Refresh re-discovers a.txt, but it must remain dismissed.
-    await client.refresh({ reconcile: true })
-    expect(client.status.reconcileCount).toBe(1)
-    const states = (reconcileGroup()?.resourceStates ?? []) as { resourceUri?: string }[]
-    expect(states.some((s) => (s.resourceUri ?? '').includes('a.txt'))).toBe(false)
-  })
-
-  it('collecting a dismissed file drops the dismissal', async () => {
-    const store = memStore()
-    const client = await makeClient(store, { reconcile: () => [{ rel: 'a.txt' }] })
-    await client.refresh({ reconcile: true })
-    client.dismissReconcile([`${LOCAL}/a.txt`])
-    expect(store.current.dismissed).toContain(`${LOCAL.toLowerCase()}/a.txt`)
-
-    await client.reconcile([`${LOCAL}/a.txt`])
-
-    expect(store.current.dismissed).not.toContain(`${LOCAL.toLowerCase()}/a.txt`)
   })
 
   it('serializes overlapping reconcile passes so a late one cannot clobber an earlier commit', async () => {
@@ -774,7 +736,7 @@ describe('PerforceClient reconcile re-verify threshold (W4)', () => {
         rev: '1',
       }),
     )
-    const store = memStore({ files, dismissed: [] })
+    const store = memStore({ files })
     const logs: string[] = []
     const client = await makeClient(store, {}, (m) => logs.push(m))
     client.restoreReconcile()
@@ -802,7 +764,7 @@ describe('PerforceClient reconcile re-verify threshold (W4)', () => {
         rev: '1',
       }),
     )
-    const store = memStore({ files, dismissed: [] })
+    const store = memStore({ files })
     const client = await makeClient(store, {
       opened: () => [{ rel: 'f0.txt' }],
     })
@@ -825,7 +787,6 @@ describe('PerforceClient reconcile re-verify threshold (W4)', () => {
       files: [
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     const client = await makeClient(store, { reconcile: () => [] })
     client.restoreReconcile()
@@ -845,7 +806,6 @@ describe('PerforceClient reconcile re-verify threshold (W4)', () => {
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
         { depotFile: '//depot/b.txt', clientFile: `${LOCAL}/b.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     const client = await makeClient(store, { reconcile: () => [] })
     client.restoreReconcile()
@@ -884,7 +844,7 @@ describe('PerforceClient reconcile stage label (W4)', () => {
         rev: '1',
       }),
     )
-    const store = memStore({ files, dismissed: [] })
+    const store = memStore({ files })
     const logs: string[] = []
     const client = await makeClient(store, {}, (m) => logs.push(m))
     client.restoreReconcile()
@@ -903,7 +863,6 @@ describe('PerforceClient reconcile stage label (W4)', () => {
       files: [
         { depotFile: '//depot/a.txt', clientFile: `${LOCAL}/a.txt`, action: 'edit', rev: '1' },
       ],
-      dismissed: [],
     })
     const logs: string[] = []
     const client = await makeClient(store, { reconcile: () => [] }, (m) => logs.push(m))

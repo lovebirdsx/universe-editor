@@ -69,11 +69,19 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   private readonly _stale = new Set<string>()
   private readonly _pending = new Map<string, string>()
   /**
-   * Keys whose query is on the wire right now. A key is removed either when its
-   * answer is written or when something invalidates it mid-flight, and an answer
-   * for a key no longer in this set is discarded — see {@link _writeHint}.
+   * Keys whose query is on the wire right now, mapped to the token of the
+   * *newest* query for that key. A key is removed either when its answer is
+   * written or when something invalidates it mid-flight; an answer whose token
+   * no longer matches is discarded — see {@link _writeHint}.
+   *
+   * The token is what makes this latest-wins. Two queries for one key overlap
+   * whenever the provider's round-trip outlasts the debounce, and without a
+   * per-request identity the second flush re-arms the marker the first answer
+   * then consumes: the pre-save answer wins and pins the row clean forever.
    */
-  private readonly _inFlight = new Set<string>()
+  private readonly _inFlight = new Map<string, number>()
+  /** Monotonic; identifies one query for one key. */
+  private _queryToken = 0
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
   /** Bumped on every invalidation so an in-flight flush can drop stale results. */
   private _generation = 0
@@ -115,9 +123,10 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
     // The decorations snapshot is recomputed on every provider refresh (a new
     // resourceStates push), which is exactly when a hint's answer can change with
-    // no matching file-system event (e.g. p4 dismiss/clearDismissed). Revalidate —
-    // not invalidate — so visible rows keep their old hint instead of flickering
-    // for the ~150ms round-trip; a result that matches the old value is not bumped.
+    // no matching file-system event (e.g. a p4 Clean Refresh moving files in or
+    // out of the reconcile group). Revalidate — not invalidate — so visible rows
+    // keep their old hint instead of flickering for the ~150ms round-trip; a
+    // result that matches the old value is not bumped.
     let firstDecorations = true
     this._register(
       autorun((reader) => {
@@ -150,15 +159,32 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // see; re-querying the whole cache the moment it goes stale would put
       // thousands of scrolled-past paths back on the wire on every provider
       // refresh — worse than the eager scan this exists to avoid.
-      if (this._stale.delete(key)) {
-        if (!this._pending.has(key)) this._pending.set(key, fsPath)
-        this._scheduleFlush()
-      }
+      if (this._stale.delete(key)) this._enqueue(key, fsPath)
       return cached ?? undefined
     }
-    if (!this._pending.has(key)) this._pending.set(key, fsPath)
-    this._scheduleFlush()
+    this._enqueue(key, fsPath)
     return undefined
+  }
+
+  /**
+   * Queue a key for the next batch, unless a query for it is already on the wire
+   * or already queued. Explorer re-reads every visible row on every render, so
+   * without the in-flight guard one slow answer becomes a stream of duplicate
+   * queries on the provider's shared concurrency gate.
+   *
+   * A key leaves `_inFlight` when its answer is written, when a newer query for
+   * it supersedes the token, when a file event drops it, or when the cache is
+   * invalidated. It does *not* leave on its own if the provider never answers —
+   * that case is bounded by the provider's own command timeout (p4's
+   * `SpawnWatchdog`, default 600s), which settles the promise as a failure and
+   * lets `_writeHint` release the key. Deliberately no timeout here: a second
+   * identical query cannot be faster than the first, so re-asking during that
+   * window only adds load to the gate the first query is already stuck behind.
+   */
+  private _enqueue(key: string, fsPath: string): void {
+    if (this._inFlight.has(key) || this._pending.has(key)) return
+    this._pending.set(key, fsPath)
+    this._scheduleFlush()
   }
 
   /** The path a resource has on the SCM host, or undefined when it is off-host. */
@@ -202,17 +228,25 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     this._pending.clear()
     if (entries.length === 0) return
     const generation = this._generation
-    // Add, never clear: two flushes can overlap (the debounce can re-arm while
-    // this one awaits), and clearing here would make the second one silently
-    // discard the first one's answers.
-    for (const [key] of entries) this._inFlight.add(key)
+    // Stamp, never merely add: two flushes can overlap (the debounce can re-arm
+    // while this one awaits), and the newer stamp is what lets the older flush's
+    // answer be recognised as superseded instead of overwriting the newer one.
+    const tokens = new Map<string, number>()
+    for (const [key] of entries) {
+      const token = ++this._queryToken
+      tokens.set(key, token)
+      this._inFlight.set(key, token)
+    }
     let changed = false
+    const write = (key: string, hint: IWorkingTreeHint | null): void => {
+      changed = this._writeHint(key, hint, tokens.get(key)) || changed
+    }
 
     const byProvider = new Map<string, string[]>()
     for (const [key, fsPath] of entries) {
       const providerId = resolveScmProviderId(this._scm.sourceControls.get(), fsPath)
       if (providerId === undefined) {
-        changed = this._writeHint(key, null) || changed
+        write(key, null)
         continue
       }
       const list = byProvider.get(providerId)
@@ -233,7 +267,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
           `check-working-tree via ${providerId} failed; treating batch as clean`,
           err,
         )
-        for (const p of paths) changed = this._writeHint(scmPathKey(p), null) || changed
+        for (const p of paths) write(scmPathKey(p), null)
         continue
       }
       // Invalidation fired while the command was in flight: the cache/pending were
@@ -243,7 +277,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // without the capability) — treat the batch as clean so we don't re-query
       // every frame.
       if (dtos === undefined) {
-        for (const p of paths) changed = this._writeHint(scmPathKey(p), null) || changed
+        for (const p of paths) write(scmPathKey(p), null)
         continue
       }
       const hintsByKey = new Map<string, IWorkingTreeHint>()
@@ -254,7 +288,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // stay "unknown" and re-enqueue on every render.
       for (const p of paths) {
         const key = scmPathKey(p)
-        changed = this._writeHint(key, hintsByKey.get(key) ?? null) || changed
+        write(key, hintsByKey.get(key) ?? null)
       }
     }
 
@@ -266,11 +300,21 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   }
 
   /** Write a hint, returning whether the cached value actually changed. */
-  private _writeHint(key: string, hint: IWorkingTreeHint | null): boolean {
-    // Gone from the in-flight set means something invalidated this key while the
-    // query was out (a file event, or a whole-cache invalidation). The answer
-    // describes state that no longer holds, so drop it rather than cache it.
-    if (!this._inFlight.delete(key)) return false
+  private _writeHint(
+    key: string,
+    hint: IWorkingTreeHint | null,
+    token: number | undefined,
+  ): boolean {
+    // A token mismatch means this answer has been superseded: either something
+    // invalidated the key mid-flight (a file event, or a whole-cache
+    // invalidation), or a newer query for the same key was already issued. Either
+    // way it describes state that no longer holds, so drop it rather than cache
+    // it — caching it would install an answer nothing is left to correct.
+    if (this._inFlight.get(key) !== token) {
+      this._logger.debug(`discarded stale hint answer for ${key}`)
+      return false
+    }
+    this._inFlight.delete(key)
     this._stale.delete(key)
     const prev = this._cache.get(key)
     if (hintsEqual(prev, hint)) return false

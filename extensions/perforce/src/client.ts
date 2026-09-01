@@ -67,8 +67,7 @@ import { parseIgnores } from './ignoresParser.js'
 import {
   parseReconcile,
   mergeReconcile,
-  filterDismissed,
-  expandDismissPaths,
+  expandReconcileTargets,
   type ReconcileFile,
 } from './reconcileParser.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
@@ -161,10 +160,9 @@ export interface P4CacheOptions {
 }
 
 /** Persisted snapshot of the "changes to reconcile" group: the last discovered
- *  file list plus the set of permanently dismissed (normalized) local paths. */
+ *  file list. */
 export interface ReconcilePersistState {
   readonly files: readonly ReconcileFile[]
-  readonly dismissed: readonly string[]
 }
 
 /** Persistence adapter for the reconcile group, backed by the extension's
@@ -442,11 +440,6 @@ export class PerforceClient {
    *  Re-filtered against the opened set on every refresh so a just-collected file
    *  drops out without a full re-scan. */
   private _reconcileFiles: readonly ReconcileFile[] = []
-  /** Normalized local paths the user permanently dismissed from the reconcile
-   *  group ("move out of the list"). Persisted; every list update filters these
-   *  out (see {@link _setReconcileFiles}) so a dismissed file never reappears —
-   *  even after a Clean Refresh — until it's collected or dismissals are cleared. */
-  private _dismissed = new Set<string>()
   /** Normalized client paths currently opened, from the last refresh. Used to
    *  filter incremental (watcher-driven) reconcile scans without a fresh `opened`
    *  round-trip. */
@@ -1324,10 +1317,10 @@ export class PerforceClient {
    * avoid, and would quietly turn scrolling the Explorer into state that sticks
    * around forever.
    *
-   * Shares the reconcile group's three predicates so a row can never say something
+   * Shares the reconcile group's two predicates so a row can never say something
    * the group would contradict: already opened (the changelist decoration is the
-   * authority), outside the discovery scope, or dismissed. When they filter
-   * everything out we return without spawning p4 at all.
+   * authority), or outside the discovery scope. When they filter everything out
+   * we return without spawning p4 at all.
    *
    * Results echo back the caller's own path strings — the scan reports paths
    * translated from client syntax against `this.root`, which need not be spelled
@@ -1339,8 +1332,8 @@ export class PerforceClient {
    * from different places — the request is spelled the way the user opened the
    * folder, the answer is spelled the way `p4 info` reports the client root — so
    * on Windows/macOS they can differ in case while naming the same file. `norm`
-   * (drive letter only) is still right for the `_openedPaths` / `_dismissed`
-   * lookups below, whose keys are p4-reported like the values we compare them to.
+   * (drive letter only) is still right for the `_openedPaths` lookup below, whose
+   * keys are p4-reported like the values we compare them to.
    */
   async checkWorkingTree(paths: readonly string[]): Promise<WorkingTreeChangeDto[]> {
     if (this._disposed || paths.length === 0) return []
@@ -1349,7 +1342,6 @@ export class PerforceClient {
       const key = norm(p)
       if (this._openedPaths.has(key)) continue
       if (!this._isInReconcileScope(p)) continue
-      if (this._dismissed.has(key)) continue
       requested.set(scopeKey(p), p)
     }
     if (requested.size === 0) return []
@@ -1436,36 +1428,33 @@ export class PerforceClient {
    *  Every producer (full scan, cheap re-filter, incremental merge, restore)
    *  lands here, so this is the single funnel where the discovery scope is
    *  enforced — a file outside the scope never enters the group, whatever path
-   *  reported it, and narrowing the scope drops entries already listed. Dismissed
-   *  files are filtered out here too, then the result is persisted so it survives
-   *  a reload without a fresh scan. */
+   *  reported it, and narrowing the scope drops entries already listed. The
+   *  result is then persisted so it survives a reload without a fresh scan. */
   private _setReconcileFiles(files: readonly ReconcileFile[]): void {
     const inScope = files.filter((f) => !f.clientFile || this._isInReconcileScope(f.clientFile))
-    const visible = filterDismissed(inScope, this._dismissed)
-    this._reconcileFiles = visible
-    this._reconcileGroup.resourceStates = toReconcileResourceStates(visible)
+    this._reconcileFiles = inScope
+    this._reconcileGroup.resourceStates = toReconcileResourceStates(inScope)
     this._persistReconcile()
   }
 
-  /** Mirror the current reconcile list + dismissed set into the injected store
-   *  (no-op when no store was provided, e.g. in tests). */
+  /** Mirror the current reconcile list into the injected store (no-op when no
+   *  store was provided, e.g. in tests). */
   private _persistReconcile(): void {
-    this._store?.save({ files: this._reconcileFiles, dismissed: [...this._dismissed] })
+    this._store?.save({ files: this._reconcileFiles })
   }
 
   /**
    * Restore the reconcile group from the persisted snapshot at activation, before
-   * the first refresh. Loads the dismissed set and the last-known file list and
-   * renders it immediately — so a reload shows the group right away — WITHOUT a
-   * `reconcile -n` walk (cheap). Reconcile discovery is turned on (sticky) so the
-   * next ordinary refresh re-filters the restored list against the fresh `opened`
-   * set (dropping anything already collected) instead of clearing it.
+   * the first refresh. Loads the last-known file list and renders it immediately
+   * — so a reload shows the group right away — WITHOUT a `reconcile -n` walk
+   * (cheap). Reconcile discovery is turned on (sticky) so the next ordinary
+   * refresh re-filters the restored list against the fresh `opened` set
+   * (dropping anything already collected) instead of clearing it.
    */
   restoreReconcile(): void {
     if (!this._store) return
-    const { files, dismissed } = this._store.load()
-    this._dismissed = new Set(dismissed.map(norm))
-    if (files.length > 0 || dismissed.length > 0) this._reconcileActive = true
+    const { files } = this._store.load()
+    if (files.length > 0) this._reconcileActive = true
     this._setReconcileFiles(files)
     this._emitChange()
   }
@@ -1680,7 +1669,6 @@ export class PerforceClient {
   async reconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
     this._reconcileActive = true
-    this._undismiss(paths)
     return this._mutate('reconcile', ['reconcile', '-a', '-e', '-d'], paths)
   }
 
@@ -1695,7 +1683,6 @@ export class PerforceClient {
   async reconcileInto(changelist: string, paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
     this._reconcileActive = true
-    this._undismiss(paths)
     const args =
       changelist === 'default'
         ? ['reconcile', '-a', '-e', '-d']
@@ -3134,13 +3121,11 @@ export class PerforceClient {
    *
    * Only the moved paths are re-scanned (`refreshReconcilePaths`, O(paths)) — the
    * paths are known, so there's no need for a full `reconcile -n` walk of the
-   * whole workspace (which was slow on large depots). Any prior dismissal of a
-   * moved path is cleared, since moving it out is an explicit request to see it.
+   * whole workspace (which was slow on large depots).
    */
   async moveToReconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
     this._reconcileActive = true
-    this._undismiss(paths)
     const ok = await this._mutate('revert -k', ['revert', '-k'], paths)
     if (ok) {
       // `revert -k` dropped these from `opened`, but `_openedPaths` is only rebuilt
@@ -3180,48 +3165,11 @@ export class PerforceClient {
     return ok
   }
 
-  /**
-   * Permanently dismiss ("move out of") reconcile entries: add their normalized
-   * local paths to the dismissed set so they never reappear in the group (even
-   * after a Clean Refresh) until collected or cleared. Targets may be concrete
-   * files, folder rows, or the whole group — directories are expanded to the
-   * currently-listed files under them ({@link expandDismissPaths}). Persists and
-   * re-renders without any p4 round-trip.
-   */
-  dismissReconcile(paths: readonly string[]): void {
-    const keys = expandDismissPaths(
-      paths.map((p) => p.replace(/[/\\]\.\.\.$/, '')),
-      this._reconcileFiles,
-    )
-    if (keys.length === 0) return
-    for (const k of keys) this._dismissed.add(k)
-    // Re-render from the current list; _setReconcileFiles filters + persists.
-    this._setReconcileFiles(this._reconcileFiles)
-    this._emitChange()
-  }
-
-  /** Clear all dismissals (the "unignore everything" escape hatch) and run a full
-   *  reconcile scan so any still-diverged files that were dismissed reappear. */
-  async clearDismissed(): Promise<void> {
-    if (this._dismissed.size === 0) return
-    this._dismissed.clear()
-    this._persistReconcile()
-    await this.refresh({ reconcile: true })
-  }
-
-  /** Remove the given paths from the dismissed set (they're being re-included,
-   *  e.g. explicitly collected or moved out again). Persists if anything changed. */
-  private _undismiss(paths: readonly string[]): void {
-    let changed = false
-    for (const p of paths) if (this._dismissed.delete(norm(p))) changed = true
-    if (changed) this._persistReconcile()
-  }
-
   /** Expand reconcile targets (concrete files or `<dir>/...` / directory paths)
    *  into the concrete listed reconcile-file paths they cover, for an incremental
    *  rescan. Strips the p4 `/...` recursion suffix before prefix-matching. */
   private _concreteReconcilePaths(targets: readonly string[]): string[] {
-    return expandDismissPaths(
+    return expandReconcileTargets(
       targets.map((p) => p.replace(/[/\\]\.\.\.$/, '')),
       this._reconcileFiles,
     )
