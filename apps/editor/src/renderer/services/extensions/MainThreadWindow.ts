@@ -60,12 +60,12 @@ function mapSeverity(severity: ExtHostMessageSeverity): Severity {
 interface ProgressEntry {
   readonly progress: IProgress<IProgressStep>
   readonly done: DeferredPromise<void>
-  readonly cancelSub: IDisposable
 }
 
 export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   private readonly _entries = this._register(new DisposableMap<number, IStatusBarEntryAccessor>())
   private readonly _progress = new Map<number, ProgressEntry>()
+  private readonly _progressCancels = this._register(new DisposableMap<number, IDisposable>())
   private _focused = true
 
   constructor(
@@ -190,6 +190,9 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   }
 
   $startProgress(handle: number, options: IProgressOptionsDto): Promise<void> {
+    // A dying host's in-flight $startProgress can land after this connection
+    // was torn down. Don't mount a progress UI whose deferred can never settle.
+    if (this._store.isDisposed) return Promise.resolve()
     const done = new DeferredPromise<void>()
     // ProgressLocation.SourceControl (1) has no dedicated surface here — the
     // quiet status-bar spinner is the closest rendering, as in VSCode's SCM.
@@ -211,7 +214,8 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
         const cancelSub = token.onCancellationRequested(() => {
           void this._extHostWindow.$acceptProgressCanceled(handle).catch(() => undefined)
         })
-        this._progress.set(handle, { progress, done, cancelSub })
+        this._progressCancels.set(handle, cancelSub)
+        this._progress.set(handle, { progress, done })
         return done.p
       },
     )
@@ -233,7 +237,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     const entry = this._progress.get(handle)
     if (entry) {
       this._progress.delete(handle)
-      entry.cancelSub.dispose()
+      this._progressCancels.deleteAndDispose(handle)
       entry.done.complete(undefined)
     }
     return Promise.resolve()
@@ -291,7 +295,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     // Connection teardown: settle every held-open progress so its UI tears down.
     for (const [handle, entry] of this._progress) {
       this._progress.delete(handle)
-      entry.cancelSub.dispose()
+      this._progressCancels.deleteAndDispose(handle)
       entry.done.complete(undefined)
     }
     super.dispose()

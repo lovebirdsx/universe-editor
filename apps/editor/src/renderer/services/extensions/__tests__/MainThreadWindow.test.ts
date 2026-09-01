@@ -3,11 +3,16 @@
  *  notification / quick-input / status-bar services.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  CancellationTokenSource,
+  DisposableStore,
+  DisposableTracker,
   ProgressLocation,
   Severity,
   StatusBarAlignment,
+  markAsSingleton,
+  setDisposableTracker,
   type IConfirmResult,
   type IDialogService,
   type IFileDialogService,
@@ -349,6 +354,61 @@ describe('MainThreadWindow progress', () => {
     await mt.$startProgress(1, { location: 15, cancellable: true })
     mt.dispose()
     expect(progress.runs[0]!.cancelSubDisposed()).toBe(true)
+  })
+
+  it('drops $startProgress after dispose', async () => {
+    const progress = fakeProgress()
+    const mt = makeWindow({ progress: progress.service })
+    mt.dispose()
+    await mt.$startProgress(1, { location: 15, cancellable: true })
+    expect(progress.runs).toHaveLength(0)
+  })
+})
+
+/**
+ * The e2e leak gate snapshots while the window is still open. `$startProgress`
+ * subscribes to the progress token; if that subscription sits in a plain Map
+ * it has no tracker parent, so an in-flight (or just-finished-on-the-host)
+ * progress is reported as a leak even though `$endProgress` would dispose it.
+ * Mirror the real wiring: singleton root → MainThreadWindow.
+ */
+describe('MainThreadWindow progress — leak tracking', () => {
+  let tracker: DisposableTracker
+
+  beforeEach(() => {
+    tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+  })
+
+  afterEach(() => {
+    setDisposableTracker(null)
+  })
+
+  function realTokenProgress(): IProgressService {
+    return {
+      withProgress<R>(
+        _options: IProgressOptions,
+        task: (progress: IProgress<IProgressStep>, token: unknown) => Promise<R>,
+      ): Promise<R> {
+        const cts = new CancellationTokenSource()
+        return (async () => {
+          try {
+            return await task({ report: () => undefined }, cts.token)
+          } finally {
+            cts.dispose()
+          }
+        })()
+      },
+    } as IProgressService
+  }
+
+  it('roots an in-flight cancel subscription through a singleton owner', async () => {
+    const root = markAsSingleton(new DisposableStore())
+    const mt = root.add(makeWindow({ progress: realTokenProgress() }))
+    await mt.$startProgress(1, { location: 15, cancellable: true })
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    await mt.$endProgress(1)
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
 })
 
