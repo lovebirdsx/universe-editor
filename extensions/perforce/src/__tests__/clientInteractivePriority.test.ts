@@ -222,6 +222,16 @@ const cases: Case[] = [
     interactive: ['fstat', 'print'],
     seed: { fstat: FSTAT_JSON },
   },
+  {
+    name: 'openedStateAmong (unified Revert confirm, cache miss)',
+    invoke: (c) => c.openedStateAmong([FILE]),
+    interactive: ['opened'],
+  },
+  {
+    name: 'openedInTree (unified Revert confirm, directory)',
+    invoke: (c) => c.openedInTree(ROOT),
+    interactive: ['opened'],
+  },
 ]
 
 describe('interactive p4 reads dispatch with priority interactive', () => {

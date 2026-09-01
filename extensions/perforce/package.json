@@ -140,12 +140,6 @@
         "icon": "arrow-left"
       },
       {
-        "command": "perforce.revertReconcile",
-        "title": "%perforce.command.revertReconcile.title%",
-        "category": "Perforce",
-        "icon": "discard"
-      },
-      {
         "command": "perforce.openShelvedFile",
         "title": "%perforce.command.openShelvedFile.title%",
         "category": "Perforce",
@@ -581,12 +575,7 @@
         },
         {
           "command": "perforce.revert",
-          "when": "!explorerResourceIsFolder",
           "group": "3_edit@4"
-        },
-        {
-          "command": "perforce.revertReconcile",
-          "group": "3_edit@5"
         },
         {
           "command": "perforce-graph.view",

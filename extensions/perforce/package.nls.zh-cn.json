@@ -20,7 +20,6 @@
   "perforce.command.revertChangelist.title": "还原 Changelist 中的所有文件",
   "perforce.command.deleteChangelist.title": "删除 Changelist",
   "perforce.command.moveToReconcile.title": "移出 Changelist",
-  "perforce.command.revertReconcile.title": "丢弃未收集的改动",
   "perforce.command.openShelvedFile.title": "打开搁置的更改",
   "perforce.command.submit.title": "提交",
   "perforce.command.submitChangelist.title": "提交 Changelist",

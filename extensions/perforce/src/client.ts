@@ -60,6 +60,7 @@ import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import { parseIgnores } from './ignoresParser.js'
 import { parseReconcile, type ReconcileFile } from './reconcileParser.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
+import { type OpenedTarget } from './revertPlan.js'
 import {
   classifySyncLine,
   parseSyncOutput,
@@ -1372,42 +1373,84 @@ export class PerforceClient {
   }
 
   /**
-   * Which of `paths` are opened in any changelist — the command layer's precheck
-   * behind the Revert / Discard-Uncollected confirmations. Both commands are
-   * silent no-ops on half their nominal targets (`p4 revert` exits 0 with "not
-   * open, not reverted" for unopened files; `p4 clean` never touches opened
-   * ones), so the confirm dialogs need to know which selection the command can
-   * actually affect before promising a loss.
+   * Opened state of `paths` for the unified Revert confirm. Key is `norm(path)`;
+   * presence means opened; value is `'default'` / a numbered id, or `undefined`
+   * when we know it's opened but not which changelist.
    *
-   * Cache-first: `_openedPaths` (the last refresh's `p4 opened`) answers with
-   * zero round-trips for the SCM-driven case. Only cache misses go to one live
-   * `p4 opened` for just those paths — an out-of-band `p4 edit` since the last
-   * refresh must not be misreported as unopened. Fails open: a query that
-   * errors (spawn failure, path outside the client view) counts every path as
-   * opened, so the caller keeps the legacy unsplit behavior instead of blocking
-   * a revert on our bookkeeping.
+   * Cache-first (`_changelistByPath`). Cache misses go to one live `p4 opened`
+   * (`INTERACTIVE_EXEC`) so an out-of-band `p4 edit` since the last refresh is
+   * not misreported as unopened. Fails open: a query that errors counts every
+   * path as opened (unknown CL for the misses) so the confirm lists them as
+   * leaving a changelist instead of promising a silent `p4 clean`.
    */
-  async openedAmong(paths: readonly string[]): Promise<ReadonlySet<string>> {
-    if (paths.length === 0) return new Set()
-    const missed = paths.filter((p) => !this._openedPaths.has(norm(p)))
-    if (missed.length === 0) return new Set(paths)
+  async openedStateAmong(
+    paths: readonly string[],
+  ): Promise<ReadonlyMap<string, string | undefined>> {
+    const out = new Map<string, string | undefined>()
+    if (paths.length === 0) return out
+    for (const p of paths) {
+      const n = norm(p)
+      if (this._changelistByPath.has(n)) out.set(n, this._changelistByPath.get(n))
+    }
+    const missed = paths.filter((p) => !out.has(norm(p)))
+    if (missed.length === 0) return out
     const res = await this._p4
       .execRecords(['opened', ...missed], INTERACTIVE_EXEC)
       .catch((err: unknown) => {
         this._log?.(`[perforce] opened precheck failed: ${String(err)}`)
         return undefined
       })
-    if (!res || this._disposed || res.result.exitCode !== 0) return new Set(paths)
-    const live = new Set(
-      parseOpened(res.records, this.root)
-        .map((f) => (f.clientFile ? norm(f.clientFile) : undefined))
-        .filter((p): p is string => p !== undefined),
-    )
-    const out = new Set<string>()
-    for (const p of paths) {
-      if (this._openedPaths.has(norm(p)) || live.has(norm(p))) out.add(p)
+    if (!res || this._disposed || res.result.exitCode !== 0) {
+      for (const p of missed) out.set(norm(p), undefined)
+      return out
+    }
+    const live = new Map<string, string>()
+    for (const f of parseOpened(res.records, this.root)) {
+      if (!f.clientFile) continue
+      live.set(norm(f.clientFile), f.changelist)
+    }
+    for (const p of missed) {
+      const n = norm(p)
+      const cl = live.get(n)
+      if (cl !== undefined) out.set(n, cl)
     }
     return out
+  }
+
+  /**
+   * Opened files under `dir` for a directory Revert confirm. Cache
+   * (`_changelistByPath` + `isUnderAny`) is unioned with a live
+   * `p4 opened <dir>/...` (`INTERACTIVE_EXEC`) so the list is never a stale
+   * under-count. Live failure: cache if any; otherwise `{ files: [], unknown:
+   * true }` — the command must not confirm as uncollected-only, and still runs
+   * `p4 revert dir/...`.
+   */
+  async openedInTree(dir: string): Promise<{ files: OpenedTarget[]; unknown: boolean }> {
+    const root = dir.replace(/[/\\]+$/, '')
+    const byNorm = new Map<string, OpenedTarget>()
+    for (const [path, changelist] of this._changelistByPath) {
+      if (isUnderAny(path, [root])) byNorm.set(path, { path, changelist })
+    }
+    const res = await this._p4
+      .execRecords(['opened', `${root}/...`], INTERACTIVE_EXEC)
+      .catch((err: unknown) => {
+        this._log?.(`[perforce] openedInTree live failed: ${String(err)}`)
+        return undefined
+      })
+    if (!res || this._disposed || res.result.exitCode !== 0) {
+      const files = [...byNorm.values()]
+      const unknown = files.length === 0
+      if (unknown) {
+        this._log?.(`[perforce] openedInTree ${root}: unknown (live failed, cache empty)`)
+      }
+      return { files, unknown }
+    }
+    for (const f of parseOpened(res.records, this.root)) {
+      if (!f.clientFile) continue
+      const n = norm(f.clientFile)
+      byNorm.set(n, { path: f.clientFile, changelist: f.changelist })
+    }
+    return { files: [...byNorm.values()], unknown: false }
   }
 
   /**

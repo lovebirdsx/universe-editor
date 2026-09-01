@@ -20,7 +20,6 @@
   "perforce.command.revertChangelist.title": "Revert All Files in Changelist",
   "perforce.command.deleteChangelist.title": "Delete Changelist",
   "perforce.command.moveToReconcile.title": "Move out of Changelist",
-  "perforce.command.revertReconcile.title": "Discard Uncollected Changes",
   "perforce.command.openShelvedFile.title": "Open Shelved Changes",
   "perforce.command.submit.title": "Submit",
   "perforce.command.submitChangelist.title": "Submit Changelist",
