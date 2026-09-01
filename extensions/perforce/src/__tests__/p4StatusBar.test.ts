@@ -9,6 +9,10 @@
  * sentinel all hide it; `haveRev: 'none'` (open-for-add) renders the "new"
  * form; a lower have than head renders the behind form and wires
  * `perforce.syncLatest`.
+ *
+ * `setVisible(false)` is the mixed-workspace gate (selection moved to another
+ * provider): all three items hide and stay hidden across refresh, tab switches
+ * and in-flight fstat completions.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -437,5 +441,94 @@ describe('P4StatusBarController revision chip', () => {
     const controller = new P4StatusBarController(makeManager() as never)
     controller.dispose()
     expect(mocks.revItem.dispose).toHaveBeenCalled()
+  })
+})
+
+describe('P4StatusBarController setVisible', () => {
+  beforeEach(() => {
+    mocks.item.text = ''
+    mocks.item.tooltip = ''
+    mocks.item.command = ''
+    mocks.item.showProgress = undefined
+    mocks.item.show.mockClear()
+    mocks.item.hide.mockClear()
+    mocks.behindItem.text = ''
+    mocks.behindItem.tooltip = ''
+    mocks.behindItem.command = ''
+    mocks.behindItem.show.mockClear()
+    mocks.behindItem.hide.mockClear()
+    mocks.revItem.text = ''
+    mocks.revItem.tooltip = ''
+    mocks.revItem.command = ''
+    mocks.revItem.show.mockClear()
+    mocks.revItem.hide.mockClear()
+    mocks.activeEditor = undefined
+    mocks.editorListener = undefined
+  })
+
+  it('hides all three items when the selection moves to another provider', () => {
+    const controller = new P4StatusBarController(makeManager() as never)
+    controller.setVisible(false)
+
+    expect(mocks.item.hide).toHaveBeenCalled()
+    expect(mocks.behindItem.hide).toHaveBeenCalled()
+    expect(mocks.revItem.hide).toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('refresh and tab switches do not re-show the items while hidden', () => {
+    const controller = new P4StatusBarController(
+      makeManager({ active: makeClient({ syncBehindCount: 12 }) }) as never,
+    )
+    controller.setVisible(false)
+    mocks.item.show.mockClear()
+
+    controller.refresh()
+    mocks.editorListener?.(fileEditor('/D:/p4ws/main/src/a.txt'))
+    expect(mocks.item.show).not.toHaveBeenCalled()
+    expect(mocks.behindItem.show).not.toHaveBeenCalled()
+    expect(mocks.revItem.show).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('an in-flight fstat finishing after hide does not re-show the chip', async () => {
+    let resolveFstat: (v: unknown) => void = () => {}
+    const client = revClient()
+    ;(client.fstat as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((res) => {
+        resolveFstat = res
+      }),
+    )
+    mocks.activeEditor = fileEditor('/D:/p4ws/main/src/a.txt')
+    const controller = new P4StatusBarController(
+      makeManager({ resolveContaining: () => client }) as never,
+    )
+    controller.refresh()
+    controller.setVisible(false)
+    mocks.revItem.show.mockClear()
+
+    resolveFstat({
+      depotFile: '//depot/branch_x/src/a.txt',
+      haveRev: '3',
+      headRev: '5',
+      action: undefined,
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mocks.revItem.show).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('setVisible(true) restores and re-renders the items', () => {
+    const controller = new P4StatusBarController(
+      makeManager({ active: makeClient({ syncBehindCount: 12 }) }) as never,
+    )
+    controller.setVisible(false)
+    mocks.item.show.mockClear()
+    mocks.behindItem.show.mockClear()
+
+    controller.setVisible(true)
+    expect(mocks.item.show).toHaveBeenCalled()
+    expect(mocks.behindItem.show).toHaveBeenCalled()
+    controller.dispose()
   })
 })

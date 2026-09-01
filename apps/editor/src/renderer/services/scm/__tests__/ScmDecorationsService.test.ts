@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for ScmDecorationsService — folding the SCM model into by-URI git status
- *  decorations for the Explorer and editor tabs.
+ *  Tests for ScmDecorationsService — folding the SCM model into by-URI SCM status
+ *  decorations for the Explorer and editor tabs, scoped to the repo the SCM view
+ *  currently shows (scmViewState.selectedRepo; first source control as fallback).
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { observableValue, REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import type { IWorkspaceService } from '@universe-editor/platform'
 import type {
@@ -14,10 +15,14 @@ import type {
 } from '../../extensions/ScmService.js'
 import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
 import { ScmDecorationsService, scmPathKey } from '../ScmDecorationsService.js'
+import { scmViewState } from '../../../workbench/scm/scmViewState.js'
 
 const ROOT = 'D:/repo'
 const REMOTE_AUTHORITY = 'myhost'
 const REMOTE_ROOT = '/home/u/repo'
+/** p4 workspace with a git repo nested inside it (the mixed-directory layout). */
+const P4_ROOT = 'e:/ws'
+const GIT_ROOT = 'e:/ws/repo'
 
 function group(
   id: string,
@@ -37,11 +42,12 @@ function sourceControl(
   groups: IScmGroupModel[],
   rootUri = ROOT,
   supplementary: IScmSupplementaryDecoration[] = [],
+  id = 'git',
 ): IScmSourceControlModel {
   return {
     handle: 1,
-    id: 'git',
-    label: 'Git',
+    id,
+    label: id,
     rootUri,
     groups: observableValue('g', groups),
     supplementary: observableValue('supp', new Map(supplementary.map((s) => [s.resourceUri, s]))),
@@ -80,6 +86,11 @@ function remote(path: string, authority = REMOTE_AUTHORITY): URI {
 }
 
 describe('ScmDecorationsService', () => {
+  afterEach(() => {
+    // scmViewState is a module-level singleton shared across tests.
+    scmViewState.setSelectedRepo(undefined)
+  })
+
   it('maps a file to its colour, badge letter and tooltip', () => {
     const svc = local([sourceControl([group('changes', 1, [res(`${ROOT}/a/file.txt`, 'M')])])])
     const deco = svc.getFile(URI.file(`${ROOT}/a/file.txt`))
@@ -207,13 +218,141 @@ describe('ScmDecorationsService', () => {
     expect(svc.getFolder(URI.file(`${ROOT}/dir`))).toBeUndefined()
   })
 
-  it('merges supplementary decorations across providers, keyed path-insensitively', () => {
+  it('keys supplementary decorations path-insensitively and drops unselected providers', () => {
     const svc = local([
       sourceControl([], ROOT, [{ resourceUri: `${ROOT}\\A.ts`, description: '可更新' }]),
       sourceControl([], '/other', [{ resourceUri: '/other/b.ts', description: '他人占用' }]),
     ])
     const supp = svc.decorations.get().supplementary
     expect(supp.get(scmPathKey(`${ROOT}/a.ts`))?.description).toBe('可更新')
-    expect(supp.get('/other/b.ts')?.description).toBe('他人占用')
+    // No selection → the first source control is selected, so the second
+    // provider's supplementary decoration is dropped entirely.
+    expect(supp.has('/other/b.ts')).toBe(false)
+  })
+
+  describe('selected repo scoping', () => {
+    /** git and perforce both reporting the same nested path. */
+    const SHARED = `${GIT_ROOT}/a.txt`
+    const gitSc = () =>
+      sourceControl(
+        [group('changes', 1, [res(SHARED, 'M', '#111111', 'git modified')])],
+        GIT_ROOT,
+        [],
+        'git',
+      )
+    const p4Sc = () =>
+      sourceControl(
+        [group('changes', 1, [res(SHARED, 'A', '#222222', 'p4 added')])],
+        P4_ROOT,
+        [],
+        'perforce',
+      )
+
+    it('only the selected repo decorates a path both providers report', () => {
+      const svc = local([gitSc(), p4Sc()])
+
+      scmViewState.setSelectedRepo(P4_ROOT)
+      expect(svc.getFile(URI.file(SHARED))).toMatchObject({ color: '#222222', letter: 'A' })
+      expect(svc.decorations.get().files.get(scmPathKey(SHARED))?.color).toBe('#222222')
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(svc.getFile(URI.file(SHARED))).toMatchObject({ color: '#111111', letter: 'M' })
+      expect(svc.decorations.get().files.get(scmPathKey(SHARED))?.color).toBe('#111111')
+    })
+
+    it('falls back to the first source control when nothing is selected', () => {
+      const svc = local([gitSc(), p4Sc()])
+      // First registered wins; the second provider's rows are dropped.
+      expect(svc.getFile(URI.file(SHARED))?.color).toBe('#111111')
+      expect(svc.decorations.get().supplementary.size).toBe(0)
+    })
+
+    it('re-arbitrates when the selected root registers later', () => {
+      const controls = observableValue<readonly IScmSourceControlModel[]>('sc', [gitSc()])
+      const svc = new ScmDecorationsService(
+        { sourceControls: controls } as unknown as IScmService,
+        workspaceOf(URI.file(P4_ROOT)),
+      )
+
+      // The selection points at a root no provider owns yet → first (git).
+      scmViewState.setSelectedRepo(P4_ROOT)
+      expect(svc.getFile(URI.file(SHARED))?.color).toBe('#111111')
+
+      // Perforce registers afterwards (extensions activate one by one) →
+      // re-derive and pick it, dropping the git decoration.
+      controls.set([gitSc(), p4Sc()], undefined)
+      expect(svc.getFile(URI.file(SHARED))?.color).toBe('#222222')
+      expect(svc.getFile(URI.file(SHARED))?.letter).toBe('A')
+    })
+
+    it('folder colours bubble up only from the selected repo', () => {
+      const svc = local([
+        sourceControl(
+          [group('changes', 1, [res(`${GIT_ROOT}/sub/a.txt`, 'M', '#111111')])],
+          GIT_ROOT,
+          [],
+          'git',
+        ),
+        sourceControl(
+          [group('changes', 1, [res(`${P4_ROOT}/p4dir/y.txt`, 'A', '#222222')])],
+          P4_ROOT,
+          [],
+          'perforce',
+        ),
+      ])
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(svc.getFolder(URI.file(`${GIT_ROOT}/sub`))?.color).toBe('#111111')
+      expect(svc.getFolder(URI.file(`${P4_ROOT}/p4dir`))).toBeUndefined()
+
+      scmViewState.setSelectedRepo(P4_ROOT)
+      expect(svc.getFolder(URI.file(`${P4_ROOT}/p4dir`))?.color).toBe('#222222')
+      expect(svc.getFolder(URI.file(`${GIT_ROOT}/sub`))).toBeUndefined()
+    })
+
+    it('supplementary decorations come only from the selected repo', () => {
+      const uri = `${GIT_ROOT}/behind.umap`
+      const svc = local([
+        sourceControl([], GIT_ROOT, [{ resourceUri: uri, description: 'git 可更新' }], 'git'),
+        sourceControl([], P4_ROOT, [{ resourceUri: uri, description: 'p4 他人占用' }], 'perforce'),
+      ])
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(svc.decorations.get().supplementary.get(scmPathKey(uri))?.description).toBe(
+        'git 可更新',
+      )
+
+      scmViewState.setSelectedRepo(P4_ROOT)
+      expect(svc.decorations.get().supplementary.get(scmPathKey(uri))?.description).toBe(
+        'p4 他人占用',
+      )
+    })
+
+    it('keeps the old behaviour for a single provider without a selection', () => {
+      const uri = `${P4_ROOT}/only.txt`
+      const svc = local([sourceControl([group('changes', 1, [res(uri, 'M')])], P4_ROOT)])
+      expect(svc.getFile(URI.file(uri))?.letter).toBe('M')
+    })
+
+    // `hasChanges` answers "any provider reports this path", so the open-changes
+    // gating keeps working for a file owned by the unselected provider.
+    it('hasChanges stays true for a path only the unselected provider reports', () => {
+      const p4Only = `${P4_ROOT}/p4only.txt`
+      const svc = local([
+        gitSc(),
+        sourceControl([group('changes', 1, [res(p4Only, 'A')])], P4_ROOT, [], 'perforce'),
+      ])
+
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      // Display is scoped to git, so the p4-only file has no decoration…
+      expect(svc.getFile(URI.file(p4Only))).toBeUndefined()
+      // …but it still counts as changed (dirty-diff / compare-icon gating).
+      expect(svc.hasChanges(URI.file(p4Only))).toBe(true)
+    })
+
+    it('hasChanges is false for a path no provider reports', () => {
+      const svc = local([gitSc(), p4Sc()])
+      expect(svc.hasChanges(URI.file(`${P4_ROOT}/untouched.txt`))).toBe(false)
+    })
   })
 })

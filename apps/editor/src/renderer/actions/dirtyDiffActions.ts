@@ -187,7 +187,7 @@ export class OpenChangesAction extends Action2 {
       return
     }
 
-    const hasScmChanges = scmDecorations.getFile(active.resource) !== undefined
+    const hasScmChanges = scmDecorations.hasChanges(active.resource)
     const head = await commandService.executeCommand<string | null>(
       dirtyDiffCommandId(providerId, 'getHeadContent'),
       hostPath,

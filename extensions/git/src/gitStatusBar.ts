@@ -5,6 +5,11 @@
  * mirroring VSCode's single-repo status bar. Clicking them runs `git-graph.view`
  * / the argument-less `git.sync`, which route to the active repo through
  * `RepositoryManager.resolveRepo`.
+ *
+ * In a mixed workspace (git repos nested in a p4 client, say) the renderer
+ * pushes `git.setActiveRepo(undefined)` when the selection moves to another
+ * provider's repo; `setVisible(false)` hides the pair and keeps it hidden until
+ * a git repo is selected again.
  */
 import {
   window,
@@ -19,6 +24,9 @@ export class GitStatusBarController {
   private readonly _syncItem: StatusBarItem
   /** Subscription to the active repo's change signal; swapped on `setActive`. */
   private _repoSub: Disposable | undefined
+  /** Hidden by `setVisible(false)` while the SCM selection points at another
+   *  provider; `_render` short-circuits so repo change events can't re-show. */
+  private _visible = true
 
   constructor(private readonly _mgr: RepositoryManager) {
     this._branchItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
@@ -38,7 +46,21 @@ export class GitStatusBarController {
     this._render()
   }
 
+  /** Show or hide the whole pair. `false` is pushed via `git.setActiveRepo` when
+   *  the SCM selection moved to another provider's repo; `true` restores and
+   *  re-renders from the active repo. */
+  setVisible(visible: boolean): void {
+    this._visible = visible
+    if (!visible) {
+      this._branchItem.hide()
+      this._syncItem.hide()
+      return
+    }
+    this.refresh()
+  }
+
   private _render(): void {
+    if (!this._visible) return
     const repo = this._mgr.active
     if (!repo) {
       this._branchItem.hide()

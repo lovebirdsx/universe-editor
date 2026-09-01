@@ -79,6 +79,20 @@ export interface IScmService {
 export const IScmService = createDecorator<IScmService>('scmService')
 
 /**
+ * The source control the SCM view is currently showing: the one whose `rootUri`
+ * equals `selectedRootUri`, falling back to the first registered one when the
+ * selection is unset or points at a repo that isn't registered (yet). This is
+ * the single arbitration shared by every "mirror the SCM view's repo" consumer
+ * (activity badge, Explorer/tab decorations, active-repo broadcast).
+ */
+export function resolveSelectedSourceControl(
+  sourceControls: readonly IScmSourceControlModel[],
+  selectedRootUri: string | undefined,
+): IScmSourceControlModel | undefined {
+  return sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
+}
+
+/**
  * Resolve which SCM provider owns `fsPath` — the source control whose `rootUri`
  * is the longest prefix of the path. Returns its provider id (e.g. `'git'` /
  * `'perforce'`), so host features (dirty-diff baseline, blame) can address the

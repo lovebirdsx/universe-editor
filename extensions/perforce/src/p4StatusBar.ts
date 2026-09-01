@@ -15,6 +15,11 @@
  * active client's fstat). The fstat itself goes through the BaselineProvider's
  * short-TTL cache + negative-result sentinel, so tab-switch bursts collapse
  * into at most one server round-trip per file per 15s.
+ *
+ * In a mixed workspace (a git repo nested in a p4 client, say) the renderer
+ * pushes `perforce.setActiveRepo(undefined)` when the selection moves to
+ * another provider's repo; `setVisible(false)` hides all three items and every
+ * render short-circuits until a p4 client is selected again.
  */
 import {
   window,
@@ -46,6 +51,9 @@ export class P4StatusBarController {
   private _editorSub: Disposable | undefined
   /** Generation guard so a slow fstat can't paint over a newer editor's chip. */
   private _revToken = 0
+  /** Hidden by `setVisible(false)` while the SCM selection points at another
+   *  provider; every render short-circuits so nothing can re-show the items. */
+  private _visible = true
 
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
@@ -85,7 +93,22 @@ export class P4StatusBarController {
     this._renderRev()
   }
 
+  /** Show or hide all three items. `false` is pushed via `perforce.setActiveRepo`
+   *  when the SCM selection moved to another provider's repo; `true` restores
+   *  and re-renders from the active client. */
+  setVisible(visible: boolean): void {
+    this._visible = visible
+    if (!visible) {
+      this._item.hide()
+      this._behindItem.hide()
+      this._revItem.hide()
+      return
+    }
+    this.refresh()
+  }
+
   private _render(): void {
+    if (!this._visible) return
     const client = this._mgr.active
     // Before the four-state branches, so no early return can skip it and leave
     // a stale behind count on screen.
@@ -134,6 +157,7 @@ export class P4StatusBarController {
   }
 
   private _renderBehind(client: PerforceClient | undefined): void {
+    if (!this._visible) return
     const behind = client?.status.syncBehindCount
     // undefined = the first behind-check hasn't completed — hiding beats a
     // reassuring zero the client hasn't earned. 0 = checked, nothing to get.
@@ -158,6 +182,7 @@ export class P4StatusBarController {
    *  from the subscription event when available; a bare call re-fetches the
    *  active editor itself (initial render, client refresh). */
   private _renderRev(editor?: TextEditor | undefined): void {
+    if (!this._visible) return
     const token = ++this._revToken
     void (async () => {
       const ed = editor ?? (await window.getActiveTextEditor())
@@ -187,6 +212,9 @@ export class P4StatusBarController {
   }
 
   private _renderRevInfo(info: FstatInfo | undefined): void {
+    // Hidden while the selection points at another provider — an in-flight
+    // fstat finishing now must not re-show the chip.
+    if (!this._visible) return
     // undefined covers both "fstat failed" and the NOT_CONTROLLED sentinel — an
     // empty `#/#` would claim knowledge we don't have.
     if (!info) {

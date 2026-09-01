@@ -33,6 +33,11 @@ export class ClientManager {
     if (root && this._clients.has(norm(root))) this._activeRoot = root
   }
 
+  /** Whether a client with this root is registered (mirrors RepositoryManager). */
+  has(root: string): boolean {
+    return this._clients.has(norm(root))
+  }
+
   get all(): PerforceClient[] {
     return [...this._clients.values()]
   }

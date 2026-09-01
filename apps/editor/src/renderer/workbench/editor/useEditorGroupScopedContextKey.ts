@@ -73,7 +73,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
         uriIdentity.isEqual(dirtyDiffResource, active.resource) &&
         dirtyDiff.regions.length > 0
       const hasScmChanges =
-        active instanceof FileEditorInput && scmDecorations?.getFile(active.resource) !== undefined
+        active instanceof FileEditorInput && scmDecorations?.hasChanges(active.resource) === true
       const scmPath =
         active instanceof FileEditorInput
           ? scmHostPath(active.resource, remoteAuthority)

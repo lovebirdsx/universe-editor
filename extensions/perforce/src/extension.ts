@@ -977,8 +977,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // Point argument-less commands at the SCM-selected client. Pushed by the
     // renderer's ActiveRepoSyncContribution as `<providerId>.setActiveRepo`.
     commands.registerCommand('perforce.setActiveRepo', (...args: unknown[]) => {
-      mgr.setActive(args[0] as string | undefined)
-      statusBar.refresh()
+      const root = args[0] as string | undefined
+      // undefined — or a root this extension doesn't own (the selection is a
+      // git repo in a mixed workspace) — hides the status-bar entries.
+      if (root === undefined || !mgr.has(root)) {
+        statusBar.setVisible(false)
+        return
+      }
+      // setActive before setVisible: setVisible(true) re-renders, so the new
+      // active client must already be in place or it would paint the old one first.
+      mgr.setActive(root)
+      statusBar.setVisible(true)
     }),
 
     // Switch the active workspace (client): list the user's clients, pick one,

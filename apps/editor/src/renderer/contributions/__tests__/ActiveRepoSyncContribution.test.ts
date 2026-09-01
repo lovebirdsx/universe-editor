@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Verifies ActiveRepoSyncContribution mirrors the SCM view's selected repo to
- *  its provider host via `<providerId>.setActiveRepo`, using the same
- *  selected-or-first fallback as ScmView / ScmViewToolbar.
+ *  Verifies ActiveRepoSyncContribution broadcasts the SCM view's selected repo
+ *  to every provider host via `<providerId>.setActiveRepo`: the selected repo's
+ *  owner gets its rootUri, every other provider gets undefined (hide), using
+ *  the same selected-or-first fallback as ScmView / ScmViewToolbar.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -144,6 +145,61 @@ describe('ActiveRepoSyncContribution', () => {
     // An unrelated command registration must not trigger a bogus push.
     store.add(CommandsRegistry.registerCommand('unrelated.command', () => undefined))
     expect(cmd.calls).toEqual([])
+    store.dispose()
+  })
+
+  it('broadcasts undefined to every provider whose repo is not selected', () => {
+    const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
+    store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
+    const scm = makeFakeScm([sc('/repo', 'git'), sc('/depot', 'perforce')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    // git is the first repo → selected; perforce must be told it isn't.
+    expect(cmd.calls).toEqual([
+      ['git.setActiveRepo', ['/repo']],
+      ['perforce.setActiveRepo', [undefined]],
+    ])
+
+    // Selecting the p4 repo flips both messages.
+    scmViewState.setSelectedRepo('/depot')
+    expect(cmd.calls.at(-2)).toEqual(['git.setActiveRepo', [undefined]])
+    expect(cmd.calls.at(-1)).toEqual(['perforce.setActiveRepo', ['/depot']])
+    store.dispose()
+  })
+
+  it('sends a single message per provider even when it owns several repos', () => {
+    const store = new DisposableStore()
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
+    store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
+    const scm = makeFakeScm([sc('/main', 'git'), sc('/sub', 'git'), sc('/depot', 'perforce')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+
+    scmViewState.setSelectedRepo('/sub')
+    // One git message (the selected repo), not one per repo.
+    expect(cmd.calls).toEqual([
+      ['git.setActiveRepo', ['/main']],
+      ['perforce.setActiveRepo', [undefined]],
+      ['git.setActiveRepo', ['/sub']],
+    ])
+    store.dispose()
+  })
+
+  it('re-pushes each pending provider once its command registers', () => {
+    const store = new DisposableStore()
+    const scm = makeFakeScm([sc('/repo', 'git'), sc('/depot', 'perforce')])
+    const cmd = makeFakeCommands()
+    store.add(new ActiveRepoSyncContribution(scm.service, cmd.service))
+    expect(cmd.calls).toEqual([])
+
+    store.add(CommandsRegistry.registerCommand('git.setActiveRepo', () => undefined))
+    expect(cmd.calls).toEqual([['git.setActiveRepo', ['/repo']]])
+
+    // The undefined (hide) push for the unselected provider retries too.
+    store.add(CommandsRegistry.registerCommand('perforce.setActiveRepo', () => undefined))
+    expect(cmd.calls.at(-1)).toEqual(['perforce.setActiveRepo', [undefined]])
     store.dispose()
   })
 })

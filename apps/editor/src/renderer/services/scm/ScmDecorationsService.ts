@@ -1,11 +1,19 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ScmDecorationsService — derives a by-URI lookup of git status decorations from
- *  the SCM model. The git extension pushes one resource per change (with a status
+ *  ScmDecorationsService — derives a by-URI lookup of SCM status decorations from
+ *  the SCM model. Each provider pushes one resource per change (with a status
  *  letter and a VSCode-matching colour); this service folds those into two maps:
  *  `files` (the file's own status) and `folders` (status propagated up to every
  *  ancestor directory, so a changed file tints its enclosing folders). Both the
  *  Explorer rows and the editor tabs consume it to colour file names.
+ *
+ *  Decorations reflect only the repo the SCM view currently shows
+ *  (`scmViewState.selectedRepo`; the first registered source control is the
+ *  fallback when nothing is selected or the selection matches no provider) —
+ *  in a mixed workspace where git and perforce report the same path, the
+ *  unselected provider's decoration is dropped instead of overlaying the
+ *  selected one's. Consumers read the snapshot through
+ *  `useObservable(decorations)`, so they follow repo switches automatically.
  *
  *  Both maps are keyed by SCM-host path, so `getFile`/`getFolder` are the only
  *  supported lookup path: they resolve the resource host-scopedly (see
@@ -22,9 +30,13 @@ import {
   type IObservable,
   type URI,
 } from '@universe-editor/platform'
-import { IScmService } from '../extensions/ScmService.js'
+import { IScmService, resolveSelectedSourceControl } from '../extensions/ScmService.js'
 import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { scmHostPath } from './scmHostPath.js'
+// services → workbench reverse import: scmViewState is module-level observable
+// state with no view dependency, so a service may read it (precedent:
+// services/acp/commitRefPicker.ts).
+import { scmViewState } from '../../workbench/scm/scmViewState.js'
 
 export interface IScmDecoration {
   readonly color: string
@@ -40,9 +52,8 @@ export interface IScmDecoration {
  * text on the Explorer row.
  *
  * Deliberately a separate map from `files` rather than extra fields on
- * IScmDecoration: `getFile(...) !== undefined` is the established test for "this
- * file has local changes" (dirty-diff gating in useEditorGroupScopedContextKey
- * and dirtyDiffActions), and a clean-but-behind file must not answer yes.
+ * IScmDecoration: supplementary answers "what the server says", and a
+ * clean-but-behind file must not count as locally changed (see `hasChanges`).
  */
 export interface IScmSupplementary {
   readonly description: string
@@ -61,6 +72,14 @@ export interface IScmDecorationsService {
   getFile(resource: URI): IScmDecoration | undefined
   getFolder(resource: URI): IScmDecoration | undefined
   getSupplementary(resource: URI): IScmSupplementary | undefined
+  /**
+   * Whether ANY provider reports the resource as changed — deliberately not
+   * scoped to the selected repo. The decorations above are selection-scoped
+   * (display), but "does this file have local changes" gates behaviour
+   * (dirty-diff open-changes, the editor-title compare icon) that must keep
+   * working for a file owned by an unselected provider.
+   */
+  hasChanges(resource: URI): boolean
 }
 
 export const IScmDecorationsService =
@@ -100,6 +119,8 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
   declare readonly _serviceBrand: undefined
 
   readonly decorations: IObservable<IScmDecorationsSnapshot>
+  /** Paths any provider reports as changed, selected repo or not (see `hasChanges`). */
+  private readonly _anyProviderChanges: IObservable<ReadonlySet<string>>
 
   constructor(
     @IScmService private readonly _scm: IScmService,
@@ -119,13 +140,23 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
     )
     this.decorations = derived((reader) => {
       workspaceEpoch.read(reader)
+      const sourceControls = this._scm.sourceControls.read(reader)
+      // Decorations mirror the repo the SCM view is showing, not the workspace
+      // sum: in a mixed workspace where git and perforce report the same path,
+      // the unselected provider's decoration is dropped instead of overlaying
+      // the selected one's.
+      const selected = resolveSelectedSourceControl(
+        sourceControls,
+        scmViewState.selectedRepo.read(reader),
+      )
       const files = new Map<string, IScmDecoration>()
       // Track the winning weight per folder so a stronger descendant overrides.
       const folders = new Map<string, IScmDecoration>()
       const folderWeight = new Map<string, number>()
       const supplementary = new Map<string, IScmSupplementary>()
 
-      for (const sc of this._scm.sourceControls.read(reader)) {
+      for (const sc of sourceControls) {
+        if (sc !== selected) continue
         const root = sc.rootUri !== undefined ? scmPathKey(sc.rootUri) : undefined
         for (const group of sc.groups.read(reader)) {
           for (const res of group.resources.read(reader)) {
@@ -174,6 +205,17 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
 
       return { files, folders, supplementary }
     })
+    this._anyProviderChanges = derived((reader) => {
+      const keys = new Set<string>()
+      for (const sc of this._scm.sourceControls.read(reader)) {
+        for (const group of sc.groups.read(reader)) {
+          for (const res of group.resources.read(reader)) {
+            keys.add(scmPathKey(res.resourceUri))
+          }
+        }
+      }
+      return keys
+    })
   }
 
   getFile(resource: URI): IScmDecoration | undefined {
@@ -189,6 +231,11 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
   getSupplementary(resource: URI): IScmSupplementary | undefined {
     const key = this._key(resource)
     return key !== undefined ? this.decorations.get().supplementary.get(key) : undefined
+  }
+
+  hasChanges(resource: URI): boolean {
+    const key = this._key(resource)
+    return key !== undefined && this._anyProviderChanges.get().has(key)
   }
 
   /** Decoration key for a resource, or undefined when it is off the SCM host. */

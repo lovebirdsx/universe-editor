@@ -263,8 +263,17 @@ function registerGitCommands(
     // Point argument-less commands (command palette, keybindings, status bar) at
     // the repo the SCM view currently shows. Pushed by the renderer on selection.
     register('git.setActiveRepo', (...args: unknown[]) => {
-      mgr.setActive(args[0] as string | undefined)
-      statusBar.refresh()
+      const root = args[0] as string | undefined
+      // undefined — or a root this extension doesn't own (the selection is a p4
+      // client in a mixed workspace) — hides the status-bar pair.
+      if (root === undefined || !mgr.has(root)) {
+        statusBar.setVisible(false)
+        return
+      }
+      // setActive before setVisible: setVisible(true) re-renders, so the new
+      // active repo must already be in place or it would paint the old one first.
+      mgr.setActive(root)
+      statusBar.setVisible(true)
     }),
 
     register('git.refresh', (arg) => mgr.resolveRepo(arg)?.refresh({ fetch: true })),
