@@ -203,13 +203,17 @@ describe('countLocalFilesUpTo', () => {
   })
 
   it('gives up (undefined) once the directory budget is exhausted', async () => {
-    // A chain of empty directories longer than the budget: the file count
-    // never grows, so without the budget the walk would follow the whole
-    // chain — one readdir round-trip per link, minutes on a network share.
-    readdirMock.mockImplementation(async (d: string) => {
-      const depth = d.split(/[\\/]/).length - 2
-      return [dir(`d${depth + 1}`)]
-    })
+    // More empty directories than the budget allows: the file count never
+    // grows, so without the budget the walk would readdir every one of them —
+    // one round-trip each, minutes on a network share. The tree is flat rather
+    // than a chain so the budget is reached against its real production value:
+    // a chain deep enough to exhaust it grows the path on every link, which is
+    // quadratic string work and takes tens of seconds.
+    readdirMock.mockImplementation(async (d: string) =>
+      d === '/root'
+        ? Array.from({ length: RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES }, (_, i) => dir(`d${i}`))
+        : [],
+    )
     expect(await countLocalFilesUpTo('/root', 5)).toBeUndefined()
     expect(readdirMock).toHaveBeenCalledTimes(RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES)
   })

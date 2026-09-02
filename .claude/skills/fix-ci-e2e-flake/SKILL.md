@@ -77,6 +77,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - webview/iframe 计数钩子 poll 恒 0+initial/retry 同形态+失败 commit 与被测链路无关=钩子以静态 HTML 标记为门控 `if(!obj) return` 静默空转（案例 9 iframe 变体）叠加单次写赛跑 createFileSystemWatcher arm 窗口（案例 55 exthost 变体）；修=poll 对象本身就位+钩子守卫改 throw+poll 内幂等重写 → 案例 79
 - teardown 泄漏栈在 Monaco `bindDocumentChangeListeners`+断言全过+全 ts spec 恒定挂=provider 挂 `onDidChange` 后 model 级 `ModelSemanticColoring`（活到 teardown）把订阅存普通数组成孤儿 root（泄漏门误报）；修=proxy 侧包装 event 给订阅 `setParentOfDisposable(store)` 锚定 root 链（区分 54 dying-host/56 半建 store）→ 案例 80
 - 自启动 spec 中途 openWorkspace 后 `getActiveEditorUri().toBeFalsy()` 恒停旧值（`a.json`）或 `release-notes:whatsNew`、`--repeat-each` 可复现=手写 state.json 漏了 harness `INITIAL_STATE` 的 `app.releaseNotes.lastVersion` pin，升级 "What's New" 标签异步打开既污染空 workspace 又触发 persist 跨通道赛跑把 A 写进 B；修=seed 合并 `INITIAL_STATE` → 案例 81
+- output 过滤后写真实 logger 的高等级行 10s 不可见、仅 CI Windows 某 shard 双挂、本地大量复现失败=先把「写链路」与「过滤可见」断言分层并加失败 dump，再逐项证伪（文件落盘/mtime、等级解析、Monaco 可见性、teardown 顺序红鲱鱼）；「aria 只剩 alert 空壳」先查 teardown `expectNoLeaks` 先 unmount 再拍 snapshot → 案例 82
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

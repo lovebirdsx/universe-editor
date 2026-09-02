@@ -68,11 +68,53 @@ async function streamInfo(page: Page, marker: string, count: number): Promise<vo
   )
 }
 
-function visibleInfoLines(page: Page, marker: string): Promise<string[]> {
+function visibleLines(page: Page, marker: string): Promise<string[]> {
   return page.evaluate(
     (marker) => window.__E2E__!.getVisibleOutputLines().filter((l) => l.includes(marker)),
     marker,
   )
+}
+
+/**
+ * Assert a marker reaches the All channel and survives the current filter.
+ *
+ * Arrival is awaited on its own because the write crosses renderer → IPC →
+ * main logger → debounced flush → broadcast → aggregation: folding that
+ * latency into the visibility poll makes a slow machine look like a filter
+ * that swallowed the line. Only the second poll measures the filter. On
+ * failure the filter's live state is dumped, which tells "arrived but stayed
+ * hidden" (a filter bug) apart from a line that never made it to the channel.
+ */
+async function expectVisibleInAllChannel(page: Page, marker: string): Promise<void> {
+  try {
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            ({ channel, marker }) =>
+              window.__E2E__!.getOutputChannelContent(channel).includes(marker),
+            { channel: ALL_CHANNEL, marker },
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true)
+    await expect
+      .poll(() => visibleLines(page, marker).then((l) => l.length), { timeout: 10_000 })
+      .toBeGreaterThan(0)
+  } catch (e) {
+    const state = await page.evaluate(
+      (channel) => ({
+        active: window.__E2E__!.getActiveOutputChannelName(),
+        hiddenRanges: window.__E2E__!.getOutputHiddenRanges(),
+        hiddenLevels: window.__E2E__!.getOutputHiddenLevels(),
+        allTail: window.__E2E__!.getOutputChannelContent(channel).split('\n').slice(-6),
+        visibleTail: window.__E2E__!.getVisibleOutputLines().slice(-6),
+      }),
+      ALL_CHANNEL,
+    )
+    console.log(`[outputLevelFilter] "${marker}" diagnostic:`, JSON.stringify(state))
+    throw e
+  }
 }
 
 test.describe('@p1 output level filter', () => {
@@ -92,11 +134,7 @@ test.describe('@p1 output level filter', () => {
 
     await streamInfo(page, 'e2e-preexisting-info', 40)
     await ensureAllChannelActive(page)
-    await expect
-      .poll(() => visibleInfoLines(page, 'e2e-preexisting-info').then((l) => l.length), {
-        timeout: 15_000,
-      })
-      .toBeGreaterThan(0)
+    await expectVisibleInAllChannel(page, 'e2e-preexisting-info')
 
     await page.evaluate(
       (levels) => window.__E2E__!.setOutputHiddenLevels(levels),
@@ -104,7 +142,7 @@ test.describe('@p1 output level filter', () => {
     )
 
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-preexisting-info').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-preexisting-info').then((l) => l.length), {
         timeout: 10_000,
       })
       .toBe(0)
@@ -113,11 +151,7 @@ test.describe('@p1 output level filter', () => {
       window.__E2E__!.logToChannel('e2eFilter', 'E2E Filter', 'warn', 'e2e-kept-warning'),
     )
     await ensureAllChannelActive(page)
-    await expect
-      .poll(() => visibleInfoLines(page, 'e2e-kept-warning').then((l) => l.length), {
-        timeout: 10_000,
-      })
-      .toBeGreaterThan(0)
+    await expectVisibleInAllChannel(page, 'e2e-kept-warning')
   })
 
   test('a channel whose every line is filtered out renders none of them', async ({
@@ -146,7 +180,7 @@ test.describe('@p1 output level filter', () => {
     }, UNIFORM_CHANNEL)
 
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-uniform-info').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-uniform-info').then((l) => l.length), {
         timeout: 15_000,
       })
       .toBe(30)
@@ -157,7 +191,7 @@ test.describe('@p1 output level filter', () => {
     )
 
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-uniform-info').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-uniform-info').then((l) => l.length), {
         timeout: 10_000,
       })
       .toBe(0)
@@ -183,7 +217,7 @@ test.describe('@p1 output level filter', () => {
     }, PRESEED_CHANNEL)
 
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-preseed-').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-preseed-').then((l) => l.length), {
         timeout: 15_000,
       })
       .toBe(10)
@@ -224,7 +258,7 @@ test.describe('@p1 output level filter', () => {
     }, STREAM_CHANNEL)
 
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-streaming-info').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-streaming-info').then((l) => l.length), {
         timeout: 15_000,
       })
       .toBeGreaterThan(0)
@@ -239,7 +273,7 @@ test.describe('@p1 output level filter', () => {
       // the current refresh window may still show. A refresh that every incoming
       // flush postpones leaves the whole backlog visible instead.
       await expect
-        .poll(() => visibleInfoLines(page, 'e2e-streaming-info').then((l) => l.length), {
+        .poll(() => visibleLines(page, 'e2e-streaming-info').then((l) => l.length), {
           timeout: 5_000,
         })
         .toBeLessThan(10)
@@ -253,7 +287,7 @@ test.describe('@p1 output level filter', () => {
 
     // Once the stream stops, the backlog must be fully hidden.
     await expect
-      .poll(() => visibleInfoLines(page, 'e2e-streaming-info').then((l) => l.length), {
+      .poll(() => visibleLines(page, 'e2e-streaming-info').then((l) => l.length), {
         timeout: 10_000,
       })
       .toBe(0)
