@@ -14,11 +14,14 @@ import {
 import {
   FILE_CLIPBOARD_CONFIRM_BYTES,
   FILE_CLIPBOARD_REFUSE_BYTES,
-  FILE_CLIPBOARD_REFUSE_ENTRIES,
   type IFileClipboardSnapshot,
 } from '../../../../shared/ipc/fileClipboardService.js'
 import type { IOsClipboardBackend, IOsClipboardReadResult } from '../osClipboardBackend.js'
-import { FileClipboardMainService } from '../fileClipboardMainService.js'
+import {
+  FileClipboardMainService,
+  MEASURE_CONCURRENCY,
+  type FileClipboardMeasureLimits,
+} from '../fileClipboardMainService.js'
 
 interface FakeNode {
   readonly isDirectory: boolean
@@ -132,7 +135,7 @@ function deferred<T>() {
 
 const cleanups: string[] = []
 
-function createHarness(): {
+function createHarness(limits?: Partial<FileClipboardMeasureLimits>): {
   backend: FakeBackend
   fileService: FakeFileService
   service: FileClipboardMainService
@@ -143,7 +146,13 @@ function createHarness(): {
   const root = mkdtempSync(join(tmpdir(), 'ue-fileclipboard-'))
   cleanups.push(root)
   const materializeRoot = join(root, 'materialize')
-  const service = new FileClipboardMainService(fileService, undefined, backend, materializeRoot)
+  const service = new FileClipboardMainService(
+    fileService,
+    undefined,
+    backend,
+    materializeRoot,
+    limits,
+  )
   return { backend, fileService, service, materializeRoot }
 }
 
@@ -436,9 +445,12 @@ describe('FileClipboardMainService', () => {
     })
 
     it('refuses writes above the entry limit and aborts the walk early', async () => {
-      const { fileService, service } = createHarness()
+      // Small injected entry limit drives the exact same refusal + early-abort
+      // path without a 100k-node tree (which is slow on CI runners).
+      const refuseEntries = 100
+      const { fileService, service } = createHarness({ refuseEntries })
       const dir = URI.from({ scheme: REMOTE_SCHEME, authority: 'test-host', path: '/many' })
-      const total = FILE_CLIPBOARD_REFUSE_ENTRIES + 5
+      const total = refuseEntries + 2 * MEASURE_CONCURRENCY
       const names: string[] = []
       for (let i = 0; i < total; i++) names.push(`f${i}.txt`)
       fileService.addDir(dir, names)
@@ -446,9 +458,64 @@ describe('FileClipboardMainService', () => {
 
       const cost = await service.checkWriteCost([remoteResource('/many', true)])
       expect(cost.refused).toBe(true)
-      // 1 stat for the root + exactly FILE_CLIPBOARD_REFUSE_ENTRIES children:
-      // the walk aborted as soon as the limit was exceeded, leaving 4 files unvisited.
-      expect(fileService.statCalls).toBe(FILE_CLIPBOARD_REFUSE_ENTRIES + 1)
+      // The walk issues at most MEASURE_CONCURRENCY stats beyond the limit —
+      // the semaphore bounds in-flight work regardless of tree shape, so once
+      // `refused` flips no new stat is issued and the in-flight ones settle.
+      expect(fileService.statCalls).toBeGreaterThan(refuseEntries)
+      expect(fileService.statCalls).toBeLessThanOrEqual(refuseEntries + 1 + MEASURE_CONCURRENCY)
+      expect(fileService.statCalls).toBeLessThan(total + 1)
+    })
+
+    it('aborts a nested tree without multiplying the in-flight bound by depth', async () => {
+      // Regression guard for the global-semaphore bound: on a bushy tree the
+      // previous per-directory batching would overshoot by `depth × batch`,
+      // the semaphore must keep the overshoot at MEASURE_CONCURRENCY.
+      const refuseEntries = 50
+      const { fileService, service } = createHarness({ refuseEntries })
+      const root = URI.from({ scheme: REMOTE_SCHEME, authority: 'test-host', path: '/bushy' })
+      // depth=3, branch=8: 1 + 8 + 64 + 512 = 585 nodes, far above the limit.
+      const level1: string[] = []
+      for (let i = 0; i < 8; i++) level1.push(`d${i}`)
+      fileService.addDir(root, level1)
+      for (const a of level1) {
+        const dirA = URI.joinPath(root, a)
+        const level2: string[] = []
+        for (let i = 0; i < 8; i++) level2.push(`d${i}`)
+        fileService.addDir(dirA, level2)
+        for (const b of level2) {
+          const dirB = URI.joinPath(dirA, b)
+          const leaves: string[] = []
+          for (let i = 0; i < 8; i++) leaves.push(`f${i}.txt`)
+          fileService.addDir(dirB, leaves)
+          for (const leaf of leaves) fileService.addFile(URI.joinPath(dirB, leaf), 1)
+        }
+      }
+
+      const cost = await service.checkWriteCost([remoteResource('/bushy', true)])
+      expect(cost.refused).toBe(true)
+      // 585 nodes total; refused must trip far earlier, bounded by the
+      // semaphore rather than by the per-level fan-out (which would allow
+      // several hundred stats past the limit on this shape).
+      expect(fileService.statCalls).toBeGreaterThan(refuseEntries)
+      expect(fileService.statCalls).toBeLessThanOrEqual(refuseEntries + 1 + MEASURE_CONCURRENCY)
+    })
+
+    it('accepts a tree with exactly the entry limit', async () => {
+      // Boundary: `count > refuseEntries` (strictly greater) is the refusal
+      // condition, so a tree with exactly `refuseEntries` nodes must pass.
+      // The root itself is counted, so a dir of `refuseEntries - 1` files
+      // totals exactly `refuseEntries` stats.
+      const refuseEntries = 100
+      const { fileService, service } = createHarness({ refuseEntries })
+      const dir = URI.from({ scheme: REMOTE_SCHEME, authority: 'test-host', path: '/exact' })
+      const names: string[] = []
+      for (let i = 0; i < refuseEntries - 1; i++) names.push(`f${i}.txt`)
+      fileService.addDir(dir, names)
+      for (const name of names) fileService.addFile(URI.joinPath(dir, name), 1)
+
+      const cost = await service.checkWriteCost([remoteResource('/exact', true)])
+      expect(cost.refused).toBe(false)
+      expect(fileService.statCalls).toBe(refuseEntries)
     })
 
     it('counts only the materialize-needed resources', async () => {

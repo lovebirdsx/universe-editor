@@ -74,7 +74,7 @@ Finder 读的文件粘贴类型（XML plist 数组）。**best-effort**：仓库
 
 | 你想做 | 动哪 |
 |---|---|
-| 改确认/拒绝阈值 | `shared/ipc/fileClipboardService.ts` 常量（`FILE_CLIPBOARD_*`）+ `checkWriteCost` 预算逻辑 |
+| 改确认/拒绝阈值 | `shared/ipc/fileClipboardService.ts` 常量（`FILE_CLIPBOARD_*`）+ `checkWriteCost` 预算逻辑；`_measureTree` 的遍历并发由 `fileClipboardMainService.ts` 的 `MEASURE_CONCURRENCY`（全局信号量，跨整个 walk 共享，嵌套树不会按深度放大洪峰）控制；测试可用构造器可选第 5 参 `limits?: Partial<FileClipboardMeasureLimits>` 注入小阈值驱动同一拒绝路径，避免 100k 节点的 CI 超时 |
 | 改 OS 写入格式 / 读回逻辑 | 对应 `osClipboard{Windows,Linux,Mac}.ts` |
 | 改所有权判定 / 宽限期 | `fileClipboardMainService.ts`（`OWNERSHIP_GRACE_MS` 等） |
 | 加新平台 | 新 backend 实现 `IOsClipboardBackend` + `createOsClipboardBackend` 分派一行 |

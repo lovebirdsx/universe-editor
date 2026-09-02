@@ -45,6 +45,55 @@ const EMPTY_SNAPSHOT: IFileClipboardSnapshot = {
   source: 'os',
 }
 
+/**
+ * Global in-flight `stat` cap for {@link _measureTree}. Sized for remote-ssh
+ * trees, where each stat is a round-trip IPC: 64 concurrent requests is enough
+ * to keep the walk off the critical path, but small enough that a refused tree
+ * cannot burst the remote queue before the early abort kicks in.
+ */
+export const MEASURE_CONCURRENCY = 64
+
+/** Hard limits of the {@link _measureTree} walk; injectable so tests can drive the same path at small scale. */
+export interface FileClipboardMeasureLimits {
+  readonly refuseEntries: number
+  readonly refuseBytes: number
+}
+
+const DEFAULT_MEASURE_LIMITS: FileClipboardMeasureLimits = {
+  refuseEntries: FILE_CLIPBOARD_REFUSE_ENTRIES,
+  refuseBytes: FILE_CLIPBOARD_REFUSE_BYTES,
+}
+
+/**
+ * Counting semaphore bounding the in-flight `stat` calls across the whole
+ * {@link _measureTree} walk (not per directory level), so a deep/bushy tree
+ * cannot multiply the concurrency of a single batch by its nesting depth.
+ */
+class MeasureSemaphore {
+  private _inFlight = 0
+  private readonly _waiters: (() => void)[] = []
+
+  constructor(private readonly _capacity: number) {}
+
+  async acquire(): Promise<void> {
+    if (this._inFlight < this._capacity) {
+      this._inFlight++
+      return
+    }
+    await new Promise<void>((resolve) => this._waiters.push(resolve))
+  }
+
+  release(): void {
+    const next = this._waiters.shift()
+    if (next) {
+      // Hand the slot directly to the next waiter without dropping _inFlight.
+      next()
+    } else {
+      this._inFlight--
+    }
+  }
+}
+
 interface ClipboardEntry {
   readonly uri: URI
   readonly isDirectory: boolean
@@ -68,6 +117,7 @@ export class FileClipboardMainService extends Disposable implements IFileClipboa
 
   private readonly _logger: ILogger
   private readonly _materializer: ClipboardMaterializer
+  private readonly _limits: FileClipboardMeasureLimits
   private _state: ClipboardState | null = null
   private _generation = 0
   private readonly _inFlightWrites: Promise<unknown>[] = []
@@ -77,10 +127,12 @@ export class FileClipboardMainService extends Disposable implements IFileClipboa
     @ILoggerService loggerService: ILoggerService | undefined,
     private readonly _backend: IOsClipboardBackend,
     materializeRoot: string,
+    limits?: Partial<FileClipboardMeasureLimits>,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'fileClipboard', name: 'File Clipboard' })
     this._materializer = new ClipboardMaterializer(_fileService, materializeRoot, this._logger)
+    this._limits = { ...DEFAULT_MEASURE_LIMITS, ...limits }
     // Async janitor for session dirs abandoned by a previous run (>24h old).
     void this._materializer.cleanupStale().catch(() => undefined)
   }
@@ -201,11 +253,12 @@ export class FileClipboardMainService extends Disposable implements IFileClipboa
   ): Promise<IFileClipboardWriteCost> {
     const isWindows = process.platform === 'win32'
     const budget = { bytes: 0, count: 0, refused: false }
+    const semaphore = new MeasureSemaphore(MEASURE_CONCURRENCY)
     let materializeCount = 0
     for (const entry of this._normalize(resources)) {
       if (localRevealFsPath(entry.uri, { isWindows }) !== undefined) continue
       materializeCount++
-      await this._measureTree(entry.uri, budget)
+      await this._measureTree(entry.uri, budget, semaphore)
       if (budget.refused) break
     }
     return {
@@ -216,27 +269,49 @@ export class FileClipboardMainService extends Disposable implements IFileClipboa
     }
   }
 
-  /** Recursive byte/entry accounting with early abort once a hard limit is exceeded. */
+  /**
+   * Recursive byte/entry accounting with early abort once a hard limit is
+   * exceeded. All `stat` calls in the walk share a single semaphore (see
+   * {@link MEASURE_CONCURRENCY}), so a deep or bushy tree cannot multiply
+   * per-directory concurrency into a burst; the limit is re-checked after
+   * every stat, so once `budget.refused` flips no new `stat` is issued and
+   * the walk finishes after the in-flight ones settle (overshoot ≤
+   * MEASURE_CONCURRENCY regardless of tree shape).
+   */
   private async _measureTree(
     uri: URI,
     budget: { bytes: number; count: number; refused: boolean },
+    semaphore: MeasureSemaphore,
   ): Promise<void> {
     if (budget.refused) return
-    const stat = await this._fileService.stat(uri)
+    await semaphore.acquire()
+    if (budget.refused) {
+      // The limit was crossed while we waited for a slot — release without
+      // issuing a stat so no further I/O happens after refusal.
+      semaphore.release()
+      return
+    }
+    let stat: Awaited<ReturnType<IFileService['stat']>>
+    try {
+      stat = await this._fileService.stat(uri)
+    } finally {
+      semaphore.release()
+    }
     budget.count++
     if (stat.isFile) {
       budget.bytes += stat.size
-    } else {
-      for (const child of await this._fileService.list(uri)) {
-        await this._measureTree(URI.joinPath(uri, child.name), budget)
-        if (budget.refused) return
-      }
     }
-    if (
-      budget.bytes > FILE_CLIPBOARD_REFUSE_BYTES ||
-      budget.count > FILE_CLIPBOARD_REFUSE_ENTRIES
-    ) {
+    if (budget.bytes > this._limits.refuseBytes || budget.count > this._limits.refuseEntries) {
       budget.refused = true
+      return
+    }
+    if (stat.isDirectory) {
+      const children = await this._fileService.list(uri)
+      await Promise.all(
+        children.map((child) =>
+          this._measureTree(URI.joinPath(uri, child.name), budget, semaphore),
+        ),
+      )
     }
   }
 
