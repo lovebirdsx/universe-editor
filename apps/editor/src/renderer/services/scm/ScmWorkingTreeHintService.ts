@@ -13,12 +13,14 @@
  *  observable bumps when a batch resolves (or the cache is invalidated) so the next
  *  render picks up the answer.
  *
- *  Folders fold that same cache upward: `getFolderHint` tints a directory while any
- *  *discovered* descendant file still carries a hint. The aggregate is a lower bound
- *  by design — paths that were never rendered were never queried, and LRU eviction
- *  or a save can also take a colour away, so a folder's tint can change as the user
- *  expands and scrolls. Accepted trade-off: the alternative is eager discovery,
- *  i.e. exactly the whole-tree scan this service exists to avoid.
+ *  Folders fold descendant hints upward from two sources: the pull channel's file
+ *  cache, and a per-directory aggregate the provider's background scan feeds
+ *  directly (so a scan can tint folders without flooding the file LRU — see
+ *  `_scanFolders`). The aggregate is a lower bound by design — paths that were
+ *  never rendered were never queried, and a save can still take a colour away,
+ *  so a folder's tint can change as the user expands and scrolls. Accepted
+ *  trade-off: the alternative is eager discovery, i.e. exactly the whole-tree
+ *  scan this service exists to avoid.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -56,6 +58,13 @@ export interface IWorkingTreeHint {
 /** Folder-level hint: colour only — a directory shows no badge letter and no strike. */
 export type IWorkingTreeFolderHint = Omit<IWorkingTreeHint, 'letter'>
 
+/** A directory's winning fold: the winning weight, colour, and the file that tinted it. */
+interface FolderFold {
+  weight: number
+  color: string
+  source: string
+}
+
 export interface IScmWorkingTreeHintService {
   readonly _serviceBrand: undefined
   /** Bumps whenever a batch resolves or the cache is invalidated, so consumers re-render. */
@@ -63,9 +72,12 @@ export interface IScmWorkingTreeHintService {
   /** Cached hint; undefined while unknown (enqueued for a batch) or clean/off-host. */
   getHint(resource: URI): IWorkingTreeHint | undefined
   /**
-   * Colour derived from the cached hints of known descendants, or undefined when
-   * none has been discovered. A lower bound: it can gain entries as the user
-   * expands/renders new paths and lose them to eviction or a save.
+   * Colour derived from known descendants across two sources — the pull
+   * channel's file cache and the background scan's per-directory fold — or
+   * undefined when none has been discovered. A lower bound: it can gain entries
+   * as the user expands/renders new paths or a scan discovers more drift, and
+   * lose them to a save or a workspace change. The scan fold is not subject to
+   * the file-level LRU eviction the pull cache is.
    */
   getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined
 }
@@ -76,6 +88,14 @@ export const IScmWorkingTreeHintService = createDecorator<IScmWorkingTreeHintSer
 
 /** Explorer is virtualised: fast scrolling touches thousands of paths, so bound the cache. */
 export const CACHE_LIMIT = 4096
+
+/**
+ * Upper bound on the scan's per-directory aggregate. Tens of thousands of drift
+ * files still map to only a few thousand directories, so this sits far above the
+ * real range; it exists so a pathological scan cannot grow the table unbounded.
+ * Unlike the file LRU it never evicts silently — reaching it logs a warning.
+ */
+export const SCAN_FOLDER_LIMIT = 16384
 
 /** Folding file hints into a folder: a delete (strikeThrough) outranks any other drift. */
 const FOLDER_HINT_WEIGHT_DELETE = 4
@@ -98,6 +118,16 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   private readonly _version = observableValue<number>('scmWorkingTreeHintVersion', 0)
   /** null = known clean; it still occupies a slot and is still evicted. */
   private readonly _cache = new Map<string, IWorkingTreeHint | null>()
+  /**
+   * Directory-aggregate built from the provider's background scan. A scan can
+   * publish tens of thousands of file hints for a single directory, so they are
+   * folded to per-directory winners here instead of flooding the file LRU (which
+   * would silently evict both the scan's own results and the pull channel's
+   * visible-row answers). Cleared on invalidation; not touched by file events —
+   * the aggregate is lossy and cannot subtract a single file, so it stays as a
+   * conservative lower bound. Bounded by {@link SCAN_FOLDER_LIMIT}.
+   */
+  private readonly _scanFolders = new Map<string, FolderFold>()
   /** Cached keys whose answer may have moved on; re-queried when next read. */
   private readonly _stale = new Set<string>()
   private readonly _pending = new Map<string, string>()
@@ -215,14 +245,14 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return undefined
-    // Every content-changing path of `_cache` bumps `_version` (flush end, file
-    // events, invalidation, and LRU eviction inside `_writeHint` before that
-    // bump). `getHint`'s LRU touch only re-orders entries, which the deterministic
-    // tie-break in `_buildFolderHints` makes irrelevant — so the version is a
-    // sound memo generation for the folder fold.
+    // Every content-changing path bumps `_version`: the pull cache (flush end,
+    // file events, invalidation, and LRU eviction inside `_writeHint`) and the
+    // scan fold (`_acceptScanResults` → `_scheduleScanVersionBump`). `getHint`'s
+    // LRU touch only re-orders entries, which the deterministic tie-break makes
+    // irrelevant — so the version is a sound memo generation for the fold.
     const version = this._version.get()
     if (this._folderHints === undefined || this._folderHintsVersion !== version) {
-      this._folderHints = this._buildFolderHints()
+      this._folderHints = this._mergeFolderHints(this._buildFolderHints(), this._scanFolders)
       this._folderHintsVersion = version
     }
     return this._folderHints.get(scmPathKey(fsPath))
@@ -231,34 +261,56 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   /**
    * Propagate every non-null file hint up its ancestor directories. No provider
    * root is known here, so propagation runs to the path top — harmless, since
-   * only rendered rows ever look a folder up. A delete outranks any other drift;
-   * ties break by the smaller source key so the colour is deterministic —
-   * `_cache` iterates in LRU order, and a `getHint` hit re-orders entries without
-   * bumping `_version`, so plain first-wins would let an unrelated rebuild flip
-   * a folder between two equal-weight descendants. The folder keeps only the colour.
+   * only rendered rows ever look a folder up. The fold decision (delete outranks
+   * any other drift; equal weight breaks to the smaller source key) is shared
+   * with the scan fold via {@link _folderWeight}/{@link _folderFoldBeats} so the
+   * two sources can never disagree about a directory's winner.
    */
-  private _buildFolderHints(): Map<string, IWorkingTreeFolderHint> {
-    const folders = new Map<string, IWorkingTreeFolderHint>()
-    const winners = new Map<string, { weight: number; source: string }>()
+  private _buildFolderHints(): Map<string, FolderFold> {
+    const folders = new Map<string, FolderFold>()
     for (const [key, hint] of this._cache) {
       if (hint === null) continue
-      const weight =
-        hint.strikeThrough === true ? FOLDER_HINT_WEIGHT_DELETE : FOLDER_HINT_WEIGHT_CHANGE
+      const weight = this._folderWeight(hint)
       let dir = parentDir(key)
       while (dir) {
-        const prev = winners.get(dir)
-        if (
-          prev === undefined ||
-          weight > prev.weight ||
-          (weight === prev.weight && key < prev.source)
-        ) {
-          winners.set(dir, { weight, source: key })
-          folders.set(dir, { color: hint.color })
+        if (this._folderFoldBeats(folders.get(dir), weight, key)) {
+          folders.set(dir, { weight, color: hint.color, source: key })
         }
         dir = parentDir(dir)
       }
     }
     return folders
+  }
+
+  /** Fold weight: a delete (strikeThrough) outranks any other drift. */
+  private _folderWeight(hint: IWorkingTreeHint): number {
+    return hint.strikeThrough === true ? FOLDER_HINT_WEIGHT_DELETE : FOLDER_HINT_WEIGHT_CHANGE
+  }
+
+  /** Shared fold decision: higher weight wins; equal weight breaks to the smaller source key. */
+  private _folderFoldBeats(prev: FolderFold | undefined, weight: number, source: string): boolean {
+    return (
+      prev === undefined || weight > prev.weight || (weight === prev.weight && source < prev.source)
+    )
+  }
+
+  /**
+   * Merge the pull-channel fold with the scan fold into colour-only entries. A
+   * directory present in both resolves by the same rule the two folds apply
+   * internally — higher weight, then smaller source key — so it is deterministic.
+   */
+  private _mergeFolderHints(
+    pull: Map<string, FolderFold>,
+    scan: Map<string, FolderFold>,
+  ): Map<string, IWorkingTreeFolderHint> {
+    const merged = new Map<string, IWorkingTreeFolderHint>()
+    for (const [key, entry] of pull) merged.set(key, { color: entry.color })
+    for (const [key, entry] of scan) {
+      if (this._folderFoldBeats(pull.get(key), entry.weight, entry.source)) {
+        merged.set(key, { color: entry.color })
+      }
+    }
+    return merged
   }
 
   /**
@@ -303,6 +355,10 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
         this._pending.set(key, fsPath)
         this._scheduleFlush()
       }
+      // Deliberately not touching `_scanFolders`: the scan aggregate is lossy —
+      // it holds per-directory winners, not per-file entries — so it cannot
+      // subtract a single changed file. Leaving it is the conservative choice
+      // (the tint is a lower bound that may briefly over-report).
       if (this._cache.delete(key)) dropped = true
     }
     // Saving a file is the main correction signal: drop only its own hint and
@@ -415,26 +471,34 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   }
 
   /**
-   * Merge a provider background-scan batch into the cache. Scan answers are
-   * file-level hints keyed like the pull channel's, so folder tints (and row
-   * badges, if the row is already rendered) appear from the same data. The
-   * scan's path strings come straight from the SCM host — the same host space
-   * {@link _hostPath} maps resources into — so `scmPathKey` alone is the right
-   * key. Nothing is written for a clean directory (an absent hint already means
-   * "no drift", and there is no directory-level negative entry to cache).
+   * Fold a provider background-scan batch into the per-directory aggregate
+   * `_scanFolders`, never into the file LRU. A scan can publish tens of
+   * thousands of file hints for one directory; writing them into the file cache
+   * would both evict most of the scan's own results and displace the pull
+   * channel's answers for visible rows. Folder tints only need the aggregate
+   * colour, so the scan lands here and the file-level RC badge stays the pull
+   * channel's job. The scan's path strings come straight from the SCM host — the
+   * same host space {@link _hostPath} maps resources into — so `scmPathKey`
+   * alone is the right key. Nothing is written for a clean directory (an absent
+   * hint already means "no drift", and there is no directory-level negative
+   * entry to cache).
    */
   private _acceptScanResults(results: readonly IScmWorkingTreeScanResult[]): void {
     let changed = false
+    // Counted as a set of directories, not as a tally of rejections: one file is
+    // folded up its whole ancestor chain, so incrementing per rejected level
+    // would report a multiple of the directories actually left out.
+    const rejected = new Set<string>()
     for (const result of results) {
       for (const dto of result.hints) {
-        const hint = toHint(dto)
-        // An answer from the pull channel may be in flight for the same file;
-        // the scan describes what a directory sweep saw, which can be newer than
-        // the point query it races. Both are honest readings of the disk at
-        // their own moment, and the in-flight token guard still applies to the
-        // pull answer when it lands.
-        if (this._putHint(scmPathKey(dto.path), hint)) changed = true
+        if (this._foldScanHint(scmPathKey(dto.path), toHint(dto), rejected)) changed = true
       }
+    }
+    if (rejected.size > 0) {
+      this._logger.warn(
+        `scan folder aggregate reached its ${SCAN_FOLDER_LIMIT}-directory limit; ` +
+          `${rejected.size} director${rejected.size === 1 ? 'y' : 'ies'} left untinted`,
+      )
     }
     if (changed) {
       this._logger.debug(
@@ -442,6 +506,30 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       )
       this._scheduleScanVersionBump()
     }
+  }
+
+  /**
+   * Fold one scan hint up its ancestor directories into `_scanFolders`, applying
+   * the same fold decision as `_buildFolderHints`. Once the table reaches
+   * `SCAN_FOLDER_LIMIT` new directories stop being added (existing entries still
+   * update) and each one is recorded in `rejected`, so the caller can report what
+   * was left out rather than silently truncating the aggregate.
+   */
+  private _foldScanHint(key: string, hint: IWorkingTreeHint, rejected: Set<string>): boolean {
+    const weight = this._folderWeight(hint)
+    let changed = false
+    let dir = parentDir(key)
+    while (dir) {
+      const prev = this._scanFolders.get(dir)
+      if (prev === undefined && this._scanFolders.size >= SCAN_FOLDER_LIMIT) {
+        rejected.add(dir)
+      } else if (this._folderFoldBeats(prev, weight, key)) {
+        this._scanFolders.set(dir, { weight, color: hint.color, source: key })
+        changed = true
+      }
+      dir = parentDir(dir)
+    }
+    return changed
   }
 
   /**
@@ -501,6 +589,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     this._inFlight.clear()
     this._cache.clear()
     this._stale.clear()
+    this._scanFolders.clear()
     this._version.set(this._version.get() + 1, undefined)
   }
 }

@@ -192,7 +192,7 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 
 - **不喂进 `ScmDecorationsService`**：`getFile(...) !== undefined` 是既有的「该文件有本地改动」判据，被 dirty-diff 门控与 `dirtyDiffActions` 依赖。新服务只服务 Explorer 行，不碰 SCM `resourceStates`。
 - **徽标从 `toReconcileResourceState` 派生**（`p4Decoration.ts` `toWorkingTreeHint`）：letter 必须是 `RC`，不是动作字母 E/A/D——与已签出行共用同一份 style 映射，保证 RC 徽标与行装饰观感一致。单测 `clientWorkingTreeHint.test.ts` 直接与 `toReconcileResourceState` 的返回值逐字段比对，改坏派生关系即红。
-- **文件行出 RC 徽标；文件夹行在有已发现的 RC 后代时染色（无字母徽章）**：`ScmWorkingTreeHintService.getFolderHint` 把已缓存的文件 hint 按版本惰性聚合向上传播（删除红色 > 其余动作，同级先到先得；不知道 provider root，传到路径顶层，只有可见行会查询）。这是**已发现改动的下界**——未展开的子树查不到、LRU 逐出/保存也会让颜色增减，用户已确认接受该权衡；别为补全上界去做全量发现。
+- **文件行出 RC 徽标；文件夹行在有已发现的 RC 后代时染色（无字母徽章）**：`ScmWorkingTreeHintService.getFolderHint` 合并两份来源——pull 通道已缓存的文件 hint 按版本惰性聚合向上传播，后台扫描折叠进**独立目录聚合表**（删除红色 > 其余动作，同级按 source 键取小；不知道 provider root，传到路径顶层，只有可见行会查询）。扫描产物不再写文件级 LRU——**根因教训**：后台扫描一次 publish 上万条 hint，灌进按可见行数定容的 LRU 会让绝大部分扫描结果自我抹除、还挤掉可见行刚查到的答案；目录聚合表只存聚合色、按目录数定容，**文件夹染色不再受文件 LRU 逐出影响**。仍是**已发现改动的下界**——未展开的子树查不到、保存/工作区切换也会让颜色增减，用户已确认接受该权衡；别为补全上界去做全量发现。
 - **只读派生（最容易被"顺手优化"破坏）**：`checkWorkingTree` 绝不写任何共享状态、绝不持久化、绝不 `_emitChange()`。一旦有人想「既然都扫了不如存下来」，这条通道就退化成它要规避的全量发现。护栏 = store save spy + `onDidChange` 计数。
 
 另两处易踩：hint 按两个谓词过滤（已 opened / scope 外），全被过滤掉则**零 p4 spawn**；返回值**回显调用方自己的路径字符串**（扫描报的是从 client 语法翻译来的路径，拼法未必与 host 一致，不回显会让 renderer 缓存键对不上，还会把没问过的路径——比如 rename 的另一半——报到不存在的行上）。

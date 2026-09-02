@@ -28,7 +28,11 @@ import type {
   IScmWorkingTreeScanResult,
 } from '../../extensions/ScmService.js'
 import type { IScmDecorationsService, IScmDecorationsSnapshot } from '../ScmDecorationsService.js'
-import { CACHE_LIMIT, ScmWorkingTreeHintService } from '../ScmWorkingTreeHintService.js'
+import {
+  CACHE_LIMIT,
+  SCAN_FOLDER_LIMIT,
+  ScmWorkingTreeHintService,
+} from '../ScmWorkingTreeHintService.js'
 
 const ROOT = 'X:/workspace'
 const REMOTE_AUTHORITY = 'myhost'
@@ -706,7 +710,7 @@ describe('ScmWorkingTreeHintService', () => {
       return { scm, fire: (results) => scans.fire(results) }
     }
 
-    it('merges a scan batch into the cache, tinting folders before any row is queried', async () => {
+    it('folds a scan batch into folder tints without touching the file cache', async () => {
       const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
       const executeCommand = vi.fn().mockResolvedValue([])
       const { service, executeCommand: exec } = makeService(executeCommand, scm)
@@ -720,14 +724,12 @@ describe('ScmWorkingTreeHintService', () => {
         },
       ])
 
-      // The file row answers straight from the scan — zero pull queries — and the
-      // folder tint appears even though the file row itself was never rendered.
-      expect(service.getHint(URI.file(`${ROOT}/src/deep/a.ts`))).toEqual({
-        color: '#111111',
-        letter: 'RC',
-      })
+      // The folder tint appears from the scan fold even though the file row was
+      // never rendered — but the scan does not feed the file cache: the RC badge
+      // for the file row remains the pull channel's job.
       expect(service.getFolderHint(URI.file(`${ROOT}/src/deep`))).toEqual({ color: '#111111' })
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+      expect(service.getHint(URI.file(`${ROOT}/src/deep/a.ts`))).toBeUndefined()
       expect(exec).not.toHaveBeenCalled()
     })
 
@@ -769,10 +771,10 @@ describe('ScmWorkingTreeHintService', () => {
       await vi.advanceTimersByTimeAsync(200)
 
       expect(service.version.get()).toBe(versionBefore + 1)
-      // All three landed in the cache regardless of the coalesced bump.
-      expect(service.getHint(URI.file(`${ROOT}/d1/a.ts`))).toBeDefined()
-      expect(service.getHint(URI.file(`${ROOT}/d2/b.ts`))).toBeDefined()
-      expect(service.getHint(URI.file(`${ROOT}/d3/c.ts`))).toBeDefined()
+      // All three landed in the folder aggregate regardless of the coalesced bump.
+      expect(service.getFolderHint(URI.file(`${ROOT}/d1`))).toBeDefined()
+      expect(service.getFolderHint(URI.file(`${ROOT}/d2`))).toBeDefined()
+      expect(service.getFolderHint(URI.file(`${ROOT}/d3`))).toBeDefined()
     })
 
     it('batches separated by the coalescing window bump once each', async () => {
@@ -820,10 +822,9 @@ describe('ScmWorkingTreeHintService', () => {
       expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
     })
 
-    it('a file event still invalidates a scan-written hint', async () => {
+    it('a file event does not clear the scan-derived folder tint', async () => {
       const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
-      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/src/a.ts`, { letter: 'RC' })])
-      const { service, fileEvents, executeCommand: exec } = makeService(executeCommand, scm)
+      const { service, fileEvents } = makeService(vi.fn().mockResolvedValue([]), scm)
 
       fire([
         {
@@ -832,19 +833,16 @@ describe('ScmWorkingTreeHintService', () => {
           hints: [dto(`${ROOT}/src/a.ts`, { color: '#111111', letter: 'RC' })],
         },
       ])
-      const a = URI.file(`${ROOT}/src/a.ts`)
-      expect(service.getHint(a)).toEqual({ color: '#111111', letter: 'RC' })
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
 
-      // The user edits the file: the scan's answer describes the old disk state,
-      // so the save drops it and the pull channel re-queries that one path.
-      fileEvents.fire([{ type: 'modified', resource: a }])
-      expect(service.getHint(a)).toBeUndefined()
-      await vi.advanceTimersByTimeAsync(200)
-      expect(exec).toHaveBeenCalledTimes(1)
-      expect(exec).toHaveBeenCalledWith('perforce.checkWorkingTree', [`${ROOT}/src/a.ts`])
+      // The scan aggregate is per-directory and lossy: it cannot subtract a
+      // single changed file, so a file event leaves it intact (a conservative
+      // over-report until the next scan) instead of flickering the tint away.
+      fileEvents.fire([{ type: 'modified', resource: URI.file(`${ROOT}/src/a.ts`) }])
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
     })
 
-    it('a later scan answer overwrites an earlier one', async () => {
+    it('a later scan answer can outrank an earlier one', async () => {
       const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
       const { service } = makeService(vi.fn().mockResolvedValue([]), scm)
 
@@ -855,19 +853,126 @@ describe('ScmWorkingTreeHintService', () => {
           hints: [dto(`${ROOT}/src/a.ts`, { color: '#111111' })],
         },
       ])
-      // A rescan reports the same file with a different reading — the newest
-      // answer wins, exactly like the pull channel's latest-wins semantics.
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+
+      // A rescan reports the same file as a delete: the higher weight outranks
+      // the earlier change, exactly like the pull fold's delete-outranks rule.
       fire([
         {
           sourceControlId: 'perforce',
           directory: `${ROOT}/src`,
-          hints: [dto(`${ROOT}/src/a.ts`, { color: '#222222' })],
+          hints: [dto(`${ROOT}/src/a.ts`, { color: '#c74e39', strikeThrough: true })],
         },
       ])
-      expect(service.getHint(URI.file(`${ROOT}/src/a.ts`))).toEqual({
-        color: '#222222',
-        letter: 'M',
-      })
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#c74e39' })
+    })
+
+    it('keeps tinting the first scanned folder past CACHE_LIMIT scan hints (regression)', async () => {
+      const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
+      const { service } = makeService(vi.fn().mockResolvedValue([]), scm)
+
+      // The first hint lands in its own folder; the rest flood the service past
+      // the file-LRU limit. Before the fix these were written into `_cache`, and
+      // the first folder's only descendant was silently evicted, leaving the
+      // folder with no tint at all.
+      const first = dto(`${ROOT}/first/a.ts`, { color: '#111111' })
+      const filler = Array.from({ length: CACHE_LIMIT + 199 }, (_, i) =>
+        dto(`${ROOT}/filler/f${i}.ts`),
+      )
+      fire([{ sourceControlId: 'perforce', directory: `${ROOT}`, hints: [first, ...filler] }])
+
+      expect(service.getFolderHint(URI.file(`${ROOT}/first`))).toEqual({ color: '#111111' })
+    })
+
+    it('does not evict a pull-channel hint just written for a visible row', async () => {
+      const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
+      const executeCommand = vi
+        .fn()
+        .mockResolvedValue([dto(`${ROOT}/visible.ts`, { color: '#333333', letter: 'RC' })])
+      const { service } = makeService(executeCommand, scm)
+
+      // The pull channel answers for a row on screen, caching its hint.
+      const visible = URI.file(`${ROOT}/visible.ts`)
+      expect(service.getHint(visible)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getHint(visible)).toEqual({ color: '#333333', letter: 'RC' })
+
+      // A background scan floods the service with far more file hints than the
+      // LRU holds. Before the fix they went into `_cache` and evicted the
+      // visible-row answer; now they land in the folder aggregate and leave the
+      // file cache untouched.
+      const filler = Array.from({ length: CACHE_LIMIT + 200 }, (_, i) =>
+        dto(`${ROOT}/filler/f${i}.ts`),
+      )
+      fire([{ sourceControlId: 'perforce', directory: `${ROOT}`, hints: filler }])
+
+      expect(service.getHint(visible)).toEqual({ color: '#333333', letter: 'RC' })
+    })
+
+    it('warns and stops adding new folders past SCAN_FOLDER_LIMIT, keeping existing tints', () => {
+      const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
+      const { service, logger } = makeService(vi.fn().mockResolvedValue([]), scm)
+
+      // One distinct directory per hint pushes the aggregate past its cap; the
+      // first few stay, the tail is dropped with a warning instead of a silent
+      // truncation.
+      const hints = Array.from({ length: SCAN_FOLDER_LIMIT + 10 }, (_, i) =>
+        dto(`${ROOT}/d${i}/f.ts`, { color: '#111111' }),
+      )
+      fire([{ sourceControlId: 'perforce', directory: `${ROOT}`, hints }])
+
+      expect(logger.warn).toHaveBeenCalled()
+      expect(service.getFolderHint(URI.file(`${ROOT}/d0`))).toEqual({ color: '#111111' })
+      expect(service.getFolderHint(URI.file(`${ROOT}/d1`))).toEqual({ color: '#111111' })
+    })
+
+    it('clears scan-derived folder tints on a full invalidation', () => {
+      const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
+      const { service, workspaceEvents } = makeService(vi.fn().mockResolvedValue([]), scm)
+
+      fire([
+        {
+          sourceControlId: 'perforce',
+          directory: `${ROOT}/src`,
+          hints: [dto(`${ROOT}/src/a.ts`, { color: '#111111' })],
+        },
+      ])
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+
+      workspaceEvents.fire(null)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
+    })
+
+    it('a delete outranks an edit and equal-weight ties break deterministically', async () => {
+      const { scm, fire } = makeScanScm([scmSourceControl('perforce', ROOT)])
+      const { service } = makeService(vi.fn().mockResolvedValue([]), scm)
+
+      fire([
+        {
+          sourceControlId: 'perforce',
+          directory: `${ROOT}/src`,
+          hints: [
+            dto(`${ROOT}/src/bbb.ts`, { color: '#222222' }),
+            dto(`${ROOT}/src/aaa.ts`, { color: '#111111' }),
+          ],
+        },
+      ])
+      await vi.advanceTimersByTimeAsync(200)
+      // Equal weight (both edits): the smaller source key (aaa) wins.
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+
+      // A later delete outranks both edits.
+      fire([
+        {
+          sourceControlId: 'perforce',
+          directory: `${ROOT}/src`,
+          hints: [dto(`${ROOT}/src/zzz.ts`, { color: '#c74e39', strikeThrough: true })],
+        },
+      ])
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#c74e39' })
     })
   })
 })
