@@ -28,6 +28,7 @@ import type {
   IScmWorkingTreeScanResult,
 } from '../../extensions/ScmService.js'
 import type { IScmDecorationsService, IScmDecorationsSnapshot } from '../ScmDecorationsService.js'
+import { scmViewState } from '../../../workbench/scm/scmViewState.js'
 import {
   CACHE_LIMIT,
   SCAN_FOLDER_LIMIT,
@@ -102,9 +103,13 @@ function makeService(
 describe('ScmWorkingTreeHintService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    // scmViewState is a module-level singleton; reset it so a selectedRepo left
+    // by a previous test can't leak into this one's arbitration.
+    scmViewState.setSelectedRepo(undefined)
   })
 
   afterEach(() => {
+    scmViewState.setSelectedRepo(undefined)
     vi.useRealTimers()
   })
 
@@ -531,6 +536,154 @@ describe('ScmWorkingTreeHintService', () => {
     expect(service.getHint(URI.parse('untitled:Untitled-1'))).toBeUndefined()
     await vi.advanceTimersByTimeAsync(200)
     expect(exec).not.toHaveBeenCalled()
+  })
+
+  describe('perforce / multi-provider arbitration', () => {
+    const GIT_ROOT = `${ROOT}/git`
+
+    function nestedControls(): readonly IScmSourceControlModel[] {
+      // Perforce registers first; the git repo is nested inside its workspace.
+      return [scmSourceControl('perforce', ROOT), scmSourceControl('git', GIT_ROOT)]
+    }
+
+    function makeScanScm(controls: readonly IScmSourceControlModel[]): {
+      scm: IScmService
+      fire: (results: readonly IScmWorkingTreeScanResult[]) => void
+    } {
+      const scans = new Emitter<readonly IScmWorkingTreeScanResult[]>()
+      const scm = {
+        sourceControls: observableValue('sc', controls),
+        onDidPublishWorkingTreeScan: scans.event,
+      } as unknown as IScmService
+      return { scm, fire: (results) => scans.fire(results) }
+    }
+
+    it('merges every provider slot while no repo is selected', () => {
+      const { scm, fire } = makeScanScm(nestedControls())
+      const executeCommand = vi.fn().mockResolvedValue([])
+      const { service } = makeService(executeCommand, scm)
+
+      // selectedRepo is undefined (no repo picked in the view): both providers'
+      // scan tints stay visible — the historical unselected behaviour.
+      fire([
+        {
+          sourceControlId: 'perforce',
+          directory: `${ROOT}/src`,
+          hints: [dto(`${ROOT}/src/a.ts`, { color: '#111111' })],
+        },
+        {
+          sourceControlId: 'git',
+          directory: `${GIT_ROOT}/src`,
+          hints: [dto(`${GIT_ROOT}/src/b.ts`, { color: '#222222' })],
+        },
+      ])
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+      expect(service.getFolderHint(URI.file(`${GIT_ROOT}/src`))).toEqual({ color: '#222222' })
+
+      // ROOT is folded by both slots (every descendant walks to the path top):
+      // equal weight breaks to the smaller source key — the git file's.
+      expect(service.getFolderHint(URI.file(ROOT))).toEqual({ color: '#222222' })
+    })
+
+    it('arbitrates to the selected outer provider over the longest-prefix owner', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([dto(`${GIT_ROOT}/a.txt`)])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      // The view is showing the p4 workspace, so a file the nested git repo also
+      // owns must be routed to perforce — not to git by longest prefix.
+      scmViewState.setSelectedRepo(ROOT)
+      expect(service.getHint(URI.file(`${GIT_ROOT}/a.txt`))).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(exec).toHaveBeenCalledWith('perforce.checkWorkingTree', [`${GIT_ROOT}/a.txt`])
+      expect(service.getHint(URI.file(`${GIT_ROOT}/a.txt`))).toEqual({
+        color: '#e2c08d',
+        letter: 'M',
+      })
+    })
+
+    it('hides cached hints while another repo is selected and restores them on switch-back', async () => {
+      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.ts`)])
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      scmViewState.setSelectedRepo(ROOT)
+      const a = URI.file(`${ROOT}/a.ts`)
+      expect(service.getHint(a)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
+
+      // The user switches the SCM view to the nested git repo: the p4 hint must
+      // disappear immediately.
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(service.getHint(a)).toBeUndefined()
+
+      // Switch back: the hint reappears from the retained p4 slot — the pull
+      // channel's data survives the switch and no new query is issued (the p4
+      // background scan would not re-publish either; it is once-per-session).
+      scmViewState.setSelectedRepo(ROOT)
+      expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'M' })
+      expect(exec).toHaveBeenCalledTimes(1)
+    })
+
+    it('restores scan-derived folder tints on switch-back without a new scan', () => {
+      const { scm, fire } = makeScanScm(nestedControls())
+      const executeCommand = vi.fn().mockResolvedValue([])
+      const { service, executeCommand: exec } = makeService(executeCommand, scm)
+
+      scmViewState.setSelectedRepo(ROOT)
+      fire([
+        {
+          sourceControlId: 'perforce',
+          directory: `${ROOT}/src`,
+          hints: [dto(`${ROOT}/src/deep/b.ts`, { color: '#111111' })],
+        },
+      ])
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+
+      // Switch to the nested git repo: the p4 scan tint must disappear.
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toBeUndefined()
+
+      // Switch back: the tint returns from the retained per-provider scan slot.
+      // The p4 reconcile scan publishes once per session, so re-deriving it
+      // would need a re-scan that never comes.
+      scmViewState.setSelectedRepo(ROOT)
+      expect(service.getFolderHint(URI.file(`${ROOT}/src`))).toEqual({ color: '#111111' })
+      expect(exec).not.toHaveBeenCalled()
+    })
+
+    it('re-routes the re-query to the newly selected repo after a switch', async () => {
+      const executeCommand = vi.fn().mockImplementation((id: unknown, _paths: unknown) => {
+        if (id === 'perforce.checkWorkingTree') {
+          return Promise.resolve([dto(`${GIT_ROOT}/x.ts`, { letter: 'P4' })])
+        }
+        // git contributes no checkWorkingTree command: an unanswered batch is clean.
+        return Promise.resolve(undefined)
+      })
+      const { service, executeCommand: exec } = makeService(executeCommand, scmOf(nestedControls()))
+
+      const x = URI.file(`${GIT_ROOT}/x.ts`)
+      scmViewState.setSelectedRepo(ROOT)
+      expect(service.getHint(x)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledWith('perforce.checkWorkingTree', [`${GIT_ROOT}/x.ts`])
+      expect(service.getHint(x)?.letter).toBe('P4')
+
+      // Switch to git: the cached p4 answer is hidden, and the re-query goes to
+      // git — which has no checkWorkingTree — so the badge disappears for good.
+      scmViewState.setSelectedRepo(GIT_ROOT)
+      expect(service.getHint(x)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(exec).toHaveBeenCalledTimes(2)
+      expect(exec).toHaveBeenLastCalledWith('git.checkWorkingTree', [`${GIT_ROOT}/x.ts`])
+      expect(service.getHint(x)).toBeUndefined()
+
+      // Switch back: the p4 answer is still in its slot and reappears; the git
+      // batch's clean answer lives in the git slot and cannot clobber it.
+      scmViewState.setSelectedRepo(ROOT)
+      expect(service.getHint(x)?.letter).toBe('P4')
+      expect(exec).toHaveBeenCalledTimes(2)
+    })
   })
 
   describe('folder hints', () => {

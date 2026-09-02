@@ -21,6 +21,14 @@
  *  so a folder's tint can change as the user expands and scrolls. Accepted
  *  trade-off: the alternative is eager discovery, i.e. exactly the whole-tree
  *  scan this service exists to avoid.
+ *
+ *  Both caches are slotted per provider id (the DirtyDiff/Blame precedent):
+ *  switching the SCM view's selected repo only hides the other providers' slots
+ *  and bumps the version — the data is kept, so switching back restores the
+ *  hints instantly. That matters because the p4 reconcile scan publishes once
+ *  per session; clearing its aggregate on switch would lose the folder tints
+ *  for good. A workspace switch or a source-controls change still clears every
+ *  slot — those stale the data itself, not just its visibility.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -42,11 +50,17 @@ import { dirtyDiffCommandId, type WorkingTreeChangeDto } from '@universe-editor/
 import {
   IScmService,
   resolveScmProviderId,
+  resolveSelectedSourceControl,
+  type IScmSourceControlModel,
   type IScmWorkingTreeScanResult,
 } from '../extensions/ScmService.js'
 import { currentRemoteAuthority } from '../remote/windowRemoteAuthority.js'
 import { IScmDecorationsService, parentDir, scmPathKey } from './ScmDecorationsService.js'
 import { scmHostPath } from './scmHostPath.js'
+// services → workbench reverse import: scmViewState is module-level observable
+// state with no view dependency, so a service may read it (precedent:
+// ScmIgnoredResourcesService).
+import { scmViewState } from '../../workbench/scm/scmViewState.js'
 
 export interface IWorkingTreeHint {
   readonly color: string
@@ -116,33 +130,46 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   readonly version: IObservable<number>
 
   private readonly _version = observableValue<number>('scmWorkingTreeHintVersion', 0)
-  /** null = known clean; it still occupies a slot and is still evicted. */
-  private readonly _cache = new Map<string, IWorkingTreeHint | null>()
   /**
-   * Directory-aggregate built from the provider's background scan. A scan can
-   * publish tens of thousands of file hints for a single directory, so they are
-   * folded to per-directory winners here instead of flooding the file LRU (which
-   * would silently evict both the scan's own results and the pull channel's
-   * visible-row answers). Cleared on invalidation; not touched by file events —
-   * the aggregate is lossy and cannot subtract a single file, so it stays as a
-   * conservative lower bound. Bounded by {@link SCAN_FOLDER_LIMIT}.
+   * Pull-channel answers, slotted by the provider id that produced them
+   * (DirtyDiff/Blame precedent). null = known clean; it still occupies a slot
+   * and is still evicted. A repo switch keeps the slots — reads filter by the
+   * selected provider — so switching back restores hints without a re-query.
+   * The per-slot LRU is bounded by {@link CACHE_LIMIT}.
    */
-  private readonly _scanFolders = new Map<string, FolderFold>()
-  /** Cached keys whose answer may have moved on; re-queried when next read. */
-  private readonly _stale = new Set<string>()
+  private readonly _cache = new Map<string, Map<string, IWorkingTreeHint | null>>()
+  /**
+   * Directory-aggregate built from the provider's background scan, slotted by
+   * `sourceControlId`. A scan can publish tens of thousands of file hints for a
+   * single directory, so they are folded to per-directory winners here instead
+   * of flooding the file LRU (which would silently evict both the scan's own
+   * results and the pull channel's visible-row answers). Cleared on
+   * invalidation; not touched by file events — the aggregate is lossy and
+   * cannot subtract a single file, so it stays as a conservative lower bound.
+   * Kept across repo switches: the p4 reconcile scan publishes once per
+   * session, so dropping the slot would lose its tints for good. Bounded by
+   * {@link SCAN_FOLDER_LIMIT} per slot.
+   */
+  private readonly _scanFolders = new Map<string, Map<string, FolderFold>>()
+  /** Cached keys whose answer may have moved on; re-queried when next read. Slotted like `_cache`. */
+  private readonly _stale = new Map<string, Set<string>>()
   private readonly _pending = new Map<string, string>()
   /**
-   * Keys whose query is on the wire right now, mapped to the token of the
-   * *newest* query for that key. A key is removed either when its answer is
-   * written or when something invalidates it mid-flight; an answer whose token
-   * no longer matches is discarded — see {@link _writeHint}.
+   * Keys whose query is on the wire right now, slotted by the provider the
+   * query was routed to, mapped to the token of the *newest* query for that
+   * key. A key is removed either when its answer is written or when something
+   * invalidates it mid-flight; an answer whose token no longer matches is
+   * discarded — see {@link _writeHint}. A repo switch does not clear it: an
+   * answer already on the wire still describes the provider that produced it
+   * and lands in that provider's slot, where the read-side filter keeps it
+   * invisible until the user switches back.
    *
    * The token is what makes this latest-wins. Two queries for one key overlap
    * whenever the provider's round-trip outlasts the debounce, and without a
    * per-request identity the second flush re-arms the marker the first answer
    * then consumes: the pre-save answer wins and pins the row clean forever.
    */
-  private readonly _inFlight = new Map<string, number>()
+  private readonly _inFlight = new Map<string, Map<string, number>>()
   /** Monotonic; identifies one query for one key. */
   private _queryToken = 0
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
@@ -184,15 +211,32 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       this._scm.onDidPublishWorkingTreeScan((results) => this._acceptScanResults(results)),
     )
 
+    // Re-arbitrate on both inputs, but with different strength. Switching the
+    // SCM view's repo only changes *which* provider's hints are visible — the
+    // slots are kept (see the cache docs) and reads filter by the selection, so
+    // a switch merely bumps the version to re-render and rebuild the folder
+    // fold. A sourceControls change replaces the providers themselves, so every
+    // slot is then suspect and the cache is fully invalidated. sourceControls
+    // must stay observed: at startup the restored selectedRepo can point at a
+    // provider whose source control isn't registered yet (extensions activate
+    // one by one), so arbitration falls back to the longest-prefix owner until
+    // it registers — re-arbitrate then.
+    let prevControls: readonly IScmSourceControlModel[] | undefined
+    let prevSelected: string | undefined
     let first = true
     this._register(
       autorun((reader) => {
-        this._scm.sourceControls.read(reader)
+        const controls = this._scm.sourceControls.read(reader)
+        const selected = scmViewState.selectedRepo.read(reader)
         if (first) {
           first = false
-          return
+        } else if (controls !== prevControls) {
+          this._invalidate()
+        } else if (selected !== prevSelected) {
+          this._version.set(this._version.get() + 1, undefined)
         }
-        this._invalidate()
+        prevControls = controls
+        prevSelected = selected
       }),
     )
 
@@ -224,35 +268,52 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   getHint(resource: URI): IWorkingTreeHint | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return undefined
-    const key = scmPathKey(fsPath)
-    const cached = this._cache.get(key)
-    if (cached !== undefined) {
-      // Refresh LRU position: a visible row re-reads its hint every render.
-      this._cache.delete(key)
-      this._cache.set(key, cached)
-      // Revalidation is lazy on purpose. Being read is what proves a row is on
-      // screen, and the whole point of this channel is to cost what the user can
-      // see; re-querying the whole cache the moment it goes stale would put
-      // thousands of scrolled-past paths back on the wire on every provider
-      // refresh — worse than the eager scan this exists to avoid.
-      if (this._stale.delete(key)) this._enqueue(key, fsPath)
-      return cached ?? undefined
+    const providerId = this._ownerProviderId(fsPath)
+    const visible = this._visibleProviderId()
+    if (providerId === undefined || (visible !== undefined && providerId !== visible)) {
+      return undefined
     }
-    this._enqueue(key, fsPath)
+    const key = scmPathKey(fsPath)
+    const slot = this._cache.get(providerId)
+    if (slot !== undefined) {
+      const cached = slot.get(key)
+      if (cached !== undefined) {
+        // Refresh LRU position: a visible row re-reads its hint every render.
+        slot.delete(key)
+        slot.set(key, cached)
+        // Revalidation is lazy on purpose. Being read is what proves a row is on
+        // screen, and the whole point of this channel is to cost what the user can
+        // see; re-querying the whole cache the moment it goes stale would put
+        // thousands of scrolled-past paths back on the wire on every provider
+        // refresh — worse than the eager scan this exists to avoid.
+        if (this._stale.get(providerId)?.delete(key)) this._enqueue(providerId, key, fsPath)
+        return cached ?? undefined
+      }
+    }
+    this._enqueue(providerId, key, fsPath)
     return undefined
   }
 
   getFolderHint(resource: URI): IWorkingTreeFolderHint | undefined {
     const fsPath = this._hostPath(resource)
     if (fsPath === undefined) return undefined
+    const providerId = this._ownerProviderId(fsPath)
+    const visible = this._visibleProviderId()
+    if (providerId === undefined || (visible !== undefined && providerId !== visible)) {
+      return undefined
+    }
     // Every content-changing path bumps `_version`: the pull cache (flush end,
-    // file events, invalidation, and LRU eviction inside `_writeHint`) and the
-    // scan fold (`_acceptScanResults` → `_scheduleScanVersionBump`). `getHint`'s
-    // LRU touch only re-orders entries, which the deterministic tie-break makes
-    // irrelevant — so the version is a sound memo generation for the fold.
+    // file events, invalidation, and LRU eviction inside `_writeHint`), the
+    // scan fold (`_acceptScanResults` → `_scheduleScanVersionBump`), and repo
+    // switches (the arbitration autorun). `getHint`'s LRU touch only re-orders
+    // entries, which the deterministic tie-break makes irrelevant — so the
+    // version is a sound memo generation for the fold.
     const version = this._version.get()
     if (this._folderHints === undefined || this._folderHintsVersion !== version) {
-      this._folderHints = this._mergeFolderHints(this._buildFolderHints(), this._scanFolders)
+      this._folderHints = this._mergeFolderHints(
+        this._buildFolderHints(visible),
+        this._scanFold(visible),
+      )
       this._folderHintsVersion = version
     }
     return this._folderHints.get(scmPathKey(fsPath))
@@ -265,21 +326,73 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
    * any other drift; equal weight breaks to the smaller source key) is shared
    * with the scan fold via {@link _folderWeight}/{@link _folderFoldBeats} so the
    * two sources can never disagree about a directory's winner.
+   *
+   * `providerId` scopes the fold to one slot; undefined merges every slot —
+   * used when no repo is selected, so every provider's hints stay visible.
    */
-  private _buildFolderHints(): Map<string, FolderFold> {
+  private _buildFolderHints(providerId: string | undefined): Map<string, FolderFold> {
     const folders = new Map<string, FolderFold>()
-    for (const [key, hint] of this._cache) {
-      if (hint === null) continue
-      const weight = this._folderWeight(hint)
-      let dir = parentDir(key)
-      while (dir) {
-        if (this._folderFoldBeats(folders.get(dir), weight, key)) {
-          folders.set(dir, { weight, color: hint.color, source: key })
+    const slots =
+      providerId !== undefined ? [this._cache.get(providerId)] : [...this._cache.values()]
+    for (const slot of slots) {
+      if (slot === undefined) continue
+      for (const [key, hint] of slot) {
+        if (hint === null) continue
+        const weight = this._folderWeight(hint)
+        let dir = parentDir(key)
+        while (dir) {
+          if (this._folderFoldBeats(folders.get(dir), weight, key)) {
+            folders.set(dir, { weight, color: hint.color, source: key })
+          }
+          dir = parentDir(dir)
         }
-        dir = parentDir(dir)
       }
     }
     return folders
+  }
+
+  /**
+   * The scan fold for `providerId`'s slot, or — when no repo is selected — a
+   * merge of every slot resolved by the same fold decision, so all providers'
+   * tints stay visible in the unselected state.
+   */
+  private _scanFold(providerId: string | undefined): Map<string, FolderFold> {
+    if (providerId !== undefined) {
+      const slot = this._scanFolders.get(providerId)
+      return slot ?? EMPTY_FOLD
+    }
+    const merged = new Map<string, FolderFold>()
+    for (const slot of this._scanFolders.values()) {
+      for (const [key, entry] of slot) {
+        if (this._folderFoldBeats(merged.get(key), entry.weight, entry.source)) {
+          merged.set(key, entry)
+        }
+      }
+    }
+    return merged
+  }
+
+  /**
+   * The provider a read should show: the SCM view's selected source control
+   * (same arbitration as the decorations), or undefined when no repo is
+   * selected — then every provider's own slot shows, matching the historical
+   * unselected behaviour. Same-root double providers cannot be told apart by
+   * the selection; both resolve to the first registered one, exactly like the
+   * query routing in `_flush`.
+   */
+  private _visibleProviderId(): string | undefined {
+    const selected = scmViewState.selectedRepo.get()
+    if (selected === undefined) return undefined
+    return resolveSelectedSourceControl(this._scm.sourceControls.get(), selected)?.id
+  }
+
+  /** Which provider currently owns `fsPath`, with the same arbitration as `_flush`. */
+  private _ownerProviderId(fsPath: string): string | undefined {
+    return resolveScmProviderId(
+      this._scm.sourceControls.get(),
+      fsPath,
+      scmViewState.selectedRepo.get(),
+    )
   }
 
   /** Fold weight: a delete (strikeThrough) outranks any other drift. */
@@ -328,8 +441,8 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
    * identical query cannot be faster than the first, so re-asking during that
    * window only adds load to the gate the first query is already stuck behind.
    */
-  private _enqueue(key: string, fsPath: string): void {
-    if (this._inFlight.has(key) || this._pending.has(key)) return
+  private _enqueue(providerId: string, key: string, fsPath: string): void {
+    if (this._inFlight.get(providerId)?.has(key) || this._pending.has(key)) return
     this._pending.set(key, fsPath)
     this._scheduleFlush()
   }
@@ -345,13 +458,21 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       const fsPath = this._hostPath(ev.resource)
       if (fsPath === undefined) continue
       const key = scmPathKey(fsPath)
-      this._stale.delete(key)
-      // An answer already on the wire describes a version of the file that no
-      // longer exists on disk. Drop it on arrival and ask again — otherwise the
-      // round-trip lands *after* this event and installs the very hint the event
-      // was supposed to correct, with nothing left to fix it until the next
-      // provider refresh (which a quiet workspace may never see).
-      if (this._inFlight.delete(key)) {
+      let reenqueue = false
+      // Drop the key from *every* provider slot: a save invalidates the file's
+      // answer regardless of which provider produced it, and whichever slot a
+      // switch-back would read must not hand out a pre-save hint.
+      for (const sc of this._scm.sourceControls.get()) {
+        // An answer already on the wire describes a version of the file that no
+        // longer exists on disk. Drop it on arrival and ask again — otherwise the
+        // round-trip lands *after* this event and installs the very hint the event
+        // was supposed to correct, with nothing left to fix it until the next
+        // provider refresh (which a quiet workspace may never see).
+        if (this._inFlight.get(sc.id)?.delete(key)) reenqueue = true
+        this._stale.get(sc.id)?.delete(key)
+        if (this._cache.get(sc.id)?.delete(key)) dropped = true
+      }
+      if (reenqueue) {
         this._pending.set(key, fsPath)
         this._scheduleFlush()
       }
@@ -359,7 +480,6 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // it holds per-directory winners, not per-file entries — so it cannot
       // subtract a single changed file. Leaving it is the conservative choice
       // (the tint is a lower bound that may briefly over-report).
-      if (this._cache.delete(key)) dropped = true
     }
     // Saving a file is the main correction signal: drop only its own hint and
     // bump so the next render re-enqueues that one path for a fresh query.
@@ -382,27 +502,28 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     // Stamp, never merely add: two flushes can overlap (the debounce can re-arm
     // while this one awaits), and the newer stamp is what lets the older flush's
     // answer be recognised as superseded instead of overwriting the newer one.
+    // Routing and stamping share one pass because the in-flight marker must land
+    // in the slot of the provider the query is routed to — the answer writes
+    // back into that slot no matter how the selection moves while it is out.
     const tokens = new Map<string, number>()
-    for (const [key] of entries) {
-      const token = ++this._queryToken
-      tokens.set(key, token)
-      this._inFlight.set(key, token)
-    }
-    let changed = false
-    const write = (key: string, hint: IWorkingTreeHint | null): void => {
-      changed = this._writeHint(key, hint, tokens.get(key)) || changed
-    }
-
     const byProvider = new Map<string, string[]>()
     for (const [key, fsPath] of entries) {
-      const providerId = resolveScmProviderId(this._scm.sourceControls.get(), fsPath)
-      if (providerId === undefined) {
-        write(key, null)
-        continue
-      }
+      const providerId = resolveScmProviderId(
+        this._scm.sourceControls.get(),
+        fsPath,
+        scmViewState.selectedRepo.get(),
+      )
+      if (providerId === undefined) continue
+      const token = ++this._queryToken
+      tokens.set(key, token)
+      this._slot(this._inFlight, providerId).set(key, token)
       const list = byProvider.get(providerId)
       if (list) list.push(fsPath)
       else byProvider.set(providerId, [fsPath])
+    }
+    let changed = false
+    const write = (providerId: string, key: string, hint: IWorkingTreeHint | null): void => {
+      changed = this._writeHint(providerId, key, hint, tokens.get(key)) || changed
     }
 
     for (const [providerId, paths] of byProvider) {
@@ -418,7 +539,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
           `check-working-tree via ${providerId} failed; treating batch as clean`,
           err,
         )
-        for (const p of paths) write(scmPathKey(p), null)
+        for (const p of paths) write(providerId, scmPathKey(p), null)
         continue
       }
       // Invalidation fired while the command was in flight: the cache/pending were
@@ -428,7 +549,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // without the capability) — treat the batch as clean so we don't re-query
       // every frame.
       if (dtos === undefined) {
-        for (const p of paths) write(scmPathKey(p), null)
+        for (const p of paths) write(providerId, scmPathKey(p), null)
         continue
       }
       const hintsByKey = new Map<string, IWorkingTreeHint>()
@@ -439,7 +560,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
       // stay "unknown" and re-enqueue on every render.
       for (const p of paths) {
         const key = scmPathKey(p)
-        write(key, hintsByKey.get(key) ?? null)
+        write(providerId, key, hintsByKey.get(key) ?? null)
       }
     }
 
@@ -452,6 +573,7 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
 
   /** Write a hint, returning whether the cached value actually changed. */
   private _writeHint(
+    providerId: string,
     key: string,
     hint: IWorkingTreeHint | null,
     token: number | undefined,
@@ -461,13 +583,13 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     // invalidation), or a newer query for the same key was already issued. Either
     // way it describes state that no longer holds, so drop it rather than cache
     // it — caching it would install an answer nothing is left to correct.
-    if (this._inFlight.get(key) !== token) {
+    if (this._inFlight.get(providerId)?.get(key) !== token) {
       this._logger.debug(`discarded stale hint answer for ${key}`)
       return false
     }
-    this._inFlight.delete(key)
-    this._stale.delete(key)
-    return this._putHint(key, hint)
+    this._inFlight.get(providerId)?.delete(key)
+    this._stale.get(providerId)?.delete(key)
+    return this._putHint(providerId, key, hint)
   }
 
   /**
@@ -490,8 +612,9 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     // would report a multiple of the directories actually left out.
     const rejected = new Set<string>()
     for (const result of results) {
+      const slot = this._slot(this._scanFolders, result.sourceControlId)
       for (const dto of result.hints) {
-        if (this._foldScanHint(scmPathKey(dto.path), toHint(dto), rejected)) changed = true
+        if (this._foldScanHint(slot, scmPathKey(dto.path), toHint(dto), rejected)) changed = true
       }
     }
     if (rejected.size > 0) {
@@ -509,22 +632,28 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
   }
 
   /**
-   * Fold one scan hint up its ancestor directories into `_scanFolders`, applying
-   * the same fold decision as `_buildFolderHints`. Once the table reaches
-   * `SCAN_FOLDER_LIMIT` new directories stop being added (existing entries still
-   * update) and each one is recorded in `rejected`, so the caller can report what
-   * was left out rather than silently truncating the aggregate.
+   * Fold one scan hint up its ancestor directories into the provider's
+   * `_scanFolders` slot, applying the same fold decision as
+   * `_buildFolderHints`. Once the slot reaches `SCAN_FOLDER_LIMIT` new
+   * directories stop being added (existing entries still update) and each one
+   * is recorded in `rejected`, so the caller can report what was left out
+   * rather than silently truncating the aggregate.
    */
-  private _foldScanHint(key: string, hint: IWorkingTreeHint, rejected: Set<string>): boolean {
+  private _foldScanHint(
+    slot: Map<string, FolderFold>,
+    key: string,
+    hint: IWorkingTreeHint,
+    rejected: Set<string>,
+  ): boolean {
     const weight = this._folderWeight(hint)
     let changed = false
     let dir = parentDir(key)
     while (dir) {
-      const prev = this._scanFolders.get(dir)
-      if (prev === undefined && this._scanFolders.size >= SCAN_FOLDER_LIMIT) {
+      const prev = slot.get(dir)
+      if (prev === undefined && slot.size >= SCAN_FOLDER_LIMIT) {
         rejected.add(dir)
       } else if (this._folderFoldBeats(prev, weight, key)) {
-        this._scanFolders.set(dir, { weight, color: hint.color, source: key })
+        slot.set(dir, { weight, color: hint.color, source: key })
         changed = true
       }
       dir = parentDir(dir)
@@ -549,17 +678,18 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     }, SCAN_VERSION_BUMP_DELAY_MS)
   }
 
-  /** Store a hint under `key` (LRU-bound), returning whether it changed. */
-  private _putHint(key: string, hint: IWorkingTreeHint | null): boolean {
-    const prev = this._cache.get(key)
+  /** Store a hint in the provider's slot (LRU-bound), returning whether it changed. */
+  private _putHint(providerId: string, key: string, hint: IWorkingTreeHint | null): boolean {
+    const slot = this._slot(this._cache, providerId)
+    const prev = slot.get(key)
     if (hintsEqual(prev, hint)) return false
-    this._cache.delete(key)
-    this._cache.set(key, hint)
-    if (this._cache.size > CACHE_LIMIT) {
-      const oldest = this._cache.keys().next().value
+    slot.delete(key)
+    slot.set(key, hint)
+    if (slot.size > CACHE_LIMIT) {
+      const oldest = slot.keys().next().value
       if (oldest !== undefined) {
-        this._cache.delete(oldest)
-        this._stale.delete(oldest)
+        slot.delete(oldest)
+        this._stale.get(providerId)?.delete(oldest)
       }
     }
     return true
@@ -576,7 +706,10 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
    * (a `Eventually`-phase contribution, say) would leave rows one render behind.
    */
   private _revalidate(): void {
-    for (const key of this._cache.keys()) this._stale.add(key)
+    for (const [providerId, slot] of this._cache) {
+      const stale = this._staleSlot(providerId)
+      for (const key of slot.keys()) stale.add(key)
+    }
   }
 
   private _invalidate(): void {
@@ -592,7 +725,29 @@ export class ScmWorkingTreeHintService extends Disposable implements IScmWorking
     this._scanFolders.clear()
     this._version.set(this._version.get() + 1, undefined)
   }
+
+  /** The per-provider slot of `slots`, created on demand. */
+  private _slot<K, V>(slots: Map<string, Map<K, V>>, providerId: string): Map<K, V> {
+    let slot = slots.get(providerId)
+    if (slot === undefined) {
+      slot = new Map()
+      slots.set(providerId, slot)
+    }
+    return slot
+  }
+
+  private _staleSlot(providerId: string): Set<string> {
+    let slot = this._stale.get(providerId)
+    if (slot === undefined) {
+      slot = new Set()
+      this._stale.set(providerId, slot)
+    }
+    return slot
+  }
 }
+
+/** Shared empty fold, so the selected-slot path of `_scanFold` allocates nothing. */
+const EMPTY_FOLD: Map<string, FolderFold> = new Map()
 
 function toHint(dto: WorkingTreeChangeDto): IWorkingTreeHint {
   return {
