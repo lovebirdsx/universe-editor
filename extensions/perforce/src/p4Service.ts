@@ -22,6 +22,12 @@ export interface P4ExecResult {
   readonly stdout: string
   readonly stderr: string
   readonly exitCode: number
+  /**
+   * Set only when the SpawnWatchdog killed the command. Callers that opt into
+   * {@link P4ExecOptions.recoverPartialOnTimeout} recover the stdout the command
+   * already streamed through that channel; `stdout` itself stays '' here.
+   */
+  readonly timedOut?: boolean
 }
 
 /** Connection coordinates prepended as global options to every command. */
@@ -75,6 +81,15 @@ export interface P4ExecOptions {
    * extension host from the async data/close handlers.
    */
   readonly onStdoutLine?: (line: string) => void
+  /**
+   * Opt-in recovery of the stdout a timed-out command already streamed: when set,
+   * {@link execRecords} collects the complete lines as they arrive and, if the
+   * watchdog kills the command, parses them as `records` (the result keeps
+   * `timedOut` true so callers know it is partial). Only for "lower-bound of
+   * drift found" consumers; callers that answer "which of these exactly?" must
+   * NOT set it — a partial answer would pin the un-covered paths as clean.
+   */
+  readonly recoverPartialOnTimeout?: boolean
 }
 
 /**
@@ -95,6 +110,42 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
  * Tiny read-only commands pass a much tighter per-call `timeoutMs`.
  */
 export const DEFAULT_P4_COMMAND_TIMEOUT_MS = 600_000
+
+/**
+ * Byte cap on the text {@link execRecords} collects for partial-on-timeout
+ * recovery. Bounding the string we build is the same host-crash red line as
+ * {@link DEFAULT_MAX_OUTPUT_BYTES} (a string V8 can't allocate thrown from the
+ * async data/close handler takes the whole host down), applied to the streamed
+ * recovery channel instead of the main buffer. Exported so tests exercise the
+ * truncation path with a small value.
+ */
+export const RECOVER_PARTIAL_TIMEOUT_MAX_BYTES = 32 * 1024 * 1024
+
+/** A bounded per-line collector for partial-on-timeout recovery (see
+ *  {@link RECOVER_PARTIAL_TIMEOUT_MAX_BYTES}). `onLine` never throws — it runs
+ *  inside `_spawn`'s async data/close handlers (host-crash red line). */
+export function createRecoverLineCollector(
+  maxBytes: number,
+  log: (msg: string) => void,
+): { onLine: (line: string) => void; text: () => string } {
+  let text = ''
+  let bytes = 0
+  let stopped = false
+  const onLine = (line: string): void => {
+    if (stopped) return
+    const chunk = line + '\n'
+    const chunkBytes = Buffer.byteLength(chunk)
+    if (bytes + chunkBytes > maxBytes) {
+      // Keep what we already have and stop — never silently drop later lines.
+      stopped = true
+      log(`  partial stdout recovery truncated at ${maxBytes} bytes; keeping ${bytes} bytes`)
+      return
+    }
+    bytes += chunkBytes
+    text += chunk
+  }
+  return { onLine, text: () => text }
+}
 
 /**
  * Tight per-command timeout for user-interactive reads (open diff / dirty-diff
@@ -421,6 +472,14 @@ export function connectionArgs(conn: P4Connection | undefined, dropClient = fals
  * client.ts; `clientDiscovery` uses a connection-less instance for `p4 info`.
  */
 export class P4Service {
+  /**
+   * Subcommands whose `-Mj` output collapsed into `{"data":…}` blobs on the
+   * current connection, so later runs skip the wasted `-Mj` probe and go straight
+   * to `-ztag`. Keyed by subcommand name — not global — because `fstat`/`opened`
+   * stay structured on the very same server where `reconcile` collapses.
+   */
+  private readonly _collapsedSubcommands = new Set<string>()
+
   constructor(
     private readonly _cwd: string,
     private readonly _gate: ConcurrencyGate,
@@ -431,10 +490,28 @@ export class P4Service {
 
   setConnection(conn: P4Connection | undefined): void {
     this._connection = conn
+    // Collapse is a property of the server, not the p4 binary — a new connection
+    // may answer `-Mj` normally, so memorized conclusions don't carry over.
+    this._collapsedSubcommands.clear()
   }
 
   get connection(): P4Connection | undefined {
     return this._connection
+  }
+
+  /**
+   * Record that `subcommand` collapses to `{"data":…}` blobs under `-Mj` — the
+   * one place that conclusion is written, whether the probe finished or was
+   * killed by the watchdog (a collapsed leg proves the server × subcommand
+   * property no matter when it stopped).
+   */
+  private _rememberCollapse(
+    subcommand: string | undefined,
+    records: readonly Record<string, unknown>[],
+  ): void {
+    if (subcommand !== undefined && isCollapsed(records)) {
+      this._collapsedSubcommands.add(subcommand)
+    }
   }
 
   /** Run `p4 <args>` and resolve with stdout/stderr/exitCode (never rejects on a
@@ -475,21 +552,71 @@ export class P4Service {
    * used as-is, but when it collapses to data blobs it re-runs the command with
    * `-ztag` and reshapes the tagged output into `-Mj`-compatible flat records so
    * the existing parsers consume it unchanged. On a normal server this costs the
-   * same as {@link execJson} (no fallback spawn).
+   * same as {@link execJson} (no fallback spawn). A subcommand once observed to
+   * collapse is remembered and skips the `-Mj` probe on later calls.
    */
   async execRecords(
     args: readonly string[],
     options?: P4ExecOptions,
   ): Promise<{ result: P4ExecResult; records: Record<string, unknown>[] }> {
-    const mj = await this.exec(['-Mj', ...args], options)
-    if (mj.exitCode !== 0) return { result: mj, records: parseMarshalJson(mj.stdout) }
-    const records = parseMarshalJson(mj.stdout)
-    if (!isCollapsed(records)) return { result: mj, records }
-    // `-Mj` collapsed to data blobs on this server — retry with tagged output.
-    this._log?.('  (-Mj collapsed to data blobs; retrying with -ztag)')
-    const tagged = await this.exec(['-ztag', ...args], options)
-    if (tagged.exitCode !== 0) return { result: tagged, records: parseMarshalJson(tagged.stdout) }
-    return { result: tagged, records: parseZtagAsMarshal(tagged.stdout) }
+    const sub = args[0]
+    const subcommand = typeof sub === 'string' && !sub.startsWith('-') ? sub : undefined
+    const recover = options?.recoverPartialOnTimeout === true
+    const memorized = subcommand !== undefined && this._collapsedSubcommands.has(subcommand)
+    if (!memorized) {
+      const mj = await this._execRecordsLeg(['-Mj', ...args], options, recover)
+      if (mj.result.timedOut && mj.collected.length > 0) {
+        // A collapsed leg still proves the collapse even when the watchdog killed
+        // it before it finished — remember it so the next call skips straight to
+        // `-ztag` instead of re-paying the full `-Mj` timeout each time. Don't run
+        // the `-ztag` retry here: that would double the worst case to two timeouts.
+        const records = parseMarshalJson(mj.collected)
+        this._rememberCollapse(subcommand, records)
+        return { result: mj.result, records }
+      }
+      if (mj.result.exitCode !== 0)
+        return { result: mj.result, records: parseMarshalJson(mj.result.stdout) }
+      const records = parseMarshalJson(mj.result.stdout)
+      if (!isCollapsed(records)) return { result: mj.result, records }
+      this._rememberCollapse(subcommand, records)
+      this._log?.(
+        '  (-Mj collapsed to data blobs; retrying with -ztag, will skip -Mj for this subcommand)',
+      )
+    }
+    const tagged = await this._execRecordsLeg(['-ztag', ...args], options, recover)
+    if (tagged.result.timedOut && tagged.collected.length > 0) {
+      return { result: tagged.result, records: parseZtagAsMarshal(tagged.collected) }
+    }
+    return { result: tagged.result, records: parseZtagAsMarshal(tagged.result.stdout) }
+  }
+
+  /**
+   * One `execRecords` leg (`-Mj` or `-ztag`), optionally collecting the complete
+   * lines the child streams so a watchdog kill can still surface them as partial
+   * records. The collector is composed with any caller `onStdoutLine` (never
+   * replaces it) and is reset per spawn — a fresh collector per leg keeps the
+   * `-Mj` and `-ztag` outputs from mixing.
+   */
+  private async _execRecordsLeg(
+    argv: readonly string[],
+    options: P4ExecOptions | undefined,
+    recover: boolean,
+  ): Promise<{ result: P4ExecResult; collected: string }> {
+    if (!recover) {
+      return { result: await this.exec(argv, options), collected: '' }
+    }
+    const collector = createRecoverLineCollector(RECOVER_PARTIAL_TIMEOUT_MAX_BYTES, (msg) =>
+      this._log?.(msg),
+    )
+    const userLine = options?.onStdoutLine
+    const onStdoutLine = userLine
+      ? (line: string): void => {
+          collector.onLine(line)
+          userLine(line)
+        }
+      : collector.onLine
+    const result = await this.exec(argv, { ...options, onStdoutLine })
+    return { result, collected: collector.text() }
   }
 
   /** Run with `-ztag` and parse into records (numbered keys collapsed). */
@@ -712,7 +839,10 @@ export class P4Service {
         if (watchdog.timedOut) {
           // The watchdog already logged the kill; resolve a failure result so a
           // hung command fails loudly instead of wedging its gate slot forever.
-          resolve({ stdout: '', stderr: watchdog.message, exitCode: code ?? 1 })
+          // `timedOut` marks the result for callers that recover partial output —
+          // the buffered stdout is still discarded (that stays the global
+          // semantic; partial results come through the streaming channel).
+          resolve({ stdout: '', stderr: watchdog.message, exitCode: code ?? 1, timedOut: true })
           return
         }
         if (overflowed) {

@@ -73,6 +73,8 @@ const {
   INTERACTIVE_COMMAND_TIMEOUT_MS,
   INTERACTIVE_EXEC,
   INTERACTIVE_CONTENT_EXEC,
+  RECOVER_PARTIAL_TIMEOUT_MAX_BYTES,
+  createRecoverLineCollector,
 } = await import('../p4Service.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
@@ -927,5 +929,310 @@ describe('P4Service._spawn onStdoutLine streaming', () => {
     child.emit('close', 0)
     const result = await p
     expect(result.stdout).toBe('a\nb\n')
+  })
+})
+
+// Once `-Mj` collapses on a given connection, it collapses for every later run of
+// that same subcommand (the server × subcommand property never flips mid-
+// connection). Remembering the collapse lets `execRecords` skip the wasted `-Mj`
+// probe on subsequent calls — halving the round-trips of background scans whose
+// `reconcile -n` collapses 100% on the field server.
+describe('P4Service execRecords collapse memory', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  function callArgs(call: unknown[]): string[] {
+    return (call[1] ?? []) as string[]
+  }
+
+  it('remembers a collapsed subcommand and skips the -Mj probe on the next call', async () => {
+    const logs: string[] = []
+    const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, (m) => logs.push(m))
+
+    const mj = new FakeChildProcess()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj).mockReturnValueOnce(ztag)
+    const p1 = svc.execRecords(['reconcile', '-n', '-a', '-e', '-d', '/repo/...'])
+    await flush()
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual([
+      '-Mj',
+      'reconcile',
+      '-n',
+      '-a',
+      '-e',
+      '-d',
+      '/repo/...',
+    ])
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj.emit('close', 0)
+    await flush()
+    expect(callArgs(spawnMock.mock.calls[1]!)).toEqual([
+      '-ztag',
+      'reconcile',
+      '-n',
+      '-a',
+      '-e',
+      '-d',
+      '/repo/...',
+    ])
+    ztag.emit('close', 0)
+    await p1
+
+    // Second call goes straight to -ztag — no wasted -Mj probe.
+    spawnMock.mockClear()
+    const ztag2 = new FakeChildProcess()
+    spawnMock.mockReturnValue(ztag2)
+    const p2 = svc.execRecords(['reconcile', '-n', '-a', '-e', '-d', '/repo/...'])
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual([
+      '-ztag',
+      'reconcile',
+      '-n',
+      '-a',
+      '-e',
+      '-d',
+      '/repo/...',
+    ])
+    ztag2.emit('close', 0)
+    await p2
+
+    // The collapse notice is logged once, not on every remembered hit.
+    const collapseLogs = logs.filter((l) => l.includes('collapsed to data blobs'))
+    expect(collapseLogs).toHaveLength(1)
+  })
+
+  it('remembers collapse when the -Mj leg times out mid-data-blob (no extra -ztag spawn)', async () => {
+    const svc = makeService()
+    const mj = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj)
+    const p1 = svc.execRecords(['reconcile', '-n'], {
+      timeoutMs: 50,
+      recoverPartialOnTimeout: true,
+    })
+    await flush()
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual(['-Mj', 'reconcile', '-n'])
+    // The -Mj leg streams a data blob, then the watchdog kills it.
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    await new Promise((r) => setTimeout(r, 80))
+    expect(mj.killed).toBe(true)
+    mj.emit('close', null)
+    const res = await p1
+    expect(res.result.timedOut).toBe(true)
+    expect(res.records).toEqual([{ data: 'blob' }])
+    // The timed-out leg still taught the collapse conclusion, but did NOT spawn
+    // the -ztag retry — the worst case stays one timeout, not two.
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+
+    // The next call skips straight to -ztag, never re-probing -Mj.
+    spawnMock.mockClear()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValue(ztag)
+    const p2 = svc.execRecords(['reconcile', '-n'])
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual(['-ztag', 'reconcile', '-n'])
+    ztag.emit('close', 0)
+    await p2
+  })
+
+  it('does not share the collapse memory across subcommands', async () => {
+    const svc = makeService()
+
+    const mj1 = new FakeChildProcess()
+    const ztag1 = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj1).mockReturnValueOnce(ztag1)
+    const p1 = svc.execRecords(['reconcile', '-n'])
+    await flush()
+    mj1.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj1.emit('close', 0)
+    await flush()
+    ztag1.emit('close', 0)
+    await p1
+
+    // `fstat` stays structured on the same server — it must still probe `-Mj`.
+    spawnMock.mockClear()
+    const mj2 = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj2)
+    const p2 = svc.execRecords(['fstat', 'file.txt'])
+    await flush()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual(['-Mj', 'fstat', 'file.txt'])
+    mj2.stdout.emit('data', Buffer.from('{"depotFile":"//depot/file.txt"}\n'))
+    mj2.emit('close', 0)
+    const res = await p2
+    expect(res.records).toEqual([{ depotFile: '//depot/file.txt' }])
+  })
+
+  it('re-probes -Mj after setConnection', async () => {
+    const svc = makeService()
+
+    const mj = new FakeChildProcess()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj).mockReturnValueOnce(ztag)
+    const p1 = svc.execRecords(['reconcile', '-n'])
+    await flush()
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj.emit('close', 0)
+    await flush()
+    ztag.emit('close', 0)
+    await p1
+
+    // A new connection is a different server — the collapse conclusion is reset.
+    svc.setConnection({ client: 'other' })
+    spawnMock.mockClear()
+    const mj2 = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj2)
+    const p2 = svc.execRecords(['reconcile', '-n'])
+    await flush()
+    expect(callArgs(spawnMock.mock.calls[0]!)).toEqual(['-c', 'other', '-Mj', 'reconcile', '-n'])
+    mj2.emit('close', 0)
+    await p2
+  })
+
+  it('never spawns a second process when -Mj stays structured', async () => {
+    const svc = makeService()
+    const mj = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj)
+    const p = svc.execRecords(['fstat', 'file.txt'])
+    await flush()
+    mj.stdout.emit('data', Buffer.from('{"depotFile":"//depot/file.txt"}\n'))
+    mj.emit('close', 0)
+    const res = await p
+    expect(res.records).toEqual([{ depotFile: '//depot/file.txt' }])
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('parses a non-zero-exit -ztag result with the ztag parser, not the JSON parser', async () => {
+    const svc = makeService()
+    const mj = new FakeChildProcess()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj).mockReturnValueOnce(ztag)
+    const p = svc.execRecords(['reconcile', '-n'])
+    await flush()
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj.emit('close', 0)
+    await flush()
+    // The -ztag leg exits non-zero but still carries tagged records on stdout.
+    // parseMarshalJson would skip every non-JSON line and return [] — losing them.
+    ztag.stdout.emit('data', Buffer.from('... depotFile //depot/file.txt\n\n'))
+    ztag.emit('close', 1)
+    const res = await p
+    expect(res.result.exitCode).toBe(1)
+    expect(res.records).toEqual([{ depotFile: '//depot/file.txt' }])
+  })
+})
+
+// Partial-output recovery for a watchdog-killed command: `recoverPartialOnTimeout`
+// makes `execRecords` collect the complete lines the child already streamed and,
+// when the watchdog kills it, parse those lines into records with the parser that
+// matches the leg that actually ran (`-Mj` → parseMarshalJson, `-ztag` →
+// parseZtagAsMarshal). `result.timedOut` stays true so the caller knows the answer
+// is partial. Without the option the old semantics hold: the timeout resolves as a
+// failure with empty records.
+describe('P4Service execRecords partial recovery on timeout', () => {
+  let child: FakeChildProcess
+  beforeEach(() => {
+    child = new FakeChildProcess()
+    spawnMock.mockReturnValue(child)
+  })
+  afterEach(() => {
+    spawnMock.mockReset()
+  })
+
+  const RECONCILE = ['reconcile', '-n', '-a', '-e', '-d', '/repo/...']
+  const ROW = '{"depotFile":"//depot/a.txt","clientFile":"//client/a.txt","action":"edit"}\n'
+
+  it('recovers the streamed -Mj lines when the watchdog kills the command', async () => {
+    const svc = makeService()
+    const p = svc.execRecords(RECONCILE, { timeoutMs: 50, recoverPartialOnTimeout: true })
+    await flush()
+    child.stdout.emit('data', Buffer.from(ROW))
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    const res = await p
+    expect(res.result.timedOut).toBe(true)
+    expect(res.result.exitCode).toBe(1)
+    expect(res.records).toEqual([
+      { depotFile: '//depot/a.txt', clientFile: '//client/a.txt', action: 'edit' },
+    ])
+  })
+
+  it('keeps empty records when recovery is not opted in (a timeout is still a failure)', async () => {
+    const svc = makeService()
+    const p = svc.execRecords(RECONCILE, { timeoutMs: 50 })
+    await flush()
+    child.stdout.emit('data', Buffer.from(ROW))
+    await new Promise((r) => setTimeout(r, 80))
+    expect(child.killed).toBe(true)
+    child.emit('close', null)
+    const res = await p
+    expect(res.result.timedOut).toBe(true)
+    expect(res.result.exitCode).toBe(1)
+    expect(res.records).toEqual([])
+  })
+
+  it('parses the timed-out -ztag leg with parseZtagAsMarshal', async () => {
+    const svc = makeService()
+    const mj = new FakeChildProcess()
+    const ztag = new FakeChildProcess()
+    spawnMock.mockReturnValueOnce(mj).mockReturnValueOnce(ztag)
+    const p = svc.execRecords(RECONCILE, { timeoutMs: 50, recoverPartialOnTimeout: true })
+    await flush()
+    // `-Mj` collapses → the retry runs `-ztag`.
+    mj.stdout.emit('data', Buffer.from('{"data":"blob"}\n'))
+    mj.emit('close', 0)
+    await flush()
+    ztag.stdout.emit('data', Buffer.from('... depotFile //depot/a.txt\n\n'))
+    await new Promise((r) => setTimeout(r, 80))
+    expect(ztag.killed).toBe(true)
+    ztag.emit('close', null)
+    const res = await p
+    expect(res.result.timedOut).toBe(true)
+    expect(res.records).toEqual([{ depotFile: '//depot/a.txt' }])
+  })
+
+  it('composes with a caller onStdoutLine instead of replacing it', async () => {
+    const svc = makeService()
+    const lines: string[] = []
+    const p = svc.execRecords(RECONCILE, {
+      timeoutMs: 50,
+      recoverPartialOnTimeout: true,
+      onStdoutLine: (l) => lines.push(l),
+    })
+    await flush()
+    child.stdout.emit('data', Buffer.from(ROW))
+    await new Promise((r) => setTimeout(r, 80))
+    child.emit('close', null)
+    const res = await p
+    // The caller's streaming hook still fires per line…
+    expect(lines).toEqual([
+      '{"depotFile":"//depot/a.txt","clientFile":"//client/a.txt","action":"edit"}',
+    ])
+    // …and the recovery collector still parsed the same line into a record.
+    expect(res.records).toHaveLength(1)
+  })
+
+  it('createRecoverLineCollector stops at the byte cap, keeps what it had, and logs', () => {
+    const logs: string[] = []
+    const collector = createRecoverLineCollector(5, (m) => logs.push(m))
+    collector.onLine('abc') // 'abc\n' = 4 bytes, fits
+    collector.onLine('def') // would be 4 more = 8 > 5 → stop, keep 'abc\n'
+    expect(collector.text()).toBe('abc\n')
+    expect(logs.some((l) => l.includes('truncated'))).toBe(true)
+    // Lines after the cap are ignored, not buffered.
+    collector.onLine('ghi')
+    expect(collector.text()).toBe('abc\n')
+  })
+
+  it('exposes the recovery cap well below the V8 string limit', () => {
+    expect(RECOVER_PARTIAL_TIMEOUT_MAX_BYTES).toBeLessThan(0x1fffffe8)
   })
 })

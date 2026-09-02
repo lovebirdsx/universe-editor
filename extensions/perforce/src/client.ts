@@ -60,6 +60,13 @@ import { parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import { parseIgnores } from './ignoresParser.js'
 import { parseReconcile, type ReconcileFile } from './reconcileParser.js'
+import {
+  countLocalFilesUpTo,
+  predictReconcileScanBatch,
+  RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD,
+  type ReconcileScanPrediction,
+  type ReconcileScanSplitPrediction,
+} from './reconcileScanBudget.js'
 import { buildScopeFilespec } from './p4Filespec.js'
 import { norm, isUnderAny, scopeKey } from './pathUtil.js'
 import { type OpenedTarget } from './revertPlan.js'
@@ -119,11 +126,19 @@ interface DesiredGroup {
  *  scan ({@link P4CacheNs.reconcileScan}): what the scan found plus when. A
  *  `split` entry carries no hints — the parent's batch was split into its
  *  subdirectories and its own result was already published in the session it
- *  ran, so a replay only re-enqueues the subdirectories. */
+ *  ran, or never produced at all (a slow failure or a pre-split on budget
+ *  priors skips the parent batch without a result), so a replay only
+ *  re-enqueues the subdirectories. */
 interface ReconcileScanEntry {
   readonly completedAt: number
   readonly hints: WorkingTreeChangeDto[]
   readonly split?: boolean
+  /** Wall-clock ms the directory's batch took when this entry was written —
+   *  persisted warm prior for the next session's pre-scan budget prediction
+   *  ({@link predictReconcileScanBatch}). Written with complete-result
+   *  checkpoints only; a split marker never carries one (its parent batch
+   *  never completed a result to time). */
+  readonly elapsedMs?: number
 }
 
 export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
@@ -1051,7 +1066,14 @@ export class PerforceClient {
     const perBatch = await Promise.all(
       batches.map(async (batch): Promise<ReconcileFile[]> => {
         if (this._disposed) return []
-        return (await this._reconcileScanBatch(batch)) ?? []
+        // No `recoverPartialOnTimeout` here: this serves `checkWorkingTree`, whose
+        // contract is "which of exactly these paths drifted" — a partial answer
+        // would let the renderer pin the un-covered paths as clean forever (the
+        // in-flight-query-race class of false negative). A timeout therefore reads
+        // as clean under the channel's existing lower-bound tradeoff; later
+        // invalidation (file events / provider refresh / workspace switch) — not a
+        // retry — is what corrects that cache entry.
+        return (await this._reconcileScanBatch(batch))?.files ?? []
       }),
     )
     return perBatch.flat()
@@ -1063,11 +1085,18 @@ export class PerforceClient {
    * ("no file(s) to reconcile") IS a result, while a failure (spawn error,
    * non-zero exit, cancellation) must not read as clean or it would be cached
    * as "nothing to see" and never retried.
+   *
+   * Three states, not two: `{ files, partial: false }` is a complete result,
+   * `{ files, partial: true }` is a timed-out batch whose streamed `files` are a
+   * lower bound of its drift — possibly empty, because the timeout itself is
+   * conclusive — and `undefined` is a hard failure (spawn error, non-timeout
+   * non-zero exit, cancellation). A partial result publishes its hints but must
+   * never be checkpointed as complete.
    */
   private async _reconcileScanBatch(
     batch: readonly string[],
     options?: P4ExecOptions,
-  ): Promise<ReconcileFile[] | undefined> {
+  ): Promise<{ files: ReconcileFile[]; partial: boolean } | undefined> {
     let res: Awaited<ReturnType<typeof this._p4.execRecords>>
     try {
       res = await this._p4.execRecords(['reconcile', '-n', '-a', '-e', '-d', ...batch], options)
@@ -1077,13 +1106,26 @@ export class PerforceClient {
     }
     if (this._disposed) return undefined
     if (res.result.exitCode === 0) {
-      return parseReconcile(res.records, this.root).filter(
+      return {
+        files: parseReconcile(res.records, this.root).filter(
+          (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
+        ),
+        partial: false,
+      }
+    }
+    if (res.result.timedOut) {
+      // A timed-out batch reports whatever drift it streamed before the kill
+      // (partial recovery) — even zero records: the timeout is what forces the
+      // directory to split, not the row count, or a timeout that recovered
+      // nothing would fall back to the elapsed heuristic and be re-run forever.
+      const files = parseReconcile(res.records, this.root).filter(
         (f) => !f.clientFile || !this._openedPaths.has(norm(f.clientFile)),
       )
+      return { files, partial: true }
     }
     const stderr = res.result.stderr.toLowerCase()
     if (stderr.includes('no file(s) to reconcile') || stderr.includes('- no such file')) {
-      return []
+      return { files: [], partial: false }
     }
     this._log?.(`[perforce] incremental reconcile -n failed: ${res.result.stderr.trim()}`)
     return undefined
@@ -2217,7 +2259,13 @@ export class PerforceClient {
    * directory with `reconcile -n -a -e -d` (dry-run), publishing each batch to
    * the renderer the moment it lands and checkpointing completed directories
    * into {@link P4CacheNs.reconcileScan} so the next session resumes instead of
-   * rescanning. A directory whose batch outlasts
+   * rescanning. Before a directory's batch runs, cheap priors decide whether it
+   * would outlast the batch ceiling anyway ({@link predictReconcileScanBatch}):
+   * the elapsed ms persisted on an expired checkpoint (a measurement), or —
+   * when the directory never produced a result — a local early-exit file count
+   * (a coarse estimate). A predicted over-budget directory is split into its
+   * subdirectories without ever spawning the doomed parent batch. A directory
+   * whose batch outlasts
    * `perforce.reconcileScan.maxBatchDurationMs` AND found drift is split into
    * its direct subdirectories — each split batch is smaller, so batches
    * auto-converge to roughly the configured duration. (A slow-but-clean
@@ -2277,6 +2325,11 @@ export class PerforceClient {
               key,
               async () => undefined,
             )
+            // Warm prior for the budget prediction below: an expired result
+            // checkpoint proves nothing about the disk any more, but its
+            // measured elapsed ms is still the best cost signal for the
+            // directory — keep it across the invalidation.
+            let priorElapsedMs: number | undefined
             if (cached !== undefined) {
               const entry = JSON.parse(cached) as ReconcileScanEntry
               if (entry.split) {
@@ -2312,17 +2365,52 @@ export class PerforceClient {
                 // disk any more: drop it and fall through to rescan now, so a
                 // directory whose drift changed between sessions is corrected this
                 // session instead of replaying a stale "clean"/"changed" answer.
+                priorElapsedMs = entry.elapsedMs
                 this._cache.invalidate(P4CacheNs.reconcileScan, key)
                 this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint expired; rescanning`)
               }
             }
+            // Budget prediction before the batch: when cheap priors say the
+            // directory would outlast the ceiling, enqueue its subdirectories
+            // directly instead of spawning the doomed parent batch (the
+            // post-hoc slow/timeout split below stays as the backstop).
+            const prediction = await this._predictReconcileScanBatch(dir, priorElapsedMs, signal)
+            if (prediction.action === 'split') {
+              const subdirs = await this._listSubdirs(dir)
+              if (subdirs.length > 0) {
+                this._log?.(
+                  `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
+                    `— pre-splitting into ${subdirs.length} subdirectories, skipping the parent batch`,
+                )
+                queue.push(...subdirs)
+                done += 1
+                pending += subdirs.length - 1
+                // Split marker with no hints — the parent batch never ran, so
+                // nothing was published for it; the marker only resumes later
+                // sessions at the subdirectories.
+                await this._writeReconcileScanSplitCheckpoint(key)
+                this._setScanProgress(done, pending, undefined, driftFound)
+                continue
+              }
+              // Predicted over budget but nothing to split into (leaf or
+              // unreadable) — degrade to the normal batch, like every other
+              // split that finds no subdirectories.
+              this._log?.(
+                `[perforce] reconcile-scan: ${dir} ${this._describeReconcileScanPrediction(prediction)} ` +
+                  `but has no subdirectories; scanning normally`,
+              )
+            }
             const started = this._now()
-            const files = await this._reconcileScanBatch([buildScopeFilespec(dir, true)], {
+            const batch = await this._reconcileScanBatch([buildScopeFilespec(dir, true)], {
               signal,
+              // The background scan publishes a lower bound of drift found, so a
+              // timed-out batch keeps whatever it already streamed (more is always
+              // better); `checkWorkingTree` deliberately omits this option.
+              recoverPartialOnTimeout: true,
             })
             if (this._disposed || signal.aborted) return
             const elapsed = this._now() - started
-            if (files === undefined) {
+            if (batch === undefined) {
               // Failure is not "clean": the directory stays un-checkpointed so the
               // next session retries it. The single exception is a slow failure —
               // a batch that already burned the whole ceiling (watchdog kill,
@@ -2347,12 +2435,55 @@ export class PerforceClient {
               this._setScanProgress(done, pending, undefined, driftFound)
               continue
             }
-            driftFound += files.length
+            if (batch.partial) {
+              // Publish what streamed before the kill — it is a lower bound of the
+              // directory's drift — but NEVER checkpoint it: a partial result saved
+              // as complete would freeze the missed paths into later sessions (the
+              // exact worst case). A timeout is conclusive proof the directory is
+              // too big, so split unconditionally rather than comparing against
+              // `maxBatchDurationMs` — that ceiling and `commandTimeout` are
+              // independent settings and either may be the larger one.
+              driftFound += batch.files.length
+              const entry: ReconcileScanEntry = {
+                completedAt: this._now(),
+                hints: batch.files
+                  .map((file) => toWorkingTreeHint(file))
+                  .filter((h): h is WorkingTreeChangeDto => h !== undefined),
+              }
+              // Nothing streamed → nothing to push; an empty publish is a wasted
+              // cross-process RPC the renderer would iterate and drop anyway.
+              if (entry.hints.length > 0) this._publishReconcileScanEntry(dir, entry)
+              const subdirs = await this._listSubdirs(dir)
+              done += 1
+              pending += subdirs.length - 1
+              if (subdirs.length > 0) {
+                this._log?.(
+                  `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.hints.length} drift hint(s), splitting into ${subdirs.length} subdirectories`,
+                )
+                queue.push(...subdirs)
+                // Split marker with no hints — the parent's own result was just
+                // published, so the marker only resumes later sessions at the
+                // subdirectories.
+                await this._writeReconcileScanSplitCheckpoint(key)
+                this._setScanProgress(done, pending, undefined, driftFound)
+                continue
+              }
+              this._log?.(
+                `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.hints.length} drift hint(s), no subdirectories to split; leaving un-checkpointed`,
+              )
+              this._setScanProgress(done, pending, undefined, driftFound)
+              continue
+            }
+            driftFound += batch.files.length
             const entry: ReconcileScanEntry = {
               completedAt: this._now(),
-              hints: files
+              hints: batch.files
                 .map((file) => toWorkingTreeHint(file))
                 .filter((h): h is WorkingTreeChangeDto => h !== undefined),
+              // Warm prior for the next session's budget prediction: a
+              // measurement beats any size estimate, so persist it with the
+              // result.
+              elapsedMs: elapsed,
             }
             this._publishReconcileScanEntry(dir, entry)
             batches++
@@ -2434,10 +2565,44 @@ export class PerforceClient {
     }
   }
 
-  /** Persist a split marker for `key`: hints stays empty (a split parent's own
-   *  result was already published, or — for a slow failure — never produced),
-   *  so the next session resumes at the subdirectories rather than re-running
-   *  the slow parent batch. */
+  /** Budget prediction for a directory about to be batched. A warm prior
+   *  (previous scan's elapsed ms, carried over an expired checkpoint) decides
+   *  alone when present — a measurement supersedes any estimate; otherwise one
+   *  early-exit local file count gives the cold answer (abortable mid-walk, so
+   *  a cancel during the count degrades instead of leaving the spinner
+   *  spinning). An unreadable directory degrades to a normal scan (the
+   *  prediction is an optimization, never a gate). */
+  private async _predictReconcileScanBatch(
+    dir: string,
+    priorElapsedMs: number | undefined,
+    signal: AbortSignal,
+  ): Promise<ReconcileScanPrediction> {
+    if (priorElapsedMs !== undefined) {
+      return predictReconcileScanBatch({ elapsedMs: priorElapsedMs }, this._reconcileScanMaxBatchMs)
+    }
+    const fileCount = await countLocalFilesUpTo(
+      dir,
+      RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD,
+      signal,
+    )
+    if (fileCount === undefined) return { action: 'scan' }
+    return predictReconcileScanBatch({ fileCount }, this._reconcileScanMaxBatchMs)
+  }
+
+  /** Human-readable reason for a pre-split log line: which prior decided and
+   *  what it observed. The file count is a lower bound — the walk stops at
+   *  the threshold instead of finishing. */
+  private _describeReconcileScanPrediction(prediction: ReconcileScanSplitPrediction): string {
+    return prediction.reason === 'elapsedMs'
+      ? `prior elapsed ${prediction.value}ms > ${this._reconcileScanMaxBatchMs}ms ceiling`
+      : `local file count ≥ ${prediction.value} (stopped counting at the threshold)`
+  }
+
+  /** Persist a split marker for `key`: hints stays empty (the parent's own
+   *  result was already published, or never produced at all — a slow failure
+   *  and a pre-split on budget priors both skip the parent batch without a
+   *  result), so the next session resumes at the subdirectories rather than
+   *  re-running the slow parent batch. */
   private async _writeReconcileScanSplitCheckpoint(key: string): Promise<void> {
     await this._cache.wrap(P4CacheNs.reconcileScan, key, async () =>
       JSON.stringify({

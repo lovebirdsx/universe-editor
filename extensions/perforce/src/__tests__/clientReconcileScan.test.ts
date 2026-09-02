@@ -26,6 +26,12 @@
  * 11. The batch ceiling is clamped to the manifest minimum (1000ms).
  * 12. Dispose aborts in-flight held batches instead of leaving them to the
  *     SpawnWatchdog.
+ * 13. Budget prediction runs before each batch: an expired checkpoint whose
+ *     persisted `elapsedMs` exceeds the ceiling pre-splits the directory with
+ *     zero parent batches; a never-scanned directory pre-splits when an
+ *     early-exit local file count exceeds the threshold; both priors stand
+ *     down (normal batch) when they fit the budget, and an unreadable count
+ *     degrades to a normal scan.
  */
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
@@ -92,6 +98,8 @@ function installScmBridge(): void {
 
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
+const { setP4CommandTimeoutSeconds } = await import('../p4Service.js')
+const { RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD } = await import('../reconcileScanBudget.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 type P4CacheDiskBackend = import('../p4Cache.js').P4CacheDiskBackend
 
@@ -137,6 +145,9 @@ interface RespondOptions {
   /** Override the reconcile exit code / stderr (failure scenarios). */
   reconcileExit?: (filespec: string) => number | undefined
   reconcileStderr?: (filespec: string) => string
+  /** Emit these reconcile rows, then never close — the SpawnWatchdog kills the
+   *  child and the partial-on-timeout path recovers the streamed rows. */
+  reconcileTimeout?: (filespec: string) => { rel: string; action?: string }[] | undefined
   /** Hold the reconcile child open (never close) until killed — cancellation. */
   reconcileHold?: (filespec: string) => boolean
   /** Opened files reported by `p4 opened` (client-syntax rows). */
@@ -152,8 +163,8 @@ function respond(opts: RespondOptions = {}): void {
     const child = new FakeChildProcess()
     queueMicrotask(() => {
       const { stdout, stderr, exit, hold } = handle(argv, opts)
-      if (hold) return
       if (stdout) child.stdout.emit('data', Buffer.from(stdout))
+      if (hold) return
       if (stderr) child.stderr.emit('data', Buffer.from(stderr))
       child.emit('close', exit ?? 0)
     })
@@ -172,6 +183,22 @@ function subcommand(argv: string[]): string | undefined {
     return a
   }
   return undefined
+}
+
+function reconcileRows(rows: { rel: string; action?: string }[]): string {
+  if (rows.length === 0) return ''
+  return (
+    rows
+      .map((r) =>
+        JSON.stringify({
+          depotFile: `//depot/branch_x/${r.rel}`,
+          clientFile: `//${CLIENT}/${r.rel}`,
+          action: r.action ?? 'edit',
+          rev: '1',
+        }),
+      )
+      .join('\n') + '\n'
+  )
 }
 
 function handle(
@@ -203,24 +230,15 @@ function handle(
     const filespec = argv[argv.length - 1] ?? ''
     const delay = opts.reconcileDelayMs?.(filespec)
     if (delay) currentClock?.advance(delay)
+    const timeoutRows = opts.reconcileTimeout?.(filespec)
+    if (timeoutRows) return { stdout: reconcileRows(timeoutRows), hold: true }
     if (opts.reconcileHold?.(filespec)) return { stdout: '', hold: true }
     const exit = opts.reconcileExit?.(filespec)
     if (exit !== undefined && exit !== 0) {
       return { stdout: '', stderr: opts.reconcileStderr?.(filespec) ?? 'reconcile failed', exit }
     }
     const rows = opts.reconcile?.(filespec) ?? []
-    return {
-      stdout: rows
-        .map((r) =>
-          JSON.stringify({
-            depotFile: `//depot/branch_x/${r.rel}`,
-            clientFile: `//${CLIENT}/${r.rel}`,
-            action: r.action ?? 'edit',
-            rev: '1',
-          }),
-        )
-        .join('\n'),
-    }
+    return { stdout: reconcileRows(rows) }
   }
   // changes / fstat / describe — succeed silently with no records.
   return { stdout: '' }
@@ -261,6 +279,10 @@ describe('PerforceClient.runReconcileScan', () => {
     installScmBridge()
     spawnMock.mockReset()
     readdirMock.mockReset()
+    // Every directory without a usable checkpoint now gets a cold-prior file
+    // count before its batch; an empty listing ("no files") is the neutral
+    // default so tests only override readdir when the count or a split matters.
+    readdirMock.mockImplementation(async () => [])
     calls.length = 0
     published.length = 0
     currentClock = undefined
@@ -351,7 +373,12 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const clock = fakeClock()
     readdirMock.mockImplementation(async (dir: string) => {
-      if (dir === LOCAL) return ['sub1', 'sub2'].map((name) => ({ name, isDirectory: () => true }))
+      if (dir === LOCAL)
+        return ['sub1', 'sub2'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
       return []
     })
     const client = await makeClient(
@@ -416,7 +443,12 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const clock = fakeClock()
     readdirMock.mockImplementation(async (dir: string) => {
-      if (dir === LOCAL) return ['sub1', 'sub2'].map((name) => ({ name, isDirectory: () => true }))
+      if (dir === LOCAL)
+        return ['sub1', 'sub2'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
       return []
     })
     const client = await makeClient(
@@ -463,12 +495,9 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('does not split a fast failure (leaves it un-checkpointed)', async () => {
     // A fast failure (server refused, auth) is transient — the directory stays
-    // un-checkpointed so the next session retries the parent, and readdir is
-    // never touched (no pointless split of a batch that cost nothing).
+    // un-checkpointed so the next session retries the parent. The only readdir
+    // is the cold-prior count; the split path never touches it.
     const disk = fakeDisk()
-    readdirMock.mockImplementation(async () => {
-      throw new Error('readdir must not be called for a fast failure')
-    })
     const client = await makeClient(
       {
         reconcile: () => [{ rel: 'a.txt' }],
@@ -483,7 +512,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
     expect(published).toHaveLength(0)
     expect(disk.store.size).toBe(0)
-    expect(readdirMock).not.toHaveBeenCalled()
+    expect(readdirMock).toHaveBeenCalledTimes(1)
   })
 
   it('leaves a slow failure with no subdirectories un-checkpointed', async () => {
@@ -512,9 +541,6 @@ describe('PerforceClient.runReconcileScan', () => {
 
   it('does not split a fast batch', async () => {
     const disk = fakeDisk()
-    readdirMock.mockImplementation(async () => {
-      throw new Error('readdir must not be called for a fast batch')
-    })
     const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
     client.setReconcileScope([LOCAL])
 
@@ -522,7 +548,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     expect(published).toHaveLength(1)
     expect(disk.store.size).toBe(1)
-    expect(readdirMock).not.toHaveBeenCalled()
+    // Only the cold-prior count read the directory; the split path did not.
+    expect(readdirMock).toHaveBeenCalledTimes(1)
   })
 
   it('does not split a batch whose elapsed equals the ceiling exactly', async () => {
@@ -530,9 +557,6 @@ describe('PerforceClient.runReconcileScan', () => {
     // the ceiling is still a normal (single-batch) checkpoint, not a split.
     const disk = fakeDisk()
     const clock = fakeClock()
-    readdirMock.mockImplementation(async () => {
-      throw new Error('readdir must not be called at exactly the ceiling')
-    })
     const client = await makeClient(
       {
         reconcileDelayMs: () => 10_000, // exactly the default ceiling
@@ -549,7 +573,8 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(disk.store.size).toBe(1)
     const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
     expect(entry.split).toBeUndefined()
-    expect(readdirMock).not.toHaveBeenCalled()
+    // Only the cold-prior count read the directory; the split path did not.
+    expect(readdirMock).toHaveBeenCalledTimes(1)
   })
 
   it('does not split a slow batch that found no drift', async () => {
@@ -560,9 +585,6 @@ describe('PerforceClient.runReconcileScan', () => {
     // ceiling schedules the rescan.
     const disk = fakeDisk()
     const clock = fakeClock()
-    readdirMock.mockImplementation(async () => {
-      throw new Error('readdir must not be called for a clean batch, however slow')
-    })
     const client = await makeClient(
       {
         reconcileDelayMs: () => 20_000, // past the 10s ceiling
@@ -580,7 +602,8 @@ describe('PerforceClient.runReconcileScan', () => {
     const entry = JSON.parse([...disk.store.values()][0]!) as { hints: unknown[]; split?: boolean }
     expect(entry.hints).toEqual([])
     expect(entry.split).toBeUndefined()
-    expect(readdirMock).not.toHaveBeenCalled()
+    // Only the cold-prior count read the directory; the split path did not.
+    expect(readdirMock).toHaveBeenCalledTimes(1)
   })
 
   // --- ④ resume from checkpoint ----------------------------------------------
@@ -835,7 +858,12 @@ describe('PerforceClient.runReconcileScan', () => {
         clientClock,
       )
     readdirMock.mockImplementation(async (dir: string) => {
-      if (dir === LOCAL) return ['sub1', 'sub2'].map((name) => ({ name, isDirectory: () => true }))
+      if (dir === LOCAL)
+        return ['sub1', 'sub2'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
       return []
     })
 
@@ -909,8 +937,13 @@ describe('PerforceClient.runReconcileScan', () => {
   it('clamps the batch ceiling to the manifest minimum (1000ms)', async () => {
     const disk = fakeDisk()
     const clock = fakeClock()
-    readdirMock.mockImplementation(async () =>
-      ['sub'].map((name) => ({ name, isDirectory: () => true })),
+    // Only LOCAL has a subdirectory: the cold-prior count walks recursively,
+    // so a mock answering "one more subdirectory" for EVERY path would never
+    // terminate.
+    readdirMock.mockImplementation(async (dir: string) =>
+      dir === LOCAL
+        ? ['sub'].map((name) => ({ name, isDirectory: () => true, isSymbolicLink: () => false }))
+        : [],
     )
     const client = await makeClient(
       {
@@ -929,7 +962,9 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // 500ms < the clamped 1000ms ceiling → no split: the directory checkpoints
     // as a single batch. An unclamped 0 would split every batch (readdir storm).
-    expect(readdirMock).not.toHaveBeenCalled()
+    // The two readdirs are the cold-prior count walking LOCAL and its one
+    // subdirectory; the split path never touched it.
+    expect(readdirMock).toHaveBeenCalledTimes(2)
     expect(disk.store.size).toBe(1)
   })
 
@@ -983,7 +1018,12 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const clock = fakeClock()
     readdirMock.mockImplementation(async (dir: string) => {
-      if (dir === LOCAL) return ['sub1', 'sub2'].map((name) => ({ name, isDirectory: () => true }))
+      if (dir === LOCAL)
+        return ['sub1', 'sub2'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
       return []
     })
     const client = await makeClient(
@@ -1143,5 +1183,423 @@ describe('PerforceClient.runReconcileScan', () => {
     // never checkpointed, spawned in both.
     expect(reconcileScans().filter((a) => a.includes(`${LOCAL}/A/...`))).toHaveLength(1)
     expect(reconcileScans().filter((a) => a.includes(`${LOCAL}/B/...`))).toHaveLength(2)
+  })
+
+  // --- ⑰ partial recovery on timeout (M11) ------------------------------------
+
+  it("publishes a timed-out batch's streamed hints and checkpoints a split marker, never a result", async () => {
+    // A batch whose child streamed drift rows before the watchdog killed it must
+    // keep those rows (they are a lower bound of drift found), publish them, and
+    // split — but NEVER checkpoint them as a complete result, which would freeze
+    // the un-scanned remainder as clean into later sessions.
+    setP4CommandTimeoutSeconds(1)
+    try {
+      const disk = fakeDisk()
+      const clock = fakeClock()
+      readdirMock.mockImplementation(async (dir: string) => {
+        if (dir === LOCAL)
+          return ['sub1', 'sub2'].map((name) => ({
+            name,
+            isDirectory: () => true,
+            isSymbolicLink: () => false,
+          }))
+        return []
+      })
+      const client = await makeClient(
+        {
+          reconcileTimeout: (filespec) =>
+            filespec === `${LOCAL}/...` ? [{ rel: 'top.txt' }] : undefined,
+          reconcile: (filespec) => {
+            const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+            if (dir === join(LOCAL, 'sub1') || dir === join(LOCAL, 'sub2')) return []
+            return undefined
+          },
+        },
+        disk,
+        clock,
+      )
+      client.setReconcileScope([LOCAL])
+
+      await client.runReconcileScan()
+
+      // The timed-out parent still publishes the drift it streamed…
+      expect(published.map((p) => p.directory)).toEqual([
+        LOCAL,
+        join(LOCAL, 'sub1'),
+        join(LOCAL, 'sub2'),
+      ])
+      expect(published[0]!.changes).toHaveLength(1)
+      expect(published[0]!.changes[0]!.path).toBe(`${LOCAL}/top.txt`)
+      // …but its checkpoint is the SPLIT marker (no hints), not a result entry.
+      const keys = [...disk.store.keys()]
+      expect(keys).toHaveLength(3)
+      const parentKey = keys.find((k) => k.includes('reconcileScan/') && !k.includes('sub'))
+      expect(parentKey).toBeDefined()
+      const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
+        split?: boolean
+        hints: unknown[]
+      }
+      expect(parentEntry.split).toBe(true)
+      expect(parentEntry.hints).toEqual([])
+    } finally {
+      setP4CommandTimeoutSeconds(600)
+    }
+  })
+
+  it('leaves a timed-out batch with no subdirectories un-checkpointed (next session retries)', async () => {
+    setP4CommandTimeoutSeconds(1)
+    try {
+      const disk = fakeDisk()
+      const clock = fakeClock()
+      readdirMock.mockImplementation(async () => []) // cannot split
+      const client = await makeClient({ reconcileTimeout: () => [{ rel: 'top.txt' }] }, disk, clock)
+      client.setReconcileScope([LOCAL])
+
+      await client.runReconcileScan()
+
+      // The streamed hints still publish…
+      expect(published).toHaveLength(1)
+      expect(published[0]!.changes).toHaveLength(1)
+      // …but with no subdirectories to split into there is nothing to checkpoint:
+      // neither a result (partial) nor a split marker.
+      expect(disk.store.size).toBe(0)
+    } finally {
+      setP4CommandTimeoutSeconds(600)
+    }
+  })
+
+  it('splits a timed-out batch even when nothing streamed before the kill (ceiling larger than commandTimeout)', async () => {
+    // A timeout that recovered zero rows still proves the directory is too big:
+    // if it only split via the elapsed > maxBatchDurationMs heuristic, a ceiling
+    // larger than `perforce.commandTimeout` would leave the doomed parent
+    // un-checkpointed and re-run it every session. It must split (and write a
+    // split marker, never a result checkpoint) regardless of the ceiling.
+    setP4CommandTimeoutSeconds(1)
+    try {
+      const disk = fakeDisk()
+      const clock = fakeClock()
+      readdirMock.mockImplementation(async (dir: string) => {
+        if (dir === LOCAL)
+          return [{ name: 'sub1', isDirectory: () => true, isSymbolicLink: () => false }]
+        return []
+      })
+      const client = await makeClient(
+        {
+          reconcileTimeout: (filespec) => (filespec === `${LOCAL}/...` ? [] : undefined),
+          reconcileDelayMs: (filespec) => (filespec === `${LOCAL}/...` ? 2000 : 0),
+          reconcile: (filespec) => {
+            const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+            return dir === join(LOCAL, 'sub1') ? [] : undefined
+          },
+        },
+        disk,
+        clock,
+      )
+      client.setReconcileScope([LOCAL])
+      // 60s ceiling ≫ the 1s command timeout — the split can only come from the
+      // timeout itself, not from elapsed outlasting the ceiling.
+      client.setReconcileScanOptions({ maxBatchDurationMs: 60_000 })
+
+      await client.runReconcileScan()
+
+      // The zero-drift parent published nothing, but still wrote a split marker…
+      expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'sub1')])
+      const keys = [...disk.store.keys()]
+      expect(keys).toHaveLength(2)
+      const parentKey = keys.find((k) => k.includes('reconcileScan/') && !k.includes('sub'))
+      expect(parentKey).toBeDefined()
+      const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
+        split?: boolean
+        hints: unknown[]
+      }
+      expect(parentEntry.split).toBe(true)
+      expect(parentEntry.hints).toEqual([])
+      // …and the clean subdirectory checkpointed as a normal result (no split).
+      const subKey = keys.find((k) => k.includes('reconcileScan/') && k.includes('sub'))
+      expect(subKey).toBeDefined()
+      const subEntry = JSON.parse(disk.store.get(subKey!)!) as { split?: boolean; hints: unknown[] }
+      expect(subEntry.split).toBeUndefined()
+      expect(subEntry.hints).toEqual([])
+    } finally {
+      setP4CommandTimeoutSeconds(600)
+    }
+  })
+
+  // --- ⑱ budget prediction (pre-scan split) ---------------------------------
+
+  it('pre-splits via the warm prior: an expired checkpoint with elapsedMs over the ceiling spawns zero parent batches', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return ['sub1', 'sub2'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const make = () =>
+      makeClient(
+        {
+          reconcileDelayMs: (filespec) => (filespec === `${LOCAL}/...` ? 20_000 : 0),
+          reconcile: (filespec) => {
+            const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+            if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+            return []
+          },
+        },
+        disk,
+        clock,
+      )
+
+    // Session 1: a slow-but-clean parent checkpoints a RESULT carrying the
+    // measured elapsed as the warm prior (slow-but-clean is not split — yet).
+    const first = await make()
+    first.setReconcileScope([LOCAL])
+    await first.runReconcileScan()
+    const parentKey = [...disk.store.keys()].find((k) => !k.includes('sub'))
+    expect(parentKey).toBeDefined()
+    const firstEntry = JSON.parse(disk.store.get(parentKey!)!) as {
+      elapsedMs?: number
+      split?: boolean
+    }
+    expect(firstEntry.elapsedMs).toBe(20_000)
+    expect(firstEntry.split).toBeUndefined()
+
+    // Session 2, past the freshness ceiling: the expired entry's warm prior
+    // pre-splits the parent — it never spawns again, the split marker
+    // replaces the result, and the subdirectories scan + checkpoint on their
+    // own.
+    clock.advance(25 * 60 * 60 * 1000)
+    const second = await make()
+    second.setReconcileScope([LOCAL])
+    await second.runReconcileScan()
+
+    const parentSpecs = reconcileScans().filter((a) => a.includes(`${LOCAL}/...`))
+    expect(parentSpecs).toHaveLength(1) // session 1 only
+    const marker = JSON.parse(disk.store.get(parentKey!)!) as { split?: boolean; hints: unknown[] }
+    expect(marker.split).toBe(true)
+    expect(marker.hints).toEqual([])
+    expect(published.map((p) => p.directory)).toEqual([
+      LOCAL,
+      join(LOCAL, 'sub1'),
+      join(LOCAL, 'sub2'),
+    ])
+    expect(disk.store.size).toBe(3)
+  })
+
+  it('still runs the batch when the warm prior fits the ceiling (no false pre-split)', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    const make = () => makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk, clock)
+
+    // Session 1: a fast batch checkpoints a small warm prior.
+    const first = await make()
+    first.setReconcileScope([LOCAL])
+    await first.runReconcileScan()
+    expect(reconcileScans()).toHaveLength(1)
+
+    // Session 2, past the freshness ceiling: the expired entry's warm prior
+    // is under the ceiling, so the directory rescans as one normal batch —
+    // the measurement shields it from any size estimate.
+    clock.advance(25 * 60 * 60 * 1000)
+    const second = await make()
+    second.setReconcileScope([LOCAL])
+    await second.runReconcileScan()
+
+    expect(reconcileScans()).toHaveLength(2)
+    expect(disk.store.size).toBe(1)
+    const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
+    expect(entry.split).toBeUndefined()
+  })
+
+  it('pre-splits a never-scanned directory whose local file count exceeds the threshold', async () => {
+    const disk = fakeDisk()
+    const overThreshold = Array.from(
+      { length: RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD + 1 },
+      (_, i) => ({ name: `f${i}.bin`, isDirectory: () => false }),
+    )
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return [
+          { name: 'sub1', isDirectory: () => true, isSymbolicLink: () => false },
+          ...overThreshold,
+        ]
+      return []
+    })
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+          if (dir === join(LOCAL, 'sub1')) return [{ rel: 'sub1/a.txt' }]
+          return []
+        },
+      },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+
+    await client.runReconcileScan()
+
+    // The parent batch never ran — only the subdirectory's did.
+    expect(reconcileScans().map((a) => a[a.length - 1])).toEqual([`${join(LOCAL, 'sub1')}/...`])
+    // The parent checkpoints the split marker (its batch never produced a
+    // result); the subdirectory checkpoints its own result and publishes.
+    const keys = [...disk.store.keys()]
+    expect(keys).toHaveLength(2)
+    const parentKey = keys.find((k) => !k.includes('sub'))
+    const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
+      split?: boolean
+      hints: unknown[]
+    }
+    expect(parentEntry.split).toBe(true)
+    expect(parentEntry.hints).toEqual([])
+    const subEntry = JSON.parse(disk.store.get(keys.find((k) => k.includes('sub'))!)!) as {
+      split?: boolean
+      hints: unknown[]
+    }
+    expect(subEntry.split).toBeUndefined()
+    expect(subEntry.hints).toHaveLength(1)
+    expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'sub1')])
+    // Early exit: the count stopped inside LOCAL's own listing and never
+    // descended into sub1 — the third readdir is sub1's OWN cold count after
+    // it was enqueued, not part of the parent's.
+    expect(readdirMock.mock.calls.map((c) => c[0])).toEqual([LOCAL, LOCAL, join(LOCAL, 'sub1')])
+  })
+
+  it('still runs the batch when the cold file count is under the threshold (no false pre-split)', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return [
+          { name: 'sub1', isDirectory: () => true, isSymbolicLink: () => false },
+          ...Array.from({ length: 5 }, (_, i) => ({ name: `f${i}.txt`, isDirectory: () => false })),
+        ]
+      return []
+    })
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+
+    await client.runReconcileScan()
+
+    expect(reconcileScans()).toHaveLength(1)
+    expect(reconcileScans()[0]![reconcileScans()[0]!.length - 1]).toBe(`${LOCAL}/...`)
+    expect(disk.store.size).toBe(1)
+    const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
+    expect(entry.split).toBeUndefined()
+  })
+
+  it('falls back to a normal batch when the cold count cannot read the directory', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async () => {
+      throw new Error('EPERM')
+    })
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+
+    await client.runReconcileScan()
+
+    // An unreadable count degrades to a normal scan — the prediction is an
+    // optimization, never a gate (same fail-open tolerance as _listSubdirs).
+    expect(reconcileScans()).toHaveLength(1)
+    expect(disk.store.size).toBe(1)
+  })
+
+  it('falls back to a normal batch when a predicted split finds no subdirectories', async () => {
+    const disk = fakeDisk()
+    // Over the threshold in files but not one subdirectory to split into —
+    // the prediction degrades to the normal batch, exactly like a post-hoc
+    // split that finds nothing.
+    const overThreshold = Array.from(
+      { length: RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD + 1 },
+      (_, i) => ({ name: `f${i}.bin`, isDirectory: () => false }),
+    )
+    readdirMock.mockImplementation(async (dir: string) => (dir === LOCAL ? overThreshold : []))
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+
+    await client.runReconcileScan()
+
+    expect(reconcileScans()).toHaveLength(1)
+    expect(reconcileScans()[0]![reconcileScans()[0]!.length - 1]).toBe(`${LOCAL}/...`)
+    expect(disk.store.size).toBe(1)
+    const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
+    expect(entry.split).toBeUndefined()
+  })
+
+  it('compares the warm prior against the CURRENT ceiling (a raised ceiling un-splits)', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return ['sub1'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const make = () =>
+      makeClient(
+        {
+          reconcileDelayMs: (filespec) => (filespec === `${LOCAL}/...` ? 20_000 : 0),
+          reconcile: () => [],
+        },
+        disk,
+        clock,
+      )
+
+    // Session 1: a 20s batch → warm prior 20000 (over the default 10s ceiling).
+    const first = await make()
+    first.setReconcileScope([LOCAL])
+    await first.runReconcileScan()
+    expect(reconcileScans()).toHaveLength(1)
+
+    // Session 2, past the freshness ceiling, with a raised ceiling: the
+    // measurement is compared against the CURRENT budget, 20000 ≤ 60000 fits,
+    // so the directory rescans as one normal batch instead of pre-splitting.
+    clock.advance(25 * 60 * 60 * 1000)
+    const second = await make()
+    second.setReconcileScanOptions({ maxBatchDurationMs: 60_000 })
+    second.setReconcileScope([LOCAL])
+    await second.runReconcileScan()
+
+    expect(reconcileScans()).toHaveLength(2)
+    expect(disk.store.size).toBe(1)
+    const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
+    expect(entry.split).toBeUndefined()
+  })
+
+  it('degrades to the cold prior for checkpoints written before elapsedMs existed', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    const first = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk, clock)
+    first.setReconcileScope([LOCAL])
+    await first.runReconcileScan()
+    expect(reconcileScans()).toHaveLength(1)
+
+    // Strip the warm prior from the stored entry, simulating a checkpoint
+    // written by an older build.
+    const key = [...disk.store.keys()][0]!
+    const legacy = JSON.parse(disk.store.get(key)!) as Record<string, unknown>
+    delete legacy.elapsedMs
+    disk.store.set(key, JSON.stringify(legacy))
+
+    // Past the freshness ceiling: no warm prior → the cold count answers
+    // instead (0 files here) and the directory rescans normally, re-earning
+    // its warm prior.
+    clock.advance(25 * 60 * 60 * 1000)
+    const second = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk, clock)
+    second.setReconcileScope([LOCAL])
+    await second.runReconcileScan()
+
+    expect(reconcileScans()).toHaveLength(2)
+    // One cold count per session: the legacy entry furnishes no warm prior,
+    // so session 2 must take the cold path (a warm prior would skip the
+    // count and leave just session 1's).
+    expect(readdirMock).toHaveBeenCalledTimes(2)
+    const entry = JSON.parse(disk.store.get(key)!) as { elapsedMs?: number }
+    expect(entry.elapsedMs).toBeTypeOf('number')
   })
 })

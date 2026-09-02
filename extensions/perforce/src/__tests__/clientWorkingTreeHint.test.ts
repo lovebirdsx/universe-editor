@@ -20,6 +20,9 @@ class FakeChildProcess extends EventEmitter {
   readonly stderr = new EventEmitter()
   readonly stdin = { end: vi.fn() }
   kill(): boolean {
+    // Simulate a killed child: `close` with a non-zero code, which is how a
+    // SpawnWatchdog kill surfaces to the scan path.
+    this.emit('close', 1)
     return true
   }
 }
@@ -54,6 +57,7 @@ function installScmBridge(): void {
 const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 const { toReconcileResourceState } = await import('../p4Decoration.js')
+const { setP4CommandTimeoutSeconds } = await import('../p4Service.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
 type ReconcileFile = import('../reconcileParser.js').ReconcileFile
 
@@ -64,6 +68,9 @@ const CLIENT = 'testclient'
 interface RespondOptions {
   /** Reconcile candidates returned by any `reconcile -n` scan (as client-syntax rows). */
   reconcile?: () => { rel: string; action?: string }[]
+  /** Emit these reconcile rows, then never close — the SpawnWatchdog kills the
+   *  child. The hint channel must NOT recover partial output from a timeout. */
+  reconcileTimeout?: () => { rel: string; action?: string }[] | undefined
   /** Opened files reported by `p4 opened` (client-syntax rows). */
   opened?: () => { rel: string; action?: string; change?: string }[]
 }
@@ -76,8 +83,9 @@ function respond(opts: RespondOptions = {}): void {
     calls.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {
-      const { stdout, stderr, exit } = handle(argv, opts)
+      const { stdout, stderr, exit, hold } = handle(argv, opts)
       if (stdout) child.stdout.emit('data', Buffer.from(stdout))
+      if (hold) return
       if (stderr) child.stderr.emit('data', Buffer.from(stderr))
       child.emit('close', exit ?? 0)
     })
@@ -101,7 +109,7 @@ function subcommand(argv: string[]): string | undefined {
 function handle(
   argv: string[],
   opts: RespondOptions,
-): { stdout: string; stderr?: string; exit?: number } {
+): { stdout: string; stderr?: string; exit?: number; hold?: boolean } {
   const cmd = subcommand(argv)
   if (cmd === 'info') {
     return { stdout: `... clientName ${CLIENT}\n... clientRoot ${ROOT}\n... userName testuser\n\n` }
@@ -126,22 +134,29 @@ function handle(
     // `clientFile` is client syntax (`//clientName/rel`), not a local path —
     // `parseReconcile(records, root)` translates it. Emitting a local path here
     // would mask the client-syntax → local-path translation.
+    const timeoutRows = opts.reconcileTimeout?.()
+    if (timeoutRows) return { stdout: reconcileRows(timeoutRows), hold: true }
     const rows = opts.reconcile?.() ?? []
-    return {
-      stdout: rows
-        .map((r) =>
-          JSON.stringify({
-            depotFile: `//depot/branch_x/${r.rel}`,
-            clientFile: `//${CLIENT}/${r.rel}`,
-            action: r.action ?? 'edit',
-            rev: '1',
-          }),
-        )
-        .join('\n'),
-    }
+    return { stdout: reconcileRows(rows) }
   }
   // changes / fstat / describe — succeed silently with no records.
   return { stdout: '' }
+}
+
+function reconcileRows(rows: { rel: string; action?: string }[]): string {
+  if (rows.length === 0) return ''
+  return (
+    rows
+      .map((r) =>
+        JSON.stringify({
+          depotFile: `//depot/branch_x/${r.rel}`,
+          clientFile: `//${CLIENT}/${r.rel}`,
+          action: r.action ?? 'edit',
+          rev: '1',
+        }),
+      )
+      .join('\n') + '\n'
+  )
 }
 
 /** All `reconcile -n` argv seen so far (each is the full p4 argv). */
@@ -322,4 +337,23 @@ describe('PerforceClient.checkWorkingTree', () => {
       expect(result[0]?.path).toBe(asAsked)
     },
   )
+
+  // --- extra: a timeout is a hard failure, never a partial answer ------------
+
+  it('does not recover partial results on timeout (the channel answers "which exactly?")', async () => {
+    // This channel's contract is "which of exactly these paths drifted": a
+    // partial answer would let the renderer pin the un-covered paths as clean
+    // forever. So a watchdog kill must surface as "no answer", not as the rows
+    // the command happened to stream before the kill.
+    setP4CommandTimeoutSeconds(1)
+    try {
+      const client = await makeClient({ reconcileTimeout: () => [{ rel: 'a.txt' }] })
+
+      const result = await client.checkWorkingTree([`${LOCAL}/a.txt`])
+
+      expect(result).toEqual([])
+    } finally {
+      setP4CommandTimeoutSeconds(600)
+    }
+  })
 })
