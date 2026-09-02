@@ -51,6 +51,7 @@ import {
   IScmDecorationsService,
   type IScmDecorationsSnapshot,
 } from '../../services/scm/ScmDecorationsService.js'
+import { IScmBehindHintService } from '../../services/scm/ScmBehindHintService.js'
 import { IScmIgnoredResourcesService } from '../../services/scm/ScmIgnoredResourcesService.js'
 import { IScmWorkingTreeHintService } from '../../services/scm/ScmWorkingTreeHintService.js'
 import { resolveRowDecoration } from '../../services/scm/rowDecoration.js'
@@ -71,6 +72,8 @@ const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgno
 
 const EMPTY_HINT_VERSION: IObservable<number> = observableValue('emptyScmWorkingTreeHintVersion', 0)
 
+const EMPTY_BEHIND_VERSION: IObservable<number> = observableValue('emptyScmBehindHintVersion', 0)
+
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
   const workspaceService = useService(IWorkspaceService)
@@ -90,6 +93,9 @@ export function ExplorerView() {
   const scmWorkingTreeHints = useOptionalService(IScmWorkingTreeHintService)
   // Same for the on-demand working-tree hints (see renderRow).
   useObservable(scmWorkingTreeHints?.version ?? EMPTY_HINT_VERSION)
+  const scmBehindHints = useOptionalService(IScmBehindHintService)
+  // Same for the on-demand behind-head probe (see renderRow).
+  useObservable(scmBehindHints?.version ?? EMPTY_BEHIND_VERSION)
 
   // Re-render when selection / active-editor change so renderRow closes over a
   // fresh active-editor key. Structure changes are handled inside <Tree>.
@@ -208,6 +214,11 @@ export function ExplorerView() {
     const row = resolveRowDecoration(deco, ignored, hint)
     // 服务器侧状态（落后 / 他人占用）只给文件行，与上面的组派生装饰各占一套字段。
     const supp = !entry.isDirectory ? scmDecorations?.getSupplementary(entry.resource) : undefined
+    // Visible-row behind probe: enqueue a checkBehind for every file row on screen.
+    // The returned boolean is NOT rendered — the actual ↓ marker arrives through the
+    // provider's supplementary-decoration push; this only feeds the ask-once cache.
+    // Not gated on `deco === undefined`: an opened file can also be behind.
+    if (!entry.isDirectory) scmBehindHints?.isBehind(entry.resource)
     return (
       <ExplorerTreeNode
         key={key}

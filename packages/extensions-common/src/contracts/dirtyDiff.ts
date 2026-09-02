@@ -45,6 +45,17 @@ export const DirtyDiffCapabilities = {
    * register it, and the host falls back to publishing nothing.
    */
   checkWorkingTree: 'checkWorkingTree',
+  /**
+   * Filter a batch of paths down to those whose have revision is behind the
+   * depot head (the server has newer revisions). Args: `(fsPaths: string[])`;
+   * returns the behind subset, each element identical to the input string it
+   * came from. Providers that cannot cheaply answer (git already decorates
+   * fetch/push) don't register it, and the host falls back to publishing
+   * nothing. Perforce registers it; the renderer uses it to probe visible rows
+   * on demand, while the provider pushes the actual ↓ decoration through
+   * setSupplementaryDecorations.
+   */
+  checkBehind: 'checkBehind',
 } as const
 
 /**

@@ -4,6 +4,7 @@
 
 ## 功能实现进展
 
+- [Perforce Explorer「远端有更新 ↓」装饰恢复](perforce-explorer-behind-decoration-restore.md) — pull 停问+push 装饰双通道缺一不可；✎/↓ 共享槽位须按路径合并；失败≠clean 保留标记；sync 清场靠渲染重触发
 - [Explorer 删除到回收站 + Ctrl+Z 撤销](explorer-trash-and-undo-feature.md) — shell.trashItem+IUndoRedoService；useTrash 须先问 provider 能力位，远端降级须显式非静默
 - [内置 agent skills + 用户版创建/移植扩展 skill](builtin-agent-skills-user-extension-commands.md) — additionalDirectories 注入四条 wire 路径两 fork 零改动发现；加 skill=放文件+补 sentinel
 - [session 开销含子 Agent](session-cost-subagent-inclusion.md) — claude SDK 总额天然已含勿双计；codex 须 fork 订阅子 thread tokenUsage 聚合进 _meta.quota

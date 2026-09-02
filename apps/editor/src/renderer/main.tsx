@@ -206,6 +206,7 @@ import { IScmService, ScmService } from './services/extensions/ScmService.js'
 import { IWebviewService, WebviewService } from './services/extensions/WebviewService.js'
 import { ITimelineService, TimelineService } from './services/timeline/TimelineService.js'
 import { ITreeViewsService, TreeViewsService } from './services/extensions/TreeViewsService.js'
+import { IScmBehindHintService, ScmBehindHintService } from './services/scm/ScmBehindHintService.js'
 import {
   IScmDecorationsService,
   ScmDecorationsService,
@@ -814,6 +815,14 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(IScmWorkingTreeHintService, scmWorkingTreeHintService)
 
+  // Server-side behind-head state (p4 have < head), probed on demand per visible
+  // row through the owning provider's checkBehind command; the provider pushes the
+  // actual ↓ decoration through supplementary decorations.
+  const scmBehindHintService = workbenchStore.add(
+    instantiation.createInstance(ScmBehindHintService),
+  )
+  services.set(IScmBehindHintService, scmBehindHintService)
+
   // Holds the active editor's dirty-diff regions and the `quickDiffDecorationCount`
   // context key; consumed by the "go to next/previous change" commands. Eager so the
   // context key is seeded before any when-clause evaluates.
@@ -930,6 +939,7 @@ async function bootstrapWorkbench(): Promise<void> {
     scmIgnoredResourcesService,
     scmDecorationsService,
     scmWorkingTreeHintService,
+    scmBehindHintService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),

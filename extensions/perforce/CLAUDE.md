@@ -33,7 +33,7 @@
 **interactive 标记判据（最终清单，加新 p4 命令照此办）**：用户点击/悬停触发的读、且用户要等它才能看到东西 = interactive；扫描 / 轮询 / 批量（reconcile 复核、refresh、后台扇出）= background（默认）。**超时选用**：能断言「正常该多快」的元数据读 → `INTERACTIVE_EXEC`（30s 紧超时）；耗时随数据量线性增长的内容传输（`print`，以及巨型 CL 上 GB 级输出的 `describe -s`/`describe -S -s`）→ `INTERACTIVE_CONTENT_EXEC`（只提优先级，保留 600s 预算）。
 
 - **interactive（已标）**：`fstat`（gutter/Timeline/openChange diff）、`print`（diff/baseline 内容，CONTENT）、`annotate` + `changes -l`（blame）、`diff -se`（timeline pending 探针）、`filelog`（Timeline 视图/切活动编辑器）、`changes -s submitted`（开图谱）、`describe -s`（点图谱节点，CONTENT）、`opened` 经 `_openedFiles`（图谱 pending 节点）、`opened` 经 `openedStateAmong` / `openedInTree`（统一 Revert 确认的 live 预检）、`where` 经 `_whereLocalPaths`（图谱/Swarm 读调用方）、`describe -S -s` 经 `describeChangeFiles`（展开 Swarm review，CONTENT）。
-- **刻意不标（background 默认）**：refresh 的 `opened`/`changes -s pending`、`_fetchShelved` 的 `describe -S -s`（带 30s 紧超时）、`reconcile -n` 全扫/增量批、`deleteChangelist` 的 `describe -S -s`、`_applyCommittedChange` 的 `print`/`where`、他人占用扫描的 `opened -a`（带 20s 紧超时，见下「他人占用」节）——这些是 mutation 或后台扇出，不是点击读。
+- **刻意不标（background 默认）**：refresh 的 `opened`/`changes -s pending`、`_fetchShelved` 的 `describe -S -s`（带 30s 紧超时）、`reconcile -n` 全扫/增量批、`deleteChangelist` 的 `describe -S -s`、`_applyCommittedChange` 的 `print`/`where`、他人占用扫描的 `opened -a`（带 20s 紧超时，见下「他人占用」节）、behind 灰字探针 `checkBehind` 的逐文件 `fstat`（带 20s 紧超时，见下「Explorer 落后灰字」节）——这些是 mutation、后台扇出或渲染路径被动突发，不是点击读。
 - **共享 helper 的处理**：`_whereLocalPaths` 同时被 mutation（`_applyCommittedChange`）和 graph/Swarm 读调用，故默认 background、加可选 `options` 参数由调用方定优先级（读调用方显式传 `INTERACTIVE_EXEC`）；`_openedFiles` 只有图谱 pending 两个消费方（refresh 自己跑 `opened`，不经过它），故直接标 `INTERACTIVE_EXEC`。
 - **以后加任何批量 p4 命令都要想**：它会不会把门灌满、把交互命令挡在队尾——批量命令一律 background，用户读一律显式标 interactive。
 
@@ -200,6 +200,16 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 回显那张 map 的 key 必须是 `scopeKey` 而非 `norm`——它两侧**不同源**：请求方按用户打开目录的拼法给，答案按 `p4 info` 报的 clientRoot 拼，Windows/macOS 上两者可以只差大小写却指同一个文件（`norm` 只折盘符，会漏配 → hint 静默消失）。同一个方法里查 `_openedPaths` 仍用 `norm`，因为那个 set 的键与被比较的值同源（都由 p4 报）。`pathUtil.ts` 里 `scopeKey` 的注释就是这条判据的出处。路由用 `resolveContaining`（严格最长前缀）而非 `resolveClient`——后者的 active 回退是命令路由语义，数据查询用它会把不归任何 client 的路径扔给 active client 扫。
 
 **⚠️ 根因 / 修法（在飞查询竞态）**：renderer 侧 `ScmWorkingTreeHintService` 的在飞标记必须带 per-request 令牌。曾经 `_inFlight` 是无身份的 `Set<string>`：p4 `reconcile -n` 往返 > 150ms 去抖时，同一 key 的两次查询必然重叠——保存文件触发的 `_onFileEvents` 删掉标记意在丢弃旧答案，但第二次 flush 又把它加了回来，于是先返回的旧（保存前）答案被接受写进缓存，后返回的正确答案反而被丢弃。后果是该文件被永久钉死成「干净」：缓存里有条目故不再重新入队，而 `_revalidate()` 只遍历 `_cache.keys()`，标记时还没进缓存的 key 漏标；`_generation` 只在 `_invalidate()` 里 bump 也救不了——症状与真正的「没有改动」完全无法区分。修法：`_inFlight: Map<string, number>` + 单调 `_queryToken`，`_writeHint` 只接受 token 匹配的答案（latest-wins），不匹配打一行 debug 日志；`getHint` 缓存 miss 分支加 `_inFlight.has(key)` 守卫，避免重渲染重复入队灌满 `ConcurrencyGate`。回归护栏在 `apps/editor/src/renderer/services/scm/__tests__/ScmWorkingTreeHintService.test.ts`（两个用例：「旧答案在重新查询已发出后才落地时被丢弃」「在飞期间不重复入队」）。
+
+### Explorer 落后灰字（`checkBehind`）——可见行按需 fstat + 状态栏 chip 复用
+
+「远端有更新 ↓」灰字与「他人占用 ✎」的驱动机制**不同**：✎ 由启动 `opened -a` 后台扫描推全量；↓ 由**可见行按需探测**驱动（旧实现是启动时全量 `sync -n` 扫描，已废弃）——renderer `ScmBehindHintService`（`apps/editor/src/renderer/services/scm/ScmBehindHintService.ts`，pull 式，与 `checkWorkingTree` 同款：渲染期问 → 150ms 去抖批量 → 缓存 + 在飞 token latest-wins）在 Explorer 文件行渲染时调 capability 命令 `perforce.checkBehind`（**运行时注册，绝不进 `contributes.commands`**，同头号坑）→ `client.checkBehind(paths)` 逐文件 fstat（`#have < #head` 即 behind）→ 返回 behind 子集给 host 停问，真正的 ↓ 装饰经 `setSupplementaryDecorations` **push**（`_publishSupplementaryDecorations` 单一收口）。行不渲染就不探测，成本与可见行数同阶、与 depot 规模无关。
+
+三条红线：
+
+- **checkBehind 走 background 优先级 + `CHECK_BEHIND_TIMEOUT_MS`（20s）紧超时**：滚 Explorer 被动触发的渲染路径突发，不是用户等结果的点击，绝不能占并发门静态预留的交互槽（见「共享 FIFO 并发门」节）。
+- **behind/occupied 按路径合并成单一 marker**：renderer 按路径 key 装饰，两个独立条目会互相覆盖——合并收口在 `_publishSupplementaryDecorations`（`✎` + `↓` → 单一 `✎ ↓`，两半 tooltip 换行拼接，e2e merge journey 守护）。
+- **状态栏 chip 复用**：`updateBehindFromFstat` 把状态栏 rev chip 已跑的 fstat 结果喂进 `_setBehindFromInfo`（chip 与可见行探针共用的单一漏斗），同一文件不跑第二次服务器查询。**sync 成功 → `_clearBehindDecorations()` + `_invalidateWorkspaceState()`**：装饰靠渲染触发 + push，sync 清掉 behind map 与 fstat 缓存后，下一次可见行渲染重新 fstat（have==head → 不再 behind）——fstat 短 TTL 只吸收重复读突发，不是 behind 判定的持久层。
 
 ## 命令路由（一 id 多 client）
 

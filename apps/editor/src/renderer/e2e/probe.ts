@@ -109,6 +109,7 @@ import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IScmIgnoredResourcesService } from '../services/scm/ScmIgnoredResourcesService.js'
 import type { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import type { IScmWorkingTreeHintService } from '../services/scm/ScmWorkingTreeHintService.js'
+import type { IScmBehindHintService } from '../services/scm/ScmBehindHintService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -151,6 +152,7 @@ export interface E2EProbeServices {
   readonly scmIgnoredResourcesService: IScmIgnoredResourcesService
   readonly scmDecorationsService: IScmDecorationsService
   readonly scmWorkingTreeHintService: IScmWorkingTreeHintService
+  readonly scmBehindHintService: IScmBehindHintService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly timelineService: ITimelineService

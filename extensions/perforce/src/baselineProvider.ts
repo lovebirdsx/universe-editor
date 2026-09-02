@@ -12,6 +12,7 @@
 import {
   INTERACTIVE_CONTENT_EXEC,
   INTERACTIVE_EXEC,
+  type P4ExecOptions,
   type P4ExecResult,
   type P4Service,
 } from './p4Service.js'
@@ -60,8 +61,8 @@ export class BaselineProvider {
    * result (not under depot control) is cached so the dirty-diff gutter doesn't
    * re-`fstat` every non-depot file on each tab switch.
    */
-  async getFstatInfo(localPath: string): Promise<FstatInfo | undefined> {
-    return (await this._getFstatInfoResult(localPath)).info
+  async getFstatInfo(localPath: string, exec?: P4ExecOptions): Promise<FstatInfo | undefined> {
+    return (await this._getFstatInfoResult(localPath, exec)).info
   }
 
   /**
@@ -69,7 +70,10 @@ export class BaselineProvider {
    * `undefined`, so a caller that needs to report "fstat really failed" (rather
    * than "file has no depot entry") can tell the two apart.
    */
-  private async _getFstatInfoResult(localPath: string): Promise<{
+  private async _getFstatInfoResult(
+    localPath: string,
+    exec?: P4ExecOptions,
+  ): Promise<{
     info?: FstatInfo
     error?: P4ExecResult
   }> {
@@ -77,7 +81,7 @@ export class BaselineProvider {
       P4CacheNs.fstat,
       norm(localPath),
       async () => {
-        const res = await this._p4.execRecords(['fstat', localPath], INTERACTIVE_EXEC)
+        const res = await this._p4.execRecords(['fstat', localPath], exec ?? INTERACTIVE_EXEC)
         if (res.result.exitCode !== 0) return { error: res.result }
         const info = parseFstat(res.records)[0]
         return { value: info ? JSON.stringify(info) : NOT_CONTROLLED }

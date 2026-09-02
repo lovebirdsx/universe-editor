@@ -54,3 +54,23 @@ export function parseFstat(records: readonly Record<string, unknown>[]): FstatIn
 export function isControlled(records: readonly Record<string, unknown>[]): boolean {
   return records.some((r) => typeof r['depotFile'] === 'string')
 }
+
+/** A revision string p4 reported, as a number — `'none'` (open-for-add has no
+ *  have revision) and anything else non-integer yield undefined rather than NaN. */
+export function asRev(v: string | undefined): number | undefined {
+  if (!v || v === 'none') return undefined
+  const n = Number(v)
+  return Number.isInteger(n) ? n : undefined
+}
+
+/** Judge whether fstat says this file is behind the depot head.
+ *  Returns `{ behind, headRev }`; excludes open-for-add (`action === 'add'` or
+ *  `haveRev === 'none'`) — a new file has no have revision to be behind. */
+export function fstatBehind(info: FstatInfo): { behind: boolean; headRev?: string } {
+  if (info.action === 'add' || info.haveRev === 'none') return { behind: false }
+  const have = asRev(info.haveRev)
+  const head = asRev(info.headRev)
+  if (have === undefined || head === undefined) return { behind: false }
+  if (have < head) return { behind: true, headRev: String(head) }
+  return { behind: false }
+}

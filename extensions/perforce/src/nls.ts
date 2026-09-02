@@ -130,6 +130,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.progressFiles': '{0} 个文件{1}',
   // 他人占用（Explorer 灰字）
   'perforce.deco.occupied.tooltip': '他人占用——{0} 打开着此文件',
+  'perforce.deco.behind.tooltip': '远端有更新——服务器已到 {0}',
   // p4Error.ts
   'perforce.btn.openOutput': '打开 Perforce 输出',
   'perforce.error.offline': 'Perforce 服务器不可达——请检查连接与 P4PORT',

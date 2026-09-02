@@ -56,7 +56,7 @@ import {
 } from './changelist.js'
 import { toResourceStates, toShelvedResourceStates, toWorkingTreeHint } from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
-import { parseFstat, type FstatInfo } from './fstatParser.js'
+import { fstatBehind, parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
 import { parseIgnores } from './ignoresParser.js'
 import { parseReconcile, type ReconcileFile } from './reconcileParser.js'
@@ -257,6 +257,11 @@ const FSTAT_UNRESOLVED_TIMEOUT_MS = 20_000
  */
 const CHECK_IGNORE_TIMEOUT_MS = 20_000
 
+/** Background timeout for the visible-row behind probe — a batch fstat over many
+ *  files can legitimately outrun the tight interactive budget, but must still die
+ *  before it wedges the gate. */
+const CHECK_BEHIND_TIMEOUT_MS = 20_000
+
 /**
  * Default ceiling for one directory batch of the background reconcile scan
  * (`perforce.reconcileScan.maxBatchDurationMs`). A batch that outlasts it is
@@ -441,6 +446,10 @@ export class PerforceClient {
   /** Grey ✎ markers (files other clients have open), keyed by {@link scopeKey}'d
    *  local path, published by {@link _publishSupplementaryDecorations}. */
   private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
+  /** Grey ↓ markers (files whose have revision is behind the depot head), keyed
+   *  by {@link scopeKey}'d local path. Merged with `_othersDecorations` at publish
+   *  time — a file can be both occupied and behind. */
+  private readonly _behindDecorations = new Map<string, SourceControlSupplementaryDecoration>()
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
   /** Whether Swarm is enabled + configured, so the commit bar offers "Request New
@@ -738,6 +747,7 @@ export class PerforceClient {
       this._othersDecorations.clear()
       this._publishSupplementaryDecorations()
     }
+    this._clearBehindDecorations()
     this._emitChange()
   }
 
@@ -1048,6 +1058,56 @@ export class PerforceClient {
   }
 
   /**
+   * Visible-row behind probe: fstat each path, mark those behind the depot head,
+   * and return the behind subset (each element identical to the input string).
+   * Background priority + a batch-sized timeout — a render-path burst must not
+   * hold the gate's interactive slot. The actual ↓ decoration is pushed through
+   * `_behindDecorations`; the returned subset only tells the host which rows are
+   * behind so it stops re-asking.
+   */
+  async checkBehind(paths: readonly string[]): Promise<string[]> {
+    // Connection guard first (same as checkIgnore): a passive batch read the
+    // host fires while scrolling the Explorer must answer "nothing is behind"
+    // without spawning doomed commands that flood the output channel.
+    if (this._connection !== 'connected') return []
+    if (this._disposed || paths.length === 0) return []
+    const exec = { timeoutMs: CHECK_BEHIND_TIMEOUT_MS }
+    const behind: string[] = []
+    let changed = false
+    await Promise.all(
+      paths.map(async (p) => {
+        let info: FstatInfo | undefined
+        try {
+          info = await this._baseline.getFstatInfo(p, exec)
+        } catch {
+          info = undefined
+        }
+        if (this._disposed) return
+        // A transient fstat failure (timeout / connection blip) is not evidence
+        // of "not behind": keep the existing marker and just exclude the path
+        // from the returned subset (same "failure ≠ clean" rule as the
+        // opened-by-others scan and checkIgnore's depot filter).
+        if (info === undefined) return
+        changed = this._setBehindFromInfo(p, info) || changed
+        if (fstatBehind(info).behind) behind.push(p)
+      }),
+    )
+    // Republish once per batch rather than per path: each publish rebuilds the
+    // merged map and runs the host's full supplementary diff, so a 100-row
+    // re-probe would otherwise do 100 O(N) passes.
+    if (changed) this._publishSupplementaryDecorations()
+    return behind
+  }
+
+  /**
+   * Record a behind verdict from an fstat the caller already ran (the status-bar
+   * revision chip), so the Explorer marker appears without a second server query.
+   */
+  updateBehindFromFstat(fsPath: string, info: FstatInfo | undefined): void {
+    if (this._setBehindFromInfo(fsPath, info)) this._publishSupplementaryDecorations()
+  }
+
+  /**
    * Run the `reconcile -n -a -e -d` dry-run scan for `paths` and return the
    * still-diverged results. A dry run never mutates server state (collecting a
    * file is a separate real `reconcile`).
@@ -1174,6 +1234,7 @@ export class PerforceClient {
     this._openedByOthersCapped = false
     this._othersDecorations.clear()
     this._publishSupplementaryDecorations()
+    this._clearBehindDecorations()
     // The background reconcile scan is a scope-wide read: with the server gone,
     // every batch still queued would be a doomed spawn (a failure storm), and
     // the in-flight one would hang until the watchdog. Stop it — its completed
@@ -1905,6 +1966,7 @@ export class PerforceClient {
         // the view reflects whatever landed before the abort.
         this._log?.('[perforce] sync cancelled by user')
         await this._refreshAfterMutation()
+        this._clearBehindDecorations()
         return {
           ok: false,
           cancelled: true,
@@ -1927,6 +1989,7 @@ export class PerforceClient {
         const error = classifySyncError(result)
         this._log?.(`[perforce] sync failed (${error.kind}): ${p4ErrorText(result)}`)
         await this._refreshAfterMutation()
+        this._clearBehindDecorations()
         return { ok: false, cancelled: false, summary, refusedFiles, error }
       }
       if (summary.unrecognized) {
@@ -1943,6 +2006,7 @@ export class PerforceClient {
       // A sync rewrites have-revisions across the scope, so every path-keyed
       // cache entry (fstat/print/filelog) is potentially stale — full clear.
       this._invalidateWorkspaceState()
+      this._clearBehindDecorations()
       await this._refreshAfterMutation()
       return { ok: true, cancelled: false, summary, refusedFiles, error: undefined }
     })
@@ -2624,12 +2688,62 @@ export class PerforceClient {
   }
 
   /**
-   * Publish the opened-by-others markers. The channel replaces the provider's
-   * whole set, so this is the single place the producer's map is turned into the
-   * published decorations.
+   * Publish the opened-by-others and behind markers. The channel replaces the
+   * provider's whole set, so this is the single place the producer's maps are
+   * turned into the published decorations — a file both occupied and behind
+   * merges into one `✎ ↓` entry.
    */
   private _publishSupplementaryDecorations(): void {
-    this._sc.setSupplementaryDecorations([...this._othersDecorations.values()])
+    const merged = new Map(this._behindDecorations)
+    for (const [key, deco] of this._othersDecorations) {
+      const behind = merged.get(key)
+      if (!behind) {
+        merged.set(key, deco)
+        continue
+      }
+      const tooltip = [deco.tooltip, behind.tooltip]
+        .filter((t): t is string => t !== undefined)
+        .join('\n')
+      merged.set(key, {
+        resourceUri: deco.resourceUri,
+        description: localize('perforce.deco.occupiedAndBehind', '✎ ↓'),
+        ...(tooltip.length > 0 ? { tooltip } : {}),
+      })
+    }
+    this._sc.setSupplementaryDecorations([...merged.values()])
+  }
+
+  /** Write or clear one file's behind marker from a fresh fstat; does NOT
+   *  republish. Single funnel so the status-bar chip and the visible-row probe
+   *  stay consistent. Returns true when the caller should republish — the set
+   *  membership changed, or the marker was already present and a fresh `info`
+   *  may carry a newer headRev for the tooltip. */
+  private _setBehindFromInfo(localPath: string, info: FstatInfo | undefined): boolean {
+    const key = scopeKey(localPath)
+    const had = this._behindDecorations.has(key)
+    if (info) {
+      const { behind, headRev } = fstatBehind(info)
+      if (behind && headRev !== undefined) {
+        this._behindDecorations.set(key, {
+          resourceUri: localPath,
+          description: localize('perforce.deco.behind', '↓'),
+          tooltip: localize('perforce.deco.behind.tooltip', 'Server has newer — head is {0}', {
+            0: `#${headRev}`,
+          }),
+        })
+      } else {
+        this._behindDecorations.delete(key)
+      }
+    } else {
+      this._behindDecorations.delete(key)
+    }
+    return had !== this._behindDecorations.has(key) || (had && info !== undefined)
+  }
+
+  private _clearBehindDecorations(): void {
+    if (this._behindDecorations.size === 0) return
+    this._behindDecorations.clear()
+    this._publishSupplementaryDecorations()
   }
 
   // --- Resolve (Phase 3) ---------------------------------------------------

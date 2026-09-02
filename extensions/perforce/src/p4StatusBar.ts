@@ -29,17 +29,8 @@ import {
 } from '@universe-editor/extension-api'
 import type { ClientManager } from './clientManager.js'
 import { uriToFsPath } from './pathUtil.js'
-import type { FstatInfo } from './fstatParser.js'
+import { asRev, type FstatInfo } from './fstatParser.js'
 import { localize } from './nls.js'
-
-/** A revision string p4 reported, as a number — `'none'` (open-for-add has no
- *  have revision, PROBE-FINDINGS §3) and anything else non-integer yield
- *  undefined rather than NaN. */
-function asRev(v: string | undefined): number | undefined {
-  if (!v || v === 'none') return undefined
-  const n = Number(v)
-  return Number.isInteger(n) ? n : undefined
-}
 
 /** Truncate a long client name for the busy status-bar text: keep at most `max`
  *  chars of the tail, but never slice mid-word — when the cut lands inside a
@@ -235,6 +226,7 @@ export class P4StatusBarController {
         info = undefined
       }
       if (token !== this._revToken) return
+      client.updateBehindFromFstat(fsPath, info)
       this._renderRevInfo(info)
     })()
   }

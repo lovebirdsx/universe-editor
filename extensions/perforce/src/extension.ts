@@ -1110,6 +1110,39 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return perClient.flat()
     }),
 
+    // Explorer behind hints: which of these visible rows have a have revision
+    // behind the depot head (host addresses this as `<providerId>.checkBehind`).
+    // Same multi-client grouping as checkWorkingTree; the provider pushes the
+    // actual ↓ decoration, this only returns the behind subset.
+    commands.registerCommand('perforce.checkBehind', async (...args: unknown[]) => {
+      const paths = Array.isArray(args[0])
+        ? (args[0] as unknown[]).filter((p): p is string => typeof p === 'string')
+        : []
+      if (paths.length === 0) return []
+
+      const byClient = new Map<PerforceClient, string[]>()
+      for (const path of paths) {
+        const client = mgr.resolveContaining(path)
+        if (!client) continue
+        const list = byClient.get(client)
+        if (list) list.push(path)
+        else byClient.set(client, [path])
+      }
+      if (byClient.size === 0) return []
+
+      const perClient = await Promise.all(
+        [...byClient].map(async ([client, owned]): Promise<string[]> => {
+          try {
+            return await client.checkBehind(owned)
+          } catch (err) {
+            log(`[perforce] checkBehind failed for ${client.root}: ${String(err)}`)
+            return []
+          }
+        }),
+      )
+      return perClient.flat()
+    }),
+
     // --- Mutating operations (Phase 2) -------------------------------------
     // File-scoped ops resolve the client from the resource path; explorer/editor
     // entry points fall back to the active editor's file.

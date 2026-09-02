@@ -58,6 +58,7 @@ function makeClient(overrides: Record<string, unknown> = {}): unknown {
     },
     onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
     fstat: vi.fn(async () => undefined),
+    updateBehindFromFstat: vi.fn(),
   }
 }
 
@@ -144,6 +145,35 @@ describe('P4StatusBarController revision chip', () => {
     // The chip describes ONE file, so it stays file-scoped.
     expect(mocks.revItem.command).toBe('perforce.syncLatest')
     expect(mocks.revItem.tooltip).toContain('this file')
+    controller.dispose()
+  })
+
+  it('feeds the chip fstat result into the behind funnel (zero extra fstat)', async () => {
+    // Design invariant: the revision chip's single fstat is reused to populate
+    // the Explorer ↓ marker via `updateBehindFromFstat` — the status bar and the
+    // visible-row probe share one funnel and never run a second server query for
+    // the same file.
+    const client = revClient() as ClientFake & {
+      updateBehindFromFstat: ReturnType<typeof vi.fn>
+    }
+    const fsPath = 'D:/p4ws/main/src/a.txt'
+    mocks.activeEditor = fileEditor(`/${fsPath}`)
+    const controller = new P4StatusBarController(
+      makeManager({ resolveContaining: () => client }) as never,
+    )
+    const info = {
+      depotFile: '//depot/branch_x/src/a.txt',
+      haveRev: '3',
+      headRev: '5',
+      action: undefined,
+    }
+    ;(client.fstat as ReturnType<typeof vi.fn>).mockResolvedValue(info)
+    controller.refresh()
+
+    await vi.waitFor(() => expect(mocks.revItem.text).toBe('#3 / ↓#5'))
+    expect(client.fstat).toHaveBeenCalledTimes(1)
+    expect(client.updateBehindFromFstat).toHaveBeenCalledTimes(1)
+    expect(client.updateBehindFromFstat).toHaveBeenCalledWith(fsPath, info)
     controller.dispose()
   })
 
