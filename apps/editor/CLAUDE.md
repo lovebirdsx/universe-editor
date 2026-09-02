@@ -400,7 +400,7 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 
 **新增 renderer 测试默认进 renderer-node**。只有当测试用到 `document`/`window`/Monaco 时才把它加进 `rendererDomTests`——若忘了加，会在 node 环境直接报 `document is not defined` 而 fail loud（不会静默劣化），按提示补进数组即可。
 
-`pnpm --filter @universe-editor/editor test` 跑全部；`vitest --project renderer-node` 只跑一边。
+`pnpm --filter @universe-editor/editor test:unit` 聚合跑 3 个 project；`test:main` / `test:renderer-node` / `test:renderer-dom` 按 project 单独跑；`test:integration` 跑集成。根 `pnpm test` 走 turbo 并行调度这 4 个任务。
 
 E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
 

@@ -135,7 +135,9 @@ function discoverPackages() {
         name: pkgJson.name,
         root: `${group}/${name}`,
         deps,
-        hasTest: Boolean(pkgJson.scripts?.test),
+        // editor 的 test 拆成了 test:main/test:renderer-node/... + test:unit（turbo 并行），
+        // 没有裸 test script，靠 test:unit 识别它仍是「有 vitest 单测」的包。
+        hasTest: Boolean(pkgJson.scripts?.test || pkgJson.scripts?.['test:unit']),
       })
     }
   }
@@ -393,7 +395,21 @@ function checkMain() {
 
   if (cls.mode === 'full') {
     console.log(`test-changed: ${cls.reason} → delegating to turbo full run`)
-    pnpm(['exec', 'turbo', 'run', 'lint', 'typecheck', 'test'])
+    // editor 没有裸 test script（拆成 test:main/test:renderer-node/test:renderer-dom/
+    // test:integration 四个并行子任务），full 模式必须把它们都调度进来，否则 editor
+    // 测试被静默跳过。
+    pnpm([
+      'exec',
+      'turbo',
+      'run',
+      'lint',
+      'typecheck',
+      'test',
+      'test:main',
+      'test:renderer-node',
+      'test:renderer-dom',
+      'test:integration',
+    ])
     return
   }
 

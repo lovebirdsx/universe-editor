@@ -66,19 +66,71 @@
       "outputLogs": "new-only",
       "outputs": []
     },
-    // editor 的 test = unit(vitest projects over src) + integration(integration/)。
-    // 默认 inputs 是整个包的 git 跟踪文件，改 e2e specs / bench 也会重跑 ~90s 单测。
-    // !integration/node_modules/**：vitest 的 transform 缓存(results.json)每次运行都写，
-    // 显式 inputs glob 会匹配未跟踪文件，不排除则 hash 永远漂移、缓存永不命中。
-    "@universe-editor/editor#test": {
+    // editor 的 test 拆成 4 个 turbo 任务并行调度：原 editor#test 单任务串行跑完 vitest
+    // 3 project（main/renderer-node/renderer-dom）+ integration，CI 上 267s 卡瓶颈，其他
+    // 32 个包都在 60s 内完成。现在每个 project 一个任务，inputs 收窄到该任务真正读的文件
+    // ——改 renderer 不该让 main 的 cache 也失效，反之亦然。renderer-node 与 renderer-dom
+    // 读同一批源文件（区别只在运行环境，不涉及不同文件集合）。integration 读
+    // integration/** + src/main + src/renderer + src/shared：scenarios 与 fixtures 同时
+    // import 三端源码（如 acpForkContract 引 services/acp/session/acpExtMethods，
+    // explorerTree fixture 引 ExplorerTreeService），漏 src/renderer 会让改 renderer
+    // 的 commit 命中陈旧 cache、集成测试假绿。src/preload/** 无需：没有任何测试在运行时
+    // import preload，renderer 对它的 import type 会被擦除。
+    // test-stubs/** 只列给 renderer-dom：monacoAlias（指向 test-stubs 的 resolve.alias）
+    // 只挂在 vitest.config.ts 的 renderer-dom project；main / renderer-node / integration
+    // 都不 import 这些 stub。vitest.renderer-setup.ts 同理只挂在 renderer-dom.setupFiles，
+    // 不列给其他任务（且 vitest*.ts glob 已覆盖，显式列出只是为可读性）。
+    // !integration/node_modules/**：vitest transform 缓存(results.json)每次运行都写，显式
+    // inputs glob 会匹配未跟踪文件，不排除则 hash 永远漂移、缓存永不命中。
+    // 并行资源：3 个 unit 子任务并发，vitest 默认 pool=forks、worker 按 CPU 核数分。若 CI
+    // 实测反而变慢（低核 runner 过度订阅），下一步给 4 个子任务各加 --maxWorkers=<n>。
+    "@universe-editor/editor#test:main": {
       "dependsOn": ["^build"],
       "outputLogs": "new-only",
       "inputs": [
-        "src/**",
-        "integration/**",
-        "!integration/node_modules/**",
+        "src/main/**",
+        "src/shared/**",
+        "vitest*.ts",
+        "package.json",
+        "tsconfig*.json"
+      ],
+      "outputs": []
+    },
+    "@universe-editor/editor#test:renderer-node": {
+      "dependsOn": ["^build"],
+      "outputLogs": "new-only",
+      "inputs": [
+        "src/renderer/**",
+        "src/shared/**",
+        "vitest*.ts",
+        "package.json",
+        "tsconfig*.json"
+      ],
+      "outputs": []
+    },
+    "@universe-editor/editor#test:renderer-dom": {
+      "dependsOn": ["^build"],
+      "outputLogs": "new-only",
+      "inputs": [
+        "src/renderer/**",
+        "src/shared/**",
         "test-stubs/**",
         "vitest*.ts",
+        "vitest.renderer-setup.ts",
+        "package.json",
+        "tsconfig*.json"
+      ],
+      "outputs": []
+    },
+    "@universe-editor/editor#test:integration": {
+      "dependsOn": ["^build"],
+      "outputLogs": "new-only",
+      "inputs": [
+        "integration/**",
+        "!integration/node_modules/**",
+        "src/main/**",
+        "src/renderer/**",
+        "src/shared/**",
         "package.json",
         "tsconfig*.json"
       ],

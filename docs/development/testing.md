@@ -8,7 +8,7 @@
 
 | 层 | 跑什么 | 环境 | 命令 |
 |---|---|---|---|
-| 单元 | `src/**/__tests__/*.test.ts(x)` | platform/main → node；renderer → happy-dom + `@testing-library/react` | `pnpm test`（turbo 全包）/ `pnpm --filter <pkg> test` |
+| 单元 | `src/**/__tests__/*.test.ts(x)` | platform/main → node；renderer → happy-dom + `@testing-library/react` | `pnpm test`（turbo 全包）/ `pnpm --filter <pkg> test`（editor 例外，用 `test:unit` 或 `test:main` / `test:renderer-node` / `test:renderer-dom`） |
 | 集成 | `apps/editor/integration/scenarios/*.test.ts` | node，真实多窗口/多进程编排 | `pnpm --filter @universe-editor/editor test:integration` |
 | E2E | 核心 `apps/editor/e2e/specs/`；扩展 `extensions/<ext>/e2e/specs/` | Playwright 驱动 `out/` 打包产物 | `pnpm e2e`（核心）/ `pnpm --filter <ext> e2e`（扩展） |
 

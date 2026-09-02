@@ -188,7 +188,7 @@ universe-bug-recording-<stamp>.zip
 跑法：
 
 ```bash
-pnpm --filter @universe-editor/editor test                          # 全部单测
+pnpm --filter @universe-editor/editor test:unit                   # 全部单测（聚合 3 project）
 pnpm --filter @universe-editor/editor exec vitest --project main    # 只跑 main 侧
 pnpm --filter @universe-editor/editor exec vitest --project renderer-node
 pnpm e2e specs/smoke.bugRecording.spec.ts                           # e2e（自动先 build）

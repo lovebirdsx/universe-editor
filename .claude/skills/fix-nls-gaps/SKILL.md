@@ -83,7 +83,7 @@ grep -n "'<key>'" apps/editor/src/shared/i18n/messages/zh-CN.ts
 pnpm exec prettier --write <改动的文件…>   # PostToolUse hook 可能留行宽 lint 错误
 pnpm --filter @universe-editor/platform build   # 仅当改了 platform（apps 看 dist/）
 pnpm check                                     # lint + typecheck + 相关测试
-pnpm --filter @universe-editor/editor test     # 全量单测——断言漂移在这暴露
+pnpm --filter @universe-editor/editor test:unit   # 全量单测——断言漂移在这暴露
 pnpm --filter @universe-editor/editor build    # e2e 跑 out/ 产物
 pnpm e2e:smoke                                 # @p0 冒烟
 ```
