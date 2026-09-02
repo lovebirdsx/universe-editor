@@ -45,6 +45,17 @@ async function showOutputOnAllChannel(page: Page): Promise<void> {
     .toBeGreaterThan(0)
 }
 
+/** 自动揭示等路径可能在测试中途切走 active channel；发现偏离就切回 "All" 并确认。 */
+async function ensureAllChannelActive(page: Page): Promise<void> {
+  const active = await page.evaluate(() => window.__E2E__!.getActiveOutputChannelName())
+  if (active !== ALL_CHANNEL) {
+    await page.evaluate((name) => window.__E2E__!.setActiveOutputChannel(name), ALL_CHANNEL)
+  }
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getActiveOutputChannelName()))
+    .toBe(ALL_CHANNEL)
+}
+
 /** Log `count` info entries through the real logger → main → "All" channel. */
 async function streamInfo(page: Page, marker: string, count: number): Promise<void> {
   await page.evaluate(
@@ -80,6 +91,7 @@ test.describe('@p1 output level filter', () => {
     await showOutputOnAllChannel(page)
 
     await streamInfo(page, 'e2e-preexisting-info', 40)
+    await ensureAllChannelActive(page)
     await expect
       .poll(() => visibleInfoLines(page, 'e2e-preexisting-info').then((l) => l.length), {
         timeout: 15_000,
@@ -100,6 +112,7 @@ test.describe('@p1 output level filter', () => {
     await page.evaluate(() =>
       window.__E2E__!.logToChannel('e2eFilter', 'E2E Filter', 'warn', 'e2e-kept-warning'),
     )
+    await ensureAllChannelActive(page)
     await expect
       .poll(() => visibleInfoLines(page, 'e2e-kept-warning').then((l) => l.length), {
         timeout: 10_000,

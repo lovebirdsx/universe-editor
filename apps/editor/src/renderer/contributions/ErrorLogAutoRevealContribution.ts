@@ -5,6 +5,7 @@ import {
   IViewsService,
   IWindowsService,
   LogLevel,
+  PartId,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -90,6 +91,11 @@ export class ErrorLogAutoRevealContribution extends Disposable implements IWorkb
   }
 
   private async _revealErrorChannel(event: LogAppendEvent): Promise<boolean> {
+    // 面板已可见时不抢 active channel / 焦点（用户可能正盯着面板里的 Output 或
+    // Terminal）。返回 false 不置位 _hasRevealed：one-shot 揭示机会留给面板隐藏
+    // 时到达的第一条 error，而不是被面板常开期间的首条 error 静默消费掉。
+    if (this._layout.getVisible(PartId.Panel)) return false
+
     const descriptor = await this._findDescriptor(event.channelId)
     if (!descriptor) return false
 

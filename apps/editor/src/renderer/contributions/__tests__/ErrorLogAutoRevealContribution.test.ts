@@ -82,6 +82,7 @@ function makeLayoutService() {
   const focus = vi.fn()
   return {
     _serviceBrand: undefined,
+    getVisible: vi.fn(() => false),
     setVisible: vi.fn(),
     getPart: vi.fn(() => ({ focus })),
     focus,
@@ -249,6 +250,32 @@ describe('ErrorLogAutoRevealContribution', () => {
     expect(output.activeChannelName.get()).toBe('Manual')
     expect(layout.setVisible).not.toHaveBeenCalled()
     expect(views.openViewContainer).not.toHaveBeenCalled()
+    contribution.dispose()
+  })
+
+  it('does not steal the active channel when the panel is already visible', async () => {
+    layout.getVisible.mockReturnValue(true)
+    const contribution = instantiate(output, logFiles, layout, views)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] boom\n', LogLevel.Error)
+    await flush()
+
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+    expect(output.activeChannelName.get()).toBeUndefined()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    expect(views.openViewContainer).not.toHaveBeenCalled()
+    expect(layout.focus).not.toHaveBeenCalled()
+
+    // 门控返回 false 不置位 _hasRevealed：面板关掉后来 error 仍正常揭示，
+    // one-shot 机会不被面板常开期间的首条 error 消费掉
+    layout.getVisible.mockReturnValue(false)
+    fireAppend(logFiles, 'main', '[10:00:01] [error] second\n', LogLevel.Error)
+    await flush()
+
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(mainDescriptor.id, 1024 * 1024)
+    expect(output.activeChannelName.get()).toBe('Main')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
     contribution.dispose()
   })
 
