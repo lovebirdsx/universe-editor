@@ -204,7 +204,7 @@ pnpmfileChecksum: sha256-f82UpNmTbduyUZTUqjsXVcD8M46KMgQ0oaUAQGcsEco=
 patchedDependencies:
   monaco-editor@0.55.1: b0e2d579336ad1e44c50badcc1a68f79cc11bf3e168cd089bcce197ebc21ac00
   playwright-core@1.62.1: fbbc098f61fe4063f66941a5dec787f34e85ebe62743c185ffda0820239b4325
-  vscode-markdown-languageservice@0.5.0-alpha.13: 352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c
+  vscode-markdown-languageservice@0.5.0-alpha.13: a88c1e5a1870db5ba3ef3a1a7d86451ca10e11f47f0d9dc9623dfc15f8d18cbe
 
 importers:
 
@@ -557,7 +557,7 @@ importers:
         version: 3.18.0
       vscode-markdown-languageservice:
         specifier: 'catalog:'
-        version: 0.5.0-alpha.13(patch_hash=352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c)
+        version: 0.5.0-alpha.13(patch_hash=a88c1e5a1870db5ba3ef3a1a7d86451ca10e11f47f0d9dc9623dfc15f8d18cbe)
       vscode-uri:
         specifier: 'catalog:'
         version: 3.1.0
@@ -3407,6 +3407,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -8754,7 +8755,7 @@ snapshots:
 
   vscode-languageserver-types@3.18.0: {}
 
-  vscode-markdown-languageservice@0.5.0-alpha.13(patch_hash=352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c):
+  vscode-markdown-languageservice@0.5.0-alpha.13(patch_hash=a88c1e5a1870db5ba3ef3a1a7d86451ca10e11f47f0d9dc9623dfc15f8d18cbe):
     dependencies:
       '@vscode/l10n': 0.0.18
       node-html-parser: 6.1.13

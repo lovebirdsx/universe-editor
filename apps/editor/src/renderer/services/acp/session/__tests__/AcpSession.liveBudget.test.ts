@@ -1,20 +1,22 @@
 /*---------------------------------------------------------------------------------------------
  *  Live resident budget: outside of a history replay there is no ingest gate,
  *  so a long-running turn can accumulate hundreds of tool cards each retaining
- *  up to 1MB of terminal output. Once the live tally passes the budget the
- *  OLDEST heavy content is trimmed in place (card shell kept, marked
- *  `memoryTrimmed`), so the newest output always lands and the renderer cannot
- *  OOM. Budgets are injected small so the trim path is exercised cheaply.
+ *  up to 1MB of terminal output. Once the tally passes the budget the OLDEST
+ *  heavy content is trimmed in place (card shell kept, marked `memoryTrimmed`),
+ *  so the newest output always lands and the renderer cannot OOM. Budgets are
+ *  injected small so the trim path is exercised cheaply, and are expressed in
+ *  overhead-adjusted bytes (wire bytes × VIEW_MODEL_OVERHEAD_FACTOR).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { AcpSession, memoryTrimmedNotice } from '../acpSession.js'
-import { estimateUpdateResidentBytes } from '../acpContentLimits.js'
+import { AcpResidentBudget } from '../acpResidentBudget.js'
+import { VIEW_MODEL_OVERHEAD_FACTOR, estimateUpdateCost } from '../acpContentLimits.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
-const LIVE_BUDGET = 2048
+const LIVE_BUDGET = 2048 * VIEW_MODEL_OVERHEAD_FACTOR
 
 function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
   return new AcpSession(
@@ -34,6 +36,12 @@ function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
     false,
     256 * 1024 * 1024,
     liveIngestionBudget,
+    undefined,
+    undefined,
+    // A private budget per session: these tests deliberately drive the resident
+    // tally over budget, which would reconcile against — and trim — any other
+    // session sharing the process-wide default.
+    new AcpResidentBudget(Number.MAX_SAFE_INTEGER),
   )
 }
 
@@ -92,7 +100,8 @@ describe('AcpSession — live resident budget', () => {
     session = createSession()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // 800 chars → 1600 bytes each. Two cards = 3200 > 2048 → the oldest is trimmed.
+    // 800 chars → 1600 wire bytes → 4800 charged each. Two cards = 9600 > 6144
+    // → the oldest is trimmed.
     session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
     session.applyUpdate(terminalToolCall('tc-b', 'y'.repeat(800)))
 
@@ -107,7 +116,7 @@ describe('AcpSession — live resident budget', () => {
 
     expect(warn).toHaveBeenCalled()
     expect(String(warn.mock.calls[0]?.[0])).toContain('s1')
-    expect(String(warn.mock.calls[0]?.[0])).toContain('1600')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('4800')
   })
 
   it('keeps trimming the oldest card until the tally is back under budget', () => {
@@ -130,8 +139,9 @@ describe('AcpSession — live resident budget', () => {
     session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // 500 chars → 2000 bytes (block + text copy); then a 1600-byte tool card
-    // pushes the tally to 3600 > 2048 → the older message is trimmed.
+    // 500 chars → 2000 wire bytes (block + text copy) → 6000 charged; then a
+    // 4800-byte tool card pushes the tally to 10800 > 6144 → the older message
+    // is trimmed.
     session.applyUpdate(agentTextChunk('a'.repeat(500)))
     session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
 
@@ -159,20 +169,26 @@ describe('AcpSession — live resident budget', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('does not trim replayed history against the live budget', () => {
-    // Live budget tiny, replay budget huge: replayed updates are gated by the
-    // replay budget (which drops on overflow), never trimmed by the live path.
-    session = createSession(LIVE_BUDGET)
+  it('charges replayed history to the same resident tally and trims it too', () => {
+    // A resumed transcript is resident content exactly like live output. The
+    // tally used to ignore it, so a session restored from a huge history
+    // reported ~0 bytes while holding all of it — several such sessions in one
+    // window is what filled the V8 cage.
+    session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     session.beginHistoryReplay()
+    // 500 chars → 6000 charged, under the 6144 budget on its own.
     session.applyUpdate(agentTextChunk('a'.repeat(500)))
+    expect(session.messages.get()[0]?.memoryTrimmed).toBeUndefined()
+    // A live card on top pushes the total over — the replayed message is the
+    // oldest content, so it is what gets released.
     session.endHistoryReplay()
+    session.applyUpdate(terminalToolCall('tc-a', 'x'.repeat(800)))
 
     const messages = session.messages.get()
-    expect(messages).toHaveLength(1)
-    expect(messages[0]?.memoryTrimmed).toBeUndefined()
-    expect(messages[0]?.text).toBe('a'.repeat(500))
+    expect(messages[0]?.memoryTrimmed).toBe(true)
+    expect(session.toolCalls.get()[0]?.memoryTrimmed).toBeUndefined()
   })
 
   it('trims sub-agent children so their charged bytes are actually released', () => {
@@ -226,16 +242,43 @@ describe('AcpSession — live resident budget', () => {
 
   it('charges the transient rawOutput copy codex ships alongside terminal output', () => {
     // codex sends a command's output twice: once as _meta.terminal_output (kept)
-    // and again as rawOutput.formatted_output (never read). Both cross the wire,
-    // so an update carrying both must cost more than one carrying only the first.
+    // and again as rawOutput.formatted_output (never read). The replay gate —
+    // which bounds a peak — must count both; the resident tally must count only
+    // the kept copy, since rawOutput is decoded and dropped, so no trim could
+    // ever release bytes charged from it.
     const text = 'x'.repeat(400)
     const withRawOutput: SessionUpdate = {
       ...(terminalToolCall('tc', text) as object),
       rawOutput: { formatted_output: text, exit_code: 0 },
     } as SessionUpdate
+    const plain = estimateUpdateCost(terminalToolCall('tc', text))
+    const withExtra = estimateUpdateCost(withRawOutput)
 
-    expect(estimateUpdateResidentBytes(withRawOutput)).toBeGreaterThan(
-      estimateUpdateResidentBytes(terminalToolCall('tc', text)),
-    )
+    expect(withExtra.retained).toBe(plain.retained)
+    expect(withExtra.transient).toBeGreaterThan(plain.transient)
+  })
+
+  it('never trims sibling cards over transient bytes (rawOutput) the cards cannot release', () => {
+    // Regression for the phantom-bytes asymmetry: an update whose cost is
+    // dominated by rawOutput must not push the resident tally over budget —
+    // the previous estimator charged rawOutput to the resident tally while no
+    // trim path could release it, so the trim loop stripped every card in the
+    // session and the tally still reported over budget.
+    session = createSession()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(terminalToolCall('tc-a', 'a'.repeat(100)))
+    const bigRawOutput: SessionUpdate = {
+      ...(terminalToolCall('tc-b', 'b'.repeat(100)) as object),
+      // Way beyond the injected budget if it were ever charged as resident.
+      rawOutput: { formatted_output: 'r'.repeat(100_000), exit_code: 0 },
+    } as SessionUpdate
+    session.applyUpdate(bigRawOutput)
+
+    const calls = session.toolCalls.get()
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.memoryTrimmed).toBeUndefined()
+    expect(calls[1]?.memoryTrimmed).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
   })
 })

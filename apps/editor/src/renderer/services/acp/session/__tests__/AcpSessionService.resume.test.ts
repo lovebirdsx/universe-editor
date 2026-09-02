@@ -227,6 +227,10 @@ interface FakeAcpClientOptions {
   loadSessionError?: { code: number; message: string }
   /** Trigger session/update notifications BEFORE session/load resolves. */
   loadSessionUpdates?: readonly SessionNotification[]
+  /** Awaited at the top of session/load — lets a test hold a replay open. */
+  loadSessionGate?: () => Promise<void>
+  /** Awaited at the top of initialize — lets a test hold a handshake open. */
+  initializeGate?: () => Promise<void>
   /** Result for session/set_config_option. Default: `{ configOptions: [] }`. */
   setConfigOptionResult?: { configOptions: readonly SessionConfigOption[] }
 }
@@ -249,12 +253,16 @@ class StubAgent implements Agent {
 
   initialize(params: InitializeRequest): Promise<InitializeResponse> {
     this.initializeCalls.push(params)
-    return Promise.resolve({
-      protocolVersion: 1,
-      agentCapabilities: { loadSession: true, promptCapabilities: {} },
-      authMethods: [],
-      ...(this._opts.initializeResult ?? {}),
-    } as unknown as InitializeResponse)
+    const gate = this._opts.initializeGate?.() ?? Promise.resolve()
+    return gate.then(
+      () =>
+        ({
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: true, promptCapabilities: {} },
+          authMethods: [],
+          ...(this._opts.initializeResult ?? {}),
+        }) as unknown as InitializeResponse,
+    )
   }
 
   newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
@@ -264,6 +272,7 @@ class StubAgent implements Agent {
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.loadSessionCalls.push(params)
+    await (this._opts.loadSessionGate?.() ?? Promise.resolve())
     // Stream any pre-load notifications first to verify the routing path.
     if (this.connection) {
       for (const upd of this._opts.loadSessionUpdates ?? []) {
@@ -958,6 +967,119 @@ describe('AcpSessionService.resumeSession — happy path', () => {
 
     const resumed = await svc.resumeSession(historyId)
     expect(resumed.messages.get().map((m) => `${m.role}:${m.text}`)).toEqual(['user:kept prompt'])
+  })
+})
+
+describe('AcpSessionService.resumeSession — replay serialization', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  /** Poll until `cond` holds; throws rather than hanging the whole suite. */
+  async function until(cond: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 2000
+    while (!cond()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+      await new Promise((r) => setTimeout(r, 2))
+    }
+  }
+
+  /** Let every already-scheduled task run, without asserting on elapsed time. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
+  }
+
+  /** Seed `count` history rows by creating and closing that many sessions. */
+  async function seedHistory(
+    built: ReturnType<typeof buildService>,
+    count: number,
+  ): Promise<string[]> {
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) {
+      const session = await built.svc.createSession()
+      await session.whenConnected()
+      ids.push(session.sessionIdOnAgent.get()!)
+      await built.svc.closeSession(session.id)
+    }
+    return ids
+  }
+
+  it('holds the second replay until the first finishes', async () => {
+    // A session/load streams a whole transcript into the view model in one
+    // burst. On an editor restart with several session tabs open they would all
+    // fire in the same frame, multiplying the peak resident bytes by the number
+    // of tabs — the shape of the renderer OOM this guards.
+    let releaseFirst!: () => void
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    let loadsStarted = 0
+    const built = buildService({
+      loadSessionResult: {},
+      loadSessionGate: async () => {
+        loadsStarted++
+        if (loadsStarted === 1) await firstHeld
+      },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const [firstId, secondId] = await seedHistory(built, 2)
+
+    const first = svc.resumeSession(firstId!)
+    const second = svc.resumeSession(secondId!)
+
+    await until(() => loadsStarted === 1, 'the first session/load to start')
+    // Both resumes have their own connection by now, so the second is parked on
+    // the replay queue rather than merely still spawning.
+    await until(() => built.client.connected.length === 4, 'both resume connections')
+    await settle()
+    expect(loadsStarted).toBe(1)
+    // The queued session is registered and already armed for its replay — a
+    // notification arriving while it waits must meet a session that knows it is
+    // replaying, not one still looking like a fresh empty chat.
+    const queued = svc.getById(secondId!)
+    expect(queued).toBeDefined()
+    expect(queued!.isReplayingHistory.get()).toBe(true)
+
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(loadsStarted).toBe(2)
+  })
+
+  it('still overlaps the spawn/initialize handshakes', async () => {
+    // Only the transcript burst is serialized. If the queue wrapped the whole
+    // resume, restoring N tabs would cost N handshakes back to back — seconds
+    // of dead time each, for work that carries no memory risk. Both handshakes
+    // being in flight at once is exactly what that costs; if they were
+    // serialized the second would never start and the wait below would throw.
+    let armed = false
+    let handshakesInFlight = 0
+    let releaseHandshakes!: () => void
+    const handshakesHeld = new Promise<void>((resolve) => {
+      releaseHandshakes = resolve
+    })
+    const built = buildService({
+      loadSessionResult: {},
+      initializeGate: async () => {
+        if (!armed) return
+        handshakesInFlight++
+        await handshakesHeld
+      },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    // Seed first: seeding needs handshakes of its own to complete.
+    const [firstId, secondId] = await seedHistory(built, 2)
+
+    armed = true
+    const first = svc.resumeSession(firstId!)
+    const second = svc.resumeSession(secondId!)
+    await until(() => handshakesInFlight === 2, 'both handshakes to be in flight at once')
+
+    releaseHandshakes()
+    await Promise.all([first, second])
   })
 })
 

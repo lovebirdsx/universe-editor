@@ -209,6 +209,45 @@ describe('WorkbenchThemeService', () => {
     })
   })
 
+  it('defers setColorTheme while the registry is empty and applies once registered', async () => {
+    const pending = service.setColorTheme('Universe Light')
+    // Still nothing applied while the registry is empty (no warn-and-drop).
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(styleElement()).toBeNull()
+    registerBuiltInThemes(service)
+    const theme = await pending
+    expect(theme?.settingsId).toBe('Universe Light')
+    expect(styleElement()?.textContent).toContain('--vscode-editor-background: #fafafa')
+  })
+
+  it('skips re-applying an unchanged theme (idempotent short-circuit)', async () => {
+    registerBuiltInThemes(service)
+    await service.setColorTheme('Universe Dark')
+    let fired = 0
+    const sub = service.onDidColorThemeChange(() => fired++)
+    await service.setColorTheme('Universe Dark')
+    expect(fired).toBe(0)
+    sub.dispose()
+  })
+
+  it('re-applies when color customizations change the resolved CSS', async () => {
+    registerBuiltInThemes(service)
+    await service.initialize()
+    let fired = 0
+    const sub = service.onDidColorThemeChange(() => fired++)
+    config.update(
+      'workbench.colorCustomizations',
+      { 'editor.background': '#ff0000' },
+      ConfigurationTarget.User,
+    )
+    await vi.waitFor(() => {
+      expect(fired).toBeGreaterThan(0)
+    })
+    expect(styleElement()?.textContent).toContain('--vscode-editor-background: #ff0000')
+    sub.dispose()
+  })
+
   it('migrates the legacy "light" setting to Universe Light on initialize', async () => {
     config.update('workbench.colorTheme', 'light', ConfigurationTarget.User)
     registerBuiltInThemes(service)

@@ -10,6 +10,7 @@ import {
   formatLongFrameLine,
   formatSlowInteractionLine,
   formatSuppressedSuffix,
+  isSuspendResumeArtifact,
   isUnattributedLongFrame,
   recordDuration,
   type InteractionEventSample,
@@ -83,6 +84,35 @@ describe('dedupeByInteraction', () => {
     ])
     expect(result.filter((r) => r.kind === 'non-interaction')).toHaveLength(1)
     expect(result.filter((r) => r.kind === 'interaction')).toHaveLength(1)
+  })
+})
+
+describe('isSuspendResumeArtifact', () => {
+  it('flags a huge present segment with a tiny input delay (suspend/resume)', () => {
+    expect(
+      isSuspendResumeArtifact({ inputDelayMs: 4, processingMs: 0, presentationDelayMs: 324476 }),
+    ).toBe(true)
+  })
+
+  it('does not flag a real multi-second stall (present under the threshold)', () => {
+    expect(
+      isSuspendResumeArtifact({ inputDelayMs: 0, processingMs: 0, presentationDelayMs: 7224 }),
+    ).toBe(false)
+  })
+
+  it('does not flag a huge present segment with a non-trivial input delay', () => {
+    expect(
+      isSuspendResumeArtifact({ inputDelayMs: 500, processingMs: 0, presentationDelayMs: 324476 }),
+    ).toBe(false)
+  })
+
+  it('treats the present threshold as inclusive', () => {
+    expect(
+      isSuspendResumeArtifact({ inputDelayMs: 10, processingMs: 0, presentationDelayMs: 30_000 }),
+    ).toBe(true)
+    expect(
+      isSuspendResumeArtifact({ inputDelayMs: 10, processingMs: 0, presentationDelayMs: 29_999 }),
+    ).toBe(false)
   })
 })
 

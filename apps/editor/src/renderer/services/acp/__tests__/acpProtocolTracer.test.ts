@@ -91,6 +91,55 @@ describe('AcpProtocolTracer', () => {
     )
   })
 
+  it('mirrors JSON-RPC error responses to the error logger', () => {
+    const errorLogger = new CapturingLogger()
+    const t = new AcpProtocolTracer(channel, logger, 'zed#abc123', errorLogger)
+    t.traceOutboundChunk(enc({ jsonrpc: '2.0', id: 7, method: 'fs/read_text_file', params: {} }))
+    t.traceInboundChunk(
+      enc({ jsonrpc: '2.0', id: 7, error: { code: -32602, message: 'invalid params' } }),
+    )
+    expect(errorLogger.infoLines).toHaveLength(1)
+    expect(errorLogger.infoLines[0]).toMatch(
+      /^\[zed#abc123\] ← Response 'fs\/read_text_file' \(7\) in \d+ms ERROR error=\{"code":-32602/,
+    )
+  })
+
+  it('mirrors a failed tool_call_update notification to the error logger', () => {
+    const errorLogger = new CapturingLogger()
+    const t = new AcpProtocolTracer(channel, logger, 'zed#abc123', errorLogger)
+    t.traceInboundChunk(
+      enc({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_abcdef1234567890',
+          update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'failed' },
+        },
+      }),
+    )
+    expect(errorLogger.infoLines).toHaveLength(1)
+    expect(errorLogger.infoLines[0]).toContain('tool_call_update failed')
+    expect(errorLogger.infoLines[0]).toContain('"status":"failed"')
+  })
+
+  it('does not mirror successful tool_call_update or plain responses to the error logger', () => {
+    const errorLogger = new CapturingLogger()
+    const t = new AcpProtocolTracer(channel, logger, 'zed#abc123', errorLogger)
+    t.traceInboundChunk(
+      enc({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_x',
+          update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'completed' },
+        },
+      }),
+    )
+    t.traceOutboundChunk(enc({ jsonrpc: '2.0', id: 8, method: 'ping', params: {} }))
+    t.traceInboundChunk(enc({ jsonrpc: '2.0', id: 8, result: {} }))
+    expect(errorLogger.infoLines).toHaveLength(0)
+  })
+
   it('buffers a line split across multiple chunks', () => {
     const full = enc({ jsonrpc: '2.0', method: 'ping', params: { n: 1 } })
     const mid = Math.floor(full.length / 2)

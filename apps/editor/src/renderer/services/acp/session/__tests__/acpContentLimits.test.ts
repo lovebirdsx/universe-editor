@@ -25,7 +25,7 @@ import {
   capRawInput,
   capTerminalOutputTail,
   capToolCallBlocks,
-  estimateUpdateResidentBytes,
+  estimateUpdateCost,
   truncateDiffSideText,
   truncateToolTextBlock,
 } from '../acpContentLimits.js'
@@ -309,28 +309,28 @@ describe('truncateDiffSideText', () => {
   })
 })
 
-describe('estimateUpdateResidentBytes', () => {
+describe('estimateUpdateCost — retained half', () => {
   it('sums text chunk content plus its derived text copy (UTF-16 bytes)', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: 'hello' },
-      }),
+      }).retained,
     ).toBe(5 * 2 * 2)
   })
 
   it('sums media data in chunk content (no text copy for media)', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'image', data: 'AAA', mimeType: 'image/png' },
-      }),
+      }).retained,
     ).toBe(3 * 2)
   })
 
   it('sums tool call content blocks, diff sides, and the text copy', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'tool_call',
         toolCallId: 'tc',
         title: 't',
@@ -340,13 +340,13 @@ describe('estimateUpdateResidentBytes', () => {
           { type: 'diff', path: '/a.ts', oldText: 'ccc', newText: 'ddddd' },
           { type: 'terminal', terminalId: 't1' },
         ],
-      }),
+      }).retained,
     ).toBe((4 + 2) * 2 + (3 + 5) * 2 + 4 * 2)
   })
 
   it('counts out-of-band terminal output carried in _meta', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'tool_call',
         toolCallId: 'tc',
         title: 'execute',
@@ -354,13 +354,13 @@ describe('estimateUpdateResidentBytes', () => {
         status: 'in_progress',
         content: [],
         _meta: { terminal_output: { data: 'xyz' } },
-      } as never),
+      } as never).retained,
     ).toBe(3 * 2)
   })
 
   it('counts a terminal delta as its incremental size', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'tool_call_update',
         toolCallId: 'tc',
         title: 'execute',
@@ -368,46 +368,75 @@ describe('estimateUpdateResidentBytes', () => {
         status: 'in_progress',
         content: [],
         _meta: { terminal_output_delta: { data: 'abcd' } },
-      } as never),
+      } as never).retained,
     ).toBe(4 * 2)
   })
 
   it('counts raw tool input by its JSON size', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'tool_call',
         toolCallId: 'tc',
         title: 't',
         content: [],
         rawInput: { command: 'ls' },
-      } as never),
+      } as never).retained,
     ).toBe('{"command":"ls"}'.length * 2)
   })
 
   it('costs an oversized raw input 0 (it is dropped downstream)', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'tool_call',
         toolCallId: 'tc',
         title: 't',
         content: [],
         rawInput: { blob: 'x'.repeat(RAW_INPUT_CAP) },
-      } as never),
+      } as never).retained,
     ).toBe(0)
   })
 
   it('returns 0 for metadata-only updates', () => {
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'usage_update',
         usage: { used: 1, size: 2 },
-      } as never),
+      } as never).retained,
     ).toBe(0)
     expect(
-      estimateUpdateResidentBytes({
+      estimateUpdateCost({
         sessionUpdate: 'plan',
         entries: [],
-      }),
+      }).retained,
+    ).toBe(0)
+  })
+})
+
+describe('estimateUpdateCost — transient half', () => {
+  it('charges rawOutput and locations as transient, never as retained', () => {
+    // The resident tally and the trim release walk must agree on the byte set:
+    // rawOutput / locations are decoded but never retained, so charging them to
+    // `retained` would leave phantom bytes no trim could ever release.
+    const update = estimateUpdateCost({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc',
+      title: 'execute',
+      kind: 'execute',
+      status: 'completed',
+      content: [],
+      rawOutput: { formatted_output: 'z'.repeat(1000), exit_code: 0 },
+      locations: [{ path: '/a.ts' }],
+    } as never)
+    expect(update.retained).toBe(0)
+    expect(update.transient).toBeGreaterThanOrEqual(1000 * 2)
+  })
+
+  it('charges nothing transient for updates that carry none', () => {
+    expect(
+      estimateUpdateCost({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'hello' },
+      }).transient,
     ).toBe(0)
   })
 })

@@ -561,6 +561,17 @@ export class AcpSessionService
    */
   private readonly _resumingBySessionId = new Map<string, Promise<IAcpSession>>()
 
+  /**
+   * Tail of the history-replay queue. A `session/load` streams a whole
+   * transcript into the renderer view model in one burst; on an editor restart
+   * with several session tabs open, every one of them auto-resumes in the same
+   * frame and their bursts overlap, multiplying the peak by the number of tabs.
+   * Replays therefore take turns. Only the replay window is serialized — the
+   * spawn/initialize handshake before it still runs in parallel, so the wait a
+   * user sees is bounded by transcript streaming, not by process startup.
+   */
+  private _replayQueue: Promise<void> = Promise.resolve()
+
   /** While true, the activeSessionId autorun skips writing to storage. */
   private _suspendActivePersist = false
 
@@ -1142,6 +1153,24 @@ export class AcpSessionService
     return promise
   }
 
+  /**
+   * Take the next slot in {@link _replayQueue}, resolving to the release
+   * callback once the previous replay has finished. Callers MUST release in a
+   * `finally` — a leaked slot stalls every later resume. Nothing between
+   * acquire and release may itself resume a session, or the queue deadlocks;
+   * the load RPC it wraps is bounded by `withTimeout`.
+   */
+  private _acquireReplaySlot(): Promise<() => void> {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const waitFor = this._replayQueue
+    const settled = waitFor.catch(() => undefined)
+    this._replayQueue = settled.then(() => held)
+    return settled.then(() => release)
+  }
+
   private async _resumeSessionInner(
     sessionId: string,
     options: {
@@ -1215,6 +1244,7 @@ export class AcpSessionService
     const mcpSelection = entry.mcpServerNames !== undefined ? entry.mcpServerNames : null
     let session: AcpSession | undefined
     let registered = false
+    let releaseReplaySlot: (() => void) | undefined
     try {
       const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
       if (initResult.agentCapabilities?.loadSession !== true) {
@@ -1273,6 +1303,10 @@ export class AcpSessionService
       // "Resuming…" placeholder for ChatBody — but the timeline is still empty
       // until session/load replays it below. Mark the replay so ChatBody keeps
       // showing a loading placeholder instead of flashing the empty-session hint.
+      //
+      // Everything that configures how the replay lands is set up here, BEFORE
+      // taking a turn in the replay queue: the session is already routable, so
+      // an update arriving while we wait must meet a fully-armed session.
       session.beginHistoryReplay()
       // Prompts retracted by a cancel-restore stay in the agent transcript —
       // filter them (and their interruption marker) out of the replay so the
@@ -1308,6 +1342,11 @@ export class AcpSessionService
         ...(await this._builtinAgentDirs(effectiveAuthority)),
         _meta: buildResumeMeta(entry, extraModels),
       }
+      // Replays take turns across sessions (see _replayQueue). The slot wraps
+      // only the session/load RPC — the spawn/initialize handshake above and
+      // the replay setup below it still overlap freely, so what a user waits
+      // for is transcript streaming, not another session's process startup.
+      releaseReplaySlot = await this._acquireReplaySlot()
       const loadResult = await withTimeout(
         conn.conn.loadSession(loadParams),
         timeoutMs,
@@ -1351,7 +1390,11 @@ export class AcpSessionService
       } else {
         conn.dispose()
       }
-      this._onResumeFailure(entry, err, readOnly)
+      // `return` (the helper is `never`): with a `finally` present TS no longer
+      // infers the catch block as terminating on its own.
+      return this._onResumeFailure(entry, err, readOnly)
+    } finally {
+      releaseReplaySlot?.()
     }
   }
 

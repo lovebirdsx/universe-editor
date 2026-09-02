@@ -10,12 +10,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { AcpSession, replayHistoryOverflowNotice } from '../acpSession.js'
-import { REPLAY_INGESTION_BUDGET } from '../acpContentLimits.js'
+import { AcpResidentBudget } from '../acpResidentBudget.js'
+import { REPLAY_INGESTION_BUDGET, VIEW_MODEL_OVERHEAD_FACTOR } from '../acpContentLimits.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
-// 4 KiB — small enough to overflow quickly; each text chunk costs 2× its
-// character count in UTF-16 bytes (block + derived `text` copy).
-const TEST_BUDGET = 4096
+// 4 KiB of wire content — small enough to overflow quickly; each text chunk
+// costs 2× its character count in UTF-16 bytes (block + derived `text` copy),
+// then the view-model overhead factor on top.
+const TEST_BUDGET = 4096 * VIEW_MODEL_OVERHEAD_FACTOR
 
 function createSession(replayIngestionBudget = TEST_BUDGET): AcpSession {
   return new AcpSession(
@@ -34,6 +36,12 @@ function createSession(replayIngestionBudget = TEST_BUDGET): AcpSession {
     undefined,
     false,
     replayIngestionBudget,
+    undefined,
+    undefined,
+    undefined,
+    // Private budget: replayed content is charged to the resident tally, which
+    // must not reconcile against the process-wide default mid-test.
+    new AcpResidentBudget(Number.MAX_SAFE_INTEGER),
   )
 }
 
@@ -59,11 +67,11 @@ describe('AcpSession — replay ingestion budget', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     session.beginHistoryReplay()
 
-    // 600 chars → 2400 bytes: within the 4096 budget.
+    // 600 chars → 2400 wire bytes → 7200 charged: within the 12288 budget.
     session.applyUpdate(agentTextChunk('a'.repeat(600)))
     expect(session.messages.get()).toHaveLength(1)
 
-    // 2400 + 2400 crosses the budget: this update and everything after it must
+    // 7200 + 7200 crosses the budget: this update and everything after it must
     // not land on the timeline.
     session.applyUpdate(agentTextChunk('b'.repeat(600)))
     session.applyUpdate(agentTextChunk('c'.repeat(50)))
@@ -78,7 +86,7 @@ describe('AcpSession — replay ingestion budget', () => {
     expect(session.messages.get()).toHaveLength(1)
     expect(session.toolCalls.get()).toHaveLength(0)
     expect(warn).toHaveBeenCalledOnce()
-    expect(String(warn.mock.calls[0]?.[0])).toContain('4800')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('14400')
 
     session.endHistoryReplay()
     const messages = session.messages.get()

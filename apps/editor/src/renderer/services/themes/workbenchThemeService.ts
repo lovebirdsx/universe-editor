@@ -334,6 +334,7 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
     // New colors only reach the CSS variable block when the theme is re-applied.
     // On a live theme (host restart / late registration), refresh it now.
     if (this._colorThemeApplied) {
+      this._logger.debug('registered colors; re-applying current theme')
       this._applyCurrentTheme()
     }
     return {
@@ -457,15 +458,23 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
           // COLOR_THEME 之外的三键都在系统跟随链路上（VSCode restoreColorTheme
           // 的对等处理）：preferred 值变化且当前 scheme 命中、或跟随开关翻转，
           // 都要按「当前活动设置键」重取主题。
+          this._logger.debug(
+            `color theme config changed [${e.keys.join(', ')}]; re-applying ${this._themeConfiguration.colorTheme}`,
+          )
           void this.setColorTheme(this._themeConfiguration.colorTheme)
         } else if (e.affectsConfiguration(ThemeSettings.COLOR_CUSTOMIZATIONS)) {
+          this._logger.debug(
+            `color customizations changed [${e.keys.join(', ')}]; re-applying current theme`,
+          )
           void this._enqueue(async () => {
             this._applyCustomizationsToCurrentTheme()
             this._applyCurrentTheme()
           })
         } else if (e.affectsConfiguration(ThemeSettings.FILE_ICON_THEME)) {
+          this._logger.debug(`file icon theme config changed [${e.keys.join(', ')}]`)
           void this.setFileIconTheme(this._themeConfiguration.fileIconTheme)
         } else if (e.affectsConfiguration(ThemeSettings.PRODUCT_ICON_THEME)) {
+          this._logger.debug(`product icon theme config changed [${e.keys.join(', ')}]`)
           void this.setProductIconTheme(this._themeConfiguration.productIconTheme)
         }
       }),
@@ -539,6 +548,11 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
 
   private _initialized = false
   private _colorThemeApplied = false
+  /** Last generated CSS (resolved colors + customizations); the idempotent
+   *  short-circuit key. `undefined` means nothing applied yet (or a snapshot
+   *  injected out-of-band via restoreSnapshot). */
+  private _lastAppliedColorThemeCss: string | undefined
+  private _lastAppliedColorThemeId: string | undefined
   private readonly _onDidChangeColorThemes = this._register(new Emitter<void>())
   /** Fires when the set of registered color themes changes. */
   readonly onDidChangeColorThemes: Event<void> = this._onDidChangeColorThemes.event
@@ -582,11 +596,34 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
    * Apply a theme by settingsId (e.g. `Universe Dark`) or full theme id.
    * Serialized through a promise chain; a stale application (superseded by a
    * newer request while loading) is discarded via a monotonic token.
+   *
+   * Extensions contribute their themes asynchronously (extension-host
+   * activation lands after BlockStartup), so a startup apply — from the config
+   * hydration listener or the system-scheme restore — can race ahead of
+   * registration. When the registry is still empty we defer exactly once to the
+   * next registry change instead of dropping the user's theme with a
+   * "theme not found" warn.
    */
   setColorTheme(
     themeIdOrSettingsId: string | undefined,
     options: ISetColorThemeOptions = {},
   ): Promise<ColorThemeData | undefined> {
+    this._logger.debug(`setColorTheme requested: ${themeIdOrSettingsId ?? '<default>'}`)
+    return this._setColorTheme(themeIdOrSettingsId, options, true)
+  }
+
+  private _setColorTheme(
+    themeIdOrSettingsId: string | undefined,
+    options: ISetColorThemeOptions,
+    allowDefer: boolean,
+  ): Promise<ColorThemeData | undefined> {
+    if (allowDefer && this.getColorThemes().length === 0) {
+      // Empty registry means extensions have not contributed their themes yet
+      // (they register asynchronously after BlockStartup). Defer exactly once.
+      return this._waitForColorThemeRegistration().then(() =>
+        this._setColorTheme(themeIdOrSettingsId, options, false),
+      )
+    }
     return this._enqueue(async () => {
       const theme = this._findTheme(themeIdOrSettingsId)
       if (theme === undefined) {
@@ -616,6 +653,26 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
         )
       }
       return theme
+    })
+  }
+
+  /**
+   * Resolves once the color theme registry becomes non-empty. The subscription
+   * is registered with the service so it never outlives it (and the deferred
+   * retry runs exactly once, because the retry no longer sees an empty registry).
+   */
+  private _waitForColorThemeRegistration(): Promise<void> {
+    if (this.getColorThemes().length > 0) {
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => {
+      const sub = this._colorThemeRegistry.onDidChangeThemes(() => {
+        if (this.getColorThemes().length > 0) {
+          sub.dispose()
+          resolve()
+        }
+      })
+      this._register(sub)
     })
   }
 
@@ -879,6 +936,16 @@ export class WorkbenchThemeService extends Disposable implements IThemeService {
   private _applyCurrentTheme(): void {
     const theme = this._currentColorTheme
     const css = generateColorThemeCSS(theme)
+    // Idempotent short-circuit: a spurious re-apply (periodic config refresh,
+    // redundant registration, host-scheme flip that resolves to the same theme)
+    // must not re-run Monaco setTheme + TextMate reset + the file-watcher
+    // unwatch/watch churn when nothing actually changed.
+    if (css === this._lastAppliedColorThemeCss && theme.id === this._lastAppliedColorThemeId) {
+      this._logger.debug(`color theme unchanged; skipping re-apply: ${theme.settingsId}`)
+      return
+    }
+    this._lastAppliedColorThemeCss = css
+    this._lastAppliedColorThemeId = theme.id
     this._injectCss(css)
     this._updateDocumentThemeAttributes(theme.type)
     this._writeSnapshot(css, theme)

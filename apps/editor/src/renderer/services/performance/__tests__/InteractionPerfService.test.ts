@@ -11,12 +11,15 @@ import { _resetPerfPhasesForTests, recordPerfPhase } from '../perfPhases.js'
 class CollectingLogger implements ILogger {
   readonly warnings: string[] = []
   readonly infos: string[] = []
+  readonly debugs: string[] = []
   readonly _serviceBrand: undefined
   onDidChangeLogLevel = (() => ({ dispose: () => undefined })) as ILogger['onDidChangeLogLevel']
   level = 0 as ILogger['level']
   setLevel(): void {}
   trace(): void {}
-  debug(): void {}
+  debug(message: string): void {
+    this.debugs.push(message)
+  }
   info(message: string): void {
     this.infos.push(message)
   }
@@ -148,6 +151,44 @@ describe('InteractionPerfService aggregation', () => {
     expect(summary.totalSampleCount).toBe(3)
     expect(fired).toHaveLength(0)
     expect(ctx.logger.warnings).toHaveLength(0)
+  })
+
+  it('ignores a suspend/resume artifact (debug trace only) but reports a real stall', () => {
+    const ctx = createService()
+    service = ctx.service
+    // pointerout with ~324s present + tiny input → suspend/resume artifact.
+    service._handleEventEntries([
+      {
+        eventType: 'pointerout',
+        startTime: 100,
+        processingStart: 104,
+        processingEnd: 104,
+        duration: 324480,
+        interactionId: 1,
+        target: null,
+      },
+    ])
+    // pointerdown with ~7.2s present → genuine jank, still reported.
+    service._handleEventEntries([
+      {
+        eventType: 'pointerdown',
+        startTime: 1000,
+        processingStart: 1000,
+        processingEnd: 1000,
+        duration: 7224,
+        interactionId: 2,
+        target: null,
+      },
+    ])
+    const summary = service.getSummary()
+    expect(summary.slowCount).toBe(1)
+    expect(summary.byType['pointerout']).toBeUndefined()
+    expect(summary.byType['pointerdown']?.count).toBe(1)
+    expect(ctx.logger.warnings).toHaveLength(1)
+    expect(ctx.logger.warnings[0]).toContain('slow pointerdown 7224ms')
+    expect(ctx.logger.debugs.some((d) => d.includes('suspend/resume artifact pointerout'))).toBe(
+      true,
+    )
   })
 
   it('fires onDidRecordSlowInteraction even when the warn is throttled', () => {

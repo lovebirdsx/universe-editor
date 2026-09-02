@@ -27,12 +27,14 @@ import {
   buildSlowInteractionReport,
   createTypeStats,
   dedupeByInteraction,
+  decomposeInteraction,
   estimateQuantile,
   extractLoafScripts,
   formatLongFrameLine,
   formatSlowInteractionLine,
   formatSuppressedSuffix,
   isDragSessionEvent,
+  isSuspendResumeArtifact,
   isUnattributedLongFrame,
   recordDuration,
   type InteractionEventSample,
@@ -227,6 +229,17 @@ export class InteractionPerfService extends Disposable implements IInteractionPe
     const deduped = dedupeByInteraction(entries)
     for (const item of deduped) {
       const { sample } = item
+      const decomposition = decomposeInteraction(sample)
+      if (isSuspendResumeArtifact(decomposition)) {
+        // OS suspend / resume (or a whole-frame freeze) inflates `present` to
+        // minutes while `input` stays tiny — not a real responsiveness problem.
+        // Keep a debug trace, but exclude it from stats and the slow report.
+        this._logger.debug(
+          `suspend/resume artifact ${sample.eventType} ${Math.round(sample.duration)}ms ` +
+            `(input ${Math.round(decomposition.inputDelayMs)} / processing ${Math.round(decomposition.processingMs)} / present ${Math.round(decomposition.presentationDelayMs)}); ignored`,
+        )
+        continue
+      }
       this._totalSampleCount += 1
       if (item.kind === 'interaction') {
         this._interactionCount += 1

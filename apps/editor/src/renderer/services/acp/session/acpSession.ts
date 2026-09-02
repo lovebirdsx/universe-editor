@@ -68,8 +68,15 @@ import {
   capRawInput,
   capTerminalOutputTail,
   capToolCallBlocks,
-  estimateUpdateResidentBytes,
+  estimateRawInputBytes,
+  estimateUpdateCost,
+  withViewModelOverhead,
 } from './acpContentLimits.js'
+import {
+  sharedResidentBudget,
+  type IAcpResidentBudget,
+  type IAcpResidentBudgetHolder,
+} from './acpResidentBudget.js'
 import {
   blocksToText,
   isBlankContentBlock,
@@ -79,6 +86,7 @@ import {
 } from './acpSessionContent.js'
 import {
   extractModelBreakdown,
+  readAgentToolNameForTelemetry,
   readFileChanges,
   readMcpServer,
   readMcpTool,
@@ -230,13 +238,15 @@ function stringBytes(s: string): number {
 }
 
 /** Heavy resident bytes a tool card holds: the `text` copy, its content blocks,
- * its diff sides, and the same for any sub-agent children — exactly what
- * trimming releases. Children must be counted: their content arrives as its own
- * updates (so it is charged to the budget), but it is retained nested on the
- * parent card, so a measure that skipped it would report 0 for a card still
- * holding megabytes and the trim loop would give up with the budget overrun. */
+ * its diff sides, the retained raw input, and the same for any sub-agent
+ * children — exactly what trimming releases. Children must be counted: their
+ * content arrives as its own updates (so it is charged to the budget), but it
+ * is retained nested on the parent card, so a measure that skipped it would
+ * report 0 for a card still holding megabytes and the trim loop would give up
+ * with the budget overrun. `rawInput` is counted for the same reason it is
+ * charged at ingest: the card retains it (`capRawInput`-bounded) until trimmed. */
 function toolCallHeavyBytes(call: AcpToolCall): number {
-  let bytes = stringBytes(call.text)
+  let bytes = stringBytes(call.text) + estimateRawInputBytes(call.rawInput)
   for (const b of call.blocks) {
     if (b.type === 'text') bytes += stringBytes(b.text)
     else if (b.type === 'image' || b.type === 'audio') bytes += stringBytes(b.data)
@@ -822,19 +832,39 @@ export class AcpSession extends Disposable implements IAcpSession {
    * cost of replayed updates against `_replayIngestionBudget`. Past the budget
    * the remaining replayed updates are dropped (`_replayOverflow`) so a
    * multi-GB restored history cannot OOM the renderer; `endHistoryReplay`
-   * marks the truncation with a timeline notice.
+   * marks the truncation with a timeline notice. Reset per replay — the content
+   * those updates leave behind is tracked by {@link _residentBytes}.
    */
   private _replayIngestedBytes = 0
   private _replayOverflow = false
 
   /**
-   * Live-run resident accounting (the non-replay path): tallies the resident
-   * cost of updates as they land, and once it passes `_liveIngestionBudget`
-   * the oldest heavy content is trimmed in place instead of rejecting new
-   * output. Unlike the replay gate (which drops the remaining history), a live
-   * turn must always surface its newest output.
+   * Everything this session currently holds on the timeline, in
+   * overhead-adjusted bytes: replayed history **and** live output, decremented
+   * by each trim. Both paths must feed it — a resumed session that only charged
+   * its *live* updates reported ~0 while holding a whole transcript, so neither
+   * its own trim nor the shared budget could see it. That blind spot is what
+   * let several resumed sessions fill the V8 pointer cage.
+   *
+   * Past `_liveIngestionBudget` the oldest heavy content is trimmed in place
+   * rather than rejecting new output: a live turn must always surface its
+   * newest result.
    */
-  private _liveIngestedBytes = 0
+  private _residentBytes = 0
+
+  /** `Date.now()` of the last update that grew {@link _residentBytes}. */
+  private _lastIngestAt = 0
+
+  /**
+   * This session's seat in the cross-session budget. `residentBytes` and
+   * `trimToward` deliberately share one traversal (`_releaseResidentDownTo` →
+   * `_trimOldestHeavyItem` → `toolCallHeavyBytes`/`messageHeavyBytes`): a
+   * measure that charged bytes the release cannot free would keep the total
+   * over budget forever, and the reverse would spin the trim loop. Built in the
+   * constructor body — a field initializer would read `id` before the parameter
+   * property is assigned.
+   */
+  private readonly _budgetHolder: IAcpResidentBudgetHolder
 
   /**
    * Replay boundary paired with {@link _suppressReplayToTimeline}: the side
@@ -943,8 +973,20 @@ export class AcpSession extends Disposable implements IAcpSession {
      * local). Cost attribution is per host — see IAcpSession.authority.
      */
     readonly authority: string | undefined = undefined,
+    /**
+     * Ceiling shared with every other session in this renderer. Defaults to the
+     * process-wide singleton; tests pass a private one with a tiny budget.
+     */
+    private readonly _residentBudget: IAcpResidentBudget = sharedResidentBudget,
   ) {
     super()
+    this._budgetHolder = {
+      budgetId: id,
+      residentBytes: () => this._residentBytes,
+      lastIngestAt: () => this._lastIngestAt,
+      trimToward: (targetBytes) => this._releaseResidentDownTo(targetBytes),
+    }
+    this._register(this._residentBudget.register(this._budgetHolder))
     this._costStrategy = getAgentCostStrategy(agentId)
     this.sessionIdOnAgent = observableValue<string | undefined>(
       `acp.session.sessionIdOnAgent.${id}`,
@@ -2321,7 +2363,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._terminalOutput.clear()
     this._streamingIds.clear()
     this._planSeen = false
-    this._liveIngestedBytes = 0
+    this._residentBytes = 0
     this._setImmediate(this.messages, this._messages)
     this._setImmediate(this.toolCalls, this._toolCalls)
     this._setImmediate(this.timeline, this._timeline)
@@ -2590,7 +2632,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._orphanChildren.clear()
     this._toolCallParent.clear()
     this._terminalOutput.clear()
-    this._liveIngestedBytes = 0
+    this._residentBytes = 0
     this._setImmediate(this.messages, this._messages)
     this._setImmediate(this.toolCalls, this._toolCalls)
     this._setImmediate(this.timeline, this._timeline)
@@ -2616,52 +2658,86 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * Release the oldest heavy content until the live resident tally is back under
-   * the budget. Unlike the replay gate (which drops the rest of the history), a
-   * live turn keeps every new update — only the oldest cards are slimmed, newest
-   * first-wins. Each trim releases the card's `text` / blocks / diffs (and the
-   * per-call terminal accumulator) while keeping the card shell on the timeline.
+   * Release the oldest heavy content until the resident tally is back under the
+   * budget. Unlike the replay gate (which drops the rest of the history), a
+   * live turn keeps every new update — only the oldest cards are slimmed,
+   * newest first-wins. Each trim releases the card's `text` / blocks / diffs
+   * (and the per-call terminal accumulator) while keeping the card shell on the
+   * timeline.
    */
   private _trimLiveResidentContent(): void {
+    const released = this._releaseResidentDownTo(this._liveIngestionBudget)
+    if (released > 0) {
+      console.warn(
+        `[acp] session ${this.id}: content exceeded the resident budget, ` +
+          `released ${released} bytes from the oldest cards to protect memory`,
+      )
+    }
+  }
+
+  /**
+   * Trim oldest-first until `_residentBytes <= targetBytes`, returning the bytes
+   * released. Shared by the per-session budget and the cross-session one, so
+   * both always release through the same traversal that measured the content.
+   */
+  private _releaseResidentDownTo(targetBytes: number): number {
     let released = 0
     // Bound the loop by the number of slots: a trim must strictly reduce the
     // remaining heavy content, but if a future measure/release pair ever
     // disagreed, an unbounded `while` would spin the main thread instead of
     // merely overrunning the budget.
     for (let guard = this._timeline.length + 1; guard > 0; guard--) {
-      if (this._liveIngestedBytes <= this._liveIngestionBudget) break
+      if (this._residentBytes <= targetBytes) break
       const freed = this._trimOldestHeavyItem()
-      if (freed === 0) break
+      if (freed === 0) {
+        // Nothing left to release, yet the tally still says we're over. The
+        // tally can drift high because it charges every update on arrival while
+        // some never land (a retracted prompt's replay, a suppressed side-task
+        // baseline). Resync it from what the timeline actually holds, so the
+        // shared budget doesn't keep seeing phantom bytes here and taking them
+        // out of other sessions instead.
+        this._residentBytes = this._measureResidentBytes()
+        break
+      }
       released += freed
-      this._liveIngestedBytes -= freed
+      this._residentBytes -= freed
     }
     if (released > 0) {
       const tx = this._batchedTx()
       this.messages.set(this._messages, tx)
       this.toolCalls.set(this._toolCalls, tx)
       this.timeline.set(this._timeline, tx)
-      console.warn(
-        `[acp] session ${this.id}: live content exceeded the resident budget, ` +
-          `released ${released} bytes from the oldest cards to protect memory`,
-      )
     }
+    return released
+  }
+
+  /** Ground truth for {@link _residentBytes}: what the timeline actually holds
+   * right now, measured by the same traversal the trim releases through. */
+  private _measureResidentBytes(): number {
+    let bytes = 0
+    for (const slot of this._timeline) {
+      if (slot.kind === 'toolCall') bytes += toolCallHeavyBytes(slot.call)
+      else if (slot.kind === 'message') bytes += messageHeavyBytes(slot.message)
+    }
+    return withViewModelOverhead(bytes)
   }
 
   /** Trim the oldest timeline slot that still holds heavy content, returning the
-   * released byte count (0 when nothing left to release). */
+   * released byte count (0 when nothing left to release). Charged at the same
+   * overhead factor the ingestion side used — see `withViewModelOverhead`. */
   private _trimOldestHeavyItem(): number {
     for (let i = 0; i < this._timeline.length; i++) {
       const slot = this._timeline[i]
       if (slot === undefined) continue
       if (slot.kind === 'toolCall') {
-        const freed = toolCallHeavyBytes(slot.call)
+        const freed = withViewModelOverhead(toolCallHeavyBytes(slot.call))
         if (freed === 0) continue
         this._replaceToolCall(slot.call.id, trimToolCall(slot.call))
         this._terminalOutput.delete(slot.call.id)
         return freed
       }
       if (slot.kind === 'message') {
-        const freed = messageHeavyBytes(slot.message)
+        const freed = withViewModelOverhead(messageHeavyBytes(slot.message))
         if (freed === 0) continue
         this._replaceMessage(slot.message.id, trimMessage(slot.message))
         return freed
@@ -2758,13 +2834,20 @@ export class AcpSession extends Disposable implements IAcpSession {
           return
       }
     }
-    const residentCost = estimateUpdateResidentBytes(update)
+    const cost = estimateUpdateCost(update)
+    const residentCost = withViewModelOverhead(cost.retained)
+    // The replay gate bounds a burst's peak, so it counts the transient bytes
+    // (rawOutput / locations — decoded on arrival, dropped by GC) at face value
+    // alongside the retained half at view-model cost. The resident tally below
+    // charges ONLY the retained half: every byte in it must be releasable by a
+    // later trim, and transient bytes are not.
+    const replayCost = withViewModelOverhead(cost.retained) + cost.transient
     if (this.isReplayingHistory.get()) {
       // Budget gate for history replays: updates suppressed above never reach
       // the timeline so they are not tallied; everything else counts against
       // the budget, and once it overflows the remaining replay is dropped
       // (only counted) instead of swelling the view model without bound.
-      this._replayIngestedBytes += residentCost
+      this._replayIngestedBytes += replayCost
       if (this._replayOverflow) return
       if (this._replayIngestedBytes > this._replayIngestionBudget) {
         this._replayOverflow = true
@@ -2776,7 +2859,6 @@ export class AcpSession extends Disposable implements IAcpSession {
         return
       }
     }
-    const liveCost = this.isReplayingHistory.get() ? 0 : residentCost
     const parentId = readParentToolUseId(update)
     if (AGENT_OUTPUT_UPDATE_KINDS.has(update.sessionUpdate)) this._agentOutputCount++
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -2947,10 +3029,22 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(settleReason !== undefined ? { settleReason } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
-        if (update.status === 'failed') {
-          this._telemetry.publicLogError('acp.tool_call_failed', {
+        if (update.status === 'failed' && !this.isReplayingHistory.get()) {
+          // publicLog, not publicLogError, for the same reason as
+          // `acp.tool_call_orphaned` below: a Bash that exits non-zero or an
+          // Edit whose old string doesn't match is the agent's business
+          // outcome, not an editor fault. As an error it drowned every genuine
+          // renderer error out of the top-fingerprints view.
+          //
+          // Replays are skipped outright: `session/load` re-emits every
+          // historical failure, so counting them multiplied one incident by the
+          // number of times its session was reopened.
+          const toolName = readAgentToolNameForTelemetry(update)
+          this._telemetry.publicLog('acp.tool_call_failed', {
             sessionId: this.id,
+            agentId: this.agentId,
             kind: next.kind,
+            ...(toolName !== undefined ? { toolName } : {}),
           })
         }
         break
@@ -3109,9 +3203,17 @@ export class AcpSession extends Disposable implements IAcpSession {
         // unhandled SessionUpdate variants — ignored for now.
         break
     }
-    if (liveCost > 0) {
-      this._liveIngestedBytes += liveCost
+    if (residentCost > 0) {
+      this._residentBytes += residentCost
+      this._lastIngestAt = Date.now()
+      // Replays are charged here too, not just live output: a `session/load`
+      // that streams a whole transcript is exactly the case the guard exists
+      // for, and deferring it to endHistoryReplay would let the peak land
+      // before anything reacted.
       this._trimLiveResidentContent()
+      // Then the cross-session ceiling: this session may be within its own
+      // budget while the window as a whole is not.
+      this._residentBudget.reconcile(`session ${this.id}`)
     }
   }
 

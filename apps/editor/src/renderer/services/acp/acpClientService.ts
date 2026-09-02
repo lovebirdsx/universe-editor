@@ -266,6 +266,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   private readonly _logger: ILogger
   private readonly _protocolLogger: ILogger
+  private readonly _protocolErrorLogger: ILogger
   /** Maps pool-key → in-flight or settled PoolEntry. Stored as Promise so
    *  concurrent `connect()` calls share the same spawn. On creation failure
    *  the catch handler evicts the entry. */
@@ -304,6 +305,13 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     this._protocolLogger = loggerService.createLogger({
       id: 'acpProtocol',
       name: 'ACP Protocol',
+    })
+    // Low-frequency, high-signal channel: only tool failures and JSON-RPC error
+    // responses land here, so the evidence survives the rotation of the full
+    // protocol trace (which can churn a 10 MB file several times a session).
+    this._protocolErrorLogger = loggerService.createLogger({
+      id: 'acpProtocolErrors',
+      name: 'ACP Protocol Errors',
     })
 
     // A window reload destroys this renderer without disposing its services
@@ -800,6 +808,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       this._getProtocolChannel(),
       this._protocolLogger,
       `${agentId}#${handle.slice(-6)}`,
+      this._protocolErrorLogger,
     )
     const hostStream = entryStore.add(
       createSdkHostStream(this._host, handle, {

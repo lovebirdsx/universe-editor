@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
-import { protectStdout } from '../stdoutProtection.js'
+import { MAX_LOG_MESSAGE_LENGTH, protectStdout } from '../stdoutProtection.js'
 
 function makeTarget() {
   const stdoutWrites: string[] = []
@@ -76,5 +76,31 @@ describe('protectStdout', () => {
     target.console.error('[ext-host] boom')
     expect(stdoutWrites).toEqual([])
     expect(stderrWrites.join('')).toContain('boom')
+  })
+
+  it('leaves a small message byte-identical', () => {
+    const { target, stderrWrites } = makeTarget()
+    protectStdout(target)
+    target.console.log('hello', { a: 1 })
+    expect(stderrWrites.join('')).toBe('[info] hello { a: 1 }\n')
+  })
+
+  it('truncates an oversized message at the cap and keeps the marker', () => {
+    const { target, stderrWrites } = makeTarget()
+    protectStdout(target)
+    target.console.log('x'.repeat(MAX_LOG_MESSAGE_LENGTH + 4096))
+    const out = stderrWrites.join('')
+    expect(out).toContain('chars truncated')
+    expect(out).not.toContain('x'.repeat(MAX_LOG_MESSAGE_LENGTH))
+    expect(out.length).toBeLessThan(MAX_LOG_MESSAGE_LENGTH + 128)
+  })
+
+  it('caps a huge string nested inside an object argument during inspect', () => {
+    const { target, stderrWrites } = makeTarget()
+    protectStdout(target)
+    target.console.log('provideCompletionItems', { document: 'y'.repeat(8192) })
+    const out = stderrWrites.join('')
+    expect(out).not.toContain('y'.repeat(8192))
+    expect(out).toContain('more characters')
   })
 })

@@ -5,7 +5,7 @@
  *  multiple concurrent ACP connections can safely share a single channel.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ILogger, IOutputChannel } from '@universe-editor/platform'
+import { NullLogger, type ILogger, type IOutputChannel } from '@universe-editor/platform'
 
 type Direction = 'send' | 'recv'
 
@@ -49,6 +49,7 @@ export class AcpProtocolTracer {
     private readonly _channel: IOutputChannel,
     private readonly _logger: ILogger,
     private readonly _source: string,
+    private readonly _errorLogger: ILogger = new NullLogger(),
   ) {}
 
   traceOutboundChunk(text: string): void {
@@ -145,6 +146,13 @@ export class AcpProtocolTracer {
       this._logger.info(
         `${logPrefix} Notification '${method}'${sTag} params=${compactJson(msg.params)}`,
       )
+      if (isFailedToolCallUpdate(msg)) {
+        // Keep a low-volume, high-signal record of tool failures in a separate
+        // channel so it survives the rotation of the full protocol trace.
+        this._errorLogger.info(
+          `${logPrefix} tool_call_update failed${sTag} params=${compactJson(msg.params)}`,
+        )
+      }
     } else if (hasId) {
       const pending = this._pending.get(id)
       this._pending.delete(id)
@@ -162,6 +170,14 @@ export class AcpProtocolTracer {
           isErr ? 'error' : 'result'
         }=${compactJson(isErr ? msg.error : msg.result)}`,
       )
+      if (isErr) {
+        // JSON-RPC error responses are the exact failure signal a diagnosis
+        // needs; mirror them to the low-volume error channel so they survive
+        // rotation of the full protocol trace.
+        this._errorLogger.info(
+          `${logPrefix} Response '${m}' (${String(id)}) in ${elapsed} ERROR error=${compactJson(msg.error)}`,
+        )
+      }
     } else {
       this._channel.appendLine(`${head} <malformed> ${line.slice(0, 200)}`)
       this._logger.info(`${logPrefix} <malformed> ${line.slice(0, 200)}`)
@@ -189,6 +205,17 @@ function sessionTag(params: unknown): string {
         : undefined
   if (!sid) return ''
   return ` [session=${sid.slice(0, 13)}]`
+}
+
+/** A `session/update` notification carrying a failed `tool_call_update`. */
+function isFailedToolCallUpdate(msg: JsonRpcMessage): boolean {
+  if (msg.method !== 'session/update') return false
+  const params = msg.params
+  if (params === null || typeof params !== 'object') return false
+  const update = (params as Record<string, unknown>).update
+  if (update === null || typeof update !== 'object') return false
+  const u = update as Record<string, unknown>
+  return u.sessionUpdate === 'tool_call_update' && u.status === 'failed'
 }
 
 function prettyJson(v: unknown): string {

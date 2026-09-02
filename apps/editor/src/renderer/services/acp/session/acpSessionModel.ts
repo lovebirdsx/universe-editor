@@ -65,7 +65,7 @@ export interface AcpMessage {
  * `cancelled` is local-only: the agent never reports it. It means "the turn
  * ended without this call ever settling" — see
  * `AcpSession._settleOrphanToolCalls`. Deliberately distinct from `failed`
- * (which the agent reported and which feeds the `acp.tool_call_failed` error
+ * (which the agent reported and which feeds the `acp.tool_call_failed` usage
  * metric), because a missing result is not a tool failure.
  */
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'

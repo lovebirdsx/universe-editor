@@ -117,10 +117,35 @@ export function readChangedConfigIds(update: {
 }
 
 function readMcpToolName(update: SessionUpdate): { server: string; tool: string } | undefined {
+  const toolName = readAgentToolName(update)
+  if (toolName === undefined) return undefined
+  return parseMcpToolName(toolName)
+}
+
+/**
+ * The agent's own name for the tool behind a `tool_call(_update)` (`Bash`,
+ * `Edit`, `mcp__sqlite__query`, …), as reported on `_meta.claudeCode.toolName`.
+ * Undefined for agents that don't report it. Kept coarse on purpose — it is a
+ * telemetry dimension, so it must never carry arguments or paths.
+ */
+export function readAgentToolName(update: SessionUpdate): string | undefined {
   const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
   const toolName = meta?.claudeCode?.toolName
   if (typeof toolName !== 'string' || toolName.length === 0) return undefined
-  return parseMcpToolName(toolName)
+  return toolName
+}
+
+/**
+ * {@link readAgentToolName} normalized for use as a telemetry dimension: an MCP
+ * tool (`mcp__<server>__<tool>`) collapses to `mcp__<server>`, so the per-tool
+ * segment — unbounded across servers and versions — cannot explode the
+ * dimension's cardinality. Built-in names pass through untouched.
+ */
+export function readAgentToolNameForTelemetry(update: SessionUpdate): string | undefined {
+  const toolName = readAgentToolName(update)
+  if (toolName === undefined) return undefined
+  const mcp = parseMcpToolName(toolName)
+  return mcp !== undefined ? `mcp__${mcp.server}` : toolName
 }
 
 /**

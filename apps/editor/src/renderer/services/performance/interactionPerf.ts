@@ -38,6 +38,30 @@ export function decomposeInteraction(sample: InteractionEventSample): Interactio
   return { inputDelayMs, processingMs, presentationDelayMs }
 }
 
+/**
+ * A presentation segment this long cannot be rendering work: the browser
+ * reported wall-clock across an OS suspend / laptop lid close / whole-frame
+ * freeze-and-resume, not a pipeline stall. Real stalls (main-thread work,
+ * layout, paint) land in the hundreds of ms to a few seconds at most.
+ */
+export const SUSPEND_RESUME_PRESENT_THRESHOLD_MS = 30_000
+
+/**
+ * An interaction handled within this input delay has no input-queue backlog —
+ * its entire "slow duration" is the suspend gap above. Combined with the present
+ * threshold this separates resume artifacts from genuine long blocks (which can
+ * also have ~0ms input delay but a sub-30s present segment).
+ */
+export const SUSPEND_RESUME_INPUT_THRESHOLD_MS = 100
+
+/** A suspend/resume artifact: a tiny input delay followed by a huge present gap. */
+export function isSuspendResumeArtifact(d: InteractionDecomposition): boolean {
+  return (
+    d.presentationDelayMs >= SUSPEND_RESUME_PRESENT_THRESHOLD_MS &&
+    d.inputDelayMs <= SUSPEND_RESUME_INPUT_THRESHOLD_MS
+  )
+}
+
 export interface DedupedInteraction {
   readonly kind: 'interaction' | 'non-interaction'
   readonly sample: InteractionEventSample

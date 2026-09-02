@@ -163,6 +163,33 @@ export function truncateDiffSideText(text: string): string {
   return `${text.slice(0, DIFF_SIDE_HEAD)}\n[... ${omitted} chars truncated ...]\n${text.slice(-DIFF_SIDE_TAIL)}`
 }
 
+/**
+ * Multiplier applied to the retained-content estimate to approximate what the
+ * update really costs the V8 heap. The wire estimate only sums the strings that
+ * arrived; each one is then retained several times over — the view-model card
+ * object, the derived `text` copy, the parsed markdown AST, the rendered React
+ * element tree and the virtual list's measurement cache all hold onto slices of
+ * it. Budgets that counted only the wire bytes therefore under-charged by
+ * roughly this factor, which is how a renderer with "256MB per session" ended up
+ * with 3.4GiB resident in lo_space.
+ *
+ * Derived from that crash rather than from a microbenchmark: it is a deliberate
+ * over-estimate, because over-charging trims a few cards early while
+ * under-charging loses the window. Transient bytes are NOT multiplied — nothing
+ * downstream ever copies them.
+ */
+export const VIEW_MODEL_OVERHEAD_FACTOR = 3
+
+/** Charge wire bytes at their real view-model cost. See {@link VIEW_MODEL_OVERHEAD_FACTOR}. */
+export function withViewModelOverhead(wireBytes: number): number {
+  return wireBytes * VIEW_MODEL_OVERHEAD_FACTOR
+}
+
+/**
+ * All budgets below are in **overhead-adjusted** bytes (wire bytes ×
+ * {@link VIEW_MODEL_OVERHEAD_FACTOR}), so 256MB here allows roughly 85MB of
+ * wire content per session.
+ */
 export const REPLAY_INGESTION_BUDGET = 256 * 1024 * 1024
 
 /**
@@ -189,7 +216,7 @@ function contentBlockBytes(block: ContentBlock): number {
 /** Resident bytes of a raw tool input kept for UI inspection: the JSON form is
  * what `capRawInput` measures, and an oversized / unstringifiable input is
  * dropped outright downstream, so it costs 0 here too. */
-function rawInputBytes(rawInput: unknown): number {
+export function estimateRawInputBytes(rawInput: unknown): number {
   if (rawInput === undefined) return 0
   try {
     const json = JSON.stringify(rawInput)
@@ -205,7 +232,7 @@ function rawInputBytes(rawInput: unknown): number {
  * command's whole output twice — once as `_meta.terminal_output*` (which the
  * card keeps) and again as `rawOutput.formatted_output` (which nothing reads).
  * The second copy still has to be decoded and held until GC, so charging it
- * keeps the budget honest about what an update actually costs to ingest;
+ * keeps the replay gate honest about what a burst actually costs to ingest;
  * without it a build-heavy session is undercounted by roughly half.
  */
 function transientJsonBytes(value: unknown): number {
@@ -219,22 +246,44 @@ function transientJsonBytes(value: unknown): number {
 }
 
 /**
- * Rough ingestion cost of one SessionUpdate in UTF-16 bytes: sums the string
- * fields that actually land in the view model — chunk text / media data / tool
- * content blocks / diff sides / out-of-band terminal output / raw tool input —
- * plus the derived `text` copy (`blocksToText`) that duplicates text blocks on
- * the card, plus the transient `rawOutput` / `locations` payloads that are
- * decoded on arrival but never retained. Metadata-only updates (usage / plan /
- * commands / config) cost 0.
+ * What one SessionUpdate costs, split by whether the view model keeps it.
+ * The two halves answer different questions and must not be summed blindly —
+ * see {@link estimateUpdateCost}.
  */
-export function estimateUpdateResidentBytes(update: SessionUpdate): number {
-  let total = 0
+export interface UpdateCostBytes {
+  /**
+   * Wire bytes the card retains: exactly what `trimToolCall` / `trimMessage`
+   * later release, so the per-session resident tally can only ever charge this
+   * half. Charging anything else would leave phantom bytes no trim can work
+   * off — the loop would strip every card and still report over budget, and the
+   * shared budget would go take the difference out of other sessions.
+   */
+  readonly retained: number
+  /**
+   * Wire bytes decoded on arrival and dropped (`rawOutput`, `locations`): real
+   * during the burst, gone by the next GC. Counted by the replay gate — which
+   * bounds a peak — and by nothing else.
+   */
+  readonly transient: number
+}
+
+/**
+ * Rough cost of one SessionUpdate in UTF-16 bytes. `retained` sums the strings
+ * that land on the card and stay there — chunk text / media data / tool content
+ * blocks / diff sides / out-of-band terminal output / raw tool input — plus the
+ * derived `text` copy (`blocksToText`) that duplicates text blocks on the card.
+ * `transient` sums the payloads that are decoded but never kept. Metadata-only
+ * updates (usage / plan / commands / config) cost 0 on both counts.
+ */
+export function estimateUpdateCost(update: SessionUpdate): UpdateCostBytes {
+  let retained = 0
+  let transient = 0
   switch (update.sessionUpdate) {
     case 'user_message_chunk':
     case 'agent_message_chunk':
     case 'agent_thought_chunk':
-      total += contentBlockBytes(update.content)
-      if (update.content.type === 'text') total += utf16Bytes(update.content.text)
+      retained += contentBlockBytes(update.content)
+      if (update.content.type === 'text') retained += utf16Bytes(update.content.text)
       break
     case 'tool_call':
     case 'tool_call_update': {
@@ -242,25 +291,26 @@ export function estimateUpdateResidentBytes(update: SessionUpdate): number {
       if (update.content != null) {
         for (const item of update.content) {
           if (item.type === 'content') {
-            total += contentBlockBytes(item.content)
+            retained += contentBlockBytes(item.content)
             if (item.content.type === 'text') blockTextBytes += utf16Bytes(item.content.text)
           } else if (item.type === 'diff') {
-            total += utf16Bytes(item.oldText ?? '') + utf16Bytes(item.newText)
+            retained += utf16Bytes(item.oldText ?? '') + utf16Bytes(item.newText)
           }
         }
       }
       // The card's `text` copy: the terminal accumulator when present (it shares
       // the `_terminalOutput` map entry), else the joined text blocks.
       const terminal = readTerminalOutput(update)
-      total += terminal !== undefined ? utf16Bytes(terminal.data) : blockTextBytes
-      total += rawInputBytes(update.rawInput)
-      // Not retained, but decoded and held until GC — see transientJsonBytes.
-      total += transientJsonBytes(update.rawOutput)
-      total += transientJsonBytes(update.locations)
+      retained += terminal !== undefined ? utf16Bytes(terminal.data) : blockTextBytes
+      retained += estimateRawInputBytes(update.rawInput)
+      // `locations` survives a trim (the card's affordances read it) but is a
+      // handful of paths — measuring it on the release side would cost more than
+      // it can ever release, so it rides with the transient half.
+      transient += transientJsonBytes(update.rawOutput) + transientJsonBytes(update.locations)
       break
     }
     default:
       break
   }
-  return total
+  return { retained, transient }
 }
