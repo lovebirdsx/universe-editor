@@ -47,8 +47,6 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.autoEdit` | 编辑未签出文件时自动 `p4 edit` | 关 |
 | `perforce.reconcileHint.enabled` | 在资源管理器中标记磁盘上改过但未签出的文件（`RC` 徽标，其父文件夹随之变色），见[收集改动](./daily-workflow.md#收集改动reconcile)。只检查当前显示在屏幕上的行，开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录 | 开 |
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
-| `perforce.syncPreview.autoCheck` | 后台落后检查：灰字 `↓` + 状态栏计数（超大型 depot 建议关闭，见[性能与配置](./sync-and-status.md#性能与配置)） | 开 |
-| `perforce.syncPreview.intervalSec` | 两次落后检查的最小间隔秒数（最小 30） | 300 |
 | `perforce.openedByOthers.autoCheck` | 后台「他人占用」扫描 + 灰字 | 开 |
 | `perforce.openedByOthers.intervalSec` | 两次「他人占用」扫描的最小间隔秒数（最小 30） | 300 |
 | `perforce.commandTimeout` | 单个 p4 进程最长存活秒数，超时强杀（`0` 不限制）。约束「永久挂死」而非「执行慢」——卡死在冻结网络盘上的 p4 不会再无限期占住并发槽 | 600 |

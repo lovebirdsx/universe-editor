@@ -15,7 +15,6 @@ import {
   window,
   ProgressLocation,
   type ExtensionContext,
-  type QuickPickItem,
 } from '@universe-editor/extension-api'
 import type {
   P4GraphChangeDto,
@@ -314,109 +313,6 @@ async function pickSyncSpec(): Promise<{ spec: string; force: boolean } | undefi
  */
 const PROGRESS_REPORT_INTERVAL_MS = 150
 
-/** `2026/08/31 14:05` from p4's unix-seconds `time`, for a quick-pick line. */
-function formatChangeDate(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return ''
-  const d = new Date(seconds * 1000)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-/**
- * Ask which changelist to sync the whole scope to.
- *
- * Replaces the old "click the behind count, get `#head`" one-shot: on a game
- * project the newest submit is frequently not the one you want to be on, and a
- * scope-wide jump to it is expensive to undo. Latest stays the first entry, so
- * the previous behaviour is still one keystroke away.
- *
- * Returns the p4 revision suffix to sync to, or undefined when the user backed
- * out (or there was nothing to offer).
- */
-async function pickBehindChangelist(
-  target: PerforceClient,
-  log: (msg: string) => void,
-): Promise<string | undefined> {
-  const res = await target.listBehindChangelists()
-  if (!res.ok) {
-    await window.showErrorMessage(
-      localize(
-        'perforce.behindPick.failed',
-        'Could not list the changelists this workspace is behind.',
-      ),
-    )
-    return undefined
-  }
-  const HEAD_ID = '#head'
-  const MORE_ID = 'older'
-  const picks: (QuickPickItem & { id: string })[] = [
-    {
-      id: HEAD_ID,
-      label: localize('perforce.behindPick.head', 'Latest revision'),
-      description: '#head',
-      detail: localize(
-        'perforce.behindPick.headDetail',
-        'Sync the whole scope to the newest submitted revision',
-      ),
-    },
-  ]
-  for (const change of res.changes) {
-    const bits = [`@${change.id}`, change.author, formatChangeDate(change.date)].filter(Boolean)
-    if (change.status === 'partial') {
-      bits.push(localize('perforce.behindPick.partial', 'partially synced'))
-    }
-    picks.push({
-      id: `@${change.id}`,
-      label: change.message || `@${change.id}`,
-      description: bits.join(' · '),
-      detail: localize('perforce.behindPick.detail', 'Sync the scope to the state at @{0}', {
-        0: change.id,
-      }),
-    })
-  }
-  if (res.hasMore || res.changes.length === 0) {
-    picks.push({
-      id: MORE_ID,
-      label: localize('perforce.behindPick.older', 'An older changelist…'),
-      description: '@12345',
-    })
-  }
-  // The placeholder carries the honesty: when cstat couldn't classify, these are
-  // simply the most recent changelists and calling them "behind" would be a
-  // claim we can't back. Same for a classified-but-empty list — the files we're
-  // behind on come from changelists older than the window we listed.
-  let placeHolder: string
-  if (!res.classified) {
-    placeHolder = localize(
-      'perforce.behindPick.placeholderUnclassified',
-      'Could not tell which are already synced — showing the most recent changelists',
-    )
-  } else if (res.changes.length === 0) {
-    log('[perforce] behind-list: every listed changelist is already synced; offering head/manual')
-    placeHolder = localize(
-      'perforce.behindPick.placeholderNone',
-      'No pending changelists in the listed range — pick latest, or enter an older number',
-    )
-  } else {
-    placeHolder = localize(
-      'perforce.behindPick.placeholder',
-      'Pick the changelist to sync this workspace to',
-    )
-  }
-  const choice = await window.showQuickPick(picks, { placeHolder })
-  if (!choice) return undefined
-  if (choice.id !== MORE_ID) return choice.id
-  const raw = await window.showInputBox({
-    prompt: localize('perforce.syncPrompt.changelist', 'Changelist number'),
-    placeHolder: '12345',
-  })
-  const value = raw?.trim()
-  if (!value) return undefined
-  // A sigil the user typed themselves is honoured rather than doubled — same
-  // rule as pickSyncSpec.
-  return /^[@#]/.test(value) ? value : `@${value}`
-}
-
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
@@ -590,35 +486,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   /**
-   * Behind awareness: how often the client may ask the server "what am I missing".
-   * `sync -n` over a game workspace is the most expensive read here, so the
-   * interval is a real floor, not a hint — the client clamps anything under 30s.
-   *
-   * Applied **before** the first refresh: the refresh tail schedules a behind-check
-   * that reads these options, so configuring them afterwards would let the very
-   * first check silently skip on a workspace the user has auto-check enabled for.
-   */
-  const applySyncPreviewOptions = async (target: PerforceClient): Promise<void> => {
-    const autoCheck = await cfg.get('syncPreview.autoCheck', true)
-    const intervalSec = await cfg.get('syncPreview.intervalSec', 300)
-    target.setSyncPreviewOptions({ autoCheck, intervalMs: intervalSec * 1000 })
-  }
-  const applySyncPreviewOptionsAll = async (): Promise<void> => {
-    for (const c of mgr.all) await applySyncPreviewOptions(c)
-  }
-  await applySyncPreviewOptions(client)
-  context.subscriptions.push(
-    workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('perforce.syncPreview')) return
-      void applySyncPreviewOptionsAll()
-    }),
-  )
-
-  /**
    * Opened-by-others awareness: how often the client may ask "who has what
-   * open". Unlike the behind-check this reads the server's open table rather
-   * than walking the client view, but it is still a scope-wide background scan,
-   * so the interval is a real floor too.
+   * open". It reads the server's open table rather than walking the client
+   * view, but it is still a scope-wide background scan, so the interval is a
+   * real floor too.
    *
    * Applied **before** the first refresh: the refresh tail schedules the scan
    * and reads these options, so configuring them afterwards would let the very
@@ -713,11 +584,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
   /**
    * Run a sync and report the outcome.
    *
-   * The whole run sits inside a cancellable notification progress. `resolveTotal`
-   * (when given) supplies the bar's denominator before p4 starts writing — a
-   * scope-wide get is minutes of silence otherwise. Without a denominator the
-   * bar stays indeterminate and only the running file count moves: an invented
-   * total that finishes at 40% is worse than no total at all.
+   * The whole run sits inside a cancellable notification progress. The bar is
+   * indeterminate and only the running file count moves: an invented total that
+   * finishes at 40% is worse than no total at all.
    */
   const runSync = async (
     target: PerforceClient,
@@ -725,7 +594,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
     options: {
       scope?: readonly string[]
       force?: boolean
-      resolveTotal?: () => Promise<number | undefined>
     },
   ): Promise<void> => {
     const res = await window.withProgress(
@@ -743,59 +611,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
         // abort mechanism instead of two that can disagree.
         const cancelSub = token.onCancellationRequested(() => target.cancelBusy())
         try {
-          let total: number | undefined
-          if (options.resolveTotal) {
-            progress.report({
-              message: localize('perforce.sync.progressChecking', 'Checking what to update…'),
-            })
-            total = await options.resolveTotal()
-            if (token.isCancellationRequested) {
-              return {
-                ok: false,
-                cancelled: true,
-                summary: undefined,
-                refusedFiles: [],
-                error: undefined,
-              }
-            }
-          }
           // p4 prints one line per file; on a ten-thousand-file get, reporting
           // each one is ten thousand RPC hops for pixels that can't move that
           // fast. Coalesce to ~7fps and settle up at the end.
-          let reported = 0
           let reportedAt = 0
           const report = (done: number, file: string | undefined, force: boolean): void => {
             const now = Date.now()
             if (!force && now - reportedAt < PROGRESS_REPORT_INTERVAL_MS) return
             reportedAt = now
-            // The denominator is a dry-run estimate of the files this get will
-            // touch or refuse; the numerator also counts the "opened and not
-            // being changed" lines the estimate leaves out. So `done` can
-            // overtake `total` — once it does the denominator is provably wrong
-            // and gets dropped rather than clamped, because "8 / 8" while files
-            // are still arriving reads as finished when it isn't.
-            const denominator =
-              total !== undefined && total > 0 && done <= total ? total : undefined
-            const message =
-              denominator !== undefined
-                ? localize('perforce.sync.progressCount', '{0} / {1}{2}', {
-                    0: String(done),
-                    1: String(denominator),
-                    2: file ? ` · ${file}` : '',
-                  })
-                : localize('perforce.sync.progressFiles', '{0} file(s){1}', {
-                    0: String(done),
-                    1: file ? ` · ${file}` : '',
-                  })
-            // No usable denominator → message only, which the host renders as an
-            // indeterminate bar.
-            if (denominator !== undefined) {
-              const increment = ((done - reported) / denominator) * 100
-              reported = done
-              progress.report({ message, increment })
-            } else {
-              progress.report({ message })
-            }
+            progress.report({
+              message: localize('perforce.sync.progressFiles', '{0} file(s){1}', {
+                0: String(done),
+                1: file ? ` · ${file}` : '',
+              }),
+            })
           }
           let lastDone = 0
           const run = await target.sync(spec, {
@@ -806,7 +635,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               report(done, file, false)
             },
           })
-          if (lastDone > reported) report(lastDone, undefined, true)
+          if (lastDone > 0) report(lastDone, undefined, true)
           return run
         } finally {
           cancelSub.dispose()
@@ -994,7 +823,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
           context.subscriptions.push(timelineProvider.trackClient(c))
         },
         applyScopes: applyReconcileScope,
-        applySyncPreviewOptions,
         applyOpenedByOthersOptions,
         startPolling: (c, seconds) => c.startPolling(seconds),
         setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
@@ -1066,7 +894,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // Get the latest revision, no prompt. From the Explorer / editor this targets
     // the clicked file or folder; with no argument it targets the active editor's
     // file — the revision chip in the status bar is per-file, and that is the file
-    // it describes. For the whole configured sync scope, see perforce.syncScope.
+    // it describes.
     commands.registerCommand('perforce.syncLatest', async (...args: unknown[]) => {
       const path = await resolveTargetPath(args[0])
       const target = path
@@ -1075,32 +903,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (!target) return
       const scope = path ? [syncTargetOf(args[0], path)] : undefined
       await runSync(target, '#head', scope !== undefined ? { scope } : {})
-    }),
-
-    // The "N files behind" status-bar item's click target. Registered at runtime
-    // only — it has no menu or command-palette entry; the whole scope is what the
-    // count describes, so this is the one sync entry point that must never fall
-    // back to the active editor's file (StatusBarItem carries only a command
-    // string, with no arguments to distinguish the two intents).
-    //
-    // It asks which changelist to land on rather than jumping straight to
-    // `#head`: the newest submit is not reliably the stable one, and a
-    // scope-wide get is expensive to walk back. "Latest revision" is still the
-    // first entry of the pick.
-    commands.registerCommand('perforce.syncScope', async (arg: unknown) => {
-      const target = mgr.resolveClient(arg) ?? mgr.active
-      if (!target) return
-      const spec = await pickBehindChangelist(target, log)
-      if (spec === undefined) return
-      await runSync(target, spec, {
-        resolveTotal: async () => {
-          // Head is free: the behind-check already counted exactly this. Any
-          // other revision needs its own dry run, and a slow or failed probe
-          // just means an indeterminate bar — never a blocked sync.
-          if (spec === '#head') return target.status.syncBehindCount
-          return target.previewSyncTotal(spec)
-        },
-      })
     }),
 
     // Get a specific revision: four ways to name one, matching what P4V offers.

@@ -1,12 +1,10 @@
 /**
  * The Perforce status-bar entries: the main client name + connection state item,
- * plus a behind-count item ("N files behind") that appears only once a
- * behind-check has actually run, plus a revision chip (`#have / #head`) for the
- * active editor's file. All render whichever client is active — switching the
- * SCM selection re-points them, mirroring VSCode's single-repo status bar (and
- * git's GitStatusBarController). Clicking the main item opens the Perforce
- * graph; clicking the behind item pops up a changelist picker to sync the whole
- * scope to, while the revision chip syncs just the file it describes.
+ * plus a revision chip (`#have / #head`) for the active editor's file. All
+ * render whichever client is active — switching the SCM selection re-points
+ * them, mirroring VSCode's single-repo status bar (and git's
+ * GitStatusBarController). Clicking the main item opens the Perforce graph; the
+ * revision chip syncs just the file it describes.
  *
  * The revision chip re-reads the active editor on every tab switch
  * (`onDidChangeActiveTextEditor`) and routes the file through
@@ -19,8 +17,8 @@
  * In a mixed workspace (a git repo nested in a p4 client, say) the renderer
  * pushes `perforce.setActiveRepo` without arguments (or with null, via the
  * nested-args RPC convention) when the selection moves to another provider's
- * repo; `setVisible(false)` hides all three items and every render
- * short-circuits until a p4 client is selected again.
+ * repo; `setVisible(false)` hides both items and every render short-circuits
+ * until a p4 client is selected again.
  */
 import {
   window,
@@ -29,7 +27,6 @@ import {
   type StatusBarItem,
   type TextEditor,
 } from '@universe-editor/extension-api'
-import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
 import { uriToFsPath } from './pathUtil.js'
 import type { FstatInfo } from './fstatParser.js'
@@ -72,7 +69,6 @@ export function formatScanElapsed(elapsedMs: number): string {
 
 export class P4StatusBarController {
   private readonly _item: StatusBarItem
-  private readonly _behindItem: StatusBarItem
   private readonly _revItem: StatusBarItem
   private _clientSub: Disposable | undefined
   private _editorSub: Disposable | undefined
@@ -85,20 +81,8 @@ export class P4StatusBarController {
   constructor(private readonly _mgr: ClientManager) {
     this._item = window.createStatusBarItem(StatusBarAlignment.Left, 100)
     this._item.command = 'perforce-graph.view'
-    // Lower priority puts it to the right of the main item.
-    this._behindItem = window.createStatusBarItem(StatusBarAlignment.Left, 90)
-    // Scope-level, not file-level: this item counts every behind file in the sync
-    // scope, so its click must offer whole-scope targets. `perforce.syncLatest`
-    // would fall back to the active editor's file and fetch one while the label
-    // promises N; `perforce.syncScope` pops a changelist picker instead of a
-    // one-shot `#head` get — the newest submit is often not the one you want on.
-    this._behindItem.command = 'perforce.syncScope'
-    this._behindItem.tooltip = localize(
-      'perforce.status.behind.tooltip',
-      'Click to pick which changelist to sync this workspace to',
-    )
-    // Lowest priority sits left of both: `#have / #head` for the active editor's
-    // file, its own signal next to (not merged into) the behind count.
+    // Lower priority sits left of the main item: `#have / #head` for the active
+    // editor's file, its own signal next to (not merged into) the main item.
     this._revItem = window.createStatusBarItem(StatusBarAlignment.Left, 80)
     this._editorSub = window.onDidChangeActiveTextEditor((editor) => this._renderRev(editor))
     this._renderRev()
@@ -120,14 +104,13 @@ export class P4StatusBarController {
     this._renderRev()
   }
 
-  /** Show or hide all three items. `false` is pushed via `perforce.setActiveRepo`
+  /** Show or hide both items. `false` is pushed via `perforce.setActiveRepo`
    *  when the SCM selection moved to another provider's repo; `true` restores
    *  and re-renders from the active client. */
   setVisible(visible: boolean): void {
     this._visible = visible
     if (!visible) {
       this._item.hide()
-      this._behindItem.hide()
       this._revItem.hide()
       return
     }
@@ -137,9 +120,6 @@ export class P4StatusBarController {
   private _render(): void {
     if (!this._visible) return
     const client = this._mgr.active
-    // Before the four-state branches, so no early return can skip it and leave
-    // a stale behind count on screen.
-    this._renderBehind(client)
     if (!client) {
       this._item.hide()
       return
@@ -224,28 +204,6 @@ export class P4StatusBarController {
       1: String(openedCount),
     })}\n${localize('perforce.status.openGraph', 'Open Perforce Graph')}`
     this._item.show()
-  }
-
-  private _renderBehind(client: PerforceClient | undefined): void {
-    if (!this._visible) return
-    const behind = client?.status.syncBehindCount
-    // undefined = the first behind-check hasn't completed — hiding beats a
-    // reassuring zero the client hasn't earned. 0 = checked, nothing to get.
-    // The connection gate is explicit even though going offline clears the
-    // count upstream: the number means nothing while disconnected, and not
-    // relying on the upstream cleanup keeps both sides honest.
-    if (!client || !behind || client.status.connection !== 'connected') {
-      this._behindItem.hide()
-      return
-    }
-    const capped = client.status.syncBehindCapped
-    const text = localize(
-      capped ? 'perforce.status.behind.capped' : 'perforce.status.behind',
-      capped ? 'more than {0} files behind' : '{0} files behind',
-      { 0: behind },
-    )
-    this._behindItem.text = `$(cloud-download) ${text}`
-    this._behindItem.show()
   }
 
   /** Re-render the revision chip for the active editor's file. `editor` comes
@@ -338,8 +296,7 @@ export class P4StatusBarController {
     const behind = have < head
     this._revItem.text = behind ? `#${have} / ↓#${head}` : `#${have} / #${head}`
     // Behind is actionable (click gets the file's latest); current is not. This
-    // chip describes ONE file, so it stays on the file-scoped command — the
-    // whole-scope get belongs to the behind-count item next to it.
+    // chip describes ONE file, so it stays on the file-scoped command.
     this._revItem.command = behind ? 'perforce.syncLatest' : undefined
     this._revItem.tooltip = behind
       ? localize(
@@ -358,7 +315,6 @@ export class P4StatusBarController {
     this._clientSub?.dispose()
     this._editorSub?.dispose()
     this._item.dispose()
-    this._behindItem.dispose()
     this._revItem.dispose()
   }
 }

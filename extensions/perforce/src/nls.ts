@@ -125,30 +125,9 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.previewSync.failed': '无法预览将要拉取的内容。',
   'perforce.previewSync.placeholder': '共有 {0} 个文件将被拉取——选择一个可直接打开',
   'perforce.copyDepotPath.notControlled': '该文件不在 depot 中。',
-  // 落后感知（Explorer 灰字 + 状态栏）
-  // 三条 deco 描述是语言无关的符号（↓ / ✎），无需翻译；tooltip 仍按语言翻译。
-  'perforce.deco.behind.tooltip':
-    '可更新——服务器上有更新版本（{0} #{1}）。用「拉取最新版本」获取。',
-  'perforce.status.behind': '{0} 个可更新',
-  'perforce.status.behind.capped': '超过 {0} 个可更新',
-  'perforce.status.behind.tooltip': '点击选择要将此工作区拉取到的变更列表',
-  // 落后变更列表选择 + 同步进度
-  'perforce.behindPick.failed': '无法列出此工作区落后的变更列表。',
-  'perforce.behindPick.head': '最新版本',
-  'perforce.behindPick.headDetail': '拉取整个作用域到最新已提交的修订',
-  'perforce.behindPick.partial': '部分已拉取',
-  'perforce.behindPick.detail': '拉取作用域到 @{0} 时的状态',
-  'perforce.behindPick.older': '更早的变更列表…',
-  'perforce.behindPick.placeholder': '选择要将此工作区拉取到的变更列表',
-  'perforce.behindPick.placeholderUnclassified': '无法判断哪些已同步——显示最近的变更列表',
-  'perforce.behindPick.placeholderNone':
-    '所列范围内没有待定的变更列表——选择最新版本，或输入更早的编号',
   'perforce.sync.progressTitleHead': '拉取最新版本',
   'perforce.sync.progressTitle': '拉取 {0}',
-  'perforce.sync.progressChecking': '正在检查要更新的内容…',
-  'perforce.sync.progressCount': '{0} / {1}{2}',
   'perforce.sync.progressFiles': '{0} 个文件{1}',
-  'perforce.busy.behindList': '正在加载变更列表',
   // 他人占用（Explorer 灰字）
   'perforce.deco.occupied.tooltip': '他人占用——{0} 打开着此文件',
   // p4Error.ts

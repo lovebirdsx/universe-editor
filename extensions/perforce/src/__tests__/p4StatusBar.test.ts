@@ -1,9 +1,4 @@
 /**
- * The behind item must only appear once a behind-check has really run:
- * `undefined` ("never checked") and `0` ("checked, nothing to get") both hide
- * it, and disconnection hides it even if a stale count survives — the count is
- * a claim about the server, so it can't be rendered while offline.
- *
  * The revision chip (`#have / #head`) tracks the active editor: non-file
  * schemes, files outside every client root, and the NOT_CONTROLLED fstat
  * sentinel all hide it; `haveRev: 'none'` (open-for-add) renders the "new"
@@ -11,8 +6,8 @@
  * `perforce.syncLatest`.
  *
  * `setVisible(false)` is the mixed-workspace gate (selection moved to another
- * provider): all three items hide and stay hidden across refresh, tab switches
- * and in-flight fstat completions.
+ * provider): both items hide and stay hidden across refresh, tab switches and
+ * in-flight fstat completions.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,7 +23,6 @@ const mocks = vi.hoisted(() => {
   })
   return {
     item: makeItem(),
-    behindItem: makeItem(),
     revItem: makeItem(),
     activeEditor: undefined as { document: { uri: unknown } } | undefined,
     editorListener: undefined as ((e: unknown) => void) | undefined,
@@ -39,7 +33,7 @@ vi.mock('@universe-editor/extension-api', () => ({
   StatusBarAlignment: { Left: 1 },
   window: {
     createStatusBarItem: vi.fn((_alignment: unknown, priority: number) =>
-      priority === 100 ? mocks.item : priority === 80 ? mocks.revItem : mocks.behindItem,
+      priority === 100 ? mocks.item : mocks.revItem,
     ),
     onDidChangeActiveTextEditor: vi.fn((listener: (e: unknown) => void) => {
       mocks.editorListener = listener
@@ -51,7 +45,6 @@ vi.mock('@universe-editor/extension-api', () => ({
 
 const { P4StatusBarController, truncateClientName, formatScanElapsed } =
   await import('../p4StatusBar.js')
-const { localize } = await import('../nls.js')
 
 function makeClient(overrides: Record<string, unknown> = {}): unknown {
   return {
@@ -59,7 +52,6 @@ function makeClient(overrides: Record<string, unknown> = {}): unknown {
       clientName: 'client-1',
       connection: 'connected',
       openedCount: 2,
-      syncBehindCount: undefined,
       busy: undefined,
       busyCancellable: false,
       ...overrides,
@@ -89,132 +81,6 @@ function fileEditor(path: string): { document: { uri: unknown } } {
   return { document: { uri: { scheme: 'file', path } } }
 }
 
-describe('P4StatusBarController behind item', () => {
-  beforeEach(() => {
-    mocks.item.text = ''
-    mocks.item.tooltip = ''
-    mocks.item.command = ''
-    mocks.item.showProgress = undefined
-    mocks.item.show.mockClear()
-    mocks.item.hide.mockClear()
-    mocks.behindItem.text = ''
-    mocks.behindItem.tooltip = ''
-    mocks.behindItem.command = ''
-    mocks.behindItem.show.mockClear()
-    mocks.behindItem.hide.mockClear()
-    mocks.revItem.text = ''
-    mocks.revItem.tooltip = ''
-    mocks.revItem.command = ''
-    mocks.revItem.show.mockClear()
-    mocks.revItem.hide.mockClear()
-    mocks.activeEditor = undefined
-    mocks.editorListener = undefined
-  })
-
-  it('hides the behind item until the first behind-check completes', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ syncBehindCount: undefined }),
-    } as never)
-    controller.refresh()
-
-    expect(mocks.behindItem.hide).toHaveBeenCalled()
-    expect(mocks.behindItem.show).not.toHaveBeenCalled()
-    controller.dispose()
-  })
-
-  it('hides the behind item when the client is up to date', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ syncBehindCount: 0 }),
-    } as never)
-    controller.refresh()
-
-    expect(mocks.behindItem.hide).toHaveBeenCalled()
-    expect(mocks.behindItem.show).not.toHaveBeenCalled()
-    controller.dispose()
-  })
-
-  it('shows the count and wires the whole-scope sync command', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ syncBehindCount: 12 }),
-    } as never)
-    controller.refresh()
-
-    expect(mocks.behindItem.show).toHaveBeenCalled()
-    expect(mocks.behindItem.text).toContain('$(cloud-download)')
-    expect(mocks.behindItem.text).toContain('12')
-    // Scope-level, NOT perforce.syncLatest: that one falls back to the active
-    // editor's file, so this item would fetch one file while promising 12.
-    expect(mocks.behindItem.command).toBe('perforce.syncScope')
-    controller.dispose()
-  })
-
-  it('marks a capped count as a floor, not a total', () => {
-    // The count passed the decoration cap: the number is a floor, and the
-    // status bar must say so — a bare "500" would claim an exactness the
-    // scan never established.
-    const controller = new P4StatusBarController({
-      active: makeClient({ syncBehindCount: 500, syncBehindCapped: true }),
-    } as never)
-    controller.refresh()
-
-    const cappedText = localize('perforce.status.behind.capped', 'more than {0} files behind', {
-      0: 500,
-    })
-    expect(mocks.behindItem.show).toHaveBeenCalled()
-    expect(mocks.behindItem.text).toContain('500')
-    expect(mocks.behindItem.text).toContain(cappedText)
-    controller.dispose()
-  })
-
-  it('renders an exact count without the capped wording', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ syncBehindCount: 12, syncBehindCapped: false }),
-    } as never)
-    controller.refresh()
-
-    const exactText = localize('perforce.status.behind', '{0} files behind', { 0: 12 })
-    expect(mocks.behindItem.show).toHaveBeenCalled()
-    expect(mocks.behindItem.text).toContain(exactText)
-    controller.dispose()
-  })
-
-  it('hides the behind item while disconnected even if a count survives', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ connection: 'offline', syncBehindCount: 12 }),
-    } as never)
-    controller.refresh()
-
-    expect(mocks.behindItem.hide).toHaveBeenCalled()
-    expect(mocks.behindItem.show).not.toHaveBeenCalled()
-    controller.dispose()
-  })
-
-  it('keeps the behind item visible while the main item is busy', () => {
-    const controller = new P4StatusBarController({
-      active: makeClient({ busy: 'Syncing', syncBehindCount: 12 }),
-    } as never)
-    controller.refresh()
-
-    // The main item took the busy early-return path…
-    expect(mocks.item.text).toContain('Syncing')
-    // …yet the behind item was already rendered before it.
-    expect(mocks.behindItem.show).toHaveBeenCalled()
-    expect(mocks.behindItem.text).toContain('12')
-    controller.dispose()
-  })
-
-  it('hides both items without an active client', () => {
-    const controller = new P4StatusBarController({ active: undefined } as never)
-    controller.refresh()
-
-    expect(mocks.item.hide).toHaveBeenCalled()
-    expect(mocks.item.show).not.toHaveBeenCalled()
-    expect(mocks.behindItem.hide).toHaveBeenCalled()
-    expect(mocks.behindItem.show).not.toHaveBeenCalled()
-    controller.dispose()
-  })
-})
-
 describe('P4StatusBarController revision chip', () => {
   beforeEach(() => {
     mocks.item.text = ''
@@ -223,11 +89,6 @@ describe('P4StatusBarController revision chip', () => {
     mocks.item.showProgress = undefined
     mocks.item.show.mockClear()
     mocks.item.hide.mockClear()
-    mocks.behindItem.text = ''
-    mocks.behindItem.tooltip = ''
-    mocks.behindItem.command = ''
-    mocks.behindItem.show.mockClear()
-    mocks.behindItem.hide.mockClear()
     mocks.revItem.text = ''
     mocks.revItem.tooltip = ''
     mocks.revItem.command = ''
@@ -280,11 +141,9 @@ describe('P4StatusBarController revision chip', () => {
     controller.refresh()
 
     await vi.waitFor(() => expect(mocks.revItem.text).toBe('#3 / ↓#5'))
-    // The chip describes ONE file, so it stays file-scoped — and must say so:
-    // promising the whole scope here is what made a one-file get look broken.
+    // The chip describes ONE file, so it stays file-scoped.
     expect(mocks.revItem.command).toBe('perforce.syncLatest')
     expect(mocks.revItem.tooltip).toContain('this file')
-    expect(mocks.revItem.tooltip).not.toContain('whole scope')
     controller.dispose()
   })
 
@@ -453,11 +312,6 @@ describe('P4StatusBarController setVisible', () => {
     mocks.item.showProgress = undefined
     mocks.item.show.mockClear()
     mocks.item.hide.mockClear()
-    mocks.behindItem.text = ''
-    mocks.behindItem.tooltip = ''
-    mocks.behindItem.command = ''
-    mocks.behindItem.show.mockClear()
-    mocks.behindItem.hide.mockClear()
     mocks.revItem.text = ''
     mocks.revItem.tooltip = ''
     mocks.revItem.command = ''
@@ -467,27 +321,23 @@ describe('P4StatusBarController setVisible', () => {
     mocks.editorListener = undefined
   })
 
-  it('hides all three items when the selection moves to another provider', () => {
+  it('hides both items when the selection moves to another provider', () => {
     const controller = new P4StatusBarController(makeManager() as never)
     controller.setVisible(false)
 
     expect(mocks.item.hide).toHaveBeenCalled()
-    expect(mocks.behindItem.hide).toHaveBeenCalled()
     expect(mocks.revItem.hide).toHaveBeenCalled()
     controller.dispose()
   })
 
   it('refresh and tab switches do not re-show the items while hidden', () => {
-    const controller = new P4StatusBarController(
-      makeManager({ active: makeClient({ syncBehindCount: 12 }) }) as never,
-    )
+    const controller = new P4StatusBarController(makeManager() as never)
     controller.setVisible(false)
     mocks.item.show.mockClear()
 
     controller.refresh()
     mocks.editorListener?.(fileEditor('/D:/p4ws/main/src/a.txt'))
     expect(mocks.item.show).not.toHaveBeenCalled()
-    expect(mocks.behindItem.show).not.toHaveBeenCalled()
     expect(mocks.revItem.show).not.toHaveBeenCalled()
     controller.dispose()
   })
@@ -520,16 +370,12 @@ describe('P4StatusBarController setVisible', () => {
   })
 
   it('setVisible(true) restores and re-renders the items', () => {
-    const controller = new P4StatusBarController(
-      makeManager({ active: makeClient({ syncBehindCount: 12 }) }) as never,
-    )
+    const controller = new P4StatusBarController(makeManager() as never)
     controller.setVisible(false)
     mocks.item.show.mockClear()
-    mocks.behindItem.show.mockClear()
 
     controller.setVisible(true)
     expect(mocks.item.show).toHaveBeenCalled()
-    expect(mocks.behindItem.show).toHaveBeenCalled()
     controller.dispose()
   })
 })
@@ -585,11 +431,6 @@ describe('P4StatusBarController scan progress', () => {
     mocks.item.showProgress = undefined
     mocks.item.show.mockClear()
     mocks.item.hide.mockClear()
-    mocks.behindItem.text = ''
-    mocks.behindItem.tooltip = ''
-    mocks.behindItem.command = ''
-    mocks.behindItem.show.mockClear()
-    mocks.behindItem.hide.mockClear()
     mocks.revItem.text = ''
     mocks.revItem.tooltip = ''
     mocks.revItem.command = ''

@@ -219,8 +219,8 @@ export function syncLineFile(line: string): string | undefined {
  * Both output modes lose these: `-ztag` drops them (no `... key value` prefix)
  * and `-Mj` collapses them into a `{"data":…}` blob. Yet each one means "this
  * file is behind AND has uncollected local work" — folding them back in is what
- * keeps `previewSync`'s up-to-date verdict, the behind count, and the revision
- * chip's `↓` from contradicting one another on a narrow scope. It is also where
+ * keeps `previewSync`'s up-to-date verdict and the revision chip's `↓` from
+ * contradicting one another on a narrow scope. It is also where
  * the "View Diff" remedy on a refused get gets its paths.
  *
  * `action` is the literal shown in the preview quick-pick and the Explorer

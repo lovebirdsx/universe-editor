@@ -50,8 +50,6 @@
   "perforce.config.cache.enabled.description": "缓存 p4 命令和 Swarm 结果以减少服务器往返。不可变的 p4 数据跨会话持久化；可变的工作区和审核数据使用短 TTL，并在任何变更后失效。",
   "perforce.config.cache.workspaceTtl.description": "缓存的工作区查询（已打开文件、路径映射）在重新拉取前保持有效的毫秒数。每次变更后缓存都会失效，因此该值只限制来自编辑器外部改动的陈旧窗口。设为 0 关闭工作区缓存（不可变历史缓存仍生效）。",
   "perforce.config.cache.diskLimitMb.description": "不可变历史数据磁盘缓存的最大容量（MB）。超过上限时按最近最少使用淘汰。设为 0 关闭磁盘持久化（内存缓存仍生效）。",
-  "perforce.config.syncPreview.autoCheck.description": "在后台定期检查 depot 中是否有比本工作区更新的版本，把这些文件在资源管理器中标出，并在状态栏显示计数。默认开启。该检查（p4 sync -n）以后台优先级运行、绝不阻塞点击，但它是一次覆盖整个作用域的服务器比对——超大型 depot 建议关闭，改为按需使用「拉取最新版本」。",
-  "perforce.config.syncPreview.intervalSec.description": "两次后台落后检查之间的最小间隔秒数。每次拉取之后也会立即重新检查一次。最小 30 秒：该检查要把整个拉取作用域与 depot 比对，间隔太短会让每次保存都变成一次服务器往返。",
   "perforce.config.openedByOthers.autoCheck.description": "在后台定期查询其他客户端当前打开了哪些文件，并在资源管理器中用灰字标出——动手改一个文件之前就能看到它是否已被别人打开；对无法合并的二进制游戏资源而言，「别人正在改」比版本号更重要。默认开启。该扫描（p4 opened -a）以后台优先级运行、绝不阻塞点击，但它要读取服务器的打开表，其规模取决于整个团队的签出活动——在非常繁忙的共享服务器上建议关闭，改问队友。",
   "perforce.config.openedByOthers.intervalSec.description": "两次自动「他人占用」扫描之间的最小间隔秒数。最小 30 秒：每次扫描都是对同步作用域的一次服务器往返，间隔太短会让每次保存都变成一次往返。",
   "perforce.config.timeline.showPending.description": "在时间线视图顶部显示该文件的待定更改条目（已签出的，或在磁盘上被修改但未签出的）。",

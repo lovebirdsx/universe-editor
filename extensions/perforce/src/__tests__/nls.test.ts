@@ -11,11 +11,7 @@ async function loadLocalize(locale: string | undefined) {
 }
 
 /** The Explorer's grey markers — a glyph each, deliberately not translated. */
-const GLYPH_KEYS = [
-  'perforce.deco.behind',
-  'perforce.deco.occupied',
-  'perforce.deco.occupiedAndBehind',
-] as const
+const GLYPH_KEYS = ['perforce.deco.occupied'] as const
 
 describe('perforce nls localize', () => {
   const original = process.env.UNIVERSE_DISPLAY_LOCALE
@@ -55,9 +51,6 @@ describe('perforce nls localize', () => {
   // has to name the condition — and that text IS translated.
   it('still translates the tooltips that explain the glyphs', async () => {
     const localize = await loadLocalize('zh-CN')
-    expect(
-      localize('perforce.deco.behind.tooltip', 'SENTINEL', { 0: 'updated', 1: '9' }),
-    ).toContain('可更新')
     expect(localize('perforce.deco.occupied.tooltip', 'SENTINEL', { 0: 'testuser' })).toContain(
       '他人占用',
     )

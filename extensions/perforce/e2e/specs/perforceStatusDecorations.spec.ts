@@ -3,23 +3,16 @@
  *
  *  The grey text trailing an Explorer row is the provider's *supplementary*
  *  decoration channel — a file's server-side condition that exists outside any
- *  resource group. Four journeys, one cold launch each, against the fake p4:
+ *  resource group. Two journeys, one cold launch each, against the fake p4:
  *
- *  1. A file behind the depot head (`headRev` > have) carries grey
- *     "↓" text with a tooltip naming the pending revision —
- *     produced by the behind-check (two-tier probe) that runs at startup.
- *  2. A file open in ANOTHER client carries grey "✎" text with a
+ *  1. A file open in ANOTHER client carries grey "✎" text with a
  *     `user@client` tooltip. The local path must come from reversing the depot
  *     path (`p4 where`) — under `opened -a` the record's `clientFile` is the
  *     OTHER client's client-syntax path (`//otherclient/…`), and translating it
  *     with this client's root manufactures a local path that doesn't exist, so
  *     the grey text would hang off no real file row and this probe would read
  *     null.
- *  3. One file both behind AND open by others publishes as ONE merged entry
- *     (the renderer keys decorations by path, so two entries would silently
- *     overwrite each other): the short text is the combined marker and the
- *     tooltip keeps each producer's full detail, joined by a newline.
- *  4. A clean file carries no decoration at all. Deliberately paired in the
+ *  2. A clean file carries no decoration at all. Deliberately paired in the
  *     same run with a file that DOES get decorated: the zero-assertion alone
  *     also passes when the whole decoration channel is broken, so the liveness
  *     assertion must come first.
@@ -30,26 +23,11 @@ import { evaluateWhenRestored, type WorkbenchPO } from '@universe-editor/e2e-har
 import type { Page } from '@playwright/test'
 import type { SeedFile } from '../fixtures/perforceApp.js'
 
-// Depot head is one revision ahead of what the client has synced — the
-// behind-check's `sync -n` then reports the file with action `updated` at #2.
-const behindFile: SeedFile = {
-  relPath: 'behind.txt',
-  content: 'have revision one\n',
-  headRev: 2,
-  headContent: 'head revision two\n',
-}
 // Open for edit in another client: `p4 opened -a` reports it with the other
-// client's client-syntax `clientFile` (see the header, journey 2).
+// client's client-syntax `clientFile` (see the header, journey 1).
 const occupiedFile: SeedFile = {
   relPath: 'occupied.txt',
   content: 'shared content\n',
-  openedBy: { user: 'testuser', client: 'otherclient' },
-}
-const bothFile: SeedFile = {
-  relPath: 'both.txt',
-  content: 'have revision one\n',
-  headRev: 2,
-  headContent: 'head revision two\n',
   openedBy: { user: 'testuser', client: 'otherclient' },
 }
 const cleanFile: SeedFile = {
@@ -79,33 +57,6 @@ async function openStatusWorkspace(
 }
 
 test.describe('@p1 perforce status decorations', () => {
-  test.describe('behind grey text', () => {
-    test.use({ p4Seeds: { files: [behindFile, cleanFile] } })
-
-    test('a file behind the depot head shows grey "↓" text @regression', async ({
-      page,
-      workbench,
-      perforce,
-    }) => {
-      test.setTimeout(120_000)
-      await openStatusWorkspace(page, workbench, perforce.openDir)
-
-      // The behind-check runs once at startup (its cheap gate falls through on
-      // the fake depot), then publishes the per-file marker.
-      await expect
-        .poll(() => decoFor(page, 'behind.txt'), {
-          timeout: 60_000,
-          message: 'the behind file should carry the grey "↓" marker',
-        })
-        .toEqual(
-          expect.objectContaining({
-            description: '↓',
-            descriptionTooltip: expect.stringContaining('updated #2'),
-          }),
-        )
-    })
-  })
-
   test.describe('opened-by-others grey text', () => {
     test.use({ p4Seeds: { files: [occupiedFile, cleanFile] } })
 
@@ -142,38 +93,10 @@ test.describe('@p1 perforce status decorations', () => {
     })
   })
 
-  test.describe('behind and occupied merge into one entry', () => {
-    test.use({ p4Seeds: { files: [bothFile, cleanFile] } })
-
-    test('one file both behind and open by others publishes one merged marker @regression', async ({
-      page,
-      workbench,
-      perforce,
-    }) => {
-      test.setTimeout(120_000)
-      await openStatusWorkspace(page, workbench, perforce.openDir)
-
-      // The merged description only appears once BOTH scans have completed and
-      // the merge ran — polling it waits for the whole chain, not just one half.
-      await expect
-        .poll(async () => (await decoFor(page, 'both.txt'))?.description, {
-          timeout: 60_000,
-          message: 'the merged marker should replace the two single-fact markers',
-        })
-        .toBe('✎ ↓')
-
-      // Both producers keep their full detail in the merged tooltip (joined by
-      // a newline), so neither fact is lost by the merge.
-      const deco = await decoFor(page, 'both.txt')
-      expect(deco?.descriptionTooltip).toContain('updated #2')
-      expect(deco?.descriptionTooltip).toContain('testuser@otherclient')
-    })
-  })
-
   test.describe('clean files carry no decoration', () => {
-    test.use({ p4Seeds: { files: [cleanFile, behindFile] } })
+    test.use({ p4Seeds: { files: [cleanFile, occupiedFile] } })
 
-    test('a clean file has no decoration while a behind file in the same run does @regression', async ({
+    test('a clean file has no decoration while an occupied file in the same run does @regression', async ({
       page,
       workbench,
       perforce,
@@ -185,11 +108,11 @@ test.describe('@p1 perforce status decorations', () => {
       // actually working in this run. Without it, the null assertion below
       // would also pass if the whole channel were deleted.
       await expect
-        .poll(() => decoFor(page, 'behind.txt'), {
+        .poll(() => decoFor(page, 'occupied.txt'), {
           timeout: 60_000,
-          message: 'the behind file should get its decoration in the same run',
+          message: 'the occupied file should get its decoration in the same run',
         })
-        .toEqual(expect.objectContaining({ description: '↓' }))
+        .toEqual(expect.objectContaining({ description: '✎' }))
 
       // The real assertion: a file that is current, unoccupied and locally
       // unchanged carries nothing.

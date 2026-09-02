@@ -28,9 +28,6 @@ function makeWiring(log: string[]): SwitchClientWiring {
     applyScopes: async (c) => {
       log.push(`applyScopes:${c.root}`)
     },
-    applySyncPreviewOptions: async (c) => {
-      log.push(`applySyncPreviewOptions:${c.root}`)
-    },
     applyOpenedByOthersOptions: async (c) => {
       log.push(`applyOpenedByOthersOptions:${c.root}`)
     },
@@ -64,9 +61,8 @@ describe('wireSwitchedClient', () => {
       // Scopes before the first refresh: the narrowed working-tree-hint scope
       // must be in place before the client answers any hint query.
       'applyScopes:X:/p4ws/branch_a',
-      // Background-check options BEFORE the first refresh: the refresh tail's
-      // scheduled checks read them and would silently skip on defaults.
-      'applySyncPreviewOptions:X:/p4ws/branch_a',
+      // Background-check option BEFORE the first refresh: the refresh tail's
+      // scheduled check reads it and would silently skip on defaults.
       'applyOpenedByOthersOptions:X:/p4ws/branch_a',
       'refresh',
       'startPolling:X:/p4ws/branch_a:120',

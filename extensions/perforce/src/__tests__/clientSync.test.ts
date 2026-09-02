@@ -354,14 +354,10 @@ describe('PerforceClient.sync', () => {
     expect(res.ok).toBe(true)
     expect(res.summary?.refusedModified).toBe(1)
     expect(res.refusedFiles).toHaveLength(1)
-    // THE guard on the early return itself: taking it would skip the refresh and
-    // the forced behind re-scan, leaving the status bar showing the count the
-    // user just clicked. Without this, dropping `refusedModified === 0` from the
-    // early-return condition still passes every assertion above.
+    // THE guard on the early return itself: taking it would skip the refresh.
+    // Without this, dropping `refusedModified === 0` from the early-return
+    // condition still passes every assertion above.
     expect(refreshedAfterSync()).toBe(true)
-    await client.whenSyncPreviewSettled()
-    const dryRuns = spawned.filter((a) => subcommand(a) === 'sync' && a.includes('-n'))
-    expect(dryRuns.length).toBeGreaterThan(0)
   })
 
   it('reports cancellation without an error and still refreshes', async () => {
@@ -448,7 +444,7 @@ describe('PerforceClient.previewSync', () => {
   it('goes straight to -ztag instead of paying for a doomed -Mj probe', async () => {
     // Measured: `-Mj sync -n` collapses to `{"data":...}` blobs on this server
     // family in *both* outcomes, so an execRecords-style `-Mj`-first attempt is
-    // a guaranteed-wasted spawn on every single behind-check.
+    // a guaranteed-wasted spawn on every preview.
     const client = await makeClient(() => ({ stdout: '' }))
 
     await client.previewSync()
@@ -497,8 +493,7 @@ describe('PerforceClient.previewSync', () => {
 
   // A refused-modified file yields a plain line that `-ztag` drops entirely, so
   // a single-file preview came back with zero records and reported "up to date"
-  // — the same false answer as the real get, and the reason the behind count and
-  // the Explorer badge vanished on a narrow scope while the chip showed `↓`.
+  // — the same false answer as the real get.
   it('folds a refused-modified line into the files instead of reporting up to date', async () => {
     const client = await makeClient((argv) => {
       if (!argv.includes('-n')) return { stdout: '' }

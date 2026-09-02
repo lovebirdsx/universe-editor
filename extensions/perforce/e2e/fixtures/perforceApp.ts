@@ -49,10 +49,9 @@ export interface SeedFile {
    *  `content` stays the have revision at #1. */
   readonly headRev?: number
   readonly headContent?: string
-  /** Per-revision historical contents, keyed by revision number. `sync @<cl>`
-   *  resolves a changelist to a revision (via `changeMeta.rev`) and reads this
-   *  map for that revision's content — without it, every sub-head revision
-   *  falls back to the head content. */
+  /** Per-revision historical contents, keyed by revision number. Read by the
+   *  fake when printing or syncing a specific sub-head revision — without it,
+   *  every sub-head revision falls back to the head content. */
   readonly revisions?: Readonly<Record<string, string>>
   /** Fault injection: a real `p4 sync` without `-f` refuses to overwrite this
    *  file (`can't clobber writable file`, exit 1); `-f` overrides. */
@@ -142,9 +141,6 @@ interface FakeState {
    *  change id → depot file → action/rev. */
   submitted?: Record<string, Record<string, { action: string; rev: number }>>
   annotateCl?: string
-  /** `cstat` classifications (change id → have/need/partial). Absent = the server
-   *  has no `cstat`, which the behind-list must degrade on. */
-  cstat?: Record<string, 'have' | 'need' | 'partial'>
 }
 
 const toPosix = (p: string): string => p.split('\\').join('/')
@@ -155,8 +151,6 @@ function seedWorkspace(
   annotate?: P4AnnotateSeed,
   submitted?: P4SubmittedSeed,
   ignored?: readonly string[],
-  changeMetaSeed?: Readonly<Record<string, P4ChangeMetaSeed>>,
-  cstat?: Readonly<Record<string, 'have' | 'need' | 'partial'>>,
 ): {
   workspaceDir: string
   stateFile: string
@@ -224,16 +218,6 @@ function seedWorkspace(
       desc: submitted.description,
     }
   }
-  if (changeMetaSeed) {
-    for (const [id, m] of Object.entries(changeMetaSeed)) {
-      changeMeta[id] = {
-        user: m.user,
-        time: m.time,
-        desc: m.desc,
-        ...(m.rev !== undefined ? { rev: m.rev } : {}),
-      }
-    }
-  }
   const state: FakeState = {
     user: 'e2e',
     client: 'e2e-client',
@@ -264,7 +248,6 @@ function seedWorkspace(
         }
       : {}),
     ...(ignored && ignored.length > 0 ? { ignored: [...ignored] } : {}),
-    ...(cstat && Object.keys(cstat).length > 0 ? { cstat: { ...cstat } } : {}),
   }
   writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8')
   return { workspaceDir, stateFile }
@@ -301,25 +284,6 @@ export interface P4SeedConfig {
   /** Ignore rules for `p4 ignores -i` (checkIgnore e2e): client-root-relative
    *  paths or directory prefixes. */
   readonly ignored?: readonly string[]
-  /** Submitted-changelist metadata for the behind-list (`changes -s submitted`
-   *  source), keyed by change id. `rev` lets `sync @<cl>` resolve to a concrete
-   *  revision. */
-  readonly changeMeta?: Readonly<Record<string, P4ChangeMetaSeed>>
-  /** `cstat` classifications for the behind-list, keyed by change id. Omit to
-   *  model a server with no `cstat` (the behind-list then degrades to the
-   *  unfiltered recent list). */
-  readonly cstat?: Readonly<Record<string, 'have' | 'need' | 'partial'>>
-}
-
-/** One submitted changelist's metadata for `changes -s submitted`. */
-export interface P4ChangeMetaSeed {
-  readonly user: string
-  /** Unix seconds (string), matching `p4 -ztag changes` output. */
-  readonly time: string
-  readonly desc: string
-  /** The revision this changelist produced, so the fake can resolve `sync @<cl>`
-   *  to a concrete revision in the file's `revisions` history. */
-  readonly rev?: number
 }
 
 /** Blame seed: the changelist annotate reports + the metadata `changes -l` returns. */
@@ -361,8 +325,6 @@ export const test = base.extend<PerforceFixtures & { p4Seeds: P4SeedConfig; open
       p4Seeds.annotate,
       p4Seeds.submitted,
       p4Seeds.ignored,
-      p4Seeds.changeMeta,
-      p4Seeds.cstat,
     )
     const openDir = openSubdir ? join(workspaceDir, openSubdir) : workspaceDir
     const abs = (relPath: string) => toPosix(join(workspaceDir, relPath))

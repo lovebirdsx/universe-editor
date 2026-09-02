@@ -64,7 +64,6 @@ if (!STATE_PATH) {
  *   shelved?: Record<string, Record<string, { action: string, rev: number, content?: string }>>,
  *   unshelveRefuse?: string[],
  *   nextChange?: number,
- *   cstat?: Record<string, 'have'|'need'|'partial'>,
  * }} State
  */
 
@@ -456,11 +455,11 @@ function main() {
 
     case 'changes': {
       // Submitted history (`changes -s submitted [-l] [-m N] <scope>` for the
-      // behind-list / graph, and `changes -l <file>` for blame): newest-first by
-      // change id, truncated by `-m`. The blame pass carries no `-s`, so its lone
-      // file arg routes it here too — sorting/truncation are harmless to it (a
-      // single seeded changeMeta entry). `-s pending` (or bare `changes`) stays
-      // the pending-changelist query below.
+      // graph, and `changes -l <file>` for blame): newest-first by change id,
+      // truncated by `-m`. The blame pass carries no `-s`, so its lone file arg
+      // routes it here too — sorting/truncation are harmless to it (a single
+      // seeded changeMeta entry). `-s pending` (or bare `changes`) stays the
+      // pending-changelist query below.
       const status = argAfter(rest, '-s')
       const file = rest.filter((a, idx) => {
         if (a.startsWith('-')) return false
@@ -502,27 +501,6 @@ function main() {
           user: state.user,
           ...(Object.keys(state.shelved[id] ?? {}).length > 0 ? { shelved: '' } : {}),
         })),
-      )
-      return 0
-    }
-
-    case 'cstat': {
-      // `cstat <scope>@<low>,#head` classifies each submitted changelist as
-      // have/need/partial. The fake ignores the revision range — it has no real
-      // file set to walk — and emits whatever the seed declares, newest first.
-      //
-      // Real cstat output scales LINEARLY with the files in scope (measured
-      // 2.1s / 279KB for one mid-sized folder, PROBE-FINDINGS §9), which is why
-      // the product always bounds it with a revision range. The fake omits that
-      // bound only because it has no per-file walk to pay for.
-      if (!state.cstat) {
-        process.stderr.write('cstat - unknown command.\n')
-        return 1
-      }
-      emit(
-        Object.entries(state.cstat)
-          .map(([id, stat]) => ({ change: id, status: stat }))
-          .sort((a, b) => Number(b.change) - Number(a.change)),
       )
       return 0
     }

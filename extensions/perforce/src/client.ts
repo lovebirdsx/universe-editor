@@ -74,7 +74,6 @@ import {
   type SyncPreviewFile,
   type SyncRunSummary,
 } from './syncParser.js'
-import { parseCstat, type CstatStatus } from './cstatParser.js'
 import { buildNewChangeSpec, replaceDescription, parseDescription } from './changeSpec.js'
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
@@ -152,16 +151,6 @@ export interface ClientStatus {
   readonly connection: ConnectionState
   /** Files currently open across all changelists (the SCM badge count). */
   readonly openedCount: number
-  /**
-   * Files the server has newer revisions of than this client holds — "you are
-   * behind by N". Undefined until the first behind-check completes, which is
-   * distinct from `0` ("checked, nothing to get"): the status bar shows nothing
-   * for undefined rather than a reassuring zero it hasn't earned.
-   */
-  readonly syncBehindCount: number | undefined
-  /** Whether {@link syncBehindCount} passed the decoration cap (the count is a
-   *  floor, not a total — the status bar renders it as "500+"). */
-  readonly syncBehindCapped: boolean
   /** Label of a long-running p4 operation in flight (e.g. "Submitting"), or
    *  undefined when idle. Drives the status-bar spinner. */
   readonly busy: string | undefined
@@ -203,75 +192,16 @@ const SHELVED_DESCRIBE_TIMEOUT_MS = 30_000
 const MAX_FILE_SCOPED_INVALIDATIONS = 64
 
 /**
- * Above this many behind files, the grey ↓ markers are dropped and only the
- * count survives. Rendering ten thousand Explorer decorations helps nobody, and
- * the status-bar number stays exact either way — but the skip is always logged,
- * never silent, or the empty Explorer reads as "I'm up to date".
- */
-const SYNC_PREVIEW_MAX_DECORATIONS = 500
-
-/**
- * Floor between two behind-checks. Even with the cheap gate in front, the check
- * must not run once per save — the interval is the outer guard, the re-entry flag
- * only stops overlap.
- */
-const SYNC_PREVIEW_MIN_INTERVAL_MS = 30_000
-
-/**
- * Hard ceiling on the expensive `sync -n` pass.
- *
- * Measured on a 450k-file game workspace: `sync -n -m 501` over the client root
- * produces **zero bytes in 120s** — `-m` caps how many records come back, not how
- * much of the client view the server walks. Without this ceiling a background
- * behind-check would hold a ConcurrencyGate slot for the full 600s command budget,
- * which is precisely the "shared FIFO gate flooded → clicks queue for minutes"
- * pathology this extension already had to fix once.
- *
- * A behind count is a nicety; a responsive editor is not. Timing out here loses
- * the per-file markers for this round and nothing else.
- */
-const SYNC_PREVIEW_TIMEOUT_MS = 20_000
-
-/**
- * Tight ceiling on the cheap gate. Measured at ~130ms even at client-root scope, so
- * ten seconds is two orders of magnitude of headroom: if it hasn't answered by then
- * it is hung, not slow, and the caller should fall through to the real check rather
- * than wait. Same reasoning as the credential-probe timeout.
- */
-const SYNC_PREVIEW_GATE_TIMEOUT_MS = 10_000
-
-/**
- * Gate marker standing for "this scope has no submitted changes at all". A real
- * marker is a changelist id list, so this can never collide with one; it exists so
- * that state is comparable across checks instead of being indistinguishable from
- * "the gate told us nothing".
- */
-const GATE_MARKER_NO_CHANGES = 'none'
-
-/**
- * How many submitted changelists the "which revision do you want" picker offers.
- *
- * The list is the cheap half of {@link PerforceClient.listBehindChangelists}
- * (`changes -l -m N`, measured at 97–500ms); the cap exists for the expensive
- * half — it bounds the revision range `cstat` has to classify, whose output
- * grows linearly with the files those changelists touch. Fifty entries is
- * already more history than a picker can usefully show, and anything older is
- * reachable by typing the number.
- */
-const BEHIND_CHANGELIST_MAX = 50
-
-/**
  * Above this many files opened by others, the grey ✎ markers are
- * dropped and only the count survives. Same reasoning as the behind-check cap —
- * but smaller, because "in use by others" is a per-file warning the user acts on
- * one file at a time, and the skip is always logged, never silent.
+ * dropped and only the count survives — the cap is small because "in use by
+ * others" is a per-file warning the user acts on one file at a time, and the
+ * skip is always logged, never silent.
  */
 const OPENED_BY_OTHERS_MAX_DECORATIONS = 300
 
 /**
- * Floor between two opened-by-others scans. Kept separate from the behind-check
- * floor: the two scans answer different questions and change at different rates
- * (an open set churns far more often than a submitted changelist does).
+ * Floor between two opened-by-others scans — an open set churns far more often
+ * than a submitted changelist does.
  */
 const OPENED_BY_OTHERS_MIN_INTERVAL_MS = 30_000
 
@@ -356,31 +286,6 @@ export interface SyncRunResult {
    */
   readonly refusedFiles: readonly SyncPreviewFile[]
   readonly error: { kind: SyncErrorKind; suggestion: string } | undefined
-}
-
-/**
- * A submitted changelist offered as a sync target, with what this client holds
- * of it. `unknown` means the classification pass didn't run or didn't answer —
- * see {@link BehindChangelistResult.classified}.
- */
-export interface BehindChangelist extends GraphChangeMeta {
-  readonly status: CstatStatus | 'unknown'
-}
-
-/** What {@link PerforceClient.listBehindChangelists} found. */
-export interface BehindChangelistResult {
-  /** Newest first. Filtered to need/partial when `classified`, else everything. */
-  readonly changes: readonly BehindChangelist[]
-  /** The scope has submitted changelists older than the ones listed. */
-  readonly hasMore: boolean
-  /**
-   * `p4 cstat` answered, so `changes` really is "what this client is missing".
-   * False means the list is "the most recent changelists" and the caller must
-   * say so rather than imply the client is behind on all of them.
-   */
-  readonly classified: boolean
-  /** False when even the cheap `changes` listing failed — nothing to show. */
-  readonly ok: boolean
 }
 
 /** True when a path is a spreadsheet the Excel extension should diff in a webview. */
@@ -483,28 +388,6 @@ export class PerforceClient {
    *  purpose (see {@link setSyncScope}). */
   private _syncScopes: readonly string[] = ['//...']
   private _syncScopeDirs: readonly string[] = []
-  /** In-flight behind-check, so it can't overlap itself and tests can await it. */
-  private _backgroundSyncPreview: Promise<void> | undefined
-  /** `_now()` of the last behind-check that actually ran p4, for the interval floor. */
-  private _lastSyncPreviewAt = 0
-  /** Behind count from the last completed check; undefined = never checked. */
-  private _syncBehindCount: number | undefined
-  /**
-   * Whether {@link _syncBehindCount} is the decoration cap rather than a true
-   * total. Remembered rather than recomputed so a gate-skipped result reports the
-   * same "500+" the scan reported, instead of downgrading it to an exact 500.
-   */
-  private _syncBehindCapped = false
-  /**
-   * Highest submitted changelist per sync scope at the last check — the cheap
-   * gate's memory. Unchanged marker ⇒ nothing was submitted here ⇒ we cannot have
-   * become newly behind, so the expensive pass is skipped entirely.
-   */
-  private _lastDepotMarker: string | undefined
-  /** Whether behind-checks run automatically (`perforce.syncPreview.autoCheck`). */
-  private _syncPreviewAutoCheck = false
-  /** Configured floor between automatic behind-checks, in ms. */
-  private _syncPreviewIntervalMs = SYNC_PREVIEW_MIN_INTERVAL_MS
   /** In-flight opened-by-others scan, so it can't overlap itself and tests can
    *  await it. */
   private _backgroundOpenedByOthers: Promise<void> | undefined
@@ -540,16 +423,8 @@ export class PerforceClient {
   private _reconcileScanArmed = false
   /** Configured ceiling for one directory batch (`perforce.reconcileScan.maxBatchDurationMs`). */
   private _reconcileScanMaxBatchMs = RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS
-  /**
-   * Grey Explorer markers this client currently publishes, keyed by
-   * {@link scopeKey}'d local path. Held so the two independent producers — behind
-   * files (this phase) and files others have open — can each rewrite their own
-   * slice without erasing the other's, then publish the union.
-   */
-  private readonly _behindDecorations = new Map<string, SourceControlSupplementaryDecoration>()
-  /** Grey ✎ markers (files other clients have open), keyed like
-   *  {@link _behindDecorations} so {@link _publishSupplementaryDecorations} can
-   *  publish the union of both. */
+  /** Grey ✎ markers (files other clients have open), keyed by {@link scopeKey}'d
+   *  local path, published by {@link _publishSupplementaryDecorations}. */
   private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
   private _disposed = false
   private _pollTimer: ReturnType<typeof setInterval> | undefined
@@ -648,8 +523,6 @@ export class PerforceClient {
       clientName: this._clientName,
       connection: this._connection,
       openedCount: this._openedCount,
-      syncBehindCount: this._syncBehindCount,
-      syncBehindCapped: this._syncBehindCapped,
       busy: this._busyOps[this._busyOps.length - 1],
       busyCancellable: this._cancelSources.length > 0,
       ...(this._scanProgress !== undefined ? { scanProgress: this._scanProgress } : {}),
@@ -839,23 +712,14 @@ export class PerforceClient {
     if (sameScopeDirs(this._syncScopeDirs, nextDirs)) return
     this._syncScopeDirs = nextDirs
     this._syncScopes = nextDirs.map((dir) => `${dir}/...`)
-    // A different scope is a different question: the behind count, its cap
-    // flag and the cheap gate's marker all describe the OLD scope. Keeping
-    // them would show a stale number, and the marker would make the first
-    // check on the new scope skip itself whenever the same changelist happens
-    // to be the newest here too — one submit batch landing in several focus
-    // dirs is the normal case, so the new scope's count would never appear.
-    // Same for the opened-by-others count: it is a claim about the old scope.
+    // A different scope is a different question: the opened-by-others count is
+    // a claim about the old scope, so keeping it would show a stale number.
     // An UNCHANGED scope (the config-change notification fires for unrelated
     // keys too) clears nothing — that would burn one expensive pass for no
     // new information.
-    this._syncBehindCount = undefined
-    this._syncBehindCapped = false
-    this._lastDepotMarker = undefined
     this._openedByOthersCount = undefined
     this._openedByOthersCapped = false
-    if (this._behindDecorations.size > 0 || this._othersDecorations.size > 0) {
-      this._behindDecorations.clear()
+    if (this._othersDecorations.size > 0) {
       this._othersDecorations.clear()
       this._publishSupplementaryDecorations()
     }
@@ -1031,11 +895,10 @@ export class PerforceClient {
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
     this._setAcceptInput(defaultHasFiles)
     this._emitChange()
-    // Fire-and-forget, and deliberately last: the behind-check, the
-    // opened-by-others scan and the reconcile scan are scope-wide server reads,
-    // so they must never be part of the refresh the spinner covers. Their own
-    // guards decide whether anything actually runs.
-    this.scheduleSyncPreview()
+    // Fire-and-forget, and deliberately last: the opened-by-others scan and the
+    // reconcile scan are scope-wide server reads, so they must never be part of
+    // the refresh the spinner covers. Their own guards decide whether anything
+    // actually runs.
     this.scheduleOpenedByOthers()
     this.scheduleReconcileScan()
   }
@@ -1264,19 +1127,9 @@ export class PerforceClient {
     this._openedCount = 0
     this._sc.count = 0
     this._setAcceptInput(false)
-    // A behind count is a claim about the server, so it can't outlive the
-    // connection: "↓12" while disconnected is a number nothing can refresh.
-    this._syncBehindCount = undefined
-    this._syncBehindCapped = false
-    // "Who has what open" is a claim about the server too, so it goes as well.
+    // "Who has what open" is a claim about the server, so it goes as well.
     this._openedByOthersCount = undefined
     this._openedByOthersCapped = false
-    // The gate's memory has to go with it. Keeping it would let the first check
-    // after reconnecting see an unchanged marker, skip the scan, and leave the
-    // count blank until someone happens to submit — the cache is only valid as
-    // long as the count it was gating still exists.
-    this._lastDepotMarker = undefined
-    this._behindDecorations.clear()
     this._othersDecorations.clear()
     this._publishSupplementaryDecorations()
     // The background reconcile scan is a scope-wide read: with the server gone,
@@ -2049,10 +1902,6 @@ export class PerforceClient {
       // cache entry (fstat/print/filelog) is potentially stale — full clear.
       this._invalidateWorkspaceState()
       await this._refreshAfterMutation()
-      // The behind count is stale by definition now, and the user just acted on
-      // it — `force` skips the interval floor so the status bar doesn't keep
-      // showing the number they clicked to clear for another few minutes.
-      this.scheduleSyncPreview({ force: true })
       return { ok: true, cancelled: false, summary, refusedFiles, error: undefined }
     })
   }
@@ -2083,10 +1932,9 @@ export class PerforceClient {
    *
    * Runs at **background** priority — the scope-wide server comparison must never
    * take the slot a user's click is waiting on. `limit` becomes `-m <n>`, which
-   * bounds how many records come back but — measured, and the whole reason
-   * {@link runSyncPreviewScan} needs a cheap gate in front — **not** how much of the
-   * client view the server walks. Pass `timeoutMs` for any caller that must not
-   * hold a gate slot for the full command budget.
+   * bounds how many records come back — but **not** how much of the client view
+   * the server walks. Pass `timeoutMs` for any caller that must not hold a gate
+   * slot for the full command budget.
    */
   async previewSync(
     scope?: readonly string[],
@@ -2139,351 +1987,6 @@ export class PerforceClient {
     return base.map((target) => `${target}${spec}`)
   }
 
-  /**
-   * How many files a sync to `spec` would touch, for a progress bar's
-   * denominator. Undefined when the server didn't say or the probe failed —
-   * callers must degrade to an indeterminate bar rather than invent a total.
-   *
-   * `-m 1` keeps the reply to a single record: `totalFileCount` is the
-   * untruncated grand total and survives the limit (see {@link previewSync}),
-   * so this asks for the number without paying to transfer the file list.
-   */
-  async previewSyncTotal(spec: string, scope?: readonly string[]): Promise<number | undefined> {
-    const res = await this.previewSync(scope, spec, 1, { timeoutMs: SYNC_PREVIEW_TIMEOUT_MS })
-    if (!res.ok) return undefined
-    if (res.upToDate) return 0
-    return res.total
-  }
-
-  // --- Behind awareness ----------------------------------------------------
-
-  /** Apply `perforce.syncPreview.*`. Turning auto-check off clears what's shown:
-   *  stale ↓ markers are worse than none, since nothing will refresh them. */
-  setSyncPreviewOptions(options: { autoCheck: boolean; intervalMs: number }): void {
-    this._syncPreviewAutoCheck = options.autoCheck
-    this._syncPreviewIntervalMs = Math.max(SYNC_PREVIEW_MIN_INTERVAL_MS, options.intervalMs)
-    if (!options.autoCheck) {
-      this._syncBehindCount = undefined
-      this._syncBehindCapped = false
-      // Same reason as going offline: a remembered marker would make the first
-      // check after re-enabling skip itself and leave the count blank.
-      this._lastDepotMarker = undefined
-      if (this._behindDecorations.size > 0) {
-        this._behindDecorations.clear()
-        this._publishSupplementaryDecorations()
-      }
-      this._emitChange()
-    }
-  }
-
-  /**
-   * Compare the sync scope against the depot and report how far behind this client
-   * is, publishing a grey ↓ marker per file.
-   *
-   * **Two tiers, because the obvious one-tier design is unusable.** Measured on a
-   * 450k-file workspace, `sync -n` over the client root returns nothing in 120s —
-   * `-m` bounds the reply, not the server's walk of the client view. So:
-   *
-   * 1. A cheap gate (`changes -m 1 -s submitted <scope>`, ~130ms even at client-root
-   *    scope) asks only "has anything been submitted here since I last looked". In
-   *    the steady state the answer is no and this method stops right here, having
-   *    spent a tenth of a second.
-   * 2. Only when that highest changelist actually moved does the expensive
-   *    `sync -n` run, under {@link SYNC_PREVIEW_TIMEOUT_MS}.
-   *
-   * `force` skips tier 1 — a user who clicked "check now" gets the real comparison
-   * even if the gate would have short-circuited it.
-   *
-   * The count comes from the server's `totalFileCount` when it reports one: that
-   * is the untruncated total of files the sync would act on (measured: it
-   * survives `-m` and counts the plain-line refusals too), so a scope with more
-   * behind files than the decoration cap still gets its real count. Without the
-   * field (older servers) the returned record count is the fallback — logged,
-   * because that count is truncated whenever the reply saturated `-m`.
-   *
-   * `capped` says the count passed the decoration cap: per-file markers are
-   * dropped then, and the count is a floor, not a total.
-   */
-  async runSyncPreviewScan(options?: {
-    force?: boolean
-  }): Promise<{ behind: number; capped: boolean; ok: boolean; skipped: boolean }> {
-    const force = options?.force === true
-    // Held, not committed: the marker may only advance once the expensive pass it
-    // gates has actually produced a result. Advancing it up front means a single
-    // timed-out `sync -n` short-circuits every later check until someone submits
-    // again — the count would sit at a stale value for hours with no way back.
-    let observedMarker: string | undefined
-    if (!force) {
-      const gate = await this._latestSubmittedChange()
-      if (gate.ok && gate.marker !== undefined) {
-        if (gate.marker === this._lastDepotMarker) {
-          // Nothing was submitted in this scope since the last check, so nothing can
-          // have made us newly behind. Skipping is the whole point of the gate.
-          return {
-            behind: this._syncBehindCount ?? 0,
-            capped: this._syncBehindCapped,
-            ok: true,
-            skipped: true,
-          }
-        }
-        observedMarker = gate.marker
-      }
-    }
-    // `-m 501` bounds how many records come back — the cap decision must NOT
-    // trust a saturated reply. `totalFileCount` (measured: one grand total in
-    // the first record, untruncated under `-m`) is the real number; only when
-    // the server doesn't report it do we fall back to the truncated record
-    // count and say so.
-    const probe = SYNC_PREVIEW_MAX_DECORATIONS + 1
-    const res = await this.previewSync(undefined, '#head', probe, {
-      timeoutMs: SYNC_PREVIEW_TIMEOUT_MS,
-    })
-    if (!res.ok) {
-      // Degrade visibly in the log only: a failed or timed-out probe is not
-      // evidence that the client is current, so the previous count and markers
-      // stay exactly as they are — and the marker stays put too, so the next
-      // check retries instead of trusting a gate reading it never acted on.
-      this._log?.('[perforce] behind-check failed; keeping the previous result')
-      return {
-        behind: this._syncBehindCount ?? 0,
-        capped: this._syncBehindCapped,
-        ok: false,
-        skipped: false,
-      }
-    }
-    if (observedMarker !== undefined) this._lastDepotMarker = observedMarker
-    let behind: number
-    let capped: boolean
-    if (res.total !== undefined) {
-      capped = res.total > SYNC_PREVIEW_MAX_DECORATIONS
-      behind = res.total
-    } else {
-      // A reply WITH records but no totalFileCount means the server doesn't
-      // report the field (an empty reply is just "up to date") — say so,
-      // because that record count is truncated whenever `-m` saturated it.
-      if (res.files.length > 0) {
-        this._log?.(
-          '[perforce] behind-check: sync -n reported no totalFileCount; ' +
-            'falling back to the returned record count',
-        )
-      }
-      capped = res.files.length > SYNC_PREVIEW_MAX_DECORATIONS
-      behind = capped ? SYNC_PREVIEW_MAX_DECORATIONS : res.files.length
-    }
-    this._syncBehindCount = behind
-    this._syncBehindCapped = capped
-    this._behindDecorations.clear()
-    if (capped) {
-      // Never silent: an Explorer with no markers plus a number in the status bar
-      // would otherwise read as a contradiction the user can't explain.
-      this._log?.(
-        `[perforce] behind-check: more than ${SYNC_PREVIEW_MAX_DECORATIONS} files behind; ` +
-          `showing the count only, no per-file markers`,
-      )
-    } else {
-      for (const file of res.files) {
-        const local = file.clientFile
-        // No local path means the file isn't in this client's view — there is no
-        // Explorer row to decorate, and the count already includes it.
-        if (!local) continue
-        this._behindDecorations.set(scopeKey(local), {
-          resourceUri: local,
-          description: localize('perforce.deco.behind', '↓'),
-          tooltip: localize(
-            'perforce.deco.behind.tooltip',
-            'Update available — the server has a newer revision ({0} #{1}). Use Get Latest Revision to fetch it.',
-            { 0: file.action, 1: file.rev },
-          ),
-        })
-      }
-    }
-    this._publishSupplementaryDecorations()
-    this._emitChange()
-    this._log?.(`[perforce] behind-check: ${behind}${capped ? '+' : ''} file(s) behind`)
-    return { behind, capped, ok: true, skipped: false }
-  }
-
-  /**
-   * The cheap gate: the highest submitted changelist per sync-scope filespec,
-   * joined into one comparable marker.
-   *
-   * `changes -m 1 -s submitted <scope>` is ~1000× cheaper than `sync -n` on the
-   * same scope (130ms vs >120s at client-root scope) because it reads the change
-   * table instead of walking the client view. `-m 1` applies **per filespec**, so a
-   * multi-scope client yields one id each and the joined string changes if any of
-   * them moves.
-   *
-   * Deliberately not `<scope>#have`, which would answer the sharper question "what
-   * do I hold" — measured at 31s, 240× slower than the plain scope, because the
-   * revision modifier forces exactly the per-file walk this gate exists to avoid.
-   */
-  private async _latestSubmittedChange(): Promise<{ ok: boolean; marker: string | undefined }> {
-    const res = await this._p4.execTagged(
-      ['changes', '-m', '1', '-s', 'submitted', ...this._syncScopes],
-      { timeoutMs: SYNC_PREVIEW_GATE_TIMEOUT_MS },
-    )
-    if (res.result.exitCode !== 0) {
-      // An unusable gate must fall through to the real check, never silently
-      // report "nothing changed" — that would freeze the count forever.
-      this._log?.(`[perforce] behind-check gate failed: ${p4ErrorText(res.result)}`)
-      return { ok: false, marker: undefined }
-    }
-    const ids = parseChangesList(res.records).map((c) => c.id)
-    // Zero records on a successful run is itself a stable answer — this scope has
-    // never had a submitted change (an empty depot, or a focus folder that only
-    // exists locally). It has to be a *comparable* marker rather than `undefined`,
-    // or that workspace pays for the expensive pass on every single check while the
-    // gate quietly never applies. A non-mapping filespec exits non-zero and is
-    // already handled above, so this really does mean "nothing here yet".
-    if (ids.length === 0) return { ok: true, marker: GATE_MARKER_NO_CHANGES }
-    return { ok: true, marker: ids.join(',') }
-  }
-
-  /**
-   * The submitted changelists in the sync scope this client hasn't fully got,
-   * newest first — what the "N files behind" click offers as sync targets.
-   *
-   * Two commands, both interactive (the user clicked and is waiting):
-   *
-   * 1. `changes -s submitted -l -m <N+1> <scope>` lists recent history with
-   *    descriptions. Measured at 97–500ms because it reads the change table
-   *    instead of walking the client view. The `+1` probes whether older
-   *    changelists exist, exactly like the graph's paging.
-   * 2. `cstat <scope>@<oldest listed>,#head` says which of those this client
-   *    already has. **The revision range is not optional**: unbounded `cstat`
-   *    output grows linearly with the files in scope (measured 279KB for one
-   *    mid-sized folder), and bounding it to the window we're about to display
-   *    keeps the work proportional to what those changelists touched.
-   *
-   * `cstat` is the only command that answers "which changelists am I missing" —
-   * `sync -n`'s `change` field is a single grand total for the whole run, not a
-   * per-file changelist, so the existing behind-check can't be reused here.
-   *
-   * When step 2 fails the result degrades to the unfiltered list with
-   * `classified: false`; the caller must then present it as "recent changelists"
-   * rather than "changelists you're missing". Never silent — always logged.
-   */
-  async listBehindChangelists(): Promise<BehindChangelistResult> {
-    return this._withBusy(localize('perforce.busy.behindList', 'Loading changelists'), async () => {
-      const started = this._now()
-      const listed = await this._p4.execTagged(
-        [
-          'changes',
-          '-s',
-          'submitted',
-          '-l',
-          '-m',
-          String(BEHIND_CHANGELIST_MAX + 1),
-          ...this._syncScopes,
-        ],
-        INTERACTIVE_EXEC,
-      )
-      if (listed.result.exitCode !== 0) {
-        this._log?.(`[perforce] behind-list: changes failed: ${p4ErrorText(listed.result)}`)
-        return { changes: [], hasMore: false, classified: false, ok: false }
-      }
-      const all = parseChangesList(listed.records)
-      const hasMore = all.length > BEHIND_CHANGELIST_MAX
-      const recent = all.slice(0, BEHIND_CHANGELIST_MAX)
-      this._log?.(
-        `[perforce] behind-list: ${recent.length} changelist(s) listed in ${this._now() - started}ms` +
-          `${hasMore ? ' (older ones exist)' : ''}`,
-      )
-      const oldest = recent.at(-1)
-      if (!oldest) {
-        return { changes: [], hasMore: false, classified: true, ok: true }
-      }
-      const statuses = await this._cstatStatuses(oldest.id)
-      if (!statuses) {
-        return {
-          changes: recent.map((c) => ({ ...c, status: 'unknown' as const })),
-          hasMore,
-          classified: false,
-          ok: true,
-        }
-      }
-      const behind = recent
-        .map((c) => ({ ...c, status: statuses.get(c.id) ?? ('unknown' as const) }))
-        .filter((c) => c.status !== 'have')
-      this._log?.(`[perforce] behind-list: ${behind.length} of ${recent.length} not fully synced`)
-      return { changes: behind, hasMore, classified: true, ok: true }
-    })
-  }
-
-  /**
-   * `p4 cstat` over the changelist window, or undefined when it can't answer.
-   *
-   * Undefined is a first-class outcome, not an error path: a server without
-   * `cstat`, a timeout, or an empty reply must degrade the picker to "recent
-   * changelists" rather than claim everything is already synced — the worst
-   * possible answer, since it's indistinguishable from being up to date.
-   */
-  private async _cstatStatuses(oldestId: string): Promise<Map<string, CstatStatus> | undefined> {
-    const started = this._now()
-    const targets = this._syncScopes.map((scope) => `${scope}@${oldestId},#head`)
-    const res = await this._p4.execTagged(['cstat', ...targets], INTERACTIVE_EXEC)
-    if (res.result.exitCode !== 0) {
-      this._log?.(
-        `[perforce] behind-list: cstat failed, listing recent changelists unclassified: ${p4ErrorText(res.result)}`,
-      )
-      return undefined
-    }
-    const statuses = parseCstat(res.records)
-    if (statuses.size === 0) {
-      this._log?.('[perforce] behind-list: cstat returned no usable records; leaving unclassified')
-      return undefined
-    }
-    this._log?.(
-      `[perforce] behind-list: cstat classified ${statuses.size} changelist(s) in ${this._now() - started}ms`,
-    )
-    return statuses
-  }
-
-  /**
-   * Run a behind-check in the background if one is due, and never block a caller.
-   *
-   * Four independent guards, because the expensive tier of a behind-check is the
-   * most expensive read this extension issues: auto-check must be on, no check may
-   * be in flight, the interval floor must have elapsed, and the client must be
-   * connected. `force` (a user-initiated get just landed) skips the interval **and**
-   * the cheap gate — a click deserves the real comparison, but still not two
-   * overlapping scans.
-   */
-  scheduleSyncPreview(options?: { force?: boolean }): void {
-    const force = options?.force === true
-    if (!force && !this._syncPreviewAutoCheck) return
-    if (this._backgroundSyncPreview) return
-    if (this._connection !== 'connected') return
-    const now = this._now()
-    if (!force && now - this._lastSyncPreviewAt < this._syncPreviewIntervalMs) return
-    this._lastSyncPreviewAt = now
-    const run = (async () => {
-      // Cross a macrotask first: chaining alone would still land inside the
-      // caller's awaited window, so the spinner would cover a scan the user
-      // never asked to wait for.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 0)
-        timer.unref?.()
-      })
-      if (this._disposed) return
-      await this.runSyncPreviewScan(force ? { force: true } : undefined)
-    })()
-      // Mandatory, not defensive: an unhandled rejection from a floating promise
-      // takes down the whole extension host.
-      .catch((err: unknown) => {
-        this._log?.(`[perforce] background behind-check failed: ${String(err)}`)
-      })
-      .finally(() => {
-        if (this._backgroundSyncPreview === run) this._backgroundSyncPreview = undefined
-      })
-    this._backgroundSyncPreview = run
-  }
-
-  /** Await any in-flight behind-check (tests; also lets callers settle). */
-  async whenSyncPreviewSettled(): Promise<void> {
-    await this._backgroundSyncPreview
-  }
-
   // --- Opened-by-others awareness ------------------------------------------
 
   /** Apply `perforce.openedByOthers.*`. Turning auto-check off clears what's
@@ -2507,7 +2010,7 @@ export class PerforceClient {
    * Ask who has what open: `p4 opened -a` over the sync scope, filtered to other
    * clients, published as grey ✎ markers.
    *
-   * No cheap gate in front (unlike the behind-check): `opened` reads the
+   * No cheap gate in front: `opened` reads the
    * server's *open table* rather than walking the client view, so its cost
    * scales with how many files are open anywhere, not with workspace size — a
    * 450k-file workspace doesn't make it slower, and there is no changes-table
@@ -2621,9 +2124,8 @@ export class PerforceClient {
    * Run an opened-by-others scan in the background if one is due, and never
    * block a caller.
    *
-   * The same four guards as the behind-check — auto-check on, no scan in flight,
-   * the interval floor elapsed, client connected — kept as independent state
-   * because the two scans have different costs and change at different rates.
+   * Four guards: auto-check on, no scan in flight, the interval floor elapsed,
+   * client connected.
    */
   scheduleOpenedByOthers(): void {
     if (!this._openedByOthersAutoCheck) return
@@ -2957,37 +2459,12 @@ export class PerforceClient {
   }
 
   /**
-   * Publish the union of every supplementary-decoration producer.
-   *
-   * The channel replaces the provider's whole set, so each producer keeps its own
-   * map and this is the single place they merge — a producer that published its
-   * slice directly would silently erase the others'. A file can appear in two
-   * maps at once (behind *and* open by someone else); it publishes as ONE entry
-   * then, because the renderer keys decorations by path and a second entry would
-   * silently overwrite the first.
+   * Publish the opened-by-others markers. The channel replaces the provider's
+   * whole set, so this is the single place the producer's map is turned into the
+   * published decorations.
    */
   private _publishSupplementaryDecorations(): void {
-    const merged = new Map<string, SourceControlSupplementaryDecoration>(this._behindDecorations)
-    for (const [key, deco] of this._othersDecorations) {
-      const behind = merged.get(key)
-      if (!behind) {
-        merged.set(key, deco)
-        continue
-      }
-      // Both facts matter and the grey line only fits two glyphs — join the
-      // descriptions; the tooltip keeps each producer's full detail. Tooltip
-      // order follows the glyph order (✎ then ↓) so the hover reads in the same
-      // sequence the row does.
-      const tooltip = [deco.tooltip, behind.tooltip]
-        .filter((t): t is string => t !== undefined)
-        .join('\n')
-      merged.set(key, {
-        resourceUri: deco.resourceUri,
-        description: localize('perforce.deco.occupiedAndBehind', '✎ ↓'),
-        ...(tooltip.length > 0 ? { tooltip } : {}),
-      })
-    }
-    this._sc.setSupplementaryDecorations([...merged.values()])
+    this._sc.setSupplementaryDecorations([...this._othersDecorations.values()])
   }
 
   // --- Resolve (Phase 3) ---------------------------------------------------

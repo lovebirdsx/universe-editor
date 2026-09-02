@@ -17,7 +17,7 @@
 | 并发门控 | `concurrency.ts` | `ConcurrencyGate`：每 client 一个 FIFO 并发门；`run(task, priority?, onStart?)` 双队列（`interactive`/`background`），**静态预留 1 槽**——background 硬顶 `max - reserve`（默认 4→3），interactive 优先出队且可用全部 `max`；`setMax` 重算 `_backgroundCap` 后 `_drain` |
 | CLI 封装 | `p4Service.ts` | `spawn('p4', argv)`（**数组、`shell:false`**，绝不拼 shell 串）；`exec`/`execJson`(`-Mj`)/`execTagged`(`-ztag`)；连接全局选项 `-p/-u/-c`；**env 净化**（剥离 `ELECTRON_*`/`NODE_OPTIONS` 防被劫持）；经 `ConcurrencyGate` 限并发。**非零退出不 reject**，只有 spawn 失败（p4 缺失 ENOENT）才 reject |
 | 输出解析 | `p4Output.ts` | 纯函数：`parseMarshalJson`（`-Mj` 每行一 JSON）、`parseZtag`（`... key value`，空行分记录）、`collapseNumberedKeys`（`depotFile0/1/…` 并行键折叠成数组）。**全部纯、可对 fixture 单测** |
-| 领域解析 | `openedParser.ts` `fstatParser.ts` `shelveParser.ts` `blameSource.ts` `changeSpec.ts` `changelist.ts` `filelogParser.ts` `cstatParser.ts` | 把 p4 记录 → 领域模型 / 分组。**纯，无 p4 I/O**，各带 `__tests__` |
+| 领域解析 | `openedParser.ts` `fstatParser.ts` `shelveParser.ts` `blameSource.ts` `changeSpec.ts` `changelist.ts` `filelogParser.ts` | 把 p4 记录 → 领域模型 / 分组。**纯，无 p4 I/O**，各带 `__tests__` |
 | 连接发现 | `clientDiscovery.ts` | 无连接 `p4 -ztag info` 解析 client/root/user（**不取 port**，见下节红线）；`perforce.port/user/client` 兜底；folder 不在 p4 workspace 内 → 返回 undefined（禁用 provider） |
 | client 编排 | `client.ts` `clientManager.ts` `baselineProvider.ts` | `PerforceClient` = 一个 client 一个 `SourceControl` + 动态 changelist 分组 + refresh 编排 + 所有 p4 操作方法；`ClientManager` 按 root 路由；`BaselineProvider` = `#have` 内容缓存（`depotFile#rev` 键） |
 | 入口 & UI 挂钩 | `extension.ts` `p4StatusBar.ts` `autoEdit.ts` `p4Decoration.ts` `p4Error.ts` `nls.ts` | `activate` 发现 client → 注册全部命令；状态栏、autoEdit、行装饰、错误分类/toast、本地化 |
@@ -99,30 +99,12 @@
 | `-ztag` | 行**照样在 raw stdout**，只是没有结构化记录（无 `... key value` 前缀，被 `parseZtag` 丢弃）——`previewSync` 因此能从 `result.stdout` 捞回来 | 走 stderr，不受影响 |
 | `-Mj` | 塌成 `{"data":…}` blob | 同上 |
 
-- **曾经的 bug**：只有 clobber 被解析 → allwrite client 上 `parseSyncOutput` 四个正则全不命中（`APPLIED_LINE` 要求 ` - ` 后紧跟 `updated`/`updating`/…，实际紧跟 `can't`）→ 全零 summary → `runSync` 弹「已是最新版本」= **假成功**，用户被送走时以为落后的文件已是最新。同一根因让 `previewSync`（走 `execTagged`）拿到零记录报 `upToDate`，窄作用域下落后计数与 Explorer 灰字一并消失，与 rev chip 的 `↓#head` 自相矛盾。
+- **曾经的 bug**：只有 clobber 被解析 → allwrite client 上 `parseSyncOutput` 四个正则全不命中（`APPLIED_LINE` 要求 ` - ` 后紧跟 `updated`/`updating`/…，实际紧跟 `can't`）→ 全零 summary → `runSync` 弹「已是最新版本」= **假成功**，用户被送走时以为落后的文件已是最新。同一根因让 `previewSync`（走 `execTagged`）拿到零记录报 `upToDate`，与 rev chip 的 `↓#head` 自相矛盾。
 - **现行**：`REFUSED_MODIFIED_LINE` → `SyncRunSummary.refusedModified`（并使 `unrecognized` 转假）；纯函数 `parseSyncRefused` 把 plain 行折回 `SyncPreviewFile[]`（`action: 'not updated'`），`previewSync` 并进 `files` 使三处信号一致（`total` 仍只读 records —— `totalFileCount` 已含拒绝行，别叠加）。`sync()` 顺带把 `refusedFiles` 带出来供「查看差异」用，避免再跑一条可能与用户所见不一致的 p4 命令。
 - **分支顺序即优先级**：`refusedModified > 0` 排在 `upToDate` 之前（一次多 filespec run 可同时产生两者，报被拒绝的更有行动价值）。**「什么都没解析出来」绝不能再回落成「已是最新」**——那是最坏的答案（与成功不可区分），现在报「没有返回可识别的结果」+ 打开输出频道按钮。
 - **`-f` 是逃生阀，不是默认补救**。p4 拒绝的唯一原因就是文件里有未收集的工作，而 `sync -f` 会永久销毁它（§11.2 已实测覆盖本地草稿）。所以三条硬约束缺一不可：① 它只能作为**显式按钮**出现（绝不自动重跑成 `-f`）；② 点击后必须走 `confirmForceGet()` **二次确认**，文案明确「未收集的改动将丢失、不可撤销」；③ 默认路径仍是先收集——按钮顺序固定为 `收集改动 → 查看差异 → 强制拉取`（收集是无损的、p4 会排合并，故领先；force 排在看过 diff 之后）。按钮集由纯函数 `refusedSyncButtons({refusedModified, mustResolve, allowForce})` 拼装（`extension.ts`，带单测）；`allowForce` 在本次 run 已经是 `-f` 时为 false——同样的拒绝再给一次 force 只会原地打转。clobber 分支同样给 force，但**不给「查看差异」**：它走 stderr/exit 1，`refusedFiles` 从 stdout 解析故为空，没有 per-file 本地路径可 diff。
 - **「查看差异」直调 `target.openChange`，不要绕回 `perforce.openChange` 命令**。runSync 已经持有发起这次 get 的 client；命令版会用 `resolveClient` 从路径重新解析，而它在无 root 命中时回退 active repository——那是命令路由语义，对一个我们已知归属的文件是错的。
 - **加任何新的 sync 输出解析前**：先想「这条行走 stdout 还是 stderr、exit 几、中断还是跳过」四问，四个答案都不同就是两个形态。
-
-## ⚠️ 状态栏条目无法传参 → 作用域级与文件级拉取必须是两个命令
-
-`StatusBarItem`（`packages/extension-api/src/index.ts`）只有 `command: string | undefined`，**没有 arguments 字段**。behind 项（「N 个可更新」）曾复用 `perforce.syncLatest`，而后者无参时回退到活动编辑器文件 → **说「N 个可更新、拉整个作用域」，实际只拉一个文件**；若活动文件恰好不落后还会弹「已是最新」而那 N 个仍然落后。现在 behind 项指向独立的运行时命令 `perforce.syncScope`（无菜单/命令面板入口，与 `perforce.cancelBusy`/`reopenTo` 同款先例，规避 renderer Action2 遮蔽坑），rev chip 保持 `perforce.syncLatest`（per-file 语义，回退活动编辑器恰是它描述的那个文件）。**给状态栏加需要「同一动作不同作用域」的入口时，一律加命令，别想着传参。**
-
-**本轮把 behind 项的一次性 `#head` 跳转变成了「选变更列表」**：`perforce.syncScope` 现在先 `pickBehindChangelist`（QuickPick：第一项固定「最新版本」`#head`，等价旧行为；其后按新→旧列本工作区尚未完全同步的已提交 CL，`partial` 额外标「部分已同步」；末项「更早的变更列表…」手动输号），选定后 `runSync(spec, { resolveTotal })`。`perforce.syncScope` **仍是运行时命令**（不进 `contributes.commands`），仍是 behind 项唯一调用方——只是交互从「点击即拉」变成「选完再拉」。落后的 CL 列表与流式进度条见下面两节。
-
-## ⚠️ `sync -n` 反推不出「落后了哪些 CL」→ 落后 CL 列表用 `changes` + `cstat` 两条命令
-
-**根因（真机实测）**：`p4 -ztag sync -n` 的 `change` 字段是**首条记录里的一个全局总量**（"这次 sync 会把你带到哪个 CL"），不是每文件的 changelist——既有的落后计数链路只能回答「落后多少个文件」，回答不了「落后了哪些 CL」（PROBE-FINDINGS §1 记录该字段、§12.3.0 记录记录数/`totalFileCount` 语义，佐证它无从按文件反查 CL）。而 `cstat` 是唯一能回答「这个 client 缺哪些 CL」的命令。
-
-**现行（两条命令，都 interactive——用户点了在等）**：
-- `p4 changes -s submitted -l -m 51 <scope>` 列最近历史带描述（读 change 表，实测 97–500ms，复用图谱的 `parseChangesList`；`+1` 探「还有更早的吗」，与图谱翻页同款）。
-- `p4 cstat <scope>@<最旧列出的CL>,#head` 把这些 CL 分类成 have/need/partial（新纯解析 `src/cstatParser.ts` `parseCstat`，未知 status 丢弃不猜——误判成 need 会推一个其实已经同步的 CL）。
-
-**cstat 必须带修订范围**：无界 cstat 输出随文件数线性增长（PROBE-FINDINGS §9 实测 2.1s / 279KB），范围由「最旧列出的 CL」界定，工作量才与展示窗口（最多 50 条）成正比。
-
-**红线（降级与诚实）**：cstat 失败 / 超时 / 零记录一律降级为「最近的变更列表（未分类）」+ 打 `[perforce] behind-list: ...` 日志——`BehindChangelistResult.classified=false` 由调用方把占位文案改成「无法分辨哪些已同步，仅列最近」；**绝不静默、绝不谎报「已是最新」**（那与成功不可区分，是下面 sync 解析节记过的最坏答案）。`changes` 失败则 `ok:false`，直接报错不给列表。
 
 ## ⚠️ `P4Service` 首条流式通道：`P4ExecOptions.onStdoutLine`（sync 进度条数据源）
 
@@ -130,7 +112,7 @@
 
 - **单一真相**：逐行判定与最终 summary **共用** `syncParser.ts` 的 `classifySyncLine`（流式只驱动 UI，权威结果仍来自完整输出的 `parseSyncOutput`）——进度条永不会与结尾 summary 漂移；`syncLineFile` 从行里抠文件名显示。
 - **UI 侧 150ms 节流**（`extension.ts` 的 `PROGRESS_REPORT_INTERVAL_MS`）：p4 每文件一行，不节流就是上万条 RPC。本扩展**首次用** `window.withProgress`（`ProgressLocation.Notification`，带 increment 百分比 + `cancellable`）；取消按钮路由到 `target.cancelBusy()`，与状态栏 spinner 同一 abort 机制，不搞两套。
-- **总数拿不到就退化为不确定进度条**：`syncScope` 的 `resolveTotal` 对 `#head` 免费（落后检查已数过 `status.syncBehindCount`），其它 spec 才跑一次 `previewSyncTotal(spec)` dry-run；拿不到只显示已处理文件数，**绝不编总数**（编一个到 40% 就停的总数比没有总数更糟）。同步照常进行。
+- **总数拿不到就显示不确定进度条**：sync 的进度条始终显示已处理文件数与当前文件名（p4 逐文件吐行，流式判定驱动），不依赖总数——**绝不编总数**（编一个到 40% 就停的总数比没有总数更糟）。同步照常进行。
 
 ## ⚠️ unresolved 信号只认 `fstat -Ru`——`opened` 从不报（真机实测）
 
@@ -316,7 +298,7 @@ dirty-diff gutter 与 inline blame 原本硬编码 `git.*` 命令；已抽象为
 
 ## 配置项（`perforce.*`）
 
-`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`reconcileHint.enabled`(true，Explorer 按需 hint 通道总开关，见上文「Explorer 按需 hint 通道」)、`syncPreview.autoCheck/intervalSec`(300s，最小 30s，落后感知两级探针)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s，最小 30s，他人占用灰字)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
+`enabled`(默认 true)、`port`/`user`/`client`（连接兜底，优先 `p4 set`/P4CONFIG）、`maxConcurrent`(4)、`commandTimeout`(600s，单个 p4 进程最长存活秒数，超时强杀；0=不限——约束「永久挂死」而非「执行慢」，见上节 SpawnWatchdog)、`refreshInterval`(0=关，最小 10s)、`autoEdit`(false)、`reconcileHint.enabled`(true，Explorer 按需 hint 通道总开关，见上文「Explorer 按需 hint 通道」)、`openedByOthers.autoCheck`(true)/`openedByOthers.intervalSec`(300s，最小 30s，他人占用灰字)、`timeline.showPending`(true，Timeline 顶部待定更改条目)、`cache.*`。加新配置：`package.json` `contributes.configuration` + nls description key，读用 `workspace.getConfiguration('perforce').get(key, default)`。
 
 ## 验证
 
@@ -349,7 +331,7 @@ pnpm check                                       # lint+typecheck+全测+docs:ch
 - `extensions/perforce/src/reconcileParser.ts` —— `reconcile -n` 输出解析（纯 + 单测），checkWorkingTree hint 通道数据源
 - `extensions/perforce/src/clientManager.ts` / `clientDiscovery.ts` —— 路由 / `p4 info` 发现
 - `extensions/perforce/src/changelist.ts` / `p4Output.ts` —— 分组纯逻辑 / 输出解析（numbered 并行键）
-- `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec,filelogParser,cstatParser}.ts` —— 领域解析（各带 __tests__；filelogParser 是 Timeline 单文件历史的数据源；cstatParser 是落后 CL 列表的 have/need/partial 分类）
+- `extensions/perforce/src/{openedParser,fstatParser,shelveParser,blameSource,changeSpec,filelogParser}.ts` —— 领域解析（各带 __tests__；filelogParser 是 Timeline 单文件历史的数据源）
 - `extensions/perforce/src/timelineProvider.ts` —— Timeline provider（单文件历史 + 待定更改项 + openDiff/copyChangelistNumber 命令；含 resolveContaining/debounce 注释）
 - `extensions/perforce/src/{baselineProvider,p4Decoration,p4Error,autoEdit,p4StatusBar,concurrency,pathUtil,nls}.ts`
 - `packages/extensions-common/src/contracts/{dirtyDiff,blame}.ts` —— provider capability 契约（宿主泛化）

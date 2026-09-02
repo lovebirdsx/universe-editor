@@ -9,9 +9,7 @@
  * OTHER client's `clientFile` is never translated with this client's root (local
  * paths must come from `p4 where` on the depot path, and the other client's
  * client-syntax path must never be sent back to p4), the scheduling guards
- * (auto-check, interval floor, re-entry, connection), the union publish with the
- * behind markers (one map's rewrite must not erase the other, and a file both
- * behind and occupied publishes one merged marker), and the state invariants: a
+ * (auto-check, interval floor, re-entry, connection), and the state invariants: a
  * failed scan keeps the previous result, and going offline clears the markers
  * because "who has what open" is a claim about the server.
  */
@@ -172,30 +170,6 @@ function mapWhere(argv: string[]): Reply {
   return { stdout: lines.join('\n') }
 }
 
-/** One `p4 -ztag changes -m 1 -s submitted` record (the behind-check gate). */
-function changeRecord(id: number): string {
-  return [
-    `... change ${id}`,
-    '... time 1788093183',
-    '... user testuser',
-    '... status submitted',
-    '... changeType public',
-    '... path //depot/branch_x/...',
-    '',
-  ].join('\n')
-}
-
-/** One `p4 -ztag sync -n` record for the union tests. */
-function previewRecordFor(rel: string, rev: number): string {
-  return [
-    `... depotFile //depot/branch_x/${rel}`,
-    `... clientFile ${localPath(rel)}`,
-    `... rev ${rev}`,
-    '... action updated',
-    '',
-  ].join('\n')
-}
-
 /** Discovery + empty refresh reads; `opened -a` / `where` come from the
  *  per-test handlers. The refresh's own `opened` returns empty so the
  *  workspace has no pending changelists. */
@@ -210,17 +184,6 @@ function makeHandler(
     if (cmd === 'where') return whereReply(argv)
     return { stdout: '' }
   }
-}
-
-async function clientWith(handler: (argv: string[]) => Reply): Promise<PerforceClientType> {
-  respond(handler)
-  const client = await PerforceClient.create(ROOT, {}, new ConcurrencyGate(4), {
-    enabled: true,
-    workspaceTtlMs: 4000,
-    now: () => clock,
-  })
-  expect(client).toBeDefined()
-  return client!
 }
 
 async function makeClient(
@@ -664,86 +627,5 @@ describe('state on disable, failure and offline', () => {
     client.setSyncScope([`${ROOT}/other`])
 
     expect(publishedDecorations()).toEqual([])
-  })
-})
-
-describe('union with the behind markers', () => {
-  function unionHandler(argv: string[]): Reply {
-    const cmd = subcommand(argv)
-    if (cmd === 'info') return { stdout: DISCOVERY }
-    if (isOpenedAll(argv)) return { stdout: openedByOthersRecords(2) }
-    if (cmd === 'where') return mapWhere(argv)
-    if (cmd === 'sync') {
-      return {
-        stdout: `${previewRecordFor('Source/bf1.txt', 1)}\n${previewRecordFor(
-          'Source/bf2.txt',
-          2,
-        )}\n${previewRecordFor('Source/bf3.txt', 3)}`,
-      }
-    }
-    if (cmd === 'changes') {
-      return argv.includes('submitted') ? { stdout: changeRecord(1_000_000) } : { stdout: '' }
-    }
-    return { stdout: '' }
-  }
-
-  it("one producer's rewrite never erases the other", async () => {
-    // The channel replaces the provider's whole set: a producer publishing its
-    // own slice would silently drop the other's. Both scans must survive each
-    // other's re-runs.
-    const client = await clientWith(unionHandler)
-
-    await client.runSyncPreviewScan()
-    await client.runOpenedByOthersScan()
-    expect(publishedDecorations()).toHaveLength(5)
-
-    // A later others-scan rewrites its own slice only — behind markers survive.
-    await client.runOpenedByOthersScan()
-    expect(publishedDecorations()).toHaveLength(5)
-  })
-
-  it('a file both behind and open by others publishes one merged marker', async () => {
-    // The renderer keys decorations by path, so two entries for one row would
-    // let the second overwrite the first. The merged marker must keep both
-    // facts: joined description, both tooltips.
-    const client = await clientWith((argv) => {
-      const cmd = subcommand(argv)
-      if (cmd === 'info') return { stdout: DISCOVERY }
-      if (isOpenedAll(argv)) {
-        return {
-          stdout: `${openedByOtherRecord('Source/f1.txt')}\n${openedByOtherRecord('Source/f3.txt')}`,
-        }
-      }
-      if (cmd === 'where') return mapWhere(argv)
-      if (cmd === 'sync') {
-        return {
-          stdout: `${previewRecordFor('Source/f1.txt', 3)}\n${previewRecordFor('Source/f2.txt', 4)}`,
-        }
-      }
-      if (cmd === 'changes') {
-        return argv.includes('submitted') ? { stdout: changeRecord(1_000_000) } : { stdout: '' }
-      }
-      return { stdout: '' }
-    })
-
-    await client.runSyncPreviewScan()
-    await client.runOpenedByOthersScan()
-
-    // f1 (merged) + f2 (behind only) + f3 (others only)
-    const decorations = publishedDecorations()
-    expect(decorations).toHaveLength(3)
-    const byUri = new Map(decorations.map((d) => [d.resourceUri.replace(/\\/g, '/'), d]))
-    const merged = byUri.get(`${ROOT_FWD}/Source/f1.txt`)!
-    // Literal glyphs, not `localize(key, glyph)`: the grey text is a symbol the
-    // user has to recognize, so the assertion has to pin the code point. Routing
-    // it through localize would just echo whatever client.ts passes as its own
-    // default (U+270E vs the emoji U+270F would both pass).
-    expect(merged.description).toBe('✎ ↓')
-    expect(merged.tooltip).toContain('testuser@otherclient')
-    expect(merged.tooltip).toContain('#3')
-    const behindOnly = byUri.get(`${ROOT_FWD}/Source/f2.txt`)!
-    expect(behindOnly.description).toBe('↓')
-    const othersOnly = byUri.get(`${ROOT_FWD}/Source/f3.txt`)!
-    expect(othersOnly.description).toBe('✎')
   })
 })

@@ -692,17 +692,6 @@
           "minimum": 1000,
           "description": "%perforce.config.reconcileScan.maxBatchDurationMs.description%"
         },
-        "perforce.syncPreview.autoCheck": {
-          "type": "boolean",
-          "default": true,
-          "description": "%perforce.config.syncPreview.autoCheck.description%"
-        },
-        "perforce.syncPreview.intervalSec": {
-          "type": "number",
-          "default": 300,
-          "minimum": 30,
-          "description": "%perforce.config.syncPreview.intervalSec.description%"
-        },
         "perforce.openedByOthers.autoCheck": {
           "type": "boolean",
           "default": true,
