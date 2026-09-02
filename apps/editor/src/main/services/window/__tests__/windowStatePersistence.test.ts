@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { combinedDisposable, URI } from '@universe-editor/platform'
 import type { IPersistedWindow } from '../../../windowsSession.js'
 
@@ -143,6 +143,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const settlePersist = (): Promise<void> => sleep(1000)
 
 describe('window state persistence on teardown', () => {
+  // Disposed after each test so the session-store debounce timer never outlives it.
+  let svc: InstanceType<typeof WindowMainService> | undefined
+  afterEach(() => svc?.dispose())
+
   beforeEach(() => {
     vi.clearAllMocks()
     persisted.list = null
@@ -151,7 +155,7 @@ describe('window state persistence on teardown', () => {
   })
 
   it('persists fullscreen when the last window is closed shortly after going fullscreen', async () => {
-    const svc = new WindowMainService(makeOpts())
+    svc = new WindowMainService(makeOpts())
     await svc.createWindow({ workspace: { folder: URI.file('/tmp/proj'), name: 'proj' } })
     const win = svc.getWindows()[0] as unknown as FakeWindow
 

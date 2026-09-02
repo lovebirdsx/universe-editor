@@ -25,12 +25,19 @@ vi.mock('../../../storage.js', () => ({
 }))
 
 // captureWindowState reads live bounds; stub to a deterministic state per window.
+// A window whose `_state` is the CAPTURE_THROW sentinel makes the capture throw,
+// standing in for Electron's "Object has been destroyed".
+const h = vi.hoisted(() => ({ CAPTURE_THROW: Symbol('capture throws') }))
 vi.mock('../../../windowState.js', () => ({
-  captureWindowState: (win: { _state: unknown }) => win._state,
+  captureWindowState: (win: { _state: unknown }) => {
+    if (win._state === h.CAPTURE_THROW) throw new Error('Object has been destroyed')
+    return win._state
+  },
 }))
 
 const { WindowSessionStore } = await import('../windowSessionStore.js')
-const { WINDOWS_SESSION_STORAGE_KEY } = await import('../../../windowsSession.js')
+const { WINDOWS_SESSION_STORAGE_KEY, WORKSPACE_GEOMETRY_STORAGE_KEY } =
+  await import('../../../windowsSession.js')
 
 interface FakeState {
   x: number
@@ -41,7 +48,12 @@ interface FakeState {
   isMaximized: boolean
 }
 
-function fakeWindow(opts: { destroyed?: boolean; devTools?: boolean; state?: Partial<FakeState> }) {
+function fakeWindow(opts: {
+  destroyed?: boolean
+  devTools?: boolean
+  captureThrows?: boolean
+  state?: Partial<FakeState>
+}) {
   const state: FakeState = {
     x: 0,
     y: 0,
@@ -52,7 +64,7 @@ function fakeWindow(opts: { destroyed?: boolean; devTools?: boolean; state?: Par
     ...opts.state,
   }
   return {
-    _state: state,
+    _state: opts.captureThrows ? (h.CAPTURE_THROW as never) : state,
     isDestroyed: () => opts.destroyed ?? false,
     webContents: { isDevToolsOpened: () => opts.devTools ?? false },
   }
@@ -137,5 +149,26 @@ describe('WindowSessionStore', () => {
     s.cancel()
     await sleep(400)
     expect(snapshots).toBe(0)
+  })
+
+  it('persistNow skips a window whose capture throws and persists the rest', async () => {
+    const s = new WindowSessionStore(() => [
+      entry('/tmp/a', { captureThrows: true }),
+      entry('/tmp/b'),
+    ])
+    await s.persistNow()
+    const list = store[WINDOWS_SESSION_STORAGE_KEY] as unknown[]
+    expect(list).toHaveLength(1)
+    // Geometry persists under a single map key; only /tmp/b made it in.
+    const geometry = store[WORKSPACE_GEOMETRY_STORAGE_KEY] as Record<string, unknown> | undefined
+    expect(Object.keys(geometry ?? {})).toEqual(['file:///tmp/b'])
+  })
+
+  it('a debounced write that hits a destroyed window does not reject', async () => {
+    const s = new WindowSessionStore(() => [entry('/tmp/a', { captureThrows: true })])
+    s.schedule()
+    await sleep(400)
+    const list = store[WINDOWS_SESSION_STORAGE_KEY] as unknown[] | undefined
+    expect(list ?? []).toHaveLength(0)
   })
 })

@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { combinedDisposable, URI } from '@universe-editor/platform'
 
 // --- Mock IPC bootstrap (renderer confirms shutdown immediately) ---
@@ -160,6 +160,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const settlePersist = (): Promise<void> => sleep(1000)
 
 describe('reopen workspace geometry', () => {
+  // Disposed after each test so the session-store debounce timer never outlives it.
+  let svc: InstanceType<typeof WindowMainService> | undefined
+  afterEach(() => svc?.dispose())
+
   beforeEach(() => {
     vi.clearAllMocks()
     for (const k of Object.keys(store)) delete store[k]
@@ -168,7 +172,7 @@ describe('reopen workspace geometry', () => {
   })
 
   it('restores the previous position/size when a closed workspace is reopened', async () => {
-    const svc = new WindowMainService(makeOpts())
+    svc = new WindowMainService(makeOpts())
     const folderA = URI.file('/tmp/projA')
     const folderB = URI.file('/tmp/projB')
 

@@ -63,20 +63,28 @@ export class WindowSessionStore {
     const geometryUpdates: Array<{ workspaceId: string; state: IWindowState }> = []
     for (const { win, workspace, remoteAuthority } of this._snapshot()) {
       if (win.isDestroyed()) continue
-      const state = captureWindowState(win)
-      list.push(
-        serializeWindow(
-          workspace.current,
-          state,
-          win.webContents.isDevToolsOpened(),
-          remoteAuthority,
-        ),
-      )
-      if (workspace.current) {
-        geometryUpdates.push({
-          workspaceId: workspaceIdFromUri(workspace.current.folder.toString()),
-          state,
-        })
+      try {
+        const state = captureWindowState(win)
+        list.push(
+          serializeWindow(
+            workspace.current,
+            state,
+            win.webContents.isDevToolsOpened(),
+            remoteAuthority,
+          ),
+        )
+        if (workspace.current) {
+          geometryUpdates.push({
+            workspaceId: workspaceIdFromUri(workspace.current.folder.toString()),
+            state,
+          })
+        }
+      } catch (e) {
+        // The window was destroyed between the isDestroyed() check and the
+        // capture (Electron then throws "Object has been destroyed") — same
+        // semantics as the skip above, never a failure of the whole write.
+        console.warn(`[WindowSessionStore] skipped window ${win.id} during persist:`, e)
+        continue
       }
     }
     const storage = getDefaultStorage()

@@ -2,7 +2,7 @@
  *  Tests for apps/editor/src/main/services/window/windowMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { combinedDisposable, ShutdownReason, URI } from '@universe-editor/platform'
@@ -201,17 +201,31 @@ function makeOpts() {
   }
 }
 
+// Every service created through this helper is disposed after the test so the
+// session-store debounce timer never outlives it.
+type WindowMainServiceInstance = InstanceType<typeof WindowMainService>
+const openServices: WindowMainServiceInstance[] = []
+function makeService(opts = makeOpts()): WindowMainServiceInstance {
+  const svc = new WindowMainService(opts)
+  openServices.push(svc)
+  return svc
+}
+
 describe('WindowMainService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     windowIdCounter.value = 1
   })
 
+  afterEach(() => {
+    for (const svc of openServices.splice(0)) svc.dispose()
+  })
+
   describe('render-process-gone crash recovery', () => {
     it('records the crash in the error sink and skips the native modal in E2E', async () => {
       const opts = makeOpts()
       opts.e2eEnabled = true
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       await svc.createWindow()
       const errorSink = opts.appServices.errorSink as { recordLocal: ReturnType<typeof vi.fn> }
       grabRenderProcessGoneHandler()(undefined, { reason: 'crashed', exitCode: 1 })
@@ -225,7 +239,7 @@ describe('WindowMainService', () => {
 
     it('ignores clean-exit entirely', async () => {
       const opts = makeOpts()
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       await svc.createWindow()
       const errorSink = opts.appServices.errorSink as { recordLocal: ReturnType<typeof vi.fn> }
       grabRenderProcessGoneHandler()(undefined, { reason: 'clean-exit' })
@@ -235,7 +249,7 @@ describe('WindowMainService', () => {
 
     it('offers a reload dialog outside E2E and reloads on confirm', async () => {
       vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false })
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       await vi.waitFor(() => {
@@ -248,7 +262,7 @@ describe('WindowMainService', () => {
     })
 
     it('de-bounces a crash storm into a single dialog', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow()
       const handler = grabRenderProcessGoneHandler()
       handler(undefined, { reason: 'crashed' })
@@ -265,7 +279,7 @@ describe('WindowMainService', () => {
       const extHostStopAll = vi.fn(() => Promise.resolve())
       opts.appServices.acpHost = { stopAllForWindow: acpStopAll } as never
       opts.appServices.extensionHost = { stopAllForWindow: extHostStopAll } as never
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       const id = await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       expect(acpStopAll).toHaveBeenCalledWith(id)
@@ -284,13 +298,13 @@ describe('WindowMainService', () => {
     }
 
     it('returns null for a window that never crashed', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       expect(svc.getLastRenderCrash(id)).toBeNull()
     })
 
     it('records reason and timestamp for an oom crash', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       const before = Date.now()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
@@ -301,14 +315,14 @@ describe('WindowMainService', () => {
     })
 
     it('does not record a clean-exit', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'clean-exit' })
       expect(svc.getLastRenderCrash(id)).toBeNull()
     })
 
     it('a later crash overwrites the earlier record', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       const handler = grabRenderProcessGoneHandler()
       handler(undefined, { reason: 'crashed' })
@@ -317,7 +331,7 @@ describe('WindowMainService', () => {
     })
 
     it('drops the record when the window closes', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
       expect(svc.getLastRenderCrash(id)).not.toBeNull()
@@ -327,19 +341,19 @@ describe('WindowMainService', () => {
   })
 
   it('createWindow returns a numeric window id', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     const id = await svc.createWindow()
     expect(typeof id).toBe('number')
   })
 
   it('getWindows returns the created window', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow()
     expect(svc.getWindows()).toHaveLength(1)
   })
 
   it('createWindow twice registers two distinct windows', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     const id1 = await svc.createWindow()
     const id2 = await svc.createWindow()
     expect(id1).not.toBe(id2)
@@ -378,7 +392,7 @@ describe('WindowMainService', () => {
       },
     ])
     Object.assign(opts.appServices.sessionSwitcher, { getAllSessions })
-    const svc = new WindowMainService(opts)
+    const svc = makeService(opts)
     await svc.createWindow()
     const requestingWindowId = await svc.createWindow()
 
@@ -398,7 +412,7 @@ describe('WindowMainService', () => {
   })
 
   it('marks only the first created window as the current session first window', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow()
     await svc.createWindow()
 
@@ -411,14 +425,14 @@ describe('WindowMainService', () => {
   })
 
   it('dispose clears all windows', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow()
     svc.dispose()
     expect(svc.getWindows()).toHaveLength(0)
   })
 
   it('getWindowById returns undefined for unknown id', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     expect(svc.getWindowById(99999)).toBeUndefined()
   })
 
@@ -427,7 +441,7 @@ describe('WindowMainService', () => {
       const opts = makeOpts()
       opts.e2eEnabled = true
       opts.silentE2E = true
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       await svc.createWindow()
       grabReadyToShowHandler()()
       expect(lastWindow().showInactive).toHaveBeenCalled()
@@ -438,7 +452,7 @@ describe('WindowMainService', () => {
       const opts = makeOpts()
       opts.e2eEnabled = true
       opts.silentE2E = false
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       await svc.createWindow()
       grabReadyToShowHandler()()
       expect(lastWindow().show).toHaveBeenCalled()
@@ -449,7 +463,7 @@ describe('WindowMainService', () => {
       const opts = makeOpts()
       opts.e2eEnabled = true
       opts.silentE2E = true
-      const svc = new WindowMainService(opts)
+      const svc = makeService(opts)
       const id = await svc.createWindow()
       svc.focusWindow(id)
       expect(lastWindow().showInactive).toHaveBeenCalled()
@@ -458,13 +472,13 @@ describe('WindowMainService', () => {
   })
 
   it('restoreSession([]) opens a single empty window', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.restoreSession([])
     expect(svc.getWindows()).toHaveLength(1)
   })
 
   it('restoreSession with two entries opens two windows', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.restoreSession([
       { workspace: { folder: URI.file('/tmp/a'), name: 'a' }, devToolsOpen: false },
       { workspace: { folder: URI.file('/tmp/b'), name: 'b' }, devToolsOpen: false },
@@ -473,7 +487,7 @@ describe('WindowMainService', () => {
   })
 
   it('restoreSession dedups entries with the same workspace', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.restoreSession([
       { workspace: { folder: URI.file('/tmp/dup'), name: 'dup' }, devToolsOpen: false },
       { workspace: { folder: URI.file('/tmp/dup'), name: 'dup' }, devToolsOpen: false },
@@ -482,7 +496,7 @@ describe('WindowMainService', () => {
   })
 
   it('createWindow({ workspace }) restores the workspace before load', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow({ workspace: { folder: URI.file('/tmp/w'), name: 'w' } })
     const instance = vi.mocked(WorkspaceMainService).mock.results.at(-1)?.value as {
       restoreCurrent: ReturnType<typeof vi.fn>
@@ -491,7 +505,7 @@ describe('WindowMainService', () => {
   })
 
   it('disposes per-window resources synchronously on a confirmed-close window', async () => {
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow()
     const userData = vi.mocked(UserDataMainService).mock.results.at(-1)?.value as {
       dispose: ReturnType<typeof vi.fn>
@@ -527,7 +541,7 @@ describe('WindowMainService', () => {
       flush: vi.fn(),
       dispose: vi.fn(),
     } as never)
-    const svc = new WindowMainService(opts)
+    const svc = makeService(opts)
     await svc.createWindow()
 
     vi.useFakeTimers()
@@ -554,7 +568,7 @@ describe('WindowMainService', () => {
       rendererLifecycle: wedgedLifecycle,
       rendererSessions: {} as never,
     }))
-    const svc = new WindowMainService(makeOpts())
+    const svc = makeService()
     await svc.createWindow()
 
     vi.useFakeTimers()
@@ -579,7 +593,7 @@ describe('WindowMainService', () => {
     }
 
     it('closes only the windows scoped to the authority, sparing local ones', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({
         workspace: {
           folder: URI.from({ scheme: REMOTE, authority: 'wsl+ubuntu', path: '/home/u/proj' }),
@@ -597,7 +611,7 @@ describe('WindowMainService', () => {
     })
 
     it('matches an empty remote-scoped window and normalizes WSL authority case', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'wsl+Ubuntu' })
       await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
 
@@ -617,7 +631,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: vetoingLifecycle,
         rendererSessions: {} as never,
       }))
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'myhost' })
       await svc.createWindow({ remoteAuthority: 'myhost' })
 
@@ -632,7 +646,7 @@ describe('WindowMainService', () => {
     })
 
     it('opens an empty local window before closing when none would remain', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'myhost' })
 
       await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(true)
@@ -644,7 +658,7 @@ describe('WindowMainService', () => {
     })
 
     it('is a no-op returning true when no window uses the authority', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
 
       await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(true)
@@ -654,7 +668,7 @@ describe('WindowMainService', () => {
     })
 
     it('getOpenWindowInfos reports the window-scoped remote authority', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'wsl+Ubuntu' })
       await svc.createWindow({ workspace: { folder: URI.file('/tmp/local'), name: 'local' } })
 
@@ -683,7 +697,7 @@ describe('WindowMainService', () => {
     }
 
     it('tracks the last focused window and fires the change event once per id', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id = await svc.createWindow()
       const listener = vi.fn()
       svc.onDidChangeFocusedWindow(listener)
@@ -697,7 +711,7 @@ describe('WindowMainService', () => {
     })
 
     it('prefers the OS-focused window over the last focused one', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       await svc.createWindow()
       const id2 = await svc.createWindow()
 
@@ -711,7 +725,7 @@ describe('WindowMainService', () => {
     })
 
     it('falls back to the last focused window when nothing has OS focus', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id1 = await svc.createWindow()
       const id2 = await svc.createWindow()
 
@@ -722,7 +736,7 @@ describe('WindowMainService', () => {
     })
 
     it('falls back to the first surviving window when the last focused window closed', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id1 = await svc.createWindow()
       await svc.createWindow()
       grabWindowFocusHandler(1)() // lastFocused = second window
@@ -732,12 +746,12 @@ describe('WindowMainService', () => {
     })
 
     it('returns null with no windows', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       expect(svc.getFocusedWindowId()).toBeNull()
     })
 
     it('focusWindow updates the last focused window and fires the event', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id1 = await svc.createWindow()
       await svc.createWindow()
       const listener = vi.fn()
@@ -752,7 +766,7 @@ describe('WindowMainService', () => {
     })
 
     it('refires the fallback top window when the last focused window closes', async () => {
-      const svc = new WindowMainService(makeOpts())
+      const svc = makeService()
       const id1 = await svc.createWindow()
       await svc.createWindow()
       const listener = vi.fn()
