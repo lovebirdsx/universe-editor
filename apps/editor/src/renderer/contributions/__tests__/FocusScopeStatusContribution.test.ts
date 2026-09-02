@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for FocusScopeStatusContribution — the "Focus: N folders" status entry
- *  shows only while a focus set is active and tracks onDidChange, and the
- *  `focusScopeActive` context key it publishes gates the focus commands.
+ *  Tests for FocusScopeStatusContribution — the folder-icon count status entry
+ *  ("$(folder) N") shows only while a focus set is active and tracks onDidChange,
+ *  and the `focusScopeActive` context key it publishes gates the focus commands.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -30,12 +30,12 @@ describe('FocusScopeStatusContribution', () => {
     contrib.dispose()
   })
 
-  it('shows a singular entry for one focus folder', () => {
+  it('shows the count for one focus folder', () => {
     const { statusBar, contrib } = makeContrib(['src'])
     const entries = statusBar.entries.get()
     expect(entries).toHaveLength(1)
     const entry = entries[0]?.entry
-    expect(entry?.text).toBe('Focus: 1 folder')
+    expect(entry?.text).toBe('$(folder) 1')
     expect(entry?.tooltip).toContain('src')
     expect(entry?.command).toBe(ManageFocusScopeAction.ID)
     expect(entry?.alignment).toBe(StatusBarAlignment.Left)
@@ -45,7 +45,7 @@ describe('FocusScopeStatusContribution', () => {
   it('shows the folder count and lists every folder in the tooltip', () => {
     const { statusBar, contrib } = makeContrib(['src', 'lib'])
     const entry = statusBar.entries.get()[0]?.entry
-    expect(entry?.text).toBe('Focus: 2 folders')
+    expect(entry?.text).toBe('$(folder) 2')
     expect(entry?.tooltip).toContain('src')
     expect(entry?.tooltip).toContain('lib')
     contrib.dispose()
@@ -56,7 +56,7 @@ describe('FocusScopeStatusContribution', () => {
     await focusScope.addFolders(['lib'])
     const entries = statusBar.entries.get()
     expect(entries).toHaveLength(1)
-    expect(entries[0]?.entry.text).toBe('Focus: 2 folders')
+    expect(entries[0]?.entry.text).toBe('$(folder) 2')
     contrib.dispose()
   })
 
@@ -93,7 +93,7 @@ describe('FocusScopeStatusContribution', () => {
   })
 
   // Enabled with no folders filters nothing, so it is indistinguishable from
-  // unfocused unless the status bar says so — and the way out has to stay
+  // unfocused unless the status bar shows it — and the way out has to stay
   // reachable there, which is why the entry (and the manage command behind it)
   // gates on `focusScopeEnabled` not `Active`.
   it('warns about the enabled-but-empty state instead of hiding the entry', () => {
@@ -101,7 +101,7 @@ describe('FocusScopeStatusContribution', () => {
     focusScope.setEnabledWithNoFolders()
 
     const entry = statusBar.entries.get()[0]?.entry
-    expect(entry?.text).toBe('Focus: no folders')
+    expect(entry?.text).toBe('$(folder) 0')
     expect(entry?.tooltip).toContain('nothing is filtered')
     expect(entry?.command).toBe(ManageFocusScopeAction.ID)
     expect(entry?.kind).toBe('prominent')

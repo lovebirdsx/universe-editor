@@ -2,16 +2,17 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  FocusScopeStatusContribution — a left-aligned status-bar entry describing the
- *  focus state: "Focus: N folders" while folders are focused, or a warning
- *  "Focus: no folders" when the toggle is on but the set is empty. Clicking it
- *  opens the focus management picker (remove a folder / add folders / exit).
- *  The entry disappears entirely only when focus is off.
+ *  focus state: a folder icon plus the count of focused folders ("$(folder) 3")
+ *  while folders are focused, or the same icon with 0 when the toggle is on but
+ *  the set is empty. Clicking it opens the focus management picker (remove a
+ *  folder / add folders / exit). The entry disappears entirely only when focus
+ *  is off.
  *
- *  The empty-but-enabled state is worth its own text because it is otherwise
- *  invisible: nothing is filtered, so the workbench looks exactly unfocused
- *  while `workspace.focusEnabled` claims the opposite. The commands keep it
- *  empty-set-free, but hand-edited settings and a `false`-cancelled project
- *  layer both reach it.
+ *  The empty-but-enabled state keeps its prominent background and its own
+ *  tooltip because it is otherwise invisible: nothing is filtered, so the
+ *  workbench looks exactly unfocused while `workspace.focusEnabled` claims the
+ *  opposite. The commands keep it empty-set-free, but hand-edited settings and
+ *  a `false`-cancelled project layer both reach it.
  *
  *  Also publishes two global context keys:
  *    - `focusScopeActive` — focus resolves to at least one folder. Gates "Add to
@@ -84,7 +85,7 @@ export class FocusScopeStatusContribution extends Disposable implements IWorkben
     if (count === 0) {
       return {
         ...base,
-        text: localize('status.focusScope.text.empty', 'Focus: no folders'),
+        text: '$(folder) 0',
         tooltip: localize(
           'status.focusScope.tooltip.empty',
           'Focus mode is on but no folders are focused, so nothing is filtered. Click to add a folder or turn focus off.',
@@ -94,10 +95,7 @@ export class FocusScopeStatusContribution extends Disposable implements IWorkben
     }
     return {
       ...base,
-      text:
-        count === 1
-          ? localize('status.focusScope.text.one', 'Focus: 1 folder')
-          : localize('status.focusScope.text.many', 'Focus: {count} folders', { count }),
+      text: `$(folder) ${count}`,
       tooltip: localize(
         'status.focusScope.tooltip',
         'Focusing on:\n{folderList}\n\nClick to manage focused folders.',
