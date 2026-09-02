@@ -703,9 +703,11 @@ describe('PerforceClient.runReconcileScan', () => {
     // The scan never touches the SCM view's state...
     expect(sc.count).toBeUndefined()
     // ...and the only change emits are the status-bar bookkeeping: busy label
-    // push/pop (2) plus cancellable registration/deregistration (2). No
-    // publish or checkpoint emits anything.
-    expect(changes).toBe(4)
+    // push/pop (2) plus cancellable registration/deregistration (2) plus the
+    // scan-progress start and terminal flush (2). No publish or checkpoint
+    // emits anything, and the throttled intermediate frames never fire (the scan
+    // finishes within one throttle window).
+    expect(changes).toBe(6)
   })
 
   // --- ⑨ filespec escaping (M2) ----------------------------------------------
@@ -948,5 +950,198 @@ describe('PerforceClient.runReconcileScan', () => {
 
     expect(published).toHaveLength(0)
     expect(disk.store.size).toBe(0)
+  })
+
+  // --- ⑯ scan progress ---------------------------------------------------------
+
+  it('reports scan progress as batches finish (done rises, pending falls)', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: (filespec) =>
+          filespec === `${LOCAL}/A/...` ? [{ rel: 'in-a.txt' }] : undefined,
+        reconcileHold: (filespec) => filespec === `${LOCAL}/B/...`,
+      },
+      disk,
+    )
+    client.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`])
+
+    const scan = client.runReconcileScan()
+    // A has finished and B is held in flight: done counted A, pending still holds
+    // B, and the current directory renders relative to the client root.
+    await vi.waitFor(() => {
+      expect(client.status.scanProgress?.currentDir).toBe('B')
+    })
+    expect(client.status.scanProgress).toMatchObject({ done: 1, pending: 1, driftFound: 1 })
+
+    client.cancelBusy()
+    await scan
+    expect(client.status.scanProgress).toBeUndefined()
+  })
+
+  it('splitting a slow batch grows pending and keeps done + pending monotonic', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL) return ['sub1', 'sub2'].map((name) => ({ name, isDirectory: () => true }))
+      return []
+    })
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+          if (dir === LOCAL) {
+            clock.advance(20_000)
+            return [{ rel: 'top.txt' }]
+          }
+          return undefined
+        },
+        reconcileHold: (filespec) => filespec === `${join(LOCAL, 'sub1')}/...`,
+      },
+      disk,
+      clock,
+    )
+    client.setReconcileScope([LOCAL])
+
+    const frames: Array<{ done: number; pending: number }> = []
+    client.onDidChange(() => {
+      const sp = client.status.scanProgress
+      if (sp) frames.push({ done: sp.done, pending: sp.pending })
+    })
+
+    const scan = client.runReconcileScan()
+    // The slow parent split into two subdirectories: pending grew from 1 to 2.
+    await vi.waitFor(() => {
+      expect(client.status.scanProgress?.pending).toBe(2)
+    })
+    const mid = client.status.scanProgress!
+    expect(mid.done).toBe(1)
+    expect(mid.driftFound).toBe(1)
+    expect(mid.currentDir).toBe('sub1')
+    frames.push({ done: mid.done, pending: mid.pending })
+
+    client.cancelBusy()
+    await scan
+    expect(client.status.scanProgress).toBeUndefined()
+
+    // `done + pending` never shrinks across every observed frame (start 1 → split 3).
+    for (let i = 1; i < frames.length; i++) {
+      expect(frames[i]!.done + frames[i]!.pending).toBeGreaterThanOrEqual(
+        frames[i - 1]!.done + frames[i - 1]!.pending,
+      )
+    }
+    expect(frames.some((f) => f.done === 1 && f.pending === 2)).toBe(true)
+  })
+
+  it('clears scanProgress once a scan finishes normally', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+
+    const frames: Array<{ done: number; pending: number }> = []
+    client.onDidChange(() => {
+      const sp = client.status.scanProgress
+      if (sp) frames.push({ done: sp.done, pending: sp.pending })
+    })
+
+    await client.runReconcileScan()
+
+    expect(frames[0]).toMatchObject({ done: 0, pending: 1 })
+    expect(client.status.scanProgress).toBeUndefined()
+  })
+
+  it('accumulates driftFound from successful batches only (failed batches add nothing)', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === `${LOCAL}/A/...`) return [{ rel: 'a1.txt' }, { rel: 'a2.txt' }]
+          return undefined
+        },
+        reconcileExit: (filespec) => (filespec === `${LOCAL}/B/...` ? 1 : undefined),
+        reconcileStderr: () => 'Connect to server failed; TCP connect failed',
+        reconcileHold: (filespec) => filespec === `${LOCAL}/C/...`,
+      },
+      disk,
+    )
+    client.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`, `${LOCAL}/C`])
+
+    const scan = client.runReconcileScan()
+    // A (2 drift files) and B (failed → no drift) are done; C is held in flight.
+    await vi.waitFor(() => {
+      expect(client.status.scanProgress?.done).toBe(2)
+    })
+    expect(client.status.scanProgress).toMatchObject({ done: 2, pending: 1, driftFound: 2 })
+
+    client.cancelBusy()
+    await scan
+    expect(client.status.scanProgress).toBeUndefined()
+  })
+
+  it('clears scanProgress when the scan throws mid-publish', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    const sc = client as unknown as {
+      _sc: { publishWorkingTreeScan: (entries: unknown) => void }
+    }
+    sc._sc.publishWorkingTreeScan = () => {
+      throw new Error('publish boom')
+    }
+
+    await expect(client.runReconcileScan()).rejects.toThrow('publish boom')
+    expect(client.status.scanProgress).toBeUndefined()
+  })
+
+  it('resume from checkpoint starts done at 0 and counts cache-served directories', async () => {
+    const disk = fakeDisk()
+    // Session 1: A completes (checkpointed), B is held then cancelled (un-checkpointed).
+    const first = await makeClient(
+      {
+        reconcile: (filespec) =>
+          filespec === `${LOCAL}/A/...` ? [{ rel: 'in-a.txt' }] : undefined,
+        reconcileHold: (filespec) => filespec === `${LOCAL}/B/...`,
+      },
+      disk,
+    )
+    first.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`])
+    const firstScan = first.runReconcileScan()
+    await vi.waitFor(() => expect(disk.store.size).toBe(1))
+    first.cancelBusy()
+    await firstScan
+
+    // Session 2: A is served from cache; B spawns again and is held so progress
+    // is observable mid-scan.
+    const second = await makeClient(
+      {
+        reconcile: (filespec) =>
+          filespec === `${LOCAL}/B/...` ? [{ rel: 'in-b.txt' }] : undefined,
+        reconcileHold: (filespec) => filespec === `${LOCAL}/B/...`,
+      },
+      disk,
+    )
+    second.setReconcileScope([`${LOCAL}/A`, `${LOCAL}/B`])
+    const frames: Array<{ done: number; pending: number }> = []
+    second.onDidChange(() => {
+      const sp = second.status.scanProgress
+      if (sp) frames.push({ done: sp.done, pending: sp.pending })
+    })
+
+    const secondScan = second.runReconcileScan()
+    await vi.waitFor(() => {
+      expect(second.status.scanProgress?.done).toBe(1)
+    })
+    // This run's progress starts at 0 (not the prior session's completed count)
+    // and the cache-served A counts as done while B is still in flight.
+    expect(frames[0]).toMatchObject({ done: 0, pending: 2 })
+    expect(second.status.scanProgress).toMatchObject({ done: 1, pending: 1 })
+
+    second.cancelBusy()
+    await secondScan
+    expect(second.status.scanProgress).toBeUndefined()
+    // A was served from cache in session 2 (one spawn across both sessions); B,
+    // never checkpointed, spawned in both.
+    expect(reconcileScans().filter((a) => a.includes(`${LOCAL}/A/...`))).toHaveLength(1)
+    expect(reconcileScans().filter((a) => a.includes(`${LOCAL}/B/...`))).toHaveLength(2)
   })
 })

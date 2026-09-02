@@ -49,7 +49,8 @@ vi.mock('@universe-editor/extension-api', () => ({
   },
 }))
 
-const { P4StatusBarController } = await import('../p4StatusBar.js')
+const { P4StatusBarController, truncateClientName, formatScanElapsed } =
+  await import('../p4StatusBar.js')
 const { localize } = await import('../nls.js')
 
 function makeClient(overrides: Record<string, unknown> = {}): unknown {
@@ -530,5 +531,207 @@ describe('P4StatusBarController setVisible', () => {
     expect(mocks.item.show).toHaveBeenCalled()
     expect(mocks.behindItem.show).toHaveBeenCalled()
     controller.dispose()
+  })
+})
+
+describe('truncateClientName', () => {
+  it('returns short names unchanged', () => {
+    expect(truncateClientName('ws_xyz')).toBe('ws_xyz')
+  })
+
+  it('returns exactly-10-char names unchanged', () => {
+    expect(truncateClientName('abcdefghij')).toBe('abcdefghij')
+  })
+
+  it('keeps a tail that already lands on a word boundary', () => {
+    expect(truncateClientName('testuser_dev_branch_xyz')).toBe('…branch_xyz')
+  })
+
+  it('extends forward to the next underscore when cut mid-word', () => {
+    expect(truncateClientName('main_ws_testuser')).toBe('…testuser')
+  })
+
+  it('falls back to the hard cut when the extended tail is too short', () => {
+    expect(truncateClientName('abcdefgh_ab')).toBe('…bcdefgh_ab')
+  })
+
+  it('hard-cuts a name with no underscore', () => {
+    expect(truncateClientName('abcdefghijklmnop')).toBe('…ghijklmnop')
+  })
+
+  it('strips a leading underscore from the tail', () => {
+    expect(truncateClientName('123456789_testuserX')).toBe('…testuserX')
+  })
+})
+
+describe('formatScanElapsed', () => {
+  it('formats sub-minute durations as seconds', () => {
+    expect(formatScanElapsed(0)).toBe('0s')
+    expect(formatScanElapsed(59_000)).toBe('59s')
+  })
+
+  it('formats minute-plus durations as `m s`', () => {
+    expect(formatScanElapsed(60_000)).toBe('1m 0s')
+    expect(formatScanElapsed(61_000)).toBe('1m 1s')
+    expect(formatScanElapsed(3_661_000)).toBe('61m 1s')
+  })
+})
+
+describe('P4StatusBarController scan progress', () => {
+  beforeEach(() => {
+    mocks.item.text = ''
+    mocks.item.tooltip = ''
+    mocks.item.command = ''
+    mocks.item.showProgress = undefined
+    mocks.item.show.mockClear()
+    mocks.item.hide.mockClear()
+    mocks.behindItem.text = ''
+    mocks.behindItem.tooltip = ''
+    mocks.behindItem.command = ''
+    mocks.behindItem.show.mockClear()
+    mocks.behindItem.hide.mockClear()
+    mocks.revItem.text = ''
+    mocks.revItem.tooltip = ''
+    mocks.revItem.command = ''
+    mocks.revItem.show.mockClear()
+    mocks.revItem.hide.mockClear()
+    mocks.activeEditor = undefined
+    mocks.editorListener = undefined
+  })
+
+  it('renders the scan counts with the spinner at the end and a full tooltip', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'testuser_dev_branch_xyz',
+        busy: 'Scanning workspace',
+        busyCancellable: true,
+        scanProgress: {
+          done: 3,
+          pending: 9,
+          currentDir: 'Content/Characters/Hero',
+          driftFound: 47,
+          startedAt: Date.now() - 12_000,
+        },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) …branch_xyz: 3/12 $(sync~spin)')
+    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.item.showProgress).toBeUndefined()
+    expect(mocks.item.tooltip).toContain('Scanning workspace testuser_dev_branch_xyz')
+    expect(mocks.item.tooltip).toContain('Scanned 3 directories / 9 pending')
+    expect(mocks.item.tooltip).toContain('Current: Content/Characters/Hero')
+    expect(mocks.item.tooltip).toContain('Found 47 drift files · 12s elapsed')
+    expect(mocks.item.tooltip).toContain('\n\nClick to cancel')
+    expect(mocks.item.command).toBe('perforce.cancelBusy')
+    controller.dispose()
+  })
+
+  it('keeps the graph command and omits the cancel line when not cancellable', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'testuser_dev_branch_xyz',
+        busy: 'Scanning workspace',
+        busyCancellable: false,
+        scanProgress: { done: 3, pending: 9, driftFound: 0, startedAt: Date.now() },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.command).toBe('perforce-graph.view')
+    expect(mocks.item.tooltip).not.toContain('Click to cancel')
+    controller.dispose()
+  })
+
+  it('renders the root label when currentDir is "."', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        busy: 'Scanning workspace',
+        busyCancellable: false,
+        scanProgress: {
+          done: 1,
+          pending: 2,
+          currentDir: '.',
+          driftFound: 0,
+          startedAt: Date.now(),
+        },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.tooltip).toContain('Current: workspace root')
+    controller.dispose()
+  })
+
+  it('omits the current line entirely when currentDir is absent', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'client-1',
+        busy: 'Scanning workspace',
+        busyCancellable: false,
+        scanProgress: { done: 1, pending: 2, driftFound: 0, startedAt: Date.now() },
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.tooltip).not.toContain('Current:')
+    controller.dispose()
+  })
+
+  it('non-scan busy falls back to the label with the spinner at the end', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({
+        clientName: 'testuser_dev_branch_xyz',
+        busy: 'Syncing',
+        busyCancellable: false,
+      }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) …branch_xyz: Syncing… $(sync~spin)')
+    expect(mocks.item.text.endsWith('$(sync~spin)')).toBe(true)
+    expect(mocks.item.showProgress).toBeUndefined()
+    expect(mocks.item.tooltip).toBe('Syncing')
+    controller.dispose()
+  })
+
+  it('idle state truncates the client name and clears showProgress', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({ clientName: 'testuser_dev_branch_xyz' }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.text).toBe('$(server) …branch_xyz 2')
+    expect(mocks.item.showProgress).toBeUndefined()
+    controller.dispose()
+  })
+
+  it('idle tooltip keeps the full client name', () => {
+    const controller = new P4StatusBarController({
+      active: makeClient({ clientName: 'testuser_dev_branch_xyz' }),
+    } as never)
+    controller.refresh()
+
+    expect(mocks.item.tooltip).toContain('Perforce: testuser_dev_branch_xyz · 2 opened')
+    expect(mocks.item.tooltip).not.toContain('…branch_xyz')
+    controller.dispose()
+  })
+
+  it('offline and not-logged-in states truncate the client name', () => {
+    const offline = new P4StatusBarController({
+      active: makeClient({ clientName: 'testuser_dev_branch_xyz', connection: 'offline' }),
+    } as never)
+    offline.refresh()
+    expect(mocks.item.text).toBe('$(server) …branch_xyz (offline)')
+    offline.dispose()
+
+    const notLoggedIn = new P4StatusBarController({
+      active: makeClient({ clientName: 'testuser_dev_branch_xyz', connection: 'not-logged-in' }),
+    } as never)
+    notLoggedIn.refresh()
+    expect(mocks.item.text).toBe('$(server) …branch_xyz (not logged in)')
+    notLoggedIn.dispose()
   })
 })

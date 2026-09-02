@@ -19,8 +19,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   shield: Shield,
 }
 
-/** Inline `$(codicon)` syntax anywhere in status-bar text (mirrors VSCode). */
-const CODICON_RE = /\$\(([a-z0-9-]+)\)/gi
+/** Inline `$(codicon)` syntax anywhere in status-bar text (mirrors VSCode); `~spin` marks a spinning glyph. */
+const CODICON_RE = /\$\(([a-z0-9-]+)(~spin)?\)/gi
 
 /** Split text into plain-text runs and inline codicon glyphs. */
 function renderText(text: string): ReactNode[] {
@@ -29,13 +29,11 @@ function renderText(text: string): ReactNode[] {
   CODICON_RE.lastIndex = 0
   for (let m = CODICON_RE.exec(text); m; m = CODICON_RE.exec(text)) {
     if (m.index > last) nodes.push(text.slice(last, m.index))
-    nodes.push(
-      <span
-        key={m.index}
-        className={`codicon codicon-${m[1]} ${styles['text-icon']}`}
-        aria-hidden="true"
-      />,
-    )
+    // Use our own `.spin` (not `codicon-modifier-spin`, which has no standalone rule).
+    const className = `codicon codicon-${m[1]} ${styles['text-icon']}${
+      m[2] ? ` ${styles['spin']}` : ''
+    }`
+    nodes.push(<span key={m.index} className={className} aria-hidden="true" />)
     last = m.index + m[0].length
   }
   if (last < text.length) nodes.push(text.slice(last))

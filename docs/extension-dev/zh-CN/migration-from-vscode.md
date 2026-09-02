@@ -60,7 +60,7 @@ Universe Editor **不提供 `vscode` 模块的兼容层（shim），也不承诺
 | `window.showQuickPick` | 同名 | 部分对齐：`string[]` 与 `QuickPickItem[]` 两重重载；`QuickPickItem` 仅 `label/description/detail/iconId`；无 `canPickMany`、无 item 按钮等复杂管道 |
 | `window.createQuickPick` / `createInputBox` | — | 缺失（暂无计划；多数场景 `showQuickPick` / `showInputBox` 已够） |
 | `window.showInputBox` | 同名 | 部分对齐：仅 `placeHolder/prompt/value`；无 `password/validateInput` |
-| `window.createStatusBarItem` | 同名 | 对齐（另有 Universe 扩展字段 `showProgress`；无 `name/color`） |
+| `window.createStatusBarItem` | 同名 | 对齐（`text` 支持 `$(icon~spin)` 内联旋转——转圈出现在 codicon 所在位置；另有 Universe 扩展字段 `showProgress`，把转圈固定显示在条目最左；无 `name/color`） |
 | `window.createOutputChannel` | 同名 | 对齐（基础子集：`append/appendLine/clear/show`） |
 | `window.activeTextEditor`（同步属性） | `window.getActiveTextEditor()`（异步方法） | 语义差异：返回快照句柄，外部变化后需重新取，不要长期持有 |
 | `window.onDidChangeActiveTextEditor` | 同名 | 对齐 |

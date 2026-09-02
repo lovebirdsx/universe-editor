@@ -170,6 +170,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.status.tooltip': 'Perforce：{0} · {1} 个已打开',
   'perforce.status.openGraph': '打开 Perforce 图谱',
   'perforce.status.cancelTooltip': '{0} —— 点击可取消',
+  // 状态栏扫描进度 tooltip
+  'perforce.status.scanning': '正在扫描工作区 {0}',
+  'perforce.status.scanCounts': '已扫描 {0} 个目录 / 待扫描 {1} 个',
+  'perforce.status.scanCurrent': '当前：{0}',
+  'perforce.status.scanCurrentRoot': '当前：工作区根目录',
+  'perforce.status.scanDrift': '已发现 {0} 个差异文件 · 已耗时 {1}',
+  'perforce.status.clickToCancel': '点击可取消',
   // 状态栏修订（#have / #head）
   'perforce.status.revAdded': '新增',
   'perforce.status.revAddedTooltip': '新文件，尚未提交到 depot',

@@ -16,6 +16,7 @@ import {
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
 import { StatusBar } from '../StatusBar.js'
+import styles from '../StatusBar.module.css'
 
 function storedEntry(id: number, entry: IStatusBarEntry): IStoredStatusBarEntry {
   return { id, entry }
@@ -110,5 +111,73 @@ describe('StatusBar — entry visuals', () => {
     const button = screen.getByTestId('statusbar-entry-plain')
     expect(button.getAttribute('style')).toBeNull()
     expect(button.className).not.toContain('has-background')
+  })
+})
+
+describe('StatusBar — inline codicons', () => {
+  const spinClass = styles['spin'] as string
+
+  it('adds the spin class to a `$(icon~spin)` glyph', () => {
+    renderStatusBar([
+      storedEntry(1, {
+        id: 'spin',
+        text: '$(sync~spin)',
+        alignment: StatusBarAlignment.Left,
+        priority: 0,
+      }),
+    ])
+    const button = screen.getByTestId('statusbar-entry-spin')
+    const icon = button.querySelector('span.codicon')
+    expect(icon).not.toBeNull()
+    expect(icon!.className).toContain('codicon-sync')
+    expect(icon!.className).toContain(spinClass)
+  })
+
+  it('does not add the spin class to a plain `$(icon)` glyph', () => {
+    renderStatusBar([
+      storedEntry(1, {
+        id: 'plain',
+        text: '$(server)',
+        alignment: StatusBarAlignment.Left,
+        priority: 0,
+      }),
+    ])
+    const button = screen.getByTestId('statusbar-entry-plain')
+    const icon = button.querySelector('span.codicon')
+    expect(icon).not.toBeNull()
+    expect(icon!.className).toContain('codicon-server')
+    expect(icon!.className).not.toContain(spinClass)
+  })
+
+  it('strips `~spin` markers from the aria-label', () => {
+    renderStatusBar([
+      storedEntry(1, {
+        id: 'spin',
+        text: 'Syncing $(sync~spin)',
+        alignment: StatusBarAlignment.Right,
+        priority: 0,
+      }),
+    ])
+    const button = screen.getByTestId('statusbar-entry-spin')
+    expect(button.getAttribute('aria-label')).toBe('Syncing')
+  })
+
+  it('renders multiple codicons in order with correct spin flags', () => {
+    renderStatusBar([
+      storedEntry(1, {
+        id: 'mixed',
+        text: '$(server) name: $(sync~spin)',
+        alignment: StatusBarAlignment.Left,
+        priority: 0,
+      }),
+    ])
+    const button = screen.getByTestId('statusbar-entry-mixed')
+    const icons = Array.from(button.querySelectorAll('span.codicon'))
+    expect(icons).toHaveLength(2)
+    expect(icons[0]!.className).toContain('codicon-server')
+    expect(icons[0]!.className).not.toContain(spinClass)
+    expect(icons[1]!.className).toContain('codicon-sync')
+    expect(icons[1]!.className).toContain(spinClass)
+    expect(button.textContent).toBe(' name: ')
   })
 })

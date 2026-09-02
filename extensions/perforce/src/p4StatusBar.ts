@@ -44,6 +44,32 @@ function asRev(v: string | undefined): number | undefined {
   return Number.isInteger(n) ? n : undefined
 }
 
+/** Truncate a long client name for the busy status-bar text: keep at most `max`
+ *  chars of the tail, but never slice mid-word — when the cut lands inside a
+ *  `_`-separated segment, extend forward to the next `_` (only if that leaves at
+ *  least 4 informative chars, else keep the hard cut). */
+export function truncateClientName(name: string, max = 10): string {
+  if (name.length <= max) return name
+  let tail = name.slice(-max)
+  const before = name[name.length - max - 1]
+  if (before !== '_' && tail[0] !== '_') {
+    const idx = tail.indexOf('_')
+    if (idx !== -1 && tail.length - idx - 1 >= 4) tail = tail.slice(idx + 1)
+  }
+  if (tail[0] === '_') tail = tail.slice(1)
+  return `…${tail}`
+}
+
+/** Format a scan's elapsed wall-clock time (milliseconds) as a compact
+ *  `12s` / `1m 12s` readout. */
+export function formatScanElapsed(elapsedMs: number): string {
+  const total = Math.floor(elapsedMs / 1000)
+  if (total < 60) return `${total}s`
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}m ${s}s`
+}
+
 export class P4StatusBarController {
   private readonly _item: StatusBarItem
   private readonly _behindItem: StatusBarItem
@@ -118,15 +144,54 @@ export class P4StatusBarController {
       this._item.hide()
       return
     }
-    const { clientName, connection, openedCount, busy, busyCancellable } = client.status
+    const { clientName, connection, openedCount, busy, busyCancellable, scanProgress } =
+      client.status
     if (busy) {
       // A long-running p4 operation is in flight — show a spinner + its label so
       // the user sees the client isn't stalled (mirrors git's syncing indicator).
       // While it's cancellable, clicking cancels instead of opening the graph:
       // without this the only way out of a slow operation is to wait out
-      // `perforce.commandTimeout`.
-      this._item.text = `$(server) ${clientName}: ${busy}…`
-      this._item.showProgress = 'spinning'
+      // `perforce.commandTimeout`. The spinner is an inline `$(sync~spin)` so it
+      // sits on the right — hence showProgress is cleared, else a lucide spinner
+      // would also appear on the left and we'd get one on each side.
+      this._item.showProgress = undefined
+      const short = truncateClientName(clientName)
+      if (scanProgress) {
+        const total = scanProgress.done + scanProgress.pending
+        this._item.text = `$(server) ${short}: ${scanProgress.done}/${total} $(sync~spin)`
+        const lines = [
+          localize('perforce.status.scanning', 'Scanning workspace {0}', { 0: clientName }),
+          localize('perforce.status.scanCounts', 'Scanned {0} directories / {1} pending', {
+            0: scanProgress.done,
+            1: scanProgress.pending,
+          }),
+        ]
+        if (scanProgress.currentDir !== undefined) {
+          lines.push(
+            scanProgress.currentDir === '.'
+              ? localize('perforce.status.scanCurrentRoot', 'Current: workspace root')
+              : localize('perforce.status.scanCurrent', 'Current: {0}', {
+                  0: scanProgress.currentDir,
+                }),
+          )
+        }
+        lines.push(
+          localize('perforce.status.scanDrift', 'Found {0} drift files · {1} elapsed', {
+            0: scanProgress.driftFound,
+            1: formatScanElapsed(Date.now() - scanProgress.startedAt),
+          }),
+        )
+        if (busyCancellable) {
+          lines.push('', localize('perforce.status.clickToCancel', 'Click to cancel'))
+          this._item.command = 'perforce.cancelBusy'
+        } else {
+          this._item.command = 'perforce-graph.view'
+        }
+        this._item.tooltip = lines.join('\n')
+        this._item.show()
+        return
+      }
+      this._item.text = `$(server) ${short}: ${busy}… $(sync~spin)`
       if (busyCancellable) {
         this._item.command = 'perforce.cancelBusy'
         this._item.tooltip = localize('perforce.status.cancelTooltip', '{0} — click to cancel', {
@@ -141,12 +206,16 @@ export class P4StatusBarController {
     }
     this._item.showProgress = undefined
     this._item.command = 'perforce-graph.view'
+    // Status bar truncates the client name in every state (busy and idle) so the
+    // entry width doesn't jump when an operation finishes; the tooltip below
+    // keeps the full name.
+    const short = truncateClientName(clientName)
     if (connection === 'offline') {
-      this._item.text = `$(server) ${clientName} (${localize('perforce.status.offline', 'offline')})`
+      this._item.text = `$(server) ${short} (${localize('perforce.status.offline', 'offline')})`
     } else if (connection === 'not-logged-in') {
-      this._item.text = `$(server) ${clientName} (${localize('perforce.status.notLoggedIn', 'not logged in')})`
+      this._item.text = `$(server) ${short} (${localize('perforce.status.notLoggedIn', 'not logged in')})`
     } else {
-      this._item.text = `$(server) ${clientName} ${openedCount}`
+      this._item.text = `$(server) ${short} ${openedCount}`
     }
     // Spell the count out in words — plus the graph is what a click opens, which
     // the label alone doesn't say.

@@ -26,7 +26,7 @@ Perforce 面板按 **changelist** 把你签出的文件分组：
 
 每个文件行右侧的字母标记它的动作：`edit` / `add` / `delete` / `S`（shelved）等。
 
-> **长操作有进度提示**：submit、shelve、还原、删除 changelist 等可能较慢的 p4 操作执行期间，状态栏的 Perforce 条目会显示带旋转图标的进度文案（如 `client: submit…`），完成后自动恢复常态，让你清楚知道后台正在跑什么。
+> **长操作有进度提示**：submit、shelve、还原、删除 changelist 等可能较慢的 p4 操作执行期间，状态栏的 Perforce 条目会显示进度文案（如 `…branch_xyz: Syncing…`），旋转图标固定在文案最右，完成后自动恢复常态，让你清楚知道后台正在跑什么。扫描工作区（reconcile）这类操作还会显示 `已扫描目录数 / 总数` 计数，进度明细（已扫描 / 待扫描目录数、当前目录、已发现差异文件数、已耗时）悬停状态栏即可查看，详见[拉取版本与状态感知](./sync-and-status.md#状态栏)。
 
 ## 拉取
 
@@ -51,7 +51,7 @@ Perforce 面板按 **changelist** 把你签出的文件分组：
 3. **丢弃不想要的改动**：在资源管理器右键 **Perforce ▸ 还原**（会先确认），把该文件恢复到 have 版本——磁盘上改过的内容被丢弃、新增的文件被删除、被删的文件被找回。文件尚未签出时，效果等同以前的「丢弃未收集的改动」（`p4 clean`）；若选中包含已签出、在 changelist 里的文件，确认框会列出哪些文件将离开 changelist，避免误操作。**支持多选**：用 `Ctrl` 选中多个文件再右键，会作用于**整个选区中的文件**，确认框显示涉及的文件数量。
 4. **直接归组**：从资源管理器把未签出文件拖到某个 changelist 的**组头**，即把它收集并直接归入该 changelist（底层 `p4 reconcile -c`），一步到位。
 
-> 提示：[聚焦目录](../search-navigation/focus-folders.md)生效时，reconcile 的扫描范围会收窄到聚焦目录——超大 depot 上这是扫描的主要耗时来源（[拉取](./sync-and-status.md)的作用域同样跟随聚焦）。但已签出文件列表（`p4 opened`）、整个 changelist 的还原与搁置仍是全 client 范围，不会因为开了聚焦就变成部分操作。
+> 提示：[聚焦目录](../search-navigation/focus-folders.md)生效时，reconcile 的扫描范围会收窄到聚焦目录——超大 depot 上这是扫描的主要耗时来源（[拉取](./sync-and-status.md)的作用域同样跟随聚焦）。扫描进行中，悬停状态栏可看进度明细（已扫描 / 待扫描目录数、当前目录等）。但已签出文件列表（`p4 opened`）、整个 changelist 的还原与搁置仍是全 client 范围，不会因为开了聚焦就变成部分操作。
 
 ## 签出、新增、删除
 

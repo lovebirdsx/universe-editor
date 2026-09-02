@@ -54,6 +54,7 @@
 
 /* Inline `$(codicon)` glyph rendered within an entry's text. */
 .text-icon {
+  display: inline-block; /* transform has no effect on inline boxes */
   font-size: 14px;
   line-height: 1;
   vertical-align: text-bottom;
