@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
@@ -15,6 +15,7 @@ import {
   registerAction2,
   type IDisposable,
   type IFileService as IFileServiceType,
+  type IHistoryEntry,
 } from '@universe-editor/platform'
 import { GoBackAction, GoForwardAction } from '../historyActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
@@ -55,10 +56,10 @@ function makeFakeFileService(): IFileServiceType {
   }
 }
 
-function setup() {
+function setup(historyOverride?: IHistoryService) {
   FileEditorRegistry._resetForTests()
   const groups = new EditorGroupsService()
-  const history = new HistoryService(new UriIdentityService('linux'))
+  const history = historyOverride ?? new HistoryService(new UriIdentityService('linux'))
 
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
@@ -222,5 +223,47 @@ describe('History navigation actions', () => {
     expect(groups.activeGroup.previewEditor).toBe(active)
     expect(groups.activeGroup.isPinned(active!)).toBe(false)
     expect(groups.activeGroup.editors).toHaveLength(1)
+  })
+
+  it('calls settleNavigation with the entry resource once the reveal completes', async () => {
+    const settleNavigation = vi.fn()
+    const uriA = URI.file('/repo/a.ts')
+    const entry: IHistoryEntry = {
+      resource: uriA,
+      selection: { startLine: 12, startColumn: 4, endLine: 12, endColumn: 9 },
+      timestamp: 1,
+    }
+    const history = {
+      _serviceBrand: undefined,
+      onDidChange: () => ({ dispose: () => {} }),
+      onWillNavigate: () => ({ dispose: () => {} }),
+      record: () => {},
+      updateCurrent: () => {},
+      goBack: () => entry,
+      goForward: () => undefined,
+      settleNavigation,
+      canGoBack: () => true,
+      canGoForward: () => false,
+      getBackStack: () => [entry],
+      getForwardStack: () => [],
+      clear: () => {},
+    } as unknown as IHistoryService
+    const { groups, inst } = setup(history)
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    groups.activeGroup.openEditor(inputA, { pinned: true, activate: true })
+    // A mounted Monaco instance so the reveal resolves immediately.
+    FileEditorRegistry.register(inputA, {
+      setSelection: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
+      focus: vi.fn(),
+    } as never)
+
+    await runCommand(inst, GoBackAction, disposables)
+    expect(groups.activeGroup.activeEditor).toBe(inputA)
+
+    // The reveal is fire-and-forget: settle lands on a later task.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(settleNavigation).toHaveBeenCalledTimes(1)
+    expect(settleNavigation).toHaveBeenCalledWith(uriA)
   })
 })

@@ -29,6 +29,7 @@ import { revealSelectionInInput } from '../services/editor/revealEditorPosition.
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
   const groups = accessor.get(IEditorGroupsService)
   const inst = accessor.get(IInstantiationService)
+  const history = accessor.get(IHistoryService)
   const target = entry.resource.toString()
 
   let opened: EditorInput | undefined
@@ -76,12 +77,17 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
 
   // Monaco may not be mounted yet (first open) — the shared helper waits for
   // the registry to report the editor, however long the model takes to build.
-  // Fire-and-forget: the command completes on navigation; the cursor restore is
-  // a continuation of editor mount, not of the command.
+  // Fire-and-forget: the command completes on navigation; the cursor restore
+  // is a continuation of editor mount, not of the command. The settle then
+  // extends the target's suppression until after the restore's trailing
+  // cursor flush — a slow editor mount must not let that flush escape the
+  // suppression window and clear the forward stack.
   void revealSelectionInInput(opened, {
     startLineNumber: selection.startLine,
     startColumn: selection.startColumn,
-  })
+    endLineNumber: selection.endLine,
+    endColumn: selection.endColumn,
+  }).then(() => history.settleNavigation(entry.resource))
 }
 
 export class GoBackAction extends Action2 {

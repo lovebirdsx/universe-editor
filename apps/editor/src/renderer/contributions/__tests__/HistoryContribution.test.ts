@@ -9,10 +9,12 @@ import {
   Emitter,
   ICommandService,
   IContextKeyService,
+  IEditorGroupsService,
   IEditorService,
   IFileService,
   IHistoryService,
   IStorageService,
+  IUriIdentityService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -27,17 +29,42 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { HistoryService } from '../../services/history/HistoryService.js'
 import { HistoryContribution } from '../HistoryContribution.js'
 
+// The contribution registers its open handler through MonacoLoader; capture it
+// here so tests can drive the real registration path without loading monaco.
+const openHandlerState = vi.hoisted(() => ({
+  handler: null as null | ((input: unknown, source: unknown) => Promise<unknown>),
+}))
+
+vi.mock('../../workbench/editor/monaco/MonacoLoader.js', () => ({
+  MonacoLoader: {
+    registerCodeEditorOpenHandler(handler: unknown) {
+      openHandlerState.handler = handler as never
+      return Promise.resolve({ dispose() {} })
+    },
+  },
+}))
+
+interface FakeSelection {
+  startLineNumber: number
+  startColumn: number
+  endLineNumber: number
+  endColumn: number
+}
+
 interface FakeMonacoEditor {
   position: { lineNumber: number; column: number }
+  selection: FakeSelection | null
   uri: URI
   cursorEmitter: Emitter<void>
   disposeEmitter: Emitter<void>
   onDidChangeCursorPosition(cb: () => void): { dispose(): void }
   onDidDispose(cb: () => void): { dispose(): void }
   getPosition(): { lineNumber: number; column: number } | null
+  getSelection(): FakeSelection | null
   getModel(): { uri: URI } | null
   triggerCursor(): void
   triggerDispose(): void
@@ -48,6 +75,7 @@ function makeFakeEditor(uri: URI): FakeMonacoEditor {
   const disposeEmitter = new Emitter<void>()
   const m: FakeMonacoEditor = {
     position: { lineNumber: 1, column: 1 },
+    selection: null,
     uri,
     cursorEmitter,
     disposeEmitter,
@@ -55,6 +83,9 @@ function makeFakeEditor(uri: URI): FakeMonacoEditor {
     onDidDispose: (cb) => disposeEmitter.event(cb),
     getPosition() {
       return m.position
+    },
+    getSelection() {
+      return m.selection
     },
     getModel() {
       return { uri: m.uri }
@@ -155,7 +186,10 @@ function setup() {
   services.set(IFileService, makeFileService())
   const contextKeyService = new ContextKeyService()
   services.set(IContextKeyService, contextKeyService)
-  const historyService = new HistoryService(new UriIdentityService('linux'))
+  const uriIdentity = new UriIdentityService('linux')
+  services.set(IUriIdentityService, uriIdentity)
+  services.set(IEditorGroupsService, new EditorGroupsService())
+  const historyService = new HistoryService(uriIdentity)
   services.set(IHistoryService, historyService)
   const editor = makeFakeEditorService()
   services.set(IEditorService, editor.service)
@@ -503,5 +537,158 @@ describe('HistoryContribution', () => {
     editor.triggerCursor()
     vi.advanceTimersByTime(300)
     expect(historyService.getBackStack().length).toBe(1)
+  })
+
+  it('records jump origin and target when an open handler lands a selection (same file)', async () => {
+    const { historyService, inst } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 11, column: 5 }
+    editor.selection = { startLineNumber: 11, startColumn: 5, endLineNumber: 11, endColumn: 5 }
+
+    const handler = openHandlerState.handler
+    expect(handler).not.toBeNull()
+    await handler?.(
+      {
+        resource: { toString: () => uri.toString() },
+        options: {
+          selection: { startLineNumber: 25, startColumn: 10, endLineNumber: 25, endColumn: 10 },
+        },
+      },
+      editor,
+    )
+
+    const stack = historyService.getBackStack()
+    expect(stack.length).toBe(2)
+    expect(stack[0]?.selection?.startLine).toBe(11)
+    expect(stack[0]?.selection?.startColumn).toBe(5)
+    expect(stack[1]?.selection?.startLine).toBe(25)
+    expect(stack[1]?.selection?.startColumn).toBe(10)
+    // The origin sits below the target: goBack lands back on the jump origin.
+    expect(historyService.goBack()?.selection?.startLine).toBe(11)
+  })
+
+  it('a short same-file jump (delta 3) still produces origin and target entries', async () => {
+    const { historyService, inst } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 20, column: 1 }
+
+    const handler = openHandlerState.handler
+    expect(handler).not.toBeNull()
+    await handler?.(
+      {
+        resource: { toString: () => uri.toString() },
+        options: {
+          selection: { startLineNumber: 23, startColumn: 1, endLineNumber: 23, endColumn: 1 },
+        },
+      },
+      editor,
+    )
+
+    const stack = historyService.getBackStack()
+    expect(stack.length).toBe(2)
+    expect(stack[0]?.selection?.startLine).toBe(20)
+    expect(stack[1]?.selection?.startLine).toBe(23)
+  })
+
+  it('flushes the active editor pending move synchronously when goBack fires onWillNavigate', () => {
+    const { historyService, inst, setActiveEditor } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    setActiveEditor(input)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 5, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300) // first flush records 5
+
+    // A significant move whose debounce has not fired yet.
+    editor.position = { lineNumber: 50, column: 1 }
+    editor.triggerCursor()
+
+    // goBack fires onWillNavigate -> the pending 50 is flushed synchronously and
+    // becomes the "current" entry; the pop then lands on 5, not on a stale top.
+    const target = historyService.goBack()
+    expect(target?.selection?.startLine).toBe(5)
+    expect(historyService.getBackStack()[0]?.selection?.startLine).toBe(5)
+    expect(historyService.getForwardStack()[0]?.selection?.startLine).toBe(50)
+
+    // The pending timer was cancelled by the flush: nothing fires later.
+    const backLength = historyService.getBackStack().length
+    const forwardLength = historyService.getForwardStack().length
+    vi.advanceTimersByTime(300)
+    expect(historyService.getBackStack().length).toBe(backLength)
+    expect(historyService.getForwardStack().length).toBe(forwardLength)
+  })
+
+  it('records the full selection range on flush and on leaving an editor', () => {
+    const { historyService, inst, setActiveEditor } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    setActiveEditor(input)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.selection = { startLineNumber: 10, startColumn: 3, endLineNumber: 12, endColumn: 7 }
+    editor.position = { lineNumber: 12, column: 7 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    expect(historyService.getBackStack()[0]?.selection).toEqual({
+      startLine: 10,
+      startColumn: 3,
+      endLine: 12,
+      endColumn: 7,
+    })
+
+    // Switching away folds the leaving editor's full selection into its entry.
+    const inputB = inst.createInstance(FileEditorInput, URI.file('/b.ts'))
+    setActiveEditor(inputB)
+    const aEntry = historyService.getBackStack().find((e) => e.resource.fsPath === uri.fsPath)
+    expect(aEntry?.selection).toEqual({ startLine: 10, startColumn: 3, endLine: 12, endColumn: 7 })
+  })
+
+  it('measures significance at the caret, so an upward drag selection still records', () => {
+    const { historyService, inst } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 30, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+    expect(historyService.getBackStack().length).toBe(1)
+
+    // Drag-select upward from line 30 to line 5: the selection range is 5..30
+    // (directionless) while the caret — the active end — moved to line 5.
+    // Significance must follow the caret; anchoring on endLine would read this
+    // 25-line move as a zero-length one and swallow it.
+    editor.selection = { startLineNumber: 5, startColumn: 1, endLineNumber: 30, endColumn: 1 }
+    editor.position = { lineNumber: 5, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    const stack = historyService.getBackStack()
+    expect(stack.length).toBe(2)
+    expect(stack[1]?.selection).toEqual({ startLine: 5, startColumn: 1, endLine: 30, endColumn: 1 })
   })
 })

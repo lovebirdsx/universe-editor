@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { URI, UriIdentityService } from '@universe-editor/platform'
 import { HistoryService } from '../HistoryService.js'
 
@@ -252,5 +252,132 @@ describe('HistoryService', () => {
     h.onDidChange(() => fired++)
     h.updateCurrent(URI.file('/z.ts'), { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 })
     expect(fired).toBe(0)
+  })
+
+  it('updateCurrent matches a resource whose drive-letter case differs (win32 identity)', () => {
+    const h = new HistoryService(new UriIdentityService('win32'))
+    h.record({
+      resource: URI.parse('file:///C:/dir/a.ts'),
+      selection: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
+    })
+    h.updateCurrent(URI.parse('file:///c:/dir/a.ts'), {
+      startLine: 9,
+      startColumn: 3,
+      endLine: 9,
+      endColumn: 3,
+    })
+    const top = h.getBackStack()[0]
+    expect(top?.selection?.startLine).toBe(9)
+    expect(top?.selection?.startColumn).toBe(3)
+    expect(h.getBackStack().length).toBe(1)
+  })
+
+  it('suppresses late records for each navigation target independently (multi-resource window)', () => {
+    const h = makeHistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    h.record(entry('/c.ts'))
+    const b = h.goBack() // target /b.ts — forward [c]
+    expect(b?.resource.fsPath).toBe(URI.file('/b.ts').fsPath)
+    // Rapid second navigation inside the first window: /a.ts gets its own window.
+    const a = h.goBack()
+    expect(a?.resource.fsPath).toBe(URI.file('/a.ts').fsPath)
+    expect(h.getForwardStack().length).toBe(2)
+    // A late record for the FIRST target still lands inside its window: swallowed.
+    h.record(entry('/b.ts', 7, 1))
+    expect(h.getForwardStack().length).toBe(2)
+    // ...and so is one for the second target.
+    h.record(entry('/a.ts', 3, 1))
+    expect(h.getForwardStack().length).toBe(2)
+    expect(h.getBackStack().length).toBe(1)
+  })
+
+  it('settleNavigation extends the target suppression so the post-reveal flush is still swallowed', () => {
+    vi.useFakeTimers()
+    try {
+      const h = makeHistoryService()
+      h.record(entry('/a.ts'))
+      h.record(entry('/b.ts'))
+      h.goBack() // target /a.ts — suppressed until now + 1000
+      expect(h.getForwardStack().length).toBe(1)
+      vi.advanceTimersByTime(900)
+      // The reveal completes just before the original window would lapse.
+      h.settleNavigation(URI.file('/a.ts'))
+      vi.advanceTimersByTime(300) // 1200 > 1000, still inside the settled window
+      h.record(entry('/a.ts', 5, 1))
+      expect(h.getForwardStack().length).toBe(1) // swallowed — forward survives
+      vi.advanceTimersByTime(100) // 1300 > settled deadline (900 + 350)
+      h.record(entry('/a.ts', 6, 1))
+      expect(h.getForwardStack().length).toBe(0) // expired — recorded for real
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('settleNavigation is a no-op for a resource that is not being suppressed', () => {
+    const h = makeHistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    // Neither resource is suppressed (no goBack/goForward ran) — settle must
+    // not create a window out of thin air.
+    h.settleNavigation(URI.file('/z.ts'))
+    h.settleNavigation(URI.file('/a.ts'))
+    expect(h.getBackStack().length).toBe(2)
+  })
+
+  it('fires onWillNavigate synchronously before goBack pops the stack', () => {
+    const h = makeHistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    const depths: number[] = []
+    h.onWillNavigate(() => depths.push(h.getBackStack().length))
+    h.goBack()
+    expect(depths).toEqual([2]) // listener observed the pre-pop depth
+  })
+
+  it('fires onWillNavigate before the depth check, letting a listener flush a move that makes goBack valid', () => {
+    const h = makeHistoryService()
+    h.record(entry('/a.ts'))
+    let fired = 0
+    h.onWillNavigate(() => {
+      fired++
+      // The pending debounced move for /b.ts lands synchronously...
+      if (h.getBackStack().length === 1) h.record(entry('/b.ts'))
+    })
+    const target = h.goBack()
+    expect(fired).toBe(1)
+    expect(target?.resource.fsPath).toBe(URI.file('/a.ts').fsPath)
+    expect(h.getForwardStack().length).toBe(1)
+  })
+
+  it('fires onWillNavigate synchronously before goForward pops the forward stack', () => {
+    const h = makeHistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    h.goBack()
+    const forwardDepths: number[] = []
+    h.onWillNavigate(() => forwardDepths.push(h.getForwardStack().length))
+    h.goForward()
+    expect(forwardDepths).toEqual([1])
+  })
+
+  it('collapse merges fields instead of wiping them', () => {
+    const h = makeHistoryService()
+    // A jump record with a selection...
+    h.record(entry('/a.ts', 11, 5))
+    // ...then an active-editor placeholder for the same file carrying no
+    // selection: the collapse must keep the selection and add the typeId.
+    h.record({ resource: URI.file('/a.ts'), typeId: 'fileEditor', serialized: 's' })
+    expect(h.getBackStack().length).toBe(1)
+    expect(h.getBackStack()[0]?.selection?.startLine).toBe(11)
+    expect(h.getBackStack()[0]?.typeId).toBe('fileEditor')
+
+    // A later cursor record carries a selection but no typeId: latest
+    // selection wins, typeId survives.
+    h.record(entry('/a.ts', 11, 9))
+    expect(h.getBackStack().length).toBe(1)
+    expect(h.getBackStack()[0]?.selection?.startColumn).toBe(9)
+    expect(h.getBackStack()[0]?.typeId).toBe('fileEditor')
+    expect(h.getBackStack()[0]?.serialized).toBe('s')
   })
 })
