@@ -102,6 +102,7 @@ import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import { stubSubProjectService } from './stubSubProjectService.js'
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
@@ -584,6 +585,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   })
 
@@ -680,6 +682,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await slowSvc.createSession()
     await s.whenConnected()
@@ -807,6 +810,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1065,6 +1069,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1128,6 +1133,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1183,6 +1189,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1254,6 +1261,7 @@ describe('AcpSessionService', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1418,6 +1426,7 @@ describe('AcpSessionService', () => {
         stubWindowsService(),
         stubEnvSnapshotService(),
         stubAcpModelCandidateService(),
+        stubSubProjectService(),
       )
     }
 
@@ -1737,6 +1746,7 @@ describe('AcpSessionService — rewind / fork', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history }
   }
@@ -2621,6 +2631,7 @@ describe('AcpSessionService — startup timeout', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -2674,6 +2685,7 @@ describe('AcpSessionService — startup timeout', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -2735,6 +2747,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   }
 
@@ -3436,6 +3449,7 @@ describe('AcpSessionService — session MCP selection', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history, agentDefaults, enablement }
   }
@@ -3828,6 +3842,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history }
   }
@@ -4115,6 +4130,7 @@ describe('AcpSessionService — first-prompt-derived title protection', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history }
   }
@@ -4326,6 +4342,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history }
   }
@@ -4446,6 +4463,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
     return { svc, history }
   }
@@ -4508,6 +4526,7 @@ describe('AcpSessionService — stall watchdog', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   }
 
@@ -4980,6 +4999,7 @@ describe('AcpSessionService — idle process reaper', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   }
 
@@ -5226,6 +5246,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
       stubWindowsService(),
       envSnapshot,
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   }
 
@@ -5308,6 +5329,7 @@ describe('AcpSessionService extra model candidates injection', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       candidates,
+      stubSubProjectService(),
     )
   }
 
@@ -5667,6 +5689,7 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
+      stubSubProjectService(),
     )
   }
 

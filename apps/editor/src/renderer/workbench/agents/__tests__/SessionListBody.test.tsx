@@ -17,6 +17,7 @@ import {
   LogLevel,
   NoopTelemetryService,
   NullLogger,
+  REMOTE_SCHEME,
   StorageScope,
   URI,
   UriIdentityService,
@@ -208,15 +209,17 @@ interface Harness {
   executeCommand: ReturnType<typeof vi.fn>
   sessionCtl: ReturnType<typeof makeSessionService>
   confirm: ReturnType<typeof vi.fn>
+  openEditor: ReturnType<typeof vi.fn>
   dispose: () => void
 }
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise<Harness> {
   const storage = new FakeStorage()
   const uriIdentity = new UriIdentityService('linux')
+  const folder = opts.folder ?? URI.file('/work')
   const workspace = {
     _serviceBrand: undefined,
-    current: { folder: URI.file('/work'), name: 'ws' } as IWorkspaceType,
+    current: { folder, name: 'ws' } as IWorkspaceType,
   } as unknown as IWorkspaceServiceType
   const history = new AcpSessionHistoryService(
     storage,
@@ -232,6 +235,7 @@ async function makeHarness(): Promise<Harness> {
     new StubLoggerService(),
   )
   const executeCommand = vi.fn().mockResolvedValue(undefined)
+  const openEditor = vi.fn()
   const sessionCtl = makeSessionService()
 
   const services = new ServiceCollection()
@@ -243,7 +247,7 @@ async function makeHarness(): Promise<Harness> {
   } as unknown as IAcpAgentRegistryType)
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
-    get: () => undefined,
+    get: (key: string) => (key === 'acp.sessions.historyScope' ? opts.scope : undefined),
     update: vi.fn(),
     onDidChangeConfiguration: Event.None,
   } as unknown as IConfigurationService)
@@ -256,7 +260,7 @@ async function makeHarness(): Promise<Harness> {
   } as unknown as IDialogService)
   services.set(IEditorService, {
     _serviceBrand: undefined,
-    openEditor: vi.fn(),
+    openEditor,
   } as unknown as IEditorService)
   services.set(ICommandService, {
     _serviceBrand: undefined,
@@ -276,6 +280,7 @@ async function makeHarness(): Promise<Harness> {
     executeCommand,
     sessionCtl,
     confirm,
+    openEditor,
     dispose: () => {
       history.dispose()
       filterService.dispose()
@@ -290,7 +295,7 @@ function addEntry(
   lastUsedAt: number,
   agentId = 'fake',
   cwd: string | undefined = '/work',
-  extra: Partial<Pick<AcpSessionHistoryEntry, 'sideTaskOf' | 'sideTaskQuote'>> = {},
+  extra: Partial<Pick<AcpSessionHistoryEntry, 'sideTaskOf' | 'sideTaskQuote' | 'authority'>> = {},
 ): AcpSessionHistoryEntry {
   let entry!: AcpSessionHistoryEntry
   // Flush the entries-observable update synchronously so the row exists by the
@@ -683,5 +688,52 @@ describe('SessionListBody — dormant rows', () => {
     expect(sessionCtl.setActiveFn).toHaveBeenCalledWith('agent-1')
     expect(session.ensureAwake).toHaveBeenCalledTimes(1)
     expect(sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('SessionListBody — subdirectory vs foreign scoping', () => {
+  it('shows a subdirectory row under workspace scope', async () => {
+    const harness = await makeHarness({ scope: 'workspace' })
+    addEntry(harness.history, 'sub', 'sub session', 1000, 'fake', '/work/sub')
+    expect(rowOrder()).toEqual(['sub'])
+    harness.dispose()
+  })
+
+  it('marks a subdirectory row as not foreign and keeps the rename button', async () => {
+    const harness = await makeHarness()
+    addEntry(harness.history, 'sub', 'sub session', 1000, 'fake', '/work/sub')
+    const row = screen.getByTestId('session-row-sub')
+    expect(row.dataset['foreign']).toBe('false')
+    expect(screen.getByRole('button', { name: 'Rename session' })).toBeTruthy()
+    harness.dispose()
+  })
+
+  it('activates a subdirectory row via resumeSession, not a read-only preview', async () => {
+    const harness = await makeHarness()
+    addEntry(harness.history, 'sub', 'sub session', 1000, 'fake', '/work/sub')
+    fireEvent.click(screen.getByTestId('session-row-sub'))
+    expect(harness.sessionCtl.resumeSessionFn).toHaveBeenCalledWith('sub')
+    expect(harness.openEditor).not.toHaveBeenCalled()
+    harness.dispose()
+  })
+
+  it('keeps a same-path row foreign when the authority differs', async () => {
+    const harness = await makeHarness({
+      folder: URI.from({ scheme: REMOTE_SCHEME, authority: 'host-1', path: '/repo' }),
+    })
+    addEntry(harness.history, 'r', 'remote session', 1000, 'fake', '/repo', { authority: 'host-2' })
+    const row = screen.getByTestId('session-row-r')
+    expect(row.dataset['foreign']).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Rename session' })).toBeNull()
+    harness.dispose()
+  })
+
+  it('shows a folded relative-path chip for a subdirectory row', async () => {
+    const harness = await makeHarness()
+    addEntry(harness.history, 'deep', 'deep session', 1000, 'fake', '/work/a/b/c')
+    const row = screen.getByTestId('session-row-deep')
+    expect(row.textContent).toContain('a/…/c')
+    expect(row.querySelector('[data-tooltip="/work/a/b/c"]')).toBeTruthy()
+    harness.dispose()
   })
 })

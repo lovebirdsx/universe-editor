@@ -16,7 +16,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { IStorageService, IUriIdentityService } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessionHistory.js'
+import {
+  isDescendantOrEqual,
+  type AcpSessionHistoryEntry,
+} from '../../services/acp/session/acpSessionHistory.js'
 
 const HISTORY_KEY = 'acp.sessionHistory'
 const SCHEMA_VERSION = 1
@@ -53,8 +56,9 @@ interface PersistedHistoryShape {
 /**
  * Build a map of `sessionId → { accumulatedRunningMs, usage }` by reading the
  * duration/cost fields out of each foreign worktree's own storage bucket. Only
- * entries whose `cwd` differs from `currentCwd` are looked up; current-workspace
- * rows already carry authoritative fields in their own bucket.
+ * entries whose `cwd` is outside the open folder (not the root nor a
+ * subdirectory) are looked up; current-workspace rows already carry
+ * authoritative fields in their own bucket.
  */
 export function useForeignSessionStats(
   entries: readonly AcpSessionHistoryEntry[],
@@ -71,7 +75,7 @@ export function useForeignSessionStats(
     const set = new Set<string>()
     for (const e of entries) {
       if (e.cwd === undefined) continue
-      if (currentCwd !== undefined && uriIdentity.arePathsEqual(e.cwd, currentCwd)) continue
+      if (currentCwd !== undefined && isDescendantOrEqual(uriIdentity, currentCwd, e.cwd)) continue
       set.add(e.cwd)
     }
     return [...set].sort()

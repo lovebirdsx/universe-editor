@@ -64,6 +64,7 @@ import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import { stubSubProjectService } from './stubSubProjectService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -425,6 +426,7 @@ function makeService(
     stubWindowsService(),
     stubEnvSnapshotService(),
     candidates,
+    stubSubProjectService(),
   )
 }
 

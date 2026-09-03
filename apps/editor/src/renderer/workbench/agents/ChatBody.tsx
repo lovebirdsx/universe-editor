@@ -71,6 +71,7 @@ import { ElicitationCard } from './ElicitationCard.js'
 import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
+import { SessionCwdPill } from './SessionCwdPill.js'
 import { SideTasksBar, SideTaskQuoteBar, SideTaskParentBar } from './SideTasksBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
@@ -385,6 +386,7 @@ function ChatSessionBody({
         </div>
       ) : (
         <>
+          <SessionCwdPill key={`cwd:${session.id}`} session={session} />
           <StickyUserMessageBar
             key={`user:${session.id}`}
             session={session}

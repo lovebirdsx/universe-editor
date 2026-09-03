@@ -38,6 +38,7 @@ function createSession(liveIngestionBudget = LIVE_BUDGET): AcpSession {
     liveIngestionBudget,
     undefined,
     undefined,
+    undefined,
     // A private budget per session: these tests deliberately drive the resident
     // tally over budget, which would reconcile against — and trim — any other
     // session sharing the process-wide default.

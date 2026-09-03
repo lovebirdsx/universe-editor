@@ -11,6 +11,7 @@ import {
   IDialogService,
   IEditorGroupsService,
   IEditorService,
+  IFileDialogService,
   IHostService,
   IInstantiationService,
   ILoggerService,
@@ -24,6 +25,7 @@ import {
   PartId,
   REMOTE_SCHEME,
   Severity,
+  URI,
   isWslAuthority,
   localize,
   localize2,
@@ -38,7 +40,10 @@ import {
 } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
-import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
+import {
+  IAcpSessionHistoryService,
+  isForeignWorkspaceSession,
+} from '../services/acp/session/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/session/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
@@ -46,8 +51,13 @@ import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAt
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
+import {
+  ISubProjectService,
+  type SubProjectScope,
+} from '../services/acp/session/acpSubProjectService.js'
 import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 import { findSessionEditor } from './_agentChatTarget.js'
+import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
@@ -70,18 +80,7 @@ export class NewAgentSessionAction extends Action2 {
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
     const session = await sessions.createSession(registry.defaultAgentId())
-    if (location.location.get() === 'editor') {
-      editor.openEditor(
-        inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
-      )
-    } else {
-      // Sidebar mode: just make sure the Agents view is visible so the new
-      // session is reachable.
-      if (!layout.getVisible(PartId.SecondarySideBar)) {
-        layout.toggleVisible(PartId.SecondarySideBar)
-      }
-      views.openViewContainer('workbench.view.agents')
-    }
+    focusCreatedSession(session, location, editor, inst, layout, views)
   }
 }
 
@@ -146,6 +145,185 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
     // editor to a different unlocked group and activates it. Re-assert this
     // group as active so focus stays where the user clicked "new session".
     groups.activateGroup(group)
+  }
+}
+
+/** Sentinel id for the trailing "Choose Folder…" entry in the scope picker. */
+const CHOOSE_FOLDER_PICK_ID = '__chooseFolder__'
+
+/**
+ * Focus a freshly-created session the same way NewAgentSessionAction does:
+ * open it as an editor tab in editor mode, or reveal the Agents view (and the
+ * secondary sidebar) in docked mode. Services are passed in — never the
+ * accessor — because the caller reaches this point after awaiting createSession.
+ */
+function focusCreatedSession(
+  session: IAcpSession,
+  location: IAcpChatLocationService,
+  editor: IEditorService,
+  inst: IInstantiationService,
+  layout: ILayoutService,
+  views: IViewsService,
+): void {
+  if (location.location.get() === 'editor') {
+    editor.openEditor(
+      inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+    )
+  } else {
+    if (!layout.getVisible(PartId.SecondarySideBar)) {
+      layout.toggleVisible(PartId.SecondarySideBar)
+    }
+    views.openViewContainer('workbench.view.agents')
+  }
+}
+
+/**
+ * Resolve the folder a `New Agent Session Here` should root at. The Explorer
+ * context menu precomputes `parent` (a directory → itself, a file → its parent),
+ * so that is authoritative when present; the fallback handles palette / keybinding
+ * invocations that only carry a bare resource.
+ */
+function resolveFolderTarget(args: unknown[]): URI | null {
+  const arg = args[0] as ITargetArg | undefined
+  const parent = reviveUri(arg?.parent ?? null)
+  if (parent) return parent
+  const target = reviveUri(arg?.target ?? arg?.resource ?? null)
+  if (!target) return null
+  return arg?.isDirectory ? target : URI.joinPath(target, '..')
+}
+
+function subProjectSourceDescription(source: SubProjectScope['source']): string | undefined {
+  switch (source) {
+    case 'detected':
+      return localize('agent.scope.detected', 'Detected project')
+    case 'configured':
+      return localize('agent.scope.configured', 'Configured project')
+    case 'workspace':
+      return undefined
+  }
+}
+
+/**
+ * New Agent Session Here — creates a session rooted at the folder chosen in the
+ * Explorer context menu (a file resolves to its parent). Pins the session cwd
+ * (and remote authority) to that folder so a sub-project chat never leaks up to
+ * the workspace root.
+ */
+export class NewAgentSessionInFolderAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.newSessionInFolder'
+  constructor() {
+    super({
+      id: NewAgentSessionInFolderAction.ID,
+      title: localize2('action.agent.newSessionInFolder', 'New Agent Session Here'),
+      category: CATEGORY,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const sessions = accessor.get(IAcpSessionService)
+    const registry = accessor.get(IAcpAgentRegistry)
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
+
+    const folder = resolveFolderTarget(args)
+    if (!folder) return
+    const session = await sessions.createSession(registry.defaultAgentId(), {
+      cwd: folder.fsPath,
+      ...(folder.authority ? { authority: folder.authority } : {}),
+    })
+    focusCreatedSession(session, location, editor, inst, layout, views)
+  }
+}
+
+/**
+ * New Agent Session in… — the scope picker. Lists the workspace root plus every
+ * configured / detected sub-project (via ISubProjectService), and a trailing
+ * "Choose Folder…" that opens the OS folder dialog, then creates the session in
+ * the chosen cwd.
+ */
+export class NewAgentSessionWithScopeAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.newSessionWithScope'
+  constructor() {
+    super({
+      id: NewAgentSessionWithScopeAction.ID,
+      title: localize2('action.agent.newSessionWithScope', 'New Agent Session in…'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const sessions = accessor.get(IAcpSessionService)
+    const registry = accessor.get(IAcpAgentRegistry)
+    const subProjects = accessor.get(ISubProjectService)
+    const quickInput = accessor.get(IQuickInputService)
+    const fileDialog = accessor.get(IFileDialogService)
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
+    const notification = accessor.get(INotificationService)
+
+    try {
+      const scopes = await subProjects.getScopes()
+      const items: IQuickPickItem[] = scopes.map((scope) => {
+        const description = subProjectSourceDescription(scope.source)
+        return {
+          id: scope.cwd,
+          label: scope.label,
+          ...(description !== undefined ? { description } : {}),
+        }
+      })
+      items.push({
+        id: CHOOSE_FOLDER_PICK_ID,
+        label: localize('agent.newSessionWithScope.chooseFolder', 'Choose Folder…'),
+      })
+      const picked = await quickInput.pick(items, {
+        placeholder: localize(
+          'agent.newSessionWithScope.placeholder',
+          'Select a working directory for the new session',
+        ),
+      })
+      if (!picked) return
+
+      let target: { cwd: string; authority?: string }
+      if (picked.id === CHOOSE_FOLDER_PICK_ID) {
+        const folder = (
+          await fileDialog.showOpenDialog({
+            title: localize(
+              'agent.newSessionWithScope.dialogTitle',
+              'Choose Agent Working Directory',
+            ),
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+          })
+        )?.[0]
+        if (!folder) return
+        target = {
+          cwd: folder.fsPath,
+          ...(folder.authority ? { authority: folder.authority } : {}),
+        }
+      } else {
+        const scope = scopes.find((s) => s.cwd === picked.id)
+        if (!scope) return
+        target = { cwd: scope.cwd, ...(scope.authority ? { authority: scope.authority } : {}) }
+      }
+
+      const session = await sessions.createSession(registry.defaultAgentId(), target)
+      focusCreatedSession(session, location, editor, inst, layout, views)
+    } catch (err) {
+      notification.notify({
+        severity: Severity.Error,
+        message: localize(
+          'agent.newSessionWithScope.failed',
+          'Could not create the agent session: {message}',
+          { message: (err as Error).message },
+        ),
+      })
+    }
   }
 }
 
@@ -381,22 +559,20 @@ export class ResumeAgentSessionAction extends Action2 {
     })
     if (!picked || !picked.id) return
 
-    // A session whose cwd differs from the open folder must not be resumed live —
-    // that would spawn the agent against a sibling worktree behind this window's
-    // UI (split-brain). Mirror SessionListBody: open it as a read-only preview tab
+    // A session whose cwd differs from the open folder — or that ran on a different
+    // host (authority) — must not be resumed live: that would spawn the agent
+    // against a sibling worktree (or another machine) behind this window's UI
+    // (split-brain). Mirror SessionListBody: open it as a read-only preview tab
     // (the editor resumes it via session/load read-only and lets the user activate
     // the owning worktree from there) instead of letting resumeSession throw an
     // AcpForeignWorktreeError into the empty catch below — which looked like the
     // pick did nothing at all.
     const entry = entries.find((e) => e.id === picked.id)
-    // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 与 entry.cwd 均为本机路径。
-    const currentCwd = workspace.current?.folder.fsPath
-    if (
-      entry &&
-      entry.cwd !== undefined &&
-      currentCwd !== undefined &&
-      !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
-    ) {
+    const folder = workspace.current?.folder
+    const currentCwd = folder?.fsPath
+    const currentAuthority =
+      folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
+    if (entry && isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
       editor.openEditor(
         inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
       )

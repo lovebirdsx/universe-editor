@@ -5,6 +5,7 @@ import {
   IDialogService,
   IEditorGroupsService,
   IEditorService,
+  IFileDialogService,
   IHostService,
   IInstantiationService,
   ILayoutService,
@@ -22,6 +23,7 @@ import {
   NullLogger,
   ServiceCollection,
   UriIdentityService,
+  URI,
   GroupDirection,
   observableValue,
   registerAction2,
@@ -47,6 +49,10 @@ import {
   NewAgentSessionInCurrentEditorAction,
 } from '../agentActions.js'
 import { AskInSideChatAction } from '../agentSessionActions.js'
+import {
+  NewAgentSessionInFolderAction,
+  NewAgentSessionWithScopeAction,
+} from '../agentSessionActions.js'
 import { FindWordAtCursorNextAction, FindWordAtCursorPreviousAction } from '../findWordActions.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import {
@@ -63,6 +69,10 @@ import {
   type AcpSessionHistoryEntry,
 } from '../../services/acp/session/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../../services/acp/session/acpChatLocationService.js'
+import {
+  ISubProjectService,
+  type SubProjectScope,
+} from '../../services/acp/session/acpSubProjectService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
@@ -702,6 +712,239 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
   })
 })
 
+describe('NewAgentSessionInFolderAction', () => {
+  function fakeSession(id: string): IAcpSession {
+    return { id, agentId: 'claude-code', title: 'New' } as unknown as IAcpSession
+  }
+
+  function build(opts?: { location?: 'editor' | 'sidebar' }) {
+    const createSession = vi.fn(async () => fakeSession('sess-1'))
+    const defaultAgentId = vi.fn(() => 'claude-code')
+    const openEditor = vi.fn()
+    const openViewContainer = vi.fn()
+    const getVisible = vi.fn(() => true)
+    const toggleVisible = vi.fn()
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      createSession,
+      getById: () => undefined,
+      activeSession: observableValue<IAcpSession | undefined>('test.activeSession', undefined),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      list: () => [],
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId,
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpChatLocationService, {
+      _serviceBrand: undefined,
+      location: observableValue('test.loc', opts?.location ?? 'editor'),
+    } as unknown as IAcpChatLocationService)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      openEditor,
+    } as unknown as IEditorService)
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible,
+      toggleVisible,
+    } as unknown as ILayoutService)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+    } as unknown as IViewsService)
+    // AcpSessionEditorInput construction pulls the chat widget service.
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    return {
+      inst,
+      createSession,
+      defaultAgentId,
+      openEditor,
+      openViewContainer,
+      getVisible,
+      toggleVisible,
+    }
+  }
+
+  it('roots the session at the folder arg and opens it as an editor tab', async () => {
+    const b = build()
+    const folder = URI.file('/ws/src')
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInFolderAction().run(accessor, { parent: folder }),
+    )
+    expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: folder.fsPath })
+    expect(b.openEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves a file target to its parent folder when no parent arg is present', async () => {
+    const b = build()
+    const file = URI.file('/ws/src/main.ts')
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInFolderAction().run(accessor, {
+        target: file,
+        resource: file,
+        isDirectory: false,
+      }),
+    )
+    const parent = URI.joinPath(file, '..')
+    expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: parent.fsPath })
+  })
+
+  it('reveals the Agents view instead of an editor tab in docked mode', async () => {
+    const b = build({ location: 'sidebar' })
+    const folder = URI.file('/ws/src')
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInFolderAction().run(accessor, { parent: folder }),
+    )
+    expect(b.openEditor).not.toHaveBeenCalled()
+    expect(b.openViewContainer).toHaveBeenCalledWith('workbench.view.agents')
+  })
+})
+
+describe('NewAgentSessionWithScopeAction', () => {
+  function fakeSession(id: string): IAcpSession {
+    return { id, agentId: 'claude-code', title: 'New' } as unknown as IAcpSession
+  }
+
+  function scope(over: Partial<SubProjectScope>): SubProjectScope {
+    return { cwd: '/ws', source: 'workspace', label: 'Workspace', ...over }
+  }
+
+  function build(opts: { scopes: SubProjectScope[]; picked: IQuickPickItem | undefined }) {
+    const createSession = vi.fn(async () => fakeSession('sess-1'))
+    const defaultAgentId = vi.fn(() => 'claude-code')
+    const getScopes = vi.fn(async () => opts.scopes)
+    const pick = vi.fn(async () => opts.picked)
+    const showOpenDialog = vi.fn(async (): Promise<URI[] | undefined> => undefined)
+    const openEditor = vi.fn()
+    const notify = vi.fn()
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      createSession,
+      getById: () => undefined,
+      activeSession: observableValue<IAcpSession | undefined>('test.activeSession', undefined),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      list: () => [],
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId,
+    } as unknown as IAcpAgentRegistry)
+    services.set(ISubProjectService, {
+      _serviceBrand: undefined,
+      getScopes,
+    } as unknown as ISubProjectService)
+    services.set(IQuickInputService, {
+      _serviceBrand: undefined,
+      pick,
+    } as unknown as IQuickInputService)
+    services.set(IFileDialogService, {
+      _serviceBrand: undefined,
+      showOpenDialog,
+    } as unknown as IFileDialogService)
+    services.set(IAcpChatLocationService, {
+      _serviceBrand: undefined,
+      location: observableValue('test.loc', 'editor'),
+    } as unknown as IAcpChatLocationService)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      openEditor,
+    } as unknown as IEditorService)
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible: () => true,
+      toggleVisible: vi.fn(),
+    } as unknown as ILayoutService)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer: vi.fn(),
+    } as unknown as IViewsService)
+    services.set(INotificationService, {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    return { inst, createSession, getScopes, pick, showOpenDialog, openEditor, notify }
+  }
+
+  it('creates the session in the chosen configured scope (cwd + authority)', async () => {
+    const configured = scope({
+      cwd: '/ws/sub',
+      authority: 'ssh-remote+192.0.2.10',
+      source: 'configured',
+      label: 'sub',
+    })
+    const b = build({
+      scopes: [scope({ cwd: '/ws' }), configured],
+      picked: { id: configured.cwd, label: configured.label },
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.createSession).toHaveBeenCalledWith('claude-code', {
+      cwd: configured.cwd,
+      authority: configured.authority,
+    })
+  })
+
+  it('opens the OS folder dialog for the trailing Choose Folder entry', async () => {
+    const pickedFolder = URI.file('/ws/other')
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+    })
+    b.showOpenDialog.mockResolvedValueOnce([pickedFolder])
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
+    expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: pickedFolder.fsPath })
+  })
+
+  it('creates nothing when the picker is dismissed', async () => {
+    const b = build({ scopes: [scope({ cwd: '/ws' })], picked: undefined })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.createSession).not.toHaveBeenCalled()
+  })
+
+  it('notifies an error when scope detection fails', async () => {
+    const b = build({ scopes: [], picked: undefined })
+    b.getScopes.mockRejectedValueOnce(new Error('io probe failed'))
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.notify).toHaveBeenCalledTimes(1)
+    expect(b.createSession).not.toHaveBeenCalled()
+  })
+
+  it('creates nothing and shows no error when the folder dialog is cancelled', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
+    expect(b.createSession).not.toHaveBeenCalled()
+    expect(b.notify).not.toHaveBeenCalled()
+  })
+})
+
 describe('ResumeAgentSessionAction', () => {
   function makeEntry(over: Partial<AcpSessionHistoryEntry>): AcpSessionHistoryEntry {
     return {
@@ -721,6 +964,7 @@ describe('ResumeAgentSessionAction', () => {
     currentCwd: string | undefined
     platform?: 'win32' | 'linux'
     location?: 'editor' | 'sidebar'
+    authority?: string
     resumeImpl?: (id: string) => Promise<IAcpSession>
   }) {
     const resumeSession = vi.fn(
@@ -775,7 +1019,14 @@ describe('ResumeAgentSessionAction', () => {
     } as unknown as INotificationService
     const workspace = {
       _serviceBrand: undefined,
-      current: opts.currentCwd ? { folder: { fsPath: opts.currentCwd }, name: 'ws' } : null,
+      current: opts.currentCwd
+        ? {
+            folder: opts.authority
+              ? { scheme: 'remote-ssh', authority: opts.authority, fsPath: opts.currentCwd }
+              : { fsPath: opts.currentCwd },
+            name: 'ws',
+          }
+        : null,
     } as unknown as IWorkspaceService
     const host = { _serviceBrand: undefined, platform: opts.platform ?? 'linux' } as IHostService
 
@@ -822,6 +1073,19 @@ describe('ResumeAgentSessionAction', () => {
     const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
     await run(b)
     expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+  })
+
+  it('resumes a session rooted in a subdirectory of the open workspace live (not a preview)', async () => {
+    const entry = makeEntry({ cwd: '/repo/main/sub', title: 'Sub-project' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    await run(b)
+    // A same-workspace subdirectory is not foreign, so it resumes live.
+    expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+    // …and opens the *live* session (id 'live'), never the read-only preview of
+    // the history row (which would carry the history id 'sess-1').
+    const opened = b.openEditor.mock.calls[0]?.[0]
+    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
+    expect((opened as AcpSessionEditorInput).sessionId).toBe('live')
   })
 
   it('shows the session directory name in the picker description', async () => {
@@ -875,6 +1139,23 @@ describe('ResumeAgentSessionAction', () => {
     await run(b)
     // The fix routes around resumeSession entirely, so the user gets a tab.
     expect(b.openEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens a read-only preview (no live resume) for a same-path session on another host', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', authority: 'ssh-remote+192.0.2.10' })
+    const b = build({
+      entries: [entry],
+      pickIndex: 0,
+      currentCwd: '/repo/main',
+      authority: 'ssh-remote+192.0.2.20',
+    })
+    await run(b)
+    // Same cwd, but the entry ran on a different remote host — still split-brain.
+    expect(b.resumeSession).not.toHaveBeenCalled()
+    expect(b.openEditor).toHaveBeenCalledTimes(1)
+    const opened = b.openEditor.mock.calls[0]?.[0]
+    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
+    expect((opened as AcpSessionEditorInput).sessionId).toBe('sess-1')
   })
 })
 

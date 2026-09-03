@@ -50,6 +50,7 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     id: 's1',
     agentId: 'fake',
     authority: undefined,
+    cwd: undefined,
     readOnly,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',

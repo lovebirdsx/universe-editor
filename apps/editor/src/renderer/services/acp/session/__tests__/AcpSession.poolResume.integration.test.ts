@@ -91,6 +91,7 @@ import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import { stubSubProjectService } from './stubSubProjectService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -499,6 +500,7 @@ function build(storage: FakeStorage): Built {
     stubWindowsService(),
     stubEnvSnapshotService(),
     stubAcpModelCandidateService(),
+    stubSubProjectService(),
   )
   return {
     client,

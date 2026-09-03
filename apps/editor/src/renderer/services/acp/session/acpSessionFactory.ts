@@ -52,6 +52,12 @@ export interface IAcpSessionCreateOptions {
    * IAcpSession.authority.
    */
   readonly authority?: string
+  /**
+   * Workspace cwd the agent process is rooted at (undefined = agent-only).
+   * Carried from the history entry on resume / creation cwd on new sessions —
+   * see IAcpSession.cwd.
+   */
+  readonly cwd?: string
 }
 
 export interface IAcpSessionFactory {
@@ -128,6 +134,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       undefined,
       undefined,
       this._providerContext,
+      opts.cwd,
       opts.authority,
     )
   }

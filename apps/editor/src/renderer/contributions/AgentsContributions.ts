@@ -339,6 +339,53 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Maximum number of images that can be attached to a single prompt.',
             ),
           },
+          'acp.projectRoots': {
+            type: 'array',
+            default: [],
+            items: { type: 'string' },
+            description: localize(
+              'settings.acp.projectRoots',
+              'Permanent list of sub-project directories. Accepts absolute paths or paths relative to the workspace root.',
+            ),
+          },
+          'acp.subProject.detectEnabled': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.subProject.detectEnabled',
+              'Detect the project root of the active file automatically when creating a new session.',
+            ),
+          },
+          'acp.subProject.detectMarkers': {
+            type: 'array',
+            default: [
+              '.git',
+              'package.json',
+              'tsconfig.json',
+              'p4config',
+              'p4config.txt',
+              '.p4ignore',
+              'Cargo.toml',
+              'go.mod',
+              'CMakeLists.txt',
+              'pyproject.toml',
+            ],
+            items: { type: 'string' },
+            description: localize(
+              'settings.acp.subProject.detectMarkers',
+              'Marker files used to identify a sub-project.',
+            ),
+          },
+          'acp.subProject.maxDepth': {
+            type: 'number',
+            default: 20,
+            minimum: 1,
+            maximum: 100,
+            description: localize(
+              'settings.acp.subProject.maxDepth',
+              'Maximum directory depth to walk upward when looking for a sub-project marker.',
+            ),
+          },
         },
       }),
     )

@@ -14,11 +14,15 @@ import {
   IWindowsService,
   IWorkspaceService,
   IUriIdentityService,
+  REMOTE_SCHEME,
   localize,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
-import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import {
+  IAcpSessionHistoryService,
+  isForeignWorkspaceSession,
+} from '../../services/acp/session/acpSessionHistory.js'
 import type { AcpSessionHistoryEntry } from '../../services/acp/session/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { isAuthRequiredError } from '../../services/acp/session/acpAuthError.js'
@@ -52,18 +56,22 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
     return <ChatBody session={session} readOnly={session.readOnly} autoFocus={!session.readOnly} />
   }
 
-  // A session whose cwd differs from the open folder must not be resumed live —
-  // that would spawn the agent against a sibling worktree behind this window's
-  // UI. Instead resume it READ-ONLY (replay history via session/load, no prompt /
-  // config side effects) so the user can read the conversation; on failure
-  // (e.g. agent without loadSession) fall back to the metadata-only preview.
+  // A session from another workspace / worktree / remote host must not be resumed
+  // live — that would spawn the agent against a different workspace behind this
+  // window's UI. A subdirectory of the open folder is the same workspace and still
+  // resumes live. For a truly foreign session resume READ-ONLY (replay history via
+  // session/load, no prompt / config side effects) so the user can read the
+  // conversation; on failure (e.g. agent without loadSession) fall back to the
+  // metadata-only preview.
   const entry = history.get(acpInput.sessionId)
-  // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 与 entry.cwd 均为本机路径。
-  const currentCwd = workspace.current?.folder.fsPath
+  // cwd 可能是远端 POSIX 路径；authority 才是跨主机判据（对齐 AcpSessionService._currentAuthority）。
+  const folder = workspace.current?.folder
+  const currentCwd = folder?.fsPath
+  const currentAuthority =
+    folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
   const isForeign =
-    entry?.cwd !== undefined &&
-    currentCwd !== undefined &&
-    !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+    entry !== undefined &&
+    isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)
   if (entry && isForeign) {
     return <ForeignSessionResumer key={acpInput.sessionId} input={acpInput} entry={entry} />
   }

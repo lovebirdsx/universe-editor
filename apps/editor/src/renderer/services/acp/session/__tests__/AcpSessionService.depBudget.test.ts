@@ -63,7 +63,15 @@ import { AcpSessionService } from '../acpSessionService.js'
 // per-agent credential selection (claude/codex config services) — no existing
 // collaborator owns that join, and the three wire paths that must carry the
 // ids (session/new + session/load + session/resume) all live on the facade.
-const MAX_INJECTED = 21
+// +1 ISubProjectService (sub-root session hydrate on restart): the restore
+// coordinator must sweep every configured sub-project root so a chat started
+// inside an `acp.projectRoots` subdirectory survives relaunch. getScopes() is
+// the single source merging workspace root + config + filesystem detection —
+// no existing collaborator (config reads settings layers, the registry owns
+// agent presets, the coordinator owns timing) can enumerate that set. The
+// facade injects it only to hand getScopes() to the coordinator, mirroring
+// IWindowsService above.
+const MAX_INJECTED = 22
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

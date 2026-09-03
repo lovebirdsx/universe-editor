@@ -978,6 +978,12 @@ export class AcpSession extends Disposable implements IAcpSession {
      */
     private readonly _providerContext?: IAcpSessionProviderContext,
     /**
+     * Workspace cwd the session's agent process is rooted at. Threaded through so
+     * the session list / editor can classify a same-workspace subdirectory session
+     * against a foreign worktree — see IAcpSession.cwd.
+     */
+    readonly cwd: string | undefined = undefined,
+    /**
      * Host this session's agent runs on (remote-ssh authority; undefined =
      * local). Cost attribution is per host — see IAcpSession.authority.
      */

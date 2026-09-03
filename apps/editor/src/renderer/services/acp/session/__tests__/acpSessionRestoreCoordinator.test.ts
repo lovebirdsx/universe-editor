@@ -85,6 +85,7 @@ import { AcpSessionHistoryService, type SessionHistoryScope } from '../acpSessio
 import type { IAcpAgentRegistry } from '../../acpAgentRegistry.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import type { IAcpSession } from '../acpSession.js'
+import { ISubProjectService, type SubProjectScope } from '../acpSubProjectService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
@@ -371,6 +372,8 @@ interface BuildOptions {
   readonly getLiveSessionIds?: () => ReadonlySet<string>
   readonly getHistoryScope?: () => SessionHistoryScope
   readonly shouldSkipAutoResume?: () => Promise<boolean>
+  /** Configured sub-project scopes reported by the fake ISubProjectService. */
+  readonly subProjects?: ISubProjectService
 }
 
 interface BuildResult {
@@ -381,6 +384,14 @@ interface BuildResult {
   readonly storage: FakeStorage
   readonly notifications: StubNotificationService
   readonly callbacks: { resumeCalls: string[] }
+}
+
+function makeSubProjects(scopes: readonly SubProjectScope[] = []): ISubProjectService {
+  return {
+    _serviceBrand: undefined,
+    getScopes: async () => [...scopes],
+    getConfiguredScopes: () => scopes.filter((s) => s.source !== 'detected'),
+  } as unknown as ISubProjectService
 }
 
 function build(opts: BuildOptions = {}): BuildResult {
@@ -430,6 +441,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     new NoopTelemetryService(),
     new StubLoggerService(),
     FAKE_URI_IDENTITY,
+    opts.subProjects ?? makeSubProjects(),
     callbacks,
   )
   return {
@@ -806,6 +818,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       new NoopTelemetryService(),
       new StubLoggerService(),
       FAKE_URI_IDENTITY,
+      makeSubProjects(),
       callbacks,
     )
     await history.initialize()
@@ -822,6 +835,215 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       { agentId: 'fake', cwd: 'C:/ws-A', silent: true },
       { agentId: 'fake', cwd: 'C:/ws-B', silent: true },
     ])
+  })
+
+  it('hydrates configured sub-project roots alongside the workspace root', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: 'C:/ws',
+      subProjects: makeSubProjects([
+        { cwd: 'C:/ws', source: 'workspace', label: 'Workspace' },
+        { cwd: 'C:/ws/src/client', source: 'configured', label: 'src/client' },
+        { cwd: 'C:/ws/lib', source: 'configured', label: 'lib' },
+        { cwd: 'C:/ws/src/client', source: 'detected', label: 'src/client' },
+      ]),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    // Workspace root first, then each *configured* sub-root — detected/workspace
+    // scopes are skipped (they are either the root or a duplicate).
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual([
+      'C:/ws',
+      'C:/ws/src/client',
+      'C:/ws/lib',
+    ])
+  })
+
+  it('derives sub-root hydrates from local history subdirectory cwds', async () => {
+    const built = build({ agentIds: ['fake'], cwd: '/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-sub',
+      title: 'sub',
+      cwd: '/ws/src/client',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['/ws', '/ws/src/client'])
+  })
+
+  it('caps history-derived sub-root hydrates at MAX_SUB_ROOT_HYDRATES', async () => {
+    const built = build({ agentIds: ['fake'], cwd: '/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    for (let i = 0; i < 12; i++) {
+      built.history.add({
+        agentId: 'fake',
+        sessionIdOnAgent: `s-${i}`,
+        title: `sub ${i}`,
+        cwd: `/ws/sub-${i}`,
+      })
+    }
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    // 1 root sweep + at most MAX_SUB_ROOT_HYDRATES extra sweeps.
+    expect(built.client.connectCalls.length - 1).toBeLessThanOrEqual(8)
+  })
+
+  it('never lets history-derived roots displace configured ones under the cap', async () => {
+    const configuredCwds = ['/ws/cfg-a', '/ws/cfg-b', '/ws/cfg-c']
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      subProjects: makeSubProjects(
+        configuredCwds.map((cwd) => ({ cwd, source: 'configured' as const, label: cwd })),
+      ),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    // Far more derived roots than the cap can hold — the configured ones must
+    // still all make it in, since they are the user's explicit intent.
+    for (let i = 0; i < 12; i++) {
+      built.history.add({
+        agentId: 'fake',
+        sessionIdOnAgent: `s-${i}`,
+        title: `sub ${i}`,
+        cwd: `/ws/sub-${i}`,
+      })
+    }
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    const swept = built.client.connectCalls.map((c) => c.cwd)
+    expect(swept[0]).toBe('/ws')
+    expect(swept.slice(1, 4)).toEqual(configuredCwds)
+    expect(swept.length - 1).toBeLessThanOrEqual(8)
+  })
+
+  it('dedupes a configured sub-root against a history-derived duplicate (configured first)', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      subProjects: makeSubProjects([
+        { cwd: '/ws/src/client', source: 'configured', label: 'src/client' },
+      ]),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-client',
+      title: 'client',
+      cwd: '/ws/src/client',
+    })
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-lib',
+      title: 'lib',
+      cwd: '/ws/lib',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    // Root, then the configured client (deduped against the history row), then
+    // the history-only lib — a duplicate client would appear twice.
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual([
+      '/ws',
+      '/ws/src/client',
+      '/ws/lib',
+    ])
+  })
+
+  it('does not hydrate sibling worktrees derived from history cwds', async () => {
+    const built = build({ agentIds: ['fake'], cwd: '/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-other',
+      title: 'other',
+      cwd: '/other',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['/ws'])
+  })
+
+  it('produces no extra connects when history only has root-cwd sessions', async () => {
+    const built = build({ agentIds: ['fake'], cwd: '/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-root',
+      title: 'root',
+      cwd: '/ws',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['/ws'])
+  })
+
+  it('skips sub-root sweeps in `all` scope — the root sweep already lists every project', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'all',
+      subProjects: makeSubProjects([{ cwd: '/ws/lib', source: 'configured', label: 'lib' }]),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-sub',
+      title: 'sub',
+      cwd: '/ws/src/client',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['/ws'])
   })
 
   it('defers the hydrate sweep until whenWorkspaceReady resolves', async () => {

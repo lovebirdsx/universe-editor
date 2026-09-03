@@ -531,6 +531,14 @@ export interface IAcpSession {
    */
   readonly authority: string | undefined
   /**
+   * Workspace cwd the session's agent process is rooted at; undefined for a
+   * session still connecting (or an agent-only session). Carried from the
+   * history entry on resume and from the creation cwd on new sessions so the
+   * session list / editor can tell a same-workspace subdirectory session apart
+   * from a foreign worktree (see isDescendantOrEqual).
+   */
+  readonly cwd: string | undefined
+  /**
    * True for a read-only preview session: spawned to replay (`session/load`) a
    * session that belongs to a different worktree so its history can be viewed in
    * this window, without allowing any prompt / config mutation (those would have

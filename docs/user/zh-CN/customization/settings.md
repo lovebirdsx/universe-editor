@@ -166,6 +166,7 @@
 - [主题与语言](./themes-and-language.md)
 - [术语表：工作区 / 项目](../reference/glossary.md#工作区--项目)
 - [命令速查表](../reference/command-reference.md)
+- [管理会话 · 子项目会话](../ai-agent/managing-sessions.md#子项目会话工作目录)（`acp.projectRoots` / `acp.subProject.*`：把 Agent 的工作目录收窄到大仓的某个子工程）
 
 ## 本页涉及的命令
 

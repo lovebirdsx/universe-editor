@@ -29,6 +29,7 @@ import {
   IUriIdentityService,
   ICommandService,
   IHostService,
+  REMOTE_SCHEME,
   isWslAuthority,
 } from '@universe-editor/platform'
 import {
@@ -59,6 +60,8 @@ import {
 } from '../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
+  isDescendantOrEqual,
+  isForeignWorkspaceSession,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
 } from '../../services/acp/session/acpSessionHistory.js'
@@ -70,6 +73,7 @@ import {
 } from '../../services/acp/session/acpSessionStatus.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
+import { pathTail, shortenScopeLabel } from './scopeLabel.js'
 import {
   SessionRowContextMenu,
   type SessionRowContextMenuState,
@@ -110,25 +114,24 @@ function readHistoryScope(config: IConfigurationService): SessionHistoryScope {
   return raw === 'workspace' || raw === 'worktree' || raw === 'all' ? raw : 'worktree'
 }
 
-/** Last path segment of an absolute fs path, for a compact directory fallback label. */
-function pathTail(p: string): string {
-  const parts = p.split(/[\\/]+/).filter(Boolean)
-  return parts.length > 0 ? parts[parts.length - 1]! : p
-}
-
 /**
  * What to show in the per-row scope chip and its full-path tooltip:
- *  - `all`:      the session cwd.
+ *  - `all`: the session cwd.
+ *  - a subdirectory of the open folder: the folded relative path (title = full cwd).
  *  - `worktree`: the git branch, falling back to the cwd's last segment.
  *  - `workspace`: nothing (the list is already a single workspace).
  */
 function scopeChip(
   entry: AcpSessionHistoryEntry,
   scope: SessionHistoryScope,
+  subPath: string | undefined,
 ): { label: string; title: string } | undefined {
   if (scope === 'all') {
     if (!entry.cwd) return undefined
     return { label: entry.cwd, title: entry.cwd }
+  }
+  if (subPath !== undefined && entry.cwd !== undefined) {
+    return { label: shortenScopeLabel(subPath), title: entry.cwd }
   }
   if (scope === 'worktree') {
     if (entry.cwd)
@@ -269,6 +272,7 @@ function SessionRow({
   scope,
   isForeign,
   foreignStat,
+  subPath,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
@@ -285,6 +289,7 @@ function SessionRow({
   scope: SessionHistoryScope
   isForeign: boolean
   foreignStat: ForeignSessionStat | undefined
+  subPath: string | undefined
 }) {
   const isRunning = liveSession !== undefined
   // Foreign rows are rebuilt by the hydrate sweep without duration/cost; fall
@@ -310,7 +315,7 @@ function SessionRow({
     historyConfigLabels?.['effort'] ??
     historyConfigOptions?.['reasoning_effort'] ??
     historyConfigOptions?.['effort']
-  const chip = scopeChip(entry, scope)
+  const chip = scopeChip(entry, scope, subPath)
   const isArchived = entry.archived === true
   const isPinned = entry.pinned === true
   // Hover tooltip: the full first user prompt when it was recorded (new rows),
@@ -507,8 +512,11 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
     return () => d.dispose()
   }, [config])
 
-  // 本机路径，不随远端工作区变化：agent 在本机 spawn，cwd 为本机路径。
-  const currentCwd = workspace.current?.folder.fsPath
+  // cwd 可能是远端 POSIX 路径；authority 才是跨主机判据（对齐 AcpSessionService._currentAuthority）。
+  const folder = workspace.current?.folder
+  const currentCwd = folder?.fsPath
+  const currentAuthority =
+    folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
 
   const scrollRef = useRef<HTMLUListElement | null>(null)
   useScrollRestore(
@@ -556,12 +564,15 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
     [pendingEntries, entries],
   )
 
-  // In `workspace` scope keep only exact-cwd rows so narrowing applies instantly
-  // without waiting for the next replace-mode hydrate. `worktree`/`all` trust the
-  // hydrate sweep's scoping (which already bounds what the bucket contains).
+  // In `workspace` scope keep only rows whose cwd is the open folder or a
+  // subdirectory of it, so narrowing applies instantly without waiting for the
+  // next replace-mode hydrate. `worktree`/`all` trust the hydrate sweep's
+  // scoping (which already bounds what the bucket contains).
   const scoped = useMemo(() => {
     if (scope !== 'workspace' || currentCwd === undefined) return merged
-    return merged.filter((e) => e.cwd === undefined || uriIdentity.arePathsEqual(e.cwd, currentCwd))
+    return merged.filter(
+      (e) => e.cwd === undefined || isDescendantOrEqual(uriIdentity, currentCwd, e.cwd),
+    )
   }, [merged, scope, currentCwd, uriIdentity])
 
   const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
@@ -688,10 +699,17 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
             // history row.
             const liveSession = live && !live.readOnly && isResidentLive(live) ? live : undefined
             const isActive = liveSession !== undefined && liveSession.id === activeId
-            const isForeign =
-              entry.cwd !== undefined &&
-              currentCwd !== undefined &&
-              !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+            const isForeign = isForeignWorkspaceSession(
+              entry,
+              currentCwd,
+              currentAuthority,
+              uriIdentity,
+            )
+            const rel =
+              entry.cwd !== undefined && currentCwd !== undefined
+                ? uriIdentity.relativePathUnder(currentCwd, entry.cwd)
+                : null
+            const subPath = rel !== null && rel !== '' ? rel : undefined
             const onRename =
               isForeign || isPending
                 ? undefined
@@ -821,6 +839,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 scope={scope}
                 isForeign={isForeign}
                 foreignStat={foreignStats.get(entry.id)}
+                subPath={subPath}
                 onRename={onRename}
                 onToggleArchive={onToggleArchive}
                 onTogglePin={onTogglePin}
@@ -840,13 +859,13 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                     // build a second session for the same durable id.
                     if (liveNow.isDormant.get()) void liveNow.ensureAwake()
                   } else if (
-                    entry.cwd !== undefined &&
-                    currentCwd !== undefined &&
-                    !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+                    isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)
                   ) {
-                    // Foreign worktree: don't resume (would spawn the agent
-                    // against another worktree behind this window's UI). Open a
-                    // read-only preview tab; the user activates from there.
+                    // Foreign worktree / cross-host: don't resume (would spawn
+                    // the agent against another worktree or host behind this
+                    // window's UI). Open a read-only preview tab; the user
+                    // activates from there. A subdirectory row is the same
+                    // workspace, so it falls through to resumeSession below.
                     editorService.openEditor(
                       instantiation.createInstance(
                         AcpSessionEditorInput,

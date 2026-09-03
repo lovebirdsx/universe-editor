@@ -39,6 +39,7 @@ function createSession(replayIngestionBudget = TEST_BUDGET): AcpSession {
     undefined,
     undefined,
     undefined,
+    undefined,
     // Private budget: replayed content is charged to the resident tally, which
     // must not reconcile against the process-wide default mid-test.
     new AcpResidentBudget(Number.MAX_SAFE_INTEGER),

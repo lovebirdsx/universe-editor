@@ -9,7 +9,7 @@
 
 import { useState } from 'react'
 import { ICommandService, localize } from '@universe-editor/platform'
-import { ArrowLeftRight, Filter, Plus, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeftRight, ChevronDown, Filter, Plus, RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
@@ -71,6 +71,14 @@ export function AgentsViewToolbar() {
           <AgentIcon agentId={defaultAgentId} size={13} className={styles['chatTitleAgentIcon']} />
         </IconButton>
         <IconButton
+          label={localize('acp.newSession.withScope', 'New session in…')}
+          command="workbench.action.agent.newSessionWithScope"
+          onClick={() => void commands.executeCommand('workbench.action.agent.newSessionWithScope')}
+          data-testid="acp-new-session-scope"
+        >
+          <ChevronDown size={14} strokeWidth={1.75} />
+        </IconButton>
+        <IconButton
           label={localize('acp.switchToEditor.tooltip', 'Move chat to the editor area')}
           onClick={() => location.setLocation('editor')}
           data-testid="acp-switch-to-editor"
@@ -109,6 +117,14 @@ export function AgentsViewToolbar() {
         data-testid="acp-new-session"
       >
         <Plus size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label={localize('acp.newSession.withScope', 'New session in…')}
+        command="workbench.action.agent.newSessionWithScope"
+        onClick={() => void commands.executeCommand('workbench.action.agent.newSessionWithScope')}
+        data-testid="acp-new-session-scope"
+      >
+        <ChevronDown size={14} strokeWidth={1.75} />
       </IconButton>
       <IconButton
         label={localize('acp.selectAgent', 'Choose agent…')}

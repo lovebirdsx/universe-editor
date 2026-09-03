@@ -24,6 +24,8 @@ import {
   FIRST_PROMPT_MAX_LENGTH,
   collectSideTaskDescendants,
   effectiveEntryAuthority,
+  isDescendantOrEqual,
+  isForeignWorkspaceSession,
   type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
 
@@ -2455,22 +2457,118 @@ describe('AcpSessionHistoryService — pinned eviction', () => {
 })
 
 describe('effectiveEntryAuthority', () => {
-  const eq = (a: string | undefined, b: string | undefined): boolean => a === b
+  const ident = makeUriIdentity('linux')
 
   it('returns entry.authority verbatim when present', () => {
-    expect(effectiveEntryAuthority({ authority: 'wsl+a' }, '/w', 'wsl+b', eq)).toBe('wsl+a')
+    expect(effectiveEntryAuthority({ authority: 'wsl+a' }, '/w', 'wsl+b', ident)).toBe('wsl+a')
   })
 
   it('infers the current authority for a legacy row whose cwd matches', () => {
-    expect(effectiveEntryAuthority({ cwd: '/w' }, '/w', 'wsl+b', eq)).toBe('wsl+b')
+    expect(effectiveEntryAuthority({ cwd: '/w' }, '/w', 'wsl+b', ident)).toBe('wsl+b')
+  })
+
+  // Must agree with isForeignWorkspaceSession, which calls a subdirectory row
+  // non-foreign: backfilling only exact-cwd rows would let a legacy remote
+  // subdirectory row connect with no authority and spawn on the local machine.
+  it('infers the current authority for a legacy row in a subdirectory', () => {
+    expect(effectiveEntryAuthority({ cwd: '/w/packages/app' }, '/w', 'wsl+b', ident)).toBe('wsl+b')
   })
 
   it('returns undefined for a legacy row whose cwd differs', () => {
-    expect(effectiveEntryAuthority({ cwd: '/other' }, '/w', 'wsl+b', eq)).toBeUndefined()
+    expect(effectiveEntryAuthority({ cwd: '/other' }, '/w', 'wsl+b', ident)).toBeUndefined()
+  })
+
+  it('returns undefined for a legacy row in a sibling sharing a path prefix', () => {
+    expect(effectiveEntryAuthority({ cwd: '/w-other/app' }, '/w', 'wsl+b', ident)).toBeUndefined()
   })
 
   it('returns undefined when the current authority is absent', () => {
-    expect(effectiveEntryAuthority({ cwd: '/w' }, '/w', undefined, eq)).toBeUndefined()
+    expect(effectiveEntryAuthority({ cwd: '/w' }, '/w', undefined, ident)).toBeUndefined()
+  })
+
+  it('returns undefined when either path is missing', () => {
+    expect(effectiveEntryAuthority({}, '/w', 'wsl+b', ident)).toBeUndefined()
+    expect(effectiveEntryAuthority({ cwd: '/w' }, undefined, 'wsl+b', ident)).toBeUndefined()
+  })
+})
+
+describe('isDescendantOrEqual', () => {
+  const posix = makeUriIdentity('linux')
+  const win = makeUriIdentity('win32')
+
+  it('treats an equal path as descendant-or-equal', () => {
+    expect(isDescendantOrEqual(posix, '/w', '/w')).toBe(true)
+  })
+
+  it('treats a nested path as descendant', () => {
+    expect(isDescendantOrEqual(posix, '/w', '/w/src/client')).toBe(true)
+  })
+
+  it('rejects a sibling that merely shares a prefix string', () => {
+    expect(isDescendantOrEqual(posix, '/w', '/w-other/src')).toBe(false)
+  })
+
+  it('rejects a parent path', () => {
+    expect(isDescendantOrEqual(posix, '/w/src', '/w')).toBe(false)
+  })
+
+  it('folds case on win32', () => {
+    expect(isDescendantOrEqual(win, 'C:\\Work', 'c:\\work\\src')).toBe(true)
+  })
+
+  it('is false when either side is undefined', () => {
+    expect(isDescendantOrEqual(posix, undefined, '/w')).toBe(false)
+    expect(isDescendantOrEqual(posix, '/w', undefined)).toBe(false)
+  })
+})
+
+describe('isForeignWorkspaceSession', () => {
+  const ident = makeUriIdentity('linux')
+
+  it('is not foreign for a subdirectory of the open folder', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w/src/client' }, '/w', undefined, ident)).toBe(false)
+  })
+
+  it('is not foreign for the workspace root itself', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w' }, '/w', undefined, ident)).toBe(false)
+  })
+
+  it('is foreign for a sibling worktree', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/other' }, '/w', undefined, ident)).toBe(true)
+  })
+
+  it('is foreign for the same path on another host', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w', authority: 'ssh+b' }, '/w', 'ssh+a', ident)).toBe(
+      true,
+    )
+  })
+
+  it('is foreign for a subdirectory on another host', () => {
+    expect(
+      isForeignWorkspaceSession({ cwd: '/w/src', authority: 'ssh+b' }, '/w', 'ssh+a', ident),
+    ).toBe(true)
+  })
+
+  it('is not foreign for a subdirectory on the same remote host', () => {
+    expect(
+      isForeignWorkspaceSession({ cwd: '/w/src', authority: 'ssh+a' }, '/w', 'ssh+a', ident),
+    ).toBe(false)
+  })
+
+  it('attributes a legacy row with no authority but a matching cwd to this window', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w' }, '/w', 'ssh+a', ident)).toBe(false)
+  })
+
+  it('attributes a legacy subdirectory row with no authority to this window', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w/src' }, '/w', 'ssh+a', ident)).toBe(false)
+  })
+
+  it('treats an entry with no cwd as belonging here', () => {
+    expect(isForeignWorkspaceSession({}, '/w', 'ssh+a', ident)).toBe(false)
+  })
+
+  it('treats an empty window as owning every entry', () => {
+    expect(isForeignWorkspaceSession({ cwd: '/w' }, undefined, undefined, ident)).toBe(false)
   })
 })
 

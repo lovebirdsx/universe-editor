@@ -33,8 +33,10 @@ import {
 } from '@agentclientprotocol/sdk'
 import type { IAcpClientService, IAcpClientConnection } from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import { ISubProjectService, PROJECT_ROOTS_KEY } from './acpSubProjectService.js'
 import {
   effectiveEntryAuthority,
+  isDescendantOrEqual,
   type IAcpSessionHistoryService,
   type SessionHistoryScope,
   type BulkMergeSessionInfo,
@@ -48,6 +50,8 @@ export const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionId'
 const HYDRATE_MAX_PAGES = 5
 /** Per-agent timeout for the initialize+listSessions roundtrip. */
 const HYDRATE_TIMEOUT_MS = 10_000
+/** Cap on extra sub-root hydrates (configured + history-derived) beyond the workspace root. */
+const MAX_SUB_ROOT_HYDRATES = 8
 
 export interface RestoreCoordinatorCallbacks {
   /** Resume a session by its (agent-issued) sessionId — facade's `resumeSession`. */
@@ -139,6 +143,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     private readonly _telemetry: ITelemetryService,
     loggerService: ILoggerService,
     private readonly _uriIdentity: IUriIdentityService,
+    private readonly _subProjects: ISubProjectService,
     private readonly _callbacks: RestoreCoordinatorCallbacks,
   ) {
     super()
@@ -299,7 +304,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       entry,
       this._callbacks.getCurrentCwd(),
       this._callbacks.getCurrentAuthority(),
-      (a, b) => this._uriIdentity.arePathsEqual(a, b),
+      this._uriIdentity,
     )
   }
 
@@ -412,6 +417,108 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     await Promise.all(
       agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, authority, myGen, replace)),
     )
+    // Extra sub-roots: the workspace-root sweep above only surfaces sessions
+    // whose cwd equals the root, so a chat started inside a configured
+    // `acp.projectRoots` subdirectory — or any subdirectory we already have a
+    // local history row for — would never refresh its title / prune agent-side
+    // deletions. Hydrate each extra root too. Serialized (`for...of` + `await`)
+    // so the concurrent agent-subprocess peak stays at `agentIds.length` rather
+    // than `subRoots.length × agentIds.length`.
+    //
+    // `all` scope is exempt: it drops the cwd filter on `session/list`, so the
+    // root sweep already reported every project's sessions and a per-sub-root
+    // sweep would spawn extra agents for byte-identical results.
+    if (cwd !== undefined && this._callbacks.getHistoryScope() !== 'all') {
+      const configured = this._subProjects
+        .getConfiguredScopes()
+        .filter(
+          (scope) =>
+            scope.source === 'configured' && !this._uriIdentity.arePathsEqual(scope.cwd, cwd),
+        )
+      const seen = new Set<string>([this._subRootKey(cwd, authority)])
+      for (const scope of configured) {
+        seen.add(this._subRootKey(scope.cwd, scope.authority))
+      }
+      const derived = this._derivedSubRoots(cwd, authority, seen)
+      if (derived.length > 0) {
+        this._logger.debug(
+          `derived ${derived.length} sub-root hydrate(s) from local history for cwd=${cwd}`,
+        )
+      }
+      const all = [
+        ...configured.map((scope) => ({ cwd: scope.cwd, authority: scope.authority })),
+        ...derived,
+      ]
+      const capped = all.slice(0, MAX_SUB_ROOT_HYDRATES)
+      const dropped = all.length - capped.length
+      if (dropped > 0) {
+        // Configured roots are merged first, so they only get dropped once the
+        // user configured more than the cap — explicit intent being truncated,
+        // not a heuristic, so that case is a warning rather than a note.
+        const droppedConfigured = Math.max(0, configured.length - MAX_SUB_ROOT_HYDRATES)
+        const detail =
+          droppedConfigured > 0
+            ? ` — ${droppedConfigured} of them configured ${PROJECT_ROOTS_KEY} entries, whose sessions will not refresh`
+            : ''
+        const message = `sub-root hydrate capped at ${MAX_SUB_ROOT_HYDRATES}: hydrating ${capped.length} of ${all.length} roots, dropped ${dropped}${detail}`
+        if (droppedConfigured > 0) this._logger.warn(message)
+        else this._logger.info(message)
+      }
+      for (const subRoot of capped) {
+        if (myGen !== this._hydrateGen) return
+        await Promise.all(
+          agentIds.map((agentId) =>
+            this._hydrateOneAgent(agentId, subRoot.cwd, subRoot.authority, myGen, replace),
+          ),
+        )
+      }
+    }
+  }
+
+  /** Dedup key for a hydrate root: the sanctioned path identity key scoped by
+   *  authority, so the same path on two hosts never collapses into one sweep. */
+  private _subRootKey(cwd: string, authority: string | undefined): string {
+    return `${authority ?? ''}|${this._uriIdentity.getPathComparisonKey(cwd)}`
+  }
+
+  /**
+   * Extra hydrate roots derived from local history: any session whose cwd is a
+   * strict descendant of `cwd` implies the user started a chat inside a
+   * subdirectory the root sweep (and `acp.projectRoots`) would miss. Sibling
+   * worktrees are deliberately NOT derived here — the root sweep already
+   * surfaces them via the agent's own worktree expansion, and turning them into
+   * per-worktree spawns would multiply subprocesses for no gain. Deduplicated
+   * by comparison key against `seen` (root + configured) and sorted by
+   * lastUsedAt desc so the cap drops the coldest entries.
+   */
+  private _derivedSubRoots(
+    cwd: string,
+    currentAuthority: string | undefined,
+    seen: ReadonlySet<string>,
+  ): readonly { cwd: string; authority: string | undefined }[] {
+    const byKey = new Map<
+      string,
+      { cwd: string; authority: string | undefined; lastUsedAt: number }
+    >()
+    for (const entry of this._history.list()) {
+      const entryCwd = entry.cwd
+      if (entryCwd === undefined) continue
+      if (this._uriIdentity.arePathsEqual(entryCwd, cwd)) continue
+      if (!isDescendantOrEqual(this._uriIdentity, cwd, entryCwd)) continue
+      const key = this._subRootKey(entryCwd, entry.authority ?? currentAuthority)
+      if (seen.has(key)) continue
+      const existing = byKey.get(key)
+      if (existing === undefined || entry.lastUsedAt > existing.lastUsedAt) {
+        byKey.set(key, {
+          cwd: entryCwd,
+          authority: entry.authority ?? currentAuthority,
+          lastUsedAt: entry.lastUsedAt,
+        })
+      }
+    }
+    return Array.from(byKey.values())
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .map((sub) => ({ cwd: sub.cwd, authority: sub.authority }))
   }
 
   private async _hydrateOneAgent(

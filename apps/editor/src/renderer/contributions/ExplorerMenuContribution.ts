@@ -9,6 +9,7 @@ import {
   FocusOnFolderAction,
   RemoveFolderFromFocusAction,
 } from '../actions/focusScopeActions.js'
+import { NewAgentSessionInFolderAction } from '../actions/agentSessionActions.js'
 
 export class ExplorerMenuContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -203,6 +204,15 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
         when: 'explorerResourceIsFolder && !explorerResourceIsRoot && explorerResourceIsFocusFolder',
         group: '7_focus',
         order: 3,
+      }),
+    )
+
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: NewAgentSessionInFolderAction.ID,
+        when: 'explorerResourceIsFolder',
+        group: '7_agent',
+        order: 1,
       }),
     )
   }

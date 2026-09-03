@@ -2339,6 +2339,22 @@
   color: inherit;
 }
 
+/* Scope badge pinned above the chat: the sub-project directory an agent session
+   is rooted in. Non-interactive (it only describes the session cwd). */
+.sessionCwdPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-badge-progressBackground, #4fa6e2);
+  border-radius: 10px;
+  background: var(--vscode-agent-messageBackground, #2a2a2a);
+  color: var(--vscode-descriptionForeground, #999);
+  font-size: calc(var(--agent-font-size, 12px) - 1px);
+  cursor: default;
+  box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+
 /* Side-task chats tint the prompt border so the child reads differently from a
    regular session at a glance (covers both the Monaco host and the textarea
    fallback). */

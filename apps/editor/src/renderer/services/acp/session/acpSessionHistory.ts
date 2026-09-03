@@ -441,22 +441,70 @@ export interface BulkMergeSessionInfo {
   readonly transcriptPath?: string | null
 }
 
+/** True when `child` equals `parent` or resolves beneath it (platform-aware,
+ *  case-folded on win32/darwin). Both must be defined — a missing path is never
+ *  treated as "under" anything. `relativePathUnder` returns `''` for equality
+ *  and `null` when the child escapes the parent, so a non-null result is exactly
+ *  the descendant-or-equal relation. */
+export function isDescendantOrEqual(
+  uriIdentity: IUriIdentityService,
+  parent: string | undefined,
+  child: string | undefined,
+): boolean {
+  if (parent === undefined || child === undefined) return false
+  return uriIdentity.relativePathUnder(parent, child) !== null
+}
+
+/**
+ * Whether a history entry belongs to a *different* workspace than the open
+ * folder (split-brain guard): its cwd is neither equal to nor beneath
+ * `currentCwd`, or its effective authority differs from `currentAuthority`.
+ * An entry with no cwd — or an empty window with no `currentCwd` — is treated
+ * as "belongs here" for legacy/global compatibility. A **subdirectory** of the
+ * current cwd is NOT foreign: that is the same workspace, so it stays
+ * live-resumable, renameable, and visible in `workspace` scope.
+ *
+ * Authority is resolved internally so every caller gets the same cross-host
+ * verdict. This is the single source of truth for the service guards, the
+ * resume picker and the session-list / editor surfaces — do NOT re-derive it
+ * inline with `arePathsEqual`, that is exactly the split-brain this function
+ * exists to prevent.
+ *
+ * Caveat inherited from `relativePathUnder`: the path primitives fold case by
+ * the *host* platform, so a win32 client comparing remote POSIX paths is
+ * case-insensitive. Authority still separates hosts, so this only matters for
+ * two remote paths on the same host differing solely in case.
+ */
+export function isForeignWorkspaceSession(
+  entry: Pick<AcpSessionHistoryEntry, 'cwd' | 'authority'>,
+  currentCwd: string | undefined,
+  currentAuthority: string | undefined,
+  uriIdentity: IUriIdentityService,
+): boolean {
+  if (entry.cwd === undefined || currentCwd === undefined) return false
+  if (!isDescendantOrEqual(uriIdentity, currentCwd, entry.cwd)) return true
+  // Past this point the cwd lies inside the open folder, so a legacy row that
+  // predates persisted authorities belongs to this window's host.
+  return entry.authority !== undefined && entry.authority !== currentAuthority
+}
+
 /** Legacy rows created before the hydrate sweep persisted `authority` lack the
- *  field — when their cwd matches the current workspace, attribute them to the
- *  current window's authority. Cross-worktree legacy rows are never guessed. */
+ *  field — when their cwd lies inside the current workspace, attribute them to
+ *  the current window's authority. Cross-worktree legacy rows are never guessed.
+ *
+ *  The membership test must stay the same relation `isForeignWorkspaceSession`
+ *  uses (descendant-or-equal, not exact equality): a legacy **subdirectory** row
+ *  is judged non-foreign there and therefore reaches resume, so backfilling only
+ *  exact-cwd rows would connect it with no authority — spawning the agent on the
+ *  local machine against a remote path. */
 export function effectiveEntryAuthority(
   entry: Pick<AcpSessionHistoryEntry, 'cwd' | 'authority'>,
   currentCwd: string | undefined,
   currentAuthority: string | undefined,
-  arePathsEqual: (a: string | undefined, b: string | undefined) => boolean,
+  uriIdentity: IUriIdentityService,
 ): string | undefined {
   if (entry.authority !== undefined) return entry.authority
-  if (
-    currentAuthority !== undefined &&
-    entry.cwd !== undefined &&
-    currentCwd !== undefined &&
-    arePathsEqual(entry.cwd, currentCwd)
-  ) {
+  if (currentAuthority !== undefined && isDescendantOrEqual(uriIdentity, currentCwd, entry.cwd)) {
     return currentAuthority
   }
   return undefined

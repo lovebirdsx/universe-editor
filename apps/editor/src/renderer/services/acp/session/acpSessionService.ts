@@ -95,11 +95,13 @@ import { contextWindowFor, type AcpModelCandidate } from '../acpModelCandidates.
 import {
   effectiveEntryAuthority,
   IAcpSessionHistoryService,
+  isForeignWorkspaceSession,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
 } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
+import { ISubProjectService } from './acpSubProjectService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
@@ -609,6 +611,7 @@ export class AcpSessionService
     private readonly _envSnapshot: IEnvironmentSnapshotService,
     @IAcpModelCandidateService
     private readonly _modelCandidates: IAcpModelCandidateService,
+    @ISubProjectService private readonly _subProjectService: ISubProjectService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -635,6 +638,7 @@ export class AcpSessionService
         this._telemetry,
         loggerService,
         this._uriIdentity,
+        this._subProjectService,
         {
           resumeSession: (sessionId) => this.resumeSession(sessionId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
@@ -717,8 +721,11 @@ export class AcpSessionService
   }
 
   private _entryAuthority(entry: AcpSessionHistoryEntry): string | undefined {
-    return effectiveEntryAuthority(entry, this._currentCwd(), this._currentAuthority(), (a, b) =>
-      this._uriIdentity.arePathsEqual(a, b),
+    return effectiveEntryAuthority(
+      entry,
+      this._currentCwd(),
+      this._currentAuthority(),
+      this._uriIdentity,
     )
   }
 
@@ -798,6 +805,7 @@ export class AcpSessionService
       title,
       collapseMode: initialCollapseMode,
       withTitleService: true,
+      ...(cwd !== undefined ? { cwd } : {}),
       ...(authority !== undefined ? { authority } : {}),
       ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
     })
@@ -1209,19 +1217,17 @@ export class AcpSessionService
     const currentCwd = this._currentCwd()
     const currentAuthority = this._currentAuthority()
     const effectiveAuthority = this._entryAuthority(entry)
+    const cwd = entry.cwd
     if (
       !readOnly &&
-      entry.cwd !== undefined &&
-      currentCwd !== undefined &&
-      (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
-        effectiveAuthority !== currentAuthority)
+      cwd !== undefined &&
+      isForeignWorkspaceSession(entry, currentCwd, currentAuthority, this._uriIdentity)
     ) {
       this._logger.info(
-        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} authority=${effectiveAuthority ?? 'local'} current=${currentCwd} authority=${currentAuthority ?? 'local'}`,
+        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${cwd} authority=${effectiveAuthority ?? 'local'} current=${currentCwd} authority=${currentAuthority ?? 'local'}`,
       )
-      throw new AcpForeignWorktreeError(sessionId, entry.cwd, currentCwd)
+      throw new AcpForeignWorktreeError(sessionId, cwd, currentCwd)
     }
-    const cwd = entry.cwd
     let conn: IAcpClientConnection
     try {
       conn = await this._client.connect(entry.agentId, {
@@ -1278,6 +1284,7 @@ export class AcpSessionService
         readOnly,
         // A read-only preview or a resumed remote session runs on the entry's
         // host, which need not be this window's — cost must follow the entry.
+        ...(cwd !== undefined ? { cwd } : {}),
         ...(effectiveAuthority !== undefined ? { authority: effectiveAuthority } : {}),
         // AI Fix sessions keep their defaults-write isolation across restarts.
         ...(entry.aiFix === true ? { suppressConfigDefaults: true } : {}),
@@ -1918,12 +1925,7 @@ export class AcpSessionService
     if (!entry) return false
     const currentCwd = this._currentCwd()
     const currentAuthority = this._currentAuthority()
-    if (
-      entry.cwd !== undefined &&
-      currentCwd !== undefined &&
-      (!this._uriIdentity.arePathsEqual(entry.cwd, currentCwd) ||
-        this._entryAuthority(entry) !== currentAuthority)
-    ) {
+    if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, this._uriIdentity)) {
       return false
     }
     this._history.updateInfo(entry.id, { title: trimmed }, { overwriteProtectedTitle: true })
@@ -2097,8 +2099,7 @@ export class AcpSessionService
     const effectiveAuthority = this._entryAuthority(entry)
     if (
       cwd !== undefined &&
-      currentCwd !== undefined &&
-      (!this._uriIdentity.arePathsEqual(cwd, currentCwd) || effectiveAuthority !== currentAuthority)
+      isForeignWorkspaceSession(entry, currentCwd, currentAuthority, this._uriIdentity)
     ) {
       throw new AcpForeignWorktreeError(sourceAgentSessionId, cwd, currentCwd)
     }

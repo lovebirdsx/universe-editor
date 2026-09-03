@@ -147,10 +147,22 @@ function makeEditor(): IEditorServiceType {
   } as unknown as IEditorServiceType
 }
 
-function makeWorkspace(folderPath?: string): IWorkspaceServiceType {
+function makeWorkspace(
+  folderPath?: string,
+  opts: { scheme?: string; authority?: string } = {},
+): IWorkspaceServiceType {
   return {
     _serviceBrand: undefined,
-    current: folderPath ? { folder: { fsPath: folderPath }, name: 'ws' } : undefined,
+    current: folderPath
+      ? {
+          folder: {
+            fsPath: folderPath,
+            ...(opts.scheme !== undefined ? { scheme: opts.scheme } : {}),
+            ...(opts.authority !== undefined ? { authority: opts.authority } : {}),
+          },
+          name: 'ws',
+        }
+      : undefined,
   } as unknown as IWorkspaceServiceType
 }
 
@@ -481,5 +493,61 @@ describe('AcpSessionEditor — foreign worktree session (read-only)', () => {
       )
     })
     expect(await screen.findByTestId('acp-foreign-session-preview')).toBeTruthy()
+  })
+})
+
+describe('AcpSessionEditor — subdirectory vs cross-host scoping', () => {
+  it('resumes a subdirectory session live, not read-only', async () => {
+    const service = makeService()
+    const { input } = buildInput(service, 'sess-sub', 'fake')
+    const history = makeHistory((id) => ({
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: id,
+      cwd: '/repo/main/sub',
+      createdAt: 0,
+      lastUsedAt: 0,
+    }))
+    const workspace = makeWorkspace('/repo/main')
+    await act(async () => {
+      const inst = new InstantiationService(makeCollection(service, history, stubEditor, workspace))
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    // Live path taken: read-only must NOT fire, and no foreign loading header.
+    expect(service.resumeSession).toHaveBeenCalledWith('sess-sub')
+    expect(service.resumeSessionReadOnly).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('acp-foreign-session-loading')).toBeNull()
+  })
+
+  it('keeps a same-path remote session read-only when the authority differs', async () => {
+    const service = makeService()
+    const { input } = buildInput(service, 'sess-remote', 'fake')
+    const history = makeHistory((id) => ({
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: id,
+      cwd: '/repo',
+      authority: 'host-2',
+      createdAt: 0,
+      lastUsedAt: 0,
+    }))
+    const workspace = makeWorkspace('/repo', { scheme: 'remote-ssh', authority: 'host-1' })
+    await act(async () => {
+      const inst = new InstantiationService(makeCollection(service, history, stubEditor, workspace))
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    expect(service.resumeSessionReadOnly).toHaveBeenCalledWith('sess-remote')
+    expect(service.resumeSession).not.toHaveBeenCalled()
+    expect(screen.getByTestId('acp-foreign-session-loading')).toBeTruthy()
   })
 })

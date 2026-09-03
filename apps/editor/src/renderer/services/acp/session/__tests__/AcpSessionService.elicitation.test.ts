@@ -77,6 +77,7 @@ import type { IAcpPermissionHandler } from '../../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
+import { stubSubProjectService } from './stubSubProjectService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -325,6 +326,7 @@ function makeService(client: FakeAcpClientService): AcpSessionService {
     stubWindowsService(),
     stubEnvSnapshotService(),
     stubAcpModelCandidateService(),
+    stubSubProjectService(),
   )
 }
 

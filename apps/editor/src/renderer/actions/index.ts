@@ -321,6 +321,8 @@ import {
   ForkAgentSessionAction,
   NewAgentSessionAction,
   NewAgentSessionInCurrentEditorAction,
+  NewAgentSessionInFolderAction,
+  NewAgentSessionWithScopeAction,
   OpenAcpMcpSettingsAction,
   OpenAgentSettingsAction,
   OpenClaudeConfigAction,
@@ -763,6 +765,8 @@ registerAction2(FocusTerminalPanelAction)
 // Agents
 registerAction2(NewAgentSessionAction)
 registerAction2(NewAgentSessionInCurrentEditorAction)
+registerAction2(NewAgentSessionInFolderAction)
+registerAction2(NewAgentSessionWithScopeAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentInEditorAction)
 registerAction2(OpenAgentViewAction)
