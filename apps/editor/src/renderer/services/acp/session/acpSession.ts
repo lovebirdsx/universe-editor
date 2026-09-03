@@ -1994,6 +1994,9 @@ export class AcpSession extends Disposable implements IAcpSession {
           if (!this._reconnecting) {
             this._settleOrphanCompactions('cancelled')
             this._scheduleOrphanToolCallSweep('turn cancelled')
+            // Stop/× ended the episode: the retry countdown must go too — a
+            // cancel is not a failure, so no manual-retry bar.
+            if (this.recovery.state.get()?.phase === 'retrying') this.recovery.clear()
           }
           return
         }
@@ -2043,6 +2046,9 @@ export class AcpSession extends Disposable implements IAcpSession {
           if (!this._reconnecting) {
             this._settleOrphanCompactions('cancelled')
             this._scheduleOrphanToolCallSweep('turn cancelled')
+            // Stop/× ended the episode: the retry countdown must go too — a
+            // cancel is not a failure, so no manual-retry bar.
+            if (this.recovery.state.get()?.phase === 'retrying') this.recovery.clear()
           }
           return
         }
@@ -2070,7 +2076,14 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
       this._sawError = true
       this._appendMessage('agent', `[error] ${failure.message}`)
-      if (verdict.cls === 'transient') {
+      // Any episode that already ran an automatic retry (attempt > 1) — or a
+      // transient whose retries ran out — must land on `exhausted`, whatever the
+      // final verdict (fatal / quota / auth). It used to only fire for
+      // `transient`, so "the retry's next attempt ends in a fatal Internal
+      // error" left `recovery` parked on `retrying` with a countdown timer that
+      // had already fired: nothing ever advanced it, and the RecoveryBar spun
+      // forever with no Retry button.
+      if (!this._reconnecting && (attempt > 1 || verdict.cls === 'transient')) {
         // Retries exhausted — keep the (possibly continuation-switched) prompt
         // so the UI can offer a manual retry from the recovery bar.
         this._failedPrompt = {
@@ -2086,7 +2099,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           phase: 'exhausted',
           attempt,
           maxAttempts: MAX_RECOVERY_ATTEMPTS,
-          reason: verdict.kind ?? 'transient',
+          reason: verdict.kind ?? verdict.cls,
         })
       }
       this._telemetry.publicLogError('acp.prompt_failed', {

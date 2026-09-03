@@ -1681,12 +1681,13 @@ export class AcpSessionService
    * `acp.turnStallTimeoutMs` (default 10min, 0 disables) is treated like a
    * crash — the agent process is alive but its turn is wedged (e.g. a hung
    * subprocess the agent spawned), so it is killed and hot-reconnected.
-   * Sessions mid-recovery or in backoff are skipped: their wait is expected
-   * silence, not a wedge. Sessions awaiting user input (AskUserQuestion /
-   * permission card) are also skipped: the wire is silent while the user
-   * thinks, and that wait is unbounded by nature. So are sessions running a
-   * compaction: the fork reports its lifecycle via ext-notifications, never
-   * session/update, so the wire stays quiet for as long as it takes.
+   * Sessions with a pending automatic-retry (backoff) attempt are skipped:
+   * their wait is expected silence, not a wedge. Sessions awaiting user input
+   * (AskUserQuestion / permission card) are also skipped: the wire is silent
+   * while the user thinks, and that wait is unbounded by nature. So are
+   * sessions running a compaction: the fork reports its lifecycle via
+   * ext-notifications, never session/update, so the wire stays quiet for as
+   * long as it takes.
    */
   private _startStallWatchdog(): void {
     const interval = setInterval(() => {
@@ -1703,7 +1704,12 @@ export class AcpSessionService
     for (const session of this._sessionStore.sessions.get()) {
       if (!(session instanceof AcpSession)) continue
       if (session.readOnly || session.status.get() !== 'running') continue
-      if (session.recovery.state.get() !== undefined) continue
+      // A session mid-backoff has a real pending automatic attempt — its wait
+      // is bounded by the countdown, so exempt it. A leftover recovery state
+      // with NO pending timer is the opposite: the retry loop has already
+      // unwound, so a silently-running turn must fall back to the stall
+      // watchdog instead of being exempted forever.
+      if (session.recovery.hasPending) continue
       // Awaiting user input (question / permission card) is expected silence —
       // the agent is demonstrably alive (it just asked), and the wait lasts as
       // long as the user thinks.
@@ -1792,15 +1798,25 @@ export class AcpSessionService
 
   /**
    * One session may see its shared process reclaimed only when it is fully at
-   * rest: no live turn, no recovery in flight, no card awaiting the user, no
-   * compaction or background work — and, unless it is already closed or
-   * read-only (both complete without the agent), it must carry a durable
-   * transcript so `session/resume` can resurrect it after the kill.
+   * rest: no live turn, no in-flight recovery (a `retrying` backoff or a
+   * `reconnecting` re-handshake), no card awaiting the user, no compaction or
+   * background work — and, unless it is already closed or read-only (both
+   * complete without the agent), it must carry a durable transcript so
+   * `session/resume` can resurrect it after the kill. An `exhausted` recovery
+   * is terminal (no timer, no attempt) and must not block reclaim.
    */
   private _isIdleReclaimable(session: AcpSession, now: number, idleMs: number): boolean {
     const status = session.status.get()
     if (status !== 'idle' && status !== 'errored' && status !== 'closed') return false
-    if (session.recovery.state.get() !== undefined) return false
+    // Only in-flight recovery blocks reclaim: `retrying` has a live backoff
+    // attempt, `reconnecting` is still re-handshaking. `exhausted` is terminal,
+    // so a fatal / quota / auth termination must not leave the agent process
+    // unreclaimed forever. The two in-flight phases are belt-and-braces rather
+    // than load-bearing — `retrying` reads as 'running' and `reconnecting` as
+    // 'connecting', so the status filter above already excluded both. Keeping
+    // the check costs nothing and this decides whether to kill a process.
+    const recovery = session.recovery.state.get()
+    if (recovery?.phase === 'retrying' || recovery?.phase === 'reconnecting') return false
     if (session.pendingElicitation.get() !== undefined) return false
     if (session.pendingPermission.get() !== undefined) return false
     if (session.compactionInProgress) return false

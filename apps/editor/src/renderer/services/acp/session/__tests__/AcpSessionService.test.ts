@@ -4801,6 +4801,40 @@ describe('AcpSessionService — stall watchdog', () => {
     expect(session.isReconnecting).toBe(false)
     svc.dispose()
   })
+
+  it('declares a session stalled when its recovery state is a leftover retrying with no pending timer', async () => {
+    const { svc, session } = await makeRunningSession()
+    // A leftover `retrying` state with no armed timer: the retry loop already
+    // unwound (or was torn down) while the prompt stays in flight, so the turn
+    // must fall back to the stall watchdog rather than being exempted forever.
+    session.recovery.set({
+      phase: 'retrying',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'http_429',
+      nextAttemptAt: Date.now() - 1000,
+    })
+    expect(session.recovery.hasPending).toBe(false)
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 90_000)
+    expect(stallSpy).toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('does not declare a session stalled while a real backoff attempt is pending', async () => {
+    const { svc, session } = await makeRunningSession()
+    const stallSpy = vi.spyOn(session, 'handleStall')
+    const sleep = session.recovery.sleep(300_000)
+    expect(session.recovery.hasPending).toBe(true)
+    try {
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 90_000)
+      expect(stallSpy).not.toHaveBeenCalled()
+    } finally {
+      session.recovery.cancelPending()
+      await sleep.catch(() => {})
+      svc.dispose()
+    }
+  })
 })
 
 describe('AcpSessionService — idle process reaper', () => {
@@ -5033,6 +5067,21 @@ describe('AcpSessionService — idle process reaper', () => {
     // no-op, so we stop right after the re-reclaim tick.)
     await vi.advanceTimersByTimeAsync(90_000)
     expect(killSpy).toHaveBeenCalledTimes(2)
+    svc.dispose()
+  })
+
+  it('reclaims a session whose recovery exhausted (terminal, no pending attempt)', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(IDLE_MS, client)
+    const session = await makeIdleSession(svc)
+    // A fatal/quota/auth termination exhausts the retry tier: the recovery state
+    // is terminal (no timer, no in-flight attempt), so it must not block reclaim.
+    session.recovery.set({ phase: 'exhausted', attempt: 2, maxAttempts: 3, reason: 'fatal' })
+    session.status.set('errored', undefined)
+    const killSpy = vi.spyOn(client, 'killConnectionFor')
+
+    await vi.advanceTimersByTimeAsync(IDLE_MS + 60_000)
+    expect(killSpy).toHaveBeenCalledWith('fake', '/w', undefined)
     svc.dispose()
   })
 })

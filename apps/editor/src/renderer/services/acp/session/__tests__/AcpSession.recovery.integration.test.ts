@@ -539,6 +539,165 @@ describe('AcpSession auto-recovery', () => {
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
   })
 
+  it('falls back to exhausted when a transient retry ends in a fatal error, keeping a manual retry', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        () => Promise.reject(new Error('Internal error')),
+        // The manual retry (after exhausted) lands.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+    expect(s.status.get()).toBe('errored')
+    expect(s.recoveryState.get()?.reason).toBe('fatal')
+    const errors = s.messages.get().filter((m) => m.text.startsWith('[error]'))
+    expect(errors).toHaveLength(1)
+    expect(errors[0]!.text).toBe('[error] Internal error')
+    // Zero-output turn: the retry reused the same messageId (no 继续 bubble).
+    expect(client.connections[0]!.promptCalls.length).toBe(2)
+    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).toBe(
+      client.connections[0]!.promptCalls[1]!._meta?.messageId,
+    )
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === CONTINUE_PROMPT_TEXT)).toBe(
+      false,
+    )
+
+    // The manual retry clears the exhausted state and re-dispatches verbatim.
+    await s.retryRecovery()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(3)
+    expect(client.connections[0]!.promptCalls[2]!._meta?.messageId).toBe(
+      client.connections[0]!.promptCalls[0]!._meta?.messageId,
+    )
+  })
+
+  it.each([
+    [
+      'quota',
+      () =>
+        Promise.reject(
+          Object.assign(new Error('billing exceeded'), { data: { errorKind: 'billing_error' } }),
+        ),
+      'billing_error',
+    ],
+    [
+      'auth',
+      () => Promise.reject(Object.assign(new Error('auth required'), { code: -32000 })),
+      'auth',
+    ],
+  ])(
+    'converges to exhausted when a transient retry ends in a %s error',
+    async (_label, secondError, expectedReason) => {
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [() => Promise.reject(transientError()), secondError],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+      expect(s.status.get()).toBe('errored')
+      expect(s.recoveryState.get()?.reason).toBe(expectedReason)
+      expect(client.connections[0]!.promptCalls.length).toBe(2)
+    },
+  )
+
+  it('clears the recovery bar when the user stops during the retry backoff', async () => {
+    __setRecoveryBackoffForTests(() => 500)
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v?.phase === 'retrying')
+    await s.cancelTurn()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    // The backoff was interrupted before the second attempt went out.
+    expect(client.connections[0]!.promptCalls.length).toBe(1)
+  })
+
+  it('clears the recovery bar when the user stops an in-flight retry dispatch', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        // The second attempt hangs in flight (never settles until aborted).
+        () => new Promise<PromptResponse>(() => {}),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    // The second attempt is in flight while recovery still reads retrying.
+    await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+    expect(s.recoveryState.get()?.phase).toBe('retrying')
+
+    await s.cancelTurn()
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections[0]!.promptCalls.length).toBe(2)
+  })
+
+  it('hands a transient retry that ends in an agent_crash to the reconnect tier, not exhausted', async () => {
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        () =>
+          Promise.reject(
+            Object.assign(
+              new Error("Internal error: undefined is not an object (evaluating 'e.includes')"),
+              {
+                code: -32603,
+                data: { details: "undefined is not an object (evaluating 'e.includes')" },
+              },
+            ),
+          ),
+        // After the hot-reconnect, the resumed turn succeeds.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+
+    await s.sendPrompt('do it')
+    await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+    expect(client.connections.length).toBe(2)
+    // The crashed turn never sealed to exhausted; it reconnected instead.
+    expect(s.status.get()).toBe('idle')
+    expect(s.recoveryState.get()).toBeUndefined()
+    expect(client.connections[0]!.promptCalls.length).toBe(2)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(
+      client.connections[0]!.promptCalls[0]!._meta?.messageId,
+    )
+    // The crash message stays on the timeline for context.
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+  })
+
   it('hot-reconnects after an agent-internal crash error and resumes the turn', async () => {
     // The ACP SDK wraps a bare exception thrown inside the agent process as
     // internalError({ details }) — the connection stays alive, so neither the
@@ -991,6 +1150,59 @@ describe('AcpSession auto-recovery', () => {
     // Only the original exhaustion [error] is on the timeline — the retry
     // itself recovered silently.
     expect(s.messages.get().filter((m) => m.text.startsWith('[error]')).length).toBe(1)
+  })
+
+  it('reclaims an exhausted session on idle, and a manual Retry hot-reconnects to resend the failed prompt', async () => {
+    // Regression: widening _isIdleReclaimable so a terminal `exhausted` no
+    // longer blocks reclaim means an errored session can now be backgrounded.
+    // Drive the REAL reaper (fake timers + a short idle window) so this test
+    // fails if that relaxation is reverted: the process would then survive and
+    // Retry would re-dispatch on the live connection instead of hot-reconnecting.
+    vi.useFakeTimers()
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [
+        () => Promise.reject(transientError()),
+        () => Promise.reject(new Error('Internal error')),
+        // The manual retry, after the reclaim-driven reconnect, lands.
+        () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+      ],
+    })
+    const config = new ConfigurationService()
+    config.update('acp.idleProcessTimeoutMs', 30_000)
+    svc = makeService(client, config)
+    const s = await svc.createSession('fake', { cwd: '/w' })
+    await s.whenConnected()
+
+    void s.sendPrompt('do it')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(s.recoveryState.get()?.phase).toBe('exhausted')
+    expect(s.status.get()).toBe('errored')
+    expect(client.connections[0]!.promptCalls.length).toBe(2)
+    const failedMessageId = client.connections[0]!.promptCalls[0]!._meta?.messageId
+
+    // Past the idle window + the 60s watchdog tick, the reaper kills the shared
+    // process — proving the exhausted session was reclaimable.
+    await vi.advanceTimersByTimeAsync(30_000 + 60_000)
+    expect(client.killCalls).toEqual([{ agentId: 'fake', cwd: '/w', authority: undefined }])
+
+    // The real kill aborts the connection; the fake killConnectionFor only
+    // records. Aborting seals the session silently (dormant, recovery + the
+    // failed prompt untouched).
+    client.killConnection(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.status.get()).toBe('closed')
+    expect(s.isDormant.get()).toBe(true)
+    expect(s.recoveryState.get()?.phase).toBe('exhausted')
+
+    // Retry on the RecoveryBar detects the dead lease and hot-reconnects.
+    await s.retryRecovery()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(client.connections.length).toBe(2)
+    expect(client.connections[1]!.promptCalls.length).toBe(1)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(failedMessageId)
+    expect(s.recoveryState.get()).toBeUndefined()
+    expect(s.status.get()).toBe('idle')
   })
 
   it('does not reconnect after a user-initiated close', async () => {
