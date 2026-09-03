@@ -92,7 +92,8 @@ async function revealExplorerRow(
   workbench: WorkbenchPO,
   relPath: string,
 ): Promise<void> {
-  await workbench.runCommand('workbench.view.explorer')
+  // A toggle: it would HIDE the Explorer when the side bar already has focus.
+  await workbench.showExplorer()
   await expect(page.locator('[role="treeitem"]', { hasText: relPath })).toBeVisible({
     timeout: 30_000,
   })

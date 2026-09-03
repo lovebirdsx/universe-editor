@@ -158,7 +158,7 @@ const cases: Case[] = [
   },
   {
     name: 'getGraphChanges (open the Perforce Graph)',
-    invoke: (c) => c.getGraphChanges(10, '//...'),
+    invoke: (c) => c.getGraphChanges(10, ['//...']),
     interactive: ['changes'],
   },
   {

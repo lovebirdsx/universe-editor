@@ -8,30 +8,39 @@
 
 import { EditorInput, URI, localize } from '@universe-editor/platform'
 import { getPerforceGraphViewState } from '../perforceGraph/perforceGraphViewState.js'
+import {
+  normalizeGraphScopeSelection,
+  scopePathKey,
+  type GraphScopePath,
+} from '../perforceGraph/graphScopeSelection.js'
 
 export interface PerforceGraphScope {
-  /** SCM 主机上的路径（已由 scmHostPath 解析过，是裸路径不是 URI）。 */
-  path: string
-  isDirectory: boolean
-  /** tab 与工具栏展示用的短名（basename）。 */
+  /**
+   * SCM 主机上的路径集合（已由 scmHostPath 解析过，是裸路径不是 URI），**必须**
+   * 经 `normalizeGraphScopeSelection` 规范化（去重 + 排序）——它是 tab 身份的一
+   * 部分，未规范化会让同一选区按点击顺序开出多个 tab。多于一项 = 合并历史。
+   */
+  paths: readonly GraphScopePath[]
+  /** tab 与工具栏展示用的短名（首项 basename，多选时带 `+N`）。 */
   label: string
 }
 
 interface ISerializedPerforceGraphScope {
-  readonly path: string
-  readonly isDirectory: boolean
-  readonly label: string
+  readonly paths: readonly GraphScopePath[]
 }
 
 const PERFORCE_GRAPH_URI = URI.from({ scheme: 'universe', path: '/perforceGraph' })
 
-/** Deterministic query encoding: the key order is fixed by this literal, so the
+/** Deterministic query encoding: the key order is fixed by these literals, so the
  *  same scope always yields the same query string — otherwise the same tab
- *  would open repeatedly instead of deduping by id. */
+ *  would open repeatedly instead of deduping by id. `paths` is already sorted by
+ *  `normalizeGraphScopeSelection`, and each path goes through `scopePathKey` so
+ *  the id folds the same file reached by a differently-cased drive letter into one
+ *  tab (the same key the selection is deduped by). `label` is derived state,
+ *  encoded anyway so a restored tab shows its title before the graph loads. */
 function encodeScope(scope: PerforceGraphScope): string {
   return JSON.stringify({
-    path: scope.path,
-    isDirectory: scope.isDirectory,
+    paths: scope.paths.map((p) => ({ path: scopePathKey(p.path), isDirectory: p.isDirectory })),
     label: scope.label,
   })
 }
@@ -51,15 +60,21 @@ export class PerforceGraphEditorInput extends EditorInput {
     // 旧格式（无 scope）：undefined / null / 空对象 → 无 scope 实例。
     if (data === undefined || data === null) return new PerforceGraphEditorInput()
     if (typeof data !== 'object' || Array.isArray(data)) return null
-    const d = data as Record<string, unknown>
-    const { path, isDirectory, label } = d
-    if (path === undefined && isDirectory === undefined && label === undefined) {
-      return new PerforceGraphEditorInput()
+    const paths = (data as Record<string, unknown>)['paths']
+    if (paths === undefined) return new PerforceGraphEditorInput()
+    if (!Array.isArray(paths)) return null
+    const parsed: GraphScopePath[] = []
+    for (const entry of paths) {
+      if (entry === null || typeof entry !== 'object') return null
+      const e = entry as Record<string, unknown>
+      if (typeof e['path'] !== 'string' || e['path'] === '') return null
+      if (typeof e['isDirectory'] !== 'boolean') return null
+      parsed.push({ path: e['path'], isDirectory: e['isDirectory'] })
     }
-    if (typeof path !== 'string' || typeof isDirectory !== 'boolean' || typeof label !== 'string') {
-      return null
-    }
-    return new PerforceGraphEditorInput({ path, isDirectory, label })
+    if (parsed.length === 0) return new PerforceGraphEditorInput()
+    // Recompute the label rather than trusting the serialized one — it's derived
+    // state, and the normalized order is what the id must match.
+    return new PerforceGraphEditorInput(normalizeGraphScopeSelection(parsed))
   }
 
   get typeId(): string {
@@ -79,9 +94,7 @@ export class PerforceGraphEditorInput extends EditorInput {
   override serialize(): ISerializedPerforceGraphScope | undefined {
     if (!this._scope) return undefined
     return {
-      path: this._scope.path,
-      isDirectory: this._scope.isDirectory,
-      label: this._scope.label,
+      paths: this._scope.paths.map((p) => ({ path: p.path, isDirectory: p.isDirectory })),
     }
   }
 

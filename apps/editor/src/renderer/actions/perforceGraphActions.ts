@@ -9,7 +9,6 @@ import {
   IWorkspaceService,
   KeybindingWeight,
   URI,
-  basename,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -17,6 +16,10 @@ import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditor
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { scmHostPath } from '../services/scm/scmHostPath.js'
+import {
+  normalizeGraphScopeSelection,
+  type GraphScopePath,
+} from '../services/perforceGraph/graphScopeSelection.js'
 import {
   getPerforceGraphViewState,
   perforceGraphViewState,
@@ -55,6 +58,26 @@ export function resolveGraphScopeArg(arg: unknown): { uri: URI; isDirectory: boo
   return undefined
 }
 
+/**
+ * Resolve the *selection* of `perforce-graph.viewFileHistory`. Both the Explorer
+ * context menu and SCM rows pass `(primary, selection)`; when the selection array
+ * is present it is authoritative (it always contains the clicked row), otherwise
+ * fall back to the single primary arg. Entries that don't resolve are dropped —
+ * a partially-unreadable selection still yields history for the rest.
+ */
+export function resolveGraphScopeTargets(
+  arg: unknown,
+  selection: unknown,
+): { uri: URI; isDirectory: boolean }[] {
+  const items = Array.isArray(selection) && selection.length > 0 ? selection : [arg]
+  const out: { uri: URI; isDirectory: boolean }[] = []
+  for (const item of items) {
+    const resolved = resolveGraphScopeArg(item)
+    if (resolved) out.push(resolved)
+  }
+  return out
+}
+
 export class ViewPerforceGraphAction extends Action2 {
   static readonly ID = 'perforce-graph.view'
 
@@ -84,30 +107,37 @@ export class ViewPerforceFileHistoryAction extends Action2 {
     })
   }
 
-  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: unknown,
+    selection?: unknown,
+  ): Promise<void> {
     const editorService = accessor.get(IEditorService)
     const workspaceService = accessor.get(IWorkspaceService)
 
-    let scope = resolveGraphScopeArg(arg)
-    if (!scope) {
+    let targets = resolveGraphScopeTargets(arg, selection)
+    if (targets.length === 0) {
       const active = editorService.activeEditor.get()
       if (active instanceof FileEditorInput) {
-        scope = { uri: active.resource, isDirectory: false }
+        targets = [{ uri: active.resource, isDirectory: false }]
       }
     }
-    if (!scope) return
+    if (targets.length === 0) return
 
     // File history runs on the SCM host; an off-host resource (a local file in a
     // remote window) has no history there — mirroring dirty-diff's scmHostPath gate.
-    const hostPath = scmHostPath(scope.uri, currentRemoteAuthority(workspaceService.current))
-    if (hostPath === undefined) return
+    // Read synchronously, before any await (see memory action2-async-accessor-invalidation).
+    const authority = currentRemoteAuthority(workspaceService.current)
+    const paths: GraphScopePath[] = []
+    for (const target of targets) {
+      const hostPath = scmHostPath(target.uri, authority)
+      if (hostPath === undefined) continue
+      paths.push({ path: hostPath, isDirectory: target.isDirectory })
+    }
+    if (paths.length === 0) return
 
     await editorService.openEditor(
-      new PerforceGraphEditorInput({
-        path: hostPath,
-        isDirectory: scope.isDirectory,
-        label: basename(hostPath),
-      }),
+      new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths)),
     )
   }
 }

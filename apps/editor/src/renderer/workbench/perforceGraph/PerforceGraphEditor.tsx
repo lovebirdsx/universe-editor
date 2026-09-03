@@ -223,12 +223,12 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
 
   const queryRef = useRef<P4GraphLoadOptions>(
     scope !== undefined
-      ? { maxChanges: limit, scopePath: scope.path, scopeIsDirectory: scope.isDirectory }
+      ? { maxChanges: limit, scopePaths: scope.paths }
       : { maxChanges: limit, wholeRepo },
   )
   queryRef.current =
     scope !== undefined
-      ? { maxChanges: limit, scopePath: scope.path, scopeIsDirectory: scope.isDirectory }
+      ? { maxChanges: limit, scopePaths: scope.paths }
       : { maxChanges: limit, wholeRepo }
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -318,6 +318,30 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     void storage.set(WHOLE_REPO_KEY, wholeRepo, StorageScope.WORKSPACE)
   }, [wholeRepo, storage, scope])
 
+  // Error text for a load result, or null when it is a normal listing. Shared by
+  // the initial load and the silent revalidate — a revalidate that clears the
+  // error unconditionally would turn a multi-client scope back into "0 changes".
+  const loadErrorFor = useCallback(
+    (r: P4GraphLoadResult | null): string | null => {
+      if (r?.error === 'multiClient') {
+        // The extension already surfaced an error notification; the tab needs a
+        // distinct empty state — reading this as "0 changes" would be misleading.
+        return localize(
+          'perforceGraph.scopedMultiClientEmpty',
+          'The selected paths are not in one Perforce workspace, so their history cannot be merged.',
+        )
+      }
+      if (r) return null
+      return scope !== undefined
+        ? localize('perforceGraph.scopedEmpty', 'No submitted changes affect this path.')
+        : localize(
+            'perforceGraph.unavailable',
+            'Perforce Graph is unavailable — is this folder inside a Perforce workspace?',
+          )
+    },
+    [scope],
+  )
+
   const load = useCallback(() => {
     let cancelled = false
     const seq = ++fetchSeqRef.current
@@ -330,15 +354,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         if (cancelled || seq !== fetchSeqRef.current) return
         setResult(r ?? null)
         setSelection([])
-        if (!r)
-          setError(
-            scope !== undefined
-              ? localize('perforceGraph.scopedEmpty', 'No submitted changes affect this path.')
-              : localize(
-                  'perforceGraph.unavailable',
-                  'Perforce Graph is unavailable — is this folder inside a Perforce workspace?',
-                ),
-          )
+        setError(loadErrorFor(r ?? null))
       })
       .catch((e: unknown) => {
         if (!cancelled && seq === fetchSeqRef.current)
@@ -350,7 +366,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [commands, scope])
+  }, [commands, loadErrorFor])
 
   useEffect(() => {
     view.refresh = () => load()
@@ -383,22 +399,40 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // Fetch (or reuse from the shared payload cache) the Commit Changes payload
   // for one changelist. Keyed by client: a changelist's depot contents are
   // immutable, but the local paths the payload carries depend on the client.
+  // Also keyed by the filter: a merged-history tab narrows the payload to the
+  // selected paths, so two tabs showing the same changelist must not share one
+  // cached payload (whoever built first would pin the other's file list).
+  const clientRoot = result?.clientRoot
+  // Only a MULTI-path tab filters. A single file/folder tab keeps showing the
+  // whole changelist, exactly as before this feature existed.
+  const filterPaths = scope !== undefined && scope.paths.length > 1 ? scope.paths : undefined
+  const scopeSig = useMemo(
+    () =>
+      filterPaths ? filterPaths.map((p) => `${p.isDirectory ? 'd' : 'f'}:${p.path}`).join('|') : '',
+    [filterPaths],
+  )
   const fetchChangePayload = useCallback(
     (id: string): Promise<ShowCommitChangesPayload | null> => {
-      const clientKey = selectedRepo ?? repos[0]?.root ?? ''
-      return getOrBuildGraphPayload(`perforce\n${clientKey}\n${id}`, async () => {
+      const clientKey = clientRoot ?? selectedRepo ?? repos[0]?.root ?? ''
+      return getOrBuildGraphPayload(`perforce\n${clientKey}\n${scopeSig}\n${id}`, async () => {
         const started = performance.now()
         const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
           PerforceGraphCommands.getChangeDetails,
           id,
+          { ...(clientRoot !== undefined ? { clientRoot } : {}) },
         )
         logger?.debug(
           `change details #${id} fetched in ${Math.round(performance.now() - started)}ms`,
         )
-        return details ? buildChangePayload(details) : null
+        return details
+          ? buildChangePayload(details, {
+              ...(filterPaths !== undefined ? { scopePaths: filterPaths } : {}),
+              ...(clientRoot !== undefined ? { clientRoot } : {}),
+            })
+          : null
       })
     },
-    [commands, logger, selectedRepo, repos],
+    [commands, logger, selectedRepo, repos, clientRoot, filterPaths, scopeSig],
   )
 
   // Silent Commit Changes follow for programmatic reveals (Open in Graph from
@@ -498,7 +532,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       .executeCommand<P4GraphLoadResult>(PerforceGraphCommands.getChanges, queryRef.current)
       .then((r) => {
         if (!r || seq !== fetchSeqRef.current) return
-        setError(null)
+        setError(loadErrorFor(r))
         setResult(r)
         setSelection((prev) => {
           const next = prev.filter((id) => id === PENDING_ID || r.changes.some((c) => c.id === id))
@@ -508,7 +542,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       .catch(() => {
         // Transient failure — leave the stale view in place.
       })
-  }, [commands])
+  }, [commands, loadErrorFor])
 
   useEffect(() => {
     const start = (): (() => void) | undefined => {
@@ -670,17 +704,19 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   // the client view no longer maps it.
   const openScopedFileDiff = useCallback(
     async (id: string) => {
-      if (scope === undefined) return
+      const only = scope?.paths.length === 1 ? scope.paths[0] : undefined
+      if (only === undefined) return
       const details = await commands.executeCommand<P4GraphChangeDetailsDto | null>(
         PerforceGraphCommands.getChangeDetails,
         id,
+        { ...(clientRoot !== undefined ? { clientRoot } : {}) },
       )
-      const scopeKey = scmProviderPathKey(scope.path)
+      const scopeKey = scmProviderPathKey(only.path)
       const file = details?.files.find(
         (f) => f.localPath !== null && scmProviderPathKey(f.localPath) === scopeKey,
       )
       if (!file) {
-        logger?.warn(`open changes: change ${id} has no entry for ${scope.path}, showing the CL`)
+        logger?.warn(`open changes: change ${id} has no entry for ${only.path}, showing the CL`)
         applySelection([id])
         return
       }
@@ -689,9 +725,10 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         status: file.status,
         rev: file.rev,
         ...(file.localPath !== null ? { localPath: file.localPath } : {}),
+        ...(clientRoot !== undefined ? { clientRoot } : {}),
       })
     },
-    [applySelection, commands, logger, scope],
+    [applySelection, commands, logger, scope, clientRoot],
   )
 
   const openChangeMenu = useCallback(
@@ -721,61 +758,48 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             }),
         },
       ]
-      // Single-file scope: every listed change touched the scoped path (that is
-      // what `p4 changes <file>` returns), so the item is always offered and the
-      // file entry is resolved on click. Resolving it up front would block the
-      // menu on `describe -s`, which is GB-scale on a giant branch CL.
-      if (scope !== undefined && !scope.isDirectory) {
-        items.push(
-          { kind: 'sep' },
-          {
+      // Scoped tab (one or many paths): every listed change touched at least one
+      // scoped path (that is what `p4 changes <filespec…>` returns), so the Get
+      // pair is always offered and file entries are resolved on click. Resolving
+      // up front would block the menu on `describe -s`, which is GB-scale on a
+      // giant branch CL.
+      if (scope !== undefined) {
+        const paths = scope.paths
+        const onlyFile =
+          paths.length === 1 && paths[0]!.isDirectory === false ? paths[0]! : undefined
+        items.push({ kind: 'sep' })
+        // Open Changes is single-file only: with several paths there is no one
+        // diff to open, and the per-file rows in Commit Changes each carry their own.
+        if (onlyFile !== undefined) {
+          items.push({
             kind: 'item',
             label: localize('perforceGraph.openChanges', 'Open Changes'),
             run: () => void openScopedFileDiff(id),
-          },
-          {
-            kind: 'item',
-            label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
-            run: () =>
-              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
-                change: id,
-                scopePaths: [{ path: scope.path, isDirectory: false }],
-                isLatest: id === result?.head,
-              }),
-          },
-          {
-            kind: 'item',
-            label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
-            run: () =>
-              void commands.executeCommand('perforce.syncLatest', {
-                resourceUri: scope.path,
-                isDirectory: false,
-              }),
-          },
-        )
-      }
-      // Folder scope: same pair, syncing the whole directory.
-      if (scope !== undefined && scope.isDirectory) {
+          })
+        }
         items.push(
-          { kind: 'sep' },
           {
             kind: 'item',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
               void commands.executeCommand(PerforceGraphCommands.syncToChange, {
                 change: id,
-                scopePaths: [{ path: scope.path, isDirectory: true }],
+                scopePaths: paths.map((p) => ({ path: p.path, isDirectory: p.isDirectory })),
                 isLatest: id === result?.head,
               }),
           },
           {
             kind: 'item',
             label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
-            run: () =>
-              void commands.executeCommand('perforce.syncLatest', {
-                resourceUri: scope.path,
-                isDirectory: true,
-              }),
+            run: () => {
+              // Reuse the extension's multi-select sync path: `(primary, selection)`,
+              // with bare `resourceUri` strings (`resourcePath` reads those directly).
+              const selectionArgs = paths.map((p) => ({
+                resourceUri: p.path,
+                isDirectory: p.isDirectory,
+              }))
+              void commands.executeCommand('perforce.syncLatest', selectionArgs[0], selectionArgs)
+            },
           },
         )
       }
@@ -983,13 +1007,14 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       <div className={styles['toolbar']}>
         <span
           className={styles['title']}
-          data-tooltip={scope !== undefined ? scope.path : undefined}
+          // Every scoped path, one per line — the `+N` label alone doesn't say which.
+          data-tooltip={scope !== undefined ? scope.paths.map((p) => p.path).join('\n') : undefined}
         >
           {scope !== undefined
             ? localize('perforceGraph.scopedTitle', 'History: {label}', { label: scope.label })
             : localize('perforceGraph.title', 'Perforce Graph')}
         </span>
-        {result && (
+        {result && result.error === undefined && (
           <span className={styles['count']}>
             {localize('perforceGraph.changeCount', '{count} changes{more}', {
               count: result.changes.length,

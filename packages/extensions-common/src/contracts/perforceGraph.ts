@@ -51,9 +51,14 @@ export interface P4GraphLoadOptions {
    * the user actually has open.
    */
   wholeRepo?: boolean
-  /** 把历史限定到该 host 路径（文件或目录）。存在时忽略 wholeRepo。 */
-  scopePath?: string
-  scopeIsDirectory?: boolean
+  /**
+   * 把历史限定到这些 host 路径（文件和/或目录）。非空时忽略 wholeRepo。
+   *
+   * 多路径 = 合并历史：列出影响**任一**路径的已提交 changelist 并集（`p4 changes`
+   * 接受多个 filespec）。形态与 {@link P4GraphSyncRequest.scopePaths} 一致，所以
+   * 同一份选区能原样喂给读（历史）与写（get revision）两条路。
+   */
+  scopePaths?: readonly { path: string; isDirectory: boolean }[]
 }
 
 /** Result of `perforce-graph.getChanges`. */
@@ -67,6 +72,21 @@ export interface P4GraphLoadResult {
   moreAvailable: boolean
   /** Number of files currently open in the workspace (the synthetic "pending" node). */
   pendingCount: number
+  /**
+   * Root of the client this result was read from. The renderer echoes it back on
+   * `getChangeDetails` / `openFileDiff` so those reads land on the same client —
+   * a scoped graph resolves its client by path (`resolveContaining`), which need
+   * not be the graph's ambient/active one.
+   */
+  clientRoot?: string
+  /**
+   * Set instead of a normal listing when the request could not be answered as
+   * asked. `multiClient`: the requested `scopePaths` span more than one Perforce
+   * client, so there is no single history to merge (mirrors sync, which also
+   * aborts). The extension has already surfaced an error notification; the
+   * renderer only needs a distinct empty state.
+   */
+  error?: 'multiClient'
 }
 
 /** A single file changed by a submitted change (or between two changes). */
@@ -98,6 +118,15 @@ export interface P4GraphChangeDetailsDto {
 }
 
 /**
+ * Optional second argument of `perforce-graph.getChangeDetails` (after the
+ * changelist id): pins the read to a specific client, for the same reason
+ * {@link P4GraphLoadResult.clientRoot} exists. Omitted → the graph's ambient client.
+ */
+export interface P4GraphChangeDetailsOptions {
+  clientRoot?: string
+}
+
+/**
  * Argument for `perforce-graph.openFileDiff` — opens a submitted file's diff in a
  * diff editor. The extension derives the two revisions to compare from the file's
  * status + revision (`rev` vs `rev-1`).
@@ -115,6 +144,8 @@ export interface P4GraphFileDiffRequest {
    * omitted/null hides that button (depot blobs have no local counterpart).
    */
   localPath?: string | null
+  /** Client root to read from — see {@link P4GraphLoadResult.clientRoot}. */
+  clientRoot?: string | null
 }
 
 /**

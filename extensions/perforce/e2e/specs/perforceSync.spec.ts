@@ -112,7 +112,9 @@ test.describe('@p1 perforce sync', () => {
       async ({ page, workbench, perforce }) => {
         test.setTimeout(120_000)
         await openSyncWorkspace(page, workbench, perforce.openDir)
-        await workbench.activityBar.click('workbench.view.explorer')
+        // The activity-bar item is a toggle too: clicking it while the Explorer is
+        // already active AND the side bar focused closes the side bar.
+        await workbench.showExplorer()
 
         const fileRow = page.locator('[role="treeitem"]', { hasText: 'behind.txt' })
         await expect(fileRow).toBeVisible({ timeout: 30_000 })

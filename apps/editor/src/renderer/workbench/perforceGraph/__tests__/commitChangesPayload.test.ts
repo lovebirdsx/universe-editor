@@ -78,4 +78,71 @@ describe('buildChangePayload', () => {
       rev: '5',
     })
   })
+
+  it('carries clientRoot into every row diff request, and omits the key when absent', () => {
+    const withRoot = buildChangePayload(makeDetails(), { clientRoot: 'C:/ws/main' })
+    expect(withRoot.files[0]?.args).toMatchObject({ clientRoot: 'C:/ws/main' })
+    expect(Object.keys(buildChangePayload(makeDetails()).files[0]?.args as object)).not.toContain(
+      'clientRoot',
+    )
+  })
+})
+
+describe('buildChangePayload with a merged-history scope', () => {
+  function file(path: string, localPath: string | null) {
+    return { status: 'M', path, oldPath: null, depotFile: `//${path}`, rev: '3', localPath }
+  }
+
+  const DETAILS = makeDetails({
+    files: [
+      file('depot/main/a.txt', 'C:/ws/main/a.txt'),
+      file('depot/main/lib/x.ts', 'C:/ws/main/lib/x.ts'),
+      file('depot/main/unrelated.txt', 'C:/ws/main/unrelated.txt'),
+      file('depot/main/gone.txt', null),
+    ],
+  })
+
+  it('keeps the selected file and everything under a selected directory', () => {
+    const payload = buildChangePayload(DETAILS, {
+      scopePaths: [
+        { path: 'C:/ws/main/a.txt', isDirectory: false },
+        { path: 'C:/ws/main/lib', isDirectory: true },
+      ],
+    })
+    expect(payload.files.map((f) => f.path)).toEqual(['depot/main/a.txt', 'depot/main/lib/x.ts'])
+  })
+
+  it('reports how many of the changelist files it hid', () => {
+    const payload = buildChangePayload(DETAILS, {
+      scopePaths: [{ path: 'C:/ws/main/a.txt', isDirectory: false }],
+    })
+    expect(payload.files).toHaveLength(1)
+    expect(payload.subtitle).toContain('3 more file(s)')
+  })
+
+  it('a directory scope never matches a sibling sharing its prefix', () => {
+    const payload = buildChangePayload(
+      makeDetails({ files: [file('depot/main/libraries/y.ts', 'C:/ws/main/libraries/y.ts')] }),
+      { scopePaths: [{ path: 'C:/ws/main/lib', isDirectory: true }] },
+    )
+    expect(payload.files).toEqual([])
+  })
+
+  it('shows an EMPTY list on zero hits rather than falling back to the whole change', () => {
+    const payload = buildChangePayload(DETAILS, {
+      scopePaths: [{ path: 'C:/ws/main/nothing-here.txt', isDirectory: false }],
+    })
+    expect(payload.files).toEqual([])
+    expect(payload.subtitle).toContain('4 more file(s)')
+  })
+
+  it('drops files with no local path when filtering (they cannot be matched)', () => {
+    const payload = buildChangePayload(
+      makeDetails({ files: [file('depot/main/gone.txt', null)] }),
+      {
+        scopePaths: [{ path: 'C:/ws/main', isDirectory: true }],
+      },
+    )
+    expect(payload.files).toEqual([])
+  })
 })

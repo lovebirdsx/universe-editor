@@ -13,7 +13,11 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { PerforceGraphEditorInput } from '../../services/editor/PerforceGraphEditorInput.js'
-import { resolveGraphScopeArg, ViewPerforceFileHistoryAction } from '../perforceGraphActions.js'
+import {
+  resolveGraphScopeArg,
+  resolveGraphScopeTargets,
+  ViewPerforceFileHistoryAction,
+} from '../perforceGraphActions.js'
 
 describe('resolveGraphScopeArg', () => {
   it('resolves the Explorer shape (live URI + isDirectory)', () => {
@@ -65,6 +69,35 @@ describe('resolveGraphScopeArg', () => {
   })
 })
 
+describe('resolveGraphScopeTargets', () => {
+  const A = { resource: URI.file('D:/repo/a.ts'), isDirectory: false }
+  const DIR = { resource: URI.file('D:/repo/lib'), isDirectory: true }
+
+  it('prefers the selection array when it has entries', () => {
+    const out = resolveGraphScopeTargets(A, [A, DIR])
+    expect(out.map((t) => [t.uri.toString(), t.isDirectory])).toEqual([
+      [A.resource.toString(), false],
+      [DIR.resource.toString(), true],
+    ])
+  })
+
+  it('falls back to the primary arg for an absent or empty selection', () => {
+    for (const selection of [undefined, null, [], 'nope']) {
+      const out = resolveGraphScopeTargets(A, selection)
+      expect(out).toHaveLength(1)
+      expect(out[0]?.uri.toString()).toBe(A.resource.toString())
+    }
+  })
+
+  it('drops unresolvable entries instead of failing the whole selection', () => {
+    expect(resolveGraphScopeTargets(undefined, [A, {}, 'x', null])).toHaveLength(1)
+  })
+
+  it('returns an empty list when nothing resolves', () => {
+    expect(resolveGraphScopeTargets(undefined, undefined)).toEqual([])
+  })
+})
+
 const workspaceOf = (folder: URI | null): IWorkspaceServiceType =>
   ({ current: folder ? { folder } : null }) as unknown as IWorkspaceServiceType
 
@@ -77,10 +110,16 @@ const editorServiceOf = (active?: IEditorInput): IEditorServiceType => {
   } as unknown as IEditorServiceType
 }
 
-async function runAction(services: ServiceCollection, arg?: unknown): Promise<void> {
+async function runAction(
+  services: ServiceCollection,
+  arg?: unknown,
+  selection?: unknown,
+): Promise<void> {
   const inst = new InstantiationService(services)
   try {
-    await inst.invokeFunction((accessor) => new ViewPerforceFileHistoryAction().run(accessor, arg))
+    await inst.invokeFunction((accessor) =>
+      new ViewPerforceFileHistoryAction().run(accessor, arg, selection),
+    )
   } finally {
     inst.dispose()
   }
@@ -103,10 +142,92 @@ describe('ViewPerforceFileHistoryAction', () => {
     const input = openedScope(editor)
     expect(input).toBeInstanceOf(PerforceGraphEditorInput)
     expect(input?.scope).toEqual({
-      path: 'D:/repo/src/a.ts',
-      isDirectory: false,
+      paths: [{ path: 'D:/repo/src/a.ts', isDirectory: false }],
       label: 'a.ts',
     })
+  })
+
+  it('merges a multi-select into one tab, ordered independently of click order', async () => {
+    const services = () =>
+      new ServiceCollection(
+        [IEditorService, editorServiceOf()],
+        [IWorkspaceService, workspaceOf(URI.file('D:/repo'))],
+      )
+
+    const first = services()
+    const firstEditor = first.get(IEditorService) as IEditorServiceType
+    await runAction(first, { resource: URI.file('D:/repo/src/b.ts'), isDirectory: false }, [
+      { resource: URI.file('D:/repo/src/b.ts'), isDirectory: false },
+      { resource: URI.file('D:/repo/lib'), isDirectory: true },
+      { resource: URI.file('D:/repo/src/a.ts'), isDirectory: false },
+    ])
+
+    const input = openedScope(firstEditor)
+    expect(input?.scope).toEqual({
+      paths: [
+        { path: 'D:/repo/lib', isDirectory: true },
+        { path: 'D:/repo/src/a.ts', isDirectory: false },
+        { path: 'D:/repo/src/b.ts', isDirectory: false },
+      ],
+      label: 'lib +2',
+    })
+
+    // Same set, different click order → the very same tab id.
+    const second = services()
+    const secondEditor = second.get(IEditorService) as IEditorServiceType
+    await runAction(second, { resource: URI.file('D:/repo/lib'), isDirectory: true }, [
+      { resource: URI.file('D:/repo/src/a.ts'), isDirectory: false },
+      { resource: URI.file('D:/repo/lib'), isDirectory: true },
+      { resource: URI.file('D:/repo/src/b.ts'), isDirectory: false },
+    ])
+    expect(openedScope(secondEditor)?.id).toBe(input?.id)
+  })
+
+  it('drops off-host selection entries but still opens the rest', async () => {
+    const editor = editorServiceOf()
+    await runAction(
+      new ServiceCollection(
+        [IEditorService, editor],
+        [
+          IWorkspaceService,
+          workspaceOf(
+            URI.from({ scheme: REMOTE_SCHEME, authority: 'myhost', path: '/home/u/repo' }),
+          ),
+        ],
+      ),
+      undefined,
+      [
+        { resource: URI.file('D:/local/a.ts'), isDirectory: false },
+        {
+          resource: URI.from({
+            scheme: REMOTE_SCHEME,
+            authority: 'myhost',
+            path: '/home/u/repo/a.ts',
+          }),
+          isDirectory: false,
+        },
+      ],
+    )
+
+    expect(openedScope(editor)?.scope).toEqual({
+      paths: [{ path: '/home/u/repo/a.ts', isDirectory: false }],
+      label: 'a.ts',
+    })
+  })
+
+  it('an empty selection array falls back to the primary arg', async () => {
+    const editor = editorServiceOf()
+    await runAction(
+      new ServiceCollection(
+        [IEditorService, editor],
+        [IWorkspaceService, workspaceOf(URI.file('D:/repo'))],
+      ),
+      { resource: URI.file('D:/repo/a.ts'), isDirectory: false },
+      [],
+    )
+    expect(openedScope(editor)?.scope?.paths).toEqual([
+      { path: 'D:/repo/a.ts', isDirectory: false },
+    ])
   })
 
   it('falls back to the active file editor when no arg is passed', async () => {
@@ -119,7 +240,10 @@ describe('ViewPerforceFileHistoryAction', () => {
     )
 
     const input = openedScope(editor)
-    expect(input?.scope).toEqual({ path: 'D:/repo/b.ts', isDirectory: false, label: 'b.ts' })
+    expect(input?.scope).toEqual({
+      paths: [{ path: 'D:/repo/b.ts', isDirectory: false }],
+      label: 'b.ts',
+    })
   })
 
   it('does nothing for a client-local file in a remote window', async () => {

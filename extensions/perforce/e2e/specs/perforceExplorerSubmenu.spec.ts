@@ -42,7 +42,9 @@ test.describe('@p1 explorer context menu submenus', () => {
         })
         .toBeGreaterThan(0)
       await waitForPerforceCommands(workbench)
-      await workbench.activityBar.click('workbench.view.explorer')
+      // The activity-bar item is a toggle too: clicking it while the Explorer is
+      // already active AND the side bar focused closes the side bar.
+      await workbench.showExplorer()
 
       const fileRow = page.locator('[role="treeitem"]', { hasText: 'submenu.txt' })
       await expect(fileRow).toBeVisible({ timeout: 30_000 })

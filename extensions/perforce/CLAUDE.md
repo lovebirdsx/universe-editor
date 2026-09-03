@@ -403,14 +403,18 @@ Perforce Graph 大量复用 git graph 的成熟部件——加功能前先看能
 
 Action2 在 `actions/index.ts` `registerAction2`。
 
-### 文件/文件夹历史（scoped graph）
+### 文件/文件夹历史（scoped graph，含多选合并历史）
 
-图谱可限定到**单个文件/文件夹**：`perforce-graph.viewFileHistory`（renderer Action2，命令面板 + Explorer 右键 `4_visualize@2` + SCM 文件行 `1_open`）打开带 `PerforceGraphScope { path, isDirectory, label }` 的 `PerforceGraphEditorInput`，历史只列影响该路径的已提交 changelist。
+图谱可限定到**一批文件/文件夹**：`perforce-graph.viewFileHistory`（renderer Action2，命令面板 + Explorer 右键 `4_visualize@2` + SCM 文件行 `1_open`）打开带 `PerforceGraphScope { paths: {path,isDirectory}[], label }` 的 `PerforceGraphEditorInput`，历史只列影响**任一** scope 路径的已提交 changelist（并集）。Explorer/SCM 的 `(primary, selection)` 双参约定使多选免费生效（`resolveGraphScopeTargets`），选区为空时回退 primary / 活动编辑器。
 
-- **`getChanges` 的 scope 参数**（`P4GraphLoadOptions`）：`scopePath` + `scopeIsDirectory`。存在时忽略 `wholeRepo`——scoped 分支用 `mgr.resolveContaining(scopePath)`（严格最长前缀、无 active fallback，数据查询语义，镜像 timeline）定位 client，`buildScopeFilespec` 拼 filespec；pending 计数经 `openedUnderScope` 过滤（`client.ts getPendingCount`）。
+- **`getChanges` 的 scope 参数**（`P4GraphLoadOptions`）：`scopePaths?: {path,isDirectory}[]`（单路径就是长度 1，无单独的单路径通道）。存在时忽略 `wholeRepo`——scoped 分支用 `resolveCommonClient(paths, mgr.resolveContaining)`（严格最长前缀、无 active fallback，数据查询语义，镜像 timeline + sync）定位**唯一** client，`buildSyncFilespecs` 展开 filespec；pending 计数经 `openedUnderAnyScope` 过滤（`client.ts getPendingCount`）。跨 client → `showErrorMessage` + 返回 `error:'multiClient'`（renderer 显示专门空态、隐藏计数行，绝不复用「0 changes / 无提交」文案）。
+- **多 filespec 一条命令，不要手动分批**：`p4 changes -s submitted -l -m N <f1> <f2> …` 天然回答并集，超长 argv 由 `prepareSpawnArgs` 的 `-x <argfile>`（`MAX_PATH_ARGS_CHARS` 8000）兜底。缓存键必须 `[...scopes].sort()`（`buildSyncFilespecs` 保输入序，不排序则同一选区换点击顺序各缓存一份）；结果过 `dedupeChangesNewestFirst`——一个 CL 命中两个 filespec 会被报两次，而单泳道 parent 链要求 id 唯一且严格降序。
+- **`clientRoot` 回程路由**：`P4GraphLoadResult.clientRoot` 带回列表来源 client，renderer 把它回传给 `getChangeDetails` / `openFileDiff`，扩展侧 `graphClientFor(req)` = `mgr.resolveClient({rootUri})` 优先、回退 `graphClient()`。缺了它，scoped tab 的 `describe`/`where` 会打到 ambient client → `localPath` 全 null（合并 tab 的过滤/计数完全依赖 localPath），出现「Get This Revision 成功而侧栏空」的读错写对矛盾。
 - **为什么 scoped 分支用 `resolveContaining` 而不是 `graphClient()`**：`graphRoot` 是整图谱共享的可变状态（`perforce-graph.setRepo` 写它），scoped 查询是「按路径定位数据」的只读语义，绝不能读/写它——否则限定到某文件的标签页会污染整图谱视图的选中 client，反之亦然。
-- **红线：任何拼进 p4 命令行的路径都必须过 `buildScopeFilespec` / `escapeFilespecPath`**（`src/p4Filespec.ts`）。`@ # * %` 是 p4 filespec 元字符（revision range / 通配 / 百分号转义引入符），路径里的字面 `@`/`#`/`*`/`%` 会被服务器重新解释、静默改变作用域含义，必须百分号编码（`%` 先转，避免把其它转义引入的 `%` 二次转义）。目录 scope 走 `<dir>/...`（先剥尾斜杠再拼）。
-- **scoped UI 差异**：隐藏 Globe（whole-repo 开关）与 client 下拉、不写全局 `setRepo`、不持久化选中行；行右键在「Open Changes」之外新增 Get Revision 对——**单文件 scope**：Get This Revision（`syncToChange` + `scopePaths=[{path, isDirectory:false}]`，`graphSyncNeedsConfirm` 判单文件免确认）+ Get Latest Revision（直调 `perforce.syncLatest`）；**目录 scope**：同一对命令（`isDirectory:true`，目录级 Get This Revision 会弹时间旅行确认）。目标行 = `result.head` 时带 `isLatest`（免确认，等价 get latest）。view state 按 `input.id` 分桶（有界 LRU cap 12，全局桶永不淘汰），多个历史 tab 各自独立。
+- **红线：任何拼进 p4 命令行的路径都必须过 `buildScopeFilespec` / `buildSyncFilespecs` / `escapeFilespecPath`**（`src/p4Filespec.ts`）。`@ # * %` 是 p4 filespec 元字符（revision range / 通配 / 百分号转义引入符），路径里的字面 `@`/`#`/`*`/`%` 会被服务器重新解释、静默改变作用域含义，必须百分号编码（`%` 先转，避免把其它转义引入的 `%` 二次转义）。目录 scope 走 `<dir>/...`（先剥尾斜杠再拼）。
+- **展示粒度与查询粒度刻意不一致**：renderer 的 `normalizeGraphScopeSelection` 只去重 + 排序（key 用镜像 `pathUtil.norm` 的 `scopePathKey`——**只小写盘符**；用 `scmProviderPathKey` 会全小写，在大小写敏感主机上把两个真实不同的文件折进同一个 tab），**保留**嵌套在所选目录下的文件：tooltip / `+N` 忠实反映用户选区，而嵌套折叠是 `buildSyncFilespecs` 的职责。别「顺手统一」这两层。
+- **scoped UI 差异**：隐藏 Globe（whole-repo 开关）与 client 下拉、不写全局 `setRepo`、不持久化选中行；行右键在「Open Changes」之外新增 Get Revision 对——Get This Revision（`syncToChange` + 全部 `scopePaths`，`graphSyncNeedsConfirm` 只对单文件免确认，目录/多路径弹时间旅行确认）+ Get Latest Revision（直调 `perforce.syncLatest`，多选走 `(primary, selection)` 双参）。目标行 = `result.head` 时带 `isLatest`（免确认，等价 get latest）。**「Open Changes」只在 `paths.length === 1 && !isDirectory` 时出现**（多路径下"打开差异"无唯一目标）。view state 按 `input.id` 分桶（有界 LRU cap 12，全局桶永不淘汰），多个历史 tab 各自独立。
+- **详情面板过滤只对多选 tab 生效**：`buildChangePayload(details, {scopePaths, clientRoot})` 在 `paths.length > 1` 时按 `scmProviderPathKey` 过滤命中文件并给 subtitle 追加「另有 N 个未选文件」；单文件/单文件夹 tab **不传** `scopePaths`，逐字保持整 CL 行为。零命中显示 0 文件 + 计数，**绝不回退整 CL**（回退会掩盖「历史列表与文件集不一致」的真问题）。payload 缓存键必须含 scope 签名段（`perforce\n<clientRoot>\n<scopeSig>\n<cl>`），否则同一 CL 在不同 scope tab 间串味。
 
 ### ⚠️ 头号坑：renderer Action2 命令绝不能进扩展 `commands` 数组
 
@@ -473,6 +477,7 @@ pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.con
 - `apps/editor/src/renderer/actions/perforceGraphActions.ts` —— 两个 Action2
 - `apps/editor/src/renderer/services/gitGraph/{graphLayout,fileTree}.ts` —— 复用的布局/文件树
 - `extensions/perforce/e2e/specs/perforceGraph.spec.ts` —— e2e 冒烟
+- `extensions/perforce/e2e/specs/perforceGraph{FileHistory,FolderHistorySync,HistoryMultiSelect}.spec.ts` —— scoped 历史三条回归（单文件 / 目录 get / 多选并集 + 双路径 get；fake-p4 的 `changes` case 吃全部 filespec 并回答并集）
 
 ### 其它
 

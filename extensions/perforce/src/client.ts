@@ -85,11 +85,12 @@ import { buildNewChangeSpec, replaceDescription, parseDescription } from './chan
 import { parseAnnotate, buildBlameResult, type P4BlameResult } from './blameSource.js'
 import {
   parseChangesList,
+  dedupeChangesNewestFirst,
   parseChangeDescribe,
   parseWhereLocalPaths,
   statusFromAction,
   displayPath,
-  openedUnderScope,
+  openedUnderAnyScope,
   type GraphChangeMeta,
   type GraphDescribe,
 } from './p4GraphParser.js'
@@ -3433,34 +3434,54 @@ export class PerforceClient {
   }
 
   /**
-   * Submitted-changelist history for the graph, newest-first, scoped to `scope`
-   * (a p4 filespec — the opened workspace folder as `<path>/...` by default, or
-   * the whole client depot `//...`). Each change's synthetic parent is the
-   * next-older change in the list, so the swim-lane layout draws a single lane.
-   * `pendingCount` is the number of currently open files (the synthetic pending
-   * node). Returns null on connection failure so the renderer shows "unavailable".
+   * Submitted-changelist history for the graph, newest-first, scoped to `scopes`
+   * (p4 filespecs — the opened workspace folder as `<path>/...` by default, the
+   * whole client depot `//...`, or one filespec per selected path). More than one
+   * filespec asks p4 for the **union**: the changes affecting any of them, which
+   * is what a merged (multi-select) history shows. Each change's synthetic parent
+   * is the next-older change in the list, so the swim-lane layout draws a single
+   * lane. Returns null on connection failure so the renderer shows "unavailable".
+   *
+   * One command regardless of filespec count: `prepareSpawnArgs` moves an
+   * over-long path list into a `-x` argfile at the spawn layer, so there is no
+   * need to batch here (batching would also force merging per-batch top-N).
+   *
+   * `moreAvailable` is decided on the RAW record count, before dedupe: `-m` caps
+   * records, not distinct changelists, so a union that reports one changelist
+   * several times can dedupe below the cap while older changes were still cut off.
+   * Reading it off the deduped list would hide the "Load more" button.
    */
-  async getGraphChanges(maxChanges: number, scope: string): Promise<GraphChangeMeta[] | null> {
-    const json = await this._cache.wrap(
-      P4CacheNs.changesSubmitted,
-      `${scope}:${maxChanges}`,
-      async () => {
-        const res = await this._p4.execRecords(
-          ['changes', '-s', 'submitted', '-l', '-m', String(maxChanges + 1), scope],
-          INTERACTIVE_EXEC,
-        )
-        if (res.result.exitCode !== 0) return undefined
-        return JSON.stringify(parseChangesList(res.records))
-      },
-    )
-    return json === undefined ? null : (JSON.parse(json) as GraphChangeMeta[])
+  async getGraphChanges(
+    maxChanges: number,
+    scopes: readonly string[],
+  ): Promise<{ changes: GraphChangeMeta[]; moreAvailable: boolean } | null> {
+    // Sorted key: `buildSyncFilespecs` preserves the user's selection order, so
+    // an unsorted key would cache the same selection once per click order.
+    const key = `${[...scopes].sort().join('\n')}:${maxChanges}`
+    const json = await this._cache.wrap(P4CacheNs.changesSubmitted, key, async () => {
+      const res = await this._p4.execRecords(
+        ['changes', '-s', 'submitted', '-l', '-m', String(maxChanges + 1), ...scopes],
+        INTERACTIVE_EXEC,
+      )
+      if (res.result.exitCode !== 0) return undefined
+      const parsed = parseChangesList(res.records)
+      return JSON.stringify({
+        changes: dedupeChangesNewestFirst(parsed),
+        moreAvailable: parsed.length > maxChanges,
+      })
+    })
+    return json === undefined
+      ? null
+      : (JSON.parse(json) as { changes: GraphChangeMeta[]; moreAvailable: boolean })
   }
 
   /** Count files currently open in the workspace (the synthetic pending node),
-   *  optionally restricted to `scope` (a local path, file or directory). */
-  async getPendingCount(scope?: { path: string; isDirectory: boolean }): Promise<number> {
+   *  optionally restricted to `scopes` (local paths, files and/or directories). */
+  async getPendingCount(
+    scopes?: readonly { path: string; isDirectory: boolean }[],
+  ): Promise<number> {
     const opened = await this._openedFiles()
-    return (scope ? openedUnderScope(opened, scope) : opened).length
+    return (scopes ? openedUnderAnyScope(opened, scopes) : opened).length
   }
 
   /**

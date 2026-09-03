@@ -461,30 +461,33 @@ function main() {
       // seeded changeMeta entry). `-s pending` (or bare `changes`) stays the
       // pending-changelist query below.
       const status = argAfter(rest, '-s')
-      const file = rest.filter((a, idx) => {
+      // Every non-flag filespec, not just the first: merged (multi-select) history
+      // passes N of them and real `p4 changes` answers their UNION.
+      const files = rest.filter((a, idx) => {
         if (a.startsWith('-')) return false
         const prev = rest[idx - 1]
         return prev !== '-s' && prev !== '-c' && prev !== '-m'
-      })[0]
-      if (status === 'submitted' || file) {
+      })
+      if (status === 'submitted' || files.length > 0) {
         const max = argAfter(rest, '-m')
         const entries = Object.entries(state.changeMeta ?? {})
           .map(([id, m]) => ({ id: Number(id), m }))
           .sort((a, b) => b.id - a.id)
         // A file/dir scope limits the listing to changes that touched it — real
-        // `p4 changes <filespec>` answers per depot path, so a scoped graph
-        // (file/folder history) must not show unrelated changes. A change
+        // `p4 changes <filespec…>` answers per depot path, so a scoped graph
+        // (file/folder/merged history) must not show unrelated changes. A change
         // seeded without a file set (the annotate-only seeds) can't be
         // filtered, so it stays — blame's `changes -l <file>` relies on that.
-        const scoped = file
-          ? entries.filter(({ id }) => {
-              const touched = state.submitted?.[String(id)]
-              if (!touched || Object.keys(touched).length === 0) return true
-              return Object.keys(touched).some((depotFile) =>
-                openedInScope(state, [file], depotFile),
-              )
-            })
-          : entries
+        const scoped =
+          files.length > 0
+            ? entries.filter(({ id }) => {
+                const touched = state.submitted?.[String(id)]
+                if (!touched || Object.keys(touched).length === 0) return true
+                return Object.keys(touched).some((depotFile) =>
+                  openedInScope(state, files, depotFile),
+                )
+              })
+            : entries
         const limited = max !== undefined ? scoped.slice(0, Number(max)) : scoped
         emit(
           limited.map(({ id, m }) => ({

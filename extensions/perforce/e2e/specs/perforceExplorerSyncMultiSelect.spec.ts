@@ -39,7 +39,8 @@ test.describe('@p1 explorer perforce get multi-select', () => {
         })
         .toBeGreaterThan(0)
       await waitForPerforceCommands(workbench)
-      await workbench.runCommand('workbench.view.explorer')
+      // A toggle: it would HIDE the Explorer when the side bar already has focus.
+      await workbench.showExplorer()
 
       const rowOf = (seed: SeedFile) => page.locator('[role="treeitem"]', { hasText: seed.relPath })
       for (const seed of seeds) {

@@ -52,6 +52,8 @@ export interface P4GraphFileDiffRequest {
   readonly status: string
   readonly rev: string
   readonly localPath?: string | null
+  /** Client root to read the revisions from; omitted → the graph's ambient client. */
+  readonly clientRoot?: string | null
 }
 
 /**

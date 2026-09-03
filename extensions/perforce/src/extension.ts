@@ -21,6 +21,7 @@ import type {
   P4GraphLoadOptions,
   P4GraphLoadResult,
   P4GraphChangeDetailsDto,
+  P4GraphChangeDetailsOptions,
   P4GraphFileChangeDto,
   P4GraphSyncRequest,
   P4GraphSyncScopeDto,
@@ -1694,6 +1695,19 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const graphClient = () =>
         (graphRoot ? mgr.resolveClient({ rootUri: graphRoot }) : undefined) ?? mgr.active
 
+      // Follow-up reads (details / file diff) must land on the client the listing
+      // came from. A scoped graph resolves its client by path, which need not be
+      // the ambient one; reading `describe`/`where` on the wrong client resolves
+      // every localPath to null. `clientRoot` is echoed back by the renderer from
+      // `P4GraphLoadResult`; absent (older/whole-graph paths) → ambient client.
+      // Strict lookup on purpose: `resolveClient` falls back to the active client,
+      // which would silently swallow a stale root instead of letting the explicit
+      // `graphClient()` fallback below take over.
+      const graphClientFor = (req: { clientRoot?: string | null } | undefined) => {
+        const root = req?.clientRoot
+        return (root ? mgr.resolveContaining(root) : undefined) ?? graphClient()
+      }
+
       const DEFAULT_MAX = 300
 
       // Default graph scope: the opened workspace folder as a p4 filespec
@@ -1716,30 +1730,64 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
           // Scoped query: resolve the client by strict longest prefix (data-query
           // semantics, no active fallback — mirrors the timeline provider) and build
-          // a path filespec. Never touches `graphRoot`, the graph's shared mutable
+          // the path filespecs. Never touches `graphRoot`, the graph's shared mutable
           // state, so a scoped read can't leak into the whole-graph view.
           let target: PerforceClient | undefined
-          let scope: string
-          let pendingScope: { path: string; isDirectory: boolean } | undefined
-          if (opts.scopePath) {
-            target = mgr.resolveContaining(opts.scopePath)
-            scope = buildScopeFilespec(opts.scopePath, opts.scopeIsDirectory === true)
-            pendingScope = { path: opts.scopePath, isDirectory: opts.scopeIsDirectory === true }
-            log(`[perforce] graph scoped to ${scope}`)
+          let scopes: string[]
+          let pendingScopes: readonly { path: string; isDirectory: boolean }[] | undefined
+          const scopePaths = opts.scopePaths
+          if (scopePaths !== undefined && scopePaths.length > 0) {
+            // Merged history spans one workspace only, same as sync: a union
+            // across clients has no single ordered changelist list to show.
+            const owner = resolveCommonClient(
+              scopePaths.map((s) => s.path),
+              (p) => mgr.resolveContaining(p),
+            )
+            if (owner === undefined) {
+              // A single path that resolves to no client is not a merge problem —
+              // it's simply outside every workspace (the palette entry acting on a
+              // non-Perforce active file). Keep the pre-existing behaviour: null,
+              // which the renderer renders as the plain "no changes" empty state.
+              if (scopePaths.length === 1) {
+                log(`[perforce] graph scope path is in no client: ${scopePaths[0]!.path}`)
+                return null
+              }
+              log(`[perforce] graph scope spans multiple clients (${scopePaths.length} paths)`)
+              await window.showErrorMessage(
+                localize(
+                  'perforce.graph.multiClient',
+                  'The selected paths are not in one Perforce workspace, so their history cannot be merged.',
+                ),
+              )
+              return {
+                changes: [],
+                head: null,
+                headClient: null,
+                moreAvailable: false,
+                pendingCount: 0,
+                error: 'multiClient',
+              } satisfies P4GraphLoadResult
+            }
+            target = owner
+            // Directory expansion (`<dir>/...`), metachar escaping, dedupe and
+            // nested-under-a-selected-directory collapsing all live here.
+            scopes = buildSyncFilespecs(scopePaths)
+            pendingScopes = scopePaths
+            log(`[perforce] graph scoped to ${scopes.length} filespec(s): ${scopes.join(' ')}`)
           } else {
             target = graphClient()
-            scope = opts.wholeRepo ? '//...' : workspaceScope
-            pendingScope = undefined
+            scopes = [opts.wholeRepo ? '//...' : workspaceScope]
+            pendingScopes = undefined
           }
           if (!target) return null
 
-          const [changes, pendingCount] = await Promise.all([
-            target.getGraphChanges(max, scope),
-            target.getPendingCount(pendingScope),
+          const [listing, pendingCount] = await Promise.all([
+            target.getGraphChanges(max, scopes),
+            target.getPendingCount(pendingScopes),
           ])
-          if (!changes) return null
-          const moreAvailable = changes.length > max
-          const visible = changes.slice(0, max)
+          if (!listing) return null
+          const { moreAvailable } = listing
+          const visible = listing.changes.slice(0, max)
           const dtos = visible.map(
             (c, i) =>
               ({
@@ -1758,11 +1806,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
             headClient: target.clientName,
             moreAvailable,
             pendingCount,
+            clientRoot: target.root,
           } satisfies P4GraphLoadResult
         }),
         commands.registerCommand('perforce-graph.getChangeDetails', async (...args: unknown[]) => {
           const id = args[0] as string
-          const target = graphClient()
+          // Pin the read to the client the listing came from: a scoped graph
+          // resolves its client by path, which need not be the ambient one, and
+          // reading `describe`/`where` on the wrong client yields null localPaths.
+          const target = graphClientFor(args[1] as P4GraphChangeDetailsOptions | undefined)
           if (!target) return null
           const detail = await target.getGraphChangeDetails(id)
           if (!detail) return null
@@ -1808,13 +1860,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
           await viewChangelist(mgr, graphClient, args[0], args[1], log)
         }),
         commands.registerCommand('perforce-graph.openFileDiff', async (...args: unknown[]) => {
-          const target = graphClient()
+          const req = args[0] as P4GraphFileDiffRequest
+          const target = graphClientFor(req)
           if (!target) return
-          await openGraphFileDiff(
-            target,
-            args[0] as P4GraphFileDiffRequest,
-            args[1] as { preserveFocus?: boolean } | undefined,
-          )
+          await openGraphFileDiff(target, req, args[1] as { preserveFocus?: boolean } | undefined)
         }),
         commands.registerCommand(
           'perforce-graph.openWorkingTreeFile',

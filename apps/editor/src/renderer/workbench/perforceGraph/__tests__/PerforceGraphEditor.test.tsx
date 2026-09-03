@@ -26,8 +26,15 @@ import {
   type P4GraphRepoDto,
 } from '@universe-editor/extensions-common'
 import { IScmService } from '../../../services/extensions/ScmService.js'
-import { perforceGraphViewState } from '../../../services/perforceGraph/perforceGraphViewState.js'
+import {
+  perforceGraphViewState,
+  _resetForTests,
+} from '../../../services/perforceGraph/perforceGraphViewState.js'
 import { PerforceGraphEditorInput } from '../../../services/editor/PerforceGraphEditorInput.js'
+import {
+  normalizeGraphScopeSelection,
+  type GraphScopePath,
+} from '../../../services/perforceGraph/graphScopeSelection.js'
 import { scmViewState } from '../../scm/scmViewState.js'
 import { _clearGraphPayloadCacheForTests } from '../../scm/commitChanges/graphPayloadCache.js'
 import { ServicesContext } from '../../useService.js'
@@ -171,11 +178,10 @@ async function flush(): Promise<void> {
 }
 
 function resetViewState(): void {
-  perforceGraphViewState.result = null
-  perforceGraphViewState.selection = []
-  perforceGraphViewState.repos = []
-  perforceGraphViewState.selectedRepo = null
-  perforceGraphViewState.wholeRepo = false
+  // Drops the scoped buckets too — the scoped/merged suites below reuse an input
+  // id across cases, and a leftover `view.result` sends the next render down the
+  // silent-revalidate path instead of a fresh load.
+  _resetForTests()
 }
 
 beforeEach(() => {
@@ -342,13 +348,16 @@ describe('PerforceGraphEditor', () => {
 })
 
 describe('PerforceGraphEditor scoped history', () => {
-  function makeScopedCommandService(details?: P4GraphChangeDetailsDto): ICommandService {
+  function makeScopedCommandService(
+    details?: P4GraphChangeDetailsDto,
+    result?: P4GraphLoadResult,
+  ): ICommandService {
     return {
       _serviceBrand: undefined,
       executeCommand: vi.fn(async (id: string) => {
         switch (id) {
           case PerforceGraphCommands.getChanges:
-            return makeResult()
+            return result ?? makeResult()
           case PerforceGraphCommands.getRepos:
             return [REPO, { root: 'X:/p4ws/other', name: 'other-ws' }]
           case PerforceGraphCommands.getChangeDetails:
@@ -363,10 +372,11 @@ describe('PerforceGraphEditor scoped history', () => {
   }
 
   function renderScoped(
-    scope: { path: string; isDirectory: boolean; label: string },
+    paths: readonly GraphScopePath[],
     details?: P4GraphChangeDetailsDto,
+    result?: P4GraphLoadResult,
   ) {
-    const commandService = makeScopedCommandService(details)
+    const commandService = makeScopedCommandService(details, result)
     const storageService = makeStorageService()
     const services = new ServiceCollection()
     services.set(ICommandService, commandService)
@@ -375,23 +385,23 @@ describe('PerforceGraphEditor scoped history', () => {
     makeViewServices(services)
     const utils = render(
       <ServicesContext.Provider value={new InstantiationService(services)}>
-        <PerforceGraphEditor input={new PerforceGraphEditorInput(scope)} />
+        <PerforceGraphEditor
+          input={new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths))}
+        />
       </ServicesContext.Provider>,
     )
     return { commandService, storageService, ...utils }
   }
 
   it('scopes the query to the path and drops the whole-repo chrome', async () => {
-    const { commandService, container } = renderScoped({
-      path: 'X:/p4ws/main',
-      isDirectory: true,
-      label: 'main',
-    })
+    const { commandService, container } = renderScoped([
+      { path: 'X:/p4ws/main', isDirectory: true },
+    ])
     await flush()
 
     expect(commandService.executeCommand).toHaveBeenCalledWith(
       PerforceGraphCommands.getChanges,
-      expect.objectContaining({ scopePath: 'X:/p4ws/main', scopeIsDirectory: true }),
+      expect.objectContaining({ scopePaths: [{ path: 'X:/p4ws/main', isDirectory: true }] }),
     )
     const getChangesCalls = (
       commandService.executeCommand as ReturnType<typeof vi.fn>
@@ -424,7 +434,7 @@ describe('PerforceGraphEditor scoped history', () => {
       ],
     }
     const { commandService, container } = renderScoped(
-      { path: 'X:/p4ws/main/a.txt', isDirectory: false, label: 'a.txt' },
+      [{ path: 'X:/p4ws/main/a.txt', isDirectory: false }],
       details,
     )
     await flush()
@@ -445,11 +455,9 @@ describe('PerforceGraphEditor scoped history', () => {
   })
 
   it('offers "Open Changes" without describing the change first', async () => {
-    const { commandService, container } = renderScoped({
-      path: 'X:/p4ws/main/a.txt',
-      isDirectory: false,
-      label: 'a.txt',
-    })
+    const { commandService, container } = renderScoped([
+      { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+    ])
     await flush()
     ;(commandService.executeCommand as ReturnType<typeof vi.fn>).mockClear()
 
@@ -479,7 +487,7 @@ describe('PerforceGraphEditor scoped history', () => {
       ],
     }
     const { commandService, container } = renderScoped(
-      { path: 'X:/p4ws/main/a.txt', isDirectory: false, label: 'a.txt' },
+      [{ path: 'X:/p4ws/main/a.txt', isDirectory: false }],
       details,
     )
     await flush()
@@ -496,5 +504,229 @@ describe('PerforceGraphEditor scoped history', () => {
       ShowCommitChangesAction.ID,
       expect.anything(),
     )
+  })
+})
+
+describe('PerforceGraphEditor merged (multi-select) history', () => {
+  const MERGED: GraphScopePath[] = [
+    { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+    { path: 'X:/p4ws/main/lib', isDirectory: true },
+  ]
+
+  function renderMerged(
+    result?: P4GraphLoadResult,
+    details?: P4GraphChangeDetailsDto,
+    paths: GraphScopePath[] = MERGED,
+  ) {
+    const commandService = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string) => {
+        switch (id) {
+          case PerforceGraphCommands.getChanges:
+            return result ?? makeResult()
+          case PerforceGraphCommands.getRepos:
+            return [REPO]
+          case PerforceGraphCommands.getChangeDetails:
+            return details ?? makeDetails()
+          default:
+            return undefined
+        }
+      }),
+      onWillExecuteCommand: Event.None,
+      onDidExecuteCommand: Event.None,
+    } as unknown as ICommandService
+    const services = new ServiceCollection()
+    services.set(ICommandService, commandService)
+    services.set(IScmService, makeScmService())
+    services.set(IStorageService, makeStorageService())
+    makeViewServices(services)
+    const utils = render(
+      <ServicesContext.Provider value={new InstantiationService(services)}>
+        <PerforceGraphEditor
+          input={new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths))}
+        />
+      </ServicesContext.Provider>,
+    )
+    return { commandService, ...utils }
+  }
+
+  it('sends every selected path as one scopePaths query and titles the tab with +N', async () => {
+    const { commandService } = renderMerged()
+    await flush()
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.getChanges,
+      expect.objectContaining({
+        scopePaths: [
+          { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+          { path: 'X:/p4ws/main/lib', isDirectory: true },
+        ],
+      }),
+    )
+    expect(screen.getByText('History: a.txt +1')).toBeTruthy()
+  })
+
+  it('offers both Get items and no "Open Changes" (ambiguous across paths)', async () => {
+    const { commandService, container } = renderMerged()
+    await flush()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4521"]')!)
+    await flush()
+
+    expect(screen.queryByText('Open Changes')).toBeNull()
+    fireEvent.click(screen.getByText('Get This Revision'))
+    await flush()
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      PerforceGraphCommands.syncToChange,
+      expect.objectContaining({
+        change: '4521',
+        scopePaths: [
+          { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+          { path: 'X:/p4ws/main/lib', isDirectory: true },
+        ],
+      }),
+    )
+  })
+
+  it('Get Latest Revision reuses the extension multi-select (primary, selection) form', async () => {
+    const { commandService, container } = renderMerged()
+    await flush()
+
+    fireEvent.contextMenu(container.querySelector('[data-id="4519"]')!)
+    await flush()
+    fireEvent.click(screen.getByText('Get Latest Revision'))
+    await flush()
+
+    const selection = [
+      { resourceUri: 'X:/p4ws/main/a.txt', isDirectory: false },
+      { resourceUri: 'X:/p4ws/main/lib', isDirectory: true },
+    ]
+    expect(commandService.executeCommand).toHaveBeenCalledWith(
+      'perforce.syncLatest',
+      selection[0],
+      selection,
+    )
+  })
+
+  it('shows a dedicated empty state (and no count row) when the paths span clients', async () => {
+    const multiClient: P4GraphLoadResult = {
+      changes: [],
+      head: null,
+      headClient: null,
+      moreAvailable: false,
+      pendingCount: 0,
+      error: 'multiClient',
+    }
+    renderMerged(multiClient)
+    await flush()
+
+    expect(
+      screen.getByText(
+        'The selected paths are not in one Perforce workspace, so their history cannot be merged.',
+      ),
+    ).toBeTruthy()
+    // Not "0 changes" — that reads like a successful empty listing.
+    expect(screen.queryByText(/changes/)).toBeNull()
+  })
+
+  it('narrows the Commit Changes payload to the selection and counts what it hid', async () => {
+    const details: P4GraphChangeDetailsDto = {
+      ...makeDetails(),
+      files: [
+        {
+          status: 'M',
+          path: 'depot/branch_x/a.txt',
+          oldPath: null,
+          depotFile: '//depot/branch_x/a.txt',
+          rev: '3',
+          localPath: 'X:/p4ws/main/a.txt',
+        },
+        {
+          status: 'A',
+          path: 'depot/branch_x/lib/x.ts',
+          oldPath: null,
+          depotFile: '//depot/branch_x/lib/x.ts',
+          rev: '1',
+          localPath: 'X:/p4ws/main/lib/x.ts',
+        },
+        {
+          status: 'M',
+          path: 'depot/branch_x/unrelated.txt',
+          oldPath: null,
+          depotFile: '//depot/branch_x/unrelated.txt',
+          rev: '7',
+          localPath: 'X:/p4ws/main/unrelated.txt',
+        },
+      ],
+    }
+    const { commandService, container } = renderMerged(undefined, details)
+    await flush()
+
+    fireEvent.click(container.querySelector('[data-id="4521"]')!)
+    await flush()
+
+    const call = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === ShowCommitChangesAction.ID,
+    )
+    expect(call).toBeTruthy()
+    const payload = call![1] as { files: { path: string }[]; subtitle?: string }
+    expect(payload.files.map((f) => f.path)).toEqual([
+      'depot/branch_x/a.txt',
+      'depot/branch_x/lib/x.ts',
+    ])
+    expect(payload.subtitle).toContain('1 more file(s)')
+  })
+
+  it('does not share one cached payload between two differently-scoped tabs', async () => {
+    // The payload cache is module-level and keyed by the caller. Without the scope
+    // signature in that key, whichever tab fetched the changelist first would pin
+    // its filtered file list for the other — the second tab would show the wrong
+    // files and the wrong "N more file(s)" count. The cache is NOT cleared between
+    // the two renders here on purpose: that is exactly the cross-tab condition.
+    const details: P4GraphChangeDetailsDto = {
+      ...makeDetails(),
+      files: [
+        {
+          status: 'M',
+          path: 'depot/branch_x/a.txt',
+          oldPath: null,
+          depotFile: '//depot/branch_x/a.txt',
+          rev: '3',
+          localPath: 'X:/p4ws/main/a.txt',
+        },
+        {
+          status: 'A',
+          path: 'depot/branch_x/lib/x.ts',
+          oldPath: null,
+          depotFile: '//depot/branch_x/lib/x.ts',
+          rev: '1',
+          localPath: 'X:/p4ws/main/lib/x.ts',
+        },
+      ],
+    }
+    const payloadOf = async (paths: GraphScopePath[]): Promise<{ files: { path: string }[] }> => {
+      const { commandService, container, unmount } = renderMerged(undefined, details, paths)
+      await flush()
+      fireEvent.click(container.querySelector('[data-id="4521"]')!)
+      await flush()
+      const call = (commandService.executeCommand as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => c[0] === ShowCommitChangesAction.ID,
+      )
+      unmount()
+      return call![1] as { files: { path: string }[] }
+    }
+
+    // Both selections are multi-path (only those filter) and both hit CL 4521.
+    const first = await payloadOf([
+      { path: 'X:/p4ws/main/a.txt', isDirectory: false },
+      { path: 'X:/p4ws/main/other', isDirectory: true },
+    ])
+    const second = await payloadOf([
+      { path: 'X:/p4ws/main/lib', isDirectory: true },
+      { path: 'X:/p4ws/main/other', isDirectory: true },
+    ])
+
+    expect(first.files.map((f) => f.path)).toEqual(['depot/branch_x/a.txt'])
+    expect(second.files.map((f) => f.path)).toEqual(['depot/branch_x/lib/x.ts'])
   })
 })

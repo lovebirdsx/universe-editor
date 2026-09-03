@@ -63,6 +63,24 @@ export function parseChangesList(records: readonly Record<string, unknown>[]): G
   return out
 }
 
+/**
+ * Collapse a merged (multi-filespec) listing: one changelist can be reported
+ * once per filespec it touched. Keeps the first occurrence of each id and
+ * re-sorts newest-first by numeric changelist so the single-lane parent chain
+ * stays monotonic — p4 already answers in that order for a single filespec, but
+ * this must not depend on it holding across a union.
+ */
+export function dedupeChangesNewestFirst(changes: readonly GraphChangeMeta[]): GraphChangeMeta[] {
+  const seen = new Set<string>()
+  const out: GraphChangeMeta[] = []
+  for (const c of changes) {
+    if (seen.has(c.id)) continue
+    seen.add(c.id)
+    out.push(c)
+  }
+  return out.sort((a, b) => Number(b.id) - Number(a.id))
+}
+
 /** One file entry inside a change's `describe`. */
 export interface GraphDescribeFile {
   readonly depotFile: string
@@ -179,24 +197,24 @@ export function displayPath(depotFile: string): string {
 
 /**
  * Keep the `p4 opened` entries whose `clientFile` (already a local path — the
- * client translated it via `clientToLocalPath`) falls inside `scope`. A directory
- * scope matches recursively (directory-boundary aware via `isUnderAny`); a file
- * scope matches exactly (via `scopeKey`, so it honours the host case policy).
- * Entries with no `clientFile` are dropped.
+ * client translated it via `clientToLocalPath`) falls inside any of `scopes`. A
+ * directory scope matches recursively (directory-boundary aware via
+ * `isUnderAny`); a file scope matches exactly (via `scopeKey`, so it honours the
+ * host case policy). Entries with no `clientFile` are dropped, and an empty
+ * scope list keeps nothing (an empty selection scopes to nothing, not to all).
  */
-export function openedUnderScope<T extends { clientFile: string | undefined }>(
+export function openedUnderAnyScope<T extends { clientFile: string | undefined }>(
   files: readonly T[],
-  scope: { path: string; isDirectory: boolean },
+  scopes: readonly { path: string; isDirectory: boolean }[],
 ): T[] {
+  if (scopes.length === 0) return []
+  const dirs = scopes.filter((s) => s.isDirectory).map((s) => s.path)
+  const fileKeys = new Set(scopes.filter((s) => !s.isDirectory).map((s) => scopeKey(s.path)))
   const out: T[] = []
   for (const f of files) {
     const cf = f.clientFile
     if (cf === undefined) continue
-    if (scope.isDirectory) {
-      if (isUnderAny(cf, [scope.path])) out.push(f)
-    } else if (scopeKey(cf) === scopeKey(scope.path)) {
-      out.push(f)
-    }
+    if (fileKeys.has(scopeKey(cf)) || isUnderAny(cf, dirs)) out.push(f)
   }
   return out
 }

@@ -173,6 +173,31 @@ export class WorkbenchPO {
       .toBe(true)
   }
 
+  /**
+   * Make the Explorer side bar visible, idempotently.
+   *
+   * `workbench.view.explorer` is a TOGGLE (ShowExplorerAction): with the side bar
+   * already visible AND focused it CLOSES it. Whether the cold-start focus
+   * restore has reached the side bar by the time a spec fires the command is a
+   * race, so a bare `runCommand('workbench.view.explorer')` hides the Explorer on
+   * roughly half the runs. The symptom is deceptive: the tree rows stay mounted
+   * (side bar width 0), so `toBeVisible` on a row still passes and only the
+   * subsequent click has nowhere to land. Fire only while the side bar is
+   * actually hidden.
+   */
+  async showExplorer(): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          const visible = await this.getContextKey<boolean>('sideBarVisible')
+          if (!visible) await this.runCommand('workbench.view.explorer')
+          return visible
+        },
+        { timeout: 30_000, message: 'the Explorer side bar should end up visible' },
+      )
+      .toBe(true)
+  }
+
   async lifecyclePhase(): Promise<string> {
     return this.page.evaluate(() => window.__E2E__!.getLifecyclePhase())
   }

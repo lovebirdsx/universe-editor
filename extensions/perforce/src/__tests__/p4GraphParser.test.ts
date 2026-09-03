@@ -6,7 +6,8 @@ import {
   fileDiffRevs,
   parseWhereLocalPaths,
   displayPath,
-  openedUnderScope,
+  openedUnderAnyScope,
+  dedupeChangesNewestFirst,
 } from '../p4GraphParser.js'
 
 describe('parseChangesList', () => {
@@ -133,8 +134,8 @@ describe('displayPath', () => {
   })
 })
 
-describe('openedUnderScope', () => {
-  const opened = [
+describe('openedUnderAnyScope', () => {
+  const opened: { clientFile: string | undefined }[] = [
     { clientFile: 'X:/p4ws/main/A/x.txt' },
     { clientFile: 'X:/p4ws/main/A/deep/y.txt' },
     { clientFile: 'X:/p4ws/main/AB/z.txt' },
@@ -143,7 +144,7 @@ describe('openedUnderScope', () => {
   ]
 
   it('matches a directory scope recursively', () => {
-    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/A', isDirectory: true })
+    const out = openedUnderAnyScope(opened, [{ path: 'X:/p4ws/main/A', isDirectory: true }])
     expect(out.map((f) => f.clientFile)).toEqual([
       'X:/p4ws/main/A/x.txt',
       'X:/p4ws/main/A/deep/y.txt',
@@ -151,37 +152,73 @@ describe('openedUnderScope', () => {
   })
 
   it('matches a file scope exactly', () => {
-    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/root.txt', isDirectory: false })
+    const out = openedUnderAnyScope(opened, [{ path: 'X:/p4ws/main/root.txt', isDirectory: false }])
     expect(out.map((f) => f.clientFile)).toEqual(['X:/p4ws/main/root.txt'])
   })
 
+  it('unions several scopes, each entry at most once', () => {
+    const out = openedUnderAnyScope(opened, [
+      { path: 'X:/p4ws/main/A', isDirectory: true },
+      { path: 'X:/p4ws/main/root.txt', isDirectory: false },
+      // Overlaps the directory scope above — must not duplicate its entry.
+      { path: 'X:/p4ws/main/A/x.txt', isDirectory: false },
+    ])
+    expect(out.map((f) => f.clientFile)).toEqual([
+      'X:/p4ws/main/A/x.txt',
+      'X:/p4ws/main/A/deep/y.txt',
+      'X:/p4ws/main/root.txt',
+    ])
+  })
+
+  it('keeps nothing for an empty scope list', () => {
+    expect(openedUnderAnyScope(opened, [])).toEqual([])
+  })
+
   it('respects the directory boundary (A never matches AB)', () => {
-    const out = openedUnderScope(opened, { path: 'X:/p4ws/main/A', isDirectory: true })
+    const out = openedUnderAnyScope(opened, [{ path: 'X:/p4ws/main/A', isDirectory: true }])
     expect(out.some((f) => f.clientFile === 'X:/p4ws/main/AB/z.txt')).toBe(false)
   })
 
   it('drops entries without a clientFile', () => {
-    const out = openedUnderScope(
+    const out = openedUnderAnyScope(
       [{ clientFile: undefined }, { clientFile: 'X:/p4ws/main/A/x.txt' }],
-      {
-        path: 'X:/p4ws/main/A',
-        isDirectory: true,
-      },
+      [{ path: 'X:/p4ws/main/A', isDirectory: true }],
     )
     expect(out).toEqual([{ clientFile: 'X:/p4ws/main/A/x.txt' }])
   })
 
   it('follows the host case policy for path segments', () => {
     const insensitive = process.platform === 'win32' || process.platform === 'darwin'
-    const out = openedUnderScope([{ clientFile: 'X:/p4ws/MAIN/a.txt' }], {
-      path: 'X:/p4ws/main',
-      isDirectory: true,
-    })
+    const out = openedUnderAnyScope(
+      [{ clientFile: 'X:/p4ws/MAIN/a.txt' }],
+      [{ path: 'X:/p4ws/main', isDirectory: true }],
+    )
     expect(out.length).toBe(insensitive ? 1 : 0)
-    const fileOut = openedUnderScope([{ clientFile: 'X:/p4ws/MAIN/a.txt' }], {
-      path: 'X:/p4ws/main/a.txt',
-      isDirectory: false,
-    })
+    const fileOut = openedUnderAnyScope(
+      [{ clientFile: 'X:/p4ws/MAIN/a.txt' }],
+      [{ path: 'X:/p4ws/main/a.txt', isDirectory: false }],
+    )
     expect(fileOut.length).toBe(insensitive ? 1 : 0)
+  })
+})
+
+describe('dedupeChangesNewestFirst', () => {
+  const meta = (id: string) => ({
+    id,
+    author: 'testuser',
+    client: 'ws',
+    date: 1,
+    message: `m${id}`,
+    body: `m${id}`,
+  })
+
+  it('drops repeats of the same changelist (one CL touching several filespecs)', () => {
+    const out = dedupeChangesNewestFirst([meta('4522'), meta('4521'), meta('4522')])
+    expect(out.map((c) => c.id)).toEqual(['4522', '4521'])
+  })
+
+  it('re-sorts numerically newest-first even when the union arrives interleaved', () => {
+    const out = dedupeChangesNewestFirst([meta('99'), meta('4521'), meta('100'), meta('4522')])
+    expect(out.map((c) => c.id)).toEqual(['4522', '4521', '100', '99'])
   })
 })

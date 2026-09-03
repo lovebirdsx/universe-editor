@@ -86,13 +86,11 @@ describe('EditorGroupView — scoped Perforce Graph tabs in one group', () => {
     const svc = new EditorGroupsService()
     const group = svc.activeGroup
     const a = new PerforceGraphEditorInput({
-      path: 'X:/p4ws/main/src/a.ts',
-      isDirectory: false,
+      paths: [{ path: 'X:/p4ws/main/src/a.ts', isDirectory: false }],
       label: 'a.ts',
     })
     const b = new PerforceGraphEditorInput({
-      path: 'X:/p4ws/main/src/b.ts',
-      isDirectory: false,
+      paths: [{ path: 'X:/p4ws/main/src/b.ts', isDirectory: false }],
       label: 'b.ts',
     })
     group.openEditor(a, { activate: true, pinned: true })

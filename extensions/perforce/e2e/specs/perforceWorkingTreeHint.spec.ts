@@ -61,7 +61,8 @@ test.describe('@p1 perforce working-tree hint', () => {
 
     // Ensure both rows actually render — the hint channel is on-demand and only
     // queries rows that are on screen.
-    await workbench.runCommand('workbench.view.explorer')
+    // A toggle: it would HIDE the Explorer when the side bar already has focus.
+    await workbench.showExplorer()
     await expect(page.locator('[role="treeitem"]', { hasText: driftedFile.relPath })).toBeVisible({
       timeout: 30_000,
     })
