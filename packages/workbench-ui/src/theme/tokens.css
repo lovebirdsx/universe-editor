@@ -53,4 +53,7 @@
   --z-toast: 1200;
   /* Tooltips sit above every anchored surface (AnchoredSurface uses 9999). */
   --z-tooltip: 10000;
+
+  /* Tooltip / hover surface max width (VSCode workbench-hover parity: 700px). */
+  --tooltip-max-width: 700px;
 }

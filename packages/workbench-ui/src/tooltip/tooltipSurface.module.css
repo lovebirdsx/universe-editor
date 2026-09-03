@@ -1,7 +1,7 @@
 /* Shared surface styling for tooltips (TooltipProvider) and hover cards (useHover). */
 .tooltipSurface {
   z-index: var(--z-tooltip, 10000);
-  max-width: 320px;
+  max-width: var(--tooltip-max-width, 700px);
   padding: var(--spacing-2) var(--spacing-4);
   background: var(--vscode-tooltip-background, #2f2f35);
   color: var(--vscode-tooltip-foreground, #c8c8c8);
@@ -11,6 +11,8 @@
   font-size: var(--font-size-sm);
   line-height: var(--line-height-normal);
   white-space: pre-line;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
