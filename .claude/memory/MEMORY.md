@@ -60,6 +60,7 @@
 
 ## 性能 / 疑难根因
 
+- [子 agent 莫名「被拒绝」停住](acp-synthetic-user-rejected-denial.md) — CLI 把任意非 interrupt 的 tool-queue abort 兜底成 user-rejected；判据=时间差 18~43ms 为伪造、>450ms 为真人；已加 syntheticDenial 拦截但改不了 CLI 内部历史
 - [AI provider 面板保存慢/列表闪空](ai-panel-getmodels-blocking-latency.md) — 根因=getModels 在线枚举被绑进 reload 的 Promise.all；修=快读先落地+枚举后台化+registry 按内容指纹保留缓存
 - [单个死 provider 端点拖垮每次 AI 调用](ai-request-blocked-by-dead-provider-endpoint.md) — 热路径全量枚举=把所有端点串成 AND；修=按 modelId 定向解析+per-endpoint 2.5s+仅超时冷却 30s
 - [大文件十连修](largefile-reveal-dirtydiff-vscode-parity.md) — reveal 事件化/行级 diff/增量同步/tsserver OOM 化/IPC 分片/DTO 去 text/切tab看门狗

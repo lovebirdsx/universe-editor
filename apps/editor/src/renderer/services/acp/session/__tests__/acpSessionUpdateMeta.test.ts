@@ -10,6 +10,7 @@ import {
   extractModelBreakdown,
   readFileChanges,
   readSubagentStats,
+  readSyntheticDenial,
 } from '../acpSessionUpdateMeta.js'
 
 describe('extractModelBreakdown', () => {
@@ -123,6 +124,37 @@ describe('readSubagentStats', () => {
     expect(readSubagentStats({ _meta: {} })).toBeUndefined()
     expect(readSubagentStats({ _meta: { '_universe/subagentStats': 42 } })).toBeUndefined()
     expect(readSubagentStats({ _meta: { '_universe/subagentStats': null } })).toBeUndefined()
+  })
+})
+
+describe('readSyntheticDenial', () => {
+  function update(meta: Record<string, unknown>): SessionUpdate {
+    return {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-1',
+      _meta: meta,
+    } as unknown as SessionUpdate
+  }
+
+  it('reads the flag when the fork stamped it', () => {
+    expect(readSyntheticDenial(update({ claudeCode: { syntheticDenial: true } }))).toBe(true)
+  })
+
+  it('returns false when the flag is absent', () => {
+    expect(readSyntheticDenial(update({ claudeCode: {} }))).toBe(false)
+    expect(readSyntheticDenial(update({ claudeCode: { syntheticDenial: false } }))).toBe(false)
+    expect(readSyntheticDenial(update({ claudeCode: { syntheticDenial: 'yes' } }))).toBe(false)
+  })
+
+  it('returns false when _meta or claudeCode is missing', () => {
+    expect(
+      readSyntheticDenial({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-1',
+      } as unknown as SessionUpdate),
+    ).toBe(false)
+    expect(readSyntheticDenial(update({}))).toBe(false)
+    expect(readSyntheticDenial(update({ claudeCode: null }))).toBe(false)
   })
 })
 

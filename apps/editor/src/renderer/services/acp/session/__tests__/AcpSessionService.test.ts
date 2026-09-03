@@ -18,6 +18,7 @@ import {
   NoopTelemetryService,
   NullLogger,
   observableValue,
+  Severity,
   StorageScope,
   UriIdentityService,
 } from '@universe-editor/platform'
@@ -62,6 +63,7 @@ import {
   type ResumeSessionRequest,
   type ResumeSessionResponse,
   type SessionConfigOption,
+  type SessionNotification,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
@@ -1277,6 +1279,104 @@ describe('AcpSessionService', () => {
     await s.cancelTurn()
     expect(cancelRestoreFires).toBe(0)
     sub.dispose()
+  })
+
+  function syntheticDenialUpdate(toolCallId: string): SessionNotification {
+    return {
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId,
+        status: 'failed',
+        content: [
+          {
+            type: 'content',
+            content: {
+              type: 'text',
+              text: "The user doesn't want to proceed with this tool use",
+            },
+          },
+        ],
+        _meta: { claudeCode: { syntheticDenial: true } },
+      },
+    }
+  }
+
+  it('notifies once for a batch of synthesized denials and marks every card', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // One assistant message can fabricate a whole batch (observed: 4 at once).
+    for (const id of ['tc1', 'tc2', 'tc3', 'tc4']) {
+      conn.sink.onSessionUpdate(syntheticDenialUpdate(id))
+    }
+
+    const denialNotices = notifications.captured.filter(
+      (n) => n.severity === Severity.Warning && n.message.includes('misreported'),
+    )
+    expect(denialNotices).toHaveLength(1)
+    const calls = s.toolCalls.get()
+    expect(calls).toHaveLength(4)
+    expect(calls.every((c) => c.syntheticDenial === true)).toBe(true)
+  })
+
+  it('re-arms the synthesized-denial notification on the next turn', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate(syntheticDenialUpdate('tc1'))
+    await s.sendPrompt('try again')
+    conn.sink.onSessionUpdate(syntheticDenialUpdate('tc2'))
+
+    const denialNotices = notifications.captured.filter(
+      (n) => n.severity === Severity.Warning && n.message.includes('misreported'),
+    )
+    expect(denialNotices).toHaveLength(2)
+  })
+
+  it('does not notify for an ordinary failed tool call and leaves the card as-is', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc1',
+        status: 'failed',
+        content: [{ type: 'content', content: { type: 'text', text: 'command exited non-zero' } }],
+      },
+    })
+
+    const denialNotices = notifications.captured.filter(
+      (n) => n.severity === Severity.Warning && n.message.includes('misreported'),
+    )
+    expect(denialNotices).toHaveLength(0)
+    const [call] = s.toolCalls.get()
+    expect(call?.status).toBe('failed')
+    expect(call?.syntheticDenial).toBeUndefined()
+    expect(call?.text).toBe('command exited non-zero')
+  })
+
+  it('does not notify for synthesized denials during history replay', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    conn.sink.onSessionUpdate(syntheticDenialUpdate('tc1'))
+    s.endHistoryReplay()
+
+    const denialNotices = notifications.captured.filter(
+      (n) => n.severity === Severity.Warning && n.message.includes('misreported'),
+    )
+    expect(denialNotices).toHaveLength(0)
+    // The card still reads as an upstream interruption so a resumed session
+    // presents it correctly.
+    expect(s.toolCalls.get()[0]?.syntheticDenial).toBe(true)
   })
 
   describe('concurrent steering prompts', () => {

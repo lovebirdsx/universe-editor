@@ -1884,6 +1884,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '模型“{model}”的上下文窗口未知，当前按默认值管理，可能不准确。请在 aiSettings.json 的 models 下为它配置 maxInputTokens（命令：AI: Open Settings JSON）。',
   'acp.switchMode.keepPlanning': '已继续规划',
   'acp.switchMode.feedbackLabel': '你的反馈',
+  'acp.syntheticDenial.badge': '上游中断',
+  'acp.syntheticDenial.cardNotice':
+    '上游响应异常导致工具调用被中断，并被误报为用户拒绝——这不是你的拒绝操作。请重新发起请求以继续。',
+  'acp.syntheticDenialDetected':
+    '上游响应异常导致工具调用被中断，并被误报为用户拒绝；子 Agent 已停止，需要重新发起请求才能继续。',
   'acp.toolCall.searchTitle': '搜索“{pattern}”',
   'acp.toolCall.openFile': '打开文件',
   'resourcePreview.openPreview': '打开预览',

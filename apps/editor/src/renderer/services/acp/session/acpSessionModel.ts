@@ -161,6 +161,14 @@ export interface AcpToolCall {
    */
   readonly settleReason?: string
   /**
+   * True when this card's `failed` result is a fake "user-rejected" denial the
+   * CLI synthesized while aborting the tool execution queue (`_meta.claudeCode.
+   * syntheticDenial`) — no real denial happened. The UI presents it as an
+   * upstream interruption (and suppresses the misleading harness denial text)
+   * so the user knows to resend rather than read it as their own rejection.
+   */
+  readonly syntheticDenial?: boolean
+  /**
    * True when this card's heavy content (text / blocks / diffs / raw input /
    * terminal accumulator) was released by the live resident budget
    * (`AcpSession._trimLiveResidentContent`). The card shell (title / status /

@@ -181,6 +181,36 @@ describe('ToolCallCard', () => {
     expect(notice.textContent).toContain('No result received (the turn ended).')
   })
 
+  it('presents a synthesized denial as an upstream interruption and hides the harness text', () => {
+    renderCard(
+      makeCall({
+        status: 'failed',
+        syntheticDenial: true,
+        blocks: [{ type: 'text', text: "The user doesn't want to proceed with this tool use" }],
+        text: "The user doesn't want to proceed with this tool use",
+      }),
+    )
+    // The misleading harness denial text is suppressed and replaced by the
+    // upstream-interruption notice plus a header badge (visible even folded).
+    expect(screen.queryByText("The user doesn't want to proceed with this tool use")).toBeNull()
+    expect(screen.queryByTestId('acp-markdown')).toBeNull()
+    expect(screen.getByTestId('acp-toolcall-synthetic-denial')).toBeTruthy()
+    expect(screen.getByTestId('acp-toolcall-synthetic-denial-badge')).toBeTruthy()
+  })
+
+  it('keeps an ordinary failed card rendering its result text', () => {
+    renderCard(
+      makeCall({
+        status: 'failed',
+        blocks: [{ type: 'text', text: 'command exited non-zero' }],
+        text: 'command exited non-zero',
+      }),
+    )
+    expect(screen.getByText('command exited non-zero')).toBeTruthy()
+    expect(screen.queryByTestId('acp-toolcall-synthetic-denial')).toBeNull()
+    expect(screen.queryByTestId('acp-toolcall-synthetic-denial-badge')).toBeNull()
+  })
+
   it('renders a sub-agent timeline (message + nested tool call) inside the parent card', () => {
     // kind 'other' renders expanded standalone, so the folded children show.
     renderCard(

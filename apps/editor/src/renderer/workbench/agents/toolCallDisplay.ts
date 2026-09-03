@@ -131,6 +131,17 @@ function stripErrorFence(text: string): string {
 }
 
 /**
+ * 上游中断（CLI 合成的假「用户拒绝」）：claude CLI 在 abort 工具执行队列时,只要
+ * abort 原因不是 interrupt/end_conversation 就一律合成一条 user-rejected 的
+ * tool_result——它不是真人拒绝,fork 端从未回答过 `behavior: deny`。fork 给这条
+ * 终态 update 打上 `_meta.claudeCode.syntheticDenial`,识别出来以「上游中断、需要
+ * 重发」呈现,并抑制那句给模型看的误导性拒绝文案。
+ */
+export function isSyntheticDenial(call: AcpToolCall): boolean {
+  return call.syntheticDenial === true
+}
+
+/**
  * 从「继续规划」工具调用里提取用户填写的 steering 意见；无意见（默认文案或空）时
  * 返回 undefined。用户意见走 deny message 通道落盘，故回放与实时同源，均从此读取。
  */

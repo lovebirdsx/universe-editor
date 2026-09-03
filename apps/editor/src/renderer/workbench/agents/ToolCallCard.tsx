@@ -51,6 +51,7 @@ import {
   deriveToolCallDisplay,
   createdFilePath,
   isKeepPlanning,
+  isSyntheticDenial,
   keepPlanningFeedback,
   tryPrettyJson,
 } from './toolCallDisplay.js'
@@ -193,6 +194,9 @@ export const ToolCallCard = memo(function ToolCallCard({
   const keepPlanning = isKeepPlanning(call)
   const effectiveStatus = keepPlanning ? 'completed' : call.status
   const steerFeedback = keepPlanningFeedback(call)
+  // CLI 合成的假「用户拒绝」（上游中断）：保留红色失败态，但替换那段误导性的 harness
+  // 拒绝文案为「上游中断、需要重发」说明——它不是用户拒绝的。
+  const syntheticDenial = isSyntheticDenial(call)
 
   const diffs = hasDiffs && (
     <div className={styles['toolCallDiffs']}>
@@ -265,7 +269,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       )
     })()
 
-  const body = isMcp ? (
+  const body = syntheticDenial ? null : isMcp ? (
     mcpBody
   ) : isExecute ? (
     <>
@@ -408,6 +412,14 @@ export const ToolCallCard = memo(function ToolCallCard({
   const titleNode = (
     <span className={styles['toolCallTitle']}>
       {display.title}
+      {syntheticDenial && (
+        <span
+          className={styles['syntheticDenialBadge']}
+          data-testid="acp-toolcall-synthetic-denial-badge"
+        >
+          {localize('acp.syntheticDenial.badge', 'Upstream interruption')}
+        </span>
+      )}
       {call.mcpServer !== undefined && (
         <span
           className={styles['mcpBadge']}
@@ -437,6 +449,18 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
+  // CLI-synthesized fake "user-rejected" result: replace the misleading harness
+  // denial text with an upstream-interruption notice so it reads as "resend",
+  // never as "you rejected this".
+  const syntheticDenialNotice = syntheticDenial && (
+    <div className={styles['toolCallSettleReason']} data-testid="acp-toolcall-synthetic-denial">
+      {localize(
+        'acp.syntheticDenial.cardNotice',
+        'Interrupted by an abnormal upstream response and misreported as a user rejection — this was not your rejection. Resend the request to continue.',
+      )}
+    </div>
+  )
+
   return (
     <CollapsibleSlot
       as="li"
@@ -458,6 +482,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       }}
     >
       {call.memoryTrimmed ? trimmedNotice : body}
+      {syntheticDenialNotice}
       {settleNotice}
       {childTimeline}
     </CollapsibleSlot>

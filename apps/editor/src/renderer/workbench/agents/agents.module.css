@@ -3766,6 +3766,19 @@
   font-weight: 600;
 }
 
+/* 上游中断徽标（CLI 合成的假「用户拒绝」）——警示色，与中性 MCP 徽标区分。 */
+.syntheticDenialBadge {
+  flex: none;
+  font-size: calc(var(--agent-font-size, 12px) * 0.643);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--vscode-badge-warningBackground, #d7ba7d);
+  color: var(--vscode-badge-foreground, #c8c8c8);
+  font-weight: 600;
+}
+
 .subagentStats {
   flex: none;
   display: inline-flex;

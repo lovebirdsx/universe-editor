@@ -123,6 +123,7 @@ import {
 } from './acpSession.js'
 import { isResidentLive } from './acpSessionStatus.js'
 import { MAX_RECOVERY_ATTEMPTS, recoveryBackoffMs } from './acpSessionRecovery.js'
+import { readSyntheticDenial } from './acpSessionUpdateMeta.js'
 import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
   AcpSessionRestoreCoordinator,
@@ -2206,7 +2207,26 @@ export class AcpSessionService
   onSessionUpdate(params: SessionNotification): void {
     const session = this._findSession(params.sessionId)
     if (!session) return
-    session.applyUpdate(params.update)
+    const update = params.update
+    // The CLI fabricates one fake "user-rejected" tool result per aborted
+    // tool_use, so one assistant message can carry a whole batch. Report at
+    // most once per turn (`reportSyntheticDenial`), never for history replays —
+    // those re-emit every historical incident on each session/load.
+    if (
+      update.sessionUpdate === 'tool_call_update' &&
+      readSyntheticDenial(update) &&
+      !session.isReplayingHistory.get() &&
+      session.reportSyntheticDenial()
+    ) {
+      this._notification.notify({
+        severity: Severity.Warning,
+        message: localize(
+          'acp.syntheticDenialDetected',
+          'A tool call was interrupted by an abnormal upstream response and misreported as a user rejection. The sub-agent has stopped — resend your request to continue.',
+        ),
+      })
+    }
+    session.applyUpdate(update)
   }
 
   onExtNotification(method: string, params: Record<string, unknown>): void {

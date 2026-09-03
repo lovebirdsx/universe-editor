@@ -101,6 +101,20 @@ export function readMessageId(update: SessionUpdate): string | undefined {
 }
 
 /**
+ * Read the flag our claude fork stamps onto a terminal `tool_call_update`
+ * (`_meta.claudeCode.syntheticDenial`) when the CLI synthesized a fake
+ * "user-rejected" tool result while aborting the tool execution queue — no real
+ * denial ever happened (the fork itself never answered `behavior: deny` for
+ * this tool_use_id). The fork only emits it deterministically, so a card
+ * carrying it must be presented as an upstream interruption, never as a user
+ * rejection. Returns false when absent or malformed.
+ */
+export function readSyntheticDenial(update: SessionUpdate): boolean {
+  const meta = (update as { _meta?: { claudeCode?: { syntheticDenial?: unknown } } | null })._meta
+  return meta?.claudeCode?.syntheticDenial === true
+}
+
+/**
  * Read the config ids our claude fork declares as actually changed on a
  * `config_option_update` (`_meta['universe-editor/changedConfigIds']`). The
  * resume-time model reconciliation broadcasts the whole bag after correcting

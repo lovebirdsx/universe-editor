@@ -93,6 +93,7 @@ import {
   readMessageId,
   readParentToolUseId,
   readSubagentStats,
+  readSyntheticDenial,
   readTerminalOutput,
 } from './acpSessionUpdateMeta.js'
 import { ACP_CAPABILITIES_META_KEY, type AcpUniverseCapabilities } from './acpExtMethods.js'
@@ -301,6 +302,7 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
     ...(call.settleReason !== undefined ? { settleReason: call.settleReason } : {}),
+    ...(call.syntheticDenial === true ? { syntheticDenial: true } : {}),
     ...(children !== undefined && children.length > 0 ? { children } : {}),
   }
 }
@@ -787,6 +789,13 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** Set when the connection died mid-turn; consumed by {@link continueInterruptedTurn}. */
   private _turnInterrupted = false
+
+  /**
+   * True once a synthesized-denial update was reported this turn (see
+   * {@link reportSyntheticDenial}); reset on every prompt dispatch so a batch
+   * of fabricated denials inside one assistant message notifies only once.
+   */
+  private _syntheticDenialReported = false
 
   /**
    * Set alongside {@link _turnInterrupted} when the lost connection had a
@@ -1857,6 +1866,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
     if (conn === undefined || sid === undefined) return
+    // A new turn starts here — synthesized-denial reporting re-arms for it.
+    this._syntheticDenialReported = false
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
     // Synchronous on purpose: callers (and tests) observe the new order right
     // after sendPrompt returns, before any awaited persistence below.
@@ -2811,6 +2822,20 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._lastActivityAt = Date.now()
   }
 
+  /**
+   * Reports that a synthesized-denial update landed this turn; true only for
+   * the first one per turn. The CLI fabricates one fake "user-rejected" result
+   * per aborted tool_use — a single assistant message can carry a batch of
+   * them — so the caller (the facade, which owns the notification service)
+   * must notify once per turn, not once per card. Re-arms on the next prompt
+   * dispatch.
+   */
+  reportSyntheticDenial(): boolean {
+    if (this._syntheticDenialReported) return false
+    this._syntheticDenialReported = true
+    return true
+  }
+
   applyUpdate(update: SessionUpdate): void {
     const sid = this.sessionIdOnAgent.get()
     // Liveness bookkeeping for the service's stall watchdog.
@@ -3024,6 +3049,9 @@ export class AcpSession extends Disposable implements IAcpSession {
         // with it or the card's notice would blink off. A real terminal update
         // drops it: the result did arrive after all.
         const settleReason = status === 'cancelled' ? existing?.settleReason : undefined
+        // A late `_meta`-only update omits the flag — carry it forward like
+        // `settleReason` so the card keeps reading as an upstream interruption.
+        const syntheticDenial = readSyntheticDenial(update) || existing?.syntheticDenial === true
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
@@ -3040,6 +3068,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(startedAt !== undefined ? { startedAt } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           ...(settleReason !== undefined ? { settleReason } : {}),
+          ...(syntheticDenial ? { syntheticDenial: true } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed' && !this.isReplayingHistory.get()) {
