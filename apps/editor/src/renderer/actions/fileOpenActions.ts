@@ -62,7 +62,7 @@ export class OpenFileAction extends Action2 {
       title: localize('fileDialog.openFile.title', 'Open File'),
       canSelectFiles: true,
       canSelectFolders: false,
-      canSelectMany: true,
+      canSelectMany: false,
       openLabel: localize('fileDialog.open', 'Open'),
       ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
     })
