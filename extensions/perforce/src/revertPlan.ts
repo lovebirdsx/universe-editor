@@ -19,8 +19,8 @@ export type OpenedTarget = {
 export type RevertPlan = {
   opened: OpenedTarget[]
   unopened: string[]
-  /** Directory target (trailing slashes already stripped). */
-  directory?: string
+  /** Directory targets (trailing slashes already stripped). */
+  directories?: string[]
   /**
    * Directory live `p4 opened` failed and the cache was empty. Treat as "may
    * have opened files" — never confirm as uncollected-only.
@@ -46,15 +46,15 @@ export type RevertActions = {
 
 /**
  * Map a confirmed plan onto the two p4 primitives. Directory targets always
- * clean `dir/...` (unopened drift is not enumerated); revert of the same spec
- * only when the tree has opened files or the opened query failed open.
+ * clean `<dir>/...` (unopened drift is not enumerated); revert of the same
+ * specs only when the tree has opened files or the opened query failed open.
  */
 export function revertActionsOf(plan: RevertPlan): RevertActions {
-  if (plan.directory !== undefined) {
-    const spec = `${plan.directory}/...`
+  if (plan.directories !== undefined && plan.directories.length > 0) {
+    const specs = plan.directories.map((d) => `${d}/...`)
     return {
-      revert: plan.opened.length > 0 || plan.openedUnknown ? [spec] : [],
-      clean: [spec],
+      revert: plan.opened.length > 0 || plan.openedUnknown ? specs : [],
+      clean: [...specs, ...plan.unopened],
     }
   }
   return {
@@ -75,7 +75,7 @@ function displayName(path: string): string {
 export function classifyRevertTargets(
   paths: readonly string[],
   openState: ReadonlyMap<string, string | undefined>,
-  opts?: { directory?: string; openedUnknown?: boolean },
+  opts?: { directories?: readonly string[]; openedUnknown?: boolean },
 ): RevertPlan {
   const opened: OpenedTarget[] = []
   const unopened: string[] = []
@@ -91,7 +91,9 @@ export function classifyRevertTargets(
   return {
     opened,
     unopened,
-    ...(opts?.directory !== undefined ? { directory: opts.directory.replace(/[/\\]+$/, '') } : {}),
+    ...(opts?.directories !== undefined && opts.directories.length > 0
+      ? { directories: opts.directories.map((d) => d.replace(/[/\\]+$/, '')) }
+      : {}),
     ...(opts?.openedUnknown ? { openedUnknown: true } : {}),
   }
 }
@@ -120,16 +122,39 @@ function formatOpenedList(opened: readonly OpenedTarget[], cap: number): string 
   return lines.join('\n')
 }
 
+function unopenedLine(count: number): string {
+  return localize(
+    'perforce.revert.alsoUnopened',
+    'Working-tree changes on {0} unopened file(s) will also be discarded.',
+    { 0: String(count) },
+  )
+}
+
 export function formatRevertConfirm(plan: RevertPlan, opts?: { listCap?: number }): string {
   const cap = opts?.listCap ?? REVERT_LIST_CAP
+  const dirs = plan.directories
   const onlyUnopened = plan.opened.length === 0 && !plan.openedUnknown
   if (onlyUnopened) {
-    if (plan.directory) {
-      return localize(
-        'perforce.revert.discardDir',
-        "Discard working-tree changes under '{0}'? This cannot be undone.",
-        { 0: displayName(plan.directory) },
-      )
+    if (dirs !== undefined && dirs.length > 0) {
+      const parts: string[] = [
+        dirs.length === 1
+          ? localize(
+              'perforce.revert.discardDir',
+              "Discard working-tree changes under '{0}'? This cannot be undone.",
+              { 0: displayName(dirs[0]!) },
+            )
+          : localize(
+              'perforce.revert.discardDirs',
+              'Discard working-tree changes under {0} directories? This cannot be undone.',
+              { 0: String(dirs.length) },
+            ),
+      ]
+      // Mixed dir+file selections also clean the unopened files — name them,
+      // or the confirm promises less loss than the run actually discards.
+      if (plan.unopened.length > 0) {
+        parts.push(unopenedLine(plan.unopened.length))
+      }
+      return parts.join('\n')
     }
     if (plan.unopened.length === 1) {
       return localize(
@@ -162,21 +187,21 @@ export function formatRevertConfirm(plan: RevertPlan, opts?: { listCap?: number 
     )
     if (plan.opened.length > 0) parts.push(formatOpenedList(plan.opened, cap))
   }
-  if (plan.directory) {
+  if (dirs !== undefined && dirs.length > 0) {
     parts.push(
-      localize(
-        'perforce.revert.alsoDirUnopened',
-        'Unopened working-tree changes under this directory will also be discarded.',
-      ),
+      dirs.length === 1
+        ? localize(
+            'perforce.revert.alsoDirUnopened',
+            'Unopened working-tree changes under this directory will also be discarded.',
+          )
+        : localize(
+            'perforce.revert.alsoDirsUnopened',
+            'Unopened working-tree changes under these directories will also be discarded.',
+          ),
     )
-  } else if (plan.unopened.length > 0) {
-    parts.push(
-      localize(
-        'perforce.revert.alsoUnopened',
-        'Working-tree changes on {0} unopened file(s) will also be discarded.',
-        { 0: String(plan.unopened.length) },
-      ),
-    )
+  }
+  if (plan.unopened.length > 0) {
+    parts.push(unopenedLine(plan.unopened.length))
   }
   return parts.join('\n')
 }

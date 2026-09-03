@@ -232,6 +232,11 @@ const cases: Case[] = [
     invoke: (c) => c.openedInTree(ROOT),
     interactive: ['opened'],
   },
+  {
+    name: 'openedInTrees (unified Revert confirm, multi-directory)',
+    invoke: (c) => c.openedInTrees([`${ROOT}/src`, `${ROOT}/assets`]),
+    interactive: ['opened'],
+  },
 ]
 
 describe('interactive p4 reads dispatch with priority interactive', () => {

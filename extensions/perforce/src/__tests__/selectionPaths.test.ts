@@ -10,6 +10,7 @@ vi.mock('@universe-editor/extension-api', () => ({
 
 import {
   expandDirectoryTargets,
+  isRevertDirectoryTarget,
   reconcileUsesSelection,
   selectionPaths,
   selectionTargets,
@@ -65,6 +66,39 @@ describe('selectionTargets', () => {
     expect(selectionTargets(undefined)).toEqual([])
     expect(selectionTargets([])).toEqual([])
     expect(selectionTargets({ resourceUri: '/w/b.txt' })).toEqual([])
+  })
+})
+
+describe('isRevertDirectoryTarget', () => {
+  const file = (path: string) => ({ path, isDirectory: false })
+  const dir = (path: string) => ({ path, isDirectory: true })
+
+  it('selection of exactly the one directory (Explorer directory right-click) → true', () => {
+    expect(isRevertDirectoryTarget([dir('X:/p4ws/main/sub')], true)).toBe(true)
+  })
+
+  it('no selection with a directory primary (old hosts / fallback) → true', () => {
+    expect(isRevertDirectoryTarget([], true)).toBe(true)
+  })
+
+  it('no selection with a file primary → false', () => {
+    expect(isRevertDirectoryTarget([], false)).toBe(false)
+  })
+
+  it('single file selection → false', () => {
+    expect(isRevertDirectoryTarget([file('X:/p4ws/main/a.txt')], false)).toBe(false)
+  })
+
+  it('mixed directory + file selection → false (handled by the multi-select merge path)', () => {
+    expect(
+      isRevertDirectoryTarget([dir('X:/p4ws/main/sub'), file('X:/p4ws/main/a.txt')], true),
+    ).toBe(false)
+  })
+
+  it('two directories → false (multi-select merge path, not the single-directory branch)', () => {
+    expect(isRevertDirectoryTarget([dir('X:/p4ws/main/a'), dir('X:/p4ws/main/b')], true)).toBe(
+      false,
+    )
   })
 })
 

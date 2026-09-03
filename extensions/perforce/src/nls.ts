@@ -48,11 +48,13 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.revert.discardOne': '放弃 “{0}” 的工作区改动？此操作不可撤销。',
   'perforce.revert.discardMany': '放弃 {0} 个文件的工作区改动？此操作不可撤销。',
   'perforce.revert.discardDir': '放弃 “{0}” 下的工作区改动？此操作不可撤销。',
+  'perforce.revert.discardDirs': '放弃 {0} 个目录下的工作区改动？此操作不可撤销。',
   'perforce.revert.leaveClHeader': '以下文件将离开 changelist。本地更改将丢失。',
   'perforce.revert.leaveClLine': '{0}  （{1}）',
   'perforce.revert.leaveClMore': '…以及另外 {0} 个',
   'perforce.revert.alsoUnopened': '其余 {0} 个未签出文件的工作区改动也会被丢弃。',
   'perforce.revert.alsoDirUnopened': '此目录下未签出的工作区改动也会被丢弃。',
+  'perforce.revert.alsoDirsUnopened': '这些目录下未签出的工作区改动也会被丢弃。',
   'perforce.revert.dirOpenedUnknown':
     '此目录中已签出的文件将离开 changelist（无法列出清单）。本地更改将丢失。',
   'perforce.btn.revertAll': '全部还原',

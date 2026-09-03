@@ -1583,22 +1583,38 @@ export class PerforceClient {
    * `p4 revert dir/...`.
    */
   async openedInTree(dir: string): Promise<{ files: OpenedTarget[]; unknown: boolean }> {
-    const root = dir.replace(/[/\\]+$/, '')
+    return this.openedInTrees([dir])
+  }
+
+  /**
+   * Batch variant of {@link openedInTree} for multi-directory selections: one
+   * live `p4 opened <d1>/... <d2>/... ...` round-trip instead of N serial
+   * ones (the confirm dialog waits on this, so its latency must not grow with
+   * the selection size). Same cache union + fail-open contract: `unknown` when
+   * the live query failed and the unioned cache came back empty.
+   */
+  async openedInTrees(
+    dirs: readonly string[],
+  ): Promise<{ files: OpenedTarget[]; unknown: boolean }> {
+    const roots = dirs.map((d) => d.replace(/[/\\]+$/, '')).filter((d) => d.length > 0)
+    if (roots.length === 0) return { files: [], unknown: false }
     const byNorm = new Map<string, OpenedTarget>()
     for (const [path, changelist] of this._changelistByPath) {
-      if (isUnderAny(path, [root])) byNorm.set(path, { path, changelist })
+      if (isUnderAny(path, roots)) byNorm.set(path, { path, changelist })
     }
     const res = await this._p4
-      .execRecords(['opened', `${root}/...`], INTERACTIVE_EXEC)
+      .execRecords(['opened', ...roots.map((r) => `${r}/...`)], INTERACTIVE_EXEC)
       .catch((err: unknown) => {
-        this._log?.(`[perforce] openedInTree live failed: ${String(err)}`)
+        this._log?.(`[perforce] openedInTrees live failed: ${String(err)}`)
         return undefined
       })
     if (!res || this._disposed || res.result.exitCode !== 0) {
       const files = [...byNorm.values()]
       const unknown = files.length === 0
       if (unknown) {
-        this._log?.(`[perforce] openedInTree ${root}: unknown (live failed, cache empty)`)
+        this._log?.(
+          `[perforce] openedInTrees ${roots.join(', ')}: unknown (live failed, cache empty)`,
+        )
       }
       return { files, unknown }
     }

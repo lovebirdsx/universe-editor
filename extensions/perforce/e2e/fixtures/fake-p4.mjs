@@ -977,12 +977,42 @@ function main() {
     }
 
     case 'revert': {
+      // Real `p4 revert` also restores the workspace copy to the have revision
+      // (open-for-add → the file leaves the disk); `-k` keeps the working tree
+      // (`moveToReconcile`). Unopened drift is untouched here — restoring that
+      // is `clean`'s job, mirroring the real two-primitive split.
+      const keepWorking = rest.includes('-k')
       const files = rest.filter((a) => !a.startsWith('-'))
       const records = []
+      const seen = new Set()
       for (const f of files) {
-        const depotFile = f.startsWith('//') ? f : depotOf(state, f)
-        if (state.opened[depotFile]) {
+        // `<dir>/...` reverts every opened file under the directory (mirrors real
+        // p4); a bare path reverts just that file. `seen` dedupes overlapping
+        // recursive specs — a file reverts once per run.
+        const matches = f.endsWith('/...')
+          ? Object.keys(state.opened).filter((depotFile) => openedInScope(state, [f], depotFile))
+          : [f.startsWith('//') ? f : depotOf(state, f)]
+        for (const depotFile of matches) {
+          const openedEntry = state.opened[depotFile]
+          if (!openedEntry || seen.has(depotFile)) continue
+          seen.add(depotFile)
           delete state.opened[depotFile]
+          if (!keepWorking) {
+            const abs = clientOf(state, depotFile)
+            if (openedEntry.action === 'add') {
+              try {
+                rmSync(abs)
+              } catch {
+                /* already gone */
+              }
+            } else {
+              const known = state.files[depotFile]
+              if (known) {
+                mkdirSync(dirname(abs), { recursive: true })
+                writeFileSync(abs, haveContentOf(known))
+              }
+            }
+          }
           records.push({
             depotFile,
             clientFile: toPosix(clientOf(state, depotFile)),

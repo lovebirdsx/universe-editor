@@ -80,14 +80,22 @@ describe('classifyRevertTargets', () => {
     })
   })
 
-  it('directory + openedUnknown flags pass through', () => {
+  it('directories + openedUnknown flags pass through (trailing slash stripped)', () => {
     expect(
-      classifyRevertTargets([], new Map(), { directory: 'src/', openedUnknown: true }),
+      classifyRevertTargets([], new Map(), { directories: ['src/'], openedUnknown: true }),
     ).toEqual({
       opened: [],
       unopened: [],
-      directory: 'src',
+      directories: ['src'],
       openedUnknown: true,
+    })
+  })
+
+  it('multiple directories pass through with trailing slashes stripped', () => {
+    expect(classifyRevertTargets([], new Map(), { directories: ['a/', 'b'] })).toEqual({
+      opened: [],
+      unopened: [],
+      directories: ['a', 'b'],
     })
   })
 
@@ -145,7 +153,7 @@ describe('revertActionsOf', () => {
   })
 
   it('directory with no opened → clean dir/..., skip revert', () => {
-    expect(revertActionsOf({ opened: [], unopened: [], directory: 'src' })).toEqual({
+    expect(revertActionsOf({ opened: [], unopened: [], directories: ['src'] })).toEqual({
       revert: [],
       clean: ['src/...'],
     })
@@ -156,7 +164,7 @@ describe('revertActionsOf', () => {
       revertActionsOf({
         opened: [{ path: 'src/a.ts', changelist: '8' }],
         unopened: [],
-        directory: 'src',
+        directories: ['src'],
       }),
     ).toEqual({ revert: ['src/...'], clean: ['src/...'] })
   })
@@ -166,10 +174,37 @@ describe('revertActionsOf', () => {
       revertActionsOf({
         opened: [],
         unopened: [],
-        directory: 'src',
+        directories: ['src'],
         openedUnknown: true,
       }),
     ).toEqual({ revert: ['src/...'], clean: ['src/...'] })
+  })
+
+  it('multiple directories with no opened → clean every dir/..., skip revert', () => {
+    expect(revertActionsOf({ opened: [], unopened: [], directories: ['a', 'b'] })).toEqual({
+      revert: [],
+      clean: ['a/...', 'b/...'],
+    })
+  })
+
+  it('multiple directories with opened → revert and clean every dir/... spec', () => {
+    expect(
+      revertActionsOf({
+        opened: [{ path: 'a/x.ts', changelist: '8' }],
+        unopened: [],
+        directories: ['a', 'b'],
+      }),
+    ).toEqual({ revert: ['a/...', 'b/...'], clean: ['a/...', 'b/...'] })
+  })
+
+  it('directories plus unopened files clean both specs and files', () => {
+    expect(
+      revertActionsOf({
+        opened: [],
+        unopened: ['x.ts'],
+        directories: ['a', 'b'],
+      }),
+    ).toEqual({ revert: [], clean: ['a/...', 'b/...', 'x.ts'] })
   })
 })
 
@@ -209,10 +244,34 @@ describe('formatRevertConfirm', () => {
 
   it('unopened directory uses the directory wording', async () => {
     const { formatRevertConfirm } = await load('en-US')
-    const plan: RevertPlan = { opened: [], unopened: [], directory: 'X:/p4ws/main/src' }
+    const plan: RevertPlan = { opened: [], unopened: [], directories: ['X:/p4ws/main/src'] }
     expect(formatRevertConfirm(plan)).toBe(
       "Discard working-tree changes under 'src'? This cannot be undone.",
     )
+  })
+
+  it('unopened multiple directories use the plural wording', async () => {
+    const { formatRevertConfirm } = await load('en-US')
+    const plan: RevertPlan = {
+      opened: [],
+      unopened: [],
+      directories: ['X:/p4ws/main/src', 'X:/p4ws/main/assets'],
+    }
+    expect(formatRevertConfirm(plan)).toBe(
+      'Discard working-tree changes under 2 directories? This cannot be undone.',
+    )
+  })
+
+  it('unopened dirs plus unopened files names both losses', async () => {
+    const { formatRevertConfirm } = await load('en-US')
+    const plan: RevertPlan = {
+      opened: [],
+      unopened: ['a.ts', 'b.ts'],
+      directories: ['X:/p4ws/main/src'],
+    }
+    const text = formatRevertConfirm(plan)
+    expect(text).toContain("Discard working-tree changes under 'src'? This cannot be undone.")
+    expect(text).toContain('Working-tree changes on 2 unopened file(s) will also be discarded.')
   })
 
   it('opened files list basename + Default vs #n', async () => {
@@ -259,7 +318,7 @@ describe('formatRevertConfirm', () => {
     const plan: RevertPlan = {
       opened: [opened('src/foo.ts', '8')],
       unopened: [],
-      directory: 'src',
+      directories: ['src'],
     }
     const text = formatRevertConfirm(plan)
     expect(text).toContain('foo.ts  (#8)')
@@ -268,12 +327,41 @@ describe('formatRevertConfirm', () => {
     )
   })
 
+  it('multiple directories with opened files use the plural drift wording', async () => {
+    const { formatRevertConfirm } = await load('en-US')
+    const plan: RevertPlan = {
+      opened: [opened('a/foo.ts', '8')],
+      unopened: [],
+      directories: ['a', 'b'],
+    }
+    const text = formatRevertConfirm(plan)
+    expect(text).toContain('foo.ts  (#8)')
+    expect(text).toContain(
+      'Unopened working-tree changes under these directories will also be discarded.',
+    )
+  })
+
+  it('opened dirs plus unopened files names every loss (no else-if swallowing)', async () => {
+    const { formatRevertConfirm } = await load('en-US')
+    const plan: RevertPlan = {
+      opened: [opened('a/foo.ts', 'default')],
+      unopened: ['x.ts'],
+      directories: ['a'],
+    }
+    const text = formatRevertConfirm(plan)
+    expect(text).toContain('foo.ts  (Default)')
+    expect(text).toContain(
+      'Unopened working-tree changes under this directory will also be discarded.',
+    )
+    expect(text).toContain('Working-tree changes on 1 unopened file(s) will also be discarded.')
+  })
+
   it('directory fail-open (no list) uses the unknown-opened wording', async () => {
     const { formatRevertConfirm } = await load('en-US')
     const plan: RevertPlan = {
       opened: [],
       unopened: [],
-      directory: 'src',
+      directories: ['src'],
       openedUnknown: true,
     }
     const text = formatRevertConfirm(plan)
@@ -295,5 +383,17 @@ describe('formatRevertConfirm', () => {
     expect(text).toContain('foo.ts  （默认）')
     expect(text).toContain('bar.ts  （#123）')
     expect(text).toContain('其余 1 个未签出文件的工作区改动也会被丢弃。')
+  })
+
+  it('zh-CN multi-directory confirm uses the plural discard + drift wording', async () => {
+    const { formatRevertConfirm } = await load('zh-CN')
+    const unopened: RevertPlan = { opened: [], unopened: [], directories: ['a', 'b'] }
+    expect(formatRevertConfirm(unopened)).toBe('放弃 2 个目录下的工作区改动？此操作不可撤销。')
+    const withOpened: RevertPlan = {
+      opened: [opened('a/foo.ts', '8')],
+      unopened: [],
+      directories: ['a', 'b'],
+    }
+    expect(formatRevertConfirm(withOpened)).toContain('这些目录下未签出的工作区改动也会被丢弃。')
   })
 })

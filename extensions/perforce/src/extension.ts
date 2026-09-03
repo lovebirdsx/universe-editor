@@ -45,7 +45,7 @@ import {
   viewCommit as viewChangelist,
   type P4GraphFileDiffRequest,
 } from './viewCommit.js'
-import { uriToFsPath } from './pathUtil.js'
+import { norm, uriToFsPath } from './pathUtil.js'
 import {
   classifyRevertTargets,
   formatRevertConfirm,
@@ -138,6 +138,22 @@ export function selectionTargets(selection: unknown): SelectionTarget[] {
 /** The plain paths of a multi-selection argument (see {@link selectionTargets}). */
 export function selectionPaths(selection: unknown): string[] {
   return selectionTargets(selection).map((t) => t.path)
+}
+
+/** 目录 Revert 的目标判定：选区恰好只有那一个目录，或无选区而 primary 是目录。
+ *  Explorer 右键目录时菜单期总会把选区物化成 args[1] 且其中包含 primary 自身，
+ *  所以「选区为空」在行右键上从不成立——必须先数 selection。但空区右键菜单
+ *  （无 args[1]）与右键工作区根行（root 被过滤成空选区）仍会命中空选区形态，
+ *  旧宿主同理；调用方须用 `selection[0]?.path ?? resolveTargetPath(args[0])`
+ *  兜底取路径。SCM 文件夹行带的是子树文件 selection（会先被
+ *  scmResourceGroupId 分支接住），多个目录属于多选合并路径，两者都不在此判定内。 */
+export function isRevertDirectoryTarget(
+  selection: readonly SelectionTarget[],
+  arg0IsDirectory: boolean,
+): boolean {
+  return selection.length === 0
+    ? arg0IsDirectory
+    : selection.length === 1 && selection[0]!.isDirectory
 }
 
 /** Expand directory entries in a target list to p4's recursive `<dir>/...`
@@ -1245,42 +1261,76 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('perforce.revert', async (...args: unknown[]) => {
-      const paths = await resolveTargetPaths(args)
-      if (paths.length === 0) return
-      const target = mgr.resolveClient({ resourceUri: paths[0]! })
-      if (!target) return
+      const selection = selectionTargets(args[1])
       // Unified revert: opened → `p4 revert` (leave the changelist + discard);
-      // unopened → `p4 clean` (old Discard Uncollected). SCM folder rows arrive
-      // as a file selection from the host; only a lone Explorer directory uses
-      // `dir/...`. SCM file rows carry `scmResourceGroupId` and are open by
-      // definition — skip the live precheck instead of pointing `p4 opened` at
-      // a folder path.
-      const fromSelection = selectionPaths(args[1])
-      const isDirectory =
-        fromSelection.length === 0 &&
-        (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true
-
+      // unopened → `p4 clean` (old Discard Uncollected). Branch order matters:
+      // SCM folder rows carry `isDirectory: true` too, but they have a
+      // `scmResourceGroupId` and a subtree-file selection — they must be caught
+      // by the group branch first. A lone Explorer directory (selection is
+      // exactly that directory — the context menu always materializes the
+      // selection with the primary in it) recurses via `dir/...`; everything
+      // else goes per-file, with directory entries merged into `directories`.
       let plan: RevertPlan
-      if (isDirectory) {
-        const dir = paths[0]!.replace(/[/\\]+$/, '')
-        const tree = await target.openedInTree(dir)
-        plan = {
-          opened: tree.files,
-          unopened: [],
-          directory: dir,
-          ...(tree.unknown ? { openedUnknown: true } : {}),
-        }
-      } else if (groupChangelistId(args[0]) !== undefined) {
+      let target: PerforceClient | undefined
+      if (groupChangelistId(args[0]) !== undefined) {
+        const paths = await resolveTargetPaths(args)
+        if (paths.length === 0) return
+        const client = mgr.resolveClient({ resourceUri: paths[0]! })
+        if (!client) return
+        target = client
         const groupCl = groupChangelistId(args[0])!
         plan = {
           opened: paths.map((p) => {
-            const changelist = knownChangelist(target.changelistOf(p) ?? groupCl)
+            const changelist = knownChangelist(client.changelistOf(p) ?? groupCl)
             return changelist === undefined ? { path: p } : { path: p, changelist }
           }),
           unopened: [],
         }
+      } else if (
+        isRevertDirectoryTarget(
+          selection,
+          (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
+        )
+      ) {
+        // Selection empty happens for real: Explorer empty-area menu (no args[1])
+        // and right-clicking the workspace root row (root filtered out of the
+        // selection) — the directory path then comes from the primary arg.
+        const dirPath = selection[0]?.path ?? (await resolveTargetPath(args[0]))
+        if (!dirPath) return
+        const dir = dirPath.replace(/[/\\]+$/, '')
+        const client = mgr.resolveClient({ resourceUri: dir })
+        if (!client) return
+        target = client
+        const tree = await client.openedInTree(dir)
+        plan = {
+          opened: tree.files,
+          unopened: [],
+          directories: [dir],
+          ...(tree.unknown ? { openedUnknown: true } : {}),
+        }
       } else {
-        plan = classifyRevertTargets(paths, await target.openedStateAmong(paths))
+        const files = selection.filter((t) => !t.isDirectory).map((t) => t.path)
+        const dirs = selection
+          .filter((t) => t.isDirectory)
+          .map((t) => t.path.replace(/[/\\]+$/, ''))
+        const first = files[0] ?? dirs[0] ?? (await resolveTargetPath(args[0]))
+        if (first === undefined) return
+        const client = mgr.resolveClient({ resourceUri: first })
+        if (!client) return
+        target = client
+        plan = classifyRevertTargets(files, await client.openedStateAmong(files))
+        if (dirs.length > 0) {
+          const seen = new Set(plan.opened.map((f) => norm(f.path)))
+          // One batched `p4 opened` round-trip for every directory entry — the
+          // confirm dialog waits on this precheck.
+          const tree = await client.openedInTrees(dirs)
+          for (const f of tree.files) {
+            if (seen.has(norm(f.path))) continue
+            seen.add(norm(f.path))
+            plan.opened.push(f)
+          }
+          plan = { ...plan, directories: dirs, ...(tree.unknown ? { openedUnknown: true } : {}) }
+        }
       }
 
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')

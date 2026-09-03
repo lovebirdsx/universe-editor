@@ -228,4 +228,46 @@ describe('PerforceClient.openedStateAmong / openedInTree', () => {
     expect(tree).toEqual({ files: [], unknown: true })
     client.dispose()
   })
+
+  it('openedInTrees batches every directory into a single live opened', async () => {
+    const client = await makeClient({
+      openedLive: () => [
+        { rel: 'src/a.txt', change: 'default' },
+        { rel: 'assets/b.txt', change: '9' },
+      ],
+    })
+    calls.length = 0
+    const tree = await client.openedInTrees([`${LOCAL}/src`, `${LOCAL}/assets`])
+    expect(tree.unknown).toBe(false)
+    const byRel = new Map(tree.files.map((f) => [norm(f.path), f.changelist]))
+    expect(byRel.get(norm(`${LOCAL}/src/a.txt`))).toBe('default')
+    expect(byRel.get(norm(`${LOCAL}/assets/b.txt`))).toBe('9')
+    const live = openedCalls()
+    expect(live).toHaveLength(1)
+    expect(live[0]!.filter((s) => s.endsWith('/...'))).toEqual([
+      `${LOCAL}/src/...`,
+      `${LOCAL}/assets/...`,
+    ])
+    client.dispose()
+  })
+
+  it('openedInTrees with no directories answers empty without spawning', async () => {
+    const client = await makeClient()
+    calls.length = 0
+    expect(await client.openedInTrees([])).toEqual({ files: [], unknown: false })
+    expect(openedCalls()).toHaveLength(0)
+    client.dispose()
+  })
+
+  it('openedInTrees live failure keeps the cache union and fails open', async () => {
+    const client = await makeClient({
+      opened: () => [{ rel: 'src/a.txt', change: '8' }],
+      openedLive: 'fail',
+    })
+    await client.refresh()
+    const tree = await client.openedInTrees([`${LOCAL}/src`, `${LOCAL}/assets`])
+    expect(tree.unknown).toBe(false)
+    expect(tree.files).toEqual([{ path: norm(`${LOCAL}/src/a.txt`), changelist: '8' }])
+    client.dispose()
+  })
 })
