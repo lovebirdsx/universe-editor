@@ -176,6 +176,32 @@ export function Tree<T>(props: ITreeProps<T>) {
     }
   }, [revealRequest])
 
+  // Keyboard context menu (ContextMenu key / Shift+F10): the browser's own
+  // synthetic contextmenu event carries (0,0) coordinates, which would anchor
+  // the menu at a fixed corner. VSCode parity: dispatch a contextmenu on the
+  // focused row with coordinates derived from its bounding rect, so each view's
+  // existing row handler opens the menu exactly like a mouse right-click.
+  const openKeyboardContextMenu = useCallback((node: IVisibleNode<T> | null) => {
+    const root = containerRef.current
+    if (!root) return
+    const row = node
+      ? (root.querySelector<HTMLElement>(`[data-row-key="${node.id}"]`) ?? null)
+      : null
+    const target = row ?? root
+    const rect = target.getBoundingClientRect()
+    target.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        // detail 1 marks the event as mouse-like so the container's detail-0
+        // guard below doesn't mistake it for Chromium's keyup supplement.
+        detail: 1,
+        clientX: rect.left,
+        clientY: row ? rect.bottom : rect.top,
+      }),
+    )
+  }, [])
+
   const makeClickHandler = useCallback(
     (node: IVisibleNode<T>) => (e: ReactMouseEvent) => {
       if (e.shiftKey) {
@@ -267,12 +293,23 @@ export function Tree<T>(props: ITreeProps<T>) {
           if (current.hasChildren) void model.toggle(current.element)
           else onActivate?.(current, { preview: true })
           return
+        case 'ContextMenu':
+          handled()
+          if (!e.repeat) openKeyboardContextMenu(current ?? null)
+          return
+        case 'F10':
+          if (e.shiftKey) {
+            handled()
+            if (!e.repeat) openKeyboardContextMenu(current ?? null)
+            return
+          }
+        // plain F10 falls through so onRowKeyDown keeps seeing it
         default:
           if (current) onRowKeyDown?.(e, current)
           return
       }
     },
-    [model, onActivate, onRowKeyDown, onShiftTab, activateNonLeafOnEnter],
+    [model, onActivate, onRowKeyDown, onShiftTab, activateNonLeafOnEnter, openKeyboardContextMenu],
   )
 
   const renderNode = (node: IVisibleNode<T>, style?: CSSProperties): ReactNode =>
@@ -301,7 +338,21 @@ export function Tree<T>(props: ITreeProps<T>) {
         onFocus?.()
       }}
       onBlur={() => setHasFocus(false)}
-      {...(onContextMenu ? { onContextMenu: (e: ReactMouseEvent) => onContextMenu(e, null) } : {})}
+      {...(onContextMenu
+        ? {
+            onContextMenu: (e: ReactMouseEvent) => {
+              // Chromium re-dispatches the contextmenu on keyup for the
+              // ContextMenu key / Shift+F10 (keydown preventDefault can't cancel
+              // it): detail 0, target = the focused container, (0,0) coords.
+              // Swallow it — the keyboard handler already opened the menu.
+              if (e.detail === 0) {
+                e.preventDefault()
+                return
+              }
+              onContextMenu(e, null)
+            },
+          }
+        : {})}
     >
       {visibleNodes.length > virtualizationThreshold ? (
         <VirtualList
