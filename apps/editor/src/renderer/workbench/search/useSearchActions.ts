@@ -26,7 +26,10 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { waitForFileEditor } from '../../services/editor/revealEditorPosition.js'
+import {
+  applyEditorSelection,
+  waitForFileEditor,
+} from '../../services/editor/revealEditorPosition.js'
 import { MonacoModelRegistry } from '../editor/monaco/MonacoModelRegistry.js'
 import { applyReplacements, type IReplaceEdit } from '../../services/search/replace.js'
 import { saveReplacedFile } from '../../services/search/saveReplacedFile.js'
@@ -72,14 +75,12 @@ export function useSearchActions(
         const editor = await waitForFileEditor(active)
         const range = match.ranges[rangeIndex]
         if (!editor || !range) return
-        editor.setSelection({
+        applyEditorSelection(editor, {
           startLineNumber: match.lineNumber,
           startColumn: range.startColumn,
           endLineNumber: match.lineNumber,
           endColumn: range.endColumn,
         })
-        editor.revealLineInCenter(match.lineNumber)
-        if (!preview) editor.focus()
       })()
     },
     [editorService, instantiation],

@@ -30,6 +30,7 @@ import { UntitledEditorInput } from '../editor/UntitledEditorInput.js'
 import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
+import { applyEditorSelection } from '../editor/revealEditorPosition.js'
 
 export interface IQuickTextSearchService {
   readonly _serviceBrand: undefined
@@ -536,14 +537,12 @@ export class QuickTextSearchService implements IQuickTextSearchService {
       const editor = FileEditorRegistry.get(input)
       const range = match.ranges[rangeIndex]
       if (!editor || !range) return false
-      editor.setSelection({
+      applyEditorSelection(editor, {
         startLineNumber: match.lineNumber,
         startColumn: range.startColumn,
         endLineNumber: match.lineNumber,
         endColumn: range.endColumn,
       })
-      editor.revealLineInCenter(match.lineNumber)
-      editor.focus()
       return true
     }
 

@@ -340,7 +340,7 @@ describe('QuickTextSearchService', () => {
       getSelection: vi.fn(() => ({ isEmpty: () => true })),
       getModel: vi.fn(() => undefined),
       setSelection: vi.fn(),
-      revealLineInCenter: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
       focus: vi.fn(),
     }
     FileEditorRegistry.register(input, fakeEditor as never, groups.activeGroup.id)
@@ -364,7 +364,12 @@ describe('QuickTextSearchService', () => {
       endLineNumber: 3,
       endColumn: 13,
     })
-    expect(fakeEditor.revealLineInCenter).toHaveBeenCalledWith(3)
+    expect(fakeEditor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith({
+      startLineNumber: 3,
+      startColumn: 7,
+      endLineNumber: 3,
+      endColumn: 13,
+    })
     expect(fakeEditor.focus).toHaveBeenCalled()
   })
 

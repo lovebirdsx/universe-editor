@@ -104,7 +104,7 @@ describe('useSearchActions', () => {
     expect(input).toBeInstanceOf(FileEditorInput)
     const editor = {
       setSelection: vi.fn(),
-      revealLineInCenter: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
       focus: vi.fn(),
     }
     FileEditorRegistry.register(input as FileEditorInput, editor as never, groups.activeGroup.id)
@@ -119,6 +119,11 @@ describe('useSearchActions', () => {
       endLineNumber: 12,
       endColumn: 13,
     })
-    expect(editor.revealLineInCenter).toHaveBeenCalledWith(12)
+    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith({
+      startLineNumber: 12,
+      startColumn: 7,
+      endLineNumber: 12,
+      endColumn: 13,
+    })
   })
 })
