@@ -876,17 +876,13 @@ describe('fileActions', () => {
       expect(h.group.opened[0]?.resource?.toString()).toBe(picked.toString())
     })
 
-    it('asks for a multi-select dialog and opens every picked file', async () => {
+    it('asks for a single-select dialog and opens the picked file', async () => {
       const h = makeHarness()
-      const first = URI.file('/first.txt')
-      const second = URI.file('/second.txt')
-      h.fileDialog.openResult = [first, second]
+      const picked = URI.file('/picked.txt')
+      h.fileDialog.openResult = [picked]
       await run(h, OpenFileAction.ID)
-      expect(h.fileDialog.openCalls[0]?.canSelectMany).toBe(true)
-      expect(h.group.opened.map((i) => i.resource?.toString())).toEqual([
-        first.toString(),
-        second.toString(),
-      ])
+      expect(h.fileDialog.openCalls[0]?.canSelectMany).toBe(false)
+      expect(h.group.opened.map((i) => i.resource?.toString())).toEqual([picked.toString()])
     })
 
     it('does nothing when the user cancels the picker', async () => {
