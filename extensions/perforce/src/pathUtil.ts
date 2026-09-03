@@ -43,6 +43,18 @@ export function isUnderAny(path: string, dirs: readonly string[]): boolean {
   return false
 }
 
+/**
+ * Whether `parentDir` equals or contains any of `dirs` — the reverse direction
+ * of {@link isUnderAny}: `dirs.some((d) => isUnderAny(d, [parentDir]))`.
+ *
+ * A dir equal to `parentDir` also counts as contained, so callers must test
+ * `parentDir`'s own exclusion (via {@link isUnderAny}) before asking this.
+ * Pure, so unit-testable without spawning p4.
+ */
+export function containsAny(parentDir: string, dirs: readonly string[]): boolean {
+  return dirs.some((d) => isUnderAny(d, [parentDir]))
+}
+
 /** Convert a host-shaped file URI (scheme `file`, path like `/D:/a/b.txt` on
  *  Windows or `/a/b` on posix) to an OS filesystem path. Returns undefined for
  *  non-file URIs (e.g. an untitled or virtual document). Pure, so unit-testable
@@ -79,4 +91,28 @@ export function clientToLocalPath(clientFile: string, clientRoot: string): strin
   const relative = rest.slice(slash + 1)
   const root = clientRoot.replace(/\\/g, '/').replace(/\/+$/, '')
   return `${root}/${relative}`
+}
+
+/**
+ * Dedupe and collapse a list of directory paths to their shallowest entries:
+ * same-scope duplicates keep one entry, and a directory nested under another
+ * collapses to its ancestor (both `A` and `A/B` yield just `A`).
+ * Uses {@link scopeKey} for deduplication and {@link isUnderAny} for nesting.
+ *
+ * Deduplication must key on {@link scopeKey}, not the raw string: on Windows
+ * two entries differing only by case (`Client` vs `client`) would otherwise
+ * each look nested under the other and BOTH get dropped, silently widening the
+ * scan scope back to the whole client.
+ */
+export function collapseScopeDirs(dirs: readonly string[]): string[] {
+  const trimmed = dirs.map((d) => d.replace(/[/\\]+$/, ''))
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const dir of trimmed) {
+    const key = scopeKey(dir)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(dir)
+  }
+  return unique.filter((dir) => !unique.some((other) => other !== dir && isUnderAny(dir, [other])))
 }

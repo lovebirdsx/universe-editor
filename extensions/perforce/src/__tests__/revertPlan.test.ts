@@ -159,6 +159,27 @@ describe('revertActionsOf', () => {
     })
   })
 
+  it('escapes filespec metacharacters in the directory spec', () => {
+    expect(
+      revertActionsOf({
+        opened: [{ path: 'a.ts' }],
+        unopened: [],
+        directories: ['we@ird#dir%1*2'],
+      }),
+    ).toEqual({ revert: ['we%40ird%23dir%251%2A2/...'], clean: ['we%40ird%23dir%251%2A2/...'] })
+  })
+
+  it('unopenedExcluded → skip clean, keep reverting the directory', () => {
+    expect(
+      revertActionsOf({
+        opened: [{ path: 'src/a.ts' }],
+        unopened: [],
+        directories: ['src'],
+        unopenedExcluded: true,
+      }),
+    ).toEqual({ revert: ['src/...'], clean: [] })
+  })
+
   it('directory with opened → revert and clean the same dir/... spec', () => {
     expect(
       revertActionsOf({
@@ -354,6 +375,19 @@ describe('formatRevertConfirm', () => {
       'Unopened working-tree changes under this directory will also be discarded.',
     )
     expect(text).toContain('Working-tree changes on 1 unopened file(s) will also be discarded.')
+  })
+
+  it('unopenedExcluded drops the discard-unopened promise', async () => {
+    const { formatRevertConfirm } = await load('en-US')
+    const plan: RevertPlan = {
+      opened: [opened('src/foo.ts', '8')],
+      unopened: [],
+      directories: ['src'],
+      unopenedExcluded: true,
+    }
+    const text = formatRevertConfirm(plan)
+    expect(text).toContain('foo.ts  (#8)')
+    expect(text).not.toContain('will also be discarded')
   })
 
   it('directory fail-open (no list) uses the unknown-opened wording', async () => {

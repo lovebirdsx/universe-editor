@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { clientToLocalPath, isUnderAny, norm, scopeKey, uriToFsPath } from '../pathUtil.js'
+import {
+  clientToLocalPath,
+  collapseScopeDirs,
+  containsAny,
+  isUnderAny,
+  norm,
+  scopeKey,
+  uriToFsPath,
+} from '../pathUtil.js'
 
 describe('uriToFsPath', () => {
   it('strips the leading slash before a Windows drive letter', () => {
@@ -75,6 +83,35 @@ describe('scopeKey', () => {
   })
 })
 
+describe('containsAny', () => {
+  it('matches a child directory inside parentDir', () => {
+    expect(containsAny('C:/ws/Client', ['C:/ws/Client/Sub'])).toBe(true)
+    expect(containsAny('C:/ws/Client', ['C:/ws/Client/Sub/Deep/x.txt'])).toBe(true)
+  })
+
+  it('matches a dir equal to parentDir (callers must test parentDir exclusion first)', () => {
+    expect(containsAny('C:/ws/Client', ['C:/ws/Client'])).toBe(true)
+  })
+
+  it('matches when any of the dirs is contained, not just the first', () => {
+    expect(containsAny('C:/ws/A', ['C:/ws/Elsewhere', 'C:/ws/A/B'])).toBe(true)
+  })
+
+  it('matches nothing for an empty dir list', () => {
+    expect(containsAny('C:/ws/a', [])).toBe(false)
+  })
+
+  it('never matches on a bare prefix (A does not contain AB)', () => {
+    expect(containsAny('C:/ws/A', ['C:/ws/AB'])).toBe(false)
+    expect(containsAny('C:/ws/A', ['C:/ws/AB/x.txt'])).toBe(false)
+  })
+
+  it('follows the host case policy like isUnderAny', () => {
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(containsAny('C:/ws/Client', ['C:/ws/client/sub'])).toBe(insensitive)
+  })
+})
+
 describe('clientToLocalPath', () => {
   // Repro for "an edited file shows as a full delete + `//` URI error when opening
   // its diff": `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX
@@ -111,5 +148,19 @@ describe('clientToLocalPath', () => {
 
   it('returns the input unchanged for a degenerate client-only spec', () => {
     expect(clientToLocalPath('//ws', 'G:/root')).toBe('//ws')
+  })
+})
+
+describe('collapseScopeDirs', () => {
+  it('dedupes and strips trailing slashes', () => {
+    expect(collapseScopeDirs(['C:/ws/A/', 'C:/ws/A'])).toEqual(['C:/ws/A'])
+  })
+
+  it('collapses nested child to shallowest ancestor', () => {
+    expect(collapseScopeDirs(['C:/ws/A', 'C:/ws/A/B', 'C:/ws/C'])).toEqual(['C:/ws/A', 'C:/ws/C'])
+  })
+
+  it('keeps sibling directories that only share a prefix', () => {
+    expect(collapseScopeDirs(['C:/ws/A', 'C:/ws/AB'])).toEqual(['C:/ws/A', 'C:/ws/AB'])
   })
 })

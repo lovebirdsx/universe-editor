@@ -21,6 +21,19 @@ export function buildScopeFilespec(path: string, isDirectory: boolean): string {
   return `${escapeFilespecPath(trimmed)}/...`
 }
 
+/**
+ * Build a p4 filespec for a single directory level: `<escaped dir>/*`. `/*` is
+ * p4's non-recursive wildcard — it matches the direct children of `dir` only —
+ * so a level spec can never reach into an excluded subtree below it. This is
+ * the non-recursive counterpart of {@link buildScopeFilespec}(dir, true):
+ * trailing `/`/`\` are dropped first, and the appended `*` must NOT be
+ * escaped (it is the wildcard here).
+ */
+export function buildLevelFilespec(dir: string): string {
+  const trimmed = dir.replace(/[/\\]+$/, '')
+  return `${escapeFilespecPath(trimmed)}/*`
+}
+
 /** One user-selected target of a get-revision: a host path plus directory-ness. */
 export interface SyncScopeTarget {
   readonly path: string

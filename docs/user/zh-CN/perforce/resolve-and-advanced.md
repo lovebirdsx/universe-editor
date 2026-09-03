@@ -46,6 +46,8 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.client` | 兜底 `P4CLIENT` | 空 |
 | `perforce.autoEdit` | 编辑未签出文件时自动 `p4 edit` | 关 |
 | `perforce.reconcileHint.enabled` | 在资源管理器中标记磁盘上改过但未签出的文件（`RC` 徽标，其父文件夹随之变色），见[收集改动](./daily-workflow.md#收集改动reconcile)。只检查当前显示在屏幕上的行，开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录 | 开 |
+| `perforce.reconcileScan.maxBatchDurationMs` | 后台预热扫描单个目录批次的时间上限（毫秒，默认 10000），超时批次自动拆分子目录 | 10000 |
+| `perforce.reconcile.excludeFolders` | reconcile 时忽略的目录列表（数组，支持相对/绝对路径）。收集祖先目录时会递归裁剪掉被排除的子目录 | `[]` |
 | `perforce.refreshInterval` | 轮询刷新间隔（秒，最小 10，`0` 关闭） | 关 |
 | `perforce.openedByOthers.autoCheck` | 后台「他人占用」扫描 + 灰字 | 开 |
 | `perforce.openedByOthers.intervalSec` | 两次「他人占用」扫描的最小间隔秒数（最小 30） | 300 |
@@ -55,6 +57,10 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 | `perforce.cache.diskLimitMb` | 不可变历史数据磁盘缓存上限（MB，`0` 关闭落盘） | 50 |
 
 连接类设置只作兜底，推荐优先用 `p4 set` / P4CONFIG，见[概览与连接](./overview.md#连接是怎么建立的)。
+
+### 关于目录排除
+
+`perforce.reconcile.excludeFolders` 的排除只作用于 reconcile 的**发现**（资源管理器 RC 徽标）、**收集**（收集改动）与 `p4 clean`（还原未收集的工作区偏离）：被排除的目录不参与后台预热扫描与 RC 探测，右键收集改动时被排除的选区会被跳过，收集祖先目录时会递归裁剪掉被排除的子目录。它**不影响已签出文件的 `p4 revert`**——已签出文件在 SCM 面板里本就可见、是显式收集过的，还原照常作用。改动该配置后，命令与资源管理器徽标**即时生效**；只有后台预热扫描需要**重载窗口**才会按新配置重跑（扫描每会话一次，已染色的目录不会即时清场）。
 
 ### 关于缓存
 

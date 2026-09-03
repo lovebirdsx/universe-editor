@@ -238,4 +238,41 @@ describe('countLocalFilesUpTo', () => {
     })
     expect(await countLocalFilesUpTo('/root', 5)).toBeUndefined()
   })
+
+  it('never descends into (or counts files under) an excluded subdirectory', async () => {
+    const excluded = join('/root', 'excluded')
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === '/root') return [dir('included'), dir('excluded'), file('top.txt')]
+      if (d === join('/root', 'included')) return [file('a.txt')]
+      if (d === excluded) return [file('hidden.txt')]
+      return []
+    })
+    // top.txt + a.txt — the excluded subtree contributes nothing.
+    expect(await countLocalFilesUpTo('/root', 100, undefined, [excluded])).toBe(2)
+    // The excluded directory was never even listed (not descended).
+    const visited = readdirMock.mock.calls.map((c) => c[0])
+    expect(visited).not.toContain(excluded)
+  })
+
+  it('excludes a nested directory boundary-aware (a sibling sharing the prefix still counts)', async () => {
+    const excluded = join('/root', 'excluded')
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === '/root') return [dir('excluded'), dir('excluded-but-not'), file('f0')]
+      if (d === excluded) return [file('hidden.txt')]
+      if (d === join('/root', 'excluded-but-not')) return [file('kept.txt')]
+      return []
+    })
+    expect(await countLocalFilesUpTo('/root', 100, undefined, [excluded])).toBe(2)
+  })
+
+  it('behaves unchanged with no exclude dirs (omitted or empty)', async () => {
+    const excluded = join('/root', 'excluded')
+    readdirMock.mockImplementation(async (d: string) => {
+      if (d === '/root') return [dir('excluded'), file('top.txt')]
+      if (d === excluded) return [file('hidden.txt')]
+      return []
+    })
+    expect(await countLocalFilesUpTo('/root', 100)).toBe(2)
+    expect(await countLocalFilesUpTo('/root', 100, undefined, [])).toBe(2)
+  })
 })

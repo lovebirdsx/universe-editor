@@ -706,6 +706,14 @@
           "minimum": 1000,
           "description": "%perforce.config.reconcileScan.maxBatchDurationMs.description%"
         },
+        "perforce.reconcile.excludeFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%perforce.config.reconcile.excludeFolders.description%"
+        },
         "perforce.openedByOthers.autoCheck": {
           "type": "boolean",
           "default": true,

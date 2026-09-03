@@ -68,7 +68,8 @@ import {
   type ReconcileScanSplitPrediction,
 } from './reconcileScanBudget.js'
 import { buildScopeFilespec } from './p4Filespec.js'
-import { norm, isUnderAny, scopeKey } from './pathUtil.js'
+import { carveReconcileFilespecs } from './reconcileCarve.js'
+import { norm, isUnderAny, containsAny, scopeKey, collapseScopeDirs } from './pathUtil.js'
 import { type OpenedTarget } from './revertPlan.js'
 import {
   classifySyncLine,
@@ -330,28 +331,14 @@ function sameScopeDirs(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /**
- * Normalize a caller-supplied scope into the directories a p4 scan should cover:
+ * Normalize and collapse a caller-supplied scope into the shallowest directories:
  * trailing separators stripped, case-insensitive duplicates collapsed, and any
- * directory nested under another dropped (the shallower one already covers its
- * files, and an overlap would make p4 visit them twice).
- *
- * Keyed via {@link scopeKey} so `Client` and `client` are one entry on Windows —
- * two survivors differing only by case would each look nested under the other
- * and both get dropped, silently widening the scan back to the whole client.
+ * directory nested under another dropped.
  *
  * Shared by the reconcile and sync scopes; pure.
  */
 function normalizeScopeDirs(paths: readonly string[]): string[] {
-  const trimmed = paths.map((p) => p.replace(/[/\\]+$/, ''))
-  const seen = new Set<string>()
-  const unique: string[] = []
-  for (const dir of trimmed) {
-    const key = scopeKey(dir)
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(dir)
-  }
-  return unique.filter((dir) => !unique.some((other) => other !== dir && isUnderAny(dir, [other])))
+  return collapseScopeDirs(paths)
 }
 
 /** Coerce the `readonly string[] | string | undefined` a scope setter accepts
@@ -405,6 +392,9 @@ export class PerforceClient {
    *  folders (or the opened folder) so a query never reports a file the user
    *  deliberately scoped out (see {@link setReconcileScope}). */
   private _reconcileScopeDirs: readonly string[] = []
+  /** Local directories excluded from reconcile discovery and the background
+   *  scan (see {@link setReconcileExcludes}). Empty means nothing is excluded. */
+  private _reconcileExcludeDirs: readonly string[] = []
   /** Filespecs a scope-less `sync` covers. Separate from the reconcile scope on
    *  purpose (see {@link setSyncScope}). */
   private _syncScopes: readonly string[] = ['//...']
@@ -721,6 +711,18 @@ export class PerforceClient {
   }
 
   /**
+   * Narrow the reconcile discovery (both the on-demand hint and the background
+   * scan) to skip the given local directories, the same way
+   * {@link setReconcileScope} narrows it to include them. A directory nested
+   * under another is dropped (the shallowest one already excludes its files).
+   * `undefined` or an empty list restores the no-exclusion default.
+   */
+  setReconcileExcludes(localPaths: readonly string[] | string | undefined): void {
+    const paths = asScopeList(localPaths)
+    this._reconcileExcludeDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+  }
+
+  /**
    * Narrow the default `p4 sync` target the same way {@link setReconcileScope}
    * narrows discovery — a game workspace's client root can map far more than the
    * folder the user opened, and "get latest" pulling the whole mapping is both
@@ -760,12 +762,53 @@ export class PerforceClient {
     return this._syncScopes
   }
 
+  /** The raw sync-scope directories, before they are rendered into the
+   *  `<dir>/...` filespecs {@link syncScopes} returns. Exposed so the command
+   *  layer can carve exclusions into them — a filespec list can't be re-carved. */
+  get syncScopeDirs(): readonly string[] {
+    return this._syncScopeDirs
+  }
+
   /** Whether a local path falls inside the current reconcile discovery scope.
    *  The whole-client default (no scope dirs) matches everything; a narrowed
-   *  scope matches only paths equal to or under one of its directories. */
+   *  scope matches only paths equal to or under one of its directories. An
+   *  excluded path never matches, whatever the scope — exclusion wins. */
   private _isInReconcileScope(localPath: string): boolean {
+    if (this._isExcluded(localPath)) return false
     if (this._reconcileScopeDirs.length === 0) return true
     return isUnderAny(localPath, this._reconcileScopeDirs)
+  }
+
+  /** Whether `localPath` equals or sits under an excluded directory. */
+  private _isExcluded(localPath: string): boolean {
+    return isUnderAny(localPath, this._reconcileExcludeDirs)
+  }
+
+  /** Whether a local path is excluded from reconcile discovery, for the command
+   *  layer to gate reconcile/collect interactions before they reach p4. */
+  isReconcileTargetExcluded(path: string): boolean {
+    return this._isExcluded(path)
+  }
+
+  /** Whether `dir` — proven by the caller to NOT be excluded itself — contains
+   *  at least one excluded directory. `containsAny` also answers true when
+   *  `dir` IS an excluded directory, so callers must test {@link _isExcluded}
+   *  FIRST; this is the "has an excluded subtree to carve around" probe for
+   *  {@link runReconcileScan}. */
+  private _containsAnyExcluded(dir: string): boolean {
+    return containsAny(dir, this._reconcileExcludeDirs)
+  }
+
+  /** The command layer's probe for the same question, under the same call-order
+   *  contract as {@link _containsAnyExcluded}. */
+  containsAnyReconcileExclude(dir: string): boolean {
+    return containsAny(dir, this._reconcileExcludeDirs)
+  }
+
+  /** The current excluded directories, raw — the command layer passes them to
+   *  the carve functions so its own filespecs respect the same exclusion set. */
+  get reconcileExcludeDirs(): readonly string[] {
+    return this._reconcileExcludeDirs
   }
 
   /**
@@ -1017,8 +1060,9 @@ export class PerforceClient {
    *
    * Filters on two predicates so a row can never say something the changelist
    * decorations would contradict: already opened (the changelist decoration is the
-   * authority), or outside the configured scope. When they filter everything out
-   * we return without spawning p4 at all.
+   * authority), or outside the configured scope — which `_isInReconcileScope`
+   * answers exclusion-first, so `excludeFolders` folds into the same test. When
+   * they filter everything out we return without spawning p4 at all.
    *
    * Results echo back the caller's own path strings — the scan reports paths
    * translated from client syntax against `this.root`, which need not be spelled
@@ -2370,8 +2414,13 @@ export class PerforceClient {
    * static reserve keeps the interactive slot free.
    */
   async runReconcileScan(): Promise<void> {
-    const scopeDirs =
+    const rawScopeDirs =
       this._reconcileScopeDirs.length > 0 ? [...this._reconcileScopeDirs] : [this.root]
+    const scopeDirs = rawScopeDirs.filter((d) => !this._isExcluded(d))
+    if (scopeDirs.length === 0) {
+      this._log?.(`[perforce] reconcile-scan: every scope dir is excluded; nothing to scan`)
+      return
+    }
     await this._withBusy(localize('perforce.busy.scan', 'Scanning workspace'), async () => {
       await this._cancellable(async (signal) => {
         this._log?.(
@@ -2397,6 +2446,16 @@ export class PerforceClient {
             // spawn one doomed p4 per remaining directory.
             if (this._disposed || signal.aborted || this._connection !== 'connected') return
             const dir = queue.shift()!
+            // A hot config reload can exclude a directory after the queue was
+            // built — enqueue-time filtering can't see it, so this is the last
+            // line of defense before p4 does.
+            if (this._isExcluded(dir)) {
+              this._log?.(`[perforce] reconcile-scan: ${dir} excluded mid-scan; skipping`)
+              done += 1
+              pending -= 1
+              this._setScanProgress(done, pending, undefined, driftFound)
+              continue
+            }
             this._setScanProgress(done, pending, dir, driftFound)
             const key = this._reconcileScanKey(dir)
             // Checkpoint probe: a directory scanned by an earlier session is served
@@ -2481,8 +2540,48 @@ export class PerforceClient {
                   `but has no subdirectories; scanning normally`,
               )
             }
+            let specs: readonly string[]
+            if (this._isExcluded(dir)) {
+              // Re-checked here, not just at the top of the loop: the awaits in
+              // between (checkpoint probe, `_listSubdirs`, budget prediction) let
+              // a config hot-reload land, and `_containsAnyExcluded` answers true
+              // for a directory that just became excluded itself — carving one
+              // would spawn a dry-run batch rooted inside excluded territory.
+              this._log?.(`[perforce] reconcile-scan: ${dir} became excluded; skipping`)
+              done += 1
+              pending -= 1
+              this._setScanProgress(done, pending, undefined, driftFound)
+              continue
+            }
+            if (this._containsAnyExcluded(dir)) {
+              // A directory that contains excluded subtrees can't be answered by a
+              // recursive `<dir>/...` — that filespec drags the excluded subtrees
+              // back into p4's traversal, which is exactly how the exclusion broke.
+              // Carve it into the level's `/*` plus the clean subtrees' `/...`
+              // instead. (`_isExcluded` was tested above — that is the whole-skip
+              // case; this probe really means "has an excluded subtree to carve".)
+              const carved = await carveReconcileFilespecs(dir, this._reconcileExcludeDirs, signal)
+              if (this._disposed || signal.aborted) return
+              if (carved === undefined) {
+                // Carve failure has no safe fallback: `<dir>/...` would re-breach
+                // the exclusion, and a checkpoint would be a lie either way — a
+                // split marker pretends the scan can resume, an empty result
+                // pretends the directory is clean. Leave it un-checkpointed so
+                // the next session retries it.
+                this._log?.(
+                  `[perforce] reconcile-scan: ${dir} contains excluded subtree(s) but carving failed; leaving un-checkpointed`,
+                )
+                done += 1
+                pending -= 1
+                this._setScanProgress(done, pending, undefined, driftFound)
+                continue
+              }
+              specs = carved
+            } else {
+              specs = [buildScopeFilespec(dir, true)]
+            }
             const started = this._now()
-            const batch = await this._reconcileScanBatch([buildScopeFilespec(dir, true)], {
+            const batch = await this._reconcileScanBatch(specs, {
               signal,
               // The background scan publishes a lower bound of drift found, so a
               // timed-out batch keeps whatever it already streamed (more is always
@@ -2621,15 +2720,23 @@ export class PerforceClient {
     return `${this._reconcileScanFingerprint()}:${dir}`
   }
 
-  /** A stable fingerprint of the reconcile scope: the sorted, case-folded scope
-   *  directories hashed, so any focus change invalidates the whole checkpoint
-   *  batch. */
+  /** A stable fingerprint of the reconcile scope AND its exclusions: the sorted,
+   *  case-folded scope directories plus the sorted, case-folded exclude
+   *  directories hashed together, so any focus or exclude change invalidates the
+   *  whole checkpoint batch — an exclude change must orphan the old checkpoints,
+   *  or a directory scanned without the exclusion would replay as if still
+   *  authoritative. */
   private _reconcileScanFingerprint(): string {
     const scopeDirs = this._reconcileScopeDirs.length > 0 ? this._reconcileScopeDirs : [this.root]
-    const canonical = scopeDirs
+    const scopeCanonical = scopeDirs
       .map((dir) => scopeKey(dir))
       .sort()
       .join('\n')
+    const excludeCanonical = this._reconcileExcludeDirs
+      .map((dir) => scopeKey(dir))
+      .sort()
+      .join('\n')
+    const canonical = `${scopeCanonical}--exclude--${excludeCanonical}`
     return createHash('sha1').update(canonical).digest('hex').slice(0, 16)
   }
 
@@ -2639,7 +2746,9 @@ export class PerforceClient {
   private async _listSubdirs(dir: string): Promise<string[]> {
     try {
       const entries = await readdir(dir, { withFileTypes: true })
-      return entries.filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name))
+      return entries
+        .filter((entry) => entry.isDirectory() && !this._isExcluded(join(dir, entry.name)))
+        .map((entry) => join(dir, entry.name))
     } catch (err) {
       this._log?.(`[perforce] reconcile-scan: readdir ${dir} failed: ${String(err)}`)
       return []
@@ -2665,6 +2774,7 @@ export class PerforceClient {
       dir,
       RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD,
       signal,
+      this._reconcileExcludeDirs,
     )
     if (fileCount === undefined) return { action: 'scan' }
     return predictReconcileScanBatch({ fileCount }, this._reconcileScanMaxBatchMs)
@@ -2685,6 +2795,10 @@ export class PerforceClient {
    *  result), so the next session resumes at the subdirectories rather than
    *  re-running the slow parent batch. */
   private async _writeReconcileScanSplitCheckpoint(key: string): Promise<void> {
+    // `wrap` returns the existing value for a hit key without overwriting it and
+    // `P4Cache` has no `set` — the call sites today are constructed so the key
+    // is empty, but invalidating first makes this unconditionally correct.
+    this._cache.invalidate(P4CacheNs.reconcileScan, key)
     await this._cache.wrap(P4CacheNs.reconcileScan, key, async () =>
       JSON.stringify({
         completedAt: this._now(),
@@ -2696,11 +2810,19 @@ export class PerforceClient {
 
   /**
    * Push one scanned directory to the renderer. Filtered again at publish time,
-   * not just scan time: a checkpoint replayed on a later session must not
-   * resurrect hints for files collected since the JSON was written.
+   * not just scan time, for two reasons the producers can't cover: a checkpoint
+   * replayed on a later session must not resurrect hints for files collected
+   * since the JSON was written; and excluded paths must be dropped — an active
+   * batch's p4 can still report lines inside an excluded directory (a path shape
+   * the carve doesn't cover, or p4's own matching), and a checkpoint written
+   * before the exclusion fix under the same fingerprint carries
+   * excluded-directory hints a replay would resurrect (the fingerprint only
+   * orphans whole batches on a config change; these two cases are not one).
    */
   private _publishReconcileScanEntry(dir: string, entry: ReconcileScanEntry): void {
-    const hints = entry.hints.filter((h) => !this._openedPaths.has(norm(h.path)))
+    const hints = entry.hints.filter(
+      (h) => !this._openedPaths.has(norm(h.path)) && !this._isExcluded(h.path),
+    )
     this._sc.publishWorkingTreeScan([{ directory: dir, changes: hints }])
   }
 

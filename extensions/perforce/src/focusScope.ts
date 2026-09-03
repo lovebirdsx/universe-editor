@@ -10,7 +10,7 @@
  * `..` are dropped rather than clamped — clamping would turn a typo into "focus
  * everything".
  */
-import { isUnderAny, scopeKey } from './pathUtil.js'
+import { collapseScopeDirs } from './pathUtil.js'
 
 /** The subset of `workspace.focusEnabled` / `workspace.focusFolders` the
  *  reconcile scope cares about. */
@@ -42,6 +42,57 @@ function canonicalRelative(value: string): string | undefined {
   return out.length === 0 ? undefined : out.join('/')
 }
 
+/** Whether a path is absolute after slash normalization: a Windows drive
+ *  (`C:/…`), a UNC root (`//server/share/…`) or a POSIX root (`/…` on non-Windows).
+ *  On Windows, a single leading slash (`/foo`) is considered a root-relative path
+ *  and handled as relative onto workspaceRoot. */
+function isAbsolutePath(value: string): boolean {
+  const s = value.replace(/\\/g, '/')
+  if (/^[a-zA-Z]:\//.test(s) || s.startsWith('//')) return true
+  if (process.platform !== 'win32' && s.startsWith('/')) return true
+  return false
+}
+
+/**
+ * Canonical absolute path: forward slashes, no `.`/`..` segments, no trailing
+ * separator. Recognizes Windows drive (`C:/…`), UNC (`//server/share/…`) and
+ * POSIX (`/…`) roots. Returns undefined when the input escapes its own root via
+ * `..` or is degenerate (`C:/`, `/`, `//`).
+ */
+function canonicalAbsolute(value: string): string | undefined {
+  const s = value.replace(/\\/g, '/')
+  const drive = /^([a-zA-Z]):\/(.*)$/.exec(s)
+  if (drive) {
+    const rest = canonicalRelative(drive[2]!)
+    return rest === undefined ? undefined : `${drive[1]}:/${rest}`
+  }
+  if (s.startsWith('//')) {
+    const parts = s.split('/')
+    const server = parts[2]
+    const share = parts[3]
+    if (server === undefined || share === undefined || server === '' || share === '') {
+      return undefined
+    }
+    const tail = parts.slice(4).join('/')
+    if (tail === '') return `//${server}/${share}`
+    const rest = canonicalRelative(tail)
+    return rest === undefined ? undefined : `//${server}/${share}/${rest}`
+  }
+  if (s.startsWith('/')) {
+    const rest = canonicalRelative(s.slice(1))
+    return rest === undefined ? undefined : `/${rest}`
+  }
+  return undefined
+}
+
+/**
+ * Dedupe and collapse a list of canonical directory paths to their shallowest
+ * entries. Delegated to {@link collapseScopeDirs}.
+ */
+function collapseDirs(dirs: readonly string[]): string[] {
+  return collapseScopeDirs(dirs)
+}
+
 /**
  * Resolve the focus configuration into absolute local directories, or `[]` when
  * focus is disabled or empty — the caller then falls back to the opened
@@ -58,21 +109,28 @@ export function resolveFocusScopeDirs(config: FocusScopeConfig, workspaceRoot: s
     if (rel === undefined) continue
     rels.push(rel)
   }
-  // Dedupe on the same key the containment test uses. Keying by raw string here
-  // would let `Client` and `client` both survive on Windows, and then the
-  // case-insensitive collapse below would find each nested under the other and
-  // drop BOTH — silently widening the scan back to the whole opened folder.
-  const seen = new Set<string>()
-  const unique: string[] = []
-  for (const rel of rels) {
-    const key = scopeKey(rel)
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(rel)
-  }
-  const collapsed = unique.filter(
-    (rel) => !unique.some((other) => other !== rel && isUnderAny(rel, [other])),
-  )
   const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
-  return collapsed.map((rel) => `${root}/${rel}`)
+  return collapseDirs(rels).map((rel) => `${root}/${rel}`)
+}
+
+/**
+ * Resolve the `perforce.reconcile.excludeFolders` setting into absolute local
+ * directories to skip during reconcile. Relative entries are joined onto the
+ * workspace root; absolute entries (drive / UNC / POSIX) are preserved as-is.
+ * Empty or escaping entries are dropped, and nested entries collapse to their
+ * shallowest ancestor.
+ */
+export function resolveExcludeDirs(values: readonly string[], workspaceRoot: string): string[] {
+  const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  const dirs: string[] = []
+  for (const value of values) {
+    if (isAbsolutePath(value)) {
+      const abs = canonicalAbsolute(value)
+      if (abs !== undefined) dirs.push(abs)
+    } else {
+      const rel = canonicalRelative(value)
+      if (rel !== undefined) dirs.push(`${root}/${rel}`)
+    }
+  }
+  return collapseDirs(dirs)
 }

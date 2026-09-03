@@ -356,4 +356,58 @@ describe('PerforceClient.checkWorkingTree', () => {
       setP4CommandTimeoutSeconds(600)
     }
   })
+
+  // --- extra: excluded directories ------------------------------------------
+
+  it('spawns nothing when every path is inside an excluded directory', async () => {
+    const client = await makeClient({ reconcile: () => [{ rel: 'Excluded/in.txt' }] })
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+    calls.length = 0
+
+    const result = await client.checkWorkingTree([
+      `${LOCAL}/Excluded/in.txt`,
+      `${LOCAL}/Excluded/out.txt`,
+    ])
+
+    expect(result).toEqual([])
+    expect(calls).toHaveLength(0)
+  })
+
+  it('omits paths inside an excluded directory (the excluded sibling is never scanned)', async () => {
+    const client = await makeClient({
+      reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }],
+    })
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+    calls.length = 0
+
+    const result = await client.checkWorkingTree([`${LOCAL}/Excluded/in.txt`, `${LOCAL}/in.txt`])
+
+    const paths = result.map((d) => d.path)
+    expect(paths).not.toContain(`${LOCAL}/Excluded/in.txt`)
+    expect(paths).toContain(`${LOCAL}/in.txt`)
+    // The excluded path is dropped before the scan — it never reaches p4.
+    for (const argv of reconcileScans()) {
+      expect(argv).not.toContain(`${LOCAL}/Excluded/in.txt`)
+    }
+  })
+
+  it('omits paths inside an excluded directory when scope is whole-client (empty scopeDirs)', async () => {
+    const client = await makeClient({
+      reconcile: () => [{ rel: 'Excluded/in.txt' }, { rel: 'in.txt' }],
+    })
+    // Leave reconcile scope as whole client (default empty _reconcileScopeDirs)
+    client.setReconcileExcludes([`${LOCAL}/Excluded`])
+    calls.length = 0
+
+    const result = await client.checkWorkingTree([`${LOCAL}/Excluded/in.txt`, `${LOCAL}/in.txt`])
+
+    const paths = result.map((d) => d.path)
+    expect(paths).not.toContain(`${LOCAL}/Excluded/in.txt`)
+    expect(paths).toContain(`${LOCAL}/in.txt`)
+    for (const argv of reconcileScans()) {
+      expect(argv).not.toContain(`${LOCAL}/Excluded/in.txt`)
+    }
+  })
 })

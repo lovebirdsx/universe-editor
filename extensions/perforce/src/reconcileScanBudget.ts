@@ -19,6 +19,7 @@
 import { readdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
+import { isUnderAny } from './pathUtil.js'
 
 /**
  * Cold-prior pre-split threshold: a never-scanned directory whose local file
@@ -129,6 +130,10 @@ export function predictReconcileScanBatch(
  *  - the scan's abort `signal`: a cancel during the walk degrades like any
  *    other interruption instead of leaving the busy spinner spinning.
  *
+ * Directories under `excludeDirs` (when given) are never descended and their
+ * files never counted: an excluded subtree is outside the reconcile scope, so
+ * its size must not inflate the budget estimate.
+ *
  * Symlinked directories and Windows junctions are counted as files, never
  * descended: following them would double-count their targets and, on a
  * junction pointing at an ancestor, walk the cycle forever. Anything readdir
@@ -146,6 +151,7 @@ export async function countLocalFilesUpTo(
   rootDir: string,
   ceiling: number,
   signal?: AbortSignal,
+  excludeDirs?: readonly string[],
 ): Promise<number | undefined> {
   let count = 0
   let directoriesVisited = 0
@@ -163,7 +169,9 @@ export async function countLocalFilesUpTo(
     }
     for (const entry of entries) {
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        stack.push(join(dir, entry.name))
+        const child = join(dir, entry.name)
+        if (excludeDirs && excludeDirs.length > 0 && isUnderAny(child, excludeDirs)) continue
+        stack.push(child)
       } else {
         count += 1
         if (count > ceiling) return count

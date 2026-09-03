@@ -24,6 +24,7 @@ export interface SwitchClientWiring {
   statusBarRefresh(): void
   trackClient(client: PerforceClient): void
   applyScopes(client: PerforceClient): Promise<void>
+  applyExcludes(client: PerforceClient): Promise<void>
   applyOpenedByOthersOptions(client: PerforceClient): Promise<void>
   startPolling(client: PerforceClient, seconds: number): void
   setSwarmAvailable(client: PerforceClient, available: boolean): void
@@ -39,7 +40,10 @@ export interface SwitchedClientConfig {
  * Wire a freshly created client into the manager, mirroring activate's
  * first-client sequence. Order matters: the background-check option
  * (opened-by-others) is set BEFORE the first refresh so the check the refresh
- * tail schedules doesn't silently skip on defaulted options.
+ * tail schedules doesn't silently skip on defaulted options, and the reconcile
+ * excludes ride directly after the scopes — a client wired without them would
+ * scan and collect inside directories the user excluded until the next
+ * config-change notification.
  */
 export async function wireSwitchedClient(
   client: PerforceClient,
@@ -51,6 +55,7 @@ export async function wireSwitchedClient(
   wiring.statusBarRefresh()
   wiring.trackClient(client)
   await wiring.applyScopes(client)
+  await wiring.applyExcludes(client)
   await wiring.applyOpenedByOthersOptions(client)
   void client.refresh()
   wiring.startPolling(client, cfg.refreshIntervalSec)

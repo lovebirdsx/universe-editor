@@ -114,6 +114,9 @@ const ZH_CN: Readonly<Record<string, string>> = {
     '强制拉取会覆盖本地文件，即使 Perforce 认为它们已是最新。其中未收集的改动将丢失，且此操作不可撤销。',
   'perforce.sync.failed': '拉取版本失败。{0}',
   'perforce.btn.collectChanges': '收集改动',
+  // reconcile（收集改动）—— 排除目录拦截
+  'perforce.reconcile.allExcluded': '所选路径已被 perforce.reconcile.excludeFolders 排除。',
+  'perforce.reconcile.carveFailed': '部分目录无法读取，其中的文件已被跳过。',
   'perforce.sync.upToDate': '已是最新版本。',
   'perforce.sync.refusedModified': '{0} 个文件未更新——它们有尚未收集的本地修改',
   'perforce.btn.viewRefusedDiff': '查看差异',

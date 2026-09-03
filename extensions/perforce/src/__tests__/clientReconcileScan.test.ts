@@ -54,7 +54,13 @@ vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(
 
 /** The `node:fs/promises.readdir` the client uses for adaptive splitting. */
 const readdirMock = vi.hoisted(() =>
-  vi.fn<(dir: string) => Promise<Array<{ name: string; isDirectory: () => boolean }>>>(),
+  vi.fn<
+    (
+      dir: string,
+    ) => Promise<
+      Array<{ name: string; isDirectory: () => boolean; isSymbolicLink?: () => boolean }>
+    >
+  >(),
 )
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -1601,5 +1607,253 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(readdirMock).toHaveBeenCalledTimes(2)
     const entry = JSON.parse(disk.store.get(key)!) as { elapsedMs?: number }
     expect(entry.elapsedMs).toBeTypeOf('number')
+  })
+
+  // --- ⑲ excluded directories (M12) ------------------------------------------
+
+  it('skips an excluded scope subdirectory: not scanned, not published, not checkpointed', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === `${LOCAL}/included/...`) return [{ rel: 'included/a.txt' }]
+          if (filespec === `${LOCAL}/excluded/...`) return [{ rel: 'excluded/b.txt' }]
+          return undefined
+        },
+      },
+      disk,
+    )
+    client.setReconcileScope([`${LOCAL}/included`, `${LOCAL}/excluded`])
+    client.setReconcileExcludes([`${LOCAL}/excluded`])
+
+    await client.runReconcileScan()
+
+    // Only the included directory is scanned and published; the excluded one
+    // never reaches p4 (zero spawn for it) and leaves no checkpoint.
+    const specs = reconcileScans().map((a) => a[a.length - 1])
+    expect(specs).toEqual([`${LOCAL}/included/...`])
+    expect(published.map((p) => p.directory)).toEqual([`${LOCAL}/included`])
+    const keys = [...disk.store.keys()]
+    expect(keys.some((k) => k.includes('included'))).toBe(true)
+    expect(keys.some((k) => k.includes('excluded'))).toBe(false)
+  })
+
+  it('exits safely when the scope directory itself is excluded', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([LOCAL])
+
+    await client.runReconcileScan()
+
+    // Nothing to scan: no p4 spawn, no publish, no checkpoint.
+    expect(reconcileScans()).toHaveLength(0)
+    expect(published).toHaveLength(0)
+    expect(disk.store.size).toBe(0)
+  })
+
+  it('an exclude change invalidates the checkpoint (different fingerprint)', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(reconcileScans()).toHaveLength(1)
+
+    // The scope is unchanged but the exclusions change: the fingerprint must
+    // change, or the directory would replay a checkpoint that answered a scan
+    // that did NOT exclude anything.
+    client.setReconcileExcludes([`${LOCAL}/ignored`])
+    await client.runReconcileScan()
+
+    // A new spawn proves the old checkpoint was orphaned rather than replayed.
+    expect(reconcileScans()).toHaveLength(2)
+  })
+
+  it('does not enqueue an excluded subdirectory when splitting a slow batch', async () => {
+    const disk = fakeDisk()
+    const clock = fakeClock()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return ['included', 'excluded'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          const dir = filespec.replace(/[/\\]\.\.\.$/, '')
+          if (dir === LOCAL) {
+            // The exclude lands mid-scan (hot config reload), after the queue
+            // was built and after the carve decision for LOCAL — the split
+            // below is what must filter it out.
+            client.setReconcileExcludes([join(LOCAL, 'excluded')])
+            clock.advance(20_000)
+            return [{ rel: 'top.txt' }]
+          }
+          if (dir === join(LOCAL, 'included')) return [{ rel: 'included/a.txt' }]
+          return undefined
+        },
+      },
+      disk,
+      clock,
+    )
+    client.setReconcileScope([LOCAL])
+
+    await client.runReconcileScan()
+
+    // The slow parent publishes and splits, but the excluded subdirectory is
+    // filtered out of the split — only `included` is enqueued and scanned.
+    expect(published.map((p) => p.directory)).toEqual([LOCAL, join(LOCAL, 'included')])
+    const specs = reconcileScans().map((a) => a[a.length - 1])
+    expect(specs).toContain(`${join(LOCAL, 'included')}/...`)
+    expect(specs).not.toContain(`${join(LOCAL, 'excluded')}/...`)
+    const keys = [...disk.store.keys()]
+    expect(keys.some((k) => k.includes('included'))).toBe(true)
+    expect(keys.some((k) => k.includes('excluded'))).toBe(false)
+  })
+
+  it('carves a directory containing an excluded subtree instead of scanning it recursively', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return [
+          { name: 'top.txt', isDirectory: () => false, isSymbolicLink: () => false },
+          { name: 'src', isDirectory: () => true, isSymbolicLink: () => false },
+        ]
+      if (dir === join(LOCAL, 'src'))
+        return ['included', 'excluded'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const client = await makeClient({ reconcile: () => [{ rel: 'top.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+
+    await client.runReconcileScan()
+
+    // One spawn, carved into the level's `/*` plus the clean subtree's `/...`:
+    // a recursive parent filespec would drag the excluded subtree back into
+    // p4's traversal, which is the bug this locks out.
+    const scans = reconcileScans()
+    expect(scans).toHaveLength(1)
+    const argv = scans[0]!
+    expect(argv).toContain(`${LOCAL}/*`)
+    expect(argv).toContain(`${join(LOCAL, 'src')}/*`)
+    expect(argv).toContain(`${join(LOCAL, 'src', 'included')}/...`)
+    expect(argv).not.toContain(`${LOCAL}/...`)
+    expect(argv.some((a) => a.includes('excluded'))).toBe(false)
+  })
+
+  it('a carved scan keeps the one-publish-per-directory shape and checkpoints once', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
+      if (dir === join(LOCAL, 'src'))
+        return ['included', 'excluded'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const client = await makeClient({ reconcile: () => [{ rel: 'src/included/a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+
+    await client.runReconcileScan()
+
+    // The carve only swaps the filespec list — it must not change the
+    // per-directory shape: one publish for LOCAL and one checkpoint.
+    expect(published).toHaveLength(1)
+    expect(published[0]!.directory).toBe(LOCAL)
+    expect(published[0]!.changes.map((c) => c.path)).toEqual([`${LOCAL}/src/included/a.txt`])
+    expect(disk.store.size).toBe(1)
+  })
+
+  it('leaves a directory un-checkpointed when carving fails', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async () => {
+      throw new Error('readdir boom')
+    })
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+
+    await client.runReconcileScan()
+
+    // A failed carve has no safe fallback (the recursive filespec would
+    // re-breach the exclusion) and must not checkpoint anything: a split
+    // marker would pretend the scan can resume, an empty result would pretend
+    // the directory is clean. The next session retries it.
+    expect(reconcileScans()).toHaveLength(0)
+    expect(published).toHaveLength(0)
+    expect(disk.store.size).toBe(0)
+  })
+
+  it('filters excluded-directory rows at publish time even when p4 reports them', async () => {
+    const disk = fakeDisk()
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === LOCAL)
+        return [{ name: 'src', isDirectory: () => true, isSymbolicLink: () => false }]
+      if (dir === join(LOCAL, 'src'))
+        return ['included', 'excluded'].map((name) => ({
+          name,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        }))
+      return []
+    })
+    const client = await makeClient(
+      {
+        // p4 reports drift inside the excluded directory anyway — a path shape
+        // the carve doesn't cover, or p4's own matching behavior. The publish
+        // filter is the guarantee that drops it.
+        reconcile: () => [{ rel: 'src/included/a.txt' }, { rel: 'src/excluded/bad.txt' }],
+      },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+    client.setReconcileExcludes([join(LOCAL, 'src', 'excluded')])
+
+    await client.runReconcileScan()
+
+    expect(published).toHaveLength(1)
+    expect(published[0]!.changes.map((c) => c.path)).toEqual([`${LOCAL}/src/included/a.txt`])
+  })
+
+  it('skips a directory excluded mid-scan after the queue was built', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: (filespec) => {
+          if (filespec === `${join(LOCAL, 'A')}/...`) {
+            // Hot config reload while the scan is in flight: B becomes
+            // excluded after the queue was already built from the scope, so
+            // enqueue-time filtering can't see it.
+            client.setReconcileExcludes([join(LOCAL, 'B')])
+            return [{ rel: 'A/a.txt' }]
+          }
+          if (filespec === `${join(LOCAL, 'B')}/...`) return [{ rel: 'B/b.txt' }]
+          return undefined
+        },
+      },
+      disk,
+    )
+    client.setReconcileScope([join(LOCAL, 'A'), join(LOCAL, 'B')])
+
+    await client.runReconcileScan()
+
+    // B never reaches p4, publishes nothing and leaves no checkpoint.
+    const specs = reconcileScans().map((a) => a[a.length - 1])
+    expect(specs).toEqual([`${join(LOCAL, 'A')}/...`])
+    expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'A')])
+    expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(false)
   })
 })

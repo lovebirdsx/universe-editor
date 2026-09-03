@@ -47,6 +47,7 @@
   "perforce.config.autoEdit.description": "在文件首次本地修改时自动签出以编辑（p4 edit）。默认关闭——签出是一次服务器操作。",
   "perforce.config.reconcileHint.enabled.description": "在资源管理器中标记「磁盘已改但尚未签出」的文件（RC 徽标）。只检查当前显示在屏幕上的行（对这些路径跑 p4 reconcile -n），开销随可见行数而非 depot 规模增长；作用范围跟随聚焦目录。关闭后资源管理器不再触发任何 reconcile 扫描。",
   "perforce.config.reconcileScan.maxBatchDurationMs.description": "后台工作树扫描（p4 reconcile -n，dry-run）单个目录批次的时间上限，用于在打开文件之前给资源管理器中的文件夹染色。超过该时长的目录批次会拆分成直接子目录，使批次时长自动收敛到该值附近。扫描以后台优先级运行、可跨重启断点续扫，并可从状态栏取消。",
+  "perforce.config.reconcile.excludeFolders.description": "执行 reconcile 时忽略的文件夹列表（包含后台预热扫描、资源管理器未签出改动 hint 探测，以及直接右键收集目录改动）。支持相对或绝对路径。收集祖先目录时会递归裁剪掉被排除的子目录。改动对命令与资源管理器徽标即时生效；只有后台预热扫描需重载窗口后才会按新配置重跑。",
   "perforce.config.cache.enabled.description": "缓存 p4 命令和 Swarm 结果以减少服务器往返。不可变的 p4 数据跨会话持久化；可变的工作区和审核数据使用短 TTL，并在任何变更后失效。",
   "perforce.config.cache.workspaceTtl.description": "缓存的工作区查询（已打开文件、路径映射）在重新拉取前保持有效的毫秒数。每次变更后缓存都会失效，因此该值只限制来自编辑器外部改动的陈旧窗口。设为 0 关闭工作区缓存（不可变历史缓存仍生效）。",
   "perforce.config.cache.diskLimitMb.description": "不可变历史数据磁盘缓存的最大容量（MB）。超过上限时按最近最少使用淘汰。设为 0 关闭磁盘持久化（内存缓存仍生效）。",

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildScopeFilespec, buildSyncFilespecs, escapeFilespecPath } from '../p4Filespec.js'
+import {
+  buildLevelFilespec,
+  buildScopeFilespec,
+  buildSyncFilespecs,
+  escapeFilespecPath,
+} from '../p4Filespec.js'
 
 describe('escapeFilespecPath', () => {
   it('escapes each metacharacter to its percent form', () => {
@@ -49,6 +54,23 @@ describe('buildScopeFilespec', () => {
     expect(buildScopeFilespec('', true)).toBe('/...')
     expect(buildScopeFilespec('/', true)).toBe('/...')
     expect(buildScopeFilespec('\\', true)).toBe('/...')
+  })
+})
+
+describe('buildLevelFilespec', () => {
+  it('builds a single-level directory scope ending in /*', () => {
+    expect(buildLevelFilespec('X:/p4ws/main')).toBe('X:/p4ws/main/*')
+  })
+
+  it('trims trailing slashes and backslashes before appending /*', () => {
+    expect(buildLevelFilespec('X:/p4ws/main/')).toBe('X:/p4ws/main/*')
+    expect(buildLevelFilespec('X:/p4ws/main//')).toBe('X:/p4ws/main/*')
+    expect(buildLevelFilespec('X:\\p4ws\\main\\')).toBe('X:\\p4ws\\main/*')
+  })
+
+  it('escapes metacharacters in the directory but not the trailing wildcard', () => {
+    expect(buildLevelFilespec('X:/p4ws/@dir#1')).toBe('X:/p4ws/%40dir%231/*')
+    expect(buildLevelFilespec('X:/p4ws/a%b')).toBe('X:/p4ws/a%25b/*')
   })
 })
 

@@ -10,6 +10,7 @@ vi.mock('@universe-editor/extension-api', () => ({
 
 import {
   expandDirectoryTargets,
+  filterReconcileTargets,
   isRevertDirectoryTarget,
   reconcileUsesSelection,
   selectionPaths,
@@ -141,5 +142,29 @@ describe('reconcileUsesSelection', () => {
     ['SCM folder row with an empty subtree', [], true, false],
   ])('%s', (_label, selection, arg0IsDirectory, expected) => {
     expect(reconcileUsesSelection(selection, arg0IsDirectory)).toBe(expected)
+  })
+})
+
+describe('filterReconcileTargets', () => {
+  const file = (path: string) => ({ path, isDirectory: false })
+  const dir = (path: string) => ({ path, isDirectory: true })
+
+  it('keeps targets whose path is not excluded', () => {
+    const targets = [file('a.txt'), file('b.txt'), dir('d')]
+    expect(filterReconcileTargets(targets, (p) => p === 'b.txt')).toEqual([file('a.txt'), dir('d')])
+  })
+
+  it('drops every target when all are excluded', () => {
+    const targets = [file('a.txt'), file('b.txt')]
+    expect(filterReconcileTargets(targets, () => true)).toEqual([])
+  })
+
+  it('returns [] for an empty array', () => {
+    expect(filterReconcileTargets([], () => false)).toEqual([])
+  })
+
+  it('filters directory targets by their own path too', () => {
+    const targets = [file('a.txt'), dir('gen')]
+    expect(filterReconcileTargets(targets, (p) => p === 'gen')).toEqual([file('a.txt')])
   })
 })

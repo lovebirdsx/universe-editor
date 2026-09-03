@@ -8,6 +8,7 @@
  * promise honest. Pure so the combinations stay covered by unit tests.
  */
 import { localize } from './nls.js'
+import { buildScopeFilespec } from './p4Filespec.js'
 import { norm } from './pathUtil.js'
 
 export type OpenedTarget = {
@@ -26,6 +27,13 @@ export type RevertPlan = {
    * have opened files" — never confirm as uncollected-only.
    */
   openedUnknown?: boolean
+  /**
+   * `perforce.reconcile.excludeFolders` covers this directory, so `p4 clean`
+   * is skipped and no uncollected drift will be discarded. Both the confirm
+   * text and the executed actions must reflect that — promising to discard and
+   * then keeping the work is the one outcome a destructive dialog cannot have.
+   */
+  unopenedExcluded?: boolean
 }
 
 export const REVERT_LIST_CAP = 10
@@ -51,10 +59,10 @@ export type RevertActions = {
  */
 export function revertActionsOf(plan: RevertPlan): RevertActions {
   if (plan.directories !== undefined && plan.directories.length > 0) {
-    const specs = plan.directories.map((d) => `${d}/...`)
+    const specs = plan.directories.map((d) => buildScopeFilespec(d, true))
     return {
       revert: plan.opened.length > 0 || plan.openedUnknown ? specs : [],
-      clean: [...specs, ...plan.unopened],
+      clean: plan.unopenedExcluded ? [...plan.unopened] : [...specs, ...plan.unopened],
     }
   }
   return {
@@ -135,7 +143,7 @@ export function formatRevertConfirm(plan: RevertPlan, opts?: { listCap?: number 
   const dirs = plan.directories
   const onlyUnopened = plan.opened.length === 0 && !plan.openedUnknown
   if (onlyUnopened) {
-    if (dirs !== undefined && dirs.length > 0) {
+    if (dirs !== undefined && dirs.length > 0 && !plan.unopenedExcluded) {
       const parts: string[] = [
         dirs.length === 1
           ? localize(
@@ -188,17 +196,19 @@ export function formatRevertConfirm(plan: RevertPlan, opts?: { listCap?: number 
     if (plan.opened.length > 0) parts.push(formatOpenedList(plan.opened, cap))
   }
   if (dirs !== undefined && dirs.length > 0) {
-    parts.push(
-      dirs.length === 1
-        ? localize(
-            'perforce.revert.alsoDirUnopened',
-            'Unopened working-tree changes under this directory will also be discarded.',
-          )
-        : localize(
-            'perforce.revert.alsoDirsUnopened',
-            'Unopened working-tree changes under these directories will also be discarded.',
-          ),
-    )
+    if (!plan.unopenedExcluded) {
+      parts.push(
+        dirs.length === 1
+          ? localize(
+              'perforce.revert.alsoDirUnopened',
+              'Unopened working-tree changes under this directory will also be discarded.',
+            )
+          : localize(
+              'perforce.revert.alsoDirsUnopened',
+              'Unopened working-tree changes under these directories will also be discarded.',
+            ),
+      )
+    }
   }
   if (plan.unopened.length > 0) {
     parts.push(unopenedLine(plan.unopened.length))

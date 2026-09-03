@@ -53,9 +53,10 @@ import {
   revertActionsOf,
   type RevertPlan,
 } from './revertPlan.js'
-import { buildScopeFilespec, buildSyncFilespecs } from './p4Filespec.js'
+import { buildScopeFilespec, buildSyncFilespecs, type SyncScopeTarget } from './p4Filespec.js'
+import { carveReconcileFilespecs, carveReconcileTargets } from './reconcileCarve.js'
 import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from './graphSync.js'
-import { resolveFocusScopeDirs } from './focusScope.js'
+import { resolveFocusScopeDirs, resolveExcludeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
 import { createPerforceTimelineCommands, PerforceTimelineProvider } from './timelineProvider.js'
@@ -165,6 +166,17 @@ export function expandDirectoryTargets(
   return paths.map((p) => (dirPaths.has(p) ? `${p.replace(/[/\\]+$/, '')}/...` : p))
 }
 
+/** The single sync target behind an Explorer/editor invocation. Directory-ness
+ *  decides both the filespec shape and — when the get is refused — how the
+ *  collect scope carves around excluded folders, so the two must be derived
+ *  from one value rather than read twice. */
+export function singleSyncTarget(arg: unknown, path: string): SyncScopeTarget {
+  return {
+    path,
+    isDirectory: (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true,
+  }
+}
+
 /** Whether a reconcile invocation should fan out over the multi-selection (one
  *  filespec per element) instead of the single primary target. SCM folder rows
  *  must NOT: their `selection` is the subtree's *opened* files, so enumerating
@@ -175,6 +187,16 @@ export function reconcileUsesSelection(
   arg0IsDirectory: boolean,
 ): boolean {
   return selection.length > 0 && (selection.some((t) => t.isDirectory) || !arg0IsDirectory)
+}
+
+/** Drop reconcile targets excluded by `perforce.reconcile.excludeFolders`. The
+ *  exclusion predicate is injected (`client.isReconcileTargetExcluded` in
+ *  production) so the fork is unit-testable without a client. */
+export function filterReconcileTargets(
+  targets: readonly SelectionTarget[],
+  isExcluded: (path: string) => boolean,
+): SelectionTarget[] {
+  return targets.filter((t) => !isExcluded(t.path))
 }
 
 /** Resolve every path a file-scoped command should act on. When the host runs
@@ -345,6 +367,35 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const log = (msg: string): void => out.appendLine(msg)
   setP4OutputShower(() => out.show())
 
+  /** Report directories a carve could not cover: log each one and surface a
+   *  single warning. The caller keeps whatever specs the carve did produce.
+   *  Wording stays action-neutral — both collecting and `p4 clean` skip here. */
+  const warnUnreadableCarves = async (dirs: readonly string[]): Promise<void> => {
+    for (const dir of dirs) {
+      log(`[perforce] cannot carve reconcile scope around excludes, skipping ${dir}`)
+    }
+    if (dirs.length > 0) {
+      await window.showWarningMessage(
+        localize(
+          'perforce.reconcile.carveFailed',
+          'Some directories could not be read, so files under them were skipped.',
+        ),
+      )
+    }
+  }
+
+  /** The whole selection sits inside `perforce.reconcile.excludeFolders`, so
+   *  there is nothing to run p4 on. Only say this when the carve succeeded —
+   *  a read failure is reported by {@link warnUnreadableCarves} instead. */
+  const notifyAllExcluded = async (): Promise<void> => {
+    await window.showInformationMessage(
+      localize(
+        'perforce.reconcile.allExcluded',
+        'The selected paths are excluded by perforce.reconcile.excludeFolders.',
+      ),
+    )
+  }
+
   const maxConcurrent = await cfg.get('maxConcurrent', 4)
   const gate = new ConcurrencyGate(maxConcurrent)
   // Bounds "hung forever", not "slow": a p4 stuck on a frozen network drive /
@@ -507,6 +558,29 @@ export async function activate(context: ExtensionContext): Promise<void> {
   )
 
   /**
+   * Reconcile excludes: directories the on-demand hint, the background scan and
+   * the collect command must all skip (`perforce.reconcile.excludeFolders`).
+   * Applied before the first refresh so the scan the refresh tail schedules
+   * already honors the configured exclusions.
+   */
+  const applyReconcileExcludes = async (target: PerforceClient): Promise<void> => {
+    const excludes = await cfg.get<string[]>('reconcile.excludeFolders', [])
+    const dirs = resolveExcludeDirs(excludes, root)
+    target.setReconcileExcludes(dirs)
+    log(`[perforce] reconcile excludes: ${dirs.length > 0 ? dirs.join(', ') : '<none>'}`)
+  }
+  const applyReconcileExcludesAll = async (): Promise<void> => {
+    for (const c of mgr.all) await applyReconcileExcludes(c)
+  }
+  await applyReconcileExcludes(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.reconcile.excludeFolders')) return
+      void applyReconcileExcludesAll()
+    }),
+  )
+
+  /**
    * Opened-by-others awareness: how often the client may ask "who has what
    * open". It reads the server's open table rather than walking the client
    * view, but it is still a scope-wide background scan, so the interval is a
@@ -614,6 +688,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
     spec: string,
     options: {
       scope?: readonly string[]
+      /** The selection the `scope` filespecs were built from. Carried so the
+       *  collect-after-refusal remedy can carve excluded subtrees out of the
+       *  exact paths this get covered (a filespec list can't be re-carved). */
+      scopeTargets?: readonly SyncScopeTarget[]
       force?: boolean
     },
   ): Promise<void> => {
@@ -671,10 +749,42 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // status-bar entry, the most common one) is refused over its own default
     // range, so collect that range rather than degrading the far more frequent
     // path to discovery-only.
+    const collectCarved = async (targets: readonly SyncScopeTarget[]): Promise<void> => {
+      const carved = await carveReconcileTargets(targets, target.reconcileExcludeDirs)
+      await warnUnreadableCarves(carved.unreadableDirs)
+      if (carved.specs.length === 0) {
+        // An empty carve after a read failure is not "everything is excluded" —
+        // `warnUnreadableCarves` already reported what actually happened, and
+        // claiming the config hid these files would send the user to the wrong
+        // setting.
+        if (carved.unreadableDirs.length === 0) await notifyAllExcluded()
+        return
+      }
+      await target.reconcile(carved.specs)
+    }
     const collectScope = async (): Promise<void> => {
+      if (options.scopeTargets !== undefined) {
+        await collectCarved(options.scopeTargets)
+        return
+      }
       const scope = options.scope
-      const targets = scope !== undefined && scope.length > 0 ? scope : target.syncScopes
-      await target.reconcile(targets)
+      if (scope !== undefined && scope.length > 0) {
+        // Graph depot-syntax scopes (`//...`) and the timeline's single-file
+        // scope pass through untouched: local exclude directories cannot trim a
+        // depot filespec, so carving them is out of scope on purpose.
+        await target.reconcile(scope)
+        return
+      }
+      // `syncScopeDirs` is empty until a scope is configured, while `syncScopes`
+      // still defaults to `//...` — collect that verbatim (same reason as the
+      // depot-syntax branch above) instead of letting an empty carve look like
+      // "everything is excluded".
+      const dirs = target.syncScopeDirs
+      if (dirs.length === 0) {
+        await target.reconcile(target.syncScopes)
+        return
+      }
+      await collectCarved(dirs.map((d) => ({ path: d, isDirectory: true })))
     }
     if (!res.ok) {
       const suggestion = res.error?.suggestion
@@ -844,6 +954,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           context.subscriptions.push(timelineProvider.trackClient(c))
         },
         applyScopes: applyReconcileScope,
+        applyExcludes: applyReconcileExcludes,
         applyOpenedByOthersOptions,
         startPolling: (c, seconds) => c.startPolling(seconds),
         setSwarmAvailable: (c, available) => c.setSwarmAvailable(available),
@@ -912,22 +1023,47 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('perforce.reconcile', async (...args: unknown[]) => {
       const arg0 = args[0] as { isDirectory?: boolean } | undefined
       const selection = selectionTargets(args[1])
-      // Explorer multi-select: one filespec per element, directories as
-      // `<dir>/...`. SCM folder rows keep the single recursive `<dir>/...`
-      // filespec (see reconcileUsesSelection).
+      // Explorer multi-select: one filespec per element, directories carved
+      // around excluded subtrees. SCM folder rows keep the single recursive
+      // `<dir>/...` filespec (see reconcileUsesSelection).
       if (reconcileUsesSelection(selection, arg0?.isDirectory === true)) {
-        const targets = expandDirectoryTargets(
-          selection.map((t) => t.path),
-          new Set(selection.filter((t) => t.isDirectory).map((t) => t.path)),
+        const client = mgr.resolveClient({ resourceUri: selection[0]!.path })
+        if (!client) return
+        const remaining = filterReconcileTargets(selection, (p) =>
+          client.isReconcileTargetExcluded(p),
         )
-        await mgr.resolveClient({ resourceUri: selection[0]!.path })?.reconcile(targets)
+        if (remaining.length === 0) {
+          await notifyAllExcluded()
+          return
+        }
+        const carved = await carveReconcileTargets(remaining, client.reconcileExcludeDirs)
+        await warnUnreadableCarves(carved.unreadableDirs)
+        if (carved.specs.length === 0) {
+          if (carved.unreadableDirs.length === 0) await notifyAllExcluded()
+          return
+        }
+        await client.reconcile(carved.specs)
         return
       }
       const path = await resolveTargetPath(args[0])
       if (!path) return
+      const client = mgr.resolveClient({ resourceUri: path })
+      if (!client) return
+      if (client.isReconcileTargetExcluded(path)) {
+        await notifyAllExcluded()
+        return
+      }
       const isDirectory = arg0?.isDirectory === true
-      const target = isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
-      await mgr.resolveClient({ resourceUri: path })?.reconcile([target])
+      if (isDirectory && client.containsAnyReconcileExclude(path)) {
+        const carved = await carveReconcileFilespecs(path, client.reconcileExcludeDirs)
+        if (carved === undefined) {
+          await warnUnreadableCarves([path])
+          return
+        }
+        await client.reconcile(carved)
+        return
+      }
+      await client.reconcile([buildScopeFilespec(path, isDirectory)])
     }),
 
     // --- Sync (get revision) ------------------------------------------------
@@ -943,7 +1079,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (selection.length > 0) {
         const owner = await syncSelectionOwner(selection)
         if (!owner) return
-        await runSync(owner, '#head', { scope: buildSyncFilespecs(selection) })
+        await runSync(owner, '#head', {
+          scope: buildSyncFilespecs(selection),
+          scopeTargets: selection,
+        })
         return
       }
       const path = await resolveTargetPath(args[0])
@@ -951,15 +1090,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
         ? mgr.resolveClient({ resourceUri: path })
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
-      const scope = path
-        ? [
-            buildScopeFilespec(
-              path,
-              (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
-            ),
-          ]
-        : undefined
-      await runSync(target, '#head', scope !== undefined ? { scope } : {})
+      const single = path ? singleSyncTarget(args[0], path) : undefined
+      await runSync(
+        target,
+        '#head',
+        single !== undefined
+          ? { scope: [buildScopeFilespec(single.path, single.isDirectory)], scopeTargets: [single] }
+          : {},
+      )
     }),
 
     // Get a specific revision: four ways to name one, matching what P4V offers.
@@ -973,6 +1111,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         if (spec.force && !(await confirmForceGet())) return
         await runSync(owner, spec.spec, {
           scope: buildSyncFilespecs(selection),
+          scopeTargets: selection,
           ...(spec.force ? { force: true } : {}),
         })
         return
@@ -982,19 +1121,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
         ? mgr.resolveClient({ resourceUri: path })
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
-      const scope = path
-        ? [
-            buildScopeFilespec(
-              path,
-              (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
-            ),
-          ]
-        : undefined
+      const single = path ? singleSyncTarget(args[0], path) : undefined
       const spec = await pickSyncSpec()
       if (spec === undefined) return
       if (spec.force && !(await confirmForceGet())) return
       await runSync(target, spec.spec, {
-        ...(scope !== undefined ? { scope } : {}),
+        ...(single !== undefined
+          ? {
+              scope: [buildScopeFilespec(single.path, single.isDirectory)],
+              scopeTargets: [single],
+            }
+          : {}),
         ...(spec.force ? { force: true } : {}),
       })
     }),
@@ -1333,11 +1470,48 @@ export async function activate(context: ExtensionContext): Promise<void> {
         }
       }
 
+      // Exclusions gate `p4 clean` only: it rediscovers working-tree drift,
+      // which is exactly what the exclude folders hide. `p4 revert` acts on
+      // files the user explicitly collected and already sees in the SCM panel,
+      // so it stays unfiltered. Resolved *before* the confirm on purpose — a
+      // dialog that promises to discard uncollected work must not then keep it.
+      let cleanOverride: string[] | undefined
+      let carveFailed = false
+      plan.unopened = plan.unopened.filter((p) => !target.isReconcileTargetExcluded(p))
+      const dirs = plan.directories
+      if (dirs !== undefined && dirs.length > 0) {
+        const kept: string[] = []
+        const unreadable: string[] = []
+        for (const dir of dirs) {
+          if (target.isReconcileTargetExcluded(dir)) continue
+          if (target.containsAnyReconcileExclude(dir)) {
+            const carved = await carveReconcileFilespecs(dir, target.reconcileExcludeDirs)
+            if (carved === undefined) {
+              unreadable.push(dir)
+              carveFailed = true
+              continue
+            }
+            kept.push(...carved)
+          } else {
+            kept.push(buildScopeFilespec(dir, true))
+          }
+        }
+        if (unreadable.length > 0) await warnUnreadableCarves(unreadable)
+        plan.unopenedExcluded = kept.length === 0
+        cleanOverride = [...kept, ...plan.unopened]
+      }
+
+      const actions = revertActionsOf(plan)
+      if (cleanOverride !== undefined) actions.clean = cleanOverride
+      if (actions.revert.length === 0 && actions.clean.length === 0) {
+        if (!carveFailed) await notifyAllExcluded()
+        return
+      }
+
       const BTN_REVERT = localize('perforce.btn.revert', 'Revert')
       const confirm = await window.showWarningMessage(formatRevertConfirm(plan), BTN_REVERT)
       if (confirm !== BTN_REVERT) return
 
-      const actions = revertActionsOf(plan)
       if (actions.revert.length > 0) await target.revert(actions.revert)
       if (actions.clean.length > 0) await target.revertReconcile(actions.clean)
     }),
@@ -1515,7 +1689,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const changelist = changelistIdFromGroupId(groupId)
       if (changelist !== 'default' && !/^\d+$/.test(changelist)) return
       const opened = paths.filter((p) => target.changelistOf(p) !== undefined)
-      const uncollected = paths.filter((p) => target.changelistOf(p) === undefined)
+      // `reconcileInto` runs the same discovery the exclude folders hide, so
+      // excluded paths must not be collected here; `opened` files were
+      // explicitly collected before and `reopen` stays unfiltered (see revert).
+      const uncollected = paths.filter(
+        (p) => target.changelistOf(p) === undefined && !target.isReconcileTargetExcluded(p),
+      )
       if (uncollected.length > 0) await target.reconcileInto(changelist, uncollected)
       if (opened.length > 0) await target.reopen(changelist, opened)
     }),
@@ -1995,7 +2174,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
               scopeList.length > 500 ? `… (${filespecs.length} filespecs)` : ''
             } to ${spec}`,
           )
-          await runSync(target, spec, { scope: filespecs })
+          await runSync(target, spec, {
+            scope: filespecs,
+            ...(scopes !== undefined && scopes.length > 0 ? { scopeTargets: scopes } : {}),
+          })
         }),
         // The top-level directories of the graph client's root, for the
         // multi-directory "Get Revision…" dialog. A plain filesystem read —
