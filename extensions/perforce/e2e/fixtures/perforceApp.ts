@@ -17,7 +17,7 @@
 import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import {
   WorkbenchPO,
@@ -145,18 +145,30 @@ interface FakeState {
 
 const toPosix = (p: string): string => p.split('\\').join('/')
 
+/** The fake p4's depot prefix — every seeded depot path starts with it. */
+export const DEPOT_PREFIX = '//depot'
+
+/** The client's have revision of one seeded depot file, read straight from the
+ *  fake p4's state file (what a real `p4 fstat` would report as `haveRev`). */
+export function readHaveRev(stateFile: string, relPath: string): number | undefined {
+  const state = JSON.parse(readFileSync(stateFile, 'utf8')) as {
+    files?: Record<string, { haveRev?: number }>
+  }
+  return state.files?.[`${DEPOT_PREFIX}/${toPosix(relPath)}`]?.haveRev
+}
+
 function seedWorkspace(
   seeds: readonly SeedFile[],
   changelists: Readonly<Record<string, string>> = {},
   annotate?: P4AnnotateSeed,
-  submitted?: P4SubmittedSeed,
+  submitted?: readonly P4SubmittedSeed[],
   ignored?: readonly string[],
 ): {
   workspaceDir: string
   stateFile: string
 } {
   const workspaceDir = mkdtempSync(join(tmpdir(), 'ue2-p4-ws-'))
-  const depotPrefix = '//depot'
+  const depotPrefix = DEPOT_PREFIX
   const files: FakeState['files'] = {}
   const opened: FakeState['opened'] = {}
   const openedByOthers: NonNullable<FakeState['openedByOthers']> = {}
@@ -180,7 +192,12 @@ function seedWorkspace(
             ...(seed.revisions ? { revisions: seed.revisions } : {}),
             ...faults,
           }
-        : { rev: 1, content: seed.content, ...(seed.revisions ? { revisions: seed.revisions } : {}), ...faults }
+        : {
+            rev: 1,
+            content: seed.content,
+            ...(seed.revisions ? { revisions: seed.revisions } : {}),
+            ...faults,
+          }
     files[depotFile] = entry
     if (seed.opened) {
       opened[depotFile] = {
@@ -211,11 +228,14 @@ function seedWorkspace(
       desc: annotate.description,
     }
   }
-  if (submitted) {
-    changeMeta[submitted.changelist] = {
-      user: submitted.user,
-      time: submitted.time,
-      desc: submitted.description,
+  for (const sub of submitted ?? []) {
+    changeMeta[sub.changelist] = {
+      user: sub.user,
+      time: sub.time,
+      desc: sub.description,
+      // The revision the change produced for its files: `sync @<cl>` lands on
+      // it instead of head, so a graph get-revision can stop at a middle rev.
+      ...(sub.rev !== undefined ? { rev: sub.rev } : {}),
     }
   }
   const state: FakeState = {
@@ -235,16 +255,19 @@ function seedWorkspace(
       : {}),
     ...(Object.keys(changeMeta).length > 0 ? { changeMeta } : {}),
     ...(annotate ? { annotateCl: annotate.changelist } : {}),
-    ...(submitted
+    ...(submitted !== undefined && submitted.length > 0
       ? {
-          submitted: {
-            [submitted.changelist]: Object.fromEntries(
-              submitted.files.map((f) => [
-                `${depotPrefix}/${toPosix(f.relPath)}`,
-                { action: f.action, rev: f.rev },
-              ]),
-            ),
-          },
+          submitted: Object.fromEntries(
+            submitted.map((sub) => [
+              sub.changelist,
+              Object.fromEntries(
+                sub.files.map((f) => [
+                  `${depotPrefix}/${toPosix(f.relPath)}`,
+                  { action: f.action, rev: f.rev },
+                ]),
+              ),
+            ]),
+          ),
         }
       : {}),
     ...(ignored && ignored.length > 0 ? { ignored: [...ignored] } : {}),
@@ -278,9 +301,10 @@ export interface P4SeedConfig {
    *  `changes -l` resolves its author/summary, so the inline blame + status bar
    *  show `user`. */
   readonly annotate?: P4AnnotateSeed
-  /** A submitted changelist with a real file set (`describe -s` + `changes -l`
-   *  source). Backs "Open Commit" (multi-diff) and graph details assertions. */
-  readonly submitted?: P4SubmittedSeed
+  /** Submitted changelists with real file sets (`describe -s` + `changes -l`
+   *  source, newest first). Back "Open Commit" (multi-diff), graph details
+   *  assertions, and — with `rev` set — `p4 sync @<cl>` landing mid-history. */
+  readonly submitted?: readonly P4SubmittedSeed[]
   /** Ignore rules for `p4 ignores -i` (checkIgnore e2e): client-root-relative
    *  paths or directory prefixes. */
   readonly ignored?: readonly string[]
@@ -296,13 +320,17 @@ export interface P4AnnotateSeed {
 }
 
 /** A submitted changelist: metadata (`changes -l`) plus the files it touched
- *  (`describe -s`). `rev` is the revision CONTAINING the edit (base = rev-1). */
+ *  (`describe -s`). `rev` is the revision the change produced for those files —
+ *  `p4 sync @<changelist>` then lands on `rev` instead of head (time travel to
+ *  a middle revision). Per-file `files[].rev` is the same number per file. */
 export interface P4SubmittedSeed {
   readonly changelist: string
   readonly user: string
   /** Unix seconds (string), matching `p4 -ztag changes` output. */
   readonly time: string
   readonly description: string
+  /** Revision the change produced; without it `sync @<cl>` resolves to head. */
+  readonly rev?: number
   readonly files: readonly {
     readonly relPath: string
     readonly action: 'add' | 'edit' | 'delete'

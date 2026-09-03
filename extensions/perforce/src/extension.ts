@@ -22,8 +22,12 @@ import type {
   P4GraphLoadResult,
   P4GraphChangeDetailsDto,
   P4GraphFileChangeDto,
+  P4GraphSyncRequest,
+  P4GraphSyncScopeDto,
   WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
+import { readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { ConcurrencyGate } from './concurrency.js'
 import { setP4CommandTimeoutSeconds, type P4Connection } from './p4Service.js'
 import { PerforceClient, type P4CacheOptions } from './client.js'
@@ -48,7 +52,8 @@ import {
   revertActionsOf,
   type RevertPlan,
 } from './revertPlan.js'
-import { buildScopeFilespec } from './p4Filespec.js'
+import { buildScopeFilespec, buildSyncFilespecs } from './p4Filespec.js'
+import { clSpecOf, graphSyncNeedsConfirm, resolveCommonClient } from './graphSync.js'
 import { resolveFocusScopeDirs } from './focusScope.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
 import { createSwarmLogger } from './swarm/swarmLog.js'
@@ -181,14 +186,6 @@ async function readFallbackConnection(): Promise<P4Connection> {
     ...(user ? { user } : {}),
     ...(client ? { client } : {}),
   }
-}
-
-/** The filespec a sync should target for an Explorer/SCM argument: a folder
- *  becomes p4's recursive `<dir>/...`, a file is passed through. Same
- *  `isDirectory` flag the Explorer attaches for `perforce.reconcile`. */
-function syncTargetOf(arg: unknown, path: string): string {
-  const isDirectory = (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
-  return isDirectory ? `${path.replace(/[/\\]+$/, '')}/...` : path
 }
 
 /** Last path segment, for a quick-pick label that isn't a wall of directories. */
@@ -427,7 +424,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const timelineProvider = new PerforceTimelineProvider(mgr, log)
   context.subscriptions.push(timelineProvider.trackClient(client))
   context.subscriptions.push(workspace.registerTimelineProvider(['file'], timelineProvider))
-  context.subscriptions.push(...createPerforceTimelineCommands(mgr, log))
+  // The sync runner forwards to `runSync` (declared below) for its progress
+  // bar / cancellation / refusal remedies. The lambda only runs when the
+  // command fires, so the later declaration is never a TDZ problem.
+  context.subscriptions.push(
+    ...createPerforceTimelineCommands(mgr, log, (target, spec, scope) =>
+      runSync(target, spec, { scope }),
+    ),
+  )
 
   const statusBar = new P4StatusBarController(mgr)
   context.subscriptions.push(statusBar)
@@ -830,6 +834,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
     )
   }
 
+  /** Resolve the one client a multi-selected get may run against. A get runs
+   *  against a single client, so every selected path must live in the same
+   *  workspace — spanning several (or none) aborts with an error. */
+  const syncSelectionOwner = async (
+    selection: readonly SelectionTarget[],
+  ): Promise<PerforceClient | undefined> => {
+    const owner = resolveCommonClient(
+      selection.map((t) => t.path),
+      (p) => mgr.resolveContaining(p),
+    )
+    if (owner !== undefined) return owner
+    await window.showErrorMessage(
+      localize(
+        'perforce.sync.multiClient',
+        'The selected files belong to different Perforce workspaces, so they cannot be synced in one operation.',
+      ),
+    )
+    return undefined
+  }
+
   context.subscriptions.push(
     // Point argument-less commands at the SCM-selected client. Pushed by the
     // renderer's ActiveRepoSyncContribution as `<providerId>.setActiveRepo`.
@@ -896,23 +920,59 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // file — the revision chip in the status bar is per-file, and that is the file
     // it describes.
     commands.registerCommand('perforce.syncLatest', async (...args: unknown[]) => {
+      // Explorer/SCM multi-select: one filespec per element, directories kept
+      // as directories — buildSyncFilespecs expands them to `<dir>/...`.
+      const selection = selectionTargets(args[1])
+      if (selection.length > 0) {
+        const owner = await syncSelectionOwner(selection)
+        if (!owner) return
+        await runSync(owner, '#head', { scope: buildSyncFilespecs(selection) })
+        return
+      }
       const path = await resolveTargetPath(args[0])
       const target = path
         ? mgr.resolveClient({ resourceUri: path })
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
-      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      const scope = path
+        ? [
+            buildScopeFilespec(
+              path,
+              (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
+            ),
+          ]
+        : undefined
       await runSync(target, '#head', scope !== undefined ? { scope } : {})
     }),
 
     // Get a specific revision: four ways to name one, matching what P4V offers.
     commands.registerCommand('perforce.sync', async (...args: unknown[]) => {
+      const selection = selectionTargets(args[1])
+      if (selection.length > 0) {
+        const owner = await syncSelectionOwner(selection)
+        if (!owner) return
+        const spec = await pickSyncSpec()
+        if (spec === undefined) return
+        if (spec.force && !(await confirmForceGet())) return
+        await runSync(owner, spec.spec, {
+          scope: buildSyncFilespecs(selection),
+          ...(spec.force ? { force: true } : {}),
+        })
+        return
+      }
       const path = await resolveTargetPath(args[0])
       const target = path
         ? mgr.resolveClient({ resourceUri: path })
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
-      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      const scope = path
+        ? [
+            buildScopeFilespec(
+              path,
+              (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
+            ),
+          ]
+        : undefined
       const spec = await pickSyncSpec()
       if (spec === undefined) return
       if (spec.force && !(await confirmForceGet())) return
@@ -929,7 +989,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
         ? mgr.resolveClient({ resourceUri: path })
         : (mgr.resolveClient(args[0]) ?? mgr.active)
       if (!target) return
-      const scope = path ? [syncTargetOf(args[0], path)] : undefined
+      const scope = path
+        ? [
+            buildScopeFilespec(
+              path,
+              (args[0] as { isDirectory?: boolean } | undefined)?.isDirectory === true,
+            ),
+          ]
+        : undefined
       const res = await target.previewSync(scope)
       if (!res.ok) {
         await window.showErrorMessage(
@@ -1757,6 +1824,98 @@ export async function activate(context: ExtensionContext): Promise<void> {
             // Pending files: show the have-revision vs local diff (mirrors the
             // SCM row's Open Changes), falling back to opening the file.
             await mgr.resolveClient({ resourceUri: localPath })?.openChange(localPath)
+          },
+        ),
+        // P4V-style "get revision as of a changelist": run a `p4 sync` scoped
+        // to the change. Moves the workspace's *have* revisions, never the
+        // depot. Scope filespecs are passed bare — `_syncTargets` joins the
+        // `@CL` suffix after escaping, so nothing here may carry one itself.
+        commands.registerCommand('perforce-graph.syncToChange', async (...args: unknown[]) => {
+          const req = (args[0] ?? {}) as P4GraphSyncRequest
+          const spec = clSpecOf(req.change)
+          if (!spec) {
+            await window.showErrorMessage(
+              localize('perforce.graphSync.invalidChange', 'Invalid changelist: {0}', {
+                0: req.change,
+              }),
+            )
+            return
+          }
+
+          const scopes = req.scopePaths
+          let target: PerforceClient
+          let filespecs: string[]
+          if (scopes !== undefined && scopes.length > 0) {
+            // Data-query semantics: strict longest-prefix per path, and every
+            // path must land in the same client — a sync spans one workspace.
+            const owner = resolveCommonClient(
+              scopes.map((s) => s.path),
+              (p) => mgr.resolveContaining(p),
+            )
+            if (owner === undefined) {
+              await window.showErrorMessage(
+                localize(
+                  'perforce.graphSync.noCommonClient',
+                  'The selected paths are not in one Perforce workspace, so they cannot be synced to that changelist.',
+                ),
+              )
+              return
+            }
+            target = owner
+            filespecs = buildSyncFilespecs(scopes)
+          } else {
+            const client = graphClient()
+            if (!client) return
+            target = client
+            filespecs = [req.wholeRepo ? '//...' : workspaceScope]
+          }
+
+          if (
+            graphSyncNeedsConfirm({
+              ...(scopes !== undefined ? { scopePaths: scopes } : {}),
+              ...(req.isLatest !== undefined ? { isLatest: req.isLatest } : {}),
+              ...(req.confirmed !== undefined ? { confirmed: req.confirmed } : {}),
+            })
+          ) {
+            const BTN_SYNC = localize('perforce.btn.confirmSync', 'Confirm Sync')
+            const BTN_CANCEL = localize('perforce.btn.cancel', 'Cancel')
+            const picked = await window.showWarningMessage(
+              localize(
+                'perforce.graphSync.timeTravelConfirm',
+                'Files that are not open for edit will be reset to their state as of changelist {0}. Files that are open (checked out) are protected by the server and are left alone.',
+                { 0: spec },
+              ),
+              BTN_SYNC,
+              BTN_CANCEL,
+            )
+            if (picked !== BTN_SYNC) return
+          }
+          const scopeList = filespecs.join(', ')
+          log(
+            `[perforce] graph sync ${scopeList.slice(0, 500)}${
+              scopeList.length > 500 ? `… (${filespecs.length} filespecs)` : ''
+            } to ${spec}`,
+          )
+          await runSync(target, spec, { scope: filespecs })
+        }),
+        // The top-level directories of the graph client's root, for the
+        // multi-directory "Get Revision…" dialog. A plain filesystem read —
+        // zero p4 calls; any failure (missing root, permission) reads as
+        // "no scopes" and the dialog explains it cannot list folders.
+        commands.registerCommand(
+          'perforce-graph.getSyncScopes',
+          async (): Promise<P4GraphSyncScopeDto[]> => {
+            const client = graphClient()
+            if (!client) return []
+            try {
+              const entries = await readdir(client.root, { withFileTypes: true })
+              return entries
+                .filter((e) => e.isDirectory())
+                .map((e) => ({ name: e.name, path: join(client.root, e.name) }))
+                .sort((a, b) => a.name.localeCompare(b.name))
+            } catch {
+              return []
+            }
           },
         ),
       ]

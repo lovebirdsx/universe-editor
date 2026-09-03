@@ -118,9 +118,51 @@ export interface P4GraphFileDiffRequest {
 }
 
 /**
+ * A candidate directory for the graph's multi-directory "Get Revision…"
+ * dialog: one top-level directory of the graph client's root.
+ */
+export interface P4GraphSyncScopeDto {
+  /** Directory basename, for display. */
+  name: string
+  /** Absolute host filesystem path. */
+  path: string
+}
+
+/**
+ * Argument for `perforce-graph.syncToChange` — P4V-style "get revision as of a
+ * changelist". Runs a `p4 sync` scoped to the change: it moves the workspace's
+ * *have* revisions (rolling files back or forward in time), never the depot.
+ */
+export interface P4GraphSyncRequest {
+  /** Changelist number as a string (the graph row id). */
+  change: string
+  /**
+   * Explicit sync scope as host paths. When non-empty it overrides the
+   * graph-derived scope; directories become `<dir>/...` filespecs.
+   */
+  scopePaths?: readonly { path: string; isDirectory: boolean }[]
+  /**
+   * Without `scopePaths` (the unscoped graph): sync `//...` instead of the
+   * opened workspace folder — mirrors the graph's whole-repo toggle.
+   */
+  wholeRepo?: boolean
+  /**
+   * The target row is the newest loaded change for the displayed scope. A
+   * get-latest equivalent, so the time-travel confirmation is skipped.
+   */
+  isLatest?: boolean
+  /**
+   * The request comes from the multi-directory dialog, whose confirm button
+   * already is the user's go-ahead — skip the extra warning.
+   */
+  confirmed?: boolean
+}
+
+/**
  * Contributed-command ids the `perforce` extension registers for the Perforce
  * Graph view. Kept here as the single source of truth for the renderer side.
- * All are read-only — the Perforce Graph does not mutate the depot.
+ * All are read-only except `syncToChange`, which mutates the workspace's have
+ * revisions (a `p4 sync`) but never the depot.
  */
 export const PerforceGraphCommands = {
   getRepos: 'perforce-graph.getRepos',
@@ -130,6 +172,8 @@ export const PerforceGraphCommands = {
   getPendingChanges: 'perforce-graph.getPendingChanges',
   openFileDiff: 'perforce-graph.openFileDiff',
   openWorkingTreeFile: 'perforce-graph.openWorkingTreeFile',
+  syncToChange: 'perforce-graph.syncToChange',
+  getSyncScopes: 'perforce-graph.getSyncScopes',
 } as const
 
 export type PerforceGraphCommandId =

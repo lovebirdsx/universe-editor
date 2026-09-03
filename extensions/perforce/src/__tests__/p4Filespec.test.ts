@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildScopeFilespec, escapeFilespecPath } from '../p4Filespec.js'
+import { buildScopeFilespec, buildSyncFilespecs, escapeFilespecPath } from '../p4Filespec.js'
 
 describe('escapeFilespecPath', () => {
   it('escapes each metacharacter to its percent form', () => {
@@ -49,5 +49,103 @@ describe('buildScopeFilespec', () => {
     expect(buildScopeFilespec('', true)).toBe('/...')
     expect(buildScopeFilespec('/', true)).toBe('/...')
     expect(buildScopeFilespec('\\', true)).toBe('/...')
+  })
+})
+
+describe('buildSyncFilespecs', () => {
+  it('returns an empty list for no targets', () => {
+    expect(buildSyncFilespecs([])).toEqual([])
+  })
+
+  it('passes a single file through escaped, without a revision suffix', () => {
+    expect(buildSyncFilespecs([{ path: 'X:/ws/a.txt', isDirectory: false }])).toEqual([
+      'X:/ws/a.txt',
+    ])
+  })
+
+  it('escapes metacharacters in every entry', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/a@1#2%3.txt', isDirectory: false },
+        { path: 'X:/ws/d@1', isDirectory: true },
+      ]),
+    ).toEqual(['X:/ws/a%401%232%253.txt', 'X:/ws/d%401/...'])
+  })
+
+  it('expands directories to recursive filespecs, trimming trailing separators', () => {
+    expect(buildSyncFilespecs([{ path: 'X:/ws/src/', isDirectory: true }])).toEqual([
+      'X:/ws/src/...',
+    ])
+    expect(buildSyncFilespecs([{ path: 'X:\\ws\\src\\', isDirectory: true }])).toEqual([
+      'X:\\ws\\src/...',
+    ])
+  })
+
+  it('drops files nested under a selected directory', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'X:/ws/src/a.txt', isDirectory: false },
+        { path: 'X:/ws/other.txt', isDirectory: false },
+      ]),
+    ).toEqual(['X:/ws/src/...', 'X:/ws/other.txt'])
+  })
+
+  it('drops subdirectories nested under a selected directory', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'X:/ws/src/sub', isDirectory: true },
+      ]),
+    ).toEqual(['X:/ws/src/...'])
+  })
+
+  it('drops nested subdirectories regardless of input order', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/src/sub', isDirectory: true },
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'X:/ws/src/sub/deep.txt', isDirectory: false },
+      ]),
+    ).toEqual(['X:/ws/src/...'])
+  })
+
+  it('keeps a path that merely shares a name prefix with a selected directory', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'X:/ws/srcother', isDirectory: false },
+        { path: 'X:/ws/srcother/deep.txt', isDirectory: false },
+      ]),
+    ).toEqual(['X:/ws/src/...', 'X:/ws/srcother', 'X:/ws/srcother/deep.txt'])
+  })
+
+  it('dedupes repeated entries, folding drive-letter case', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'x:/ws/src', isDirectory: true },
+        { path: 'X:/ws/src', isDirectory: true },
+      ]),
+    ).toEqual(['X:/ws/src/...'])
+  })
+
+  it('drops empty paths', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: '', isDirectory: false },
+        { path: 'X:/ws/a.txt', isDirectory: false },
+      ]),
+    ).toEqual(['X:/ws/a.txt'])
+  })
+
+  it('preserves input order', () => {
+    expect(
+      buildSyncFilespecs([
+        { path: 'X:/ws/b.txt', isDirectory: false },
+        { path: 'X:/ws/src', isDirectory: true },
+        { path: 'X:/ws/a.txt', isDirectory: false },
+      ]),
+    ).toEqual(['X:/ws/b.txt', 'X:/ws/src/...', 'X:/ws/a.txt'])
   })
 })

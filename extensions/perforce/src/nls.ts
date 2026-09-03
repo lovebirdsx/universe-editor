@@ -128,6 +128,15 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.sync.progressTitleHead': '拉取最新版本',
   'perforce.sync.progressTitle': '拉取 {0}',
   'perforce.sync.progressFiles': '{0} 个文件{1}',
+  // graph sync（sync to change，extension.ts 的 perforce-graph.syncToChange）
+  'perforce.sync.multiClient': '所选文件属于不同的 Perforce 工作区，无法在一次操作中同步。',
+  'perforce.graphSync.invalidChange': '无效的变更列表：{0}',
+  'perforce.graphSync.noCommonClient':
+    '所选路径不属于同一个 Perforce 工作区，无法同步到该变更列表。',
+  'perforce.graphSync.timeTravelConfirm':
+    '未打开编辑的文件将回到变更列表 {0} 时的状态；已签出的文件受服务器保护，不受影响。',
+  'perforce.btn.confirmSync': '确认同步',
+  'perforce.btn.cancel': '取消',
   // 他人占用（Explorer 灰字）
   'perforce.deco.occupied.tooltip': '他人占用——{0} 打开着此文件',
   'perforce.deco.behind.tooltip': '远端有更新——服务器已到 {0}',

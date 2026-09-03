@@ -51,6 +51,7 @@ import {
   type P4GraphLoadOptions,
   type P4GraphLoadResult,
   type P4GraphRepoDto,
+  type P4GraphSyncScopeDto,
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import { useService, useObservable, useOptionalService } from '../useService.js'
@@ -81,6 +82,10 @@ import {
   type GitGraphMenuItem,
   type GitGraphMenuState,
 } from '../gitGraph/GitGraphContextMenu.js'
+import {
+  PerforceGraphSyncDialog,
+  type PerforceGraphSyncDialogState,
+} from './PerforceGraphSyncDialog.js'
 import { useGraphKeyboardNav } from '../gitGraph/useGraphKeyboardNav.js'
 import { usePersistedGraphSelection } from '../gitGraph/usePersistedGraphSelection.js'
 import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
@@ -194,6 +199,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => view.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
+  const [syncDialog, setSyncDialog] = useState<PerforceGraphSyncDialogState | null>(null)
 
   const [selection, setSelection] = useState<string[]>(() => view.selection)
   // Ref mirror so onRowClick stays referentially stable across selection
@@ -727,11 +733,93 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             label: localize('perforceGraph.openChanges', 'Open Changes'),
             run: () => void openScopedFileDiff(id),
           },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
+            run: () =>
+              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+                change: id,
+                scopePaths: [{ path: scope.path, isDirectory: false }],
+                isLatest: id === result?.head,
+              }),
+          },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
+            run: () =>
+              void commands.executeCommand('perforce.syncLatest', {
+                resourceUri: scope.path,
+                isDirectory: false,
+              }),
+          },
+        )
+      }
+      // Folder scope: same pair, syncing the whole directory.
+      if (scope !== undefined && scope.isDirectory) {
+        items.push(
+          { kind: 'sep' },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
+            run: () =>
+              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+                change: id,
+                scopePaths: [{ path: scope.path, isDirectory: true }],
+                isLatest: id === result?.head,
+              }),
+          },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
+            run: () =>
+              void commands.executeCommand('perforce.syncLatest', {
+                resourceUri: scope.path,
+                isDirectory: true,
+              }),
+          },
+        )
+      }
+      // Whole-repo graph: sync the whole client (honouring the scope toggle),
+      // or pick top-level directories via the multi-directory dialog.
+      if (scope === undefined) {
+        items.push(
+          { kind: 'sep' },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
+            run: () =>
+              void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+                change: id,
+                wholeRepo,
+                isLatest: id === result?.head,
+              }),
+          },
+          {
+            kind: 'item',
+            label: localize('perforceGraph.getRevision', 'Get Revision…'),
+            run: () =>
+              void (async () => {
+                let scopes: P4GraphSyncScopeDto[] = []
+                try {
+                  scopes =
+                    (await commands.executeCommand<P4GraphSyncScopeDto[]>(
+                      PerforceGraphCommands.getSyncScopes,
+                    )) ?? []
+                } catch {
+                  // Empty list: the dialog opens and explains itself.
+                }
+                setSyncDialog({
+                  change: id,
+                  isLatest: id === result?.head,
+                  candidates: scopes,
+                })
+              })(),
+          },
         )
       }
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [commands, openScopedFileDiff, scope],
+    [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog],
   )
 
   // Pending changes node, followed by the real changes.
@@ -1088,6 +1176,22 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
             // otherwise, which would silently break arrow-key navigation.
             scrollRef.current?.focus()
           }}
+        />
+      )}
+      {syncDialog && (
+        <PerforceGraphSyncDialog
+          state={syncDialog}
+          onConfirm={(paths) => {
+            const d = syncDialog
+            setSyncDialog(null)
+            void commands.executeCommand(PerforceGraphCommands.syncToChange, {
+              change: d.change,
+              isLatest: d.isLatest,
+              confirmed: true,
+              scopePaths: paths.map((path) => ({ path, isDirectory: true })),
+            })
+          }}
+          onCancel={() => setSyncDialog(null)}
         />
       )}
     </div>

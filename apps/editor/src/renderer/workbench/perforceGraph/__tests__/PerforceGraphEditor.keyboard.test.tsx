@@ -347,6 +347,8 @@ describe('PerforceGraphEditor Ctrl+Enter context menu', () => {
       'Copy changelist number',
       'Copy commit message',
       'Send to Agent Chat',
+      'Get This Revision',
+      'Get Revision…',
     ])
   })
 

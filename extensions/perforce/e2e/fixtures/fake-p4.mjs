@@ -471,7 +471,21 @@ function main() {
         const entries = Object.entries(state.changeMeta ?? {})
           .map(([id, m]) => ({ id: Number(id), m }))
           .sort((a, b) => b.id - a.id)
-        const limited = max !== undefined ? entries.slice(0, Number(max)) : entries
+        // A file/dir scope limits the listing to changes that touched it — real
+        // `p4 changes <filespec>` answers per depot path, so a scoped graph
+        // (file/folder history) must not show unrelated changes. A change
+        // seeded without a file set (the annotate-only seeds) can't be
+        // filtered, so it stays — blame's `changes -l <file>` relies on that.
+        const scoped = file
+          ? entries.filter(({ id }) => {
+              const touched = state.submitted?.[String(id)]
+              if (!touched || Object.keys(touched).length === 0) return true
+              return Object.keys(touched).some((depotFile) =>
+                openedInScope(state, [file], depotFile),
+              )
+            })
+          : entries
+        const limited = max !== undefined ? scoped.slice(0, Number(max)) : scoped
         emit(
           limited.map(({ id, m }) => ({
             change: String(id),

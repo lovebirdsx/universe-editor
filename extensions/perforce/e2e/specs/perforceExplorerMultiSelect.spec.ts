@@ -19,8 +19,9 @@ const seeds: readonly SeedFile[] = [
   { relPath: 'gamma.txt', content: 'gamma have revision\n' },
 ]
 
-/** Drifted on disk but never `p4 edit`-ed — the "uncollected drift" that
- *  Discard Uncollected Changes (`p4 clean`) restores to the have revision. */
+/** Drifted on disk but never `p4 edit`-ed — the "uncollected drift" the unified
+ *  Revert entry (`perforce.revert` → `p4 clean` for unopened files) restores to
+ *  the have revision. */
 const drift = (seed: SeedFile): string => `drifted: ${seed.content}`
 
 test.describe('@p1 explorer perforce multi-select', () => {
@@ -69,7 +70,7 @@ test.describe('@p1 explorer perforce multi-select', () => {
       await submenuRow.hover()
       const panel = page.getByTestId('context-menu-submenu')
       await expect(panel).toBeVisible({ timeout: 10_000 })
-      await panel.getByText('Discard Uncollected Changes', { exact: true }).click()
+      await panel.getByText('Revert', { exact: true }).click()
 
       // The confirm names the whole selection — "3 files", not just the clicked row.
       const dialog = page.getByRole('dialog')

@@ -39,6 +39,7 @@ import {
 import { filelogLabel, type FilelogRevision } from './filelogParser.js'
 import { statusFromAction, fileDiffRevs, displayPath } from './p4GraphParser.js'
 import { viewCommit as viewChangelist } from './viewCommit.js'
+import { buildScopeFilespec } from './p4Filespec.js'
 import { localize } from './nls.js'
 import type { PerforceClient } from './client.js'
 import type { ClientManager } from './clientManager.js'
@@ -230,10 +231,21 @@ function revisionItem(revision: FilelogRevision, absPath: string, depotFile: str
   }
 }
 
+/** Run a sync against one client for a single filespec scope (the timeline's
+ *  "Get This Revision"). Injected by `extension.ts` — the timeline module owns
+ *  the command, but the sync plumbing (progress, refusal remedies) lives in the
+ *  activate closure. */
+export type TimelineSyncRunner = (
+  client: PerforceClient,
+  spec: string,
+  scope: string[],
+) => Promise<unknown>
+
 /** The timeline feature's commands (item click + context menu entries). */
 export function createPerforceTimelineCommands(
   mgr: ClientManager,
   log?: (msg: string) => void,
+  syncRunner?: TimelineSyncRunner,
 ): Disposable[] {
   return [
     commands.registerCommand('perforce.timeline.openDiff', async (arg: unknown) => {
@@ -304,6 +316,24 @@ export function createPerforceTimelineCommands(
     commands.registerCommand('perforce.timeline.viewCommit', async (item: unknown) => {
       const it = item as { id?: string; command?: { arguments?: [{ uri?: string }] } } | undefined
       await viewChangelist(mgr, () => mgr.active, it?.command?.arguments?.[0]?.uri, it?.id, log)
+    }),
+
+    // Get This Revision: sync the file back to the revision the row shows
+    // (`p4 sync <file>#<rev>`). A single file at a #rev granularity is the
+    // most casual sync there is, so no confirmation — mirroring how openDiff
+    // needs none. The menu passes the TimelineItem itself, so the payload is
+    // its openDiff command arguments (the same source viewCommit reads).
+    commands.registerCommand('perforce.timeline.getThisRevision', async (item: unknown) => {
+      const arg = (item as { command?: { arguments?: [OpenDiffArg] } } | undefined)?.command
+        ?.arguments?.[0]
+      const { uri, rev } = arg ?? {}
+      // Belt and braces: the rev crosses RPC, so only a bare number may become
+      // the `#rev` suffix (same whitelist idea as clSpecOf for `@CL`).
+      if (!uri || rev === undefined || rev === null || !/^\d+$/.test(String(rev))) return
+      const client = mgr.resolveContaining(uri)
+      if (!client || !syncRunner) return
+      log?.(`[perforce] timeline getThisRevision ${uri}#${String(rev)}`)
+      await syncRunner(client, `#${String(rev)}`, [buildScopeFilespec(uri, false)])
     }),
   ]
 }

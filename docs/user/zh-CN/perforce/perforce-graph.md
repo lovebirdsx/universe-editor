@@ -14,6 +14,7 @@ Perforce 图谱是一个专门用来**可视化浏览已提交 changelist 历史
 - [搜索 changelist](#搜索-changelist)
 - [刷新图谱](#刷新图谱)
 - [右键即操作](#右键即操作)
+- [获取修订（Get Revision）](#获取修订get-revision)
 - [图谱不可用时](#图谱不可用时)
 
 ## 打开 Perforce 图谱
@@ -103,8 +104,35 @@ Perforce 图谱是一个专门用来**可视化浏览已提交 changelist 历史
 - **复制变更号**：拷贝该 changelist 的编号。
 - **复制提交信息**：拷贝该 changelist 的完整描述文字（含所有行）。鼠标悬停在描述上也会以悬浮提示显示完整内容。
 - **发送到 Agent Chat**（Send to Agent Chat）：把这个 changelist 的编号和描述发到 AI 会话的输入框，方便让 agent 结合这次改动回答问题。没有活动会话时会自动新建一个。
+- **Get This Revision / Get Revision…**（获取此修订 / 获取修订…）：把工作区的 have 版本移动到这个 changelist 的状态，见[获取修订（Get Revision）](#获取修订get-revision)。
 
 <!-- 截图：对某 changelist 右键的操作菜单 -->
+
+## 获取修订（Get Revision）
+
+图谱行右键提供一组对齐 P4V "Get Revision" 的操作：把工作区（workspace）的 have 版本**移动**到某个 changelist 的状态——向过去回退、向未来更新都可以。它们**只改你本地工作区**，绝不改动 depot；已签出（正在编辑）的文件由服务器保护，不会被覆盖。
+
+**菜单项随图谱类型不同：**
+
+| 图谱类型 | 右键菜单项 | 同步范围 |
+|---|---|---|
+| 整个仓库的图谱 | **Get This Revision** / **Get Revision…** | 图谱显示范围 / 你勾选的目录 |
+| 文件历史 | **Get This Revision** / **Get Latest Revision** | 这一个文件 |
+| 文件夹历史 | **Get This Revision** / **Get Latest Revision** | 整个目录（递归） |
+
+- **Get This Revision**（获取此修订）：把范围同步到所选 changelist 的状态（`@CL`）。在**整个仓库的图谱**里，范围 = 图谱当前的显示范围，跟随工具栏的[地球开关](#只看当前目录还是整个仓库)（激活 = 整个 client，未激活 = 打开的文件夹）；在**文件 / 文件夹历史**里，范围 = 该标签页限定的那个文件或目录。
+- **Get Revision…**（获取修订…）：只在**整个仓库的图谱**里出现。弹出目录选择对话框，列出 client root 下的顶层目录（默认全选），勾选要同步的目录，点 **Get Revision** 确认。支持键盘操作（方向键移动 / 空格勾选 / 回车确认 / Esc 取消）。**对话框的确认按钮就是你的授权**，点击后直接执行，不会再有第二次警告。
+- **Get Latest Revision**（获取最新修订）：只在**文件 / 文件夹历史**里出现，等价于对该文件 / 目录执行[拉取最新版本](./sync-and-status.md#拉取最新版本)。
+
+**什么时候会先确认：** 把工作区回退到过去（时间旅行）会连带一批文件，所以范围较大的操作会先弹一次确认（文案说明：未签出的文件将被重置到该 changelist 的状态，已签出的文件不受影响）：
+
+- **单文件**（文件历史的 Get This Revision）：免确认，直接执行。
+- **目录**（文件夹历史的 Get This Revision）：会确认。
+- **整个显示范围**（整图 Get This Revision）：会确认。
+- **目标是最新的 changelist**：所有入口都免确认——拿到最新版本不是时间旅行，等价于拉取最新版本。
+- **Get Revision… 对话框**：确认按钮即授权，不再二次警告。
+
+执行后与 Explorer 里的拉取完全一致：通知区进度条、跳过未收集的改动、需要合并时提供解决冲突按钮，见[拉取版本与状态感知](./sync-and-status.md)。
 
 ## 图谱不可用时
 
