@@ -440,5 +440,13 @@ markdown job（ubuntu，CI run 31295361355）`markdownPreview.spec.ts:205` 与 `
 
 ---
 
+**案例 84 — ContextMenu 键断言仅 CI Linux 确定性挂：Chromium keyup 补充 contextmenu 是 Windows 专属契约（平台契约差异，非回归非 flake），断言改平台感知**
+信号：`smoke.explorerKeyboardContextMenu`「ContextMenu key opens a single row-anchored menu @regression」仅 CI ubuntu 挂（run 33715671603，E2E Smoke ubuntu-latest 2/2），失败点 `expect(native).toHaveLength(1)` received 空数组（`detail === 0` 补充事件恒 0 条）；**initial+retry 同形态**=确定性挂；Windows 两 shard（含 @regression 档）全绿；**新 spec 首跑**（提交 8e477b54 新加）。同 spec 的 detail-1 行事件断言（第 114 行）、单菜单、行级菜单项、锚定几何全部通过——挂的只是平台契约断言本身。
+根因：spec 文件头注释把 Windows 专属的 Chromium 行为写成了普世契约。按 ContextMenu 键时，Windows 上 Chromium 在 keyup 补发一个 `detail: 0` 的原生 `contextmenu`（target=聚焦的树容器，(0,0) 坐标，keydown 的 preventDefault 取消不掉），Linux（xvfb/CI ubuntu）上**根本不产生**该补充事件。产品代码两端都正确：`packages/workbench-ui/src/tree/Tree.tsx` 键盘处理器用 `detail: 1` 自造行级菜单事件，容器 `onContextMenu` 的 `if (e.detail === 0)` 守卫吞掉 Windows 补充事件；Linux 无补充事件可吞，行为同样正确——是「仅单 OS 挂先怀疑该 OS 子系统语义差异」族（案例 75b）的新形态：挂的不是产品，是断言对平台契约的假设。
+修（断言平台感知，核心被测断言一字不弱化）：`process.platform === 'win32'` 保持精确断言（恰 1 条 detail-0、targetRole='tree'——swallow gate 真实生效的平台，契约强度不减）；非 win32 允许 0..1 条，若存在仍须断言 targetRole='tree'（可被守卫吞掉的形状）——未来某平台 Chromium 契约变化（如出现补充事件但 target 不是树容器）时断言仍响亮失败而非静默腐烂。单菜单、行级菜单项、锚定几何、detail-1 行事件断言保持原样。整类扫：grep 全部 e2e specs（core + `extensions/*/e2e` + `extensions-external/*/e2e`）无其它 ContextMenu 键/detail 契约断言——该 spec 是唯一键盘 ContextMenu 测试；其余 `process.platform` 用法都是合理 skip/分支（fileClipboard/terminalRestore/terminalProfiles/update/windowCloseFolderLock）。单测 `Tree.contextMenu.test.tsx` 用 fireEvent 显式构造事件，不受平台影响。验证：Windows 上该 spec `--repeat-each=5` 全绿。
+教训：a) e2e 断言浏览器原生事件契约（keyup 补充事件、坐标、detail 值）时先问「这个契约是否跨平台成立」——Chromium 键盘补充鼠标事件与平台窗口系统强相关，Windows 会产生 Linux 不会；把单平台实测写成普世契约的注释是这类确定性 CI 挂的典型来源。b) 平台感知 ≠ 弱化：win32 保持原强度，非 win32 收敛到「可被守卫吞掉的形状」这一被测不变量上，契约变化仍响亮失败。c) 「新 spec 首跑 + 仅单 OS 确定性挂 + retry 同形态 + 另一 OS 全绿」=平台契约差异的高置信指纹，别当回归改产品代码。锚：`apps/editor/e2e/specs/smoke.explorerKeyboardContextMenu.spec.ts`（平台分支断言）；`packages/workbench-ui/src/tree/Tree.tsx`（detail-0 swallow 守卫）；`packages/workbench-ui/src/__tests__/Tree.contextMenu.test.tsx`（fireEvent 显式构造，平台无关）。
+
+---
+
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

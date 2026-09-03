@@ -79,6 +79,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 自启动 spec 中途 openWorkspace 后 `getActiveEditorUri().toBeFalsy()` 恒停旧值（`a.json`）或 `release-notes:whatsNew`、`--repeat-each` 可复现=手写 state.json 漏了 harness `INITIAL_STATE` 的 `app.releaseNotes.lastVersion` pin，升级 "What's New" 标签异步打开既污染空 workspace 又触发 persist 跨通道赛跑把 A 写进 B；修=seed 合并 `INITIAL_STATE` → 案例 81
 - output 过滤后写真实 logger 的高等级行 10s 不可见、仅 CI Windows 某 shard 双挂、本地大量复现失败=先把「写链路」与「过滤可见」断言分层并加失败 dump，再逐项证伪（文件落盘/mtime、等级解析、Monaco 可见性、teardown 顺序红鲱鱼）；「aria 只剩 alert 空壳」先查 teardown `expectNoLeaks` 先 unmount 再拍 snapshot → 案例 82
 - `sideBarVisible` 恒 false **但同一时刻** treeitem 的 toBeVisible 已过（矛盾指纹）+ 侧栏宽度 0 而树行仍在 DOM=裸 fire 了 toggle 命令 `workbench.view.explorer`，一半概率把 Explorer 关掉；改走幂等 `WorkbenchPO.showExplorer()`（读状态再决定是否 fire）→ 案例 83
+- 键盘 ContextMenu 键断言仅 CI Linux 确定性挂+`detail===0` 恒空+retry 同形态+Windows 全绿+新 spec 首跑=keyup 补充 contextmenu 是 Windows 专属 Chromium 契约，断言改平台感知（win32 精确/非 win32 0..1 且形状不变，非弱化）→ 案例 84
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

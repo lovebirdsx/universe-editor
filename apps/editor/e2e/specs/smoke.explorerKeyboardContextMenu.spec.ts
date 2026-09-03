@@ -2,15 +2,15 @@
  *  Smoke spec: Explorer keyboard context menu (regression guard).
  *
  *  Guard: pressing the ContextMenu key opens ONE context menu anchored at the
- *  focused row. Chromium supplements the key press with a native `contextmenu`
- *  on keyup — detail 0, target = the focused tree container, (0,0) coords —
- *  which keydown's preventDefault cannot cancel. The tree must swallow it,
- *  otherwise a second, row-less menu opens at a fixed position.
- *
- *  The spec also asserts that Chromium contract empirically: a capture listener
- *  records every contextmenu the press produces, so if a future Chromium changes
- *  detail/target, the assertion fails loudly instead of the swallow gate
- *  silently rotting.
+ *  focused row. On Windows, Chromium supplements the key press with a native
+ *  `contextmenu` on keyup — detail 0, target = the focused tree container,
+ *  (0,0) coords — which keydown's preventDefault cannot cancel. The tree must
+ *  swallow it, otherwise a second, row-less menu opens at a fixed position.
+ *  Linux Chromium (xvfb/CI) emits no such supplement at all, so a capture
+ *  listener records every contextmenu the press produces and the spec asserts
+ *  the contract per-platform (exact on win32, 0..1 swallowable events
+ *  elsewhere): if a future Chromium changes the supplement, the assertion
+ *  fails loudly instead of the swallow gate silently rotting.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -105,16 +105,28 @@ test.describe('@p1 explorer keyboard context menu', () => {
       expect(menuBox.y).toBeLessThanOrEqual(rowBox.y + rowBox.height + 80)
     }
 
-    // The Chromium contract: exactly one keyboard-dispatched menu event (ours,
-    // detail 1, on the row) plus one native keyup supplement (detail 0, on the
-    // focused tree container) — the latter swallowed by the tree.
+    // The native keyup supplement is Windows-only: Chromium re-dispatches a
+    // detail-0 contextmenu (target = the focused tree container) on the
+    // ContextMenu key's keyup there, and keydown's preventDefault can't cancel
+    // it — the tree's detail-0 guard swallows it. Linux Chromium (xvfb/CI)
+    // produces no supplement at all (CI-verified), so assert per-platform:
+    // exact on win32 (the swallow gate's real battlefront), at most one
+    // swallowable event elsewhere — a future Chromium contract change still
+    // fails loudly here instead of silently rotting the gate.
     const log = await page.evaluate(
       () => (window as unknown as { __kcmLog?: CapturedContextMenu[] }).__kcmLog,
     )
     expect(log?.filter((e) => e.detail === 1 && e.targetRowKey !== null)).toHaveLength(1)
     const native = (log ?? []).filter((e) => e.detail === 0)
-    expect(native).toHaveLength(1)
-    expect(native[0]?.targetRole).toBe('tree')
+    if (process.platform === 'win32') {
+      expect(native).toHaveLength(1)
+      expect(native[0]?.targetRole).toBe('tree')
+    } else {
+      expect(native.length).toBeLessThanOrEqual(1)
+      if (native[0]) {
+        expect(native[0].targetRole).toBe('tree')
+      }
+    }
 
     // Mouse right-click on another row: still exactly one menu, and the target
     // row switches.
