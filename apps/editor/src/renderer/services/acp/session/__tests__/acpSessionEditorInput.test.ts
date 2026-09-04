@@ -4,6 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  Emitter,
   Event,
   IInstantiationService,
   InstantiationService,
@@ -319,6 +320,34 @@ describe('AcpSessionEditorInput', () => {
         undefined,
       )
       expect(input2.hasSubdirCwd.get()).toBe(true)
+    })
+
+    it('stops tracking workspace changes after dispose', () => {
+      const emitter = new Emitter<IWorkspaceServiceType['current']>()
+      let current: IWorkspaceServiceType['current'] = null
+      const workspace = {
+        ...stubWorkspace,
+        get current() {
+          return current
+        },
+        onDidChangeWorkspace: emitter.event,
+      } as unknown as IWorkspaceServiceType
+      const rows = [rowWithCwd('sess-disp', 'X:/workspace/apps')]
+      const { inst } = makeAccessor(rows, { workspace })
+      const input = inst.createInstance(AcpSessionEditorInput, 'sess-disp', 'fake', undefined)
+      // No workspace yet → badge off even though the cwd is a subdirectory shape.
+      expect(input.hasSubdirCwd.get()).toBe(false)
+
+      current = { folder: URI.file('X:/workspace'), name: 'workspace' }
+      emitter.fire(current)
+      expect(input.hasSubdirCwd.get()).toBe(true)
+
+      input.dispose()
+      current = null
+      emitter.fire(null)
+      // Listener released with the input → badge stays at its last value.
+      expect(input.hasSubdirCwd.get()).toBe(true)
+      emitter.dispose()
     })
   })
 })

@@ -12,7 +12,6 @@ import {
   IUriIdentityService,
   IWorkspaceService,
   localize,
-  observableFromEvent,
   observableValue,
   URI,
   type IDialogService,
@@ -34,7 +33,7 @@ export class AcpSessionEditorInput extends EditorInput {
   private _lastTitle: string
   private _isSideTask = false
   private _titleSub: IDisposable | undefined
-  private readonly _workspaceFolder: IObservable<IWorkspaceService['current']>
+  private readonly _workspaceFolder: ISettableObservable<IWorkspaceService['current']>
   private readonly _hasSubdirCwd: ISettableObservable<boolean>
   /** True while the session cwd is a *strict* subdirectory of the open
    *  workspace — drives the tab's folder badge next to the agent icon. Same
@@ -97,9 +96,18 @@ export class AcpSessionEditorInput extends EditorInput {
     // from the live session (when resident) or the history row (a restored,
     // not-yet-live input), and the judgement refreshes on history hydration
     // and workspace swaps.
-    this._workspaceFolder = observableFromEvent(
-      this._workspace.onDidChangeWorkspace,
-      () => this._workspace.current,
+    // NOTE: observableValue + registered listener instead of observableFromEvent —
+    // the latter's internal event subscription is an unparented tracked
+    // disposable that outlives teardown while this input sits in an open tab
+    // (singleton-exempt), which the e2e leak detector flags.
+    this._workspaceFolder = observableValue<IWorkspaceService['current']>(
+      `acpSessionWorkspace:${sessionId}`,
+      this._workspace.current,
+    )
+    this._register(
+      this._workspace.onDidChangeWorkspace(() => {
+        this._workspaceFolder.set(this._workspace.current, undefined)
+      }),
     )
     this._cwdSub = autorun((r) => {
       this._history.entries.read(r)

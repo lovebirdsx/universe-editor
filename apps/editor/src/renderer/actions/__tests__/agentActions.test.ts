@@ -1158,6 +1158,7 @@ describe('ResumeAgentSessionAction', () => {
             name: 'ws',
           }
         : null,
+      onDidChangeWorkspace: Event.None,
     } as unknown as IWorkspaceService
     const host = { _serviceBrand: undefined, platform: opts.platform ?? 'linux' } as IHostService
 
@@ -1357,8 +1358,13 @@ describe('RevealAgentSessionInOSAction', () => {
           current: {
             folder: { scheme: 'remote-ssh', authority: opts.remoteAuthority, path: '/root' },
           },
+          onDidChangeWorkspace: Event.None,
         } as unknown as IWorkspaceService)
-      : ({ _serviceBrand: undefined, current: null } as unknown as IWorkspaceService)
+      : ({
+          _serviceBrand: undefined,
+          current: null,
+          onDidChangeWorkspace: Event.None,
+        } as unknown as IWorkspaceService)
     const logger = {
       _serviceBrand: undefined,
       createLogger: () => new NullLogger(),

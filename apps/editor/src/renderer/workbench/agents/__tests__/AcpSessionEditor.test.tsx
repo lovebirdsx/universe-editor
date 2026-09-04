@@ -15,6 +15,7 @@ import {
   IContextKeyService,
   observableValue,
   Emitter,
+  Event,
   IEditorService,
   IWorkspaceService,
   IHostService,
@@ -163,6 +164,7 @@ function makeWorkspace(
           name: 'ws',
         }
       : undefined,
+    onDidChangeWorkspace: Event.None,
   } as unknown as IWorkspaceServiceType
 }
 
