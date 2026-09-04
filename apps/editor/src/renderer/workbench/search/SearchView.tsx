@@ -132,13 +132,20 @@ export function SearchView() {
   ])
   useEffect(() => {
     searchSession.results = results
-  }, [results])
+    searchSession.resultsWorkspaceKey = workspaceService.current?.folder.toString() ?? null
+  }, [results, workspaceService])
 
   // Mirror result presence to the title toolbar; reset on unmount.
   useEffect(() => {
     searchViewState.setHasResults(results.length > 0)
   }, [results])
   useEffect(() => () => searchViewState.setHasResults(false), [])
+
+  // Mirror query presence so Refresh/Clear stay usable with an empty result set.
+  useEffect(() => {
+    searchViewState.setHasQuery(pattern.length > 0)
+  }, [pattern])
+  useEffect(() => () => searchViewState.setHasQuery(false), [])
 
   // Toolbar "Clear Search Results": empty the query and drop results immediately.
   const clearSignal = useObservable(searchViewState.clearSignal)

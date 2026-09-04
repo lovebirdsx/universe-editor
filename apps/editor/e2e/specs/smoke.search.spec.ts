@@ -47,4 +47,24 @@ test.describe('@p1 search', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
       .toBe(MATCH_LINE)
   })
+
+  test('search re-runs automatically after opening a workspace from an empty window @regression', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+
+    // Query typed in an empty window finds nothing on disk.
+    await workbench.activityBar.click(SEARCH)
+    const searchView = page.getByTestId('search-view')
+    await expect(searchView).toBeVisible()
+    await searchView.getByRole('textbox', { name: 'Search', exact: true }).fill(NEEDLE)
+    await expect(searchView.getByText('No results found')).toBeVisible()
+
+    // Opening a workspace must re-run the current query without further input.
+    const { dir } = writeWorkspace()
+    await workbench.openWorkspace(dir)
+    await expect(searchView.getByText(NEEDLE)).toBeVisible({ timeout: 10000 })
+  })
 })

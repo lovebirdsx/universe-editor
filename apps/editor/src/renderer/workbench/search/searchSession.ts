@@ -5,7 +5,9 @@
  *  The SideBar only mounts the active container's view, so switching to Explorer
  *  and back unmounts SearchView and would otherwise drop its query, options and
  *  results. Holding that state here (outside the component, like IScmService does
- *  for SCM) lets a remount restore it instantly. Reset on workspace change.
+ *  for SCM) lets a remount restore it instantly. Cached results are tagged with
+ *  the workspace they were searched in (resultsWorkspaceKey) so a remount after a
+ *  workspace switch re-runs the query instead of showing stale matches.
  *--------------------------------------------------------------------------------------------*/
 
 import type { IFileMatch } from '@universe-editor/platform'
@@ -21,6 +23,8 @@ export interface SearchSessionState {
   replaceVisible: boolean
   filtersVisible: boolean
   results: readonly IFileMatch[]
+  /** Workspace folder URI string the cached results belong to; null when searched without a folder. */
+  resultsWorkspaceKey: string | null
   /**
    * Nodes the user expanded or collapsed by hand, as a diff against whatever
    * `search.collapseResults` would have chosen. Storing the deviation rather
@@ -57,6 +61,7 @@ function emptyState(): SearchSessionState {
     replaceVisible: false,
     filtersVisible: false,
     results: [],
+    resultsWorkspaceKey: null,
     treeExpansionOverrides: new Map<string, boolean>(),
   }
 }

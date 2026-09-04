@@ -36,6 +36,7 @@ import { stubConfigurationService } from './stubConfigurationService.js'
 class FakeTextSearch implements ITextSearchServiceType {
   declare readonly _serviceBrand: undefined
   results: readonly IFileMatch[] = []
+  searchCalls = 0
   /** When set, emit these batches via onResults before resolving. */
   batches: readonly (readonly IFileMatch[])[] | undefined
   /** Delay between emitted batches, so each lands past the 80ms result-flush timer. */
@@ -44,6 +45,7 @@ class FakeTextSearch implements ITextSearchServiceType {
     _query: ITextSearchQuery,
     opts?: ITextSearchOptions,
   ): Promise<readonly IFileMatch[]> {
+    this.searchCalls++
     if (opts?.signal?.aborted) return []
     if (this.batches) {
       for (const batch of this.batches) {
@@ -130,7 +132,7 @@ function renderWithServices(search: FakeTextSearch) {
   }
   const workspace = {
     _serviceBrand: undefined,
-    current: null,
+    current: null as IWorkspace | null,
     recent: [],
     onDidChangeWorkspace: workspaceEmitter.event,
     onDidChangeRecent: new Emitter<readonly never[]>().event,
@@ -148,8 +150,10 @@ function renderWithServices(search: FakeTextSearch) {
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return {
+    inst,
     watcherEmitter,
     workspaceEmitter,
+    workspace,
     get watcherSubscriptionCount() {
       return watcherSubscriptions
     },
@@ -213,16 +217,50 @@ describe('SearchView watcher + workspace', () => {
     expect(screen.queryByTestId('search-stale')).toBeNull()
   })
 
-  it('clears results when the workspace changes', async () => {
+  it('clears results then re-runs the search when the workspace changes', async () => {
     const search = new FakeTextSearch()
     search.results = [makeFileMatch('/ws/a.ts')]
     const ctx = renderWithServices(search)
     await runQuery(search)
     expect(screen.queryByText(/matches/)).toBeTruthy()
+    expect(search.searchCalls).toBe(1)
     act(() => {
       ctx.workspaceEmitter.fire(null)
     })
+    // Results from the old workspace drop immediately…
     expect(screen.queryByText(/matches/)).toBeFalsy()
+    // …then the current query re-runs against the new workspace after the debounce.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(search.searchCalls).toBe(2)
+    expect(screen.queryByText(/matches/)).toBeTruthy()
+  })
+
+  it('re-runs the search on remount when the workspace changed while unmounted', async () => {
+    const search = new FakeTextSearch()
+    search.results = [makeFileMatch('/ws/a.ts')]
+    const ctx = renderWithServices(search)
+    await runQuery(search)
+    expect(search.searchCalls).toBe(1)
+
+    // Sidebar switch away (unmount), workspace changes while the view is gone.
+    ctx.rendered.unmount()
+    act(() => {
+      ctx.workspace.current = { folder: URI.file('/ws2'), name: 'ws2' }
+      ctx.workspaceEmitter.fire(ctx.workspace.current)
+    })
+    render(
+      <ServicesContext.Provider value={ctx.inst}>
+        <SearchView />
+      </ServicesContext.Provider>,
+    )
+    // Cached results belong to the old workspace: the remount must not reuse
+    // them silently — the query re-runs after the debounce.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(search.searchCalls).toBe(2)
   })
 
   it('subscribes to the file watcher once while results stream in', async () => {

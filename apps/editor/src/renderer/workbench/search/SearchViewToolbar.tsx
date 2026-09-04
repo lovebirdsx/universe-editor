@@ -14,6 +14,7 @@ import styles from './SearchView.module.css'
 
 export function SearchViewToolbar() {
   const hasResults = useObservable(searchViewState.hasResults)
+  const hasQuery = useObservable(searchViewState.hasQuery)
   const viewMode = useObservable(searchViewState.viewMode)
   const isTree = viewMode === 'tree'
 
@@ -23,7 +24,8 @@ export function SearchViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         data-tooltip={localize('search.refresh', 'Refresh')}
-        disabled={!hasResults}
+        aria-label={localize('search.refresh', 'Refresh')}
+        disabled={!hasQuery}
         onClick={() => searchViewState.requestRefresh()}
       >
         <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -32,7 +34,8 @@ export function SearchViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         data-tooltip={localize('search.clear', 'Clear Search Results')}
-        disabled={!hasResults}
+        aria-label={localize('search.clear', 'Clear Search Results')}
+        disabled={!hasQuery && !hasResults}
         onClick={() => searchViewState.requestClear()}
       >
         <SearchX size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -41,6 +44,7 @@ export function SearchViewToolbar() {
         type="button"
         className={styles['toolbarBtn']}
         data-tooltip={localize('search.collapseAll', 'Collapse All')}
+        aria-label={localize('search.collapseAll', 'Collapse All')}
         disabled={!hasResults}
         onClick={() => searchViewState.requestCollapseAll()}
       >

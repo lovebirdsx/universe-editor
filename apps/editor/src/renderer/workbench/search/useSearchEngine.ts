@@ -24,6 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { recordPerfPhase } from '../../services/performance/perfPhases.js'
+import { searchSession } from './searchSession.js'
 import { searchDebounceDelay } from './searchDebounce.js'
 
 // Base keystroke debounce, matching VSCode's search.searchOnTypeDebouncePeriod.
@@ -71,6 +72,9 @@ export function useSearchEngine(
   const [isSearching, setIsSearching] = useState(false)
   const [regexError, setRegexError] = useState<string | null>(null)
   const [isStale, setIsStale] = useState(false)
+  // Bumped on every workspace switch so the debounced-search effect re-runs the
+  // current query against the new root even though `pattern` did not change.
+  const [workspaceEpoch, setWorkspaceEpoch] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -85,7 +89,13 @@ export function useSearchEngine(
   const knownRef = useRef<Set<string>>(new Set(initialResults.map((fm) => fm.resource.toString())))
   // On a remount with cached results for the same query, skip the first debounced
   // run so switching sidebars back doesn't re-search (and flash the status bar).
-  const skipFirstRef = useRef(initialResults.length > 0 && query.pattern.length > 0)
+  // Cached results from a different workspace are stale by definition, so only
+  // results searched in the current workspace qualify for the skip.
+  const skipFirstRef = useRef(
+    initialResults.length > 0 &&
+      query.pattern.length > 0 &&
+      searchSession.resultsWorkspaceKey === (workspaceService.current?.folder.toString() ?? null),
+  )
 
   const { pattern, isRegex, matchCase, matchWholeWord, includes, excludes, useExcludeSettings } =
     query
@@ -192,7 +202,7 @@ export function useSearchEngine(
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [pattern, isRegex, runSearch, configurationService])
+  }, [pattern, isRegex, runSearch, configurationService, workspaceEpoch])
 
   useEffect(() => {
     return () => {
@@ -236,6 +246,9 @@ export function useSearchEngine(
         setIsSearching(false)
         setRegexError(null)
         setIsStale(false)
+        // Results belonged to the old workspace: re-run the current query so the
+        // view refreshes against the new root (debounced, honors searchOnType).
+        setWorkspaceEpoch((e) => e + 1)
       }),
     )
     return () => disposable.dispose()

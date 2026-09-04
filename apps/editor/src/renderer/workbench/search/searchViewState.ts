@@ -30,6 +30,7 @@ const _collapseAll = observableValue<number>('search.collapseAll', 0)
 const _clear = observableValue<number>('search.clear', 0)
 const _refresh = observableValue<number>('search.refresh', 0)
 const _hasResults = observableValue<boolean>('search.hasResults', false)
+const _hasQuery = observableValue<boolean>('search.hasQuery', false)
 const _useExcludeSettings = observableValue<boolean>('search.useExcludeSettings', true)
 const _history = observableValue<readonly string[]>('search.history', [])
 const _seed = observableValue<number>('search.seed', 0)
@@ -51,6 +52,8 @@ export const searchViewState = {
   refreshSignal: _refresh as IObservable<number>,
   /** Whether the results tree currently has any matches (drives toolbar enablement). */
   hasResults: _hasResults as IObservable<boolean>,
+  /** Whether the query input is non-empty (drives refresh/clear enablement). */
+  hasQuery: _hasQuery as IObservable<boolean>,
   /** Whether files.exclude / search.exclude globs are applied to the search. */
   useExcludeSettings: _useExcludeSettings as IObservable<boolean>,
   /** Most-recent-first ring of accepted search queries. */
@@ -100,6 +103,9 @@ export const searchViewState = {
   },
   setHasResults(value: boolean): void {
     _hasResults.set(value, undefined)
+  },
+  setHasQuery(value: boolean): void {
+    _hasQuery.set(value, undefined)
   },
   /** Ask a mounted SearchView to apply searchSession.seedPattern (set by FindInFilesAction). */
   requestSeed(): void {
