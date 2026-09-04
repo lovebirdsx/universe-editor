@@ -964,6 +964,9 @@ describe('AcpSession.timeline', () => {
         content: { type: 'text', text: 'part2' },
       },
     })
+    // The second chunk merges in place inside the 16ms batch window — wait for
+    // the commit so `.get()` reflects the merged text.
+    await new Promise((r) => setTimeout(r, 25))
 
     const midAgent = s.timeline
       .get()
@@ -1129,6 +1132,9 @@ describe('AcpSession.timeline', () => {
         content: { type: 'text', text: 'answer part2' },
       },
     })
+    // In-place merge inside the batch window — wait for the commit before
+    // reading the merged text.
+    await new Promise((r) => setTimeout(r, 25))
     {
       const agent = messages().find(
         (m) => m.role === 'agent' && m.text === 'answer part1answer part2',
@@ -1213,6 +1219,8 @@ describe('AcpSession.timeline', () => {
         update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } },
       })
     }
+    // Chunks merge in place inside the 16ms batch window — wait for the commit.
+    await new Promise((r) => setTimeout(r, 25))
 
     const thoughts = s.timeline
       .get()
@@ -1872,6 +1880,8 @@ describe('AcpSession.timeline', () => {
         messageId: 'mid-multi',
       } as never,
     })
+    // The two same-anchor chunks merge in place inside the 16ms batch window.
+    await new Promise((r) => setTimeout(r, 25))
 
     const texts = s.timeline
       .get()
@@ -2101,6 +2111,149 @@ describe('AcpSession.timeline — batched/immediate atomicity', () => {
     expect(slot.call.status).toBe('completed')
     // A settled top-level card records a frozen duration.
     expect(slot.call.durationMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('AcpSession.timeline — in-place streaming merge inside the batch window', () => {
+  let svc: AcpSessionService
+  let client: FakeAcpClientService
+
+  beforeEach(() => {
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  /** Let the 16ms chunk batch commit so `.get()` reflects the merged stream. */
+  async function flushBatch(): Promise<void> {
+    await new Promise((r) => setTimeout(r, 25))
+  }
+
+  it('N chunks in one window replace the _messages array once, at commit', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const promptPromise = s.sendPrompt('go')
+    await flushBatch()
+
+    // First chunk opens the message (one array replacement, current behavior);
+    // every chunk after it must merge in place and leave the array reference
+    // untouched until the batch commits.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } },
+    })
+    const opened = s.messages.get()
+
+    let notifications = 0
+    const stop = autorun((r) => {
+      s.messages.read(r)
+      notifications++
+    })
+    const initial = notifications
+
+    for (const t of ['b', 'c', 'd', 'e']) {
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: t } },
+      })
+      expect(s.messages.get()).toBe(opened)
+    }
+
+    await flushBatch()
+    stop.dispose()
+
+    const committed = s.messages.get()
+    expect(committed).not.toBe(opened)
+    expect(committed.map((m) => m.text)).toEqual(['go', 'abcde'])
+    // One observer notification for the whole window, not one per chunk.
+    expect(notifications - initial).toBe(1)
+    // The committed message's text is the flat merged string on the card.
+    const last = committed[committed.length - 1]!
+    expect(last.streaming).toBe(true)
+    expect(last.blocks).toStrictEqual([{ type: 'text', text: 'abcde' }])
+
+    await s.cancelTurn()
+    await promptPromise
+  })
+
+  it('a cap-triggered push publishes immediately and the window continues', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const big = 'a'.repeat(MESSAGE_TEXT_REBUILD_AT + 100)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: big } },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'END' } },
+    })
+    // The hysteresis rebuild publishes synchronously — no batch wait needed.
+    const msg = s.messages.get()[0]
+    if (!msg) throw new Error('expected an agent message')
+    expect(msg.text.startsWith(MESSAGE_TEXT_TRUNCATED_MARKER)).toBe(true)
+    expect(msg.text.endsWith('END')).toBe(true)
+
+    // A follow-up chunk below the threshold merges in place again.
+    const opened = s.messages.get()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '!' } },
+    })
+    expect(s.messages.get()).toBe(opened)
+    await flushBatch()
+    expect(s.messages.get()[0]?.text.endsWith('END!')).toBe(true)
+  })
+
+  it('child chunks merge in place inside the window and publish once', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcParent',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'sub ' },
+        _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+      },
+    })
+    const opened = s.timeline.get()
+    for (const t of ['a', 'b']) {
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: t },
+          _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+        },
+      })
+      expect(s.timeline.get()).toBe(opened)
+    }
+    await flushBatch()
+
+    const parent = s.timeline.get()[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    const child = parent.call.children?.[0]
+    if (child?.kind !== 'message') throw new Error('expected child message')
+    expect(child.message.text).toBe('sub ab')
   })
 })
 

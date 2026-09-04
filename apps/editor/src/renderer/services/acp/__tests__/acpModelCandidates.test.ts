@@ -206,6 +206,37 @@ describe('extraModelCandidatesForAgentSettings', () => {
   })
 })
 
+describe('anthropic version-dot normalization', () => {
+  it('rewrites dotted claude version segments to the hyphenated wire id', () => {
+    expect(ids(undefined, provider(['claude-opus-4.8[1m]', 'claude-sonnet-4.5']))).toEqual([
+      'claude-opus-4-8[1m]',
+      'claude-sonnet-4-5',
+    ])
+  })
+
+  it('normalizes the pick too, so the fork resolves the official id', () => {
+    expect(ids('claude-opus-4.8[1m]', undefined)).toEqual(['claude-opus-4-8[1m]'])
+  })
+
+  it('leaves non-anthropic dotted ids untouched', () => {
+    expect(ids(undefined, provider(['gpt-5.2-codex', 'deepseek-pro-v4', 'kimi-k3']))).toEqual([
+      'gpt-5.2-codex',
+      'deepseek-pro-v4',
+      'kimi-k3',
+    ])
+  })
+
+  it('leaves claude ids without a dotted version segment untouched', () => {
+    expect(ids('claude-fable-5', undefined)).toEqual(['claude-fable-5'])
+  })
+
+  it('dedupes a dotted pick against the hyphenated declaration', () => {
+    expect(ids('claude-opus-4.8[1m]', provider(['claude-opus-4-8[1m]']))).toEqual([
+      'claude-opus-4-8[1m]',
+    ])
+  })
+})
+
 describe('contextWindowFor', () => {
   it('prefers the named model own window', () => {
     const candidates = [
@@ -218,6 +249,20 @@ describe('contextWindowFor', () => {
   it('matches a context-lane id to the bare candidate', () => {
     expect(
       contextWindowFor([{ id: 'acme-chat-pro', contextWindow: 1000000 }], 'acme-chat-pro[1m]'),
+    ).toBe(1000000)
+  })
+
+  it('matches a dotted remembered id to the normalized candidate', () => {
+    // Candidates are normalized to the hyphen spelling; a history/config pick
+    // still spelled dotted must resolve to the same model's window.
+    expect(
+      contextWindowFor([{ id: 'claude-opus-4-8', contextWindow: 1000000 }], 'claude-opus-4.8'),
+    ).toBe(1000000)
+    expect(
+      contextWindowFor(
+        [{ id: 'claude-opus-4-8[1m]', contextWindow: 1000000 }],
+        'claude-opus-4.8[1m]',
+      ),
     ).toBe(1000000)
   })
 

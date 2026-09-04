@@ -61,10 +61,8 @@ import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import {
   LIVE_INGESTION_BUDGET,
-  MESSAGE_TEXT_REBUILD_AT,
   REPLAY_INGESTION_BUDGET,
   capContentBlock,
-  capMessageBlocksTail,
   capRawInput,
   capTerminalOutputTail,
   capToolCallBlocks,
@@ -78,9 +76,9 @@ import {
   type IAcpResidentBudgetHolder,
 } from './acpResidentBudget.js'
 import {
+  StreamingBlocksAccumulator,
   blocksToText,
   isBlankContentBlock,
-  mergeStreamingBlock,
   readToolCallLocations,
   splitToolCallContent,
 } from './acpSessionContent.js'
@@ -167,11 +165,11 @@ export type {
 } from './acpSessionModel.js'
 export type { AcpRecoveryPhase, AcpRecoveryState } from './acpSessionRecovery.js'
 export {
+  StreamingBlocksAccumulator,
   blocksToText,
   firstLineSummary,
   hasVisibleMessageContent,
   isBlankContentBlock,
-  mergeStreamingBlock,
   splitToolCallContent,
   timelineItemToText,
   toolCallToText,
@@ -511,6 +509,25 @@ interface PromptSnapshot {
 }
 
 /**
+ * In-place accumulation slot for the top-level streaming message currently
+ * receiving chunks inside the open 16ms batch. Per-chunk appends push into the
+ * accumulator's mutable string array (O(1), no cons-string rope, no array
+ * rebuild); the single materialized copy is published when the batch commits or
+ * a hysteresis cap fires.
+ */
+interface PendingStreamingMerge {
+  readonly base: AcpMessage
+  readonly acc: StreamingBlocksAccumulator
+}
+
+/** Same slot for a sub-agent child message streaming under its parent tool call. */
+interface PendingChildMerge {
+  readonly parentId: string
+  readonly base: AcpChildItem
+  readonly acc: StreamingBlocksAccumulator
+}
+
+/**
  * Update kinds that surface as visible agent output. Feeds `_agentOutputCount`
  * — cancelTurn's "did the agent answer at all" signal. Metadata updates
  * (usage / config / session_info / available_commands) deliberately excluded:
@@ -659,6 +676,13 @@ export class AcpSession extends Disposable implements IAcpSession {
   // synchronously (set(v, tx) writes _value before tx.finish()).
   private _pendingTx: TransactionImpl | undefined
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Streaming merges inside the open batch (see {@link PendingStreamingMerge} /
+   * {@link PendingChildMerge}). Cleared whenever the batch commits.
+   */
+  private _pendingStreamingMerge: PendingStreamingMerge | undefined
+  private _pendingChildMerge: PendingChildMerge | undefined
 
   /**
    * Grace-window timer for the orphan-tool-call sweep — see
@@ -1629,6 +1653,10 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   endHistoryReplay(): void {
+    // Replay end is a batch boundary: publish any pending streaming merges
+    // first so the just-restored history reads complete (mirrors the commit at
+    // the top of close / _resetForReplay).
+    this._commitBatchedTx()
     this._suppressReplayToTimeline = false
     this._suppressAnchorMessageId = undefined
     this.isReplayingHistory.set(false, undefined)
@@ -2711,6 +2739,19 @@ export class AcpSession extends Disposable implements IAcpSession {
    * both always release through the same traversal that measured the content.
    */
   private _releaseResidentDownTo(targetBytes: number): number {
+    // Trim operates on committed state: publish any pending streaming merges
+    // first, or a trim of the message/tool card holding them would drop the
+    // newest chunks (and a later commit would splice stale content back in).
+    // Gated on actually being over budget — the resident check runs after
+    // every text chunk, and flushing on each of them would undo the batch
+    // window's in-place merges entirely.
+    if (this._residentBytes > targetBytes) {
+      if (this._pendingStreamingMerge !== undefined || this._pendingChildMerge !== undefined) {
+        const tx = this._batchedTx()
+        this._materializePendingStreamingMerge(tx)
+        this._materializePendingChildMerge(tx)
+      }
+    }
     let released = 0
     // Bound the loop by the number of slots: a trim must strictly reduce the
     // remaining heavy content, but if a future measure/release pair ever
@@ -3403,7 +3444,6 @@ export class AcpSession extends Disposable implements IAcpSession {
       return
     }
     const last = this._messages[this._messages.length - 1]
-    let next: AcpMessage
     // Chunks merge into the open streaming message only when they belong to it:
     // same role AND same anchor. Replays stamp each persisted message with its
     // own messageId, so without the anchor check two adjacent replayed user
@@ -3412,31 +3452,24 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Anchorless chunks (agent/thought paths never pass one) keep the old
     // merge-anything behavior — undefined === undefined.
     if (last && last.role === role && this._isStreaming(last.id) && last.messageId === messageId) {
-      const merged = mergeStreamingBlock(last.blocks, block)
-      // Bound the text a single streaming message keeps resident (hysteresis:
-      // only rebuild once past the threshold so per-chunk appends stay cheap).
-      const blocks =
-        last.text.length > MESSAGE_TEXT_REBUILD_AT ? capMessageBlocksTail(merged) : merged
-      next = {
-        id: last.id,
-        role,
-        blocks,
-        text: blocksToText(blocks),
-        streaming: true,
-        ...(last.messageId !== undefined
-          ? { messageId: last.messageId }
-          : messageId !== undefined
-            ? { messageId }
-            : {}),
-        ...(last.autoRetry === true || autoRetry === true ? { autoRetry: true as const } : {}),
-        ...(last.selectionContexts !== undefined
-          ? { selectionContexts: last.selectionContexts }
-          : selectionContexts !== undefined && selectionContexts.length > 0
-            ? { selectionContexts }
-            : {}),
+      const tx = this._batchedTx()
+      const pending = this._pendingStreamingMerge
+      if (pending !== undefined && pending.base !== last) {
+        this._materializePendingStreamingMerge(tx)
       }
-      this._messages = [...this._messages.slice(0, -1), next]
-      this._upsertMessageInTimeline(next)
+      const acc =
+        this._pendingStreamingMerge !== undefined
+          ? this._pendingStreamingMerge.acc
+          : this._openStreamingMerge(last)
+      // Below the hysteresis threshold the chunk only pushes into the mutable
+      // run — no `_messages` spread, no timeline upsert, no blocksToText join.
+      // Cap-triggered pushes publish immediately (same cadence as before);
+      // non-text chunks are rare and publish right away too, so media blocks
+      // stay visible mid-window like they did on the old per-chunk path.
+      const capped = acc.push(block)
+      if (capped || block.type !== 'text') this._materializePendingStreamingMerge(tx)
+      this.messages.set(this._messages, tx)
+      this.timeline.set(this._timeline, tx)
     } else {
       // A blank chunk that would open a brand-new message is dropped: agents
       // emit empty/whitespace thought chunks as turn markers, which would
@@ -3451,7 +3484,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
       const blocks: readonly ContentBlock[] = [capContentBlock(block)]
-      next = {
+      const next: AcpMessage = {
         id,
         role,
         blocks,
@@ -3477,6 +3510,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _closePriorStreaming(): AcpMessage[] {
+    this._materializePendingStreamingMerge(this._batchedTx())
     if (this._streamingIds.size === 0) return []
     const closed: AcpMessage[] = []
     this._messages = this._messages.map((m) => {
@@ -3507,6 +3541,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _flushStream(): void {
+    this._materializePendingStreamingMerge(this._batchedTx())
     this._streamingIds.clear()
     this._messages = this._messages.map((m) => (m.streaming ? { ...m, streaming: false } : m))
     for (const m of this._messages) {
@@ -3531,6 +3566,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       selectionContexts?: readonly SelectionContext[]
     },
   ): void {
+    // Materialize any pending streaming merge before appending, or the commit
+    // below would splice the merge in at the tail and drop this message.
+    this._materializePendingStreamingMerge(this._batchedTx())
     const id = `m${++this._msgCounter}`
     // Image (or other) blocks lead, then the text block. Skip an empty text
     // block so an image-only message doesn't carry a blank paragraph.
@@ -3862,37 +3900,79 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   /** Append a streaming sub-agent message chunk under its parent tool call. */
   private _appendChildChunk(role: AcpMessageRole, block: ContentBlock, parentId: string): void {
+    const tx = this._batchedTx()
+    const pending = this._pendingChildMerge
+    if (pending !== undefined && pending.parentId !== parentId) {
+      this._materializePendingChildMerge(tx)
+    }
+    const active = this._pendingChildMerge
+    if (active !== undefined) {
+      if (active.base.kind === 'message' && active.base.message.role === role) {
+        // Same-parent merge reuses the in-place accumulator; cap-triggered and
+        // non-text pushes publish immediately (same cadence as before).
+        const capped = active.acc.push(block)
+        if (capped || block.type !== 'text') this._materializePendingChildMerge(tx)
+        this.timeline.set(this._timeline, tx)
+        return
+      }
+      // Role switch mid-run: flush the pending run, then open a fresh message.
+      this._materializePendingChildMerge(tx)
+    }
     const children = this._childrenOf(parentId)
     const last = children[children.length - 1]
-    let next: readonly AcpChildItem[]
     if (last && last.kind === 'message' && last.message.role === role) {
       // Merge into the trailing child message. No streaming-flag bookkeeping:
       // an interleaved child tool call makes `last` a toolCall, which naturally
       // breaks the merge and opens a fresh message — same for a role switch.
-      const merged = mergeStreamingBlock(last.message.blocks, block)
-      const blocks =
-        last.message.text.length > MESSAGE_TEXT_REBUILD_AT ? capMessageBlocksTail(merged) : merged
-      const message: AcpMessage = {
-        ...last.message,
-        blocks,
-        text: blocksToText(blocks),
-      }
-      next = [...children.slice(0, -1), { kind: 'message', id: message.id, message }]
-    } else {
-      if (isBlankContentBlock(block)) return
-      const id = `m${++this._msgCounter}`
-      const blocks: readonly ContentBlock[] = [capContentBlock(block)]
-      // Child messages never show a streaming caret (folded by default), so they
-      // stay out of `_streamingIds` and the top-level seal/flush machinery.
-      const message: AcpMessage = { id, role, blocks, text: blocksToText(blocks), streaming: false }
-      next = [...children, { kind: 'message', id, message }]
+      const acc = new StreamingBlocksAccumulator(last.message.blocks)
+      this._pendingChildMerge = { parentId, base: last, acc }
+      const capped = acc.push(block)
+      if (capped || block.type !== 'text') this._materializePendingChildMerge(tx)
+      this.timeline.set(this._timeline, tx)
+      return
     }
-    this._setChildren(parentId, next)
-    this.timeline.set(this._timeline, this._batchedTx())
+    if (isBlankContentBlock(block)) return
+    const id = `m${++this._msgCounter}`
+    const blocks: readonly ContentBlock[] = [capContentBlock(block)]
+    // Child messages never show a streaming caret (folded by default), so they
+    // stay out of `_streamingIds` and the top-level seal/flush machinery.
+    const message: AcpMessage = { id, role, blocks, text: blocksToText(blocks), streaming: false }
+    this._setChildren(parentId, [...children, { kind: 'message', id, message }])
+    this.timeline.set(this._timeline, tx)
+  }
+
+  /**
+   * Materialize the pending sub-agent child merge into its parent's children.
+   * Publishes on `tx`; the parent slot is located by the pending `base`'s
+   * identity, so a children rebuild that already replaced it (e.g. a trim)
+   * wins and the pending delta is dropped.
+   */
+  private _materializePendingChildMerge(tx: TransactionImpl): void {
+    const pending = this._pendingChildMerge
+    if (pending === undefined) return
+    this._pendingChildMerge = undefined
+    const base = pending.base
+    if (base.kind !== 'message') return
+    const { blocks, text } = pending.acc.flatten()
+    const message: AcpMessage = { ...base.message, blocks, text }
+    const child: AcpChildItem = { kind: 'message', id: message.id, message }
+    const children = this._childrenOf(pending.parentId)
+    const idx = children.findIndex((c) => c === base)
+    if (idx === -1) return
+    const next = [...children.slice(0, idx), child, ...children.slice(idx + 1)]
+    this._setChildren(pending.parentId, next)
+    this.timeline.set(this._timeline, tx)
   }
 
   /** Upsert one child slot (message / toolCall) into its parent's children. */
   private _upsertChildOfParent(parentId: string, child: AcpChildItem): void {
+    const tx = this._batchedTx()
+    // A pending child merge holds the parent's trailing message out of the
+    // timeline — publish it first, or the upsert would rebuild children from
+    // the stale array and drop the pending chunks.
+    if (this._pendingChildMerge !== undefined && this._pendingChildMerge.parentId === parentId) {
+      this._materializePendingChildMerge(tx)
+    }
     const children = this._childrenOf(parentId)
     const idx = children.findIndex((c) => c.kind === child.kind && c.id === child.id)
     const next =
@@ -3900,7 +3980,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         ? [...children, child]
         : [...children.slice(0, idx), child, ...children.slice(idx + 1)]
     this._setChildren(parentId, next)
-    this.timeline.set(this._timeline, this._batchedTx())
+    this.timeline.set(this._timeline, tx)
   }
 
   private _childrenOf(parentId: string): readonly AcpChildItem[] {
@@ -3941,7 +4021,58 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
+  /** Open the in-place accumulation slot for the trailing streaming message. */
+  private _openStreamingMerge(last: AcpMessage): StreamingBlocksAccumulator {
+    const acc = new StreamingBlocksAccumulator(last.blocks)
+    this._pendingStreamingMerge = { base: last, acc }
+    return acc
+  }
+
+  /**
+   * Materialize the pending top-level merge: one blocks flatten + one
+   * `_messages` spread + one timeline upsert, published on `tx`. The message is
+   * located by the pending `base`'s identity, so a trim that already replaced
+   * it wins and the pending delta is dropped instead of splicing stale content
+   * back in.
+   *
+   * `autoRetry` / `selectionContexts` are inherited from `base` rather than the
+   * latest chunk's args: the chunk args only ever differ on the chunk that OPENS
+   * the message (already fixed on `base`), and selection contexts are keyed by
+   * messageId so every chunk of one message carries the same value.
+   */
+  private _materializePendingStreamingMerge(tx: TransactionImpl): void {
+    const pending = this._pendingStreamingMerge
+    if (pending === undefined) return
+    this._pendingStreamingMerge = undefined
+    const { blocks, text } = pending.acc.flatten()
+    const base = pending.base
+    const next: AcpMessage = {
+      id: base.id,
+      role: base.role,
+      blocks,
+      text,
+      streaming: true,
+      ...(base.messageId !== undefined ? { messageId: base.messageId } : {}),
+      ...(base.autoRetry === true ? { autoRetry: true as const } : {}),
+      ...(base.selectionContexts !== undefined
+        ? { selectionContexts: base.selectionContexts }
+        : {}),
+    }
+    const idx = this._messages.findIndex((m) => m === base)
+    if (idx === -1) return
+    this._messages = [...this._messages.slice(0, idx), next, ...this._messages.slice(idx + 1)]
+    this._upsertMessageInTimeline(next)
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
+  }
+
   private _upsertToolCallInTimeline(call: AcpToolCall): void {
+    // Orphan adoption below rebuilds the slot's children from what the
+    // timeline / orphan stash holds — publish a pending child merge for this
+    // very call first, or the adopted children would miss its newest chunks.
+    if (this._pendingChildMerge !== undefined && this._pendingChildMerge.parentId === call.id) {
+      this._materializePendingChildMerge(this._batchedTx())
+    }
     const idx = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === call.id)
     // Preserve any sub-agent children already attached to this slot (tool_call_update
     // rebuilds the call from the wire without children) and absorb orphans that
@@ -3978,9 +4109,17 @@ export class AcpSession extends Disposable implements IAcpSession {
       clearTimeout(this._flushTimer)
       this._flushTimer = undefined
     }
-    if (this._pendingTx) {
-      const tx = this._pendingTx
-      this._pendingTx = undefined
+    if (!this._pendingTx) return
+    const tx = this._pendingTx
+    this._pendingTx = undefined
+    try {
+      // Publish any in-place streaming merges on the same tx, so the batch's
+      // single notification carries the final merged content.
+      this._materializePendingStreamingMerge(tx)
+      this._materializePendingChildMerge(tx)
+    } finally {
+      // finish() must always run: a throw during materialize would otherwise
+      // leave every set() in this batch with an unpaired beginUpdate.
       tx.finish()
     }
   }

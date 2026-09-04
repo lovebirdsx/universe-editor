@@ -18,7 +18,10 @@
 
 import type { AiResolvedProvider, AiWireProtocol } from '@universe-editor/platform'
 
-import { stripTrailingBracketSuffix } from '../../../shared/ai/catalog/index.js'
+import {
+  normalizeAnthropicVersionDots,
+  stripTrailingBracketSuffix,
+} from '../../../shared/ai/catalog/index.js'
 
 /** Wire protocol each built-in agent speaks, i.e. which `protocolMap` entry holds its models. */
 export const CLAUDE_AGENT_PROTOCOL: AiWireProtocol = 'anthropic-messages'
@@ -94,10 +97,12 @@ export function extraModelCandidatesForAgentSettings(
   const out: AcpModelCandidate[] = []
   const seen = new Set<string>()
   const add = (c: AcpModelCandidate): void => {
-    const trimmed = c.id.trim()
-    if (!trimmed || seen.has(trimmed) || out.length >= MAX_EXTRA_MODELS) return
-    seen.add(trimmed)
-    out.push(candidate(trimmed, c.contextWindow, c.effortLevels))
+    // Dedupe on the normalized id: a gateway declaring the dotted form next to
+    // the canonical hyphenated one must not inject the same model twice.
+    const normalized = normalizeAnthropicVersionDots(c.id.trim())
+    if (!normalized || seen.has(normalized) || out.length >= MAX_EXTRA_MODELS) return
+    seen.add(normalized)
+    out.push(candidate(normalized, c.contextWindow, c.effortLevels))
   }
 
   const trimmedPick = pick?.trim()
@@ -136,12 +141,15 @@ export function contextWindowFor(
 ): number | undefined {
   const trimmed = modelId?.trim()
   if (!trimmed) return undefined
-  const exact = candidates.find((c) => c.id === trimmed)
+  // Candidates carry the normalized id, so a remembered/configured model spelled
+  // dotted (`claude-opus-4.8`) must be normalized too or the lookup misses.
+  const query = normalizeAnthropicVersionDots(trimmed)
+  const exact = candidates.find((c) => c.id === query)
   if (exact) return exact.contextWindow
   // A remembered id may carry a context-lane suffix (`acme-chat-pro[1m]`) that
   // the provider's declaration spells bare; match on the stripped name.
   return candidates.find(
-    (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(trimmed),
+    (c) => stripTrailingBracketSuffix(c.id) === stripTrailingBracketSuffix(query),
   )?.contextWindow
 }
 
@@ -151,7 +159,7 @@ function candidate(
   effortLevels?: readonly string[],
 ): AcpModelCandidate {
   return {
-    id,
+    id: normalizeAnthropicVersionDots(id),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(effortLevels !== undefined ? { effortLevels } : {}),
   }

@@ -7,7 +7,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock, ToolCallContent, ToolCallLocation } from '@agentclientprotocol/sdk'
-import { capContentBlock, truncateDiffSideText } from './acpContentLimits.js'
+import {
+  MESSAGE_TEXT_REBUILD_AT,
+  capContentBlock,
+  capMessageBlocksTail,
+  truncateDiffSideText,
+} from './acpContentLimits.js'
 import type {
   AcpToolCall,
   AcpToolCallDiff,
@@ -162,21 +167,81 @@ export function readToolCallLocations(
 }
 
 /**
- * Merge an incoming streaming chunk into the existing blocks list. Consecutive
- * `text` blocks collapse into a single block so the markdown parser can see a
- * coherent document; non-text blocks (image / resource / resource_link / audio)
- * are appended as-is.
+ * Mutable accumulation slot for a streamed message's blocks. Consecutive text
+ * chunks push into an internal string array instead of `last.text + chunk.text`,
+ * which V8 compiles into a cons-string rope: each 1-char chunk adds ~60-80B of
+ * cons nodes the resident budget's flat 2-bytes-per-char estimate never counts,
+ * so a 1MB streamed message peaked at ~75-90MB before any cap fired. The run is
+ * joined (a flat SeqString) only when it trips the {@link MESSAGE_TEXT_REBUILD_AT}
+ * hysteresis gate — the flattening cadence is unchanged, everything in between
+ * costs O(1) per chunk. Non-text chunks close the open run into a flat block and
+ * append as-is, so `flatten()` always yields ordinary
+ * `{ type: 'text', text: <flat string> }` blocks.
  */
-export function mergeStreamingBlock(
-  blocks: readonly ContentBlock[],
-  chunk: ContentBlock,
-): readonly ContentBlock[] {
-  if (chunk.type === 'text') {
-    const last = blocks[blocks.length - 1]
-    if (last && last.type === 'text') {
-      return [...blocks.slice(0, -1), { type: 'text', text: last.text + chunk.text }]
+export class StreamingBlocksAccumulator {
+  private _blocks: ContentBlock[] = []
+  private _chunks: string[] | undefined = undefined
+  private _runLength = 0
+
+  constructor(base: readonly ContentBlock[]) {
+    const tail = base[base.length - 1]
+    if (tail !== undefined && tail.type === 'text') {
+      this._blocks = base.slice(0, -1)
+      this._chunks = [tail.text]
+      this._runLength = tail.text.length
+    } else {
+      this._blocks = [...base]
     }
-    return [...blocks, chunk]
   }
-  return [...blocks, capContentBlock(chunk)]
+
+  /**
+   * Append one streaming chunk in place. Returns true when the append tripped
+   * the rebuild threshold — the content was flattened and capped right away and
+   * the caller should publish immediately, keeping the cap's publish cadence
+   * identical to the pre-accumulator merge path.
+   */
+  push(chunk: ContentBlock): boolean {
+    if (chunk.type !== 'text') {
+      this._closeRun()
+      this._blocks.push(capContentBlock(chunk))
+      return false
+    }
+    if (this._chunks === undefined) {
+      this._chunks = []
+      this._runLength = 0
+    }
+    if (this._runLength > MESSAGE_TEXT_REBUILD_AT) {
+      this._chunks.push(chunk.text)
+      const flat = this._chunks.join('')
+      const capped = capMessageBlocksTail([...this._blocks, { type: 'text', text: flat }])
+      const tail = capped[capped.length - 1]
+      if (tail !== undefined && tail.type === 'text') {
+        this._blocks = capped.slice(0, -1)
+        this._chunks = [tail.text]
+        this._runLength = tail.text.length
+      } else {
+        this._blocks = [...capped]
+        this._chunks = undefined
+        this._runLength = 0
+      }
+      return true
+    }
+    this._chunks.push(chunk.text)
+    this._runLength += chunk.text.length
+    return false
+  }
+
+  /** Materialize the final flat blocks and their joined plain text. */
+  flatten(): { readonly blocks: readonly ContentBlock[]; readonly text: string } {
+    this._closeRun()
+    const blocks = [...this._blocks]
+    return { blocks, text: blocksToText(blocks) }
+  }
+
+  private _closeRun(): void {
+    if (this._chunks === undefined) return
+    this._blocks.push({ type: 'text', text: this._chunks.join('') })
+    this._chunks = undefined
+    this._runLength = 0
+  }
 }

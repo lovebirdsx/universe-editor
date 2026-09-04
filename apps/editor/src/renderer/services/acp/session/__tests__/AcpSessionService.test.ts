@@ -751,6 +751,9 @@ describe('AcpSessionService', () => {
         content: { type: 'text', text: 'bar' },
       },
     })
+    // The second chunk merges in place inside the 16ms batch window — wait for
+    // the commit so `.get()` reflects the merged text.
+    await new Promise((r) => setTimeout(r, 25))
     const msgsMid = s.messages.get()
     expect(msgsMid).toHaveLength(1)
     expect(msgsMid[0]?.text).toBe('foobar')
@@ -842,16 +845,18 @@ describe('AcpSessionService', () => {
           },
         })
       }
+      // Chunks after the first merge in place inside the batch window: no
+      // observer notification, and the merged text only lands at commit.
+      expect(observerFires).toBe(1)
+
+      await new Promise((r) => setTimeout(r, 24))
+      expect(observerFires).toBe(2)
       expect(
         s.messages
           .get()
           .map((m) => m.text)
           .join(''),
       ).toBe('c0c1c2c3c4c5c6c7c8c9')
-      expect(observerFires).toBe(1)
-
-      await new Promise((r) => setTimeout(r, 24))
-      expect(observerFires).toBe(2)
     } finally {
       sub.dispose()
     }

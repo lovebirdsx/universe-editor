@@ -30,6 +30,26 @@ export function normalizeCatalogModelId(id: string): string {
     .replace(/-\d{8}$/, '')
 }
 
+/**
+ * Anthropic spells the version segment with hyphens (`claude-opus-4-8`) while
+ * gateways sometimes declare it dotted (`claude-opus-4.8`), and the CLI resolves
+ * ids exactly so the dotted form fails the API call. Rewrite the dot only inside
+ * the `claude-<family>-<major>.<minor>` shape — never a blanket
+ * `.replace(/\./g, '-')`, which would mangle third-party ids like
+ * `gpt-5.2-codex`. Lane hints are stripped before the rewrite and re-appended
+ * after, so `claude-opus-4.8[1m]` becomes `claude-opus-4-8[1m]`.
+ */
+export function normalizeAnthropicVersionDots(id: string): string {
+  const bare = stripTrailingBracketSuffix(id)
+  const suffix = id.slice(bare.length)
+  const m = /^claude-([a-z]+)-(\d+)\.(\d+)$/i.exec(bare)
+  const family = m?.[1]
+  const major = m?.[2]
+  const minor = m?.[3]
+  if (family === undefined || major === undefined || minor === undefined) return id
+  return `claude-${family.toLowerCase()}-${major}-${minor}${suffix}`
+}
+
 const ANTHROPIC_IDS: ReadonlySet<string> = new Set(
   Object.keys(ANTHROPIC_CATALOG).map(normalizeCatalogModelId),
 )
