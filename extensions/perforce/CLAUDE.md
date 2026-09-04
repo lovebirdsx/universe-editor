@@ -172,27 +172,33 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 - 组 id ↔ changelist id 互转：`numberedGroupId`/`shelvedGroupId`/`changelistIdFromGroupId`。组作用域命令靠宿主附在 group action 上的 `scmResourceGroupId` 定位 CL（见 `extension.ts` `groupChangelistId`）。
 - `sc.count` = 打开文件总数（不含搁置）；`acceptInputCommand`/`acceptInputActions` 在默认组有文件时挂 Submit / Revert Unchanged。
 
-## 收集修改（无常驻分组）
+## 收集修改（常驻 reconcile 分组）
 
-**根因**：git 面板 = 磁盘真相（`git status`），p4 面板 = 服务器 `p4 opened`（只显示**已签出**的文件）→ 磁盘上改了/建了/删了但没签出的文件面板看不到，形成「改了看不到、想签点不到」死结。早先的补法是一个**固定置顶分组**「待收集的改动」（`RECONCILE_GROUP_ID`），现已连同它的全量 `reconcile -n` 扇出、文件监视自动刷新（`workspaceWatcher.ts`）与启动快照持久化一起**删除**。「未收集改动」现在**只有一个发现渠道**：Explorer 按需 RC 徽标（见下）。收集 / 还原 / 移出等操作仍在，只是不再依赖任何常驻分组：
+**根因**：git 面板 = 磁盘真相（`git status`），p4 面板 = 服务器 `p4 opened`（只显示**已签出**的文件）→ 磁盘上改了/建了/删了但没签出的文件面板看不到，形成「改了看不到、想签点不到」死结。解法是一个**常驻分组** `_reconcileGroup`（`RECONCILE_GROUP_ID = 'reconcile'`，SCM 组 id，标题「Working Tree Changes」），它的 `resourceStates` = 未签出但磁盘偏离 depot 的全部文件，**整组可见、可点、可拖**，让 p4 面板对齐 git 的「Changes」体验：
 
-- **发现（按需）**：`p4 reconcile -n -a -e -d <paths>`（`-n` = **dry-run，绝不改服务器**）报告偏离 depot 的文件；`reconcileParser.ts`（纯函数 + 单测）把记录 → `ReconcileFile[]`（字段同 `opened`：depotFile/clientFile/action/rev）。**没有任何全量 `//...` 扫描**——只在 Explorer 可见行按需触发（见下）。
+- **常驻组成员**：`client.ts` `_reconcileGroup` 在 `_resolveGroup` 之后、changelist 组之前创建（`createResourceGroup`），所以渲染在「Needs Resolve」之下、changelist 组之上（SCM 视图按创建顺序显示组）；`hideWhenEmpty = true`，无漂移时整组消失。
+- **组内容 = 全量替换，不是 patch**：`_applyDriftGroup()` 是**唯一**写 `_reconcileGroup.resourceStates` 的地方，且**每次赋整个数组**。全量替换是承重设计——renderer 从新数组整体重建文件/文件夹装饰，**离开集合的行连带它的文件夹染色（含祖先）一起回收**；逐行 patch 会把我们打回文件夹聚合的老路。行过滤（已 `opened` / excluded / scope 外）在赋值处而非合并处跑，所以「收集一个文件」下次刷新就自动移进它的 changelist 组，无需重新扫描忘记它。
+- **数据源**：`_driftFiles`（`Map<key, ReconcileFile>`）。发现走**单轮扫描 + watcher 增量**——每个会话一次穷举扫描（`scheduleReconcileScan`，`_rescanReconcilePaths` 按目录分批喂入），之后靠 `_startExternalWatcher`（`watchRoot` + `createFileSystemWatcher`，见 `extension.ts` 传的 opts）逐文件增量修正。任何会改 `_driftFiles` 的路径都走 `_scheduleDriftApply()` 合并赋值（窗口随行数缩放）；扫描轮末 `_flushDriftApply()` 同步落定，面板与「scanning x/y」后缀同 tick 收敛。
+- **Bug D 的两条失效路径都已堵**：watcher 删除磁盘路径（`_onExternalFileEvent` → `_flushExternalChanges` 的窄查询 + checkpoint 合并），以及目录变更的命名空间擦除路径（超过 `MAX_EXTERNAL_NARROW_PATHS` 预算或目录事件时 `_invalidateAndLatch`）。都不得回退成「重新打开又全量重扫」——启动快照（checkpoint）持久化仍在，只是这两条路径不再摧毁它。
+- **收口**：`_applyDriftGroup()` 同时维护 `_driftShown`/`_driftTotal` 与 `_updateDriftGroupLabel()`（截断 `perforce.reconcileLimit` 默认 10000、扫描进度后缀），二者都是**进度/截断提示，绝非装饰**——scan 逐目录推进而非一次原子落地，不带后缀的部分列表会被当作完整列表，用户会以为看全了。
 - **收集**：`reconcile(paths)`（explorer 右键「收集改动」`perforce.reconcile`，目录转 `<dir>/...`）跑**真** `p4 reconcile -a -e -d`，文件签出进 changelist。`reconcileInto(cl, paths)`（`reconcile -a -e -d [-c <cl>]`，`default` 省略 `-c`）把未签出文件直接收集进指定 changelist——供把未签出文件拖到 changelist 组头（`reopenTo`，见下文）。
-- **移出 Changelist**：`moveToReconcile(paths)` = `p4 revert -k`（退出签出、磁盘内容保留），之后该文件在资源管理器显示 RC 徽标，可再收集回任意 changelist。
+- **移出 Changelist**：`moveToReconcile(paths)` = `p4 revert -k`（退出签出、磁盘内容保留），之后该文件出现在「Working Tree Changes」组并在资源管理器显示 RC 徽标，可再收集回任意 changelist。**它必须自己把这些行加回漂移集**（`_reapplyDriftForMutation`：裸目录补 `/...` → `_reconcileScanBatch` 窄查一次 → upsert 进 `_driftFiles`/`_driftWatchedKeys` → `_scheduleDriftApply()`）——`_mutate` 的善后只做减法（`_removeDriftUnder`），而这些文件 revert 前是 `opened`（本就不在漂移集里），减法减不到任何东西；同时 mutation 自己的 watcher 事件被 `_suppressExternalChanges()` 抑制，两头都不补的结果是文件**在本会话彻底消失**，要等下个会话扫描才回来。查询失败只记日志、**绝不记成 clean**（漂移留给下个会话的扫描找到）。守卫见 `clientReconcileScan.test.ts` 的 `re-adds reverted files as drift…`。凡是「让文件从 opened 变回未签出」的新命令都要照此补这一步。
 - **还原（统一入口）**：`perforce.revert` 按打开状态分流——已打开走 `revert(paths)` = `p4 revert`（离开 changelist + 丢本地改动）；未打开走 `revertReconcile(paths)` = `p4 clean`（旧「丢弃未收集的改动」）。确认框在含已打开文件时列出将离开 changelist 的文件（`revertPlan.ts`）。Explorer 目录去掉 `!explorerResourceIsFolder`，`openedInTree(dir)` 做 live `p4 opened dir/...` 预检后始终 `p4 clean dir/...`，有 opened / fail-open 才叠加 `p4 revert dir/...`。**目录判定走纯函数 `isRevertDirectoryTarget(selection, arg0.isDirectory)`**：Explorer 右键目录时菜单期总会把选区物化成 args[1] 且含 primary 自身，所以行右键只能判「selection 恰好只有那一个目录」；但空选区形态仍真实存在（Explorer 空区右键菜单无 args[1]、右键工作区根行 selection 被过滤成空数组、旧宿主），handler 须用 `selection[0]?.path ?? resolveTargetPath(args[0])` 兜底取目录路径，绝不能判 `selectionPaths(...).length === 0`——那是 06d94fa9 起的失效条件，让目录 revert 恒掉进逐文件分支静默无效果。多选混入目录项时并入 `plan.directories`（多目录经 `openedInTrees` 单条 `p4 opened <d1>/... <d2>/...` 批量预检）。`client.revertReconcile` 只作执行原语，不再有独立菜单/命令面板入口。
 - **扫描范围**：`applyReconcileScope` → `resolveFocusScopeDirs`（`focusScope.ts` 纯函数）→ `client.setReconcileScope(dirs)`，聚焦目录（`workspace.focusEnabled`+`workspace.focusFolders`）非空时用聚焦目录，否则回退打开文件夹；范围外路径在 `_isInReconcileScope` 处过滤。
 
-### Explorer 按需 hint 通道（`checkWorkingTree`）——唯一的未收集改动发现渠道
+### Explorer 按需 hint 通道（`checkWorkingTree`）——未收集改动的行级徽标
 
-未签出但磁盘偏离 depot 的文件**只在资源管理器**上显示 `RC` 徽标：一条**由 Explorer 当前渲染出来的文件行驱动**的按需查询通道——成本与可见行数同阶，与 depot 规模无关（绝不打开全量扫描，那正是「点击几分钟打不开 diff」的根因）。
+未签出但磁盘偏离 depot 的文件在资源管理器文件行上显示 `RC` 徽标：一条**由 Explorer 当前渲染出来的文件行驱动**的按需查询通道——成本与可见行数同阶，与 depot 规模无关（绝不打开全量扫描，那正是「点击几分钟打不开 diff」的根因）。它与上节的常驻 reconcile 分组**并存**：分组是面板 / 文件夹染色 / 可操作性的完整真相，这条通道是行级 RC 徽标的按需发现。
 
 链路：renderer `ScmWorkingTreeHintService`（pull 式，骨架照抄同目录 `ScmIgnoredResourcesService`：render 期问 → 150ms 去抖批量 → 缓存 + LRU 4096 → `version` observable 触发重渲染）→ capability 命令 `perforce.checkWorkingTree`（**运行时注册，绝不进 `contributes.commands`**，同头号坑）→ `client.checkWorkingTree(paths)` → 复用 `_rescanReconcilePaths` 的分批/并发/client 语法翻译。配置项 `perforce.reconcileHint.enabled`（默认开）可整体关掉。
 
+**owner 仲裁必须按能力过滤**（`ScmService.ts` 的 `resolveScmProviderIdWhere`）：p4 workspace 内常有嵌套的独立 git provider（`git.repositoryScanMaxDepth` 命中的子目录）。裸最长前缀会让嵌套 git 胜出，而 git 侧从不注册 `checkWorkingTree` → `executeCommand` 返回 undefined → `_flush` 把整批路径当 clean 写进缓存，该行**再也不会重新入队**，症状就是「p4 确实有改动但 Explorer 永远不显示 RC」。所以最长前缀只在**注册了该能力**的 owner 里选（显式选中的 repo 仍优先，与既有语义一致）；无 capable owner 时**既不缓存也不入队**，这是能力晚注册（`checkWorkingTree` 在 `extension.ts` 注册，晚于 SourceControl 创建且不伴随 `sourceControls` 变更）能自愈的唯一原因——别为「省一次仲裁」把它改成写缓存。
+
 四条决策，改这条通道前先对照：
 
-- **不喂进 `ScmDecorationsService`**：`getFile(...) !== undefined` 是既有的「该文件有本地改动」判据，被 dirty-diff 门控与 `dirtyDiffActions` 依赖。新服务只服务 Explorer 行，不碰 SCM `resourceStates`。
+- **本通道不写 SCM `resourceStates`**：`checkWorkingTree` / hint 服务只服务 Explorer 行，绝不写 `_reconcileGroup.resourceStates`——那是 `_applyDriftGroup()` 的专属职责（见上节）。但注意：`ScmDecorationsService` 确实会消费常驻 reconcile 组的 `resourceStates` 来给文件夹染色，二者靠**组**衔接，而非拆掉 hint 通道去喂装饰。
 - **徽标从 `toReconcileResourceState` 派生**（`p4Decoration.ts` `toWorkingTreeHint`）：letter 必须是 `RC`，不是动作字母 E/A/D——与已签出行共用同一份 style 映射，保证 RC 徽标与行装饰观感一致。单测 `clientWorkingTreeHint.test.ts` 直接与 `toReconcileResourceState` 的返回值逐字段比对，改坏派生关系即红。
-- **文件行出 RC 徽标；文件夹行在有已发现的 RC 后代时染色（无字母徽章）**：`ScmWorkingTreeHintService.getFolderHint` 合并两份来源——pull 通道已缓存的文件 hint 按版本惰性聚合向上传播，后台扫描折叠进**独立目录聚合表**（删除红色 > 其余动作，同级按 source 键取小；不知道 provider root，传到路径顶层，只有可见行会查询）。扫描产物不再写文件级 LRU——**根因教训**：后台扫描一次 publish 上万条 hint，灌进按可见行数定容的 LRU 会让绝大部分扫描结果自我抹除、还挤掉可见行刚查到的答案；目录聚合表只存聚合色、按目录数定容，**文件夹染色不再受文件 LRU 逐出影响**。仍是**已发现改动的下界**——未展开的子树查不到、保存/工作区切换也会让颜色增减，用户已确认接受该权衡；别为补全上界去做全量发现。
+- **文件行出 RC 徽标；文件夹染色走 `ScmDecorationsService`，不靠本通道**：`ScmWorkingTreeHintService.getFolderHint` 现在只从 pull 通道已有缓存的文件 hint 聚合向上传播（删除红色 > 其余动作，同级按 source 键取小），作为**首轮扫描落地前的兜底下界**。权威的文件夹颜色是 `ScmDecorationsService`——它读常驻 reconcile 组 `resourceStates` 的整组替换（可回收），本通道不再有独立目录聚合表（旧的 `_scanFolders` / `onDidPublishWorkingTreeScan` 已删）——背景扫描一次 publish 上万条 hint 灌进按可见行数定容的 LRU 会自我抹除、还挤掉可见行刚查到的答案（根因教训）。仍是**已发现改动的下界**——未展开的子树查不到、保存/工作区切换也会让颜色增减，用户已确认接受该权衡；别为补全上界去做全量发现。
 - **只读派生（最容易被"顺手优化"破坏）**：`checkWorkingTree` 绝不写任何共享状态、绝不持久化、绝不 `_emitChange()`。一旦有人想「既然都扫了不如存下来」，这条通道就退化成它要规避的全量发现。护栏 = store save spy + `onDidChange` 计数。
 
 另两处易踩：hint 按两个谓词过滤（已 opened / scope 外），全被过滤掉则**零 p4 spawn**；返回值**回显调用方自己的路径字符串**（扫描报的是从 client 语法翻译来的路径，拼法未必与 host 一致，不回显会让 renderer 缓存键对不上，还会把没问过的路径——比如 rename 的另一半——报到不存在的行上）。
@@ -236,11 +242,17 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 
 ## 连接状态 & 离线
 
-server 端状态、**无 FS watcher**。`ConnectionState` = `connected|offline|not-logged-in`。任何 p4 命令非零退出经 `p4Error.ts` `classifyP4Error` 分类：session 过期/未登录 → `not-logged-in`（提示重新登录），连接失败 → `offline`。`_goOffline` 清空组 + count=0 + emit（状态栏更新），**不刷屏弹错**。
+server 端状态（p4 服务器**不推送**变更通知）。`ConnectionState` = `connected|offline|not-logged-in`。任何 p4 命令非零退出经 `p4Error.ts` `classifyP4Error` 分类：session 过期/未登录 → `not-logged-in`（提示重新登录），连接失败 → `offline`。`_goOffline` 清空组 + count=0 + emit（状态栏更新），**不刷屏弹错**。
 
-捕捉**编辑器外改动**有两条互补手段（都因服务器无 watcher 而必需）：
+捕捉**编辑器外改动**有三条互补手段（都因服务器不推送而必需）：
 - **autoEdit**（`autoEdit.ts`，默认关）：`onDidChangeTextDocument` 首次改动即 `p4 edit`。
 - **轮询**（`startPolling`，`perforce.refreshInterval` 秒，最小 10s 地板，默认关）：定时兜底，留给共享盘/CI。
+- **工作树 FS watcher**（`client.ts` `_startExternalWatcher`，默认开）：**只服务目录色块（后台 reconcile 扫描的 checkpoint 保鲜）**，不做 `p4 edit`、不刷 SCM 组；**文件级 RC 徽标不在这条路上**——渲染侧 `ScmWorkingTreeHintService` 自己的 file watcher 会丢缓存重问，插件不必掺和。存在理由：`scheduleReconcileScan` 每 session 只跑一轮，checkpoint（`P4CacheNs.reconcileScan`）持久化且只由插件自身 mutation 失效，所以外部改动（另一个编辑器保存、嵌套 git `checkout`/`stash`）后 clean checkpoint 会被无限重放，目录级 RC 提示永远不再上报。事件 → 150ms 去抖 → 定向 `_invalidateReconcileScanFor` → **对这些具体文件跑一次窄查询 `checkWorkingTree` 并把漂移增量 publish**。四条红线：
+  - ① **base 必须是打开的文件夹（`watchRoot`），绝不是 client root**——client root 可以是打开文件夹的祖先（`discoverClient` 明确允许），base 落到 workspace 外时 workbench 会 arm 一个**不过 `files.watcherExclude`** 的主进程内递归 `fs.watch`，linux 上就是 `extensions/git/src/repositoryWatcher.ts` 刻意规避的 ENOSPC 崩溃。
+  - ② 插件自身写盘经 `_suppressExternalChanges()`（5s 窗口，`_mutate`/`sync`/`_runResolve`/`_applyCommittedChange` 开头）抑制，否则自己的 mutation 会激励一轮多余查询。
+  - ③ 窗口内到期的 flush **推迟一拍再放行，不丢批次**——排队路径是 mutation 的窄失效覆盖不到的真实外部改动。
+  - ④ **绝不用整目录重扫回应逐文件信号**。watcher 报的是具体路径，`reconcile -n -a -e -d <dir>/...` 在 45 万文件的工作区是分钟级；而窄查询按 argv 8000 字符分批、只 stat 指定文件。且重扫**并不更强**：渲染侧 `_scanFolders` 单调不可减（无 `slot.delete`，空 hints 是 no-op），重扫同样撤不掉已发布的色块。超过 `MAX_EXTERNAL_NARROW_PATHS`（2000，切大分支的病态量级）时降级为**只失效 checkpoint + 记日志**，色块滞后到下个 session——目录聚合本就被定义为单调下界。in-flight 扫描可能拿变更前的读把 checkpoint 写回，故用 `_externalReinvalidatePaths` 闩到本轮结束**重做失效**（只失效，不重扫）。
+  - ⑤ **settle 时的重做失效只能打没能合并的路径**（`_externalPatchedPaths` 排除集）。flush 已用 `_patchReconcileScanCheckpoints` 把窄查询的精确答案合并进 covering checkpoint，而合并自身的 `invalidate` + 重新 `wrap` 会 bump key generation（`p4Cache.ts` 的 fencing），在飞轮次那个基于旧读的写入本就会被拒绝——所以对已合并路径重做失效是**纯破坏性**的：`P4Cache.invalidate` 末行物理删盘，等于把刚校正好的 checkpoint 扔掉、把「重开又全量重扫」引回来。只有目录事件 / 超预算 / 查询失败（即 `_invalidateAndLatch` 的三条）才真需要重做。两个踩过的细节：**读集合必须先快照**（`new Set(...)`，曾经写成 `const patched = this._externalPatchedPaths` 别名，被紧随其后的 `clear()` 清空 → 跳过逻辑恒为假、静默退回破坏性行为）；**该集合的生命周期必须与 latch 集完全一致**（从 latch 到轮次 settle，只在 `.finally`/`_goOffline`/`dispose` 清），按 flush 清会让一次空 flush 或第二次 flush 抹掉前一次的补丁记录。守卫见 `clientReconcileScan.test.ts` 的 `keeps a checkpoint the flush patched…` 与 `remembers a patch across a second flush…`。
 - **状态栏计数**：`ClientStatus` 带 `openedCount`，`p4StatusBar.ts` 连接态下显示「client名 N个已打开」，对标 git ahead/behind。刷新在 `_doRefresh` 末尾更新 `_openedCount`，`_goOffline` 清零。
 
 ## 宿主泛化：p4/git 共用一个无偏见 host

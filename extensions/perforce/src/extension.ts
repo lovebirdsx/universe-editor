@@ -432,7 +432,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // outside any Perforce workspace disables the provider without crashing.
   let client: PerforceClient | undefined
   try {
-    client = await PerforceClient.create(root, fallback, gate, cacheOptions, log)
+    client = await PerforceClient.create(root, fallback, gate, cacheOptions, {
+      log,
+      watchRoot: root,
+      createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
+    })
   } catch (err) {
     if (isMissingCli(err)) {
       console.info('[perforce] p4 CLI not found; perforce source control disabled')
@@ -554,6 +558,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
     workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration('perforce.reconcileScan')) return
       void applyReconcileScanOptionsAll()
+    }),
+  )
+
+  /** Cap on rows in the "Working Tree Changes" group (`perforce.reconcileLimit`). */
+  const applyReconcileLimit = async (target: PerforceClient): Promise<void> => {
+    target.setReconcileLimit(await cfg.get('reconcileLimit', 10_000))
+  }
+  await applyReconcileLimit(client)
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('perforce.reconcileLimit')) return
+      void (async () => {
+        for (const c of mgr.all) await applyReconcileLimit(c)
+      })()
     }),
   )
 
@@ -1008,7 +1026,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
             fallback,
             gate,
             cacheOptions,
-            log,
+            {
+              log,
+              watchRoot: root,
+              createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
+            },
           ),
         wire: wireClient,
       })

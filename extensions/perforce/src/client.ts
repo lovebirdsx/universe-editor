@@ -13,8 +13,11 @@ import {
   commands,
   scm,
   window,
+  RelativePattern,
   type Command,
   type Disposable,
+  type FileSystemWatcher,
+  type GlobPattern,
   type QuickPickItem,
   type SourceControl,
   type SourceControlResourceGroup,
@@ -23,7 +26,7 @@ import {
 } from '@universe-editor/extension-api'
 import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
 import { createHash } from 'node:crypto'
-import { chmod, readFile, readdir, writeFile } from 'node:fs/promises'
+import { chmod, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
@@ -50,11 +53,17 @@ import {
   changelistIdFromGroupId,
   descriptionFirstLine,
   shelvedGroupId,
+  RECONCILE_GROUP_ID,
   RESOLVE_GROUP_ID,
   type PendingChangelist,
   type P4Action,
 } from './changelist.js'
-import { toResourceStates, toShelvedResourceStates, toWorkingTreeHint } from './p4Decoration.js'
+import {
+  toReconcileResourceState,
+  toResourceStates,
+  toShelvedResourceStates,
+  toWorkingTreeHint,
+} from './p4Decoration.js'
 import { parseShelved, type ShelvedFile } from './shelveParser.js'
 import { fstatBehind, parseFstat, type FstatInfo } from './fstatParser.js'
 import { parseFilelog, type FilelogRevision } from './filelogParser.js'
@@ -133,7 +142,18 @@ interface DesiredGroup {
  *  re-enqueues the subdirectories. */
 interface ReconcileScanEntry {
   readonly completedAt: number
-  readonly hints: WorkingTreeChangeDto[]
+  /**
+   * The directory's drift rows, verbatim from `reconcile -n`.
+   *
+   * Persisted as rows rather than as rendered hints because the SCM row derived
+   * from one carries a click command that only `action` can decide (`add` has no
+   * depot base, so it opens the file instead of a diff), and the rendered hint
+   * cannot recover it: add / branch / move-add all render in the same colour with
+   * no strike-through. Rows are the source both views derive from — the same
+   * reason `toWorkingTreeHint` derives from `toReconcileResourceState` instead of
+   * mapping the action a second time.
+   */
+  readonly files: ReconcileFile[]
   readonly split?: boolean
   /** Wall-clock ms the directory's batch took when this entry was written —
    *  persisted warm prior for the next session's pre-scan budget prediction
@@ -141,6 +161,28 @@ interface ReconcileScanEntry {
    *  checkpoints only; a split marker never carries one (its parent batch
    *  never completed a result to time). */
   readonly elapsedMs?: number
+}
+
+/**
+ * Parse a persisted checkpoint, returning undefined when the stored value is
+ * unusable — malformed JSON, or a shape this reader can't consume. Callers drop
+ * the checkpoint and rescan rather than trust a partial read: an older build
+ * persisted rendered hints under a different key, and reading `files` off one of
+ * those yields undefined, which would look like "this directory is clean".
+ */
+function parseReconcileScanEntry(raw: string): ReconcileScanEntry | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined
+  const entry = parsed as Partial<ReconcileScanEntry>
+  if (typeof entry.completedAt !== 'number') return undefined
+  if (entry.split === true) return entry as ReconcileScanEntry
+  if (!Array.isArray(entry.files)) return undefined
+  return entry as ReconcileScanEntry
 }
 
 export type ConnectionState = 'connected' | 'offline' | 'not-logged-in'
@@ -294,6 +336,90 @@ const RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000
  *  this interval (terminal frames bypass it via {@link PerforceClient._flushScanProgress}). */
 const SCAN_PROGRESS_THROTTLE_MS = 200
 
+/**
+ * Default cap on rows in the working-tree drift group, and the fallback when
+ * `perforce.reconcileLimit` is unset. Mirrors git's `git.statusLimit` default:
+ * assigning a group's `resourceStates` is O(rows) across the RPC boundary AND
+ * O(rows × depth) in the renderer's folder aggregation, and a workspace with
+ * more pending drift than this is one where the list has stopped being a work
+ * queue anyway. Truncation is logged and annotated in the group title — never
+ * silent.
+ */
+const RECONCILE_LIMIT_DEFAULT = 10_000
+
+/**
+ * Coalescing floor and per-row slope for drift-group assignments.
+ *
+ * A whole-array assignment is the only thing that makes retraction free (see
+ * {@link PerforceClient._applyDriftGroup}), but it also means every assignment
+ * costs O(rows) to build, to serialize across the RPC boundary, and to re-fold
+ * into folder decorations on the far side. The background scan lands a batch
+ * every few ms, so assigning per batch would push megabytes per second at a
+ * 9000-row workspace — the shape of the flood that got the resident group
+ * deleted in the first place.
+ *
+ * So the window scales with the set: small sets stay snappy (a save shows up in
+ * 300ms), large ones back off to seconds. Interval = `rows × slope`, clamped to
+ * [floor, ceiling].
+ */
+const DRIFT_APPLY_MIN_INTERVAL_MS = 300
+const DRIFT_APPLY_MAX_INTERVAL_MS = 5000
+const DRIFT_APPLY_MS_PER_ROW = 0.2
+
+/**
+ * Debounce window for external working-tree file events feeding the background
+ * reconcile scan. A bulk external change (a nested `git checkout`, another
+ * editor's save-all, an unzip) floods thousands of events in a few ms and then
+ * goes quiet, so 150ms of silence folds the whole burst into ONE narrow query —
+ * matching git's watcher debounce and this file's other 150ms conventions. The
+ * value is the *coalescing* window: one query per burst, never per event.
+ */
+const EXTERNAL_CHANGE_DEBOUNCE_MS = 150
+
+/**
+ * How many external paths one flush will still answer with a narrow
+ * `reconcile -n` query before it degrades to invalidate-only.
+ *
+ * The narrow query costs one p4 spawn per ~8000 argv chars ({@link chunkByLength}),
+ * so a few hundred paths is a handful of spawns — far cheaper than the recursive
+ * `<dir>/...` walk it replaced, which on a 450k-file workspace is minutes.
+ * Switching a big branch is the pathological case: tens of thousands of paths
+ * would become hundreds of spawns, so past this ceiling the flush only
+ * invalidates the covering checkpoints (and says so in the log — never a silent
+ * truncation) and leaves the folder tints to the next session's scan. That is
+ * safe by the channel's existing contract: the folder aggregate is a monotonic
+ * LOWER BOUND, and the file-level RC badge is not on this path at all — the
+ * renderer's own file watcher re-asks for it (`ScmWorkingTreeHintService`).
+ */
+const MAX_EXTERNAL_NARROW_PATHS = 2000
+
+/**
+ * How long a plugin-initiated disk mutation suppresses the external-change
+ * watcher. A mutation (`edit` / `revert` / `reconcile` / `sync` / `resolve`)
+ * rewrites workspace files, which the watcher would otherwise read as external
+ * drift and re-query — but the mutation's own
+ * {@link PerforceClient._invalidateAfterMutation} + post-mutation refresh
+ * already covers that. The window is sized to outlast a typical mutation plus
+ * its follow-up refresh, because watcher events arrive late (RPC forwarding is
+ * not synchronous with the child's writes) and would otherwise pile a second
+ * query on top. It is deliberately NOT tied to the child's lifetime: a mutation
+ * that outlives the window (a whole-workspace `sync`) leaks its late writes to
+ * the watcher and costs one redundant narrow query — wasteful, not wrong, and
+ * cheaper than keeping a suppression counter honest across every failure path.
+ *
+ * The cost runs the other way too, and is accepted: events arriving *inside* the
+ * window are dropped outright ({@link PerforceClient._onExternalFileEvent}), not
+ * deferred, so a genuinely external change landing during a mutation — or during
+ * the window a *failed* mutation still armed — waits for the next session's scan.
+ * Deferring them instead would mean queueing the mutation's own thousands of
+ * writes, which is the flood this window exists to stop; and the window must be
+ * armed before the child runs, since that is when the writes happen, so keying
+ * it on success is not an option. Events queued *before* the window opens are a
+ * different case and are deferred rather than dropped (see
+ * {@link PerforceClient._flushExternalChanges}).
+ */
+const SELF_MUTATION_SUPPRESS_MS = 5000
+
 /** What a `p4 sync` run reports back — see {@link PerforceClient.sync}. */
 export interface SyncRunResult {
   readonly ok: boolean
@@ -356,6 +482,38 @@ function displayScanDir(dir: string, root: string): string {
   return rel === '' ? '.' : rel.replace(/\\/g, '/')
 }
 
+/** Creates the RPC-backed working-tree watcher; injectable for tests (mirrors
+ *  git's `RepositoryWatcher.CreateFileSystemWatcher`). */
+export type CreateFileSystemWatcher = (globPattern: GlobPattern) => FileSystemWatcher
+
+/** Construction-time dependencies beyond the positional connection/cache params.
+ *  `log` is the output-channel logger; `createFileSystemWatcher` arms the
+ *  external-change watcher that keeps the reconcile-scan checkpoints honest —
+ *  when absent the client simply does not watch (external changes are then only
+ *  caught by the next session's checkpoint-expiry rescan). */
+export interface PerforceClientOptions {
+  readonly log?: (msg: string) => void
+  readonly createFileSystemWatcher?: CreateFileSystemWatcher
+  /**
+   * Directory the external-change watcher is anchored at — the OPEN FOLDER, not
+   * the client root. The two differ whenever the client root is an ancestor of
+   * the open folder (a game workspace mapping far more than what the user
+   * opened, which {@link discoverClient} explicitly accepts), and the difference
+   * decides how the watch is realized: a base inside the workspace joins the
+   * workbench's out-of-process watch plan and inherits its `files.watcherExclude`
+   * pruning, while a base OUTSIDE it arms an unfiltered in-main recursive
+   * `fs.watch` over the whole client root — which on linux is the ENOSPC crash
+   * `extensions/git/src/repositoryWatcher.ts` exists to avoid. Anchoring at the
+   * open folder is also never a coverage loss: the reconcile scope is resolved
+   * against that same folder, so nothing the scan can report lives above it.
+   * Absent (tests, `switchClient` before a folder is known) → no watch.
+   */
+  readonly watchRoot?: string
+  /** Overrides {@link EXTERNAL_CHANGE_DEBOUNCE_MS}; tests pass 0 so the
+   *  coalesced flush is a single deterministic macrotask. */
+  readonly externalChangeDebounceMs?: number
+}
+
 export class PerforceClient {
   private readonly _p4: P4Service
   private readonly _sc: SourceControl
@@ -367,6 +525,46 @@ export class PerforceClient {
    *  renders at the top (the SCM view renders groups in creation order). Hidden
    *  when empty, never in {@link _groups}, released in dispose(). */
   private readonly _resolveGroup: SourceControlResourceGroup
+  /** The pinned working-tree drift group — files whose disk content diverged from
+   *  the depot but that aren't opened. Created after {@link _resolveGroup} (a
+   *  conflict blocks submit, drift does not, and git renders Merge Changes above
+   *  Changes for the same reason) and before any changelist group. Hidden when
+   *  empty, never in {@link _groups}, released in dispose(). */
+  private readonly _reconcileGroup: SourceControlResourceGroup
+  /**
+   * The authoritative working-tree drift set, keyed by {@link scopeKey} of the
+   * row's local path. This is the single source the drift group and (via the
+   * renderer's own folder aggregation) the Explorer folder tint both read.
+   *
+   * It exists because the old design published each scanned directory's hints and
+   * then forgot them, folding the answer into an aggregate that stored only the
+   * winning file per directory. That aggregate is irretractable by construction —
+   * once file identity is discarded there is no way to answer "is anything ELSE
+   * in this directory still dirty", so a reverted folder stayed tinted. Keeping
+   * the rows makes retraction the free side effect of a whole-array assignment,
+   * exactly as it is for git.
+   */
+  private readonly _driftFiles = new Map<string, ReconcileFile>()
+  /** Which drift keys each scanned directory contributed, so re-scanning that
+   *  directory can drop its previous contribution without walking the whole set
+   *  (its new answer is authoritative for its own subtree, including rows an
+   *  earlier partial batch of the same directory had reported). */
+  private readonly _driftByScanDir = new Map<string, readonly string[]>()
+  /** Drift keys owned by the watcher's per-file channel rather than by a scanned
+   *  directory. Tracked separately so a later scan of a covering directory can
+   *  drop them: that scan's answer supersedes a per-file answer from before it,
+   *  and these keys are in no directory's contribution list. */
+  private readonly _driftWatchedKeys = new Set<string>()
+  private _driftApplyTimer: ReturnType<typeof setTimeout> | undefined
+  /** Whether the last assignment truncated at {@link _reconcileLimit}, so the
+   *  log line fires on the transition instead of once per assignment. */
+  private _driftTruncated = false
+  private _driftShown = 0
+  private _driftTotal = 0
+  /** Last label written to the group, so the throttled progress tick only crosses
+   *  the RPC boundary when the text actually changed. */
+  private _driftLabel: string | undefined
+  private _reconcileLimit = RECONCILE_LIMIT_DEFAULT
   /** Normalized client paths currently opened, from the last refresh. Lets the
    *  on-demand working-tree hint skip files p4 already tracks without a fresh
    *  `opened` round-trip. */
@@ -428,12 +626,63 @@ export class PerforceClient {
    *  scheduled and cleared when the connection drops ({@link _goOffline}) — a
    *  scan that never finished because the server went away must be able to
    *  re-arm when the connection comes back, because the un-scanned directories
-   *  have no checkpoints to resume from. A user-initiated cancel keeps it set:
-   *  that is a deliberate "stop scanning this session", and completed
-   *  checkpoints survive for the next one. */
+   *  have no checkpoints to resume from. That is the ONLY re-arm: an external
+   *  file change deliberately does not clear this, because its narrow query
+   *  already published the drift for this session (see
+   *  {@link _flushExternalChanges}) and the invalidated checkpoint is there for
+   *  the NEXT one. A user-initiated cancel keeps it set: that is a deliberate
+   *  "stop scanning this session", and completed checkpoints survive for the
+   *  next one. */
   private _reconcileScanArmed = false
   /** Configured ceiling for one directory batch (`perforce.reconcileScan.maxBatchDurationMs`). */
   private _reconcileScanMaxBatchMs = RECONCILE_SCAN_DEFAULT_MAX_BATCH_MS
+  /** Injected `workspace.createFileSystemWatcher` (undefined = no working-tree
+   *  watch; see {@link PerforceClientOptions}). */
+  private readonly _createFileSystemWatcher: CreateFileSystemWatcher | undefined
+  /** Directory the working-tree watch is anchored at — the open folder, NOT
+   *  {@link root} (see {@link PerforceClientOptions.watchRoot}). */
+  private readonly _watchRoot: string | undefined
+  /** Debounce delay for external file events ({@link EXTERNAL_CHANGE_DEBOUNCE_MS}). */
+  private readonly _externalChangeDebounceMs: number
+  /** The live RPC working-tree watcher, if {@link _createFileSystemWatcher} was
+   *  provided. */
+  private _workingTreeWatcher: FileSystemWatcher | undefined
+  /** Event subscriptions of {@link _workingTreeWatcher}, released in dispose(). */
+  private readonly _watcherSubscriptions: Disposable[] = []
+  /** Local paths the watcher reported since the last debounce flush — drained by
+   *  {@link _flushExternalChanges}. */
+  private readonly _externalChangePending = new Set<string>()
+  /** The pending debounce timer for {@link _externalChangePending}. */
+  private _externalChangeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Set while a flush has been deferred once past a mutation's suppression
+   *  window, so the retry flushes unconditionally instead of deferring forever
+   *  (see {@link _flushExternalChanges}). */
+  private _externalFlushDeferred = false
+  /** Paths whose checkpoint invalidation must be REDONE once the in-flight scan
+   *  round settles: that round may be re-writing a checkpoint from a read that
+   *  predates the change, undoing the invalidation the flush just did. Only
+   *  populated by the cases that cannot be patched in place (see
+   *  {@link _invalidateAndLatch}) — a patched checkpoint needs no replay, since
+   *  the patch bumps the key's generation and a round's stale write is refused.
+   *  Only the invalidation is replayed, never another scan round. */
+  private readonly _externalReinvalidatePaths = new Set<string>()
+  /** Paths {@link _flushExternalChanges} answered authoritatively by folding them
+   *  into a covering checkpoint. The settle-time replay
+   *  ({@link _externalReinvalidatePaths}) treats these as already-correct: a
+   *  merged checkpoint is the flush's own narrow-query answer, and re-invalidate
+   *  would only throw it away and re-introduce a full re-walk next session.
+   *  Its lifetime must match the latch set's exactly — from the latch to the
+   *  round's settle, cleared only where that set is (the scan's `.finally`,
+   *  {@link _goOffline}, `dispose`). Clearing it per flush instead would let an
+   *  empty flush, or a second flush before the round settles, forget a patch
+   *  whose latch entry survives — silently restoring the destructive replay. */
+  private readonly _externalPatchedPaths = new Set<string>()
+  /** The in-flight narrow query of {@link _flushExternalChanges}, awaited by
+   *  {@link whenExternalFlushSettled}. */
+  private _externalFlushInFlight: Promise<void> | undefined
+  /** `_now()` until which the watcher ignores events — the plugin's own
+   *  disk mutations (see {@link SELF_MUTATION_SUPPRESS_MS}). */
+  private _suppressExternalUntil = 0
   /** Grey ✎ markers (files other clients have open), keyed by {@link scopeKey}'d
    *  local path, published by {@link _publishSupplementaryDecorations}. */
   private readonly _othersDecorations = new Map<string, SourceControlSupplementaryDecoration>()
@@ -458,6 +707,8 @@ export class PerforceClient {
   private _scanProgressTimer: ReturnType<typeof setTimeout> | undefined
   /** Clock shared with the cache, so a test that advances one advances both. */
   private readonly _now: () => number
+  /** Output-channel logger, from {@link PerforceClientOptions.log}. */
+  private readonly _log: ((msg: string) => void) | undefined
 
   private constructor(
     readonly root: string,
@@ -465,9 +716,13 @@ export class PerforceClient {
     connection: P4Connection,
     gate: ConcurrencyGate,
     cacheOptions: P4CacheOptions,
-    private readonly _log?: (msg: string) => void,
+    options: PerforceClientOptions = {},
   ) {
-    this._p4 = new P4Service(root, gate, connection, _log)
+    this._log = options.log
+    this._createFileSystemWatcher = options.createFileSystemWatcher
+    this._watchRoot = options.watchRoot
+    this._externalChangeDebounceMs = options.externalChangeDebounceMs ?? EXTERNAL_CHANGE_DEBOUNCE_MS
+    this._p4 = new P4Service(root, gate, connection, this._log)
     this._now = cacheOptions.now ?? Date.now
     this._cache = new P4Cache(this._now, cacheOptions.disk, cacheOptions.enabled)
     registerP4CacheNamespaces(this._cache, cacheOptions.workspaceTtlMs)
@@ -480,11 +735,17 @@ export class PerforceClient {
       localize('perforce.group.resolve', 'Needs Resolve'),
     )
     this._resolveGroup.hideWhenEmpty = true
+    this._reconcileGroup = this._sc.createResourceGroup(
+      RECONCILE_GROUP_ID,
+      localize('perforce.group.reconcile', 'Working Tree Changes'),
+    )
+    this._reconcileGroup.hideWhenEmpty = true
     this._sc.inputBox.placeholder = localize(
       'perforce.input.placeholder',
       'Message for the default changelist',
     )
     this._setAcceptInput(false)
+    this._startExternalWatcher()
   }
 
   /** Discover the client for `folder` and build a PerforceClient, or undefined
@@ -494,19 +755,19 @@ export class PerforceClient {
     fallback: P4Connection,
     gate: ConcurrencyGate,
     cacheOptions: P4CacheOptions,
-    log?: (msg: string) => void,
+    options: PerforceClientOptions = {},
   ): Promise<PerforceClient | undefined> {
     // Connection-less probe first to resolve client + root from the environment.
-    const probe = new P4Service(folder, gate, undefined, log)
+    const probe = new P4Service(folder, gate, undefined, options.log)
     let discovered: DiscoveredClient | undefined
     try {
-      discovered = await discoverClient(probe, folder, fallback, log)
+      discovered = await discoverClient(probe, folder, fallback, options.log)
     } catch {
       // Spawn failed (p4 missing) — surfaced by the caller's guard.
       return undefined
     }
     if (!discovered) return undefined
-    return PerforceClient.createForClient(discovered, fallback, gate, cacheOptions, log)
+    return PerforceClient.createForClient(discovered, fallback, gate, cacheOptions, options)
   }
 
   /** Build a client for an already-known client name + root (the
@@ -520,7 +781,7 @@ export class PerforceClient {
     fallback: P4Connection,
     gate: ConcurrencyGate,
     cacheOptions: P4CacheOptions,
-    log?: (msg: string) => void,
+    options: PerforceClientOptions = {},
   ): PerforceClient {
     const connection = connectionFor(discovered, fallback)
     return new PerforceClient(
@@ -529,7 +790,7 @@ export class PerforceClient {
       connection,
       gate,
       cacheOptions,
-      log,
+      options,
     )
   }
 
@@ -542,6 +803,31 @@ export class PerforceClient {
       busyCancellable: this._cancelSources.length > 0,
       ...(this._scanProgress !== undefined ? { scanProgress: this._scanProgress } : {}),
     }
+  }
+
+  /**
+   * A read-only view of the working-tree drift set, keyed by the row's
+   * `scopeKey`. Tests assert the per-directory orchestration (which directories
+   * contributed what) against {@link scanDriftByDir} rather than against a
+   * renderer-push that no longer exists; production code has no caller.
+   */
+  get scanDrift(): ReadonlyMap<string, ReconcileFile> {
+    return this._driftFiles
+  }
+
+  /** Per-directory drift-key ownership, for the same tests (see {@link scanDrift}). */
+  get scanDriftByDir(): ReadonlyMap<string, readonly string[]> {
+    return this._driftByScanDir
+  }
+
+  /**
+   * The drift group's rendered rows, for the same tests (see {@link scanDrift}).
+   * The group is a resident SCM resource group whose rows are whole-array
+   * assigned on every drift settle, so a directory revert that clears the set
+   * is observable here as the group going empty. Production code has no caller.
+   */
+  get reconcileGroupStates(): readonly SourceControlResourceState[] {
+    return this._reconcileGroup.resourceStates
   }
 
   /**
@@ -638,6 +924,9 @@ export class PerforceClient {
     if (this._scanProgressTimer !== undefined) return
     this._scanProgressTimer = setTimeout(() => {
       this._scanProgressTimer = undefined
+      // The drift group's title carries the same progress the status bar does, so
+      // it rides the same coalescing window rather than re-rendering per batch.
+      this._updateDriftGroupLabel()
       this._emitChange()
     }, SCAN_PROGRESS_THROTTLE_MS)
     this._scanProgressTimer.unref?.()
@@ -650,6 +939,7 @@ export class PerforceClient {
       clearTimeout(this._scanProgressTimer)
       this._scanProgressTimer = undefined
     }
+    this._updateDriftGroupLabel()
     this._emitChange()
   }
 
@@ -707,7 +997,14 @@ export class PerforceClient {
    *  files. `undefined` or an empty list restores the whole-client default. */
   setReconcileScope(localPaths: readonly string[] | string | undefined): void {
     const paths = asScopeList(localPaths)
-    this._reconcileScopeDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+    const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+    if (sameScopeDirs(this._reconcileScopeDirs, nextDirs)) return
+    this._reconcileScopeDirs = nextDirs
+    // Every row in the drift set answers a question about the old scope, and the
+    // checkpoint fingerprint already orphans the persisted answers for the same
+    // reason. Dropping the rows keeps the panel from listing files the user just
+    // scoped out.
+    this._clearDrift()
   }
 
   /**
@@ -719,7 +1016,21 @@ export class PerforceClient {
    */
   setReconcileExcludes(localPaths: readonly string[] | string | undefined): void {
     const paths = asScopeList(localPaths)
-    this._reconcileExcludeDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+    const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
+    if (sameScopeDirs(this._reconcileExcludeDirs, nextDirs)) return
+    this._reconcileExcludeDirs = nextDirs
+    // Exclusions are applied when the group is assigned, not when rows are merged,
+    // so a narrowed exclusion list re-admits rows already in the set and a widened
+    // one drops them — one reassignment is the whole update.
+    this._scheduleDriftApply()
+  }
+
+  /** Cap on rows shown in the drift group (`perforce.reconcileLimit`). */
+  setReconcileLimit(limit: number | undefined): void {
+    const next = limit !== undefined && limit > 0 ? limit : RECONCILE_LIMIT_DEFAULT
+    if (next === this._reconcileLimit) return
+    this._reconcileLimit = next
+    this._scheduleDriftApply()
   }
 
   /**
@@ -958,6 +1269,10 @@ export class PerforceClient {
         .filter((f) => f.clientFile)
         .map((f) => [norm(f.clientFile!), f.changelist] as const),
     )
+    // `_openedPaths` just changed, and the drift group filters on it: a file
+    // collected since the last assignment must leave the drift group in the same
+    // frame it appears in its changelist group, or it shows in both.
+    this._applyDriftGroup()
     this._log?.(`[perforce] refresh total ${Date.now() - started}ms`)
     this._openedCount = countOpened(groups)
     this._sc.count = this._openedCount
@@ -1078,7 +1393,37 @@ export class PerforceClient {
    * keys are p4-reported like the values we compare them to.
    */
   async checkWorkingTree(paths: readonly string[]): Promise<WorkingTreeChangeDto[]> {
-    if (this._disposed || paths.length === 0) return []
+    const { rows } = await this._queryWorkingTreeRows(paths)
+    const hints: WorkingTreeChangeDto[] = []
+    for (const row of rows) {
+      const hint = toWorkingTreeHint(row)
+      if (hint) hints.push(hint)
+    }
+    return hints
+  }
+
+  /**
+   * The narrow `reconcile -n` query behind {@link checkWorkingTree}, in its raw
+   * row form.
+   *
+   * Two callers need two different things from one query, so the shared step
+   * stops at the rows: the host-facing hint channel renders them into DTOs, while
+   * the watcher's flush needs the rows themselves — the SCM row's click command
+   * depends on `action`, which the rendered hint cannot recover.
+   *
+   * `covered` is the subset of `paths` the query actually examined (opened and
+   * out-of-scope paths are dropped before spawning). It matters to the caller:
+   * "examined and not in `rows`" is the only defensible reading of "clean", and
+   * treating an unexamined path as clean would write a lie into a checkpoint.
+   *
+   * Each returned row's `clientFile` is rewritten to the caller's own spelling,
+   * for the reasons in {@link checkWorkingTree}'s echo note.
+   */
+  private async _queryWorkingTreeRows(
+    paths: readonly string[],
+  ): Promise<{ covered: readonly string[]; rows: readonly ReconcileFile[] }> {
+    const empty = { covered: [], rows: [] } as const
+    if (this._disposed || paths.length === 0) return empty
     const requested = new Map<string, string>()
     for (const p of paths) {
       const key = norm(p)
@@ -1086,20 +1431,19 @@ export class PerforceClient {
       if (!this._isInReconcileScope(p)) continue
       requested.set(scopeKey(p), p)
     }
-    if (requested.size === 0) return []
+    if (requested.size === 0) return empty
 
     const fresh = await this._rescanReconcilePaths([...requested.values()])
-    if (this._disposed) return []
+    if (this._disposed) return empty
 
-    const hints: WorkingTreeChangeDto[] = []
+    const rows: ReconcileFile[] = []
     for (const file of fresh) {
       if (!file.clientFile) continue
       const asAsked = requested.get(scopeKey(file.clientFile))
       if (asAsked === undefined) continue
-      const hint = toWorkingTreeHint(file)
-      if (hint) hints.push({ ...hint, path: asAsked })
+      rows.push({ ...file, clientFile: asAsked })
     }
-    return hints
+    return { covered: [...requested.values()], rows }
   }
 
   /**
@@ -1270,6 +1614,13 @@ export class PerforceClient {
     for (const live of this._groups.values()) live.resourceStates = []
     this._openedPaths = new Set()
     this._resolveGroup.resourceStates = []
+    // Drift is a claim about disk measured against the depot; with the server gone
+    // we can no longer justify half of it, and disarming the scan below means
+    // reconnecting rebuilds the set from scratch.
+    this._driftFiles.clear()
+    this._driftByScanDir.clear()
+    this._driftWatchedKeys.clear()
+    this._reconcileGroup.resourceStates = []
     this._unresolvedPaths = new Set()
     this._openedCount = 0
     this._sc.count = 0
@@ -1287,6 +1638,14 @@ export class PerforceClient {
     // directories get their scan when the connection comes back.
     this._reconcileScanCancelSource?.abort()
     this._reconcileScanArmed = false
+    // Whatever the watcher had queued or latched describes a workspace we can no
+    // longer ask the server about, and disarming above already means reconnecting
+    // re-walks everything those paths would have invalidated. Keeping the latch
+    // would just spend one doomed round on the way back.
+    this._externalChangePending.clear()
+    this._externalReinvalidatePaths.clear()
+    this._externalPatchedPaths.clear()
+    this._externalFlushDeferred = false
     this._log?.(`[perforce] ${this._clientName} → ${this._connection} (${kind})`)
     this._emitChange()
   }
@@ -1322,6 +1681,7 @@ export class PerforceClient {
     paths: readonly string[] = [],
   ): Promise<boolean> {
     if (args.length === 0) return false
+    this._suppressExternalChanges()
     return this._withBusy(this._busyLabel(label), async () => {
       const { value: result, cancelled } = await this._cancellable((signal) =>
         this._p4.exec([...args, ...paths], { signal }),
@@ -1375,26 +1735,44 @@ export class PerforceClient {
    * they describe on-disk drift, and a mutation is exactly what invalidates that
    * description. `invalidateFile` cannot reach them (it only walks ttl namespaces
    * and the scan keys are *directories*, which a file needle would never
-   * substring-match the right way around), so a narrow mutation drops every
-   * checkpoint whose scanned directory is an ancestor of a mutated path, and the
-   * full-clear branch drops the namespace outright.
+   * substring-match the right way around). Three branches, narrowest first: a
+   * per-file mutation drops the checkpoints covering each path; a bounded set of
+   * `<dir>/...` specs drops only the subtrees it touched (both directions — see
+   * {@link _invalidateReconcileScanUnder}); anything larger drops the namespace.
    */
   private _invalidateAfterMutation(paths: readonly string[]): void {
-    const narrow =
-      paths.length > 0 &&
-      paths.length <= MAX_FILE_SCOPED_INVALIDATIONS &&
-      !paths.some((p) => p.endsWith('/...'))
-    if (!narrow) {
-      this._invalidateWorkspaceState()
+    // The drift set describes the same on-disk divergence the checkpoints do, so
+    // it is corrected on every branch. Empty `paths` (submit / shelve) removes
+    // nothing, which is right: those operate on files that are already opened, and
+    // an unopened file's drift is unaffected by them.
+    this._removeDriftUnder(paths)
+    const bounded = paths.length > 0 && paths.length <= MAX_FILE_SCOPED_INVALIDATIONS
+    const recursive = paths.filter((p) => p.endsWith('/...'))
+    if (bounded && recursive.length === 0) {
+      for (const p of paths) {
+        this._cache.invalidateFile(p)
+        const normalized = norm(p)
+        if (normalized !== p) this._cache.invalidateFile(normalized)
+        this._invalidateReconcileScanFor(p)
+      }
+      this._cache.invalidateNamespace(P4CacheNs.opened)
       return
     }
-    for (const p of paths) {
-      this._cache.invalidateFile(p)
-      const normalized = norm(p)
-      if (normalized !== p) this._cache.invalidateFile(normalized)
-      this._invalidateReconcileScanFor(p)
+    // A bounded set of `<dir>/...` specs is a directory-scoped mutation, not a
+    // workspace-wide one. Clearing the whole checkpoint namespace for it is what
+    // made every directory Revert cost the next workspace open a full rescan —
+    // so scope the checkpoint drop to the subtrees actually touched and leave
+    // unrelated directories' checkpoints alone. The ttl layer is still cleared
+    // wholesale: it is cheap to refetch and a recursive mutation can move files
+    // between changelists anywhere in the view.
+    if (bounded && recursive.length === paths.length) {
+      this._cache.invalidateWorkspace()
+      for (const spec of recursive) {
+        this._invalidateReconcileScanUnder(spec.slice(0, -'/...'.length))
+      }
+      return
     }
-    this._cache.invalidateNamespace(P4CacheNs.opened)
+    this._invalidateWorkspaceState()
   }
 
   /** Drop the whole ttl layer plus the reconcile-scan checkpoints: the shared
@@ -1418,6 +1796,116 @@ export class PerforceClient {
       const dir = key.slice(key.indexOf(':') + 1)
       return isUnderAny(path, [dir])
     })
+  }
+
+  /** Drop the reconcile-scan checkpoints whose scanned directory sits inside
+   *  `dir` — the mirror of {@link _invalidateReconcileScanFor}, which drops the
+   *  ones that *cover* a path. A directory-recursive mutation stales both: its
+   *  own subtree's checkpoints describe only territory the mutation rewrote, and
+   *  an ancestor's checkpoint carries hints for that subtree among its own. */
+  private _invalidateReconcileScanUnder(dir: string): void {
+    this._cache.invalidateWhere(P4CacheNs.reconcileScan, (key) => {
+      const scanned = key.slice(key.indexOf(':') + 1)
+      return isUnderAny(scanned, [dir]) || isUnderAny(dir, [scanned])
+    })
+  }
+
+  /**
+   * Fold a narrow query's exact per-file answers into every checkpoint that
+   * covers those paths, rather than dropping the checkpoints.
+   *
+   * Invalidating is destructive here, not merely cautious: `P4Cache.invalidate`
+   * deletes the persisted copy too (it has to — the disk backend refuses to
+   * overwrite an existing id, so a surviving file would replay forever). With
+   * the default root-level scope a fast scan produces exactly ONE checkpoint for
+   * the whole workspace, and `isUnderAny` makes every file in the workspace
+   * "covered" by it — so answering one saved file by invalidating threw away a
+   * 450k-file scan and forced a full re-walk on the next open. That was the
+   * reported bug, and it was steady-state, not a startup edge.
+   *
+   * `completedAt` is preserved deliberately. It means "when this directory's
+   * scan completed", and the freshness ceiling is what eventually forces a real
+   * re-walk of the paths nobody asked about. Restamping it on every save would
+   * renew the 24h window indefinitely, so a checkpoint whose unqueried paths
+   * went stale long ago would never expire.
+   *
+   * Returns the paths whose answer was authoritatively folded into a checkpoint,
+   * so the caller can distinguish "the flush corrected this" from "the flush
+   * could not". The settle-time re-invalidation ({@link scheduleReconcileScan}'s
+   * `.finally`) must only re-invalidate the latter: a patched checkpoint is
+   * already correct, and its `wrap` generation bump fences off any stale write
+   * from a round that read the key before the patch.
+   */
+  private async _patchReconcileScanCheckpoints(
+    paths: readonly string[],
+    drift: ReadonlyMap<string, ReconcileFile>,
+  ): Promise<readonly string[]> {
+    const merged: string[] = []
+    for (const key of this._cache.keys(P4CacheNs.reconcileScan)) {
+      const dir = key.slice(key.indexOf(':') + 1)
+      const covered = paths.filter((p) => isUnderAny(p, [dir]))
+      if (covered.length === 0) continue
+      const raw = await this._cache.wrap(P4CacheNs.reconcileScan, key, async () => undefined)
+      if (raw === undefined) continue
+      const entry = parseReconcileScanEntry(raw)
+      if (entry === undefined) {
+        // Unreadable or legacy-shaped checkpoint: drop it instead of leaving a
+        // value no reader can use. The next scan writes a fresh one.
+        this._cache.invalidate(P4CacheNs.reconcileScan, key)
+        continue
+      }
+      // A split marker carries no rows — the real data lives in the
+      // subdirectory checkpoints, which this loop reaches on their own keys.
+      if (entry.split === true) continue
+      // Every queried path is superseded by this answer: present in `drift` means
+      // it still drifts, absent means the query found it clean. Dropping first
+      // and re-adding is what makes a now-clean file disappear from the
+      // checkpoint — the retraction the aggregate could never express.
+      const superseded = new Set(covered.map((p) => scopeKey(p)))
+      const kept = entry.files.filter(
+        (f) => f.clientFile === undefined || !superseded.has(scopeKey(f.clientFile)),
+      )
+      const files = [...kept]
+      for (const path of covered) {
+        const row = drift.get(scopeKey(path))
+        if (row !== undefined) files.push(row)
+      }
+      // The patch is authoritative for every covered path — whether or not this
+      // checkpoint changed. Skipping the rewrite for a quiet save is a disk-cost
+      // choice, not a "the path wasn't answered" one, so merge is recorded either
+      // way.
+      merged.push(...covered)
+      if (files.length === entry.files.length && kept.length === entry.files.length) {
+        // Nothing this checkpoint holds changed (the paths were clean before and
+        // are clean now) — skip the rewrite so a quiet save does not churn disk.
+        continue
+      }
+      this._cache.invalidate(P4CacheNs.reconcileScan, key)
+      await this._cache.wrap(P4CacheNs.reconcileScan, key, async () =>
+        JSON.stringify({
+          completedAt: entry.completedAt,
+          files,
+          ...(entry.elapsedMs !== undefined ? { elapsedMs: entry.elapsedMs } : {}),
+        } satisfies ReconcileScanEntry),
+      )
+      this._log?.(
+        `[perforce] reconcile-scan: patched ${dir} checkpoint (${entry.files.length} → ${files.length} drift row(s))`,
+      )
+    }
+    return merged
+  }
+
+  /** Whether `path` is a directory on disk. The narrow query is per-file, so a
+   *  directory event (a new folder, a moved subtree) matches no file row and
+   *  would read as "clean" — those paths must invalidate instead of patch. A
+   *  path that no longer exists is a deleted file, not a directory: `stat`
+   *  throwing IS the answer here, not an error to report. */
+  private async _isDirectoryPath(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isDirectory()
+    } catch {
+      return false
+    }
   }
 
   /** Human-friendly busy label for a raw p4 command label (e.g. `revert -k` →
@@ -1884,6 +2372,7 @@ export class PerforceClient {
     skipped: { depotFile: string; reason: string }[]
     keptOpen: { depotFile: string; reason: string }[]
   }> {
+    this._suppressExternalChanges()
     const applied: string[] = []
     const skipped: { depotFile: string; reason: string }[] = []
     const localByDepot = await this._whereLocalPaths(depotFiles)
@@ -2010,6 +2499,7 @@ export class PerforceClient {
     const targets = this._syncTargets(spec, options?.scope)
     const args = ['sync', ...(options?.force === true ? ['-f'] : []), ...targets]
     const onProgress = options?.onProgress
+    this._suppressExternalChanges()
     return this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
       let done = 0
       const onStdoutLine = onProgress
@@ -2343,9 +2833,13 @@ export class PerforceClient {
    * tail like the other background scans, but unlike them it does not re-arm
    * while armed: the scan checkpoints every completed directory, so a finished
    * scan (or a user-cancelled one, whose checkpoints survive) has nothing left
-   * to do until the next session. Going offline disarms it ({@link _goOffline})
-   * so the un-scanned directories — which have no checkpoints — are picked up
-   * when the connection comes back.
+   * to do until the next session. Only going offline legitimately re-arms it
+   * ({@link _goOffline} disarms it) so the un-scanned directories — which have
+   * no checkpoints — are picked up when the connection comes back. An external
+   * file change notably does NOT re-arm: it is answered by a narrow per-file
+   * query instead ({@link _flushExternalChanges}), because re-walking a
+   * directory to learn what a handful of paths already reported is the cost
+   * that design exists to avoid.
    */
   scheduleReconcileScan(): void {
     if (this._reconcileScanArmed) return
@@ -2370,6 +2864,26 @@ export class PerforceClient {
       })
       .finally(() => {
         if (this._backgroundReconcileScan === run) this._backgroundReconcileScan = undefined
+        // This round's view predates the external changes that landed while it
+        // was in flight, so it may have re-written a checkpoint the flush had
+        // just invalidated. Redo the invalidation now that nothing is writing —
+        // and only the invalidation: the flush's narrow query already published
+        // this session's tints, so another round would buy nothing. Paths the
+        // flush folded into a checkpoint are already correct (the merge bumped
+        // the key's generation, refusing the round's stale write), so they are
+        // skipped — re-invalidating them would only throw the corrected
+        // checkpoint away and re-introduce a full re-walk next session.
+        // Both sets are snapshotted before either is cleared: reading a live
+        // reference here once made the skip a no-op (the clear below emptied it
+        // before the loop asked), which silently restored the destructive
+        // behaviour this branch exists to prevent.
+        const patched = new Set(this._externalPatchedPaths)
+        const stale = [...this._externalReinvalidatePaths]
+        this._externalReinvalidatePaths.clear()
+        this._externalPatchedPaths.clear()
+        for (const path of stale) {
+          if (!patched.has(path)) this._invalidateReconcileScanFor(path)
+        }
       })
     this._backgroundReconcileScan = run
   }
@@ -2377,6 +2891,235 @@ export class PerforceClient {
   /** Await any in-flight reconcile scan (tests; also lets callers settle). */
   async whenReconcileScanSettled(): Promise<void> {
     await this._backgroundReconcileScan
+  }
+
+  /** Await the narrow query of an in-flight external-change flush (tests; the
+   *  flush is not part of {@link whenReconcileScanSettled} — that is the whole
+   *  point of the change that replaced the rescan with a per-file query). */
+  async whenExternalFlushSettled(): Promise<void> {
+    await this._externalFlushInFlight
+  }
+
+  // --- External-change watcher ----------------------------------------------
+
+  /**
+   * Arm the working-tree watcher that keeps the reconcile-scan checkpoints
+   * honest about external drift. It serves the *folder tint* channel only — the
+   * file-level RC badge is the renderer's job, and `ScmWorkingTreeHintService`
+   * already drops and re-asks a changed file's cache entry off its own file
+   * watcher, so nothing here needs to.
+   *
+   * The watcher is the RPC-backed `workspace.createFileSystemWatcher` (same shape
+   * as git's {@code RepositoryWatcher}), anchored at
+   * {@link PerforceClientOptions.watchRoot} — the open folder, NOT {@link root};
+   * that choice is what keeps the watch inside the workbench's out-of-process,
+   * `files.watcherExclude`-pruned plan instead of an unfiltered in-main recursive
+   * `fs.watch` (rationale on the option). No watchRoot (tests, a client built
+   * before the folder is known) means no watch. A failure to create it (e.g. the
+   * workspace is unmounted) degrades to a log line — external changes are then
+   * only caught by the next session's checkpoint-expiry rescan.
+   */
+  private _startExternalWatcher(): void {
+    if (!this._createFileSystemWatcher) return
+    const base = this._watchRoot
+    if (base === undefined) return
+    let watcher: FileSystemWatcher
+    try {
+      watcher = this._createFileSystemWatcher(new RelativePattern(base, '**/*'))
+    } catch (err) {
+      this._log?.(`[perforce] working-tree watcher unavailable: ${String(err)}`)
+      return
+    }
+    this._workingTreeWatcher = watcher
+    this._watcherSubscriptions.push(
+      watcher.onDidCreate((uri) => this._onExternalFileEvent(uri.fsPath)),
+      watcher.onDidChange((uri) => this._onExternalFileEvent(uri.fsPath)),
+      watcher.onDidDelete((uri) => this._onExternalFileEvent(uri.fsPath)),
+    )
+  }
+
+  /**
+   * One external file event. Cheap guards first (disposed / offline / the
+   * plugin's own mutation aftermath / excluded / out of scope), then the path is
+   * queued into the debounced pending set — invalidation and the narrow query
+   * happen once per burst in {@link _flushExternalChanges}, never per event.
+   */
+  private _onExternalFileEvent(path: string): void {
+    if (this._disposed) return
+    if (this._connection !== 'connected') return
+    if (this._now() < this._suppressExternalUntil) return
+    if (!path) return
+    if (!this._isInReconcileScope(path)) return
+    this._externalChangePending.add(path)
+    this._scheduleExternalInvalidation()
+  }
+
+  /** (Re)arm the single debounce timer for {@link _externalChangePending}. One
+   *  timer per burst: a bulk external change floods events for a few ms, and the
+   *  guard below means the whole burst coalesces into one flush — the flood
+   *  control that keeps it to one narrow query per batch. */
+  private _scheduleExternalInvalidation(): void {
+    if (this._externalChangeTimer !== undefined) return
+    this._externalChangeTimer = setTimeout(() => {
+      this._externalChangeTimer = undefined
+      // The catch is mandatory, not defensive: this promise is floating (only
+      // tests await it), and an unhandled rejection takes down the whole
+      // extension host — the same rule scheduleReconcileScan follows.
+      const flush = this._flushExternalChanges()
+        .catch((err: unknown) => {
+          this._log?.(`[perforce] external-change flush failed: ${String(err)}`)
+        })
+        .finally(() => {
+          if (this._externalFlushInFlight === flush) this._externalFlushInFlight = undefined
+        })
+      this._externalFlushInFlight = flush
+    }, this._externalChangeDebounceMs)
+    this._externalChangeTimer.unref?.()
+  }
+
+  /**
+   * Drain the pending external paths and answer them with a NARROW query: one
+   * `reconcile -n -a -e -d <those exact files>` (via {@link checkWorkingTree}),
+   * whose drift is published straight to the renderer. The watcher's signal is
+   * per-file, so the response is per-file — responding with the scan's recursive
+   * `<dir>/...` walk would spend minutes of a 450k-file workspace to learn what
+   * a handful of paths already told us.
+   *
+   * The answer is then merged INTO the covering checkpoints rather than dropping
+   * them ({@link _patchReconcileScanCheckpoints}) — dropping one is destructive
+   * to disk, and with a root-level scope every file in the workspace covers the
+   * single root checkpoint, so invalidating on save cost the next session a full
+   * re-walk. Three cases cannot be merged and still invalidate: a batch over
+   * {@link MAX_EXTERNAL_NARROW_PATHS} (no query, so no state), a directory event
+   * (the query is per-file and would read the directory as clean), and a failed
+   * query (unknown state, which must not be recorded as clean).
+   *
+   * A mutation that opened its suppression window *after* these paths were
+   * queued gets one debounce tick of grace, then the flush proceeds anyway
+   * instead of dropping the batch. Both halves matter: the queued paths are
+   * genuine external drift the mutation's narrow invalidation would not cover,
+   * so dropping them would strand a stale checkpoint until the next session;
+   * and flushing after exactly one deferral is what makes this terminate
+   * regardless of the clock (the injected test clock does not advance with the
+   * timer, and a long `sync` would otherwise defer for its whole duration). The
+   * mutation's *own* writes are never in this queue — they are dropped at
+   * {@link _onExternalFileEvent} while the window is open.
+   */
+  private async _flushExternalChanges(): Promise<void> {
+    // Disposed / offline: drop the queue outright. Offline is safe to drop
+    // because _goOffline already disarmed the scan, so reconnecting re-walks
+    // everything these paths would have invalidated.
+    if (this._disposed || this._connection !== 'connected') {
+      this._externalChangePending.clear()
+      this._externalFlushDeferred = false
+      return
+    }
+    if (
+      this._now() < this._suppressExternalUntil &&
+      !this._externalFlushDeferred &&
+      this._externalChangePending.size > 0
+    ) {
+      this._externalFlushDeferred = true
+      this._scheduleExternalInvalidation()
+      return
+    }
+    this._externalFlushDeferred = false
+    const paths = [...this._externalChangePending]
+    this._externalChangePending.clear()
+    if (paths.length === 0) return
+
+    // Above the budget the query itself is the expensive option, and without it
+    // there is no per-path state to merge — so this is the one case where
+    // dropping the checkpoints is right. The next session's re-walk is genuinely
+    // necessary: a branch switch really did change the whole tree's drift set.
+    if (paths.length > MAX_EXTERNAL_NARROW_PATHS) {
+      this._invalidateAndLatch(paths)
+      this._log?.(
+        `[perforce] ${paths.length} external changes exceed the ${MAX_EXTERNAL_NARROW_PATHS}-path narrow-query budget; checkpoints invalidated, folder tints deferred to the next scan`,
+      )
+      return
+    }
+
+    // Directory events can't be answered per-file, so they can't be merged —
+    // partition them out and drop their covering checkpoints instead. Whatever
+    // files landed inside a new directory arrive as their own events under the
+    // recursive watch, so this loses no drift; it only refuses to record "clean"
+    // for a path the query never really examined.
+    const directories: string[] = []
+    const files: string[] = []
+    for (const path of paths) {
+      if (await this._isDirectoryPath(path)) directories.push(path)
+      else files.push(path)
+    }
+    if (this._disposed || this._connection !== 'connected') return
+    if (directories.length > 0) this._invalidateAndLatch(directories)
+    if (files.length === 0) return
+    // Latched before the query, not after the patch: the whole span from here to
+    // the write is a window in which an in-flight round can install a checkpoint
+    // built from a pre-change read, and a patch cannot fence a checkpoint that
+    // does not exist yet.
+    this._latchForInFlightScan(files)
+
+    // Already filtered by _queryWorkingTreeRows (opened files, out-of-scope and
+    // excluded paths).
+    let covered: readonly string[]
+    let rows: readonly ReconcileFile[]
+    try {
+      ;({ covered, rows } = await this._queryWorkingTreeRows(files))
+    } catch (err) {
+      // The paths' state is unknown, and treating unknown as clean would write a
+      // lie into the checkpoint that nothing later corrects.
+      this._invalidateAndLatch(files)
+      this._log?.(`[perforce] external-change narrow query failed: ${String(err)}`)
+      return
+    }
+    if (this._disposed || this._connection !== 'connected') return
+
+    // `covered` — not `files` — is the authoritative set here: the query drops
+    // opened and out-of-scope paths before spawning, and calling those clean would
+    // record a claim the query never made.
+    this._applyDriftFromWatcher(covered, rows)
+    // The answer covers every examined path — drift for the ones present, clean
+    // for the ones absent — so the checkpoints can be corrected in place instead
+    // of thrown away.
+    const patched = await this._patchReconcileScanCheckpoints(
+      covered,
+      new Map(
+        rows
+          .filter((r) => r.clientFile !== undefined)
+          .map((r) => [scopeKey(r.clientFile!), r] as const),
+      ),
+    )
+    for (const path of patched) this._externalPatchedPaths.add(path)
+    if (this._disposed || this._connection !== 'connected') return
+  }
+
+  /** Drop the checkpoints covering `paths`, and latch for a settle-time replay. */
+  private _invalidateAndLatch(paths: readonly string[]): void {
+    for (const path of paths) this._invalidateReconcileScanFor(path)
+    this._latchForInFlightScan(paths)
+  }
+
+  /**
+   * Remember `paths` for a re-invalidation once an in-flight scan round settles.
+   * Needed even when the flush patched successfully: a patch only bumps the key
+   * generation for checkpoints that ALREADY EXIST, and a round in flight has not
+   * written its own yet. Its write is a read that predates the change, so
+   * without this the round would install a checkpoint that says "clean" for a
+   * path this flush just proved dirty — and nothing would correct it until the
+   * freshness ceiling expired a day later.
+   */
+  private _latchForInFlightScan(paths: readonly string[]): void {
+    if (this._backgroundReconcileScan === undefined) return
+    for (const path of paths) this._externalReinvalidatePaths.add(path)
+  }
+
+  /** Mark the start of a plugin-initiated disk mutation so the watcher ignores
+   *  the workspace writes it causes (they are the mutation's own effect, already
+   *  covered by {@link _invalidateAfterMutation} + the post-mutation refresh —
+   *  the watcher must not pile a second round on top). */
+  private _suppressExternalChanges(): void {
+    this._suppressExternalUntil = this._now() + SELF_MUTATION_SUPPRESS_MS
   }
 
   /**
@@ -2470,9 +3213,16 @@ export class PerforceClient {
             // measured elapsed ms is still the best cost signal for the
             // directory — keep it across the invalidation.
             let priorElapsedMs: number | undefined
-            if (cached !== undefined) {
-              const entry = JSON.parse(cached) as ReconcileScanEntry
-              if (entry.split) {
+            const cachedEntry = cached === undefined ? undefined : parseReconcileScanEntry(cached)
+            if (cached !== undefined && cachedEntry === undefined) {
+              // Unreadable or legacy-shaped checkpoint (an older build persisted
+              // rendered hints, which cannot recover the row's action): drop it and
+              // rescan rather than replay a shape this reader can't use.
+              this._cache.invalidate(P4CacheNs.reconcileScan, key)
+              this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint unusable; rescanning`)
+            }
+            if (cachedEntry !== undefined) {
+              if (cachedEntry.split) {
                 // A split marker means the parent's slow batch was already split in
                 // an earlier session and its own result was published back then.
                 // Replaying the parent's hints here would double-publish (each
@@ -2493,8 +3243,12 @@ export class PerforceClient {
                 // the marker and fall through to rescan the parent rather than
                 // replaying a split that can never resume.
                 this._cache.invalidate(P4CacheNs.reconcileScan, key)
-              } else if (this._now() - entry.completedAt <= RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS) {
-                this._publishReconcileScanEntry(dir, entry)
+              } else if (
+                this._now() - cachedEntry.completedAt <=
+                RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS
+              ) {
+                this._acceptReconcileScanEntry(dir, cachedEntry)
+                driftFound += cachedEntry.files.length
                 this._log?.(`[perforce] reconcile-scan: ${dir} served from checkpoint`)
                 done += 1
                 pending -= 1
@@ -2505,7 +3259,7 @@ export class PerforceClient {
                 // disk any more: drop it and fall through to rescan now, so a
                 // directory whose drift changed between sessions is corrected this
                 // session instead of replaying a stale "clean"/"changed" answer.
-                priorElapsedMs = entry.elapsedMs
+                priorElapsedMs = cachedEntry.elapsedMs
                 this._cache.invalidate(P4CacheNs.reconcileScan, key)
                 this._log?.(`[perforce] reconcile-scan: ${dir} checkpoint expired; rescanning`)
               }
@@ -2616,7 +3370,7 @@ export class PerforceClient {
               continue
             }
             if (batch.partial) {
-              // Publish what streamed before the kill — it is a lower bound of the
+              // Keep what streamed before the kill — it is a lower bound of the
               // directory's drift — but NEVER checkpoint it: a partial result saved
               // as complete would freeze the missed paths into later sessions (the
               // exact worst case). A timeout is conclusive proof the directory is
@@ -2626,30 +3380,29 @@ export class PerforceClient {
               driftFound += batch.files.length
               const entry: ReconcileScanEntry = {
                 completedAt: this._now(),
-                hints: batch.files
-                  .map((file) => toWorkingTreeHint(file))
-                  .filter((h): h is WorkingTreeChangeDto => h !== undefined),
+                files: [...batch.files],
               }
-              // Nothing streamed → nothing to push; an empty publish is a wasted
-              // cross-process RPC the renderer would iterate and drop anyway.
-              if (entry.hints.length > 0) this._publishReconcileScanEntry(dir, entry)
+              // A partial answer is a lower bound, so it may only ADD: replacing the
+              // directory's contribution here would retract rows an earlier batch
+              // legitimately found in the part this run never reached.
+              for (const file of entry.files) this._upsertDriftRow(dir, file)
               const subdirs = await this._listSubdirs(dir)
               done += 1
               pending += subdirs.length - 1
               if (subdirs.length > 0) {
                 this._log?.(
-                  `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.hints.length} drift hint(s), splitting into ${subdirs.length} subdirectories`,
+                  `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), splitting into ${subdirs.length} subdirectories`,
                 )
                 queue.push(...subdirs)
-                // Split marker with no hints — the parent's own result was just
-                // published, so the marker only resumes later sessions at the
-                // subdirectories.
+                // Split marker with no rows — the parent's partial rows are already
+                // in the drift set, so the marker only resumes later sessions at
+                // the subdirectories.
                 await this._writeReconcileScanSplitCheckpoint(key)
                 this._setScanProgress(done, pending, undefined, driftFound)
                 continue
               }
               this._log?.(
-                `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.hints.length} drift hint(s), no subdirectories to split; leaving un-checkpointed`,
+                `[perforce] reconcile-scan: ${dir} timed out after ${elapsed}ms — kept ${entry.files.length} drift row(s), no subdirectories to split; leaving un-checkpointed`,
               )
               this._setScanProgress(done, pending, undefined, driftFound)
               continue
@@ -2657,15 +3410,13 @@ export class PerforceClient {
             driftFound += batch.files.length
             const entry: ReconcileScanEntry = {
               completedAt: this._now(),
-              hints: batch.files
-                .map((file) => toWorkingTreeHint(file))
-                .filter((h): h is WorkingTreeChangeDto => h !== undefined),
+              files: [...batch.files],
               // Warm prior for the next session's budget prediction: a
               // measurement beats any size estimate, so persist it with the
               // result.
               elapsedMs: elapsed,
             }
-            this._publishReconcileScanEntry(dir, entry)
+            this._acceptReconcileScanEntry(dir, entry)
             batches++
             done += 1
             pending -= 1
@@ -2675,7 +3426,7 @@ export class PerforceClient {
             // already hashed the whole subtree, so splitting multiplies the total
             // work by depth for zero new information. Checkpoint it as a result
             // and let the freshness ceiling schedule the rescan instead.
-            if (entry.hints.length > 0 && elapsed > this._reconcileScanMaxBatchMs) {
+            if (entry.files.length > 0 && elapsed > this._reconcileScanMaxBatchMs) {
               const subdirs = await this._listSubdirs(dir)
               if (subdirs.length > 0) {
                 this._log?.(
@@ -2702,6 +3453,9 @@ export class PerforceClient {
             this._log?.('[perforce] reconcile-scan cancelled; checkpoints kept')
             return
           }
+          // Final flush so the group settles in the same tick the scan does — see
+          // _flushDriftApply.
+          this._flushDriftApply()
           this._log?.(
             `[perforce] reconcile-scan complete: ${batches} batch(es), ${done} directories, ${driftFound} drift file(s)`,
           )
@@ -2789,7 +3543,7 @@ export class PerforceClient {
       : `local file count ≥ ${prediction.value} (stopped counting at the threshold)`
   }
 
-  /** Persist a split marker for `key`: hints stays empty (the parent's own
+  /** Persist a split marker for `key`: `files` stays empty (the parent's own
    *  result was already published, or never produced at all — a slow failure
    *  and a pre-split on budget priors both skip the parent batch without a
    *  result), so the next session resumes at the subdirectories rather than
@@ -2802,28 +3556,251 @@ export class PerforceClient {
     await this._cache.wrap(P4CacheNs.reconcileScan, key, async () =>
       JSON.stringify({
         completedAt: this._now(),
-        hints: [],
+        files: [],
         split: true,
       } satisfies ReconcileScanEntry),
     )
   }
 
   /**
-   * Push one scanned directory to the renderer. Filtered again at publish time,
-   * not just scan time, for two reasons the producers can't cover: a checkpoint
-   * replayed on a later session must not resurrect hints for files collected
-   * since the JSON was written; and excluded paths must be dropped — an active
-   * batch's p4 can still report lines inside an excluded directory (a path shape
-   * the carve doesn't cover, or p4's own matching), and a checkpoint written
-   * before the exclusion fix under the same fingerprint carries
-   * excluded-directory hints a replay would resurrect (the fingerprint only
-   * orphans whole batches on a config change; these two cases are not one).
+   * Accept one scanned directory's result as that directory's authoritative drift
+   * contribution.
+   *
+   * The merge REPLACES the directory's previous contribution rather than adding to
+   * it: the batch answered `<dir>/...` recursively, so what it did not report is
+   * clean, and a row an earlier partial batch of the same directory reported must
+   * not survive its complete answer. That replacement — not any extra retraction
+   * logic — is what makes a reverted folder go clean.
    */
-  private _publishReconcileScanEntry(dir: string, entry: ReconcileScanEntry): void {
-    const hints = entry.hints.filter(
-      (h) => !this._openedPaths.has(norm(h.path)) && !this._isExcluded(h.path),
+  private _acceptReconcileScanEntry(dir: string, entry: ReconcileScanEntry): void {
+    this._mergeDriftFromScan(dir, entry.files)
+  }
+
+  /** Replace `dir`'s contribution to the drift set with `files`. Also drops the
+   *  watcher-owned keys inside `dir`: a directory batch that just finished is a
+   *  later, wider observation than any per-file answer from before it. */
+  private _mergeDriftFromScan(dir: string, files: readonly ReconcileFile[]): void {
+    for (const key of this._driftByScanDir.get(dir) ?? []) this._driftFiles.delete(key)
+    for (const key of [...this._driftWatchedKeys]) {
+      const existing = this._driftFiles.get(key)
+      const path = existing?.clientFile
+      if (path !== undefined && !isUnderAny(path, [dir])) continue
+      this._driftFiles.delete(key)
+      this._driftWatchedKeys.delete(key)
+    }
+    const keys: string[] = []
+    for (const file of files) {
+      if (!file.clientFile) continue
+      const key = scopeKey(file.clientFile)
+      this._driftFiles.set(key, file)
+      keys.push(key)
+    }
+    this._driftByScanDir.set(dir, keys)
+    this._scheduleDriftApply()
+  }
+
+  /** Add one row to `dir`'s contribution without retracting anything, for a
+   *  partial (timed-out) batch whose silence proves nothing. */
+  private _upsertDriftRow(dir: string, file: ReconcileFile): void {
+    if (!file.clientFile) return
+    const key = scopeKey(file.clientFile)
+    this._driftFiles.set(key, file)
+    const keys = this._driftByScanDir.get(dir)
+    if (keys === undefined) this._driftByScanDir.set(dir, [key])
+    else if (!keys.includes(key)) this._driftByScanDir.set(dir, [...keys, key])
+    this._scheduleDriftApply()
+  }
+
+  /**
+   * Fold a narrow query's per-file answer into the drift set: `rows` still drift,
+   * every other path in `covered` was examined and found clean.
+   *
+   * Per-file upsert/delete is exactly the granularity the watcher signal has, and
+   * it is the half the scan cannot supply — the scan runs once per session, so
+   * without this a file edited externally after the scan would stay invisible (or
+   * a file cleaned up externally would stay listed) until the next session.
+   */
+  private _applyDriftFromWatcher(covered: readonly string[], rows: readonly ReconcileFile[]): void {
+    const drifting = new Map(
+      rows
+        .filter((r) => r.clientFile !== undefined)
+        .map((r) => [scopeKey(r.clientFile!), r] as const),
     )
-    this._sc.publishWorkingTreeScan([{ directory: dir, changes: hints }])
+    for (const path of covered) {
+      const key = scopeKey(path)
+      const row = drifting.get(key)
+      if (row === undefined) {
+        this._driftFiles.delete(key)
+        this._driftWatchedKeys.delete(key)
+        continue
+      }
+      this._driftFiles.set(key, row)
+      this._driftWatchedKeys.add(key)
+    }
+    this._scheduleDriftApply()
+  }
+
+  /**
+   * Drop the drift rows a successful mutation just resolved. `paths` are p4
+   * filespecs, so a `<dir>/...` entry drops the whole subtree.
+   *
+   * Deliberately independent of whether the mutation's plan was complete: an
+   * excluded subdirectory, a partially failed revert, a multi-select mixing files
+   * and directories all leave the drift set optimistic, and the watcher's disk
+   * events plus the next narrow query are the authority that corrects it. Removing
+   * eagerly is still right — the row the user just acted on must leave the list
+   * immediately, not after a round-trip.
+   */
+  private _removeDriftUnder(paths: readonly string[]): void {
+    if (paths.length === 0 || this._driftFiles.size === 0) return
+    const dirs: string[] = []
+    const files = new Set<string>()
+    for (const path of paths) {
+      if (path.endsWith('/...')) dirs.push(path.slice(0, -'/...'.length))
+      else files.add(scopeKey(path))
+    }
+    let removed = 0
+    for (const [key, row] of [...this._driftFiles]) {
+      const local = row.clientFile
+      const hit =
+        files.has(key) || (local !== undefined && dirs.length > 0 && isUnderAny(local, dirs))
+      if (!hit) continue
+      this._driftFiles.delete(key)
+      this._driftWatchedKeys.delete(key)
+      removed++
+    }
+    if (removed === 0) return
+    // The scan-directory index would otherwise keep pointing at keys that are
+    // gone; harmless for lookups but it would resurrect nothing and cost nothing
+    // to leave, so only the per-directory lists that lost entries are rebuilt.
+    for (const [dir, keys] of [...this._driftByScanDir]) {
+      const kept = keys.filter((k) => this._driftFiles.has(k))
+      if (kept.length !== keys.length) this._driftByScanDir.set(dir, kept)
+    }
+    this._scheduleDriftApply()
+  }
+
+  /** Drop the whole drift set — the scope changed, so every row in it answers a
+   *  question nobody asked. */
+  private _clearDrift(): void {
+    if (this._driftFiles.size === 0 && this._driftByScanDir.size === 0) return
+    this._driftFiles.clear()
+    this._driftByScanDir.clear()
+    this._driftWatchedKeys.clear()
+    this._scheduleDriftApply()
+  }
+
+  /** Coalesce drift-group assignments; see {@link DRIFT_APPLY_MIN_INTERVAL_MS} for
+   *  why the window scales with the row count. */
+  private _scheduleDriftApply(): void {
+    if (this._driftApplyTimer !== undefined) return
+    const interval = Math.min(
+      DRIFT_APPLY_MAX_INTERVAL_MS,
+      Math.max(DRIFT_APPLY_MIN_INTERVAL_MS, this._driftFiles.size * DRIFT_APPLY_MS_PER_ROW),
+    )
+    this._driftApplyTimer = setTimeout(() => {
+      this._driftApplyTimer = undefined
+      this._applyDriftGroup()
+    }, interval)
+    this._driftApplyTimer.unref?.()
+  }
+
+  /**
+   * Flush a pending drift-group assignment immediately. A scan round ends with a
+   * final flush so the group settles in the same tick the scan does — the scan's
+   * "scanning x/y" suffix is cleared right after, and a still-pending coalesced
+   * apply would otherwise leave the panel showing a stale set during the gap.
+   */
+  private _flushDriftApply(): void {
+    if (this._driftApplyTimer !== undefined) {
+      clearTimeout(this._driftApplyTimer)
+      this._driftApplyTimer = undefined
+    }
+    this._applyDriftGroup()
+  }
+
+  /**
+   * Assign the drift group's rows — the ONLY place `_reconcileGroup.resourceStates`
+   * is written, and always the whole array.
+   *
+   * Whole-array assignment is the load-bearing part: the renderer rebuilds its
+   * file and folder decorations from the new array outright, so a row that left
+   * the set takes its folder tint with it, ancestors included. Patching individual
+   * rows would put us back where the folder aggregate was.
+   *
+   * The two filters run here rather than at merge time so they re-evaluate for
+   * free: collecting a file makes it `opened`, and it should move to its changelist
+   * group on the next refresh without needing a rescan to forget it. They also
+   * cover two cases no producer can: a checkpoint replayed in a later session must
+   * not resurrect rows for files collected since the JSON was written, and an
+   * active batch's p4 can still report lines inside an excluded directory (a path
+   * shape the carve doesn't cover, or p4's own matching) — as can a checkpoint
+   * written before the exclusion existed under the same fingerprint, since the
+   * fingerprint only orphans whole batches on a config change.
+   */
+  private _applyDriftGroup(): void {
+    if (this._disposed) return
+    const rows = [...this._driftFiles.values()]
+      .filter(
+        (row) =>
+          row.clientFile !== undefined &&
+          !this._openedPaths.has(norm(row.clientFile)) &&
+          !this._isExcluded(row.clientFile),
+      )
+      .sort((a, b) => (a.clientFile! < b.clientFile! ? -1 : a.clientFile! > b.clientFile! ? 1 : 0))
+    const truncated = rows.length > this._reconcileLimit
+    if (truncated !== this._driftTruncated) {
+      this._driftTruncated = truncated
+      if (truncated) {
+        this._log?.(
+          `[perforce] working-tree drift exceeds perforce.reconcileLimit (${rows.length} > ${this._reconcileLimit}); showing the first ${this._reconcileLimit}`,
+        )
+      }
+    }
+    const shown = truncated ? rows.slice(0, this._reconcileLimit) : rows
+    this._reconcileGroup.resourceStates = shown
+      .map((row) => toReconcileResourceState(row))
+      .filter((s): s is SourceControlResourceState => s !== undefined)
+    this._driftShown = shown.length
+    this._driftTotal = rows.length
+    this._updateDriftGroupLabel()
+  }
+
+  /**
+   * Annotate the group title with scan progress while the background walk is still
+   * running, and with the truncation count when the list is capped.
+   *
+   * The progress suffix is not decoration: p4's drift discovery advances directory
+   * by directory rather than landing as one atomic `git status`, so an unannotated
+   * partial list reads as complete and the user would submit believing they had
+   * seen everything.
+   */
+  private _updateDriftGroupLabel(): void {
+    if (this._disposed) return
+    const base = localize('perforce.group.reconcile', 'Working Tree Changes')
+    const notes: string[] = []
+    const progress = this._scanProgress
+    if (progress !== undefined) {
+      notes.push(
+        localize('perforce.group.reconcile.scanning', 'scanning {0}/{1}', {
+          0: progress.done,
+          1: progress.done + progress.pending,
+        }),
+      )
+    }
+    if (this._driftShown < this._driftTotal) {
+      notes.push(
+        localize('perforce.group.reconcile.truncated', 'showing {0} of {1}', {
+          0: this._driftShown,
+          1: this._driftTotal,
+        }),
+      )
+    }
+    const label = notes.length === 0 ? base : `${base} (${notes.join(', ')})`
+    if (label !== this._driftLabel) {
+      this._driftLabel = label
+      this._reconcileGroup.label = label
+    }
   }
 
   /**
@@ -2920,6 +3897,7 @@ export class PerforceClient {
     args: readonly string[],
     candidates: readonly string[],
   ): Promise<boolean> {
+    this._suppressExternalChanges()
     return this._withBusy(this._busyLabel('resolve'), async () => {
       const { value: result, cancelled } = await this._cancellable((signal) =>
         this._p4.exec([...args], { signal }),
@@ -3178,11 +4156,50 @@ export class PerforceClient {
    *
    * `_mutate` refreshes afterwards, which rebuilds `_openedPaths` from a fresh
    * `p4 opened` — that's what drops these paths from the opened set, so the hint
-   * channel stops filtering them out as tracked.
+   * channel stops filtering them out as tracked. It does NOT, however, put them
+   * back into the working-tree drift set: the post-mutation invalidation
+   * (`_removeDriftUnder`) drops what the mutation resolved, and the mutation's own
+   * watcher events are suppressed — so without the narrow re-query below the files
+   * would stay invisible in "Working Tree Changes" until the next session's scan.
+   * Re-query them (`reconcile -n`, same dry-run as the watcher flush) and fold the
+   * still-diverged rows back in, so the group updates in this session.
    */
   async moveToReconcile(paths: readonly string[]): Promise<boolean> {
     if (paths.length === 0) return false
-    return this._mutate('revert -k', ['revert', '-k'], paths)
+    const ok = await this._mutate('revert -k', ['revert', '-k'], paths)
+    if (ok && !this._disposed && this._connection === 'connected') {
+      await this._reapplyDriftForMutation(paths)
+    }
+    return ok
+  }
+
+  /** Fold a mutation's own reverted paths back into the drift set, in place of the
+   *  watcher events the mutation suppressed. A bare directory is spelled as
+   *  `<dir>/...` for the dry-run; a `reconcile -n` returns the still-diverged rows
+   *  (a file the mutation un-opened is no longer in `_openedPaths`, so it is no
+   *  longer filtered out), and each is upserted exactly like
+   *  {@link _applyDriftFromWatcher}. A failed query just leaves drift where the
+   *  next session's scan will find it — never recorded as clean. */
+  private async _reapplyDriftForMutation(paths: readonly string[]): Promise<void> {
+    const specs: string[] = []
+    for (const path of paths) {
+      if (!path.endsWith('/...') && (await this._isDirectoryPath(path))) specs.push(`${path}/...`)
+      else specs.push(path)
+    }
+    if (specs.length === 0) return
+    try {
+      const result = await this._reconcileScanBatch(specs)
+      if (result === undefined || this._disposed || !result.files.length) return
+      for (const file of result.files) {
+        if (!file.clientFile) continue
+        const key = scopeKey(file.clientFile)
+        this._driftFiles.set(key, file)
+        this._driftWatchedKeys.add(key)
+      }
+      this._scheduleDriftApply()
+    } catch (err) {
+      this._log?.(`[perforce] re-apply drift after revert -k failed: ${String(err)}`)
+    }
   }
 
   /**
@@ -3957,6 +4974,28 @@ export class PerforceClient {
       this._scanProgressTimer = undefined
     }
     this._scanProgress = undefined
+    // A coalesced drift assignment must never fire into a disposed client either.
+    if (this._driftApplyTimer !== undefined) {
+      clearTimeout(this._driftApplyTimer)
+      this._driftApplyTimer = undefined
+    }
+    // Release the external-change watcher and its debounce timer: a pending
+    // coalesced flush must never fire into a disposed client, and the watcher
+    // subscriptions must not outlive it.
+    if (this._externalChangeTimer !== undefined) {
+      clearTimeout(this._externalChangeTimer)
+      this._externalChangeTimer = undefined
+    }
+    this._externalChangePending.clear()
+    this._externalReinvalidatePaths.clear()
+    this._externalPatchedPaths.clear()
+    for (const sub of this._watcherSubscriptions.splice(0)) sub.dispose()
+    try {
+      this._workingTreeWatcher?.dispose()
+    } catch {
+      // ignore
+    }
+    this._workingTreeWatcher = undefined
     // In-flight cancellable p4 spawns (a held reconcile batch, a submit) would
     // otherwise outlive the client and hang until the SpawnWatchdog kills them
     // — abort them so dispose settles them now. The disposed flag makes their
@@ -3966,6 +5005,7 @@ export class PerforceClient {
     for (const live of this._groups.values()) live.dispose()
     this._groups.clear()
     this._resolveGroup.dispose()
+    this._reconcileGroup.dispose()
     this._sc.dispose()
     this._changeListeners.clear()
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   clientToLocalPath,
   collapseScopeDirs,
+  commonAncestorDir,
   containsAny,
   isUnderAny,
   norm,
@@ -162,5 +163,33 @@ describe('collapseScopeDirs', () => {
 
   it('keeps sibling directories that only share a prefix', () => {
     expect(collapseScopeDirs(['C:/ws/A', 'C:/ws/AB'])).toEqual(['C:/ws/A', 'C:/ws/AB'])
+  })
+})
+
+describe('commonAncestorDir', () => {
+  it('returns the parent directory of a single path', () => {
+    expect(commonAncestorDir(['C:/ws/A/b.txt'])).toBe('c:/ws/A')
+  })
+
+  it('returns the deepest shared directory', () => {
+    expect(commonAncestorDir(['C:/ws/A/b.txt', 'C:/ws/A/sub/c.txt'])).toBe('c:/ws/A')
+  })
+
+  it('splits on segments, never on characters', () => {
+    // A character-wise prefix would answer `c:/ws/ma`, a directory that does not exist.
+    expect(commonAncestorDir(['C:/ws/main/a.txt', 'C:/ws/mate/b.txt'])).toBe('c:/ws')
+  })
+
+  it('normalizes separators (and folds the drive letter, like norm)', () => {
+    expect(commonAncestorDir(['C:\\ws\\A\\b.txt', 'C:/ws/A/c.txt'])).toBe('c:/ws/A')
+  })
+
+  it('keeps the first input casing for segments below the drive letter', () => {
+    expect(commonAncestorDir(['C:/ws/Client/a.txt', 'C:/ws/client/b.txt'])).toBe('c:/ws/Client')
+  })
+
+  it('returns empty for no shared root and for an empty list', () => {
+    expect(commonAncestorDir(['C:/ws/a.txt', 'D:/other/b.txt'])).toBe('')
+    expect(commonAncestorDir([])).toBe('')
   })
 })

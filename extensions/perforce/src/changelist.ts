@@ -75,6 +75,13 @@ export const DEFAULT_GROUP_ID = 'default'
  *  reports unresolved. Hidden when empty. */
 export const RESOLVE_GROUP_ID = 'resolve'
 
+/** Fixed group id for the working-tree drift group — files whose disk content
+ *  diverged from the depot but that aren't opened in any changelist. This is p4's
+ *  answer to git's `Changes`: the depot has no notion of them, so without a group
+ *  of their own they are invisible in the panel and impossible to act on. Hidden
+ *  when empty. */
+export const RECONCILE_GROUP_ID = 'reconcile'
+
 /** Build the `cl:<n>` group id for a numbered changelist. */
 export function numberedGroupId(id: string): string {
   return `cl:${id}`

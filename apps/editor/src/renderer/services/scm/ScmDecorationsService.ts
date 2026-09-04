@@ -99,14 +99,18 @@ export function scmPathKey(p: string): string {
   return p.replace(/\\/g, '/').toLowerCase()
 }
 
+/** Weight of a deleting change — the strongest non-conflict state. */
+const LETTER_WEIGHT_DELETE = 4
+
 /** Higher wins when several changes fold into one folder colour. */
 const LETTER_WEIGHT: Record<string, number> = {
   U: 5, // conflict / unmerged
-  D: 4, // deleted
+  D: LETTER_WEIGHT_DELETE, // deleted
   M: 4, // modified
   R: 4, // renamed
   C: 4, // copied
   A: 2, // added
+  RC: 2, // on disk but not opened in any changelist (perforce working-tree drift)
   '?': 1, // untracked
 }
 
@@ -163,6 +167,10 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
             const letter = res.contextValue ?? 'M'
             const color = res.decorations?.color ?? '#cccccc'
             const key = scmPathKey(res.resourceUri)
+            // A provider can mark a row struck-through without its letter saying
+            // `D`: perforce files every reconcile action under the single letter
+            // `RC`, so the delete case is only visible here.
+            const strikeThrough = res.decorations?.strikeThrough === true || letter === 'D'
             // Later groups (working tree) override earlier ones (staged), so the
             // file shows its most user-relevant state.
             files.set(key, {
@@ -171,10 +179,16 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
               ...(res.decorations?.tooltip !== undefined
                 ? { tooltip: res.decorations.tooltip }
                 : {}),
-              ...(letter === 'D' ? { strikeThrough: true } : {}),
+              ...(strikeThrough ? { strikeThrough: true } : {}),
             })
 
-            const weight = LETTER_WEIGHT[letter] ?? 3
+            // A deletion outranks any non-deleting change of the same letter
+            // class — without this an `RC` delete's red would lose the folder to
+            // whichever `RC` edit the iteration happened to reach first. `max`
+            // rather than assignment so it can only ever raise (a struck-through
+            // conflict keeps its higher weight).
+            const base = LETTER_WEIGHT[letter] ?? 3
+            const weight = strikeThrough ? Math.max(base, LETTER_WEIGHT_DELETE) : base
             for (const dir of ancestors(key, root)) {
               const prev = folderWeight.get(dir)
               if (prev === undefined || weight > prev) {

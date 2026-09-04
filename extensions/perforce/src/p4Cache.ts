@@ -217,6 +217,17 @@ export class P4Cache {
     this._disk?.delete?.(ns, key)
   }
 
+  /**
+   * The namespace's current in-memory keys, as a snapshot so the caller can
+   * rewrite entries while iterating. Deliberately memory-only, matching what
+   * {@link invalidateWhere} walks: an entry still sitting on disk that this
+   * session never read is one nothing can be merged into, because merging needs
+   * the value in hand.
+   */
+  keys(ns: string): readonly string[] {
+    return [...(this._store.get(ns)?.keys() ?? [])]
+  }
+
   /** Drop every entry in one namespace. */
   invalidateNamespace(ns: string): void {
     this._store.get(ns)?.clear()
@@ -352,8 +363,11 @@ export const P4CacheNs = {
    *  `<focus-fingerprint>:<dir>` and persisted so a workspace reopen resumes the
    *  scan where it stopped (per-directory checkpoints). Immutable only in the
    *  cache sense — a mismatch between the stored hints and the disk is corrected
-   *  by the renderer's file-event invalidation, and a focus change changes the
-   *  fingerprint so the whole batch is discarded, never reused. */
+   *  by the client's working-tree watcher invalidating the covering checkpoint
+   *  (which also answers the changed files with a narrow query, so this session
+   *  is corrected without a rescan), and a mutation or focus change drops the
+   *  entry / changes the fingerprint so the whole batch is discarded, never
+   *  reused. */
   reconcileScan: 'reconcileScan',
 } as const
 

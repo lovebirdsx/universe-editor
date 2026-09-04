@@ -145,6 +145,30 @@ describe('ScmDecorationsService', () => {
     expect(svc.getFolder(URI.file(`${ROOT}/dir`))?.color).toBe('#c74e39')
   })
 
+  it('a reconcile group tint clears when its rows are replaced by an empty array', () => {
+    // Bug C contract: reverting a directory empties the perforce drift group's
+    // resourceStates, and the derived fold must drop the folder tint it produced.
+    const resources = observableValue<ISourceControlResourceStateDto[]>('rc', [
+      res(`${ROOT}/dir/drift.txt`, 'RC', '#e2c08d', 'On disk'),
+    ])
+    const svc = local([
+      sourceControl([
+        {
+          id: 'reconcile',
+          handle: 1,
+          label: observableValue('l', 'reconcile'),
+          hideWhenEmpty: observableValue('h', false),
+          resources,
+        } as unknown as IScmGroupModel,
+      ]),
+    ])
+    expect(svc.getFolder(URI.file(`${ROOT}/dir`))?.color).toBe('#e2c08d')
+    expect(svc.getFolder(URI.file(`${ROOT}/dir`))?.letter).toBeUndefined()
+
+    resources.set([], undefined, undefined)
+    expect(svc.getFolder(URI.file(`${ROOT}/dir`))).toBeUndefined()
+  })
+
   it('keys are case- and separator-insensitive', () => {
     expect(scmPathKey('D:\\Repo\\A')).toBe('d:/repo/a')
   })

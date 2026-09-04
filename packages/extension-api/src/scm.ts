@@ -92,31 +92,6 @@ export interface SourceControlInputBox {
   readonly onDidChange: Event<string>
 }
 
-/** One changed path the provider reports as a working-tree hint, mirroring the
- *  wire's `WorkingTreeChangeDto` (extension-api cannot import extensions-common,
- *  so the shape is inlined). */
-export interface SourceControlWorkingTreeChange {
-  /** Local path (host-side, absolute). */
-  readonly path: string
-  /** Single status letter for the row badge. */
-  readonly letter: string
-  readonly color: string
-  readonly tooltip?: string
-  readonly strikeThrough?: boolean
-}
-
-/**
- * One directory batch of a provider's background working-tree scan: the
- * directory that was scanned plus every change found under it. An empty
- * `changes` array means "scanned, clean" — the provider sends no negative
- * entry for it; see {@link SourceControl.publishWorkingTreeScan}.
- */
-export interface SourceControlWorkingTreeScanEntry {
-  /** Local directory the scan covered (host-side, absolute). */
-  readonly directory: string
-  readonly changes: readonly SourceControlWorkingTreeChange[]
-}
-
 export interface SourceControl {
   readonly id: string
   readonly label: string
@@ -155,17 +130,6 @@ export interface SourceControl {
    * state costs no RPC traffic.
    */
   setSupplementaryDecorations(decorations: readonly SourceControlSupplementaryDecoration[]): void
-  /**
-   * Push one batch of the provider's background working-tree scan (see
-   * {@link SourceControlWorkingTreeScanEntry}). Batches accumulate as the scan
-   * progresses: each entry adds the changes it found for its directory, and a
-   * clean directory publishes no negative entry — the renderer keeps whatever it
-   * learned earlier for that directory until a later batch (or its own
-   * invalidation) says otherwise. This is a background-discovery channel — it
-   * feeds Explorer folder tints ahead of any file row being rendered, and must
-   * never be used to publish state that belongs in a resource group.
-   */
-  publishWorkingTreeScan(entries: readonly SourceControlWorkingTreeScanEntry[]): void
   dispose(): void
 }
 

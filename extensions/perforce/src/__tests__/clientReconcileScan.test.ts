@@ -4,9 +4,9 @@
  * rendered. This locks in:
  *  1. Each directory batch is published to the renderer the moment it lands and
  *     checkpointed into the persistent cache (per-directory resume points).
- *  2. A clean directory is a RESULT (checkpointed with an empty hint list), a
+ *  2. A clean directory is a RESULT (checkpointed with an empty file list), a
  *     failed batch is not — failure must never be cached as "nothing to see"
- *     (a SLOW failure only writes a split marker, never hints).
+ *     (a SLOW failure only writes a split marker, never files).
  *  3. A batch slower than `perforce.reconcileScan.maxBatchDurationMs` that found
  *     drift — or that fails after outlasting the ceiling — splits into its
  *     direct subdirectories; the split itself is checkpointed as a marker so
@@ -17,7 +17,7 @@
  *  5. A focus-scope change changes the checkpoint fingerprint, so scans from a
  *     different scope are never replayed.
  *  6. Cancellation stops the scan; completed checkpoints survive.
- *  7. Files already opened are filtered out at publish time.
+ *  7. Files already opened are filtered out when the drift group is assembled.
  *  8. Directory filespecs escape `@ # * %` (p4 filespec metacharacters).
  *  9. A mutation invalidates the scan checkpoints of every directory covering
  *     the mutated path (and a whole-workspace mutation clears the namespace).
@@ -32,10 +32,25 @@
  *     early-exit local file count exceeds the threshold; both priors stand
  *     down (normal batch) when they fit the budget, and an unreadable count
  *     degrades to a normal scan.
+ * 14. An external file change (working-tree watcher) is answered by a NARROW
+ *     `reconcile -n` about those exact files plus an incremental drift merge — never
+ *     by re-walking `<dir>/...`; the covering checkpoint is PATCHED in place with
+ *     that answer (preserving `completedAt`) rather than dropped, because with a
+ *     root-level scope every file covers the single root checkpoint and dropping
+ *     it cost the next session a full re-walk. Three cases still invalidate: a
+ *     bulk change past the path budget, a directory event (the query is per-file
+ *     and would read a directory as clean), and a failed query. An in-flight
+ *     round is fenced by re-invalidating once it settles — a patch cannot fence a
+ *     checkpoint that round has not written yet. Excluded / out-of-scope /
+ *     self-mutation / offline / disposed events query nothing at all.
  */
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FileSystemWatcher } from '@universe-editor/extension-api'
+import { expandP4Argv } from './expandP4Argv.js'
 
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new EventEmitter()
@@ -51,6 +66,19 @@ class FakeChildProcess extends EventEmitter {
 
 const spawnMock = vi.fn<(...args: unknown[]) => FakeChildProcess>()
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
+
+/** The extension window, mocked so a mutation-failure path can surface its toast
+ *  without a real host (the cleanest place is a failed-revert test). */
+const windowMock = vi.hoisted(() => ({
+  showErrorMessage: vi.fn(),
+  showWarningMessage: vi.fn(),
+  showInformationMessage: vi.fn(),
+  showQuickPick: vi.fn(),
+}))
+vi.mock('@universe-editor/extension-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@universe-editor/extension-api')>()
+  return { ...actual, window: windowMock }
+})
 
 /** The `node:fs/promises.readdir` the client uses for adaptive splitting. */
 const readdirMock = vi.hoisted(() =>
@@ -71,8 +99,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 const BRIDGE_KEY = '__universeExtensionHostBridge__'
-/** Every `publishWorkingTreeScan` batch every client pushed. */
-const published: Array<{ directory: string; changes: Array<{ path: string }> }> = []
+/** Every resource group created by the bridge, so a test can observe the drift
+ *  group's `resourceStates` after a scan settles (the publish wire was removed;
+ *  the resident group is the surviving observation point). */
+const groups: Array<{ id: string; resourceStates: unknown[] }> = []
+/** When true, assigning the drift group's `resourceStates` throws — the bridge
+ *  stand-in for a renderer that dies mid-publish (the deleted `publishWorkingTreeScan`
+ *  wire's throw path). */
+let reconcileGroupThrow = false
 function installScmBridge(): void {
   ;(globalThis as Record<string, unknown>)[BRIDGE_KEY] = {
     createSourceControl: () => ({
@@ -84,19 +118,31 @@ function installScmBridge(): void {
       commitTemplate: undefined,
       acceptInputCommand: undefined,
       acceptInputActions: undefined,
-      createResourceGroup: (id: string) => ({
-        id,
-        label: '',
-        hideWhenEmpty: undefined,
-        resourceStates: [],
-        dispose() {},
-      }),
-      setSupplementaryDecorations: () => {},
-      publishWorkingTreeScan: (
-        entries: Array<{ directory: string; changes: Array<{ path: string }> }>,
-      ) => {
-        published.push(...entries)
+      createResourceGroup: (id: string) => {
+        const group = {
+          id,
+          label: '',
+          hideWhenEmpty: undefined,
+          dispose() {},
+        } as {
+          id: string
+          label: string
+          hideWhenEmpty: unknown
+          resourceStates: unknown[]
+          dispose(): void
+        }
+        let states: unknown[] = []
+        Object.defineProperty(group, 'resourceStates', {
+          get: () => states,
+          set: (v: unknown[]) => {
+            if (reconcileGroupThrow) throw new Error('publish boom')
+            states = v
+          },
+        })
+        groups.push(group)
+        return group
       },
+      setSupplementaryDecorations: () => {},
       dispose() {},
     }),
   }
@@ -106,8 +152,11 @@ const { PerforceClient } = await import('../client.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 const { setP4CommandTimeoutSeconds } = await import('../p4Service.js')
 const { RECONCILE_SCAN_PRESPLIT_FILE_COUNT_THRESHOLD } = await import('../reconcileScanBudget.js')
+const { P4CacheDisk } = await import('../p4CacheDisk.js')
 type PerforceClientInstance = import('../client.js').PerforceClient
+type PerforceClientOptions = import('../client.js').PerforceClientOptions
 type P4CacheDiskBackend = import('../p4Cache.js').P4CacheDiskBackend
+type P4CacheDiskInstance = import('../p4CacheDisk.js').P4CacheDisk
 
 const ROOT = process.platform === 'win32' ? 'X:\\p4ws\\main' : '/p4ws/main'
 const LOCAL = process.platform === 'win32' ? 'X:/p4ws/main' : '/p4ws/main'
@@ -158,19 +207,38 @@ interface RespondOptions {
   reconcileHold?: (filespec: string) => boolean
   /** Opened files reported by `p4 opened` (client-syntax rows). */
   opened?: () => { rel: string; action?: string; change?: string }[]
+  /** Override the `p4 clean` (revert) exit code / stderr — a failed mutate. */
+  cleanExit?: number | undefined
+  cleanStderr?: string
 }
 
 const calls: string[][] = []
 
+/** Held reconcile children, so a test can let them close on demand instead of
+ *  only ever killing them (the in-flight-settle race needs the round to COMPLETE
+ *  normally while a watcher event is pending). */
+const heldChildren: { close: () => void }[] = []
+
+/** Close every child currently held open by `reconcileHold`. */
+function releaseHeld(): void {
+  for (const child of heldChildren.splice(0)) child.close()
+}
+
 function respond(opts: RespondOptions = {}): void {
   spawnMock.mockImplementation((...args: unknown[]) => {
-    const argv = (args[1] as string[]) ?? []
+    // Expanded, not raw: a narrow query large enough to sit on the char budget
+    // trips the spawn layer's `-x <argfile>`, and those paths would otherwise
+    // vanish from the recorded argv (see expandP4Argv).
+    const argv = expandP4Argv((args[1] as string[]) ?? [])
     calls.push(argv)
     const child = new FakeChildProcess()
     queueMicrotask(() => {
       const { stdout, stderr, exit, hold } = handle(argv, opts)
       if (stdout) child.stdout.emit('data', Buffer.from(stdout))
-      if (hold) return
+      if (hold) {
+        heldChildren.push({ close: () => child.emit('close', exit ?? 0) })
+        return
+      }
       if (stderr) child.stderr.emit('data', Buffer.from(stderr))
       child.emit('close', exit ?? 0)
     })
@@ -246,6 +314,13 @@ function handle(
     const rows = opts.reconcile?.(filespec) ?? []
     return { stdout: reconcileRows(rows) }
   }
+  if (cmd === 'clean') {
+    const exit = opts.cleanExit
+    if (exit !== undefined && exit !== 0) {
+      return { stdout: '', stderr: opts.cleanStderr ?? 'clean failed', exit }
+    }
+    return { stdout: '' }
+  }
   // changes / fstat / describe — succeed silently with no records.
   return { stdout: '' }
 }
@@ -255,12 +330,74 @@ function reconcileScans(): string[][] {
   return calls.filter((a) => subcommand(a) === 'reconcile' && a.includes('-n'))
 }
 
+/**
+ * The background scan's own spawns: a `reconcile -n` carrying at least one
+ * recursive/wildcard filespec (`<dir>/...` or a carved `<dir>/*`).
+ *
+ * Split from {@link narrowScans} because BOTH are `reconcile -n` — asserting on
+ * `reconcileScans().length` cannot tell "re-walked the whole directory" from
+ * "asked about three files", which is exactly the distinction the watcher's
+ * narrow-query design turns on.
+ */
+function fullScanScans(): string[][] {
+  return reconcileScans().filter((a) => a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+}
+
+/** The per-file spawns: a `reconcile -n` whose filespecs are all concrete paths
+ *  (the watcher flush and `checkWorkingTree`). */
+function narrowScans(): string[][] {
+  return reconcileScans().filter((a) => !a.some((arg) => /[/\\](\.\.\.|\*)$/.test(arg)))
+}
+
 let currentClock: ReturnType<typeof fakeClock> | undefined
+
+/** A controllable `FileSystemWatcher` fake: its three events can be fired by the
+ *  test with a filesystem path, mirroring git's `repositoryWatcher.test.ts`. */
+interface FakeWatcherController {
+  readonly watcher: FileSystemWatcher
+  readonly dispose: ReturnType<typeof vi.fn>
+  fire(kind: 'create' | 'change' | 'delete', path: string): void
+}
+
+function makeFakeWatcher(): FakeWatcherController {
+  const listeners = {
+    create: new Set<(uri: { fsPath: string }) => void>(),
+    change: new Set<(uri: { fsPath: string }) => void>(),
+    delete: new Set<(uri: { fsPath: string }) => void>(),
+  }
+  const dispose = vi.fn()
+  const watcher = {
+    ignoreCreateEvents: false,
+    ignoreChangeEvents: false,
+    ignoreDeleteEvents: false,
+    onDidCreate: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.create.add(fn)
+      return { dispose: () => listeners.create.delete(fn) }
+    },
+    onDidChange: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.change.add(fn)
+      return { dispose: () => listeners.change.delete(fn) }
+    },
+    onDidDelete: (fn: (uri: { fsPath: string }) => void) => {
+      listeners.delete.add(fn)
+      return { dispose: () => listeners.delete.delete(fn) }
+    },
+    dispose,
+  }
+  return {
+    watcher: watcher as unknown as FileSystemWatcher,
+    dispose,
+    fire(kind, path) {
+      for (const fn of [...listeners[kind]]) fn({ fsPath: path })
+    },
+  }
+}
 
 async function makeClient(
   opts: RespondOptions = {},
-  disk?: ReturnType<typeof fakeDisk>,
+  disk?: P4CacheDiskBackend,
   clock = fakeClock(),
+  clientOptions: PerforceClientOptions = {},
 ): Promise<PerforceClientInstance> {
   currentClock = clock
   respond(opts)
@@ -274,10 +411,42 @@ async function makeClient(
       now: clock.now,
       ...(disk ? { disk } : {}),
     },
-    undefined,
+    clientOptions,
   )
   expect(client).toBeDefined()
   return client!
+}
+
+/** Await a macrotask so the debounce flush (delay 0 in tests) and the re-armed
+ *  scan's own macrotask hop have both been scheduled. */
+function nextMacrotask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+// --- drift-set observations --------------------------------------------------
+//
+// The `publishWorkingTreeScan` wire was removed: the renderer now reads the
+// client's resident drift group. The group's rows are whole-array assigned on
+// every settle, so the rendered set is observable via `reconcileGroupStates`,
+// and the per-directory ownership (which directory contributed what, which is
+// exactly what the old `published[].directory` carried) via `scanDriftByDir`.
+
+/** The drift group's rendered rows as `{ path, letter }`, in group order. */
+function groupRows(client: PerforceClientInstance): Array<{ path: string; letter: string }> {
+  return client.reconcileGroupStates.map((s) => ({
+    path: s.resourceUri,
+    letter: s.contextValue ?? '',
+  }))
+}
+
+/** Every directory that contributed a drift observation, in landing order. */
+function scannedDirs(client: PerforceClientInstance): string[] {
+  return [...client.scanDriftByDir.keys()]
+}
+
+/** Every path that contributed a drift observation, in `scanDrift` key order. */
+function driftFiles(client: PerforceClientInstance): string[] {
+  return [...client.scanDrift.values()].flatMap((f) => (f.clientFile ? [f.clientFile] : []))
 }
 
 describe('PerforceClient.runReconcileScan', () => {
@@ -290,8 +459,11 @@ describe('PerforceClient.runReconcileScan', () => {
     // default so tests only override readdir when the count or a split matters.
     readdirMock.mockImplementation(async () => [])
     calls.length = 0
-    published.length = 0
+    groups.length = 0
+    reconcileGroupThrow = false
+    heldChildren.length = 0
     currentClock = undefined
+    windowMock.showErrorMessage.mockClear()
   })
   afterEach(() => {
     delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
@@ -306,38 +478,38 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(1)
-    expect(published[0]!.directory).toBe(LOCAL)
-    // The hint derives from the same reconcile row style as the resource group:
-    // letter RC, never the action letter.
-    expect(published[0]!.changes).toEqual([
-      expect.objectContaining({ path: `${LOCAL}/a.txt`, letter: 'RC' }),
-    ])
+    // The drift group now carries the row the old publish wire broadcast: the
+    // path is the local file and the letter is RC, never the action letter.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
     // One checkpoint under the scan namespace.
     expect(disk.store.size).toBe(1)
     const [key] = [...disk.store.keys()]
     expect(key).toContain('reconcileScan/')
-    const entry = JSON.parse(disk.store.get(key!)!) as { completedAt: number; hints: unknown[] }
+    const entry = JSON.parse(disk.store.get(key!)!) as { completedAt: number; files: unknown[] }
     expect(entry.completedAt).toBeTypeOf('number')
-    expect(entry.hints).toHaveLength(1)
+    expect(entry.files).toHaveLength(1)
   })
 
-  it('checkpoints a clean directory as a result (empty hint list)', async () => {
+  it('checkpoints a clean directory as a result (empty file list)', async () => {
     const disk = fakeDisk()
     const client = await makeClient({ reconcile: () => [] }, disk)
     client.setReconcileScope([LOCAL])
 
     await client.runReconcileScan()
 
-    expect(published).toEqual([{ directory: LOCAL, changes: [] }])
+    // A clean directory is a RESULT, not an absence — the dir key appears with an
+    // empty list, and the rendered group is empty.
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(client.scanDriftByDir.get(LOCAL)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(1)
-    const entry = JSON.parse([...disk.store.values()][0]!) as { hints: unknown[] }
-    expect(entry.hints).toEqual([])
+    const entry = JSON.parse([...disk.store.values()][0]!) as { files: unknown[] }
+    expect(entry.files).toEqual([])
   })
 
   // --- ② failure is never cached as clean ------------------------------------
 
-  it('leaves a failed directory un-checkpointed and unpushed', async () => {
+  it('leaves a failed directory un-checkpointed and unrendered', async () => {
     const disk = fakeDisk()
     const client = await makeClient(
       {
@@ -351,7 +523,9 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(0)
+    // Failure is not "clean": nothing enters the drift set, nothing renders.
+    expect(scannedDirs(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(0)
   })
 
@@ -369,7 +543,11 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toEqual([{ directory: LOCAL, changes: [] }])
+    // "no file(s) to reconcile" is a clean answer: the directory contributes a
+    // (empty) observation and checkpoints it.
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(client.scanDriftByDir.get(LOCAL)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(1)
   })
 
@@ -414,15 +592,11 @@ describe('PerforceClient.runReconcileScan', () => {
     // each subdirectory batch publishes in turn. Subdirectory paths come from
     // `readdir` + `path.join`, so assert with the same helper, not a hand-built
     // separator.
-    expect(published.map((p) => p.directory)).toEqual([
-      LOCAL,
-      join(LOCAL, 'sub1'),
-      join(LOCAL, 'sub2'),
-    ])
-    expect(published[0]!.changes).toHaveLength(1)
-    expect(published[1]!.changes).toHaveLength(1)
-    expect(published[2]!.changes).toHaveLength(0)
-    // The slow parent checkpoints the SPLIT itself (a marker with no hints — its
+    expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
+    expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toHaveLength(1)
+    expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toHaveLength(0)
+    // The slow parent checkpoints the SPLIT itself (a marker with no files — its
     // result was published just above), so the next session resumes at the
     // subdirectories instead of re-running the slow batch; the two fast
     // subdirectories checkpoint their results.
@@ -432,10 +606,10 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(parentKey).toBeDefined()
     const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
       split?: boolean
-      hints: unknown[]
+      files: unknown[]
     }
     expect(parentEntry.split).toBe(true)
-    expect(parentEntry.hints).toEqual([])
+    expect(parentEntry.files).toEqual([])
     expect(keys.some((k) => k.includes(join(LOCAL, 'sub1')))).toBe(true)
     expect(keys.some((k) => k.includes(join(LOCAL, 'sub2')))).toBe(true)
   })
@@ -479,10 +653,10 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The failed parent publishes nothing, but both subdirectory batches do.
-    expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
-    expect(published[0]!.changes).toHaveLength(1)
-    expect(published[1]!.changes).toHaveLength(0)
-    // The parent checkpoints the SPLIT marker (no hints — there was no result);
+    expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toHaveLength(1)
+    expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toHaveLength(0)
+    // The parent checkpoints the SPLIT marker (no files — there was no result);
     // the subdirectories checkpoint their results, so the next session resumes
     // at the subdirectories instead of re-running the doomed parent batch.
     const keys = [...disk.store.keys()]
@@ -491,10 +665,10 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(parentKey).toBeDefined()
     const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
       split?: boolean
-      hints: unknown[]
+      files: unknown[]
     }
     expect(parentEntry.split).toBe(true)
-    expect(parentEntry.hints).toEqual([])
+    expect(parentEntry.files).toEqual([])
     expect(keys.some((k) => k.includes(join(LOCAL, 'sub1')))).toBe(true)
     expect(keys.some((k) => k.includes(join(LOCAL, 'sub2')))).toBe(true)
   })
@@ -516,7 +690,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(0)
     expect(readdirMock).toHaveBeenCalledTimes(1)
   })
@@ -541,7 +716,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(0)
   })
 
@@ -552,7 +728,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(1)
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
     expect(disk.store.size).toBe(1)
     // Only the cold-prior count read the directory; the split path did not.
     expect(readdirMock).toHaveBeenCalledTimes(1)
@@ -575,7 +752,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(1)
+    expect(scannedDirs(client)).toEqual([LOCAL])
     expect(disk.store.size).toBe(1)
     const entry = JSON.parse([...disk.store.values()][0]!) as { split?: boolean }
     expect(entry.split).toBeUndefined()
@@ -603,10 +780,11 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toEqual([{ directory: LOCAL, changes: [] }])
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(client.scanDriftByDir.get(LOCAL)).toEqual([])
     expect(disk.store.size).toBe(1)
-    const entry = JSON.parse([...disk.store.values()][0]!) as { hints: unknown[]; split?: boolean }
-    expect(entry.hints).toEqual([])
+    const entry = JSON.parse([...disk.store.values()][0]!) as { files: unknown[]; split?: boolean }
+    expect(entry.files).toEqual([])
     expect(entry.split).toBeUndefined()
     // Only the cold-prior count read the directory; the split path did not.
     expect(readdirMock).toHaveBeenCalledTimes(1)
@@ -628,10 +806,11 @@ describe('PerforceClient.runReconcileScan', () => {
     await second.runReconcileScan()
 
     expect(reconcileScans()).toHaveLength(1)
-    expect(published).toHaveLength(2)
-    expect(published[1]!.changes).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: `${LOCAL}/a.txt` })]),
-    )
+    // Both sessions observe the same drift: the first from its own scan, the
+    // second replayed from the checkpoint (zero spawns). Each client owns its
+    // own resident drift set.
+    expect(groupRows(first)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
+    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
   })
 
   // --- ⑤ focus fingerprint ----------------------------------------------------
@@ -657,8 +836,9 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // B was never scanned under the old fingerprint — a new spawn answers it.
     expect(reconcileScans()).toHaveLength(2)
-    const pushed = published.flatMap((p) => p.changes.map((c) => c.path))
-    expect(pushed).toContain(`${LOCAL}/in-b.txt`)
+    // The scope change dropped the old drift set; only B's row survives.
+    expect(scannedDirs(client)).toEqual([`${LOCAL}/B`])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RC' }])
   })
 
   // --- ⑥ cancellation ---------------------------------------------------------
@@ -689,7 +869,8 @@ describe('PerforceClient.runReconcileScan', () => {
     const keys = [...disk.store.keys()]
     expect(keys).toHaveLength(1)
     expect(keys[0]).toContain(`${LOCAL}/A`)
-    expect(published.map((p) => p.directory)).toEqual([`${LOCAL}/A`])
+    expect(scannedDirs(client)).toEqual([`${LOCAL}/A`])
+    expect(driftFiles(client)).toEqual([`${LOCAL}/in-a.txt`])
     // The held child was killed exactly once.
     const held = reconcileScans().filter((a) => a.includes(`${LOCAL}/B/...`))
     expect(held).toHaveLength(1)
@@ -710,9 +891,8 @@ describe('PerforceClient.runReconcileScan', () => {
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
 
-    const pushed = published.flatMap((p) => p.changes.map((c) => c.path))
-    expect(pushed).not.toContain(`${LOCAL}/a.txt`)
-    expect(pushed).toContain(`${LOCAL}/b.txt`)
+    // The opened file is filtered at query time; only the unopened one renders.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/b.txt`, letter: 'RC' }])
   })
 
   // --- ⑧ background-only side effects -----------------------------------------
@@ -886,15 +1066,15 @@ describe('PerforceClient.runReconcileScan', () => {
     await second.runReconcileScan()
 
     expect(reconcileScans()).toEqual(firstScans)
-    // The parent's own hints are not double-published by the split replay; the
-    // subdirectory checkpoints publish theirs.
-    expect(published.map((p) => p.directory)).toEqual([
-      LOCAL,
-      join(LOCAL, 'sub1'),
-      join(LOCAL, 'sub2'),
-      join(LOCAL, 'sub1'),
-      join(LOCAL, 'sub2'),
-    ])
+    // The parent's own hints are not double-published by the split replay: in the
+    // first session the parent batch published top.txt and each subdirectory its
+    // own; in the second session the parent is served from its split marker (which
+    // re-enqueues only the subdirectories), so its LOCAL key never re-enters the
+    // second client's per-directory index.
+    expect(scannedDirs(first)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(driftFiles(first).sort()).toEqual([`${LOCAL}/sub1/a.txt`, `${LOCAL}/top.txt`])
+    expect(scannedDirs(second)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(driftFiles(second).sort()).toEqual([`${LOCAL}/sub1/a.txt`])
   })
 
   // --- ⑬ offline mid-scan (M3) -------------------------------------------------
@@ -989,7 +1169,8 @@ describe('PerforceClient.runReconcileScan', () => {
     // child never closes and the scan would hang until the test times out.
     await scan
 
-    expect(published).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([])
+    expect(driftFiles(client)).toEqual([])
     expect(disk.store.size).toBe(0)
   })
 
@@ -1128,12 +1309,10 @@ describe('PerforceClient.runReconcileScan', () => {
     const disk = fakeDisk()
     const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
     client.setReconcileScope([LOCAL])
-    const sc = client as unknown as {
-      _sc: { publishWorkingTreeScan: (entries: unknown) => void }
-    }
-    sc._sc.publishWorkingTreeScan = () => {
-      throw new Error('publish boom')
-    }
+
+    // The renderer's resourceStates setter is what sinks each publish; a throw
+    // there is the "renderer died" signal the scan loop must not let leak.
+    reconcileGroupThrow = true
 
     await expect(client.runReconcileScan()).rejects.toThrow('publish boom')
     expect(client.status.scanProgress).toBeUndefined()
@@ -1229,24 +1408,22 @@ describe('PerforceClient.runReconcileScan', () => {
       await client.runReconcileScan()
 
       // The timed-out parent still publishes the drift it streamed…
-      expect(published.map((p) => p.directory)).toEqual([
-        LOCAL,
-        join(LOCAL, 'sub1'),
-        join(LOCAL, 'sub2'),
-      ])
-      expect(published[0]!.changes).toHaveLength(1)
-      expect(published[0]!.changes[0]!.path).toBe(`${LOCAL}/top.txt`)
-      // …but its checkpoint is the SPLIT marker (no hints), not a result entry.
+      expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
+      expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
+      expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toEqual([])
+      expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toEqual([])
+      // …but its checkpoint is the SPLIT marker (no files), not a result entry.
       const keys = [...disk.store.keys()]
       expect(keys).toHaveLength(3)
       const parentKey = keys.find((k) => k.includes('reconcileScan/') && !k.includes('sub'))
       expect(parentKey).toBeDefined()
       const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
         split?: boolean
-        hints: unknown[]
+        files: unknown[]
       }
       expect(parentEntry.split).toBe(true)
-      expect(parentEntry.hints).toEqual([])
+      expect(parentEntry.files).toEqual([])
     } finally {
       setP4CommandTimeoutSeconds(600)
     }
@@ -1264,8 +1441,8 @@ describe('PerforceClient.runReconcileScan', () => {
       await client.runReconcileScan()
 
       // The streamed hints still publish…
-      expect(published).toHaveLength(1)
-      expect(published[0]!.changes).toHaveLength(1)
+      expect(scannedDirs(client)).toEqual([LOCAL])
+      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
       // …but with no subdirectories to split into there is nothing to checkpoint:
       // neither a result (partial) nor a split marker.
       expect(disk.store.size).toBe(0)
@@ -1309,23 +1486,23 @@ describe('PerforceClient.runReconcileScan', () => {
       await client.runReconcileScan()
 
       // The zero-drift parent published nothing, but still wrote a split marker…
-      expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'sub1')])
+      expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1')])
       const keys = [...disk.store.keys()]
       expect(keys).toHaveLength(2)
       const parentKey = keys.find((k) => k.includes('reconcileScan/') && !k.includes('sub'))
       expect(parentKey).toBeDefined()
       const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
         split?: boolean
-        hints: unknown[]
+        files: unknown[]
       }
       expect(parentEntry.split).toBe(true)
-      expect(parentEntry.hints).toEqual([])
+      expect(parentEntry.files).toEqual([])
       // …and the clean subdirectory checkpointed as a normal result (no split).
       const subKey = keys.find((k) => k.includes('reconcileScan/') && k.includes('sub'))
       expect(subKey).toBeDefined()
-      const subEntry = JSON.parse(disk.store.get(subKey!)!) as { split?: boolean; hints: unknown[] }
+      const subEntry = JSON.parse(disk.store.get(subKey!)!) as { split?: boolean; files: unknown[] }
       expect(subEntry.split).toBeUndefined()
-      expect(subEntry.hints).toEqual([])
+      expect(subEntry.files).toEqual([])
     } finally {
       setP4CommandTimeoutSeconds(600)
     }
@@ -1384,14 +1561,15 @@ describe('PerforceClient.runReconcileScan', () => {
 
     const parentSpecs = reconcileScans().filter((a) => a.includes(`${LOCAL}/...`))
     expect(parentSpecs).toHaveLength(1) // session 1 only
-    const marker = JSON.parse(disk.store.get(parentKey!)!) as { split?: boolean; hints: unknown[] }
+    const marker = JSON.parse(disk.store.get(parentKey!)!) as { split?: boolean; files: unknown[] }
     expect(marker.split).toBe(true)
-    expect(marker.hints).toEqual([])
-    expect(published.map((p) => p.directory)).toEqual([
-      LOCAL,
-      join(LOCAL, 'sub1'),
-      join(LOCAL, 'sub2'),
-    ])
+    expect(marker.files).toEqual([])
+    // Each client owns its own drift state: session 1 saw the clean parent (its
+    // slow-but-clean result, not a split), session 2's pre-split never accepted
+    // the parent and saw only the subdirectories.
+    expect(scannedDirs(first)).toEqual([LOCAL])
+    expect(scannedDirs(second)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
+    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RC' }])
     expect(disk.store.size).toBe(3)
   })
 
@@ -1457,17 +1635,18 @@ describe('PerforceClient.runReconcileScan', () => {
     const parentKey = keys.find((k) => !k.includes('sub'))
     const parentEntry = JSON.parse(disk.store.get(parentKey!)!) as {
       split?: boolean
-      hints: unknown[]
+      files: unknown[]
     }
     expect(parentEntry.split).toBe(true)
-    expect(parentEntry.hints).toEqual([])
+    expect(parentEntry.files).toEqual([])
     const subEntry = JSON.parse(disk.store.get(keys.find((k) => k.includes('sub'))!)!) as {
       split?: boolean
-      hints: unknown[]
+      files: unknown[]
     }
     expect(subEntry.split).toBeUndefined()
-    expect(subEntry.hints).toHaveLength(1)
-    expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'sub1')])
+    expect(subEntry.files).toHaveLength(1)
+    expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1')])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RC' }])
     // Early exit: the count stopped inside LOCAL's own listing and never
     // descended into sub1 — the third readdir is sub1's OWN cold count after
     // it was enqueued, not part of the parent's.
@@ -1632,7 +1811,8 @@ describe('PerforceClient.runReconcileScan', () => {
     // never reaches p4 (zero spawn for it) and leaves no checkpoint.
     const specs = reconcileScans().map((a) => a[a.length - 1])
     expect(specs).toEqual([`${LOCAL}/included/...`])
-    expect(published.map((p) => p.directory)).toEqual([`${LOCAL}/included`])
+    expect(scannedDirs(client)).toEqual([`${LOCAL}/included`])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/included/a.txt`, letter: 'RC' }])
     const keys = [...disk.store.keys()]
     expect(keys.some((k) => k.includes('included'))).toBe(true)
     expect(keys.some((k) => k.includes('excluded'))).toBe(false)
@@ -1648,7 +1828,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // Nothing to scan: no p4 spawn, no publish, no checkpoint.
     expect(reconcileScans()).toHaveLength(0)
-    expect(published).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(0)
   })
 
@@ -1706,7 +1887,11 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // The slow parent publishes and splits, but the excluded subdirectory is
     // filtered out of the split — only `included` is enqueued and scanned.
-    expect(published.map((p) => p.directory)).toEqual([LOCAL, join(LOCAL, 'included')])
+    expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'included')])
+    expect(groupRows(client)).toEqual([
+      { path: `${LOCAL}/included/a.txt`, letter: 'RC' },
+      { path: `${LOCAL}/top.txt`, letter: 'RC' },
+    ])
     const specs = reconcileScans().map((a) => a[a.length - 1])
     expect(specs).toContain(`${join(LOCAL, 'included')}/...`)
     expect(specs).not.toContain(`${join(LOCAL, 'excluded')}/...`)
@@ -1771,9 +1956,8 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // The carve only swaps the filespec list — it must not change the
     // per-directory shape: one publish for LOCAL and one checkpoint.
-    expect(published).toHaveLength(1)
-    expect(published[0]!.directory).toBe(LOCAL)
-    expect(published[0]!.changes.map((c) => c.path)).toEqual([`${LOCAL}/src/included/a.txt`])
+    expect(scannedDirs(client)).toEqual([LOCAL])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RC' }])
     expect(disk.store.size).toBe(1)
   })
 
@@ -1793,7 +1977,8 @@ describe('PerforceClient.runReconcileScan', () => {
     // marker would pretend the scan can resume, an empty result would pretend
     // the directory is clean. The next session retries it.
     expect(reconcileScans()).toHaveLength(0)
-    expect(published).toHaveLength(0)
+    expect(scannedDirs(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
     expect(disk.store.size).toBe(0)
   })
 
@@ -1824,8 +2009,11 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    expect(published).toHaveLength(1)
-    expect(published[0]!.changes.map((c) => c.path)).toEqual([`${LOCAL}/src/included/a.txt`])
+    // The excluded row is dropped at assembly time. The per-directory index still
+    // keeps the key (its contribution to the set is real), so this must assert on
+    // the rendered group, not scanDriftByDir.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RC' }])
+    expect(scannedDirs(client)).toEqual([LOCAL])
   })
 
   it('skips a directory excluded mid-scan after the queue was built', async () => {
@@ -1853,7 +2041,711 @@ describe('PerforceClient.runReconcileScan', () => {
     // B never reaches p4, publishes nothing and leaves no checkpoint.
     const specs = reconcileScans().map((a) => a[a.length - 1])
     expect(specs).toEqual([`${join(LOCAL, 'A')}/...`])
-    expect(published.map((p) => p.directory)).toEqual([join(LOCAL, 'A')])
+    expect(scannedDirs(client)).toEqual([join(LOCAL, 'A')])
     expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(false)
+  })
+
+  // --- ⑳ external-change watcher (M13) ---------------------------------------
+
+  it('an external file change queries only the changed file, never the whole directory', async () => {
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      // Drift is reported for whatever concrete file is asked about, so the
+      // assertion below proves the argv carried `a.txt` rather than matching a
+      // fixture the fake would have returned for any filespec.
+      { reconcile: (spec) => (spec.endsWith('a.txt') ? [{ rel: 'a.txt' }] : []) },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+
+    // Session scan: clean → checkpointed as a (clean) result.
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+    expect(client.scanDriftByDir.get(LOCAL) ?? []).toEqual([])
+    const firstEntry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    const firstCompletedAt = (JSON.parse(firstEntry![1]) as { completedAt: number }).completedAt
+
+    // An external tool edits a file under the directory (git checkout, another
+    // editor). The watcher answers with ONE narrow query about that exact file —
+    // re-walking `<dir>/...` for a signal that already names the file is the cost
+    // this design exists to avoid.
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(fullScanScans()).toHaveLength(1)
+    expect(narrowScans()).toHaveLength(1)
+    expect(narrowScans()[0]).toContain(`${LOCAL}/a.txt`)
+    // A watcher flush does NOT flush the reconcile group, so assert on the
+    // synchronous drift maps here.
+    expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+    // The covering checkpoint is corrected in place, not dropped: the narrow
+    // query's answer is authoritative for the paths it covered, so the next
+    // session replays a checkpoint that already knows `a.txt` drifts. Dropping it
+    // is what made every save cost the next workspace open a full re-walk.
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    expect(entry).toBeDefined()
+    const patched = JSON.parse(entry![1]) as {
+      completedAt: number
+      files: readonly { clientFile?: string }[]
+    }
+    expect(patched.files.map((f) => f.clientFile)).toEqual([`${LOCAL}/a.txt`])
+    // completedAt is the freshness anchor: renewing it on every save would keep
+    // the 24h window sliding forward forever and truly stale data would never
+    // expire.
+    expect(patched.completedAt).toBe(firstCompletedAt)
+  })
+
+  it('coalesces a bulk external change into one batched narrow query', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+
+    // A bulk external change floods hundreds of events; the debounce folds them
+    // into ONE flush, which the argv budget then splits into a handful of
+    // batches — never one spawn per event, and never a directory re-walk.
+    const fired = 600
+    for (let i = 0; i < fired; i++) wt.fire('change', `${LOCAL}/f${i}.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(fullScanScans()).toHaveLength(1)
+    const narrow = narrowScans()
+    expect(narrow.length).toBeGreaterThan(1) // batched by the argv budget…
+    expect(narrow.length).toBeLessThan(20) // …not one spawn per event
+    // Batching loses nothing: every fired path was asked about exactly once.
+    const asked = narrow.flat().filter((a) => a.startsWith(`${LOCAL}/f`))
+    expect(new Set(asked).size).toBe(fired)
+  })
+
+  it('degrades to invalidate-only past the narrow-query budget', async () => {
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const client = await makeClient({ reconcile: () => [] }, disk, fakeClock(), {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+    expect([...disk.store.keys()].some((k) => k.endsWith(LOCAL))).toBe(true)
+
+    // Switching a big branch reports tens of thousands of paths: past the budget
+    // the narrow query would itself become hundreds of spawns, so the flush only
+    // invalidates and leaves the tints to the next scan. Neither a narrow query
+    // nor a directory re-walk is spawned.
+    for (let i = 0; i <= 2000; i++) wt.fire('change', `${LOCAL}/f${i}.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(narrowScans()).toHaveLength(0)
+    expect(fullScanScans()).toHaveLength(1)
+    expect([...disk.store.keys()].some((k) => k.endsWith(LOCAL))).toBe(false)
+  })
+
+  it('redoes the invalidation after a scan round that was in flight settles', async () => {
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    let hold = true
+    const client = await makeClient(
+      { reconcile: () => [], reconcileHold: (spec) => hold && spec.endsWith('/...') },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await nextMacrotask()
+
+    // The change lands while the round is mid-flight, so there is no checkpoint on
+    // disk yet for the flush to correct — patching cannot fence a key that does
+    // not exist, and the round's eventual write comes from a read that PREDATES
+    // the change. The latch therefore invalidates on settle. Only the
+    // invalidation is replayed — never a second round.
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    hold = false
+    releaseHeld()
+    await client.whenReconcileScanSettled()
+
+    expect(fullScanScans()).toHaveLength(1)
+    expect([...disk.store.keys()].some((k) => k.endsWith(LOCAL))).toBe(false)
+  })
+
+  it('keeps a checkpoint the flush patched, even when an in-flight round settles', async () => {
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const clock = fakeClock()
+    // Two scope dirs. B's batch is made to finish later than A's (reconcileDelayMs
+    // advances the injected clock), so after a 24h advance A is stale and gets
+    // rescanned while B is still fresh and patchable.
+    const dirA = `${LOCAL}/A`
+    const dirB = `${LOCAL}/B`
+    let holdScan = false
+    const client = await makeClient(
+      {
+        reconcile: (spec) => (spec.endsWith('b.txt') ? [{ rel: 'B/b.txt' }] : []),
+        reconcileDelayMs: (spec) => (spec.endsWith('/B/...') ? 10000 : 0),
+        reconcileHold: (spec) => holdScan && spec.endsWith('/A/...'),
+      },
+      disk,
+      clock,
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([dirA, dirB])
+
+    // Session 1: clean scan → both directories checkpointed. B's checkpoint is
+    // written 5s later than A's.
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(2)
+    expect([...disk.store.keys()].some((k) => k.endsWith(dirA))).toBe(true)
+    expect([...disk.store.keys()].some((k) => k.endsWith(dirB))).toBe(true)
+
+    // A's checkpoint now ages out past the 24h ceiling; B's stays fresh. Round 2
+    // therefore rescans A and holds its batch open, in flight.
+    clock.advance(24 * 60 * 60 * 1000)
+    ;(client as unknown as { _reconcileScanArmed: boolean })._reconcileScanArmed = false
+    holdScan = true
+    client.scheduleReconcileScan()
+    await nextMacrotask()
+
+    // An external change lands in B while the round is still held on A. Its flush
+    // queries B's file and patches B's (still-fresh) checkpoint in place.
+    wt.fire('change', `${LOCAL}/B/b.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(dirB))
+    expect(entry).toBeDefined()
+    expect(
+      (JSON.parse(entry![1]) as { files: readonly { clientFile?: string }[] }).files.map(
+        (f) => f.clientFile,
+      ),
+    ).toEqual([`${LOCAL}/B/b.txt`])
+    // completedAt is the freshness anchor: renewing it would slide the 24h window
+    // forever and truly stale data would never expire.
+    expect((JSON.parse(entry![1]) as { completedAt: number }).completedAt).toBe(11000)
+
+    // The held round settles (it reaches B, serves the patched checkpoint, then
+    // re-invalidates the latched path). It must NOT drop the patched checkpoint:
+    // the patch already corrected it, and dropping it forces the next session to
+    // re-walk the whole directory (the Bug D regression).
+    holdScan = false
+    releaseHeld()
+    await client.whenReconcileScanSettled()
+
+    const after = [...disk.store.entries()].find(([k]) => k.endsWith(dirB))
+    expect(after).toBeDefined()
+    expect(
+      (JSON.parse(after![1]) as { files: readonly { clientFile?: string }[] }).files.map(
+        (f) => f.clientFile,
+      ),
+    ).toEqual([`${LOCAL}/B/b.txt`])
+  })
+
+  it('remembers a patch across a second flush before the round settles', async () => {
+    // The patched-path set must live as long as the latch set does — from the
+    // latch to the round's settle — not be reset per flush. Two saves land while
+    // one round is held: the first patches B's checkpoint, the second touches A,
+    // whose checkpoint the held round already dropped as expired, so that flush
+    // patches nothing. If the set were cleared at the top of each flush, the
+    // second would erase the first's record and the settle-time replay would
+    // drop B's checkpoint anyway — the full re-walk this branch exists to avoid.
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const clock = fakeClock()
+    const dirA = `${LOCAL}/A`
+    const dirB = `${LOCAL}/B`
+    let holdScan = false
+    const client = await makeClient(
+      {
+        reconcile: (spec) => (spec.endsWith('b.txt') ? [{ rel: 'B/b.txt' }] : []),
+        reconcileDelayMs: (spec) => (spec.endsWith('/B/...') ? 10000 : 0),
+        reconcileHold: (spec) => holdScan && spec.endsWith('/A/...'),
+      },
+      disk,
+      clock,
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([dirA, dirB])
+
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect([...disk.store.keys()].some((k) => k.endsWith(dirB))).toBe(true)
+
+    clock.advance(24 * 60 * 60 * 1000)
+    ;(client as unknown as { _reconcileScanArmed: boolean })._reconcileScanArmed = false
+    holdScan = true
+    client.scheduleReconcileScan()
+    await nextMacrotask()
+
+    // First save: patches B's checkpoint and records B as answered.
+    wt.fire('change', `${LOCAL}/B/b.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    // Second save under A, same round still held. A has no checkpoint left to
+    // patch, so this flush merges nothing — it must not erase B's record.
+    wt.fire('change', `${LOCAL}/A/x.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    holdScan = false
+    releaseHeld()
+    await client.whenReconcileScanSettled()
+
+    const after = [...disk.store.entries()].find(([k]) => k.endsWith(dirB))
+    expect(after).toBeDefined()
+    expect(
+      (JSON.parse(after![1]) as { files: readonly { clientFile?: string }[] }).files.map(
+        (f) => f.clientFile,
+      ),
+    ).toEqual([`${LOCAL}/B/b.txt`])
+  })
+
+  it('re-adds reverted files as drift so they land in Working Tree Changes', async () => {
+    // The file is opened before the move and no longer opened after `revert -k`.
+    let opened = true
+    const client = await makeClient(
+      {
+        opened: () => (opened ? [{ rel: 'a.txt' }] : []),
+        reconcile: (spec) => (spec.endsWith('a.txt') ? [{ rel: 'a.txt' }] : []),
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => makeFakeWatcher().watcher, watchRoot: ROOT },
+    )
+    client.setReconcileScope([LOCAL])
+    await client.refresh()
+
+    const ok = await (async () => {
+      opened = false
+      return client.moveToReconcile([`${LOCAL}/a.txt`])
+    })()
+    expect(ok).toBe(true)
+
+    // The reverted content is now uncollected drift: it must appear in the
+    // reconcile group this session, not wait for the next session's scan.
+    expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
+  })
+
+  it('ignores external events outside the scope or inside an excluded directory', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.setReconcileScope([`${LOCAL}/sub`])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(reconcileScans()).toHaveLength(1)
+
+    client.setReconcileExcludes([`${LOCAL}/sub/excluded`])
+    wt.fire('change', `${LOCAL}/outside/a.txt`)
+    wt.fire('change', `${LOCAL}/sub/excluded/b.txt`)
+    await nextMacrotask()
+    await nextMacrotask()
+
+    // Neither path is queried at all: no narrow spawn, no directory re-walk,
+    // zero new drift on disk.
+    expect(narrowScans()).toHaveLength(0)
+    expect(fullScanScans()).toHaveLength(1)
+    expect(groupRows(client)).toEqual([])
+    expect(driftFiles(client)).toEqual([])
+  })
+
+  it("does not treat the plugin's own mutation writes as external changes", async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      { reconcile: () => [], opened: () => [] },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+
+    // The mutation's own path schedules the first scan round via its refresh tail.
+    await client.reconcile([`${LOCAL}/a.txt`])
+    const before = narrowScans().length
+    // The watcher then reports the very files the mutation wrote…
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    await client.whenReconcileScanSettled()
+
+    // …but self-mutation suppression means nothing is asked about them again.
+    expect(narrowScans()).toHaveLength(before)
+    expect(fullScanScans()).toHaveLength(1)
+  })
+
+  it('does not query on external events while offline', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+    ;(client as unknown as { _goOffline(kind: string): void })._goOffline('offline')
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(narrowScans()).toHaveLength(0)
+    expect(fullScanScans()).toHaveLength(1)
+  })
+
+  it('dispose cancels a pending debounce and releases the watcher', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher: () => wt.watcher,
+      watchRoot: ROOT,
+      externalChangeDebounceMs: 0,
+    })
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+
+    wt.fire('change', `${LOCAL}/a.txt`)
+    client.dispose()
+    await nextMacrotask()
+    await nextMacrotask()
+
+    // No flush fired into the disposed client, and the watcher was released.
+    expect(narrowScans()).toHaveLength(0)
+    expect(fullScanScans()).toHaveLength(1)
+    expect(wt.dispose).toHaveBeenCalled()
+  })
+
+  it('anchors the watch at the open folder, not the client root', async () => {
+    // A game workspace's client root maps far more than the folder the user
+    // opened. Anchoring at the client root would push the watcher base outside
+    // the workspace, where the workbench arms an unfiltered in-main recursive
+    // fs.watch over the whole mapping instead of joining its exclude-pruned
+    // out-of-process plan.
+    const opened = `${LOCAL}/Source/Client`
+    const bases: string[] = []
+    const wt = makeFakeWatcher()
+    await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher: (glob) => {
+        bases.push((glob as unknown as { base: string }).base)
+        return wt.watcher
+      },
+      watchRoot: opened,
+      externalChangeDebounceMs: 0,
+    })
+
+    // Anchored at the opened subfolder, NOT at the (broader) client root ROOT.
+    expect(bases).toEqual([opened])
+  })
+
+  it('does not watch at all when no open folder was supplied', async () => {
+    const createFileSystemWatcher = vi.fn()
+    await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
+      createFileSystemWatcher,
+      externalChangeDebounceMs: 0,
+    })
+
+    expect(createFileSystemWatcher).not.toHaveBeenCalled()
+  })
+
+  it('defers an external change queued before a mutation instead of dropping it', async () => {
+    const clock = fakeClock()
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      // Drift is echoed for the file actually asked about: the narrow query only
+      // keeps hints matching a requested path, so a fixed fixture row would be
+      // filtered out and the assertion would prove nothing.
+      {
+        reconcile: (spec) => (spec.endsWith('elsewhere.txt') ? [{ rel: 'elsewhere.txt' }] : []),
+        opened: () => [],
+      },
+      fakeDisk(),
+      clock,
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+
+    // The external change is queued FIRST; the mutation's suppression window
+    // opens before the debounce flush runs. The queued path is real drift the
+    // mutation's own narrow invalidation does not cover, so it must survive the
+    // window rather than being dropped with the batch.
+    wt.fire('change', `${LOCAL}/elsewhere.txt`)
+    await client.reconcile([`${LOCAL}/a.txt`])
+    await nextMacrotask()
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    await client.whenReconcileScanSettled()
+
+    // The deferred path was queried by name, and its drift published.
+    expect(narrowScans().flat()).toContain(`${LOCAL}/elsewhere.txt`)
+    expect(driftFiles(client)).toContain(`${LOCAL}/elsewhere.txt`)
+  })
+
+  it('a directory event invalidates the covering checkpoint instead of reading it as clean', async () => {
+    // _isDirectoryPath stats the path for real, so the event must name a path
+    // that actually IS a directory on disk — a faked path would read as a file
+    // and take the narrow-query branch this test exists to prove is skipped.
+    const realDir = mkdtempSync(join(tmpdir(), 'p4-dirEvt-'))
+    try {
+      const disk = fakeDisk()
+      const wt = makeFakeWatcher()
+      const client = await makeClient({ reconcile: () => [] }, disk, fakeClock(), {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      })
+      client.setReconcileScope([realDir])
+      client.scheduleReconcileScan()
+      await client.whenReconcileScanSettled()
+      expect(fullScanScans()).toHaveLength(1)
+      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(true)
+
+      // A directory event (new folder, moved subtree) names no file, so a
+      // per-file narrow query would read it as clean and stamp that lie into the
+      // checkpoint. The flush must refuse to merge and drop the checkpoint instead.
+      wt.fire('change', realDir)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+
+      expect(narrowScans()).toHaveLength(0)
+      expect(fullScanScans()).toHaveLength(1)
+      expect([...disk.store.keys()].some((k) => k.endsWith(realDir))).toBe(false)
+    } finally {
+      rmSync(realDir, { recursive: true, force: true })
+    }
+  })
+
+  it('a directory revert invalidates only the touched subtree checkpoints, not siblings', async () => {
+    const disk = fakeDisk()
+    const dirA = join(LOCAL, 'A')
+    const dirB = join(LOCAL, 'B')
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }] }, disk)
+    client.setReconcileScope([dirA, dirB])
+    await client.runReconcileScan()
+    expect(disk.store.size).toBe(2)
+    expect([...disk.store.keys()].some((k) => k.includes('A'))).toBe(true)
+    expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(true)
+
+    // A directory-scoped mutation rewrites only that subtree, so only its
+    // checkpoints are stale — clearing the whole namespace here is what made
+    // every directory Revert cost the next workspace open a full rescan.
+    await client.revertReconcile([`${dirA}/...`])
+
+    expect([...disk.store.keys()].some((k) => k.includes('A'))).toBe(false)
+    expect([...disk.store.keys()].some((k) => k.includes('B'))).toBe(true)
+  })
+
+  // --- ㉒ Bug C: a directory revert clears the drift group --------------------
+  //
+  // The old post-mutation "invalidate only" left the resident drift set holding
+  // rows for files the revert just cleaned, so the folder tint survived until the
+  // next session rescan. The fix is to DROP the affected rows outright: the
+  // whole-array group assignment then rebuilds the view, and a folder tint that
+  // a row anchored disappears with it (ancestors included).
+
+  it('a directory revert clears the drift group and the per-directory index', async () => {
+    let cleaned = false
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        // Before the revert the directory has drift; after it the disk is clean,
+        // and the post-revert refresh re-scans with that truth.
+        reconcile: () => (cleaned ? [] : [{ rel: 'in-a.txt' }]),
+      },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+    expect(scannedDirs(client)).toEqual([LOCAL])
+
+    cleaned = true
+    await client.revertReconcile([`${LOCAL}/...`])
+    // The revert's refresh schedules a background scan; drain it so it cannot
+    // re-add rows after this test's assertions.
+    await client.whenReconcileScanSettled()
+
+    // The drift rows are dropped (not just invalidated) and the group is
+    // whole-array assigned empty — the folder tint has nothing left to anchor on.
+    // The per-directory index keeps LOCAL (with an empty list), which is fine: it
+    // only records which directories contributed an observation, and the clean
+    // scan re-recorded it.
+    expect(driftFiles(client)).toEqual([])
+    expect(groupRows(client)).toEqual([])
+  })
+
+  it('a subtree revert clears only its own rows, keeping siblings', async () => {
+    let cleaned = false
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        // One batch for the whole scope returns both rows; flipping `cleaned`
+        // makes the post-revert rescan answer only the sibling.
+        reconcile: () =>
+          cleaned ? [{ rel: 'top.txt' }] : [{ rel: 'sub/in-s.txt' }, { rel: 'top.txt' }],
+      },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/sub/in-s.txt`, `${LOCAL}/top.txt`])
+    expect(groupRows(client).sort()).toEqual([
+      { path: `${LOCAL}/sub/in-s.txt`, letter: 'RC' },
+      { path: `${LOCAL}/top.txt`, letter: 'RC' },
+    ])
+
+    cleaned = true
+    await client.revertReconcile([`${join(LOCAL, 'sub')}/...`])
+    await client.whenReconcileScanSettled()
+
+    // Only the sub tree's row is gone; the sibling row survives its own tint.
+    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/top.txt`])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
+  })
+
+  it('a failed revert clears nothing', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        reconcile: () => [{ rel: 'in-a.txt' }],
+        cleanExit: 1,
+        cleanStderr: 'clean failed: file(s) not opened on this client',
+      },
+      disk,
+    )
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+
+    const ok = await client.revertReconcile([`${LOCAL}/...`])
+    expect(ok).toBe(false)
+    await client.whenReconcileScanSettled()
+
+    // The disk was not cleaned, so the drift must survive the failed mutation.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+    expect(windowMock.showErrorMessage).toHaveBeenCalled()
+  })
+
+  it('a truncating reconcileLimit keeps the group at the cap but the index intact', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient({ reconcile: () => [{ rel: 'a.txt' }, { rel: 'b.txt' }] }, disk)
+    client.setReconcileScope([LOCAL])
+    client.setReconcileLimit(1)
+    await client.runReconcileScan()
+
+    // The rendered group is capped at 1 row (sorted by clientFile, so a.txt),
+    // while the scan index owns both — the cap is a display concern, not a
+    // discovery one.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
+    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+  })
+})
+
+describe('㉑ reconcile-scan checkpoint 跨 session 持久化（真磁盘）', () => {
+  let root: string
+  let disk: P4CacheDiskInstance
+
+  beforeEach(() => {
+    installScmBridge()
+    spawnMock.mockReset()
+    readdirMock.mockReset()
+    // 同主 describe：冷 prior 文件计数默认空列表，只有测试关心 split 时才覆写。
+    readdirMock.mockImplementation(async () => [])
+    calls.length = 0
+    groups.length = 0
+    reconcileGroupThrow = false
+    heldChildren.length = 0
+    currentClock = undefined
+    windowMock.showErrorMessage.mockClear()
+    root = mkdtempSync(join(tmpdir(), 'p4cache-'))
+    disk = P4CacheDisk.open(root, 1024 * 1024)!
+  })
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[BRIDGE_KEY]
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('单个外部文件事件不得删除磁盘上的 checkpoint', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'changed.txt', action: 'edit' }] },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+
+    // 扫描完成后 checkpoint 已物理落盘：reconcileScan/ 目录下恰好一个值文件。
+    expect(readdirSync(join(root, 'reconcileScan'))).toHaveLength(1)
+
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    // 工作区内任意一个文件的 watcher 事件都命中 root checkpoint，但不能把
+    // 磁盘上的那个值文件删掉 —— 否则下次重开工作区必然全量重扫。
+    expect(readdirSync(join(root, 'reconcileScan'))).toHaveLength(1)
+  })
+
+  it('跨 session 复用 checkpoint，零重扫', async () => {
+    const wt = makeFakeWatcher()
+    const client1 = await makeClient(
+      { reconcile: () => [{ rel: 'changed.txt', action: 'edit' }] },
+      disk,
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client1.setReconcileScope([LOCAL])
+    client1.scheduleReconcileScan()
+    await client1.whenReconcileScanSettled()
+    expect(fullScanScans()).toHaveLength(1)
+
+    // 用户保存一个文件 → watcher flush → root checkpoint 被删（bug）。
+    wt.fire('change', `${LOCAL}/a.txt`)
+    await nextMacrotask()
+    await client1.whenExternalFlushSettled()
+    client1.dispose()
+
+    // 重开工作区：新 client 对同一目录重新 open 一个 disk（真实场景）。
+    calls.length = 0
+    await nextMacrotask()
+    const disk2 = P4CacheDisk.open(root, 1024 * 1024)!
+    const client2 = await makeClient(
+      { reconcile: () => [{ rel: 'changed.txt', action: 'edit' }] },
+      disk2,
+      fakeClock(),
+    )
+    client2.setReconcileScope([LOCAL])
+    client2.scheduleReconcileScan()
+    await client2.whenReconcileScanSettled()
+
+    // checkpoint 新鲜、直接 served，零整目录 spawn。当前代码下 checkpoint 已被
+    // 删除，client2 必然重扫。
+    expect(fullScanScans()).toHaveLength(0)
   })
 })

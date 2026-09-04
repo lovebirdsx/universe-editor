@@ -15,12 +15,19 @@
  *  (it lists the opened file — never the discard wording), and after Revert the
  *  opened file must be restored to its have revision AND leave the default
  *  changelist, while a drifted file outside the directory stays untouched.
+ *
+ *  The same command also drives the perforce drift group: a file inside the
+ *  directory that is drifted on disk but NOT opened (the `p4 clean` half of the
+ *  revert) must leave the resident `reconcile` SCM group, so the folder tint it
+ *  produced clears (Bug C: "revert a folder and its yellow state must go away").
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { test, expect, waitForPerforceCommands } from '../fixtures/perforceApp.js'
 import { evaluateWhenRestored } from '@universe-editor/e2e-harness'
 import type { SeedFile } from '../fixtures/perforceApp.js'
+
+const RECONCILE_GROUP = 'reconcile'
 
 const inner: SeedFile = {
   relPath: 'sub/inner.txt',
@@ -33,8 +40,13 @@ const outside: SeedFile = {
   relPath: 'outside.txt',
   content: 'outside have revision\n',
 }
+/** Inside the reverted directory but never opened — the `p4 clean` half. */
+const spare: SeedFile = {
+  relPath: 'sub/spare.txt',
+  content: 'spare have revision\n',
+}
 
-const seeds: readonly SeedFile[] = [inner, outside]
+const seeds: readonly SeedFile[] = [inner, outside, spare]
 
 /** Drifted on disk: diverges from the have revision but is not a new p4 edit. */
 const drift = (seed: SeedFile): string => `drifted: ${seed.content}`
@@ -49,7 +61,7 @@ test.describe('@p1 explorer directory revert', () => {
       test.setTimeout(120_000)
       await evaluateWhenRestored(page)
 
-      // Drift both files before the workspace opens so the Explorer's first
+      // Drift every file before the workspace opens so the Explorer's first
       // render already sees divergent disk content.
       for (const seed of seeds) {
         writeFileSync(perforce.file(seed.relPath), drift(seed), 'utf8')
@@ -72,6 +84,16 @@ test.describe('@p1 explorer directory revert', () => {
           { timeout: 30_000, message: 'inner.txt should be opened in the default changelist' },
         )
         .toEqual(['default'])
+
+      // The seeded child file `sub/spare.txt` was drifted but never opened, so
+      // the reconcile scan surfaced it as a `reconcile` group row (the drift that
+      // tints the `sub` folder — Bug C's pre-state).
+      await expect
+        .poll(
+          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), 'sub/spare.txt'),
+          { timeout: 30_000, message: 'spare.txt should sit in the reconcile group' },
+        )
+        .toEqual([RECONCILE_GROUP])
 
       // Click (select) the directory row, then right-click it.
       const dirRow = page.locator('[role="treeitem"]', { hasText: 'sub' })
@@ -112,6 +134,17 @@ test.describe('@p1 explorer directory revert', () => {
           { timeout: 30_000, message: 'inner.txt should no longer be in any changelist' },
         )
         .toEqual([])
+
+      // The `p4 clean sub/...` half also restored the drifted-but-unopened child:
+      // it leaves the reconcile group (Bug C — its row was the tint source), and
+      // its disk content returns to the have revision.
+      await expect
+        .poll(
+          () => page.evaluate((s) => window.__E2E__!.getScmGroupIdsForResource(s), 'sub/spare.txt'),
+          { timeout: 30_000, message: 'spare.txt should no longer be in any SCM group' },
+        )
+        .toEqual([])
+      expect(readFileSync(perforce.file(spare.relPath), 'utf8')).toBe(spare.content)
 
       // The revert was scoped to the directory: the drifted file outside it is
       // untouched (its drift survives; it was never opened).

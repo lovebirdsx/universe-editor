@@ -13,9 +13,7 @@
 import {
   createDecorator,
   Disposable,
-  Emitter,
   observableValue,
-  type Event,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
@@ -27,8 +25,6 @@ import type {
   ISourceControlGroupFeaturesDto,
   ISourceControlResourceStateDto,
   ISupplementaryDecorationDeltaDto,
-  IWorkingTreeScanEntryDto,
-  WorkingTreeChangeDto,
 } from '@universe-editor/extensions-common'
 
 export interface IScmGroupModel {
@@ -52,18 +48,6 @@ export interface IScmSupplementaryDecoration {
   readonly tooltip?: string
 }
 
-/**
- * One directory batch of a provider's background working-tree scan, as received
- * over `$publishWorkingTreeScan`. Consumers (the Explorer working-tree hint
- * service) fold the file hints into folder tints.
- */
-export interface IScmWorkingTreeScanResult {
-  /** The source control that published it (routing by id, not handle). */
-  readonly sourceControlId: string
-  readonly directory: string
-  readonly hints: readonly WorkingTreeChangeDto[]
-}
-
 export interface IScmSourceControlModel {
   readonly handle: number
   readonly id: string
@@ -84,12 +68,6 @@ export interface IScmSourceControlModel {
 export interface IScmService {
   readonly _serviceBrand: undefined
   readonly sourceControls: IObservable<readonly IScmSourceControlModel[]>
-  /**
-   * Fires when a provider pushes background working-tree scan batches
-   * (`$publishWorkingTreeScan`). Incremental — each event carries only the
-   * directories that batch covered.
-   */
-  readonly onDidPublishWorkingTreeScan: Event<readonly IScmWorkingTreeScanResult[]>
   /** A user edit in the commit box: update the model and report it to the host. */
   changeInputBoxValue(handle: number, value: string): void
   /** Wire the host proxy once the extension host connection is up. */
@@ -156,6 +134,44 @@ export function resolveScmProviderId(
     // registration-order tie-break of the heuristic above).
     if (selectedId === undefined && selectedKey !== undefined && root === selectedKey) {
       selectedId = sc.id
+    }
+  }
+  return selectedId ?? bestId
+}
+
+/**
+ * {@link resolveScmProviderId}, restricted to owners satisfying `predicate`.
+ * Same selected-wins → longest-prefix arbitration, but the longest-prefix
+ * fallback only considers providers the predicate accepts — so a capable outer
+ * provider (a Perforce workspace) beats a more specific but incapable nested one
+ * (a git repo that never registered the capability in question). The selected
+ * repo still wins regardless of the predicate: routing to a repo the user
+ * explicitly picked is the intent even when that repo cannot answer, since the
+ * SCM view is showing its slot and the others' are hidden.
+ */
+export function resolveScmProviderIdWhere(
+  sourceControls: readonly IScmSourceControlModel[],
+  fsPath: string,
+  selectedRootUri: string | undefined,
+  predicate: (providerId: string) => boolean,
+): string | undefined {
+  const target = scmProviderPathKey(fsPath)
+  const selectedKey =
+    selectedRootUri !== undefined ? scmProviderPathKey(selectedRootUri) : undefined
+  let bestId: string | undefined
+  let bestLen = -1
+  let selectedId: string | undefined
+  for (const sc of sourceControls) {
+    if (sc.rootUri === undefined) continue
+    const root = scmProviderPathKey(sc.rootUri)
+    if (target !== root && !target.startsWith(`${root}/`)) continue
+    if (selectedId === undefined && selectedKey !== undefined && root === selectedKey) {
+      selectedId = sc.id
+    }
+    if (!predicate(sc.id)) continue
+    if (root.length > bestLen) {
+      bestId = sc.id
+      bestLen = root.length
     }
   }
   return selectedId ?? bestId
@@ -261,17 +277,10 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
     number,
     { sc: ScmSourceControlModel; group: ScmGroupModel }
   >()
-  private readonly _onDidPublishWorkingTreeScan = new Emitter<
-    readonly IScmWorkingTreeScanResult[]
-  >()
   private _extHost: IExtHostScm | undefined
 
   get sourceControls(): IObservable<readonly IScmSourceControlModel[]> {
     return this._sourceControls
-  }
-
-  get onDidPublishWorkingTreeScan(): Event<readonly IScmWorkingTreeScanResult[]> {
-    return this._onDidPublishWorkingTreeScan.event
   }
 
   setExtHost(extHost: IExtHostScm): void {
@@ -386,22 +395,6 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
       }
       model.supplementary.set(next, undefined)
     }
-    return Promise.resolve()
-  }
-
-  $publishWorkingTreeScan(
-    sourceControlHandle: number,
-    entries: IWorkingTreeScanEntryDto[],
-  ): Promise<void> {
-    const model = this._byHandle.get(sourceControlHandle)
-    if (!model || entries.length === 0) return Promise.resolve()
-    this._onDidPublishWorkingTreeScan.fire(
-      entries.map((entry) => ({
-        sourceControlId: model.id,
-        directory: entry.directory,
-        hints: entry.hints,
-      })),
-    )
     return Promise.resolve()
   }
 

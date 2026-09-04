@@ -94,6 +94,35 @@ export function clientToLocalPath(clientFile: string, clientRoot: string): strin
 }
 
 /**
+ * The deepest directory that contains every path in `paths` — `''` when they
+ * share no prefix (different drives / roots) or the list is empty.
+ *
+ * Segment-wise, never string-wise: a character prefix would return `X:/p4ws/ma`
+ * for `X:/p4ws/main/a` + `X:/p4ws/mate/b`, a directory that does not exist.
+ * Comparison uses {@link scopeKey} (both sides come from different places — one
+ * from the OS watcher, one from p4) but the returned string is spelled from the
+ * first input under {@link norm}, so segments keep their original casing and
+ * only the drive letter is folded. A single path yields its parent directory.
+ *
+ * Pure, so unit-testable without spawning p4.
+ */
+export function commonAncestorDir(paths: readonly string[]): string {
+  const first = paths[0]
+  if (first === undefined) return ''
+  const spelled = norm(first).split('/')
+  let common = spelled.length - 1 // drop the file segment: we want a directory
+  for (const path of paths.slice(1)) {
+    const segs = scopeKey(path).split('/')
+    const limit = Math.min(common, segs.length - 1)
+    let i = 0
+    while (i < limit && scopeKey(spelled[i]!) === segs[i]) i++
+    common = i
+    if (common === 0) return ''
+  }
+  return spelled.slice(0, common).join('/')
+}
+
+/**
  * Dedupe and collapse a list of directory paths to their shallowest entries:
  * same-scope duplicates keep one entry, and a directory nested under another
  * collapses to its ancestor (both `A` and `A/B` yield just `A`).

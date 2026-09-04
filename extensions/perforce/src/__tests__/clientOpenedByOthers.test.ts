@@ -197,7 +197,7 @@ async function makeClient(
     {},
     new ConcurrencyGate(4),
     { enabled: true, workspaceTtlMs: 4000, now: () => clock },
-    log,
+    { ...(log !== undefined ? { log } : {}) },
   )
   expect(client).toBeDefined()
   return client!

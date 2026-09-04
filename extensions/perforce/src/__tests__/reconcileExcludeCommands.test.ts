@@ -145,6 +145,7 @@ interface FakeClient {
   setSwarmAvailable: Mock
   setReconcileScope: Mock
   setReconcileScanOptions: Mock
+  setReconcileLimit: Mock
   setOpenedByOthersOptions: Mock
   setSyncScope: Mock
   setReconcileExcludes: Mock
@@ -178,6 +179,7 @@ function makeFakeClient(): FakeClient {
   fake.setSwarmAvailable = vi.fn()
   fake.setReconcileScope = vi.fn()
   fake.setReconcileScanOptions = vi.fn()
+  fake.setReconcileLimit = vi.fn()
   fake.setOpenedByOthersOptions = vi.fn()
   fake.setSyncScope = vi.fn((dirs: readonly string[] | string) => {
     fake.syncScopeDirs = typeof dirs === 'string' ? [dirs] : [...dirs]

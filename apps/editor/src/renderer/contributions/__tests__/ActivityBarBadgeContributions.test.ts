@@ -55,7 +55,6 @@ function makeFakeScm(rootUris: readonly string[]): {
   const service: IScmService = {
     _serviceBrand: undefined,
     sourceControls,
-    onDidPublishWorkingTreeScan: () => ({ dispose() {} }),
     changeInputBoxValue() {},
     setExtHost() {},
     resetSourceControls() {},

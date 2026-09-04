@@ -700,6 +700,12 @@
           "default": true,
           "description": "%perforce.config.reconcileHint.enabled.description%"
         },
+        "perforce.reconcileLimit": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 1,
+          "description": "%perforce.config.reconcileLimit.description%"
+        },
         "perforce.reconcileScan.maxBatchDurationMs": {
           "type": "number",
           "default": 10000,

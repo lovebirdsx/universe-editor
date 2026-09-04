@@ -10,6 +10,7 @@ import {
   encodeScmProviderIds,
   resolveScmProviderId,
   resolveScmProviderIds,
+  resolveScmProviderIdWhere,
   type IScmSourceControlModel,
 } from '../ScmService.js'
 
@@ -97,49 +98,6 @@ describe('ScmService', () => {
 
     await scm.$unregisterSourceControl(0)
     expect(scm.sourceControls.get()).toHaveLength(0)
-  })
-})
-
-describe('ScmService working-tree scan', () => {
-  it('fires the scan event with the owning provider id, and never for zero entries', async () => {
-    const { scm } = make()
-    const seen: unknown[] = []
-    scm.onDidPublishWorkingTreeScan((results) => {
-      seen.push(results)
-    })
-    await scm.$registerSourceControl(0, 'perforce', 'Perforce', '/depot')
-
-    await scm.$publishWorkingTreeScan(0, [
-      {
-        directory: '/depot/src',
-        hints: [{ path: '/depot/src/a.ts', letter: 'RC', color: '#e2c08d' }],
-      },
-    ])
-    expect(seen).toEqual([
-      [
-        {
-          sourceControlId: 'perforce',
-          directory: '/depot/src',
-          hints: [{ path: '/depot/src/a.ts', letter: 'RC', color: '#e2c08d' }],
-        },
-      ],
-    ])
-
-    // An empty batch is a no-op (host guards it too — double safety).
-    await scm.$publishWorkingTreeScan(0, [])
-    expect(seen).toHaveLength(1)
-  })
-
-  it('silently ignores a scan for an unknown handle', async () => {
-    const { scm } = make()
-    const seen = vi.fn()
-    scm.onDidPublishWorkingTreeScan(seen)
-    await scm.$registerSourceControl(0, 'git', 'Git')
-
-    await scm.$publishWorkingTreeScan(99, [
-      { directory: '/repo', hints: [{ path: '/repo/x.ts', letter: 'M', color: '#e2c08d' }] },
-    ])
-    expect(seen).not.toHaveBeenCalled()
   })
 })
 
@@ -261,5 +219,48 @@ describe('resolveScmProviderId(s)', () => {
     expect(/\|perforce\|/.test(encodeScmProviderIds(['perforce', 'git']))).toBe(true)
     expect(/\|git\|/.test(encodeScmProviderIds(['perforce', 'git']))).toBe(true)
     expect(/\|perforce\|/.test(encodeScmProviderIds(['git']))).toBe(false)
+  })
+
+  it('resolveScmProviderIdWhere drops incapable owners from the longest-prefix fallback', () => {
+    const controls = [model('perforce', '/depot/client'), model('git', '/depot/client/app')]
+    const capable = (id: string) => id === 'perforce'
+    // The nested git repo is the longest prefix but incapable; perforce wins.
+    expect(
+      resolveScmProviderIdWhere(controls, '/depot/client/app/main.ts', undefined, capable),
+    ).toBe('perforce')
+    expect(
+      resolveScmProviderIdWhere(controls, '/depot/client/other/x.ts', undefined, capable),
+    ).toBe('perforce')
+    // No capable provider owns the path → undefined.
+    expect(
+      resolveScmProviderIdWhere(controls, '/elsewhere/x.ts', undefined, capable),
+    ).toBeUndefined()
+  })
+
+  it('resolveScmProviderIdWhere keeps the selected repo winning even when incapable', () => {
+    const controls = [model('perforce', '/depot/client'), model('git', '/depot/client/app')]
+    const capable = (id: string) => id === 'perforce'
+    // The user explicitly selected the nested git repo: it still wins over the
+    // capable outer perforce, matching resolveScmProviderId's selection semantics.
+    expect(
+      resolveScmProviderIdWhere(
+        controls,
+        '/depot/client/app/main.ts',
+        '/depot/client/app',
+        capable,
+      ),
+    ).toBe('git')
+    // Selecting the outer perforce workspace routes to perforce.
+    expect(
+      resolveScmProviderIdWhere(controls, '/depot/client/app/main.ts', '/depot/client', capable),
+    ).toBe('perforce')
+  })
+
+  it('resolveScmProviderIdWhere returns undefined when every owner is incapable', () => {
+    const controls = [model('git', '/depot/client')]
+    const capable = () => false
+    expect(
+      resolveScmProviderIdWhere(controls, '/depot/client/app/main.ts', undefined, capable),
+    ).toBeUndefined()
   })
 })

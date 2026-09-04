@@ -47,7 +47,6 @@ function recordingScm(): IMainThreadScm & {
   updateGroupResourceStates: ReturnType<typeof vi.fn>
   setInputBoxValue: ReturnType<typeof vi.fn>
   updateSupplementary: ReturnType<typeof vi.fn>
-  publishWorkingTreeScan: ReturnType<typeof vi.fn>
 } {
   const registerSourceControl = vi.fn().mockResolvedValue(undefined)
   const registerGroup = vi.fn().mockResolvedValue(undefined)
@@ -55,7 +54,6 @@ function recordingScm(): IMainThreadScm & {
   const updateGroupResourceStates = vi.fn().mockResolvedValue(undefined)
   const setInputBoxValue = vi.fn().mockResolvedValue(undefined)
   const updateSupplementary = vi.fn().mockResolvedValue(undefined)
-  const publishWorkingTreeScan = vi.fn().mockResolvedValue(undefined)
   return {
     registerSourceControl,
     registerGroup,
@@ -63,7 +61,6 @@ function recordingScm(): IMainThreadScm & {
     updateGroupResourceStates,
     setInputBoxValue,
     updateSupplementary,
-    publishWorkingTreeScan,
     $registerSourceControl: registerSourceControl,
     $updateSourceControl: updateSourceControl,
     $unregisterSourceControl: () => Promise.resolve(),
@@ -72,7 +69,6 @@ function recordingScm(): IMainThreadScm & {
     $updateGroupResourceStates: updateGroupResourceStates,
     $unregisterGroup: () => Promise.resolve(),
     $updateSupplementaryDecorations: updateSupplementary,
-    $publishWorkingTreeScan: publishWorkingTreeScan,
     $setInputBoxValue: setInputBoxValue,
     $setInputBoxPlaceholder: () => Promise.resolve(),
   }
@@ -129,32 +125,6 @@ describe('host SCM bridge', () => {
     service.onInputBoxValueChange(0, 'user typed')
     expect(sc.inputBox.value).toBe('user typed')
     expect(changed).toHaveBeenCalledWith('user typed')
-  })
-
-  it('forwards a working-tree scan batch to the renderer, and never with zero entries', () => {
-    const scm = recordingScm()
-    const service = new ExtensionService([], noopCommands, noopWindow, scm, noopTimeline)
-    const sc = service.createSourceControl('perforce', 'Perforce')
-
-    sc.publishWorkingTreeScan([
-      {
-        directory: '/repo/src',
-        changes: [
-          { path: '/repo/src/a.ts', letter: 'RC', color: '#e2c08d', tooltip: 'Not opened · Edit' },
-        ],
-      },
-    ])
-    expect(scm.publishWorkingTreeScan).toHaveBeenCalledWith(0, [
-      {
-        directory: '/repo/src',
-        hints: [
-          { path: '/repo/src/a.ts', letter: 'RC', color: '#e2c08d', tooltip: 'Not opened · Edit' },
-        ],
-      },
-    ])
-
-    sc.publishWorkingTreeScan([])
-    expect(scm.publishWorkingTreeScan).toHaveBeenCalledTimes(1)
   })
 
   it('sends a cleared acceptInputActions so the renderer can collapse the split button', () => {

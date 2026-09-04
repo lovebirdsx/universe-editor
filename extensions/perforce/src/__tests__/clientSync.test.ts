@@ -278,7 +278,7 @@ describe('PerforceClient.sync', () => {
       {},
       new ConcurrencyGate(4),
       { enabled: true, workspaceTtlMs: 4000 },
-      log,
+      { log },
     )
     expect(client).toBeDefined()
 
@@ -308,7 +308,7 @@ describe('PerforceClient.sync', () => {
       {},
       new ConcurrencyGate(4),
       { enabled: true, workspaceTtlMs: 4000 },
-      log,
+      { log },
     )
     expect(client).toBeDefined()
 
