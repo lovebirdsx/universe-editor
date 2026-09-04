@@ -205,6 +205,8 @@ interface StubAgentOptions {
   readonly capabilities?: AgentCapabilities
   /** Per-page session list (last page returns nextCursor=null). */
   readonly listPages?: readonly (readonly SessionInfo[])[]
+  /** Dispatch the per-page session list by the requested `session/list` cwd — overrides listPages. */
+  readonly listFor?: (cwd: string | null | undefined) => readonly (readonly SessionInfo[])[]
   /** Throw an error from listSessions. */
   readonly listError?: { code: number; message: string }
   /** Throw an error from initialize. */
@@ -238,7 +240,7 @@ class StubAgent implements Agent {
     if (this._opts.listError) {
       throw new RequestError(this._opts.listError.code, this._opts.listError.message)
     }
-    const pages = this._opts.listPages ?? []
+    const pages = this._opts.listFor ? this._opts.listFor(params.cwd) : (this._opts.listPages ?? [])
     // Cursors are zero-based page indices encoded as strings.
     const cursor = params.cursor == null ? 0 : Number(params.cursor)
     const page = pages[cursor] ?? []
@@ -1112,6 +1114,223 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     const titles = built.history.list().map((e) => e.title)
     expect(titles).toContain('mine')
     expect(titles).not.toContain('theirs')
+  })
+})
+
+describe('AcpSessionRestoreCoordinator — sub-root sweep keeps root sessions', () => {
+  let coordinator: AcpSessionRestoreCoordinator | undefined
+
+  afterEach(() => {
+    coordinator?.dispose()
+    coordinator = undefined
+  })
+
+  /** Agent that reports a root session for the workspace-root sweep and one
+   *  session per configured projectRoot — mirroring a fork whose `session/list`
+   *  filters by the requested cwd. */
+  function seedAgentPerCwd(
+    built: BuildResult,
+    sessionsByCwd: ReadonlyMap<string, readonly SessionInfo[]>,
+  ): void {
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listFor: (cwd) => [sessionsByCwd.get(cwd ?? '') ?? []],
+    })
+  }
+
+  function info(sessionId: string, cwd: string): SessionInfo {
+    return {
+      sessionId,
+      cwd,
+      title: sessionId,
+      updatedAt: '2026-01-01T00:00:00Z',
+    } as unknown as SessionInfo
+  }
+
+  it('refresh() with configured projectRoots keeps both root and sub-root sessions (worktree scope)', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'worktree',
+      subProjects: makeSubProjects([
+        { cwd: '/ws/src/client', source: 'configured', label: 'src/client' },
+      ]),
+    })
+    seedAgentPerCwd(
+      built,
+      new Map<string, readonly SessionInfo[]>([
+        ['/ws', [info('s-root', '/ws')]],
+        ['/ws/src/client', [info('s-sub', '/ws/src/client')]],
+      ]),
+    )
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.refresh()
+    const ids = built.history
+      .list()
+      .map((e) => e.sessionIdOnAgent)
+      .sort()
+    expect(ids).toEqual(['s-root', 's-sub'])
+  })
+
+  it('refresh() keeps both root and sub-root sessions in workspace scope', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'workspace',
+      subProjects: makeSubProjects([
+        { cwd: '/ws/src/client', source: 'configured', label: 'src/client' },
+      ]),
+    })
+    seedAgentPerCwd(
+      built,
+      new Map<string, readonly SessionInfo[]>([
+        ['/ws', [info('s-root', '/ws')]],
+        ['/ws/src/client', [info('s-sub', '/ws/src/client')]],
+      ]),
+    )
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.refresh()
+    const ids = built.history
+      .list()
+      .map((e) => e.sessionIdOnAgent)
+      .sort()
+    expect(ids).toEqual(['s-root', 's-sub'])
+  })
+
+  it('refresh() does not rebuild a sub-root row from scratch (local title flags survive)', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'worktree',
+      subProjects: makeSubProjects([
+        { cwd: '/ws/src/client', source: 'configured', label: 'src/client' },
+      ]),
+    })
+    seedAgentPerCwd(
+      built,
+      new Map<string, readonly SessionInfo[]>([
+        ['/ws', [info('s-root', '/ws')]],
+        ['/ws/src/client', [info('s-sub', '/ws/src/client')]],
+      ]),
+    )
+    await built.history.initialize()
+    const sub = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-sub',
+      title: 'My Name',
+      cwd: '/ws/src/client',
+    })
+    built.history.setHistoryManualTitle(sub.id)
+    built.history.setHistoryConfigOption(sub.id, 'model', 'claude-opus')
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.refresh()
+    const kept = built.history.get('s-sub')
+    expect(kept?.title).toBe('My Name')
+    expect(kept?.manualTitle).toBe(true)
+    expect(kept?.configOptions).toEqual({ model: 'claude-opus' })
+    expect(built.history.get('s-root')).toBeDefined()
+  })
+
+  it('default merge hydrate keeps both root and sub-root sessions (worktree scope)', async () => {
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'worktree',
+      subProjects: makeSubProjects([
+        { cwd: '/ws/src/client', source: 'configured', label: 'src/client' },
+      ]),
+    })
+    seedAgentPerCwd(
+      built,
+      new Map<string, readonly SessionInfo[]>([
+        ['/ws', [info('s-root', '/ws')]],
+        ['/ws/src/client', [info('s-sub', '/ws/src/client')]],
+      ]),
+    )
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 50))
+    const ids = built.history
+      .list()
+      .map((e) => e.sessionIdOnAgent)
+      .sort()
+    expect(ids).toEqual(['s-root', 's-sub'])
+  })
+
+  it('refresh() with a derived (detected) sub-root keeps the root session too', async () => {
+    // No configured projectRoots: the sub-root comes from a local history row
+    // (e.g. a session the detectEnabled machinery created earlier). The same
+    // multi-sweep prune applies, so the root row must survive.
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'worktree',
+    })
+    seedAgentPerCwd(
+      built,
+      new Map<string, readonly SessionInfo[]>([
+        ['/ws', [info('s-root', '/ws')]],
+        ['/ws/lib', [info('s-sub', '/ws/lib')]],
+      ]),
+    )
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-sub',
+      title: 'lib chat',
+      cwd: '/ws/lib',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.refresh()
+    const ids = built.history
+      .list()
+      .map((e) => e.sessionIdOnAgent)
+      .sort()
+    expect(ids).toEqual(['s-root', 's-sub'])
+  })
+
+  it('a sub-root directory deleted agent-side stays listed once its sweep is truncated by the cap (documented tradeoff)', async () => {
+    // Known liveness gap of the split prune domains: a stale subdirectory row
+    // is only cleaned by its own sub-root sweep ('sweep' domain, exact cwd) —
+    // the root sweep deliberately skips strict subdirectories so it cannot
+    // clobber their locally-edited fields. Sub-root sweeps are capped at
+    // MAX_SUB_ROOT_HYDRATES, so once ≥8 hotter roots exist (configured roots
+    // always outrank derived ones), the cold directory's sweep never runs and
+    // its stale row lingers in the list until the user deletes it locally.
+    // This test pins that tradeoff down so a future fix flips it red.
+    const hotRoots = Array.from({ length: 8 }, (_, i) => `/ws/hot${i}`)
+    const built = build({
+      agentIds: ['fake'],
+      cwd: '/ws',
+      getHistoryScope: () => 'worktree',
+      subProjects: makeSubProjects(
+        hotRoots.map((cwd) => ({ cwd, source: 'configured', label: cwd })),
+      ),
+    })
+    seedAgentPerCwd(built, new Map())
+    await built.history.initialize()
+    // The agent deleted every session under /ws/lib; the stale row remains
+    // only in local history.
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-stale',
+      title: 'stale lib chat',
+      cwd: '/ws/lib',
+    })
+    coordinator = built.coordinator
+    coordinator.start()
+    await coordinator.refresh()
+    // The eight configured roots consume the entire sweep budget; /ws/lib is
+    // only derivable from the stale row itself and never gets swept.
+    expect(built.history.get('s-stale')).toBeDefined()
   })
 })
 

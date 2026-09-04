@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   ServiceCollection,
   observableValue,
   type IEditorInput,
@@ -152,6 +154,12 @@ function makeHarness(): {
   services.set(IAcpSessionService, sessions as unknown as IAcpSessionServiceType)
   services.set(IAcpSessionHistoryService, history)
   services.set(IAcpChatWidgetService, widgets as unknown as IAcpChatWidgetServiceType)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
   const instantiation = new InstantiationService(services)
   const svc = new RendererSessionsService(
     sessions as unknown as IAcpSessionServiceType,

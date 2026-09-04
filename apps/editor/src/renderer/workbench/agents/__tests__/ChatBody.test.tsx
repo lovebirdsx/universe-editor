@@ -20,17 +20,20 @@ import {
   IFileSearchService,
   IFileService,
   InstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   MenuId,
   observableValue,
   registerAction2,
   ServiceCollection,
+  URI,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import type {
   IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
+  IUriIdentityService as IUriIdentityServiceType,
   IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import type {
@@ -118,6 +121,7 @@ function makeSession(
     forkSupported?: boolean
     status?: AcpSessionStatus
     plan?: readonly AcpPlanEntry[]
+    cwd?: string
   } = {},
 ): IAcpSession {
   const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
@@ -129,6 +133,8 @@ function makeSession(
     agentId: 'fake',
     title: 'Fake',
     sessionIdOnAgent: observableValue<string | undefined>('t.sidOnAgent', id),
+    authority: undefined,
+    cwd: opts.cwd,
     messages: observableValue<readonly AcpMessage[]>('t.messages', []),
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', opts.plan ?? []),
@@ -193,10 +199,37 @@ const stubWorkspaceService = {
   onDidChangeRecent: Event.None,
 } as unknown as IWorkspaceServiceType
 
+const stubUriIdentity: IUriIdentityServiceType = {
+  _serviceBrand: undefined,
+  platform: 'linux',
+  isEqual: (a?: URI, b?: URI) => a?.toString() === b?.toString(),
+  isEqualOrParent: () => false,
+  getComparisonKey: (uri: URI) => uri.toString(),
+  arePathsEqual: (a?: string, b?: string) => a === b,
+  getPathComparisonKey: (p: string) => p,
+  relativePathUnder: (root: string, child: string) => {
+    const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
+    const normChild = child.replace(/\\/g, '/')
+    if (normChild === normRoot) return ''
+    return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
+  },
+  createResourceMap: () => new Map() as never,
+  createResourceSet: () => new Set() as never,
+} as unknown as IUriIdentityServiceType
+
+function workspaceWithFolder(folder: string): IWorkspaceServiceType {
+  return {
+    ...stubWorkspaceService,
+    current: { folder: URI.file(folder), name: 'workspace' },
+  } as unknown as IWorkspaceServiceType
+}
+
 interface InstantiationOverrides {
   widget?: Partial<IAcpChatWidgetServiceType>
   history?: Partial<IAcpSessionHistoryServiceType>
   groups?: IEditorGroupsServiceType
+  workspace?: IWorkspaceServiceType
+  uriIdentity?: IUriIdentityServiceType
 }
 
 function makeInstantiation(
@@ -244,7 +277,8 @@ function makeInstantiation(
   } as unknown as IEditorResolverService)
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
-  services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(IWorkspaceService, overrides.workspace ?? stubWorkspaceService)
+  services.set(IUriIdentityService, overrides.uriIdentity ?? stubUriIdentity)
   services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IConfigurationService, {
     _serviceBrand: undefined,
@@ -276,8 +310,8 @@ function makeInstantiation(
   return new InstantiationService(services)
 }
 
-function renderChat(session: IAcpSession) {
-  const inst = makeInstantiation()
+function renderChat(session: IAcpSession, overrides: InstantiationOverrides = {}) {
+  const inst = makeInstantiation(undefined, undefined, overrides)
   return render(
     <ServicesContext.Provider value={inst}>
       <ChatBody session={session} />
@@ -1108,6 +1142,56 @@ describe('ChatBody — empty session hint', () => {
       'workbench.action.agent.resumeSession',
       'workbench.action.agent.selectAgent',
     ])
+  })
+})
+
+describe('ChatBody — cwd pill placement', () => {
+  const workspaceOverrides = (): InstantiationOverrides => ({
+    workspace: workspaceWithFolder('X:/workspace'),
+  })
+
+  const userMessage: TimelineItem = {
+    kind: 'message',
+    id: 'u1',
+    message: {
+      id: 'u1',
+      role: 'user',
+      text: 'hello',
+      blocks: [{ type: 'text', text: 'hello' }],
+      streaming: false,
+    },
+  }
+
+  it('docks the pill above the prompt input for a blank session with a subdirectory cwd', () => {
+    const { container } = renderChat(makeSession('s-blank', [], { cwd: 'X:/workspace/apps' }), {
+      workspace: workspaceWithFolder('X:/workspace'),
+    })
+    const pill = container.querySelector('[data-testid="acp-session-cwd"]')
+    expect(pill).not.toBeNull()
+    // Inside the prompt form (not at the top of the chat container).
+    expect(pill!.closest('form')).not.toBeNull()
+    expect(pill!.closest('[data-testid="acp-chat"]')).not.toBeNull()
+  })
+
+  it('moves the pill into the sticky user bar header once a user message exists', () => {
+    const { container } = renderChat(
+      makeSession('s-started', [userMessage], { cwd: 'X:/workspace/apps' }),
+      workspaceOverrides(),
+    )
+    const pill = container.querySelector('[data-testid="acp-session-cwd"]')
+    expect(pill).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-user-bar"]')?.contains(pill)).toBe(true)
+    // No duplicate: the prompt input renders no pill for a started session.
+    const pills = container.querySelectorAll('[data-testid="acp-session-cwd"]')
+    expect(pills.length).toBe(1)
+  })
+
+  it('renders no pill for a root-level cwd', () => {
+    const { container } = renderChat(
+      makeSession('s-root', [], { cwd: 'X:/workspace' }),
+      workspaceOverrides(),
+    )
+    expect(container.querySelector('[data-testid="acp-session-cwd"]')).toBeNull()
   })
 })
 

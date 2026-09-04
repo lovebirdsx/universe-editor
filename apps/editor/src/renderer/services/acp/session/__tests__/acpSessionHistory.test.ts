@@ -1809,6 +1809,185 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
   })
 })
 
+describe('AcpSessionHistoryService — multi-sweep replace (root + sub-root hydrates)', () => {
+  let svc: AcpSessionHistoryService
+  beforeEach(() => {
+    svc = makeService().svc
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('worktree root sweep never prunes strict subdirectory rows — sub-root sweeps own them', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-sub', title: 'sub', cwd: '/work/src/client' })
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-root', cwd: '/work', title: 'root', updatedAt: null }],
+      '/work',
+      undefined,
+      new Set<string>(),
+      'worktree',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toContain('s-root')
+    expect(ids).toContain('s-sub')
+  })
+
+  it('worktree root sweep still prunes rows outside the workspace tree (sibling worktrees / foreign workspaces)', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-stale',
+      title: 'stale',
+      cwd: '/other-worktree',
+    })
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-root', cwd: '/work', title: 'root', updatedAt: null }],
+      '/work',
+      undefined,
+      new Set<string>(),
+      'worktree',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-root'])
+  })
+
+  it("'sweep' domain (sub-root hydrate) only prunes exact-cwd rows — the root and sibling rows survive", async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-root', title: 'root', cwd: '/work' })
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-lib',
+      title: 'lib',
+      cwd: '/work/lib',
+    })
+    svc.replaceAgentEntries(
+      'fake',
+      [
+        {
+          sessionId: 's-client',
+          cwd: '/work/src/client',
+          title: 'client',
+          updatedAt: null,
+        },
+      ],
+      '/work/src/client',
+      undefined,
+      new Set<string>(),
+      'worktree',
+      'sweep',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toContain('s-root')
+    expect(ids).toContain('s-lib')
+    expect(ids).toContain('s-client')
+  })
+
+  it("'sweep' domain still prunes stale rows inside its own exact cwd", async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-root', title: 'root', cwd: '/work' })
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-stale',
+      title: 'stale',
+      cwd: '/work/src/client',
+    })
+    svc.replaceAgentEntries(
+      'fake',
+      [
+        {
+          sessionId: 's-fresh',
+          cwd: '/work/src/client',
+          title: 'fresh',
+          updatedAt: null,
+        },
+      ],
+      '/work/src/client',
+      undefined,
+      new Set<string>(),
+      'worktree',
+      'sweep',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toContain('s-root')
+    expect(ids).toContain('s-fresh')
+    expect(ids).not.toContain('s-stale')
+  })
+
+  it("'sweep' domain in workspace scope behaves like the default (exact cwd)", async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-root', title: 'root', cwd: '/work' })
+    svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-stale',
+      title: 'stale',
+      cwd: '/work/src/client',
+    })
+    svc.replaceAgentEntries(
+      'fake',
+      [
+        {
+          sessionId: 's-fresh',
+          cwd: '/work/src/client',
+          title: 'fresh',
+          updatedAt: null,
+        },
+      ],
+      '/work/src/client',
+      undefined,
+      new Set<string>(),
+      'workspace',
+      'sweep',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toContain('s-root')
+    expect(ids).toContain('s-fresh')
+    expect(ids).not.toContain('s-stale')
+  })
+
+  it('all scope keeps the full-agent prune (its sweep lists every project)', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-other', title: 'other', cwd: '/elsewhere' })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-sub', title: 'sub', cwd: '/work/src/client' })
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-root', cwd: '/work', title: 'root', updatedAt: null }],
+      '/work',
+      undefined,
+      new Set<string>(),
+      'all',
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-root'])
+  })
+
+  it('workspace-scope merge never absorbs a subdirectory row — the sub-root sweep adds it separately', async () => {
+    // Semantic anchor for the hydrate split: the root sweep (workspace scope)
+    // only absorbs exact-cwd rows; a subdirectory session arrives via its own
+    // sub-root sweep. The session list still shows both because the display
+    // filter uses descendant-or-equal over the merged entries.
+    await svc.initialize()
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-sub', cwd: '/work/src/client', title: 'sub', updatedAt: null }],
+      '/work',
+      undefined,
+      'workspace',
+    )
+    expect(svc.list()).toEqual([])
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-sub', cwd: '/work/src/client', title: 'sub', updatedAt: null }],
+      '/work/src/client',
+      undefined,
+      'workspace',
+    )
+    expect(svc.list().map((e) => e.sessionIdOnAgent)).toEqual(['s-sub'])
+  })
+})
+
 describe('AcpSessionHistoryService — updateInfo', () => {
   let svc: AcpSessionHistoryService
   beforeEach(() => {

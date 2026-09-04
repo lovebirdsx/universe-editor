@@ -27,6 +27,7 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
+  type ReactNode,
 } from 'react'
 import {
   CancellationTokenSource,
@@ -161,12 +162,16 @@ export function PromptInput({
   autoFocus = false,
   handleRef,
   onPopoverOpenChange,
+  topAccessory,
 }: {
   session: IAcpSession
   isSideTask?: boolean
   autoFocus?: boolean
   handleRef?: MutableRefObject<WidgetHandle>
   onPopoverOpenChange?: (open: boolean) => void
+  /** Optional element rendered above the composer (sibling of the selection /
+   *  image chips) — the empty-session cwd pill lives here. */
+  topAccessory?: ReactNode
 }) {
   const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
   const [caret, setCaret] = useState(() => AcpPromptDraftCache.load(session.id)?.caret ?? 0)
@@ -1416,6 +1421,7 @@ export function PromptInput({
 
   return (
     <form className={styles['promptForm']} onSubmit={submit} onContextMenu={onPromptContextMenu}>
+      {topAccessory != null && <div className={styles['promptTopAccessory']}>{topAccessory}</div>}
       <SelectionContextChips
         contexts={contexts}
         onRemove={(i) => setContexts((prev) => prev.filter((_, idx) => idx !== i))}

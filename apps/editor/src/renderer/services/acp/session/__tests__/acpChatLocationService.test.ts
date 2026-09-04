@@ -13,6 +13,8 @@ import {
   Event,
   Emitter,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -187,6 +189,12 @@ function makeHarness(
   const services = new ServiceCollection()
   services.set(IAcpSessionService, sessions as unknown as IAcpSessionServiceType)
   services.set(IAcpSessionHistoryService, history)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
   const inst = new InstantiationService(services)
   const svc = new AcpChatLocationService(
     storage,

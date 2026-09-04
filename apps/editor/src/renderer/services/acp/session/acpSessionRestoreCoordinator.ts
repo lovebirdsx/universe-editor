@@ -468,7 +468,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
         if (myGen !== this._hydrateGen) return
         await Promise.all(
           agentIds.map((agentId) =>
-            this._hydrateOneAgent(agentId, subRoot.cwd, subRoot.authority, myGen, replace),
+            this._hydrateOneAgent(agentId, subRoot.cwd, subRoot.authority, myGen, replace, 'sweep'),
           ),
         )
       }
@@ -527,6 +527,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     authority: string | undefined,
     myGen: number,
     replace: boolean,
+    pruneDomain: 'scope' | 'sweep' = 'scope',
   ): Promise<void> {
     let conn: IAcpClientConnection | undefined
     try {
@@ -584,6 +585,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           authority,
           this._callbacks.getLiveSessionIds(),
           scope,
+          pruneDomain,
         )
       } else if (merged.length > 0) {
         this._history.bulkMergeFromAgent(agentId, merged, cwd, authority, scope)

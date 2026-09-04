@@ -9,14 +9,20 @@ import {
   autorun,
   EditorInput,
   IInstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   localize,
+  observableFromEvent,
+  observableValue,
   URI,
   type IDialogService,
   type IDisposable,
+  type IObservable,
+  type ISettableObservable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
-import { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import { IAcpSessionHistoryService, sessionCwdScopeRel } from './acpSessionHistory.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 import { agentIconId } from '../acpAgentRegistry.js'
 import { resolveLiveSessionTitle, truncateSessionTitle } from './acpSessionTitle.js'
@@ -28,6 +34,13 @@ export class AcpSessionEditorInput extends EditorInput {
   private _lastTitle: string
   private _isSideTask = false
   private _titleSub: IDisposable | undefined
+  private readonly _workspaceFolder: IObservable<IWorkspaceService['current']>
+  private readonly _hasSubdirCwd: ISettableObservable<boolean>
+  /** True while the session cwd is a *strict* subdirectory of the open
+   *  workspace — drives the tab's folder badge next to the agent icon. Same
+   *  judgement as the chat's SessionCwdPill (sessionCwdScopeRel). */
+  readonly hasSubdirCwd: IObservable<boolean>
+  private _cwdSub: IDisposable | undefined
 
   /**
    * `agentId` is captured at construction so a stale serialized input — left
@@ -41,9 +54,13 @@ export class AcpSessionEditorInput extends EditorInput {
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpChatWidgetService private readonly _chatWidgetService: IAcpChatWidgetService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._resource = URI.from({ scheme: 'universe', path: `/acp/session/${sessionId}` })
+    this._hasSubdirCwd = observableValue<boolean>(`acpSessionCwdBadge:${sessionId}`, false)
+    this.hasSubdirCwd = this._hasSubdirCwd
     this._lastTitle =
       initialTitle !== undefined && initialTitle.length > 0
         ? truncateSessionTitle(initialTitle)
@@ -75,6 +92,25 @@ export class AcpSessionEditorInput extends EditorInput {
       }
     })
     this._register(this._titleSub)
+
+    // Track the strict-subdirectory cwd badge for the tab. The cwd resolves
+    // from the live session (when resident) or the history row (a restored,
+    // not-yet-live input), and the judgement refreshes on history hydration
+    // and workspace swaps.
+    this._workspaceFolder = observableFromEvent(
+      this._workspace.onDidChangeWorkspace,
+      () => this._workspace.current,
+    )
+    this._cwdSub = autorun((r) => {
+      this._history.entries.read(r)
+      this._workspaceFolder.read(r)
+      const root = this._workspace.current?.folder?.fsPath
+      const cwd =
+        this._sessions.getById(this.sessionId)?.cwd ?? this._history.get(this.sessionId)?.cwd
+      const next = sessionCwdScopeRel(this._uriIdentity, root, cwd) !== null
+      if (next !== this._hasSubdirCwd.get()) this._hasSubdirCwd.set(next, undefined)
+    })
+    this._register(this._cwdSub)
   }
 
   override get typeId(): string {

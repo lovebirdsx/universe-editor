@@ -119,13 +119,15 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
     const sessions = accessor.get(IAcpSessionService)
     const registry = accessor.get(IAcpAgentRegistry)
     const groups = accessor.get(IEditorGroupsService)
+    const history = accessor.get(IAcpSessionHistoryService)
     const inst = accessor.get(IInstantiationService)
 
     const group = resolveEditorGroup(arg, groups)
     const current = resolveTargetSessionEditor(arg, group) ?? group.activeEditor
     const agentId = resolveSessionEditorAgentId(current, sessions) ?? registry.defaultAgentId()
+    const cwd = resolveSessionEditorCwd(current, sessions, history)
 
-    const session = await sessions.createSession(agentId)
+    const session = await sessions.createSession(agentId, cwd !== undefined ? { cwd } : undefined)
     const nextInput = inst.createInstance(
       AcpSessionEditorInput,
       session.id,
@@ -1027,6 +1029,24 @@ function resolveSessionEditorAgentId(
     return editor.agentId ?? sessions.getById(editor.sessionId)?.agentId
   }
   return sessions.activeSession.get()?.agentId
+}
+
+/** Live session cwd first, history row (keyed by the durable agent id) as the
+ *  fallback for a restored tab that is not live yet. Deliberately no
+ *  activeSession fallback for non-session editors — unlike agentId, a plain
+ *  file tab has no session cwd to inherit, so the new session keeps the
+ *  workspace root. */
+function resolveSessionEditorCwd(
+  editor: IEditorGroup['activeEditor'],
+  sessions: IAcpSessionService,
+  history: IAcpSessionHistoryService,
+): string | undefined {
+  if (editor instanceof AcpSessionEditorInput) {
+    const live = sessions.getById(editor.sessionId)
+    const historyId = live?.sessionIdOnAgent.get() ?? editor.sessionId
+    return live?.cwd ?? history.get(historyId)?.cwd
+  }
+  return undefined
 }
 
 function openSessionEditorInGroup(

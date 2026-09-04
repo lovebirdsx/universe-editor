@@ -390,12 +390,23 @@ export interface IAcpSessionHistoryService {
    * historyIds so a session that hasn't been listed yet (e.g. just-created)
    * does not get pruned from under the UI.
    *
-   * Pruning follows `scope`: in `workspace` scope only exact-`currentCwd` rows
-   * are eligible (other workspaces survive); in `worktree`/`all` scope any
-   * known-cwd row for this agent is eligible, so narrowing the scope drops the
-   * rows a wider scope had pulled in. Entries with a missing `cwd` are always
-   * left alone (we cannot tell which workspace they belong to). Entries for
-   * other agents are untouched.
+   * The prune domain follows `scope` unless `pruneDomain: 'sweep'` is passed:
+   * - `'sweep'`: only rows whose cwd exactly equals `currentCwd` are eligible.
+   *   Used by the restore coordinator's sub-root hydrates, where the workspace
+   *   root and sibling sub-roots own the rest of the rows — pruning them here
+   *   would delete sessions another sweep just reported.
+   * - `workspace` scope: only exact-`currentCwd` rows are eligible (other
+   *   workspaces survive).
+   * - `worktree` scope: every known-cwd row EXCEPT strict subdirectories of
+   *   `currentCwd` is eligible. Subdirectory rows belong to their own sub-root
+   *   sweeps; pruning them from the root sweep would both lose local-only
+   *   fields (the sub-root sweep would rebuild the row from scratch) and
+   *   starve `_derivedSubRoots`, which reads the history to find extra roots.
+   * - `all` scope: any known-cwd row is eligible — the `all` sweep drops the
+   *   cwd filter on `session/list` and therefore owns every project.
+   *
+   * Entries with a missing `cwd` are always left alone (we cannot tell which
+   * workspace they belong to). Entries for other agents are untouched.
    *
    * Called by the Refresh Session List button via the coordinator.
    */
@@ -406,6 +417,7 @@ export interface IAcpSessionHistoryService {
     authority: string | undefined,
     preserveIds: ReadonlySet<string>,
     scope: SessionHistoryScope,
+    pruneDomain?: 'scope' | 'sweep',
   ): void
   /**
    * Patch metadata for one entry from a `session_info_update` notification.
@@ -453,6 +465,22 @@ export function isDescendantOrEqual(
 ): boolean {
   if (parent === undefined || child === undefined) return false
   return uriIdentity.relativePathUnder(parent, child) !== null
+}
+
+/**
+ * Relative path of a session cwd beneath the workspace root — the single source
+ * of the "strict subdirectory" judgement shared by the chat cwd pill and the
+ * editor-tab folder badge. Returns null for a root-level cwd, an unknown cwd,
+ * or a cwd outside the workspace (those need no scope badge).
+ */
+export function sessionCwdScopeRel(
+  uriIdentity: IUriIdentityService,
+  rootFsPath: string | undefined,
+  cwd: string | undefined,
+): string | null {
+  if (rootFsPath === undefined || cwd === undefined) return null
+  const rel = uriIdentity.relativePathUnder(rootFsPath, cwd)
+  return rel === null || rel === '' ? null : rel
 }
 
 /**
@@ -989,7 +1017,7 @@ export class AcpSessionHistoryService
     scope: SessionHistoryScope,
   ): void {
     if (sessions.length === 0) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, authority, undefined, scope)
+    this._mergeOrReplace(agentId, sessions, currentCwd, authority, undefined, scope, 'scope')
   }
 
   replaceAgentEntries(
@@ -999,11 +1027,20 @@ export class AcpSessionHistoryService
     authority: string | undefined,
     preserveIds: ReadonlySet<string>,
     scope: SessionHistoryScope,
+    pruneDomain?: 'scope' | 'sweep',
   ): void {
     // Empty bucket protection: same as bulkMergeFromAgent. Without a workspace
     // we don't know which rows to prune, so leave everything alone.
     if (currentCwd === undefined) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, authority, preserveIds, scope)
+    this._mergeOrReplace(
+      agentId,
+      sessions,
+      currentCwd,
+      authority,
+      preserveIds,
+      scope,
+      pruneDomain ?? 'scope',
+    )
   }
 
   private _mergeOrReplace(
@@ -1013,6 +1050,7 @@ export class AcpSessionHistoryService
     authority: string | undefined,
     preserveIds: ReadonlySet<string> | undefined,
     scope: SessionHistoryScope,
+    pruneDomain: 'scope' | 'sweep',
   ): void {
     // Empty window: refuse to absorb anything the agent reports. Otherwise a
     // hydrate fired before the user opens a folder would pollute the GLOBAL
@@ -1121,17 +1159,17 @@ export class AcpSessionHistoryService
       }
     }
     // Replace mode: prune entries for this agent that are absent from the new
-    // list and not protected via preserveIds. The prune domain follows `scope`:
-    // `workspace` only touches exact-cwd rows (so unrelated workspaces survive);
-    // `worktree`/`all` prune any known-cwd row (so narrowing the scope or losing
-    // a sibling worktree drops it). Entries with no cwd are always left alone —
-    // we cannot tell which workspace they belong to.
+    // list and not protected via preserveIds. The prune domain is decided by
+    // `pruneDomain` + `scope` (see `replaceAgentEntries`): a sub-root sweep
+    // ('sweep' domain) only touches exact-cwd rows; the root sweep keeps its
+    // `scope` semantics but never touches strict subdirectories in `worktree`
+    // scope — those rows belong to their own sub-root sweeps. Entries with no
+    // cwd are always left alone — we cannot tell which workspace they belong to.
     if (preserveIds !== undefined) {
       for (const [key, entry] of byKey) {
         if (entry.agentId !== agentId) continue
         if (entry.cwd === undefined) continue
-        if (scope === 'workspace' && !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd))
-          continue
+        if (!this._inPruneDomain(entry.cwd, currentCwd, scope, pruneDomain)) continue
         if (reportedSessionIds.has(entry.sessionIdOnAgent)) continue
         if (preserveIds.has(entry.id)) continue
         byKey.delete(key)
@@ -1143,6 +1181,37 @@ export class AcpSessionHistoryService
     this._truncate()
     this._publish()
     this._scheduleWrite()
+  }
+
+  /**
+   * Whether a row with `entryCwd` belongs to the prune domain of a replace
+   * sweep (single source of the multi-sweep prune rules — see
+   * `replaceAgentEntries`):
+   *  - `sweep` domain (sub-root hydrates): exact-`currentCwd` rows only — the
+   *    workspace root and sibling sub-roots own the rest.
+   *  - `workspace` scope: exact-`currentCwd` rows only (other workspaces survive).
+   *  - `worktree` scope: every row EXCEPT strict subdirectories of
+   *    `currentCwd` (they belong to their own sub-root sweeps).
+   *  - `all` scope: every row (the `all` sweep lists every project).
+   */
+  private _inPruneDomain(
+    entryCwd: string,
+    currentCwd: string | undefined,
+    scope: SessionHistoryScope,
+    pruneDomain: 'scope' | 'sweep',
+  ): boolean {
+    if (pruneDomain === 'sweep' || scope === 'workspace') {
+      return this._uriIdentity.arePathsEqual(entryCwd, currentCwd)
+    }
+    if (scope === 'worktree') {
+      if (
+        isDescendantOrEqual(this._uriIdentity, currentCwd, entryCwd) &&
+        !this._uriIdentity.arePathsEqual(entryCwd, currentCwd)
+      ) {
+        return false
+      }
+    }
+    return true
   }
 
   updateInfo(

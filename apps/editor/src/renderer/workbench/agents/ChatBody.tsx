@@ -239,6 +239,12 @@ function ChatSessionBody({
   const widgetService = useService(IAcpChatWidgetService)
   const history = useService(IAcpSessionHistoryService)
   const timeline = useObservable(session.timeline)
+  // The sticky bar pins the first user message; until one exists the session is
+  // "blank" and the cwd pill docks above the prompt input instead (it shares
+  // the sticky bar's header row once the bar appears — see PromptInput).
+  const hasFirstUserMessage = timeline.some(
+    (item) => item.kind === 'message' && item.message.role === 'user',
+  )
   const isReplayingHistory = useObservable(session.isReplayingHistory)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -386,7 +392,6 @@ function ChatSessionBody({
         </div>
       ) : (
         <>
-          <SessionCwdPill key={`cwd:${session.id}`} session={session} />
           <StickyUserMessageBar
             key={`user:${session.id}`}
             session={session}
@@ -430,6 +435,12 @@ function ChatSessionBody({
                 handleRef={handleRef}
                 onPopoverOpenChange={handlePopoverOpenChange}
                 {...(autoFocus !== undefined ? { autoFocus } : {})}
+                // The cwd pill docks above the input only while the session has
+                // no first user message to pin; once the sticky bar exists it
+                // hosts the pill inside its header row instead.
+                topAccessory={
+                  hasFirstUserMessage ? undefined : <SessionCwdPill session={session} />
+                }
               />
             </>
           )}

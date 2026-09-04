@@ -9,16 +9,21 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   Action2,
   ContextKeyService,
+  Event,
   ICommandService,
   IContextKeyService,
   IOpenerService,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   localize2,
   MenuId,
   ServiceCollection,
   URI,
   observableValue,
   registerAction2,
+  type IUriIdentityService as IUriIdentityServiceType,
+  type IWorkspaceService as IWorkspaceServiceType,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import type {
@@ -33,6 +38,32 @@ import { ServicesContext } from '../../useService.js'
 afterEach(() => {
   cleanup()
 })
+
+const stubWorkspace: IWorkspaceServiceType = {
+  _serviceBrand: undefined,
+  current: { folder: URI.file('X:/workspace'), name: 'workspace' },
+  onDidChangeWorkspace: Event.None,
+  recent: [],
+  onDidChangeRecent: Event.None,
+} as unknown as IWorkspaceServiceType
+
+const stubUriIdentity: IUriIdentityServiceType = {
+  _serviceBrand: undefined,
+  platform: 'linux',
+  isEqual: (a?: URI, b?: URI) => a?.toString() === b?.toString(),
+  isEqualOrParent: () => false,
+  getComparisonKey: (uri: URI) => uri.toString(),
+  arePathsEqual: (a?: string, b?: string) => a === b,
+  getPathComparisonKey: (p: string) => p,
+  relativePathUnder: (root: string, child: string) => {
+    const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
+    const normChild = child.replace(/\\/g, '/')
+    if (normChild === normRoot) return ''
+    return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
+  },
+  createResourceMap: () => new Map() as never,
+  createResourceSet: () => new Set() as never,
+} as unknown as IUriIdentityServiceType
 
 function message(
   id: string,
@@ -54,10 +85,11 @@ function message(
   }
 }
 
-function makeSession(id: string, items: TimelineItem[]): IAcpSession {
+function makeSession(id: string, items: TimelineItem[], cwd?: string): IAcpSession {
   return {
     id,
     readOnly: false,
+    cwd,
     forkSupported: observableValue<boolean>(`fork:${id}`, false),
     timeline: observableValue<readonly TimelineItem[]>(`tl:${id}`, items),
   } as unknown as IAcpSession
@@ -78,6 +110,8 @@ function renderWithServices(node: React.ReactNode) {
     setContextTarget: () => {},
   } as unknown as IAcpChatWidgetService)
   services.set(IOpenerService, { open } as unknown as IOpenerService)
+  services.set(IWorkspaceService, stubWorkspace)
+  services.set(IUriIdentityService, stubUriIdentity)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -127,6 +161,36 @@ describe('StickyUserMessageBar', () => {
       <StickyUserMessageBar session={makeSession('s-sticky', [message('u1', 'user', 'long')])} />,
     )
     expect(screen.getByTestId('acp-collapsible-toggle').className).toContain('stickyUserBarHeader')
+  })
+
+  // The cwd pill lives inside the bar's header row (no extra vertical space):
+  // right after the role icon.
+  it('shows the cwd pill inside the header when the cwd is a strict subdirectory', () => {
+    renderWithServices(
+      <StickyUserMessageBar
+        session={makeSession('s-cwd', [message('u1', 'user', 'hello')], 'X:/workspace/apps')}
+      />,
+    )
+    const pill = screen.getByTestId('acp-session-cwd')
+    expect(pill.textContent).toBe('apps')
+    const header = screen.getByTestId('acp-collapsible-toggle')
+    expect(header.contains(pill)).toBe(true)
+    // Pill follows the role icon: it sits in the headerSuffix slot, whose
+    // previous sibling is the icon span.
+    const suffixSlot = pill.parentElement
+    expect(suffixSlot?.className).toContain('slotHeaderSuffix')
+    const iconSlot = suffixSlot?.previousElementSibling
+    expect(iconSlot?.className).toContain('slotIcon')
+    expect(pill.compareDocumentPosition(iconSlot!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
+  it('shows no cwd pill for a root-level cwd', () => {
+    renderWithServices(
+      <StickyUserMessageBar
+        session={makeSession('s-root', [message('u1', 'user', 'hello')], 'X:/workspace')}
+      />,
+    )
+    expect(screen.queryByTestId('acp-session-cwd')).toBeNull()
   })
 
   it('shows and reveals selection attachments for the pinned first message', () => {

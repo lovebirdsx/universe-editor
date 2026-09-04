@@ -423,6 +423,7 @@ interface FakeSessionOptions {
   readonly commands?: readonly AvailableCommand[]
   readonly usage?: AcpUsage
   readonly imageSupported?: boolean
+  readonly cwd?: string
 }
 
 interface FakeSession extends IAcpSession {
@@ -452,7 +453,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     id: opts.id ?? 's1',
     agentId: 'fake',
     authority: undefined,
-    cwd: undefined,
+    cwd: opts.cwd,
     readOnly: false,
     sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
@@ -541,6 +542,27 @@ describe('extractSlashQuery', () => {
     // 已有正文，光标停在开头命令名内 → 仍返回命令名（需求：先写内容再补 `/cmd`）
     expect(extractSlashQuery('/diff review the code', 5)).toBe('diff')
     expect(extractSlashQuery('/di review the code', 3)).toBe('di')
+  })
+})
+
+describe('PromptInput — topAccessory', () => {
+  it('renders the accessory inside the prompt form above the composer', () => {
+    const session = makeSession({ cwd: 'X:/workspace/apps' })
+    renderWithServices(
+      <PromptInput
+        session={session}
+        topAccessory={<span data-testid="top-accessory-marker">scope</span>}
+      />,
+      { workspace: makeWorkspaceService(URI.file('X:/workspace')) },
+    )
+    const form = screen.getByTestId('acp-prompt-input').closest('form')
+    expect(form).not.toBeNull()
+    expect(form!.contains(screen.getByTestId('top-accessory-marker'))).toBe(true)
+  })
+
+  it('renders nothing when no accessory is provided', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    expect(screen.queryByTestId('top-accessory-marker')).toBeNull()
   })
 })
 

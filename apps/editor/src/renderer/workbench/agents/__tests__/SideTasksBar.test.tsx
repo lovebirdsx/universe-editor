@@ -9,12 +9,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import {
   ConfigurationTarget,
+  Event,
   GroupDirection,
   IConfigurationService,
   IDialogService,
   IEditorGroupsService,
   IInstantiationService,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   observableValue,
   ServiceCollection,
   type IConfigurationService as IConfigurationServiceType,
@@ -134,6 +137,12 @@ function renderBar(
     register: () => ({ dispose() {} }),
     lastFocusedWidget: undefined,
   } as unknown as IAcpChatWidgetService)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
   services.set(IDialogService, {
     _serviceBrand: undefined,
     confirm,
@@ -218,6 +227,12 @@ function renderParentBar(
     register: () => ({ dispose() {} }),
     lastFocusedWidget: undefined,
   } as unknown as IAcpChatWidgetService)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
 

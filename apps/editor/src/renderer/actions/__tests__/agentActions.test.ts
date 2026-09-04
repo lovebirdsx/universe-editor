@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  EditorInput,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
@@ -77,6 +78,17 @@ import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEdit
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { EditorService } from '../../services/editor/EditorService.js'
+import { Event } from '@universe-editor/platform'
+
+/** AcpSessionEditorInput's cwd-badge autorun pulls these two services. */
+function registerWorkspaceServices(services: ServiceCollection): void {
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
+}
 
 describe('Agent timeline navigation actions', () => {
   const disposables: IDisposable[] = []
@@ -515,14 +527,27 @@ describe('Agent prompt suggestion popover actions', () => {
 })
 
 describe('NewAgentSessionInCurrentEditorAction', () => {
-  function fakeSession(id: string, agentId: string, title: string): IAcpSession {
+  function fakeSession(id: string, agentId: string, title: string, cwd?: string): IAcpSession {
     return {
       id,
       agentId,
       title,
       status: observableValue('test.status', 'idle'),
       sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', id),
+      ...(cwd !== undefined ? { cwd } : {}),
     } as unknown as IAcpSession
+  }
+
+  class PlainEditorInput extends EditorInput {
+    get typeId(): string {
+      return 'test.plain'
+    }
+    get resource(): URI | undefined {
+      return undefined
+    }
+    getName(): string {
+      return 'plain'
+    }
   }
 
   it('is available from the session message context menu', () => {
@@ -585,6 +610,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       confirm: vi.fn(),
       prompt: vi.fn(),
     } as unknown as IDialogService)
+    registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     instRef.current = inst
     services.set(IInstantiationService, inst)
@@ -598,7 +624,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       }),
     )
 
-    expect(createSession).toHaveBeenCalledWith('codex')
+    expect(createSession).toHaveBeenCalledWith('codex', undefined)
     expect(defaultAgentId).not.toHaveBeenCalled()
     // The old session stays open; the new one is added right after it and active.
     const editors = groups.activeGroup.editors
@@ -665,6 +691,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       confirm: vi.fn(),
       prompt: vi.fn(),
     } as unknown as IDialogService)
+    registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     instRef.current = inst
     services.set(IInstantiationService, inst)
@@ -709,6 +736,109 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
       .flatMap((g) => g.editors)
       .filter((e) => e instanceof AcpSessionEditorInput && e.sessionId === 'new-session')
     expect(duplicates).toHaveLength(0)
+  })
+
+  function buildCwdCase(opts: {
+    live?: IAcpSession
+    activeSession?: IAcpSession
+    historyGet?: (id: string) => AcpSessionHistoryEntry | undefined
+  }) {
+    const groups = new EditorGroupsService()
+    const live = new Map<string, IAcpSession>()
+    if (opts.live !== undefined) live.set(opts.live.id, opts.live)
+
+    const createSession = vi.fn(async (agentId?: string) => {
+      const session = fakeSession('new-session', agentId ?? 'missing-agent', 'New')
+      live.set(session.id, session)
+      return session
+    })
+    const defaultAgentId = vi.fn(() => 'claude-code')
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      createSession,
+      getById: (id: string) => live.get(id),
+      activeSession: observableValue<IAcpSession | undefined>(
+        'test.activeSession',
+        opts.activeSession,
+      ),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId,
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      get: opts.historyGet ?? (() => undefined),
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+      focusSessionInput: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, groups)
+    services.set(IDialogService, {
+      _serviceBrand: undefined,
+      confirm: vi.fn(),
+      prompt: vi.fn(),
+    } as unknown as IDialogService)
+    registerWorkspaceServices(services)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst)
+    return { groups, inst, createSession, defaultAgentId }
+  }
+
+  it('inherits the current session cwd from the live session', async () => {
+    const b = buildCwdCase({
+      live: fakeSession('old-session', 'codex', 'Old', 'X:/workspace/packages/app'),
+    })
+    b.groups.activeGroup.openEditor(
+      b.inst.createInstance(AcpSessionEditorInput, 'old-session', 'codex', 'Old'),
+    )
+
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInCurrentEditorAction().run(accessor, { sessionId: 'old-session' }),
+    )
+
+    expect(b.createSession).toHaveBeenCalledWith('codex', { cwd: 'X:/workspace/packages/app' })
+  })
+
+  it('falls back to the history row cwd when the session editor is not live', async () => {
+    const entry = {
+      id: 'durable-sess',
+      sessionIdOnAgent: 'durable-sess',
+      agentId: 'codex',
+      title: 'Old',
+      cwd: 'X:/workspace/packages/app',
+      createdAt: 0,
+      lastUsedAt: 0,
+    } as unknown as AcpSessionHistoryEntry
+    const b = buildCwdCase({ historyGet: (id) => (id === 'durable-sess' ? entry : undefined) })
+    b.groups.activeGroup.openEditor(
+      b.inst.createInstance(AcpSessionEditorInput, 'durable-sess', 'codex', 'Old'),
+    )
+
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInCurrentEditorAction().run(accessor, { sessionId: 'durable-sess' }),
+    )
+
+    expect(b.createSession).toHaveBeenCalledWith('codex', { cwd: 'X:/workspace/packages/app' })
+  })
+
+  it('does not inherit the active session cwd when the current editor is not a session', async () => {
+    const b = buildCwdCase({
+      activeSession: fakeSession('active-sess', 'codex', 'Active', 'X:/workspace/active'),
+    })
+    b.groups.activeGroup.openEditor(new PlainEditorInput())
+
+    await b.inst.invokeFunction((accessor) =>
+      new NewAgentSessionInCurrentEditorAction().run(accessor),
+    )
+
+    expect(b.createSession).toHaveBeenCalledWith('codex', undefined)
+    expect(b.defaultAgentId).not.toHaveBeenCalled()
   })
 })
 
@@ -764,6 +894,7 @@ describe('NewAgentSessionInFolderAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
+    registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
     return {
@@ -1406,6 +1537,7 @@ describe('AskInSideChatAction', () => {
       _serviceBrand: undefined,
       createLogger: () => new NullLogger(),
     } as unknown as ILoggerService)
+    registerWorkspaceServices(services)
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
     return { groups, notify, forkSideTask, inst }

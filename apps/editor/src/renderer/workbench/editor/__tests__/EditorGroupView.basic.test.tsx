@@ -8,16 +8,21 @@ import {
   ContextKeyService,
   EditorInput,
   EditorRegistry,
+  Event,
   ICommandService,
   IContextKeyService,
   IDialogService,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   observableValue,
   ServiceCollection,
   URI,
   type ICommandService as ICommandServiceType,
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
+  type IUriIdentityService as IUriIdentityServiceType,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { EditorGroupView } from '../EditorGroupView.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
@@ -48,6 +53,34 @@ const stubCommand: ICommandServiceType = {
   async executeCommand() {
     return undefined
   },
+}
+
+const stubUriIdentity: IUriIdentityServiceType = {
+  _serviceBrand: undefined,
+  platform: 'linux',
+  isEqual: (a?: URI, b?: URI) => a?.toString() === b?.toString(),
+  isEqualOrParent: () => false,
+  getComparisonKey: (uri: URI) => uri.toString(),
+  arePathsEqual: (a?: string, b?: string) => a === b,
+  getPathComparisonKey: (p: string) => p,
+  relativePathUnder: (root: string, child: string) => {
+    const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
+    const normChild = child.replace(/\\/g, '/')
+    if (normChild === normRoot) return ''
+    return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
+  },
+  createResourceMap: () => new Map() as never,
+  createResourceSet: () => new Set() as never,
+} as unknown as IUriIdentityServiceType
+
+function makeWorkspace(folder?: string): IWorkspaceServiceType {
+  return {
+    _serviceBrand: undefined,
+    current: folder ? { folder: URI.file(folder), name: 'workspace' } : null,
+    onDidChangeWorkspace: Event.None,
+    recent: [],
+    onDidChangeRecent: Event.None,
+  } as unknown as IWorkspaceServiceType
 }
 
 function renderWithServices(node: React.ReactNode) {
@@ -185,24 +218,7 @@ describe('EditorGroupView', () => {
         lastUsedAt: 2,
       },
     ]
-    const services = new ServiceCollection()
-    services.set(IDialogService, stubDialog)
-    services.set(ICommandService, stubCommand)
-    services.set(IContextKeyService, new ContextKeyService())
-    services.set(IAcpSessionService, {
-      _serviceBrand: undefined,
-      getById: () => undefined,
-    } as unknown as IAcpSessionServiceType)
-    services.set(IAcpSessionHistoryService, {
-      _serviceBrand: undefined,
-      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', rows),
-      get: (id: string) => rows.find((e) => e.sessionIdOnAgent === id),
-    } as unknown as IAcpSessionHistoryServiceType)
-    services.set(IAcpChatWidgetService, {
-      _serviceBrand: undefined,
-      focusSessionInput: () => false,
-    } as unknown as IAcpChatWidgetServiceType)
-    const inst = new InstantiationService(services)
+    const inst = makeSessionInst(rows)
 
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(inst.createInstance(AcpSessionEditorInput, 'side-1', 'fake', 'side'))
@@ -223,4 +239,68 @@ describe('EditorGroupView', () => {
     expect(badges.length).toBe(1)
     expect(badges[0]!.closest('[role="tab"]')?.textContent).toContain('side chat')
   })
+
+  it('renders the folder badge only for a session cwd strictly inside the workspace', () => {
+    const rows: AcpSessionHistoryEntry[] = [
+      {
+        id: 'sub-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'sub-1',
+        title: 'sub chat',
+        createdAt: 1,
+        lastUsedAt: 1,
+        cwd: 'X:/workspace/apps/editor',
+      },
+      {
+        id: 'root-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'root-1',
+        title: 'root chat',
+        createdAt: 2,
+        lastUsedAt: 2,
+        cwd: 'X:/workspace',
+      },
+    ]
+    const inst = makeSessionInst(rows, 'X:/workspace')
+
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(inst.createInstance(AcpSessionEditorInput, 'sub-1', 'fake', 'sub'))
+    svc.activeGroup.openEditor(inst.createInstance(AcpSessionEditorInput, 'root-1', 'fake', 'root'))
+    render(
+      <ServicesContext.Provider value={inst}>
+        <EditorGroupView
+          group={svc.activeGroup}
+          groupsService={svc}
+          resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+        />
+      </ServicesContext.Provider>,
+    )
+
+    const badges = screen.getAllByTestId('editor-tab-cwd-badge')
+    expect(badges.length).toBe(1)
+    expect(badges[0]!.closest('[role="tab"]')?.textContent).toContain('sub chat')
+  })
 })
+
+function makeSessionInst(rows: AcpSessionHistoryEntry[], workspaceFolder?: string) {
+  const services = new ServiceCollection()
+  services.set(IDialogService, stubDialog)
+  services.set(ICommandService, stubCommand)
+  services.set(IContextKeyService, new ContextKeyService())
+  services.set(IAcpSessionService, {
+    _serviceBrand: undefined,
+    getById: () => undefined,
+  } as unknown as IAcpSessionServiceType)
+  services.set(IAcpSessionHistoryService, {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', rows),
+    get: (id: string) => rows.find((e) => e.sessionIdOnAgent === id),
+  } as unknown as IAcpSessionHistoryServiceType)
+  services.set(IAcpChatWidgetService, {
+    _serviceBrand: undefined,
+    focusSessionInput: () => false,
+  } as unknown as IAcpChatWidgetServiceType)
+  services.set(IWorkspaceService, makeWorkspace(workspaceFolder))
+  services.set(IUriIdentityService, stubUriIdentity)
+  return new InstantiationService(services)
+}

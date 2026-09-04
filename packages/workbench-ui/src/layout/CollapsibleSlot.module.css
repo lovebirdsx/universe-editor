@@ -39,6 +39,22 @@
   cursor: pointer;
 }
 
+.slotHeaderPrefix {
+  flex: none;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.slotHeaderSuffix {
+  flex: none;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+
 .slotIcon {
   flex: none;
   display: inline-flex;

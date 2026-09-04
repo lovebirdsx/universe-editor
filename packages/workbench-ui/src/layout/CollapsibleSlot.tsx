@@ -37,6 +37,14 @@ function Chevron({ collapsed }: { collapsed: boolean }) {
 export interface CollapsibleSlotProps {
   /** Leading kind icon (any element). */
   readonly icon: ReactNode
+  /** Optional element pinned to the very start of the header row, before the
+   *  kind icon (e.g. a compact scope badge). Shares the header's flex line so
+   *  it never adds vertical space. */
+  readonly headerPrefix?: ReactNode
+  /** Optional element rendered right after the kind icon, before the
+   *  title/summary (e.g. a compact scope badge). Shares the header's flex line
+   *  so it never adds vertical space. */
+  readonly headerSuffix?: ReactNode
   /** Header tooltip — the concrete kind label (e.g. 'read' / 'thought' / 'Plan'). */
   readonly kindLabel: string
   /** Title shown when expanded. */
@@ -77,6 +85,8 @@ export function CollapsibleSlot({
   children,
   rootProps,
   headerClassName,
+  headerPrefix,
+  headerSuffix,
   as = 'li',
 }: CollapsibleSlotProps) {
   const Tag = as
@@ -96,9 +106,11 @@ export function CollapsibleSlot({
       data-tooltip={kindLabel}
       data-testid="acp-collapsible-toggle"
     >
+      {headerPrefix != null && <span className={styles['slotHeaderPrefix']}>{headerPrefix}</span>}
       <span className={styles['slotIcon']} aria-hidden="true">
         {icon}
       </span>
+      {headerSuffix != null && <span className={styles['slotHeaderSuffix']}>{headerSuffix}</span>}
       {collapsed ? (
         <span className={styles['slotSummary']}>{summary ?? title}</span>
       ) : (

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  Event,
   IDialogService,
   IEditorService,
   IInstantiationService,
@@ -7,6 +8,8 @@ import {
   IViewsService,
   ILayoutService,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   ServiceCollection,
   observableValue,
   registerAction2,
@@ -117,6 +120,12 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     get: () => undefined,
     entries: observableValue('t.entries', []),
   } as unknown as IAcpSessionHistoryService)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as unknown as IWorkspaceService)
+  services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
 

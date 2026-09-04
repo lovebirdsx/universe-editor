@@ -1121,6 +1121,13 @@
   gap: 2px;
 }
 
+/* Host line for the empty-session cwd pill rendered above the composer. */
+.promptTopAccessory {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+}
+
 .promptTextarea {
   width: 100%;
   resize: none;
@@ -2346,7 +2353,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border: 1px solid var(--vscode-badge-progressBackground, #4fa6e2);
+  border: 1px solid var(--vscode-workbench-border, #333);
   border-radius: 10px;
   background: var(--vscode-agent-messageBackground, #2a2a2a);
   color: var(--vscode-descriptionForeground, #999);

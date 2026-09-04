@@ -73,6 +73,52 @@ describe('CollapsibleSlot', () => {
     expect(screen.getByTestId('acp-collapsible-toggle').className).toContain('sticky-header')
   })
 
+  it('renders headerPrefix inside the header before the kind icon', () => {
+    render(
+      <ul>
+        <CollapsibleSlot
+          icon={<span data-testid="kind-icon">icon</span>}
+          kindLabel="user"
+          collapsed={false}
+          onToggle={vi.fn()}
+          headerPrefix={<span data-testid="header-prefix">scope</span>}
+        >
+          <div>body</div>
+        </CollapsibleSlot>
+      </ul>,
+    )
+    const header = screen.getByTestId('acp-collapsible-toggle')
+    const prefix = screen.getByTestId('header-prefix')
+    const icon = screen.getByTestId('kind-icon')
+    expect(header.contains(prefix)).toBe(true)
+    // The prefix is wrapped in its own flex span, so compare document order
+    // rather than direct children.
+    expect(prefix.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders headerSuffix inside the header after the kind icon', () => {
+    render(
+      <ul>
+        <CollapsibleSlot
+          icon={<span data-testid="kind-icon">icon</span>}
+          kindLabel="user"
+          collapsed={false}
+          onToggle={vi.fn()}
+          headerSuffix={<span data-testid="header-suffix">scope</span>}
+        >
+          <div>body</div>
+        </CollapsibleSlot>
+      </ul>,
+    )
+    const header = screen.getByTestId('acp-collapsible-toggle')
+    const suffix = screen.getByTestId('header-suffix')
+    const icon = screen.getByTestId('kind-icon')
+    expect(header.contains(suffix)).toBe(true)
+    // The suffix is wrapped in its own flex span, so compare document order
+    // rather than direct children.
+    expect(suffix.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
   describe('actions', () => {
     function renderWithActions(collapsed: boolean) {
       const onAction = vi.fn()

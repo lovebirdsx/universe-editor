@@ -29,6 +29,7 @@ import { MessageContent } from './MessageContent.js'
 import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
 import { roleIcon } from './timelineIcons.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
+import { SessionCwdPill } from './SessionCwdPill.js'
 import { itemSlotKey } from './stickyScroll.js'
 import type { WidgetHandle } from './ChatBody.js'
 import styles from './agents.module.css'
@@ -134,6 +135,10 @@ export function StickyUserMessageBar({
         collapsed={collapsed}
         onToggle={toggle}
         headerClassName={styles['stickyUserBarHeader']}
+        // The scope badge sits right after the role icon on the header row so
+        // it never claims its own vertical line; it renders null for a
+        // root/unknown cwd, in which case the header layout is unchanged.
+        headerSuffix={<SessionCwdPill session={session} />}
         rootProps={{
           // The focus ring goes on the card (inset by the bar's 12px padding),
           // not the full-width <ul> — a ring at the chat edge gets painted over

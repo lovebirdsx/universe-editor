@@ -80,7 +80,7 @@ import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
-import { ChevronLeft, ChevronRight, GitBranch, Lock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Folder, GitBranch, Lock } from 'lucide-react'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -89,6 +89,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
 )
 
 const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
+
+const EMPTY_SUBDIR_CWD: IObservable<boolean> = observableValue('emptySubdirCwd', false)
 
 const PATH_LIKE_TOOLTIP_SCHEMES = new Set(['file', 'diff', 'merge', 'markdown-preview'])
 
@@ -318,6 +320,11 @@ const EditorTab = memo(function EditorTab({
   const scmIgnoredResources = useOptionalService(IScmIgnoredResourcesService)
   // Re-render the tab once a check-ignore batch resolves so the cached answer re-applies.
   useObservable(scmIgnoredResources?.version ?? EMPTY_IGNORED_VERSION)
+  // Folder badge next to the agent icon: re-renders when the session cwd /
+  // workspace (and therefore the strict-subdirectory judgement) changes.
+  const hasSubdirCwd = useObservable(
+    input instanceof AcpSessionEditorInput ? input.hasSubdirCwd : EMPTY_SUBDIR_CWD,
+  )
   const deco = resource ? scmDecorations?.getFile(resource) : undefined
   // 无 SCM 状态装饰时，被 ignore 规则忽略的文件标签变暗（VSCode 对标，git / p4 通用）。
   const ignored =
@@ -399,6 +406,15 @@ const EditorTab = memo(function EditorTab({
                     strokeWidth={2}
                     className={styles['tabSideTaskIcon']}
                     data-testid="editor-tab-side-task-badge"
+                    aria-hidden="true"
+                  />
+                )}
+                {input instanceof AcpSessionEditorInput && hasSubdirCwd && (
+                  <Folder
+                    size={11}
+                    strokeWidth={2}
+                    className={styles['tabSideTaskIcon']}
+                    data-testid="editor-tab-cwd-badge"
                     aria-hidden="true"
                   />
                 )}

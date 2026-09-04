@@ -9,7 +9,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  Event,
   InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
   ServiceCollection,
   observableValue,
   type IObservable,
@@ -640,6 +643,14 @@ describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
     services.set(IAcpSessionService, sessions)
     services.set(IAcpSessionHistoryService, history)
     services.set(IAcpChatWidgetService, chatWidget)
+    services.set(IWorkspaceService, {
+      _serviceBrand: undefined,
+      current: null,
+      onDidChangeWorkspace: Event.None,
+    } as unknown as IWorkspaceService)
+    services.set(IUriIdentityService, {
+      _serviceBrand: undefined,
+    } as unknown as IUriIdentityService)
     const inst = new InstantiationService(services)
     return inst.createInstance(AcpSessionEditorInput, sessionId, 'fake', undefined)
   }
