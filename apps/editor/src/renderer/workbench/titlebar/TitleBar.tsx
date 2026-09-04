@@ -20,7 +20,7 @@ import { isFileSystemScheme, resourceDisplayPath } from '../../services/files/fi
 import { workspaceTitleLabel } from '../../services/workspace/workspaceLabel.js'
 import { GoToFileAction } from '../../actions/fileOpenActions.js'
 import { AgentStatusIndicator } from './AgentStatusIndicator.js'
-import { AiTitleBarButton } from './AiTitleBarButton.js'
+import { AgentSessionButtons } from './AgentSessionButtons.js'
 import { LayoutControls } from './LayoutControls.js'
 import { MenuBar } from './MenuBar.js'
 import { NavigationControls } from './NavigationControls.js'
@@ -177,7 +177,7 @@ export function TitleBar() {
           </span>
         </button>
         <AgentStatusIndicator />
-        <AiTitleBarButton />
+        <AgentSessionButtons />
       </div>
       <div className={styles['right']}>
         <UpdateIndicator />

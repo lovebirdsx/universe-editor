@@ -43,7 +43,7 @@ bridgeInlineSuggestionVisible(editorFocus.ts) ── autorun 订阅 controller �
 editor.trigger('editor.action.inlineSuggest.commit') → Monaco 把 ghost text 插入文档
 
 旁路消费者：
-  AiTitleBarButton ── 订阅 service.onDidChange → 标题栏 AI 快速设置里的 inline 开关
+  AiStatusBarButtons ── 订阅 service.onDidChange → 状态栏 AI 快速设置里的 inline 开关
 ```
 
 ### 核心服务：InlineCompletionService（生成层主干）
@@ -100,9 +100,10 @@ Monaco 把 ghost-text 可见性放在 editor **自己 scoped 的** context-key s
 
 trigger/commit 都靠 `IEditorGroupsService.activeGroup.activeEditor` 拿 `FileEditorInput` → `FileEditorRegistry.get()` 拿 Monaco 实例再 `editor.trigger(...)`；activeEditor 不是 FileEditorInput 时静默返回。
 
-### AI 入口：标题栏 Sparkle 按钮（原状态栏 Completions 条目已并入）
+### AI 入口：状态栏 Sparkle 按钮（原状态栏 Completions 条目已并入）
 
-> 🔀 2026-06 变更：原 `InlineCompletionStatusContribution`（状态栏 Completions 条目：requesting `$(loading~spin)` / enabled `$(sparkle)` / disabled `$(circle-slash)`，点击触发 toggle）已删除，AI 入口统一为**标题栏**的 Sparkle 按钮 `workbench/titlebar/AiTitleBarButton.tsx`（data-testid `titlebar-ai-button`）。
+> 🔀 2026-06 变更：原 `InlineCompletionStatusContribution`（状态栏 Completions 条目：requesting `$(loading~spin)` / enabled `$(sparkle)` / disabled `$(circle-slash)`，点击触发 toggle）已删除，AI 入口统一为 Sparkle 按钮。
+> 🔀 2026-09 变更：AI 入口从标题栏迁回**状态栏右下角** `workbench/statusbar/AiStatusBarButtons.tsx`（data-testid `statusbar-ai-button`，经 `AiStatusBarContribution` 以 componentKey 挂载）；新建会话 / 选择 Agent 两个按钮留在标题栏（`workbench/titlebar/AgentSessionButtons.tsx`）。
 
 - 点击按钮弹快速设置浮层（workbench-ui 的 `AiQuickSettingsPanel`）：inline-completion 开关（data-testid `ai-quick-settings-inline-toggle`，`aria-checked` 反映 `service.enabled`，拨动 → `inline.setEnabled(b)`）、四个功能模型行（chat / inline / commit / sessionTitle → 各自 pickModel 命令）、Open Agents / Manage AI Models 捷径。
 - 数据源：订阅 `inline.onDidChange` + `IAiModelService` 的 onDidChange*Models 系列事件刷新。
@@ -137,7 +138,7 @@ schema 定义在 `contributions/InlineCompletionConfigurationContribution.ts`（
 - **新增「什么时候不给补全」的条件**：provide() 的 gate 段（enabled/语言/模型那串）。
 - **ghost text 出来了但 Tab 不接受**：集成层三件套——确认 `bridgeInlineSuggestionVisible` 有把全局 `inlineSuggestionVisible` 置 true、`CommitInlineCompletionAction` 权重 > 400（ExternalExtension，压过扩展级 Tab 绑定）、when 子句成立（`!suggestWidgetVisible` 等）。逐步诊断走 [fix-keybinding-not-firing]。
 - **根本不出 ghost text**：先用 e2e probe `installFakeInlineCompletion('X')` 隔离 AI 层——能出说明问题在生成层（gate/模型/sendRequest）；仍不出说明 provider 没注册或 Monaco 集成断了。
-- **改 AI 入口按钮 / 快速设置浮层**：`workbench/titlebar/AiTitleBarButton.tsx`（原状态栏 `InlineCompletionStatusContribution` 已并入此统一入口）。
+- **改 AI 入口按钮 / 快速设置浮层**：`workbench/statusbar/AiStatusBarButtons.tsx`（原状态栏 `InlineCompletionStatusContribution` 已并入此统一入口）。
 - **加配置项**：schema（`InlineCompletionConfigurationContribution.ts`）+ service 里读它。
 - **改快捷键 / when**：`inlineCompletionActions.ts` 对应 Action 的 `keybinding`。
 
@@ -171,7 +172,7 @@ e2e（`apps/editor/e2e/specs/smoke.inlineCompletion.spec.ts`，@p1，用 sharedA
 - `apps/editor/src/renderer/services/ai/__tests__/InlineCompletionService.test.ts` —— 生成层单测
 - `apps/editor/src/renderer/contributions/InlineCompletionContribution.ts` —— 唯一全语言 provider 注册
 - `apps/editor/src/renderer/contributions/InlineCompletionConfigurationContribution.ts` —— 8 个配置 schema（BlockStartup）
-- `apps/editor/src/renderer/workbench/titlebar/AiTitleBarButton.tsx` —— 标题栏 AI 统一入口（含 inline 开关；原状态栏 Completions 条目已并入）
+- `apps/editor/src/renderer/workbench/statusbar/AiStatusBarButtons.tsx` —— 状态栏 AI 统一入口（含 inline 开关；原状态栏 Completions 条目已并入）
 - `apps/editor/src/renderer/actions/inlineCompletionActions.ts` —— trigger/commit/toggle/pickModel
 - `apps/editor/src/renderer/services/editor/editorFocus.ts` —— `bridgeInlineSuggestionVisible` / `bridgeSuggestWidgetVisible`
 - `apps/editor/src/renderer/workbench/editor/FileEditor.tsx` —— 装配/dispose 两个 bridge

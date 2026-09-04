@@ -6,7 +6,7 @@
  *    - the contributed commands are registered (trigger / commit / toggle / pickModel)
  *    - `Alt+\` resolves to the trigger command via KeybindingsRegistry
  *    - ghost text appears and **Tab accepts it** (commits the suggestion)
- *    - the AI button is present in the title bar
+ *    - the AI button is present in the status bar
  *    - the AI quick-settings popover reflects the inline-completion toggle state
  *
  *  The model-dependent ranking/streaming path is covered by unit tests on
@@ -82,15 +82,15 @@ test.describe('@p1 inline completion', () => {
     expect(await workbench.getKeybindingCommandsForKey('alt+\\')).toContain(TRIGGER)
   })
 
-  test('shows the AI button in the title bar', async ({ page, workbench }) => {
+  test('shows the AI button in the status bar', async ({ page, workbench }) => {
     await workbench.waitForRestored()
-    await expect(page.getByTestId('titlebar-ai-button')).toBeVisible()
+    await expect(page.getByTestId('statusbar-ai-button')).toBeVisible()
   })
 
   test('quick-settings toggle reflects inline-completion state', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const aiButton = page.getByTestId('titlebar-ai-button')
+    const aiButton = page.getByTestId('statusbar-ai-button')
     await expect(aiButton).toBeVisible()
     await aiButton.click()
 

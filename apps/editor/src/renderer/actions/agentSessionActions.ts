@@ -429,7 +429,7 @@ export class SelectAgentAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentAction.ID,
-      title: localize2('action.agent.selectAgent', 'Choose Agent Then New Session…'),
+      title: localize2('action.agent.selectAgent', 'Choose Agent…'),
       category: CATEGORY,
       menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
       f1: true,
@@ -441,7 +441,6 @@ export class SelectAgentAction extends Action2 {
     // or the quick pick below) throws "service accessor is only valid …".
     const registry = accessor.get(IAcpAgentRegistry)
     const quickInput = accessor.get(IQuickInputService)
-    const sessions = accessor.get(IAcpSessionService)
     const agents = registry.list()
     const healths = await Promise.all(agents.map((a) => registry.health(a.id)))
     const items: IQuickPickItem[] = agents.map((d, i) => {
@@ -464,10 +463,8 @@ export class SelectAgentAction extends Action2 {
       placeholder: localize('agent.selectAgent.placeholder', 'Select default ACP agent'),
     })
     if (!picked) return
-    // Persist the user's choice as the new default so the next "New session" uses
-    // the same agent. The original code only created a session without writing this.
+    // Only switch the default agent; creating a session is the `+` button's job.
     registry.setDefaultAgentId(picked.id)
-    await sessions.createSession(picked.id)
   }
 }
 

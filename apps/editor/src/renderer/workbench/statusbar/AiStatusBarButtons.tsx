@@ -1,10 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AiTitleBarButton — the AI quick-settings entry, moved from the status bar to
- *  the title bar (right of the running-session pill). Renders a sparkle button
- *  and, on click, a downward-anchored quick-settings popover (inline-completion
- *  toggle, shortcuts to the Agents view / AI settings, and per-feature model
- *  rows). The tooltip carries the active session's MCP server summary.
+ *  AiStatusBarButton — the status-bar (bottom-right) AI quick-settings button.
+ *  Clicking opens an upward-anchored popover (inline-completion toggle, shortcuts
+ *  to the Agents view / AI settings, and per-feature model rows). The tooltip
+ *  carries the active session's MCP server summary. (The New-session / Choose-agent
+ *  buttons live in the title bar — see workbench/titlebar/AgentSessionButtons.tsx.)
  *
  *  The AI services are Promise+Event based (not observables), so we pull data in an
  *  effect and refresh on their change events rather than using useObservable.
@@ -32,7 +32,10 @@ import { Bot, Settings, Sparkles } from 'lucide-react'
 import { useObservable, useOptionalService, useService } from '../useService.js'
 import { IInlineCompletionService } from '../../services/ai/InlineCompletionService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
-import styles from './TitleBar.module.css'
+import styles from './AiStatusBarButtons.module.css'
+
+/** StatusBarComponentRegistry key the AiStatusBarContribution binds this component to. */
+export const AI_STATUS_BAR_COMPONENT_KEY = 'aiStatusBarButtons'
 
 const GAP = 6
 
@@ -72,7 +75,7 @@ function mcpTooltip(base: string, servers: readonly { status: string }[]): strin
   return failed > 0 ? `${base} · ${summary}, ${failed} failed` : `${base} · ${summary}`
 }
 
-export function AiTitleBarButton() {
+export function AiStatusBarButtons() {
   const ai = useService(IAiModelService)
   const inline = useService(IInlineCompletionService)
   const commands = useService(ICommandService)
@@ -83,7 +86,7 @@ export function AiTitleBarButton() {
   const [snapshot, setSnapshot] = useState<AiSnapshot>(EMPTY)
   const [inlineEnabled, setInlineEnabled] = useState(inline.enabled)
 
-  const btnRef = useRef<HTMLButtonElement>(null)
+  const aiBtnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
   /** Monotonic guard so a stale enumeration can never paint over a newer one. */
   const modelsTokenRef = useRef(0)
@@ -115,7 +118,7 @@ export function AiTitleBarButton() {
       if (disposedRef.current) return
       setSnapshot((prev) => ({ ...prev, chat, inline: inlineModel, commit, sessionTitle }))
     } catch (error) {
-      console.debug('aiTitleBar: active model reads failed', error)
+      console.debug('aiStatusBar: active model reads failed', error)
     }
 
     const token = ++modelsTokenRef.current
@@ -126,7 +129,7 @@ export function AiTitleBarButton() {
         setSnapshot((prev) => ({ ...prev, models }))
       })
       .catch((error) => {
-        console.debug('aiTitleBar: model enumeration failed', error)
+        console.debug('aiStatusBar: model enumeration failed', error)
       })
   }, [ai])
 
@@ -154,7 +157,7 @@ export function AiTitleBarButton() {
       sessionsService
         ? derived(
             /**
-             * @description titlebar.aiButton.mcpServers
+             * @description statusbar.aiButton.mcpServers
              */
             (r) => sessionsService.activeSession.read(r)?.mcpServers.read(r) ?? NO_SERVERS,
           )
@@ -162,7 +165,7 @@ export function AiTitleBarButton() {
     [sessionsService],
   )
   const mcpServers = useObservable(mcpServersObs)
-  const tooltip = mcpTooltip(localize('ai.statusbar.tooltip', 'AI'), mcpServers)
+  const aiTooltip = mcpTooltip(localize('ai.statusbar.tooltip', 'AI'), mcpServers)
 
   // Close on click-outside (FocusScopeOverlay only handles Escape + focus trap).
   useEffect(() => {
@@ -170,7 +173,7 @@ export function AiTitleBarButton() {
     const onMousedown = (e: MouseEvent) => {
       const target = e.target as Node
       if (popRef.current?.contains(target)) return
-      if (btnRef.current?.contains(target)) return
+      if (aiBtnRef.current?.contains(target)) return
       setOpen(false)
     }
     document.addEventListener('mousedown', onMousedown)
@@ -178,7 +181,7 @@ export function AiTitleBarButton() {
   }, [open])
 
   const toggleOpen = () => {
-    const r = btnRef.current?.getBoundingClientRect()
+    const r = aiBtnRef.current?.getBoundingClientRect()
     if (r) setRect(r)
     setOpen((o) => !o)
   }
@@ -232,7 +235,7 @@ export function AiTitleBarButton() {
               ref={popRef}
               style={{
                 position: 'fixed',
-                top: rect.bottom + GAP,
+                bottom: window.innerHeight - rect.top + GAP,
                 right: Math.max(GAP, window.innerWidth - rect.right),
                 zIndex: 1000,
               }}
@@ -264,20 +267,21 @@ export function AiTitleBarButton() {
       : null
 
   return (
-    <>
+    <span className={styles['container']} data-testid="statusbar-entry-ai">
       <button
-        ref={btnRef}
+        ref={aiBtnRef}
+        type="button"
         className={styles['ai-button']}
         onClick={toggleOpen}
-        data-tooltip={tooltip}
-        aria-label={tooltip}
+        data-tooltip={aiTooltip}
+        aria-label={aiTooltip}
         aria-expanded={open}
         aria-haspopup="dialog"
-        data-testid="titlebar-ai-button"
+        data-testid="statusbar-ai-button"
       >
         <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />
       </button>
       {panel}
-    </>
+    </span>
   )
 }

@@ -62,13 +62,9 @@ test.describe('@p1 titlebar', () => {
     await expect(page.getByRole('menuitem', { name: 'Toggle Panel' })).toHaveCount(0)
   })
 
-  test('agent pill is always visible and AI button opens quick settings', async ({ page }) => {
+  test('agent pill is always visible', async ({ page }) => {
+    // The AI entry moved to the status bar (statusbar-entry-ai); the title bar
+    // keeps only the per-session agent pill.
     await expect(page.getByTestId('titlebar-agent-status')).toBeVisible()
-
-    await page.getByTestId('titlebar-ai-button').click()
-    await expect(page.getByTestId('ai-quick-settings')).toBeVisible()
-
-    await page.keyboard.press('Escape')
-    await expect(page.getByTestId('ai-quick-settings')).toHaveCount(0)
   })
 })

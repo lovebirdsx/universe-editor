@@ -379,7 +379,7 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 
 **已落地 provider（按协议）**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai-chat`（baseUrl 可指向任何 OpenAI 兼容端点，`/chat/completions` SSE 流，无 key 时省略 auth 头）、`anthropic-messages`（`/v1/messages` SSE，system prompt 是顶层字段）、`openai-responses`（`sendRequest` 为桩、仅供 agent 派生；`listModels` 真实探测 `GET /models` 供 Test 按钮用）。改密钥/配置后由 main 显式 `setProviders` 失效注册表缓存、重新枚举模型并 `fire onDidChangeModels`。
 
-**模型选择 UI**：命令 `ai.pickModel`（QuickPick，标题栏 AI 快捷设置 `workbench/titlebar/AiTitleBarButton.tsx` 的下拉里各功能行触发）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`；AI 组四分类：供应商配置 / 模型配置（顶层 `models` 知识库，`AiModelKnowledgePanel`）/ 功能模型 / MCP 服务器）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。
+**模型选择 UI**：命令 `ai.pickModel`（QuickPick，状态栏 AI 快捷设置 `workbench/statusbar/AiStatusBarButtons.tsx` 的下拉里各功能行触发）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`；AI 组四分类：供应商配置 / 模型配置（顶层 `models` 知识库，`AiModelKnowledgePanel`）/ 功能模型 / MCP 服务器）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。
 
 参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiSettingsEditor.tsx`、`renderer/workbench/ai/AiProvidersPanel.tsx`
 

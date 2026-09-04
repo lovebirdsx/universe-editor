@@ -26,6 +26,7 @@ import { EditorGroupsService } from '../../../services/editor/EditorGroupsServic
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { IInlineCompletionService } from '../../../services/ai/InlineCompletionService.js'
 import { IUpdateService } from '../../../../shared/ipc/updateService.js'
+import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
 import { ServicesContext } from '../../useService.js'
 import { TitleBar } from '../TitleBar.js'
 
@@ -152,6 +153,10 @@ function makeContainer(
   sc.set(IHistoryService, makeHistoryService())
   sc.set(IAiModelService, makeAiModelService())
   sc.set(IInlineCompletionService, makeInlineCompletionService())
+  sc.set(IAcpAgentRegistry, {
+    _serviceBrand: undefined,
+    defaultAgentIdObs: constObservable('claude-code'),
+  } as unknown as IAcpAgentRegistry)
   sc.set(ICommandService, {
     _serviceBrand: undefined,
     executeCommand: (id: string) => {

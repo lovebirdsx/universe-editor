@@ -89,8 +89,8 @@ test.describe('@p1 inline completion restore', () => {
         await expect
           .poll(() => second.page.evaluate((k) => window.__E2E__!.getConfigurationValue(k), KEY))
           .toBe(false)
-        await expect(second.page.getByTestId('titlebar-ai-button')).toBeVisible()
-        await second.page.getByTestId('titlebar-ai-button').click()
+        await expect(second.page.getByTestId('statusbar-ai-button')).toBeVisible()
+        await second.page.getByTestId('statusbar-ai-button').click()
         await expect
           .poll(() =>
             second.page.getByTestId('ai-quick-settings-inline-toggle').getAttribute('aria-checked'),

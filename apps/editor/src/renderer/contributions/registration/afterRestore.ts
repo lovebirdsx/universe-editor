@@ -13,6 +13,7 @@ import { JsonSchemaContextContribution } from '../JsonSchemaContextContribution.
 import { JsonLanguageFeaturesContribution } from '../JsonLanguageFeaturesContribution.js'
 import { InlineCompletionContribution } from '../InlineCompletionContribution.js'
 import { AiFixCodeActionContribution } from '../AiFixCodeActionContribution.js'
+import { AiStatusBarContribution } from '../AiStatusBarContribution.js'
 import { FileEditorStatusContribution } from '../FileEditorStatusContribution.js'
 import { FocusScopeStatusContribution } from '../FocusScopeStatusContribution.js'
 import { ScmBlameContribution } from '../ScmBlameContribution.js'
@@ -127,6 +128,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletion',
   InlineCompletionContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Bottom-right status-bar cluster: new session / choose agent / AI quick settings
+// (moved out of the title bar). AfterRestore so the status bar is live; the
+// component registers before the entry is added to avoid a fallback first paint.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiStatusBar',
+  AiStatusBarContribution,
   WorkbenchPhase.AfterRestore,
 )
 

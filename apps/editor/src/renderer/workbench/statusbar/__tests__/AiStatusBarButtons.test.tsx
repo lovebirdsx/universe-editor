@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AiTitleBarButton tests — the AI quick-settings entry in the title bar:
- *    - renders a sparkle button (no popover initially)
- *    - clicking opens the quick-settings popover
+ *  AiStatusBarButtons tests — the status-bar (bottom-right) AI button:
+ *    - renders the AI button (no popover initially)
+ *    - clicking the AI button opens the quick-settings popover
  *    - the inline toggle reflects service state and writes back via setEnabled
  *    - picking a model routes to the matching slot picker command
  *    - the Agents / AI-settings shortcuts execute their commands
@@ -18,7 +18,7 @@ import {
   ServiceCollection,
   type AiModelMetadata,
 } from '@universe-editor/platform'
-import { AiTitleBarButton } from '../AiTitleBarButton.js'
+import { AiStatusBarButtons } from '../AiStatusBarButtons.js'
 import { IInlineCompletionService } from '../../../services/ai/InlineCompletionService.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -82,7 +82,7 @@ function makeInline() {
   }
 }
 
-function renderButton(
+function renderButtons(
   ai = makeAi(),
   inline = makeInline(),
   commands = { executeCommand: vi.fn() },
@@ -92,7 +92,7 @@ function renderButton(
   services.set(IInlineCompletionService, inline as never)
   services.set(ICommandService, commands as never)
   const inst = new InstantiationService(services)
-  render(<AiTitleBarButton />, {
+  render(<AiStatusBarButtons />, {
     wrapper: ({ children }) => (
       <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
     ),
@@ -100,41 +100,42 @@ function renderButton(
   return { ai, inline, commands }
 }
 
-describe('AiTitleBarButton', () => {
-  it('renders the sparkle button without a popover', () => {
-    renderButton()
-    expect(screen.getByTestId('titlebar-ai-button')).toBeTruthy()
+describe('AiStatusBarButtons', () => {
+  it('renders the AI button without a popover', () => {
+    renderButtons()
+    expect(screen.getByTestId('statusbar-entry-ai')).toBeTruthy()
+    expect(screen.getByTestId('statusbar-ai-button')).toBeTruthy()
     expect(screen.queryByTestId('ai-quick-settings')).toBeNull()
   })
 
   it('opens the popover on click', async () => {
-    renderButton()
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    renderButtons()
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     expect(await screen.findByTestId('ai-quick-settings')).toBeTruthy()
   })
 
   it('writes the inline toggle back to the service', async () => {
-    const { inline } = renderButton()
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    const { inline } = renderButtons()
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
     fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle'))
     expect(inline.setEnabled).toHaveBeenCalledWith(false)
   })
 
   it('opens the slot model picker command when a model row is clicked', async () => {
-    const { commands } = renderButton()
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    const { commands } = renderButtons()
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
     fireEvent.click(screen.getByTestId('ai-quick-settings-model-chat'))
     expect(commands.executeCommand).toHaveBeenCalledWith('ai.pickModel')
   })
 
   it('runs the Agents and AI-settings commands', async () => {
-    const { commands } = renderButton()
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    const { commands } = renderButtons()
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
     fireEvent.click(screen.getByTestId('ai-quick-settings-open-agents'))
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
     fireEvent.click(screen.getByTestId('ai-quick-settings-open-settings'))
     expect(commands.executeCommand).toHaveBeenCalledWith('workbench.action.agent.openView')
@@ -145,8 +146,8 @@ describe('AiTitleBarButton', () => {
     const ai = makeAi()
     // A hung /v1/models must not make a configured slot read "Select model…".
     ai.getModels = vi.fn(() => new Promise<AiModelMetadata[]>(() => {}))
-    renderButton(ai)
-    fireEvent.click(screen.getByTestId('titlebar-ai-button'))
+    renderButtons(ai)
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
 
     expect(screen.getByTestId('ai-quick-settings-model-chat').textContent).toBe('m1')

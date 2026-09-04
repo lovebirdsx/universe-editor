@@ -215,7 +215,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.scrollTimelineToBottom': '滚动时间线到底部',
   'action.agent.scrollTimelineToTop': '滚动时间线到顶部',
   'action.agent.scrollTimelineUp': '向上滚动时间线',
-  'action.agent.selectAgent': '选择 Agent 并新建会话…',
+  'action.agent.selectAgent': '选择 Agent…',
   'action.agent.selectMode': '选择 Agent 模式…',
   'action.agent.selectModel': '选择 Agent 模型…',
   'action.agent.selectThoughtLevel': '选择 Agent 思考级别…',

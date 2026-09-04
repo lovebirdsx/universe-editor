@@ -170,28 +170,6 @@
   color: var(--vscode-foreground, #c8c8c8);
 }
 
-/* AI quick-settings button, right of the agent pill. */
-.ai-button {
-  width: 28px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: default;
-  border-radius: 3px;
-  color: var(--vscode-descriptionForeground, #8a8a92);
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-
-.ai-button:hover {
-  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
-  color: var(--vscode-foreground, #c8c8c8);
-}
-
 @keyframes agent-status-pulse {
   0%   { box-shadow: 0 0 0 0   rgba(80, 160, 255, 0.55); }
   65%  { box-shadow: 0 0 0 6px rgba(80, 160, 255, 0); }

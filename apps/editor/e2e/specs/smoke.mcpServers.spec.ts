@@ -67,8 +67,8 @@ test.describe('@p1 mcp servers', () => {
     const fsCall = toolCalls.find((t) => t.mcpServer === 'fs')
     expect(fsCall).toMatchObject({ title: 'read_file', status: 'completed' })
 
-    // 7. 标题栏 AI 按钮：MCP 信息只进 tooltip（状态栏 AI 入口已迁到标题栏）。
-    const aiTooltip = page.getByTestId('titlebar-ai-button')
+    // 7. 状态栏 AI 按钮：MCP 信息只进 tooltip（AI 入口已迁到状态栏右下角）。
+    const aiTooltip = page.getByTestId('statusbar-ai-button')
     await expect(aiTooltip).toHaveAttribute('data-tooltip', /MCP 1\/2 connected/)
     await expect(aiTooltip).toHaveAttribute('data-tooltip', /1 failed/)
 
