@@ -19,7 +19,9 @@ interface Call {
  * Drive `gitExec(args, cwd)` from per-cwd canned responses. `status[cwd]` is the
  * `git status --porcelain` stdout (presence of text ⇒ dirty); `cherry[cwd]` is
  * the `git cherry <target> HEAD` stdout (a `+`-prefixed line ⇒ unmerged commit);
- * `reset[cwd]`, when present, overrides the reset result. Records every call.
+ * `reset[cwd]`, when present, overrides the reset result. `log` is keyed by
+ * `cwd` → `args.join(' ')` for `git log`; `mergeBase`/`mergeBaseUnrelated`/
+ * `mergeBaseFail` drive the `git merge-base` probe per cwd. Records every call.
  */
 function setup(opts: {
   status?: Record<string, string>
@@ -27,6 +29,11 @@ function setup(opts: {
   cherry?: Record<string, string>
   reset?: Record<string, GitExecResult>
   submoduleFail?: Record<string, string>
+  log?: Record<string, Record<string, string>>
+  logFail?: Record<string, Record<string, string>>
+  mergeBase?: Record<string, string>
+  mergeBaseUnrelated?: Set<string>
+  mergeBaseFail?: Set<string>
 }): Call[] {
   const calls: Call[] = []
   execMock.mockImplementation((args: readonly string[], cwd: string): Promise<GitExecResult> => {
@@ -42,6 +49,20 @@ function setup(opts: {
     if (args[0] === 'submodule') {
       const errMsg = opts.submoduleFail?.[cwd]
       return Promise.resolve(errMsg ? fail(errMsg) : ok())
+    }
+    if (args[0] === 'log') {
+      const key = args.join(' ')
+      const err = opts.logFail?.[cwd]?.[key]
+      if (err !== undefined) return Promise.resolve(fail(err))
+      return Promise.resolve(ok(opts.log?.[cwd]?.[key] ?? ''))
+    }
+    if (args[0] === 'merge-base') {
+      if (opts.mergeBaseFail?.has(cwd)) {
+        const res = fail('merge-base boom')
+        return Promise.resolve({ ...res, exitCode: 128 })
+      }
+      if (opts.mergeBaseUnrelated?.has(cwd)) return Promise.resolve(fail('no common ancestor'))
+      return Promise.resolve(ok(opts.mergeBase?.[cwd] ?? ''))
     }
     return Promise.resolve(ok())
   })
@@ -63,7 +84,13 @@ describe('syncWorktreesToBranch', () => {
       undefined,
     )
 
-    expect(res).toEqual({ synced: ['a', 'b'], skippedDirty: [], skippedUnmerged: [], failed: [] })
+    expect(res).toEqual({
+      synced: ['a', 'b'],
+      skippedDirty: [],
+      skippedUnmerged: [],
+      skippedUnmatchedMessages: [],
+      failed: [],
+    })
     const resets = calls.filter((c) => c.args[0] === 'reset')
     expect(resets).toEqual([
       { args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' },
@@ -118,9 +145,16 @@ describe('syncWorktreesToBranch', () => {
     expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
   })
 
-  it('force-syncs a clean worktree with commits not contained in the target', async () => {
+  it('force-syncs a clean worktree whose orphan-to-be commits are covered by the target', async () => {
     const calls = setup({
       cherry: { '/repo.wt/a': '+ 2222222222222222222222222222222222222222\n' },
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc2\ndc3\n',
+          'log --format=%s abc123..main': 'dc1\ndc2\ndc3\n',
+        },
+      },
+      mergeBase: { '/repo.wt/a': 'abc123' },
     })
 
     const res = await syncWorktreesToBranch(
@@ -132,8 +166,159 @@ describe('syncWorktreesToBranch', () => {
 
     expect(res.synced).toEqual(['a'])
     expect(res.skippedUnmerged).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual([])
     expect(calls).not.toContainEqual({ args: ['cherry', 'main', 'HEAD'], cwd: '/repo.wt/a' })
+    expect(calls).toContainEqual({
+      args: ['log', '--format=%s', 'main..HEAD'],
+      cwd: '/repo.wt/a',
+    })
+    expect(calls).toContainEqual({ args: ['merge-base', 'main', 'HEAD'], cwd: '/repo.wt/a' })
+    expect(calls).toContainEqual({
+      args: ['log', '--format=%s', 'abc123..main'],
+      cwd: '/repo.wt/a',
+    })
     expect(calls).toContainEqual({ args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' })
+  })
+
+  it('refuses force sync when an orphan-to-be commit message is missing from the target', async () => {
+    const calls = setup({
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc2\ndc31\n',
+          'log --format=%s abc123..main': 'dc1\ndc2\ndc3\n',
+        },
+      },
+      mergeBase: { '/repo.wt/a': 'abc123' },
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [
+        { path: '/repo.wt/a', name: 'a' },
+        { path: '/repo.wt/b', name: 'b' },
+      ],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual(['b'])
+    expect(res.skippedUnmerged).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
+  })
+
+  it('force-syncs without probing messages when the worktree has no commits beyond the target', async () => {
+    const calls = setup({})
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'merge-base')).toBe(false)
+    expect(calls).toContainEqual({ args: ['reset', '--hard', 'main'], cwd: '/repo.wt/a' })
+  })
+
+  it('falls back to the target full history when there is no common ancestor', async () => {
+    const calls = setup({
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc2\n',
+          'log --format=%s main': 'dc1\ndc2\n',
+        },
+      },
+      mergeBaseUnrelated: new Set(['/repo.wt/a']),
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual(['a'])
+    expect(calls).toContainEqual({ args: ['log', '--format=%s', 'main'], cwd: '/repo.wt/a' })
+    expect(calls).not.toContainEqual({
+      args: ['log', '--format=%s', 'abc123..main'],
+      cwd: '/repo.wt/a',
+    })
+  })
+
+  it('records a unique-log failure as a failure, not a skip', async () => {
+    setup({ logFail: { '/repo.wt/a': { 'log --format=%s main..HEAD': 'fatal: bad revision' } } })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual([])
+    expect(res.failed).toEqual([{ name: 'a', error: 'fatal: bad revision' }])
+  })
+
+  it('records an unexpected merge-base failure as a failure', async () => {
+    setup({
+      log: { '/repo.wt/a': { 'log --format=%s main..HEAD': 'dc2\n' } },
+      mergeBaseFail: new Set(['/repo.wt/a']),
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual([])
+    expect(res.failed).toEqual([{ name: 'a', error: 'merge-base boom' }])
+  })
+
+  it('records a target-side log failure as a failure', async () => {
+    setup({
+      log: { '/repo.wt/a': { 'log --format=%s main..HEAD': 'dc2\n' } },
+      logFail: { '/repo.wt/a': { 'log --format=%s abc123..main': 'fatal: bad object' } },
+      mergeBase: { '/repo.wt/a': 'abc123' },
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual([])
+    expect(res.failed).toEqual([{ name: 'a', error: 'fatal: bad object' }])
+  })
+
+  it('refuses force sync when a unique commit has an empty subject', async () => {
+    const calls = setup({
+      log: {
+        '/repo.wt/a': {
+          'log --format=%s main..HEAD': 'dc2\n\n',
+          'log --format=%s abc123..main': 'dc1\ndc2\n',
+        },
+      },
+      mergeBase: { '/repo.wt/a': 'abc123' },
+    })
+
+    const res = await syncWorktreesToBranch(
+      'main',
+      [{ path: '/repo.wt/a', name: 'a' }],
+      undefined,
+      true,
+    )
+
+    expect(res.synced).toEqual([])
+    expect(res.skippedUnmatchedMessages).toEqual(['a'])
+    expect(calls.some((c) => c.args[0] === 'reset' && c.cwd === '/repo.wt/a')).toBe(false)
   })
 
   it('still skips dirty worktrees in force mode', async () => {

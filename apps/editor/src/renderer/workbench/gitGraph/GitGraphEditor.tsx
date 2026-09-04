@@ -1431,6 +1431,15 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           ),
         )
       }
+      if (summary.skippedUnmatchedMessages.length > 0) {
+        lines.push(
+          localize(
+            'gitGraph.worktree.sync.summaryUnmatched',
+            'Skipped (no matching commit message in {branch}): {names}',
+            { branch: targetBranch, names: summary.skippedUnmatchedMessages.join(', ') },
+          ),
+        )
+      }
       if (summary.failed.length > 0) {
         lines.push(
           localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {

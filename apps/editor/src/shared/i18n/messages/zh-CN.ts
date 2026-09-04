@@ -1042,6 +1042,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.worktree.sync.summarySynced': '已同步：{names}',
   'gitGraph.worktree.sync.summarySkipped': '已跳过（有未提交更改）：{names}',
   'gitGraph.worktree.sync.summaryUnmerged': '已跳过（存在不在 {branch} 中的提交）：{names}',
+  'gitGraph.worktree.sync.summaryUnmatched': '已跳过（在 {branch} 中找不到相同提交消息）：{names}',
   'gitGraph.worktree.sync.summaryFailed': '失败：{items}',
   'gitGraph.worktree.sync.summaryNone': '无可执行的操作。',
 

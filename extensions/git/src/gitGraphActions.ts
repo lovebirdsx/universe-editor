@@ -375,12 +375,75 @@ export interface WorktreeSyncResult {
   synced: string[]
   skippedDirty: string[]
   skippedUnmerged: string[]
+  skippedUnmatchedMessages: string[]
   failed: { name: string; error: string }[]
 }
 
 type SyncOutcome =
-  | { kind: 'synced' | 'skippedDirty' | 'skippedUnmerged'; name: string }
+  | {
+      kind: 'synced' | 'skippedDirty' | 'skippedUnmerged' | 'skippedUnmatchedMessages'
+      name: string
+    }
   | { kind: 'failed'; name: string; error: string }
+
+type ForceCoverage =
+  | { ok: true }
+  | { ok: false; kind: 'skippedUnmatchedMessages' | 'failed'; error?: string }
+
+/**
+ * Force-mode guard: every commit `reset --hard <targetBranch>` would orphan must
+ * have its subject present in the target's own history since the merge-base —
+ * the cherry-pick / squash case, where the same change landed under a different
+ * hash. Any unique commit whose subject is missing is treated as unhandled work
+ * and blocks the force sync. Subjects (`%s`) rather than full bodies are matched
+ * so cherry-pick footers / squash-concatenated bodies don't cause false refusals.
+ */
+const forceMessagesCovered = async (
+  targetBranch: string,
+  wt: SyncWorktreeRef,
+  log: Log,
+): Promise<ForceCoverage> => {
+  const unique = await gitExec(['log', '--format=%s', `${targetBranch}..HEAD`], wt.path, log)
+  if (unique.exitCode !== 0) return { ok: false, kind: 'failed', error: gitErrorText(unique) }
+  // Trim each side, drop only the trailing empty artefact of the final newline —
+  // a real empty subject stays and is refused below (never auto-approved).
+  const uniqueSubjects = unique.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l, i, a) => l !== '' || i < a.length - 1)
+  if (uniqueSubjects.length === 0) return { ok: true }
+
+  const mb = await gitExec(['merge-base', targetBranch, 'HEAD'], wt.path, log)
+  let targetLog: GitExecResult
+  if (mb.exitCode === 0) {
+    targetLog = await gitExec(
+      ['log', '--format=%s', `${mb.stdout.trim()}..${targetBranch}`],
+      wt.path,
+      log,
+    )
+  } else if (mb.exitCode === 1) {
+    // Unrelated histories: fall back to the target's full log so the check still holds.
+    targetLog = await gitExec(['log', '--format=%s', targetBranch], wt.path, log)
+  } else {
+    return { ok: false, kind: 'failed', error: gitErrorText(mb) }
+  }
+  if (targetLog.exitCode !== 0) return { ok: false, kind: 'failed', error: gitErrorText(targetLog) }
+
+  const targetSubjects = new Set(
+    targetLog.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== ''),
+  )
+  const uncovered = uniqueSubjects.filter((s) => s === '' || !targetSubjects.has(s))
+  if (uncovered.length > 0) {
+    log?.(
+      `[git] force sync ${wt.name}: skipped — messages not in ${targetBranch}: ${uncovered.join('; ')}`,
+    )
+    return { ok: false, kind: 'skippedUnmatchedMessages' }
+  }
+  return { ok: true }
+}
 
 const syncOneWorktree = async (
   targetBranch: string,
@@ -394,12 +457,20 @@ const syncOneWorktree = async (
   // In normal mode, only reset when the worktree's commits are already in the
   // target — otherwise reset --hard would silently drop them. `git cherry
   // <target> HEAD` lists commits relative to the target: a `+` prefix marks a
-  // change not yet present by patch-id. Force mode deliberately skips this check.
+  // change not yet present by patch-id. Force mode skips this and instead
+  // requires every orphan-to-be commit's subject to appear in the target's own
+  // history (cherry-pick / squash landings), refusing when any is unmatched.
   if (!force) {
     const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
     if (cherry.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(cherry) }
     const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
     if (hasUnmerged) return { kind: 'skippedUnmerged', name: wt.name }
+  } else {
+    const cov = await forceMessagesCovered(targetBranch, wt, log)
+    if (!cov.ok) {
+      if (cov.kind === 'failed') return { kind: 'failed', name: wt.name, error: cov.error ?? '' }
+      return { kind: 'skippedUnmatchedMessages', name: wt.name }
+    }
   }
   const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
   if (reset.exitCode !== 0) return { kind: 'failed', name: wt.name, error: gitErrorText(reset) }
@@ -418,10 +489,11 @@ const syncOneWorktree = async (
  * (`merge-base --is-ancestor`) so squash/rebase-merged worktrees, whose commits
  * landed in the target under different hashes, are still recognised as merged.
  * Anything not mergeable is skipped into the matching bucket unless `force` is
- * set. Force mode still protects worktrees with uncommitted changes, but discards
- * committed work that is not contained in `targetBranch`. `targetBranch` is a ref
- * name (e.g. `main`), so each reset worktree's branch ends up exactly at the
- * target commit.
+ * set. Force mode still protects worktrees with uncommitted changes, and still
+ * refuses when a commit the reset would orphan has no subject match in the
+ * target's own history since the merge-base — only then does it discard the
+ * remaining committed work. `targetBranch` is a ref name (e.g. `main`), so each
+ * reset worktree's branch ends up exactly at the target commit.
  *
  * Worktrees are synced concurrently: each has its own working directory, index
  * and branch ref, so their pipelines don't contend (git takes per-ref locks).
@@ -440,6 +512,7 @@ export const syncWorktreesToBranch = async (
     synced: [],
     skippedDirty: [],
     skippedUnmerged: [],
+    skippedUnmatchedMessages: [],
     failed: [],
   }
   for (const outcome of outcomes) {

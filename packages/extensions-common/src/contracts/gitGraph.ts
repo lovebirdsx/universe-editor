@@ -60,6 +60,8 @@ export interface GitGraphWorktreeSyncResult {
   skippedDirty: string[]
   /** Names of worktrees skipped because they hold commits not contained in the target. */
   skippedUnmerged: string[]
+  /** Names of worktrees force-sync refused: unique commits' messages not found in the target. */
+  skippedUnmatchedMessages: string[]
   /** Worktrees whose reset failed, with the git error text. */
   failed: { name: string; error: string }[]
 }
