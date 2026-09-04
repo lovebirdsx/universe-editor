@@ -32,6 +32,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
+// The budget-exhaustion test walks a chain one node per budget slot, and every
+// level emits a `<dir>/*` spec whose length grows with depth — against the
+// production budget (10_000) that is O(MAX²) string work and takes tens of
+// seconds, blowing the 30s test timeout on CI. The logic under test is
+// "exhausted budget → undefined", not the constant's value (that value's
+// realism is covered flat by `countLocalFilesUpTo`'s budget test), so shrink
+// it here. vi.mock is hoisted above the dynamic imports below.
+vi.mock('../reconcileScanBudget.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../reconcileScanBudget.js')>()
+  return { ...actual, RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES: 50 }
+})
+
 const { carveReconcileFilespecs, carveReconcileTargets } = await import('../reconcileCarve.js')
 const { RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES } = await import('../reconcileScanBudget.js')
 
@@ -160,10 +172,10 @@ describe('carveReconcileFilespecs', () => {
   it('returns undefined once the directory budget is exhausted', async () => {
     // A chain deeper than the budget with a single exclude at its tail: every
     // node on the chain contains the exclude, so every node is pushed and
-    // visited until the budget runs out. One exclude keeps each per-node
-    // predicate O(path length) — the flat-tree alternative would need one
-    // exclude per sibling, making `containsAny` itself O(MAX²), far too slow
-    // to run as a test.
+    // visited until the budget runs out. The budget is mocked down to 50 (see
+    // the top of this file) — against the production value the per-level
+    // `<dir>/*` spec strings grow with depth and the walk is O(MAX²) string
+    // work, tens of seconds on CI.
     const link = Array.from({ length: RECONCILE_SCAN_MAX_COUNTED_DIRECTORIES + 1 }, () => 'd')
     const excluded = join(ROOT, ...link, 'x')
     readdirMock.mockImplementation(async () => [dir('d')])
