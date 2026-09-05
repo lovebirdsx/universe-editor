@@ -659,5 +659,33 @@ describe('ContextMenu submenus', () => {
       expect(activeLabel(screen.getByRole('menu'))).toBeNull()
       expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
     })
+
+    it('keeps the opening highlight against the hover a still cursor fires', () => {
+      render(
+        <ContextMenu
+          menuId={twoGroups('test.autofocus.stillCursor')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          onClose={vi.fn()}
+        />,
+      )
+
+      const menu = screen.getByRole('menu')
+      // The menu can land directly under a stationary pointer, and the browser
+      // then fires mouseenter on whatever row is beneath it — which must not
+      // steal the highlight from the row Enter is about to run.
+      act(() => {
+        fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Second' }))
+      })
+      expect(activeLabel(menu)).toBe('First')
+
+      // A genuine pointer move arms hover again.
+      act(() => {
+        fireEvent.mouseMove(window)
+        fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Second' }))
+      })
+      expect(activeLabel(menu)).toBe('Second')
+    })
   })
 })

@@ -395,4 +395,39 @@ describe('SwarmReviewsView keyboard', () => {
     // Focus is now on the group header — the file list must not blank out.
     expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001')
   })
+
+  it('opens the row menu with the ContextMenu key, already highlighted and drivable', async () => {
+    const { tree } = await renderTree()
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
+
+    fireEvent.keyDown(tree, { key: 'ContextMenu' })
+
+    const menu = await screen.findByRole('menu')
+    // A keyboard user has no pointer to aim, so the first entry opens highlighted
+    // and Enter would run it outright.
+    const active = () => menu.ownerDocument.querySelectorAll('[role="menuitem"][data-active]')
+    expect(active()).toHaveLength(1)
+    expect(active()[0]?.textContent).toBe('Open Review')
+    expect(menu.getAttribute('aria-activedescendant')).toBeTruthy()
+
+    // The arrow keys drive the menu and must not tear it down (the regression
+    // this whole change exists for).
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+    })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(active()[0]?.textContent).not.toBe('Open Review')
+  })
+
+  it('leaves a mouse-opened menu unhighlighted', async () => {
+    await renderTree()
+    const row = (await screen.findAllByTestId('swarm-review-row'))[0]!
+
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 })
+
+    await screen.findByRole('menu')
+    // An unsolicited highlight would read as a pending action under a pointer
+    // that isn't there.
+    expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+  })
 })

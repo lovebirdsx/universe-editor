@@ -461,6 +461,59 @@ describe('OutlineView — context menu', () => {
     act(() => def.click())
     expect(executeCommand).not.toHaveBeenCalled()
   })
+
+  it('opens with the ContextMenu key, highlighted, and drives the Go to submenu by keyboard', () => {
+    const { revealSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Alpha', { line: 1 })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    outlineViewState.setFollowCursor(false)
+    renderView(instantiation)
+
+    const view = document.querySelector('[role="tree"]') as HTMLElement
+    act(() => {
+      view.focus()
+      fireEvent.keyDown(view, { key: 'ContextMenu' })
+    })
+
+    const active = () => document.querySelectorAll('[role="menuitem"][data-active]')
+    expect(active()).toHaveLength(1)
+    expect(active()[0]?.textContent?.trim()).toBe('Expand All')
+
+    // Down to the "Go to" submenu row, then ArrowRight to open it — the first
+    // time this menu's submenu is reachable without a pointer.
+    act(() => fireEvent.keyDown(window, { key: 'ArrowDown' }))
+    act(() => fireEvent.keyDown(window, { key: 'ArrowDown' }))
+    expect(active()[0]?.textContent?.trim()).toBe('Go to')
+    act(() => fireEvent.keyDown(window, { key: 'ArrowRight' }))
+    expect(menuItemByText('Go to Symbol')).toBeTruthy()
+
+    // Escape peels the submenu off without closing the whole menu.
+    act(() => fireEvent.keyDown(window, { key: 'Escape' }))
+    expect(document.querySelector('[role="menu"]')).not.toBeNull()
+    expect(menuItems().some((i) => i.textContent?.trim() === 'Go to Symbol')).toBe(false)
+
+    // Re-open the submenu and run its first entry with Enter.
+    act(() => fireEvent.keyDown(window, { key: 'ArrowRight' }))
+    act(() => fireEvent.keyDown(window, { key: 'Enter' }))
+    expect(revealSymbol).toHaveBeenCalledTimes(1)
+    expect(revealSymbol.mock.calls[0]?.[0]?.name).toBe('Alpha')
+  })
+
+  it('leaves a mouse-opened menu unhighlighted', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Alpha', { line: 1 })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    act(() => fireEvent.contextMenu(rowByLabel('Alpha')))
+    expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+  })
 })
 
 // Keyboard navigation parity with Explorer: Enter jumps to the symbol (does NOT

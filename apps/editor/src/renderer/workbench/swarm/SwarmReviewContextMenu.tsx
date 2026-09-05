@@ -1,20 +1,23 @@
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
-import styles from './SwarmReviewContextMenu.module.css'
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  SwarmReviewContextMenu — right-click menu for a Swarm review row. Thin wrapper
+ *  over the workbench-ui ListMenu: the entries are built per row at open time
+ *  (the allowed state transitions arrive from an async Swarm fetch), so they
+ *  can't come from MenuRegistry — but the keyboard navigation, virtual focus and
+ *  opening highlight are the shared ones.
+ *--------------------------------------------------------------------------------------------*/
 
-export type SwarmReviewMenuItem =
-  | {
-      readonly kind: 'item'
-      readonly label: string
-      readonly danger?: boolean
-      readonly run: () => void
-    }
-  | { readonly kind: 'separator' }
+import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+
+export type SwarmReviewMenuItem = ListMenuEntry
 
 export interface SwarmReviewContextMenuState {
   readonly x: number
   readonly y: number
   readonly reviewId: string
   readonly items: readonly SwarmReviewMenuItem[]
+  /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
+  readonly keyboard: boolean
 }
 
 export function SwarmReviewContextMenu({
@@ -25,27 +28,11 @@ export function SwarmReviewContextMenu({
   onClose: () => void
 }) {
   return (
-    <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
-      <ul role="menu" className={styles['menu']}>
-        {state.items.map((item, index) =>
-          item.kind === 'separator' ? (
-            <li key={`separator-${index}`} role="separator" className={styles['separator']} />
-          ) : (
-            <li
-              key={`${item.label}-${index}`}
-              role="menuitem"
-              tabIndex={-1}
-              className={`${styles['item']} ${item.danger ? styles['danger'] : ''}`}
-              onClick={() => {
-                onClose()
-                item.run()
-              }}
-            >
-              {item.label}
-            </li>
-          ),
-        )}
-      </ul>
-    </AnchoredSurface>
+    <ListMenu
+      items={state.items}
+      anchor={{ x: state.x, y: state.y }}
+      autoFocusFirst={state.keyboard}
+      onClose={onClose}
+    />
   )
 }

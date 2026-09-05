@@ -20,6 +20,11 @@ import {
 } from 'react'
 import { localize } from '@universe-editor/platform'
 import {
+  dispatchKeyboardContextMenu,
+  findRowElement,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
   useScrollRestore,
   VirtualList,
   type VirtualListHandle,
@@ -54,7 +59,7 @@ export interface KeybindingsTableProps {
   readonly onSelect: (rowId: string | undefined) => void
   readonly onRevealed: () => void
   readonly onDefineKeybinding: (row: IKeybindingRow) => void
-  readonly onContextMenu: (row: IKeybindingRow, x: number, y: number) => void
+  readonly onContextMenu: (row: IKeybindingRow, x: number, y: number, keyboard: boolean) => void
   readonly onFocusChange: (focused: boolean) => void
   readonly onWhenCommit: (row: IKeybindingRow, when: string) => void
   readonly onWhenCancel: (viaKeyboard: boolean) => void
@@ -113,6 +118,19 @@ export function KeybindingsTable({
     // VSCode gets the same split via listFocus/whenFocus context gating.
     if (e.target !== e.currentTarget) return
     if (rows.length === 0) return
+    // ContextMenu key / Shift+F10: anchor the synthetic event on the selected
+    // row so it lands in the same handler a right-click would. `repeat` guard:
+    // holding the key must not stack menus.
+    if (isContextMenuKey(e)) {
+      e.preventDefault()
+      if (e.repeat) return
+      const container = e.currentTarget
+      const selected = rows[selectedIndex < 0 ? 0 : selectedIndex]?.row
+      if (!selected) return
+      const rowEl = findRowElement(container, 'data-row-id', selected.id)
+      dispatchKeyboardContextMenu(rowEl ?? container, rowEl !== null)
+      return
+    }
     const pageSize = Math.max(
       1,
       Math.floor(
@@ -168,7 +186,7 @@ export function KeybindingsTable({
           onContextMenu={(e) => {
             e.preventDefault()
             onSelect(row.id)
-            onContextMenu(row, e.clientX, e.clientY)
+            onContextMenu(row, e.clientX, e.clientY, isKeyboardContextMenu(e))
           }}
           onWhenCommit={(when) => onWhenCommit(row, when)}
           onWhenCancel={onWhenCancel}
@@ -198,6 +216,10 @@ export function KeybindingsTable({
       aria-rowcount={rows.length}
       className={styles['table']}
       onKeyDown={onKeyDown}
+      onContextMenu={(e) => {
+        // The keydown handler already opened the menu on the selected row.
+        if (isKeyupContextMenuSupplement(e)) e.preventDefault()
+      }}
       onFocus={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onFocusChange(true)
       }}

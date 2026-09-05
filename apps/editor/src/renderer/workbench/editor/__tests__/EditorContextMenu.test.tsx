@@ -57,6 +57,7 @@ describe('EditorContextMenu', () => {
           resource={resource}
           editor={fakeEditor()}
           isReadonly={false}
+          keyboard={false}
           commandService={commandService as unknown as ICommandService}
           contextKeyService={new ContextKeyService()}
           onClose={() => {}}
@@ -96,6 +97,7 @@ describe('EditorContextMenu', () => {
           resource={resource}
           editor={fakeEditor({ selectionEmpty: true })}
           isReadonly={false}
+          keyboard={false}
           commandService={commandService as unknown as ICommandService}
           contextKeyService={contextKeyService}
           onClose={() => {}}
@@ -111,6 +113,7 @@ describe('EditorContextMenu', () => {
           resource={resource}
           editor={fakeEditor({ selectionEmpty: false })}
           isReadonly={false}
+          keyboard={false}
           commandService={commandService as unknown as ICommandService}
           contextKeyService={contextKeyService}
           onClose={() => {}}
@@ -147,6 +150,7 @@ describe('EditorContextMenu', () => {
           resource={resource}
           editor={fakeEditor({ langId: 'typescript' })}
           isReadonly={true}
+          keyboard={false}
           commandService={commandService as unknown as ICommandService}
           contextKeyService={contextKeyService}
           onClose={() => {}}
@@ -157,6 +161,41 @@ describe('EditorContextMenu', () => {
       contextKeyService.dispose()
       readonlyMenu.dispose()
       readonly.dispose()
+    }
+  })
+
+  it('keyboard opens with the first entry highlighted; the mouse does not', () => {
+    const cmdId = 'test.editorContext.autofocus'
+    const cmd = CommandsRegistry.registerCommand(cmdId, () => {}, { description: 'First' })
+    const menu = MenuRegistry.addMenuItem(MenuId.EditorContext, { command: cmdId, title: 'First' })
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      const commandService = new FakeCommandService()
+      const props = {
+        x: 0,
+        y: 0,
+        resource: URI.file('/ws/src/main.ts'),
+        editor: fakeEditor(),
+        isReadonly: false,
+        commandService: commandService as unknown as ICommandService,
+        contextKeyService,
+        onClose: () => {},
+      }
+      const active = (): Element | null => document.querySelector('[role="menuitem"][data-active]')
+
+      // A right-click has a pointer to aim; an unsolicited highlight there reads
+      // as a pending action.
+      const mouse = render(<EditorContextMenu {...props} keyboard={false} />)
+      expect(active()).toBeNull()
+      mouse.unmount()
+
+      render(<EditorContextMenu {...props} keyboard={true} />)
+      expect(active()?.textContent).toBe('First')
+    } finally {
+      contextKeyService.dispose()
+      menu.dispose()
+      cmd.dispose()
     }
   })
 })

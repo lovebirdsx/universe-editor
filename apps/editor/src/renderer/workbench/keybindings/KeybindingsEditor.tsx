@@ -46,6 +46,8 @@ interface IMenuState {
   readonly x: number
   readonly y: number
   readonly row: IKeybindingRow
+  /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
+  readonly keyboard: boolean
 }
 
 interface IDefineState {
@@ -358,9 +360,12 @@ export function KeybindingsEditor(): JSX.Element {
     setSelectedRowId(row.id)
     setDefineState({ row, add: false })
   }, [])
-  const onRowContextMenu = useCallback((row: IKeybindingRow, x: number, y: number) => {
-    setMenuState({ row, x, y })
-  }, [])
+  const onRowContextMenu = useCallback(
+    (row: IKeybindingRow, x: number, y: number, keyboard: boolean) => {
+      setMenuState({ row, x, y, keyboard })
+    },
+    [],
+  )
 
   const hasQuery = query.trim() !== ''
 
@@ -455,6 +460,7 @@ export function KeybindingsEditor(): JSX.Element {
           y={menuState.y}
           row={menuState.row}
           handle={handle}
+          keyboard={menuState.keyboard}
           onClose={() => setMenuState(undefined)}
         />
       )}

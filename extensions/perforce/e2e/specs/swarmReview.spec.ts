@@ -330,8 +330,39 @@ test.describe('@p1 swarm reviews', () => {
       )
       await expect(row.locator('.lucide-circle-check')).toBeVisible()
 
+      // The ContextMenu key must raise a menu the keyboard can then drive. It
+      // used to open a dead menu: the rows rendered a hand-built popup with no
+      // arrow-key navigation and no active row, so it appeared and swallowed
+      // every key. Real key presses on purpose — the whole dispatch chain is
+      // what regressed.
+      await row.click()
+      const tree = page.getByRole('tree', { name: 'Swarm reviews' })
+      await tree.focus()
+      await page.keyboard.press('ContextMenu')
+
+      const keyboardMenu = page.getByRole('menu')
+      await expect(keyboardMenu).toHaveCount(1)
+      // A keyboard user has no pointer to aim, so the first entry opens
+      // highlighted (VSCode parity) and Enter would run it outright. The
+      // highlight is a virtual focus — moving DOM focus would blur the tree.
+      const active = page.locator('[role="menuitem"][data-active]')
+      await expect(active).toHaveCount(1)
+      await expect(active).toHaveText('Open Review')
+      await expect(keyboardMenu).toHaveAttribute('aria-activedescendant', /.+/)
+
+      await page.keyboard.press('ArrowDown')
+      await expect(keyboardMenu).toHaveCount(1)
+      await expect(active).toHaveCount(1)
+      await expect(active).not.toHaveText('Open Review')
+
+      await page.keyboard.press('Escape')
+      await expect(keyboardMenu).toHaveCount(0)
+
       await row.click({ button: 'right' })
       const menu = page.getByRole('menu')
+      // A mouse-opened menu stays unhighlighted: an unsolicited highlight reads
+      // as a pending action under a pointer that isn't there.
+      await expect(page.locator('[role="menuitem"][data-active]')).toHaveCount(0)
       await expect(menu.getByRole('menuitem', { name: 'Approve', exact: true })).toBeVisible()
       await expect(menu.getByRole('menuitem', { name: 'Open Review in Browser' })).toBeVisible()
       await expect(menu.getByRole('menuitem', { name: 'Copy Review Name' })).toBeVisible()

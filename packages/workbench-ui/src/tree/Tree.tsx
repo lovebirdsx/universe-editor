@@ -34,6 +34,11 @@ import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
+import {
+  dispatchKeyboardContextMenu,
+  findRowElement,
+  isKeyupContextMenuSupplement,
+} from './keyboardContextMenu.js'
 import { useTreeModel } from './useTreeModel.js'
 
 const PAGE_STEP = 10
@@ -49,24 +54,9 @@ const DEFAULT_INDENT_BASE = 6
  * Matching the attribute value directly sidesteps CSS escaping altogether.
  */
 const findRow = (root: HTMLElement, id: string): HTMLElement | null =>
-  [...root.querySelectorAll<HTMLElement>('[data-row-key]')].find(
-    (el) => el.getAttribute('data-row-key') === id,
-  ) ?? null
+  findRowElement(root, 'data-row-key', id)
 
-/**
- * Contextmenu events the tree synthesized from a key press. They cannot be told
- * apart by `detail` — the synthetic event deliberately claims `detail: 1` to get
- * past the detail-0 guard below — so the origin travels out-of-band and views
- * read it back with `isKeyboardContextMenu`.
- */
-const keyboardContextMenuEvents = new WeakSet<Event>()
-
-/** True when this contextmenu came from the ContextMenu key / Shift+F10 rather
- *  than the mouse. Views use it to open their menu with the first row already
- *  highlighted (VSCode parity), since a keyboard user has no pointer to aim. */
-export function isKeyboardContextMenu(e: Event | { nativeEvent: Event }): boolean {
-  return keyboardContextMenuEvents.has('nativeEvent' in e ? e.nativeEvent : e)
-}
+export { isKeyboardContextMenu } from './keyboardContextMenu.js'
 
 export interface ITreeActivateOptions {
   /** True for a light "preview" open (single click / Space); false to pin (Enter). */
@@ -255,28 +245,14 @@ export function Tree<T>(props: ITreeProps<T>) {
     }
   }, [revealRequest, sizeAt, rowHeight, getRowHeight])
 
-  // Keyboard context menu (ContextMenu key / Shift+F10): the browser's own
-  // synthetic contextmenu event carries (0,0) coordinates, which would anchor
-  // the menu at a fixed corner. VSCode parity: dispatch a contextmenu on the
-  // focused row with coordinates derived from its bounding rect, so each view's
-  // existing row handler opens the menu exactly like a mouse right-click.
+  // Keyboard context menu (ContextMenu key / Shift+F10): anchored on the focused
+  // row so each view's existing row handler opens the menu exactly like a mouse
+  // right-click. See `keyboardContextMenu.ts` for why the event is marked.
   const openKeyboardContextMenu = useCallback((node: IVisibleNode<T> | null) => {
     const root = containerRef.current
     if (!root) return
     const row = node ? findRow(root, node.id) : null
-    const target = row ?? root
-    const rect = target.getBoundingClientRect()
-    const event = new MouseEvent('contextmenu', {
-      bubbles: true,
-      cancelable: true,
-      // detail 1 marks the event as mouse-like so the container's detail-0
-      // guard below doesn't mistake it for Chromium's keyup supplement.
-      detail: 1,
-      clientX: rect.left,
-      clientY: row ? rect.bottom : rect.top,
-    })
-    keyboardContextMenuEvents.add(event)
-    target.dispatchEvent(event)
+    dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
 
   const makeClickHandler = useCallback(
@@ -418,11 +394,7 @@ export function Tree<T>(props: ITreeProps<T>) {
       {...(onContextMenu
         ? {
             onContextMenu: (e: ReactMouseEvent) => {
-              // Chromium re-dispatches the contextmenu on keyup for the
-              // ContextMenu key / Shift+F10 (keydown preventDefault can't cancel
-              // it): detail 0, target = the focused container, (0,0) coords.
-              // Swallow it — the keyboard handler already opened the menu.
-              if (e.detail === 0) {
+              if (isKeyupContextMenuSupplement(e)) {
                 e.preventDefault()
                 return
               }

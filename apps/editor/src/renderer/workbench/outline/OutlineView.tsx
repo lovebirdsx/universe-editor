@@ -29,6 +29,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  isKeyboardContextMenu,
   type ITreeDataSource,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
@@ -396,7 +397,7 @@ export function OutlineView() {
         label: localize('outline.goTo', 'Go to'),
         children: buildGotoItems(node.symbol),
       })
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [model, buildGotoItems],
   )
@@ -406,6 +407,7 @@ export function OutlineView() {
     setMenu({
       x: e.clientX,
       y: e.clientY,
+      keyboard: isKeyboardContextMenu(e),
       items: [
         {
           kind: 'item',

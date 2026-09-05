@@ -1,14 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SearchResultsContextMenu — right-click menu for the search results tree.
- *
- *  Unlike the MenuRegistry-driven ContextMenu, the search actions (copy, dismiss)
- *  operate on the SearchView's local result state rather than global commands, so
- *  this is a small bespoke menu whose items are plain callbacks.
+ *  SearchResultsContextMenu — right-click menu for the search results tree. Thin
+ *  wrapper over the workbench-ui ListMenu: the actions (copy, dismiss) operate on
+ *  the SearchView's local result state rather than global commands, so the items
+ *  are plain callbacks rather than MenuRegistry contributions — but the keyboard
+ *  navigation, virtual focus and opening highlight are the shared ones.
  *--------------------------------------------------------------------------------------------*/
 
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
-import styles from './SearchResultsContextMenu.module.css'
+import { useMemo } from 'react'
+import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 
 export interface SearchMenuItem {
   readonly label: string
@@ -19,6 +19,8 @@ export interface SearchContextMenuState {
   readonly x: number
   readonly y: number
   readonly items: readonly SearchMenuItem[]
+  /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
+  readonly keyboard: boolean
 }
 
 export function SearchResultsContextMenu({
@@ -28,26 +30,17 @@ export function SearchResultsContextMenu({
   state: SearchContextMenuState
   onClose: () => void
 }) {
-  if (state.items.length === 0) return null
+  const items = useMemo<readonly ListMenuEntry[]>(
+    () => state.items.map((item) => ({ kind: 'item', label: item.label, run: item.run })),
+    [state.items],
+  )
 
   return (
-    <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
-      <ul role="menu" className={styles['menu']}>
-        {state.items.map((item) => (
-          <li
-            key={item.label}
-            role="menuitem"
-            tabIndex={-1}
-            className={styles['item']}
-            onClick={() => {
-              onClose()
-              item.run()
-            }}
-          >
-            {item.label}
-          </li>
-        ))}
-      </ul>
-    </AnchoredSurface>
+    <ListMenu
+      items={items}
+      anchor={{ x: state.x, y: state.y }}
+      autoFocusFirst={state.keyboard}
+      onClose={onClose}
+    />
   )
 }

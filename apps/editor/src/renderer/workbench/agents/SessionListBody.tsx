@@ -48,7 +48,11 @@ import {
 import {
   IconButton,
   Input,
+  dispatchKeyboardContextMenu,
   fuzzyMatchField,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
   scoreFuzzyMatch,
   useScrollRestore,
 } from '@universe-editor/workbench-ui'
@@ -350,6 +354,15 @@ function SessionRow({
           e.preventDefault()
           e.stopPropagation()
           onToggleArchive()
+          return
+        }
+        // The row is its own container, so the synthetic contextmenu is raised
+        // on it directly and lands in the same `onContextMenu` a right-click
+        // would. `repeat` guard: holding the key must not stack menus.
+        if (isContextMenuKey(e) && !e.repeat) {
+          e.preventDefault()
+          e.stopPropagation()
+          dispatchKeyboardContextMenu(e.currentTarget, true)
         }
       }}
     >
@@ -787,6 +800,9 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
             const openContextMenu = (e: ReactMouseEvent) => {
               e.preventDefault()
               e.stopPropagation()
+              // The row is its own container, so there is no Tree to host the
+              // guard against Chromium's keyup supplement — swallow it here.
+              if (isKeyupContextMenuSupplement(e)) return
               const items: SessionRowMenuItem[] = []
               if (!isPending) {
                 items.push({
@@ -826,7 +842,13 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 danger: true,
                 run: onRemove,
               })
-              setMenu({ x: e.clientX, y: e.clientY, sessionId: entry.id, items })
+              setMenu({
+                x: e.clientX,
+                y: e.clientY,
+                sessionId: entry.id,
+                items,
+                keyboard: isKeyboardContextMenu(e),
+              })
             }
             return (
               <SessionRow

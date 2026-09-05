@@ -54,6 +54,10 @@ import {
   type P4GraphSyncScopeDto,
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
+import {
+  createKeyboardContextMenuEvent,
+  isKeyboardContextMenu,
+} from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { IScmService, scmProviderPathKey } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
@@ -841,7 +845,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
         )
       }
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [commands, openScopedFileDiff, scope, wholeRepo, result, setSyncDialog],
   )
@@ -894,8 +898,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
   const graphWidth = layout?.width ?? GRID.offsetX * 2
   const selected = useMemo(() => new Set(selection), [selection])
 
-  // Ctrl+Enter on the selected row: a changelist row has exactly one menu
-  // target (the change itself), so the menu opens directly, anchored at the row.
+  // ContextMenu key / Shift+F10 (or Ctrl+Enter) on the selected row: a changelist
+  // row has exactly one menu target (the change itself), so the menu opens
+  // directly, anchored at the row.
   const openRowMenu = useCallback(
     (id: string) => {
       const change = filteredChanges.find((c) => c.id === id)
@@ -905,12 +910,16 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         .values()
         .find((el) => el.getAttribute('data-id') === id)
       const rect = rowEl?.getBoundingClientRect()
-      openChangeMenu(change, {
-        clientX: (rect?.left ?? 0) + 16,
-        clientY: rect?.bottom ?? 0,
-        preventDefault: () => {},
-        stopPropagation: () => {},
-      } as MouseEvent)
+      // A marked (but never dispatched) event: `openChangeMenu` reads coordinates
+      // off it and asks `isKeyboardContextMenu` whether to open with the first
+      // row highlighted, exactly as it does for a real right-click.
+      openChangeMenu(
+        change,
+        createKeyboardContextMenuEvent(
+          (rect?.left ?? 0) + 16,
+          rect?.bottom ?? 0,
+        ) as unknown as MouseEvent,
+      )
     },
     [filteredChanges, openChangeMenu],
   )
@@ -1197,8 +1206,9 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           state={menu}
           onClose={() => {
             setMenu(null)
-            // The menu lives in a portal; closing it drops focus to <body>
-            // otherwise, which would silently break arrow-key navigation.
+            // The menu navigates by virtual focus, so the graph never lost DOM
+            // focus — but a mouse right-click may have landed outside it, and
+            // arrow-key navigation only works while the container holds focus.
             scrollRef.current?.focus()
           }}
         />

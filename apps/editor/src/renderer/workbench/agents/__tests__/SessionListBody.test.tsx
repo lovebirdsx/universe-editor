@@ -450,13 +450,52 @@ describe('SessionListBody — archive / pin', () => {
     await act(async () => {
       filterService.toggleArchived()
     })
-    fireEvent.contextMenu(screen.getByTestId('session-row-b'))
+    // detail 1 is what a real mouse right-click carries; detail 0 is reserved
+    // for the keyup supplement Chromium sends after the ContextMenu key.
+    fireEvent.contextMenu(screen.getByTestId('session-row-b'), { detail: 1 })
     expect(screen.getByText('Unpin Session')).toBeTruthy()
     expect(screen.getByText('Archive Session')).toBeTruthy()
     fireEvent.click(screen.getByText('Archive Session'))
     expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.archiveSession', {
       sessionId: 'b',
     })
+  })
+
+  it('opens the row menu with the ContextMenu key, already highlighted and drivable', async () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+
+    const row = screen.getByTestId('session-row-a')
+    fireEvent.keyDown(row, { key: 'ContextMenu' })
+
+    const menu = await screen.findByRole('menu')
+    // A keyboard user has no pointer to aim, so the first entry opens highlighted.
+    const active = () => menu.ownerDocument.querySelectorAll('[role="menuitem"][data-active]')
+    expect(active()).toHaveLength(1)
+    expect(active()[0]?.textContent).toBe('Pin Session')
+    expect(menu.getAttribute('aria-activedescendant')).toBeTruthy()
+
+    // The arrow keys drive the menu and must not tear it down.
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+    })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(active()[0]?.textContent).toBe('Archive Session')
+  })
+
+  it('swallows the keyup contextmenu Chromium re-dispatches after the key', async () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+
+    const row = screen.getByTestId('session-row-a')
+    fireEvent.keyDown(row, { key: 'ContextMenu' })
+    await screen.findByRole('menu')
+    // Chromium's supplement: detail 0, (0,0) coords. Without the guard it would
+    // reopen the menu at the top-left corner, unhighlighted.
+    fireEvent.contextMenu(row, { detail: 0 })
+
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1)
+    expect(document.querySelectorAll('[role="menuitem"][data-active]')).toHaveLength(1)
   })
 
   it('foreign-worktree rows keep the archive/pin buttons (rename stays hidden)', () => {

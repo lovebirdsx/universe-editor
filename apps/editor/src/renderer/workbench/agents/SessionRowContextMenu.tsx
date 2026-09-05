@@ -1,14 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionRowContextMenu — per-row right-click menu for the AGENTS session list.
- *  Hand-built (rather than driven by MenuRegistry) because the item set depends
- *  on the row: rename is disabled for foreign-worktree rows and "reveal" is
- *  disabled when the session has no transcript file. Mirrors the SwarmReviews
- *  context-menu shape.
+ *  Thin wrapper over the workbench-ui ListMenu: the item set depends on the row
+ *  (rename is disabled for foreign-worktree rows, "reveal" is disabled when the
+ *  session has no transcript file), so it can't come from MenuRegistry — but the
+ *  keyboard navigation, virtual focus and opening highlight are the shared ones.
  *--------------------------------------------------------------------------------------------*/
 
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
-import styles from './SessionRowContextMenu.module.css'
+import { useMemo } from 'react'
+import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 
 export type SessionRowMenuItem =
   | {
@@ -25,6 +25,8 @@ export interface SessionRowContextMenuState {
   readonly y: number
   readonly sessionId: string
   readonly items: readonly SessionRowMenuItem[]
+  /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
+  readonly keyboard: boolean
 }
 
 export function SessionRowContextMenu({
@@ -34,32 +36,29 @@ export function SessionRowContextMenu({
   state: SessionRowContextMenuState
   onClose: () => void
 }) {
+  const items = useMemo<readonly ListMenuEntry[]>(
+    () =>
+      state.items.map(
+        (item): ListMenuEntry =>
+          item.kind === 'separator'
+            ? { kind: 'separator' }
+            : {
+                kind: 'item',
+                label: item.label,
+                danger: item.danger === true,
+                disabled: item.disabled === true,
+                run: item.run,
+              },
+      ),
+    [state.items],
+  )
+
   return (
-    <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
-      <ul role="menu" className={styles['menu']}>
-        {state.items.map((item, index) =>
-          item.kind === 'separator' ? (
-            <li key={`separator-${index}`} role="separator" className={styles['separator']} />
-          ) : (
-            <li
-              key={`${item.label}-${index}`}
-              role="menuitem"
-              aria-disabled={item.disabled ? 'true' : undefined}
-              tabIndex={-1}
-              className={`${styles['item']} ${item.danger ? styles['danger'] : ''} ${
-                item.disabled ? styles['disabled'] : ''
-              }`}
-              onClick={() => {
-                if (item.disabled) return
-                onClose()
-                item.run()
-              }}
-            >
-              {item.label}
-            </li>
-          ),
-        )}
-      </ul>
-    </AnchoredSurface>
+    <ListMenu
+      items={items}
+      anchor={{ x: state.x, y: state.y }}
+      autoFocusFirst={state.keyboard}
+      onClose={onClose}
+    />
   )
 }

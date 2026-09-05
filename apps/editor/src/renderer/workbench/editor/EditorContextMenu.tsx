@@ -28,6 +28,8 @@ interface Props {
   readonly resource: URI
   readonly editor: monaco.editor.IStandaloneCodeEditor
   readonly isReadonly: boolean
+  /** Raised with the ContextMenu key, so it opens with the first entry highlighted. */
+  readonly keyboard: boolean
   readonly commandService: ICommandService
   readonly contextKeyService: IContextKeyService
   readonly onClose: () => void
@@ -39,6 +41,7 @@ export function EditorContextMenu({
   resource,
   editor,
   isReadonly,
+  keyboard,
   commandService,
   contextKeyService,
   onClose,
@@ -60,6 +63,7 @@ export function EditorContextMenu({
       menuId={MenuId.EditorContext}
       anchor={{ x, y }}
       args={[resource]}
+      autoFocusFirst={keyboard}
       commandService={commandService}
       contextKeyService={scopedContext}
       onClose={onClose}

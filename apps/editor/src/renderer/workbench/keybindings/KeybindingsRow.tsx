@@ -85,6 +85,9 @@ export const KeybindingsRow = memo(function KeybindingsRow({
       aria-selected={selected}
       data-parity={index % 2 === 1 ? 'odd' : 'even'}
       data-selected={selected || undefined}
+      // The grid keeps DOM focus on its container, so the ContextMenu key has to
+      // find the selected row by id to anchor the synthetic event on it.
+      data-row-id={row.id}
       className={cx(styles['row'], selected && styles['selected'])}
       style={style}
       onClick={onSelect}

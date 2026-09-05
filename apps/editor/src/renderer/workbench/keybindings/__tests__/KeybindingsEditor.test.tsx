@@ -323,6 +323,44 @@ describe('KeybindingsEditor', () => {
     expect(contextKeyService.get('keybindingFocus')).toBe(false)
   })
 
+  it('opens the row menu with the ContextMenu key, already highlighted and drivable', () => {
+    registerTestCommands()
+    const { container } = mount()
+    const grid = container.querySelector('[role=grid]') as HTMLElement
+
+    act(() => {
+      grid.focus()
+      fireEvent.keyDown(grid, { key: 'ArrowDown' })
+    })
+    expect(gridRows(container)[0]!.getAttribute('aria-selected')).toBe('true')
+
+    act(() => {
+      fireEvent.keyDown(grid, { key: 'ContextMenu' })
+    })
+
+    const menu = document.querySelector<HTMLElement>('[role=menu]')
+    expect(menu).not.toBeNull()
+    // A keyboard user has no pointer to aim, so the first entry opens highlighted.
+    const active = () => document.querySelectorAll('[role=menuitem][data-active]')
+    expect(active()).toHaveLength(1)
+    expect(active()[0]?.textContent).toContain('Copy')
+    expect(menu!.getAttribute('aria-activedescendant')).toBeTruthy()
+
+    // The arrow keys drive the menu and must not tear it down.
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+    })
+    expect(document.querySelector('[role=menu]')).not.toBeNull()
+    expect(active()[0]?.textContent).toContain('Copy Command ID')
+  })
+
+  it('leaves a mouse-opened menu unhighlighted', () => {
+    registerTestCommands()
+    const { container } = mount()
+    openMenuOnRow(container, 'Alpha Command')
+    expect(document.querySelector('[role=menuitem][data-active]')).toBeNull()
+  })
+
   it('record-keys mode writes a quoted complete-match query and Escape exits it', async () => {
     registerTestCommands()
     const { container } = mount()

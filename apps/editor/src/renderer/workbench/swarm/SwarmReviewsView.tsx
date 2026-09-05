@@ -62,6 +62,7 @@ import {
   Tree,
   TreeModel,
   cx,
+  isKeyboardContextMenu,
   useOwnedTreeModel,
   type ITreeDataSource,
   type ITreeRowRenderContext,
@@ -676,8 +677,15 @@ export function SwarmReviewsView() {
       event.stopPropagation()
       const x = event.clientX
       const y = event.clientY
+      const keyboard = isKeyboardContextMenu(event)
       const show = (allowedTransitions: readonly SwarmTransitionDto[]) =>
-        setMenu({ x, y, reviewId: review.id, items: createMenuItems(review, allowedTransitions) })
+        setMenu({
+          x,
+          y,
+          reviewId: review.id,
+          items: createMenuItems(review, allowedTransitions),
+          keyboard,
+        })
       show(transitionsRef.current[review.id] ?? [])
       if (!transitionsRef.current[review.id]) {
         void loadTransitions(review)
@@ -930,6 +938,11 @@ export function SwarmReviewsView() {
           onActivate={(node, opts) => {
             if (node.element.kind === 'review') openReview(node.element.review.id, opts.preview)
           }}
+          // Row menus are opened by each row's own handler; this exists so the
+          // Tree binds its detail-0 guard, which swallows the native contextmenu
+          // Chromium re-dispatches on keyup after the ContextMenu key — without
+          // it that supplement would open a second menu at (0, 0).
+          onContextMenu={() => {}}
         />
       )}
       {swarmReady &&

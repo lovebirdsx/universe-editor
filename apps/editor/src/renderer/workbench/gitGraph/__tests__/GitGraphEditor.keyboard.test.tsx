@@ -3,10 +3,12 @@
  *  Keyboard navigation for the Git Graph editor: the scroll container is
  *  focusable, ArrowUp/ArrowDown/Home/End/PageUp/PageDown move the selection
  *  through the same entry point as mouse clicks (so the Commit Changes bridge
- *  and latest-wins sequencing still apply), and Ctrl+Enter opens the row's
- *  context menu — disambiguating through a QuickPick when the row carries
- *  several menu targets (commit + branch/tag/…). The menu itself is fully
- *  keyboard-operable (arrows move, Enter runs, Escape closes).
+ *  and latest-wins sequencing still apply), and the ContextMenu key / Shift+F10
+ *  (with Ctrl+Enter as an alias) opens the row's context menu — disambiguating
+ *  through a QuickPick when the row carries several menu targets (commit +
+ *  branch/tag/…). The menu itself is fully keyboard-operable (arrows move, Enter
+ *  runs, Escape closes) and navigates by virtual focus, so the graph keeps DOM
+ *  focus throughout.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -208,6 +210,11 @@ function menuLabels(): string[] {
   return [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent ?? '')
 }
 
+/** Label of the virtually focused row (`data-active`), if any. */
+function activeLabel(): string | undefined {
+  return document.querySelector('[role="menuitem"][data-active]')?.textContent ?? undefined
+}
+
 describe('GitGraphEditor keyboard navigation', () => {
   it('selects the first row on open and shows its changes', async () => {
     const { executeCommand } = renderEditor()
@@ -373,62 +380,110 @@ describe('GitGraphEditor Ctrl+Enter context menu', () => {
     items[0]!.context.open()
     await flush()
     expect(menuLabels()).toContain('Cherry-pick…')
-    // Menu opened from the pick must also hold keyboard focus.
-    expect(document.activeElement).toBe(openMenu())
+    // Menu opened from the pick is keyboard-driven too: first row highlighted,
+    // and it never grabs DOM focus (navigation is virtual).
+    expect(activeLabel()).toBe('Checkout this commit…')
+    expect(document.activeElement).not.toBe(openMenu())
   })
 })
 
-describe('GitGraphContextMenu focus on open', () => {
+describe('GitGraphContextMenu opening', () => {
   // A real browser dispatches keydown to document.activeElement, so the whole
   // flow is driven through it (instead of aiming fireEvent at a known node) —
-  // that is what makes a missing menu focus observable.
-  function pressKey(key: string, init: { ctrlKey?: boolean } = {}): void {
+  // that is what makes a broken raise path observable.
+  function pressKey(key: string, init: { ctrlKey?: boolean; shiftKey?: boolean } = {}): void {
     fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init })
   }
 
-  it('Ctrl+Enter moves keyboard focus into the menu; arrows operate the menu, not the graph', async () => {
+  it('the ContextMenu key opens the menu with the first row highlighted', async () => {
     const { container } = renderEditor()
     await flush()
 
     const body = scrollBody(container)
     body.focus()
-    expect(document.activeElement).toBe(body)
     // The first row is already selected on open.
     expect(gitGraphViewState.selection).toEqual([HASH_A])
 
+    pressKey('ContextMenu')
+    await flush()
+
+    expect(openMenu()).not.toBeNull()
+    expect(activeLabel()).toBe('Checkout this commit…')
+  })
+
+  it('Shift+F10 opens the menu as well', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    scrollBody(container).focus()
+    pressKey('F10', { shiftKey: true })
+    await flush()
+
+    expect(openMenu()).not.toBeNull()
+    expect(activeLabel()).toBe('Checkout this commit…')
+  })
+
+  it('Ctrl+Enter stays as an alias', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    scrollBody(container).focus()
     pressKey('Enter', { ctrlKey: true })
     await flush()
 
-    const menu = openMenu()!
-    expect(menu).not.toBeNull()
-    expect(document.activeElement).toBe(menu)
+    expect(openMenu()).not.toBeNull()
+    expect(activeLabel()).toBe('Checkout this commit…')
+  })
 
-    pressKey('ArrowDown')
+  it('the graph keeps DOM focus; arrows operate the menu, not the graph', async () => {
+    const { container } = renderEditor()
     await flush()
-    expect(menu.querySelector('[data-active]')?.textContent).toBe('Cherry-pick…')
+
+    const body = scrollBody(container)
+    body.focus()
+    pressKey('ContextMenu')
+    await flush()
+
+    // Virtual focus: the menu drives the keyboard while the graph keeps its own
+    // focus ring and selection — that is the point of the shared menu layer.
+    expect(document.activeElement).toBe(body)
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeLabel()).toBe('Cherry-pick…')
     expect(gitGraphViewState.selection).toEqual([HASH_A])
+  })
+
+  it('a mouse right-click opens the menu with no row highlighted', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const row = container.querySelector(`[data-hash="${HASH_A}"]`)!
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 40 })
+    await flush()
+
+    expect(openMenu()).not.toBeNull()
+    expect(activeLabel()).toBeUndefined()
   })
 })
 
 describe('GitGraphContextMenu keyboard operation', () => {
-  it('highlights the first item on open, arrows move, Enter runs the item', async () => {
+  function openRowMenu(container: HTMLElement): void {
+    scrollBody(container).focus()
+    fireEvent.keyDown(scrollBody(container), { key: 'ContextMenu' })
+  }
+
+  it('arrows move the highlight and Enter runs the item', async () => {
     const { container, executeCommand } = renderEditor()
     await flush()
 
-    const body = scrollBody(container)
-    // The open-selected first row is the menu target.
-    fireEvent.keyDown(body, { key: 'Enter', ctrlKey: true })
+    openRowMenu(container)
     await flush()
+    expect(activeLabel()).toBe('Checkout this commit…')
 
-    const menu = openMenu()!
-    expect(menu).not.toBeNull()
-    // First actionable item is highlighted on open.
-    expect(menu.querySelector('[data-active]')?.textContent).toBe('Checkout this commit…')
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeLabel()).toBe('Cherry-pick…')
 
-    fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    expect(menu.querySelector('[data-active]')?.textContent).toBe('Cherry-pick…')
-
-    fireEvent.keyDown(menu, { key: 'Enter' })
+    fireEvent.keyDown(window, { key: 'Enter' })
     await flush()
     expect(executeCommand).toHaveBeenCalledWith(GitGraphCommands.cherrypick, HASH_A)
     // The menu closed after running the item.
@@ -439,27 +494,26 @@ describe('GitGraphContextMenu keyboard operation', () => {
     const { container } = renderEditor()
     await flush()
 
-    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
+    openRowMenu(container)
     await flush()
 
-    const menu = openMenu()!
     const labels = menuLabels()
     // ArrowUp from the first item wraps to the last (skipping separators).
-    fireEvent.keyDown(menu, { key: 'ArrowUp' })
-    expect(menu.querySelector('[data-active]')?.textContent).toBe(labels[labels.length - 1])
-    fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    expect(menu.querySelector('[data-active]')?.textContent).toBe(labels[0])
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    expect(activeLabel()).toBe(labels[labels.length - 1])
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeLabel()).toBe(labels[0])
   })
 
   it('Escape closes the menu', async () => {
     const { container } = renderEditor()
     await flush()
 
-    fireEvent.keyDown(scrollBody(container), { key: 'Enter', ctrlKey: true })
+    openRowMenu(container)
     await flush()
     expect(openMenu()).not.toBeNull()
 
-    fireEvent.keyDown(openMenu()!, { key: 'Escape' })
+    fireEvent.keyDown(window, { key: 'Escape' })
     await flush()
     expect(openMenu()).toBeNull()
   })

@@ -57,7 +57,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
   const commandService = useService(ICommandService)
   const hasOverflow = useHasOverflow(ctx)
   const btnRef = useRef<HTMLButtonElement>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; keyboard: boolean } | null>(null)
 
   const label = localize('editorTitle.moreActions', 'More Actions…')
 
@@ -73,9 +73,12 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
         <button
           ref={btnRef}
           className={styles['actionBtn']}
-          onClick={() => {
+          onClick={(e) => {
             const rect = btnRef.current?.getBoundingClientRect()
-            if (rect) setMenu({ x: rect.left, y: rect.bottom })
+            // detail 0 means Enter/Space activated the button rather than a
+            // mouse click — a keyboard user gets the first entry highlighted so
+            // the menu is drivable straight away.
+            if (rect) setMenu({ x: rect.left, y: rect.bottom, keyboard: e.detail === 0 })
           }}
           data-tooltip={label}
           aria-label={label}
@@ -89,6 +92,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
           menuId={MenuId.EditorTitle}
           anchor={menu}
           args={[{ groupId: group.id }]}
+          autoFocusFirst={menu.keyboard}
           commandService={commandService}
           contextKeyService={ctx}
           groupFilter={(g) => g !== NAVIGATION_GROUP}

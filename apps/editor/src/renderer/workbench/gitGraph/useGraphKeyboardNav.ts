@@ -1,16 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useGraphKeyboardNav — arrow-key / Home / End / PageUp / PageDown navigation
- *  plus Enter (focus the Commit Changes view) and Ctrl/Cmd+Enter (context menu)
- *  for the commit-graph row lists (Git Graph and Perforce Graph). The host makes
- *  its scroll container focusable and wires the returned handler as its
- *  onKeyDown; selection changes go through the same entry point as mouse
- *  clicks, so latest-wins sequencing and payload caching are preserved. Only
- *  the listed navigation keys are handled (and prevented) — everything else
- *  bubbles up untouched.
+ *  plus Enter (focus the Commit Changes view) and the context menu (ContextMenu
+ *  key / Shift+F10, with Ctrl/Cmd+Enter kept as an alias) for the commit-graph
+ *  row lists (Git Graph and Perforce Graph). The host makes its scroll container
+ *  focusable and wires the returned handler as its onKeyDown; selection changes
+ *  go through the same entry point as mouse clicks, so latest-wins sequencing
+ *  and payload caching are preserved. Only the listed navigation keys are
+ *  handled (and prevented) — everything else bubbles up untouched.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
+import { isContextMenuKey } from '@universe-editor/workbench-ui'
 
 export interface GraphKeyboardNavOptions {
   /** Keys of the currently rendered rows, top to bottom (after filtering). */
@@ -19,7 +20,7 @@ export interface GraphKeyboardNavOptions {
   readonly selectionRef: RefObject<string[]>
   /** Select a single row (no toggle semantics). */
   readonly select: (key: string) => void
-  /** Open the context menu for a row (Ctrl/Cmd+Enter). */
+  /** Open the context menu for a row (ContextMenu key / Shift+F10 / Ctrl+Enter). */
   readonly openMenu: (key: string) => void
   /** Move focus into the Commit Changes view for the selected row (Enter). */
   readonly openCommitChanges: () => void
@@ -45,6 +46,15 @@ export function useGraphKeyboardNav({
       if (rows.length === 0) return
       const currentKey = selectionRef.current[0]
       const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
+
+      // ContextMenu key / Shift+F10 — the VSCode-standard way to raise a menu.
+      // `repeat` guard: holding the key must not stack menus.
+      if (isContextMenuKey(e)) {
+        e.preventDefault()
+        if (e.repeat || currentKey === undefined) return
+        openMenu(currentKey)
+        return
+      }
 
       const moveTo = (index: number) => {
         const clamped = Math.max(0, Math.min(rows.length - 1, index))

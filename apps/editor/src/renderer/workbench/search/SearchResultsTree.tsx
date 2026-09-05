@@ -32,6 +32,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  isKeyboardContextMenu,
   resourceDragProps,
   selectionDragUris,
   type ITreeDataSource,
@@ -372,7 +373,8 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           run: () => void navigator.clipboard?.writeText(n.relPath),
         })
       }
-      if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items })
+      if (items.length > 0)
+        setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     }
 
     const renderRow = (ctx: ITreeRowRenderContext<SearchNode>) => {

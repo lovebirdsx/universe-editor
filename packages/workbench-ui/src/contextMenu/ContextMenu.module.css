@@ -48,6 +48,33 @@
   outline: none;
 }
 
+/* Destructive actions (delete, obliterate, discard). */
+.danger {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+/* Visible but inert: skipped by arrow navigation, no hover/active highlight.
+   Only item-driven menus produce these — a MenuRegistry row that fails its
+   `when` is dropped rather than dimmed. */
+.disabled {
+  color: var(--vscode-menu-disabledForeground, #656565);
+  cursor: default;
+}
+
+.disabled:hover,
+.disabled[data-active] {
+  background: transparent;
+}
+
+/* Trailing secondary text (a keybinding hint). `.label` already takes the free
+   space, so this lands at the trailing edge. */
+.hint {
+  flex: 0 0 auto;
+  margin-left: var(--spacing-5);
+  opacity: 0.7;
+  font-size: var(--font-size-xs);
+}
+
 .separator {
   margin: 4px 0;
   border: none;

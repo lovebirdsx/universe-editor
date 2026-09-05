@@ -56,6 +56,10 @@ import {
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import {
+  createKeyboardContextMenuEvent,
+  isKeyboardContextMenu,
+} from '@universe-editor/workbench-ui'
+import {
   useService,
   useObservable,
   useCommandRegistered,
@@ -989,6 +993,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         setMenu({
           x: e.clientX,
           y: e.clientY,
+          keyboard: isKeyboardContextMenu(e),
           items: [
             {
               kind: 'item',
@@ -1140,7 +1145,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             }),
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [commands, dialog, runOp, openCherryPickToBranch, fullMessages],
   )
@@ -1248,7 +1253,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [dialog, runOp],
   )
@@ -1331,7 +1336,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [commands, dialog, runOp],
   )
@@ -1361,7 +1366,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         },
       ]
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [dialog, runOp],
   )
@@ -1542,7 +1547,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
         )
       }
-      setMenu({ x: e.clientX, y: e.clientY, items })
+      setMenu({ x: e.clientX, y: e.clientY, items, keyboard: isKeyboardContextMenu(e) })
     },
     [allWorktrees, commands, dialog, runOp],
   )
@@ -1552,15 +1557,22 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const openOverflowMenu = useCallback((entries: RefEntry[], e: MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const anchor = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      preventDefault: () => {},
-      stopPropagation: () => {},
-    } as MouseEvent
+    const keyboard = isKeyboardContextMenu(e)
+    // Picking an entry always opens its menu from the keyboard-or-not origin the
+    // overflow badge itself carried: a keyboard user must not lose the opening
+    // highlight one level in.
+    const anchor = keyboard
+      ? (createKeyboardContextMenuEvent(e.clientX, e.clientY) as unknown as MouseEvent)
+      : ({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        } as MouseEvent)
     setMenu({
       x: e.clientX,
       y: e.clientY,
+      keyboard,
       items: entries.map((entry) => ({
         kind: 'item' as const,
         label: entry.menuLabel,
@@ -1633,10 +1645,10 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
   const effectiveGraphWidth = isCompact ? GRID.offsetX * 2 : graphWidth
   const selected = useMemo(() => new Set(selection), [selection])
 
-  // Ctrl+Enter on the selected row: open the same context menu a right-click
-  // would show, anchored at the row. A row can carry several menu targets (the
-  // commit itself plus worktree / branch / tag / remote badges); when more than
-  // one applies, a QuickPick disambiguates first.
+  // ContextMenu key / Shift+F10 (or Ctrl+Enter) on the selected row: open the
+  // same context menu a right-click would show, anchored at the row. A row can
+  // carry several menu targets (the commit itself plus worktree / branch / tag /
+  // remote badges); when more than one applies, a QuickPick disambiguates first.
   const openRowMenu = useCallback(
     (hash: string) => {
       const commit = filteredCommits.find((c) => c.hash === hash)
@@ -1646,12 +1658,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         .values()
         .find((el) => el.getAttribute('data-hash') === hash)
       const rect = rowEl?.getBoundingClientRect()
-      const anchor = {
-        clientX: (rect?.left ?? 0) + 16,
-        clientY: rect?.bottom ?? 0,
-        preventDefault: () => {},
-        stopPropagation: () => {},
-      } as MouseEvent
+      // A marked (but never dispatched) event: the per-target handlers below read
+      // coordinates off it and ask `isKeyboardContextMenu` whether to open with
+      // the first row highlighted, exactly as they do for a real right-click.
+      const anchor = createKeyboardContextMenuEvent(
+        (rect?.left ?? 0) + 16,
+        rect?.bottom ?? 0,
+      ) as unknown as MouseEvent
       const contexts = [
         {
           label: localize('gitGraph.ref.commit', 'Commit {hash}', { hash: shortHash(hash) }),
@@ -2040,8 +2053,9 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           state={menu}
           onClose={() => {
             setMenu(null)
-            // The menu lives in a portal; closing it drops focus to <body>
-            // otherwise, which would silently break arrow-key navigation.
+            // The menu navigates by virtual focus, so the graph never lost DOM
+            // focus — but a mouse right-click may have landed outside it, and
+            // arrow-key navigation only works while the container holds focus.
             scrollRef.current?.focus()
           }}
         />

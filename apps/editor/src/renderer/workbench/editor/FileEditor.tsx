@@ -137,7 +137,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // effect below so switching tabs stays a cheap setModel — no editor rebuild.
   const fileInputRef = useRef(fileInput)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    keyboard: boolean
+  } | null>(null)
   const activeGroup = groupsService.activeGroup
   const activeGroupActiveEditor = activeGroup.activeEditor
 
@@ -272,9 +276,13 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // Right-click opens the MenuRegistry-driven context menu instead of Monaco's
     // native one (`contextmenu: false` above). clientX/clientY are viewport
     // coordinates, matching the other ContextMenu consumers.
+    // detail 0 means the browser raised this itself from the ContextMenu key /
+    // Shift+F10 rather than from a mouse button — a keyboard user has no pointer
+    // to aim, so the menu opens with its first entry highlighted. (Note the
+    // inversion vs the tree lists: their synthetic events fake detail 1.)
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault()
-      setContextMenu({ x: e.clientX, y: e.clientY })
+      setContextMenu({ x: e.clientX, y: e.clientY, keyboard: e.detail === 0 })
     }
     dropContainer.addEventListener('contextmenu', onContextMenu)
     const hoverGuard = MonacoLoader.trackEditorDispose(ed)
@@ -586,6 +594,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           resource={fileInput.resource}
           editor={editorRef.current}
           isReadonly={fileInput.isReadonly}
+          keyboard={contextMenu.keyboard}
           commandService={commandService}
           contextKeyService={contextKeyService}
           onClose={() => setContextMenu(null)}

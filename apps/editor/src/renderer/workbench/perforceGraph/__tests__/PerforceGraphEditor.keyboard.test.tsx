@@ -275,33 +275,52 @@ describe('PerforceGraphEditor keyboard navigation', () => {
   })
 })
 
-describe('PerforceGraphEditor menu focus on open', () => {
+describe('PerforceGraphEditor menu keyboard operation', () => {
   // Driven through document.activeElement like a real browser: a keypress lands
-  // on whatever holds focus, so a missing menu focus is directly observable.
-  function pressKey(key: string, init: { ctrlKey?: boolean } = {}): void {
+  // on whatever holds focus, so a broken raise path is directly observable.
+  function pressKey(key: string, init: { ctrlKey?: boolean; shiftKey?: boolean } = {}): void {
     fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init })
   }
 
-  it('Ctrl+Enter moves keyboard focus into the menu; arrows operate the menu, not the graph', async () => {
+  function activeLabel(): string | undefined {
+    return document.querySelector('[role="menuitem"][data-active]')?.textContent ?? undefined
+  }
+
+  it.each([
+    ['ContextMenu key', 'ContextMenu', {}],
+    ['Shift+F10', 'F10', { shiftKey: true }],
+    ['Ctrl+Enter', 'Enter', { ctrlKey: true }],
+  ])('%s opens the menu with the first row highlighted', async (_name, key, init) => {
+    const { container } = renderEditor()
+    await flush()
+
+    scrollBody(container).focus()
+    // The first changelist is already selected on open.
+    expect(perforceGraphViewState.selection).toEqual(['4521'])
+
+    pressKey(key, init)
+    await flush()
+
+    expect(openMenu()).not.toBeNull()
+    expect(activeLabel()).toBe('Copy changelist number')
+  })
+
+  it('the graph keeps DOM focus; arrows operate the menu, not the graph', async () => {
     const { container } = renderEditor()
     await flush()
 
     const body = scrollBody(container)
     body.focus()
+    pressKey('ContextMenu')
+    await flush()
+
+    expect(openMenu()).not.toBeNull()
+    // Virtual focus: the menu drives the keyboard while the graph keeps its own
+    // focus ring and selection.
     expect(document.activeElement).toBe(body)
-    // The first changelist is already selected on open.
-    expect(perforceGraphViewState.selection).toEqual(['4521'])
 
-    pressKey('Enter', { ctrlKey: true })
-    await flush()
-
-    const menu = openMenu()!
-    expect(menu).not.toBeNull()
-    expect(document.activeElement).toBe(menu)
-
-    pressKey('ArrowDown')
-    await flush()
-    expect(menu.querySelector('[data-active]')?.textContent).toBe('Copy commit message')
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeLabel()).toBe('Copy commit message')
     expect(perforceGraphViewState.selection).toEqual(['4521'])
   })
 })

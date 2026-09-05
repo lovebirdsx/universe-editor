@@ -167,4 +167,38 @@ describe('SearchResultsTree', () => {
     })
     expect(screen.queryAllByText('big hit')).toHaveLength(11)
   })
+
+  it('opens the row menu with the ContextMenu key, already highlighted and drivable', async () => {
+    const results: IFileMatch[] = [makeMatch('/ws/a.ts', 1, 'foo')]
+    render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)
+
+    const tree = screen.getByRole('tree', { name: 'Search results' })
+    // Clicking seeds the tree cursor — the ContextMenu key anchors on it.
+    fireEvent.click(screen.getByText('a.ts'))
+    fireEvent.keyDown(tree, { key: 'ContextMenu' })
+
+    const menu = await screen.findByRole('menu')
+    // A keyboard user has no pointer to aim, so the first entry opens highlighted.
+    const active = () => menu.ownerDocument.querySelectorAll('[role="menuitem"][data-active]')
+    expect(active()).toHaveLength(1)
+    expect(active()[0]?.textContent).toBe('Copy Path')
+    expect(menu.getAttribute('aria-activedescendant')).toBeTruthy()
+
+    // The arrow keys drive the menu and must not tear it down.
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+    })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(active()[0]?.textContent).toBe('Copy All')
+  })
+
+  it('leaves a mouse-opened menu unhighlighted', async () => {
+    const results: IFileMatch[] = [makeMatch('/ws/a.ts', 1, 'foo')]
+    render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)
+
+    fireEvent.contextMenu(screen.getByText('a.ts'), { clientX: 10, clientY: 20 })
+
+    await screen.findByRole('menu')
+    expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+  })
 })

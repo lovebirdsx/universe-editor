@@ -8,10 +8,12 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 |---|---|
 | `ContextViewService` | Floating UI 定位 + Portal 渲染的浮层服务 |
 | `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数）；键盘导航走 window capture + 虚拟焦点；传 `renderIcon` 即为每行渲染定宽图标插槽（不传则无插槽，外观不变）；传 `autoFocusFirst` 即开菜单就高亮首项（只给键盘打开的菜单用，鼠标打开保持无高亮） |
+| `ListMenu` | **items 驱动**的右键菜单：菜单项在打开时由视图自己算（异步拉来的 transition、按 worktree 禁用的 rename、带快捷键提示的行……），塞不进 MenuRegistry 的静态 `when` 模型时用它。与 `ContextMenu` 共用同一套 `useMenuNavigation` + `MenuRows`，键盘行为/DOM 完全一致，不会各自漂移。item 支持 `hint`（右对齐次要文字）/ `danger` / `disabled`（可见但惰性：变暗、方向键跳过、Enter 与点击均无效）/ `kind: 'submenu'`；选中项会**先关菜单再执行** run |
 | `HoverService` | delay 触发 / keyboard-accessible 的 hover popup |
 | `TooltipProvider` | 全局委托 tooltip：元素挂 `data-tooltip="…"` 即得主题化气泡；普通 `title` 属性也会被接管（悬停期间暂存到 `data-tooltip-native-title` 抑制原生气泡，离开后还原；iframe/webview 除外），editor 在 `main.tsx` 根部挂载 |
 | `VirtualList` | `@tanstack/react-virtual` 薄包装，固定/动态行高均支持 |
-| `Tree` / `useTreeModel` / `useOwnedTreeModel` | 虚拟化树（数据源 + 选择 + 展开模型）；组件自建 TreeModel 用 `useOwnedTreeModel`；ContextMenu 键 / Shift+F10 合成的 `contextmenu` 事件用 `isKeyboardContextMenu(e)` 识别（**不能看 `detail`**，合成事件刻意伪装成 `detail: 1` 去躲 detail-0 守卫），视图据它决定 `autoFocusFirst` |
+| `Tree` / `useTreeModel` / `useOwnedTreeModel` | 虚拟化树（数据源 + 选择 + 展开模型）；组件自建 TreeModel 用 `useOwnedTreeModel` |
+| `tree/keyboardContextMenu` | ContextMenu 键 / Shift+F10 唤出右键菜单的共用件，Tree 与手写行列表（会话列表、快捷键表格、提交图）都走它：`isContextMenuKey(e)` 认键、`dispatchKeyboardContextMenu(row, isRow)` 在行上合成 `contextmenu`（走 DOM 的宿主）、`createKeyboardContextMenuEvent(x, y)` 造一个**不派发**的标记事件（直接调处理函数的宿主，如提交图）、`isKeyboardContextMenu(e)` 识别来源以决定 `autoFocusFirst`、`isKeyupContextMenuSupplement(e)` 吞掉 Chromium 在 keyup 补发的那个原生 contextmenu（`detail: 0`、落在焦点元素上、坐标 (0,0)；keydown 的 `preventDefault` 取消不掉它，**自己从 keydown 开菜单的宿主必须吞**，否则同一次按键会在屏幕角上再开一个）、`findRowElement` 按属性值遍历查行（**不要拼 CSS 选择器**，行 id 常含 `.` 与 `\`）。**判来源不能看 `detail`**：合成事件刻意伪装成 `detail: 1` 正是为了躲开这层守卫。反过来，浏览器**原生**由键盘触发的 contextmenu/click 是 `detail === 0`——Monaco 右键菜单与编辑器标题溢出按钮不合成任何事件，原生事件本身就是唤出路径，所以那两处直接内联判 `e.detail === 0` 当「键盘打开」，与本守卫同式反义，勿混用 |
 | `useDragHandle` / `useDropTarget` / `DragSessionContext` | 原生 HTML5 DnD source/target + 跨边界 payload 传递 |
 | `atoms/*` | `Button` / `IconButton` / `Input` / `Checkbox` / `Badge` / `Spinner` + `cx` 工具 |
 | `layout/*` | `Sash`（拖拽分隔条）/ `GridLayout`（消费 platform `Grid<T>`）/ `CollapsibleSlot`（图标走 props 注入） |
