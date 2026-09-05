@@ -1,0 +1,43 @@
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+}
+
+.empty {
+  padding: 12px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  font-size: 12px;
+}
+
+.header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 6px;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+}
+
+.error {
+  padding: 8px 12px;
+  color: var(--vscode-errorForeground, #f48771);
+  font-size: 12px;
+}

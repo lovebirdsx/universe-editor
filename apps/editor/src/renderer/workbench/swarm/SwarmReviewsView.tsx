@@ -2,18 +2,23 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SwarmReviewsView — the Swarm Reviews sidebar viewlet. Loads the action
  *  dashboard (needs-my-action / authored / participating) through the extension's
- *  contributed commands, renders each group with a state badge + vote / comment /
- *  task counts, and opens a review's detail tab on click. A keyword filter box
+ *  contributed commands and renders it as a two-level tree (group headers →
+ *  review rows) with a state badge + vote / comment / task counts. Keyboard
+ *  parity with Source Control: ↑↓ move, ←→ fold groups, Space previews a review,
+ *  Enter opens it pinned, Ctrl+Enter jumps to the Swarm Changes view. The focused
+ *  review drives that view through swarmChangesViewState. A keyword filter box
  *  re-queries the list. All wire logic lives behind ICommandService — this
- *  component owns no HTTP. Mirrors ExtensionsView / PerforceGraphEditor patterns.
+ *  component owns no HTTP.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -50,7 +55,17 @@ import { IScmService } from '../../services/extensions/ScmService.js'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { SWARM_REVIEWS_VIEW_ID } from '../../actions/swarmActions.js'
-import { IconButton, Input, Spinner, cx, useScrollRestore } from '@universe-editor/workbench-ui'
+import {
+  IconButton,
+  Input,
+  Spinner,
+  Tree,
+  TreeModel,
+  cx,
+  useOwnedTreeModel,
+  type ITreeDataSource,
+  type ITreeRowRenderContext,
+} from '@universe-editor/workbench-ui'
 import {
   SwarmCommands,
   type SwarmDashboardResult,
@@ -75,6 +90,7 @@ import {
   reviewDtoFromDetail,
 } from '../../services/swarm/swarmIgnoreStore.js'
 import { swarmReviewsUiStore } from '../../services/swarm/swarmReviewsUiStore.js'
+import { swarmChangesViewState } from './swarmChangesViewState.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
   canApproveReview,
@@ -93,6 +109,10 @@ import {
 import styles from './SwarmReviewsView.module.css'
 
 const KEYWORD_DEBOUNCE_MS = 300
+
+/** Group headers are one line, review rows carry a meta line under the title. */
+const GROUP_ROW_HEIGHT = 22
+const REVIEW_ROW_HEIGHT = 40
 
 export function swarmReviewName(review: SwarmReviewDto): string {
   return review.description.trim() || `Review #${review.id}`
@@ -122,6 +142,61 @@ const GROUP_LABELS: Record<GroupKey, string> = {
 }
 
 const GROUP_KEYS: GroupKey[] = ['needsAction', 'ignored', 'authored']
+
+/** Tree nodes: a group header and its review rows. Ids are namespaced so a
+ *  review id can never collide with a group key. */
+type SwarmReviewsNode =
+  | { kind: 'group'; id: string; key: GroupKey; label: string; count: number }
+  | { kind: 'review'; id: string; review: SwarmReviewDto; canApprove: boolean }
+
+const groupNodeId = (key: GroupKey): string => `group:${key}`
+const reviewNodeId = (reviewId: string): string => `review:${reviewId}`
+
+interface SwarmReviewsSnapshot {
+  readonly roots: readonly SwarmReviewsNode[]
+  readonly childrenMap: ReadonlyMap<string, readonly SwarmReviewsNode[]>
+  readonly parentMap: ReadonlyMap<string, SwarmReviewsNode>
+}
+
+const EMPTY_SNAPSHOT: SwarmReviewsSnapshot = {
+  roots: [],
+  childrenMap: new Map(),
+  parentMap: new Map(),
+}
+
+function buildSwarmReviewsSnapshot(
+  grouped: Record<GroupKey, SwarmReviewDto[]>,
+  transitions: Readonly<Record<string, SwarmTransitionDto[]>>,
+): SwarmReviewsSnapshot {
+  const roots: SwarmReviewsNode[] = []
+  const childrenMap = new Map<string, readonly SwarmReviewsNode[]>()
+  const parentMap = new Map<string, SwarmReviewsNode>()
+  for (const key of GROUP_KEYS) {
+    const reviews = grouped[key]
+    // The ignored group only exists once something is in it (unchanged from the
+    // pre-tree rendering).
+    if (key === 'ignored' && reviews.length === 0) continue
+    const group: SwarmReviewsNode = {
+      kind: 'group',
+      id: groupNodeId(key),
+      key,
+      label: GROUP_LABELS[key],
+      count: reviews.length,
+    }
+    roots.push(group)
+    const children = reviews.map(
+      (review): SwarmReviewsNode => ({
+        kind: 'review',
+        id: reviewNodeId(review.id),
+        review,
+        canApprove: canApproveReview(transitions[review.id]),
+      }),
+    )
+    childrenMap.set(group.id, children)
+    for (const child of children) parentMap.set(child.id, group)
+  }
+  return { roots, childrenMap, parentMap }
+}
 
 /** Mirrors the host guard's defaults (perforce package.json): swarm is enabled
  * unless explicitly turned off; the bundled default URL counts as configured. */
@@ -190,17 +265,14 @@ export function SwarmReviewsView() {
   // Ids whose stale ignore-snapshot already got a detail-fetch heal attempt this
   // mount — keeps a genuinely blank description from re-fetching on every poll.
   const healAttemptedRef = useRef<Set<string>>(new Set())
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
-  useScrollRestore(
-    'swarmReviews',
-    useCallback(() => scrollRef.current, []),
-  )
-  // Focus target for ILayoutService.focusView (Show Swarm Reviews); without it
-  // focusView polls for two seconds and settles on the side bar part instead.
+  // Focus target for ILayoutService.focusView (Show Swarm Reviews) — the tree,
+  // not the filter box: keyboard users land on a review row and can move / open
+  // straight away (Shift+Tab still reaches the filter box).
   useViewFocusable(
     SWARM_REVIEWS_VIEW_ID,
-    useCallback(() => filterInputRef.current, []),
+    useCallback(() => treeRef.current, []),
   )
   const transitionsRef = useRef<Record<string, SwarmTransitionDto[]>>(
     swarmReviewsViewState.transitions,
@@ -450,8 +522,13 @@ export function SwarmReviewsView() {
   )
 
   const openReview = useCallback(
-    (id: string) => {
-      void editorService.openEditor(new SwarmReviewEditorInput(id))
+    (id: string, preview = false) => {
+      // Source Control parity: single click / Space previews without stealing
+      // focus, double click / Enter pins the tab and moves focus to it.
+      void editorService.openEditor(
+        new SwarmReviewEditorInput(id),
+        preview ? { pinned: false, preserveFocus: true } : { pinned: true },
+      )
     },
     [editorService],
   )
@@ -462,14 +539,6 @@ export function SwarmReviewsView() {
 
   const unignoreReview = useCallback((reviewId: string) => {
     swarmIgnoreStore.unignore(reviewId)
-  }, [])
-
-  const toggle = useCallback((key: GroupKey) => {
-    setCollapsed((prev) => {
-      const next = { ...prev, [key]: !prev[key] }
-      swarmReviewsUiStore.setCollapsed(key, next[key])
-      return next
-    })
   }, [])
 
   const reviewUrl = useCallback(
@@ -686,6 +755,118 @@ export function SwarmReviewsView() {
   const needsActionFilterActive =
     filterConfig.needsActionAuthors.length > 0 || filterConfig.needsActionApprovableOnly
 
+  // --- tree wiring ---------------------------------------------------------
+
+  const snapshotRef = useRef<SwarmReviewsSnapshot>(EMPTY_SNAPSHOT)
+  const treeModel = useOwnedTreeModel<SwarmReviewsNode>(() => {
+    const dataSource: ITreeDataSource<SwarmReviewsNode> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => n.kind === 'group',
+      getChildren: (n) => snapshotRef.current.childrenMap.get(n.id) ?? [],
+      getRoots: () => snapshotRef.current.roots,
+      getParent: (n) => snapshotRef.current.parentMap.get(n.id) ?? null,
+    }
+    return new TreeModel<SwarmReviewsNode>({
+      dataSource,
+      // Seeded from the persisted collapse state on mount; this only covers
+      // groups the store said nothing about.
+      defaultExpanded: (n) => n.kind === 'group' && !swarmReviewsUiStore.collapsed[n.key],
+    })
+  })
+
+  const snapshot = useMemo(
+    () => buildSwarmReviewsSnapshot(groupedReviews, transitions),
+    // groupedReviews is rebuilt every render (it is derived from several
+    // sources), so key the memo on the inputs that actually move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groupedReviews.needsAction, groupedReviews.ignored, groupedReviews.authored, transitions],
+  )
+  snapshotRef.current = snapshot
+  useLayoutEffect(() => {
+    treeModel.refresh()
+  }, [snapshot, treeModel])
+
+  // Persisted folding, both ways. Only `onDidChangeExpansion` writes back — it
+  // fires from expand()/collapse() alone, so a data refresh never looks like a
+  // user toggle (TreeModel documents this contract).
+  useEffect(() => {
+    treeModel.setExpansion(GROUP_KEYS.map((key) => [groupNodeId(key), !collapsed[key]] as const))
+  }, [treeModel, collapsed])
+  useEffect(() => {
+    const d = treeModel.onDidChangeExpansion(({ element, expanded }) => {
+      if (element.kind === 'group') swarmReviewsUiStore.setCollapsed(element.key, !expanded)
+    })
+    return () => d.dispose()
+  }, [treeModel])
+
+  // The focused review drives the Swarm Changes view. A focused group header
+  // leaves the previous selection in place — collapsing a group must not blank
+  // the file list.
+  useEffect(() => {
+    const d = treeModel.onDidChangeSelection(() => {
+      const focusedId = treeModel.focused
+      if (focusedId === null) return
+      const node = treeModel.getVisibleNodes().find((n) => n.id === focusedId)?.element
+      if (node?.kind === 'review') swarmChangesViewState.select(node.review.id)
+    })
+    return () => d.dispose()
+  }, [treeModel])
+
+  // Landing focus: keep an existing (still visible) cursor, else pick the first
+  // review row so the arrow keys have somewhere to start.
+  const onTreeFocus = useCallback(() => {
+    const visible = treeModel.getVisibleNodes()
+    const focusedId = treeModel.focused
+    if (focusedId !== null && visible.some((n) => n.id === focusedId)) return
+    const first = visible.find((n) => n.element.kind === 'review') ?? visible[0]
+    if (first) treeModel.setSelection([first.id], first.id, { reveal: false })
+  }, [treeModel])
+
+  const renderRow = (ctx: ITreeRowRenderContext<SwarmReviewsNode>) => {
+    const node = ctx.node.element
+    const className = cx(
+      node.kind === 'group' ? styles['sectionHeader'] : styles['row'],
+      ctx.isSelected && styles['rowSelected'],
+      ctx.isFocused && styles['rowFocused'],
+    )
+    if (node.kind === 'group') {
+      return (
+        <div
+          key={node.id}
+          data-row-key={node.id}
+          data-testid="swarm-review-group"
+          role="treeitem"
+          aria-expanded={ctx.node.expanded}
+          aria-selected={ctx.isSelected}
+          className={className}
+          style={ctx.style}
+          onClick={ctx.onClickRow}
+        >
+          {ctx.node.expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <span className={styles['sectionTitle']}>{node.label}</span>
+          <span className={styles['count']}>{node.count}</span>
+        </div>
+      )
+    }
+    return (
+      <ReviewRow
+        key={node.id}
+        nodeId={node.id}
+        review={node.review}
+        canApprove={node.canApprove}
+        selected={ctx.isSelected}
+        className={className}
+        style={ctx.style}
+        onClick={ctx.onClickRow}
+        onDoubleClick={() => openReview(node.review.id)}
+        onContextMenu={openReviewMenu}
+      />
+    )
+  }
+
+  const hasContent =
+    swarmReady && ignoreReady && (dashboard !== null || groupedReviews.ignored.length > 0)
+
   return (
     <div className={styles['container']} data-testid="swarm-reviews-view">
       {swarmReady && (
@@ -724,93 +905,65 @@ export function SwarmReviewsView() {
           </IconButton>
         </div>
       )}
-      <div className={styles['scroll']} ref={scrollRef}>
-        {error && <div className={styles['error']}>{error}</div>}
-        {!swarmReady && (
-          <div className={styles['message']}>
-            {!perforceAvailable
-              ? localize('swarm.workspaceNotPerforce', 'Not a Perforce workspace.')
-              : localize('swarm.notConfigured', 'Swarm is not configured. Set perforce.swarm.url.')}
-          </div>
+      {error && <div className={styles['error']}>{error}</div>}
+      {!swarmReady && (
+        <div className={styles['message']}>
+          {!perforceAvailable
+            ? localize('swarm.workspaceNotPerforce', 'Not a Perforce workspace.')
+            : localize('swarm.notConfigured', 'Swarm is not configured. Set perforce.swarm.url.')}
+        </div>
+      )}
+      {hasContent && (
+        <Tree<SwarmReviewsNode>
+          model={treeModel}
+          className={styles['tree'] ?? ''}
+          ariaLabel={localize('swarm.reviews.treeLabel', 'Swarm reviews')}
+          rowHeight={GROUP_ROW_HEIGHT}
+          getRowHeight={(n) => (n.element.kind === 'review' ? REVIEW_ROW_HEIGHT : GROUP_ROW_HEIGHT)}
+          indentBase={0}
+          indentWidth={0}
+          rootRef={treeRef}
+          renderRow={renderRow}
+          onFocus={onTreeFocus}
+          onShiftTab={() => filterInputRef.current?.focus()}
+          scrollStateKey="swarmReviews"
+          onActivate={(node, opts) => {
+            if (node.element.kind === 'review') openReview(node.element.review.id, opts.preview)
+          }}
+        />
+      )}
+      {swarmReady &&
+        dashboard &&
+        !loading &&
+        dashboard.needsAction.length === 0 &&
+        dashboard.authored.length === 0 && (
+          <div className={styles['message']}>{localize('swarm.empty', 'No reviews found.')}</div>
         )}
-        {swarmReady &&
-          (dashboard || groupedReviews.ignored.length > 0) &&
-          ignoreReady &&
-          GROUP_KEYS.filter((key) => key !== 'ignored' || groupedReviews.ignored.length > 0).map(
-            (key) => (
-              <ReviewGroup
-                key={key}
-                label={GROUP_LABELS[key]}
-                reviews={groupedReviews[key]}
-                collapsed={collapsed[key]}
-                onToggle={() => toggle(key)}
-                onOpen={openReview}
-                onContextMenu={openReviewMenu}
-                transitions={transitions}
-              />
-            ),
-          )}
-        {swarmReady &&
-          dashboard &&
-          !loading &&
-          dashboard.needsAction.length === 0 &&
-          dashboard.authored.length === 0 && (
-            <div className={styles['message']}>{localize('swarm.empty', 'No reviews found.')}</div>
-          )}
-      </div>
       {menu && <SwarmReviewContextMenu state={menu} onClose={() => setMenu(null)} />}
     </div>
   )
 }
 
-function ReviewGroup({
-  label,
-  reviews,
-  collapsed,
-  onToggle,
-  onOpen,
-  onContextMenu,
-  transitions,
-}: {
-  label: string
-  reviews: SwarmReviewDto[]
-  collapsed: boolean
-  onToggle: () => void
-  onOpen: (id: string) => void
-  onContextMenu: (event: ReactMouseEvent, review: SwarmReviewDto) => void
-  transitions: Readonly<Record<string, SwarmTransitionDto[]>>
-}) {
-  return (
-    <div className={styles['section']}>
-      <button className={styles['sectionHeader']} onClick={onToggle} type="button">
-        {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-        <span className={styles['sectionTitle']}>{label}</span>
-        <span className={styles['count']}>{reviews.length}</span>
-      </button>
-      {!collapsed &&
-        reviews.map((review) => (
-          <ReviewRow
-            key={review.id}
-            review={review}
-            onOpen={onOpen}
-            onContextMenu={onContextMenu}
-            canApprove={canApproveReview(transitions[review.id])}
-          />
-        ))}
-    </div>
-  )
-}
-
 function ReviewRow({
+  nodeId,
   review,
-  onOpen,
-  onContextMenu,
   canApprove,
+  selected,
+  className,
+  style,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
 }: {
+  nodeId: string
   review: SwarmReviewDto
-  onOpen: (id: string) => void
-  onContextMenu: (event: ReactMouseEvent, review: SwarmReviewDto) => void
   canApprove: boolean
+  selected: boolean
+  className: string
+  style?: CSSProperties | undefined
+  onClick: (event: ReactMouseEvent) => void
+  onDoubleClick: () => void
+  onContextMenu: (event: ReactMouseEvent, review: SwarmReviewDto) => void
 }) {
   const stateIcon =
     review.state === 'needsReview' && canApprove
@@ -819,8 +972,13 @@ function ReviewRow({
   const StateIcon = stateIcon?.icon
   return (
     <div
-      className={styles['row']}
-      onClick={() => onOpen(review.id)}
+      data-row-key={nodeId}
+      role="treeitem"
+      aria-selected={selected}
+      className={className}
+      style={style}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={(event) => onContextMenu(event, review)}
       data-testid="swarm-review-row"
     >

@@ -29,7 +29,9 @@ import {
   swarmReviewsViewState,
 } from '../../../services/swarm/swarmViewState.js'
 import { swarmIgnoreStore } from '../../../services/swarm/swarmIgnoreStore.js'
+import { swarmReviewsUiStore } from '../../../services/swarm/swarmReviewsUiStore.js'
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
+import { swarmChangesViewState } from '../swarmChangesViewState.js'
 import { canApproveReview, swarmReviewName, SwarmReviewsView } from '../SwarmReviewsView.js'
 
 const review: SwarmReviewDto = {
@@ -60,7 +62,7 @@ interface FakeServicesOptions {
 function createServices(
   executeCommand: ReturnType<typeof vi.fn>,
   options: FakeServicesOptions = {},
-): InstantiationService {
+): { instantiation: InstantiationService; openEditor: ReturnType<typeof vi.fn> } {
   const {
     configValues = { 'perforce.swarm.url': 'https://swarm.example.test/' },
     sourceControls = [{ id: 'perforce' } as unknown as IScmSourceControlModel],
@@ -76,10 +78,8 @@ function createServices(
     _serviceBrand: undefined,
     confirm: vi.fn().mockResolvedValue({ confirmed: true }),
   } as never)
-  services.set(IEditorService, {
-    _serviceBrand: undefined,
-    openEditor: vi.fn().mockResolvedValue(undefined),
-  } as never)
+  const openEditor = vi.fn().mockResolvedValue(undefined)
+  services.set(IEditorService, { _serviceBrand: undefined, openEditor } as never)
   services.set(IOpenerService, {
     _serviceBrand: undefined,
     open: vi.fn().mockResolvedValue(true),
@@ -107,7 +107,12 @@ function createServices(
     setExtHost() {},
     resetSourceControls() {},
   } as never)
-  return new InstantiationService(services)
+  return { instantiation: new InstantiationService(services), openEditor }
+}
+
+/** The tree container is the keyboard target; every nav test drives it. */
+function reviewsTree(): HTMLElement {
+  return screen.getByRole('tree', { name: 'Swarm reviews' })
 }
 
 afterEach(() => {
@@ -116,6 +121,10 @@ afterEach(() => {
   swarmReviewsViewState.transitions = {}
   swarmReviewsViewState.transitionsSeenUpdated = {}
   for (const id of swarmIgnoreStore.list()) swarmIgnoreStore.unignore(id)
+  swarmChangesViewState._resetForTests()
+  for (const key of ['needsAction', 'ignored', 'authored'] as const) {
+    swarmReviewsUiStore.setCollapsed(key, false)
+  }
   vi.restoreAllMocks()
 })
 
@@ -141,7 +150,7 @@ describe('SwarmReviewsView', () => {
     })
 
     render(
-      <ServicesContext.Provider value={createServices(executeCommand)}>
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
         <SwarmReviewsView />
       </ServicesContext.Provider>,
     )
@@ -178,7 +187,7 @@ describe('SwarmReviewsView', () => {
     })
 
     render(
-      <ServicesContext.Provider value={createServices(executeCommand)}>
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
         <SwarmReviewsView />
       </ServicesContext.Provider>,
     )
@@ -228,7 +237,7 @@ describe('SwarmReviewsView', () => {
     })
 
     render(
-      <ServicesContext.Provider value={createServices(executeCommand)}>
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
         <SwarmReviewsView />
       </ServicesContext.Provider>,
     )
@@ -254,7 +263,7 @@ describe('SwarmReviewsView', () => {
     })
 
     render(
-      <ServicesContext.Provider value={createServices(executeCommand)}>
+      <ServicesContext.Provider value={createServices(executeCommand).instantiation}>
         <SwarmReviewsView />
       </ServicesContext.Provider>,
     )
@@ -268,7 +277,10 @@ describe('SwarmReviewsView', () => {
 
     render(
       <ServicesContext.Provider
-        value={createServices(executeCommand, { configValues: { 'perforce.swarm.url': '' } })}
+        value={
+          createServices(executeCommand, { configValues: { 'perforce.swarm.url': '' } })
+            .instantiation
+        }
       >
         <SwarmReviewsView />
       </ServicesContext.Provider>,
@@ -285,7 +297,9 @@ describe('SwarmReviewsView', () => {
     const executeCommand = vi.fn(async () => dashboard)
 
     render(
-      <ServicesContext.Provider value={createServices(executeCommand, { sourceControls: [] })}>
+      <ServicesContext.Provider
+        value={createServices(executeCommand, { sourceControls: [] }).instantiation}
+      >
         <SwarmReviewsView />
       </ServicesContext.Provider>,
     )
@@ -294,5 +308,91 @@ describe('SwarmReviewsView', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.dashboard, expect.anything())
     expect(screen.queryByTestId('swarm-needs-action-filter')).toBeNull()
+  })
+})
+
+describe('SwarmReviewsView keyboard', () => {
+  const second: SwarmReviewDto = { ...review, id: '1002', description: 'Second review' }
+  const twoReviews: SwarmDashboardResult = {
+    needsAction: [review, second],
+    authored: [],
+    participating: [],
+  }
+
+  async function renderTree() {
+    const executeCommand = vi.fn(async (command: string) => {
+      if (command === SwarmCommands.dashboard) return twoReviews
+      if (command === SwarmCommands.getTransitions) return []
+      return undefined
+    })
+    const { instantiation, openEditor } = createServices(executeCommand)
+    render(
+      <ServicesContext.Provider value={instantiation}>
+        <SwarmReviewsView />
+      </ServicesContext.Provider>,
+    )
+    await screen.findAllByTestId('swarm-review-row')
+    const tree = reviewsTree()
+    // Landing focus seeds the cursor on the first review row.
+    fireEvent.focus(tree)
+    return { tree, openEditor, executeCommand }
+  }
+
+  it('moves between review rows with the arrow keys', async () => {
+    const { tree } = await renderTree()
+
+    // aria-selected is the row the tree considers current — assistive tech has
+    // no other signal for it (the highlight is CSS only).
+    const rowOf = (text: string) => screen.getByText(text).closest('[role="treeitem"]')
+    await waitFor(() =>
+      expect(rowOf('Fix the renderer')?.getAttribute('aria-selected')).toBe('true'),
+    )
+    fireEvent.keyDown(tree, { key: 'ArrowDown' })
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1002'))
+    expect(rowOf('Second review')?.getAttribute('aria-selected')).toBe('true')
+    expect(rowOf('Fix the renderer')?.getAttribute('aria-selected')).toBe('false')
+    fireEvent.keyDown(tree, { key: 'ArrowUp' })
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
+  })
+
+  it('previews on Space and pins on Enter', async () => {
+    const { tree, openEditor } = await renderTree()
+
+    fireEvent.keyDown(tree, { key: ' ' })
+    await waitFor(() => expect(openEditor).toHaveBeenCalled())
+    expect(openEditor.mock.calls.at(-1)?.[1]).toEqual({ pinned: false, preserveFocus: true })
+
+    openEditor.mockClear()
+    fireEvent.keyDown(tree, { key: 'Enter' })
+    await waitFor(() => expect(openEditor).toHaveBeenCalled())
+    expect(openEditor.mock.calls.at(-1)?.[1]).toEqual({ pinned: true })
+  })
+
+  it('feeds the focused review to the Swarm Changes view', async () => {
+    await renderTree()
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
+  })
+
+  it('folds a group with the arrow keys and persists it', async () => {
+    const { tree } = await renderTree()
+
+    // ArrowLeft from a review row steps to its group header, a second one folds it.
+    fireEvent.keyDown(tree, { key: 'ArrowLeft' })
+    fireEvent.keyDown(tree, { key: 'ArrowLeft' })
+    await waitFor(() => expect(swarmReviewsUiStore.collapsed.needsAction).toBe(true))
+    expect(screen.queryByText('Fix the renderer')).toBeNull()
+
+    fireEvent.keyDown(tree, { key: 'ArrowRight' })
+    await waitFor(() => expect(swarmReviewsUiStore.collapsed.needsAction).toBe(false))
+    expect(screen.getByText('Fix the renderer')).toBeTruthy()
+  })
+
+  it('keeps the previous Swarm Changes selection when a group header is focused', async () => {
+    const { tree } = await renderTree()
+    await waitFor(() => expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001'))
+
+    fireEvent.keyDown(tree, { key: 'ArrowLeft' })
+    // Focus is now on the group header — the file list must not blank out.
+    expect(swarmChangesViewState.selectedReviewId.get()).toBe('1001')
   })
 })

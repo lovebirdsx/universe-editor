@@ -65,6 +65,13 @@ export interface ITreeProps<T> {
   readonly model: TreeModel<T>
   readonly renderRow: (ctx: ITreeRowRenderContext<T>) => ReactNode
   readonly rowHeight?: number
+  /**
+   * Per-row height for trees whose rows are not uniform (e.g. two-line entry
+   * rows under one-line group headers). Returning undefined falls back to
+   * `rowHeight`. Rows stay fixed-height — this only lets a tree use more than
+   * one fixed height, it does not measure content.
+   */
+  readonly getRowHeight?: (node: IVisibleNode<T>) => number | undefined
   readonly virtualizationThreshold?: number
   readonly indentWidth?: number
   readonly indentBase?: number
@@ -108,6 +115,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     model,
     renderRow,
     rowHeight = DEFAULT_ROW_HEIGHT,
+    getRowHeight,
     virtualizationThreshold = DEFAULT_THRESHOLD,
     indentWidth = DEFAULT_INDENT_WIDTH,
     indentBase = DEFAULT_INDENT_BASE,
@@ -124,7 +132,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     scrollStatePersister,
   } = props
 
-  const { selectionVersion, visibleNodes } = useTreeModel(model)
+  const { selectionVersion, structureVersion, visibleNodes } = useTreeModel(model)
   void selectionVersion // re-render on selection change so row flags stay fresh
 
   const [hasFocus, setHasFocus] = useState(false)
@@ -169,6 +177,22 @@ export function Tree<T>(props: ITreeProps<T>) {
     return () => d.dispose()
   }, [model])
 
+  // Row heights: uniform by default, per-row when the view supplies
+  // getRowHeight. Held in a ref so the virtualizer's estimateSize identity stays
+  // stable while still seeing the latest resolver.
+  const rowHeightRef = useRef({ rowHeight, getRowHeight })
+  rowHeightRef.current = { rowHeight, getRowHeight }
+  const sizeAt = useCallback(
+    (index: number): number => {
+      const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+      const node = visibleRef.current[index]
+      return (node && resolve?.(node)) ?? fallback
+    },
+    // The virtualizer memoizes its measurements against this identity, so it
+    // must change whenever the rows behind the indices did.
+    [structureVersion],
+  )
+
   useLayoutEffect(() => {
     if (!revealRequest) return
     const root = containerRef.current
@@ -189,14 +213,21 @@ export function Tree<T>(props: ITreeProps<T>) {
       // of view.
       const scroller = virtualRef.current.getScrollElement()
       if (scroller) {
-        const top = idx * rowHeight
+        // Uniform-height trees (the overwhelming majority) get the O(1) offset;
+        // only a per-row resolver forces the accumulating walk.
+        let top = rowHeight * idx
+        if (getRowHeight) {
+          top = 0
+          for (let i = 0; i < idx; i++) top += sizeAt(i)
+        }
+        const height = sizeAt(idx)
         const visibleTop = scroller.scrollTop
         const visibleBottom = visibleTop + scroller.clientHeight
-        if (top >= visibleTop && top + rowHeight <= visibleBottom) return
+        if (top >= visibleTop && top + height <= visibleBottom) return
       }
       virtualRef.current.scrollToIndex(idx, { align: 'start' })
     }
-  }, [revealRequest, rowHeight])
+  }, [revealRequest, sizeAt, rowHeight, getRowHeight])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): the browser's own
   // synthetic contextmenu event carries (0,0) coordinates, which would anchor
@@ -380,7 +411,7 @@ export function Tree<T>(props: ITreeProps<T>) {
         <VirtualList
           ref={virtualRef}
           items={visibleNodes}
-          estimateSize={() => rowHeight}
+          estimateSize={sizeAt}
           scrollElementRef={containerRef}
           windowed={visibleNodes.length > virtualizationThreshold}
           renderItem={(node, style) => renderNode(node, style)}

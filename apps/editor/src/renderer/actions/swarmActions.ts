@@ -12,6 +12,9 @@ import {
   IEditorService,
   ILayoutService,
   IQuickInputService,
+  IViewDescriptorService,
+  IViewsService,
+  KeybindingWeight,
   MenuId,
   PartId,
   localize,
@@ -24,7 +27,19 @@ import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationT
 
 const CATEGORY = localize2('command.category.swarm', 'Swarm')
 
+export const SWARM_CONTAINER_ID = 'workbench.view.swarm'
+
 export const SWARM_REVIEWS_VIEW_ID = 'workbench.view.swarm.reviews'
+
+/** View id of the Swarm Changes view; shared by the dynamic view registration
+ *  (SwarmViewContribution), the view component and the focus commands. Lives
+ *  here rather than in the view component so neither side imports the other's
+ *  React tree — same seam as SESSION_CHANGES_VIEW_ID. */
+export const SWARM_CHANGES_VIEW_ID = 'workbench.view.swarm.changes'
+
+/** Keybinding scope for the Swarm Reviews tree: the root `focusedView` context
+ *  key (seeded by FocusContextKeyContribution from the DOM's data-view-id). */
+const SWARM_REVIEWS_FOCUS_WHEN = `focusedView == '${SWARM_REVIEWS_VIEW_ID}'`
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {
@@ -213,5 +228,73 @@ export class RefreshSwarmReviewsAction extends Action2 {
 
   override async run(): Promise<void> {
     await requestSwarmReviewsRefresh()
+  }
+}
+
+/** Reveal the Swarm container, expand the Swarm Changes view and move DOM focus
+ *  into its file tree. Shared by the palette command and the Ctrl+Enter jump. */
+async function focusSwarmChangesView(accessor: ServicesAccessor): Promise<void> {
+  // Snapshot every service synchronously — the accessor dies past the first await.
+  const layoutService = accessor.get(ILayoutService)
+  const viewsService = accessor.get(IViewsService)
+  const viewDescriptorService = accessor.get(IViewDescriptorService)
+
+  if (!layoutService.getVisible(PartId.SideBar)) layoutService.setVisible(PartId.SideBar, true)
+  viewsService.openViewContainer(SWARM_CONTAINER_ID)
+  viewDescriptorService.setViewCollapsed(SWARM_CHANGES_VIEW_ID, false)
+  await layoutService.focusView(SWARM_CHANGES_VIEW_ID, { source: 'command' })
+}
+
+/**
+ * Focus the Swarm Changes view. No default keybinding — VSCode assigns none to
+ * secondary views either; the command palette (f1) finds it. Mirrors
+ * FocusCommitChangesAction / FocusSessionChangesAction.
+ */
+export class FocusSwarmChangesAction extends Action2 {
+  static readonly ID = 'workbench.view.swarm.changes.focus'
+
+  constructor() {
+    super({
+      id: FocusSwarmChangesAction.ID,
+      title: localize2('action.swarmChanges.focus', 'Focus on Swarm Changes View'),
+      category: localize2('command.category.view', 'View'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await focusSwarmChangesView(accessor)
+  }
+}
+
+/**
+ * Ctrl+Enter from the Swarm Reviews tree hands keyboard focus to the Swarm
+ * Changes file tree — the keyboard twin of "I picked a review, now let me walk
+ * its files". Scoped to the reviews view through the root `focusedView` key; the
+ * weight must beat any global Ctrl+Enter binding (see memory
+ * `keybinding-when-not-priority-weight-wins`). The Tree ignores modifier-key
+ * combos outright (Tree.tsx's `if (e.altKey || e.ctrlKey || e.metaKey) return`),
+ * so the event reaches the global keybinding handler unconsumed.
+ */
+export class JumpToSwarmChangesAction extends Action2 {
+  static readonly ID = 'swarm.jumpToChanges'
+
+  constructor() {
+    super({
+      id: JumpToSwarmChangesAction.ID,
+      title: localize2('action.swarm.jumpToChanges', 'Go to Swarm Changes'),
+      category: CATEGORY,
+      keybinding: {
+        primary: 'ctrl+enter',
+        when: SWARM_REVIEWS_FOCUS_WHEN,
+        weight: KeybindingWeight.WorkbenchContrib + 50,
+      },
+      precondition: SWARM_REVIEWS_FOCUS_WHEN,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await focusSwarmChangesView(accessor)
   }
 }

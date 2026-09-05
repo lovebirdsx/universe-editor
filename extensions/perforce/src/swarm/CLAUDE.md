@@ -189,6 +189,7 @@ Swarm 的 comment 端点**不挂在 review 下**——它是独立的 topic-base
 - `#revision` 可进 immutable print cache；`@=<pending-change>` 可被 reshelve 原地替换，不能进永久缓存——**但 `@=<archiveChange>` 不可变**，renderer 请求带 `immutable: true`（`SwarmFileContentRequest.immutable`），`printRevision/printRevisionBytes(spec, immutable)` 据此走 `P4CacheNs.print`（bytes 以 `bytes:` 前缀 key + base64 存字符串缓存）。打开已存在的 immutable diff tab 还会被 renderer 短路（`openFileDiff` 查 `editorService.openEditors`，零 p4 流量）；diff model 另有 `diffModelCache` LRU（容量 8，全文校验防 pending re-shelve 脏读），关闭重开免 createModel+tokenize+diff 计算。
 - **绝不用工作区当前文件当右侧**——它会随本地编辑漂移，行号对不上 Swarm 评论锚点。
 - 文件列表 / 版本元数据走 `describeVersion`（pending shelf 用 `p4 describe -S -s <change>`，报表型命令走 `execRecords()` 防 `-Mj` 塌陷，见上文 p4 插件节）。**`describeVersion` 的入参 change 也必须走 `archiveChange ?? change`**：作者的 `version.change`（如 100452）可能被 re-shelve/清空，直接用它会让文件列表时有时无、内容漂移成空；archive shelf（如 100475）才是不可变快照。这条与右侧内容 `changeForVersion` 是同一铁律的两个消费点，别只修一处。
+- 侧栏 **SWARM CHANGES** 视图（`renderer/workbench/swarm/SwarmChangesView.tsx`）是这条铁律的第三个消费点：它跟随 SWARM REVIEWS 的选中行，按 `getReview` → 取 `versions[last]` 的 `archiveChange ?? change` → `describeVersion` 取数，恒与 depot 基线(0) 对比，与详情页的 version/compare 选择器解耦。archive shelf 不可变，所以强制刷新（review mutate）时**不给它带 `force`**，只给 pending 快照带。
 - “打开文件”目标是当前 client 的工作区副本，路径必须批量走 `p4 where <depotFile...>`；不能从 depot/display path 猜本地路径。无映射时 DTO 传 `localPath:null`，标题栏隐藏该动作。
 
 ### diff 编辑器基础能力接入

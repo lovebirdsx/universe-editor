@@ -243,6 +243,8 @@ import {
   WorkbenchOpenSwarmReviewsAction,
   WorkbenchSwarmPollTickAction,
   RefreshSwarmReviewsAction,
+  FocusSwarmChangesAction,
+  JumpToSwarmChangesAction,
 } from './swarmActions.js'
 import {
   ToggleBlameEditorDecorationAction,
@@ -678,6 +680,8 @@ registerAction2(WorkbenchOpenSwarmReviewAction)
 registerAction2(WorkbenchOpenSwarmReviewsAction)
 registerAction2(WorkbenchSwarmPollTickAction)
 registerAction2(RefreshSwarmReviewsAction)
+registerAction2(FocusSwarmChangesAction)
+registerAction2(JumpToSwarmChangesAction)
 
 // Git Blame
 registerAction2(ToggleBlameEditorDecorationAction)
