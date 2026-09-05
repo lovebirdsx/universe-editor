@@ -1,10 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SubagentModelPicker — standalone trigger in the prompt action row of
- *  claude-code sessions: a compact "Sub Agent" pick over the selected
- *  provider's candidates, opened in an AnchoredSurface floating above the
- *  trigger with viewport avoidance (the old Model-popover footer scrolled out
- *  of view whenever the model candidate list was long).
+ *  claude-code sessions: a compact "Sub Agent" pick over the session's live
+ *  model catalogue (official Anthropic models + gateway extraModels) merged
+ *  with the selected provider's protocolMap candidates, opened in an
+ *  AnchoredSurface floating above the trigger with viewport avoidance (the old
+ *  Model-popover footer scrolled out of view whenever the model candidate list
+ *  was long).
  *
  *  The pick travels as CLAUDE_CODE_SUBAGENT_MODEL spawn env, so it only reaches
  *  a freshly spawned process; after the user changes it, a hint row appears and
@@ -26,11 +28,13 @@ import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import {
   candidateModelsForProtocol,
   CLAUDE_AGENT_PROTOCOL,
+  mergeModelCandidates,
+  sessionModelCandidates,
 } from '../../services/acp/acpModelCandidates.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import { useClaudeConfig } from '../agentSettings/claude/useClaudeConfig.js'
 import { useProviderRegistry } from '../agentSettings/useProviderRegistry.js'
-import { useService } from '../useService.js'
+import { useObservable, useService } from '../useService.js'
 import styles from './agents.module.css'
 
 /** Inherit is the empty pick — `setSubagentModel(undefined)` clears the env. */
@@ -128,9 +132,21 @@ export function SubagentModelPanel({ session }: { session: IAcpSession }) {
         : undefined,
     [activeAuth, providers],
   )
+  // The session's live model list is the fork's own catalogue — official
+  // Anthropic models plus the gateway extraModels injected at handshake — so
+  // the sub-agent pick offers the same scope as the main model picker, including
+  // official-subscription credentials where there is no provider entry at all.
+  // The protocolMap declaration merges in behind it: it covers the window
+  // before the config bag arrives (and the no-model-option fallback) without
+  // duplicating rows once the session list is live.
+  const configOptions = useObservable(session.configOptions)
   const candidates = useMemo(
-    () => candidateModelsForProtocol(provider, CLAUDE_AGENT_PROTOCOL),
-    [provider],
+    () =>
+      mergeModelCandidates(
+        sessionModelCandidates(configOptions),
+        candidateModelsForProtocol(provider, CLAUDE_AGENT_PROTOCOL),
+      ),
+    [configOptions, provider],
   )
   const current = subagentModelEnv ?? INHERIT
   // A value the provider no longer offers must stay selectable instead of

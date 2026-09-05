@@ -16,6 +16,7 @@
  *  the picker and the switch validation.
  *--------------------------------------------------------------------------------------------*/
 
+import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import type { AiResolvedProvider, AiWireProtocol } from '@universe-editor/platform'
 
 import {
@@ -70,6 +71,51 @@ export function candidateModelsForProtocol(
   protocol: AiWireProtocol,
 ): readonly string[] {
   return candidateModelCandidatesForProtocol(provider, protocol).map((c) => c.id)
+}
+
+/**
+ * Every value the session's live `model` select option offers — the fork's own
+ * catalogue (the Claude SDK's official Anthropic list) merged with the
+ * `extraModels` injected at handshake time, i.e. exactly what the main model
+ * picker lets the user choose. Grouped option shapes are flattened to their
+ * values. An empty result means the bag carries no usable model option (not yet
+ * handshaked, or a non-select shape), so callers fall back to their own source.
+ */
+export function sessionModelCandidates(
+  configOptions: readonly SessionConfigOption[],
+): readonly string[] {
+  const modelOption = configOptions.find((o) => o.category === 'model')
+  if (modelOption?.type !== 'select') return []
+  const out: string[] = []
+  for (const o of modelOption.options) {
+    if ('group' in o) {
+      for (const v of o.options) out.push(v.value)
+    } else {
+      out.push(o.value)
+    }
+  }
+  return out
+}
+
+/**
+ * Merge candidate id lists in order, deduping on the normalized id and keeping
+ * the first spelling that wins. Used to union the session's live model list with
+ * the provider's `protocolMap` declaration: the session list already carries the
+ * gateway models once handshaked, so the declaration only adds the pre-handshake
+ * window (and the no-model-option fallback) without duplicating rows.
+ */
+export function mergeModelCandidates(...lists: readonly (readonly string[])[]): readonly string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const list of lists) {
+    for (const id of list) {
+      const normalized = normalizeAnthropicVersionDots(id.trim())
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      out.push(normalized)
+    }
+  }
+  return out
 }
 
 /**

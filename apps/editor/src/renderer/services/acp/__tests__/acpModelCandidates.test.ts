@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import type { AiResolvedProvider } from '@universe-editor/platform'
 import {
   CLAUDE_AGENT_PROTOCOL,
@@ -7,6 +8,8 @@ import {
   candidateModelCandidatesForProtocol,
   contextWindowFor,
   extraModelCandidatesForAgentSettings,
+  mergeModelCandidates,
+  sessionModelCandidates,
 } from '../acpModelCandidates.js'
 
 function provider(
@@ -289,5 +292,93 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor([{ id: 'a' }], 'a')).toBeUndefined()
     expect(contextWindowFor([], 'a')).toBeUndefined()
     expect(contextWindowFor([], undefined)).toBeUndefined()
+  })
+})
+
+function selectOption(partial: Partial<SessionConfigOption>): SessionConfigOption {
+  return {
+    id: 'model',
+    name: 'Model',
+    type: 'select',
+    currentValue: '',
+    ...partial,
+  } as SessionConfigOption
+}
+
+describe('sessionModelCandidates', () => {
+  it('returns the flat option values of the model select', () => {
+    const bag = [
+      selectOption({
+        category: 'model',
+        options: [
+          { value: 'claude-opus-5', name: 'Opus 5' },
+          { value: 'acme-chat-pro', name: 'Acme' },
+        ],
+      }),
+    ]
+    expect(sessionModelCandidates(bag)).toEqual(['claude-opus-5', 'acme-chat-pro'])
+  })
+
+  it('flattens grouped option shapes to their values', () => {
+    const bag = [
+      selectOption({
+        category: 'model',
+        options: [
+          {
+            group: 'official',
+            name: 'Official',
+            options: [{ value: 'claude-opus-5', name: 'Opus 5' }],
+          },
+          {
+            group: 'extra',
+            name: 'Gateway',
+            options: [{ value: 'acme-chat-pro', name: 'Acme' }],
+          },
+        ],
+      }),
+    ]
+    expect(sessionModelCandidates(bag)).toEqual(['claude-opus-5', 'acme-chat-pro'])
+  })
+
+  it('returns empty when the bag has no model option', () => {
+    expect(sessionModelCandidates([])).toEqual([])
+    expect(
+      sessionModelCandidates([
+        selectOption({ category: 'thought_level', options: [{ value: 'high', name: 'High' }] }),
+      ]),
+    ).toEqual([])
+  })
+
+  it('returns empty for a non-select model option', () => {
+    const bag = [
+      { id: 'model', category: 'model', type: 'boolean', name: 'Model', currentValue: false },
+    ] as unknown as readonly SessionConfigOption[]
+    expect(sessionModelCandidates(bag)).toEqual([])
+  })
+})
+
+describe('mergeModelCandidates', () => {
+  it('keeps list order, earlier lists first', () => {
+    expect(mergeModelCandidates(['a', 'b'], ['c'])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('dedupes exact repeats across lists', () => {
+    expect(mergeModelCandidates(['a', 'b'], ['b', 'c'])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('dedupes dotted vs hyphenated spellings onto the normalized id', () => {
+    expect(mergeModelCandidates(['claude-opus-4.8'], ['claude-opus-4-8'])).toEqual([
+      'claude-opus-4-8',
+    ])
+  })
+
+  it('trims and drops blank ids', () => {
+    expect(mergeModelCandidates(['  a  ', '', '   '], ['b'])).toEqual(['a', 'b'])
+  })
+
+  it('handles any number of lists including none', () => {
+    expect(mergeModelCandidates()).toEqual([])
+    expect(mergeModelCandidates(['a'])).toEqual(['a'])
+    expect(mergeModelCandidates([], ['a'], [])).toEqual(['a'])
   })
 })

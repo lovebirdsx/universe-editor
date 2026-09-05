@@ -1,15 +1,19 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SubagentModelPicker tests — the standalone prompt-action-row picker for
- *  claude-code sessions: candidate rendering (inherit row + provider
- *  candidates + stale value pinning), the setSubagentModel writes (including
- *  the inherit=clear semantic), the silent-until-changed hint row, and the
- *  restart ordering (requestProcessRestart only after the write has resolved).
+ *  claude-code sessions: candidate rendering (inherit row + session catalogue
+ *  merged with provider candidates + stale value pinning), the
+ *  setSubagentModel writes (including the inherit=clear semantic), the
+ *  silent-until-changed hint row, and the restart ordering
+ *  (requestProcessRestart only after the write has resolved).
  *
  *  The current value is seeded through `settings.env.CLAUDE_CODE_SUBAGENT_MODEL` —
- *  the effective value the spawned process reads — and the candidates come from
- *  the provider whose credential is in effect on disk (`activeAuth`), because
- *  those are the only places the pick lives.
+ *  the effective value the spawned process reads. Candidates come from two
+ *  sources merged in order: the session's live `model` config option (the
+ *  fork's official Anthropic catalogue ⊕ handshake-injected extraModels, so
+ *  official entries light up even under subscription credentials where no
+ *  provider is in effect) and the protocolMap of the provider whose credential
+ *  is on disk (`activeAuth`), which also covers the pre-handshake window.
  *
  *  Plus a direct-render test of `SubagentModelPanel` (the surface-free content)
  *  proving it works without the picker's AnchoredSurface shell.
@@ -18,11 +22,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
+import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
   Event,
   IAiModelService,
   INotificationService,
   InstantiationService,
+  observableValue,
   ServiceCollection,
   Severity,
   type AiProviderEntry,
@@ -46,6 +52,39 @@ const GW_ENTRY: AiProviderEntry = {
   apiKey: 'tok-1',
   baseUrl: 'https://gw.example.com',
   protocolMap: { 'anthropic-messages': ['claude-sonnet-4-6', 'acme-chat-pro'] },
+}
+
+/** The session's live model select, as the fork synthesizes it (catalogue ⊕ extraModels). */
+function modelOption(values: readonly string[]): SessionConfigOption {
+  return {
+    id: 'model',
+    category: 'model',
+    type: 'select',
+    name: 'Model',
+    currentValue: values[0] ?? '',
+    options: values.map((v) => ({ value: v, name: v })),
+  }
+}
+
+function groupedModelOption(
+  groups: ReadonlyArray<{ group: string; name: string; values: readonly string[] }>,
+): SessionConfigOption {
+  return {
+    id: 'model',
+    category: 'model',
+    type: 'select',
+    name: 'Model',
+    currentValue: '',
+    options: groups.map((g) => ({
+      group: g.group,
+      name: g.name,
+      options: g.values.map((v) => ({ value: v, name: v })),
+    })),
+  }
+}
+
+function makeConfigOptionsObservable(initial: readonly SessionConfigOption[] = []) {
+  return observableValue<readonly SessionConfigOption[]>('configOptions', initial)
 }
 
 function makeClaudeService(opts: { activeAuth: AgentActiveAuth; subagentModel?: string }) {
@@ -125,6 +164,7 @@ function setup(opts: {
   activeAuth: AgentActiveAuth
   subagentModel?: string
   entries?: readonly AiProviderEntry[]
+  configOptions?: readonly SessionConfigOption[]
   restart?: () => void
   notify?: (n: unknown) => void
 }) {
@@ -134,6 +174,7 @@ function setup(opts: {
   })
   const session = {
     requestProcessRestart: opts.restart ?? vi.fn(),
+    configOptions: makeConfigOptionsObservable(opts.configOptions),
   } as unknown as IAcpSession
   const instantiation = new InstantiationService(makeServices(claude, opts))
   render(
@@ -408,10 +449,138 @@ describe('SubagentModelPicker', () => {
   })
 })
 
+describe('SubagentModelPicker (session catalogue merge)', () => {
+  function optionLabels(): string[] {
+    return within(screen.getByTestId('acp-subagent-panel'))
+      .getAllByRole('option')
+      .map((n) => n.textContent)
+  }
+
+  it('offers the session official catalogue ahead of the gateway candidates, deduped', async () => {
+    setup({
+      activeAuth: { kind: 'provider', providerId: 'gw' },
+      // The fork's synthesized model option: official catalogue first, then the
+      // handshake-injected extraModels (which already contain the gateway ids).
+      configOptions: [
+        modelOption(['claude-opus-5', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'acme-chat-pro']),
+      ],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-opus-5'),
+      ).toBeTruthy(),
+    )
+
+    // claude-sonnet-4-6 / acme-chat-pro appear in BOTH sources but must render
+    // exactly once each; the protocolMap tail adds nothing new here.
+    expect(optionLabels()).toEqual([
+      'Follow main model',
+      'claude-opus-5',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5',
+      'acme-chat-pro',
+    ])
+  })
+
+  it('lights up official candidates under subscription credentials with no provider in effect', async () => {
+    setup({
+      activeAuth: { kind: 'subscription' },
+      configOptions: [modelOption(['claude-opus-5', 'claude-sonnet-4-6'])],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-opus-5'),
+      ).toBeTruthy(),
+    )
+
+    // No provider → no protocolMap candidates; the official catalogue carries
+    // the whole list (previously the panel was inherit-only for subscribers).
+    expect(optionLabels()).toEqual(['Follow main model', 'claude-opus-5', 'claude-sonnet-4-6'])
+  })
+
+  it('dedupes a dotted session spelling against the hyphenated gateway declaration', async () => {
+    setup({
+      activeAuth: { kind: 'provider', providerId: 'gw' },
+      entries: [{ ...GW_ENTRY, protocolMap: { 'anthropic-messages': ['claude-opus-4-8'] } }],
+      configOptions: [modelOption(['claude-opus-4.8'])],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-opus-4-8'),
+      ).toBeTruthy(),
+    )
+
+    // Same model spelled both ways across the two sources → one normalized row.
+    expect(optionLabels()).toEqual(['Follow main model', 'claude-opus-4-8'])
+  })
+
+  it('flattens a grouped model option into plain rows', async () => {
+    setup({
+      activeAuth: { kind: 'subscription' },
+      configOptions: [
+        groupedModelOption([
+          { group: 'official', name: 'Official', values: ['claude-opus-5'] },
+          { group: 'extra', name: 'Gateway', values: ['acme-chat-pro'] },
+        ]),
+      ],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('acme-chat-pro'),
+      ).toBeTruthy(),
+    )
+
+    expect(optionLabels()).toEqual(['Follow main model', 'claude-opus-5', 'acme-chat-pro'])
+  })
+
+  it('selects a current value that comes from the session catalogue without pinning a duplicate', async () => {
+    setup({
+      activeAuth: { kind: 'subscription' },
+      subagentModel: 'claude-opus-5',
+      configOptions: [modelOption(['claude-opus-5', 'claude-sonnet-4-6'])],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-opus-5'),
+      ).toBeTruthy(),
+    )
+
+    expect(option('claude-opus-5').getAttribute('aria-selected')).toBe('true')
+    expect(optionLabels()).toEqual(['Follow main model', 'claude-opus-5', 'claude-sonnet-4-6'])
+  })
+
+  it('picking an official id writes it verbatim to the sub-agent env', async () => {
+    const { claude } = setup({
+      activeAuth: { kind: 'subscription' },
+      configOptions: [modelOption(['claude-opus-5'])],
+    })
+    openPicker()
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('acp-subagent-panel')).getByText('claude-opus-5'),
+      ).toBeTruthy(),
+    )
+
+    await pick('claude-opus-5')
+    claude.flushWrite()
+    await act(async () => {})
+
+    expect(claude.patches.at(-1)).toEqual({ env: { [SUBAGENT_MODEL]: 'claude-opus-5' } })
+  })
+})
+
 describe('SubagentModelPanel (direct render)', () => {
   it('renders rows and picks without any floating-surface shell', async () => {
     const claude = makeClaudeService({ activeAuth: { kind: 'provider', providerId: 'gw' } })
-    const session = { requestProcessRestart: vi.fn() } as unknown as IAcpSession
+    const session = {
+      requestProcessRestart: vi.fn(),
+      configOptions: makeConfigOptionsObservable(),
+    } as unknown as IAcpSession
     const instantiation = new InstantiationService(makeServices(claude, {}))
     render(
       <ServicesContext.Provider value={instantiation}>
