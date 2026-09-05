@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   CommandsRegistry,
   type ICommandService,
@@ -36,6 +36,21 @@ export interface ContextMenuProps {
    * group (which is rendered as inline icon buttons).
    */
   groupFilter?: (group: string) => boolean
+  /**
+   * Renders the leading icon slot for a row from a menu contribution's `icon`
+   * id. Icons stay a caller concern (this package takes no icon library), and
+   * when set every row gets a fixed-width slot — including rows without an icon
+   * — so labels stay aligned. Omit it for icon-less menus (Explorer, VSCode
+   * parity), which then render no slot at all.
+   */
+  renderIcon?: (icon: string | undefined) => ReactNode
+  /**
+   * Highlights the first row on open, so a menu the user raised with the
+   * ContextMenu key is immediately drivable by Enter (VSCode parity). Left off
+   * for mouse-opened menus, where an unsolicited highlight reads as a pending
+   * action under a pointer that isn't there.
+   */
+  autoFocusFirst?: boolean
   onClose: () => void
 }
 
@@ -43,6 +58,7 @@ interface MenuEntry {
   kind: 'item'
   id: string
   label: string
+  icon: string | undefined
   run: () => void
 }
 
@@ -55,6 +71,7 @@ interface MenuSubmenu {
   kind: 'submenu'
   id: string
   label: string
+  icon: string | undefined
   children: RowModel[]
 }
 
@@ -80,6 +97,14 @@ interface MenuState {
 }
 
 const INITIAL_STATE: MenuState = { open: [], active: undefined }
+
+/**
+ * Stable stand-in for an omitted `args`. A `= []` default would mint a fresh
+ * array on every render, invalidating `runCommand` and through it the `rows`
+ * memo — so every keystroke would re-resolve the menu against a context service
+ * the caller may since have disposed, and the menu would vanish mid-navigation.
+ */
+const NO_ARGS: readonly unknown[] = []
 
 /** Rows shown at `level`, walking the open submenu chain. */
 function rowsAtLevel(
@@ -117,11 +142,13 @@ function stepIndex(
 export function ContextMenu({
   menuId,
   anchor,
-  args = [],
+  args = NO_ARGS,
   commandService,
   executeCommand,
   contextKeyService,
   groupFilter,
+  renderIcon,
+  autoFocusFirst = false,
   onClose,
 }: ContextMenuProps) {
   const runCommand = useCallback(
@@ -155,7 +182,13 @@ export function ContextMenu({
           const children = build(entry.submenu, new Set([...seen, entry.submenu]), false)
           // An empty submenu would render as a dead end, so drop the whole row.
           if (children.length === 0) continue
-          row = { kind: 'submenu', id: entry.submenu, label: entry.title, children }
+          row = {
+            kind: 'submenu',
+            id: entry.submenu,
+            label: entry.title,
+            icon: entry.icon,
+            children,
+          }
         } else {
           const cmd = CommandsRegistry.getCommand(entry.command)
           const commandId = entry.command
@@ -163,6 +196,7 @@ export function ContextMenu({
             kind: 'item',
             id: commandId,
             label: entry.title ?? cmd?.metadata?.description ?? commandId,
+            icon: entry.icon,
             run: () => runCommand(commandId),
           }
         }
@@ -181,7 +215,14 @@ export function ContextMenu({
   }, [menuId, contextKeyService, groupFilter, runCommand])
 
   const uid = useId()
-  const [state, setState] = useState<MenuState>(INITIAL_STATE)
+  // Lazy initializer: `rows` is final on the first render (MenuRegistry resolves
+  // synchronously), so the opening highlight lands on the right row without an
+  // extra effect + re-render.
+  const [state, setState] = useState<MenuState>(() => {
+    if (!autoFocusFirst) return INITIAL_STATE
+    const first = stepIndex(rows, undefined, 1)
+    return first === undefined ? INITIAL_STATE : { open: [], active: { level: 0, index: first } }
+  })
   const stateRef = useRef(state)
   stateRef.current = state
   const rowsRef = useRef(rows)
@@ -339,6 +380,7 @@ export function ContextMenu({
         direction="right"
         onRowEnter={onRowEnter}
         onCancelClose={cancelClose}
+        renderIcon={renderIcon}
       />
     </AnchoredSurface>
   )
@@ -352,6 +394,7 @@ interface MenuRowsProps {
   readonly direction: SubmenuDirection
   readonly onRowEnter: (level: number, index: number, isSubmenu: boolean) => void
   readonly onCancelClose: () => void
+  readonly renderIcon?: ((icon: string | undefined) => ReactNode) | undefined
   readonly className?: string | undefined
   readonly style?: React.CSSProperties | undefined
   readonly innerRef?: React.Ref<HTMLUListElement> | undefined
@@ -374,6 +417,7 @@ function MenuRows({
   direction,
   onRowEnter,
   onCancelClose,
+  renderIcon,
   className,
   style,
   innerRef,
@@ -408,6 +452,13 @@ function MenuRows({
             ...(isActive ? { 'data-active': '' } : {}),
             onMouseEnter: () => onRowEnter(level, index, row.kind === 'submenu'),
           }
+          // The slot is rendered for every row once `renderIcon` is set, even
+          // when that row has no icon, so labels line up in a mixed menu.
+          const iconSlot = renderIcon ? (
+            <span className={styles['icon']} aria-hidden="true">
+              {renderIcon(row.icon)}
+            </span>
+          ) : null
           if (row.kind === 'submenu') {
             return (
               <li
@@ -417,13 +468,15 @@ function MenuRows({
                 aria-expanded={index === openIndex}
                 className={`${styles['item']} ${styles['submenuItem']}`}
               >
-                {row.label}
+                {iconSlot}
+                <span className={styles['label']}>{row.label}</span>
               </li>
             )
           }
           return (
             <li key={row.id} {...common} className={styles['item']} onClick={row.run}>
-              {row.label}
+              {iconSlot}
+              <span className={styles['label']}>{row.label}</span>
             </li>
           )
         })}
@@ -446,6 +499,7 @@ function MenuRows({
           parentRowId={rowElementId(uid, level, openIndex)}
           onRowEnter={onRowEnter}
           onCancelClose={onCancelClose}
+          renderIcon={renderIcon}
         />
       )}
     </>

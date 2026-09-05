@@ -14,7 +14,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import {
   Event,
   CommandsRegistry,
+  ContextKeyService,
   ICommandService,
+  IContextKeyService,
   IEditorGroupsService,
   IEditorResolverService,
   IStorageService,
@@ -50,6 +52,10 @@ function setup() {
   const services = new ServiceCollection()
   services.set(IScmService, scm)
   services.set(ICommandService, stubCommand)
+  // The row context menu resolves its `when` clauses against a scoped context
+  // (Explorer parity), so the real service is needed rather than a stub.
+  const contextKeyService = new ContextKeyService()
+  services.set(IContextKeyService, contextKeyService)
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: { openEditor() {}, closeEditor() {}, indexOf: () => -1 },
@@ -67,7 +73,7 @@ function setup() {
       <ScmView />
     </ServicesContext.Provider>,
   )
-  return { scm, executeCommand }
+  return { scm, executeCommand, contextKeyService }
 }
 
 afterEach(() => cleanup())
@@ -112,6 +118,9 @@ describe('ScmView — file-row context menu', () => {
     fireEvent.contextMenu(row)
 
     const menuItem = await screen.findByText('Move to Changelist')
+    // A mouse-opened menu starts with nothing highlighted: the pointer is the
+    // cursor, and a pre-highlighted row would read as a pending action.
+    expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
     fireEvent.click(menuItem)
 
     expect(executeCommand).toHaveBeenCalledWith(
@@ -119,6 +128,67 @@ describe('ScmView — file-row context menu', () => {
       expect.objectContaining({ resourceUri: 'D:/repo/foo.txt', scmResourceGroupId: 'default' }),
       expect.arrayContaining([expect.objectContaining({ resourceUri: 'D:/repo/foo.txt' })]),
     )
+  })
+
+  // Regression: the ContextMenu key opened a menu that was a mouse-only widget —
+  // no arrow-key navigation, no Enter, nothing marking a current row — so the
+  // menu looked unfocused and could only be driven with the mouse. Explorer had
+  // keyboard navigation all along because it renders the shared ContextMenu.
+  //
+  // The resource carries a Windows path on purpose: row ids embed it, and <Tree>
+  // used to interpolate the id straight into a CSS selector, where a backslash
+  // reads as an escape introducer. The lookup then found no row and the key
+  // press produced no menu at all.
+  it('the ContextMenu key opens a menu focused on its first entry', async () => {
+    contributions.push(
+      MenuRegistry.addMenuItem(MenuId.ScmResourceStateContext, {
+        command: 'perforce.reopen',
+        title: 'Move to Changelist',
+        when: 'scmProvider == perforce && scmResourceState == E',
+        group: '2_modify',
+        order: 1,
+      }),
+    )
+
+    const resourceUri = 'D:\\repo\\foo.txt'
+    const { scm, executeCommand } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:\\repo')
+      await scm.$registerGroup(0, 1, 'default', 'Default Changelist')
+      await scm.$updateGroupResourceStates(1, [{ resourceUri, contextValue: 'E' }])
+    })
+
+    const label = await screen.findByText('foo.txt')
+    const row = label.closest('[role="treeitem"]') as HTMLElement
+    expect(row).not.toBeNull()
+
+    // Focus the row, then press the ContextMenu key on the tree: <Tree> turns it
+    // into a contextmenu dispatched on the focused row (Tree.openKeyboardContextMenu).
+    const tree = screen.getByRole('tree')
+    fireEvent.click(row)
+    fireEvent.keyDown(tree, { key: 'ContextMenu' })
+
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('Move to Changelist')).toBeTruthy()
+
+    // A keyboard-opened menu highlights its first entry right away (VSCode
+    // parity) — there is no pointer to aim, so Enter must work immediately.
+    // Navigation uses a virtual cursor (data-active / aria-activedescendant)
+    // and deliberately leaves DOM focus on the tree.
+    const active = document.querySelector('[role="menuitem"][data-active]')
+    expect(active?.textContent).toContain('Move to Changelist')
+    expect(menu.getAttribute('aria-activedescendant')).toBe(active?.id)
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Enter' })
+    })
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      'perforce.reopen',
+      expect.objectContaining({ resourceUri, scmResourceGroupId: 'default' }),
+      expect.arrayContaining([expect.objectContaining({ resourceUri })]),
+    )
+    expect(screen.queryByRole('menu')).toBeNull()
   })
 })
 

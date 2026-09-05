@@ -88,6 +88,7 @@
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — 去重复用旧快照；EditorInput.updateFrom 钩子
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — $didChangeFiles 主动通知磁盘变更
 - [StrictMode dispose useRef 的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — useRef 持有的 disposable 绝不在 cleanup dispose
+- [scoped ContextKeyService 的 dispose 是静默清空](scoped-contextkey-silent-dispose.md) — dispose 后 get 透传父级、when 全判 false 无报错；配 `args = []` 默认参数的重算即菜单整体消失（dev-only）；修=NO_ARGS 哨兵 + useScopedContextKey 守卫
 - [渲染崩溃→日志死循环黑屏](renderer-crash-log-feedback-loop-blackscreen.md) — ElectronProtocol 事件闸门+FileLogger 熔断
 - [Peek 预览面板 blank](peek-preview-blank-embedded-automaticlayout.md) — .preview.inline 与 automaticLayout 死锁；CSS 填满 slot 断环
 - [最大化重启二级侧栏宽度重置](secondary-sidebar-maximize-restart-width-reset.md) — allotment 回调读 props 走 ref；宽度只在 onDragEnd 持久化

@@ -93,6 +93,14 @@ test.describe('@p1 explorer keyboard context menu', () => {
     await expect(menus.getByRole('menuitem', { name: 'Rename…' })).toBeVisible()
     await expect(menus.getByRole('menuitem', { name: 'Delete' })).toBeVisible()
 
+    // A keyboard-opened menu highlights its first entry right away (VSCode
+    // parity): there is no pointer to aim, so Enter must work immediately. The
+    // highlight is a virtual focus — DOM focus stays on the tree.
+    const active = page.locator('[role="menuitem"][data-active]')
+    await expect(active).toHaveCount(1)
+    await expect(menus).toHaveAttribute('aria-activedescendant', /.+/)
+    await expect(tree).toHaveAttribute('data-focused', 'true')
+
     // The menu anchors below the focused row (Tree dispatches at the row's
     // bottom-left corner), not at a fixed viewport position.
     const rowBox = await alpha.boundingBox()
@@ -138,6 +146,9 @@ test.describe('@p1 explorer keyboard context menu', () => {
     await expect(menus).toHaveCount(1)
     await expect(menus.getByRole('menuitem', { name: 'Rename…' })).toBeVisible()
     await expect(beta).toHaveAttribute('aria-selected', 'true')
+    // Mouse-opened: nothing highlighted — the pointer is the cursor, and a
+    // pre-highlighted row would read as a pending action under it.
+    await expect(active).toHaveCount(0)
     await page.keyboard.press('Escape')
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })

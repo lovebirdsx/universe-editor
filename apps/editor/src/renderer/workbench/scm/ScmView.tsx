@@ -47,6 +47,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  isKeyboardContextMenu,
   resourceDragProps,
   selectionDragUris,
   useDropTarget,
@@ -73,12 +74,12 @@ import {
   ActionButton,
   TitleOverflowMenu,
   menuActions,
-  menuToRows,
   useMenuRevision,
   type ActionItem,
   type OverflowRow,
   type ViewMode,
 } from './scmShared.js'
+import { ScmContextMenu, type ScmContextMenuState } from './ScmContextMenu.js'
 import { scmViewState } from './scmViewState.js'
 import {
   peekCollapsedIds,
@@ -400,7 +401,7 @@ interface SharedRowProps {
   isFocused: boolean
   expanded: boolean
   hasChildren: boolean
-  showContextMenu: (anchor: { x: number; y: number }, rows: OverflowRow[]) => void
+  showContextMenu: (state: ScmContextMenuState) => void
   /** Virtualization positioning style from <Tree> (absolute top/height); merged
    *  onto the row root. Undefined in the non-virtualized (inline) branch. */
   rowStyle?: CSSProperties
@@ -465,10 +466,13 @@ const ScmFileRow = memo(function ScmFileRow({
     e.preventDefault()
     e.stopPropagation()
     if (!isSelected) model.setSelection([node.id], node.id)
-    showContextMenu(
-      { x: e.clientX, y: e.clientY },
-      menuToRows(MenuId.ScmResourceStateContext, rowScope, run),
-    )
+    showContextMenu({
+      anchor: { x: e.clientX, y: e.clientY },
+      menuId: MenuId.ScmResourceStateContext,
+      scope: rowScope,
+      run,
+      keyboard: isKeyboardContextMenu(e),
+    })
   }
   const openChange = (): void => {
     if (resource.command)
@@ -595,10 +599,13 @@ const ScmFolderRow = memo(function ScmFolderRow({
   const onContextMenu = (e: ReactMouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
-    showContextMenu(
-      { x: e.clientX, y: e.clientY },
-      menuToRows(MenuId.ScmResourceFolderContext, folderScope, run),
-    )
+    showContextMenu({
+      anchor: { x: e.clientX, y: e.clientY },
+      menuId: MenuId.ScmResourceFolderContext,
+      scope: folderScope,
+      run,
+      keyboard: isKeyboardContextMenu(e),
+    })
   }
 
   return (
@@ -701,10 +708,13 @@ const ScmGroupRow = memo(function ScmGroupRow({
   const onContextMenu = (e: ReactMouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
-    showContextMenu(
-      { x: e.clientX, y: e.clientY },
-      menuToRows(MenuId.ScmResourceGroupContext, groupScope, runGroup),
-    )
+    showContextMenu({
+      anchor: { x: e.clientX, y: e.clientY },
+      menuId: MenuId.ScmResourceGroupContext,
+      scope: groupScope,
+      run: runGroup,
+      keyboard: isKeyboardContextMenu(e),
+    })
   }
 
   // A group is a drop target for "move files here" only when its provider
@@ -813,17 +823,10 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const viewMode = useObservable(scmViewState.viewMode)
 
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
-  const [ctxMenu, setCtxMenu] = useState<{
-    anchor: { x: number; y: number }
-    rows: OverflowRow[]
-  } | null>(null)
-  const showContextMenu = useCallback(
-    (anchor: { x: number; y: number }, rows: OverflowRow[]): void => {
-      // An empty menu (no command's `when` matched) shouldn't pop an empty box.
-      if (rows.length > 0) setCtxMenu({ anchor, rows })
-    },
-    [],
-  )
+  const [ctxMenu, setCtxMenu] = useState<ScmContextMenuState | null>(null)
+  const showContextMenu = useCallback((state: ScmContextMenuState): void => {
+    setCtxMenu(state)
+  }, [])
   const [stickyCommitId, setStickyCommitId] = useState<string | undefined>(undefined)
   const [isCommitting, setIsCommitting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -1264,13 +1267,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
           onClose={() => setCommitMenu(null)}
         />
       )}
-      {ctxMenu && (
-        <TitleOverflowMenu
-          anchor={ctxMenu.anchor}
-          rows={ctxMenu.rows}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
+      {ctxMenu && <ScmContextMenu state={ctxMenu} onClose={() => setCtxMenu(null)} />}
     </section>
   )
 }

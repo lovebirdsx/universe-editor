@@ -33,6 +33,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  isKeyboardContextMenu,
   type ITreeDataSource,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
@@ -116,6 +117,8 @@ interface TimelineMenuState {
   readonly anchor: { x: number; y: number }
   readonly item: ITimelineItemDto
   readonly scoped: IScopedContextKeyService
+  /** Raised with the ContextMenu key — the menu opens on its first entry. */
+  readonly keyboard: boolean
 }
 
 export function TimelineView() {
@@ -290,6 +293,7 @@ export function TimelineView() {
         anchor: { x: e.clientX, y: e.clientY },
         item: row.item,
         scoped: contextKeyService.createScoped({ timelineItem: row.item.contextValue ?? '' }),
+        keyboard: isKeyboardContextMenu(e),
       })
     },
     [model, contextKeyService],
@@ -450,6 +454,7 @@ export function TimelineView() {
           args={[menu.item]}
           commandService={commandService}
           contextKeyService={menu.scoped}
+          autoFocusFirst={menu.keyboard}
           onClose={closeMenu}
         />
       )}

@@ -11,12 +11,17 @@ import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import {
   Event,
+  ContextKeyService,
   ICommandService,
+  IContextKeyService,
   IEditorGroupsService,
   IEditorResolverService,
   IStorageService,
   InstantiationService,
+  MenuId,
+  MenuRegistry,
   ServiceCollection,
+  type IDisposable,
   type ICommandService as ICommandServiceType,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IEditorResolverService as IEditorResolverServiceType,
@@ -80,6 +85,9 @@ function setup() {
   const services = new ServiceCollection()
   services.set(IScmService, scm)
   services.set(ICommandService, stubCommand)
+  // Row menus resolve their `when` clauses against a scoped context, so the real
+  // service is needed rather than a stub.
+  services.set(IContextKeyService, new ContextKeyService())
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: editorGroup,
@@ -102,6 +110,12 @@ function setup() {
 afterEach(() => cleanup())
 
 describe('ScmView under StrictMode', () => {
+  let contributions: IDisposable[] = []
+  afterEach(() => {
+    contributions.forEach((d) => d.dispose())
+    contributions = []
+  })
+
   it('renders resources that arrive after the provider view has mounted', async () => {
     const { scm } = setup()
 
@@ -121,6 +135,57 @@ describe('ScmView under StrictMode', () => {
     })
 
     expect(await screen.findByText('foo.txt')).toBeTruthy()
+  })
+
+  // Regression: the row menu's scoped ContextKeyService was created by a plain
+  // useMemo and disposed from an effect cleanup, so StrictMode's dry run cleared
+  // its keys before the real mount. Disposal is silent — reads fall through to
+  // the parent — so every `scmProvider == …` clause turned false. Any re-render
+  // that re-resolved the menu (the first ArrowDown does, via the menu's own
+  // setState) then produced zero rows and the whole menu unmounted mid-keypress.
+  it('keeps the row context menu open when the arrow keys move through it', async () => {
+    contributions.push(
+      MenuRegistry.addMenuItem(MenuId.ScmResourceStateContext, {
+        command: 'perforce.reopen',
+        title: 'Move to Changelist',
+        when: 'scmProvider == perforce && scmResourceState == E',
+        group: '2_modify',
+        order: 1,
+      }),
+      MenuRegistry.addMenuItem(MenuId.ScmResourceStateContext, {
+        command: 'perforce.revert',
+        title: 'Revert',
+        when: 'scmProvider == perforce && scmResourceState == E',
+        group: '2_modify',
+        order: 2,
+      }),
+    )
+
+    const { scm } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'default', 'Default Changelist')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/foo.txt', contextValue: 'E' },
+      ])
+    })
+
+    const label = await screen.findByText('foo.txt')
+    const row = label.closest('[role="treeitem"]') as HTMLElement
+    fireEvent.click(row)
+    fireEvent.keyDown(screen.getByRole('tree'), { key: 'ContextMenu' })
+
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('Move to Changelist')).toBeTruthy()
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+    })
+
+    expect(screen.queryByRole('menu')).not.toBeNull()
+    expect(document.querySelector('[role="menuitem"][data-active]')?.textContent).toContain(
+      'Revert',
+    )
   })
 
   it('disables Commit when git has no local changes and nothing to synchronize', async () => {

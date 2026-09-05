@@ -36,6 +36,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  isKeyboardContextMenu,
   type ITreeDataSource,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight, type LucideIcon } from 'lucide-react'
@@ -51,6 +52,8 @@ interface IRowMenuState {
   readonly anchor: { x: number; y: number }
   readonly item: ITreeItemDto
   readonly scoped: IScopedContextKeyService
+  /** Raised with the ContextMenu key — the menu opens on its first entry. */
+  readonly keyboard: boolean
 }
 
 export function ExtensionTreeView({ viewId }: IViewComponentProps) {
@@ -197,6 +200,7 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         anchor: { x: e.clientX, y: e.clientY },
         item,
         scoped,
+        keyboard: isKeyboardContextMenu(e),
       })
     },
     [model, contextKeyService, viewId],
@@ -307,6 +311,7 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
             treeViews.executeTreeItemCommand(viewId, menu.item.handle, commandId)
           }
           contextKeyService={menu.scoped}
+          autoFocusFirst={menu.keyboard}
           onClose={closeMenu}
         />
       )}

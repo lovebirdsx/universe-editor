@@ -7,11 +7,11 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 | 模块 | 用途 |
 |---|---|
 | `ContextViewService` | Floating UI 定位 + Portal 渲染的浮层服务 |
-| `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数） |
+| `ContextMenu` | MenuRegistry 驱动的右键菜单（消费 `MenuId.*` 注册的条目，`args` 透传命令参数）；键盘导航走 window capture + 虚拟焦点；传 `renderIcon` 即为每行渲染定宽图标插槽（不传则无插槽，外观不变）；传 `autoFocusFirst` 即开菜单就高亮首项（只给键盘打开的菜单用，鼠标打开保持无高亮） |
 | `HoverService` | delay 触发 / keyboard-accessible 的 hover popup |
 | `TooltipProvider` | 全局委托 tooltip：元素挂 `data-tooltip="…"` 即得主题化气泡；普通 `title` 属性也会被接管（悬停期间暂存到 `data-tooltip-native-title` 抑制原生气泡，离开后还原；iframe/webview 除外），editor 在 `main.tsx` 根部挂载 |
 | `VirtualList` | `@tanstack/react-virtual` 薄包装，固定/动态行高均支持 |
-| `Tree` / `useTreeModel` / `useOwnedTreeModel` | 虚拟化树（数据源 + 选择 + 展开模型）；组件自建 TreeModel 用 `useOwnedTreeModel` |
+| `Tree` / `useTreeModel` / `useOwnedTreeModel` | 虚拟化树（数据源 + 选择 + 展开模型）；组件自建 TreeModel 用 `useOwnedTreeModel`；ContextMenu 键 / Shift+F10 合成的 `contextmenu` 事件用 `isKeyboardContextMenu(e)` 识别（**不能看 `detail`**，合成事件刻意伪装成 `detail: 1` 去躲 detail-0 守卫），视图据它决定 `autoFocusFirst` |
 | `useDragHandle` / `useDropTarget` / `DragSessionContext` | 原生 HTML5 DnD source/target + 跨边界 payload 传递 |
 | `atoms/*` | `Button` / `IconButton` / `Input` / `Checkbox` / `Badge` / `Spinner` + `cx` 工具 |
 | `layout/*` | `Sash`（拖拽分隔条）/ `GridLayout`（消费 platform `Grid<T>`）/ `CollapsibleSlot`（图标走 props 注入） |

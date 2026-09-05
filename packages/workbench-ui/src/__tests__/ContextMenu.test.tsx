@@ -538,4 +538,126 @@ describe('ContextMenu submenus', () => {
       expect(onClose).toHaveBeenCalled()
     })
   })
+
+  describe('renderIcon', () => {
+    const iconSlots = (): (string | null)[] =>
+      Array.from(document.querySelectorAll('[role="menuitem"]')).map(
+        (li) => li.firstElementChild?.textContent ?? null,
+      )
+
+    it('gives every row a slot — including rows with no icon — so labels align', () => {
+      const root = asMenuId('test.icons.mixed')
+      const sub = asMenuId('test.icons.mixed.child')
+      track(
+        MenuRegistry.addMenuItem(root, {
+          command: 'a.cmd',
+          title: 'With Icon',
+          icon: 'discard',
+          group: '1_a',
+        }),
+      )
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'Plain', group: '1_a' }))
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'c.cmd', title: 'Nested' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          renderIcon={(icon) => (icon === undefined ? null : `[${icon}]`)}
+          onClose={vi.fn()}
+        />,
+      )
+
+      // Three rows, three slots: the icon-less one is an empty placeholder.
+      expect(iconSlots()).toEqual(['[discard]', '', ''])
+      // The label sits in its own element, so the row text is unchanged.
+      expect(screen.getByText('With Icon')).toBeDefined()
+    })
+
+    it('renders no icon slot at all when the prop is omitted', () => {
+      const root = asMenuId('test.icons.omitted')
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', icon: 'discard' }))
+
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      const row = screen.getByRole('menuitem')
+      expect(row.children).toHaveLength(1)
+      expect(row.textContent).toBe('A')
+    })
+  })
+
+  describe('autoFocusFirst', () => {
+    /** Root menu with a leading separator: `1_a` and `2_b` are distinct groups. */
+    function twoGroups(id: string) {
+      const root = asMenuId(id)
+      track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'First', group: '1_a' }))
+      track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'Second', group: '2_b' }))
+      return root
+    }
+
+    it('highlights the first row on open so Enter runs it straight away', () => {
+      const executed: unknown[][] = []
+      render(
+        <ContextMenu
+          menuId={twoGroups('test.autofocus.on')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          autoFocusFirst
+          onClose={vi.fn()}
+        />,
+      )
+
+      const menu = screen.getByRole('menu')
+      expect(activeLabel(menu)).toBe('First')
+
+      act(() => {
+        fireEvent.keyDown(window, { key: 'Enter' })
+      })
+      expect(executed[0]?.[0]).toBe('a.cmd')
+    })
+
+    it('leaves the arrow keys stepping on from the opening highlight', () => {
+      render(
+        <ContextMenu
+          menuId={twoGroups('test.autofocus.separator')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          autoFocusFirst
+          onClose={vi.fn()}
+        />,
+      )
+
+      const menu = screen.getByRole('menu')
+      expect(activeLabel(menu)).toBe('First')
+      // The two entries are in different groups, so a separator sits between
+      // them; the cursor steps over it rather than landing on it.
+      act(() => {
+        fireEvent.keyDown(window, { key: 'ArrowDown' })
+      })
+      expect(activeLabel(menu)).toBe('Second')
+    })
+
+    it('leaves nothing highlighted when omitted (mouse-opened menus)', () => {
+      render(
+        <ContextMenu
+          menuId={twoGroups('test.autofocus.off')}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(activeLabel(screen.getByRole('menu'))).toBeNull()
+      expect(document.querySelector('[role="menuitem"][data-active]')).toBeNull()
+    })
+  })
 })

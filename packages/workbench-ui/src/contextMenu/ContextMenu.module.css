@@ -15,11 +15,28 @@
 .item {
   display: flex;
   align-items: center;
+  gap: var(--spacing-4);
   padding: 4px 16px;
   cursor: pointer;
   color: var(--vscode-menu-foreground, #cccccc);
   white-space: nowrap;
   user-select: none;
+}
+
+/* Fixed width whether or not the caller's renderIcon produced anything, so a
+   menu mixing icon-bearing and plain entries keeps its labels aligned. */
+.icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  width: 16px;
+}
+
+/* Takes the free space so the submenu chevron sits at the trailing edge. */
+.label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* `data-active` is the cursor shared by mouse and keyboard: navigation uses a
@@ -37,16 +54,15 @@
   border-top: 1px solid var(--vscode-menu-separatorBackground, #3c3c3c);
 }
 
-.submenuItem {
-  justify-content: space-between;
-  gap: 16px;
-}
-
 /* The chevron is drawn rather than imported: this package takes icons through
-   props and must not depend on an application icon library. */
+   props and must not depend on an application icon library. `.label` already
+   takes the free space, so it lands at the trailing edge without a
+   justify-content override (which would fight the leading icon slot's
+   alignment against icon-less rows). */
 .submenuItem::after {
   content: '';
   flex: 0 0 auto;
+  margin-left: var(--spacing-4);
   width: 5px;
   height: 5px;
   border-top: 1px solid currentColor;

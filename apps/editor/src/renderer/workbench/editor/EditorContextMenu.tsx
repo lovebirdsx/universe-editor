@@ -11,9 +11,7 @@
  *  to UriComponents across the extension-host RPC and revived on the other side.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo } from 'react'
 import {
-  markAsSingleton,
   MenuId,
   type ICommandService,
   type IContextKeyService,
@@ -22,6 +20,7 @@ import {
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { basenameOfResource, extensionOfBasename } from '../files/resourceInfo.js'
+import { useScopedContextKey } from '../useScopedContextKey.js'
 
 interface Props {
   readonly x: number
@@ -46,21 +45,15 @@ export function EditorContextMenu({
 }: Props) {
   const resourceScheme = resource.scheme
   const resourceExtname = extensionOfBasename(basenameOfResource(resource)) ?? ''
+  const selection = editor.getSelection()
 
-  const scopedContext = useMemo(() => {
-    const selection = editor.getSelection()
-    return markAsSingleton(
-      contextKeyService.createScoped({
-        resourceScheme,
-        resourceExtname,
-        editorHasSelection: selection !== null && !selection.isEmpty(),
-        editorLangId: editor.getModel()?.getLanguageId() ?? '',
-        editorReadonly: isReadonly,
-      }),
-    )
-  }, [contextKeyService, resourceScheme, resourceExtname, editor, isReadonly])
-
-  useEffect(() => () => scopedContext.dispose(), [scopedContext])
+  const scopedContext = useScopedContextKey(contextKeyService, {
+    resourceScheme,
+    resourceExtname,
+    editorHasSelection: selection !== null && !selection.isEmpty(),
+    editorLangId: editor.getModel()?.getLanguageId() ?? '',
+    editorReadonly: isReadonly,
+  })
 
   return (
     <ContextMenu

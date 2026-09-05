@@ -8,15 +8,11 @@
  *  command's first argument.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo } from 'react'
-import {
-  ICommandService,
-  IContextKeyService,
-  MenuId,
-  markAsSingleton,
-} from '@universe-editor/platform'
+import { useMemo } from 'react'
+import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
+import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useService } from '../useService.js'
 
 export type RemoteRowMenuKind = 'sshTarget' | 'wslTarget' | 'connection' | 'recent'
@@ -43,24 +39,19 @@ export function RemoteContextMenu({ state, onClose }: Props) {
   const contextKeyService = useService(IContextKeyService)
   const { kind, state: rowState, manual } = state.target
 
-  const scoped = useMemo(
-    () =>
-      markAsSingleton(
-        contextKeyService.createScoped({
-          remoteRowKind: kind,
-          remoteRowState: rowState ?? '',
-          remoteRowManual: manual,
-        }),
-      ),
-    [contextKeyService, kind, rowState, manual],
-  )
-  useEffect(() => () => scoped.dispose(), [scoped])
+  const scoped = useScopedContextKey(contextKeyService, {
+    remoteRowKind: kind,
+    remoteRowState: rowState ?? '',
+    remoteRowManual: manual,
+  })
+
+  const args = useMemo(() => [state.target.arg], [state.target.arg])
 
   return (
     <ContextMenu
       menuId={MenuId.RemoteExplorerContext}
       anchor={{ x: state.x, y: state.y }}
-      args={[state.target.arg]}
+      args={args}
       commandService={commandService}
       contextKeyService={scoped}
       onClose={onClose}

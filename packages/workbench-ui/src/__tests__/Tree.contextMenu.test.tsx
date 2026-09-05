@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { Tree } from '../tree/Tree.js'
+import { Tree, isKeyboardContextMenu } from '../tree/Tree.js'
 import { TreeModel } from '../tree/TreeModel.js'
 import type { ITreeDataSource } from '../tree/ITreeDataSource.js'
 
@@ -63,8 +63,10 @@ function renderTree(model: TreeModel<Node>, props: Partial<Parameters<typeof Tre
 const view = () => screen.getByRole('tree')
 
 const pinRowRect = (id: string, left: number, top: number, width: number, height: number) => {
-  const row = document.querySelector<HTMLElement>(`[data-row-key="${id}"]`)
-  expect(row).not.toBeNull()
+  const row = [...document.querySelectorAll<HTMLElement>('[data-row-key]')].find(
+    (el) => el.getAttribute('data-row-key') === id,
+  )
+  expect(row).toBeDefined()
   const rect = new DOMRect(left, top, width, height)
   vi.spyOn(row as HTMLElement, 'getBoundingClientRect').mockReturnValue(rect)
   return row as HTMLElement
@@ -98,6 +100,33 @@ describe('Tree — keyboard context menu anchors to the focused row', () => {
     const event = rowMenu.mock.calls[0]?.[0] as MouseEvent | undefined
     expect(event?.clientX).toBe(30)
     expect(event?.clientY).toBe(32)
+    model.dispose()
+  })
+
+  it('anchors to a row whose id carries CSS-significant characters', () => {
+    // SCM row keys embed the resource path, so on Windows they contain
+    // backslashes. Interpolated straight into a selector those read as CSS
+    // escape introducers and match nothing — the menu then fell back to the
+    // container, and an SCM list (no container handler) opened none at all.
+    const row: Node = { id: 'file:workingTree/C:\\repo\\a.ts', children: [] }
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: () => false,
+      getChildren: () => [],
+      getRoots: () => [row],
+      getParent: () => null,
+    }
+    const model = new TreeModel<Node>({ dataSource })
+    const { rowMenu } = renderTree(model)
+    act(() => model.setSelection([row.id], row.id))
+
+    pinRowRect(row.id, 100, 40, 200, 22)
+    fireEvent.keyDown(view(), { key: 'ContextMenu' })
+
+    expect(rowMenu).toHaveBeenCalledTimes(1)
+    const event = rowMenu.mock.calls[0]?.[0] as MouseEvent | undefined
+    expect(event?.clientX).toBe(100)
+    expect(event?.clientY).toBe(62)
     model.dispose()
   })
 
@@ -185,6 +214,24 @@ describe('Tree — keyboard context menu anchors to the focused row', () => {
     // detail-0 guard doesn't swallow it when it bubbles past a row handler.
     expect((rowMenu.mock.calls[0]?.[0] as MouseEvent | undefined)?.detail).toBe(1)
     expect(containerMenu).not.toHaveBeenCalled()
+    model.dispose()
+  })
+
+  it('marks the keyboard-dispatched event so views can highlight the first entry', () => {
+    const model = makeModel()
+    const { rowMenu } = renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+
+    pinRowRect('0', 100, 40, 200, 22)
+    fireEvent.keyDown(view(), { key: 'ContextMenu' })
+    // `detail` cannot carry this: the synthetic event claims detail 1 to pass
+    // the container's keyup-supplement guard, so the origin travels separately.
+    const keyboardEvent = rowMenu.mock.calls[0]?.[0] as { nativeEvent: Event }
+    expect(isKeyboardContextMenu(keyboardEvent)).toBe(true)
+    expect(isKeyboardContextMenu(keyboardEvent.nativeEvent)).toBe(true)
+
+    fireEvent.contextMenu(screen.getByText('1'), { clientX: 11, clientY: 13, detail: 1 })
+    expect(isKeyboardContextMenu(rowMenu.mock.calls[1]?.[0] as { nativeEvent: Event })).toBe(false)
     model.dispose()
   })
 })

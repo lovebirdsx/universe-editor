@@ -38,6 +38,7 @@ import {
   DragSessionProvider,
   Tree,
   dragContainsResources,
+  isKeyboardContextMenu,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import {
@@ -140,7 +141,7 @@ export function ExplorerView() {
     (e: ReactMouseEvent, target: { resource: URI; isDirectory: boolean } | null) => {
       e.preventDefault()
       e.stopPropagation()
-      setMenu({ x: e.clientX, y: e.clientY, target })
+      setMenu({ x: e.clientX, y: e.clientY, target, keyboard: isKeyboardContextMenu(e) })
     },
     [],
   )

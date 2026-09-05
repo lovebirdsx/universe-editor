@@ -4,9 +4,8 @@
  *  Items come from MenuRegistry (ExplorerMenuContribution registers them at BlockStartup).
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import {
-  markAsSingleton,
   observableValue,
   type ICommandService,
   type IContextKeyService,
@@ -25,6 +24,7 @@ import {
 } from '../../services/extensions/ScmService.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
+import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useObservable, useOptionalService } from '../useService.js'
 
 const EMPTY_SOURCE_CONTROLS: IObservable<readonly IScmSourceControlModel[]> = observableValue(
@@ -47,6 +47,9 @@ export interface ContextMenuState {
   readonly y: number
   /** Null when the user right-clicked an empty area; commands fall back to root. */
   readonly target: { resource: URI; isDirectory: boolean } | null
+  /** Raised with the ContextMenu key, so the menu opens with its first entry
+   *  highlighted rather than waiting for an arrow key. */
+  readonly keyboard?: boolean
 }
 
 interface Props {
@@ -133,36 +136,16 @@ export function ExplorerContextMenu({
     )
   }, [tree, state.target])
 
-  const scopedContext = useMemo(
-    () =>
-      contextKeyService
-        ? markAsSingleton(
-            contextKeyService.createScoped({
-              explorerResourceIsFolder: isDirectory,
-              explorerResourceIsRoot: isRoot,
-              explorerResourceIsFocusFolder,
-              resourceScheme,
-              resourceExtname,
-              resourceScmProvider,
-              fileCopied: hasClipboard,
-              explorerResourceCut: hasCutItems,
-            }),
-          )
-        : undefined,
-    [
-      contextKeyService,
-      isDirectory,
-      isRoot,
-      explorerResourceIsFocusFolder,
-      resourceScheme,
-      resourceExtname,
-      resourceScmProvider,
-      hasClipboard,
-      hasCutItems,
-    ],
-  )
-
-  useEffect(() => () => scopedContext?.dispose(), [scopedContext])
+  const scopedContext = useScopedContextKey(contextKeyService, {
+    explorerResourceIsFolder: isDirectory,
+    explorerResourceIsRoot: isRoot,
+    explorerResourceIsFocusFolder,
+    resourceScheme,
+    resourceExtname,
+    resourceScmProvider,
+    fileCopied: hasClipboard,
+    explorerResourceCut: hasCutItems,
+  })
 
   const args = useMemo(() => {
     // `parent` (NewFile, NewFolder): when the clicked node is a directory use
@@ -182,6 +165,7 @@ export function ExplorerContextMenu({
       args={args}
       commandService={commandService}
       {...(scopedContext ? { contextKeyService: scopedContext } : {})}
+      autoFocusFirst={state.keyboard ?? false}
       onClose={onClose}
     />
   )

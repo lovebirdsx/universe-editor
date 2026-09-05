@@ -42,6 +42,32 @@ const DEFAULT_THRESHOLD = 200
 const DEFAULT_INDENT_WIDTH = 12
 const DEFAULT_INDENT_BASE = 6
 
+/**
+ * Row ids are opaque to this component and routinely carry characters CSS gives
+ * meaning to — an SCM key embeds a Windows path, whose backslashes read as
+ * escape introducers and make an interpolated selector silently match nothing.
+ * Matching the attribute value directly sidesteps CSS escaping altogether.
+ */
+const findRow = (root: HTMLElement, id: string): HTMLElement | null =>
+  [...root.querySelectorAll<HTMLElement>('[data-row-key]')].find(
+    (el) => el.getAttribute('data-row-key') === id,
+  ) ?? null
+
+/**
+ * Contextmenu events the tree synthesized from a key press. They cannot be told
+ * apart by `detail` — the synthetic event deliberately claims `detail: 1` to get
+ * past the detail-0 guard below — so the origin travels out-of-band and views
+ * read it back with `isKeyboardContextMenu`.
+ */
+const keyboardContextMenuEvents = new WeakSet<Event>()
+
+/** True when this contextmenu came from the ContextMenu key / Shift+F10 rather
+ *  than the mouse. Views use it to open their menu with the first row already
+ *  highlighted (VSCode parity), since a keyboard user has no pointer to aim. */
+export function isKeyboardContextMenu(e: Event | { nativeEvent: Event }): boolean {
+  return keyboardContextMenuEvents.has('nativeEvent' in e ? e.nativeEvent : e)
+}
+
 export interface ITreeActivateOptions {
   /** True for a light "preview" open (single click / Space); false to pin (Enter). */
   readonly preview: boolean
@@ -197,7 +223,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     if (!revealRequest) return
     const root = containerRef.current
     if (!root) return
-    const el = root.querySelector<HTMLElement>(`[data-row-key="${revealRequest.id}"]`)
+    const el = findRow(root, revealRequest.id)
     if (el) {
       el.scrollIntoView({ block: 'nearest' })
       return
@@ -237,22 +263,20 @@ export function Tree<T>(props: ITreeProps<T>) {
   const openKeyboardContextMenu = useCallback((node: IVisibleNode<T> | null) => {
     const root = containerRef.current
     if (!root) return
-    const row = node
-      ? (root.querySelector<HTMLElement>(`[data-row-key="${node.id}"]`) ?? null)
-      : null
+    const row = node ? findRow(root, node.id) : null
     const target = row ?? root
     const rect = target.getBoundingClientRect()
-    target.dispatchEvent(
-      new MouseEvent('contextmenu', {
-        bubbles: true,
-        cancelable: true,
-        // detail 1 marks the event as mouse-like so the container's detail-0
-        // guard below doesn't mistake it for Chromium's keyup supplement.
-        detail: 1,
-        clientX: rect.left,
-        clientY: row ? rect.bottom : rect.top,
-      }),
-    )
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      // detail 1 marks the event as mouse-like so the container's detail-0
+      // guard below doesn't mistake it for Chromium's keyup supplement.
+      detail: 1,
+      clientX: rect.left,
+      clientY: row ? rect.bottom : rect.top,
+    })
+    keyboardContextMenuEvents.add(event)
+    target.dispatchEvent(event)
   }, [])
 
   const makeClickHandler = useCallback(
