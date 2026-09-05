@@ -170,7 +170,7 @@ git 是「staged / working 两个固定组」；p4 是「一个文件属于**恰
 - 分组纯逻辑在 `changelist.ts` 的 `groupChangelists()`（喂 `p4 opened` + `p4 changes -s pending`）。
 - `client.ts` `_applyGroups()` 用 `DesiredGroup[]` **对账** live ResourceGroups：新建 / 更新 label+states / dispose 消失的。**不要每次全量重建组**（会闪烁 + 泄漏）。
 - 组 id ↔ changelist id 互转：`numberedGroupId`/`shelvedGroupId`/`changelistIdFromGroupId`。组作用域命令靠宿主附在 group action 上的 `scmResourceGroupId` 定位 CL（见 `extension.ts` `groupChangelistId`）。
-- `sc.count` = 打开文件总数（不含搁置）；`acceptInputCommand`/`acceptInputActions` 在默认组有文件时挂 Submit / Revert Unchanged。
+- `sc.count` = 已签出文件数 + 未收集漂移数（Working Tree Changes 组的真实总数 `_driftTotal`，截断前），对齐 git 的 staged+working 角标语义；统一由 `_updateScmCount()` 收口（`_applyDriftGroup`/`_doRefresh`/`_goOffline` 三处接线）；`acceptInputCommand`/`acceptInputActions` 在默认组有文件时挂 Submit / Revert Unchanged。
 
 ## 收集修改（常驻 reconcile 分组）
 

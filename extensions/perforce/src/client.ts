@@ -577,7 +577,8 @@ export class PerforceClient {
    *  id), from the last refresh. Lets file-scoped shelve resolve which changelist a
    *  clicked row belongs to without another `p4 opened` round-trip. */
   private _changelistByPath: ReadonlyMap<string, string> = new Map()
-  /** Opened-file count from the last refresh (mirrors the SCM badge). */
+  /** Opened-file count from the last refresh. Contributes half of the SCM badge
+   *  (the other half is the working-tree drift total); see {@link _updateScmCount}. */
   private _openedCount = 0
   private readonly _changeListeners = new Set<() => void>()
   /** Pending numbered changelists from the last refresh, for reopen quick-picks. */
@@ -1276,7 +1277,7 @@ export class PerforceClient {
     this._applyDriftGroup()
     this._log?.(`[perforce] refresh total ${Date.now() - started}ms`)
     this._openedCount = countOpened(groups)
-    this._sc.count = this._openedCount
+    this._updateScmCount()
     const defaultHasFiles = groups.some((g) => g.isDefault && g.files.length > 0)
     this._setAcceptInput(defaultHasFiles)
     this._emitChange()
@@ -1624,7 +1625,9 @@ export class PerforceClient {
     this._reconcileGroup.resourceStates = []
     this._unresolvedPaths = new Set()
     this._openedCount = 0
-    this._sc.count = 0
+    this._driftShown = 0
+    this._driftTotal = 0
+    this._updateScmCount()
     this._setAcceptInput(false)
     // "Who has what open" is a claim about the server, so it goes as well.
     this._openedByOthersCount = undefined
@@ -3765,6 +3768,7 @@ export class PerforceClient {
     this._driftShown = shown.length
     this._driftTotal = rows.length
     this._updateDriftGroupLabel()
+    this._updateScmCount()
   }
 
   /**
@@ -3802,6 +3806,17 @@ export class PerforceClient {
       this._driftLabel = label
       this._reconcileGroup.label = label
     }
+  }
+
+  /**
+   * SCM badge count = opened files (pending changelists) + working-tree drift
+   * (uncollected local modifications), mirroring git's staged + working total.
+   * `_driftTotal` is the true post-filter total (pre-truncation) so the badge
+   * reports the real modification count even when the group list is capped.
+   */
+  private _updateScmCount(): void {
+    if (this._disposed) return
+    this._sc.count = this._openedCount + this._driftTotal
   }
 
   /**

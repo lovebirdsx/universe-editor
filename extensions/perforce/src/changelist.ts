@@ -182,8 +182,10 @@ export function groupChangelists(
 }
 
 /**
- * Total opened files across pending groups (default + numbered). This is the
- * SCM badge count — "how many files you have open" — and excludes shelved files.
+ * Total opened files across pending groups (default + numbered), excluding
+ * shelved files. This is only half of the SCM badge count — the badge also adds
+ * the working-tree drift total (uncollected local modifications) so it mirrors
+ * git's staged + working semantics.
  */
 export function countOpened(groups: readonly ChangelistGroup[]): number {
   return groups.reduce((total, g) => total + g.files.length, 0)

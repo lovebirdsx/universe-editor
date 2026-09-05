@@ -910,14 +910,37 @@ describe('PerforceClient.runReconcileScan', () => {
 
     await client.runReconcileScan()
 
-    // The scan never touches the SCM view's state...
-    expect(sc.count).toBeUndefined()
-    // ...and the only change emits are the status-bar bookkeeping: busy label
-    // push/pop (2) plus cancellable registration/deregistration (2) plus the
-    // scan-progress start and terminal flush (2). No publish or checkpoint
-    // emits anything, and the throttled intermediate frames never fire (the scan
-    // finishes within one throttle window).
+    // The badge counts working-tree drift alongside opened files, so the scan's
+    // one drift row lands in `sc.count` (no opened files → count === 1)...
+    expect(sc.count).toBe(1)
+    // ...but the scan never emits a change: the only emits are the status-bar
+    // bookkeeping — busy label push/pop (2) plus cancellable
+    // registration/deregistration (2) plus the scan-progress start and terminal
+    // flush (2). No publish or checkpoint emits anything, and the throttled
+    // intermediate frames never fire (the scan finishes within one throttle
+    // window).
     expect(changes).toBe(6)
+  })
+
+  it('badge counts opened files plus working-tree drift', async () => {
+    const disk = fakeDisk()
+    const client = await makeClient(
+      {
+        opened: () => [{ rel: 'opened.txt' }],
+        reconcile: () => [{ rel: 'drift-a.txt' }, { rel: 'drift-b.txt' }],
+      },
+      disk,
+    )
+    const sc = (client as unknown as { _sc: { count: number | undefined } })._sc
+
+    await client.refresh()
+    // 1 opened, no drift yet.
+    expect(sc.count).toBe(1)
+
+    client.setReconcileScope([LOCAL])
+    await client.runReconcileScan()
+    // 1 opened + 2 drift rows.
+    expect(sc.count).toBe(3)
   })
 
   // --- ⑨ filespec escaping (M2) ----------------------------------------------
