@@ -7,7 +7,9 @@
  *  selection, focus, visible-row flattening, reveal) is delegated to the shared
  *  workbench-ui TreeModel; this service adapts it to URIs and owns the
  *  file-system specifics (lazy loading, CRUD, watcher refresh, exclude filter).
- *  Tree state is not persisted — switching workspace folders drops everything.
+ *  Expansion state is persisted per workspace-root (see explorerTreeState) and
+ *  restored on `_setRoot`; selection / focus / scroll are still dropped on a
+ *  workspace switch.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -20,13 +22,23 @@ import {
   IFileService,
   IFileWatcherService,
   ILoggerService,
+  IStorageService,
   IWorkspaceService,
+  StorageScope,
   URI,
   createNamedLogger,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
 import { TreeModel, type ITreeDataSource } from '@universe-editor/workbench-ui'
+import {
+  flushExpandedIdsWrite,
+  lastAcceptedExpandedIds,
+  persistExpandedIds,
+  sameIds,
+  storageKeyForRoot,
+  type ExplorerTreePersistedState,
+} from './explorerTreeState.js'
 import {
   dedupe,
   isDescendant,
@@ -106,6 +118,13 @@ export class ExplorerTreeService extends Disposable {
   // must sync immediately even if startWatching() hasn't fired yet.
   private _watchStarted = false
   private _coldStartSettled = false
+  // Expansion-persistence orchestration (explorerTreeState). `_restoreGeneration`
+  // tokens an in-flight restore so a `_setRoot` mid-restore abandons the stale
+  // pass instead of re-expanding the old root's directories under the new one.
+  // `_restoring` suppresses the onDidChangeExpansion → persist echo while a
+  // restore replays the persisted set (those flips are not user gestures).
+  private _restoreGeneration = 0
+  private _restoring = false
 
   private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
     getId: (e) => e.resource.toString(),
@@ -174,6 +193,12 @@ export class ExplorerTreeService extends Disposable {
     @IExcludeService private readonly _exclude: IExcludeService,
     @IFocusScopeService private readonly _focus: IFocusScopeService,
     @ILoggerService loggerService: ILoggerServiceType,
+    // Optional DI: many unit tests construct the tree without a storage proxy —
+    // the container injects undefined then and persistence is simply disabled.
+    // Declared as a required `| undefined` param (not `?`) because a trailing
+    // optional parameter would break GetLeadingNonServiceArgs and every bare
+    // createInstance(ExplorerTreeService) call site.
+    @IStorageService private readonly _storage: IStorageService | undefined,
     // Optional DI: tests / early boot may construct the tree before the shared
     // clipboard proxy exists — the container injects undefined then. Declared
     // as a required `| undefined` param (not `?`) because a trailing optional
@@ -209,6 +234,26 @@ export class ExplorerTreeService extends Disposable {
     // Focus folders narrow which entries survive _loadChildren, and drive which
     // subtrees the watcher subscribes to — both need re-deriving on a change.
     this._register(this._focus.onDidChange(() => this._onFocusChange()))
+    // Persist the user's expanded-directory set on every genuine flip, and
+    // re-restore when the WORKSPACE-scope backend (re)hydrates — cold start
+    // reads the workspace bucket asynchronously over IPC, so the first
+    // `_setRoot` restore can run before the bucket is readable; this event is
+    // the late-arrival backstop (the `hasState` guard makes it a no-op once
+    // the user has touched expansion).
+    this._register(
+      this._model.onDidChangeExpansion(() => {
+        if (!this._restoring) this._persistExpansion()
+      }),
+    )
+    // The scope-change backstop only exists when storage is available (it is
+    // absent in some unit tests, where persistence is disabled wholesale).
+    if (this._storage) {
+      this._register(
+        this._storage.onDidChangeWorkspaceScope(() => {
+          if (this._root) void this._restoreExpansion(this._root)
+        }),
+      )
+    }
   }
 
   /** The TreeModel powering this view — consumed directly by ExplorerView's <Tree>. */
@@ -672,6 +717,14 @@ export class ExplorerTreeService extends Disposable {
   private _setRoot(root: URI | null): void {
     const normalized = root ? normalizeUri(root) : null
     this._logger.info(`setRoot ${normalized?.toString() ?? '<none>'}`)
+    // Flush the outgoing root's expansion snapshot BEFORE `_model.reset()`
+    // empties it — the snapshot must be read off the old root's model, and a
+    // debounced write left pending would otherwise land in the new root's
+    // WORKSPACE bucket. Skip when the root is unchanged: hydration re-pushes
+    // the same folder and must not wipe-then-restore.
+    const rootChanged = normalized?.toString() !== this._root?.toString()
+    if (rootChanged && this._root) this._persistExpansion(true)
+    this._restoreGeneration++ // abandon any in-flight restore of the old root
     this._root = normalized
     this._nodes.clear()
     this._activeEditorResource = null
@@ -684,7 +737,17 @@ export class ExplorerTreeService extends Disposable {
     // URIs, so entries under the old root match no row under the new one.
     this._model.reset()
     if (normalized) {
+      // The root's auto-expand and the restore replay are both programmatic,
+      // not user gestures — suppress the onDidChangeExpansion → persist echo
+      // across both so they never schedule a write of the transient (empty /
+      // mid-restore) snapshot. `_restoreExpansion(holdRestoring: true)` takes
+      // the flag over and releases it once the replay finishes.
+      this._restoring = true
       void this._model.expand(this._rootEntry(normalized))
+      // Restore the persisted expansion after the root auto-expands. Async and
+      // deliberately not awaited: the tree paints the root immediately while
+      // the persisted set re-expands in the background.
+      void this._restoreExpansion(normalized, true)
     }
     // Before the watcher has ever armed, a root assignment during cold start
     // (including the first onDidChangeWorkspace firing while
@@ -775,6 +838,134 @@ export class ExplorerTreeService extends Disposable {
   private _onFocusChange(): void {
     if (this._watchStarted) this._syncWatch(this._root)
     this._refreshLoadedNodes()
+    // Re-restore: a directory filtered out of the first restore by the previous
+    // focus set may now be visible. The hasState guard keeps this a no-op for
+    // everything already expanded, so a plain focus flip never collapses
+    // anything the user (or a prior restore) opened.
+    if (this._root) void this._restoreExpansion(this._root)
+  }
+
+  /** Snapshot the current expanded-directory set into WORKSPACE storage. */
+  private _persistExpansion(flush = false): void {
+    const storage = this._storage
+    const root = this._root
+    if (!storage || !root) return
+    const key = storageKeyForRoot(root)
+    const rootKey = root.toString()
+    // Exclude the root (it always auto-expands — never stored) and any node
+    // whose children failed to load (persisting those would wed them open).
+    const ids = this._model
+      .getExpandedIds()
+      .filter((id) => id !== rootKey && this._nodes.get(id)?.error == null)
+    if (flush) flushExpandedIdsWrite(storage, key, ids)
+    else persistExpandedIds(storage, key, ids)
+  }
+
+  /** Test/e2e hook: synchronously flush any pending debounced expansion write. */
+  flushExpansionState(): void {
+    this._persistExpansion(true)
+  }
+
+  /**
+   * Re-apply the persisted expanded-directory set for `root`. Shallowest-first
+   * and sequential, so a parent is expanded (its children loaded) before its
+   * own persisted descendants expand against the now-known entries. Idempotent
+   * per node via `hasState` — a re-restore never re-expands a directory the
+   * user has since collapsed, and a generation token abandons the pass if the
+   * root changes mid-restore.
+   */
+  private async _restoreExpansion(root: URI, holdRestoring = false): Promise<void> {
+    const generation = ++this._restoreGeneration
+    // Own the suppress flag for the whole restore when the caller primed it
+    // (the `_setRoot` root auto-expand window); released in the replay finally.
+    if (holdRestoring) this._restoring = true
+    const storage = this._storage
+    if (!storage) {
+      if (holdRestoring) this._restoring = false
+      return
+    }
+    let state: ExplorerTreePersistedState | undefined
+    try {
+      state = await storage.get<ExplorerTreePersistedState>(
+        storageKeyForRoot(root),
+        StorageScope.WORKSPACE,
+      )
+    } catch {
+      if (holdRestoring) this._restoring = false
+      return
+    }
+    if (
+      this._restoreGeneration !== generation ||
+      this._root === null ||
+      !sameUri(this._root, root)
+    ) {
+      if (holdRestoring) this._restoring = false
+      return
+    }
+    const raw = state?.expandedIds
+    if (!Array.isArray(raw)) {
+      if (holdRestoring) this._restoring = false
+      return
+    }
+    const rootKey = root.toString()
+    const targets: URI[] = []
+    for (const id of raw) {
+      if (typeof id !== 'string') continue
+      let uri: URI
+      try {
+        uri = normalizeUri(URI.parse(id))
+      } catch {
+        continue
+      }
+      if (uri.toString() === rootKey) continue
+      if (!isDescendant(root, uri)) continue
+      if (this._model.hasState(uri.toString())) continue
+      if (!this._isEntryVisible(root, this._dirEntry(uri))) continue
+      targets.push(uri)
+    }
+    const depth = (u: URI): number => u.path.split('/').length
+    targets.sort((a, b) => depth(a) - depth(b))
+    this._restoring = true
+    let abandoned = false
+    try {
+      for (const uri of targets) {
+        if (
+          this._restoreGeneration !== generation ||
+          this._root === null ||
+          !sameUri(this._root, root)
+        ) {
+          abandoned = true
+          break
+        }
+        if (this._model.hasState(uri.toString())) continue
+        await this._model.expand(this._dirEntry(uri))
+      }
+    } finally {
+      this._restoring = false
+    }
+    // Self-heal: only once the loop ran to completion (not abandoned mid-way
+    // by a root switch), and only when the restored snapshot actually diverged
+    // from what storage already holds (a stale id that failed to re-expand is
+    // absent). Flushing that converged set drops the stale id; an unchanged
+    // set is left alone so a plain reload never churns a write.
+    if (abandoned || this._root === null || !sameUri(this._root, root)) return
+    // Self-heal the persisted set: drop a target that failed to actually expand
+    // (a deleted directory rejects its load, so `isExpanded` stays false and
+    // the node carries an error). Ids we did NOT attempt this pass — filtered
+    // out by the current focus set — are kept verbatim: focus is a transient
+    // view, not a reason to forget the expansion. Only a real "was expanded
+    // before, now won't open" is pruned.
+    const attempted = new Set(targets.map((u) => u.toString()))
+    const healed = raw
+      .filter((id): id is string => typeof id === 'string')
+      .filter((id) => {
+        if (id === rootKey) return false
+        if (!attempted.has(id)) return true // not attempted (e.g. out of focus) — keep
+        return this._model.isExpanded(id) && this._nodes.get(id)?.error == null
+      })
+    const accepted = lastAcceptedExpandedIds(storageKeyForRoot(root))
+    if (accepted !== undefined && sameIds(accepted, healed)) return
+    flushExpandedIdsWrite(storage, storageKeyForRoot(root), healed)
   }
 
   private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {

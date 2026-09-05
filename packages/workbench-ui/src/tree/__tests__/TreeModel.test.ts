@@ -329,6 +329,46 @@ describe('TreeModel', () => {
     })
   })
 
+  describe('getExpandedIds', () => {
+    // Explorer-style: default fully collapsed, only expand on demand.
+    const foldingModel = () => {
+      const roots: N[] = [
+        { id: 'a', children: [{ id: 'a1', children: [{ id: 'a1x' }] }] },
+        { id: 'b', children: [{ id: 'b1' }] },
+      ]
+      return { roots, model: new TreeModel({ dataSource: eagerSource(roots) }) }
+    }
+
+    it('starts empty and excludes nodes never touched', () => {
+      const { model } = foldingModel()
+      model.getVisibleNodes()
+      expect(model.getExpandedIds()).toEqual([])
+    })
+
+    it('lists user-expanded nodes and drops them again on collapse', async () => {
+      const { model, roots } = foldingModel()
+      await model.expand(roots[0]!)
+      await model.expand(roots[0]!.children![0]!)
+      expect([...model.getExpandedIds()].sort()).toEqual(['a', 'a1'])
+      model.collapse(roots[0]!)
+      expect(model.getExpandedIds()).toEqual(['a1'])
+    })
+
+    it('round-trips through setExpansion on a fresh model', async () => {
+      const { model: first, roots } = foldingModel()
+      await first.expand(roots[0]!)
+      await first.expand(roots[1]!)
+      const persisted = first.getExpandedIds()
+      expect([...persisted].sort()).toEqual(['a', 'b'])
+
+      const { model: second } = foldingModel()
+      second.setExpansion(persisted.map((id) => [id, true] as const))
+      expect(second.isExpanded('a')).toBe(true)
+      expect(second.isExpanded('b')).toBe(true)
+      expect(ids(second)).toEqual(['a', 'a1', 'b', 'b1']) // expanded — children visible
+    })
+  })
+
   describe('setExpansionAndRefresh', () => {
     const counting = (model: TreeModel<N>): (() => number) => {
       let count = 0

@@ -265,6 +265,19 @@ export class TreeModel<T> extends Disposable {
     return out
   }
 
+  /**
+   * Ids currently expanded — the diff from a view whose default is collapsed
+   * (e.g. Explorer). Persist this list and feed it back through `expand` /
+   * `setExpansion` on the next mount to restore the user's folding.
+   */
+  getExpandedIds(): string[] {
+    const out: string[] = []
+    for (const [id, state] of this._state) {
+      if (state.expanded) out.push(id)
+    }
+    return out
+  }
+
   /** Invalidate the visible-rows cache after the underlying data changed. */
   refresh(): void {
     this._emitStructure()

@@ -15,10 +15,11 @@ explorer（文件资源管理器）是主侧栏的文件树视图。它把「文
 ### 数据流一图
 
 ```
-IWorkspaceService.current.folder  ← 树根来源（切 workspace 整树重置，状态不持久化）
+IWorkspaceService.current.folder  ← 树根来源（切 workspace 整树重置；展开状态持久化到 WORKSPACE 存储并回灌）
 IFileService                      ← 所有磁盘 CRUD / list / stat / copy / rename / delete
 IFileWatcherService               ← 递归监听 → onWatcherEvents → refresh 受影响父目录
 IExcludeService                   ← files.exclude glob → 过滤 + watcher excludes
+IStorageService                   ← 展开状态持久化（explorer/treeState/<root>，WORKSPACE 作用域）
   │
   ▼
 ExplorerTreeService  ── 懒加载子节点缓存(_nodes: URI→NodeState) + 委托 TreeModel 管
@@ -49,8 +50,8 @@ file*Actions 命令 —— run() 里解析目标（单/多）→ 调 tree 的 CR
 
 `apps/editor/src/renderer/services/explorer/ExplorerTreeService.ts`
 
-- **注入**：`IWorkspaceService`（根 + 切换）、`IFileService`（CRUD）、`IFileWatcherService`（监听）、`IExcludeService`（过滤）、`ILoggerService`。
-- **树状态委托给 workbench-ui `TreeModel`**（`_model`）：展开/选择/焦点/可见行扁平化/reveal 全在通用 TreeModel，本 service 只做 URI 适配 + 文件系统特化（懒加载 `_nodes` 缓存、CRUD、watcher 刷新、exclude 过滤、compact 折叠）。**树状态不持久化**——切 workspace（`_setRoot`）整个 `_nodes.clear()` + `_model.reset()`。
+- **注入**：`IWorkspaceService`（根 + 切换）、`IFileService`（CRUD）、`IFileWatcherService`（监听）、`IExcludeService`（过滤）、`ILoggerService`、`IStorageService`（可选注入 `| undefined`，展开状态持久化；测试未注册时禁用）。
+- **树状态委托给 workbench-ui `TreeModel`**（`_model`）：展开/选择/焦点/可见行扁平化/reveal 全在通用 TreeModel，本 service 只做 URI 适配 + 文件系统特化（懒加载 `_nodes` 缓存、CRUD、watcher 刷新、exclude 过滤、compact 折叠）。**展开状态持久化**（仿 SCM `scmTreeState`）：`_setRoot` 仍 `_nodes.clear()` + `_model.reset()`，但随后 `_restoreExpansion` 从 WORKSPACE 存储（key `explorer/treeState/<root>`，实现见 `explorerTreeState.ts`）按深度升序重放展开集合并自愈剔除失效目录；选择/焦点/滚动仍丢弃。
 - **懒加载**：`_dataSource.loadChildren` 读目录 + 为 compact 折叠预取一层孙目录。`getChildren` 返回经 `_computeCompactChildren` 折叠后的视图（单子目录链 `a/b/c` 合成一行）。
 - **选择模型**（关键，命令目标解析依赖它）：
   - `selection: readonly URI[]`——当前选区（多选）。
@@ -189,7 +190,7 @@ actions/index.ts                                     registerAction2 注册全�
 - **命令目标解析双轨**：文件操作的「作用范围」本质分单/多两类，收敛到 `resolveTarget` vs `resolveContextOperations` 两个 helper + service 端 `getContextResources` 一个裁决点。**新命令只需认领用哪个**，多选语义（选区内→全选区 / 选区外→单行）自动一致。历史 bug（delete、copy-path 漏接多选）都是「本该多选却用了单目标」。
 - **扩展命令的多选注入在菜单期物化（SCM parity）**：扩展命令跑在 extension-host 进程，拿不到 renderer 的 tree 选区——`ExplorerContextMenu` 在菜单弹出时就把选区固化成 `args[1]`（`getContextResourceOperations`，元素 `{resource, isDirectory}`）随命令跨进程传过去。renderer 自己的 Action2 忽略 args[1]、自行走 `resolveContextOperations`（同为 `getContextResourceOperations` 派生，语义一致）。**args[1] 已被多选选区占用**：explorer/context 的命令 handler 不得再把 args[1] 当 options 对象解构——若确需 options（如 `dirtyDiffActions` 的 `{pinned, preserveFocus}`），先 `Array.isArray(args[1])` 守卫剔除选区形态。
 - **树状态委托 TreeModel、不自造**：选择/焦点/展开/虚拟化/键盘导航是通用树能力，放 workbench-ui 的 TreeModel；本 service 只加文件系统特化。所以 explorer 与 outline 等共享同一套 Tree 交互契约。
-- **状态不持久化、切 workspace 全重置**：树是 workspace 的派生视图，换根即弃（对标 VSCode 的轻量策略）。
+- **展开状态持久化，其余切 workspace 丢弃**：树是 workspace 的派生视图，换根即弃选择/焦点/滚动（对标 VSCode 的轻量策略）；**展开集合例外**——用户手动展开的目录跨重启/换根恢复（`explorerTreeState.ts` 防抖写 + `_setRoot` 回灌 + `onDidChangeWorkspaceScope` 兜底），focusEnabled 开/关都生效。
 - **watcher 冷启动延迟**：递归监听是主进程 CPU 大头，冷启动时 root 展开已够首屏，watcher 推迟到 idle phase arm，避开与 renderer restore 抢 CPU。见构造函数注释。
 - **共享剪贴板权威、树是镜像**：cut/copy 命令写 main 侧 `IFileClipboardService`（main 内存 + OS 剪贴板，跨窗口共享、快照可带远端 URI）；`ExplorerClipboardContextContribution` 订阅其 `onDidChangeClipboard`（ProxyChannel 广播**含发起窗口**）→ `tree.adoptClipboard` 回灌本地状态 + 同步 context key，构造时还会 `readResources` 一次做启动快照初始化（renderer reload 后 cut 变暗与 context key 不丢）。**事件方向严格单向**：`adoptClipboard` 只进不出；回写 shared 只有「清空」方向，且**只在剪贴板内容真的失效时**——`tree.clearClipboard`（cut 项被 rename/delete/move）、CancelCut、paste-move 成功后的直接 `clear()`。切 workspace 不在此列（见易踩坑 11）。
 
@@ -211,7 +212,7 @@ actions/index.ts                                     registerAction2 注册全�
 1. **多选命令误用单目标解析**（delete、copy-path 已修，勿回退）：作用于「一批」的命令必须 `resolveContextOperations`，否则多选只生效焦点一个。判据见目标解析决策表。
 2. **右击选区外的行**：应只作用那一行，不能吞整个选区——由 `getContextResources` 的「primary 是否在 selection 内」判断实现，别绕过它自己取 `tree.selection`。
 3. **键盘 Delete 传的是焦点行**：ExplorerView `onRowKeyDown` 只传 `node.element.resource` 作 target，多选删除靠命令层展开选区，不要改成在视图层拼多个 target。
-4. **切 workspace 树状态全丢**：`_setRoot` 会 clear+reset，任何「记住展开/选择」的需求都要另做持久化（默认没有）。**唯一例外是剪贴板**——它是 shared 镜像不是树状态，见易踩坑 11。
+4. **切 workspace 只回灌展开集合**：`_setRoot` 仍 clear+reset 掉选择/焦点/滚动，但展开目录会从 WORKSPACE 存储回灌（`explorerTreeState.ts`）。要新增「记住别的树状态」得扩展同一套机制，别以为全部无持久化。**唯一例外是剪贴板**——它是 shared 镜像不是树状态，见易踩坑 11。
 5. **watcher 冷启动窗口不监听**：`startWatching()` 前外部改动可能漏报，`startWatching`/`_refreshLoadedNodes` 会补一次全量重读——别把冷启动期的「没收到 watcher 事件」当 bug。
 6. **cut 项被操作后要清剪贴板**：rename/delete/move 命中 cut 项时 service 已自动 `clearClipboard`；新增会移动/删除文件的路径记得保持这一点。
 7. **compact 折叠行的目标是「段」不是「整行」**：右键/落点要用该段的 URI（`data-segment-uri`），不是 leaf `resource`。
