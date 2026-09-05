@@ -203,7 +203,7 @@ actions/index.ts                                     registerAction2 注册全�
 - **改新建/重命名的输入交互**：对应 action + `IDialogService.prompt`。
 - **改右键菜单项/顺序/可见条件**：`ExplorerMenuContribution.ts`（分组 + order + when）；新 context key 要在 `ExplorerContextMenu.tsx`（行属性类）或 `ExplorerClipboardContextContribution.ts`（剪贴板类）里 set。
 - **改树的懒加载/刷新/watcher/exclude**：`ExplorerTreeService` 的 `_loadChildren`/`refresh`/`_onWatcherEvents`/`_onExcludeChange`/`_syncWatch`。
-- **改 compact 折叠**：`_computeCompactChildren`/`_isSingleDirChild`/`_eagerLoadForCompact`（service）+ ExplorerTreeNode 的 `segments`（视图）。
+- **改 compact 折叠**：`_computeCompactChildren`/`_isSingleDirChild`/`_eagerLoadForCompact`（service）+ ExplorerTreeNode 的 `segments`（视图）。**链的成形时机由 `_compactChainReady` 守**：`getChildren` 发现某子目录的链只缓存了一半就返回 `null`，让 `TreeModel.expand` 把它路由回 `loadChildren` 补链——因为压缩行的 id 是**链尾**，晚成形会让行 id 变化并静默丢焦点。补链只挂 `dataSource.loadChildren`/`refresh`/`_refreshLoadedNodes` 三处，**绝不下沉进 `_loadChildren`**（会闭环递归整棵树）。链因文件系统变化伸缩时靠 `_captureCompactAnchors`（重读**之前**）+ `_remapSelectionToCompact`（之后）把焦点迁到新行。
 - **改自动 reveal / active-editor 标记**：`ExplorerAutoRevealContribution.ts`。
 - **rename/move 后要联动别的东西**：监听 `onDidRunFileOperation`。
 

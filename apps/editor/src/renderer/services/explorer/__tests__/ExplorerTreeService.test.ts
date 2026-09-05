@@ -699,6 +699,179 @@ describe('ExplorerTreeService — compact folders', () => {
   })
 })
 
+/*
+ * A chain that starts one level below a directory the root's own prefetch
+ * already cached. The root eager-loads `source` but stops there (two children,
+ * not a chain), so `config`'s chain is the one that has to form when `source`
+ * is expanded — the case where expand() short-circuits because `source`'s
+ * children are already known.
+ */
+describe('ExplorerTreeService — compact folders below a cached parent', () => {
+  const root = URI.file('/nested')
+  const source = URI.joinPath(root, 'source')
+  const config = URI.joinPath(source, 'config')
+  const raw = URI.joinPath(config, 'raw')
+  const tables = URI.joinPath(raw, 'tables')
+  const leaf = URI.joinPath(tables, 'leaf')
+
+  const CHAIN = 'config/raw/tables/leaf'
+
+  function makeNestedFs() {
+    return makeFs({
+      [root.toString()]: [{ name: 'source', isFile: false, isDirectory: true }],
+      // The sibling file is what keeps `source` itself out of the chain.
+      [source.toString()]: [
+        { name: 'config', isFile: false, isDirectory: true },
+        { name: 'a.txt', isFile: true, isDirectory: false },
+      ],
+      [config.toString()]: [{ name: 'raw', isFile: false, isDirectory: true }],
+      [raw.toString()]: [{ name: 'tables', isFile: false, isDirectory: true }],
+      [tables.toString()]: [{ name: 'leaf', isFile: false, isDirectory: true }],
+      [leaf.toString()]: [{ name: 'data.json', isFile: true, isDirectory: false }],
+    })
+  }
+
+  function rowFor(tree: ExplorerTreeService, resource: URI) {
+    return tree.getVisibleEntries().find((e) => e.resource.toString() === resource.toString())
+  }
+
+  it('expanding the parent renders the chain compacted on the first frame', async () => {
+    const inst = makeInst(makeNestedFs(), new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
+    expect(rowFor(tree, leaf)?.compactRoot?.toString()).toBe(config.toString())
+    // The plain `config` row is the bug: it only compacts once expanded, and
+    // compacting changes the row id, which silently drops focus.
+    expect(rowFor(tree, config)).toBeUndefined()
+  })
+
+  it('keeps the chain compacted across a refresh of the parent', async () => {
+    const inst = makeInst(makeNestedFs(), new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    await tree.refresh(source)
+
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
+    expect(rowFor(tree, config)).toBeUndefined()
+  })
+
+  it('rebuilds the chain after the cached subtree is dropped', async () => {
+    const watcher = new FakeWatcher()
+    const inst = makeInst(makeNestedFs(), new FakeWorkspaceService(root), watcher)
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+
+    tree.forgetSubtree(config)
+    await tree.refresh(source)
+
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
+  })
+
+  it('survives the cold-start catch-up re-read without decompacting', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    const before = fs.calls.list.length
+
+    tree.startWatching()
+    await flush()
+    await flush()
+
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
+    // The catch-up re-reads each loaded directory once; the chain prefetch adds
+    // nothing on top because every directory in it is already cached.
+    expect(fs.calls.list.length).toBeGreaterThan(before)
+    expect(fs.calls.list.filter((p) => p === config.toString())).toHaveLength(2)
+  })
+
+  it('compacts a chain that first appears during the cold-start catch-up', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+
+    // A whole chain lands on disk while the watcher was not yet armed; the
+    // catch-up re-read is the only thing that will ever see it.
+    const added = URI.joinPath(source, 'added')
+    const addedInner = URI.joinPath(added, 'inner')
+    fs.dirs.set(source.toString(), [
+      { name: 'config', isFile: false, isDirectory: true },
+      { name: 'added', isFile: false, isDirectory: true },
+      { name: 'a.txt', isFile: true, isDirectory: false },
+    ])
+    fs.dirs.set(added.toString(), [{ name: 'inner', isFile: false, isDirectory: true }])
+    fs.dirs.set(addedInner.toString(), [{ name: 'x.txt', isFile: true, isDirectory: false }])
+
+    tree.startWatching()
+    await flush()
+    await flush()
+
+    expect(rowFor(tree, addedInner)?.compactName).toBe('added/inner')
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
+  })
+
+  it('shares one listing between concurrent expands of the same parent', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await Promise.all([tree.expand(source), tree.expand(source)])
+
+    expect(fs.calls.list.filter((p) => p === config.toString())).toHaveLength(1)
+  })
+
+  it('moves focus onto the new tail when the chain shortens', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    tree.setSelection([leaf], leaf)
+
+    // A sibling appears under `raw`, so the chain stops there and the row id
+    // moves from the old leaf up to `raw` — the shape a watcher event on `raw`
+    // produces.
+    fs.dirs.set(raw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(URI.joinPath(raw, 'extra').toString(), [])
+    await tree.refresh(raw)
+
+    expect(rowFor(tree, raw)?.compactName).toBe('config/raw')
+    expect(tree.focused?.toString()).toBe(raw.toString())
+    expect(tree.selection.map((u) => u.toString())).toEqual([raw.toString()])
+  })
+
+  it('leaves focus alone when it still matches a row, or when the row is gone', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+
+    const sibling = URI.joinPath(source, 'a.txt')
+    tree.setSelection([sibling], sibling)
+    await tree.refresh(source)
+    expect(tree.focused?.toString()).toBe(sibling.toString())
+
+    // A resource that no longer exists cannot be re-resolved onto any row —
+    // remapping it would send focus somewhere the user never pointed at.
+    const gone = URI.joinPath(source, 'deleted')
+    tree.setSelection([gone], gone)
+    await tree.refresh(source)
+    expect(tree.focused?.toString()).toBe(gone.toString())
+  })
+})
+
 describe('ExplorerTreeService — focus folders', () => {
   const root = URI.file('/ws')
   const client = URI.joinPath(root, 'Client')

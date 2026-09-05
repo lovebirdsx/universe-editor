@@ -80,6 +80,9 @@ interface NodeState {
   children: IExplorerEntry[] | null
   loading: boolean
   error: string | null
+  // In-flight listing. The compact-chain prefetch shares it with expand(), so
+  // the two paths never fire two list IPC for the same directory.
+  pending: Promise<void> | null
 }
 
 function basename(resource: URI): string {
@@ -132,16 +135,16 @@ export class ExplorerTreeService extends Disposable {
     getChildren: (e) => {
       const raw = this._nodes.get(e.resource.toString())?.children ?? null
       if (!raw) return null
+      // A directory child whose chain is only half-cached would render plain
+      // now and compact later — and compacting moves the row id to the chain
+      // tail, which silently drops selection and focus. Reporting "not ready"
+      // routes expand() through loadChildren, which completes the chains first.
+      if (raw.some((c) => c.isDirectory && !this._compactChainReady(c.resource))) return null
       return this._computeCompactChildren(raw)
     },
     loadChildren: async (e) => {
-      const node = this._ensureNode(e.resource)
-      await this._loadChildren(e.resource, node)
-      await Promise.all(
-        (node.children ?? [])
-          .filter((c) => c.isDirectory)
-          .map((c) => this._eagerLoadForCompact(c.resource)),
-      )
+      await this._ensureChildrenLoaded(e.resource)
+      await this._ensureCompactChainsFor(this._ensureNode(e.resource).children ?? [])
     },
     getRoots: () => (this._root ? [this._rootEntry(this._root)] : []),
     getParent: (e) => {
@@ -475,8 +478,11 @@ export class ExplorerTreeService extends Disposable {
   /** Force re-read of a directory's entries, keeping its expanded state. */
   async refresh(resource: URI): Promise<void> {
     const node = this._ensureNode(resource)
+    const anchors = this._captureCompactAnchors()
     await this._loadChildren(resource, node)
+    await this._ensureCompactChainsFor(node.children ?? [])
     this._model.refresh()
+    this._remapSelectionToCompact(anchors)
   }
 
   /**
@@ -818,9 +824,17 @@ export class ExplorerTreeService extends Disposable {
     for (const [key, node] of this._nodes) {
       if (node.children !== null) loaded.push(URI.parse(key))
     }
-    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u)))).then(() =>
-      this._model.refresh(),
-    )
+    const anchors = this._captureCompactAnchors()
+    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u))))
+      .then(() =>
+        Promise.all(
+          loaded.map((u) => this._ensureCompactChainsFor(this._ensureNode(u).children ?? [])),
+        ),
+      )
+      .then(() => {
+        this._model.refresh()
+        this._remapSelectionToCompact(anchors)
+      })
   }
 
   /**
@@ -994,7 +1008,7 @@ export class ExplorerTreeService extends Disposable {
     const key = resource.toString()
     let node = this._nodes.get(key)
     if (!node) {
-      node = { children: null, loading: false, error: null }
+      node = { children: null, loading: false, error: null, pending: null }
       this._nodes.set(key, node)
     }
     return node
@@ -1083,6 +1097,74 @@ export class ExplorerTreeService extends Disposable {
     return ch !== null && ch !== undefined && ch.length === 1 && (ch[0]?.isDirectory ?? false)
   }
 
+  /** Topmost directory of the compact chain that `resource` belongs to. */
+  private _compactChainHead(resource: URI): URI {
+    let head = resource
+    for (let d = 0; d < 20; d++) {
+      const parent = this.getParent(head)
+      if (parent === null || !this._isSingleDirChild(parent)) break
+      head = parent
+    }
+    return head
+  }
+
+  /** Bottom of the compact chain starting at `resource` — the row's identity. */
+  private _compactChainTail(resource: URI): URI {
+    let current = resource
+    for (let d = 0; d < 20; d++) {
+      if (!this._isSingleDirChild(current)) break
+      const child = this._nodes.get(current.toString())?.children?.[0]
+      if (!child) break
+      current = child.resource
+    }
+    return current
+  }
+
+  /**
+   * Rows are keyed by their chain tail, so a refresh that lengthens or shortens
+   * a chain moves the id out from under selection and focus. Snapshot each
+   * selected id's chain head *before* the re-read — afterwards the cache holds
+   * the new shape and walking up from a stale tail no longer reaches the head.
+   */
+  private _captureCompactAnchors(): Map<string, string> {
+    const anchors = new Map<string, string>()
+    const ids = [...this._model.selection]
+    if (this._model.focused !== null) ids.push(this._model.focused)
+    for (const id of ids) {
+      if (!anchors.has(id)) anchors.set(id, this._compactChainHead(URI.parse(id)).toString())
+    }
+    return anchors
+  }
+
+  /**
+   * Re-resolve ids orphaned by a chain reshape onto the row that now covers
+   * them, walking down from the anchor captured before the re-read.
+   *
+   * Only ids that resolve back to a *visible* row are moved: a row hidden under
+   * a collapsed ancestor, or one whose resource is simply gone, is orphaned for
+   * reasons a chain walk cannot fix, and moving it would send focus somewhere
+   * the user never pointed at.
+   */
+  private _remapSelectionToCompact(anchors: Map<string, string>): void {
+    const model = this._model
+    if (model.focused === null && model.selection.length === 0) return
+    const visible = new Set(model.getVisibleNodes().map((n) => n.id))
+    const remap = (id: string): string => {
+      if (visible.has(id)) return id
+      const anchor = anchors.get(id)
+      if (anchor === undefined) return id
+      const tail = this._compactChainTail(URI.parse(anchor)).toString()
+      return visible.has(tail) ? tail : id
+    }
+    const selection = model.selection.map(remap)
+    const focused = model.focused === null ? null : remap(model.focused)
+    const changed =
+      selection.length !== model.selection.length ||
+      focused !== model.focused ||
+      selection.some((id, i) => id !== model.selection[i])
+    if (changed) model.setSelection(selection, focused, { reveal: false })
+  }
+
   private _computeCompactChildren(raw: readonly IExplorerEntry[]): readonly IExplorerEntry[] {
     return raw.map((entry) => {
       if (!entry.isDirectory) return entry
@@ -1105,11 +1187,52 @@ export class ExplorerTreeService extends Disposable {
     })
   }
 
+  /**
+   * True once the whole single-directory chain under `resource` is cached, so
+   * `_computeCompactChildren` would produce its final shape. Unlike
+   * `_isSingleDirChild` this distinguishes "known not to be a chain" (ready)
+   * from "not loaded yet" (not ready) — collapsing the two is what let a row
+   * paint plain and compact later.
+   */
+  private _compactChainReady(resource: URI): boolean {
+    let current = resource
+    for (let d = 0; d < 20; d++) {
+      const ch = this._nodes.get(current.toString())?.children
+      if (!ch) return false
+      if (ch.length !== 1 || !(ch[0]?.isDirectory ?? false)) return true
+      current = ch[0]!.resource
+    }
+    return true
+  }
+
+  /** List only when children are unknown; concurrent callers share one IPC. */
+  private _ensureChildrenLoaded(resource: URI): Promise<void> {
+    const node = this._ensureNode(resource)
+    if (node.children !== null) return Promise.resolve()
+    if (!node.pending) {
+      node.pending = this._loadChildren(resource, node).finally(() => {
+        node.pending = null
+      })
+    }
+    return node.pending
+  }
+
+  /**
+   * Prefetch the single-directory chain of every directory in a listing, so the
+   * rows render compacted on the first frame. Call sites are the three points
+   * that are about to render a listing — never `_loadChildren` itself, which
+   * would re-enter through the recursion below with the depth count reset.
+   */
+  private async _ensureCompactChainsFor(children: readonly IExplorerEntry[]): Promise<void> {
+    await Promise.all(
+      children.filter((c) => c.isDirectory).map((c) => this._eagerLoadForCompact(c.resource)),
+    )
+  }
+
   private async _eagerLoadForCompact(resource: URI, depth = 0): Promise<void> {
     if (depth >= 20) return
-    const node = this._ensureNode(resource)
-    if (node.children === null) await this._loadChildren(resource, node)
-    const ch = node.children
+    await this._ensureChildrenLoaded(resource)
+    const ch = this._ensureNode(resource).children
     if (ch && ch.length === 1 && (ch[0]?.isDirectory ?? false)) {
       await this._eagerLoadForCompact(ch[0]!.resource, depth + 1)
     }

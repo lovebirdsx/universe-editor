@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
   Emitter,
   CommandsRegistry,
@@ -379,5 +379,64 @@ describe('ExplorerView — compact folders segment targeting', () => {
     fireEvent.mouseEnter(srcSeg)
     expect(srcSeg.getAttribute('data-segment-active')).toBe('true')
     expect(libSeg!.getAttribute('data-segment-active')).not.toBe('true')
+  })
+})
+
+/*
+ * A chain one level below a directory whose own children the root prefetch has
+ * already cached. Expanding that directory used to short-circuit the prefetch,
+ * so the chain rendered plain and only compacted on the next ArrowRight — which
+ * moves the row id to the chain tail and silently drops the selection.
+ */
+describe('ExplorerView — compact chain below a cached parent', () => {
+  const root = URI.file('/ws')
+  const source = URI.joinPath(root, 'source')
+  const config = URI.joinPath(source, 'config')
+  const raw = URI.joinPath(config, 'raw')
+  const leaf = URI.joinPath(raw, 'data.json')
+
+  it('keeps the row selected when ArrowRight expands the compact chain', async () => {
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'source', isFile: false, isDirectory: true }],
+      [source.toString()]: [
+        { name: 'config', isFile: false, isDirectory: true },
+        { name: 'a.txt', isFile: true, isDirectory: false },
+      ],
+      [config.toString()]: [{ name: 'raw', isFile: false, isDirectory: true }],
+      [raw.toString()]: [{ name: 'data.json', isFile: true, isDirectory: false }],
+    })
+    const { container, tree } = renderView({ folder: root, fs })
+
+    await waitFor(() => expect(container.querySelector('[data-row-key]')).toBeTruthy())
+    await act(async () => {
+      await tree.expand(source)
+    })
+
+    // The chain is compacted on the first frame: one row keyed by the tail, no
+    // separate `config` row to press ArrowRight on.
+    const row = await waitFor(() => {
+      const r = container.querySelector<HTMLElement>(`[data-row-key="${raw.toString()}"]`)
+      expect(r).toBeTruthy()
+      return r!
+    })
+    expect(container.querySelector(`[data-row-key="${config.toString()}"]`)).toBeNull()
+
+    fireEvent.click(row)
+    await waitFor(() => expect(row.getAttribute('aria-selected')).toBe('true'))
+    // Clicking a directory also toggles it; collapse again so ArrowRight is the
+    // press that expands rather than the one that steps into the first child.
+    act(() => tree.collapse(raw))
+    await waitFor(() =>
+      expect(container.querySelector(`[data-row-key="${leaf.toString()}"]`)).toBeNull(),
+    )
+
+    fireEvent.keyDown(document.querySelector('[role="tree"]')!, { key: 'ArrowRight' })
+
+    await waitFor(() =>
+      expect(container.querySelector(`[data-row-key="${leaf.toString()}"]`)).toBeTruthy(),
+    )
+    // Same row key, still selected — the id never moved out from under it.
+    const rowAfter = container.querySelector<HTMLElement>(`[data-row-key="${raw.toString()}"]`)
+    expect(rowAfter?.getAttribute('aria-selected')).toBe('true')
   })
 })
