@@ -28,7 +28,7 @@ Perforce 用 **changelist（变更列表）** 组织一组待提交的改动，�
 把已签出的文件从一个 changelist 移到另一个，用的是 Perforce 的 `reopen`：
 
 - 在文件行上点行内的**移动到 Changelist** 图标（→），或在文件行上**右键**选**移动到 Changelist**，然后选目标（已有的编号 changelist、默认 changelist，或新建一个）。
-- **拖拽**：直接把文件行拖到目标 changelist 的**组头**上松手，即把它移进该 changelist——不弹选择框，最快。拖动时目标组头会高亮。**未签出的文件（资源管理器里带 RC 徽标的）也能直接拖进 changelist**：因为它们还没签出，拖进去等于把它们[收集](./daily-workflow.md#收集改动reconcile)并直接归入该 changelist（底层 `p4 reconcile -c`），一步到位。
+- **拖拽**：直接把文件行拖到目标 changelist 的**组头**上松手，即把它移进该 changelist——不弹选择框，最快。拖动时目标组头会高亮。**未签出的文件（资源管理器里带改动徽标的）也能直接拖进 changelist**：因为它们还没签出，拖进去等于把它们[收集](./daily-workflow.md#收集改动reconcile)并直接归入该 changelist（底层 `p4 reconcile -c`），一步到位。
 - 选中多个文件行时，操作会作用于整个选择（见[多选批量操作](#多选批量操作)）；拖拽也会带上整个选择。
 
 > **文件夹整块操作**：树状视图（面板标题栏切换）下，文件夹行同样支持右键菜单、行内图标与拖拽，操作会作用于该文件夹下的**所有文件**——例如把整个目录一次移进某个 changelist。
@@ -42,7 +42,7 @@ Perforce 用 **changelist（变更列表）** 组织一组待提交的改动，�
 有时你想把已签出的文件**退出签出状态**、重新整理——比如误签出了一批文件、或想把改动拆成不同任务重新收集。这就是**移出 Changelist**：
 
 - 在文件行、文件夹行、或 changelist 组头上右键选 **移出 Changelist**（组头 / 文件夹会作用于其下所有文件）。
-- 底层跑的是 `p4 revert -k`：撤销 Perforce 的签出登记，但**保留磁盘上的文件内容不变**。文件随即离开该 changelist——**退出签出、磁盘内容保留**，于是它变成一笔未收集的改动：**立刻**出现在源代码管理面板的 **Working Tree Changes** 组里，资源管理器上也随即显示 RC 标记，可再[收集](./daily-workflow.md#收集改动reconcile)回任意 changelist。
+- 底层跑的是 `p4 revert -k`：撤销 Perforce 的签出登记，但**保留磁盘上的文件内容不变**。文件随即离开该 changelist——**退出签出、磁盘内容保留**，于是它变成一笔未收集的改动：**立刻**出现在源代码管理面板的 **Working Tree Changes** 组里，资源管理器上也随即显示改动徽标（M/A/D），可再[收集](./daily-workflow.md#收集改动reconcile)回任意 changelist。
 - 与[还原](./daily-workflow.md#还原)不同：还原会把文件内容恢复到 have 版本（丢改动），移出 Changelist **不动内容**，只解除签出。
 - 移出只针对你选中的那些文件：面板与标记的更新只对这些路径查一次，**不会触发整个工作区的全量扫描**，因此在大型仓库里也很快。
 

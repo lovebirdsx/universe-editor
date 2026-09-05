@@ -247,7 +247,7 @@ describe('PerforceClient.checkWorkingTree', () => {
 
   // --- ③ badge consistency with the resource group ---------------------------
 
-  it('sources its DTOs from toReconcileResourceState (letter RC, colour, tooltip, strike)', async () => {
+  it('sources its DTOs from toReconcileResourceState (letter, colour, tooltip, strike)', async () => {
     const client = await makeClient({
       reconcile: () => [
         { rel: 'a.txt', action: 'edit' },
@@ -259,9 +259,6 @@ describe('PerforceClient.checkWorkingTree', () => {
 
     expect(result).toHaveLength(2)
     for (const dto of result) {
-      // The `RC` letter is the public contract — never the action letter E/A/D.
-      expect(dto.letter).toBe('RC')
-
       const rel = dto.path === `${LOCAL}/a.txt` ? 'a.txt' : 'b.txt'
       const file: ReconcileFile = {
         depotFile: `//depot/branch_x/${rel}`,
@@ -271,6 +268,9 @@ describe('PerforceClient.checkWorkingTree', () => {
       }
       const state = toReconcileResourceState(file)
       expect(state).toBeDefined()
+      // The letter is the public contract and must be the one the resource row
+      // derives — never mapped a second time. edit → RM, delete → RD.
+      expect(dto.letter).toBe(state!.contextValue)
       // Every presentation field must come from the same source as the resource
       // row, so the badge letter/color/tooltip/strike-through all live in one place.
       expect(dto.color).toBe(state!.decorations?.color)

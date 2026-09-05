@@ -5,7 +5,7 @@
  *  (p4 only tracks opened files), so the Explorer shows no decoration for it.
  *  The on-demand `checkWorkingTree` channel fills that gap: when an Explorer row
  *  renders, the host asks the provider which of the visible rows have drift it
- *  hasn't published, and gives the drifted row an "RC" badge.
+ *  hasn't published, and gives the drifted row an "RM" badge.
  *
  *  Liveness-first, like perforceStatusDecorations.spec.ts: the drift assertion
  *  runs BEFORE the clean-file null assertion, so a spec with the whole channel
@@ -38,7 +38,7 @@ const hintFor = (page: Page, suffix: string) =>
 test.describe('@p1 perforce working-tree hint', () => {
   test.use({ p4Seeds: { files: [driftedFile, cleanFile] } })
 
-  test('an uncollected drift gets an RC hint while a clean file gets none @regression', async ({
+  test('an uncollected drift gets an RM hint while a clean file gets none @regression', async ({
     page,
     workbench,
     perforce,
@@ -70,7 +70,7 @@ test.describe('@p1 perforce working-tree hint', () => {
       timeout: 30_000,
     })
 
-    // Liveness first: the drifted row resolves an RC hint. `getHint` is on-demand
+    // Liveness first: the drifted row resolves an RM hint. `getHint` is on-demand
     // (the first call only enqueues; the debounced batch resolves ~150ms later),
     // so poll instead of reading once. The rewrite re-triggers the file watcher —
     // which drops the cached hint and re-enqueues — in case the cold-start batch
@@ -82,7 +82,7 @@ test.describe('@p1 perforce working-tree hint', () => {
       .poll(
         async () => {
           const hint = await hintFor(page, driftedFile.relPath)
-          if (hint?.letter !== 'RC' && rearms < 5) {
+          if (hint?.letter !== 'RM' && rearms < 5) {
             rearms++
             writeFileSync(perforce.file(driftedFile.relPath), DRIFTED_CONTENT, 'utf8')
           }
@@ -90,7 +90,7 @@ test.describe('@p1 perforce working-tree hint', () => {
         },
         { timeout: 60_000, intervals: [500, 1000] },
       )
-      .toEqual(expect.objectContaining({ letter: 'RC' }))
+      .toEqual(expect.objectContaining({ letter: 'RM' }))
 
     // The clean file resolves to "no hint" (cached null → undefined → null).
     // Asserted AFTER liveness so a broken channel can't fake a pass here.
@@ -106,10 +106,10 @@ test.describe('@p1 perforce working-tree hint', () => {
     // `p4 opened`/`reconcile -n` report `clientFile` in CLIENT SYNTAX (`//client/rel`),
     // not a local path — so readFile('//client/…') failed (empty modified side =
     // looks deleted) and the `//` path broke the file: URI. The fake p4 still emits
-    // client syntax for those commands, so the RC hint above and the diff here
+    // client syntax for those commands, so the RM hint above and the diff here
     // together guard the client→local translation end-to-end.
-    await test.step('opening the diff for an RC-hinted file shows the real edit, not a phantom delete', async () => {
-      // The RC badge proves the on-demand reconcile scan found the drift and
+    await test.step('opening the diff for an RM-hinted file shows the real edit, not a phantom delete', async () => {
+      // The RM badge proves the on-demand reconcile scan found the drift and
       // translated the client-syntax path back to the real local file. Now open
       // the diff through the same capability command a drifted row drives, and
       // assert the modified side is the real on-disk content — NOT empty (what a

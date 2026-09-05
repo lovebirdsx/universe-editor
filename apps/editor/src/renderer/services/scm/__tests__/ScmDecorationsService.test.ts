@@ -149,7 +149,7 @@ describe('ScmDecorationsService', () => {
     // Bug C contract: reverting a directory empties the perforce drift group's
     // resourceStates, and the derived fold must drop the folder tint it produced.
     const resources = observableValue<ISourceControlResourceStateDto[]>('rc', [
-      res(`${ROOT}/dir/drift.txt`, 'RC', '#e2c08d', 'On disk'),
+      res(`${ROOT}/dir/drift.txt`, 'RM', '#e2c08d', 'On disk'),
     ])
     const svc = local([
       sourceControl([

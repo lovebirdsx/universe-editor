@@ -567,8 +567,9 @@ export class PerforceClient {
   private _reconcileLimit = RECONCILE_LIMIT_DEFAULT
   /** Normalized client paths currently opened, from the last refresh. Lets the
    *  on-demand working-tree hint skip files p4 already tracks without a fresh
-   *  `opened` round-trip. */
-  private _openedPaths: ReadonlySet<string> = new Set()
+   *  `opened` round-trip. Mutable because revert -k must drop entries before the
+   *  next refresh rebuilds the set. */
+  private _openedPaths: Set<string> = new Set()
   /** Normalized client paths the server still reports unresolved, from the last
    *  refresh. The authoritative "what's left to resolve" after a resolve run. */
   private _unresolvedPaths: ReadonlySet<string> = new Set()
@@ -4187,6 +4188,20 @@ export class PerforceClient {
       else specs.push(path)
     }
     if (specs.length === 0) return
+    // A `revert -k`'d file is no longer opened, but `_openedPaths` is still the
+    // pre-mutation refresh snapshot. `_reconcileScanBatch` filters rows by it,
+    // so the row would be dropped before it reaches the drift set. Remove the
+    // reverted paths up front so the query's answer lands.
+    for (const path of paths) {
+      if (path.endsWith('/...')) {
+        const dir = path.slice(0, -4)
+        for (const p of [...this._openedPaths]) {
+          if (isUnderAny(p, [dir])) this._openedPaths.delete(p)
+        }
+      } else {
+        this._openedPaths.delete(norm(path))
+      }
+    }
     try {
       const result = await this._reconcileScanBatch(specs)
       if (result === undefined || this._disposed || !result.files.length) return

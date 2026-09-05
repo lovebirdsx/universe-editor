@@ -2,6 +2,7 @@
   "perforce.command.viewGraph.title": "View Perforce Graph",
   "perforce.command.refresh.title": "Refresh",
   "perforce.command.reconcile.title": "Collect Changes",
+  "perforce.command.reconcileIntoNewChangelist.title": "Collect into New Changelist…",
   "perforce.command.syncLatest.title": "Get Latest Revision",
   "perforce.command.sync.title": "Get Revision…",
   "perforce.command.previewSync.title": "Preview What Would Be Fetched",

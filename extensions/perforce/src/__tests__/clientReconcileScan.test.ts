@@ -479,8 +479,9 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The drift group now carries the row the old publish wire broadcast: the
-    // path is the local file and the letter is RC, never the action letter.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
+    // path is the local file and the letter is the reconcile drift letter (RM
+    // for an edit), never the opened row's bare action letter.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
     // One checkpoint under the scan namespace.
     expect(disk.store.size).toBe(1)
     const [key] = [...disk.store.keys()]
@@ -809,8 +810,8 @@ describe('PerforceClient.runReconcileScan', () => {
     // Both sessions observe the same drift: the first from its own scan, the
     // second replayed from the checkpoint (zero spawns). Each client owns its
     // own resident drift set.
-    expect(groupRows(first)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
-    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
+    expect(groupRows(first)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
   })
 
   // --- ⑤ focus fingerprint ----------------------------------------------------
@@ -838,7 +839,7 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(reconcileScans()).toHaveLength(2)
     // The scope change dropped the old drift set; only B's row survives.
     expect(scannedDirs(client)).toEqual([`${LOCAL}/B`])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-b.txt`, letter: 'RM' }])
   })
 
   // --- ⑥ cancellation ---------------------------------------------------------
@@ -892,7 +893,7 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
 
     // The opened file is filtered at query time; only the unopened one renders.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/b.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/b.txt`, letter: 'RM' }])
   })
 
   // --- ⑧ background-only side effects -----------------------------------------
@@ -1409,7 +1410,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
       // The timed-out parent still publishes the drift it streamed…
       expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
-      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
+      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RM' }])
       expect(client.scanDriftByDir.get(LOCAL)).toHaveLength(1)
       expect(client.scanDriftByDir.get(join(LOCAL, 'sub1'))).toEqual([])
       expect(client.scanDriftByDir.get(join(LOCAL, 'sub2'))).toEqual([])
@@ -1442,7 +1443,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
       // The streamed hints still publish…
       expect(scannedDirs(client)).toEqual([LOCAL])
-      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
+      expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RM' }])
       // …but with no subdirectories to split into there is nothing to checkpoint:
       // neither a result (partial) nor a split marker.
       expect(disk.store.size).toBe(0)
@@ -1569,7 +1570,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // the parent and saw only the subdirectories.
     expect(scannedDirs(first)).toEqual([LOCAL])
     expect(scannedDirs(second)).toEqual([join(LOCAL, 'sub1'), join(LOCAL, 'sub2')])
-    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RC' }])
+    expect(groupRows(second)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RM' }])
     expect(disk.store.size).toBe(3)
   })
 
@@ -1646,7 +1647,7 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(subEntry.split).toBeUndefined()
     expect(subEntry.files).toHaveLength(1)
     expect(scannedDirs(client)).toEqual([join(LOCAL, 'sub1')])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/sub1/a.txt`, letter: 'RM' }])
     // Early exit: the count stopped inside LOCAL's own listing and never
     // descended into sub1 — the third readdir is sub1's OWN cold count after
     // it was enqueued, not part of the parent's.
@@ -1812,7 +1813,7 @@ describe('PerforceClient.runReconcileScan', () => {
     const specs = reconcileScans().map((a) => a[a.length - 1])
     expect(specs).toEqual([`${LOCAL}/included/...`])
     expect(scannedDirs(client)).toEqual([`${LOCAL}/included`])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/included/a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/included/a.txt`, letter: 'RM' }])
     const keys = [...disk.store.keys()]
     expect(keys.some((k) => k.includes('included'))).toBe(true)
     expect(keys.some((k) => k.includes('excluded'))).toBe(false)
@@ -1889,8 +1890,8 @@ describe('PerforceClient.runReconcileScan', () => {
     // filtered out of the split — only `included` is enqueued and scanned.
     expect(scannedDirs(client)).toEqual([LOCAL, join(LOCAL, 'included')])
     expect(groupRows(client)).toEqual([
-      { path: `${LOCAL}/included/a.txt`, letter: 'RC' },
-      { path: `${LOCAL}/top.txt`, letter: 'RC' },
+      { path: `${LOCAL}/included/a.txt`, letter: 'RM' },
+      { path: `${LOCAL}/top.txt`, letter: 'RM' },
     ])
     const specs = reconcileScans().map((a) => a[a.length - 1])
     expect(specs).toContain(`${join(LOCAL, 'included')}/...`)
@@ -1957,7 +1958,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // The carve only swaps the filespec list — it must not change the
     // per-directory shape: one publish for LOCAL and one checkpoint.
     expect(scannedDirs(client)).toEqual([LOCAL])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RM' }])
     expect(disk.store.size).toBe(1)
   })
 
@@ -2012,7 +2013,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // The excluded row is dropped at assembly time. The per-directory index still
     // keeps the key (its contribution to the set is real), so this must assert on
     // the rendered group, not scanDriftByDir.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/src/included/a.txt`, letter: 'RM' }])
     expect(scannedDirs(client)).toEqual([LOCAL])
   })
 
@@ -2342,6 +2343,35 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(driftFiles(client)).toContain(`${LOCAL}/a.txt`)
   })
 
+  it('revert -k makes the file appear in the rendered reconcile group immediately', async () => {
+    // Regression: _reapplyDriftForMutation queries with reconcile -n, but
+    // _reconcileScanBatch filters rows by _openedPaths — a stale snapshot from
+    // the last refresh. Without removing the reverted file from _openedPaths
+    // before the query, the row is filtered out and the group stays empty.
+    // The mock keeps reporting the file as opened even after revert -k,
+    // simulating the stale snapshot.
+    const client = await makeClient(
+      {
+        opened: () => [{ rel: 'a.txt' }],
+        reconcile: (spec) => (spec.endsWith('a.txt') ? [{ rel: 'a.txt' }] : []),
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => makeFakeWatcher().watcher, watchRoot: ROOT },
+    )
+    client.setReconcileScope([LOCAL])
+    await client.refresh()
+
+    const ok = await client.moveToReconcile([`${LOCAL}/a.txt`])
+    expect(ok).toBe(true)
+
+    // _applyDriftGroup is debounced; in a unit test with mock timers the cleanest
+    // assertion is to call it directly (the real workspace verify covers the
+    // timer path end-to-end).
+    ;(client as unknown as { _applyDriftGroup: () => void })._applyDriftGroup()
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
+  })
+
   it('ignores external events outside the scope or inside an excluded directory', async () => {
     const wt = makeFakeWatcher()
     const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {
@@ -2578,7 +2608,7 @@ describe('PerforceClient.runReconcileScan', () => {
     )
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
     expect(scannedDirs(client)).toEqual([LOCAL])
 
     cleaned = true
@@ -2612,8 +2642,8 @@ describe('PerforceClient.runReconcileScan', () => {
     await client.runReconcileScan()
     expect(driftFiles(client).sort()).toEqual([`${LOCAL}/sub/in-s.txt`, `${LOCAL}/top.txt`])
     expect(groupRows(client).sort()).toEqual([
-      { path: `${LOCAL}/sub/in-s.txt`, letter: 'RC' },
-      { path: `${LOCAL}/top.txt`, letter: 'RC' },
+      { path: `${LOCAL}/sub/in-s.txt`, letter: 'RM' },
+      { path: `${LOCAL}/top.txt`, letter: 'RM' },
     ])
 
     cleaned = true
@@ -2622,7 +2652,7 @@ describe('PerforceClient.runReconcileScan', () => {
 
     // Only the sub tree's row is gone; the sibling row survives its own tint.
     expect(driftFiles(client).sort()).toEqual([`${LOCAL}/top.txt`])
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/top.txt`, letter: 'RM' }])
   })
 
   it('a failed revert clears nothing', async () => {
@@ -2637,14 +2667,14 @@ describe('PerforceClient.runReconcileScan', () => {
     )
     client.setReconcileScope([LOCAL])
     await client.runReconcileScan()
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
 
     const ok = await client.revertReconcile([`${LOCAL}/...`])
     expect(ok).toBe(false)
     await client.whenReconcileScanSettled()
 
     // The disk was not cleaned, so the drift must survive the failed mutation.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/in-a.txt`, letter: 'RM' }])
     expect(windowMock.showErrorMessage).toHaveBeenCalled()
   })
 
@@ -2658,7 +2688,7 @@ describe('PerforceClient.runReconcileScan', () => {
     // The rendered group is capped at 1 row (sorted by clientFile, so a.txt),
     // while the scan index owns both — the cap is a display concern, not a
     // discovery one.
-    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RC' }])
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/a.txt`, letter: 'RM' }])
     expect(driftFiles(client).sort()).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
   })
 })

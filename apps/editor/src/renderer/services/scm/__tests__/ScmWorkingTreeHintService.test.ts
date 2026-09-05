@@ -304,13 +304,13 @@ describe('ScmWorkingTreeHintService', () => {
     // The pre-save answer arrives first (it was sent first), then the fresh one.
     resolvers[0]!([])
     await vi.advanceTimersByTimeAsync(0)
-    resolvers[1]!([dto(`${ROOT}/a.ts`, { letter: 'RC' })])
+    resolvers[1]!([dto(`${ROOT}/a.ts`, { letter: 'RM' })])
     await vi.advanceTimersByTimeAsync(0)
 
     // Latest query wins. Accepting #1 would pin the file "clean" for good: the
     // cache holds an entry, so no render re-enqueues it, and `_revalidate` only
     // walks keys already cached at the time it runs.
-    expect(service.getHint(a)?.letter).toBe('RC')
+    expect(service.getHint(a)?.letter).toBe('RM')
   })
 
   it('does not re-enqueue a key whose query is still in flight', async () => {
@@ -365,9 +365,9 @@ describe('ScmWorkingTreeHintService', () => {
     expect(exec).toHaveBeenCalledTimes(2)
 
     // Once it lands the key is released, so a still-stale row queries again.
-    resolveCmd!([dto(`${ROOT}/a.ts`, { letter: 'RC' })])
+    resolveCmd!([dto(`${ROOT}/a.ts`, { letter: 'RM' })])
     await vi.advanceTimersByTimeAsync(0)
-    expect(service.getHint(a)?.letter).toBe('RC')
+    expect(service.getHint(a)?.letter).toBe('RM')
   })
 
   it('fully invalidates when the workspace changes', async () => {
@@ -628,7 +628,7 @@ describe('ScmWorkingTreeHintService', () => {
     it('surfaces p4 drift for an unselected nested-git file', async () => {
       const executeCommand = vi.fn().mockImplementation((id: unknown, _paths: unknown) => {
         if (id === 'perforce.checkWorkingTree') {
-          return Promise.resolve([dto(`${GIT_ROOT}/a.txt`, { letter: 'RC' })])
+          return Promise.resolve([dto(`${GIT_ROOT}/a.txt`, { letter: 'RM' })])
         }
         // git contributes no checkWorkingTree command: an unanswered batch is clean.
         return Promise.resolve(undefined)
@@ -638,13 +638,13 @@ describe('ScmWorkingTreeHintService', () => {
       // No repo is selected in the SCM view (scmViewState.selectedRepo stays
       // undefined). The unselected state is meant to merge every provider's hint
       // slot, so the nested git repo's file — still owned by the outer Perforce
-      // workspace — must surface its p4 drift as an RC badge.
+      // workspace — must surface its p4 drift as an RM badge.
       const a = URI.file(`${GIT_ROOT}/a.txt`)
       expect(service.getHint(a)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(200)
 
       expect(exec).toHaveBeenCalledWith('perforce.checkWorkingTree', [`${GIT_ROOT}/a.txt`])
-      expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'RC' })
+      expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'RM' })
     })
 
     it('queries nothing when no owner has the checkWorkingTree capability', async () => {
@@ -666,7 +666,7 @@ describe('ScmWorkingTreeHintService', () => {
     })
 
     it('re-queries a path once its owner registers the capability late', async () => {
-      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.ts`, { letter: 'RC' })])
+      const executeCommand = vi.fn().mockResolvedValue([dto(`${ROOT}/a.ts`, { letter: 'RM' })])
       const { service, executeCommand: exec } = makeService(
         executeCommand,
         scmOf([scmSourceControl('late', ROOT)]),
@@ -687,7 +687,7 @@ describe('ScmWorkingTreeHintService', () => {
         expect(service.getHint(a)).toBeUndefined()
         await vi.advanceTimersByTimeAsync(200)
         expect(exec).toHaveBeenCalledWith('late.checkWorkingTree', [`${ROOT}/a.ts`])
-        expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'RC' })
+        expect(service.getHint(a)).toEqual({ color: '#e2c08d', letter: 'RM' })
       } finally {
         command.dispose()
       }

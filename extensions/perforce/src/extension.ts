@@ -38,7 +38,12 @@ import { ClientManager } from './clientManager.js'
 import { P4StatusBarController } from './p4StatusBar.js'
 import { AutoEditController } from './autoEdit.js'
 import { notifyP4Failure, setP4OutputShower, isMissingCli } from './p4Error.js'
-import { changelistIdFromGroupId, type P4Action } from './changelist.js'
+import {
+  changelistIdFromGroupId,
+  RECONCILE_GROUP_ID,
+  RESOLVE_GROUP_ID,
+  type P4Action,
+} from './changelist.js'
 import { statusFromAction, displayPath } from './p4GraphParser.js'
 import {
   openGraphFileDiff,
@@ -75,10 +80,13 @@ function resourcePath(arg: unknown): string | undefined {
 }
 
 /** The changelist a group-scoped command targets, from the `scmResourceGroupId`
- *  the host attaches to group actions ('default' or `cl:<n>`). */
+ *  the host attaches to group actions ('default' or `cl:<n>`). Returns
+ *  `undefined` for the non-changelist groups (reconcile drift / resolve /
+ *  shelved have no meaningful "whole changelist" to move or revert). */
 function groupChangelistId(arg: unknown): string | undefined {
   const id = (arg as { scmResourceGroupId?: string } | undefined)?.scmResourceGroupId
-  return id === undefined ? undefined : changelistIdFromGroupId(id)
+  if (id === undefined || id === RECONCILE_GROUP_ID || id === RESOLVE_GROUP_ID) return undefined
+  return changelistIdFromGroupId(id)
 }
 
 /** The `perforce.setActiveRepo` handler, exported as a test seam. `root == null`
@@ -1086,6 +1094,26 @@ export async function activate(context: ExtensionContext): Promise<void> {
         return
       }
       await client.reconcile([buildScopeFilespec(path, isDirectory)])
+    }),
+
+    // Collect the selected not-yet-opened files into a brand-new numbered
+    // changelist (the reconcile-drift analogue of `moveToNewChangelist`). Only
+    // meaningful from the Working Tree Changes group, so the menu shows it solely
+    // there. `reconcileInto` (not `reopen`) is the engine — these files are not
+    // open yet, so `reopen` would no-op on them; `reconcile -c` opens them for
+    // their on-disk action straight into the new changelist.
+    commands.registerCommand('perforce.reconcileIntoNewChangelist', async (...args: unknown[]) => {
+      const paths = await resolveTargetPaths(args)
+      if (paths.length === 0) return
+      const target = mgr.resolveClient({ resourceUri: paths[0]! })
+      if (!target) return
+      const description = await window.showInputBox({
+        prompt: localize('perforce.newChangelist.prompt', 'New changelist description'),
+      })
+      if (description === undefined) return
+      const created = await target.newChangelist(description)
+      if (!created) return
+      await target.reconcileInto(created, paths)
     }),
 
     // --- Sync (get revision) ------------------------------------------------

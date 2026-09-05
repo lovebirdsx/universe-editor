@@ -110,7 +110,11 @@ const LETTER_WEIGHT: Record<string, number> = {
   R: 4, // renamed
   C: 4, // copied
   A: 2, // added
-  RC: 2, // on disk but not opened in any changelist (perforce working-tree drift)
+  // Perforce working-tree drift (not opened in any changelist): the action
+  // letter with an `R` prefix (RM/RA/RD). Same weight as the opened equivalent.
+  RM: 4,
+  RD: LETTER_WEIGHT_DELETE,
+  RA: 2,
   '?': 1, // untracked
 }
 
@@ -168,8 +172,9 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
             const color = res.decorations?.color ?? '#cccccc'
             const key = scmPathKey(res.resourceUri)
             // A provider can mark a row struck-through without its letter saying
-            // `D`: perforce files every reconcile action under the single letter
-            // `RC`, so the delete case is only visible here.
+            // `D`: perforce reconcile drift reuses the action letter with an `R`
+            // prefix (`RD` for a delete), and an opened move/delete is `D` only
+            // by letter — the strike is carried on the decoration either way.
             const strikeThrough = res.decorations?.strikeThrough === true || letter === 'D'
             // Later groups (working tree) override earlier ones (staged), so the
             // file shows its most user-relevant state.
@@ -183,10 +188,10 @@ export class ScmDecorationsService extends Disposable implements IScmDecorations
             })
 
             // A deletion outranks any non-deleting change of the same letter
-            // class — without this an `RC` delete's red would lose the folder to
-            // whichever `RC` edit the iteration happened to reach first. `max`
-            // rather than assignment so it can only ever raise (a struck-through
-            // conflict keeps its higher weight).
+            // class — without this an `RD` (reconcile delete) red would lose the
+            // folder to whichever `RM` edit the iteration happened to reach first.
+            // `max` rather than assignment so it can only ever raise (a
+            // struck-through conflict keeps its higher weight).
             const base = LETTER_WEIGHT[letter] ?? 3
             const weight = strikeThrough ? Math.max(base, LETTER_WEIGHT_DELETE) : base
             for (const dir of ancestors(key, root)) {

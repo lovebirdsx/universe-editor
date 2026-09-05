@@ -2,6 +2,7 @@
   "perforce.command.viewGraph.title": "查看 Perforce Graph",
   "perforce.command.refresh.title": "刷新",
   "perforce.command.reconcile.title": "收集改动",
+  "perforce.command.reconcileIntoNewChangelist.title": "收集到新建 Changelist…",
   "perforce.command.syncLatest.title": "拉取最新版本",
   "perforce.command.sync.title": "拉取版本…",
   "perforce.command.previewSync.title": "预览将要拉取的内容",

@@ -148,7 +148,8 @@ export interface E2EScmDecoration {
  * it is clean/off-host or the on-demand query hasn't resolved yet (specs poll).
  */
 export interface E2EWorkingTreeHint {
-  /** Badge letter (Perforce reconcile drift reads as 'RC'). */
+  /** Badge letter (Perforce reconcile drift reuses the git action letter with an
+   *  `R` prefix, e.g. 'RM' for a modified-but-unopened file). */
   readonly letter: string
   /** Concrete CSS color the file name/badge is painted with. */
   readonly color: string

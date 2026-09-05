@@ -2,11 +2,14 @@
  * Maps opened files into SCM resource states + decorations. Pure transforms
  * (opened file → row); no p4 I/O here. Mirrors git's repositoryDecoration.ts.
  *
- * `contextValue` is a single status letter (E/A/D/B/I/M, or U for unresolved),
+ * `contextValue` is the git-aligned status letter (M/A/D), or U for unresolved,
  * matching how the host renders the row badge AND how menu `when` clauses select
- * rows (e.g. `scmResourceState == U` for a resolve action). Reconcile (not-yet-
- * opened) rows use `RC`, shelved rows use `S`. The full p4 action is kept in the
- * tooltip for humans.
+ * rows (e.g. `scmResourceState == U` for a resolve action). Shelved rows use `S`.
+ * Reconcile (not-yet-opened) rows reuse the same action letter but with an `R`
+ * prefix (`RM`/`RA`/`RD`) so they read as the git letter family while staying
+ * distinguishable from opened rows for menu gating (`scmResourceState != RC`
+ * no longer works once the letters align — the group id is the discriminator).
+ * The full p4 action is kept in the tooltip for humans.
  */
 import type { SourceControlResourceState } from '@universe-editor/extension-api'
 import type { WorkingTreeChangeDto } from '@universe-editor/extensions-common'
@@ -21,18 +24,18 @@ interface ActionStyle {
   readonly strikeThrough?: boolean
 }
 
-/** Visual style per p4 action. Colours mirror git's palette for consistency. */
+/** Visual style per p4 action. Letters and colours mirror git's palette. */
 const ACTION_STYLE: Record<P4Action, ActionStyle> = {
-  edit: { letter: 'E', color: '#e2c08d', tooltip: 'Edit' },
+  edit: { letter: 'M', color: '#e2c08d', tooltip: 'Edit' },
   add: { letter: 'A', color: '#73c991', tooltip: 'Add' },
   delete: { letter: 'D', color: '#c74e39', tooltip: 'Delete', strikeThrough: true },
-  branch: { letter: 'B', color: '#73c991', tooltip: 'Branch' },
-  integrate: { letter: 'I', color: '#e2c08d', tooltip: 'Integrate' },
-  'move/add': { letter: 'M', color: '#73c991', tooltip: 'Move (add)' },
-  'move/delete': { letter: 'M', color: '#c74e39', tooltip: 'Move (delete)', strikeThrough: true },
-  import: { letter: 'I', color: '#73c991', tooltip: 'Import' },
-  archive: { letter: 'R', color: '#e2c08d', tooltip: 'Archive' },
-  purge: { letter: 'R', color: '#c74e39', tooltip: 'Purge' },
+  branch: { letter: 'A', color: '#73c991', tooltip: 'Branch' },
+  integrate: { letter: 'M', color: '#e2c08d', tooltip: 'Integrate' },
+  'move/add': { letter: 'A', color: '#73c991', tooltip: 'Move (add)' },
+  'move/delete': { letter: 'D', color: '#c74e39', tooltip: 'Move (delete)', strikeThrough: true },
+  import: { letter: 'A', color: '#73c991', tooltip: 'Import' },
+  archive: { letter: 'M', color: '#e2c08d', tooltip: 'Archive' },
+  purge: { letter: 'M', color: '#c74e39', tooltip: 'Purge' },
 }
 
 const UNRESOLVED_STYLE: ActionStyle = {
@@ -118,10 +121,13 @@ export function toShelvedResourceStates(
 
 /**
  * A file whose working-tree state diverged from the depot but that isn't opened
- * yet (from `p4 reconcile -n`). The `RC` context value distinguishes it from
- * opened rows. Feeds the Explorer working-tree hint (see
- * {@link toWorkingTreeHint}); clicking shows the have-vs-local diff for
- * edit/delete, or just opens the file for add (no depot base yet).
+ * yet (from `p4 reconcile -n`). Its `contextValue` reuses the git-aligned action
+ * letter with an `R` prefix (`RM`/`RA`/`RD`) so the row reads in git's letter
+ * family yet stays distinguishable from an opened row for menu gating — opened
+ * rows must not show "move out of changelist" / shelve, and reconcile rows must
+ * not. Feeds the Explorer working-tree hint (see {@link toWorkingTreeHint});
+ * clicking shows the have-vs-local diff for edit/delete, or just opens the file
+ * for add (no depot base yet).
  */
 export function toReconcileResourceState(
   file: ReconcileFile,
@@ -130,7 +136,7 @@ export function toReconcileResourceState(
   const style = ACTION_STYLE[file.action]
   return {
     resourceUri: file.clientFile,
-    contextValue: 'RC',
+    contextValue: `R${style.letter}`,
     decorations: {
       tooltip: `Not opened · ${style.tooltip}`,
       color: style.color,
@@ -161,7 +167,7 @@ export function toWorkingTreeHint(file: ReconcileFile): WorkingTreeChangeDto | u
   if (deco?.color === undefined) return undefined
   return {
     path: state.resourceUri,
-    letter: state.contextValue ?? 'RC',
+    letter: state.contextValue ?? 'RM',
     color: deco.color,
     ...(deco.tooltip !== undefined ? { tooltip: deco.tooltip } : {}),
     ...(deco.strikeThrough ? { strikeThrough: true } : {}),

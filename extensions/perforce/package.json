@@ -34,6 +34,12 @@
         "icon": "add"
       },
       {
+        "command": "perforce.reconcileIntoNewChangelist",
+        "title": "%perforce.command.reconcileIntoNewChangelist.title%",
+        "category": "Perforce",
+        "icon": "new-file"
+      },
+      {
         "command": "perforce.syncLatest",
         "title": "%perforce.command.syncLatest.title%",
         "category": "Perforce",
@@ -343,19 +349,19 @@
         },
         {
           "command": "perforce.reopen",
-          "when": "scmProvider == perforce && scmResourceState != S",
+          "when": "scmProvider == perforce && scmResourceState != S && scmResourceGroup != reconcile",
           "group": "inline@2",
           "icon": "arrow-right"
         },
         {
           "command": "perforce.moveToNewChangelist",
-          "when": "scmProvider == perforce && scmResourceState != S",
+          "when": "scmProvider == perforce && scmResourceState != S && scmResourceGroup != reconcile",
           "group": "inline@3",
           "icon": "new-file"
         },
         {
           "command": "perforce.shelve",
-          "when": "scmProvider == perforce && scmResourceState != S",
+          "when": "scmProvider == perforce && scmResourceState != S && scmResourceGroup != reconcile",
           "group": "inline@4",
           "icon": "archive"
         },
@@ -421,9 +427,21 @@
         },
         {
           "command": "perforce.moveToReconcile",
-          "when": "scmProvider == perforce && scmResourceState != S",
+          "when": "scmProvider == perforce && scmResourceState != S && scmResourceGroup != reconcile",
           "group": "2_move@1",
           "icon": "arrow-left"
+        },
+        {
+          "command": "perforce.reconcile",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@1",
+          "icon": "add"
+        },
+        {
+          "command": "perforce.reconcileIntoNewChangelist",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@2",
+          "icon": "new-file"
         }
       ],
       "scm/resourceGroup/context": [
@@ -477,7 +495,7 @@
         },
         {
           "command": "perforce.revertUnchanged",
-          "when": "scmProvider == perforce",
+          "when": "scmProvider == perforce && (scmResourceGroup == default || scmResourceGroup =~ /^cl:/)",
           "group": "2_revert@1",
           "icon": "discard"
         },
@@ -515,21 +533,33 @@
         },
         {
           "command": "perforce.reopen",
-          "when": "scmProvider == perforce",
+          "when": "scmProvider == perforce && scmResourceGroup != reconcile",
           "group": "inline@2",
           "icon": "arrow-right"
         },
         {
           "command": "perforce.moveToNewChangelist",
-          "when": "scmProvider == perforce",
+          "when": "scmProvider == perforce && scmResourceGroup != reconcile",
           "group": "inline@3",
           "icon": "new-file"
         },
         {
           "command": "perforce.moveToReconcile",
-          "when": "scmProvider == perforce",
+          "when": "scmProvider == perforce && scmResourceGroup != reconcile",
           "group": "inline@4",
           "icon": "arrow-left"
+        },
+        {
+          "command": "perforce.reconcile",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@1",
+          "icon": "add"
+        },
+        {
+          "command": "perforce.reconcileIntoNewChangelist",
+          "when": "scmProvider == perforce && scmResourceGroup == reconcile",
+          "group": "2_move@2",
+          "icon": "new-file"
         }
       ],
       "explorer/context": [
