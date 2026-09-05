@@ -12,7 +12,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'perforce.group.numberedNoDesc': '#{0}',
   'perforce.group.shelved': '已搁置的文件',
   'perforce.group.resolve': '需要合并',
-  'perforce.group.reconcile': '未收集的改动',
+  'perforce.group.reconcile': '改动',
   'perforce.group.reconcile.scanning': '扫描中 {0}/{1}',
   'perforce.group.reconcile.truncated': '仅显示 {0}/{1}',
   // status-bar busy labels (spinner text during long p4 operations)

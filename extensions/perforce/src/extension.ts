@@ -569,7 +569,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
   )
 
-  /** Cap on rows in the "Working Tree Changes" group (`perforce.reconcileLimit`). */
+  /** Cap on rows in the "Changes" group (`perforce.reconcileLimit`). */
   const applyReconcileLimit = async (target: PerforceClient): Promise<void> => {
     target.setReconcileLimit(await cfg.get('reconcileLimit', 10_000))
   }
@@ -1098,7 +1098,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     // Collect the selected not-yet-opened files into a brand-new numbered
     // changelist (the reconcile-drift analogue of `moveToNewChangelist`). Only
-    // meaningful from the Working Tree Changes group, so the menu shows it solely
+    // meaningful from the Changes group, so the menu shows it solely
     // there. `reconcileInto` (not `reopen`) is the engine — these files are not
     // open yet, so `reopen` would no-op on them; `reconcile -c` opens them for
     // their on-disk action straight into the new changelist.

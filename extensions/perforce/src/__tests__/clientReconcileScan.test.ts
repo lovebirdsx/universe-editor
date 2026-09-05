@@ -2340,7 +2340,7 @@ describe('PerforceClient.runReconcileScan', () => {
     ).toEqual([`${LOCAL}/B/b.txt`])
   })
 
-  it('re-adds reverted files as drift so they land in Working Tree Changes', async () => {
+  it('re-adds reverted files as drift so they land in the Changes group', async () => {
     // The file is opened before the move and no longer opened after `revert -k`.
     let opened = true
     const client = await makeClient(

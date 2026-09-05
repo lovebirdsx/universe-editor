@@ -739,7 +739,7 @@ export class PerforceClient {
     this._resolveGroup.hideWhenEmpty = true
     this._reconcileGroup = this._sc.createResourceGroup(
       RECONCILE_GROUP_ID,
-      localize('perforce.group.reconcile', 'Working Tree Changes'),
+      localize('perforce.group.reconcile', 'Changes'),
     )
     this._reconcileGroup.hideWhenEmpty = true
     this._sc.inputBox.placeholder = localize(
@@ -3782,7 +3782,7 @@ export class PerforceClient {
    */
   private _updateDriftGroupLabel(): void {
     if (this._disposed) return
-    const base = localize('perforce.group.reconcile', 'Working Tree Changes')
+    const base = localize('perforce.group.reconcile', 'Changes')
     const notes: string[] = []
     const progress = this._scanProgress
     if (progress !== undefined) {
@@ -4176,7 +4176,7 @@ export class PerforceClient {
    * back into the working-tree drift set: the post-mutation invalidation
    * (`_removeDriftUnder`) drops what the mutation resolved, and the mutation's own
    * watcher events are suppressed — so without the narrow re-query below the files
-   * would stay invisible in "Working Tree Changes" until the next session's scan.
+   * would stay invisible in the "Changes" group until the next session's scan.
    * Re-query them (`reconcile -n`, same dry-run as the watcher flush) and fold the
    * still-diverged rows back in, so the group updates in this session.
    */

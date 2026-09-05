@@ -78,7 +78,7 @@ Perforce 文件同样支持行内 **Blame（溯源）**，与 Git 共用同一�
 - **面板不出现**：确认 `p4` 在 `PATH` 中，且该文件夹在某个 Perforce 客户端根目录下（`p4 info` 能报出 client root）。
 - **提示未登录 / 会话过期**：用面板 ⋯ 菜单的**登录**重新登录。
 - **看不到最新服务器状态**：手动**刷新**，或开启 `perforce.refreshInterval` 轮询。
-- **改了文件但面板里没有**：普通改动会出现在面板的 **Working Tree Changes** 组；若该组隐藏、资源管理器也没有改动徽标，说明文件已签出且没有未收集改动，或已被[收集改动](./daily-workflow.md#收集改动reconcile)。想把它收进某个 changelist，在资源管理器右键 **收集改动** 即可。
+- **改了文件但面板里没有**：普通改动会出现在面板的 **改动**（Changes）组；若该组隐藏、资源管理器也没有改动徽标，说明文件已签出且没有未收集改动，或已被[收集改动](./daily-workflow.md#收集改动reconcile)。想把它收进某个 changelist，在资源管理器右键 **收集改动** 即可。
 - **想看底层命令**：在面板标题栏 ⋯ 菜单选 **显示输出**，打开 **Perforce 输出**底栏看完整日志。
 
 更多通用问题见[常见问题](../reference/faq.md)与[疑难排查](../reference/troubleshooting.md)。
