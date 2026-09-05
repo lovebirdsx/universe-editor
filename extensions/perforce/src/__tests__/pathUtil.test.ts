@@ -185,7 +185,13 @@ describe('commonAncestorDir', () => {
   })
 
   it('keeps the first input casing for segments below the drive letter', () => {
-    expect(commonAncestorDir(['C:/ws/Client/a.txt', 'C:/ws/client/b.txt'])).toBe('c:/ws/Client')
+    // Comparison follows the host case policy (scopeKey): on win32/darwin `Client`
+    // and `client` name the same directory, so the result keeps the first input's
+    // casing; elsewhere they are distinct and the ancestor stops one level up.
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(commonAncestorDir(['C:/ws/Client/a.txt', 'C:/ws/client/b.txt'])).toBe(
+      insensitive ? 'c:/ws/Client' : 'c:/ws',
+    )
   })
 
   it('returns empty for no shared root and for an empty list', () => {
