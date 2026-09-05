@@ -231,6 +231,21 @@ describe('TreeModel', () => {
     expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1' })
   })
 
+  it('setSelection with { reveal: false } seeds focus without firing onReveal', () => {
+    const model = new TreeModel({ dataSource: eagerSource([{ id: 'a' }, { id: 'b' }]) })
+    const onReveal = vi.fn()
+    model.onReveal(onReveal)
+    // Programmatic seeding (e.g. giving a freshly focused tree a keyboard
+    // cursor) must not scroll the viewport to that row.
+    model.setSelection(['a'], 'a', { reveal: false })
+    expect(model.focused).toBe('a')
+    expect(model.isSelected('a')).toBe(true)
+    expect(onReveal).not.toHaveBeenCalled()
+    // Default stays reveal-on.
+    model.setSelection(['b'], 'b')
+    expect(onReveal).toHaveBeenCalledWith({ id: 'b' })
+  })
+
   describe('navigate', () => {
     function tree(): TreeModel<N> {
       const model = new TreeModel({

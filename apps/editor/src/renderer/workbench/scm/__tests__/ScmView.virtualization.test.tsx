@@ -111,7 +111,7 @@ describe('ScmView — virtualization (renderer OOM regression)', () => {
     expect(parseInt(spacer!.style.height, 10)).toBeGreaterThan(COUNT * 10)
   })
 
-  it('still renders rows inline for a small changelist (below threshold)', async () => {
+  it('renders every row for a small changelist (below threshold)', async () => {
     const { scm } = setup()
 
     await act(async () => {
@@ -123,8 +123,8 @@ describe('ScmView — virtualization (renderer OOM regression)', () => {
       ])
     })
 
-    // Below the virtualization threshold rows render inline (no layout engine
-    // needed), so their labels are queryable.
+    // Below the virtualization threshold every row is rendered (no layout
+    // engine needed), so their labels are queryable.
     expect(await screen.findByText('a.txt')).toBeTruthy()
     expect(await screen.findByText('b.txt')).toBeTruthy()
   })

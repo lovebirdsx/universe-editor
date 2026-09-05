@@ -231,7 +231,6 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         model={model}
         rootRef={containerRef}
         className={styles['view'] ?? ''}
-        virtualListClassName={styles['virtualList'] ?? ''}
         ariaLabel={ariaLabel}
         renderRow={(ctx) => {
           const item = ctx.node.element

@@ -374,11 +374,15 @@ export class ExplorerTreeService extends Disposable {
     return this._visibleEntries
   }
 
-  setSelection(resources: readonly URI[] | URI | null, focus?: URI | null): void {
+  setSelection(
+    resources: readonly URI[] | URI | null,
+    focus?: URI | null,
+    options?: { reveal?: boolean },
+  ): void {
     const list = resources == null ? [] : Array.isArray(resources) ? resources : [resources as URI]
     const ids = list.map((u) => u.toString())
-    if (focus === undefined) this._model.setSelection(ids)
-    else this._model.setSelection(ids, focus === null ? null : focus.toString())
+    if (focus === undefined) this._model.setSelection(ids, undefined, options)
+    else this._model.setSelection(ids, focus === null ? null : focus.toString(), options)
   }
 
   setFocus(resource: URI | null): void {

@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Smoke spec: Explorer row height (P1).
- *  Regression guard — when many rows render in non-virtual mode (count below the
- *  virtualization threshold) the flat list lives directly inside the flex column
- *  `.view`. Without `flex-shrink: 0` each row would be compressed below its 22px
- *  height to fit the container instead of overflowing/scrolling, so spacing
- *  shrank as more folders were expanded. This asserts rows keep their height.
+ *  Regression guard — rows must keep their 22px height however many are on
+ *  screen. The original failure was a flat list of flex children inside the flex
+ *  column `.view`, where each row compressed to fit instead of overflowing, so
+ *  spacing shrank as more folders were expanded. Rows are absolutely positioned
+ *  now, but the row count here stays below the virtualization threshold so this
+ *  still covers the path where every row is rendered at once.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -14,7 +15,7 @@ import { test, expect } from '../fixtures/sharedApp.js'
 
 const ROW_HEIGHT = 22
 // Enough rows to overflow any reasonable viewport, but well under the 200 default
-// virtualization threshold so we exercise the non-virtual flat-list path.
+// virtualization threshold so every row is rendered rather than windowed.
 const FILE_COUNT = 120
 
 test.describe('@p1 explorer row height', () => {

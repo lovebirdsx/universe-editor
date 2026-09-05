@@ -47,12 +47,14 @@ test.describe('@p1 search scroll', () => {
     const tree = searchView.getByRole('tree', { name: 'Search results' })
     await expect(tree).toBeVisible()
 
-    // The inner virtual scroller is the element that actually scrolls.
-    const scroller = tree.locator('div').first()
+    // The tree root is the scroll container; the spacer inside it carries the
+    // full-result-set height.
+    const scroller = tree
 
     // Poll for a scroll range that reflects the full result set: total height
-    // must be far larger than the client height. With the flex-shrink bug the
-    // spacer collapses and scrollHeight ≈ clientHeight, so this never holds.
+    // must be far larger than the client height. The spacer is a child of the
+    // flex-column tree root, so without `flex-shrink: 0` it collapses to the
+    // viewport and scrollHeight ≈ clientHeight, making this never hold.
     await expect
       .poll(
         async () =>

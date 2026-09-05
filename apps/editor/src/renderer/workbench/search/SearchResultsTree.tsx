@@ -551,7 +551,6 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           rootRef={containerRef}
           scrollStateKey="search"
           className={styles['resultsTree'] ?? ''}
-          virtualListClassName={styles['resultsTreeVirtual'] ?? ''}
           ariaLabel={localize('search.results', 'Search results')}
           rowHeight={22}
           indentWidth={10}

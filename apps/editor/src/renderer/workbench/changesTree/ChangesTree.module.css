@@ -12,15 +12,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Below the virtualization threshold rows render inline as flex children;
-   * this makes .tree the scroll container for them (the VirtualList brings its
-   * own scroller above the threshold). Mirrors ScmView. */
+  /* Always the scroll container — see ScmView. */
   overflow-y: auto;
-}
-
-.virtualList {
-  flex: 1;
-  min-height: 0;
 }
 
 .folder.selected,

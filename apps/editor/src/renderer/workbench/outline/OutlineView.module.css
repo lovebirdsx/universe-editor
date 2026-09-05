@@ -124,8 +124,3 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.virtualList {
-  flex: 1;
-  min-height: 0;
-}

@@ -130,8 +130,3 @@
   font-size: 12px;
   color: var(--vscode-sideBar-foreground, #888888);
 }
-
-.virtualList {
-  flex: 1;
-  min-height: 0;
-}

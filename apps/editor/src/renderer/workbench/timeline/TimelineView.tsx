@@ -318,7 +318,6 @@ export function TimelineView() {
           rootRef={containerRef}
           scrollStateKey="timeline"
           className={styles['view'] ?? ''}
-          virtualListClassName={styles['virtualList'] ?? ''}
           ariaLabel={localize('timeline.label', 'Timeline')}
           renderRow={(ctx) => {
             const row = ctx.node.element

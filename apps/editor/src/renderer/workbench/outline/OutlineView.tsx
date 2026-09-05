@@ -487,7 +487,6 @@ export function OutlineView() {
           rootRef={containerRef}
           scrollStateKey="outline"
           className={styles['view'] ?? ''}
-          virtualListClassName={styles['virtualList'] ?? ''}
           ariaLabel={localize('outline.label', 'Outline')}
           renderRow={(ctx) => {
             const node = ctx.node

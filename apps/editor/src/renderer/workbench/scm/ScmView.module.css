@@ -334,20 +334,15 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Below the virtualization threshold, rows render inline as flex children;
-   * this makes .tree the scroll container for them (the VirtualList brings its
-   * own scroller above the threshold). */
+  /* Always the scroll container: Tree renders its rows into a spacer here
+   * rather than bringing a scroller of its own, so the scroll position lives
+   * on an element whose identity never changes. */
   overflow-y: auto;
 }
 
 /* Virtualized scroller (large changelists) — fills the remaining tree height so
  * @tanstack/react-virtual can window rows instead of mounting one <li> per file
  * (a 70k-file changelist otherwise OOMed the renderer). Mirrors ExplorerView. */
-.virtualList {
-  flex: 1;
-  min-height: 0;
-}
-
 /* Selection / keyboard-focus states shared by group / folder / file rows. */
 .groupHeader.selected,
 .folder.selected,

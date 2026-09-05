@@ -195,11 +195,6 @@
   overflow: auto;
 }
 
-.fileTreeVirtual {
-  height: 100%;
-  overflow: auto;
-}
-
 .fileTreeRow {
   display: flex;
   align-items: center;

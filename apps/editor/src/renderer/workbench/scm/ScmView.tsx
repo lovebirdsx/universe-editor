@@ -1231,7 +1231,6 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       <Tree<ScmNode>
         model={treeModel}
         className={styles['tree'] ?? ''}
-        virtualListClassName={styles['virtualList'] ?? ''}
         rootRef={treeRef}
         scrollStateKey={`scm:${model.id}`}
         scrollStatePersister={scrollPersister}

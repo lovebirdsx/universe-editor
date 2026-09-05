@@ -41,7 +41,7 @@ test.describe('@p1 search scroll restore', () => {
 
     const tree = searchView.getByRole('tree', { name: 'Search results' })
     await expect(tree).toBeVisible()
-    const scroller = tree.locator('div').first()
+    const scroller = tree
 
     // Wait for a large, virtualized result set (scroll range far exceeds viewport).
     await expect
@@ -70,10 +70,7 @@ test.describe('@p1 search scroll restore', () => {
     await expect(searchView).toBeVisible()
 
     // The restored scroller should land back at (approximately) the saved offset.
-    const restoredScroller = searchView
-      .getByRole('tree', { name: 'Search results' })
-      .locator('div')
-      .first()
+    const restoredScroller = searchView.getByRole('tree', { name: 'Search results' })
     await expect
       .poll(async () => restoredScroller.evaluate((el) => (el as HTMLElement).scrollTop), {
         timeout: 8000,

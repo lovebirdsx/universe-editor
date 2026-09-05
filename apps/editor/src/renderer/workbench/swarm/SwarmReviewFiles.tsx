@@ -324,7 +324,6 @@ export function SwarmReviewFiles({
       <Tree<SwarmFileNode>
         model={treeModel}
         className={styles['fileTree'] ?? ''}
-        virtualListClassName={styles['fileTreeVirtual'] ?? ''}
         ariaLabel={localize('swarm.files', 'Files')}
         rowHeight={22}
         indentWidth={12}

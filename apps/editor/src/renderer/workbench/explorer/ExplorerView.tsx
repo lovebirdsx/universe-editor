@@ -264,12 +264,14 @@ export function ExplorerView() {
           rootRef={containerRef}
           scrollStateKey="explorer"
           className={styles['view'] ?? ''}
-          virtualListClassName={styles['virtualList'] ?? ''}
           virtualizationThreshold={threshold}
           renderRow={renderRow}
           onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
           onFocus={() => {
-            if (!tree.focused && root) tree.setSelection(root, root)
+            // Seeding a keyboard cursor is not a user request to jump: revealing
+            // here would yank the viewport back to the root row when the user
+            // scrolls down and clicks.
+            if (!tree.focused && root) tree.setSelection(root, root, { reveal: false })
           }}
           onRowKeyDown={(e, node) => {
             if (node.id === rootKey) return

@@ -500,7 +500,6 @@ export function ChangesTree<TEntry>({
       <Tree<ChangesTreeNode<TEntry>>
         model={treeModel}
         className={styles['tree'] ?? ''}
-        virtualListClassName={styles['virtualList'] ?? ''}
         ariaLabel={ariaLabel}
         indentBase={0}
         rootRef={treeRef}

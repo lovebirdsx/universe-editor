@@ -3,10 +3,16 @@
  *  Tree — generic render-prop tree view.
  *
  *  Owns the structural concerns shared by every tree (Explorer / Scm / Search):
- *  the role="tree" focusable container, keyboard navigation, virtualization
- *  threshold switching and reveal-into-view scrolling. Row content — twistie,
+ *  the role="tree" focusable container, keyboard navigation, windowing above a
+ *  row-count threshold and reveal-into-view scrolling. Row content — twistie,
  *  icon, label, inline actions, highlights — is entirely the view's job via
  *  `renderRow`. The view also owns per-row context menu / drag-and-drop.
+ *
+ *  The container is always the scroll element and the rows are always absolutely
+ *  positioned inside a spacer; `virtualizationThreshold` only decides whether
+ *  every row is rendered or just the visible window. Nothing about the DOM shape
+ *  changes with the row count — an earlier design swapped the scroll container
+ *  itself at the threshold, which lost the scroll position on every crossing.
  *
  *  The keyboard / selection logic is lifted verbatim from the original
  *  ExplorerView so behaviour is preserved across the refactor.
@@ -63,8 +69,6 @@ export interface ITreeProps<T> {
   readonly indentWidth?: number
   readonly indentBase?: number
   readonly className?: string
-  /** Class for the inner VirtualList scroller (virtual mode only) — usually `flex:1; min-height:0`. */
-  readonly virtualListClassName?: string
   readonly ariaLabel?: string
   /** Receives the tree container element (e.g. to register it as focusable). */
   readonly rootRef?: Ref<HTMLDivElement>
@@ -108,7 +112,6 @@ export function Tree<T>(props: ITreeProps<T>) {
     indentWidth = DEFAULT_INDENT_WIDTH,
     indentBase = DEFAULT_INDENT_BASE,
     className,
-    virtualListClassName,
     ariaLabel,
     rootRef,
     onActivate,
@@ -130,22 +133,27 @@ export function Tree<T>(props: ITreeProps<T>) {
   const visibleRef = useRef(visibleNodes)
   visibleRef.current = visibleNodes
 
+  // React attaches child refs before parent ones, so on the first render the
+  // container does not exist yet and the virtualizer would find no scroll
+  // element. Left alone it would attach on whichever later render happens to
+  // come first — and attaching resets its scroll offset to 0, which is exactly
+  // the jump this design removes. Holding the list back until the container
+  // lands pins the attach to mount, when the position is 0 anyway.
+  const [containerReady, setContainerReady] = useState(false)
+
   const setContainer = useCallback(
     (el: HTMLDivElement | null) => {
       containerRef.current = el
+      setContainerReady(el !== null)
       if (typeof rootRef === 'function') rootRef(el)
       else if (rootRef) (rootRef as { current: HTMLDivElement | null }).current = el
     },
     [rootRef],
   )
 
-  // The scroll element differs by mode: in virtual mode the VirtualList parent
-  // scrolls (the root div doesn't); otherwise the root div itself is the
-  // overflow-y:auto scroller. Resolved lazily so it follows a threshold switch.
-  const getScrollElement = useCallback(
-    (): HTMLElement | null => virtualRef.current?.getScrollElement() ?? containerRef.current,
-    [],
-  )
+  // The container is the scroll element in every mode — VirtualList renders
+  // into it rather than bringing its own.
+  const getScrollElement = useCallback((): HTMLElement | null => containerRef.current, [])
   useScrollRestore(scrollStateKey, getScrollElement, scrollStatePersister)
 
   // Reveal: defer scroll to after commit. Prefer scrollIntoView on the row
@@ -172,9 +180,23 @@ export function Tree<T>(props: ITreeProps<T>) {
     }
     if (virtualRef.current) {
       const idx = visibleRef.current.findIndex((n) => n.id === revealRequest.id)
-      if (idx >= 0) virtualRef.current.scrollToIndex(idx, { align: 'start' })
+      if (idx < 0) return
+      // "Not in the DOM" does not always mean "off-screen": the virtualizer may
+      // not have rendered against the current scroll position yet, which makes
+      // every row below the top look unrendered. Scrolling then would yank the
+      // clicked row to the top of the viewport. Rows are fixed-height here, so
+      // decide from the scroller's geometry and only scroll when genuinely out
+      // of view.
+      const scroller = virtualRef.current.getScrollElement()
+      if (scroller) {
+        const top = idx * rowHeight
+        const visibleTop = scroller.scrollTop
+        const visibleBottom = visibleTop + scroller.clientHeight
+        if (top >= visibleTop && top + rowHeight <= visibleBottom) return
+      }
+      virtualRef.current.scrollToIndex(idx, { align: 'start' })
     }
-  }, [revealRequest])
+  }, [revealRequest, rowHeight])
 
   // Keyboard context menu (ContextMenu key / Shift+F10): the browser's own
   // synthetic contextmenu event carries (0,0) coordinates, which would anchor
@@ -354,16 +376,15 @@ export function Tree<T>(props: ITreeProps<T>) {
           }
         : {})}
     >
-      {visibleNodes.length > virtualizationThreshold ? (
+      {containerReady && (
         <VirtualList
           ref={virtualRef}
           items={visibleNodes}
           estimateSize={() => rowHeight}
-          {...(virtualListClassName !== undefined ? { className: virtualListClassName } : {})}
+          scrollElementRef={containerRef}
+          windowed={visibleNodes.length > virtualizationThreshold}
           renderItem={(node, style) => renderNode(node, style)}
         />
-      ) : (
-        <>{visibleNodes.map((node) => renderNode(node))}</>
       )}
     </div>
   )

@@ -32,6 +32,16 @@ export interface ITreeModelOptions<T> {
   readonly defaultExpanded?: (element: T, depth: number) => boolean
 }
 
+export interface ISetSelectionOptions {
+  /**
+   * Fire onReveal for the new focus so the view scrolls it into view
+   * (default true). Pass false when the selection is seeded programmatically
+   * rather than requested by the user — e.g. giving a freshly focused tree a
+   * keyboard cursor, which must not yank the viewport to that row.
+   */
+  readonly reveal?: boolean
+}
+
 interface NodeState {
   expanded: boolean
   loading: boolean
@@ -299,7 +309,11 @@ export class TreeModel<T> extends Disposable {
     return this._selectionKeys.has(id)
   }
 
-  setSelection(ids: readonly string[], focus?: string | null): void {
+  setSelection(
+    ids: readonly string[],
+    focus?: string | null,
+    options?: ISetSelectionOptions,
+  ): void {
     const list = dedupeStrings(ids)
     const newFocus =
       focus === undefined ? (list.length > 0 ? (list[list.length - 1] ?? null) : null) : focus
@@ -307,7 +321,7 @@ export class TreeModel<T> extends Disposable {
     this._replaceSelection(list)
     this._focused = newFocus
     this._emitSelection()
-    if (newFocus) this._onReveal.fire({ id: newFocus })
+    if (newFocus && (options?.reveal ?? true)) this._onReveal.fire({ id: newFocus })
   }
 
   setFocus(id: string | null): void {

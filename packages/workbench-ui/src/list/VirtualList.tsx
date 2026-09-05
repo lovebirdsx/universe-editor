@@ -5,9 +5,11 @@ import {
   useRef,
   type CSSProperties,
   type ForwardedRef,
+  type Key,
   type ReactElement,
   type ReactNode,
   type Ref,
+  type RefObject,
 } from 'react'
 
 export interface VirtualListProps<T> {
@@ -26,6 +28,21 @@ export interface VirtualListProps<T> {
   measureDynamically?: boolean
   /** Stable identity per index (e.g. for re-orderable lists). Defaults to the index. */
   getItemKey?: (index: number) => string | number
+  /**
+   * Scroll against an ancestor the caller owns instead of rendering our own
+   * scroller. Only the spacer is emitted, so the scroll position lives on an
+   * element whose identity we never change — the virtualizer attaches once and
+   * never re-attaches, which matters because re-attaching resets its scroll
+   * offset to 0 (`_willUpdate` ends in `_scrollToOffset(getScrollOffset())`,
+   * and a fresh attach has no offset to report).
+   */
+  scrollElementRef?: RefObject<HTMLElement | null> | undefined
+  /**
+   * Render only the visible window (default). Pass false for small lists to
+   * render every item — same spacer, same absolute positioning, so the DOM
+   * shape does not change with the item count.
+   */
+  windowed?: boolean
 }
 
 export interface VirtualListHandle {
@@ -54,15 +71,25 @@ function VirtualListInner<T>(
     overscan = 5,
     measureDynamically = false,
     getItemKey,
+    scrollElementRef,
+    windowed = true,
   }: VirtualListProps<T>,
   ref: ForwardedRef<VirtualListHandle>,
 ) {
   const parentRef = useRef<HTMLDivElement>(null)
   const styleCacheRef = useRef<Map<number, CachedStyle>>(new Map())
+  const resolveScrollElement = (): HTMLElement | null =>
+    scrollElementRef ? scrollElementRef.current : parentRef.current
 
   const virtualizer = useVirtualizer({
     count: items.length,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: resolveScrollElement,
+    // Read the element rather than assuming 0. The virtualizer seeds its offset
+    // once, when it attaches, and then writes that value back to the DOM — so a
+    // scroller already positioned by someone else (useScrollRestore on mount,
+    // or an external scroller that outlives us) would otherwise be yanked to
+    // the top the moment we attach to it.
+    initialOffset: () => resolveScrollElement()?.scrollTop ?? 0,
     estimateSize,
     overscan,
     ...(getItemKey ? { getItemKey } : {}),
@@ -75,7 +102,7 @@ function VirtualListInner<T>(
         virtualizer.scrollToIndex(index, opts)
       },
       getScrollElement() {
-        return parentRef.current
+        return resolveScrollElement()
       },
     }),
     [virtualizer],
@@ -98,28 +125,60 @@ function VirtualListInner<T>(
     return next
   }
 
+  // Dynamic measurement needs a ResizeObserver per rendered row, which only
+  // makes sense for a window — so it always wins over `windowed: false`.
+  const renderEveryItem = !windowed && !measureDynamically
+
+  const renderRow = (index: number, start: number, size: number, key: Key) => {
+    const item = items[index]
+    if (item === undefined) return null
+    const rowStyle = getStableStyle(index, start, size)
+    if (measureDynamically) {
+      return (
+        <div key={key} data-index={index} ref={virtualizer.measureElement} style={rowStyle}>
+          {renderItem(item, EMPTY_STYLE)}
+        </div>
+      )
+    }
+    return renderItem(item, rowStyle)
+  }
+
+  // Sized from `estimateSize` rather than `getTotalSize()` when rendering every
+  // item: the virtualizer reports 0 until it has measured a scroll rect, and in
+  // this mode the rows themselves are the proof of the list's extent.
+  let totalSize = 0
+  let body: ReactNode
+  if (renderEveryItem) {
+    const rows: ReactNode[] = []
+    for (let index = 0; index < items.length; index++) {
+      const size = estimateSize(index)
+      rows.push(renderRow(index, totalSize, size, index))
+      totalSize += size
+    }
+    body = rows
+  } else {
+    totalSize = virtualizer.getTotalSize()
+    body = virtualizer
+      .getVirtualItems()
+      .map((virtualItem) =>
+        renderRow(virtualItem.index, virtualItem.start, virtualItem.size, virtualItem.key),
+      )
+  }
+
+  // `flexShrink: 0` because the caller's scroller is often a flex column: a
+  // shrinkable spacer would collapse to the viewport height, leaving no scroll
+  // range at all.
+  const spacer = (
+    <div style={{ height: `${totalSize}px`, position: 'relative', flexShrink: 0 }}>{body}</div>
+  )
+
+  // With an external scroller we contribute only the spacer — wrapping it in
+  // our own overflow container would reintroduce the second scroll element.
+  if (scrollElementRef) return spacer
+
   return (
     <div ref={parentRef} className={className} style={{ overflowY: 'auto', ...style }}>
-      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
-        {virtualizer.getVirtualItems().map((virtualItem) => {
-          const item = items[virtualItem.index]
-          if (item === undefined) return null
-          const style = getStableStyle(virtualItem.index, virtualItem.start, virtualItem.size)
-          if (measureDynamically) {
-            return (
-              <div
-                key={virtualItem.key}
-                data-index={virtualItem.index}
-                ref={virtualizer.measureElement}
-                style={style}
-              >
-                {renderItem(item, EMPTY_STYLE)}
-              </div>
-            )
-          }
-          return renderItem(item, style)
-        })}
-      </div>
+      {spacer}
     </div>
   )
 }
