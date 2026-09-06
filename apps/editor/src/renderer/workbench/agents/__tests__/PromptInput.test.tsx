@@ -2020,7 +2020,7 @@ describe('PromptInput — context menu', () => {
     pasteImage(getTextarea(), makeImageFile())
     const chip = await screen.findByTestId('acp-prompt-image-chip')
 
-    fireEvent.contextMenu(chip)
+    fireEvent.contextMenu(chip, { detail: 1 })
 
     expect(setPromptContextTarget).toHaveBeenCalledWith('image')
     // The Copy Image item gates on `acpPromptContextImage` — its presence
@@ -2053,7 +2053,7 @@ describe('PromptInput — context menu', () => {
 
     // The pill spans offsets [0, 12); pin the hit test at offset 1 (column 2).
     setTargetAtClientPoint({ lineNumber: 1, column: 2 })
-    fireEvent.contextMenu(ta)
+    fireEvent.contextMenu(ta, { detail: 1 })
 
     expect(setPromptContextTarget).toHaveBeenCalledWith('ref')
     expect(screen.getByText('Copy Reference')).toBeTruthy()
@@ -2081,7 +2081,7 @@ describe('PromptInput — context menu', () => {
     const { command, setPromptContextTarget } = renderForMenu(session, makeHandleRef())
     const chip = await screen.findByTestId('acp-selection-context-chip')
 
-    fireEvent.contextMenu(chip)
+    fireEvent.contextMenu(chip, { detail: 1 })
 
     expect(setPromptContextTarget).toHaveBeenCalledWith('text')
     // The Copy Text item gates on `acpPromptContextChipText`.
@@ -2111,7 +2111,7 @@ describe('PromptInput — context menu', () => {
 
     // Past the pill (end-exclusive offset 12) and its trailing space.
     setTargetAtClientPoint({ lineNumber: 1, column: 14 })
-    const notPrevented = fireEvent.contextMenu(ta)
+    const notPrevented = fireEvent.contextMenu(ta, { detail: 1 })
     expect(notPrevented).toBe(true)
     expect(screen.queryByRole('menu')).toBeNull()
     expect(setPromptContextTarget).not.toHaveBeenCalled()
@@ -2122,7 +2122,7 @@ describe('PromptInput — context menu', () => {
     const session = makeSession({ id: 's1' })
     const { setPromptContextTarget } = renderForMenu(session, makeHandleRef())
     setTargetAtClientPoint(null)
-    fireEvent.contextMenu(getTextarea())
+    fireEvent.contextMenu(getTextarea(), { detail: 1 })
     expect(screen.queryByRole('menu')).toBeNull()
     expect(setPromptContextTarget).not.toHaveBeenCalled()
   })

@@ -48,7 +48,11 @@ import {
   generateUuid,
   localize,
 } from '@universe-editor/platform'
-import { dragContainsResources } from '@universe-editor/workbench-ui'
+import {
+  dragContainsResources,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
+} from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
 import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
@@ -1195,6 +1199,11 @@ export function PromptInput({
   // timeline menu (or native behaviour) still applies. Monaco's own menu is
   // already disabled (`contextmenu: false`), so the event bubbles up here.
   const onPromptContextMenu = (e: ReactMouseEvent): void => {
+    // Swallow Chromium's keyup supplement: with focus inside the prompt, the
+    // ContextMenu key re-dispatches a detail:0 contextmenu at (0,0) on keyup —
+    // keydown preventDefault cannot cancel it. Untrapped, it would hit-test
+    // whatever chip/ref pill sits at the screen corner and open this menu there.
+    if (isKeyupContextMenuSupplement(e)) return
     const el = e.target as HTMLElement
     // The chip testid lands on the <img> itself (ChatImage); the querySelector
     // fallback keeps the lookup robust if that ever moves to a wrapper.
@@ -1229,7 +1238,12 @@ export function PromptInput({
     // Keep ChatBody's timeline context menu from opening on top of ours.
     e.stopPropagation()
     widgetService.setPromptContextTarget(menuKind)
-    setCtxMenu({ x: e.clientX, y: e.clientY, args: [{ sessionId: session.id, target }] })
+    setCtxMenu({
+      x: e.clientX,
+      y: e.clientY,
+      args: [{ sessionId: session.id, target }],
+      keyboard: isKeyboardContextMenu(e),
+    })
   }
 
   const onPromptDragOver = (e: React.DragEvent<HTMLDivElement>): void => {

@@ -11,6 +11,10 @@ export interface AgentChatContextMenuState {
   readonly x: number
   readonly y: number
   readonly args?: readonly unknown[]
+  /** True when raised by the ContextMenu key / Shift+F10 — the menu opens with
+   *  its first row highlighted (VSCode parity), since a keyboard user has no
+   *  pointer to aim. */
+  readonly keyboard?: boolean
 }
 
 interface Props {
@@ -37,6 +41,7 @@ export function AgentChatContextMenu({
       {...(state.args !== undefined ? { args: state.args } : {})}
       commandService={commandService}
       {...(contextKeyService !== undefined ? { contextKeyService } : {})}
+      autoFocusFirst={state.keyboard ?? false}
       onClose={onClose}
     />
   )

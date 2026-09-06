@@ -16,6 +16,7 @@
 import {
   useEffect,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from 'react'
@@ -24,7 +25,13 @@ import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, TimelineItem } from '../../services/acp/session/acpSessionService.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { resolveChatContextTarget } from '../../services/acp/chatContextTarget.js'
-import { CollapsibleSlot } from '@universe-editor/workbench-ui'
+import {
+  CollapsibleSlot,
+  dispatchKeyboardContextMenu,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
+} from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { SelectionContextChips, useSelectionContextReveal } from './SelectionContextChips.js'
 import { roleIcon } from './timelineIcons.js'
@@ -106,6 +113,9 @@ export function StickyUserMessageBar({
   }
 
   const handleContextMenu = (e: ReactMouseEvent): void => {
+    // No Tree hosts the guard against Chromium's keyup supplement — swallow it
+    // here, or the same ContextMenu keystroke opens a second menu at (0,0).
+    if (isKeyupContextMenuSupplement(e)) return
     e.preventDefault()
     if (slotKey !== null) onFocusSlot?.(slotKey)
     widgetService.setHasSelection(!!window.getSelection()?.toString())
@@ -117,7 +127,18 @@ export function StickyUserMessageBar({
       x: e.clientX,
       y: e.clientY,
       args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+      keyboard: isKeyboardContextMenu(e),
     })
+  }
+
+  // The bar lives outside ChatBody's scroll container, so ChatBody's own
+  // ContextMenu-key handler never sees a keystroke aimed here — raise the menu
+  // on the bar itself, anchored at its bottom-left like any timeline row.
+  const handleKeyDown = (e: ReactKeyboardEvent): void => {
+    if (!isContextMenuKey(e) || e.repeat) return
+    e.preventDefault()
+    e.stopPropagation()
+    dispatchKeyboardContextMenu(e.currentTarget as HTMLElement, true)
   }
 
   return (
@@ -125,6 +146,7 @@ export function StickyUserMessageBar({
       className={styles['stickyUserBar']}
       data-testid="acp-user-bar"
       data-timeline-key={slotKey ?? undefined}
+      onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
     >
       <CollapsibleSlot

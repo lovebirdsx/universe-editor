@@ -273,7 +273,9 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         </ServicesContext.Provider>,
       )
 
-      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!)
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!, {
+        detail: 1,
+      })
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(setContextTarget).toHaveBeenCalledWith('image')
@@ -283,6 +285,76 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         sessionId: 's-sticky-menu',
         target: { kind: 'image', src },
       })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('opens the menu via the ContextMenu key with the first row highlighted', () => {
+    const disposable = registerAction2(CaptureStickyContextArgAction)
+    try {
+      const session = makeSession('s-sticky-key', [message('u1', 'user', 'hello')])
+      const command = vi.fn()
+      const services = new ServiceCollection()
+      services.set(IContextKeyService, new ContextKeyService())
+      services.set(ICommandService, {
+        executeCommand: (id: string, ...args: unknown[]) => {
+          command(id, ...args)
+          return Promise.resolve(undefined)
+        },
+      } as unknown as ICommandService)
+      services.set(IAcpChatWidgetService, {
+        setHasSelection: () => {},
+        setForkSupported: () => {},
+        setContextTarget: () => {},
+      } as unknown as IAcpChatWidgetService)
+      services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
+      const inst = new InstantiationService(services)
+      const { getByTestId, getByRole, getByText } = render(
+        <ServicesContext.Provider value={inst}>
+          <StickyUserMessageBar session={session} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.keyDown(getByTestId('acp-user-bar'), { key: 'ContextMenu' })
+      const menu = getByRole('menu')
+      expect(menu.querySelector('[data-active]')).not.toBeNull()
+      fireEvent.click(getByText('Capture Session Arg'))
+      expect(command).toHaveBeenCalledWith(CaptureStickyContextArgAction.ID, {
+        sessionId: 's-sticky-key',
+      })
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('keeps exactly one menu when Chromium re-dispatches contextmenu on keyup', () => {
+    const disposable = registerAction2(CaptureStickyContextArgAction)
+    try {
+      const session = makeSession('s-sticky-keyup', [message('u1', 'user', 'hello')])
+      const services = new ServiceCollection()
+      services.set(IContextKeyService, new ContextKeyService())
+      services.set(ICommandService, {
+        executeCommand: () => Promise.resolve(undefined),
+      } as unknown as ICommandService)
+      services.set(IAcpChatWidgetService, {
+        setHasSelection: () => {},
+        setForkSupported: () => {},
+        setContextTarget: () => {},
+      } as unknown as IAcpChatWidgetService)
+      services.set(IOpenerService, { open: vi.fn() } as unknown as IOpenerService)
+      const inst = new InstantiationService(services)
+      const { getByTestId, getAllByRole } = render(
+        <ServicesContext.Provider value={inst}>
+          <StickyUserMessageBar session={session} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.keyDown(getByTestId('acp-user-bar'), { key: 'ContextMenu' })
+      // detail:0 is Chromium's keyup re-dispatch after the ContextMenu key —
+      // it must not open a second menu on top of the first.
+      fireEvent.contextMenu(getByTestId('acp-user-bar'), { detail: 0 })
+      expect(getAllByRole('menu')).toHaveLength(1)
     } finally {
       disposable.dispose()
     }

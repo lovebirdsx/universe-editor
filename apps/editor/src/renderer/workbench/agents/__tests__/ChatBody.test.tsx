@@ -369,7 +369,7 @@ describe('ChatBody — click to focus a timeline item', () => {
         </ServicesContext.Provider>,
       )
 
-      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(command).toHaveBeenCalledWith(CaptureChatContextArgAction.ID, {
@@ -390,6 +390,45 @@ describe('ChatBody — click to focus a timeline item', () => {
       fireEvent.click(slotEl(container, 'm:b'))
     })
     expect(container.ownerDocument.activeElement).toBe(scroll)
+  })
+
+  it('opens the menu on the focused slot via the ContextMenu key with the first row highlighted', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const { container, getByRole, getByText } = renderChat(makeSession('s1', items))
+      act(() => {
+        fireEvent.click(slotEl(container, 'm:b'))
+      })
+      const scroll = container.querySelector<HTMLElement>(
+        '[data-testid="acp-timeline"]',
+      )!.parentElement!
+      fireEvent.keyDown(scroll, { key: 'ContextMenu' })
+      const menu = getByRole('menu')
+      expect(menu.querySelector('[data-active]')).not.toBeNull()
+      fireEvent.click(getByText('Capture Session Arg'))
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  it('keeps exactly one menu when Chromium re-dispatches contextmenu on keyup', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const { container, getAllByRole } = renderChat(makeSession('s1', items))
+      act(() => {
+        fireEvent.click(slotEl(container, 'm:b'))
+      })
+      const scroll = container.querySelector<HTMLElement>(
+        '[data-testid="acp-timeline"]',
+      )!.parentElement!
+      fireEvent.keyDown(scroll, { key: 'ContextMenu' })
+      // detail:0 is Chromium's keyup re-dispatch after the ContextMenu key —
+      // it must not re-anchor or re-open the menu the keydown already raised.
+      fireEvent.contextMenu(scroll, { detail: 0 })
+      expect(getAllByRole('menu')).toHaveLength(1)
+    } finally {
+      disposable.dispose()
+    }
   })
 
   it('restores the focused item after an unmount → remount cycle', () => {
@@ -469,7 +508,9 @@ describe('ChatBody — context menu fragment targets', () => {
         makeSession('s-menu', items),
       )
 
-      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!)
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-image-block"]')!, {
+        detail: 1,
+      })
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(setContextTarget).toHaveBeenCalledWith('image')
@@ -502,7 +543,9 @@ describe('ChatBody — context menu fragment targets', () => {
         makeSession('s-menu', items),
       )
 
-      fireEvent.contextMenu(container.querySelector('[data-testid="acp-resource-link"]')!)
+      fireEvent.contextMenu(container.querySelector('[data-testid="acp-resource-link"]')!, {
+        detail: 1,
+      })
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(setContextTarget).toHaveBeenCalledWith('path')
@@ -534,7 +577,10 @@ describe('ChatBody — context menu fragment targets', () => {
         makeSession('s-menu', items),
       )
 
-      fireEvent.contextMenu(container.querySelector('[data-testid="acp-selection-context-chip"]')!)
+      fireEvent.contextMenu(
+        container.querySelector('[data-testid="acp-selection-context-chip"]')!,
+        { detail: 1 },
+      )
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(setContextTarget).toHaveBeenCalledWith('text')
@@ -557,7 +603,7 @@ describe('ChatBody — context menu fragment targets', () => {
         makeSession('s-menu', items),
       )
 
-      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
       fireEvent.click(getByText('Capture Session Arg'))
 
       expect(setContextTarget).toHaveBeenCalledWith(undefined)
@@ -1709,7 +1755,7 @@ describe('ChatBody — side task affordances', () => {
         </ServicesContext.Provider>,
       )
 
-      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
       expect(setForkSupported).toHaveBeenCalledWith(true)
     })
 
@@ -1724,7 +1770,7 @@ describe('ChatBody — side task affordances', () => {
         </ServicesContext.Provider>,
       )
 
-      fireEvent.contextMenu(slotEl(container, 'm:a'))
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
       expect(setForkSupported).toHaveBeenCalledWith(false)
     })
   })

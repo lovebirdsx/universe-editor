@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MutableRefObject,
 } from 'react'
 import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/react-virtual'
@@ -64,7 +65,14 @@ import {
   type AcpChatAnchor,
   type AcpChatViewState,
 } from '../../services/acp/session/acpChatViewStateCache.js'
-import { CollapsibleSlot } from '@universe-editor/workbench-ui'
+import {
+  CollapsibleSlot,
+  dispatchKeyboardContextMenu,
+  findRowElement,
+  isContextMenuKey,
+  isKeyboardContextMenu,
+  isKeyupContextMenuSupplement,
+} from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { ElicitationCard } from './ElicitationCard.js'
@@ -805,6 +813,9 @@ function ChatScroll({
   }
 
   const handleContextMenu = (e: ReactMouseEvent) => {
+    // No Tree hosts the guard against Chromium's keyup supplement — swallow it
+    // here, or the same ContextMenu keystroke opens a second menu at (0,0).
+    if (isKeyupContextMenuSupplement(e)) return
     const key = focusedKeyFromEvent(e)
     if (key) focusSlot(key)
     e.preventDefault()
@@ -821,7 +832,29 @@ function ChatScroll({
       x: e.clientX,
       y: e.clientY,
       args: [{ sessionId: session.id, ...(target ? { target } : {}) }],
+      keyboard: isKeyboardContextMenu(e),
     })
+  }
+
+  // ContextMenu key / Shift+F10: synthesize the menu on the keyboard-focused
+  // slot (bottom-left of its card). Falls back to the container top-left when
+  // no slot is focused, the focused row is currently unmounted, or the focused
+  // key lives outside the scroll container (sticky user / plan bar — the bar
+  // sits right above, so the container corner is still adjacent). The synthetic
+  // event bubbles into handleContextMenu above — the same path a right-click
+  // takes — and its keyboard mark opens the menu with the first row highlighted.
+  const handleKeyDown = (e: ReactKeyboardEvent) => {
+    if (!isContextMenuKey(e) || e.repeat) return
+    e.preventDefault()
+    e.stopPropagation()
+    const container = e.currentTarget as HTMLElement
+    const key = focusedKeyRef.current
+    const row =
+      key !== null
+        ? (findRowElement(container, 'data-timeline-key', key) ??
+          findRowElement(container, 'data-sticky-key', key))
+        : null
+    dispatchKeyboardContextMenu(row ?? container, row !== null)
   }
 
   // Pin to the very bottom. A single `scrollTop = scrollHeight` lands short in
@@ -1497,6 +1530,7 @@ function ChatScroll({
         tabIndex={-1}
         onScroll={handleScroll}
         onClick={handleClick}
+        onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
       >
         {find.visible && (
