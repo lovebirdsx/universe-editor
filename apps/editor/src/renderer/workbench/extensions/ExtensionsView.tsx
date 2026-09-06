@@ -31,6 +31,7 @@ import {
   isKeyboardContextMenu,
   useFlatListNavigation,
   useScrollRestore,
+  type IFlatListNavigation,
   type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
 import { useEventValue, useService } from '../useService.js'
@@ -88,6 +89,8 @@ interface FlattenedRows {
   readonly navigable: readonly ExtensionsNavRow[]
   /** Render index → navigation index, or -1 for a placeholder. */
   readonly navIndexOf: readonly number[]
+  /** Navigation index → its section header's navigation index. */
+  readonly headerNavIndexOf: readonly number[]
 }
 
 function flattenSections(
@@ -97,6 +100,8 @@ function flattenSections(
   const rows: ExtensionsRow[] = []
   const navigable: ExtensionsNavRow[] = []
   const navIndexOf: number[] = []
+  const headerNavIndexOf: number[] = []
+  let currentHeaderNavIndex = -1
 
   const push = (row: ExtensionsRow) => {
     rows.push(row)
@@ -105,6 +110,8 @@ function flattenSections(
       return
     }
     navIndexOf.push(navigable.length)
+    if (row.kind === 'header') currentHeaderNavIndex = navigable.length
+    headerNavIndexOf.push(currentHeaderNavIndex)
     navigable.push(row)
   }
 
@@ -120,7 +127,7 @@ function flattenSections(
       push({ kind: 'empty', key: `empty:${section.id}`, message: section.emptyMessage })
     }
   }
-  return { rows, navigable, navIndexOf }
+  return { rows, navigable, navIndexOf, headerNavIndexOf }
 }
 
 export function ExtensionsView() {
@@ -210,6 +217,16 @@ export function ExtensionsView() {
     })
   }, [])
 
+  const setSectionCollapsed = useCallback((id: string, value: boolean) => {
+    setCollapsed((prev) => {
+      if (prev.has(id) === value) return prev
+      const next = new Set(prev)
+      if (value) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
   const noResults = localize('extensions.noResults', 'No extensions found')
   // The entry filtering lives inside the memo rather than above it: every step
   // allocates a fresh array, so hoisting it would give `sections` a new input
@@ -271,7 +288,7 @@ export function ExtensionsView() {
     noResults,
   ])
 
-  const { rows, navigable, navIndexOf } = useMemo(
+  const { rows, navigable, navIndexOf, headerNavIndexOf } = useMemo(
     () => flattenSections(sections, collapsed),
     [sections, collapsed],
   )
@@ -279,6 +296,11 @@ export function ExtensionsView() {
   // Searching, collapsing a section or an install finishing all shorten the
   // list, which would otherwise leave the cursor past the end.
   const clampedFocusedIndex = focusedIndex >= navigable.length ? -1 : focusedIndex
+
+  // ArrowLeft/ArrowRight need to move the cursor, but the mover comes out of the
+  // very hook this handler is passed to — read it through a ref rather than
+  // closing over a value that does not exist yet.
+  const navRef = useRef<IFlatListNavigation | undefined>(undefined)
 
   const nav = useFlatListNavigation({
     count: navigable.length,
@@ -295,8 +317,35 @@ export function ExtensionsView() {
       },
       [navigable, toggleSection, openDetail],
     ),
+    // Tree parity for the section headers: Left folds an expanded section (or
+    // jumps an entry back to its header), Right expands a folded one (or steps
+    // into its first entry).
+    onRowKeyDown: useCallback(
+      (e: React.KeyboardEvent, index: number) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+        const row = navigable[index]
+        if (!row) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (row.kind === 'entry') {
+          const headerIndex = headerNavIndexOf[index] ?? -1
+          if (e.key === 'ArrowLeft' && headerIndex >= 0) navRef.current?.focusRow(headerIndex)
+          return
+        }
+        const isCollapsed = collapsed.has(row.section.id)
+        if (e.key === 'ArrowLeft') {
+          setSectionCollapsed(row.section.id, true)
+        } else if (isCollapsed) {
+          setSectionCollapsed(row.section.id, false)
+        } else if (row.section.entries.length > 0) {
+          navRef.current?.focusRow(index + 1)
+        }
+      },
+      [navigable, headerNavIndexOf, collapsed, setSectionCollapsed],
+    ),
     onShiftTab: useCallback(() => inputRef.current?.focus(), []),
   })
+  navRef.current = nav
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     if (!dragContainsResources(e.dataTransfer)) return

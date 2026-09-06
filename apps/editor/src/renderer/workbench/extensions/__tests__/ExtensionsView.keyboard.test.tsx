@@ -180,6 +180,47 @@ describe('ExtensionsView keyboard navigation', () => {
     expect(screen.getAllByTestId('extension-row')).toHaveLength(2)
   })
 
+  it('ArrowLeft on a header folds the section, ArrowRight re-expands it', () => {
+    setup({ installed: [entry('acme.one'), entry('acme.two')] })
+    fireEvent.keyDown(list(), { key: 'ArrowDown' })
+    expect(focusedLabels()).toEqual(['Installed'])
+
+    fireEvent.keyDown(list(), { key: 'ArrowLeft' })
+    expect(screen.queryAllByTestId('extension-row')).toHaveLength(0)
+    expect(screen.getByTestId('extension-section-header').getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+    // Already folded: Left holds instead of bouncing the cursor elsewhere.
+    fireEvent.keyDown(list(), { key: 'ArrowLeft' })
+    expect(focusedLabels()).toEqual(['Installed'])
+
+    fireEvent.keyDown(list(), { key: 'ArrowRight' })
+    expect(screen.getAllByTestId('extension-row')).toHaveLength(2)
+    expect(focusedLabels()).toEqual(['Installed'])
+  })
+
+  it('ArrowRight on an expanded header steps into its first entry', () => {
+    setup({ installed: [entry('acme.one'), entry('acme.two')] })
+    fireEvent.keyDown(list(), { key: 'ArrowDown' })
+    fireEvent.keyDown(list(), { key: 'ArrowRight' })
+    expect(focusedLabels()[0]).toContain('acme.one')
+  })
+
+  it('ArrowLeft on an entry jumps back to its own section header', async () => {
+    setup({
+      installed: [entry('acme.one')],
+      results: [entry('acme.market', { installed: false })],
+      marketplace: true,
+    })
+    await waitFor(() => expect(screen.getAllByTestId('extension-section-header')).toHaveLength(2))
+
+    // End lands on the marketplace entry, whose header is the second one.
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedLabels()[0]).toContain('acme.market')
+    fireEvent.keyDown(list(), { key: 'ArrowLeft' })
+    expect(focusedLabels()).toEqual(['Market Extensions'])
+  })
+
   it('Enter on an entry opens its detail editor', () => {
     const { openEditor } = setup({ installed: [entry('acme.one')] })
     fireEvent.keyDown(list(), { key: 'End' })
