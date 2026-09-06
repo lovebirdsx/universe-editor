@@ -65,12 +65,15 @@ export class SessionChangesDiffSyncContribution
         if (!(editor instanceof DiffEditorInput) || editor.isCrossFile) continue
         const change = byUri.get(editor.originalUri.toString())
         if (!change) continue
-        // A degraded row carries no texts at all — the file was never read (too
-        // large, not a regular file, or its content was released under memory
-        // pressure). Pushing its empty strings in would blank the tab, and on
-        // the editable path would blank the SHARED buffer and mark it clean,
-        // so a later save would write the file empty. Keep the last content.
-        if (change.status === 'degraded') continue
+        // A row without texts carries no content at all — the file was never
+        // read (too large, not a regular file, or its content was released
+        // under memory pressure). Pushing its empty strings in would blank the
+        // tab, and on the editable path would blank the SHARED buffer and mark
+        // it clean, so a later save would write the file empty. Keep the last
+        // content. Note this is NOT `status === 'degraded'`: a degraded row
+        // often carries both texts in full and only means the baseline is
+        // imprecise, and skipping those froze the tab on its first edit.
+        if (!change.hasTexts) continue
 
         const liveModel = MonacoModelRegistry.peek(editor.originalUri)
         const model = liveModel && !liveModel.isDisposed() ? liveModel : undefined

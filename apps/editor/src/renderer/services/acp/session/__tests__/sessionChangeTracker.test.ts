@@ -695,6 +695,46 @@ describe('SessionChangeTrackerService — watched changes (fs-watch fallback)', 
     expect(list[0]?.status).toBe('degraded')
     expect(list[0]?.baselineSource).toBe('none')
     expect(list[0]?.baseline).toBe('now')
+    // Degraded here means "the baseline is not comparable", NOT "there is no
+    // content": both texts were read for real. Consumers that write these texts
+    // somewhere (the open-diff sync) must be able to tell the two apart.
+    expect(list[0]?.hasTexts).toBe(true)
+  })
+
+  it('keeps both texts on a row whose hunk could not be located', async () => {
+    // Two batches that both describe the edit relative to the ORIGINAL baseline
+    // (what an agent reports when it rewrites the same line twice): undoing the
+    // newest already lands back on the baseline, so the older one no longer
+    // matches anywhere and reconstruction reports `degraded`. The baseline it
+    // recovered is still right, and `current` is a genuine disk read — the row
+    // must stay usable.
+    files.set('/work/t.ts', 'line one\nline two MODIFIED AGAIN')
+    const obs = svc.changesFor(SID)
+    svc.record(SID, '/work/t.ts', 'tc-1', [
+      {
+        oldStart: 1,
+        oldLines: 2,
+        newStart: 1,
+        newLines: 2,
+        lines: [' line one', '-line two', '+line two MODIFIED'],
+      },
+    ])
+    svc.record(SID, '/work/t.ts', 'tc-2', [
+      {
+        oldStart: 1,
+        oldLines: 2,
+        newStart: 1,
+        newLines: 2,
+        lines: [' line one', '-line two', '+line two MODIFIED AGAIN'],
+      },
+    ])
+    await flush()
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.status).toBe('degraded')
+    expect(list[0]?.hasTexts).toBe(true)
+    expect(list[0]?.baseline).toBe('line one\nline two')
+    expect(list[0]?.current).toBe('line one\nline two MODIFIED AGAIN')
   })
 
   it('never downgrades an agent-tracked file to watched', async () => {
@@ -1044,6 +1084,7 @@ describe('SessionChangeTrackerService — non-regular paths', () => {
     const list = obs.get()
     expect(list).toHaveLength(1)
     expect(list[0]?.status).toBe('degraded')
+    expect(list[0]?.hasTexts).toBe(false)
   })
 
   it('skips a directory during restore instead of throwing', async () => {

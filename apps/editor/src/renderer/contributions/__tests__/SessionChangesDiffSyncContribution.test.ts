@@ -82,6 +82,7 @@ function change(uri: URI, baseline: string, current: string): SessionFileChange 
     status: 'modified',
     origin: 'agent',
     baselineSource: 'reported',
+    hasTexts: true,
     batchCount: 1,
   }
 }
@@ -166,9 +167,9 @@ describe('SessionChangesDiffSyncContribution', () => {
     contrib.dispose()
   })
 
-  it('never pushes a degraded row into an editable diff (it would blank the file)', () => {
-    // A degraded row carries no texts — the file was never read (too large, not
-    // a regular file, or released under memory pressure). The editable path
+  it('never pushes a textless row into an editable diff (it would blank the file)', () => {
+    // A textless row carries no content — the file was never read (too large,
+    // not a regular file, or released under memory pressure). The editable path
     // writes `current` straight into the SHARED buffer and marks it clean, so
     // syncing one would blank the user's open document and let the next save
     // persist the empty content.
@@ -200,13 +201,45 @@ describe('SessionChangesDiffSyncContribution', () => {
       makeGroups([input]),
     )
 
-    changesObs.set([{ ...change(uri, '', ''), status: 'degraded' }], undefined)
+    changesObs.set([{ ...change(uri, '', ''), status: 'degraded', hasTexts: false }], undefined)
 
     expect(modelValue).toBe('current-1')
     expect(input.modifiedContent).toBe('current-1')
     expect(input.originalContent).toBe('base-1')
     expect(markCleanCalls).not.toContain(model)
     liveModels.delete(uri.toString())
+    contrib.dispose()
+  })
+
+  it('still refreshes a degraded row that carries both texts', () => {
+    // `degraded` covers two unrelated things, and only one of them means "no
+    // content": a row whose baseline could not be reconstructed precisely (a
+    // hunk failed to locate, or there is no comparable pre-change content)
+    // still carries both texts in full. Gating the sync on the status instead
+    // of on `hasTexts` froze such a tab on its first edit forever.
+    const uri = URI.file('/ws/foo.ts')
+    const input = new DiffEditorInput(
+      uri,
+      'base-1',
+      'current-1',
+      undefined,
+      undefined,
+      false,
+      fileService,
+    )
+    const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
+      change(uri, 'base-1', 'current-1'),
+    ])
+    const contrib = new SessionChangesDiffSyncContribution(
+      makeSessions('agent-1'),
+      makeTracker(changesObs),
+      makeGroups([input]),
+    )
+
+    changesObs.set([{ ...change(uri, 'base-1', 'current-2'), status: 'degraded' }], undefined)
+
+    expect(input.modifiedContent).toBe('current-2')
+    expect(input.originalContent).toBe('base-1')
     contrib.dispose()
   })
 

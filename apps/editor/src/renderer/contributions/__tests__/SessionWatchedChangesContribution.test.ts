@@ -263,6 +263,7 @@ describe('SessionWatchedChangesContribution', () => {
       status: 'modified',
       origin: 'agent',
       baselineSource: 'reported',
+      hasTexts: true,
       batchCount: 1,
     }
     const { contrib, emitter, tracker, commands } = await make({ tracker: makeTracker([tracked]) })

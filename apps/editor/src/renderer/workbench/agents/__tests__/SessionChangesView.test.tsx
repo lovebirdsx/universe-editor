@@ -119,6 +119,7 @@ function change(path: string, status: SessionFileChange['status'] = 'modified'):
     status,
     origin: 'agent',
     baselineSource: 'reported',
+    hasTexts: true,
     batchCount: 1,
   }
 }

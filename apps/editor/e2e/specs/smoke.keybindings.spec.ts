@@ -35,8 +35,11 @@ function dataRows(page: Page) {
   return grid(page).locator('[role=row][aria-selected]')
 }
 
+// aria-rowcount counts the column-header row too (ARIA semantics), so the data
+// row total is one less. Reported as 0 when the grid is absent (empty state).
 async function totalRowCount(page: Page): Promise<number> {
-  return Number((await grid(page).getAttribute('aria-rowcount')) ?? '0')
+  const attr = await grid(page).getAttribute('aria-rowcount')
+  return attr === null ? 0 : Math.max(0, Number(attr) - 1)
 }
 
 async function userEntryCount(page: Page, command: string): Promise<number> {

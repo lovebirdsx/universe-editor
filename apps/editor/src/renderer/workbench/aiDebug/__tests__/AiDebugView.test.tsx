@@ -189,7 +189,10 @@ describe('AiDebugView — keyboard navigation', () => {
 
     resolveRecords(three())
     await waitFor(() => expect(screen.getAllByTestId('ai-debug-row')).toHaveLength(3))
-    expect(selectedIds()).toEqual(['a'])
+    // The deferred seed runs in a passive effect, so it commits one render after
+    // the rows themselves appear — polling here rather than asserting inline
+    // (rows present does not imply the seed has been applied yet).
+    await waitFor(() => expect(selectedIds()).toEqual(['a']))
   })
 
   it('leaves an existing selection alone when focus returns', async () => {

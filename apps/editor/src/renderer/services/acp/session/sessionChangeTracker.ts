@@ -58,6 +58,16 @@ export interface SessionFileChange {
   readonly status: SessionFileChangeStatus
   readonly origin: SessionChangeOrigin
   readonly baselineSource: SessionBaselineSource
+  /**
+   * False when the two texts above are absent by design — the file was never
+   * read (too large, not a regular file) or its content was released under
+   * memory pressure. `status` alone does not answer this: a `degraded` row may
+   * still carry both texts in full and only mean "the baseline is imprecise"
+   * (a hunk could not be located, or there is no comparable pre-change
+   * content). Consumers that write these texts somewhere must check this flag,
+   * not the status.
+   */
+  readonly hasTexts: boolean
   /** Number of tool-call batches that touched this file. */
   readonly batchCount: number
 }
@@ -265,7 +275,7 @@ function changeBytes(change: SessionFileChange): number {
  *  but non-comparable entry. Same shape `_buildChange` produces for a file too
  *  large to read, so the UI already renders it correctly. */
 function degradeChange(change: SessionFileChange): SessionFileChange {
-  return { ...change, baseline: '', current: '', status: 'degraded' }
+  return { ...change, baseline: '', current: '', status: 'degraded', hasTexts: false }
 }
 
 export class SessionChangeTrackerService
@@ -912,6 +922,7 @@ export class SessionChangeTrackerService
         status: 'degraded',
         origin: record.origin,
         baselineSource: 'none',
+        hasTexts: false,
         batchCount: record.batchCount,
       }
     }
@@ -969,6 +980,9 @@ export class SessionChangeTrackerService
       status,
       origin: record.origin,
       baselineSource: source,
+      // Both texts were read for real on this path — the row may still be
+      // `degraded` (imprecise baseline), which is about accuracy, not absence.
+      hasTexts: true,
       batchCount: record.batchCount,
     }
   }
