@@ -79,21 +79,27 @@ describe('keyboardContextMenu', () => {
     expect(isKeyupContextMenuSupplement(event)).toBe(false)
   })
 
-  it('identifies the keyup supplement by detail AND origin, sparing real clicks', () => {
-    // Chromium's supplement: detail 0, (0,0), on the focused element.
-    expect(isKeyupContextMenuSupplement(new MouseEvent('contextmenu'))).toBe(true)
+  it('identifies the keyup supplement by detail AND button, sparing real clicks', () => {
+    // Chromium's supplement: detail 0 and button -1 ("no button did this"), on
+    // the focused element — at that element's centre, NOT at (0,0).
+    expect(
+      isKeyupContextMenuSupplement(
+        new MouseEvent('contextmenu', { detail: 0, button: -1, clientX: 168, clientY: 252 }),
+      ),
+    ).toBe(true)
     // A real right-click carries its click count.
     expect(
       isKeyupContextMenuSupplement(
-        new MouseEvent('contextmenu', { detail: 1, clientX: 30, clientY: 40 }),
+        new MouseEvent('contextmenu', { detail: 1, button: 2, clientX: 30, clientY: 40 }),
       ),
     ).toBe(false)
     // A CDP-driven right-click keeps detail 0 (clickCount does not feed detail)
-    // but lands at real pointer coordinates — the (0,0) origin check must spare
-    // it, or e2e can never open the menu.
+    // but still reports button 2 — the button check must spare it, or e2e can
+    // never open the menu. Its coordinates are the element centre, same as the
+    // supplement's, so no coordinate test can tell the two apart.
     expect(
       isKeyupContextMenuSupplement(
-        new MouseEvent('contextmenu', { detail: 0, clientX: 30, clientY: 40 }),
+        new MouseEvent('contextmenu', { detail: 0, button: 2, clientX: 168, clientY: 141 }),
       ),
     ).toBe(false)
     // And so does the synthetic event the keydown path dispatches — otherwise a

@@ -947,9 +947,9 @@ export function SwarmReviewsView() {
             if (node.element.kind === 'review') openReview(node.element.review.id, opts.preview)
           }}
           // Row menus are opened by each row's own handler; this exists so the
-          // Tree binds its detail-0 guard, which swallows the native contextmenu
-          // Chromium re-dispatches on keyup after the ContextMenu key — without
-          // it that supplement would open a second menu at (0, 0).
+          // Tree binds its guard, which swallows the native contextmenu Chromium
+          // re-dispatches on keyup after the ContextMenu key — without it that
+          // supplement would replace the row menu with the empty-area one.
           onContextMenu={() => {}}
         />
       )}

@@ -422,9 +422,11 @@ describe('ChatBody — click to focus a timeline item', () => {
         '[data-testid="acp-timeline"]',
       )!.parentElement!
       fireEvent.keyDown(scroll, { key: 'ContextMenu' })
-      // detail:0 is Chromium's keyup re-dispatch after the ContextMenu key —
-      // it must not re-anchor or re-open the menu the keydown already raised.
-      fireEvent.contextMenu(scroll, { detail: 0 })
+      // detail:0 + button:-1 is Chromium's keyup re-dispatch after the
+      // ContextMenu key — it must not re-anchor or re-open the menu the keydown
+      // already raised. (button:-1 is the half that separates it from a
+      // CDP-driven right-click, which also reports detail 0.)
+      fireEvent.contextMenu(scroll, { detail: 0, button: -1 })
       expect(getAllByRole('menu')).toHaveLength(1)
     } finally {
       disposable.dispose()

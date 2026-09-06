@@ -814,7 +814,8 @@ function ChatScroll({
 
   const handleContextMenu = (e: ReactMouseEvent) => {
     // No Tree hosts the guard against Chromium's keyup supplement — swallow it
-    // here, or the same ContextMenu keystroke opens a second menu at (0,0).
+    // here, or the same ContextMenu keystroke re-anchors the menu onto the
+    // focus holder instead of the focused slot.
     if (isKeyupContextMenuSupplement(e)) return
     const key = focusedKeyFromEvent(e)
     if (key) focusSlot(key)

@@ -1200,9 +1200,9 @@ export function PromptInput({
   // already disabled (`contextmenu: false`), so the event bubbles up here.
   const onPromptContextMenu = (e: ReactMouseEvent): void => {
     // Swallow Chromium's keyup supplement: with focus inside the prompt, the
-    // ContextMenu key re-dispatches a detail:0 contextmenu at (0,0) on keyup —
-    // keydown preventDefault cannot cancel it. Untrapped, it would hit-test
-    // whatever chip/ref pill sits at the screen corner and open this menu there.
+    // ContextMenu key re-dispatches a detail:0 / button:-1 contextmenu on keyup
+    // — keydown preventDefault cannot cancel it. Untrapped, it would hit-test
+    // whatever sits at the focus holder's centre and open this menu there.
     if (isKeyupContextMenuSupplement(e)) return
     const el = e.target as HTMLElement
     // The chip testid lands on the <img> itself (ChatImage); the querySelector

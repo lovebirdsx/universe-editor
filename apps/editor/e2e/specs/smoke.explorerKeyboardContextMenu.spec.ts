@@ -3,14 +3,15 @@
  *
  *  Guard: pressing the ContextMenu key opens ONE context menu anchored at the
  *  focused row. On Windows, Chromium supplements the key press with a native
- *  `contextmenu` on keyup — detail 0, target = the focused tree container,
- *  (0,0) coords — which keydown's preventDefault cannot cancel. The tree must
- *  swallow it, otherwise a second, row-less menu opens at a fixed position.
- *  Linux Chromium (xvfb/CI) emits no such supplement at all, so a capture
- *  listener records every contextmenu the press produces and the spec asserts
- *  the contract per-platform (exact on win32, 0..1 swallowable events
- *  elsewhere): if a future Chromium changes the supplement, the assertion
- *  fails loudly instead of the swallow gate silently rotting.
+ *  `contextmenu` on keyup — detail 0, button -1, target = the focused tree
+ *  container, at that container's centre — which keydown's preventDefault
+ *  cannot cancel. The tree must swallow it, otherwise it replaces the row menu
+ *  with the row-less empty-area one. Linux Chromium (xvfb/CI) emits no such
+ *  supplement at all, so a capture listener records every contextmenu the press
+ *  produces and the spec asserts the contract per-platform (exact on win32,
+ *  0..1 swallowable events elsewhere): if a future Chromium changes the
+ *  supplement, the assertion fails loudly instead of the swallow gate silently
+ *  rotting.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -26,6 +27,7 @@ const RESTORE_WINDOW_MS = 1700
 
 interface CapturedContextMenu {
   readonly detail: number
+  readonly button: number
   readonly clientX: number
   readonly clientY: number
   readonly targetRole: string | null
@@ -73,6 +75,7 @@ test.describe('@p1 explorer keyboard context menu', () => {
           const t = e.target as HTMLElement | null
           w.__kcmLog?.push({
             detail: e.detail,
+            button: e.button,
             clientX: e.clientX,
             clientY: e.clientY,
             targetRole: t?.getAttribute?.('role') ?? null,
@@ -114,13 +117,15 @@ test.describe('@p1 explorer keyboard context menu', () => {
     }
 
     // The native keyup supplement is Windows-only: Chromium re-dispatches a
-    // detail-0 contextmenu (target = the focused tree container) on the
-    // ContextMenu key's keyup there, and keydown's preventDefault can't cancel
-    // it — the tree's detail-0 guard swallows it. Linux Chromium (xvfb/CI)
-    // produces no supplement at all (CI-verified), so assert per-platform:
-    // exact on win32 (the swallow gate's real battlefront), at most one
-    // swallowable event elsewhere — a future Chromium contract change still
-    // fails loudly here instead of silently rotting the gate.
+    // contextmenu (target = the focused tree container) on the ContextMenu key's
+    // keyup there, and keydown's preventDefault can't cancel it — the tree's
+    // guard swallows it. Linux Chromium (xvfb/CI) produces no supplement at all
+    // (CI-verified), so assert per-platform: exact on win32 (the swallow gate's
+    // real battlefront), at most one swallowable event elsewhere — a future
+    // Chromium contract change still fails loudly here instead of silently
+    // rotting the gate. `button === -1` is the half the gate keys off (detail 0
+    // alone also matches a CDP right-click); pin it so a Chromium change there
+    // surfaces here rather than as a row-less menu.
     const log = await page.evaluate(
       () => (window as unknown as { __kcmLog?: CapturedContextMenu[] }).__kcmLog,
     )
@@ -129,10 +134,12 @@ test.describe('@p1 explorer keyboard context menu', () => {
     if (process.platform === 'win32') {
       expect(native).toHaveLength(1)
       expect(native[0]?.targetRole).toBe('tree')
+      expect(native[0]?.button).toBe(-1)
     } else {
       expect(native.length).toBeLessThanOrEqual(1)
       if (native[0]) {
         expect(native[0].targetRole).toBe('tree')
+        expect(native[0].button).toBe(-1)
       }
     }
 

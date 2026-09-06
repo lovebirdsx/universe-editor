@@ -114,7 +114,8 @@ export function StickyUserMessageBar({
 
   const handleContextMenu = (e: ReactMouseEvent): void => {
     // No Tree hosts the guard against Chromium's keyup supplement — swallow it
-    // here, or the same ContextMenu keystroke opens a second menu at (0,0).
+    // here, or the same ContextMenu keystroke re-opens the menu anchored on the
+    // focus holder instead of the row.
     if (isKeyupContextMenuSupplement(e)) return
     e.preventDefault()
     if (slotKey !== null) onFocusSlot?.(slotKey)

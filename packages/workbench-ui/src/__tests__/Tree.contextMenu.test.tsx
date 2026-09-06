@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tree keyboard context menu — ContextMenu key / Shift+F10 must open the menu
- *  anchored at the focused row (VSCode parity), not at the browser's synthetic
- *  (0,0) coordinates.
+ *  anchored at the focused row (VSCode parity), not where the browser's own
+ *  keyboard-triggered contextmenu lands (the focus holder's centre).
  *
  *  happy-dom has no layout engine, so the row rect is pinned via a
  *  getBoundingClientRect mock; the test locks the fix at its source: the
@@ -204,10 +204,11 @@ describe('Tree — keyboard context menu anchors to the focused row', () => {
     pinRowRect('0', 100, 40, 200, 22)
     fireEvent.keyDown(view(), { key: 'ContextMenu' })
     // Chromium supplements the ContextMenu key press with a native contextmenu
-    // on keyup — targeted at the DOM-focus holder (the tree container), at (0,0)
-    // coordinates and detail 0 (UI Events: keyboard-generated mouse events carry
-    // detail 0). keydown's preventDefault cannot cancel it.
-    fireEvent.contextMenu(view(), { detail: 0, clientX: 0, clientY: 0 })
+    // on keyup — targeted at the DOM-focus holder (the tree container), with
+    // detail 0 (UI Events: keyboard-generated mouse events carry detail 0) and
+    // button -1 ("no button did this"), at that container's centre. keydown's
+    // preventDefault cannot cancel it.
+    fireEvent.contextMenu(view(), { detail: 0, button: -1, clientX: 168, clientY: 252 })
 
     expect(rowMenu).toHaveBeenCalledTimes(1)
     // The keyboard-dispatched event must look mouse-like so the container's

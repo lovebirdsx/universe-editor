@@ -226,12 +226,20 @@ describe('useFlatListNavigation — keyboard context menu', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it("swallows Chromium's keyup contextmenu supplement (detail 0)", () => {
+  it("swallows Chromium's keyup contextmenu supplement (detail 0, button -1)", () => {
     render(<Harness focusedIndex={0} />)
-    const supplement = fireEvent.contextMenu(list(), { detail: 0, cancelable: true })
+    const supplement = fireEvent.contextMenu(list(), {
+      detail: 0,
+      button: -1,
+      cancelable: true,
+    })
     expect(supplement).toBe(false) // preventDefault'd
-    const real = fireEvent.contextMenu(list(), { detail: 1, cancelable: true })
+    const real = fireEvent.contextMenu(list(), { detail: 1, button: 2, cancelable: true })
     expect(real).toBe(true)
+    // A CDP-driven right-click reports detail 0 but still button 2 — swallowing
+    // it would make the menu unreachable from e2e.
+    const cdp = fireEvent.contextMenu(list(), { detail: 0, button: 2, cancelable: true })
+    expect(cdp).toBe(true)
   })
 })
 

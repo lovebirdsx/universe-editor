@@ -351,9 +351,9 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
       )
 
       fireEvent.keyDown(getByTestId('acp-user-bar'), { key: 'ContextMenu' })
-      // detail:0 is Chromium's keyup re-dispatch after the ContextMenu key —
-      // it must not open a second menu on top of the first.
-      fireEvent.contextMenu(getByTestId('acp-user-bar'), { detail: 0 })
+      // detail:0 + button:-1 is Chromium's keyup re-dispatch after the
+      // ContextMenu key — it must not open a second menu on top of the first.
+      fireEvent.contextMenu(getByTestId('acp-user-bar'), { detail: 0, button: -1 })
       expect(getAllByRole('menu')).toHaveLength(1)
     } finally {
       disposable.dispose()

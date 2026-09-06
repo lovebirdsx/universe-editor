@@ -3,12 +3,13 @@
  *  Keyboard-raised context menus, for any row list — `Tree` and the hand-rolled
  *  ones alike (session list, keybindings grid, commit graph).
  *
- *  The browser's own contextmenu event for the ContextMenu key / Shift+F10
- *  carries (0,0) coordinates, which would anchor the menu at a fixed corner. So
- *  we synthesize one on the focused row with coordinates taken from its bounding
- *  rect: each view's existing row handler then opens the menu exactly as it does
- *  for a mouse right-click, and only has to ask `isKeyboardContextMenu` whether
- *  to open it with the first entry highlighted.
+ *  The browser's own contextmenu event for the ContextMenu key / Shift+F10 is
+ *  anchored on whatever holds focus — the scroll container, not the focused row
+ *  — so the menu would open at that container's centre. So we synthesize one on
+ *  the focused row with coordinates taken from its bounding rect: each view's
+ *  existing row handler then opens the menu exactly as it does for a mouse
+ *  right-click, and only has to ask `isKeyboardContextMenu` whether to open it
+ *  with the first entry highlighted.
  *--------------------------------------------------------------------------------------------*/
 
 /**
@@ -69,22 +70,20 @@ export function isContextMenuKey(e: { key: string; shiftKey: boolean }): boolean
 /**
  * True for the `contextmenu` Chromium re-dispatches on *keyup* after the
  * ContextMenu key / Shift+F10 — keydown `preventDefault` cannot cancel it. It
- * arrives with `detail: 0` AND at `(0,0)`, targeting whatever holds focus. Every
- * host that raises its menu from the keydown must swallow it, or the same
- * keystroke opens a second menu at the screen corner.
+ * arrives with `detail: 0` and `button: -1`, targeting whatever holds focus.
+ * Every host that raises its menu from the keydown must swallow it, or the same
+ * keystroke opens a second, row-less menu.
  *
- * The `(0,0)` coordinate is the distinguishing half: a real right-click — even
- * one driven by CDP, whose `detail` stays 0 because `Input.dispatchMouseEvent`'s
- * clickCount does not feed `MouseEvent.detail` — carries the actual pointer
- * coordinates, never exactly (0,0). `detail === 0` alone would swallow those
- * synthetic-but-real right-clicks.
+ * `button: -1` is the distinguishing half — Chromium's marker for "no button
+ * produced this". A real right-click reports `button: 2`, including one driven
+ * by CDP, whose `detail` stays 0 because `Input.dispatchMouseEvent`'s clickCount
+ * does not feed `MouseEvent.detail`; `detail === 0` alone would swallow those.
+ * The coordinates cannot serve as that half: the supplement lands at the centre
+ * of the focused element, not at (0,0) as once assumed — and CDP clicks aim at
+ * element centres too, so no coordinate test separates them.
  */
-export function isKeyupContextMenuSupplement(e: {
-  detail: number
-  clientX: number
-  clientY: number
-}): boolean {
-  return e.detail === 0 && e.clientX === 0 && e.clientY === 0
+export function isKeyupContextMenuSupplement(e: { detail: number; button: number }): boolean {
+  return e.detail === 0 && e.button === -1
 }
 
 /**

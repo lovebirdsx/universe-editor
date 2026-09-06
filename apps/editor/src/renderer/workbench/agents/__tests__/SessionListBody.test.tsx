@@ -515,9 +515,9 @@ describe('SessionListBody — archive / pin', () => {
     focusRowAt(0)
     fireEvent.keyDown(list(), { key: 'ContextMenu' })
     await screen.findByRole('menu')
-    // Chromium's supplement: detail 0, (0,0) coords. Without the guard it would
-    // reopen the menu at the top-left corner, unhighlighted.
-    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 0 })
+    // Chromium's supplement: detail 0 and button -1, landing on the focused
+    // element. Without the guard it would reopen the menu unhighlighted.
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 0, button: -1 })
 
     expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1)
     expect(document.querySelectorAll('[role="menuitem"][data-active]')).toHaveLength(1)
