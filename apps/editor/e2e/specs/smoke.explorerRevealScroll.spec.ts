@@ -58,14 +58,34 @@ test.describe('@p1 explorer reveal scroll', () => {
     await expect(targetRow).toBeInViewport({ timeout: 5000 })
 
     // Scroll the tree back to the top so the (still-selected) target row leaves
-    // the viewport.
-    await page
-      .locator('[role="tree"]')
-      .first()
-      .evaluate((el) => {
-        el.scrollTop = 0
-      })
-    await expect(targetRow).not.toBeInViewport({ timeout: 5000 })
+    // the window viewport. Don't use toBeInViewport here: rows are absolutely
+    // positioned with an inline `transform: translateY(...)`, and a row
+    // re-mounted by the scroll reads as translateY(0) for one frame before
+    // React commits the real offset. IntersectionObserver may report that
+    // transient frame (ratio=1) even though the row's settled position is far
+    // below the window. Also, the tree's reveal useLayoutEffect re-runs when
+    // the tree structure version changes (e.g. the file watcher delivering its
+    // initial refresh after arming), which calls scrollIntoView and silently
+    // undoes our scroll-to-top. So keep re-asserting scrollTop = 0 inside the
+    // poll until the bounding rect confirms the row is outside the window.
+    await expect
+      .poll(
+        async () => {
+          await page
+            .locator('[role="tree"]')
+            .first()
+            .evaluate((el) => {
+              el.scrollTop = 0
+            })
+          const r = await targetRow.evaluate((el) => {
+            const rect = el.getBoundingClientRect()
+            return { top: rect.top, bottom: rect.bottom, vh: window.innerHeight }
+          })
+          return r.bottom <= 0 || r.top >= r.vh
+        },
+        { timeout: 5000 },
+      )
+      .toBe(true)
 
     // Reveal in Explorer must scroll the already-selected row back into view.
     await workbench.runCommand('revealInExplorer', { resource: targetUri })
