@@ -69,16 +69,22 @@ export function isContextMenuKey(e: { key: string; shiftKey: boolean }): boolean
 /**
  * True for the `contextmenu` Chromium re-dispatches on *keyup* after the
  * ContextMenu key / Shift+F10 — keydown `preventDefault` cannot cancel it. It
- * arrives with `detail: 0`, targeting whatever holds focus, at (0,0). Every host
- * that raises its menu from the keydown must swallow it, or the same keystroke
- * opens a second menu at the screen corner.
+ * arrives with `detail: 0` AND at `(0,0)`, targeting whatever holds focus. Every
+ * host that raises its menu from the keydown must swallow it, or the same
+ * keystroke opens a second menu at the screen corner.
  *
- * Safe against a real right-click: mouse contextmenu events carry the click
- * count in `detail`, and so does `dispatchKeyboardContextMenu`'s synthetic one
- * (deliberately — see above).
+ * The `(0,0)` coordinate is the distinguishing half: a real right-click — even
+ * one driven by CDP, whose `detail` stays 0 because `Input.dispatchMouseEvent`'s
+ * clickCount does not feed `MouseEvent.detail` — carries the actual pointer
+ * coordinates, never exactly (0,0). `detail === 0` alone would swallow those
+ * synthetic-but-real right-clicks.
  */
-export function isKeyupContextMenuSupplement(e: { detail: number }): boolean {
-  return e.detail === 0
+export function isKeyupContextMenuSupplement(e: {
+  detail: number
+  clientX: number
+  clientY: number
+}): boolean {
+  return e.detail === 0 && e.clientX === 0 && e.clientY === 0
 }
 
 /**

@@ -79,11 +79,23 @@ describe('keyboardContextMenu', () => {
     expect(isKeyupContextMenuSupplement(event)).toBe(false)
   })
 
-  it('identifies the keyup supplement by detail alone, sparing real clicks', () => {
+  it('identifies the keyup supplement by detail AND origin, sparing real clicks', () => {
     // Chromium's supplement: detail 0, (0,0), on the focused element.
     expect(isKeyupContextMenuSupplement(new MouseEvent('contextmenu'))).toBe(true)
     // A real right-click carries its click count.
-    expect(isKeyupContextMenuSupplement(new MouseEvent('contextmenu', { detail: 1 }))).toBe(false)
+    expect(
+      isKeyupContextMenuSupplement(
+        new MouseEvent('contextmenu', { detail: 1, clientX: 30, clientY: 40 }),
+      ),
+    ).toBe(false)
+    // A CDP-driven right-click keeps detail 0 (clickCount does not feed detail)
+    // but lands at real pointer coordinates — the (0,0) origin check must spare
+    // it, or e2e can never open the menu.
+    expect(
+      isKeyupContextMenuSupplement(
+        new MouseEvent('contextmenu', { detail: 0, clientX: 30, clientY: 40 }),
+      ),
+    ).toBe(false)
     // And so does the synthetic event the keydown path dispatches — otherwise a
     // host's guard would swallow the very menu it was asked to open.
     const row = document.createElement('div')
