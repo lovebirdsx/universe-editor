@@ -84,6 +84,7 @@ import {
 } from '../acpSessionCreateProfiler.js'
 import { ACP_EXT_METHODS, ACP_META_KEYS, readCodexModelKnownInCatalog } from './acpExtMethods.js'
 import { isAuthRequiredError } from './acpAuthError.js'
+import { isSessionNotFoundError } from './acpErrorClassify.js'
 import { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { IAcpAuthGuidanceService } from './acpAuthGuidanceService.js'
 import { IAcpSessionFactory } from './acpSessionFactory.js'
@@ -1841,12 +1842,21 @@ export class AcpSessionService
   }
 
   /**
-   * Centralised resume-failure policy. An empty session (created but never
-   * messaged) cannot be revived after a restart — the agent never persisted it —
-   * so we discard it silently: drop the history row (it leaves the session list)
-   * and let the restored editor tab close itself, with NO error notification.
-   * Any session that has messages (or predates the `hasMessages` flag) surfaces
-   * the failure to the user as before. Always rethrows so callers see the error.
+   * Centralised resume-failure policy. A session with no agent-side transcript
+   * cannot be revived after a restart, so we discard it silently: drop the
+   * history row (it leaves the session list) and let the restored editor tab
+   * close itself, with NO error notification. Two ways to reach that verdict:
+   *
+   *  - `hasMessages === false` — we created it and know it was never messaged.
+   *  - the agent answered `resourceNotFound` — the authoritative "no such
+   *    session". This is the only signal for rows imported by the hydrate sweep
+   *    (`bulkMergeFromAgent`), which carry no `hasMessages` at all: `session/list`
+   *    does not report message counts, so the flag stays `undefined` and the
+   *    check above can never fire for them.
+   *
+   * Any other failure (crash, timeout, auth) keeps the row and surfaces the
+   * error as before, so the user still has something to retry. Always rethrows
+   * so callers see the error.
    */
   private _onResumeFailure(entry: AcpSessionHistoryEntry, err: unknown, readOnly = false): never {
     const msg = (err as Error).message
@@ -1854,7 +1864,7 @@ export class AcpSessionService
       // Read-only preview failures (e.g. agent without loadSession) are not
       // user errors: the UI falls back to the metadata-only preview. Log only.
       this._logger.info(`read-only resume failed for ${entry.id}: ${msg}`)
-    } else if (entry.hasMessages === false) {
+    } else if (entry.hasMessages === false || isSessionNotFoundError(err)) {
       this._logger.info(`discarding empty session that failed to resume: ${entry.id}`)
       this._history.remove(entry.id)
       this._sessionFactory.messageAttachments.removeSession(entry.id)

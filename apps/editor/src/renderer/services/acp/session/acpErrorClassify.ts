@@ -144,6 +144,28 @@ function classifyClaudeKind(kind: unknown): AcpErrorVerdict | undefined {
 }
 
 /**
+ * True for the agent's authoritative "I have no such session" answer: JSON-RPC
+ * `-32002`, which both forks raise via `RequestError.resourceNotFound` when a
+ * resume finds no transcript for the id (claude fork: the SDK reports
+ * "No conversation found with session ID"; codex: the thread is gone).
+ *
+ * Deliberately NOT folded into {@link classifyAcpError} — not-found stays
+ * `fatal` there, because retrying it can never succeed. This predicate answers a
+ * different question: "is the session itself gone?", which lets the resume path
+ * discard the dead history row instead of showing the user an error they cannot
+ * act on. A crash / timeout / auth failure is NOT this and must stay visible.
+ *
+ * The text fallback is anchored at the start so an unrelated error that merely
+ * mentions the phrase in its body can never be mistaken for the agent's verdict.
+ */
+export function isSessionNotFoundError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | undefined)?.code
+  if (typeof code === 'number') return code === -32002
+  const message = (err as { message?: unknown } | undefined)?.message
+  return typeof message === 'string' && /^resource not found\b/i.test(message.trim())
+}
+
+/**
  * Classify an error raised by an agent round-trip. `fatal` is the conservative
  * default: only errors we positively recognise as transient are auto-retried.
  */

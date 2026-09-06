@@ -341,6 +341,9 @@ class FakeAcpClientService implements IAcpClientService {
   /** When true, the next connect() rejects — simulates the pool's bounded
    *  initialize handshake timing out (or any spawn/handshake failure). */
   failConnect = false
+  /** Error thrown by connect() when {@link failConnect} is set. Lets a test
+   *  distinguish a generic stall from the agent's `resourceNotFound` verdict. */
+  connectError: unknown
   private _agentSeq = 0
   private _sink: IAcpClientNotificationSink | undefined
 
@@ -380,7 +383,7 @@ class FakeAcpClientService implements IAcpClientService {
     if (!sink) throw new Error('FakeAcpClientService.connect: sink not installed')
     this.connectArgs.push({ agentId, cwd: options?.cwd, authority: options?.authority })
     if (this.failConnect) {
-      throw new Error('ACP initialize timed out after 1ms')
+      throw this.connectError ?? new Error('ACP initialize timed out after 1ms')
     }
     const agentSessionId = `agent-${++this._agentSeq}`
     const pair = createInMemoryAcpPair()
@@ -1268,6 +1271,59 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(built.notifications.captured.filter((n) => /Failed to resume/.test(n.message))).toEqual(
       [],
     )
+  })
+
+  it('discards a session the agent reports as not found, even with hasMessages set', async () => {
+    // The hydrate sweep imports rows via `session/list` → `bulkMergeFromAgent`,
+    // which never writes `hasMessages` (the protocol reports no message count).
+    // Such a row can still be an empty shell: the CLI wrote only sidecar
+    // metadata (`last-prompt` / `ai-title`) because the turn produced nothing,
+    // so the transcript holds zero user/assistant lines and resume can only
+    // answer resourceNotFound. `hasMessages: true` here stands in for "the flag
+    // says nothing useful" — it must NOT keep a dead row in the session list.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
+    await svc.closeSession(original.id)
+    expect(built.history.get(historyId)).toBeDefined()
+
+    built.client.failConnect = true
+    built.client.connectError = Object.assign(new Error(`Resource not found: ${historyId}`), {
+      code: -32002,
+    })
+
+    await expect(svc.resumeSession(historyId)).rejects.toThrow(/Resource not found/)
+    expect(svc.sessions.get()).toHaveLength(0)
+    expect(built.history.get(historyId)).toBeUndefined()
+    expect(built.notifications.captured.filter((n) => /Failed to resume/.test(n.message))).toEqual(
+      [],
+    )
+  })
+
+  it('keeps the row and surfaces the error when a real session fails for another reason', async () => {
+    // Guard for the case above: only the agent's authoritative not-found may
+    // discard a row. A crash / stall is recoverable, so the row must survive and
+    // the user must see something to retry.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
+    await svc.closeSession(original.id)
+
+    built.client.failConnect = true
+
+    await expect(svc.resumeSession(historyId)).rejects.toThrow(/timed out/)
+    expect(built.history.get(historyId)).toBeDefined()
+    expect(
+      built.notifications.captured.filter((n) => /Failed to resume/.test(n.message)),
+    ).not.toEqual([])
   })
 })
 

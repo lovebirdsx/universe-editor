@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { classifyAcpError } from '../acpErrorClassify.js'
+import { classifyAcpError, isSessionNotFoundError } from '../acpErrorClassify.js'
 
 describe('classifyAcpError', () => {
   it('classifies claude fork structured errorKinds', () => {
@@ -154,5 +154,35 @@ describe('classifyAcpError', () => {
     expect(classifyAcpError(undefined).cls).toBe('fatal')
     expect(classifyAcpError(null).cls).toBe('fatal')
     expect(classifyAcpError({}).cls).toBe('fatal')
+  })
+})
+
+describe('isSessionNotFoundError', () => {
+  it('matches the JSON-RPC resourceNotFound code', () => {
+    expect(isSessionNotFoundError({ code: -32002, message: 'Resource not found: abc' })).toBe(true)
+  })
+
+  it('does not match other JSON-RPC codes', () => {
+    // -32000 is authRequired: recoverable, the user must stay informed.
+    expect(isSessionNotFoundError({ code: -32000, message: 'Authentication required' })).toBe(false)
+    expect(isSessionNotFoundError({ code: -32603, message: 'Internal error' })).toBe(false)
+  })
+
+  it('falls back to anchored message text for agents with no error code', () => {
+    expect(isSessionNotFoundError(new Error('Resource not found: abc'))).toBe(true)
+    expect(isSessionNotFoundError(new Error('resource not found'))).toBe(true)
+    // Mid-sentence mentions must not count as the agent's verdict.
+    expect(isSessionNotFoundError(new Error('agent crashed: Resource not found'))).toBe(false)
+  })
+
+  it('is false for unknown shapes', () => {
+    expect(isSessionNotFoundError(undefined)).toBe(false)
+    expect(isSessionNotFoundError(null)).toBe(false)
+    expect(isSessionNotFoundError({})).toBe(false)
+    expect(isSessionNotFoundError(new Error('ACP initialize timed out after 1ms'))).toBe(false)
+  })
+
+  it('keeps not-found classified as fatal (never auto-retried)', () => {
+    expect(classifyAcpError({ code: -32002, message: 'Resource not found: abc' }).cls).toBe('fatal')
   })
 })
