@@ -61,6 +61,10 @@ import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import {
   LIVE_INGESTION_BUDGET,
+  MAX_AVAILABLE_COMMANDS,
+  MAX_PLAN_ENTRIES,
+  MAX_PLAN_ENTRY_CHARS,
+  MAX_TOOL_CALL_PARENT_ENTRIES,
   REPLAY_INGESTION_BUDGET,
   capContentBlock,
   capRawInput,
@@ -3146,11 +3150,16 @@ export class AcpSession extends Disposable implements IAcpSession {
           this._planSeen = true
           this._sealStreamingMessages()
         }
-        const entries: readonly AcpPlanEntry[] = update.entries.map((e) => ({
-          content: e.content,
-          status: e.status,
-          ...(e.priority !== undefined ? { priority: e.priority } : {}),
-        }))
+        const entries: readonly AcpPlanEntry[] = update.entries
+          .slice(0, MAX_PLAN_ENTRIES)
+          .map((e) => ({
+            content:
+              e.content.length > MAX_PLAN_ENTRY_CHARS
+                ? e.content.slice(0, MAX_PLAN_ENTRY_CHARS)
+                : e.content,
+            status: e.status,
+            ...(e.priority !== undefined ? { priority: e.priority } : {}),
+          }))
         this.plan.set(entries, this._batchedTx())
         // Mirror onto history so the plan bar survives resume — codex's
         // session/load replay does not re-emit plan. An empty snapshot clears
@@ -3160,7 +3169,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'available_commands_update':
-        this.availableCommands.set(update.availableCommands, undefined)
+        this.availableCommands.set(
+          update.availableCommands.slice(0, MAX_AVAILABLE_COMMANDS),
+          undefined,
+        )
         this._telemetry.publicLog('acp.commands_advertised', {
           sessionId: this.id,
           count: update.availableCommands.length,
@@ -3892,6 +3904,15 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _resolveParent(toolCallId: string, parentId: string | undefined): string | undefined {
     if (parentId != null) {
+      // Bounded FIFO (Map keeps insertion order). There is no reliable "this
+      // link is done with" signal — a late PostToolUse update can arrive long
+      // after its card settled — so the map is capped rather than pruned. An
+      // evicted link at worst makes one very old late update render as a
+      // top-level card instead of a child; it never grows without bound.
+      if (this._toolCallParent.size >= MAX_TOOL_CALL_PARENT_ENTRIES) {
+        const oldest = this._toolCallParent.keys().next().value
+        if (oldest !== undefined) this._toolCallParent.delete(oldest)
+      }
       this._toolCallParent.set(toolCallId, parentId)
       return parentId
     }

@@ -13,7 +13,11 @@ import { NoopTelemetryService } from '@universe-editor/platform'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { AcpSession, memoryTrimmedNotice } from '../acpSession.js'
 import { AcpResidentBudget } from '../acpResidentBudget.js'
-import { VIEW_MODEL_OVERHEAD_FACTOR, estimateUpdateCost } from '../acpContentLimits.js'
+import {
+  MAX_TOOL_CALL_PARENT_ENTRIES,
+  VIEW_MODEL_OVERHEAD_FACTOR,
+  estimateUpdateCost,
+} from '../acpContentLimits.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 
 const LIVE_BUDGET = 2048 * VIEW_MODEL_OVERHEAD_FACTOR
@@ -281,5 +285,52 @@ describe('AcpSession — live resident budget', () => {
     expect(calls[0]?.memoryTrimmed).toBeUndefined()
     expect(calls[1]?.memoryTrimmed).toBeUndefined()
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('AcpSession — tool-call parent index bound', () => {
+  let session: AcpSession | undefined
+
+  afterEach(() => {
+    session?.dispose()
+    session = undefined
+    vi.restoreAllMocks()
+  })
+
+  /** A late update that drops `parentToolUseId` — it re-attaches to the parent
+   *  card only if the session still remembers the link. */
+  function lateUpdate(id: string): SessionUpdate {
+    return { sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed' }
+  }
+
+  it('remembers recent parent links and evicts the oldest beyond the cap', () => {
+    // The index has no end-of-life signal (a PostToolUse update can land long
+    // after its card settled), so it is bounded FIFO rather than pruned. It
+    // used to grow for the life of the session with nothing ever capping it.
+    session = createSession(Number.MAX_SAFE_INTEGER)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    session.applyUpdate(terminalToolCall('parent', 'p'))
+    for (let i = 0; i < MAX_TOOL_CALL_PARENT_ENTRIES + 1; i++) {
+      session.applyUpdate(childToolCall('parent', `child-${i}`, 'c'))
+    }
+
+    const parentSlot = (): { children?: readonly unknown[] } | undefined => {
+      const slot = session?.timeline
+        .get()
+        .find((it) => it.kind === 'toolCall' && it.id === 'parent')
+      return slot?.kind === 'toolCall' ? slot.call : undefined
+    }
+    const childrenBefore = parentSlot()?.children?.length ?? 0
+
+    // The newest link survives: a late update still routes under the parent.
+    session.applyUpdate(lateUpdate(`child-${MAX_TOOL_CALL_PARENT_ENTRIES}`))
+    expect(parentSlot()?.children?.length).toBe(childrenBefore)
+
+    // The oldest link was evicted, so its late update can no longer resolve a
+    // parent — it surfaces at the top level instead of nesting.
+    session.applyUpdate(lateUpdate('child-0'))
+    expect(session.toolCalls.get().some((c) => c.id === 'child-0')).toBe(true)
+    expect(parentSlot()?.children?.length).toBe(childrenBefore)
   })
 })

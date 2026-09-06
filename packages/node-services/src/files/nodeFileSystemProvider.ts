@@ -43,6 +43,10 @@ function mapError(err: unknown, fallbackMessage: string): FileSystemError {
 const DEFAULT_MAX_TEXT_BYTES = 256 * 1024 * 1024
 const DEFAULT_MAX_BINARY_BYTES = 1024 * 1024 * 1024
 
+/** Window over which an identical (op, path, code) read failure logs at most
+ *  once. See {@link NodeFileSystemProvider._logReadFailure}. */
+const READ_FAILURE_LOG_WINDOW_MS = 60_000
+
 export interface NodeFileSystemProviderOptions {
   /** Moves a native path to the OS trash. Absent → `useTrash` fails loud. */
   readonly trash?: (nativePath: string) => Promise<void>
@@ -59,6 +63,9 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
   private readonly _logger: ILogger
   private readonly _maxTextBytes: number
   private readonly _maxBinaryBytes: number
+  private readonly _loggedFailuresThisWindow = new Set<string>()
+  private _failureLogWindowStart = 0
+  private _suppressedFailureLogs = 0
 
   constructor(options: NodeFileSystemProviderOptions = {}) {
     this._trash = options.trash
@@ -84,11 +91,36 @@ export class NodeFileSystemProvider implements IFileSystemProvider {
   }
 
   /** ENOENT is a normal "not there" answer callers handle (e.g. probing an
-   *  optional file like `.mcp.json`); anything else is a genuine failure. */
+   *  optional file like `.mcp.json`); anything else is a genuine failure.
+   *
+   *  Non-ENOENT failures are throttled per (op, path, code): a caller stuck in
+   *  a retry loop over one bad path once wrote 6000+ identical warn lines in a
+   *  single session, which is enough to push every other file system log line
+   *  out of the tail window a diagnostics bundle captures. */
   private _logReadFailure(op: string, uri: URI, mapped: FileSystemError): void {
     const msg = `${op} failed ${uri.fsPath} code=${mapped.code}`
-    if (mapped.code === 'ENOENT') this._logger.debug(msg, mapped.message)
-    else this._logger.warn(msg, mapped.message)
+    if (mapped.code === 'ENOENT') {
+      this._logger.debug(msg, mapped.message)
+      return
+    }
+    const key = `${op}:${uri.fsPath}:${mapped.code}`
+    const now = Date.now()
+    if (now - this._failureLogWindowStart >= READ_FAILURE_LOG_WINDOW_MS) {
+      this._failureLogWindowStart = now
+      if (this._suppressedFailureLogs > 0) {
+        this._logger.warn(
+          `suppressed ${this._suppressedFailureLogs} repeated read failure log(s) in the last ${READ_FAILURE_LOG_WINDOW_MS / 1000}s`,
+        )
+      }
+      this._suppressedFailureLogs = 0
+      this._loggedFailuresThisWindow.clear()
+    }
+    if (this._loggedFailuresThisWindow.has(key)) {
+      this._suppressedFailureLogs++
+      return
+    }
+    this._loggedFailuresThisWindow.add(key)
+    this._logger.warn(msg, mapped.message)
   }
 
   async readFile(uri: URI): Promise<Uint8Array> {

@@ -151,6 +151,20 @@ const MAX_BASELINE_BYTES = 4 * 1024 * 1024
  *  main process serving the read. */
 const MAX_CURRENT_BYTES = 16 * 1024 * 1024
 
+/** Cap on the live in-memory diff results held per session, and across all
+ *  sessions, in `_observables`. Distinct from the budgets above: those bound
+ *  what is *persisted* (pinned baselines + hunk batches), while every recompute
+ *  additionally materializes `baseline` AND `current` in full for each tracked
+ *  file and parks the result in an observable. A long agent session accumulates
+ *  tracked files, and nothing measured or released that array — it is how a
+ *  renderer once climbed from 0.7GB to 5.4GB over two hours and was OOM-killed.
+ *  Sizes are UTF-16 string lengths doubled, matching what the JS heap holds.
+ *  Keep the per-session cap at or below the total: the session being recomputed
+ *  is never a candidate for the global sweep, so a per-session cap above the
+ *  total would leave the sweep with nothing it is allowed to release. */
+const MAX_LIVE_CHANGE_BYTES = 32 * 1024 * 1024
+const MAX_LIVE_CHANGE_TOTAL_BYTES = 64 * 1024 * 1024
+
 /** Serialized size of a value in bytes (safe on undefined). */
 function jsonSize(value: unknown): number {
   return JSON.stringify(value)?.length ?? 0
@@ -242,6 +256,18 @@ function recordBytes(rec: FileRecord): number {
   return bytes
 }
 
+/** Heap cost of one live diff row: both full texts, as UTF-16. */
+function changeBytes(change: SessionFileChange): number {
+  return (change.baseline.length + change.current.length) * 2
+}
+
+/** Strip the two full texts from a row, keeping it visible as a known-changed
+ *  but non-comparable entry. Same shape `_buildChange` produces for a file too
+ *  large to read, so the UI already renders it correctly. */
+function degradeChange(change: SessionFileChange): SessionFileChange {
+  return { ...change, baseline: '', current: '', status: 'degraded' }
+}
+
 export class SessionChangeTrackerService
   extends PersistedStateBase<TrackerState>
   implements ISessionChangeTrackerService
@@ -256,6 +282,12 @@ export class SessionChangeTrackerService
 
   /** Approximate serialized size per session, kept in sync on record/load. */
   private readonly _sessionBytes = new Map<string, number>()
+
+  /** Heap cost of the live diff rows currently parked in {@link _observables},
+   *  per session. Kept in lockstep with what `_recompute` writes: the same pass
+   *  that degrades over-budget rows is the one that records their size, so a
+   *  byte counted here is always a byte some row still holds. */
+  private readonly _liveChangeBytes = new Map<string, number>()
 
   /** Set by _deserialize when it pruned over-budget entries → persist the slimmed state. */
   private _prunedOnLoad = false
@@ -273,6 +305,8 @@ export class SessionChangeTrackerService
   maxTotalBytes = MAX_TOTAL_BYTES
   maxBaselineBytes = MAX_BASELINE_BYTES
   maxCurrentBytes = MAX_CURRENT_BYTES
+  maxLiveChangeBytes = MAX_LIVE_CHANGE_BYTES
+  maxLiveChangeTotalBytes = MAX_LIVE_CHANGE_TOTAL_BYTES
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -581,6 +615,7 @@ export class SessionChangeTrackerService
   clear(sessionId: string): void {
     if (!this._state.delete(sessionId)) return
     this._sessionBytes.delete(sessionId)
+    this._liveChangeBytes.delete(sessionId)
     this._scheduleWrite()
     this._observables.get(sessionId)?.set([], undefined)
   }
@@ -644,6 +679,7 @@ export class SessionChangeTrackerService
       total -= this._sessionBytes.get(oldest) ?? 0
       this._state.delete(oldest)
       this._sessionBytes.delete(oldest)
+      this._liveChangeBytes.delete(oldest)
       this._observables.get(oldest)?.set([], undefined)
     }
   }
@@ -677,6 +713,10 @@ export class SessionChangeTrackerService
       let current = ''
       try {
         const stat = await this._files.stat(uri)
+        if (!stat.isFile) {
+          this._logger.warn(`skipping restore of ${rec.path} — not a regular file`)
+          continue
+        }
         if (stat.size > this.maxCurrentBytes) {
           this._logger.warn(
             `skipping restore of ${rec.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(this.maxCurrentBytes / 1024 / 1024).toFixed(0)}MB read cap`,
@@ -750,6 +790,7 @@ export class SessionChangeTrackerService
     const obs = this._observables.get(sessionId)
     if (!obs) return
     if (!files || files.size === 0) {
+      this._liveChangeBytes.delete(sessionId)
       obs.set([], undefined)
       return
     }
@@ -759,9 +800,77 @@ export class SessionChangeTrackerService
       (rec) => this._buildChange(rec),
     )
     obs.set(
-      changes.filter((c): c is SessionFileChange => c !== undefined),
+      this._capLiveChanges(
+        sessionId,
+        changes.filter((c): c is SessionFileChange => c !== undefined),
+      ),
       undefined,
     )
+  }
+
+  /**
+   * Bound the heap held by one session's live diff rows, and by all sessions
+   * together, then record what survived. Measuring and releasing are the same
+   * pass over the same array on purpose: a budget whose accounting can outrun
+   * its release path either reports a permanent overage it can never act on, or
+   * spins trying to free bytes nothing holds.
+   *
+   * Heaviest rows degrade first — dropping their two full texts costs only the
+   * inline diff for the files least likely to be reviewed inline anyway.
+   */
+  private _capLiveChanges(
+    sessionId: string,
+    changes: readonly SessionFileChange[],
+  ): readonly SessionFileChange[] {
+    const result = [...changes]
+    let bytes = 0
+    for (const c of result) bytes += changeBytes(c)
+
+    if (bytes > this.maxLiveChangeBytes) {
+      const heaviestFirst = result
+        .map((c, index) => ({ index, bytes: changeBytes(c) }))
+        .sort((a, b) => b.bytes - a.bytes)
+      for (const { index, bytes: rowBytes } of heaviestFirst) {
+        if (bytes <= this.maxLiveChangeBytes) break
+        // Degrading frees exactly `rowBytes`, so a zero-byte row frees nothing:
+        // stop rather than spin once the heaviest remaining row is already bare.
+        if (rowBytes === 0) break
+        const row = result[index]
+        if (row === undefined) continue
+        result[index] = degradeChange(row)
+        bytes -= rowBytes
+      }
+      this._logger.warn(
+        `degraded oversized diff rows for session ${sessionId} — live change budget exceeded`,
+      )
+    }
+
+    this._liveChangeBytes.set(sessionId, bytes)
+
+    let total = 0
+    for (const b of this._liveChangeBytes.values()) total += b
+    if (total > this.maxLiveChangeTotalBytes) {
+      // Over the global ceiling: release other sessions' rows wholesale, least
+      // recently recorded first. `_state` is the LRU order `_touchLru` already
+      // maintains (most-recently-recorded last); `_observables` insertion order
+      // would instead be "whoever opened the panel first", which says nothing
+      // about which session is cold. The session being recomputed is kept.
+      for (const otherId of this._state.keys()) {
+        if (total <= this.maxLiveChangeTotalBytes) break
+        if (otherId === sessionId) continue
+        const otherBytes = this._liveChangeBytes.get(otherId) ?? 0
+        if (otherBytes === 0) continue
+        const otherObs = this._observables.get(otherId)
+        if (otherObs) otherObs.set(otherObs.get().map(degradeChange), undefined)
+        this._liveChangeBytes.set(otherId, 0)
+        total -= otherBytes
+        this._logger.warn(
+          `degraded live diff rows for session ${otherId} — global live change budget exceeded`,
+        )
+      }
+    }
+
+    return result
   }
 
   private async _buildChange(record: FileRecord): Promise<SessionFileChange | undefined> {
@@ -773,7 +882,14 @@ export class SessionChangeTrackerService
     let tooLarge = false
     try {
       const stat = await this._files.stat(uri)
-      if (stat.size > this.maxCurrentBytes) {
+      if (!stat.isFile) {
+        // A directory (or other non-regular entry) that made it into tracking
+        // would otherwise be read on every single recompute, and every read is
+        // a guaranteed EISDIR — a permanent error loop that also floods the
+        // file system log. Surface it as degraded instead of ever reading it.
+        tooLarge = true
+        this._logger.debug(`skipping diff of ${record.path} — not a regular file`)
+      } else if (stat.size > this.maxCurrentBytes) {
         tooLarge = true
         this._logger.debug(
           `skipping diff of ${record.path} — ${(stat.size / 1024 / 1024).toFixed(1)}MB exceeds the ${(this.maxCurrentBytes / 1024 / 1024).toFixed(0)}MB read cap`,

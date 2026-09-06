@@ -81,6 +81,9 @@ class FakeFileService implements IFileService {
   /** Optional per-path size override for stat() — fakes a huge file without
    *  materializing its content. */
   readonly sizes = new Map<string, number>()
+  /** Paths stat() reports as directories. readFileText on one throws EISDIR,
+   *  matching the real provider. */
+  readonly directories = new Set<string>()
   /** Total readFileText calls — asserts the tracker doesn't fan out unboundedly. */
   reads = 0
   /** Currently in-flight reads and the peak, to bound open-handle pressure. */
@@ -94,12 +97,16 @@ class FakeFileService implements IFileService {
   remove(path: string): void {
     this.files.delete(URI.file(path).fsPath)
   }
+  addDirectory(path: string): void {
+    this.directories.add(URI.file(path).fsPath)
+  }
   async readFileText(resource: URI): Promise<string> {
     this.reads++
     this._inFlight++
     this.peakInFlight = Math.max(this.peakInFlight, this._inFlight)
     try {
       if (this.deferReads) await Promise.resolve()
+      if (this.directories.has(resource.fsPath)) throw new Error('EISDIR')
       const c = this.files.get(resource.fsPath)
       if (c === undefined) throw new Error('ENOENT')
       return c
@@ -121,6 +128,9 @@ class FakeFileService implements IFileService {
   }
   async stat(resource: URI): Promise<IFileStat> {
     const fsPath = resource.fsPath
+    if (this.directories.has(fsPath)) {
+      return { resource, isFile: false, isDirectory: true, size: 4096, mtime: 0 }
+    }
     const override = this.sizes.get(fsPath)
     if (override !== undefined) {
       return { resource, isFile: true, isDirectory: false, size: override, mtime: 0 }
@@ -1004,6 +1014,122 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
     expect(obs.get()).toHaveLength(100)
     // Never open more than the concurrency cap at once, regardless of file count.
     expect(files.peakInFlight).toBeLessThanOrEqual(8)
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — non-regular paths', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('never reads a tracked directory, on any recompute', async () => {
+    // The regression: stat() succeeds on a directory and reports a small size,
+    // so the size check passed and every recompute issued a read that could
+    // only ever fail with EISDIR — a permanent loop that also flooded the log.
+    files.addDirectory('/work/conf/Final')
+    const obs = svc.changesFor(SID)
+    svc.recordWatched(SID, '/work/conf/Final')
+    await flush()
+    svc.recordWatched(SID, '/work/conf/Final')
+    await flush()
+
+    expect(files.reads).toBe(0)
+    const list = obs.get()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.status).toBe('degraded')
+  })
+
+  it('skips a directory during restore instead of throwing', async () => {
+    files.addDirectory('/work/conf/Final')
+    svc.record(SID, '/work/conf/Final', 'tc-1', [createHunk(['a'])], { baseline: '' })
+    await flush()
+
+    const impact = await svc.restore(SID, ['tc-1'])
+    expect(impact.filesChanged).toHaveLength(0)
+    expect(files.reads).toBe(0)
+  })
+})
+
+describe('SessionChangeTrackerService — live change budget', () => {
+  it('degrades the heaviest rows so live diff bytes stay under the cap', async () => {
+    // Each row holds baseline AND current in full. Nothing measured or released
+    // that array before, which is how a renderer climbed past 5GB and was
+    // OOM-killed while every persisted-state budget still looked healthy.
+    const { svc, files } = makeService()
+    await svc.initialize()
+    svc.maxLiveChangeBytes = 4096
+
+    const obs = svc.changesFor(SID)
+    const big = 'x'.repeat(2000)
+    const small = 'y'.repeat(10)
+    files.set('/work/big1.ts', big)
+    files.set('/work/big2.ts', big)
+    files.set('/work/small.ts', small)
+    for (const [path, content] of [
+      ['/work/big1.ts', big],
+      ['/work/big2.ts', big],
+      ['/work/small.ts', small],
+    ] as const) {
+      svc.record(SID, path, `tc-${path}`, [createHunk([content])], { baseline: '' })
+    }
+    await flush()
+
+    const list = obs.get()
+    expect(list).toHaveLength(3)
+    const liveBytes = list.reduce((sum, c) => sum + (c.baseline.length + c.current.length) * 2, 0)
+    expect(liveBytes).toBeLessThanOrEqual(4096)
+    // The small row keeps its texts; the heavy ones are the ones that gave way.
+    expect(list.find((c) => c.path.endsWith('small.ts'))?.current).toBe(small)
+    expect(list.filter((c) => c.status === 'degraded').length).toBeGreaterThan(0)
+    svc.dispose()
+  })
+
+  it('leaves rows intact when they fit the budget', async () => {
+    const { svc, files } = makeService()
+    await svc.initialize()
+    const obs = svc.changesFor(SID)
+    files.set('/work/a.ts', 'current')
+    svc.record(SID, '/work/a.ts', 'tc-1', [createHunk(['a'])], { baseline: 'a' })
+    await flush()
+    expect(obs.get()[0]?.status).toBe('modified')
+    expect(obs.get()[0]?.current).toBe('current')
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — global live change budget', () => {
+  it('releases another session rows once the total is over the ceiling', async () => {
+    const { svc, files } = makeService()
+    await svc.initialize()
+    svc.maxLiveChangeTotalBytes = 4096
+
+    const cold = 'sess-cold'
+    const hot = 'sess-hot'
+    const coldObs = svc.changesFor(cold)
+    const hotObs = svc.changesFor(hot)
+    const big = 'x'.repeat(2000)
+    files.set('/work/cold.ts', big)
+    files.set('/work/hot.ts', big)
+
+    svc.record(cold, '/work/cold.ts', 'tc-cold', [createHunk([big])], { baseline: '' })
+    await flush()
+    expect(coldObs.get()[0]?.current).toBe(big)
+
+    // The hot session's own rows fit its per-session cap, but together the two
+    // sessions blow the global ceiling — the colder one is what gives way.
+    svc.record(hot, '/work/hot.ts', 'tc-hot', [createHunk([big])], { baseline: '' })
+    await flush()
+
+    expect(hotObs.get()[0]?.current).toBe(big)
+    expect(coldObs.get()[0]?.status).toBe('degraded')
+    expect(coldObs.get()[0]?.current).toBe('')
     svc.dispose()
   })
 })

@@ -61,9 +61,21 @@ export const MAIN_HEAP_BUSY_BYTES = 512 * 1024 * 1024
 /** heapUsed above this logs at warn — the clearest pre-OOM signal we get. */
 export const MAIN_HEAP_WARN_BYTES = 1536 * 1024 * 1024
 
-/** Sampling interval for the cycle AFTER a reading of `heapUsed` bytes. */
-export function processMetricsIntervalMs(heapUsed: number): number {
-  return heapUsed > MAIN_HEAP_BUSY_BYTES
+/**
+ * Working set of a single renderer (`type: 'Tab'`) above which we log at warn.
+ * The metrics line has always carried every child process's working set, but
+ * nothing ever compared it to anything — a renderer that climbed from 0.7GB to
+ * 5.4GB over two hours and was then OOM-killed left a complete curve in the log
+ * and not one warning. Picked below the kill point, mirroring how
+ * {@link MAIN_HEAP_WARN_BYTES} leaves room to react.
+ */
+export const TAB_WORKING_SET_WARN_BYTES = 2 * 1024 * 1024 * 1024
+
+/** Sampling interval for the cycle AFTER a reading of `heapUsed` bytes.
+ *  `rendererBusy` forces the dense interval when a renderer is climbing even
+ *  though the main heap itself is calm. */
+export function processMetricsIntervalMs(heapUsed: number, rendererBusy = false): number {
+  return rendererBusy || heapUsed > MAIN_HEAP_BUSY_BYTES
     ? PROCESS_METRICS_BUSY_INTERVAL_MS
     : PROCESS_METRICS_NORMAL_INTERVAL_MS
 }
@@ -101,15 +113,26 @@ export function installProcessMetricsLogging(loggerService: {
   let timer: ReturnType<typeof setTimeout> | undefined
   const sample = (): void => {
     let heapUsed = 0
+    let rendererBusy = false
     try {
-      const line = app
-        .getAppMetrics()
+      const metrics = app.getAppMetrics()
+      const line = metrics
         .map(
           (metric) =>
             `pid=${metric.pid} type=${metric.type} mem=${Math.round(metric.memory.workingSetSize / 1024)}MB cpu=${Math.round(metric.cpu.percentCPUUsage)}%`,
         )
         .join(' | ')
       logger.info(line)
+      for (const metric of metrics) {
+        if (metric.type !== 'Tab') continue
+        // workingSetSize is reported in KB.
+        const workingSetBytes = metric.memory.workingSetSize * 1024
+        if (workingSetBytes <= TAB_WORKING_SET_WARN_BYTES) continue
+        rendererBusy = true
+        logger.warn(
+          `pid=${metric.pid} type=Tab mem=${Math.round(workingSetBytes / 1024 / 1024)}MB — renderer working set above ${Math.round(TAB_WORKING_SET_WARN_BYTES / 1024 / 1024)}MB, OOM risk`,
+        )
+      }
       const mem = process.memoryUsage()
       heapUsed = mem.heapUsed
       const heapLine = formatMainHeapSample(mem)
@@ -127,7 +150,7 @@ export function installProcessMetricsLogging(loggerService: {
     // depends on THIS sample's heap, and the first sample runs synchronously
     // at install so a fast crash still leaves at least one data point.
     if (!disposed) {
-      timer = setTimeout(sample, processMetricsIntervalMs(heapUsed))
+      timer = setTimeout(sample, processMetricsIntervalMs(heapUsed, rendererBusy))
       timer.unref()
     }
   }

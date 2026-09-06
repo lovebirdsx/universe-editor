@@ -166,6 +166,50 @@ describe('SessionChangesDiffSyncContribution', () => {
     contrib.dispose()
   })
 
+  it('never pushes a degraded row into an editable diff (it would blank the file)', () => {
+    // A degraded row carries no texts — the file was never read (too large, not
+    // a regular file, or released under memory pressure). The editable path
+    // writes `current` straight into the SHARED buffer and marks it clean, so
+    // syncing one would blank the user's open document and let the next save
+    // persist the empty content.
+    const uri = URI.file('/ws/foo.ts')
+    const input = new DiffEditorInput(
+      uri,
+      'base-1',
+      'current-1',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    let modelValue = 'current-1'
+    const model = {
+      getValue: () => modelValue,
+      setValue: (v: string) => (modelValue = v),
+      isDisposed: () => false,
+    }
+    liveModels.set(uri.toString(), model)
+    markCleanCalls.length = 0
+
+    const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
+      change(uri, 'base-1', 'current-1'),
+    ])
+    const contrib = new SessionChangesDiffSyncContribution(
+      makeSessions('agent-1'),
+      makeTracker(changesObs),
+      makeGroups([input]),
+    )
+
+    changesObs.set([{ ...change(uri, '', ''), status: 'degraded' }], undefined)
+
+    expect(modelValue).toBe('current-1')
+    expect(input.modifiedContent).toBe('current-1')
+    expect(input.originalContent).toBe('base-1')
+    expect(markCleanCalls).not.toContain(model)
+    liveModels.delete(uri.toString())
+    contrib.dispose()
+  })
+
   it('ignores diff tabs with no matching tracked change', () => {
     const openUri = URI.file('/ws/foo.ts')
     const input = new DiffEditorInput(

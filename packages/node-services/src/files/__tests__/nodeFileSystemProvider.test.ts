@@ -126,3 +126,68 @@ describe('NodeFileSystemProvider trash capability', () => {
     }
   })
 })
+
+describe('NodeFileSystemProvider read-failure log throttling', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(join(tmpdir(), 'universe-editor-nfsp-log-'))
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  /** Collects warn/debug lines from a provider's logger. */
+  function makeLogger(): { warn: string[]; debug: string[]; logger: never } {
+    const warn: string[] = []
+    const debug: string[] = []
+    return {
+      warn,
+      debug,
+      logger: {
+        trace: () => {},
+        debug: (m: string) => debug.push(m),
+        info: () => {},
+        warn: (m: string) => warn.push(m),
+        error: () => {},
+      } as never,
+    }
+  }
+
+  it('logs a repeated non-ENOENT failure once per window', async () => {
+    // A caller looping over one bad path (a directory reaching a text read, say)
+    // once produced thousands of identical warn lines, which is enough to push
+    // everything else out of the log tail a diagnostics bundle captures.
+    const { warn, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    const target = URI.file(dir)
+    for (let i = 0; i < 5; i++) {
+      await expect(provider.readFileText(target)).rejects.toBeInstanceOf(FileSystemError)
+    }
+    expect(warn).toHaveLength(1)
+  })
+
+  it('does not throttle distinct paths against each other', async () => {
+    const { warn, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    const a = join(dir, 'a')
+    const b = join(dir, 'b')
+    await fs.mkdir(a)
+    await fs.mkdir(b)
+    await expect(provider.readFileText(URI.file(a))).rejects.toBeInstanceOf(FileSystemError)
+    await expect(provider.readFileText(URI.file(b))).rejects.toBeInstanceOf(FileSystemError)
+    expect(warn).toHaveLength(2)
+  })
+
+  it('keeps ENOENT on the debug channel, unthrottled', async () => {
+    const { warn, debug, logger } = makeLogger()
+    const provider = new NodeFileSystemProvider({ logger })
+    const missing = URI.file(join(dir, 'nope.txt'))
+    for (let i = 0; i < 3; i++) {
+      await expect(provider.readFileText(missing)).rejects.toBeInstanceOf(FileSystemError)
+    }
+    expect(warn).toHaveLength(0)
+    expect(debug.filter((l) => l.includes('code=ENOENT'))).toHaveLength(3)
+  })
+})

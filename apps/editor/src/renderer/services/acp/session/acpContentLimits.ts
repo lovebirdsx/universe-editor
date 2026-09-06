@@ -201,6 +201,23 @@ export const REPLAY_INGESTION_BUDGET = 256 * 1024 * 1024
  */
 export const LIVE_INGESTION_BUDGET = 256 * 1024 * 1024
 
+/**
+ * Caps on agent-reported metadata lists. Unlike timeline content these are
+ * replaced wholesale on every update (a plan or command list is a snapshot, not
+ * an append), so they need no trim path — only a ceiling on how large a single
+ * snapshot may be, since the agent chooses the length.
+ */
+export const MAX_PLAN_ENTRIES = 200
+export const MAX_PLAN_ENTRY_CHARS = 4096
+export const MAX_AVAILABLE_COMMANDS = 200
+
+/**
+ * Cap on the tool-call → parent-tool-call index a session remembers so late
+ * updates that drop `parentToolUseId` can re-attach. Entries have no reliable
+ * end-of-life signal, so the map is bounded FIFO rather than pruned.
+ */
+export const MAX_TOOL_CALL_PARENT_ENTRIES = 5000
+
 /** UTF-16 byte size of a string: `length` counts code units, each 2 bytes. */
 function utf16Bytes(s: string): number {
   return s.length * 2
