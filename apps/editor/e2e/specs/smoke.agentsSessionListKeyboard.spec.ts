@@ -36,6 +36,18 @@ const cursorRowIds = () => {
 }
 
 /**
+ * Whether the row under the cursor is also the open session. `data-active` is
+ * the row's own answer, so this needs no mapping between the local session id
+ * the probe reports and the durable id the row is keyed by.
+ */
+const cursorRowIsActive = () => {
+  const row = document.querySelector(
+    '[role="listbox"][aria-label="Sessions"] li[aria-selected="true"]',
+  )
+  return row instanceof HTMLElement && row.dataset['active'] === 'true'
+}
+
+/**
  * Focus the AGENTS view and wait for the focus to actually stick.
  *
  * A freshly opened session's editor claims focus for its prompt input a beat
@@ -109,6 +121,51 @@ test.describe('@p1 agents session list keyboard navigation', () => {
     expect(await page.evaluate(cursorRowIds)).toEqual(second)
     await page.keyboard.press('Home')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
+  })
+
+  test('Enter opens the session under the cursor', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+
+    for (const _ of [0, 1]) {
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+      })
+    }
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 20000 })
+      .toBe(2)
+
+    const activeBefore = await page.evaluate(() => window.__E2E__!.getActiveAcpSessionId())
+    expect(activeBefore).toBeTruthy()
+
+    await focusSessionList(page, workbench)
+
+    // Park the cursor on a row that is NOT the open session, so pressing Enter
+    // has an observable effect. `data-active` is the row's own view of that, so
+    // the check needs no id mapping between local and agent-issued ids.
+    await expect
+      .poll(async () => {
+        const onActive = await page.evaluate(cursorRowIsActive)
+        if (onActive) await page.keyboard.press('ArrowDown')
+        return onActive
+      })
+      .toBe(false)
+
+    // The bug: with Enter unbound on the list, this did nothing at all and the
+    // only way to open a session was the mouse.
+    await page.keyboard.press('Enter')
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveAcpSessionId()), { timeout: 20000 })
+      .not.toBe(activeBefore)
+    // …and it is the row the cursor was on that opened.
+    await expect.poll(() => page.evaluate(cursorRowIsActive)).toBe(true)
   })
 
   test('the ContextMenu key opens one row-anchored menu', async ({ page, workbench }) => {

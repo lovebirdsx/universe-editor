@@ -644,6 +644,40 @@ export function SessionListBody({
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
+  // Opening a row, shared by the pointer path (click) and the keyboard one
+  // (Enter/Space) so the two can never drift apart.
+  const activateEntry = useCallback(
+    (entry: AcpSessionHistoryEntry) => {
+      const fresh = service.getById(entry.id)
+      // Exclude read-only previews: a live read-only session must not be set
+      // active; opening it re-opens its (read-only) tab via the foreign branch
+      // below.
+      const liveNow = fresh && !fresh.readOnly && isResidentLive(fresh) ? fresh : undefined
+      if (liveNow) {
+        service.setActive(liveNow.id)
+        // Asleep: activate instantly off the resident instance and bring its
+        // process back in the background (the recovery bar reports progress).
+        // Falling through to resumeSession would build a second session for the
+        // same durable id.
+        if (liveNow.isDormant.get()) void liveNow.ensureAwake()
+      } else if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
+        // Foreign worktree / cross-host: don't resume (would spawn the agent
+        // against another worktree or host behind this window's UI). Open a
+        // read-only preview tab; the user activates from there. A subdirectory
+        // row is the same workspace, so it falls through to resumeSession below.
+        editorService.openEditor(
+          instantiation.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
+        )
+      } else {
+        service.resumeSession(entry.id).catch(() => {
+          // resumeSession publishes its own notification.
+        })
+      }
+      onPick?.(entry)
+    },
+    [service, currentCwd, currentAuthority, uriIdentity, editorService, instantiation, onPick],
+  )
+
   // The keyboard cursor. Deliberately separate from `activeId`: the active
   // session is which chat is open, this is which row the arrows are on, and
   // moving the cursor must not resume anything.
@@ -663,9 +697,17 @@ export function SessionListBody({
     getItemKey,
     getContainer,
     ariaLabel: localize('acp.sessions.list', 'Sessions'),
-    // Enter/Space stay unbound: activating a row resumes a session (spawning an
-    // agent process), too heavy to sit under a cursor move. Rows are opened by
-    // click, as before.
+    // Enter/Space open the row under the cursor — the keyboard counterpart of a
+    // click. Space is not a lighter "preview" here: a session has only one way
+    // to open, so both keys take the same path.
+    onActivate: useCallback(
+      (index: number) => {
+        const entry = visible[index]
+        if (!entry) return
+        activateEntry(entry)
+      },
+      [visible, activateEntry],
+    ),
     onRowKeyDown: useCallback(
       (e: ReactKeyboardEvent, index: number) => {
         const entry = visible[index]
@@ -920,43 +962,7 @@ export function SessionListBody({
                 onTogglePin={onTogglePin}
                 onContextMenu={openContextMenu}
                 rowProps={nav.getRowProps(index)}
-                onActivate={() => {
-                  const fresh = service.getById(entry.id)
-                  // Exclude read-only previews: a live read-only session must not
-                  // be set active; clicking re-opens its (read-only) tab via the
-                  // foreign branch below.
-                  const liveNow =
-                    fresh && !fresh.readOnly && isResidentLive(fresh) ? fresh : undefined
-                  if (liveNow) {
-                    service.setActive(liveNow.id)
-                    // Asleep: activate instantly off the resident instance and
-                    // bring its process back in the background (the recovery bar
-                    // reports progress). Falling through to resumeSession would
-                    // build a second session for the same durable id.
-                    if (liveNow.isDormant.get()) void liveNow.ensureAwake()
-                  } else if (
-                    isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)
-                  ) {
-                    // Foreign worktree / cross-host: don't resume (would spawn
-                    // the agent against another worktree or host behind this
-                    // window's UI). Open a read-only preview tab; the user
-                    // activates from there. A subdirectory row is the same
-                    // workspace, so it falls through to resumeSession below.
-                    editorService.openEditor(
-                      instantiation.createInstance(
-                        AcpSessionEditorInput,
-                        entry.id,
-                        entry.agentId,
-                        entry.title,
-                      ),
-                    )
-                  } else {
-                    service.resumeSession(entry.id).catch(() => {
-                      // resumeSession publishes its own notification.
-                    })
-                  }
-                  onPick?.(entry)
-                }}
+                onActivate={() => activateEntry(entry)}
                 onRemove={onRemove}
               />
             )

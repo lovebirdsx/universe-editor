@@ -639,6 +639,51 @@ describe('SessionListBody — keyboard navigation', () => {
     fireEvent.keyDown(list(), { key: 'ArrowDown', ctrlKey: true })
     expect(focusedRowIds()).toEqual([])
   })
+
+  it('Enter opens the row under the cursor, like a click', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    // 'b' sorts first; walk down to 'a' so the assertion proves Enter follows
+    // the cursor rather than always taking the top row.
+    focusRowAt(1)
+    expect(focusedRowIds()).toEqual(['a'])
+    fireEvent.keyDown(list(), { key: 'Enter' })
+    expect(sessionCtl.resumeSessionFn).toHaveBeenCalledWith('a')
+  })
+
+  it('Space opens the row too — a session has only one way to open', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: ' ' })
+    expect(sessionCtl.resumeSessionFn).toHaveBeenCalledWith('a')
+  })
+
+  it('Enter activates a live session in place instead of resuming a second one', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'agent-1', 'live session', 1000)
+    const session = makeFakeSession({
+      id: 'agent-1',
+      status: 'idle',
+      sessionIdOnAgent: 'agent-1',
+    })
+    act(() => {
+      sessionCtl.liveById.set(session.id, session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: 'Enter' })
+    expect(sessionCtl.setActiveFn).toHaveBeenCalledWith('agent-1')
+    expect(sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
+  })
+
+  it('Enter is a no-op while the cursor sits nowhere', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    fireEvent.keyDown(list(), { key: 'Enter' })
+    expect(sessionCtl.resumeSessionFn).not.toHaveBeenCalled()
+  })
 })
 
 describe('SessionListBody — optimistic pending rows', () => {
