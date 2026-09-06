@@ -320,6 +320,23 @@ function rowOrder(): string[] {
   )
 }
 
+/**
+ * The list is a single focusable container (useFlatListNavigation): keys land
+ * on the `<ul>`, not on a row, so tests drive it the way a user would.
+ */
+const list = () => screen.getByRole('listbox')
+
+/** Walk the cursor down to `index` from the unfocused state. */
+function focusRowAt(index: number): void {
+  for (let i = 0; i <= index; i++) fireEvent.keyDown(list(), { key: 'ArrowDown' })
+}
+
+function focusedRowIds(): string[] {
+  return [...document.querySelectorAll<HTMLLIElement>('li[aria-selected="true"]')].map((el) =>
+    el.dataset['testid']!.replace('session-row-', ''),
+  )
+}
+
 describe('SessionListBody — archive / pin', () => {
   let harness: Harness
   beforeEach(async () => {
@@ -376,12 +393,20 @@ describe('SessionListBody — archive / pin', () => {
   it('Delete archives the focused row; Shift+Delete is a no-op on an unarchived row', () => {
     const { history, executeCommand } = harness
     addEntry(history, 'a', 'alpha', 1000)
-    fireEvent.keyDown(screen.getByTestId('session-row-a'), { key: 'Delete' })
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: 'Delete' })
     expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.archiveSession', {
       sessionId: 'a',
     })
-    fireEvent.keyDown(screen.getByTestId('session-row-a'), { key: 'Delete', shiftKey: true })
+    fireEvent.keyDown(list(), { key: 'Delete', shiftKey: true })
     expect(executeCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores row keys while the cursor sits nowhere', () => {
+    const { history, executeCommand } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    fireEvent.keyDown(list(), { key: 'Delete' })
+    expect(executeCommand).not.toHaveBeenCalled()
   })
 
   it('Shift+Delete unarchives an archived row; plain Delete is a no-op on it', async () => {
@@ -393,10 +418,10 @@ describe('SessionListBody — archive / pin', () => {
     await act(async () => {
       filterService.toggleArchived()
     })
-    const row = screen.getByTestId('session-row-b')
-    fireEvent.keyDown(row, { key: 'Delete' })
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: 'Delete' })
     expect(executeCommand).not.toHaveBeenCalled()
-    fireEvent.keyDown(row, { key: 'Delete', shiftKey: true })
+    fireEvent.keyDown(list(), { key: 'Delete', shiftKey: true })
     expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.unarchiveSession', {
       sessionId: 'b',
     })
@@ -465,8 +490,8 @@ describe('SessionListBody — archive / pin', () => {
     const { history } = harness
     addEntry(history, 'a', 'alpha', 1000)
 
-    const row = screen.getByTestId('session-row-a')
-    fireEvent.keyDown(row, { key: 'ContextMenu' })
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: 'ContextMenu' })
 
     const menu = await screen.findByRole('menu')
     // A keyboard user has no pointer to aim, so the first entry opens highlighted.
@@ -487,12 +512,12 @@ describe('SessionListBody — archive / pin', () => {
     const { history } = harness
     addEntry(history, 'a', 'alpha', 1000)
 
-    const row = screen.getByTestId('session-row-a')
-    fireEvent.keyDown(row, { key: 'ContextMenu' })
+    focusRowAt(0)
+    fireEvent.keyDown(list(), { key: 'ContextMenu' })
     await screen.findByRole('menu')
     // Chromium's supplement: detail 0, (0,0) coords. Without the guard it would
     // reopen the menu at the top-left corner, unhighlighted.
-    fireEvent.contextMenu(row, { detail: 0 })
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 0 })
 
     expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1)
     expect(document.querySelectorAll('[role="menuitem"][data-active]')).toHaveLength(1)
@@ -521,6 +546,98 @@ describe('SessionListBody — archive / pin', () => {
       filterService.toggleArchived()
     })
     expect(rowOrder()).toEqual(['a'])
+  })
+})
+
+describe('SessionListBody — keyboard navigation', () => {
+  let harness: Harness
+  beforeEach(async () => {
+    harness = await makeHarness()
+  })
+  afterEach(() => {
+    harness.dispose()
+  })
+
+  it('is a single focusable listbox, with rows as data rather than tab stops', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    expect(list().getAttribute('tabindex')).toBe('0')
+    expect(screen.getByTestId('session-row-a').hasAttribute('tabindex')).toBe(false)
+  })
+
+  it('landing focus on the list selects the first row', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    expect(focusedRowIds()).toEqual([])
+    fireEvent.focus(list())
+    // 'b' is the most recent, so it sorts first. The cursor landing there does
+    // not resume it — `data-active` stays independent.
+    expect(focusedRowIds()).toEqual(['b'])
+    expect(screen.getByTestId('session-row-b').dataset['active']).toBe('false')
+  })
+
+  it('walks the rows with ArrowDown / ArrowUp and clamps at both ends', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    // 'b' is more recent, so it sorts first.
+    expect(rowOrder()).toEqual(['b', 'a'])
+
+    fireEvent.keyDown(list(), { key: 'ArrowDown' })
+    expect(focusedRowIds()).toEqual(['b'])
+    fireEvent.keyDown(list(), { key: 'ArrowDown' })
+    expect(focusedRowIds()).toEqual(['a'])
+    fireEvent.keyDown(list(), { key: 'ArrowDown' })
+    expect(focusedRowIds()).toEqual(['a'])
+
+    fireEvent.keyDown(list(), { key: 'ArrowUp' })
+    expect(focusedRowIds()).toEqual(['b'])
+    fireEvent.keyDown(list(), { key: 'ArrowUp' })
+    expect(focusedRowIds()).toEqual(['b'])
+  })
+
+  it('Home and End jump to the ends', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedRowIds()).toEqual(['a'])
+    fireEvent.keyDown(list(), { key: 'Home' })
+    expect(focusedRowIds()).toEqual(['b'])
+  })
+
+  it('drops the cursor when filtering shortens the list past it', async () => {
+    const { history, filterService } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedRowIds()).toEqual(['a'])
+
+    // Searching leaves one row: without the clamp the cursor would still point
+    // at index 1 and mark a row that is no longer there.
+    await act(async () => {
+      filterService.openSearch()
+      filterService.setQuery('bravo')
+    })
+    expect(rowOrder()).toEqual(['b'])
+    expect(focusedRowIds()).toEqual([])
+  })
+
+  it('clicking a row moves the cursor to it', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    fireEvent.click(screen.getByTestId('session-row-a'))
+    expect(focusedRowIds()).toEqual(['a'])
+  })
+
+  it('lets Ctrl/Alt combinations through to the global keybinding handler', () => {
+    const { history } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    addEntry(history, 'b', 'bravo', 2000)
+    fireEvent.keyDown(list(), { key: 'ArrowDown', ctrlKey: true })
+    expect(focusedRowIds()).toEqual([])
   })
 })
 

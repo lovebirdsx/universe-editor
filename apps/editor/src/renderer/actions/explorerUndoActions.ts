@@ -14,9 +14,13 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { EXPLORER_UNDO_SOURCE } from '../services/explorer/ExplorerFileOperationService.js'
+import { EXPLORER_TREE_VIEW_ID } from './fileActionsCommon.js'
+import { viewFocusWhen } from './viewFocusWhen.js'
 
-const EXPLORER_UNDO_WHEN =
-  "focusedView == 'workbench.view.explorer.tree' && !editorTextFocus && !terminalFocus && explorerEnableUndo"
+const EXPLORER_UNDO_WHEN = viewFocusWhen(
+  EXPLORER_TREE_VIEW_ID,
+  '!editorTextFocus && !terminalFocus && explorerEnableUndo',
+)
 // Above the default WorkbenchContrib so the scoped Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
 // beat Monaco's global undo/redo whenever the Explorer tree is focused,
 // regardless of registration order.

@@ -43,13 +43,20 @@ function McpServerList({ session }: { session: IAcpSession }) {
   }
   return (
     <div className={styles['mcpView']} data-testid="acp-mcp-view">
-      <ul className={styles['mcpList']}>
+      {/* `list`, not `listbox`: these rows carry no action, and `listbox`
+          promises a keyboard-operable selection this view does not have. */}
+      <ul
+        className={styles['mcpList']}
+        role="list"
+        aria-label={localize('acp.mcp.list', 'MCP servers')}
+      >
         {servers.map((s) => {
           const c = counts.get(s.name)
           return (
             <li
               key={s.name}
               className={styles['mcpRow']}
+              role="listitem"
               data-status={s.status}
               data-testid="acp-mcp-row"
             >

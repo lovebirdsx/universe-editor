@@ -207,7 +207,7 @@ export function ProbeModelsDialog({
                 estimateSize={() => ROW_HEIGHT}
                 getItemKey={(index) => visible[index] ?? index}
                 renderItem={(id, style) => (
-                  <div style={style} className={styles['probeRow']}>
+                  <div key={id} style={style} className={styles['probeRow']}>
                     <Checkbox checked={checked.has(id)} label={id} onChange={() => toggle(id)} />
                   </div>
                 )}

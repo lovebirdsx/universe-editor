@@ -24,6 +24,7 @@ import {
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
 import { requestSwarmReviewsRefresh } from '../services/swarm/swarmViewState.js'
 import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationTick.js'
+import { viewFocusWhen } from './viewFocusWhen.js'
 
 const CATEGORY = localize2('command.category.swarm', 'Swarm')
 
@@ -39,7 +40,7 @@ export const SWARM_CHANGES_VIEW_ID = 'workbench.view.swarm.changes'
 
 /** Keybinding scope for the Swarm Reviews tree: the root `focusedView` context
  *  key (seeded by FocusContextKeyContribution from the DOM's data-view-id). */
-const SWARM_REVIEWS_FOCUS_WHEN = `focusedView == '${SWARM_REVIEWS_VIEW_ID}'`
+const SWARM_REVIEWS_FOCUS_WHEN = viewFocusWhen(SWARM_REVIEWS_VIEW_ID)
 
 /** Focus (and reveal) the Swarm Reviews view container in the primary side bar. */
 function revealSwarmContainer(accessor: ServicesAccessor): void {

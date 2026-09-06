@@ -51,6 +51,12 @@
   max-height: 45%;
   flex-shrink: 0;
   border-bottom: 1px solid var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
+  outline: none;
+}
+
+.list:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
 }
 
 .empty {
@@ -78,6 +84,10 @@
 
 .row[data-selected='true'] {
   background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
+}
+
+.list:not([data-focused='true']) .row[data-selected='true'] {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(255, 255, 255, 0.06));
 }
 
 .purpose {

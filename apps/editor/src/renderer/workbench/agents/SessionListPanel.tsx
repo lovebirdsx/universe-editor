@@ -10,10 +10,12 @@
 import { SessionListBody } from './SessionListBody.js'
 import styles from './agents.module.css'
 
+export const AGENTS_VIEW_ID = 'workbench.view.agents.main'
+
 export function SessionListPanel() {
   return (
     <div className={styles['sessionList']} data-testid="acp-session-list">
-      <SessionListBody scrollStateKey="agentsSessionList" />
+      <SessionListBody scrollStateKey="agentsSessionList" viewId={AGENTS_VIEW_ID} />
     </div>
   )
 }

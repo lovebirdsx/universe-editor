@@ -48,15 +48,16 @@ import {
 import {
   IconButton,
   Input,
-  dispatchKeyboardContextMenu,
   fuzzyMatchField,
-  isContextMenuKey,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
   scoreFuzzyMatch,
+  useFlatListNavigation,
   useScrollRestore,
+  type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
+import { useViewFocusable } from '../useViewFocusable.js'
 import { relativeTime } from '../../relativeTime.js'
 import {
   IAcpSessionService,
@@ -254,6 +255,12 @@ export interface SessionListBodyProps {
    */
   scrollStateKey?: string
   /**
+   * View id to register the row list against, so `LayoutService.focusView` and
+   * the `focusedView` context key reach it. Only the sidebar host passes one —
+   * the popover is not a view and already owns its own listbox.
+   */
+  viewId?: string
+  /**
    * Called after a row is picked. Popover variant uses this to dismiss itself.
    * The list still drives session activation + editor open; this hook is
    * fire-and-forget.
@@ -272,6 +279,7 @@ function SessionRow({
   onToggleArchive,
   onTogglePin,
   onContextMenu,
+  rowProps,
   rate,
   scope,
   isForeign,
@@ -289,6 +297,8 @@ function SessionRow({
   onToggleArchive: () => void
   onTogglePin: () => void
   onContextMenu: (e: ReactMouseEvent) => void
+  /** Identity + ARIA + focus-on-click from useFlatListNavigation. */
+  rowProps: IFlatListRowProps
   rate: number
   scope: SessionHistoryScope
   isForeign: boolean
@@ -335,6 +345,7 @@ function SessionRow({
     : localize('acp.sessions.pin', 'Pin session')
   return (
     <li
+      {...rowProps}
       className={styles['sessionRow']}
       data-active={isActive ? 'true' : 'false'}
       data-running={isRunning ? 'true' : 'false'}
@@ -343,28 +354,11 @@ function SessionRow({
       data-pending={isPending ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
       data-tooltip={rowTooltip}
-      tabIndex={0}
-      onClick={onActivate}
-      onContextMenu={onContextMenu}
-      onKeyDown={(e) => {
-        // Del archives an unarchived row; Shift+Del restores an archived one
-        // (mirrors VSCode's agentSessions viewer keys). Other combinations are
-        // no-ops so a stray Shift+Del can't archive and vice versa.
-        if (e.key === 'Delete' && e.shiftKey === isArchived) {
-          e.preventDefault()
-          e.stopPropagation()
-          onToggleArchive()
-          return
-        }
-        // The row is its own container, so the synthetic contextmenu is raised
-        // on it directly and lands in the same `onContextMenu` a right-click
-        // would. `repeat` guard: holding the key must not stack menus.
-        if (isContextMenuKey(e) && !e.repeat) {
-          e.preventDefault()
-          e.stopPropagation()
-          dispatchKeyboardContextMenu(e.currentTarget, true)
-        }
+      onClick={(e) => {
+        rowProps.onClick(e)
+        onActivate()
       }}
+      onContextMenu={onContextMenu}
     >
       <div className={styles['sessionRowTitle']}>
         <span className={styles['sessionRowLabelLine']}>
@@ -488,7 +482,12 @@ function SessionRow({
   )
 }
 
-export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: SessionListBodyProps) {
+export function SessionListBody({
+  hideEmptyState,
+  scrollStateKey,
+  viewId,
+  onPick,
+}: SessionListBodyProps) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const filterService = useService(IAcpSessionFilterService)
@@ -534,6 +533,10 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const scrollRef = useRef<HTMLUListElement | null>(null)
   useScrollRestore(
     scrollStateKey,
+    useCallback(() => scrollRef.current, []),
+  )
+  useViewFocusable(
+    viewId,
     useCallback(() => scrollRef.current, []),
   )
 
@@ -641,6 +644,51 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
+  // The keyboard cursor. Deliberately separate from `activeId`: the active
+  // session is which chat is open, this is which row the arrows are on, and
+  // moving the cursor must not resume anything.
+  const [focusedIndex, setFocusedIndex] = useState(-1)
+  // Filtering / archiving / a search query all shorten `visible`, which would
+  // otherwise leave the cursor pointing past the end (and `aria-selected` on a
+  // row that is no longer there).
+  const clampedFocusedIndex = focusedIndex >= visible.length ? -1 : focusedIndex
+
+  const getItemKey = useCallback((index: number) => visible[index]?.id ?? '', [visible])
+  const getContainer = useCallback(() => scrollRef.current, [])
+
+  const nav = useFlatListNavigation({
+    count: visible.length,
+    focusedIndex: clampedFocusedIndex,
+    onFocusChange: setFocusedIndex,
+    getItemKey,
+    getContainer,
+    ariaLabel: localize('acp.sessions.list', 'Sessions'),
+    // Enter/Space stay unbound: activating a row resumes a session (spawning an
+    // agent process), too heavy to sit under a cursor move. Rows are opened by
+    // click, as before.
+    onRowKeyDown: useCallback(
+      (e: ReactKeyboardEvent, index: number) => {
+        const entry = visible[index]
+        if (!entry) return
+        // Del archives an unarchived row; Shift+Del restores an archived one
+        // (mirrors VSCode's agentSessions viewer keys). Other combinations are
+        // no-ops so a stray Shift+Del can't archive and vice versa.
+        const isArchived = entry.archived === true
+        if (e.key !== 'Delete' || e.shiftKey !== isArchived) return
+        if (pendingIds.has(entry.id)) return
+        e.preventDefault()
+        e.stopPropagation()
+        void commandService.executeCommand(
+          isArchived
+            ? 'workbench.action.agent.unarchiveSession'
+            : 'workbench.action.agent.archiveSession',
+          { sessionId: entry.id },
+        )
+      },
+      [visible, pendingIds, commandService],
+    ),
+  })
+
   // Foreign (other-worktree) rows lose their duration/cost in the hydrate merge;
   // backfill them from each owning worktree's own storage bucket.
   const foreignStats = useForeignSessionStats(visible, currentCwd)
@@ -700,8 +748,8 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
           {localize('acp.sessions.noMatch', 'No matching sessions.')}
         </p>
       ) : (
-        <ul className={styles['sessionRows']} ref={scrollRef}>
-          {visible.map((entry) => {
+        <ul {...nav.containerProps} className={styles['sessionRows']} ref={scrollRef}>
+          {visible.map((entry, index) => {
             const isPending = pendingIds.has(entry.id)
             const live = service.getById(entry.id)
             // A read-only foreign preview is a live AcpSession instance but must
@@ -871,6 +919,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 onToggleArchive={onToggleArchive}
                 onTogglePin={onTogglePin}
                 onContextMenu={openContextMenu}
+                rowProps={nav.getRowProps(index)}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   // Exclude read-only previews: a live read-only session must not

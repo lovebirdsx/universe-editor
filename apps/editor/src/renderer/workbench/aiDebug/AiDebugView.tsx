@@ -4,9 +4,14 @@
  *  AI request (newest first) and shows the full prompt / response / options /
  *  usage / error of the selected one. A record can be replayed offline as mock
  *  data (no model call) to reproduce streaming behaviour.
+ *
+ *  The list uses `useFlatListNavigation`, so it inherits the same keyboard model
+ *  as the trees (container focus, rows as data). Selection follows focus: moving
+ *  the cursor swaps the detail pane, which is what "browse the recorded calls"
+ *  means here — there is no separate open action to defer to.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   localize,
   parseModelRef,
@@ -16,8 +21,15 @@ import {
 } from '@universe-editor/platform'
 import { IAiDebugService } from '../../../shared/ipc/aiDebugService.js'
 import { useEventSubscription, useService } from '../useService.js'
-import { useScrollRestore } from '@universe-editor/workbench-ui'
+import {
+  useFlatListNavigation,
+  useScrollRestore,
+  type IFlatListRowProps,
+} from '@universe-editor/workbench-ui'
+import { useViewFocusable } from '../useViewFocusable.js'
 import styles from './AiDebugView.module.css'
+
+const AI_DEBUG_VIEW_ID = 'workbench.view.aiDebug.main'
 
 export function AiDebugView() {
   const service = useService(IAiDebugService)
@@ -25,10 +37,9 @@ export function AiDebugView() {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
 
   const listRef = useRef<HTMLUListElement | null>(null)
-  useScrollRestore(
-    'aiDebug',
-    useCallback(() => listRef.current, []),
-  )
+  const getContainer = useCallback(() => listRef.current, [])
+  useScrollRestore('aiDebug', getContainer)
+  useViewFocusable(AI_DEBUG_VIEW_ID, getContainer)
 
   const refresh = useCallback(() => {
     void service.listRecords().then(setRecords)
@@ -49,6 +60,22 @@ export function AiDebugView() {
     [service, refresh],
   )
 
+  // Derived rather than stored: a refresh can drop the selected record, and an
+  // index kept in state would then point at whatever slid into its slot.
+  const focusedIndex = useMemo(
+    () => (selectedId === undefined ? -1 : records.findIndex((r) => r.id === selectedId)),
+    [records, selectedId],
+  )
+
+  const nav = useFlatListNavigation({
+    count: records.length,
+    focusedIndex,
+    onFocusChange: useCallback((index: number) => setSelectedId(records[index]?.id), [records]),
+    getItemKey: useCallback((index: number) => records[index]?.id ?? '', [records]),
+    getContainer,
+    ariaLabel: localize('aiDebug.list', 'Recorded AI requests'),
+  })
+
   return (
     <div className={styles['view']} data-testid="ai-debug-view">
       <div className={styles['toolbar']}>
@@ -65,18 +92,18 @@ export function AiDebugView() {
         </button>
       </div>
       <div className={styles['body']}>
-        <ul className={styles['list']} ref={listRef}>
+        <ul {...nav.containerProps} className={styles['list']} ref={listRef}>
           {records.length === 0 && (
-            <li className={styles['empty']} data-testid="ai-debug-empty">
+            <li className={styles['empty']} data-testid="ai-debug-empty" role="presentation">
               {localize('aiDebug.none', 'No AI requests recorded yet.')}
             </li>
           )}
-          {records.map((r) => (
+          {records.map((r, index) => (
             <RecordRow
               key={r.id}
               record={r}
               selected={r.id === selectedId}
-              onSelect={() => setSelectedId(r.id)}
+              rowProps={nav.getRowProps(index)}
             />
           ))}
         </ul>
@@ -89,19 +116,19 @@ export function AiDebugView() {
 function RecordRow({
   record,
   selected,
-  onSelect,
+  rowProps,
 }: {
   record: AiDebugRecordSummary
   selected: boolean
-  onSelect: () => void
+  rowProps: IFlatListRowProps
 }) {
   return (
     <li
+      {...rowProps}
       className={styles['row']}
       data-status={record.status}
       data-selected={selected ? 'true' : undefined}
       data-testid="ai-debug-row"
-      onClick={onSelect}
       data-tooltip={record.modelId}
     >
       <span className={styles['purpose']}>{record.purpose ?? 'unknown'}</span>

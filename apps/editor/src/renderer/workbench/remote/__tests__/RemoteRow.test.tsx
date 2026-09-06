@@ -1,79 +1,49 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for apps/editor/src/renderer/workbench/remote/RemoteRow.tsx
+ *
+ *  RemoteRow is a pure tree row: the shared `Tree` container owns focus and every
+ *  navigation key, so this file asserts presentation + the two events the row
+ *  still owns (click, contextmenu) — not keyboard behaviour.
  *--------------------------------------------------------------------------------------------*/
 
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { RemoteRow } from '../RemoteRow.js'
+import { RemoteRow, REMOTE_ROW_INDENT_BASE, REMOTE_ROW_INDENT_WIDTH } from '../RemoteRow.js'
 
 describe('RemoteRow', () => {
-  it('fires onActivate on row click', () => {
-    const onActivate = vi.fn()
-    render(
-      <RemoteRow
-        testId="remote-target-row"
-        label="alice@host"
-        tooltip="alice@host"
-        onActivate={onActivate}
-      />,
-    )
-    fireEvent.click(screen.getByTestId('remote-target-row'))
-    expect(onActivate).toHaveBeenCalledTimes(1)
-  })
-
-  it('passes the click event (with modifiers) to onActivate', () => {
-    const onActivate = vi.fn()
-    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" onActivate={onActivate} />)
+  it('fires onClick on row click, passing the event with modifiers', () => {
+    const onClick = vi.fn()
+    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" onClick={onClick} />)
     const row = screen.getByTestId('remote-recent-row')
     fireEvent.click(row, { ctrlKey: true })
     fireEvent.click(row)
-    expect(onActivate).toHaveBeenCalledTimes(2)
-    const first = onActivate.mock.calls[0]?.[0] as { ctrlKey: boolean }
-    const second = onActivate.mock.calls[1]?.[0] as { ctrlKey: boolean }
+    expect(onClick).toHaveBeenCalledTimes(2)
+    const first = onClick.mock.calls[0]?.[0] as { ctrlKey: boolean }
+    const second = onClick.mock.calls[1]?.[0] as { ctrlKey: boolean }
     expect(first.ctrlKey).toBe(true)
     expect(second.ctrlKey).toBe(false)
   })
 
-  it('passes modifier state for keyboard activation', () => {
-    const onActivate = vi.fn()
-    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" onActivate={onActivate} />)
-    const row = screen.getByTestId('remote-recent-row')
-    fireEvent.keyDown(row, { key: 'Enter', ctrlKey: true })
-    expect(onActivate).toHaveBeenCalledTimes(1)
-    const e = onActivate.mock.calls[0]?.[0] as { key: string; ctrlKey: boolean }
-    expect(e.key).toBe('Enter')
-    expect(e.ctrlKey).toBe(true)
-  })
-
-  it('marks the row as a focusable button only when activatable', () => {
-    const { unmount } = render(
-      <RemoteRow testId="remote-target-row" label="h" tooltip="h" onActivate={() => {}} />,
+  it('is a treeitem, never a tab stop (the tree container owns focus)', () => {
+    render(
+      <RemoteRow testId="remote-target-row" rowKey="target:h" label="h" tooltip="h" selected />,
     )
-    expect(screen.getByRole('button', { name: 'h' })).toBeDefined()
-    unmount()
-    render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" />)
-    expect(screen.queryByRole('button', { name: 'h' })).toBeNull()
-  })
-
-  it('activates on Enter and Space', () => {
-    const onActivate = vi.fn()
-    render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" onActivate={onActivate} />)
     const row = screen.getByTestId('remote-target-row')
-    fireEvent.keyDown(row, { key: 'Enter' })
-    fireEvent.keyDown(row, { key: ' ' })
-    fireEvent.keyDown(row, { key: 'x' })
-    expect(onActivate).toHaveBeenCalledTimes(2)
+    expect(row.getAttribute('role')).toBe('treeitem')
+    expect(row.hasAttribute('tabindex')).toBe(false)
+    expect(row.getAttribute('aria-selected')).toBe('true')
+    expect(row.getAttribute('data-row-key')).toBe('target:h')
   })
 
-  it('does not trigger onActivate from inner action buttons', () => {
-    const onActivate = vi.fn()
+  it('does not fire onClick from inner action buttons', () => {
+    const onClick = vi.fn()
     const onAction = vi.fn()
     render(
       <RemoteRow
         testId="remote-target-row"
         label="h"
         tooltip="h"
-        onActivate={onActivate}
+        onClick={onClick}
         actions={
           <button type="button" data-testid="inner-action" onClick={onAction}>
             act
@@ -83,7 +53,7 @@ describe('RemoteRow', () => {
     )
     fireEvent.click(screen.getByTestId('inner-action'))
     expect(onAction).toHaveBeenCalledTimes(1)
-    expect(onActivate).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
   })
 
   it('reports context-menu with the pointer position', () => {
@@ -111,21 +81,33 @@ describe('RemoteRow', () => {
     expect(screen.getByText('default')).toBeDefined()
   })
 
-  it('toggles via chevron without firing the primary action', () => {
-    const onActivate = vi.fn()
+  it('toggles via chevron without firing the row click', () => {
+    const onClick = vi.fn()
     const onToggle = vi.fn()
     render(
       <RemoteRow
         testId="remote-target-row"
         label="h"
         tooltip="h"
-        onActivate={onActivate}
+        onClick={onClick}
         chevron={{ expanded: true, onToggle }}
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
     expect(onToggle).toHaveBeenCalledTimes(1)
-    expect(onActivate).not.toHaveBeenCalled()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps the chevron out of the tab order', () => {
+    render(
+      <RemoteRow
+        testId="remote-target-row"
+        label="h"
+        tooltip="h"
+        chevron={{ expanded: true, onToggle: () => {} }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Collapse' }).getAttribute('tabindex')).toBe('-1')
   })
 
   it('reflects chevron expanded state', () => {
@@ -134,27 +116,44 @@ describe('RemoteRow', () => {
         testId="remote-target-row"
         label="h"
         tooltip="h"
+        ariaExpanded
         chevron={{ expanded: true, onToggle: () => {} }}
       />,
     )
     expect(screen.getByRole('button', { name: 'Collapse' }).getAttribute('aria-expanded')).toBe(
       'true',
     )
+    expect(screen.getByTestId('remote-target-row').getAttribute('aria-expanded')).toBe('true')
     rerender(
       <RemoteRow
         testId="remote-target-row"
         label="h"
         tooltip="h"
+        ariaExpanded={false}
         chevron={{ expanded: false, onToggle: () => {} }}
       />,
     )
     expect(screen.getByRole('button', { name: 'Expand' }).getAttribute('aria-expanded')).toBe(
       'false',
     )
+    expect(screen.getByTestId('remote-target-row').getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('applies left indentation from the indent prop', () => {
-    render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" indent={2} />)
+  it('omits aria-expanded on leaf rows', () => {
+    render(<RemoteRow testId="remote-recent-row" label="h" tooltip="h" />)
+    expect(screen.getByTestId('remote-recent-row').hasAttribute('aria-expanded')).toBe(false)
+  })
+
+  it('applies the tree-supplied indent padding, defaulting to the depth-0 base', () => {
+    const { unmount } = render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" />)
+    expect(screen.getByTestId('remote-target-row').style.paddingLeft).toBe(
+      `${REMOTE_ROW_INDENT_BASE}px`,
+    )
+    unmount()
+
+    // What Tree computes for depth 2 with the view's indent configuration.
+    const depth2 = 2 * REMOTE_ROW_INDENT_WIDTH + REMOTE_ROW_INDENT_BASE
+    render(<RemoteRow testId="remote-target-row" label="h" tooltip="h" indentPadding={depth2} />)
     expect(screen.getByTestId('remote-target-row').style.paddingLeft).toBe('36px')
   })
 })

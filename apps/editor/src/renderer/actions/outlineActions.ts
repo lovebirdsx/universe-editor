@@ -18,6 +18,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { OutlineNavigatorRegistry } from '../workbench/outline/outlineNavigatorRegistry.js'
+import { viewFocusWhen } from './viewFocusWhen.js'
 
 const CATEGORY = localize2('command.category.view', 'View')
 
@@ -26,7 +27,7 @@ const CATEGORY = localize2('command.category.view', 'View')
 // the default WorkbenchContrib) makes the scoped binding authoritative over the
 // global Ctrl+P/N/B/F whenever OUTLINE_FOCUS_WHEN holds, independent of which
 // action registered last.
-const OUTLINE_FOCUS_WHEN = "focusedView == 'workbench.view.outline.main'"
+const OUTLINE_FOCUS_WHEN = viewFocusWhen('workbench.view.outline.main')
 const OUTLINE_KEY_WEIGHT = KeybindingWeight.WorkbenchContrib + 50
 
 class OutlineNavigateAction extends Action2 {

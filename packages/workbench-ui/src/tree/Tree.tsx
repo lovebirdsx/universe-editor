@@ -19,6 +19,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -31,6 +32,7 @@ import {
   type Ref,
 } from 'react'
 import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
+import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
@@ -79,6 +81,10 @@ export interface ITreeRowRenderContext<T> {
 
 export interface ITreeProps<T> {
   readonly model: TreeModel<T>
+  /**
+   * Row content. The React key is Tree's job, not yours — it wraps each row in a
+   * keyed Fragment using `node.id`, so the row root needs no `key` of its own.
+   */
   readonly renderRow: (ctx: ITreeRowRenderContext<T>) => ReactNode
   readonly rowHeight?: number
   /**
@@ -309,21 +315,20 @@ export function Tree<T>(props: ITreeProps<T>) {
           model.navigate('up', e.shiftKey)
           return
         case 'Home':
-          handled()
-          moveTo(0)
-          return
         case 'End':
-          handled()
-          moveTo(vis.length - 1)
-          return
         case 'PageDown':
+        case 'PageUp': {
+          // Pure index arithmetic — shared with flat lists so both stay in step.
+          const next = resolveIndexNavigation(e.key, {
+            index: currentIndex,
+            count: vis.length,
+            pageSize: PAGE_STEP,
+          })
+          if (next === undefined) return
           handled()
-          moveTo((currentIndex < 0 ? 0 : currentIndex) + PAGE_STEP)
+          moveTo(next)
           return
-        case 'PageUp':
-          handled()
-          moveTo((currentIndex < 0 ? 0 : currentIndex) - PAGE_STEP)
-          return
+        }
         case 'ArrowRight':
           if (!current) return
           handled()
@@ -365,16 +370,24 @@ export function Tree<T>(props: ITreeProps<T>) {
     [model, onActivate, onRowKeyDown, onShiftTab, activateNonLeafOnEnter, openKeyboardContextMenu],
   )
 
-  const renderNode = (node: IVisibleNode<T>, style?: CSSProperties): ReactNode =>
-    renderRow({
-      node,
-      isSelected: model.isSelected(node.id),
-      isFocused: model.focused === node.id,
-      indentPadding: node.depth * indentWidth + indentBase,
-      onToggle: () => void model.toggle(node.element),
-      onClickRow: makeClickHandler(node),
-      style,
-    })
+  // The React key for every row is owned here rather than by the view. Tree holds
+  // the only correct identity (`node.id`), and VirtualList's default branch
+  // returns renderItem's result verbatim — so a view that forgot its own key got
+  // a "unique key prop" warning plus positional reconciliation. A Fragment adds
+  // no DOM node, so row markup is unchanged.
+  const renderNode = (node: IVisibleNode<T>, style?: CSSProperties): ReactNode => (
+    <Fragment key={node.id}>
+      {renderRow({
+        node,
+        isSelected: model.isSelected(node.id),
+        isFocused: model.focused === node.id,
+        indentPadding: node.depth * indentWidth + indentBase,
+        onToggle: () => void model.toggle(node.element),
+        onClickRow: makeClickHandler(node),
+        style,
+      })}
+    </Fragment>
+  )
 
   return (
     <div

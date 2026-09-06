@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useState, type MouseEvent } from 'react'
+import { isKeyboardContextMenu } from '@universe-editor/workbench-ui'
 import type { RemoteMenuState } from './RemoteContextMenu.js'
 
 export function useRemoteRowMenu(): {
@@ -18,7 +19,7 @@ export function useRemoteRowMenu(): {
     (target: RemoteMenuState['target']) => (e: MouseEvent<HTMLDivElement>) => {
       e.preventDefault()
       e.stopPropagation()
-      setMenu({ x: e.clientX, y: e.clientY, target })
+      setMenu({ x: e.clientX, y: e.clientY, target, keyboard: isKeyboardContextMenu(e) })
     },
     [],
   )

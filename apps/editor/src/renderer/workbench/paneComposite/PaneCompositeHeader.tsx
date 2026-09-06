@@ -176,7 +176,17 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
               }}
               onDrop={onTabDrop(c.id)}
               onClick={() => {
-                if (!isSingle) viewsService.openViewContainer(c.id)
+                if (isSingle) return
+                // Mirror ActivityBar's handleClick: activating a container also
+                // focuses its primary view. Without this a tabs-header click
+                // (Panel / Secondary Side Bar, which have no ActivityBar) leaves
+                // DOM focus stranded, so a view that seeds its cursor on focus
+                // shows nothing selected. focusView opens the container itself.
+                // The toggle-close branch is deliberately not ported — that is
+                // ActivityBar icon behaviour, not tab behaviour.
+                const firstViewId = viewDescriptors.getViewsByContainer(c.id)[0]?.id
+                if (firstViewId) void layoutService.focusView(firstViewId, { source: 'user' })
+                else viewsService.openViewContainer(c.id)
               }}
             >
               {Icon ? (

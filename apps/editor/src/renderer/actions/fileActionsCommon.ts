@@ -17,8 +17,9 @@ import {
   type IExplorerResourceOperation,
 } from '../services/explorer/ExplorerTreeService.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
+import { viewFocusWhen } from './viewFocusWhen.js'
 
-const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
+export const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
 
 /**
  * When-clause gating Explorer file-command keybindings to the moment the
@@ -26,7 +27,10 @@ const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
  * a global stroke like F2 from stealing the keystroke away from Monaco's own
  * binding (e.g. `editor.action.rename`) when the cursor is in a code editor.
  */
-export const EXPLORER_FOCUS_WHEN = `focusedView == '${EXPLORER_TREE_VIEW_ID}' && !editorTextFocus && !terminalFocus`
+export const EXPLORER_FOCUS_WHEN = viewFocusWhen(
+  EXPLORER_TREE_VIEW_ID,
+  '!editorTextFocus && !terminalFocus',
+)
 
 /**
  * Menu when-clause for commands acting on filesystem-backed resources: local

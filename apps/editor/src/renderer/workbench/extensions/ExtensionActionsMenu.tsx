@@ -5,6 +5,10 @@
  *  are built dynamically from the entry's enablement state (like
  *  GitGraphContextMenu), not from the MenuRegistry, so enable/disable, the
  *  workspace-scope override, "view details" and uninstall reflect the row.
+ *
+ *  Rendering goes through the shared `ListMenu`, so the menu gets the same
+ *  keyboard navigation and virtual focus as every other item-driven menu in the
+ *  workbench rather than a second, hand-rolled one.
  *--------------------------------------------------------------------------------------------*/
 
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
@@ -19,6 +23,11 @@ export interface ExtensionActionsMenuState {
   readonly x: number
   readonly y: number
   readonly entry: IExtensionEntry
+  /**
+   * Raised by the ContextMenu key / Shift+F10 — open with the first row
+   * highlighted, since a keyboard user has no pointer to aim.
+   */
+  readonly keyboard?: boolean
 }
 
 export interface ExtensionActionsMenuHandlers {
@@ -44,36 +53,34 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
     danger: true,
     run: () => h.onUninstall(entry),
   }
-  const set = (state: EnablementState) => () => h.onSetEnablement(entry, state)
 
   // A dev extension is not in extensions.json — enable/disable and uninstall
   // have no meaning for it. Offer only the details page.
-  if (entry.isUnderDevelopment) {
-    items.push(viewDetails)
-    return items
-  }
+  if (entry.isUnderDevelopment) return [viewDetails]
 
   // A local-side extension in a remote workspace isn't running, so
   // enable/disable has no effect on it — offer Install-in-Remote + local
   // uninstall instead.
   if (entry.installableInRemote) {
-    items.push({
-      kind: 'item',
-      icon: 'remote',
-      label: localize('extensions.installInRemote', 'Install in Remote'),
-      run: () => h.onInstallInRemote(entry),
-    })
-    items.push({ kind: 'separator' })
-    items.push(viewDetails)
-    items.push({ kind: 'separator' })
-    items.push(uninstall)
-    return items
+    return [
+      {
+        kind: 'item',
+        icon: 'remote',
+        label: localize('extensions.installInRemote', 'Install in Remote'),
+        run: () => h.onInstallInRemote(entry),
+      },
+      { kind: 'separator' },
+      viewDetails,
+      { kind: 'separator' },
+      uninstall,
+    ]
   }
 
   // A version-incompatible extension is auto-disabled by the host — the user
   // cannot enable/disable it, so offer no enablement items (uninstall below
   // stays available for non-built-ins).
   if (!entry.isVersionIncompatible) {
+    const set = (state: EnablementState) => () => h.onSetEnablement(entry, state)
     if (entry.enabled) {
       items.push({
         kind: 'item',
@@ -107,13 +114,8 @@ function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): Li
     }
   }
 
-  items.push({ kind: 'separator' })
-  items.push(viewDetails)
-
-  if (!entry.isBuiltin) {
-    items.push({ kind: 'separator' })
-    items.push(uninstall)
-  }
+  items.push({ kind: 'separator' }, viewDetails)
+  if (!entry.isBuiltin) items.push({ kind: 'separator' }, uninstall)
 
   return items
 }
@@ -127,12 +129,12 @@ export function ExtensionActionsMenu({
   handlers: ExtensionActionsMenuHandlers
   onClose: () => void
 }) {
-  const items = buildItems(state.entry, handlers)
   return (
     <ListMenu
-      items={items}
+      items={buildItems(state.entry, handlers)}
       anchor={{ x: state.x, y: state.y }}
       renderIcon={renderMenuIcon}
+      autoFocusFirst={state.keyboard === true}
       onClose={onClose}
     />
   )

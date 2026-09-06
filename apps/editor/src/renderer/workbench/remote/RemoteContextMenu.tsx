@@ -21,6 +21,8 @@ export type RemoteRowMenuKind = 'sshTarget' | 'wslTarget' | 'connection' | 'rece
 export interface RemoteMenuState {
   readonly x: number
   readonly y: number
+  /** Raised by the ContextMenu key / Shift+F10 — open with the first row highlighted. */
+  readonly keyboard?: boolean
   readonly target: {
     readonly kind: RemoteRowMenuKind
     readonly state: RemoteConnectionStateDto | undefined
@@ -56,6 +58,7 @@ export function RemoteContextMenu({ state, onClose }: Props) {
       commandService={commandService}
       contextKeyService={scoped}
       renderIcon={renderMenuIcon}
+      autoFocusFirst={state.keyboard === true}
       onClose={onClose}
     />
   )

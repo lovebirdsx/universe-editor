@@ -5,8 +5,14 @@
  *  which fields matched (24/40/60, see the VSCode Delegate), single selection,
  *  arrow/home/end/page keyboard navigation, and scroll-position restore.
  *
+ *  Navigation comes from the shared `useFlatListNavigation` — the same hook the
+ *  session / AI-debug / extensions lists use and the sibling of `Tree`. The grid
+ *  only supplies what is genuinely its own: `role="grid"`, rows keyed by
+ *  `data-row-id`, and a page size read live off the scroller.
+ *
  *  Action keys (Enter/Delete/Ctrl+C/…) are intentionally NOT handled here —
- *  T8 routes them through Action2 + the editor handle.
+ *  T8 routes them through Action2 + the editor handle, which is why no
+ *  `onActivate` is passed: the hook then leaves Enter/Space to bubble.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -15,16 +21,13 @@ import {
   useMemo,
   useRef,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
+  type FocusEvent as ReactFocusEvent,
   type RefObject,
 } from 'react'
 import { localize } from '@universe-editor/platform'
 import {
-  dispatchKeyboardContextMenu,
-  findRowElement,
-  isContextMenuKey,
   isKeyboardContextMenu,
-  isKeyupContextMenuSupplement,
+  useFlatListNavigation,
   useScrollRestore,
   VirtualList,
   type VirtualListHandle,
@@ -93,6 +96,8 @@ export function KeybindingsTable({
     return map
   }, [rows])
 
+  // Prop-driven reveal, deliberately separate from the keyboard cursor: it fires
+  // after a re-key, when the row may not exist yet at the time the prop is set.
   useEffect(() => {
     if (revealRowId === undefined) return
     const index = indexOfRowId.get(revealRowId)
@@ -102,69 +107,39 @@ export function KeybindingsTable({
     onRevealed()
   }, [revealRowId, indexOfRowId, onSelect, onRevealed])
 
-  const moveSelection = useCallback(
-    (next: number) => {
-      const row = rows[next]?.row
-      if (!row) return
-      onSelect(row.id)
-      listRef.current?.scrollToIndex(next)
-    },
-    [rows, onSelect],
-  )
-
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    // Navigation keys belong to the grid itself; a keydown bubbling up from an
-    // inner control (the inline when editor's input) is that control's key —
-    // VSCode gets the same split via listFocus/whenFocus context gating.
-    if (e.target !== e.currentTarget) return
-    if (rows.length === 0) return
-    // ContextMenu key / Shift+F10: anchor the synthetic event on the selected
-    // row so it lands in the same handler a right-click would. `repeat` guard:
-    // holding the key must not stack menus.
-    if (isContextMenuKey(e)) {
-      e.preventDefault()
-      if (e.repeat) return
-      const container = e.currentTarget
-      const selected = rows[selectedIndex < 0 ? 0 : selectedIndex]?.row
-      if (!selected) return
-      const rowEl = findRowElement(container, 'data-row-id', selected.id)
-      dispatchKeyboardContextMenu(rowEl ?? container, rowEl !== null)
-      return
-    }
-    const pageSize = Math.max(
-      1,
-      Math.floor(
-        ((listRef.current?.getScrollElement()?.clientHeight ?? 0) || HEADER_HEIGHT * 8) /
-          ROW_HEIGHT,
-      ),
-    )
-    const current = selectedIndex < 0 ? 0 : selectedIndex
-    let next: number | undefined
-    switch (e.key) {
-      case 'ArrowDown':
-        next = Math.min(current + (selectedIndex < 0 ? 0 : 1), rows.length - 1)
-        break
-      case 'ArrowUp':
-        next = Math.max(current - 1, 0)
-        break
-      case 'Home':
-        next = 0
-        break
-      case 'End':
-        next = rows.length - 1
-        break
-      case 'PageDown':
-        next = Math.min(current + pageSize, rows.length - 1)
-        break
-      case 'PageUp':
-        next = Math.max(current - pageSize, 0)
-        break
-      default:
-        return
-    }
-    e.preventDefault()
-    moveSelection(next)
-  }
+  const nav = useFlatListNavigation({
+    count: rows.length,
+    focusedIndex: selectedIndex,
+    onFocusChange: useCallback((index: number) => onSelect(rows[index]?.row.id), [rows, onSelect]),
+    getItemKey: useCallback((index: number) => rows[index]?.row.id ?? '', [rows]),
+    getContainer: useCallback(() => containerRef.current, [containerRef]),
+    role: 'grid',
+    // Unlike the other flat lists, focus alone must not select a row: the
+    // `keybindingFocus` context key gates the row commands, and arriving in the
+    // table is not yet a choice of which binding to act on. VSCode's own
+    // keybindings editor does not preselect either.
+    focusSelectsFirst: false,
+    // The rows carry data-row-id (grid semantics predate the shared hook), so
+    // the reveal lookup is pointed at it rather than the default data-row-key.
+    rowDataAttr: 'data-row-id',
+    ariaLabel: localize('keybindings.table.ariaLabel', 'Keyboard shortcuts'),
+    // +1 for the column-header row, which is part of the grid but not of `rows`.
+    ariaRowCount: rows.length + 1,
+    // Read at keydown time, not memoized: the editor is resizable, and a stale
+    // page size makes PageDown jump the wrong distance after a drag.
+    getPageSize: useCallback(
+      () =>
+        Math.max(
+          1,
+          Math.floor(
+            ((listRef.current?.getScrollElement()?.clientHeight ?? 0) || HEADER_HEIGHT * 8) /
+              ROW_HEIGHT,
+          ),
+        ),
+      [],
+    ),
+    scrollToIndex: useCallback((index: number) => listRef.current?.scrollToIndex(index), []),
+  })
 
   const estimateSize = useCallback((index: number) => estimateRowSize(rows[index]!), [rows])
   const getItemKey = useCallback((index: number) => rows[index]?.row.id ?? index, [rows])
@@ -209,21 +184,18 @@ export function KeybindingsTable({
 
   return (
     <div
+      {...nav.containerProps}
       ref={containerRef}
-      role="grid"
-      tabIndex={0}
-      aria-label={localize('keybindings.table.ariaLabel', 'Keyboard shortcuts')}
-      aria-rowcount={rows.length}
       className={styles['table']}
-      onKeyDown={onKeyDown}
-      onContextMenu={(e) => {
-        // The keydown handler already opened the menu on the selected row.
-        if (isKeyupContextMenuSupplement(e)) e.preventDefault()
-      }}
-      onFocus={(e) => {
+      // Containment-checked, unlike the hook's plain focus flag: moving the
+      // caret into the inline When editor stays "the table is focused" as far
+      // as the keybindingFocus context key is concerned.
+      onFocus={(e: ReactFocusEvent<HTMLDivElement>) => {
+        nav.containerProps.onFocus()
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onFocusChange(true)
       }}
-      onBlur={(e) => {
+      onBlur={(e: ReactFocusEvent<HTMLDivElement>) => {
+        nav.containerProps.onBlur()
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onFocusChange(false)
       }}
     >

@@ -1,15 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  RemoteRow — the shared list-row component for the Remote Explorer tree.
+ *  RemoteRow — the shared row component for the Remote Explorer tree.
  *  Visuals track the Explorer file row: fixed 22px height, status-dot slot,
  *  ellipsized label, optional muted description, and floating hover actions
- *  overlaid on the right edge. An explicit onActivate makes the whole row the
- *  primary-action target (click / Enter / Space); inner action buttons never
- *  trigger it (stopPropagation on the actions slot). Optional `indent` /
- *  `chevron` turn it into a tree row (group headers + targets with recents).
+ *  overlaid on the right edge. Inner action buttons never trigger the row's
+ *  primary action (stopPropagation on the actions slot).
+ *
+ *  Keyboard handling deliberately lives nowhere here: the row renders inside the
+ *  shared `Tree`, whose container owns focus and the arrow / Enter / Space /
+ *  ContextMenu keys. Rows are data marked with `data-row-key` + `aria-selected`,
+ *  never tab stops — the same model Explorer / Search / SCM use.
  *--------------------------------------------------------------------------------------------*/
 
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { cx } from '@universe-editor/workbench-ui'
 import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
@@ -23,6 +26,11 @@ const dotStyles = {
   idle: styles['dotIdle'],
 } as const
 
+/** Left padding of a depth-0 row; deeper rows get the tree's indent on top. */
+export const REMOTE_ROW_INDENT_BASE = 8
+/** Per-depth indent step, preserved from the pre-tree hand-rolled rendering. */
+export const REMOTE_ROW_INDENT_WIDTH = 14
+
 /** Collapse toggle state for tree rows (group headers and targets with recents). */
 export interface RemoteRowChevronProps {
   readonly expanded: boolean
@@ -32,6 +40,8 @@ export interface RemoteRowChevronProps {
 export interface RemoteRowProps {
   /** Per-row-type test ids kept stable across the split (remote-*-row). */
   readonly testId: string
+  /** Tree row identity — drives reveal + keyboard context-menu anchoring. */
+  readonly rowKey?: string | undefined
   /** When set, renders the 8px connection-status dot for this state. */
   readonly dot?: RemoteConnectionStateDto | undefined
   readonly label: string
@@ -41,63 +51,72 @@ export interface RemoteRowProps {
   /** Hover-revealed IconButtons, overlaid on the right edge. */
   readonly actions?: ReactNode
   /**
-   * Primary action: whole-row click + Enter/Space keyboard activation. The
-   * event is passed through so consumers can honour modifiers (e.g. the
-   * recent row's ctrl/cmd = open in new window).
+   * Row click. The event is passed through so consumers can honour modifiers
+   * (e.g. the recent row's ctrl/cmd = open in new window).
    */
-  readonly onActivate?:
-    | ((e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>) => void)
-    | undefined
+  readonly onClick?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined
   readonly onContextMenu?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined
-  /** Left indentation depth in levels (group = 0, target = 1, recent = 2). */
-  readonly indent?: number
-  /** When set, renders a leading chevron that toggles without firing onActivate. */
+  /** Whole-row left padding in px (from the tree's depth-derived indent). */
+  readonly indentPadding?: number | undefined
+  /** When set, renders a leading chevron that toggles without firing onClick. */
   readonly chevron?: RemoteRowChevronProps | undefined
   /** Bold the label (group header rows). */
   readonly emphasized?: boolean
   /** Render `description` as a flexible, ellipsized suffix and keep `label` fully visible. */
   readonly truncateDescription?: boolean
+  readonly selected?: boolean
+  readonly focused?: boolean
+  /** Virtualization positioning style from the tree. */
+  readonly style?: CSSProperties | undefined
+  /** Row-level ARIA expansion state; omitted for leaves. */
+  readonly ariaExpanded?: boolean | undefined
+  /** Inert placeholder rows (the empty-state hint) opt out of the pointer affordance. */
+  readonly inert?: boolean
 }
 
 export function RemoteRow({
   testId,
+  rowKey,
   dot,
   label,
   tooltip,
   description,
   actions,
-  onActivate,
+  onClick,
   onContextMenu,
-  indent,
+  indentPadding,
   chevron,
   emphasized,
   truncateDescription,
+  selected,
+  focused,
+  style,
+  ariaExpanded,
+  inert,
 }: RemoteRowProps) {
-  const activated = onActivate !== undefined
-  const handleKeyDown = activated
-    ? (e: KeyboardEvent<HTMLDivElement>) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onActivate(e)
-        }
-      }
-    : undefined
-
-  const indentPx = 8 + (indent ?? 0) * 14
-
   return (
     <div
-      className={cx(styles['row'], activated && styles['clickable'])}
-      style={{ paddingLeft: indentPx }}
+      className={cx(
+        styles['row'],
+        !inert && styles['clickable'],
+        selected && styles['selected'],
+        focused && styles['focused'],
+      )}
+      style={{ paddingLeft: indentPadding ?? REMOTE_ROW_INDENT_BASE, ...style }}
       data-testid={testId}
-      {...(activated ? { role: 'button', tabIndex: 0 } : {})}
-      onClick={onActivate}
-      onKeyDown={handleKeyDown}
+      {...(rowKey !== undefined ? { 'data-row-key': rowKey } : {})}
+      role="treeitem"
+      {...(ariaExpanded !== undefined ? { 'aria-expanded': ariaExpanded } : {})}
+      aria-selected={selected === true}
+      onClick={onClick}
       onContextMenu={onContextMenu}
     >
       {chevron && (
         <button
           type="button"
+          // Not a tab stop: the tree container owns focus, and Left/Right
+          // already expand and collapse the focused row.
+          tabIndex={-1}
           className={cx(styles['chevron'], !chevron.expanded && styles['chevronCollapsed'])}
           onClick={(e) => {
             e.stopPropagation()

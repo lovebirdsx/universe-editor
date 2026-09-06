@@ -10,9 +10,15 @@
  *  a `.vsix` file onto the view installs/updates it. Focusing the view
  *  (Ctrl+Shift+X) puts the caret in the search box. Clicking a row opens its
  *  detail editor. All state is read through IExtensionsWorkbenchService.
+ *
+ *  The sections are flattened into one row list so the arrow keys cross section
+ *  boundaries in a single index space (`useFlatListNavigation`, the same
+ *  keyboard model the trees get from `Tree`). That is also why section collapse
+ *  state lives here rather than inside `Section` — the flattening has to know
+ *  which bodies are folded away.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, ShieldCheck, Settings } from 'lucide-react'
 import { IEditorService, INotificationService, Severity, localize } from '@universe-editor/platform'
 import {
@@ -22,7 +28,10 @@ import {
   Spinner,
   cx,
   dragContainsResources,
+  isKeyboardContextMenu,
+  useFlatListNavigation,
   useScrollRestore,
+  type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
 import { useEventValue, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -47,6 +56,73 @@ const SEARCH_DEBOUNCE_MS = 300
 /** The view id — must match the descriptor registered in ExtensionsViewContribution. */
 const VIEW_ID = 'workbench.view.extensions.main'
 
+interface ExtensionsSection {
+  readonly id: string
+  readonly title: string
+  readonly loading?: boolean
+  readonly entries: readonly IExtensionEntry[]
+  /** Shown in place of the entries when there are none. */
+  readonly emptyMessage: string
+}
+
+type ExtensionsRow =
+  | { readonly kind: 'header'; readonly key: string; readonly section: ExtensionsSection }
+  | {
+      readonly kind: 'entry'
+      readonly key: string
+      readonly entry: IExtensionEntry
+    }
+  | { readonly kind: 'empty'; readonly key: string; readonly message: string }
+
+/** A navigable row: everything except the "nothing here" placeholders. */
+type ExtensionsNavRow = Exclude<ExtensionsRow, { kind: 'empty' }>
+
+interface FlattenedRows {
+  /** Render order, placeholders included. */
+  readonly rows: readonly ExtensionsRow[]
+  /**
+   * The arrow-key index space. Placeholder rows are excluded: they carry no
+   * action, so stopping on one would show the user a cursor that does nothing.
+   * `rows[i].navIndex` is therefore not `i` — use `navIndexOf`.
+   */
+  readonly navigable: readonly ExtensionsNavRow[]
+  /** Render index → navigation index, or -1 for a placeholder. */
+  readonly navIndexOf: readonly number[]
+}
+
+function flattenSections(
+  sections: readonly ExtensionsSection[],
+  collapsed: ReadonlySet<string>,
+): FlattenedRows {
+  const rows: ExtensionsRow[] = []
+  const navigable: ExtensionsNavRow[] = []
+  const navIndexOf: number[] = []
+
+  const push = (row: ExtensionsRow) => {
+    rows.push(row)
+    if (row.kind === 'empty') {
+      navIndexOf.push(-1)
+      return
+    }
+    navIndexOf.push(navigable.length)
+    navigable.push(row)
+  }
+
+  for (const section of sections) {
+    push({ kind: 'header', key: `header:${section.id}`, section })
+    if (collapsed.has(section.id)) continue
+    for (const entry of section.entries) {
+      // Namespaced: the same extension can appear under both INSTALLED and
+      // MARKETPLACE, and a duplicated row key would collapse them into one.
+      push({ kind: 'entry', key: `${section.id}:${entry.id}`, entry })
+    }
+    if (section.entries.length === 0 && section.loading !== true) {
+      push({ kind: 'empty', key: `empty:${section.id}`, message: section.emptyMessage })
+    }
+  }
+  return { rows, navigable, navIndexOf }
+}
+
 export function ExtensionsView() {
   const service = useService(IExtensionsWorkbenchService)
   const editorService = useService(IEditorService)
@@ -69,25 +145,16 @@ export function ExtensionsView() {
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false)
   const [query, setQuery] = useState('')
   const listQuery = parseExtensionListQuery(query)
-  const visibleEntries = filterExtensionEntries(installed, listQuery)
-  // In a remote workspace the INSTALLED group splits into the effective remote
-  // side and the local side (built-ins are only listed under @builtin, which
-  // keeps the single-section rendering below).
-  const splitRemote = remoteLabel !== undefined && !listQuery.builtin
-  const remoteEntries = splitRemote
-    ? visibleEntries.filter((e) => e.remote === true)
-    : visibleEntries
-  const localEntries = splitRemote ? visibleEntries.filter((e) => e.remote !== true) : []
   const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const [focusedIndex, setFocusedIndex] = useState(-1)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const getContainer = useCallback(() => scrollRef.current, [])
 
-  useScrollRestore(
-    'extensions',
-    useCallback(() => scrollRef.current, []),
-  )
+  useScrollRestore('extensions', getContainer)
 
   useViewFocusable(
     VIEW_ID,
@@ -131,22 +198,105 @@ export function ExtensionsView() {
     [editorService],
   )
 
-  const openMenu = useCallback((entry: IExtensionEntry, x: number, y: number) => {
-    setMenu({ entry, x, y })
+  const openMenu = useCallback((entry: IExtensionEntry, x: number, y: number, keyboard = false) => {
+    setMenu({ entry, x, y, keyboard })
   }, [])
 
-  const renderRow = useCallback(
-    (entry: IExtensionEntry) => (
-      <ExtensionRow
-        key={entry.id}
-        entry={entry}
-        onOpen={openDetail}
-        onInstall={() => void service.install(entry)}
-        onOpenMenu={openMenu}
-      />
-    ),
-    [openDetail, openMenu, service],
+  const toggleSection = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }, [])
+
+  const noResults = localize('extensions.noResults', 'No extensions found')
+  // The entry filtering lives inside the memo rather than above it: every step
+  // allocates a fresh array, so hoisting it would give `sections` a new input
+  // identity on every render and defeat both this memo and `rows` below.
+  const sections = useMemo<readonly ExtensionsSection[]>(() => {
+    const visibleEntries = filterExtensionEntries(installed, listQuery)
+    // In a remote workspace the INSTALLED group splits into the effective remote
+    // side and the local side (built-ins are only listed under @builtin, which
+    // keeps the single-section rendering below).
+    const splitRemote = remoteLabel !== undefined && !listQuery.builtin
+
+    const list: ExtensionsSection[] = []
+    if (splitRemote) {
+      list.push({
+        id: 'remote',
+        title: remoteLabel,
+        entries: visibleEntries.filter((e) => e.remote === true),
+        emptyMessage: listQuery.text
+          ? noResults
+          : localize('extensions.noneInstalled', 'No extensions installed'),
+      })
+      list.push({
+        id: 'local',
+        title: localize('extensions.group.local', 'Local'),
+        entries: visibleEntries.filter((e) => e.remote !== true),
+        emptyMessage: localize('extensions.noneInstalled.local', 'No local extensions installed'),
+      })
+    } else {
+      list.push({
+        id: 'installed',
+        title: listQuery.builtin
+          ? localize('extensions.group.builtin', 'Built-in')
+          : localize('extensions.group.installed', 'Installed'),
+        entries: visibleEntries,
+        emptyMessage:
+          listQuery.text || listQuery.builtin
+            ? noResults
+            : localize('extensions.noneInstalled', 'No extensions installed'),
+      })
+    }
+    if (marketplaceEnabled && !listQuery.builtin) {
+      list.push({
+        id: 'marketplace',
+        title: localize('extensions.group.marketplace', 'Market Extensions'),
+        loading: searching,
+        entries: results,
+        emptyMessage: noResults,
+      })
+    }
+    return list
+  }, [
+    installed,
+    remoteLabel,
+    listQuery.builtin,
+    listQuery.text,
+    marketplaceEnabled,
+    searching,
+    results,
+    noResults,
+  ])
+
+  const { rows, navigable, navIndexOf } = useMemo(
+    () => flattenSections(sections, collapsed),
+    [sections, collapsed],
   )
+
+  // Searching, collapsing a section or an install finishing all shorten the
+  // list, which would otherwise leave the cursor past the end.
+  const clampedFocusedIndex = focusedIndex >= navigable.length ? -1 : focusedIndex
+
+  const nav = useFlatListNavigation({
+    count: navigable.length,
+    focusedIndex: clampedFocusedIndex,
+    onFocusChange: setFocusedIndex,
+    getItemKey: useCallback((index: number) => navigable[index]?.key ?? '', [navigable]),
+    getContainer,
+    ariaLabel: localize('extensions.list', 'Extensions'),
+    onActivate: useCallback(
+      (index: number) => {
+        const row = navigable[index]
+        if (row?.kind === 'header') toggleSection(row.section.id)
+        else if (row?.kind === 'entry') openDetail(row.entry)
+      },
+      [navigable, toggleSection, openDetail],
+    ),
+    onShiftTab: useCallback(() => inputRef.current?.focus(), []),
+  })
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     if (!dragContainsResources(e.dataTransfer)) return
@@ -208,60 +358,40 @@ export function ExtensionsView() {
         />
       </div>
 
-      <div className={styles.scroll} ref={scrollRef}>
-        {splitRemote ? (
-          <>
-            <Section title={remoteLabel!}>
-              {remoteEntries.map(renderRow)}
-              {remoteEntries.length === 0 && (
-                <div className={styles.empty}>
-                  {listQuery.text
-                    ? localize('extensions.noResults', 'No extensions found')
-                    : localize('extensions.noneInstalled', 'No extensions installed')}
-                </div>
-              )}
-            </Section>
-            <Section title={localize('extensions.group.local', 'Local')}>
-              {localEntries.map(renderRow)}
-              {localEntries.length === 0 && (
-                <div className={styles.empty}>
-                  {localize('extensions.noneInstalled.local', 'No local extensions installed')}
-                </div>
-              )}
-            </Section>
-          </>
-        ) : (
-          <Section
-            title={
-              listQuery.builtin
-                ? localize('extensions.group.builtin', 'Built-in')
-                : localize('extensions.group.installed', 'Installed')
-            }
-          >
-            {visibleEntries.map(renderRow)}
-            {visibleEntries.length === 0 && (
-              <div className={styles.empty}>
-                {listQuery.text || listQuery.builtin
-                  ? localize('extensions.noResults', 'No extensions found')
-                  : localize('extensions.noneInstalled', 'No extensions installed')}
+      <div {...nav.containerProps} className={styles.scroll} ref={scrollRef}>
+        {rows.map((row, index) => {
+          if (row.kind === 'empty') {
+            return (
+              <div key={row.key} className={styles.empty} role="presentation">
+                {row.message}
               </div>
-            )}
-          </Section>
-        )}
-
-        {marketplaceEnabled && !listQuery.builtin && (
-          <Section
-            title={localize('extensions.group.marketplace', 'Market Extensions')}
-            loading={searching}
-          >
-            {results.map(renderRow)}
-            {!searching && results.length === 0 && (
-              <div className={styles.empty}>
-                {localize('extensions.noResults', 'No extensions found')}
-              </div>
-            )}
-          </Section>
-        )}
+            )
+          }
+          // Render order != navigation order: placeholders are skipped, so the
+          // cursor index has to come from the flattener's mapping.
+          const rowProps = nav.getRowProps(navIndexOf[index]!)
+          if (row.kind === 'header') {
+            return (
+              <SectionHeader
+                key={row.key}
+                section={row.section}
+                collapsed={collapsed.has(row.section.id)}
+                onToggle={() => toggleSection(row.section.id)}
+                rowProps={rowProps}
+              />
+            )
+          }
+          return (
+            <ExtensionRow
+              key={row.key}
+              entry={row.entry}
+              onOpen={openDetail}
+              onInstall={() => void service.install(row.entry)}
+              onOpenMenu={openMenu}
+              rowProps={rowProps}
+            />
+          )
+        })}
       </div>
 
       {menu && (
@@ -281,24 +411,31 @@ export function ExtensionsView() {
   )
 }
 
-function Section({
-  title,
-  loading,
-  children,
+function SectionHeader({
+  section,
+  collapsed,
+  onToggle,
+  rowProps,
 }: {
-  title: string
-  loading?: boolean
-  children: React.ReactNode
+  section: ExtensionsSection
+  collapsed: boolean
+  onToggle: () => void
+  rowProps: IFlatListRowProps
 }) {
-  const [collapsed, setCollapsed] = useState(false)
   return (
-    <div className={styles.section}>
-      <button className={styles.sectionHeader} onClick={() => setCollapsed((c) => !c)}>
-        {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-        <span className={styles.sectionTitle}>{title}</span>
-        {loading && <Spinner size={12} />}
-      </button>
-      {!collapsed && <div className={styles.sectionBody}>{children}</div>}
+    <div
+      {...rowProps}
+      className={styles.sectionHeader}
+      aria-expanded={!collapsed}
+      data-testid="extension-section-header"
+      onClick={(e) => {
+        rowProps.onClick(e)
+        onToggle()
+      }}
+    >
+      {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+      <span className={styles.sectionTitle}>{section.title}</span>
+      {section.loading === true && <Spinner size={12} />}
     </div>
   )
 }
@@ -308,11 +445,13 @@ function ExtensionRow({
   onOpen,
   onInstall,
   onOpenMenu,
+  rowProps,
 }: {
   entry: IExtensionEntry
   onOpen: (entry: IExtensionEntry) => void
   onInstall: () => void
-  onOpenMenu: (entry: IExtensionEntry, x: number, y: number) => void
+  onOpenMenu: (entry: IExtensionEntry, x: number, y: number, keyboard?: boolean) => void
+  rowProps: IFlatListRowProps
 }) {
   const userDisabled = entry.installed && !entry.enabled
   const versionIncompatible = entry.isVersionIncompatible
@@ -324,12 +463,16 @@ function ExtensionRow({
     if (!entry.installed) return
     e.preventDefault()
     e.stopPropagation()
-    onOpenMenu(entry, e.clientX, e.clientY)
+    onOpenMenu(entry, e.clientX, e.clientY, isKeyboardContextMenu(e))
   }
   return (
     <div
+      {...rowProps}
       className={cx(styles.row, rowDisabled && styles.disabledRow)}
-      onClick={() => onOpen(entry)}
+      onClick={(e) => {
+        rowProps.onClick(e)
+        onOpen(entry)
+      }}
       onContextMenu={onContextMenu}
       data-testid="extension-row"
     >

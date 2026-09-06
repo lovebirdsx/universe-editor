@@ -14,6 +14,12 @@ import {
 
 export interface VirtualListProps<T> {
   items: readonly T[]
+  /**
+   * Row content. By default the returned element *is* an array element, so its
+   * root must carry a React `key` — nothing here supplies one, and `getItemKey`
+   * is not it. Under `measureDynamically` the internal wrapper owns the key
+   * instead, and the root needs none.
+   */
   renderItem: (item: T, style: CSSProperties) => ReactNode
   estimateSize: (index: number) => number
   className?: string | undefined
@@ -26,7 +32,11 @@ export interface VirtualListProps<T> {
    * style object it may ignore.
    */
   measureDynamically?: boolean
-  /** Stable identity per index (e.g. for re-orderable lists). Defaults to the index. */
+  /**
+   * Stable identity per index (e.g. for re-orderable lists). Defaults to the
+   * index. Goes to the virtualizer only — it never becomes the React key, so
+   * passing it does not relieve `renderItem` of setting one.
+   */
   getItemKey?: (index: number) => string | number
   /**
    * Scroll against an ancestor the caller owns instead of rendering our own

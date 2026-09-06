@@ -64,7 +64,9 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
       ref={containerRef}
       className={styles['sessionsPopover']}
       data-testid="acp-sessions-popover"
-      role="listbox"
+      // No role="listbox" here: SessionListBody's own <ul> is the listbox, and
+      // nesting one inside another makes screen readers announce two competing
+      // lists. This element is just the popover frame around it plus a toolbar.
       aria-label={localize('acp.sessions.popover', 'Sessions')}
     >
       <div className={styles['sessionsPopoverToolbar']}>

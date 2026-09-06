@@ -19,11 +19,12 @@
 .scroll {
   flex: 1;
   overflow-y: auto;
+  outline: none;
 }
 
-.section {
-  display: flex;
-  flex-direction: column;
+.scroll:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #0070e0);
+  outline-offset: -1px;
 }
 
 .sectionHeader {
@@ -39,16 +40,27 @@
   text-transform: uppercase;
   font-size: 11px;
   font-weight: 700;
+  user-select: none;
+}
+
+/* Keyboard cursor. `aria-selected` here means "the arrow keys are on this row",
+   not "this extension is chosen" — the list has no selection of its own. */
+.sectionHeader[aria-selected='true'],
+.row[aria-selected='true'] {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(255, 255, 255, 0.06));
+}
+
+.scroll[data-focused='true'] .sectionHeader[aria-selected='true'],
+.scroll[data-focused='true'] .row[aria-selected='true'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #ffffff);
+  outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
+  outline-offset: -1px;
 }
 
 .sectionTitle {
   flex: 1;
   text-align: left;
-}
-
-.sectionBody {
-  display: flex;
-  flex-direction: column;
 }
 
 .row {
