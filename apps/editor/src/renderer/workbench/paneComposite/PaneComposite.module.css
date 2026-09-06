@@ -220,8 +220,21 @@
   flex-direction: column;
 }
 
+/* Was `display: contents`, which generates no layout box — and Chromium refuses
+   focus to boxless elements, so ViewBody could not act as the views' fallback
+   focus target. A real flex column plus a stretched child reproduces the old
+   geometry: the view root still fills the pane whether the parent sizes it by
+   flex (single-view stack) or by block height (ViewPane body, tiled panel). */
 .viewBody {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.viewBody > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ---- view-container drop (merge a view / whole container into this one) ---- */

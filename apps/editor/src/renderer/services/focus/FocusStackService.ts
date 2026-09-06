@@ -109,30 +109,49 @@ export class FocusStackService extends Disposable implements IFocusStackService 
   private _onFocusChange(e: IFocusChangeEvent): void {
     const el = e.current as unknown as HTMLElement | null
     if (!el) return
-    const partTestId = this._closestAttr(el, 'data-testid')
-    const partIdStr = partTestId?.startsWith('part-') ? partTestId.slice('part-'.length) : ''
-    if (!isPartId(partIdStr)) return
-    const viewId = this._closestAttr(el, 'data-view-id')
-    const groupIdStr = this._closestAttr(el, 'data-group-id')
+    const partId = closestPartId(el)
+    if (!partId) return
+    const viewId = closestAttr(el, 'data-view-id')
+    const groupIdStr = closestAttr(el, 'data-group-id')
     const groupId = groupIdStr === undefined ? undefined : Number(groupIdStr)
     this.push({
-      partId: partIdStr,
+      partId,
       viewId: viewId ?? undefined,
       groupId: Number.isFinite(groupId) ? groupId : undefined,
     })
   }
-
-  private _closestAttr(el: HTMLElement, attr: string): string | undefined {
-    let cur: HTMLElement | null = el
-    while (cur) {
-      const v = cur.getAttribute?.(attr)
-      if (v) return v
-      cur = cur.parentElement
-    }
-    return undefined
-  }
 }
 
-function isPartId(s: string): s is PartId {
-  return (PART_ORDER as readonly string[]).includes(s)
+/** Nearest ancestor value of `attr` (inclusive of `el`), or undefined. */
+export function closestAttr(el: HTMLElement, attr: string): string | undefined {
+  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+    const v = cur.getAttribute?.(attr)
+    if (v) return v
+  }
+  return undefined
+}
+
+// Parts spell their `data-testid` inconsistently (`part-sidebar` vs the
+// `sideBar` enum member, `part-activitybar` vs `activityBar`, …). The testids
+// are an e2e selector contract, so match case-insensitively here instead.
+const PART_ID_BY_TESTID_SUFFIX = new Map<string, PartId>(
+  PART_ORDER.map((id) => [id.toLowerCase(), id]),
+)
+
+/**
+ * Nearest enclosing Part, or undefined if the element sits outside every Part.
+ *
+ * Walks past unrelated `data-testid`s rather than stopping at the first one:
+ * view roots carry their own (e.g. `search-view`), and stopping there made the
+ * Part lookup fail for every focus landing inside such a view, silently
+ * dropping the entry — so those views never entered the focus history at all.
+ */
+export function closestPartId(el: HTMLElement): PartId | undefined {
+  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+    const testId = cur.getAttribute?.('data-testid')
+    if (!testId?.startsWith('part-')) continue
+    const partId = PART_ID_BY_TESTID_SUFFIX.get(testId.slice('part-'.length).toLowerCase())
+    if (partId) return partId
+  }
+  return undefined
 }

@@ -335,4 +335,26 @@ test.describe('@p0 quick access', () => {
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
   })
+
+  // Views are switch targets in the file picker too, so Ctrl+P reaches anything
+  // switchable. With no workspace open they are listed up front (there are no
+  // workspace files to crowd out); with one, they join the fuzzy matching only.
+  test('lists views and focuses the picked one', async ({ page, workbench }) => {
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.quickOpen')
+    })
+    await workbench.quickInput.waitForVisible()
+
+    const outline = workbench.quickInput.dialog.getByRole('option', { name: /Outline/ })
+    await expect(outline).toBeVisible()
+
+    await workbench.quickInput.input.fill('Outline')
+    await expect(outline).toBeVisible()
+    await outline.click()
+    await workbench.quickInput.waitForHidden()
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('focusedView'))
+      .toBe('workbench.view.outline.main')
+  })
 })

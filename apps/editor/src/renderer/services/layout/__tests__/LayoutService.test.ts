@@ -7,6 +7,7 @@ import {
   type IEditorGroupsService,
   type IFocusableRegistry,
   type IStorageService,
+  type IViewDescriptorService,
   type IViewsService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -73,6 +74,15 @@ function makeWorkspace(): IWorkspaceService {
   return { current: {} } as unknown as IWorkspaceService
 }
 
+/** Only the two reads focusView makes; nothing here exercises collapsing. */
+function makeViewDescriptors(): IViewDescriptorService {
+  return {
+    _serviceBrand: undefined,
+    getViewState: vi.fn(() => ({})),
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService
+}
+
 function newSvc(storage: IStorageService = makeStorage()): LayoutService {
   return new LayoutService(
     storage,
@@ -82,6 +92,7 @@ function newSvc(storage: IStorageService = makeStorage()): LayoutService {
     makeEditorGroups(),
     makeContextKeyService(),
     makeWorkspace(),
+    makeViewDescriptors(),
   )
 }
 

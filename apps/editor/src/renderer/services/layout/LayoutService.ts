@@ -10,6 +10,7 @@ import {
   IEditorGroupsService,
   IFocusableRegistry,
   IStorageService,
+  IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
   StorageScope,
@@ -85,6 +86,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IViewDescriptorService private readonly _viewDescriptors: IViewDescriptorService,
   ) {
     super()
     // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
@@ -366,6 +368,14 @@ export class LayoutService extends Disposable implements ILayoutService {
 
     // Make the container visible at its location, then bring its hosting part up.
     this._viewsService.openViewContainer(descriptor.containerId)
+    // A view can also be collapsed *within* an otherwise visible container.
+    // Collapsed panes still render their children — into a display:none subtree —
+    // so the registry hands back an element the browser then refuses to focus,
+    // and the poll below spins to timeout while the caller is told it succeeded.
+    // Expanding here is what four callers used to hand-roll before calling in.
+    if (this._viewDescriptors.getViewState(viewId).collapsed === true) {
+      this._viewDescriptors.setViewCollapsed(viewId, false)
+    }
     const partId = LayoutService._partIdForLocation(container.location)
     const ok = await this._focusPart(partId, opts, viewId)
     if (!ok) return false
@@ -379,7 +389,12 @@ export class LayoutService extends Disposable implements ILayoutService {
       const el = this._focusableRegistry.get(viewId)?.()
       if (el) {
         ;(el as { focus?(): void } | null)?.focus?.()
-        break
+        // The element existing is not the same as it accepting focus: a pane
+        // expanded one line above is still display:none until React commits,
+        // and browsers refuse focus to boxless elements. Keep polling until
+        // focus actually lands, otherwise callers get a false success and the
+        // view never reaches the focus history.
+        if (typeof document !== 'undefined' && document.activeElement === el) return true
       }
       if (Date.now() >= deadline) break
       await new Promise<void>((r) => {
@@ -387,7 +402,7 @@ export class LayoutService extends Disposable implements ILayoutService {
         else setTimeout(r, 16)
       })
     }
-    return true
+    return false
   }
 
   private _findViewDescriptor(viewId: string): IViewDescriptor | undefined {

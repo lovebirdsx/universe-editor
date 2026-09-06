@@ -8,6 +8,7 @@
 import type { ComponentType } from 'react'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import type { IViewComponentProps } from '../../services/views/ViewComponentRegistry.js'
+import { ViewBody } from './ViewBody.js'
 import styles from './PaneComposite.module.css'
 
 interface Props {
@@ -21,9 +22,9 @@ export function TiledViews({ views, resolve }: Props) {
       {views.map((v) => {
         const Component = resolve(v.componentKey)
         return Component ? (
-          <div key={v.id} data-view-id={v.id} className={styles['viewBody'] ?? ''}>
+          <ViewBody key={v.id} viewId={v.id} className={styles['viewBody']}>
             <Component viewId={v.id} />
-          </div>
+          </ViewBody>
         ) : null
       })}
     </div>

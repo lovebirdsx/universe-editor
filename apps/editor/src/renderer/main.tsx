@@ -146,9 +146,9 @@ import {
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
 import {
-  IRecentEditorsService,
-  RecentEditorsService,
-} from './services/editor/RecentEditorsService.js'
+  IRecentTargetsService,
+  RecentTargetsService,
+} from './services/editor/RecentTargetsService.js'
 import {
   IClosedEditorsService,
   ClosedEditorsService,
@@ -630,10 +630,12 @@ async function bootstrapWorkbench(): Promise<void> {
   const recentFilesService = workbenchStore.add(instantiation.createInstance(RecentFilesService))
   services.set(IRecentFilesService, recentFilesService)
 
-  const recentEditorsService = workbenchStore.add(
-    instantiation.createInstance(RecentEditorsService),
+  // Ctrl+Tab switch targets. Constructed after FocusStack — it subscribes to
+  // that service to fold view focus into the same recency list as editors.
+  const recentTargetsService = workbenchStore.add(
+    instantiation.createInstance(RecentTargetsService),
   )
-  services.set(IRecentEditorsService, recentEditorsService)
+  services.set(IRecentTargetsService, recentTargetsService)
 
   const closedEditorsService = workbenchStore.add(
     instantiation.createInstance(ClosedEditorsService),

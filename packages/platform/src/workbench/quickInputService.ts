@@ -46,6 +46,14 @@ export interface IQuickPickItem {
    * rewrite `items`, ...).
    */
   readonly buttons?: readonly IQuickPickItemButton[]
+  /**
+   * When false, the item opts out of the picker's remove affordance (no ✕
+   * button, Delete / quick-navigate `x` are no-ops on it) even though the
+   * picker has an `onItemRemove` handler. Defaults to true. Used by the
+   * Ctrl+Tab switcher, where editors can be closed from the list but views
+   * cannot.
+   */
+  readonly removable?: boolean
 }
 
 /**
@@ -136,9 +144,11 @@ export interface IPickOptions {
   /** Initial busy state — useful when items are still being computed when `pick` is called. */
   readonly busy?: boolean
   /**
-   * Enables VSCode-style "quick navigate" mode: while the configured modifier
-   * key remains held, Tab / Shift+Tab cycles focus; releasing the modifier
-   * accepts the focused item. Used by Ctrl+Tab editor switching.
+   * Enables VSCode-style "quick navigate" mode: Tab / Shift+Tab cycles the
+   * focused item and the picker opens on `initialSelectionIndex` rather than the
+   * first row. Acceptance is ordinary Enter — the picker deliberately does NOT
+   * close when the modifier is released, so the user can keep typing to filter a
+   * long list. Used by Ctrl+Tab editor/view switching.
    */
   readonly quickNavigate?: {
     readonly modifier: 'ctrl'

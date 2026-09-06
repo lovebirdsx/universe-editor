@@ -7,6 +7,7 @@ import {
   ILayoutService,
   InstantiationService,
   IStorageService,
+  IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
   PartId,
@@ -73,6 +74,12 @@ function makeContainer() {
     _serviceBrand: undefined,
     current: {},
   } as unknown as IWorkspaceService)
+  // Only the two reads focusView makes; nothing here exercises collapsing.
+  services.set(IViewDescriptorService, {
+    _serviceBrand: undefined,
+    getViewState: vi.fn(() => ({})),
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService)
   const instantiation = new InstantiationService(services, true)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)

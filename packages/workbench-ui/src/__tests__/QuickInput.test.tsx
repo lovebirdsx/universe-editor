@@ -579,7 +579,7 @@ describe('QuickPickPanel item removal', () => {
     expect(screen.queryByText('Format Document')).toBeNull()
   })
 
-  it('x on the focused item removes it in quick-navigate mode', () => {
+  it('Ctrl+X on the focused item removes it in quick-navigate mode', () => {
     const onItemRemove = vi.fn()
     render(
       <QuickPickPanel
@@ -598,6 +598,48 @@ describe('QuickPickPanel item removal', () => {
     expect(screen.getByText('Go to Line')).toBeTruthy()
   })
 
+  it('a bare x types instead of removing, so the filter box stays usable', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'x' })
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  // Releasing the modifier used to accept the focused item, which made the
+  // filter box unusable: the picker closed before a query could be typed.
+  it('releasing the modifier neither accepts nor closes in quick-navigate mode', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onAccept,
+        })}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+
+    // Enter is what accepts now.
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([items[0]], expect.anything())
+  })
+
   it('x does not remove items outside quick-navigate mode', () => {
     const onItemRemove = vi.fn()
     render(
@@ -608,6 +650,56 @@ describe('QuickPickPanel item removal', () => {
     )
     const input = screen.getByTestId('quick-input-field')
     fireEvent.keyDown(input, { key: 'x' })
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  // `removable: false` lets a picker mix closable and non-closable rows — the
+  // Ctrl+Tab switcher lists editors (closable) alongside views (not).
+  const mixedItems = [
+    { id: 'cmd.format', label: 'Format Document', removable: false },
+    { id: 'cmd.line', label: 'Go to Line' },
+  ]
+
+  it('rows opting out of removal render no remove button', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({ items: mixedItems, onItemRemove: vi.fn() })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(screen.getAllByTestId('quick-input-item-remove')).toHaveLength(1)
+  })
+
+  it('Delete is a no-op on a row that opted out of removal', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ items: mixedItems, onItemRemove })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Delete' })
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  it('quick-navigate Ctrl+X is a no-op on a row that opted out of removal', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: mixedItems,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'x', ctrlKey: true })
     expect(onItemRemove).not.toHaveBeenCalled()
     expect(screen.getByText('Format Document')).toBeTruthy()
   })

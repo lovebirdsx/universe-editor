@@ -84,9 +84,12 @@ export interface ILayoutService {
   focusPart(part: PartId, opts?: IFocusPartOptions): Promise<boolean>
 
   /**
-   * Open the view container that hosts `viewId`, focus the hosting part, then
-   * focus the view's registered focusable element (if any). Resolves to true
-   * on success.
+   * Open the view container that hosts `viewId`, expand the view if it is
+   * collapsed, focus the hosting part, then focus the view's registered
+   * focusable element. Resolves to true only once focus has actually landed on
+   * that element — a collapsed or not-yet-mounted view renders into a subtree
+   * the browser refuses to focus, and reporting success there would strand
+   * focus on the part.
    */
   focusView(viewId: string, opts?: IFocusPartOptions): Promise<boolean>
 }

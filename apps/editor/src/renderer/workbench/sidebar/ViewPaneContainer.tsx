@@ -24,6 +24,7 @@ import {
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { dragContainsView, viewDragData, type ViewDragPayload } from '../dnd/viewDragData.js'
 import { applyViewDrop } from '../dnd/applyViewDrop.js'
+import { ViewBody } from '../paneComposite/ViewBody.js'
 import '../layout/allotment-theme.css'
 import styles from '../paneComposite/PaneComposite.module.css'
 
@@ -303,13 +304,13 @@ export function ViewPaneContainer({
     const v = views[0]!
     const Component = resolve(v.componentKey)
     body = (
-      <div data-view-id={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
+      <ViewBody viewId={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
         {Component ? (
           <Component viewId={v.id} />
         ) : (
           <span className={styles['empty']}>{v.name}</span>
         )}
-      </div>
+      </ViewBody>
     )
   } else {
     body = (
@@ -385,13 +386,13 @@ export function ViewPaneContainer({
                 draggable={v.canMoveView !== false}
                 onDropView={(sourceViewId, position) => moveHere(sourceViewId, v.id, position)}
               >
-                <div data-view-id={v.id} className={styles['viewBody']}>
+                <ViewBody viewId={v.id} className={styles['viewBody']}>
                   {Component ? (
                     <Component viewId={v.id} />
                   ) : (
                     <span className={styles['empty']}>{v.name}</span>
                   )}
-                </div>
+                </ViewBody>
               </ViewPane>
             </Allotment.Pane>
           )

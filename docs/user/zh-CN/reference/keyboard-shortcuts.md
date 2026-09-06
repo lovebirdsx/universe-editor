@@ -61,7 +61,7 @@
 | 关闭其他编辑器 | `Alt+W` |
 | 重新打开已关闭的编辑器 | `Ctrl+Shift+T` |
 | 打开下一个 / 上一个编辑器 | `Ctrl+PageDown` / `Ctrl+PageUp` |
-| 最近使用的编辑器（MRU） | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| 最近使用的编辑器和视图（MRU） | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | 向右拆分编辑器 | `Ctrl+\` |
 | 切换自动换行 | `Alt+Z` |
 | 更改语言模式（当前文件的语法高亮语言） | `Ctrl+K M` |

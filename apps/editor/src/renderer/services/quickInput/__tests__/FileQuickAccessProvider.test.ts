@@ -18,7 +18,9 @@ import {
   IFileSearchService,
   IFileService,
   IInstantiationService,
+  ILayoutService,
   ILoggerService,
+  IViewDescriptorService,
   IWorkspaceService,
   InstantiationService,
   NullLogger,
@@ -26,6 +28,7 @@ import {
   URI,
   UriIdentityService,
   IUriIdentityService,
+  ViewContainerLocation,
   type CancellationToken,
   type IEditorGroup,
   type IEditorResolverService as IEditorResolverServiceType,
@@ -39,6 +42,7 @@ import {
   type IQuickPickItemButtonEvent,
   type IQuickPick,
   type IQuickPickItem,
+  type IViewDescriptor,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
   type QuickPickInput,
@@ -50,7 +54,7 @@ import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
-import { IRecentEditorsService } from '../../editor/RecentEditorsService.js'
+import { IRecentTargetsService } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService, type ClosedEditorEntry } from '../../editor/ClosedEditorsService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
@@ -308,11 +312,17 @@ class FakeEditorInput extends EditorInput {
   }
 }
 
-class FakeRecentEditorsService implements IRecentEditorsService {
+class FakeRecentTargetsService implements IRecentTargetsService {
   declare readonly _serviceBrand: undefined
-  constructor(private readonly _items: readonly { editor: EditorInput; group: IEditorGroup }[]) {}
-  getRecentEditors() {
-    return this._items
+  constructor(
+    private readonly _items: readonly { editor: EditorInput; group: IEditorGroup }[],
+    private readonly _views: readonly IViewDescriptor[] = [],
+  ) {}
+  getRecentTargets() {
+    return this._items.map((i) => ({ kind: 'editor' as const, ...i }))
+  }
+  getRecentViews() {
+    return this._views
   }
 }
 
@@ -358,6 +368,34 @@ class FakeEditorResolverService implements IEditorResolverServiceType {
   }
 }
 
+/** Records focusView calls so tests can assert a view pick switches to the view
+ *  rather than trying to open it as a resource. */
+class FakeLayoutService {
+  readonly focusedViews: string[] = []
+  async focusView(viewId: string): Promise<boolean> {
+    this.focusedViews.push(viewId)
+    return true
+  }
+}
+
+const PANEL_CONTAINER = {
+  id: 'workbench.view.terminal',
+  label: 'Terminal',
+  icon: 'terminal',
+  order: 1,
+  location: ViewContainerLocation.Panel,
+} as const
+
+function makeViewDescriptors(): IViewDescriptorService {
+  return {
+    getViewContainerByViewId: () => PANEL_CONTAINER,
+  } as unknown as IViewDescriptorService
+}
+
+function makeView(id: string, name: string): IViewDescriptor {
+  return { id, name, containerId: PANEL_CONTAINER.id, componentKey: id, order: 1 }
+}
+
 function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
@@ -372,6 +410,7 @@ function setup(
     openEditors?: EditorInput[]
     sideEditors?: EditorInput[]
     closedEntries?: ClosedEditorEntry[]
+    views?: readonly IViewDescriptor[]
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
@@ -380,23 +419,29 @@ function setup(
   const recent = new FakeRecentFilesService(opts.recent ?? [])
   const groupsFake = makeGroups(opts.openEditors ?? [], opts.sideEditors ?? [])
   const closedEditors = new FakeClosedEditorsService([...(opts.closedEntries ?? [])])
-  const recentEditors = new FakeRecentEditorsService([
-    ...(opts.openEditors ?? []).map((editor) => ({
-      editor,
-      group: groupsFake.all[0] as unknown as IEditorGroup,
-    })),
-    ...(opts.sideEditors ?? []).map((editor) => ({
-      editor,
-      group: groupsFake.all[1] as unknown as IEditorGroup,
-    })),
-  ])
+  const recentTargets = new FakeRecentTargetsService(
+    [
+      ...(opts.openEditors ?? []).map((editor) => ({
+        editor,
+        group: groupsFake.all[0] as unknown as IEditorGroup,
+      })),
+      ...(opts.sideEditors ?? []).map((editor) => ({
+        editor,
+        group: groupsFake.all[1] as unknown as IEditorGroup,
+      })),
+    ],
+    opts.views ?? [],
+  )
+  const layout = new FakeLayoutService()
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
   services.set(IFileSearchService, fileSearch)
   services.set(IEditorGroupsService, groupsFake.groups)
   services.set(IRecentFilesService, recent)
-  services.set(IRecentEditorsService, recentEditors)
+  services.set(IRecentTargetsService, recentTargets)
   services.set(IClosedEditorsService, closedEditors)
+  services.set(IViewDescriptorService, makeViewDescriptors())
+  services.set(ILayoutService, layout as unknown as ILayoutService)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IFocusScopeService, opts.focus ?? new FakeFocusScopeService())
   services.set(IUriIdentityService, new UriIdentityService('linux'))
@@ -407,7 +452,7 @@ function setup(
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
-  return { provider, fileSearch, workspace, resolver, groupsFake, closedEditors }
+  return { provider, fileSearch, workspace, resolver, groupsFake, closedEditors, layout }
 }
 
 function run(
@@ -1362,5 +1407,81 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     expect(groupsFake.openLog[0]!.editor.typeId).toBe(FAKE_CUSTOM_TYPE)
     expect(groupsFake.openLog[0]!.options).toMatchObject({ activate: true, pinned: true })
     expect(resolver.opened).toHaveLength(0)
+  })
+})
+
+describe('FileQuickAccessProvider — views as switch targets', () => {
+  beforeEach(() => invalidateMentionFileCache())
+
+  /** Narrow away the separator half of QuickPickInput; this picker emits none. */
+  const rows = (picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] =>
+    picker.items.filter((i): i is IQuickPickItem => 'label' in i && i.label !== undefined)
+
+  it('matches views while typing but keeps them out of the empty-query list', async () => {
+    // The empty query is a recent-files list by convention; views there would
+    // crowd out the files the user actually came for.
+    const { provider, fileSearch } = setup({
+      views: [makeView('workbench.view.terminal.main', 'Terminal')],
+      recent: [{ uri: URI.file('/ws/a.ts'), name: 'a.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = ['/ws/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(rows(picker).some((i) => i.label === 'Terminal')).toBe(false)
+
+    picker.fireValue('termin')
+    await flushPromises()
+    // Presentation comes from the shared builder: container label, no remove ✕.
+    expect(rows(picker).find((i) => i.label === 'Terminal')).toMatchObject({
+      description: 'Terminal',
+      removable: false,
+    })
+  })
+
+  it('matches a view by its container label, not just its own name', async () => {
+    const { provider } = setup({ views: [makeView('workbench.view.output.main', 'Output')] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // 'Output' sits in the Terminal container in this fixture; searching by the
+    // container name must still reach it.
+    picker.fireValue('Terminal')
+    await flushPromises()
+    expect(rows(picker).some((i) => i.label === 'Output')).toBe(true)
+  })
+
+  it('accepting a view row focuses that view instead of opening a resource', async () => {
+    const { provider, layout, resolver } = setup({
+      views: [makeView('workbench.view.terminal.main', 'Terminal')],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('termin')
+    await flushPromises()
+    picker.fireAccept([rows(picker).find((i) => i.label === 'Terminal')!])
+
+    expect(layout.focusedViews).toEqual(['workbench.view.terminal.main'])
+    // Never routed through the editor resolver — a view id is not a URI.
+    expect(resolver.opened).toHaveLength(0)
+  })
+
+  it('lists views with no workspace open, where they are the main switch target', async () => {
+    const { provider, layout } = setup({
+      root: null,
+      views: [makeView('workbench.view.terminal.main', 'Terminal')],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    const view = rows(picker).find((i) => i.label === 'Terminal')
+    expect(view).toBeDefined()
+    picker.fireAccept([view!])
+    expect(layout.focusedViews).toEqual(['workbench.view.terminal.main'])
   })
 })

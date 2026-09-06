@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
   type IContextKeyService,
+  type IDisposable,
   type IEditorGroupsService,
   type IFocusableRegistry,
   type IPart,
   type IStorageService,
+  type IViewDescriptorService,
   type IViewsService,
   type IWorkspaceService,
   PartId,
@@ -50,6 +52,15 @@ function makeViewContainerMemory(): IViewContainerMemoryService {
   return new ViewContainerMemoryService()
 }
 
+/** Only the two reads focusView makes; `collapsed` seeds the initial state. */
+function makeViewDescriptors(collapsed = false): IViewDescriptorService {
+  return {
+    _serviceBrand: undefined,
+    getViewState: vi.fn(() => ({ collapsed })),
+    setViewCollapsed: vi.fn(),
+  } as unknown as IViewDescriptorService
+}
+
 function makeEditorGroups(): IEditorGroupsService {
   return {
     _serviceBrand: undefined,
@@ -79,6 +90,7 @@ function newSvc(storage: IStorageService = makeStorage()): LayoutService {
     makeEditorGroups(),
     makeContextKeyService(),
     makeWorkspace(),
+    makeViewDescriptors(),
   )
 }
 
@@ -168,57 +180,123 @@ describe('LayoutService — focus routing', () => {
   const CONTAINER_ID = 'workbench.view.focusProbe'
   const VIEW_ID = 'workbench.view.focusProbe.main'
 
-  it('focusView does not recurse when the part remembers that same view', async () => {
-    // Regression: focusView -> focusPart -> "focus the part's last focused
-    // view" -> focusView ... blew the stack whenever the remembered view was
-    // the one being focused, which is true for any view the user has already
-    // focused once (e.g. Show Swarm Reviews after clicking into the view).
-    const containerDisposable = ViewContainerRegistry.registerViewContainer({
+  /** Register the probe container + view; caller disposes what comes back. */
+  function registerProbeView(): IDisposable {
+    const container = ViewContainerRegistry.registerViewContainer({
       id: CONTAINER_ID,
       label: 'Focus Probe',
       icon: 'window',
       order: 99,
       location: ViewContainerLocation.SideBar,
     })
-    const viewDisposable = ViewRegistry.registerView({
+    const view = ViewRegistry.registerView({
       id: VIEW_ID,
       name: 'Focus Probe',
       containerId: CONTAINER_ID,
       componentKey: 'focusProbe.main',
       order: 1,
     })
+    return {
+      dispose() {
+        view.dispose()
+        container.dispose()
+      },
+    }
+  }
 
-    const memory = new ViewContainerMemoryService()
-    memory.setLastFocusedView(CONTAINER_ID, VIEW_ID)
-    const views = {
+  function makeProbeViews(): IViewsService {
+    return {
       _serviceBrand: undefined,
       openViewContainer: vi.fn(),
       getActiveViewContainerId: vi.fn(() => CONTAINER_ID),
     } as unknown as IViewsService
-    const element = { focus: vi.fn() }
-    const registry = {
+  }
+
+  /** Registry that always resolves to `element` — never a real DOM node here. */
+  function makeRegistryFor(element: unknown): IFocusableRegistry {
+    return {
       _serviceBrand: undefined,
       register: vi.fn(() => ({ dispose() {} })),
       get: vi.fn(() => () => element),
       onDidChange: Event.None,
     } as unknown as IFocusableRegistry
+  }
 
+  function newFocusSvc(
+    registry: IFocusableRegistry,
+    viewDescriptors: IViewDescriptorService,
+    memory: ViewContainerMemoryService = new ViewContainerMemoryService(),
+  ): LayoutService {
     const svc = new LayoutService(
       makeStorage(),
-      views,
+      makeProbeViews(),
       registry,
       memory as unknown as IViewContainerMemoryService,
       makeEditorGroups(),
       makeContextKeyService(),
       makeWorkspace(),
+      viewDescriptors,
     )
-    const part = makePart(PartId.SideBar)
-    svc.registerPart(part)
+    svc.registerPart(makePart(PartId.SideBar))
+    return svc
+  }
 
-    await expect(svc.focusView(VIEW_ID, { timeoutMs: 200 })).resolves.toBe(true)
-    expect(element.focus).toHaveBeenCalledTimes(1)
+  it('focusView does not recurse when the part remembers that same view', async () => {
+    // Regression: focusView -> focusPart -> "focus the part's last focused
+    // view" -> focusView ... blew the stack whenever the remembered view was
+    // the one being focused, which is true for any view the user has already
+    // focused once (e.g. Show Swarm Reviews after clicking into the view).
+    const registered = registerProbeView()
+    const memory = new ViewContainerMemoryService()
+    memory.setLastFocusedView(CONTAINER_ID, VIEW_ID)
+    const element = { focus: vi.fn() }
+    const svc = newFocusSvc(makeRegistryFor(element), makeViewDescriptors(), memory)
 
-    containerDisposable.dispose()
-    viewDisposable.dispose()
+    // False, not true: the fake element is not a real DOM node, so focus never
+    // lands on it and focusView correctly reports that. What this test guards
+    // is that it *returns* at all rather than blowing the stack.
+    await expect(svc.focusView(VIEW_ID, { timeoutMs: 200 })).resolves.toBe(false)
+    expect(element.focus).toHaveBeenCalled()
+
+    registered.dispose()
+  })
+
+  // A collapsed pane renders its view into a display:none subtree, so the
+  // registry hands back an element the browser refuses to focus. Expanding is
+  // part of focusView's contract rather than each caller's job.
+  it('expands the view when it is collapsed', async () => {
+    const registered = registerProbeView()
+    const viewDescriptors = makeViewDescriptors(true)
+    const svc = newFocusSvc(makeRegistryFor({ focus: vi.fn() }), viewDescriptors)
+
+    await svc.focusView(VIEW_ID, { timeoutMs: 50 })
+
+    expect(viewDescriptors.setViewCollapsed).toHaveBeenCalledWith(VIEW_ID, false)
+    registered.dispose()
+  })
+
+  it('leaves an already-expanded view alone', async () => {
+    const registered = registerProbeView()
+    const viewDescriptors = makeViewDescriptors(false)
+    const svc = newFocusSvc(makeRegistryFor({ focus: vi.fn() }), viewDescriptors)
+
+    await svc.focusView(VIEW_ID, { timeoutMs: 50 })
+
+    expect(viewDescriptors.setViewCollapsed).not.toHaveBeenCalled()
+    registered.dispose()
+  })
+
+  it('resolves false when no focusable element ever registers', async () => {
+    const registered = registerProbeView()
+    const registry = {
+      _serviceBrand: undefined,
+      register: vi.fn(() => ({ dispose() {} })),
+      get: vi.fn(() => undefined),
+      onDidChange: Event.None,
+    } as unknown as IFocusableRegistry
+    const svc = newFocusSvc(registry, makeViewDescriptors())
+
+    await expect(svc.focusView(VIEW_ID, { timeoutMs: 50 })).resolves.toBe(false)
+    registered.dispose()
   })
 })

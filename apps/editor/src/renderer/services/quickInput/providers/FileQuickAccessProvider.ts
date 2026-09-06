@@ -12,7 +12,10 @@
  *  merges the hits, so files outside the cached subset remain findable.
  *  Open editors (all types, MRU order) head the empty-query list and
  *  join fuzzy matching while typing, followed by recent files; with no workspace
- *  it falls back to the recent files list. Mirrors VSCode's file quick access,
+ *  it falls back to the recent files list. Views (Explorer, Terminal, Output…)
+ *  are matched too, so Ctrl+P reaches any switch target — but only when the user
+ *  types: they would otherwise crowd out files in the empty-query list, which is
+ *  a "recent files" list by convention. Mirrors VSCode's file quick access,
  *  whose cached-listing fast path is what keeps typing responsive on large trees.
  *--------------------------------------------------------------------------------------------*/
 
@@ -25,8 +28,10 @@ import {
   IFileSearchService,
   IFileService,
   IInstantiationService,
+  ILayoutService,
   ILoggerService,
   IUriIdentityService,
+  IViewDescriptorService,
   IWorkspaceService,
   URI,
   createNamedLogger,
@@ -54,11 +59,13 @@ import {
 import { IFocusScopeService } from '../../focus/FocusScopeService.js'
 import {
   decodeEditorPickId,
+  decodeViewPickId,
   encodeEditorPickId,
-  IRecentEditorsService,
-} from '../../editor/RecentEditorsService.js'
+  IRecentTargetsService,
+} from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
+import { createViewPickItem } from '../viewQuickPick.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
 // Above this pool size the per-keystroke scan leaves the input event and runs
@@ -114,8 +121,9 @@ function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPick
   return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
 }
 
-/** An open editor as a pick candidate: the pick itself plus the strings the
- *  fuzzy scorer matches against (label + path, mirroring file entries). */
+/** An open editor or a view as a pick candidate: the pick itself plus the
+ *  strings the fuzzy scorer matches against (label + path, mirroring file
+ *  entries). */
 interface EditorPickCandidate {
   readonly pick: IQuickPickItem
   readonly name: string
@@ -176,8 +184,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IFileService private readonly _fileService: IFileService,
-    @IRecentEditorsService private readonly _recentEditors: IRecentEditorsService,
+    @IRecentTargetsService private readonly _recentTargets: IRecentTargetsService,
     @IClosedEditorsService private readonly _closedEditors: IClosedEditorsService,
+    @IViewDescriptorService private readonly _viewDescriptors: IViewDescriptorService,
+    @ILayoutService private readonly _layout: ILayoutService,
     @IInstantiationService private readonly _inst: IInstantiationService,
     @ILoggerService loggerService: ILoggerService,
     @IFocusScopeService private readonly _focus: IFocusScopeService,
@@ -201,7 +211,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   private _buildEditorCandidates(root: URI | undefined): EditorPickCandidate[] {
     const out: EditorPickCandidate[] = []
     const seen = new Set<string>()
-    for (const { editor, group } of this._recentEditors.getRecentEditors()) {
+    // Views are switch targets too, but they are built separately
+    // (`_buildViewCandidates`) so only the editor half seeds the empty query.
+    for (const target of this._recentTargets.getRecentTargets()) {
+      if (target.kind !== 'editor') continue
+      const { editor, group } = target
       const resource = editor.resource
       const id = resource ? resource.toString() : encodeEditorPickId(group.id, editor.id)
       if (seen.has(id)) continue
@@ -244,6 +258,16 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       })
     }
     return out
+  }
+
+  /** Visible views (MRU order) as pick candidates. Matched against the view name
+   *  and its container label, so "term" finds Terminal and "panel" is not
+   *  required to know which container a view lives in. */
+  private _buildViewCandidates(): EditorPickCandidate[] {
+    return this._recentTargets.getRecentViews().map((descriptor) => {
+      const pick = createViewPickItem(descriptor, this._viewDescriptors)
+      return { pick, name: pick.label, path: pick.description ?? pick.label }
+    })
   }
 
   /** Activate the editor if already open in any group, else open it via the
@@ -336,6 +360,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     opts: { addRecent: boolean; pinned: boolean; openToSide: boolean },
   ): void {
     if (!pick) return
+    const viewId = decodeViewPickId(pick.id)
+    if (viewId !== undefined) {
+      // focusView owns the whole reveal: active container, hosting part, and the
+      // view's own collapsed state — no need to expand anything here first.
+      void this._layout.focusView(viewId, { source: 'command' })
+      return
+    }
     const decoded = decodeEditorPickId(pick.id)
     if (decoded) {
       const group = this._groups.getGroup(decoded.groupId)
@@ -367,9 +398,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     // Open editors (all types, MRU order) participate both as the head of the
     // empty-query list and as fuzzy-match candidates while typing — mirroring
-    // VSCode, where Ctrl+P mixes open editors with recent files.
+    // VSCode, where Ctrl+P mixes open editors with recent files. Views join the
+    // matching only, never the empty-query list (see the file header).
     const editorCandidates = this._buildEditorCandidates(root)
     const editorPicks = editorCandidates.map((c) => c.pick)
+    const matchCandidates = [...editorCandidates, ...this._buildViewCandidates()]
 
     let recentFileItems: readonly IQuickPickItem[] = []
     const emptyQueryItems = (): IQuickPickItem[] => {
@@ -393,13 +426,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // it. Reset whenever a fresh listing lands.
     let lastCompleted: { pattern: string; entries: readonly MentionFileEntry[] } | undefined
 
-    // Fuzzy match over the open-editor candidates only — used both as the
-    // editor tier of the full filter and as the cold-cache fallback list.
+    // Fuzzy match over the open-editor and view candidates only — used both as
+    // the non-file tier of the full filter and as the cold-cache fallback list.
     const matchEditors = (
       pattern: string,
     ): { pick: IQuickPickItem; score: number; path: string }[] => {
       const hits: { pick: IQuickPickItem; score: number; path: string }[] = []
-      for (const cand of editorCandidates) {
+      for (const cand of matchCandidates) {
         const score = scoreFileMatch(cand.name, cand.path, pattern)
         if (score >= 0) hits.push({ pick: cand.pick, score, path: cand.path })
       }
@@ -693,6 +726,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     picker.placeholder = localize('quickInput.openRecentFile.placeholder', 'Open Recent File…')
 
     const editorPicks = this._buildEditorCandidates(undefined).map((c) => c.pick)
+    // Panel-side filtering here (no `filterExternally`), so views are part of the
+    // item list rather than appearing only once a query is typed. Harmless with
+    // no workspace open: the list is short, and views are then the main thing
+    // worth switching to.
+    const viewPicks = this._buildViewCandidates().map((c) => c.pick)
 
     disposables.add(
       picker.onDidAccept((items) => {
@@ -716,6 +754,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
             iconId: resourceIconId(f.uri),
           }))
           .filter((it) => !editorIds.has(it.id)),
+        ...viewPicks,
       ]
     })
   }

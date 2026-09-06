@@ -162,6 +162,13 @@ function isSelectable(item: QuickPickInput<IQuickPickItem> | undefined): item is
   return item !== undefined && !isSeparator(item)
 }
 
+// A picker-wide `onItemRemove` handler opts every row into the remove affordance;
+// an item sets `removable: false` to opt back out (e.g. the Ctrl+Tab switcher's
+// view rows, which have nothing to close).
+function canRemove(item: QuickPickInput<IQuickPickItem> | undefined): item is IQuickPickItem {
+  return isSelectable(item) && item.removable !== false
+}
+
 function compareMru(a: IQuickPickItem, b: IQuickPickItem, mruIds: readonly string[]): number {
   const ai = mruIds.indexOf(a.id)
   const bi = mruIds.indexOf(b.id)
@@ -639,7 +646,7 @@ export function QuickPickPanel({
 
   const removeItem = useCallback(
     (item: IQuickPickItem) => {
-      if (!onItemRemove) return
+      if (!onItemRemove || !canRemove(item)) return
       onItemRemove(item)
       setRemovedIds((prev) => {
         const next = new Set(prev)
@@ -650,29 +657,9 @@ export function QuickPickPanel({
     [onItemRemove],
   )
 
-  // Quick navigate mode: release of the modifier accepts the focused item.
-  // Refs let the document keyup listener read the latest state without
-  // re-binding on every focusedIdx change.
-  const sortedFilteredRef = useRef(sortedFiltered)
-  sortedFilteredRef.current = sortedFiltered
-  const focusedIdxRef = useRef(focusedIdx)
-  focusedIdxRef.current = focusedIdx
-  const acceptRef = useRef(accept)
-  acceptRef.current = accept
-
-  useEffect(() => {
-    if (!quickNavigate) return
-    const modifierKey = quickNavigate.modifier === 'ctrl' ? 'Control' : ''
-    if (!modifierKey) return
-    const onKeyUp = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== modifierKey) return
-      const list = sortedFilteredRef.current
-      const item = list[focusedIdxRef.current]
-      if (isSelectable(item)) acceptRef.current([item])
-    }
-    document.addEventListener('keyup', onKeyUp, true)
-    return () => document.removeEventListener('keyup', onKeyUp, true)
-  }, [quickNavigate])
+  // Quick navigate mode keeps the picker open when the modifier is released: the
+  // input box is a real filter box, so accepting on keyup would make it
+  // impossible to type a query. Enter accepts, like every other picker.
 
   const PAGE_SIZE = 8
 
@@ -704,14 +691,14 @@ export function QuickPickPanel({
     } else if (e.key === 'Delete' && onItemRemove) {
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
-      if (isSelectable(item)) removeItem(item)
-    } else if (quickNavigate && onItemRemove && e.key.toLowerCase() === 'x') {
-      // In quick-navigate mode (e.g. Ctrl+Tab editor switcher) the input box is
-      // not used for typing, so `x` can act as a remove shortcut. Scoped to
-      // quickNavigate so ordinary quick picks keep `x` as a search character.
+      if (canRemove(item)) removeItem(item)
+    } else if (quickNavigate && onItemRemove && e.ctrlKey && e.key.toLowerCase() === 'x') {
+      // Ctrl+X removes the focused row in quick-navigate mode (the Ctrl+Tab
+      // switcher, where Ctrl is already down). Gated on ctrlKey because the input
+      // box is a live filter — a bare `x` must type, not close an editor.
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
-      if (isSelectable(item)) removeItem(item)
+      if (canRemove(item)) removeItem(item)
     } else if (e.key === ' ' && canSelectMany && !filterExternally) {
       // Multi-select pickers: Space toggles the focused row's checkbox (VSCode
       // parity). Externally-filtered pickers (the file dialog) are exempt — their
@@ -956,7 +943,7 @@ export function QuickPickPanel({
                           {renderIcon?.(btn.iconId, 14, styles['itemButtonIcon'])}
                         </span>
                       ))}
-                      {onItemRemove && (
+                      {onItemRemove && canRemove(item) && (
                         <span
                           role="button"
                           aria-label={localize('quickInput.removeFromList', 'Remove from list')}

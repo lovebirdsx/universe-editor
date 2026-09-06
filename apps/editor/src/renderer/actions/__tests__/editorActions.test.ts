@@ -14,10 +14,14 @@ import {
   MenuRegistry,
   ServiceCollection,
   URI,
+  ViewContainerLocation,
   registerAction2,
   type IDisposable,
+  type IViewDescriptorService,
 } from '@universe-editor/platform'
 import {
+  buildRecentTargetPickItems,
+  computeInitialSelectionIndex,
   CloseActiveEditorAction,
   CloseAllEditorsAction,
   CloseEditorsInGroupAction,
@@ -36,6 +40,8 @@ import {
   MoveEditorRightInGroupAction,
   NextEditorAction,
   PreviousEditorAction,
+  QuickOpenRecentEditorAction,
+  QuickOpenRecentEditorReverseAction,
   SplitEditorDownAction,
   SplitEditorLeftAction,
   SplitEditorRightAction,
@@ -46,6 +52,10 @@ import { EditorGroupsService } from '../../services/editor/EditorGroupsService.j
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
+import type {
+  IRecentTargetsService,
+  RecentTarget,
+} from '../../services/editor/RecentTargetsService.js'
 
 class TestEditor extends EditorInput {
   constructor(private readonly _name: string) {
@@ -710,5 +720,143 @@ describe('FocusActiveEditorGroupAction', () => {
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(new TestEditor('x'))
     expect(() => exec(FocusActiveEditorGroupAction, svc)).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ctrl+Tab picker: editors and views in one recency list
+// ---------------------------------------------------------------------------
+
+describe('quick-open recent targets', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length) disposables.pop()!.dispose()
+  })
+
+  const explorerContainer = {
+    id: 'workbench.view.explorer',
+    label: 'Explorer',
+    icon: 'files',
+    order: 0,
+    location: ViewContainerLocation.SideBar,
+  }
+
+  function makeViewDescriptors(
+    containerByView: Record<string, typeof explorerContainer | undefined>,
+  ): IViewDescriptorService {
+    return {
+      getViewContainerByViewId: (viewId: string) => containerByView[viewId],
+    } as unknown as IViewDescriptorService
+  }
+
+  function makeRecentTargets(targets: readonly RecentTarget[]): IRecentTargetsService {
+    return { getRecentTargets: () => targets } as IRecentTargetsService
+  }
+
+  function viewTarget(id: string, icon?: string): RecentTarget {
+    return {
+      kind: 'view',
+      descriptor: {
+        id,
+        name: id,
+        containerId: explorerContainer.id,
+        componentKey: id,
+        order: 0,
+        ...(icon ? { icon } : {}),
+      },
+    }
+  }
+
+  it('view rows opt out of removal and carry their container label', () => {
+    const items = buildRecentTargetPickItems(
+      makeRecentTargets([viewTarget('tree', 'files')]),
+      makeViewDescriptors({ tree: explorerContainer }),
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0]!.removable).toBe(false)
+    expect(items[0]!.description).toBe('Explorer')
+    expect(items[0]!.iconId).toBe('files')
+  })
+
+  it('a view without its own icon falls back to the container icon', () => {
+    const items = buildRecentTargetPickItems(
+      makeRecentTargets([viewTarget('tree')]),
+      makeViewDescriptors({ tree: explorerContainer }),
+    )
+    expect(items[0]!.iconId).toBe('files')
+  })
+
+  it('a view with no resolvable container omits the description', () => {
+    const items = buildRecentTargetPickItems(
+      makeRecentTargets([viewTarget('orphan')]),
+      makeViewDescriptors({}),
+    )
+    expect(items[0]!.description).toBeUndefined()
+    expect(items[0]!.removable).toBe(false)
+  })
+
+  it('editor rows stay removable', () => {
+    const svc = new EditorGroupsService()
+    const editor = new TestEditor('a')
+    svc.activeGroup.openEditor(editor)
+    const items = buildRecentTargetPickItems(
+      makeRecentTargets([{ kind: 'editor', editor, group: svc.activeGroup }]),
+      makeViewDescriptors({}),
+    )
+    expect(items[0]!.removable).toBeUndefined()
+  })
+
+  it('highlights the entry after the current one', () => {
+    const items = [
+      { id: 'a', label: 'a' },
+      { id: 'b', label: 'b' },
+      { id: 'c', label: 'c' },
+    ]
+    expect(computeInitialSelectionIndex(items, 'a', false)).toBe(1)
+    expect(computeInitialSelectionIndex(items, 'b', false)).toBe(2)
+  })
+
+  it('reverse direction highlights the entry before the current one, wrapping', () => {
+    const items = [
+      { id: 'a', label: 'a' },
+      { id: 'b', label: 'b' },
+      { id: 'c', label: 'c' },
+    ]
+    expect(computeInitialSelectionIndex(items, 'b', true)).toBe(0)
+    expect(computeInitialSelectionIndex(items, 'a', true)).toBe(2)
+  })
+
+  it('falls back to "index 0 is here" when the current target is not listed', () => {
+    // Focus parked on the activity bar / status bar: nothing in the list matches.
+    const items = [
+      { id: 'a', label: 'a' },
+      { id: 'b', label: 'b' },
+      { id: 'c', label: 'c' },
+    ]
+    expect(computeInitialSelectionIndex(items, undefined, false)).toBe(1)
+    expect(computeInitialSelectionIndex(items, 'missing', false)).toBe(1)
+    expect(computeInitialSelectionIndex(items, undefined, true)).toBe(2)
+  })
+
+  it('does not divide by zero on an empty list', () => {
+    expect(computeInitialSelectionIndex([], undefined, false)).toBe(0)
+  })
+
+  it('both directions are registered and usable without an editor open', () => {
+    disposables.push(registerAction2(QuickOpenRecentEditorAction))
+    disposables.push(registerAction2(QuickOpenRecentEditorReverseAction))
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+tab')).toBe(QuickOpenRecentEditorAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+tab')).toBe(
+      QuickOpenRecentEditorReverseAction.ID,
+    )
+    // The picker also lists views, so it must not be gated on `editorIsOpen`.
+    // A precondition would be ANDed into the command palette entry's when-clause.
+    for (const id of [QuickOpenRecentEditorAction.ID, QuickOpenRecentEditorReverseAction.ID]) {
+      const entry = MenuRegistry.getMenuItems(MenuId.CommandPalette).find(
+        (i) => 'command' in i && i.command === id,
+      )
+      expect(entry).toBeDefined()
+      expect((entry as { when?: unknown }).when).toBeUndefined()
+    }
   })
 })

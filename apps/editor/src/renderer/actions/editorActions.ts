@@ -17,8 +17,10 @@ import {
   IEditorGroupsService,
   type IEditorGroup,
   IFocusStackService,
+  ILayoutService,
   IQuickInputService,
   type IQuickPickItem,
+  IViewDescriptorService,
   MenuId,
   PartId,
   localize,
@@ -34,10 +36,13 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { openPreviewInGroup } from '../services/editor/openPreviewInGroup.js'
 import {
   decodeEditorPickId,
+  decodeViewPickId,
   encodeEditorPickId,
-  IRecentEditorsService,
-} from '../services/editor/RecentEditorsService.js'
+  encodeViewPickId,
+  IRecentTargetsService,
+} from '../services/editor/RecentTargetsService.js'
 import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
+import { createViewPickItem } from '../services/quickInput/viewQuickPick.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
 // ---------------------------------------------------------------------------
@@ -351,12 +356,24 @@ export class MoveEditorRightInGroupAction extends Action2 {
 }
 
 // ---------------------------------------------------------------------------
-// Quick-pick MRU editor switching (Ctrl+Tab / Ctrl+Shift+Tab)
+// Quick-pick MRU switching (Ctrl+Tab / Ctrl+Shift+Tab)
+//
+// Lists editors and views in one recency-ordered picker. Views carry their
+// container's label as description and opt out of the remove affordance —
+// there is nothing to close.
 // ---------------------------------------------------------------------------
 
-function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuickPickItem[] {
+export function buildRecentTargetPickItems(
+  recentService: IRecentTargetsService,
+  viewDescriptors: IViewDescriptorService,
+): IQuickPickItem[] {
   const items: IQuickPickItem[] = []
-  for (const { editor, group } of recentService.getRecentEditors()) {
+  for (const target of recentService.getRecentTargets()) {
+    if (target.kind === 'view') {
+      items.push(createViewPickItem(target.descriptor, viewDescriptors))
+      continue
+    }
+    const { editor, group } = target
     const iconId =
       editor.getIconId?.() ?? (editor.resource ? resourceIconId(editor.resource) : undefined)
     items.push({
@@ -369,46 +386,92 @@ function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuic
   return items
 }
 
-function resolveRecentEditorPick(
+type ResolvedRecentPick =
+  | { kind: 'editor'; group: IEditorGroup; editor: EditorInput }
+  | { kind: 'view'; viewId: string }
+
+function resolveRecentPick(
   groups: IEditorGroupsService,
   id: string,
-): { group: IEditorGroup; editor: EditorInput } | undefined {
+): ResolvedRecentPick | undefined {
+  const viewId = decodeViewPickId(id)
+  if (viewId !== undefined) return { kind: 'view', viewId }
   const decoded = decodeEditorPickId(id)
   if (!decoded) return undefined
   const group = groups.getGroup(decoded.groupId)
   if (!group) return undefined
   const editor = group.editors.find((e) => e.id === decoded.editorId)
   if (!editor) return undefined
-  return { group, editor }
+  return { kind: 'editor', group, editor }
+}
+
+/**
+ * Index to highlight when the picker opens: one step away from wherever the
+ * user currently is, so a single Ctrl+Tab lands on the previous target. Falls
+ * back to the classic "index 0 is here" assumption when the current location
+ * isn't in the list (focus parked on the activity bar / status bar, say).
+ */
+export function computeInitialSelectionIndex(
+  items: readonly IQuickPickItem[],
+  currentId: string | undefined,
+  reverse: boolean,
+): number {
+  if (items.length === 0) return 0
+  const currentIdx = currentId === undefined ? -1 : items.findIndex((i) => i.id === currentId)
+  const from = currentIdx === -1 ? 0 : currentIdx
+  const step = reverse ? -1 : 1
+  return (((from + step) % items.length) + items.length) % items.length
 }
 
 async function runQuickOpenRecentEditor(
   accessor: ServicesAccessor,
   reverse: boolean,
 ): Promise<void> {
+  // Read every service synchronously — the accessor is invalidated after await.
   const groups = accessor.get(IEditorGroupsService)
-  const recentService = accessor.get(IRecentEditorsService)
+  const recentService = accessor.get(IRecentTargetsService)
+  const viewDescriptors = accessor.get(IViewDescriptorService)
+  const layoutService = accessor.get(ILayoutService)
   const quickInput = accessor.get(IQuickInputService)
   const focusStack = accessor.get(IFocusStackService)
   const dialogService = accessor.get(IDialogService)
   const contextKeyService = accessor.get(IContextKeyService)
 
-  const items = buildRecentEditorPickItems(recentService)
+  const items = buildRecentTargetPickItems(recentService, viewDescriptors)
   if (items.length <= 1) return
 
-  const initialSelectionIndex = reverse ? items.length - 1 : 1
+  const focusedViewId = focusStack.getTop()?.viewId
+  const activeEditor = groups.activeGroup.activeEditor
+  const currentId = focusedViewId
+    ? encodeViewPickId(focusedViewId)
+    : activeEditor
+      ? encodeEditorPickId(groups.activeGroup.id, activeEditor.id)
+      : undefined
+
+  const initialSelectionIndex = computeInitialSelectionIndex(items, currentId, reverse)
   const picked = await quickInput.pick(items, {
-    placeholder: localize('quickOpenRecentEditor.placeholder', 'Recently Used Editors'),
+    placeholder: localize('quickOpenRecentEditor.placeholder', 'Recently Used Editors and Views'),
     quickNavigate: { modifier: 'ctrl', initialSelectionIndex },
     onItemRemove: (item) => {
-      const target = resolveRecentEditorPick(groups, item.id)
-      if (target) void closeEditorWithConfirm(target.editor, target.group, dialogService)
+      // Views have nothing to close; the panel already hides their ✕ via
+      // `removable: false`, this guards programmatic callers.
+      if (decodeViewPickId(item.id) !== undefined) return
+      const target = resolveRecentPick(groups, item.id)
+      if (target?.kind === 'editor')
+        void closeEditorWithConfirm(target.editor, target.group, dialogService)
     },
   })
   if (!picked) return
 
-  const target = resolveRecentEditorPick(groups, picked.id)
+  const target = resolveRecentPick(groups, picked.id)
   if (!target) return
+
+  if (target.kind === 'view') {
+    // focusView owns the whole reveal: active container, hosting part, and the
+    // view's own collapsed state — no need to expand anything here first.
+    await layoutService.focusView(target.viewId, { source: 'command' })
+    return
+  }
 
   groups.activateGroup(target.group)
   target.group.setActive(target.editor)
@@ -420,10 +483,9 @@ export class QuickOpenRecentEditorAction extends Action2 {
   constructor() {
     super({
       id: QuickOpenRecentEditorAction.ID,
-      title: localize2('action.quickOpenRecentEditor.title', 'Open Recently Used Editor'),
+      title: localize2('action.quickOpenRecentEditor.title', 'Open Recently Used Editor or View'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+tab', when: '!quickInputVisible' },
-      precondition: 'editorIsOpen',
       f1: true,
     })
   }
@@ -439,11 +501,10 @@ export class QuickOpenRecentEditorReverseAction extends Action2 {
       id: QuickOpenRecentEditorReverseAction.ID,
       title: localize2(
         'action.quickOpenRecentEditorReverse.title',
-        'Open Least Recently Used Editor',
+        'Open Least Recently Used Editor or View',
       ),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+tab', when: '!quickInputVisible' },
-      precondition: 'editorIsOpen',
       f1: true,
     })
   }
