@@ -85,6 +85,7 @@ export class KillProcessAction extends Action2 {
   constructor() {
     super({
       id: KillProcessAction.ID,
+      icon: 'kill',
       title: localize2('processExplorer.killProcess', 'Kill Process'),
       menu: [{ id: MenuId.ProcessExplorerContext, group: '1_kill', order: 1 }],
       f1: false,
@@ -102,6 +103,7 @@ export class ForceKillProcessAction extends Action2 {
   constructor() {
     super({
       id: ForceKillProcessAction.ID,
+      icon: 'force-kill',
       title: localize2('processExplorer.forceKillProcess', 'Force Kill Process'),
       // SIGKILL does not exist on Windows — terminate is always forceful there,
       // so this entry is only shown on macOS/Linux.
@@ -121,6 +123,7 @@ export class CopyProcessAction extends Action2 {
   constructor() {
     super({
       id: CopyProcessAction.ID,
+      icon: 'copy',
       title: localize2('processExplorer.copyProcess', 'Copy'),
       menu: [{ id: MenuId.ProcessExplorerContext, group: '2_copy', order: 1 }],
       f1: false,
@@ -140,6 +143,7 @@ export class CopyAllProcessesAction extends Action2 {
   constructor() {
     super({
       id: CopyAllProcessesAction.ID,
+      icon: 'copy',
       title: localize2('processExplorer.copyAllProcesses', 'Copy All'),
       menu: [{ id: MenuId.ProcessExplorerContext, group: '2_copy', order: 2 }],
       f1: false,

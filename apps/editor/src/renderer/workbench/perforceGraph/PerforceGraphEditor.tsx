@@ -743,17 +743,20 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('perforceGraph.copyId', 'Copy changelist number'),
           run: () => void navigator.clipboard?.writeText(id),
         },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: () => void navigator.clipboard?.writeText(change.body || change.message),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'sparkle',
           label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
           run: () =>
             void commands.executeCommand(SendCommitToAgentChatAction.ID, {
@@ -777,6 +780,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         if (onlyFile !== undefined) {
           items.push({
             kind: 'item',
+            icon: 'compare-changes',
             label: localize('perforceGraph.openChanges', 'Open Changes'),
             run: () => void openScopedFileDiff(id),
           })
@@ -784,6 +788,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         items.push(
           {
             kind: 'item',
+            icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
               void commands.executeCommand(PerforceGraphCommands.syncToChange, {
@@ -794,6 +799,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            icon: 'cloud-download',
             label: localize('perforceGraph.getLatestRevision', 'Get Latest Revision'),
             run: () => {
               // Reuse the extension's multi-select sync path: `(primary, selection)`,
@@ -814,6 +820,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            icon: 'cloud-download',
             label: localize('perforceGraph.getThisRevision', 'Get This Revision'),
             run: () =>
               void commands.executeCommand(PerforceGraphCommands.syncToChange, {
@@ -824,6 +831,7 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            icon: 'cloud-download',
             label: localize('perforceGraph.getRevision', 'Get Revision…'),
             run: () =>
               void (async () => {

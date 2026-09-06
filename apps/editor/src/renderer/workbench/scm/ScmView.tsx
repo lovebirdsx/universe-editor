@@ -59,7 +59,7 @@ import {
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { ResourcePreviewButton } from '../files/ResourcePreviewButton.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import { useService, useObservable } from '../useService.js'
@@ -778,7 +778,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
           ))}
       </span>
       {(() => {
-        const GroupIcon = resolveHeaderIcon(groupIconName(node.groupId))
+        const GroupIcon = resolveIcon(groupIconName(node.groupId))
         return GroupIcon ? (
           <GroupIcon
             size={16}

@@ -12,6 +12,7 @@ import { useMemo } from 'react'
 import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { RemoteConnectionStateDto } from '../../../shared/ipc/remoteStatusService.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useService } from '../useService.js'
 
@@ -54,6 +55,7 @@ export function RemoteContextMenu({ state, onClose }: Props) {
       args={args}
       commandService={commandService}
       contextKeyService={scoped}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

@@ -23,6 +23,7 @@ import {
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import { MoreHorizontal } from 'lucide-react'
 import { useService } from '../useService.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useEditorGroupScopedContextKey } from './useEditorGroupScopedContextKey.js'
 import styles from '../viewContainerHeader/ViewTitleActions.module.css'
@@ -96,6 +97,7 @@ export function EditorTitleActions({ group }: { group: IEditorGroup }) {
           commandService={commandService}
           contextKeyService={ctx}
           groupFilter={(g) => g !== NAVIGATION_GROUP}
+          renderIcon={renderMenuIcon}
           onClose={() => setMenu(null)}
         />
       )}

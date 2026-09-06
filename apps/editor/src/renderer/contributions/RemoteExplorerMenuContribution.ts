@@ -36,6 +36,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
       this._register(
         MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
           command: ConnectToHostAction.ID,
+          icon: 'connect',
           when: `remoteRowKind == '${kind}' && !remoteRowState`,
           group: '1_connect',
           order: 1,
@@ -46,6 +47,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: OpenFolderOnHostAction.ID,
+        icon: 'folder-opened',
         when: "remoteRowState == 'connected'",
         group: '1_connect',
         order: 2,
@@ -54,6 +56,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: RetryConnectionAction.ID,
+        icon: 'retry',
         when: "remoteRowState == 'failed'",
         group: '1_connect',
         order: 3,
@@ -65,6 +68,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
       this._register(
         MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
           command: CloseConnectionAction.ID,
+          icon: 'disconnect',
           when: `remoteRowKind == 'connection' && remoteRowState == '${state}'`,
           group: '2_connection',
           order: 1,
@@ -74,6 +78,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: StopRemoteServerAction.ID,
+        icon: 'stop-server',
         when: "remoteRowKind == 'connection' && remoteRowState == 'connected'",
         group: '2_connection',
         order: 2,
@@ -83,6 +88,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: RemoveManualHostAction.ID,
+        icon: 'trash',
         when: "remoteRowKind == 'sshTarget' && remoteRowManual",
         group: '3_manage',
         order: 1,
@@ -92,6 +98,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: OpenWorkspaceInCurrentWindowAction.ID,
+        icon: 'window',
         when: "remoteRowKind == 'recent'",
         group: '1_open',
         order: 1,
@@ -100,6 +107,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: OpenWorkspaceInNewWindowAction.ID,
+        icon: 'empty-window',
         when: "remoteRowKind == 'recent'",
         group: '1_open',
         order: 2,
@@ -108,6 +116,7 @@ export class RemoteExplorerMenuContribution extends Disposable implements IWorkb
     this._register(
       MenuRegistry.addMenuItem(MenuId.RemoteExplorerContext, {
         command: RemoveRecentWorkspaceAction.ID,
+        icon: 'remove',
         when: "remoteRowKind == 'recent'",
         group: '3_manage',
         order: 2,

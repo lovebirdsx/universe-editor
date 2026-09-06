@@ -807,6 +807,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               if (!isPending) {
                 items.push({
                   kind: 'item',
+                  icon: entry.pinned === true ? 'pin-off' : 'pin',
                   label:
                     entry.pinned === true
                       ? localize('acp.sessions.unpinMenu', 'Unpin Session')
@@ -815,6 +816,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 })
                 items.push({
                   kind: 'item',
+                  icon: entry.archived === true ? 'archive-restore' : 'archive',
                   label:
                     entry.archived === true
                       ? localize('acp.sessions.unarchiveMenu', 'Unarchive Session')
@@ -824,12 +826,14 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
                 if (onRename) {
                   items.push({
                     kind: 'item',
+                    icon: 'edit',
                     label: localize('acp.sessions.renameMenu', 'Rename Session'),
                     run: onRename,
                   })
                 }
                 items.push({
                   kind: 'item',
+                  icon: 'reveal',
                   label: localize('acp.sessions.revealTranscript', 'Open Session Location'),
                   disabled: !hasTranscript || revealUnsupported,
                   run: onReveal,
@@ -838,6 +842,7 @@ export function SessionListBody({ hideEmptyState, scrollStateKey, onPick }: Sess
               }
               items.push({
                 kind: 'item',
+                icon: 'trash',
                 label: localize('acp.sessions.removeMenu', 'Delete Session'),
                 danger: true,
                 run: onRemove,

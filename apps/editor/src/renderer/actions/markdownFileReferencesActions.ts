@@ -45,6 +45,7 @@ export class FindMarkdownFileReferencesAction extends Action2 {
   constructor() {
     super({
       id: FindMarkdownFileReferencesAction.ID,
+      icon: 'go-to-file',
       title: localize2('action.markdown.findFileReferences', 'Find File References'),
       category: CATEGORY,
       menu: [

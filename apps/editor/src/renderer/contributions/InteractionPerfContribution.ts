@@ -104,7 +104,6 @@ export class InteractionPerfContribution extends Disposable implements IWorkbenc
     const count = this._slowTimestamps.length
     const entry: IStatusBarEntry = {
       text: `$(pulse) ${count}`,
-      icon: 'pulse',
       kind: 'prominent',
       tooltip: localize(
         'performance.responsiveness.statusbar.tooltip',

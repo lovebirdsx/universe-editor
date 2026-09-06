@@ -45,7 +45,8 @@ import {
 import { timelineFollowTarget } from '../../services/timeline/followTarget.js'
 import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
 import { FileIcon } from '../files/fileIconTheme.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { FileDiff, GitCommitHorizontal, Waypoints, type LucideIcon } from 'lucide-react'
 import { timelineViewState } from './timelineViewState.js'
 import styles from './TimelineView.module.css'
@@ -61,7 +62,7 @@ const ROW_ICON_MAP: Record<string, LucideIcon> = {
 
 function resolveRowIcon(themeIcon: string | undefined): LucideIcon | undefined {
   if (!themeIcon) return undefined
-  return ROW_ICON_MAP[themeIcon] ?? resolveHeaderIcon(themeIcon)
+  return ROW_ICON_MAP[themeIcon] ?? resolveIcon(themeIcon)
 }
 
 // Inline row actions, keyed by the owning provider's (source, contextValue)
@@ -454,6 +455,7 @@ export function TimelineView() {
           args={[menu.item]}
           commandService={commandService}
           contextKeyService={menu.scoped}
+          renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}
           onClose={closeMenu}
         />

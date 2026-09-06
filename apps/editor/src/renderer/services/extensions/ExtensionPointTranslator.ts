@@ -205,7 +205,7 @@ export class ExtensionPointTranslator extends Disposable {
       })
       this._guardContribution(ext.id, 'menu', () => {
         if (contributes.menus) {
-          this._registerMenus(contributes.menus, contributes.submenus ?? [])
+          this._registerMenus(contributes.menus, contributes.submenus ?? [], contributes.commands)
         }
       })
       this._guardContribution(ext.id, 'keybinding', () => {
@@ -442,8 +442,16 @@ export class ExtensionPointTranslator extends Disposable {
   private _registerMenus(
     menus: Record<string, IMenuContribution[]>,
     submenus: readonly ISubmenuContribution[],
+    commands: readonly ICommandContribution[] | undefined,
   ): void {
     const submenuById = new Map(submenus.map((s) => [s.id, s]))
+    // VSCode parity: a menu item without its own `icon` inherits the one its
+    // command declared, so an extension states a command's glyph once.
+    const commandIconById = new Map(
+      (commands ?? [])
+        .filter((c) => c.icon !== undefined)
+        .map((c) => [c.command, c.icon as string]),
+    )
     for (const [key, items] of Object.entries(menus)) {
       // A menus key is either a well-known location or a declared submenu id
       // (whose children live under the submenu's own id used as a MenuId).
@@ -476,13 +484,14 @@ export class ExtensionPointTranslator extends Disposable {
           console.warn(`[extensions] ignoring menu item with neither command nor submenu`)
           continue
         }
+        const icon = item.icon ?? commandIconById.get(item.command)
         this._register(
           MenuRegistry.addMenuItem(menuId, {
             command: item.command,
             ...(item.when !== undefined ? { when: item.when } : {}),
             ...(group !== undefined ? { group } : {}),
             ...(order !== undefined ? { order } : {}),
-            ...(item.icon !== undefined ? { icon: item.icon } : {}),
+            ...(icon !== undefined ? { icon } : {}),
           }),
         )
       }

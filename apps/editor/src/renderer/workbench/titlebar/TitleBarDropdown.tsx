@@ -8,7 +8,7 @@
 import { Fragment, useState } from 'react'
 import { MenuId, localize } from '@universe-editor/platform'
 import { useMenuItems, type ResolvedMenuSection } from './useTitleBarMenus.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import styles from './TitleBar.module.css'
 
 interface DropdownContentsProps {
@@ -33,7 +33,7 @@ export function DropdownContents({ sections, onExecute }: DropdownContentsProps)
           {sectionIdx > 0 && <div className={styles['separator']} />}
           {section.items.map((item, itemIdx) => {
             const showIconColumn = section.items.some((entry) => entry.icon !== undefined)
-            const Icon = resolveHeaderIcon(item.icon)
+            const Icon = resolveIcon(item.icon)
             const iconCell = showIconColumn ? (
               <span className={styles['dropdown-icon-cell']} aria-hidden="true">
                 {Icon ? <Icon size={14} strokeWidth={1.75} /> : null}

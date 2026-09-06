@@ -133,7 +133,7 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 - **改 view 移动命令的交互**：`actions/viewActions.ts`（QuickPick 流程）；要让标题栏 action 拿到 viewId 看 `ViewTitleActions.tsx` 的 context key 传参。
 - **某 view 不该被拖走**：注册描述符设 `canMoveView: false`（静态层），UI 的 `draggable` 与命令的目标过滤都已尊重它。
 - **加新 View/Container（让它出现在系统里）**：套路 B 三件套，**不是**这个 service 的事。
-- **生成容器图标不对**：`workbench/activitybar/icon-map.ts`（`window: AppWindow`）/ `viewContainerHeader/icon-map.ts`。
+- **生成容器图标不对**：`workbench/activitybar/icon-map.ts`（`window: AppWindow`）/ `icons/icon-map.ts`。
 
 ## 尺寸持久化与折叠语义（对标 VSCode SplitView）
 

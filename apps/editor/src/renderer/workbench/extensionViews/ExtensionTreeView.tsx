@@ -44,7 +44,8 @@ import { useOptionalService, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 import { ITreeViewsService } from '../../services/extensions/TreeViewsService.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import type { IViewComponentProps } from '../../services/views/ViewComponentRegistry.js'
 import styles from './ExtensionTreeView.module.css'
 
@@ -238,7 +239,7 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
         ariaLabel={ariaLabel}
         renderRow={(ctx) => {
           const item = ctx.node.element
-          const RowIcon: LucideIcon | undefined = resolveHeaderIcon(item.iconId)
+          const RowIcon: LucideIcon | undefined = resolveIcon(item.iconId)
           const className = [
             styles['row'],
             ctx.isSelected && styles['selected'],
@@ -311,6 +312,7 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
             treeViews.executeTreeItemCommand(viewId, menu.item.handle, commandId)
           }
           contextKeyService={menu.scoped}
+          renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}
           onClose={closeMenu}
         />

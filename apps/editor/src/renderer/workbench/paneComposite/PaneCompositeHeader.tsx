@@ -26,7 +26,7 @@ import { useService, useObservable } from '../useService.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { VIEW_DRAG_MIME, dragContainsView, viewDragData } from '../dnd/viewDragData.js'
 import { applyViewDrop } from '../dnd/applyViewDrop.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { resolveContainerIconName } from '../icons/resolveContainerIcon.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
@@ -136,7 +136,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
     >
       <div className={styles['tabs']}>
         {containers.map((c) => {
-          const Icon = resolveHeaderIcon(resolveContainerIconName(c, viewDescriptors))
+          const Icon = resolveIcon(resolveContainerIconName(c, viewDescriptors))
           const active = c.id === activeId
           const edge = dropTarget?.id === c.id ? dropTarget.edge : undefined
           const tabClass = [

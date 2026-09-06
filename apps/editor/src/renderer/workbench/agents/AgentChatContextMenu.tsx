@@ -6,6 +6,7 @@
 
 import { type ICommandService, type IContextKeyService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export interface AgentChatContextMenuState {
   readonly x: number
@@ -42,6 +43,7 @@ export function AgentChatContextMenu({
       commandService={commandService}
       {...(contextKeyService !== undefined ? { contextKeyService } : {})}
       autoFocusFirst={state.keyboard ?? false}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

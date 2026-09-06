@@ -9,9 +9,11 @@
 
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export interface SearchMenuItem {
   readonly label: string
+  readonly icon?: string
   readonly run: () => void
 }
 
@@ -31,7 +33,13 @@ export function SearchResultsContextMenu({
   onClose: () => void
 }) {
   const items = useMemo<readonly ListMenuEntry[]>(
-    () => state.items.map((item) => ({ kind: 'item', label: item.label, run: item.run })),
+    () =>
+      state.items.map((item) => ({
+        kind: 'item',
+        label: item.label,
+        icon: item.icon,
+        run: item.run,
+      })),
     [state.items],
   )
 
@@ -40,6 +48,7 @@ export function SearchResultsContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

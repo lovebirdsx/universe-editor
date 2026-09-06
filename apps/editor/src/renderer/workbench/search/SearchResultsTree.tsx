@@ -348,17 +348,24 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       const items: SearchMenuItem[] = []
       if (n.kind === 'match') {
         items.push({
+          icon: 'copy',
           label: localize('search.menu.copy', 'Copy'),
           run: () => void navigator.clipboard?.writeText(n.match.preview.trim()),
         })
         if (onDismissMatch)
-          items.push({ label: localize('search.menu.remove', 'Remove'), run: () => dismissNode(n) })
+          items.push({
+            icon: 'remove',
+            label: localize('search.menu.remove', 'Remove'),
+            run: () => dismissNode(n),
+          })
       } else if (n.kind === 'file') {
         items.push({
+          icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
           run: () => void navigator.clipboard?.writeText(resourceDisplayPath(n.resource)),
         })
         items.push({
+          icon: 'copy',
           label: localize('search.menu.copyAll', 'Copy All'),
           run: () =>
             void navigator.clipboard?.writeText(
@@ -366,9 +373,14 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             ),
         })
         if (onDismissFile)
-          items.push({ label: localize('search.menu.remove', 'Remove'), run: () => dismissNode(n) })
+          items.push({
+            icon: 'remove',
+            label: localize('search.menu.remove', 'Remove'),
+            run: () => dismissNode(n),
+          })
       } else {
         items.push({
+          icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
           run: () => void navigator.clipboard?.writeText(n.relPath),
         })

@@ -10,7 +10,7 @@ import { useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } fr
 import { ChevronDown } from 'lucide-react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import {
   ActionButton,
@@ -175,7 +175,7 @@ export function ScmViewToolbar() {
         onClick={openOverflow}
       >
         {(() => {
-          const Icon = resolveHeaderIcon('more')
+          const Icon = resolveIcon('more')
           return Icon ? <Icon size={16} strokeWidth={1.6} /> : <span>…</span>
         })()}
       </button>

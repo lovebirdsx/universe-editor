@@ -83,7 +83,6 @@ export class StartupPerformanceStatusContribution
     const seconds = (metrics.totalTime / 1000).toFixed(2)
     const entry: IStatusBarEntry = {
       text: `$(dashboard) ${seconds}s`,
-      icon: 'dashboard',
       kind: 'prominent',
       tooltip: localize(
         'performance.statusbar.tooltip',

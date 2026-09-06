@@ -7,17 +7,15 @@
  *  instead of the mouse-only overflow menu it used to render: the ContextMenu
  *  key opened a menu no key could then drive.
  *
- *  Two SCM specifics the shared component takes through props:
- *   - `executeCommand`, because SCM commands carry their own argument shape
- *     (primary + selection / subtree / group descriptor) rather than one `args`
- *     tuple shared by every row kind.
- *   - `renderIcon`, because provider menus (git stage/discard, p4 revert, …)
- *     carry icons; Explorer's menus don't.
+ *  One SCM specific the shared component takes through props: `executeCommand`,
+ *  because SCM commands carry their own argument shape (primary + selection /
+ *  subtree / group descriptor) rather than one `args` tuple shared by every row
+ *  kind.
  *--------------------------------------------------------------------------------------------*/
 
 import { ICommandService, IContextKeyService, type MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useService } from '../useService.js'
 
@@ -36,11 +34,6 @@ export interface ScmContextMenuState {
 
 /** `navigation` items render as inline row buttons, so the menu omits them. */
 const withoutNavigation = (group: string): boolean => group !== 'navigation'
-
-function renderIcon(icon: string | undefined) {
-  const Icon = resolveHeaderIcon(icon)
-  return Icon ? <Icon size={16} strokeWidth={1.6} /> : null
-}
 
 export function ScmContextMenu({
   state,
@@ -63,7 +56,7 @@ export function ScmContextMenu({
       contextKeyService={scopedContext}
       executeCommand={run}
       groupFilter={withoutNavigation}
-      renderIcon={renderIcon}
+      renderIcon={renderMenuIcon}
       autoFocusFirst={keyboard}
       onClose={onClose}
     />

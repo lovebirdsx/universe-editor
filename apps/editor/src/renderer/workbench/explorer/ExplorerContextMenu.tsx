@@ -23,6 +23,7 @@ import {
   type IScmSourceControlModel,
 } from '../../services/extensions/ScmService.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 import { useObservable, useOptionalService } from '../useService.js'
@@ -165,6 +166,7 @@ export function ExplorerContextMenu({
       args={args}
       commandService={commandService}
       {...(scopedContext ? { contextKeyService: scopedContext } : {})}
+      renderIcon={renderMenuIcon}
       autoFocusFirst={state.keyboard ?? false}
       onClose={onClose}
     />

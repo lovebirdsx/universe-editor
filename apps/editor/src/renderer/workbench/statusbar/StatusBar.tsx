@@ -6,18 +6,13 @@ import {
   asCssVariable,
 } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
-import { Bell, Loader2, RefreshCw, Shield, Sparkles, type LucideIcon } from 'lucide-react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { StatusBarComponentRegistry } from '../../services/statusbar/StatusBarComponentRegistry.js'
 import styles from './StatusBar.module.css'
-
-const ICON_MAP: Record<string, LucideIcon> = {
-  bell: Bell,
-  sparkle: Sparkles,
-  shield: Shield,
-}
 
 /** Inline `$(codicon)` syntax anywhere in status-bar text (mirrors VSCode); `~spin` marks a spinning glyph. */
 const CODICON_RE = /\$\(([a-z0-9-]+)(~spin)?\)/gi
@@ -59,7 +54,7 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
     }
   }
 
-  const Icon = entry.icon ? ICON_MAP[entry.icon] : undefined
+  const Icon = resolveIcon(entry.icon)
   const showSpinner = entry.showProgress === true || entry.showProgress === 'spinning'
   const showSyncing = entry.showProgress === 'syncing'
   const label = stripCodicons(entry.text) || entry.tooltip || ''

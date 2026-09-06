@@ -91,46 +91,6 @@
   cursor: help;
 }
 
-.menu {
-  min-width: 180px;
-  margin: 0;
-  padding: 4px 0;
-  list-style: none;
-  background: var(--vscode-menu-background, #252526);
-  color: var(--vscode-menu-foreground, #cccccc);
-  border: 1px solid var(--vscode-menu-border, #454545);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  font-size: 13px;
-  min-height: 0;
-  overflow: auto;
-}
-
-.menuItem {
-  display: flex;
-  align-items: center;
-  padding: 4px 16px;
-  cursor: pointer;
-  color: var(--vscode-menu-foreground, #cccccc);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.menuItem:hover {
-  background: var(--vscode-menu-selectionBackground, #094771);
-  outline: none;
-}
-
-.menuItemDanger {
-  color: var(--vscode-errorForeground, #f48771);
-}
-
-.menuSep {
-  margin: 4px 0;
-  border: none;
-  border-top: 1px solid var(--vscode-menu-separatorBackground, #3c3c3c);
-}
-
 .icon {
   flex-shrink: 0;
   align-self: flex-start;

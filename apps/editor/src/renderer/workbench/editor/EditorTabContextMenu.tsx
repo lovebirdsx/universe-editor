@@ -16,6 +16,7 @@ import {
   type URI,
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 
 interface Props {
@@ -59,6 +60,7 @@ export function EditorTabContextMenu({
       args={args}
       commandService={commandService}
       contextKeyService={scopedContext}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

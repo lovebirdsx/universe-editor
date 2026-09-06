@@ -16,7 +16,7 @@ import { Loader2 } from 'lucide-react'
 import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { useViewTitleActions } from './useViewTitleActions.js'
-import { resolveHeaderIcon } from './icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import styles from './ViewTitleActions.module.css'
 
 interface Props {
@@ -56,7 +56,7 @@ export function ViewTitleActions({ menuId, contextKeyService, group, actionArg }
   return (
     <>
       {actions.map((a) => {
-        const Icon = resolveHeaderIcon(a.icon)
+        const Icon = resolveIcon(a.icon)
         const busy = pending.has(a.command)
         // A busy button keeps its own icon spinning; a command without an icon
         // falls back to a generic spinner so some feedback remains.

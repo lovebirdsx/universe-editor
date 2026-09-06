@@ -251,6 +251,16 @@ entry.dispose()
 
 参考：`src/renderer/contributions/FileEditorStatusContribution.ts`、`src/renderer/workbench/search/useSearchEngine.ts`
 
+## 右键菜单图标：新增菜单项一律写 `icon`
+
+图标 id 是**不透明字符串**，在渲染时经 `workbench/icons/icon-map.ts` 的 `resolveIcon` 查表（container 图标从 `containerIcons.ts` 并入同一张表）。**表里没有 → 返回 undefined → 静默不渲染**，typo 不报错，所以：
+
+- 新增菜单项时写 `icon: '<id>'`（Action2 的 `desc.icon` / `MenuRegistry.addMenuItem` 的 `icon` / ListMenu item 的 `icon` / 扩展 manifest 的 `menus[].icon`；扩展的 `commands[].icon` 会被同命令的无 icon 菜单项继承，VSCode 同款）；id 不在表里就先去 `icon-map.ts` 补 `id → LucideIcon`。
+- 菜单宿主渲染图标是 opt-in 的：`<ContextMenu>` / `<ListMenu>` **必须传 `renderIcon={renderMenuIcon}`**（`workbench/icons/menuIcon.tsx` 的唯一共享实现，不要各写一份）——`workbench-ui` 刻意不依赖图标库，不传就没有图标插槽。
+- 新写右键菜单一律用共享的 `ContextMenu`（MenuId 驱动）或 `ListMenu`（items 驱动），不要自己画 `<ul role="menu">`：键盘导航、Escape、outside-press、图标插槽、danger/disabled 都是白拿的。
+- ⚠️ `registerAction2` 会把 `desc.icon` 撒到该 Action2 声明的**每一个** menu 槽位——给挂在 Menubar 上的命令加图标会整组开启图标列。
+- 护栏：`workbench/icons/__tests__/iconCoverage.test.ts` 扫源码与扩展 manifest 断言 id 可解析，并断言 Menubar 保持无图标。
+
 ## 套路 F：加一个 E2E 冒烟场景
 
 冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 通过 `window.__E2E__` 探针调服务，不戳 DOM。三层安全门：`UNIVERSE_E2E=1` → main argv `--enable-e2e-probe` → preload 经 `contextBridge` 暴露——production 构建天然剥除。

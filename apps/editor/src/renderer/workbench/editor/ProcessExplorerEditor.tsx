@@ -15,6 +15,7 @@ import {
   MenuId,
 } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useService } from '../useService.js'
 import {
   IProcessMonitorService,
@@ -148,6 +149,7 @@ export function ProcessExplorerEditor(_props: { input: IEditorInput }) {
           args={[{ pid: menu.item.pid, name: menu.item.name, cmd: menu.item.cmd }]}
           commandService={commandService}
           contextKeyService={contextKeyService}
+          renderIcon={renderMenuIcon}
           onClose={() => setMenu(null)}
         />
       )}

@@ -322,30 +322,35 @@ export function OutlineView() {
       return [
         {
           kind: 'item',
+          icon: 'go-to-file',
           label: localize('outline.goToSymbol', 'Go to Symbol'),
           run: () => outlineService.revealSymbol(symbol),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'go-to-definition',
           label: localize('outline.goToDefinition', 'Go to Definition'),
           disabled: !isFile,
           run: nav('editor.action.revealDefinition'),
         },
         {
           kind: 'item',
+          icon: 'go-to-definition',
           label: localize('outline.goToTypeDefinition', 'Go to Type Definition'),
           disabled: !isFile,
           run: nav('editor.action.goToTypeDefinition'),
         },
         {
           kind: 'item',
+          icon: 'go-to-definition',
           label: localize('outline.goToImplementation', 'Go to Implementations'),
           disabled: !isFile,
           run: nav('editor.action.goToImplementation'),
         },
         {
           kind: 'item',
+          icon: 'go-to-file',
           label: localize('outline.goToReferences', 'Go to References'),
           disabled: !isFile,
           run: nav('editor.action.goToReferences'),
@@ -367,6 +372,7 @@ export function OutlineView() {
           model.setExpansion(collectExpandableIds([node]).map((id) => [id, value] as const))
         items.push({
           kind: 'item',
+          icon: expanded ? 'collapse-all' : 'expand-all',
           label: expanded
             ? localize('outline.collapse', 'Collapse')
             : localize('outline.expand', 'Expand'),
@@ -374,6 +380,7 @@ export function OutlineView() {
         })
         items.push({
           kind: 'item',
+          icon: expanded ? 'collapse-all' : 'expand-all',
           label: expanded
             ? localize('outline.collapseSubtree', 'Collapse Subtree')
             : localize('outline.expandSubtree', 'Expand Subtree'),
@@ -383,17 +390,20 @@ export function OutlineView() {
       }
       items.push({
         kind: 'item',
+        icon: 'expand-all',
         label: localize('outline.expandAll', 'Expand All'),
         run: () => outlineViewState.requestExpandAll(),
       })
       items.push({
         kind: 'item',
+        icon: 'collapse-all',
         label: localize('outline.collapseAll', 'Collapse All'),
         run: () => outlineViewState.requestCollapseAll(),
       })
       items.push({ kind: 'sep' })
       items.push({
         kind: 'submenu',
+        icon: 'go-to-file',
         label: localize('outline.goTo', 'Go to'),
         children: buildGotoItems(node.symbol),
       })
@@ -411,11 +421,13 @@ export function OutlineView() {
       items: [
         {
           kind: 'item',
+          icon: 'expand-all',
           label: localize('outline.expandAll', 'Expand All'),
           run: () => outlineViewState.requestExpandAll(),
         },
         {
           kind: 'item',
+          icon: 'collapse-all',
           label: localize('outline.collapseAll', 'Collapse All'),
           run: () => outlineViewState.requestCollapseAll(),
         },

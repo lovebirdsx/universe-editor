@@ -7,22 +7,13 @@
  *  workspace-scope override, "view details" and uninstall reflect the row.
  *--------------------------------------------------------------------------------------------*/
 
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
+import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
 import { localize } from '@universe-editor/platform'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import {
   EnablementState,
   type IExtensionEntry,
 } from '../../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
-import styles from './ExtensionsView.module.css'
-
-type MenuItem =
-  | {
-      readonly kind: 'item'
-      readonly label: string
-      readonly danger?: boolean
-      readonly run: () => void
-    }
-  | { readonly kind: 'sep' }
 
 export interface ExtensionActionsMenuState {
   readonly x: number
@@ -38,28 +29,27 @@ export interface ExtensionActionsMenuHandlers {
   readonly hasWorkspace: boolean
 }
 
-function buildItems(
-  entry: IExtensionEntry,
-  h: ExtensionActionsMenuHandlers,
-  close: () => void,
-): MenuItem[] {
-  const items: MenuItem[] = []
-  const set = (state: EnablementState) => () => {
-    close()
-    h.onSetEnablement(entry, state)
+function buildItems(entry: IExtensionEntry, h: ExtensionActionsMenuHandlers): ListMenuEntry[] {
+  const items: ListMenuEntry[] = []
+  const viewDetails: ListMenuEntry = {
+    kind: 'item',
+    icon: 'eye',
+    label: localize('extensions.viewDetails', 'View Details'),
+    run: () => h.onOpen(entry),
   }
+  const uninstall: ListMenuEntry = {
+    kind: 'item',
+    icon: 'trash',
+    label: localize('extensions.uninstall', 'Uninstall'),
+    danger: true,
+    run: () => h.onUninstall(entry),
+  }
+  const set = (state: EnablementState) => () => h.onSetEnablement(entry, state)
 
   // A dev extension is not in extensions.json — enable/disable and uninstall
   // have no meaning for it. Offer only the details page.
   if (entry.isUnderDevelopment) {
-    items.push({
-      kind: 'item',
-      label: localize('extensions.viewDetails', 'View Details'),
-      run: () => {
-        close()
-        h.onOpen(entry)
-      },
-    })
+    items.push(viewDetails)
     return items
   }
 
@@ -69,31 +59,14 @@ function buildItems(
   if (entry.installableInRemote) {
     items.push({
       kind: 'item',
+      icon: 'remote',
       label: localize('extensions.installInRemote', 'Install in Remote'),
-      run: () => {
-        close()
-        h.onInstallInRemote(entry)
-      },
+      run: () => h.onInstallInRemote(entry),
     })
-    items.push({ kind: 'sep' })
-    items.push({
-      kind: 'item',
-      label: localize('extensions.viewDetails', 'View Details'),
-      run: () => {
-        close()
-        h.onOpen(entry)
-      },
-    })
-    items.push({ kind: 'sep' })
-    items.push({
-      kind: 'item',
-      label: localize('extensions.uninstall', 'Uninstall'),
-      danger: true,
-      run: () => {
-        close()
-        h.onUninstall(entry)
-      },
-    })
+    items.push({ kind: 'separator' })
+    items.push(viewDetails)
+    items.push({ kind: 'separator' })
+    items.push(uninstall)
     return items
   }
 
@@ -104,12 +77,14 @@ function buildItems(
     if (entry.enabled) {
       items.push({
         kind: 'item',
+        icon: 'disable',
         label: localize('extensions.disable', 'Disable'),
         run: set(EnablementState.DisabledGlobally),
       })
       if (h.hasWorkspace) {
         items.push({
           kind: 'item',
+          icon: 'disable',
           label: localize('extensions.disableWorkspace', 'Disable (Workspace)'),
           run: set(EnablementState.DisabledWorkspace),
         })
@@ -117,12 +92,14 @@ function buildItems(
     } else {
       items.push({
         kind: 'item',
+        icon: 'check',
         label: localize('extensions.enable', 'Enable'),
         run: set(EnablementState.EnabledGlobally),
       })
       if (h.hasWorkspace) {
         items.push({
           kind: 'item',
+          icon: 'check',
           label: localize('extensions.enableWorkspace', 'Enable (Workspace)'),
           run: set(EnablementState.EnabledWorkspace),
         })
@@ -130,27 +107,12 @@ function buildItems(
     }
   }
 
-  items.push({ kind: 'sep' })
-  items.push({
-    kind: 'item',
-    label: localize('extensions.viewDetails', 'View Details'),
-    run: () => {
-      close()
-      h.onOpen(entry)
-    },
-  })
+  items.push({ kind: 'separator' })
+  items.push(viewDetails)
 
   if (!entry.isBuiltin) {
-    items.push({ kind: 'sep' })
-    items.push({
-      kind: 'item',
-      label: localize('extensions.uninstall', 'Uninstall'),
-      danger: true,
-      run: () => {
-        close()
-        h.onUninstall(entry)
-      },
-    })
+    items.push({ kind: 'separator' })
+    items.push(uninstall)
   }
 
   return items
@@ -165,27 +127,13 @@ export function ExtensionActionsMenu({
   handlers: ExtensionActionsMenuHandlers
   onClose: () => void
 }) {
-  const items = buildItems(state.entry, handlers, onClose)
+  const items = buildItems(state.entry, handlers)
   return (
-    <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
-      <ul role="menu" className={styles.menu}>
-        {items.map((item, i) =>
-          item.kind === 'sep' ? (
-            <li key={`sep-${i}`} role="separator" className={styles.menuSep} />
-          ) : (
-            <li
-              key={`${item.label}-${i}`}
-              role="menuitem"
-              className={
-                item.danger ? `${styles.menuItem} ${styles.menuItemDanger}` : styles.menuItem
-              }
-              onClick={item.run}
-            >
-              {item.label}
-            </li>
-          ),
-        )}
-      </ul>
-    </AnchoredSurface>
+    <ListMenu
+      items={items}
+      anchor={{ x: state.x, y: state.y }}
+      renderIcon={renderMenuIcon}
+      onClose={onClose}
+    />
   )
 }

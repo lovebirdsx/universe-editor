@@ -609,6 +609,7 @@ export class CopyFocusedAcpMessageAction extends Action2 {
   constructor() {
     super({
       id: CopyFocusedAcpMessageAction.ID,
+      icon: 'copy',
       title: localize2('action.agent.copyFocusedMessage', 'Copy Message'),
       category: CATEGORY,
       precondition: ACP_NAV_WHEN,
@@ -627,6 +628,7 @@ export class CopySelectedTextAction extends Action2 {
   constructor() {
     super({
       id: CopySelectedTextAction.ID,
+      icon: 'copy',
       title: localize2('common.copy', 'Copy'),
       category: CATEGORY,
       precondition: ACP_NAV_WHEN,
@@ -652,6 +654,7 @@ export class CopyAcpImageAction extends Action2 {
   constructor() {
     super({
       id: CopyAcpImageAction.ID,
+      icon: 'copy',
       title: localize2('action.agent.copyImage', 'Copy Image'),
       category: CATEGORY,
       menu: [
@@ -680,6 +683,7 @@ export class CopyAcpResourcePathAction extends Action2 {
   constructor() {
     super({
       id: CopyAcpResourcePathAction.ID,
+      icon: 'copy',
       title: localize2('action.agent.copyResourcePath', 'Copy Path'),
       category: CATEGORY,
       menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 3, when: 'acpChatContextPath' }],
@@ -704,6 +708,7 @@ export class CopyAcpContextTextAction extends Action2 {
   constructor() {
     super({
       id: CopyAcpContextTextAction.ID,
+      icon: 'copy',
       title: localize2('action.agent.copyContextText', 'Copy Text'),
       category: CATEGORY,
       menu: [
@@ -729,6 +734,7 @@ export class CopyAcpReferenceAction extends Action2 {
   constructor() {
     super({
       id: CopyAcpReferenceAction.ID,
+      icon: 'copy',
       title: localize2('action.agent.copyReference', 'Copy Reference'),
       category: CATEGORY,
       menu: [

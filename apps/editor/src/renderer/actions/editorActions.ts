@@ -82,6 +82,7 @@ export class CloseActiveEditorAction extends Action2 {
   constructor() {
     super({
       id: CloseActiveEditorAction.ID,
+      icon: 'close',
       title: localize2('action.closeActiveEditor.title', 'Close Editor'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+w', when: '!terminalFocus' },
@@ -105,6 +106,7 @@ export class CloseOtherEditorsAction extends Action2 {
   constructor() {
     super({
       id: CloseOtherEditorsAction.ID,
+      icon: 'close',
       title: localize2('action.closeOtherEditors.title', 'Close Other Editors'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+w' },
@@ -130,6 +132,7 @@ export class CloseEditorsToTheRightAction extends Action2 {
   constructor() {
     super({
       id: CloseEditorsToTheRightAction.ID,
+      icon: 'close',
       title: localize2('action.closeEditorsToTheRight.title', 'Close Editors to the Right'),
       category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+a' },
@@ -156,6 +159,7 @@ export class CloseEditorsToTheLeftAction extends Action2 {
   constructor() {
     super({
       id: CloseEditorsToTheLeftAction.ID,
+      icon: 'close',
       title: localize2('action.closeEditorsToTheLeft.title', 'Close Editors to the Left'),
       category: localize2('command.category.view', 'View'),
       precondition: 'hasActiveEditor && !activeEditorIsFirstInGroup',
@@ -181,6 +185,7 @@ export class CloseUnmodifiedEditorsAction extends Action2 {
   constructor() {
     super({
       id: CloseUnmodifiedEditorsAction.ID,
+      icon: 'close',
       title: localize2('action.closeUnmodifiedEditors.title', 'Close Saved Editors'),
       category: localize2('command.category.view', 'View'),
       precondition: 'editorIsOpen',
@@ -205,6 +210,7 @@ export class CloseEditorsInGroupAction extends Action2 {
   constructor() {
     super({
       id: CloseEditorsInGroupAction.ID,
+      icon: 'close',
       title: localize2('action.closeEditorsInGroup.title', 'Close All Editors in Group'),
       category: localize2('command.category.view', 'View'),
       precondition: 'editorIsOpen',
@@ -231,6 +237,7 @@ export class CloseAllEditorsAction extends Action2 {
   constructor() {
     super({
       id: CloseAllEditorsAction.ID,
+      icon: 'close',
       title: localize2('action.closeAllEditors.title', 'Close All Editors'),
       category: localize2('command.category.view', 'View'),
       precondition: 'editorIsOpen',

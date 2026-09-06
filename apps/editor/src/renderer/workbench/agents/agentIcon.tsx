@@ -68,6 +68,21 @@ export function resolveAgentIcon(iconId: string): AgentIconComponent {
   return ICON_MAP[iconId] ?? BotLogo
 }
 
+/**
+ * Like {@link resolveAgentIcon} but without the bot fallback, for callers that
+ * chain resolvers: a menu row whose icon id belongs to another table (or is a
+ * typo) must fall through to "no icon" rather than acquire a bot.
+ */
+export function resolveKnownAgentIcon(iconId: string | undefined): AgentIconComponent | undefined {
+  if (iconId === undefined) return undefined
+  return ICON_MAP[iconId]
+}
+
+/** The agent logo ids, for the icon coverage test. */
+export function isKnownAgentIcon(iconId: string): boolean {
+  return iconId in ICON_MAP
+}
+
 export interface AgentIconByIdProps extends AgentIconProps {
   readonly agentId: string | undefined
 }

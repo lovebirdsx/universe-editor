@@ -9,11 +9,13 @@
 
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export type SessionRowMenuItem =
   | {
       readonly kind: 'item'
       readonly label: string
+      readonly icon?: string
       readonly danger?: boolean
       readonly disabled?: boolean
       readonly run: () => void
@@ -45,6 +47,7 @@ export function SessionRowContextMenu({
             : {
                 kind: 'item',
                 label: item.label,
+                icon: item.icon,
                 danger: item.danger === true,
                 disabled: item.disabled === true,
                 run: item.run,
@@ -58,6 +61,7 @@ export function SessionRowContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

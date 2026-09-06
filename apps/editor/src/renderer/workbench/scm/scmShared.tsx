@@ -34,7 +34,7 @@ import {
   type ContextKeyExpression,
   type IContext,
 } from '@universe-editor/platform'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import styles from './ScmView.module.css'
 
 export type ViewMode = 'list' | 'tree'
@@ -114,7 +114,7 @@ export function ActionButton({
   busy?: boolean
   onRun: (e: ReactMouseEvent) => void
 }) {
-  const Icon = resolveHeaderIcon(action.icon)
+  const Icon = resolveIcon(action.icon)
   const Glyph = busy === true ? (Icon ?? Loader2) : Icon
   return (
     <button
@@ -282,7 +282,7 @@ export function TitleOverflowMenu({
               <li key={row.id} role="separator" className={styles['overflowSeparator']} />
             )
           }
-          const Icon = resolveHeaderIcon(row.icon)
+          const Icon = resolveIcon(row.icon)
           const iconEl = Icon ? (
             <Icon size={16} strokeWidth={1.6} />
           ) : (

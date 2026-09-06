@@ -16,7 +16,7 @@ import {
 import { useService } from '../useService.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { parseResourceIconId } from '../../services/quickInput/quickPickResourceIcon.js'
 import { renderSymbolIconById } from '../symbols/symbolIcon.js'
@@ -27,7 +27,7 @@ import {
 import styles from './QuickInput.module.css'
 
 function resolveFallbackIcon(iconId: string) {
-  return resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
+  return resolveIcon(iconId) ?? resolveAgentIcon(iconId)
 }
 
 /** Portal that renders Quick Pick / Input Box over the entire workbench. */

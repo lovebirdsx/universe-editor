@@ -24,6 +24,7 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
         command: ShowCommandsAction.ID,
+        icon: 'list-view',
         title: localize('action.showAllCommands.title', 'Show All Commands'),
         group: 'navigation',
         order: 1,
@@ -33,6 +34,7 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
         command: AddSelectionToAgentChatAction.ID,
+        icon: 'sparkle',
         title: localize('action.agent.addSelectionToChat', 'Add Selection to Agent Chat'),
         when: 'editorHasSelection',
         group: '1_agent',
@@ -43,6 +45,7 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
         command: 'editor.action.clipboardCutAction',
+        icon: 'cut',
         title: localize('action.cut.title', 'Cut'),
         when: '!editorReadonly',
         group: '9_cutcopypaste',
@@ -52,6 +55,7 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
         command: 'editor.action.clipboardCopyAction',
+        icon: 'copy',
         title: localize('action.copy.title', 'Copy'),
         group: '9_cutcopypaste',
         order: 2,
@@ -60,6 +64,7 @@ export class EditorContextMenuContribution extends Disposable implements IWorkbe
     this._register(
       MenuRegistry.addMenuItem(MenuId.EditorContext, {
         command: 'editor.action.clipboardPasteAction',
+        icon: 'paste',
         title: localize('action.paste.title', 'Paste'),
         when: '!editorReadonly',
         group: '9_cutcopypaste',

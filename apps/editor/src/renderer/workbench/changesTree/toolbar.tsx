@@ -9,7 +9,7 @@
 
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { localize } from '@universe-editor/platform'
-import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveIcon } from '../icons/icon-map.js'
 import { ActionButton, TitleOverflowMenu, type OverflowRow } from '../scm/scmShared.js'
 import styles from '../scm/ScmView.module.css'
 import type { ChangesTreeViewMode } from './buildSnapshot.js'
@@ -96,7 +96,7 @@ export function ChangesTreeViewModeOverflow({
         onClick={openOverflow}
       >
         {(() => {
-          const Icon = resolveHeaderIcon('more')
+          const Icon = resolveIcon('more')
           return Icon ? <Icon size={16} strokeWidth={1.6} /> : <span>…</span>
         })()}
       </button>

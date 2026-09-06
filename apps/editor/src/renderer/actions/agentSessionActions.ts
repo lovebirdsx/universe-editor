@@ -64,6 +64,7 @@ export class NewAgentSessionAction extends Action2 {
   constructor() {
     super({
       id: NewAgentSessionAction.ID,
+      icon: 'sparkle',
       title: localize2('action.agent.newSession', 'New Agent Session'),
       keybinding: { primary: 'ctrl+alt+n' },
       category: CATEGORY,
@@ -431,6 +432,7 @@ export class SelectAgentAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentAction.ID,
+      icon: 'list-view',
       title: localize2('action.agent.selectAgent', 'Choose Agent…'),
       category: CATEGORY,
       menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
@@ -669,6 +671,7 @@ export class SwitchSessionAction extends Action2 {
   constructor() {
     super({
       id: SwitchSessionAction.ID,
+      icon: 'history',
       title: localize2('action.agent.switchSession', 'Switch Session…'),
       category: CATEGORY,
       keybinding: { primary: 'alt+s' },
@@ -717,6 +720,7 @@ export class RenameAgentSessionAction extends Action2 {
   constructor() {
     super({
       id: RenameAgentSessionAction.ID,
+      icon: 'edit',
       title: localize2('action.agent.renameSession', 'Rename Agent Session…'),
       category: CATEGORY,
       menu: [
@@ -774,6 +778,7 @@ export class RevealAgentSessionInOSAction extends Action2 {
   constructor() {
     super({
       id: RevealAgentSessionInOSAction.ID,
+      icon: 'reveal',
       title: localize2(
         'action.agent.revealSessionInOS',
         'Reveal Session Transcript in File Manager',
@@ -1150,6 +1155,7 @@ export class AskInSideChatAction extends Action2 {
   constructor() {
     super({
       id: AskInSideChatAction.ID,
+      icon: 'sparkle',
       title: localize2('acp.sideTask.ask', 'Ask in Side Chat'),
       category: CATEGORY,
       menu: [

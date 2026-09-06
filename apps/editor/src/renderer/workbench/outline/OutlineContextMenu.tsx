@@ -9,11 +9,13 @@
 
 import { useMemo } from 'react'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export type OutlineMenuItem =
   | {
       readonly kind: 'item'
       readonly label: string
+      readonly icon?: string
       readonly disabled?: boolean
       readonly run: () => void
     }
@@ -21,6 +23,7 @@ export type OutlineMenuItem =
   | {
       readonly kind: 'submenu'
       readonly label: string
+      readonly icon?: string
       readonly children: readonly OutlineMenuItem[]
     }
 
@@ -36,9 +39,20 @@ function toEntries(items: readonly OutlineMenuItem[]): ListMenuEntry[] {
   return items.map((item): ListMenuEntry => {
     if (item.kind === 'sep') return { kind: 'separator' }
     if (item.kind === 'submenu') {
-      return { kind: 'submenu', label: item.label, children: toEntries(item.children) }
+      return {
+        kind: 'submenu',
+        label: item.label,
+        icon: item.icon,
+        children: toEntries(item.children),
+      }
     }
-    return { kind: 'item', label: item.label, disabled: item.disabled === true, run: item.run }
+    return {
+      kind: 'item',
+      label: item.label,
+      icon: item.icon,
+      disabled: item.disabled === true,
+      run: item.run,
+    }
   })
 }
 
@@ -56,6 +70,7 @@ export function OutlineContextMenu({
       items={items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

@@ -43,6 +43,7 @@ export class CopyFileNameAction extends Action2 {
   constructor() {
     super({
       id: CopyFileNameAction.ID,
+      icon: 'copy',
       title: localize2('action.copyName.title', 'Copy Name'),
       category: localize2('command.category.file', 'File'),
       f1: true,
@@ -67,6 +68,7 @@ export class CopyEditorNameAction extends Action2 {
   constructor() {
     super({
       id: CopyEditorNameAction.ID,
+      icon: 'copy',
       title: localize2('action.copyName.title', 'Copy Name'),
       category: localize2('command.category.file', 'File'),
       menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 1 }],
@@ -85,6 +87,7 @@ export class CopyFilePathAction extends Action2 {
   constructor() {
     super({
       id: CopyFilePathAction.ID,
+      icon: 'copy',
       title: localize2('action.copyFilePath.title', 'Copy Path'),
       category: localize2('command.category.file', 'File'),
       menu: [
@@ -110,6 +113,7 @@ export class CopyFileRelativePathAction extends Action2 {
   constructor() {
     super({
       id: CopyFileRelativePathAction.ID,
+      icon: 'copy',
       title: localize2('action.copyRelativeFilePath.title', 'Copy Relative Path'),
       category: localize2('command.category.file', 'File'),
       menu: [

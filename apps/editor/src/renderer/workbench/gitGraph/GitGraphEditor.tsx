@@ -195,6 +195,8 @@ interface RefEntry {
   text: string
   /** Label used in the overflow menu (carries the ref kind, unlike `text`). */
   menuLabel: string
+  /** Icon id for the overflow menu row, keyed to the ref kind. */
+  menuIcon: string
   title?: string
   priority: number
   onMenu: (e: MouseEvent) => void
@@ -223,6 +225,7 @@ function CommitRefs({
       key: `w-${wt.path}`,
       className: `${styles['badge']} ${styles['badgeWorktree']} ${wt.isCurrent ? styles['badgeWorktreeCurrent'] : ''}`,
       text: wt.isCurrent ? `✓ ${wt.name}` : wt.name,
+      menuIcon: 'git-worktree',
       menuLabel: localize('gitGraph.ref.worktree', 'Worktree {name}', { name: wt.name }),
       title: wt.branch
         ? localize('gitGraph.worktree.tooltip', 'Worktree {name} · {branch}\n{path}', {
@@ -243,6 +246,7 @@ function CommitRefs({
       key: `h-${h}`,
       className: `${styles['badge']} ${styles['badgeHead']}`,
       text: h,
+      menuIcon: 'checkout',
       menuLabel: localize('gitGraph.ref.branch', 'Branch {name}', { name: h }),
       priority: h === headName ? 2 : 3,
       onMenu: (e) => onBranchMenu(h, e),
@@ -253,6 +257,7 @@ function CommitRefs({
       key: `t-${t.name}`,
       className: `${styles['badge']} ${styles['badgeTag']}`,
       text: t.name,
+      menuIcon: 'tag',
       menuLabel: localize('gitGraph.ref.tag', 'Tag {name}', { name: t.name }),
       priority: 5,
       onMenu: (e) => onTagMenu(t.name, e),
@@ -263,6 +268,7 @@ function CommitRefs({
       key: `r-${r.name}`,
       className: `${styles['badge']} ${styles['badgeRemote']}`,
       text: r.name,
+      menuIcon: 'remote',
       menuLabel: localize('gitGraph.ref.remote', 'Remote {name}', { name: r.name }),
       priority: 6,
       onMenu: (e) => onRemoteMenu(r.name, e),
@@ -997,17 +1003,20 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           items: [
             {
               kind: 'item',
+              icon: 'stash',
               label: localize('gitGraph.stash.apply', 'Apply stash…'),
               run: () => runOp(GitGraphCommands.stashApply, selector),
             },
             {
               kind: 'item',
+              icon: 'stash',
               label: localize('gitGraph.stash.pop', 'Pop stash…'),
               run: () => runOp(GitGraphCommands.stashPop, selector),
             },
             { kind: 'sep' },
             {
               kind: 'item',
+              icon: 'trash',
               label: localize('gitGraph.stash.drop', 'Drop stash…'),
               danger: true,
               run: async () => {
@@ -1028,6 +1037,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
             { kind: 'sep' },
             {
               kind: 'item',
+              icon: 'copy',
               label: localize('gitGraph.copyHash', 'Copy commit hash'),
               run: () => void navigator.clipboard?.writeText(hash),
             },
@@ -1038,6 +1048,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          icon: 'checkout',
           label: localize('gitGraph.checkoutCommit', 'Checkout this commit…'),
           run: async () => {
             const r = await dialog.confirm({
@@ -1052,32 +1063,38 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          icon: 'cherry-pick',
           label: localize('gitGraph.cherryPick', 'Cherry-pick…'),
           run: () => runOp(GitGraphCommands.cherrypick, hash),
         },
         {
           kind: 'item',
+          icon: 'cherry-pick',
           label: localize('gitGraph.cherryPickToBranch', 'Cherry-pick to branch…'),
           run: () => openCherryPickToBranch(hash),
         },
         {
           kind: 'item',
+          icon: 'discard',
           label: localize('gitGraph.revert', 'Revert…'),
           run: () => runOp(GitGraphCommands.revert, hash),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'merge',
           label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, hash),
         },
         {
           kind: 'item',
+          icon: 'merge',
           label: localize('gitGraph.rebaseCurrentCommit', 'Rebase current branch on this commit…'),
           run: () => runOp(GitGraphCommands.rebase, hash),
         },
         {
           kind: 'item',
+          icon: 'reset',
           label: localize('gitGraph.resetCurrentCommit', 'Reset current branch to this commit…'),
           danger: true,
           run: async () => {
@@ -1102,6 +1119,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'create-branch',
           label: localize('gitGraph.createBranchHere', 'Create branch here…'),
           run: async () => {
             const name = await dialog.prompt({
@@ -1112,6 +1130,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          icon: 'tag',
           label: localize('gitGraph.createTagHere', 'Create tag here…'),
           run: async () => {
             const name = await dialog.prompt({
@@ -1123,11 +1142,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.copyHash', 'Copy commit hash'),
           run: () => void navigator.clipboard?.writeText(hash),
         },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: async () => {
             const body = await fullMessages.load(hash)
@@ -1137,6 +1158,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'sparkle',
           label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
           run: () =>
             void commands.executeCommand(SendCommitToAgentChatAction.ID, {
@@ -1157,28 +1179,33 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          icon: 'checkout',
           label: localize('gitGraph.checkout', 'Checkout'),
           run: () => runOp(GitGraphCommands.checkout, name),
         },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
           run: () => void navigator.clipboard?.writeText(name),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'merge',
           label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, name),
         },
         {
           kind: 'item',
+          icon: 'merge',
           label: localize('gitGraph.rebaseCurrentBranch', 'Rebase current branch on branch…'),
           run: () => runOp(GitGraphCommands.rebase, name),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'edit',
           label: localize('gitGraph.rename', 'Rename…'),
           run: async () => {
             const newName = await dialog.prompt({
@@ -1192,27 +1219,32 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          icon: 'pull',
           label: localize('gitGraph.pull', 'Pull'),
           run: () => runOp(GitGraphCommands.pull, name, 'default'),
         },
         {
           kind: 'item',
+          icon: 'pull',
           label: localize('gitGraph.pullRebase', 'Pull (Rebase)'),
           run: () => runOp(GitGraphCommands.pull, name, 'rebase'),
         },
         {
           kind: 'item',
+          icon: 'pull',
           label: localize('gitGraph.pullAutostash', 'Pull (Autostash)'),
           run: () => runOp(GitGraphCommands.pull, name, 'autostash'),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'push',
           label: localize('gitGraph.push', 'Push…'),
           run: () => runOp(GitGraphCommands.pushBranch, name, 'origin'),
         },
         {
           kind: 'item',
+          icon: 'push',
           label: localize('gitGraph.pushForce', 'Push (Force)…'),
           danger: true,
           run: async () => {
@@ -1233,6 +1265,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'trash',
           label: localize('common.deleteWithEllipsis', 'Delete…'),
           danger: true,
           run: async () => {
@@ -1265,6 +1298,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          icon: 'checkout',
           label: localize('gitGraph.checkoutLocalBranch', 'Checkout as local branch…'),
           run: async () => {
             const suggested = name.includes('/') ? name.slice(name.indexOf('/') + 1) : name
@@ -1310,12 +1344,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
           run: () => void navigator.clipboard?.writeText(name),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'trash',
           label: localize('gitGraph.deleteRemoteBranch', 'Delete remote branch…'),
           danger: true,
           run: async () => {
@@ -1348,12 +1384,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
+          icon: 'push',
           label: localize('gitGraph.pushTag', 'Push tag…'),
           run: () => runOp(GitGraphCommands.pushTag, name, 'origin'),
         },
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'trash',
           label: localize('gitGraph.deleteTag', 'Delete tag…'),
           danger: true,
           run: async () => {
@@ -1474,12 +1512,14 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       if (!isCurrent) {
         items.push({
           kind: 'item',
+          icon: 'git-worktree',
           label: localize('gitGraph.worktree.open', 'Open worktree'),
           run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, false),
         })
       }
       items.push({
         kind: 'item',
+        icon: 'empty-window',
         label: localize('gitGraph.worktree.openNewWindow', 'Open worktree in new window'),
         run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, true),
       })
@@ -1487,6 +1527,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
+          icon: 'copy',
           label: localize('gitGraph.worktree.copyPath', 'Copy worktree path'),
           run: () => void navigator.clipboard?.writeText(path),
         },
@@ -1501,6 +1542,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            icon: 'sync',
             label: localize('gitGraph.worktree.syncToThis', 'Sync worktrees to {branch}…', {
               branch,
             }),
@@ -1509,6 +1551,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           },
           {
             kind: 'item',
+            icon: 'sync',
             label: localize(
               'gitGraph.worktree.forceSyncToThis',
               'Force sync worktrees to {branch}…',
@@ -1527,6 +1570,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           { kind: 'sep' },
           {
             kind: 'item',
+            icon: 'trash',
             label: localize('gitGraph.worktree.delete', 'Delete worktree…'),
             danger: true,
             run: async () => {
@@ -1576,6 +1620,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
       items: entries.map((entry) => ({
         kind: 'item' as const,
         label: entry.menuLabel,
+        icon: entry.menuIcon,
         run: () => entry.onMenu(anchor),
       })),
     })

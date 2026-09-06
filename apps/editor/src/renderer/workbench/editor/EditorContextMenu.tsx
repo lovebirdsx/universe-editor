@@ -20,6 +20,7 @@ import {
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { basenameOfResource, extensionOfBasename } from '../files/resourceInfo.js'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import { useScopedContextKey } from '../useScopedContextKey.js'
 
 interface Props {
@@ -63,6 +64,7 @@ export function EditorContextMenu({
       menuId={MenuId.EditorContext}
       anchor={{ x, y }}
       args={[resource]}
+      renderIcon={renderMenuIcon}
       autoFocusFirst={keyboard}
       commandService={commandService}
       contextKeyService={scopedContext}

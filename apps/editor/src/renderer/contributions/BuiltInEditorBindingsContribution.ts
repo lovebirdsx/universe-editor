@@ -72,6 +72,7 @@ export class BuiltInEditorBindingsContribution
       MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
         command: 'workbench.action.reopenWith',
         title: localize('action.reopenWith', 'Reopen With...'),
+        icon: 'reopen-with',
         when: 'resourceScheme == file',
         group: 'z_commands',
         order: 1,

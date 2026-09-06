@@ -10,6 +10,7 @@
 import { useMemo } from 'react'
 import { localize } from '@universe-editor/platform'
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 import type { IKeybindingRow } from '../../services/keybindings/keybindingsEditorModel.js'
 import type { IKeybindingsEditorHandle } from '../../services/keybindings/keybindingsEditorRuntime.js'
 
@@ -17,11 +18,12 @@ const SEPARATOR: ListMenuEntry = { kind: 'separator' }
 
 function action(
   label: string,
+  icon: string,
   hint: string | undefined,
   enabled: boolean,
   run: () => void,
 ): ListMenuEntry {
-  return { kind: 'item', label, hint, disabled: !enabled, run }
+  return { kind: 'item', label, icon, hint, disabled: !enabled, run }
 }
 
 export interface KeybindingsContextMenuProps {
@@ -48,14 +50,19 @@ export function KeybindingsContextMenu({
     const hasTitle = row.commandLabel !== row.command
 
     return [
-      action(localize('keybindings.menu.copy', 'Copy'), 'Ctrl+C', true, () =>
+      action(localize('keybindings.menu.copy', 'Copy'), 'copy', 'Ctrl+C', true, () =>
         handle.copyEntry('json'),
       ),
-      action(localize('keybindings.menu.copyCommandId', 'Copy Command ID'), undefined, true, () =>
-        handle.copyEntry('commandId'),
+      action(
+        localize('keybindings.menu.copyCommandId', 'Copy Command ID'),
+        'copy',
+        undefined,
+        true,
+        () => handle.copyEntry('commandId'),
       ),
       action(
         localize('keybindings.menu.copyCommandTitle', 'Copy Command Title'),
+        'copy',
         undefined,
         hasTitle,
         () => handle.copyEntry('commandTitle'),
@@ -64,12 +71,14 @@ export function KeybindingsContextMenu({
       hasBinding
         ? action(
             localize('keybindings.menu.changeKeybinding', 'Change Keybinding...'),
+            'keyboard',
             'Enter',
             true,
             () => handle.defineKeybinding(false),
           )
         : action(
             localize('keybindings.menu.addKeybinding', 'Add Keybinding...'),
+            'keyboard',
             'Ctrl+K Ctrl+A',
             true,
             () => handle.defineKeybinding(false),
@@ -77,12 +86,14 @@ export function KeybindingsContextMenu({
       SEPARATOR,
       action(
         localize('keybindings.menu.removeKeybinding', 'Remove Keybinding'),
+        'remove',
         'Delete',
         hasBinding,
         () => handle.removeSelectedKeybinding(),
       ),
       action(
         localize('keybindings.menu.resetKeybinding', 'Reset Keybinding'),
+        'reset',
         undefined,
         isUser,
         () => handle.resetSelectedKeybinding(),
@@ -90,6 +101,7 @@ export function KeybindingsContextMenu({
       SEPARATOR,
       action(
         localize('keybindings.menu.changeWhen', 'Change When Expression'),
+        'when',
         'Ctrl+K Ctrl+E',
         hasBinding,
         () => handle.defineWhenExpression(),
@@ -97,6 +109,7 @@ export function KeybindingsContextMenu({
       SEPARATOR,
       action(
         localize('keybindings.menu.showSame', 'Show Same Keybindings'),
+        'list-view',
         undefined,
         hasBinding,
         () => handle.showSameKeybindings(),
@@ -104,5 +117,13 @@ export function KeybindingsContextMenu({
     ]
   }, [row, handle])
 
-  return <ListMenu items={entries} anchor={{ x, y }} autoFocusFirst={keyboard} onClose={onClose} />
+  return (
+    <ListMenu
+      items={entries}
+      anchor={{ x, y }}
+      autoFocusFirst={keyboard}
+      renderIcon={renderMenuIcon}
+      onClose={onClose}
+    />
+  )
 }

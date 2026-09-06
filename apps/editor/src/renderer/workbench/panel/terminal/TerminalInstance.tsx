@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { URI } from '@universe-editor/platform'
 import { localize, markAsSingleton } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
@@ -7,7 +7,8 @@ import {
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
 import { useService } from '../../useService.js'
-import { dragContainsResources } from '@universe-editor/workbench-ui'
+import { dragContainsResources, ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../../icons/menuIcon.js'
 import {
   formatPathForTerminal,
   readDroppedResources,
@@ -114,30 +115,29 @@ export function TerminalInstance({
     return () => d.dispose()
   }, [id, manager])
 
-  // Dismiss context menu on Escape.
-  useEffect(() => {
-    if (!contextMenu) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setContextMenu(null)
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [contextMenu])
-
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY })
   }
 
-  const handleCopy = async () => {
-    await holderRef.current?.copy()
-    setContextMenu(null)
-  }
-
-  const handlePaste = async () => {
-    await holderRef.current?.paste()
-    setContextMenu(null)
-  }
+  const menuItems = useMemo<readonly ListMenuEntry[]>(
+    () => [
+      {
+        kind: 'item',
+        icon: 'copy',
+        label: localize('common.copy', 'Copy'),
+        disabled: !hasSelection,
+        run: () => void holderRef.current?.copy(),
+      },
+      {
+        kind: 'item',
+        icon: 'paste',
+        label: localize('common.paste', 'Paste'),
+        run: () => void holderRef.current?.paste(),
+      },
+    ],
+    [hasSelection],
+  )
 
   const handleDragOver = (e: React.DragEvent) => {
     if (!dragContainsResources(e.dataTransfer)) return
@@ -185,21 +185,12 @@ export function TerminalInstance({
         onDrop={handleDrop}
       />
       {contextMenu && (
-        <>
-          <div className={styles['ctx-overlay']} onClick={() => setContextMenu(null)} />
-          <div className={styles['ctx-menu']} style={{ left: contextMenu.x, top: contextMenu.y }}>
-            <button
-              className={hasSelection ? styles['ctx-item'] : styles['ctx-item-disabled']}
-              disabled={!hasSelection}
-              onClick={handleCopy}
-            >
-              {localize('common.copy', 'Copy')}
-            </button>
-            <button className={styles['ctx-item']} onClick={handlePaste}>
-              {localize('common.paste', 'Paste')}
-            </button>
-          </div>
-        </>
+        <ListMenu
+          items={menuItems}
+          anchor={{ x: contextMenu.x, y: contextMenu.y }}
+          renderIcon={renderMenuIcon}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </>
   )

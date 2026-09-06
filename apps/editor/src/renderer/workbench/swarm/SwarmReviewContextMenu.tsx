@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import { renderMenuIcon } from '../icons/menuIcon.js'
 
 export type SwarmReviewMenuItem = ListMenuEntry
 
@@ -32,6 +33,7 @@ export function SwarmReviewContextMenu({
       items={state.items}
       anchor={{ x: state.x, y: state.y }}
       autoFocusFirst={state.keyboard}
+      renderIcon={renderMenuIcon}
       onClose={onClose}
     />
   )

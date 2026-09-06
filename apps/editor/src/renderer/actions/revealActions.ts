@@ -76,6 +76,7 @@ export class RevealInExplorerAction extends Action2 {
   constructor() {
     super({
       id: RevealInExplorerAction.ID,
+      icon: 'reveal',
       title: localize2('action.revealInExplorer.title', 'Reveal in Explorer View'),
       category: localize2('command.category.file', 'File'),
       menu: [
@@ -114,6 +115,7 @@ export class RevealInOSExplorerAction extends Action2 {
   constructor() {
     super({
       id: RevealInOSExplorerAction.ID,
+      icon: 'reveal',
       title: localize2('action.openContainingFolder.title', 'Open Containing Folder'),
       category: localize2('command.category.file', 'File'),
       keybinding: {

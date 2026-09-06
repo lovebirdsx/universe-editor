@@ -183,12 +183,12 @@
         { "command": "git.unstage", "when": "scmProvider == git && scmResourceGroup == index", "group": "inline", "icon": "remove" }
       ],
       "timeline/item/context": [
-        { "command": "git.timeline.openDiff", "when": "timelineItem == git:file:commit", "group": "1_diff@1" },
-        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "1_actions@2" },
-        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "inline" },
-        { "command": "git.timeline.copyCommitId", "when": "timelineItem == git:file:commit", "group": "2_copy@1" },
-        { "command": "git.timeline.copyCommitMessage", "when": "timelineItem == git:file:commit", "group": "2_copy@2" },
-        { "command": "git.timeline.openInGraph", "when": "timelineItem == git:file:commit", "group": "3_graph@1" }
+        { "command": "git.timeline.openDiff", "when": "timelineItem == git:file:commit", "group": "1_diff@1", "icon": "compare-changes" },
+        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "1_actions@2", "icon": "git-commit" },
+        { "command": "git.timeline.viewCommit", "when": "timelineItem == git:file:commit", "group": "inline", "icon": "git-commit" },
+        { "command": "git.timeline.copyCommitId", "when": "timelineItem == git:file:commit", "group": "2_copy@1", "icon": "copy" },
+        { "command": "git.timeline.copyCommitMessage", "when": "timelineItem == git:file:commit", "group": "2_copy@2", "icon": "copy" },
+        { "command": "git.timeline.openInGraph", "when": "timelineItem == git:file:commit", "group": "3_graph@1", "icon": "git-graph" }
       ],
       "commandPalette": [
         { "command": "git.openChange", "when": "false" },
