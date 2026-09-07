@@ -49,6 +49,17 @@ const CATALOG_CTX: SessionProviderContext = {
   pricingSource: { id: 'catalog', options: { vendor: 'anthropic' } },
 }
 
+/** A Moonshot gateway: input_tokens includes cached tokens, CNY rates. */
+const MOONSHOT_GATEWAY_CTX: SessionProviderContext = {
+  providerId: 'gw',
+  protocol: 'anthropic-messages',
+  pricingSource: { id: 'http-json', options: {} },
+  gatewayRates: {
+    'kimi-k3': { currency: 'CNY', input: 14, output: 70, cacheRead: 1.4 },
+  },
+  cnyPerUsd: 6.73,
+}
+
 function createSession(ctx: SessionProviderContext | undefined): AcpSession {
   return new AcpSession(
     's1',
@@ -247,5 +258,38 @@ describe('AcpSession — mid-turn usage_update cost', () => {
 
     const after = session.usage.get()?.cost?.amount
     expect(after).toBeLessThan(before!)
+  })
+
+  // Moonshot gateways fold cached tokens into `input_tokens`; the sub-agent
+  // tally goes through the same normalization as the top-level breakdown or
+  // the cached share is billed twice.
+  it('deducts cached tokens from sub-agent input before pricing (Moonshot gateway)', () => {
+    session = createSession(MOONSHOT_GATEWAY_CTX)
+
+    session.applyUpdate({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc1',
+      title: 'Task',
+      kind: 'other',
+      status: 'completed',
+    } as SessionUpdate)
+    session.applyUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      _meta: {
+        '_universe/subagentStats': {
+          model: 'kimi-k3',
+          inputTokens: 1_000_000,
+          cacheReadTokens: 800_000,
+          cacheCreateTokens: 0,
+          outputTokens: 10_000,
+        },
+      },
+    } as SessionUpdate)
+
+    const call = session.toolCalls.get()[0]
+    // (1_000_000−800_000)*14 + 800_000*1.4 + 10_000*70 = 4_620_000 CNY ÷ 6.73 ÷ 1e6.
+    const expected = ((1_000_000 - 800_000) * 14 + 800_000 * 1.4 + 10_000 * 70) / 6.73 / 1e6
+    expect(call?.subagentStats?.costUSD).toBeCloseTo(expected, 10)
   })
 })

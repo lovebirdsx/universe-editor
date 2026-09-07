@@ -65,9 +65,13 @@ describe('repriceForeignModelBreakdown', () => {
       ctx,
     )
     // acme-chat-flash (CNY): input 1 / cacheRead 0.2 / output 2 per M, at 7.2.
+    // DeepSeek's official API reports cache hits/misses separately from
+    // input_tokens (Anthropic-style exclude semantics), so input is NOT netted:
+    // 1_000_000*1 + 500_000*0.2 + 100_000*2.
     const expected = (1_000_000 * 1 + 500_000 * 0.2 + 100_000 * 2) / 7.2 / 1e6
     expect(result).toBeDefined()
-    expect(result!.cost).toEqual({ amount: expected, currency: 'USD' })
+    expect(result!.cost!.amount).toBeCloseTo(expected, 10)
+    expect(result!.cost!.currency).toBe('USD')
     expect(result!.models).toHaveLength(1)
     expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
   })
@@ -145,6 +149,9 @@ describe('repriceForeignModelBreakdown', () => {
         },
       },
     )
+    // acme-chat-pro is a built-in DeepSeek catalog member, and DeepSeek reports
+    // cache hits separately from input_tokens, so input is NOT netted:
+    // 1_000_000*9 + 500_000*0.2997 + 100_000*27.
     const expected = (1_000_000 * 9 + 500_000 * 0.2997 + 100_000 * 27) / 7.2 / 1e6
     expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
     expect(result!.cost!.amount).toBeCloseTo(expected, 10)
@@ -251,6 +258,97 @@ describe('repriceForeignModelBreakdown', () => {
     )
     expect(result!.models[0]!.costUSD).toBe(0.42)
     expect(result!.models[1]!.costUSD).toBeGreaterThan(0)
+  })
+
+  // Moonshot/DeepSeek gateways report `input_tokens` WITH the cached tokens
+  // already inside (Anthropic reports them separately). Pricing the raw figure
+  // bills the cached share twice — once at the full input rate, once at the
+  // cache rate. Real session shape: kimi-k3 showed ¥398.7 against an actual
+  // gateway charge of ¥47.74 (~8.5x).
+  it('deducts Moonshot gateway cache tokens from input before pricing (no double billing)', () => {
+    const result = repriceForeignModelBreakdown(
+      [
+        row({
+          model: 'kimi-k3[1m]',
+          inputTokens: 25_670_000,
+          cacheReadTokens: 25_130_000,
+          outputTokens: 58_700,
+          costUSD: 59.24, // what the un-normalized math produced
+        }),
+      ],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: { 'kimi-k3': { currency: 'CNY', input: 14, output: 70, cacheRead: 1.4 } },
+        cnyPerUsd: 6.73,
+      },
+    )
+    // Net input 540_000*14 + cache 25_130_000*1.4 + output 58_700*70 = 46_851_000 CNY
+    // ÷ 6.73 ÷ 1e6 ≈ 6.9615 USD — matching the gateway's actual charge.
+    const expected = ((25_670_000 - 25_130_000) * 14 + 25_130_000 * 1.4 + 58_700 * 70) / 6.73 / 1e6
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
+    expect(result!.cost!.amount).toBeCloseTo(expected, 10)
+  })
+
+  it('deducts cache tokens for a catalog-source Moonshot vendor', () => {
+    const ctx: SessionProviderContext = {
+      providerId: 'm',
+      protocol: 'anthropic-messages',
+      pricingSource: { id: 'catalog', options: { vendor: 'moonshot' } },
+    }
+    const result = repriceForeignModelBreakdown(
+      [row({ model: 'kimi-k2.6', inputTokens: 1_000_000, cacheReadTokens: 500_000, costUSD: 30 })],
+      ctx,
+    )
+    // kimi-k2.6 (CNY): input 6.5 / cacheRead 1.3 per M, default rate 7.2.
+    // (1_000_000−500_000)*6.5 + 500_000*1.3 = 3_900_000 CNY ÷ 7.2 ÷ 1e6 ≈ 0.5417.
+    const expected = ((1_000_000 - 500_000) * 6.5 + 500_000 * 1.3) / 7.2 / 1e6
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
+  })
+
+  // A gateway that renames a Kimi model escapes the built-in catalog membership
+  // check — the raw figure is kept. Documented limitation of name-based
+  // attribution, pinned so it cannot silently change.
+  it('leaves a renamed gateway model un-normalized (catalog membership miss)', () => {
+    const result = repriceForeignModelBreakdown(
+      [
+        row({
+          model: 'kimi-k3-renamed',
+          inputTokens: 1_000_000,
+          cacheReadTokens: 800_000,
+          costUSD: 30,
+        }),
+      ],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: {
+          'kimi-k3-renamed': { currency: 'CNY', input: 14, output: 70, cacheRead: 1.4 },
+        },
+        cnyPerUsd: 6.74,
+      },
+    )
+    const expected = (1_000_000 * 14 + 800_000 * 1.4) / 6.74 / 1e6
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
+  })
+
+  // Anthropic-semantics rows must keep input verbatim: their `input_tokens`
+  // already excludes cache, so deducting would under-bill.
+  it('does not deduct cache tokens for an Anthropic-semantics row', () => {
+    const result = repriceForeignModelBreakdown(
+      [midturnRow({ model: 'claude-opus-4', inputTokens: 1_000_000, cacheReadTokens: 500_000 })],
+      {
+        providerId: 'gw',
+        protocol: 'anthropic-messages',
+        pricingSource: { id: 'http-json', options: {} },
+        gatewayRates: { 'claude-opus-4': { input: 3, output: 15, cacheRead: 0.3 } },
+      },
+    )
+    // 1_000_000*3 + 500_000*0.3 = 3.15. A wrong deduction would give 1.65.
+    const expected = (1_000_000 * 3 + 500_000 * 0.3) / 1e6
+    expect(result!.models[0]!.costUSD).toBeCloseTo(expected, 10)
   })
 })
 

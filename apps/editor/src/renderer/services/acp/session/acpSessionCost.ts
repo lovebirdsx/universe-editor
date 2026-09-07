@@ -17,7 +17,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { estimateCostUSD } from '@universe-editor/platform'
-import { isAnthropicCatalogModel } from '../../../../shared/ai/catalog/index.js'
+import {
+  inputTokensIncludeCached,
+  isAnthropicCatalogModel,
+} from '../../../../shared/ai/catalog/index.js'
 import type { CodexModelUsage } from '../../../../shared/ai/codexUsage.js'
 import { priceSessionModel, type SessionProviderContext } from './acpSessionProviderContext.js'
 import type { AcpModelCost } from './acpSessionModel.js'
@@ -111,10 +114,15 @@ export function repriceForeignModelBreakdown(
     const { pricing, origin } = priceSessionModel(m.model, ctx)
     const trustCli = m.costUSD != null && origin !== 'gateway' && isAnthropicCatalogModel(m.model)
     if (pricing !== undefined && !trustCli) {
+      // Moonshot/DeepSeek rows carry cached tokens inside inputTokens; pricing
+      // the raw figure would bill the cached share at both rates.
+      const input = inputTokensIncludeCached(m.model, ctx?.pricingSource)
+        ? Math.max(0, m.inputTokens - m.cacheReadTokens - m.cacheCreateTokens)
+        : m.inputTokens
       const costUSD = estimateCostUSD(
         pricing,
         {
-          input: m.inputTokens,
+          input,
           output: m.outputTokens,
           cacheRead: m.cacheReadTokens,
           cacheWrite: m.cacheCreateTokens,

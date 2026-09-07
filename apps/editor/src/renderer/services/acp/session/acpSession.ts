@@ -59,6 +59,7 @@ import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
+import { inputTokensIncludeCached } from '../../../../shared/ai/catalog/index.js'
 import {
   LIVE_INGESTION_BUDGET,
   MAX_AVAILABLE_COMMANDS,
@@ -3430,10 +3431,15 @@ export class AcpSession extends Disposable implements IAcpSession {
       console.debug(`[acp-cost] subagent model rate unknown: ${stats.model}`)
       return stats
     }
+    const includesCache = inputTokensIncludeCached(stats.model, ctx?.pricingSource)
     const costUSD = estimateCostUSD(
       pricing,
       {
-        input: stats.inputTokens,
+        // Moonshot/DeepSeek rows carry cached tokens inside inputTokens (same
+        // normalization as the top-level breakdown in acpSessionCost.ts).
+        input: includesCache
+          ? Math.max(0, stats.inputTokens - stats.cacheReadTokens - stats.cacheCreateTokens)
+          : stats.inputTokens,
         output: stats.outputTokens,
         cacheRead: stats.cacheReadTokens,
         cacheWrite: stats.cacheCreateTokens,

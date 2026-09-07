@@ -821,7 +821,9 @@ describe('AcpSessionService — session/update fan-out', () => {
         },
       },
     } as never)
-    const expected = 1.3 / 7.2 // (1e6·¥1 + 5e5·¥0.2 + 1e5·¥2) / 7.2 / 1e6
+    // (1e6·¥1 + 5e5·¥0.2 + 1e5·¥2) / 7.2 / 1e6 — DeepSeek reports cache hits
+    // separately from input_tokens, so input is NOT netted before pricing.
+    const expected = 1.3 / 7.2
     const u = s.usage.get()
     expect(u?.costEstimated).toBe(true)
     expect(u?.cost?.amount).toBeCloseTo(expected, 10)
@@ -899,6 +901,9 @@ describe('AcpSessionService — session/update fan-out', () => {
         },
       } as never)
       // Priced in CNY, normalized with the live 6.74 rate the context carries.
+      // acme-chat-pro is a DeepSeek catalog member, and DeepSeek reports cache
+      // hits separately from input_tokens, so input is NOT netted
+      // (1e6·9 + 5e5·0.2997 + 1e5·27).
       const expected = (1_000_000 * 9 + 500_000 * 0.2997 + 100_000 * 27) / 6.74 / 1e6
       const u = s.usage.get()
       expect(u?.costEstimated).toBe(true)
