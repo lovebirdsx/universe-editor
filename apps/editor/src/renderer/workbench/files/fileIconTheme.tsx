@@ -5,7 +5,7 @@
 
 import { type JSX, useEffect, useState } from 'react'
 import { CornerDownRight } from 'lucide-react'
-import { IThemeService, type URI } from '@universe-editor/platform'
+import { IThemeService, markAsSingleton, type URI } from '@universe-editor/platform'
 import { useOptionalService } from '../useService.js'
 import { basenameOfResource } from './resourceInfo.js'
 import { languageForResource } from './resourceLanguage.js'
@@ -113,7 +113,7 @@ function useFileIconThemeActive(): boolean {
     if (!themeService) return
     const update = (): void => setActive(themeService.getFileIconTheme().id !== '')
     update()
-    const d = themeService.onDidFileIconThemeChange(update)
+    const d = markAsSingleton(themeService.onDidFileIconThemeChange(update))
     return () => d.dispose()
   }, [themeService])
   return active

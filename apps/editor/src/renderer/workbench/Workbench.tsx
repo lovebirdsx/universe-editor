@@ -6,6 +6,7 @@ import {
   PartId,
   LifecyclePhase,
   mark,
+  markAsSingleton,
 } from '@universe-editor/platform'
 import type { LifecycleService, InstantiationService, LayoutSizes } from '@universe-editor/platform'
 import { PerfMarks } from '../../shared/perf/marks.js'
@@ -47,7 +48,7 @@ function useFileIconsEnabledGate(): void {
       document.body.classList.toggle('show-file-icons', themeService.getFileIconTheme().id !== '')
     }
     apply()
-    const d = themeService.onDidFileIconThemeChange(apply)
+    const d = markAsSingleton(themeService.onDidFileIconThemeChange(apply))
     return () => d.dispose()
   }, [themeService])
 }
