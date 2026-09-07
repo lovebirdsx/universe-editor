@@ -8,6 +8,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { request } from 'node:http'
+import { createServer } from 'node:net'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -15,8 +16,21 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const serverScript = join(__dirname, '..', 'server.mjs')
-const PORT = 39217
 const BASE = '/universe-editor/'
+
+let PORT
+
+// 绑 :0 拿 OS 分配的空闲端口后立即释放，避免硬编码端口撞 CI 并行/残留监听。
+async function pickFreePort() {
+  const probe = createServer()
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', resolve)
+  })
+  const { port } = probe.address()
+  await new Promise((resolve) => probe.close(resolve))
+  return port
+}
 
 function httpGet(path) {
   return new Promise((resolve, reject) => {
@@ -123,6 +137,7 @@ before(async () => {
   await mkdir(vsixDir, { recursive: true })
   await writeFile(join(vsixDir, 'acme.demo-1.2.3.vsix'), 'PKZIPfakevsixbody')
 
+  PORT = await pickFreePort()
   child = spawn(
     process.execPath,
     [serverScript, '--root', root, '--port', String(PORT), '--base', BASE],

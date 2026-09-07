@@ -21,12 +21,10 @@ import {
   writePublishers,
 } from './publish-fixture.mjs'
 
-const PORT = 39230
-const RATE_PORT = 39231
-
 let root
 let authDir
 let child
+let PORT
 
 function postRegister(port, payload, rawBody) {
   return httpRequest(port, '/gallery/api/register', {
@@ -51,9 +49,8 @@ before(async () => {
   await writePublishers(authDir, [
     { name: 'taken', tokens: [makeTokenEntry('uet_testtoken_taken_000000000000000', 'ops')] },
   ])
-  ;({ child } = await spawnServer({
+  ;({ child, port: PORT } = await spawnServer({
     root,
-    port: PORT,
     extraArgs: [
       '--gallery-root',
       galleryRoot,
@@ -179,7 +176,6 @@ test('register: IP 节流——--register-rate-limit 2 时第 3 次注册 429', 
   const limitedAuth = `${limitedRoot}-auth`
   const limited = await spawnServer({
     root: limitedRoot,
-    port: RATE_PORT,
     extraArgs: [
       '--gallery-root',
       join(limitedRoot, 'gallery'),
@@ -189,10 +185,11 @@ test('register: IP 节流——--register-rate-limit 2 时第 3 次注册 429', 
       '2',
     ],
   })
+  const ratePort = limited.port
   try {
-    const r1 = await postRegister(RATE_PORT, { publisher: 'p-one' })
-    const r2 = await postRegister(RATE_PORT, { publisher: 'p-two' })
-    const r3 = await postRegister(RATE_PORT, { publisher: 'p-three' })
+    const r1 = await postRegister(ratePort, { publisher: 'p-one' })
+    const r2 = await postRegister(ratePort, { publisher: 'p-two' })
+    const r3 = await postRegister(ratePort, { publisher: 'p-three' })
     assert.equal(r1.status, 201)
     assert.equal(r2.status, 201)
     assert.equal(r3.status, 429)

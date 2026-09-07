@@ -26,15 +26,14 @@ import {
   spawnServer,
 } from './publish-fixture.mjs'
 
-const PORT = 39240
-const NOADMIN_PORT = 39241
-
 let root
 let galleryRoot
 let authDir
 let admin
 let child
 let noAdminChild
+let PORT
+let NOADMIN_PORT
 
 function postAdmin(port, action, token, name) {
   return httpRequest(port, `/gallery/api/admin/publishers/${action}`, {
@@ -73,9 +72,8 @@ before(async () => {
   await writeFile(join(galleryRoot, 'registry.json'), JSON.stringify({ extensions: [] }))
   admin = await makeAdminToken(root)
   const signing = await makeSigningKey(root)
-  ;({ child } = await spawnServer({
+  ;({ child, port: PORT } = await spawnServer({
     root,
-    port: PORT,
     extraArgs: [
       '--gallery-root',
       galleryRoot,
@@ -87,9 +85,8 @@ before(async () => {
   }))
   // 对照实例：未配置管理令牌 → 管理面整体 503
   const bareRoot = await mkdtemp(join(tmpdir(), 'ue-admin-off-'))
-  ;({ child: noAdminChild } = await spawnServer({
+  ;({ child: noAdminChild, port: NOADMIN_PORT } = await spawnServer({
     root: bareRoot,
-    port: NOADMIN_PORT,
     extraArgs: ['--gallery-root', join(bareRoot, 'gallery'), '--auth-dir', `${bareRoot}-auth`],
   }))
 })

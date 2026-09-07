@@ -26,12 +26,12 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const bundleScript = join(__dirname, '..', 'bundle.mjs')
-const PORT = 39224
 const TOKEN = 'uet_bundle_smoke_token_0000000000000'
 
 let root
 let distDir
 let child
+let PORT
 
 before(async () => {
   // 独立临时 dist 目录，避免并发下与 bundle-env/setup 互踩真实 dist/server.env（无 --env 会清理它）。
@@ -51,9 +51,8 @@ before(async () => {
   await writePublishers(authDir, [{ name: 'acme', tokens: [makeTokenEntry(TOKEN, 'ci')] }])
   makeTestVsix(join(root, 'fixture.vsix'), demoManifest())
   const signing = await makeSigningKey(root)
-  ;({ child } = await spawnServer({
+  ;({ child, port: PORT } = await spawnServer({
     root,
-    port: PORT,
     script: bundleOut,
     extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))

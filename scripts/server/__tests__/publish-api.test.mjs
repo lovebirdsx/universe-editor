@@ -27,7 +27,6 @@ import {
   writePublishers,
 } from './publish-fixture.mjs'
 
-const PORT = 39220
 const TOKEN = 'uet_testtoken_acme_0000000000000000'
 const OTHER_TOKEN = 'uet_testtoken_globex_00000000000000'
 
@@ -37,6 +36,7 @@ let authDir
 let vsixPath
 let signing
 let child
+let PORT
 
 before(async () => {
   root = await mkdtemp(join(tmpdir(), 'ue-publish-api-'))
@@ -72,9 +72,8 @@ before(async () => {
   vsixPath = join(root, 'fixture.vsix')
   makeTestVsix(vsixPath, demoManifest())
   signing = await makeSigningKey(root)
-  ;({ child } = await spawnServer({
+  ;({ child, port: PORT } = await spawnServer({
     root,
-    port: PORT,
     extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))
 })
@@ -269,14 +268,14 @@ test('publish: extensionquery 版本 properties 带 VsixHash/VsixSignature/Signa
 test('publish: 未配置签名私钥 → 503（whoami/unpublish 不受影响）', async () => {
   const noKey = await spawnServer({
     root,
-    port: 39225,
     extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir],
   })
+  const noKeyPort = noKey.port
   try {
-    const r = await postVsix(39225, '/gallery/api/publish', TOKEN, vsixPath)
+    const r = await postVsix(noKeyPort, '/gallery/api/publish', TOKEN, vsixPath)
     assert.equal(r.status, 503)
     assert.match(r.body, /signing key/)
-    const who = await httpRequest(39225, '/gallery/api/whoami', { headers: bearer(TOKEN) })
+    const who = await httpRequest(noKeyPort, '/gallery/api/whoami', { headers: bearer(TOKEN) })
     assert.equal(who.status, 200)
   } finally {
     noKey.child.kill()
@@ -390,7 +389,6 @@ test('启动自检: --auth-dir 落在 galleryRoot 之内 → 拒绝启动', asyn
 test('publish: 超过 --max-vsix-size 413', async () => {
   const tiny = await spawnServer({
     root,
-    port: 39222,
     extraArgs: [
       '--gallery-root',
       galleryRoot,
@@ -402,7 +400,7 @@ test('publish: 超过 --max-vsix-size 413', async () => {
     ],
   })
   try {
-    const r = await postVsix(39222, '/gallery/api/publish', TOKEN, vsixPath)
+    const r = await postVsix(tiny.port, '/gallery/api/publish', TOKEN, vsixPath)
     assert.equal(r.status, 413)
   } finally {
     tiny.child.kill()

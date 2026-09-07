@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import { request } from 'node:http'
+import { createServer } from 'node:net'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -49,11 +50,26 @@ export function demoManifest(overrides = {}) {
   }
 }
 
+// 绑 :0 拿一个 OS 分配的空闲端口后立即释放。调用方拿它去起 server 子进程，
+// 避免硬编码端口撞上 CI 上并行/残留的监听者（曾致 EADDRINUSE 重试 20 次耗尽）。
+async function pickFreePort() {
+  const probe = createServer()
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', resolve)
+  })
+  const { port } = probe.address()
+  await new Promise((resolve) => probe.close(resolve))
+  return port
+}
+
 // 起 server 子进程并等就绪。extraArgs 形如 ['--max-vsix-size', '1024']。
+// 不传 port 时自动探测空闲端口；返回实际端口供后续请求使用。
 export async function spawnServer({ root, port, base = '/', extraArgs = [], script = serverScript }) {
+  const actualPort = port ?? (await pickFreePort())
   const child = spawn(
     process.execPath,
-    [script, '--root', root, '--port', String(port), '--base', base, ...extraArgs],
+    [script, '--root', root, '--port', String(actualPort), '--base', base, ...extraArgs],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let output = ''
@@ -65,7 +81,7 @@ export async function spawnServer({ root, port, base = '/', extraArgs = [], scri
       throw new Error(`server 启动失败 (exit ${child.exitCode})\n${output}`)
     }
     try {
-      const r = await httpRequest(port, '/nonexistent-probe')
+      const r = await httpRequest(actualPort, '/nonexistent-probe')
       if (r.status > 0) break
     } catch {
       /* 尚未就绪 */
@@ -76,7 +92,7 @@ export async function spawnServer({ root, port, base = '/', extraArgs = [], scri
     }
     await new Promise((r) => setTimeout(r, 100))
   }
-  return { child, output: () => output }
+  return { child, port: actualPort, output: () => output }
 }
 
 export function httpRequest(port, path, { method = 'GET', headers = {}, body } = {}) {

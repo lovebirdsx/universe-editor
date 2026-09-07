@@ -23,7 +23,6 @@ import {
   writePublishers,
 } from './publish-fixture.mjs'
 
-const PORT = 39223
 const TOKEN = 'uet_uex_integration_token_00000000'
 const uexCli = join(repoRoot, 'packages', 'uex', 'dist', 'cli.js')
 
@@ -33,6 +32,7 @@ let authDir
 let homeDir
 let vsixPath
 let child
+let PORT
 
 function runUex(args) {
   return spawnSync(process.execPath, [uexCli, ...args], {
@@ -57,9 +57,8 @@ before(async () => {
   vsixPath = join(root, 'fixture.vsix')
   makeTestVsix(vsixPath, demoManifest())
   const signing = await makeSigningKey(root)
-  ;({ child } = await spawnServer({
+  ;({ child, port: PORT } = await spawnServer({
     root,
-    port: PORT,
     extraArgs: ['--gallery-root', galleryRoot, '--auth-dir', authDir, ...signing.args],
   }))
 })
