@@ -54,7 +54,7 @@ import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../focus/testing/fakeFocusScopeService.js'
 import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
-import { IRecentTargetsService } from '../../editor/RecentTargetsService.js'
+import { IRecentTargetsService, type RecentTarget } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService, type ClosedEditorEntry } from '../../editor/ClosedEditorsService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
@@ -317,8 +317,10 @@ class FakeRecentTargetsService implements IRecentTargetsService {
   constructor(
     private readonly _items: readonly { editor: EditorInput; group: IEditorGroup }[],
     private readonly _views: readonly IViewDescriptor[] = [],
+    private readonly _order: readonly RecentTarget[] = [],
   ) {}
-  getRecentTargets() {
+  getRecentTargets(): readonly RecentTarget[] {
+    if (this._order.length > 0) return this._order
     return this._items.map((i) => ({ kind: 'editor' as const, ...i }))
   }
   getRecentViews() {
@@ -411,6 +413,8 @@ function setup(
     sideEditors?: EditorInput[]
     closedEntries?: ClosedEditorEntry[]
     views?: readonly IViewDescriptor[]
+    /** Full interleaved MRU order overriding the default editors-first order. */
+    recentTargetsOrder?: readonly RecentTarget[]
   } = {},
 ) {
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
@@ -438,7 +442,12 @@ function setup(
   services.set(IFileSearchService, fileSearch)
   services.set(IEditorGroupsService, groupsFake.groups)
   services.set(IRecentFilesService, recent)
-  services.set(IRecentTargetsService, recentTargets)
+  services.set(
+    IRecentTargetsService,
+    opts.recentTargetsOrder
+      ? new FakeRecentTargetsService([], opts.views ?? [], opts.recentTargetsOrder)
+      : recentTargets,
+  )
   services.set(IClosedEditorsService, closedEditors)
   services.set(IViewDescriptorService, makeViewDescriptors())
   services.set(ILayoutService, layout as unknown as ILayoutService)
@@ -1417,9 +1426,7 @@ describe('FileQuickAccessProvider — views as switch targets', () => {
   const rows = (picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] =>
     picker.items.filter((i): i is IQuickPickItem => 'label' in i && i.label !== undefined)
 
-  it('matches views while typing but keeps them out of the empty-query list', async () => {
-    // The empty query is a recent-files list by convention; views there would
-    // crowd out the files the user actually came for.
+  it('seeds views into the empty-query list between editors and recent files', async () => {
     const { provider, fileSearch } = setup({
       views: [makeView('workbench.view.terminal.main', 'Terminal')],
       recent: [{ uri: URI.file('/ws/a.ts'), name: 'a.ts', lastOpened: 1 }],
@@ -1429,15 +1436,86 @@ describe('FileQuickAccessProvider — views as switch targets', () => {
     run(provider, picker)
     await flushPromises()
 
-    expect(rows(picker).some((i) => i.label === 'Terminal')).toBe(false)
-
-    picker.fireValue('termin')
-    await flushPromises()
-    // Presentation comes from the shared builder: container label, no remove ✕.
+    // Empty-query rows: editors and views interleave by recency (no editors
+    // open here), then recent files. The view row carries its container label
+    // as description.
+    expect(rows(picker).map((i) => i.label)).toEqual(['Terminal', 'a.ts'])
     expect(rows(picker).find((i) => i.label === 'Terminal')).toMatchObject({
       description: 'Terminal',
       removable: false,
     })
+
+    picker.fireValue('termin')
+    await flushPromises()
+    expect(rows(picker).find((i) => i.label === 'Terminal')).toMatchObject({
+      description: 'Terminal',
+      removable: false,
+    })
+  })
+
+  it('keeps view MRU order in the empty-query list', async () => {
+    // getRecentViews returns most-recent-first; the picker must preserve that
+    // order rather than re-sort alphabetically.
+    const { provider } = setup({
+      views: [
+        makeView('workbench.view.zeta.main', 'Zeta'),
+        makeView('workbench.view.alpha.main', 'Alpha'),
+        makeView('workbench.view.middle.main', 'Middle'),
+      ],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(rows(picker).map((i) => i.label)).toEqual(['Zeta', 'Alpha', 'Middle'])
+  })
+
+  it('interleaves editors and views by recency at the head of the empty-query list', async () => {
+    // The reported scenario: an editor is open, the user clicks into the search
+    // view, then hits Ctrl+P. Because the search view is the most-recently
+    // focused target, it must outrank every editor — editors and views are not
+    // grouped into separate segments but interleaved by getRecentTargets order.
+    const editor = new FakeEditorInput('file', URI.file('/ws/src/a.ts'), 'a.ts')
+    const searchView = makeView('workbench.view.search.main', 'Search')
+    const otherView = makeView('workbench.view.output.main', 'Output')
+    const { provider } = setup({
+      openEditors: [editor],
+      views: [searchView, otherView],
+      recentTargetsOrder: [
+        { kind: 'view', descriptor: searchView },
+        {
+          kind: 'editor',
+          editor,
+          group: { id: 1 } as unknown as IEditorGroup,
+        },
+        { kind: 'view', descriptor: otherView },
+      ],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(rows(picker).map((i) => i.label)).toEqual(['Search', 'a.ts', 'Output'])
+  })
+
+  it('orders fuzzy-equal view hits by MRU rather than alphabetically', async () => {
+    // Both views match the query with the same fuzzy score (exact prefix hit on
+    // the label), so the score alone cannot order them — without the MRU
+    // tie-breaker the picker would fall back to path length/alphabetical and
+    // 'Alpha' would outrank 'Zulu'.
+    const { provider } = setup({
+      views: [
+        makeView('workbench.view.zulu.main', 'Zulu panel'),
+        makeView('workbench.view.alpha.main', 'Alpha panel'),
+      ],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('panel')
+    await flushPromises()
+    expect(rows(picker).map((i) => i.label)).toEqual(['Zulu panel', 'Alpha panel'])
   })
 
   it('matches a view by its container label, not just its own name', async () => {

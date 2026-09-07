@@ -10,13 +10,13 @@
  *  warm-up walk could not see the whole tree (listing truncated at the cache
  *  cap), each keystroke additionally runs a scored main-process search and
  *  merges the hits, so files outside the cached subset remain findable.
- *  Open editors (all types, MRU order) head the empty-query list and
- *  join fuzzy matching while typing, followed by recent files; with no workspace
- *  it falls back to the recent files list. Views (Explorer, Terminal, Output…)
- *  are matched too, so Ctrl+P reaches any switch target — but only when the user
- *  types: they would otherwise crowd out files in the empty-query list, which is
- *  a "recent files" list by convention. Mirrors VSCode's file quick access,
- *  whose cached-listing fast path is what keeps typing responsive on large trees.
+ *  Open editors and views interleave by recency at the head of the empty-query
+ *  list — the target the user just worked in (file OR view) outranks everything
+ *  else, mirroring Ctrl+Tab's MRU. Both kinds also join fuzzy matching while
+ *  typing; fuzzy-equal view rows keep their MRU order rather than falling back
+ *  to alphabetical. With no workspace the picker falls back to the recent files
+ *  list. Mirrors VSCode's file quick access, whose cached-listing fast path is
+ *  what keeps typing responsive on large trees.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -61,6 +61,7 @@ import {
   decodeEditorPickId,
   decodeViewPickId,
   encodeEditorPickId,
+  encodeViewPickId,
   IRecentTargetsService,
 } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
@@ -93,6 +94,18 @@ interface ScoredRow {
   readonly path: string
   readonly pick?: IQuickPickItem
   readonly entry?: MentionFileEntry
+  /** Set only on view rows: index within `getRecentViews()`. Tie-breaker when
+   *  two view rows score equally so MRU order survives the fuzzy sort. */
+  readonly viewRank?: number
+}
+
+/** Fuzzy-row comparator. Score first; when two view rows tie, prefer the one
+ *  more recently used (lower `viewRank`); otherwise fall back to the standard
+ *  path comparator. */
+function compareScoredRows(a: ScoredRow, b: ScoredRow): number {
+  if (a.score !== b.score) return b.score - a.score
+  if (a.viewRank !== undefined && b.viewRank !== undefined) return a.viewRank - b.viewRank
+  return compareByScoreThenPath(a.score, b.score, a.path, b.path)
 }
 
 /** 绝对路径显示：file: 用 fsPath 折 Windows 盘符，非 file:（远端资源）用其 path 段。 */
@@ -128,6 +141,10 @@ interface EditorPickCandidate {
   readonly pick: IQuickPickItem
   readonly name: string
   readonly path: string
+  /** Index within `IRecentTargetsService.getRecentViews()` — set only on view
+   *  candidates. Used as the tie-breaker when two view rows score equally in a
+   *  fuzzy match so the picker keeps the MRU order the tracker produced. */
+  readonly viewRank?: number
 }
 
 function hasPathSeparator(value: string): boolean {
@@ -262,11 +279,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   /** Visible views (MRU order) as pick candidates. Matched against the view name
    *  and its container label, so "term" finds Terminal and "panel" is not
-   *  required to know which container a view lives in. */
+   *  required to know which container a view lives in. Each candidate carries
+   *  its MRU index so fuzzy-equal view rows keep the recency order. */
   private _buildViewCandidates(): EditorPickCandidate[] {
-    return this._recentTargets.getRecentViews().map((descriptor) => {
+    return this._recentTargets.getRecentViews().map((descriptor, index) => {
       const pick = createViewPickItem(descriptor, this._viewDescriptors)
-      return { pick, name: pick.label, path: pick.description ?? pick.label }
+      return { pick, name: pick.label, path: pick.description ?? pick.label, viewRank: index }
     })
   }
 
@@ -396,18 +414,43 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
     }
 
-    // Open editors (all types, MRU order) participate both as the head of the
-    // empty-query list and as fuzzy-match candidates while typing — mirroring
-    // VSCode, where Ctrl+P mixes open editors with recent files. Views join the
-    // matching only, never the empty-query list (see the file header).
+    // Open editors (all types) and views interleave by recency at the head of
+    // the empty-query list — the target the user just worked in outranks
+    // everything else, mirroring Ctrl+Tab's MRU. Both kinds also participate in
+    // fuzzy matching while typing; fuzzy-equal view rows keep their MRU order
+    // rather than falling back to alphabetical.
     const editorCandidates = this._buildEditorCandidates(root)
-    const editorPicks = editorCandidates.map((c) => c.pick)
-    const matchCandidates = [...editorCandidates, ...this._buildViewCandidates()]
+    const viewCandidates = this._buildViewCandidates()
+    const matchCandidates = [...editorCandidates, ...viewCandidates]
+
+    // Index candidates by pick id so the empty-query list below can re-emit
+    // them in `getRecentTargets()` recency order without rebuilding the pick.
+    const candidateByPickId = new Map<string, IQuickPickItem>()
+    for (const c of matchCandidates) candidateByPickId.set(c.pick.id, c.pick)
 
     let recentFileItems: readonly IQuickPickItem[] = []
     const emptyQueryItems = (): IQuickPickItem[] => {
-      const editorIds = new Set(editorPicks.map((p) => p.id))
-      return [...editorPicks, ...recentFileItems.filter((it) => !editorIds.has(it.id))].slice(
+      const headIds = new Set<string>()
+      const head: IQuickPickItem[] = []
+      for (const target of this._recentTargets.getRecentTargets()) {
+        const id =
+          target.kind === 'editor'
+            ? (target.editor.resource?.toString() ??
+              encodeEditorPickId(target.group.id, target.editor.id))
+            : encodeViewPickId(target.descriptor.id)
+        if (headIds.has(id)) continue
+        const pick = candidateByPickId.get(id)
+        if (!pick) continue
+        headIds.add(id)
+        head.push(pick)
+      }
+      // Candidates the MRU did not surface (e.g. recently closed editors —
+      // restorable but never focused this session) keep their relative order
+      // after the interleaved head, before the recent files.
+      for (const c of matchCandidates) {
+        if (!headIds.has(c.pick.id)) head.push(c.pick)
+      }
+      return [...head, ...recentFileItems.filter((it) => !headIds.has(it.id))].slice(
         0,
         GO_TO_FILE_MAX_RESULTS,
       )
@@ -428,13 +471,17 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     // Fuzzy match over the open-editor and view candidates only — used both as
     // the non-file tier of the full filter and as the cold-cache fallback list.
-    const matchEditors = (
-      pattern: string,
-    ): { pick: IQuickPickItem; score: number; path: string }[] => {
-      const hits: { pick: IQuickPickItem; score: number; path: string }[] = []
+    const matchEditors = (pattern: string): ScoredRow[] => {
+      const hits: ScoredRow[] = []
       for (const cand of matchCandidates) {
         const score = scoreFileMatch(cand.name, cand.path, pattern)
-        if (score >= 0) hits.push({ pick: cand.pick, score, path: cand.path })
+        if (score < 0) continue
+        hits.push({
+          pick: cand.pick,
+          score,
+          path: cand.path,
+          ...(cand.viewRank !== undefined ? { viewRank: cand.viewRank } : {}),
+        })
       }
       return hits
     }
@@ -444,18 +491,17 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // Small pools filter synchronously inside the keystroke (zero added latency);
     // large pools scan in time-sliced chunks so the input event returns instantly.
     const sortRows = (rows: ScoredRow[]): void => {
-      rows.sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
+      rows.sort(compareScoredRows)
     }
     const finalizeRows = (rows: ScoredRow[]): IQuickPickItem[] => {
       sortRows(rows)
       return rows.slice(0, GO_TO_FILE_MAX_RESULTS).map((r) => r.pick ?? entryToPick(r.entry!))
     }
     const editorRows = (pattern: string): { rows: ScoredRow[]; ids: Set<string> } => {
-      const hits = matchEditors(pattern)
-      return {
-        rows: hits.map((h) => ({ score: h.score, path: h.path, pick: h.pick })),
-        ids: new Set(hits.map((h) => h.pick.id)),
-      }
+      const rows = matchEditors(pattern)
+      const ids = new Set<string>()
+      for (const r of rows) if (r.pick) ids.add(r.pick.id)
+      return { rows, ids }
     }
     // Score `pool` from index `from` into rows/matched; stops once past
     // `deadline` (checked every 1024 entries). Returns the resume index.
@@ -644,9 +690,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         // query once files land, superseding these interim results).
         picker.busy = true
         const editorOnly = matchEditors(pattern)
-          .sort((a, b) => compareByScoreThenPath(a.score, b.score, a.path, b.path))
+          .sort(compareScoredRows)
           .slice(0, GO_TO_FILE_MAX_RESULTS)
-          .map((h) => h.pick)
+          .flatMap((h) => (h.pick ? [h.pick] : []))
         picker.items = editorOnly
         void prependExactPathMatch(pattern, mySeq, editorOnly)
         return
@@ -723,14 +769,42 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   ): void {
     const { disposables, token } = options
     picker.matchOnDescription = true
+    // Keep the provider order (editors → views by MRU → recent files) rather
+    // than letting the panel re-sort alphabetically. fuzzyKeepOrder still filters
+    // as the user types but skips the score/MRU sort, so view recency survives.
+    picker.filterMode = 'fuzzyKeepOrder'
     picker.placeholder = localize('quickInput.openRecentFile.placeholder', 'Open Recent File…')
 
     const editorPicks = this._buildEditorCandidates(undefined).map((c) => c.pick)
     // Panel-side filtering here (no `filterExternally`), so views are part of the
     // item list rather than appearing only once a query is typed. Harmless with
     // no workspace open: the list is short, and views are then the main thing
-    // worth switching to.
+    // worth switching to. Editors and views interleave by recency (mirroring the
+    // workspace branch), then recent files follow.
     const viewPicks = this._buildViewCandidates().map((c) => c.pick)
+    const headPickById = new Map<string, IQuickPickItem>()
+    for (const p of [...editorPicks, ...viewPicks]) headPickById.set(p.id, p)
+
+    const interleavedHead = (): IQuickPickItem[] => {
+      const seen = new Set<string>()
+      const out: IQuickPickItem[] = []
+      for (const target of this._recentTargets.getRecentTargets()) {
+        const id =
+          target.kind === 'editor'
+            ? (target.editor.resource?.toString() ??
+              encodeEditorPickId(target.group.id, target.editor.id))
+            : encodeViewPickId(target.descriptor.id)
+        if (seen.has(id)) continue
+        const pick = headPickById.get(id)
+        if (!pick) continue
+        seen.add(id)
+        out.push(pick)
+      }
+      for (const p of headPickById.values()) {
+        if (!seen.has(p.id)) out.push(p)
+      }
+      return out
+    }
 
     disposables.add(
       picker.onDidAccept((items) => {
@@ -743,19 +817,16 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     void this._recentFiles.getAll().then((all) => {
       if (token.isCancellationRequested) return
-      const editorIds = new Set(editorPicks.map((p) => p.id))
-      picker.items = [
-        ...editorPicks,
-        ...all
-          .map((f) => ({
-            id: f.uri.toString(),
-            label: f.name,
-            description: displayPath(f.uri),
-            iconId: resourceIconId(f.uri),
-          }))
-          .filter((it) => !editorIds.has(it.id)),
-        ...viewPicks,
-      ]
+      const headIds = new Set(headPickById.keys())
+      const recentPicks = all
+        .map((f) => ({
+          id: f.uri.toString(),
+          label: f.name,
+          description: displayPath(f.uri),
+          iconId: resourceIconId(f.uri),
+        }))
+        .filter((it) => !headIds.has(it.id))
+      picker.items = [...interleavedHead(), ...recentPicks]
     })
   }
 }
