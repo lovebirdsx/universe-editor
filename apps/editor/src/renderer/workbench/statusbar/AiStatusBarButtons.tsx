@@ -15,6 +15,8 @@ import { createPortal } from 'react-dom'
 import {
   AiQuickSettingsPanel,
   FocusScopeOverlay,
+  type AiInlineScope,
+  type AiInlineScopeRow,
   type AiSlotKey,
   type AiSlotRow,
 } from '@universe-editor/workbench-ui'
@@ -84,7 +86,10 @@ export function AiStatusBarButtons() {
   const [open, setOpen] = useState(false)
   const [rect, setRect] = useState<DOMRect | null>(null)
   const [snapshot, setSnapshot] = useState<AiSnapshot>(EMPTY)
-  const [inlineEnabled, setInlineEnabled] = useState(inline.enabled)
+  const [inlineEnabled, setInlineEnabled] = useState<Record<AiInlineScope, boolean>>({
+    editor: inline.isEnabled('editor'),
+    session: inline.isEnabled('session'),
+  })
 
   const aiBtnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
@@ -136,7 +141,7 @@ export function AiStatusBarButtons() {
   useEffect(() => {
     const apply = () => {
       void reload()
-      setInlineEnabled(inline.enabled)
+      setInlineEnabled({ editor: inline.isEnabled('editor'), session: inline.isEnabled('session') })
     }
     apply()
     const disposables = [
@@ -227,6 +232,23 @@ export function AiStatusBarButtons() {
     setOpen(false)
   }
 
+  const inlineScopes: readonly AiInlineScopeRow[] = [
+    {
+      scope: 'editor',
+      label: localize('ai.quickSettings.inlineScope.editor', 'Text Editor'),
+      checked: inlineEnabled.editor,
+    },
+    {
+      scope: 'session',
+      label: localize('ai.quickSettings.inlineScope.session', 'Session Input'),
+      checked: inlineEnabled.session,
+    },
+  ]
+
+  const onToggleInlineScope = (scope: AiInlineScope, enabled: boolean) => {
+    inline.setEnabled(scope, enabled)
+  }
+
   const panel =
     open && rect
       ? createPortal(
@@ -243,8 +265,8 @@ export function AiStatusBarButtons() {
               <AiQuickSettingsPanel
                 title={localize('ai.quickSettings.title', 'AI Settings')}
                 inlineLabel={localize('ai.quickSettings.inlineCompletions', 'Inline Completions')}
-                inlineEnabled={inlineEnabled}
-                onToggleInline={(b) => inline.setEnabled(b)}
+                inlineScopes={inlineScopes}
+                onToggleInlineScope={onToggleInlineScope}
                 openAgentsLabel={localize('ai.quickSettings.openAgents', 'Open Agents')}
                 onOpenAgents={() => {
                   void commands.executeCommand('workbench.action.agent.openView')

@@ -35,6 +35,10 @@ const PROMPT_UNICODE_HIGHLIGHT: NonNullable<monaco.editor.IEditorOptions['unicod
   allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
 }
 
+// Monotonic id so each prompt model gets a unique inmemory://prompt/<id> URI
+// (createModel throws on a duplicate URI).
+let nextPromptModelId = 1
+
 // Minimal shape of Monaco's inline-completions controller, just enough to read
 // whether ghost text is currently on screen at the cursor.
 interface GhostTextLike {
@@ -307,7 +311,13 @@ export function PromptMonacoEditor({
     const mount = (m: typeof monaco): void => {
       if (disposed || !containerRef.current) return
       monacoRef.current = m
-      const model = m.editor.createModel(initialText ?? '', 'plaintext')
+      // Give the prompt model a dedicated inmemory URI so IInlineCompletionService
+      // can scope it ('session') apart from real file editors ('editor').
+      const model = m.editor.createModel(
+        initialText ?? '',
+        'plaintext',
+        m.Uri.parse(`inmemory://prompt/${nextPromptModelId++}`),
+      )
       modelRef.current = model
       const fontSize = configService.get<number>('editor.fontSize') ?? 13
       const ed = m.editor.create(

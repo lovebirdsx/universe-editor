@@ -19,8 +19,11 @@ function renderPanel(overrides: Partial<AiQuickSettingsPanelProps> = {}) {
   const props: AiQuickSettingsPanelProps = {
     title: 'AI',
     inlineLabel: 'Inline Completions',
-    inlineEnabled: true,
-    onToggleInline: vi.fn(),
+    inlineScopes: [
+      { scope: 'editor', label: 'Text Editor', checked: true },
+      { scope: 'session', label: 'Session Input', checked: false },
+    ],
+    onToggleInlineScope: vi.fn(),
     openAgentsLabel: 'Open Agents',
     onOpenAgents: vi.fn(),
     openSettingsLabel: 'Manage Models',
@@ -40,10 +43,22 @@ function renderPanel(overrides: Partial<AiQuickSettingsPanelProps> = {}) {
 }
 
 describe('AiQuickSettingsPanel', () => {
-  it('toggles inline completions', () => {
+  it('toggles each inline completion scope independently', () => {
     const props = renderPanel()
-    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle'))
-    expect(props.onToggleInline).toHaveBeenCalledWith(false)
+    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle-editor'))
+    expect(props.onToggleInlineScope).toHaveBeenCalledWith('editor', false)
+    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle-session'))
+    expect(props.onToggleInlineScope).toHaveBeenCalledWith('session', true)
+  })
+
+  it('reflects the checked state of each scope', () => {
+    renderPanel()
+    expect(
+      (screen.getByTestId('ai-quick-settings-inline-toggle-editor') as HTMLInputElement).checked,
+    ).toBe(true)
+    expect(
+      (screen.getByTestId('ai-quick-settings-inline-toggle-session') as HTMLInputElement).checked,
+    ).toBe(false)
   })
 
   it('fires the shortcut callbacks', () => {

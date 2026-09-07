@@ -3,7 +3,7 @@
  *
  *  验证 toggle 命令写全局 User 设置层，重启后开关状态保持：
  *    1. 首次冷启动 → toggle → 轮询磁盘 settings.json 落盘（UserSettingsSync 异步写盘）
- *    2. 同一 userData 目录二次冷启动 → 快速设置里 inline toggle 保持关闭
+ *    2. 同一 userData 目录二次冷启动 → 快速设置里 editor 勾选保持关闭
  *
  *  自启动模式（每测试自己 launch 两次），照抄 smoke.editorRestore.spec.ts。
  *--------------------------------------------------------------------------------------------*/
@@ -20,8 +20,8 @@ import {
 import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
-const TOGGLE = 'ai.inlineCompletion.toggle'
-const KEY = 'ai.inlineCompletion.enabled'
+const TOGGLE = 'ai.inlineCompletion.toggleInEditor'
+const KEY = 'ai.inlineCompletion.enabledInEditor'
 
 function readPersistedEnabled(userDataDir: string): unknown {
   const raw = readFileSync(join(userDataDir, 'settings.json'), 'utf8')
@@ -91,11 +91,9 @@ test.describe('@p1 inline completion restore', () => {
           .toBe(false)
         await expect(second.page.getByTestId('statusbar-ai-button')).toBeVisible()
         await second.page.getByTestId('statusbar-ai-button').click()
-        await expect
-          .poll(() =>
-            second.page.getByTestId('ai-quick-settings-inline-toggle').getAttribute('aria-checked'),
-          )
-          .toBe('false')
+        await expect(
+          second.page.getByTestId('ai-quick-settings-inline-toggle-editor'),
+        ).not.toBeChecked()
         await expectNoLeaks(second.page)
       } finally {
         await closeApp(second.app)

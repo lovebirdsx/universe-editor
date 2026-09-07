@@ -27,7 +27,11 @@ import {
   type ILoggerService,
   type INotificationService,
 } from '@universe-editor/platform'
-import { InlineCompletionService, sanitizeCompletion } from '../InlineCompletionService.js'
+import {
+  InlineCompletionService,
+  isSessionPromptModel,
+  sanitizeCompletion,
+} from '../InlineCompletionService.js'
 import type { IRecentEdit, IRecentEditsTracker } from '../RecentEditsTracker.js'
 
 const MODEL: AiModelMetadata = {
@@ -135,12 +139,20 @@ interface FakeModelOptions {
   value: string
   cursorOffset: number
   languageId?: string
+  scheme?: string
+  authority?: string
 }
 
 function fakeMonacoModel(opts: FakeModelOptions) {
   const lines = opts.value.split('\n')
+  const scheme = opts.scheme ?? 'file'
+  const authority = opts.authority ?? ''
   return {
-    uri: { toString: () => 'file:///test' },
+    uri: {
+      scheme,
+      authority,
+      toString: () => `${scheme}://${authority}/test`,
+    },
     getValue: () => opts.value,
     getLanguageId: () => opts.languageId ?? 'plaintext',
     getOffsetAt: () => opts.cursorOffset,
@@ -248,12 +260,37 @@ describe('sanitizeCompletion', () => {
 })
 
 describe('InlineCompletionService.provide', () => {
-  it('returns null when the feature is disabled', async () => {
+  it('returns null when the feature is disabled in that scope', async () => {
     const { service, ai } = createService()
     ai.inlineModelId = MODEL.id
-    service.setEnabled(false)
+    service.setEnabled('editor', false)
     const result = await provide(service, fakeMonacoModel({ value: 'abc', cursorOffset: 3 }))
     expect(result).toBeNull()
+  })
+
+  it('gates the two scopes independently', async () => {
+    const { service, ai } = createService()
+    ai.inlineModelId = MODEL.id
+    ai.reply = 'world'
+    // Defaults: editor on, session off.
+    expect(service.isEnabled('editor')).toBe(true)
+    expect(service.isEnabled('session')).toBe(false)
+    const sessionModel = fakeMonacoModel({
+      value: 'abc',
+      cursorOffset: 3,
+      scheme: 'inmemory',
+      authority: 'prompt',
+    })
+    expect(await provide(service, sessionModel)).toBeNull()
+    const editorModel = fakeMonacoModel({ value: 'abc', cursorOffset: 3 })
+    expect(await provide(service, editorModel)).not.toBeNull()
+
+    // Enabling only the session scope unblocks the prompt model, and disabling
+    // the editor scope does not affect it.
+    service.setEnabled('session', true)
+    service.setEnabled('editor', false)
+    expect(await provide(service, sessionModel)).not.toBeNull()
+    expect(await provide(service, editorModel)).toBeNull()
   })
 
   it('returns null when no model is configured', async () => {
@@ -366,14 +403,15 @@ describe('InlineCompletionService.provide', () => {
 })
 
 describe('enabled persistence', () => {
-  const KEY = 'ai.inlineCompletion.enabled'
+  const KEY = 'ai.inlineCompletion.enabledInEditor'
+  const SESSION_KEY = 'ai.inlineCompletion.enabledInSession'
 
   it('persists setEnabled to the User layer and fires once', () => {
     const { service, config } = createService()
     let fires = 0
     service.onDidChange(() => fires++)
-    service.setEnabled(false)
-    expect(service.enabled).toBe(false)
+    service.setEnabled('editor', false)
+    expect(service.isEnabled('editor')).toBe(false)
     expect(fires).toBe(1)
     expect(config.getLayerSnapshot(ConfigurationTarget.User)[KEY]).toBe(false)
     expect(config.getLayerSnapshot(ConfigurationTarget.Project)[KEY]).toBeUndefined()
@@ -384,37 +422,70 @@ describe('enabled persistence', () => {
     const config = new ConfigurationService()
     config.update(KEY, false, ConfigurationTarget.Project)
     const { service } = createService({ config })
-    expect(service.enabled).toBe(false)
+    expect(service.isEnabled('editor')).toBe(false)
     let fires = 0
     service.onDidChange(() => fires++)
-    service.toggleEnabled()
-    expect(service.enabled).toBe(true)
+    service.toggleEnabled('editor')
+    expect(service.isEnabled('editor')).toBe(true)
     expect(fires).toBe(1)
     expect(config.getLayerSnapshot(ConfigurationTarget.User)[KEY]).toBe(true)
     expect(config.getLayerSnapshot(ConfigurationTarget.Project)[KEY]).toBeUndefined()
   })
 
-  it('seeds from persisted layers', () => {
+  it('seeds each scope from its own persisted layers', () => {
     const userDisabled = new ConfigurationService()
     userDisabled.update(KEY, false, ConfigurationTarget.User)
-    expect(createService({ config: userDisabled }).service.enabled).toBe(false)
+    const fromUser = createService({ config: userDisabled }).service
+    expect(fromUser.isEnabled('editor')).toBe(false)
+    // The untouched session scope keeps its own default (off).
+    expect(fromUser.isEnabled('session')).toBe(false)
 
     const projectShadowsUser = new ConfigurationService()
     projectShadowsUser.update(KEY, true, ConfigurationTarget.User)
     projectShadowsUser.update(KEY, false, ConfigurationTarget.Project)
-    expect(createService({ config: projectShadowsUser }).service.enabled).toBe(false)
+    expect(createService({ config: projectShadowsUser }).service.isEnabled('editor')).toBe(false)
+
+    const sessionEnabled = new ConfigurationService()
+    sessionEnabled.update(SESSION_KEY, true, ConfigurationTarget.User)
+    const fromSession = createService({ config: sessionEnabled }).service
+    expect(fromSession.isEnabled('session')).toBe(true)
+    expect(fromSession.isEnabled('editor')).toBe(true)
   })
 
-  it('reacts to external configuration changes', () => {
+  it('reacts to external configuration changes per scope', () => {
     const { service, config } = createService()
     let fires = 0
     service.onDidChange(() => fires++)
-    config.update(KEY, false, ConfigurationTarget.Memory)
-    expect(service.enabled).toBe(false)
+    config.update(SESSION_KEY, true, ConfigurationTarget.Memory)
+    expect(service.isEnabled('session')).toBe(true)
+    expect(service.isEnabled('editor')).toBe(true)
     expect(fires).toBe(1)
-    config.update(KEY, undefined, ConfigurationTarget.Memory)
-    expect(service.enabled).toBe(true)
+    config.update(SESSION_KEY, undefined, ConfigurationTarget.Memory)
+    expect(service.isEnabled('session')).toBe(false)
     expect(fires).toBe(2)
+    // The editor scope key still controls only the editor scope.
+    config.update(KEY, false, ConfigurationTarget.Memory)
+    expect(service.isEnabled('editor')).toBe(false)
+    expect(service.isEnabled('session')).toBe(false)
+    expect(fires).toBe(3)
+  })
+})
+
+describe('isSessionPromptModel', () => {
+  it('recognizes the session prompt URI', () => {
+    const prompt = fakeMonacoModel({
+      value: '',
+      cursorOffset: 0,
+      scheme: 'inmemory',
+      authority: 'prompt',
+    })
+    expect(isSessionPromptModel(prompt as never)).toBe(true)
+    expect(isSessionPromptModel(fakeMonacoModel({ value: '', cursorOffset: 0 }) as never)).toBe(
+      false,
+    )
+    // A plain inmemory model without the prompt authority is an editor.
+    const scratch = fakeMonacoModel({ value: '', cursorOffset: 0, scheme: 'inmemory' })
+    expect(isSessionPromptModel(scratch as never)).toBe(false)
   })
 })
 

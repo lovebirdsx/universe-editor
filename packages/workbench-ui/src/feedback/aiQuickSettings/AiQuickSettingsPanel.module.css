@@ -17,16 +17,19 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-4);
-  padding-block-end: var(--spacing-3);
-  border-block-end: 1px solid var(--vscode-workbench-borderSubtle, rgba(255, 255, 255, 0.06));
 }
 
-.inlineToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  cursor: pointer;
+.inlineTitle {
+  font-weight: var(--font-weight-semibold, 600);
   user-select: none;
+}
+
+.scopeList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block-end: var(--spacing-3);
+  border-block-end: 1px solid var(--vscode-workbench-borderSubtle, rgba(255, 255, 255, 0.06));
 }
 
 .actions {

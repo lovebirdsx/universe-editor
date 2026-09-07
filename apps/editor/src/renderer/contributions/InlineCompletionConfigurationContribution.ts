@@ -34,12 +34,20 @@ export class InlineCompletionConfigurationContribution
               'How often (milliseconds) the gateway account-usage indicator re-reads its value. Each refresh reads the cached value; a missing or stale (5 minutes) reading triggers one network fetch to the gateway.',
             ),
           },
-          'ai.inlineCompletion.enabled': {
+          'ai.inlineCompletion.enabledInEditor': {
             type: 'boolean',
             default: true,
             description: localize(
-              'settings.ai.inlineCompletion.enabled',
-              'Enable AI inline completions (ghost text) while editing.',
+              'settings.ai.inlineCompletion.enabledInEditor',
+              'Enable AI inline completions (ghost text) in text editors.',
+            ),
+          },
+          'ai.inlineCompletion.enabledInSession': {
+            type: 'boolean',
+            default: false,
+            description: localize(
+              'settings.ai.inlineCompletion.enabledInSession',
+              'Enable AI inline completions (ghost text) in the session prompt input.',
             ),
           },
           'ai.inlineCompletion.debounceDelay': {

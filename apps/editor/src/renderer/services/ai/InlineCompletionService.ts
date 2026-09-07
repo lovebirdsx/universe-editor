@@ -37,7 +37,8 @@ import { IRecentEditsTracker, type IRecentEdit } from './RecentEditsTracker.js'
 import { composeNesEdits, parseNesEdits } from './nesEditParser.js'
 
 const CONFIG = {
-  enabled: 'ai.inlineCompletion.enabled',
+  enabledInEditor: 'ai.inlineCompletion.enabledInEditor',
+  enabledInSession: 'ai.inlineCompletion.enabledInSession',
   debounceDelay: 'ai.inlineCompletion.debounceDelay',
   prefixChars: 'ai.inlineCompletion.maxContextPrefixChars',
   suffixChars: 'ai.inlineCompletion.maxContextSuffixChars',
@@ -53,7 +54,8 @@ const CONFIG = {
 } as const
 
 const DEFAULTS = {
-  enabled: true,
+  enabledInEditor: true,
+  enabledInSession: false,
   debounceDelay: 300,
   prefixChars: 2000,
   suffixChars: 500,
@@ -67,19 +69,49 @@ const DEFAULTS = {
   nesFallback: true,
 } as const
 
+/**
+ * Scope an inline completion fires in: a normal text editor, or the session
+ * prompt input. Each scope has its own persisted enable flag so the two can be
+ * toggled independently.
+ */
+export type InlineCompletionScope = 'editor' | 'session'
+
+const SCOPE_CONFIG: Record<InlineCompletionScope, string> = {
+  editor: CONFIG.enabledInEditor,
+  session: CONFIG.enabledInSession,
+}
+
+const SCOPE_DEFAULT: Record<InlineCompletionScope, boolean> = {
+  editor: DEFAULTS.enabledInEditor,
+  session: DEFAULTS.enabledInSession,
+}
+
+/**
+ * The session prompt input is a Monaco editor too, so the single all-language
+ * provider fires for it. Its model carries a dedicated inmemory URI (assigned by
+ * PromptMonacoEditor) which is how we tell it apart from a file editor.
+ */
+export function isSessionPromptModel(model: monaco.editor.ITextModel): boolean {
+  return model.uri.scheme === 'inmemory' && model.uri.authority === 'prompt'
+}
+
+function scopeOf(model: monaco.editor.ITextModel): InlineCompletionScope {
+  return isSessionPromptModel(model) ? 'session' : 'editor'
+}
+
 export interface IInlineCompletionService {
   readonly _serviceBrand: undefined
   /** Fires when enablement, the selected model, or the in-flight state changes. */
   readonly onDidChange: Event<void>
-  /** Runtime on/off; persisted to the User settings layer by the toggle / command. */
-  readonly enabled: boolean
   /** True while a request is in flight (drives the status-bar spinner). */
   readonly requesting: boolean
   /** The completion model id from settings, or undefined when none is chosen. */
   getModelId(): Promise<string | undefined>
   setModelId(modelId: string | undefined): Promise<void>
-  toggleEnabled(): void
-  setEnabled(enabled: boolean): void
+  /** Runtime on/off for one scope; persisted to the User settings layer. */
+  isEnabled(scope: InlineCompletionScope): boolean
+  toggleEnabled(scope: InlineCompletionScope): void
+  setEnabled(scope: InlineCompletionScope, enabled: boolean): void
   /** The Monaco provider entry point. Returns null when nothing should be shown. */
   provide(
     model: monaco.editor.ITextModel,
@@ -105,7 +137,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
 
   private readonly _logger: ILogger
 
-  private _enabled: boolean
+  private readonly _enabled: Record<InlineCompletionScope, boolean>
   private _requesting = false
 
   // Debounce + cancellation for the most recent automatic request.
@@ -126,11 +158,16 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'inlineCompletion', name: 'Inline Completion' })
-    this._enabled = this._config.get<boolean>(CONFIG.enabled) ?? DEFAULTS.enabled
+    this._enabled = {
+      editor: this._readEnabled('editor'),
+      session: this._readEnabled('session'),
+    }
     this._register(
       this._config.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(CONFIG.enabled)) {
-          this._applyEnabled(this._config.get<boolean>(CONFIG.enabled) ?? DEFAULTS.enabled)
+        for (const scope of ['editor', 'session'] as const) {
+          if (e.affectsConfiguration(SCOPE_CONFIG[scope])) {
+            this._applyEnabled(scope, this._readEnabled(scope))
+          }
         }
       }),
     )
@@ -142,8 +179,8 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     this._register({ dispose: () => this._cancelInFlight() })
   }
 
-  get enabled(): boolean {
-    return this._enabled
+  isEnabled(scope: InlineCompletionScope): boolean {
+    return this._enabled[scope]
   }
 
   get requesting(): boolean {
@@ -158,23 +195,27 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     return this._aiModel.setInlineCompletionModelId(modelId)
   }
 
-  toggleEnabled(): void {
-    this.setEnabled(!this._enabled)
+  toggleEnabled(scope: InlineCompletionScope): void {
+    this.setEnabled(scope, !this._enabled[scope])
   }
 
-  setEnabled(enabled: boolean): void {
-    if (this._enabled === enabled) return
-    this._applyEnabled(enabled)
+  setEnabled(scope: InlineCompletionScope, enabled: boolean): void {
+    if (this._enabled[scope] === enabled) return
+    this._applyEnabled(scope, enabled)
     // Persist globally and drop any per-workspace override. Project ranks above
     // User, so clear it FIRST — deleting it while a stale User value is in place
     // makes the config event converge instead of bouncing off the shadowing layer.
-    this._config.update(CONFIG.enabled, undefined, ConfigurationTarget.Project)
-    this._config.update(CONFIG.enabled, enabled, ConfigurationTarget.User)
+    this._config.update(SCOPE_CONFIG[scope], undefined, ConfigurationTarget.Project)
+    this._config.update(SCOPE_CONFIG[scope], enabled, ConfigurationTarget.User)
   }
 
-  private _applyEnabled(enabled: boolean): void {
-    if (this._enabled === enabled) return
-    this._enabled = enabled
+  private _readEnabled(scope: InlineCompletionScope): boolean {
+    return this._config.get<boolean>(SCOPE_CONFIG[scope]) ?? SCOPE_DEFAULT[scope]
+  }
+
+  private _applyEnabled(scope: InlineCompletionScope, enabled: boolean): void {
+    if (this._enabled[scope] === enabled) return
+    this._enabled[scope] = enabled
     if (!enabled) this._cancelInFlight()
     this._onDidChange.fire()
   }
@@ -185,7 +226,8 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     context: monaco.languages.InlineCompletionContext,
     token: CancellationToken,
   ): Promise<monaco.languages.InlineCompletions | null> {
-    if (!this._enabled) return null
+    const scope = scopeOf(model)
+    if (!this._enabled[scope]) return null
     if (token.isCancellationRequested) return null
 
     const disabled = this._config.get<readonly string[]>(CONFIG.disabledLanguages) ?? []
@@ -201,14 +243,14 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     // it produces nothing (unless the user opted out of the fallback).
     const nesEnabled = this._config.get<boolean>(CONFIG.nesEnabled) ?? DEFAULTS.nesEnabled
     if (nesEnabled && context.includeInlineEdits === true) {
-      const edit = await this._provideInlineEdit(model, position, modelId, automatic, token)
+      const edit = await this._provideInlineEdit(model, position, modelId, automatic, scope, token)
       if (edit) return edit
       if (token.isCancellationRequested) return null
       const fallback = this._config.get<boolean>(CONFIG.nesFallback) ?? DEFAULTS.nesFallback
       if (!fallback) return null
     }
 
-    return this._provideGhostText(model, position, modelId, automatic, token)
+    return this._provideGhostText(model, position, modelId, automatic, scope, token)
   }
 
   private async _provideGhostText(
@@ -216,6 +258,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     position: monaco.Position,
     modelId: string,
     automatic: boolean,
+    scope: InlineCompletionScope,
     token: CancellationToken,
   ): Promise<monaco.languages.InlineCompletions | null> {
     if (automatic) {
@@ -233,6 +276,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
       maxTokens,
       modelId,
       'inline-completion',
+      scope,
       token,
     )
     if (text === null || token.isCancellationRequested) return null
@@ -252,6 +296,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     position: monaco.Position,
     modelId: string,
     automatic: boolean,
+    scope: InlineCompletionScope,
     token: CancellationToken,
   ): Promise<monaco.languages.InlineCompletions | null> {
     if (automatic) {
@@ -267,7 +312,14 @@ export class InlineCompletionService extends Disposable implements IInlineComple
 
     const messages = this._buildNesPrompt(model, position, recent)
     const maxTokens = this._config.get<number>(CONFIG.nesMaxTokens) ?? DEFAULTS.nesMaxTokens
-    const text = await this._sendText(messages, maxTokens, modelId, 'next-edit-suggestion', token)
+    const text = await this._sendText(
+      messages,
+      maxTokens,
+      modelId,
+      'next-edit-suggestion',
+      scope,
+      token,
+    )
     if (text === null || token.isCancellationRequested) return null
 
     const parsedEdits = parseNesEdits(text, model.getLineCount())
@@ -312,6 +364,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     maxTokens: number,
     modelId: string,
     purpose: AiRequestPurpose,
+    scope: InlineCompletionScope,
     token: CancellationToken,
   ): Promise<string | null> {
     const cts = new CancellationTokenSource()
@@ -332,7 +385,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     } catch (err) {
       if (!cts.token.isCancellationRequested) {
         this._logger.warn('inline completion failed', err)
-        this._notifyError(err, modelId)
+        this._notifyError(err, modelId, scope)
       }
       return null
     } finally {
@@ -483,7 +536,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     }
   }
 
-  private _notifyError(err: unknown, modelId: string): void {
+  private _notifyError(err: unknown, modelId: string, scope: InlineCompletionScope): void {
     const message = err instanceof Error ? err.message : String(err)
     const code = getAiErrorCode(err)
     // One toast per distinct failure (keyed by model too, so switching the
@@ -501,7 +554,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
       actions: [
         {
           label: localize('inlineCompletion.error.disable', 'Disable'),
-          run: () => this.setEnabled(false),
+          run: () => this.setEnabled(scope, false),
         },
       ],
     })

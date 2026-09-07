@@ -52,18 +52,19 @@ editor.trigger('editor.action.inlineSuggest.commit') → Monaco 把 ghost text �
 
 - **注入依赖**：`IAiModelService`（产文本）、`IConfigurationService`（读 8 个配置 + 订阅变化）、`INotificationService`（错误 toast）、`ILoggerService`。
 - **暴露**（接口 `IInlineCompletionService`）：
-  - `onDidChange: Event<void>`——enabled / 选中模型 / requesting 任一变化时触发（驱动状态栏）。
-  - `enabled: boolean`——运行时开关；`requesting: boolean`——有在途请求（状态栏 spinner）。
+  - `onDidChange: Event<void>`——任一作用域 enabled / 选中模型 / requesting 变化时触发（驱动状态栏）。
+  - `requesting: boolean`——有在途请求（状态栏 spinner）。
   - `getModelId() / setModelId(id)`——读写补全模型（**与 chat 模型分开存**，见下）。
-  - `toggleEnabled() / setEnabled(b)`——**全局持久化**：先 `update(…, undefined, Project)` 清工作区层覆盖、再写 `ConfigurationTarget.User`（顺序勿反，见易踩坑 #11），经 UserSettingsSync 落全局 settings.json；内存即时翻转 + 对外恰 fire 一次 onDidChange（配置事件回音由 `_applyEnabled` 同值守卫吞掉）。
+  - `isEnabled(scope) / toggleEnabled(scope) / setEnabled(scope, b)`——**按作用域（`'editor'` / `'session'`）全局持久化**：先 `update(…, undefined, Project)` 清工作区层覆盖、再写 `ConfigurationTarget.User`（顺序勿反，见易踩坑 #8），经 UserSettingsSync 落全局 settings.json；内存即时翻转 + 对外恰 fire 一次 onDidChange（配置事件回音由 `_applyEnabled` 同值守卫吞掉）。
   - `provide(model, position, context, token)`——Monaco provider 的真正入口。
-- **provide() 的 gate 顺序**（任一不过返回 null，**新增 gate 加在这里**）：`!enabled` → 语言在 `disabledLanguages` → 无 `model`（modelId 空或已从模型列表删除）。
+- **作用域判定**：`isSessionPromptModel(model)`（导出纯函数）按 model URI 区分——会话 prompt 输入框的 model 由 `PromptMonacoEditor` 显式赋 `inmemory://prompt/<id>` URI（scheme `inmemory` + authority `prompt`），其余一律 editor 侧（diff 预览 / Swarm 内嵌编辑器都算 editor）。
+- **provide() 的 gate 顺序**（任一不过返回 null，**新增 gate 加在这里**）：`!_enabled[scopeOf(model)]` → 语言在 `disabledLanguages` → 无 `model`（modelId 空或已从模型列表删除）。
 - **FIM 提示构建** `_buildPrompt`：`[system, user]`，user 体为 `<|prefix|>...{prefix}<|cursor|>{suffix}<|suffix|>`；prefix/suffix 分别裁到 `maxContextPrefixChars` / `maxContextSuffixChars`。
 - **后处理** `sanitizeCompletion`（**纯函数、易单测**）：去 ```` ``` ```` 代码围栏 → 去掉「模型回复尾部与光标后既有代码开头重叠」的重复 → `multiline:false` 时截断到首个换行 → 纯空白归一为空串（空串 → 不出建议）。
-- **错误处理**：失败 toast **去重**（同一 errorKey 只弹一次，成功后清零；取消 token 不弹），toast 带 Disable 按钮。
-- **配置存储**：8 个 key 全走 `IConfigurationService`，写用 `ConfigurationTarget.User`；`setModelId(undefined)` 落盘为 `''`，`getModelId()` 把 `''` 读回 `undefined`。
+- **错误处理**：失败 toast **去重**（同一 errorKey 只弹一次，成功后清零；取消 token 不弹），toast 带 Disable 按钮（只关当前触发的作用域）。
+- **配置存储**：9 个 key 全走 `IConfigurationService`，写用 `ConfigurationTarget.User`；`setModelId(undefined)` 落盘为 `''`，`getModelId()` 把 `''` 读回 `undefined`。
 - **DI 注册**：`renderer/main.tsx`——`createInstance(InlineCompletionService)` → `services.set(IInlineCompletionService, …)`。
-- **单测**：`services/ai/__tests__/InlineCompletionService.test.ts`——覆盖 sanitizeCompletion 各分支、provide 的四种 gate、模型持久化 undefined↔'' 往返、错误 toast 去重、**enabled persistence**（toggle 写 User 层+清 Project 覆盖+恰 fire 一次+层种子恢复）。改生成层逻辑**优先在这里加用例**（用 FakeAiModel/FakeNotification + 真 `ConfigurationService`，无需起 Monaco）。
+- **单测**：`services/ai/__tests__/InlineCompletionService.test.ts`——覆盖 sanitizeCompletion 各分支、provide 的四种 gate、两作用域独立 gate、模型持久化 undefined↔'' 往返、错误 toast 去重、**enabled persistence**（per-scope toggle 写 User 层+清 Project 覆盖+恰 fire 一次+层种子恢复）。改生成层逻辑**优先在这里加用例**（用 FakeAiModel/FakeNotification + 真 `ConfigurationService`，无需起 Monaco）。
 
 ### 集成层：provider 注册 + context key 镜像 + Tab 接受
 
@@ -87,7 +88,7 @@ Monaco 把 ghost-text 可见性放在 editor **自己 scoped 的** context-key s
 
 > 🔑 **为什么不能靠 Monaco 自己的 Tab**：本编辑器开 `editContext: true`，焦点元素是 `DIV.native-edit-context`，其异步 keydown 路径下 Monaco 内置的 `AcceptInlineCompletion`（id `inlineSuggestCommitId`，Tab，weight 200）**不可靠地被缩进抢走**——即使其 scoped context 满足 commit 的全部 kbExpr。修法就是上面三件套：**镜像可见性到全局 + 自己用高权重命令抢 Tab 直接调 commit**。这是已修 bug，**勿回退**。Tab 抢不到的逐步诊断见 [fix-keybinding-not-firing]。
 
-### 四个 Action
+### 五个 Action
 
 `apps/editor/src/renderer/actions/inlineCompletionActions.ts`（`CATEGORY = AI`，全在 `actions/index.ts` `registerAction2`）：
 
@@ -95,8 +96,11 @@ Monaco 把 ghost-text 可见性放在 editor **自己 scoped 的** context-key s
 |---|---|---|---|---|
 | TriggerInlineCompletionAction | `ai.inlineCompletion.trigger` | `alt+\`（f1:true） | `editorTextFocus` | `editor.trigger('editor.action.inlineSuggest.trigger')`；**无模型时弹引导提示**（去 pickModel） |
 | CommitInlineCompletionAction | `ai.inlineCompletion.commit` | `tab` | `inlineSuggestionVisible && editorTextFocus && !suggestWidgetVisible` | `editor.trigger('editor.action.inlineSuggest.commit')`（见集成层） |
-| ToggleInlineCompletionAction | `ai.inlineCompletion.toggle` | — | — | `service.toggleEnabled()` + toast；标题栏 AI 快速设置的 inline 开关也走它 |
+| ToggleInlineCompletionInEditorAction | `ai.inlineCompletion.toggleInEditor` | — | — | `service.toggleEnabled('editor')` + toast |
+| ToggleInlineCompletionInSessionAction | `ai.inlineCompletion.toggleInSession` | — | — | `service.toggleEnabled('session')` + toast |
 | PickInlineCompletionModelAction | `ai.inlineCompletion.pickModel` | — | — | QuickPick 选模型 → `setModelId()` 持久化 |
+
+两个 toggle 共享抽象基类 `ToggleInlineCompletionScopeAction`（`protected abstract readonly scope`）。状态栏 AI 快速设置的勾选不经过命令，直接调 `service.setEnabled(scope, b)`。
 
 trigger/commit 都靠 `IEditorGroupsService.activeGroup.activeEditor` 拿 `FileEditorInput` → `FileEditorRegistry.get()` 拿 Monaco 实例再 `editor.trigger(...)`；activeEditor 不是 FileEditorInput 时静默返回。
 
@@ -105,17 +109,18 @@ trigger/commit 都靠 `IEditorGroupsService.activeGroup.activeEditor` 拿 `FileE
 > 🔀 2026-06 变更：原 `InlineCompletionStatusContribution`（状态栏 Completions 条目：requesting `$(loading~spin)` / enabled `$(sparkle)` / disabled `$(circle-slash)`，点击触发 toggle）已删除，AI 入口统一为 Sparkle 按钮。
 > 🔀 2026-09 变更：AI 入口从标题栏迁回**状态栏右下角** `workbench/statusbar/AiStatusBarButtons.tsx`（data-testid `statusbar-ai-button`，经 `AiStatusBarContribution` 以 componentKey 挂载）；新建会话 / 选择 Agent 两个按钮留在标题栏（`workbench/titlebar/AgentSessionButtons.tsx`）。
 
-- 点击按钮弹快速设置浮层（workbench-ui 的 `AiQuickSettingsPanel`）：inline-completion 开关（data-testid `ai-quick-settings-inline-toggle`，`aria-checked` 反映 `service.enabled`，拨动 → `inline.setEnabled(b)`）、四个功能模型行（chat / inline / commit / sessionTitle → 各自 pickModel 命令）、Open Agents / Manage AI Models 捷径。
+- 点击按钮弹快速设置浮层（workbench-ui 的 `AiQuickSettingsPanel`）：inline-completion 区按作用域两个勾选项（data-testid `ai-quick-settings-inline-toggle-editor` / `-session`，`Checkbox` 的 `checked` 反映 `service.isEnabled(scope)`，拨动 → `inline.setEnabled(scope, b)`）、四个功能模型行（chat / inline / commit / sessionTitle → 各自 pickModel 命令）、Open Agents / Manage AI Models 捷径。
 - 数据源：订阅 `inline.onDidChange` + `IAiModelService` 的 onDidChange*Models 系列事件刷新。
 - tooltip：基础文案 + 活跃会话 MCP server 摘要。
 
-### 配置项（8 个，全 `ai.inlineCompletion.*`）
+### 配置项（9 个，全 `ai.inlineCompletion.*`）
 
 schema 定义在 `contributions/InlineCompletionConfigurationContribution.ts`（`WorkbenchPhase.BlockStartup`——schema 必须早注册，否则其它 contribution 读默认值拿不到）：
 
 | key | type | default | 用途 |
 |---|---|---|---|
-| `.enabled` | boolean | true | 功能开关 |
+| `.enabledInEditor` | boolean | true | 文本编辑器作用域开关 |
+| `.enabledInSession` | boolean | false | 会话 prompt 输入框作用域开关 |
 | `.model` | string | `''` | 补全模型 id（**独立于 chat**） |
 | `.debounceDelay` | number | 300 | 自动触发防抖 ms |
 | `.maxContextPrefixChars` | number | 2000 | 光标前上文裁剪 |

@@ -21,7 +21,10 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
-import { IInlineCompletionService } from '../services/ai/InlineCompletionService.js'
+import {
+  IInlineCompletionService,
+  type InlineCompletionScope,
+} from '../services/ai/InlineCompletionService.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize2('command.category.ai', 'AI')
@@ -137,26 +140,51 @@ export class JumpToNextInlineEditAction extends Action2 {
   }
 }
 
-export class ToggleInlineCompletionAction extends Action2 {
-  static readonly ID = 'ai.inlineCompletion.toggle'
+abstract class ToggleInlineCompletionScopeAction extends Action2 {
+  protected abstract readonly scope: InlineCompletionScope
+  override run(accessor: ServicesAccessor): void {
+    const inline = accessor.get(IInlineCompletionService)
+    inline.toggleEnabled(this.scope)
+    const enabled = inline.isEnabled(this.scope)
+    accessor
+      .get(INotificationService)
+      .status(
+        enabled
+          ? localize('ai.inlineCompletion.enabled', 'Inline completions enabled.')
+          : localize('ai.inlineCompletion.disabled', 'Inline completions disabled.'),
+      )
+  }
+}
+
+export class ToggleInlineCompletionInEditorAction extends ToggleInlineCompletionScopeAction {
+  static readonly ID = 'ai.inlineCompletion.toggleInEditor'
+  protected readonly scope = 'editor' as const
   constructor() {
     super({
-      id: ToggleInlineCompletionAction.ID,
-      title: localize2('action.ai.inlineCompletion.toggle', 'Toggle Inline Completions'),
+      id: ToggleInlineCompletionInEditorAction.ID,
+      title: localize2(
+        'action.ai.inlineCompletion.toggleInEditor',
+        'Toggle Inline Completions in Editor',
+      ),
       category: CATEGORY,
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    const inline = accessor.get(IInlineCompletionService)
-    inline.toggleEnabled()
-    accessor
-      .get(INotificationService)
-      .status(
-        inline.enabled
-          ? localize('ai.inlineCompletion.enabled', 'Inline completions enabled.')
-          : localize('ai.inlineCompletion.disabled', 'Inline completions disabled.'),
-      )
+}
+
+export class ToggleInlineCompletionInSessionAction extends ToggleInlineCompletionScopeAction {
+  static readonly ID = 'ai.inlineCompletion.toggleInSession'
+  protected readonly scope = 'session' as const
+  constructor() {
+    super({
+      id: ToggleInlineCompletionInSessionAction.ID,
+      title: localize2(
+        'action.ai.inlineCompletion.toggleInSession',
+        'Toggle Inline Completions in Session Input',
+      ),
+      category: CATEGORY,
+      f1: true,
+    })
   }
 }
 

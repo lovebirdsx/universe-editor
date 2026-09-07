@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  AiQuickSettingsPanel — presentation-only quick-settings popover for AI features.
- *  Top row: an inline-completions toggle + shortcut buttons (open Agents view, open
- *  AI settings). Below: a small table mapping each AI feature slot (chat / inline /
- *  commit) to its active model; clicking a row asks the host to open that slot's
- *  model picker (a command-palette QuickPick), so model selection stays consistent
+ *  Top: an inline-completions section with one checkbox per scope (text editor /
+ *  session input) so each can be toggled independently, plus shortcut buttons
+ *  (open Agents view, open AI settings). Below: a small table mapping each AI
+ *  feature slot (chat / inline / commit) to its active model; clicking a row asks
+ *  the host to open that slot's model picker, so model selection stays consistent
  *  with the rest of the app.
  *
  *  Pure: data in, callbacks out. Icons are injected via `renderIcon` so the library
@@ -11,11 +12,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type ReactNode } from 'react'
-import { Toggle } from '../../atoms/Toggle.js'
+import { Checkbox } from '../../atoms/Checkbox.js'
 import { IconButton } from '../../atoms/IconButton.js'
 import styles from './AiQuickSettingsPanel.module.css'
 
 export type AiSlotKey = 'chat' | 'inline' | 'commit' | 'sessionTitle'
+
+export type AiInlineScope = 'editor' | 'session'
 
 export interface AiSlotRow {
   readonly key: AiSlotKey
@@ -23,11 +26,17 @@ export interface AiSlotRow {
   readonly currentModelName?: string | undefined
 }
 
+export interface AiInlineScopeRow {
+  readonly scope: AiInlineScope
+  readonly label: string
+  readonly checked: boolean
+}
+
 export interface AiQuickSettingsPanelProps {
   readonly title: string
   readonly inlineLabel: string
-  readonly inlineEnabled: boolean
-  readonly onToggleInline: (enabled: boolean) => void
+  readonly inlineScopes: readonly AiInlineScopeRow[]
+  readonly onToggleInlineScope: (scope: AiInlineScope, enabled: boolean) => void
   readonly openAgentsLabel: string
   readonly onOpenAgents: () => void
   readonly openSettingsLabel: string
@@ -41,8 +50,8 @@ export interface AiQuickSettingsPanelProps {
 export function AiQuickSettingsPanel({
   title,
   inlineLabel,
-  inlineEnabled,
-  onToggleInline,
+  inlineScopes,
+  onToggleInlineScope,
   openAgentsLabel,
   onOpenAgents,
   openSettingsLabel,
@@ -60,15 +69,7 @@ export function AiQuickSettingsPanel({
       aria-label={title}
     >
       <div className={styles['header']}>
-        <label className={styles['inlineToggle']}>
-          <Toggle
-            checked={inlineEnabled}
-            onChange={onToggleInline}
-            aria-label={inlineLabel}
-            data-testid="ai-quick-settings-inline-toggle"
-          />
-          <span>{inlineLabel}</span>
-        </label>
+        <span className={styles['inlineTitle']}>{inlineLabel}</span>
         <div className={styles['actions']}>
           <IconButton
             label={openAgentsLabel}
@@ -85,6 +86,19 @@ export function AiQuickSettingsPanel({
             {renderIcon('settings')}
           </IconButton>
         </div>
+      </div>
+
+      <div className={styles['scopeList']}>
+        {inlineScopes.map((s) => (
+          <Checkbox
+            key={s.scope}
+            checked={s.checked}
+            onChange={(checked) => onToggleInlineScope(s.scope, checked)}
+            label={s.label}
+            aria-label={s.label}
+            data-testid={`ai-quick-settings-inline-toggle-${s.scope}`}
+          />
+        ))}
       </div>
 
       <div className={styles['table']} role="table">

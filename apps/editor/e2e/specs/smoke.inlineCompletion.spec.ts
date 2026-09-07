@@ -20,8 +20,10 @@ import { test, expect } from '../fixtures/sharedApp.js'
 
 const TRIGGER = 'ai.inlineCompletion.trigger'
 const COMMIT = 'ai.inlineCompletion.commit'
-const TOGGLE = 'ai.inlineCompletion.toggle'
+const TOGGLE_EDITOR = 'ai.inlineCompletion.toggleInEditor'
+const TOGGLE_SESSION = 'ai.inlineCompletion.toggleInSession'
 const PICK_MODEL = 'ai.inlineCompletion.pickModel'
+const ENABLED_IN_EDITOR_KEY = 'ai.inlineCompletion.enabledInEditor'
 
 function writeWorkspace(): { dir: string; filePath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-inline-'))
@@ -33,7 +35,7 @@ function writeWorkspace(): { dir: string; filePath: string } {
 test.describe('@p1 inline completion', () => {
   test('contributes commands and Tab accepts ghost text', async ({ page, workbench }) => {
     await workbench.waitForRestored()
-    for (const id of [TRIGGER, COMMIT, TOGGLE, PICK_MODEL]) {
+    for (const id of [TRIGGER, COMMIT, TOGGLE_EDITOR, TOGGLE_SESSION, PICK_MODEL]) {
       await expect
         .poll(() => page.evaluate((cmd) => window.__E2E__!.hasCommand(cmd), id), {
           message: `command ${id} should be registered`,
@@ -87,37 +89,43 @@ test.describe('@p1 inline completion', () => {
     await expect(page.getByTestId('statusbar-ai-button')).toBeVisible()
   })
 
-  test('quick-settings toggle reflects inline-completion state', async ({ page, workbench }) => {
+  test('quick-settings checkboxes reflect per-scope inline-completion state', async ({
+    page,
+    workbench,
+  }) => {
     await workbench.waitForRestored()
 
     const aiButton = page.getByTestId('statusbar-ai-button')
     await expect(aiButton).toBeVisible()
     await aiButton.click()
 
-    const toggle = page.getByTestId('ai-quick-settings-inline-toggle')
-    await expect(toggle).toBeVisible()
-    const before = await toggle.getAttribute('aria-checked')
+    const editorToggle = page.getByTestId('ai-quick-settings-inline-toggle-editor')
+    const sessionToggle = page.getByTestId('ai-quick-settings-inline-toggle-session')
+    await expect(editorToggle).toBeVisible()
+    await expect(sessionToggle).toBeVisible()
 
-    await workbench.runCommand(TOGGLE)
-    await expect.poll(() => toggle.getAttribute('aria-checked')).not.toBe(before)
-    // The toggle persists to the global User layer and clears any per-workspace
-    // override — origin 'user' proves both at once.
+    // Defaults: editor scope on, session scope off.
+    await expect(editorToggle).toBeChecked()
+    await expect(sessionToggle).not.toBeChecked()
+
+    // Toggling the editor scope flips only its own checkbox and persists the
+    // editor key to the global User layer (origin 'user' proves both the write
+    // and the cleared workspace override at once).
+    await workbench.runCommand(TOGGLE_EDITOR)
+    await expect(editorToggle).not.toBeChecked()
+    await expect(sessionToggle).not.toBeChecked()
     await expect
       .poll(() =>
-        page.evaluate(() =>
-          window.__E2E__!.getConfigurationValueOrigin('ai.inlineCompletion.enabled'),
-        ),
+        page.evaluate((k) => window.__E2E__!.getConfigurationValueOrigin(k), ENABLED_IN_EDITOR_KEY),
       )
       .toBe('user')
 
     // Toggle back so the shared worker instance is left in its default state.
-    await workbench.runCommand(TOGGLE)
-    await expect.poll(() => toggle.getAttribute('aria-checked')).toBe(before)
+    await workbench.runCommand(TOGGLE_EDITOR)
+    await expect(editorToggle).toBeChecked()
     await expect
       .poll(() =>
-        page.evaluate(() =>
-          window.__E2E__!.getConfigurationValueOrigin('ai.inlineCompletion.enabled'),
-        ),
+        page.evaluate((k) => window.__E2E__!.getConfigurationValueOrigin(k), ENABLED_IN_EDITOR_KEY),
       )
       .toBe('user')
   })

@@ -70,13 +70,14 @@ function makeAi() {
 }
 
 function makeInline() {
+  const enabledByScope = { editor: true, session: false }
   return {
     _serviceBrand: undefined,
     onDidChange: new Emitter<void>().event,
-    enabled: true,
     requesting: false,
     getModelId: vi.fn().mockResolvedValue(undefined),
     setModelId: vi.fn(),
+    isEnabled: vi.fn((scope: 'editor' | 'session') => enabledByScope[scope]),
     toggleEnabled: vi.fn(),
     setEnabled: vi.fn(),
   }
@@ -114,12 +115,26 @@ describe('AiStatusBarButtons', () => {
     expect(await screen.findByTestId('ai-quick-settings')).toBeTruthy()
   })
 
-  it('writes the inline toggle back to the service', async () => {
+  it('writes each inline scope toggle back to the service', async () => {
     const { inline } = renderButtons()
     fireEvent.click(screen.getByTestId('statusbar-ai-button'))
     await screen.findByTestId('ai-quick-settings')
-    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle'))
-    expect(inline.setEnabled).toHaveBeenCalledWith(false)
+    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle-editor'))
+    expect(inline.setEnabled).toHaveBeenCalledWith('editor', false)
+    fireEvent.click(screen.getByTestId('ai-quick-settings-inline-toggle-session'))
+    expect(inline.setEnabled).toHaveBeenCalledWith('session', true)
+  })
+
+  it('reflects the per-scope enabled state in the checkboxes', async () => {
+    renderButtons()
+    fireEvent.click(screen.getByTestId('statusbar-ai-button'))
+    await screen.findByTestId('ai-quick-settings')
+    expect(
+      (screen.getByTestId('ai-quick-settings-inline-toggle-editor') as HTMLInputElement).checked,
+    ).toBe(true)
+    expect(
+      (screen.getByTestId('ai-quick-settings-inline-toggle-session') as HTMLInputElement).checked,
+    ).toBe(false)
   })
 
   it('opens the slot model picker command when a model row is clicked', async () => {

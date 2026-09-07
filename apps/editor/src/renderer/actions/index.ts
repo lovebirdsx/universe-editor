@@ -215,7 +215,8 @@ import {
   TriggerInlineCompletionAction,
   CommitInlineCompletionAction,
   JumpToNextInlineEditAction,
-  ToggleInlineCompletionAction,
+  ToggleInlineCompletionInEditorAction,
+  ToggleInlineCompletionInSessionAction,
   PickInlineCompletionModelAction,
 } from './inlineCompletionActions.js'
 import { PickCommitModelAction } from './commitMessageActions.js'
@@ -652,7 +653,8 @@ registerAction2(ClearApiKeyAction)
 registerAction2(TriggerInlineCompletionAction)
 registerAction2(CommitInlineCompletionAction)
 registerAction2(JumpToNextInlineEditAction)
-registerAction2(ToggleInlineCompletionAction)
+registerAction2(ToggleInlineCompletionInEditorAction)
+registerAction2(ToggleInlineCompletionInSessionAction)
 registerAction2(PickInlineCompletionModelAction)
 registerAction2(PickCommitModelAction)
 registerAction2(PickSessionTitleModelAction)
