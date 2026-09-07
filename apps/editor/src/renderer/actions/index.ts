@@ -219,7 +219,7 @@ import {
   ToggleInlineCompletionInSessionAction,
   PickInlineCompletionModelAction,
 } from './inlineCompletionActions.js'
-import { PickCommitModelAction } from './commitMessageActions.js'
+import { PickCommitModelAction, RevealScmAction } from './commitMessageActions.js'
 import { PickSessionTitleModelAction } from './sessionTitleActions.js'
 import {
   ViewGitGraphAction,
@@ -657,6 +657,7 @@ registerAction2(ToggleInlineCompletionInEditorAction)
 registerAction2(ToggleInlineCompletionInSessionAction)
 registerAction2(PickInlineCompletionModelAction)
 registerAction2(PickCommitModelAction)
+registerAction2(RevealScmAction)
 registerAction2(PickSessionTitleModelAction)
 
 // Git Graph

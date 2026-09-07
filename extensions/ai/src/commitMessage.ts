@@ -98,6 +98,11 @@ async function resolveModelId(): Promise<string | undefined> {
 }
 
 export async function generateCommitMessage(arg: unknown): Promise<void> {
+  // Surface the SCM panel up front: the generated message streams into its
+  // commit input, which the user can't see when this runs from the palette with
+  // the panel hidden. Fire-and-forget — a missing handler must not block the run.
+  void commands.executeCommand('_workbench.revealScm').then(undefined, () => undefined)
+
   const ctx = await commands.executeCommand<CommitGenContext | undefined>(
     'git.getCommitGenerationContext',
     arg,

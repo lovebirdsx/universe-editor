@@ -6,6 +6,7 @@
 import {
   Action2,
   IAiModelService,
+  ILayoutService,
   IQuickInputService,
   localize,
   localize2,
@@ -14,6 +15,28 @@ import {
 import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize2('command.category.ai', 'AI')
+
+/**
+ * `_workbench.revealScm` — internal bridge the ai extension invokes before
+ * generating a commit message, so the streaming write-back into the SCM commit
+ * input is visible even when the command was run from the palette (where the
+ * SCM panel may not be up). Never declare this id in an extension manifest —
+ * it would shadow the renderer handler. Focus lands on the commit input.
+ */
+export class RevealScmAction extends Action2 {
+  static readonly ID = '_workbench.revealScm'
+  constructor() {
+    super({
+      id: RevealScmAction.ID,
+      title: localize2('action.ai.revealScm', 'Reveal Source Control'),
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // focusView opens the SCM container, expands the view and focuses the
+    // commit input (the view's registered focusable element).
+    await accessor.get(ILayoutService).focusView('workbench.view.scm.main', { source: 'command' })
+  }
+}
 
 export class PickCommitModelAction extends Action2 {
   static readonly ID = 'ai.commitMessage.pickModel'
