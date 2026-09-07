@@ -543,6 +543,8 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       return this._authEmitter.event(listener, thisArgs, disposables)
     }
     readonly onDidChangeClaudeConfig: Event<void> = Event.None
+    readonly onDidChangeClaudeMcpConfig: Event<void> = Event.None
+    readonly onDidChangeCodexMcpConfig: Event<void> = Event.None
     codexSettings: CodexSettings = {}
     codexAuthStatus: CodexAuthStatus = { active: 'none', hasApiKey: false }
 
@@ -557,6 +559,15 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     }
     claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
       return Promise.resolve({ loggedIn: false, expired: false })
+    }
+    claudeReadMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
+    }
+    codexReadUserMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
+    }
+    codexReadProjectMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
     }
     codexRead(): Promise<CodexSettings> {
       return Promise.resolve(this.codexSettings)

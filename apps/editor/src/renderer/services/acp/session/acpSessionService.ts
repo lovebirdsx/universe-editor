@@ -55,20 +55,21 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
 import {
+  agentIdToMcpAffinity,
   filterMcpServersByCapabilities,
   filterWireByNames,
+  mcpServerRawToRecord,
   mcpServerTransport,
-  mergeMcpServerDefinitions,
   mergeMcpServerRawLayers,
-  mergeWireMcpServers,
   normalizeMcpServers,
   parseMcpJson,
-  readMcpServerDefinitions,
   readMcpServerDefinitionsLayered,
   resolveMcpServerSelection,
+  type McpAgentAffinity,
   type McpServerDefinition,
   type McpServerRawLayer,
 } from '../acpMcpServers.js'
+import { IAgentMcpConfigService } from '../agentMcpConfigService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -346,19 +347,27 @@ export interface IAcpSessionService {
   ): Promise<RewindFilesResult | undefined>
   /**
    * The MCP definition pool the session picker shows: `acp.mcpServers` merged
-   * with the project `.mcp.json` (project wins by name), annotated with
-   * transport / disabled / source. Updated on config changes and by
-   * {@link refreshMcpServerDefinitions} (the picker calls it on open so a
-   * `.mcp.json` edited on disk is picked up without a file watcher).
+   * with the active agent's own config files (`~/.claude.json`, codex
+   * `config.toml`, and for claude-code the workspace-root `.mcp.json`),
+   * annotated with transport / disabled / source / agentAffinity. Updated on
+   * config changes and by {@link refreshMcpServerDefinitions} (the picker
+   * calls it on open so a `.mcp.json` edited on disk is picked up without a
+   * file watcher). When several agents' sessions are open the pool shows the
+   * union — per-agent filtering happens at session/wire resolution.
    */
   readonly mcpServerDefinitions: IObservable<readonly McpServerDefinition[]>
-  /** Re-read the pool (global config + project `.mcp.json`). Fire-and-forget safe. */
-  refreshMcpServerDefinitions(): Promise<void>
+  /**
+   * Re-read the pool. `agentId` narrows the pool to one agent's layers
+   * (per-agent isolation); omitted → the union across agents (picker view).
+   * Fire-and-forget safe.
+   */
+  refreshMcpServerDefinitions(agentId?: string): Promise<void>
   /**
    * Read + parse the project `.mcp.json` at the workspace root (both the
    * Claude-Code envelope and the bare Record form). Returns `{}` when there is
    * no workspace / no file / broken JSON. Exposed for the MCP settings panel,
-   * which renders this file as a read-only group.
+   * which renders this file as a read-only group. This file feeds only
+   * claude-code sessions (per-agent isolation).
    */
   readProjectMcpJson(): Promise<Record<string, unknown>>
   /**
@@ -521,9 +530,12 @@ export class AcpSessionService
   readonly onDidCloseSession = this._onDidCloseSession.event
 
   /**
-   * MCP definition pool mirror (global config + project `.mcp.json`). Seeded
-   * synchronously from the global config; the project file joins on the first
-   * {@link refreshMcpServerDefinitions} / session creation.
+   * MCP definition pool mirror (the union across agents: global config + each
+   * agent's own config files + the project `.mcp.json`). Seeded synchronously
+   * from the global config; the agent/project layers join on the first
+   * {@link refreshMcpServerDefinitions} / session creation. Consumers that
+   * present a single session's view (the picker) narrow this union by
+   * `agentAffinity` — see `filterPoolForSession`.
    */
   readonly mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
 
@@ -607,6 +619,8 @@ export class AcpSessionService
     private readonly _extensionMcpServers: IExtensionMcpServersService,
     @IMcpServerEnablementService
     private readonly _mcpEnablement: IMcpServerEnablementService,
+    @IAgentMcpConfigService
+    private readonly _agentMcpConfig: IAgentMcpConfigService,
     @IWindowsService private readonly _windows: IWindowsService,
     @IEnvironmentSnapshotService
     private readonly _envSnapshot: IEnvironmentSnapshotService,
@@ -621,8 +635,9 @@ export class AcpSessionService
     void this._sessionFactory.messageAttachments.initialize()
     this.mcpServerDefinitions = observableValue<readonly McpServerDefinition[]>(
       'acp.mcpServerDefinitions',
-      this._readGlobalMcpDefinitions(),
+      [],
     )
+    void this.refreshMcpServerDefinitions()
     // Install the notification sink on the (singleton) client service. The
     // pool fans out session/update + session/request_permission via this sink,
     // routing by params.sessionId, so a single sink supports the shared
@@ -709,6 +724,10 @@ export class AcpSessionService
     // the next session's wire list reflect the new overrides. Live sessions
     // are NOT reloaded — same semantics as a config edit.
     this._register(this._mcpEnablement.onDidChange(() => void this.refreshMcpServerDefinitions()))
+    // Agent-owned MCP files changed on disk (`~/.claude.json`, codex
+    // `config.toml`): refresh the pool mirror — same "no live reload"
+    // semantics as a settings edit.
+    this._register(this._agentMcpConfig.onDidChange(() => void this.refreshMcpServerDefinitions()))
   }
 
   private _currentCwd(): string | undefined {
@@ -970,7 +989,13 @@ export class AcpSessionService
     // against the defaults.
     const selection = session.mcpServerSelection.get()
     profile.step('willResolveMcp')
-    const mcpServers = await this._resolveSessionWireMcpServers(resolvedAgentId, selection, true)
+    const mcpServers = await this._resolveSessionWireMcpServers(
+      resolvedAgentId,
+      selection,
+      true,
+      cwd,
+      authority,
+    )
     profile.step('didResolveMcp')
     let conn: IAcpClientConnection | undefined
     try {
@@ -1332,7 +1357,13 @@ export class AcpSessionService
         session.suppressReplayToTimeline(entry.sideTaskAnchorMessageId)
       }
 
-      const mcpServers = await this._resolveSessionWireMcpServers(entry.agentId, mcpSelection, true)
+      const mcpServers = await this._resolveSessionWireMcpServers(
+        entry.agentId,
+        mcpSelection,
+        true,
+        cwd,
+        effectiveAuthority,
+      )
       const { kept, dropped } = filterMcpServersByCapabilities(
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
@@ -1533,6 +1564,8 @@ export class AcpSessionService
                 session.agentId,
                 session.mcpServerSelection.get(),
                 attempt === 1,
+                cwd,
+                authority,
               ),
               initResult.agentCapabilities?.mcpCapabilities,
             )
@@ -2124,7 +2157,13 @@ export class AcpSessionService
       if (initResult.agentCapabilities?.sessionCapabilities?.fork == null) {
         throw new Error('Agent does not advertise sessionCapabilities.fork — cannot fork')
       }
-      const mcpServers = await this._resolveSessionWireMcpServers(entry.agentId, mcpSelection, true)
+      const mcpServers = await this._resolveSessionWireMcpServers(
+        entry.agentId,
+        mcpSelection,
+        true,
+        cwd,
+        effectiveAuthority,
+      )
       const { kept } = filterMcpServersByCapabilities(
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
@@ -2485,12 +2524,16 @@ export class AcpSessionService
   }
 
   /**
-   * The `acp.mcpServers` raw values of every layer, lowest priority first:
-   * the extension-contributed runtime record (declarative
-   * `contributes.mcpServers`, never persisted), then the settings layers
-   * (mirrors `IConfigurationService.get` precedence). Layers compose per
-   * server name — a workspace entry overrides only the same-named global one,
-   * never the whole map; a user entry likewise overrides an extension one.
+   * The shared (agent-agnostic) `acp.mcpServers` raw values of every layer,
+   * lowest priority first: the extension-contributed runtime record
+   * (declarative `contributes.mcpServers`, never persisted), then the settings
+   * layers (mirrors `IConfigurationService.get` precedence). Layers compose
+   * per server name — a workspace entry overrides only the same-named global
+   * one, never the whole map; a user entry likewise overrides an extension one.
+   *
+   * Agent-owned sources (`~/.claude.json`, codex `config.toml`, `.mcp.json`)
+   * are NOT here — they are appended per agent by
+   * {@link _mcpLayers} (per-agent isolation).
    */
   private _mcpSettingsLayers(): McpServerRawLayer[] {
     const raw = (t: ConfigurationTarget): unknown =>
@@ -2505,8 +2548,63 @@ export class AcpSessionService
     ]
   }
 
-  private _readMcpServers(): McpServer[] {
-    return normalizeMcpServers(mergeMcpServerRawLayers(this._mcpSettingsLayers()), (m) =>
+  /**
+   * Every MCP layer one agent's pool/wire sees: shared settings layers, then
+   * the agent-owned layers — `agent-user` sits between extension and the
+   * user settings layers (a user settings.json edit shadows the CLI file),
+   * `agent-project` above everything (project wins). `agentId === undefined`
+   * collects every known agent's layers into one list (sequential, so merge
+   * precedence is deterministic); the union only becomes a *view* because
+   * `readMcpServerDefinitionsLayered` omits the affinity filter when no
+   * concrete affinity is passed (the picker mirror), while the session/wire
+   * paths always pass the session's affinity and stay isolated.
+   */
+  private async _mcpLayers(
+    agentId: string | undefined,
+    cwd: string | undefined,
+    authority: string | undefined,
+  ): Promise<McpServerRawLayer[]> {
+    const shared = this._mcpSettingsLayers()
+    const userAgentLayers: McpServerRawLayer[] = []
+    const projectAgentLayers: McpServerRawLayer[] = []
+    const collect = async (id: string): Promise<void> => {
+      const layers = await this._agentMcpConfig.readAgentMcpLayers(id, cwd, authority)
+      userAgentLayers.push(...layers.userLayers)
+      projectAgentLayers.push(...layers.projectLayers)
+    }
+    if (agentId !== undefined) {
+      await collect(agentId)
+    } else {
+      // Deterministic layer order: merge precedence must not depend on IPC
+      // completion order (claude's read is one RPC, codex's two).
+      for (const id of ['claude-code', 'codex']) await collect(id)
+    }
+    if (agentId === undefined || agentId === 'claude-code') {
+      // `.mcp.json` is a claude-code source (per-agent isolation) even though
+      // the file itself is agent-agnostic — codex sessions never see it.
+      const mcpJsonRaw = await this.readProjectMcpJson()
+      projectAgentLayers.push({
+        source: 'agent-project',
+        raw: mcpJsonRaw,
+        agentAffinity: 'claude-code',
+      })
+    }
+    // Insertion order = priority: agent-user layers go right after the
+    // extension layer (lowest agent-overridable rung), agent-project last.
+    // The union view stays one row per name; cross-agent visibility for a
+    // same-named entry shadowed by a shared layer is handled by `sharedWith`
+    // in `readMcpServerDefinitionsLayered`, not by duplicating layers here.
+    return [shared[0]!, ...userAgentLayers, ...shared.slice(1), ...projectAgentLayers]
+  }
+
+  private _readMcpServers(
+    layers: readonly McpServerRawLayer[],
+    agentAffinity: McpAgentAffinity | undefined,
+  ): McpServer[] {
+    const filtered = layers.filter(
+      (l) => l.agentAffinity === undefined || l.agentAffinity === agentAffinity,
+    )
+    return normalizeMcpServers(mergeMcpServerRawLayers(filtered), (m) =>
       this._logger.warn(`mcpServers: ${m}`),
     )
   }
@@ -2516,14 +2614,6 @@ export class AcpSessionService
   /** Pool `disabled` annotation source: the storage-backed enablement overrides. */
   private readonly _isMcpDefaultDisabled = (name: string): boolean =>
     !this._mcpEnablement.isEnabled(name)
-
-  private _readGlobalMcpDefinitions(): readonly McpServerDefinition[] {
-    return readMcpServerDefinitionsLayered(
-      this._mcpSettingsLayers(),
-      (m) => this._logger.warn(`mcpServers: ${m}`),
-      this._isMcpDefaultDisabled,
-    )
-  }
 
   /**
    * Read + parse the project `.mcp.json` at the workspace root. Returns an
@@ -2541,70 +2631,65 @@ export class AcpSessionService
     }
   }
 
-  async refreshMcpServerDefinitions(): Promise<void> {
+  async refreshMcpServerDefinitions(agentId?: string): Promise<void> {
     // Cold-start barriers: the extension layer resolves asynchronously
     // (execPath snapshot fetch) and the enablement overrides hydrate from
     // storage — don't publish a pool that silently misses either.
     await Promise.all([this._extensionMcpServers.whenReady, this._mcpEnablement.whenReady])
-    const globalDefs = this._readGlobalMcpDefinitions()
-    const projectRaw = await this.readProjectMcpJson()
-    const projectDefs = readMcpServerDefinitions(
-      projectRaw,
-      'project',
-      (m) => this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    const cwd = this._currentCwd()
+    const authority = this._currentAuthority()
+    const affinity = agentIdToMcpAffinity(agentId)
+    const layers = await this._mcpLayers(agentId, cwd, authority)
+    // `.mcp.json` winners carry `fromMcpJson` for the picker's source badge;
+    // the mark applies only to definitions whose affinity is claude-code (or
+    // to the union view, where the affinity badge disambiguates).
+    const mcpJsonNames = new Set(
+      layers
+        .filter((l) => l.agentAffinity === 'claude-code' && l.source === 'agent-project')
+        .flatMap((l) => Object.keys(mcpServerRawToRecord(l.raw))),
+    )
+    const defs = readMcpServerDefinitionsLayered(
+      layers,
+      (m) => this._logger.warn(`mcpServers: ${m}`),
       this._isMcpDefaultDisabled,
-    ).map((d) => ({ ...d, fromMcpJson: true }))
-    // `.mcp.json` winners never carry the user-level annotation from the
-    // layered read (the file is not a settings layer) — propagate it so a
-    // same-named user-level definition still offers the user-level toggle.
-    const userLevelNames = new Set(
-      globalDefs.filter((d) => d.hasUserLevelDefinition).map((d) => d.name),
-    )
-    const annotatedProjectDefs = projectDefs.map((d) =>
-      !d.hasUserLevelDefinition && userLevelNames.has(d.name)
-        ? { ...d, hasUserLevelDefinition: true }
-        : d,
-    )
-    this.mcpServerDefinitions.set(
-      mergeMcpServerDefinitions(globalDefs, annotatedProjectDefs),
-      undefined,
-    )
+      affinity,
+    ).map((d) => (mcpJsonNames.has(d.name) ? { ...d, fromMcpJson: true } : d))
+    this.mcpServerDefinitions.set(defs, undefined)
   }
 
   /**
-   * Resolve a session's effective MCP wire list: merged pool (global config +
-   * project `.mcp.json`) → whitelist filter (`null` selection = every
-   * non-`disabled` pool entry) → warning for whitelisted names that no longer
-   * exist in the pool.
+   * Resolve a session's effective MCP wire list: merged pool (shared settings
+   * + the agent's own config files) → whitelist filter (`null` selection =
+   * every non-`disabled` pool entry) → warning for whitelisted names that no
+   * longer exist in the pool.
    */
   private async _resolveSessionWireMcpServers(
     agentId: string,
     selection: readonly string[] | null,
     warnStale: boolean,
+    cwd?: string,
+    authority?: string,
   ): Promise<McpServer[]> {
     await Promise.all([this._extensionMcpServers.whenReady, this._mcpEnablement.whenReady])
-    const projectRaw = await this.readProjectMcpJson()
-    const projectWire = normalizeMcpServers(projectRaw, (m) =>
-      this._logger.warn(`mcpServers(.mcp.json): ${m}`),
-    )
-    const mergedWire = mergeWireMcpServers(this._readMcpServers(), projectWire)
+    const affinity = agentIdToMcpAffinity(agentId)
+    const layers = await this._mcpLayers(agentId, cwd, authority)
+    const wire = this._readMcpServers(layers, affinity)
     // Recompute the pool from the same snapshot instead of reading the async
     // mirror: the mirror's refresh (config-change → fs read) races session
     // creation, and a stale mirror silently filters the wire list down to [].
-    const projectDefs = readMcpServerDefinitions(
-      projectRaw,
-      'project',
-      (m) => this._logger.warn(`mcpServers(.mcp.json): ${m}`),
+    const pool = readMcpServerDefinitionsLayered(
+      layers,
+      (m) => this._logger.warn(`mcpServers: ${m}`),
       this._isMcpDefaultDisabled,
+      affinity,
     )
-    const pool = mergeMcpServerDefinitions(this._readGlobalMcpDefinitions(), projectDefs)
     const { enabledNames, staleNames } = resolveMcpServerSelection(pool, selection)
     if (warnStale && staleNames.length > 0) {
       this._logger.warn(
         `mcpServers: session whitelist names not in the definition pool, skipped: ${staleNames.join(', ')}`,
       )
     }
-    return filterWireByNames(mergedWire, new Set(enabledNames))
+    return filterWireByNames(wire, new Set(enabledNames))
   }
 
   setSessionMcpServers(sessionId: string, names: readonly string[] | null): void {

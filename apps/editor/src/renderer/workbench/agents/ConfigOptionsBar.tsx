@@ -47,7 +47,7 @@ import {
   evaluateModelSwitchContextShrink,
 } from '../../services/acp/session/modelSwitchContextGuard.js'
 import { ConfigBarOverflowMenu } from './ConfigBarOverflowMenu.js'
-import { isMcpPickerHidden, McpServerPicker } from './McpServerPicker.js'
+import { isMcpPickerHidden, filterPoolForSession, McpServerPicker } from './McpServerPicker.js'
 import { SubagentModelPicker } from './SubagentModelPicker.js'
 import { useConfigBarOverflow } from './useConfigBarOverflow.js'
 import styles from './agents.module.css'
@@ -63,7 +63,8 @@ export { compareByCategory }
 export function ConfigOptionsBar({ session }: { session: IAcpSession }) {
   const options = useObservable(session.configOptions)
   const service = useOptionalService(IAcpSessionService)
-  const pool = useObservable(service?.mcpServerDefinitions ?? EMPTY_MCP_POOL)
+  const unionPool = useObservable(service?.mcpServerDefinitions ?? EMPTY_MCP_POOL)
+  const pool = filterPoolForSession(unionPool, session.agentId)
   const [openId, setOpenId] = useState<string | null>(null)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const entries = buildConfigBarEntries(options, {

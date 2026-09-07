@@ -18,7 +18,9 @@ import {
 } from '@universe-editor/platform'
 import {
   ClaudeConfigStore,
+  ClaudeMcpConfigStore,
   CodexConfigStore,
+  CodexMcpConfigStore,
   probeGatewayConnectivity,
   resolveCodexAuthMode,
   type IRemoteAgentConfigService,
@@ -42,7 +44,9 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   declare readonly _serviceBrand: undefined
 
   private readonly _claude: ClaudeConfigStore
+  private readonly _claudeMcp: ClaudeMcpConfigStore
   private readonly _codex: CodexConfigStore
+  private readonly _codexMcp: CodexMcpConfigStore
   private readonly _logger: { createLogger(channel: ILogChannel): ILogger } | undefined
 
   private readonly _onDidChangeCodexAuth = this._register(new Emitter<void>())
@@ -50,6 +54,12 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
 
   private readonly _onDidChangeClaudeConfig = this._register(new Emitter<void>())
   readonly onDidChangeClaudeConfig: Event<void> = this._onDidChangeClaudeConfig.event
+
+  private readonly _onDidChangeClaudeMcpConfig = this._register(new Emitter<void>())
+  readonly onDidChangeClaudeMcpConfig: Event<void> = this._onDidChangeClaudeMcpConfig.event
+
+  private readonly _onDidChangeCodexMcpConfig = this._register(new Emitter<void>())
+  readonly onDidChangeCodexMcpConfig: Event<void> = this._onDidChangeCodexMcpConfig.event
 
   constructor(
     logger?: { createLogger(channel: ILogChannel): ILogger },
@@ -65,14 +75,32 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
         ...(logger !== undefined ? { logger } : {}),
       }),
     )
+    this._claudeMcp = this._register(
+      new ClaudeMcpConfigStore({
+        ...(options.claudeConfigPath !== undefined
+          ? { settingsPath: options.claudeConfigPath }
+          : {}),
+        ...(logger !== undefined ? { logger } : {}),
+      }),
+    )
     this._codex = this._register(
       new CodexConfigStore({
         ...(options.codexConfigPath !== undefined ? { configPath: options.codexConfigPath } : {}),
         ...(logger !== undefined ? { logger } : {}),
       }),
     )
+    this._codexMcp = this._register(
+      new CodexMcpConfigStore({
+        ...(options.codexConfigPath !== undefined
+          ? { userConfigPath: options.codexConfigPath }
+          : {}),
+        ...(logger !== undefined ? { logger } : {}),
+      }),
+    )
     this._register(this._codex.onDidChangeAuth(() => this._onDidChangeCodexAuth.fire()))
     this._register(this._claude.onDidChangeConfig(() => this._onDidChangeClaudeConfig.fire()))
+    this._register(this._claudeMcp.onDidChange(() => this._onDidChangeClaudeMcpConfig.fire()))
+    this._register(this._codexMcp.onDidChange(() => this._onDidChangeCodexMcpConfig.fire()))
   }
 
   /** Whether each store's watch is armed. For tests to await arming without sleeping. */
@@ -95,6 +123,9 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
     return this._claude.readAuthStatus()
   }
+  claudeReadMcpServers(): Promise<Record<string, unknown>> {
+    return this._claudeMcp.readMcpServers()
+  }
 
   codexRead(): Promise<CodexSettings> {
     return this._codex.read()
@@ -110,6 +141,12 @@ export class RemoteAgentConfigService extends Disposable implements IRemoteAgent
   }
   codexReadAuthStatus(): Promise<CodexAuthStatus> {
     return this._codex.readAuthStatus()
+  }
+  codexReadUserMcpServers(): Promise<Record<string, unknown>> {
+    return this._codexMcp.readUserMcpServers()
+  }
+  codexReadProjectMcpServers(cwd: string): Promise<Record<string, unknown>> {
+    return this._codexMcp.readProjectMcpServers(cwd)
   }
 
   checkGatewayConnectivity(baseUrl: string): Promise<boolean> {

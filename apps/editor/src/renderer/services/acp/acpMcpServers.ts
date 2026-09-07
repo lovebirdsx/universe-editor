@@ -145,9 +145,31 @@ export function mcpServerTransport(server: McpServer): McpTransport {
 /**
  * Where an MCP server definition came from. Later layers override earlier ones
  * with the same name: `extension` (declarative `contributes.mcpServers`, lowest)
- * < `global` (user settings) < `project` (workspace settings / `.mcp.json`).
+ * < `agent-user` (agent's own user-level config: `~/.claude.json`,
+ * `~/.claude/settings.json`, `~/.codex/config.toml`)
+ * < `global` (user settings)
+ * < `project` (workspace settings)
+ * < `agent-project` (agent's own project-level config: `<cwd>/.mcp.json` for
+ * Claude, `<cwd>/.codex/config.toml` for Codex).
+ *
+ * `agent-*` sources are per-agent isolated: a Claude MCP definition only flows
+ * to claude-code sessions, a Codex one only to codex sessions. The pool
+ * filters by the active agent — see `agentAffinity` on `McpServerDefinition`.
  */
-export type McpServerSource = 'extension' | 'global' | 'project'
+export type McpServerSource = 'extension' | 'global' | 'project' | 'agent-user' | 'agent-project'
+
+/** Identifies which agent family an `agent-*` source belongs to. */
+export type McpAgentAffinity = 'claude-code' | 'codex'
+
+/**
+ * The MCP-source affinity an agent id maps to. Only the two built-in agents
+ * own config files the editor imports; custom agents share the settings pool.
+ * Single source of truth — `AgentMcpConfigService` (which layers to read) and
+ * `AcpSessionService` (wire isolation) both derive from this.
+ */
+export function agentIdToMcpAffinity(agentId: string | undefined): McpAgentAffinity | undefined {
+  return agentId === 'claude-code' || agentId === 'codex' ? agentId : undefined
+}
 
 /**
  * One settings layer contributing to `acp.mcpServers`, lowest priority first.
@@ -156,6 +178,13 @@ export type McpServerSource = 'extension' | 'global' | 'project'
 export interface McpServerRawLayer {
   readonly source: McpServerSource
   readonly raw: unknown
+  /**
+   * Which agent family this layer belongs to. Required when `source` is
+   * `agent-user` or `agent-project`; omitted for the shared layers (extension /
+   * settings). Layers with a different affinity than the active agent are
+   * dropped before merging.
+   */
+  readonly agentAffinity?: McpAgentAffinity
 }
 
 /** Convert one raw layer value (Record or legacy array form) into a by-name record. */
@@ -193,34 +222,94 @@ export function mergeMcpServerRawLayers(
  * (transport is read from the winning entry). An invalid winning entry drops
  * the name entirely — a broken workspace override must not silently fall back
  * to the global definition it shadows.
+ *
+ * `agentAffinity` filters the layers before merging: when provided, layers
+ * whose own `agentAffinity` mismatches are dropped (per-agent isolation);
+ * when omitted, **all** layers participate — the union view the picker mirror
+ * shows, where each definition carries its `agentAffinity` badge and the UI
+ * narrows by the session's agent (see `McpServerPicker.filterPoolForSession`).
  */
 export function readMcpServerDefinitionsLayered(
   layers: readonly McpServerRawLayer[],
   onWarn?: WarnFn,
   isDisabled?: (name: string) => boolean,
+  agentAffinity?: McpAgentAffinity,
 ): McpServerDefinition[] {
+  const filtered =
+    agentAffinity === undefined
+      ? layers
+      : layers.filter((l) => l.agentAffinity === undefined || l.agentAffinity === agentAffinity)
   const sourceByName = new Map<string, McpServerSource>()
+  const affinityByName = new Map<string, McpAgentAffinity>()
+  const affinitiesByName = new Map<string, Set<McpAgentAffinity>>()
+  const sharedLayerNames = new Set<string>()
   // Names defined by any user-level layer (everything except the workspace
-  // `project` layers: extension contributions, VSCodeUser, User, Memory) — the
-  // UI offers the user-level default toggle only for these.
+  // `project` layers: extension contributions, agent-user, VSCodeUser, User,
+  // Memory) — the UI offers the user-level default toggle only for these.
   const userLevelNames = new Set<string>()
-  for (const layer of layers) {
+  for (const layer of filtered) {
     for (const name of Object.keys(mcpServerRawToRecord(layer.raw))) {
       sourceByName.set(name, layer.source)
-      if (layer.source !== 'project') userLevelNames.add(name)
+      if (layer.agentAffinity !== undefined) {
+        affinityByName.set(name, layer.agentAffinity)
+        const set = affinitiesByName.get(name) ?? new Set<McpAgentAffinity>()
+        set.add(layer.agentAffinity)
+        affinitiesByName.set(name, set)
+      } else {
+        sharedLayerNames.add(name)
+      }
+      if (layer.source !== 'project' && layer.source !== 'agent-project') userLevelNames.add(name)
+    }
+  }
+  // Union-view only: the union shows one row per name, labeled with the
+  // winning layer's affinity. Other agents that also define the name must
+  // stay visible in their own picker (their layers DO wire the server), so
+  // they are recorded in `sharedWith`:
+  //  - winner is agent-A's layer and agent-B also defines the name
+  //    (B's definition is shadowed — `filterPoolForSession` would otherwise
+  //    drop the row entirely from B's picker);
+  //  - winner is a shared layer and agent-A also defines the name (A's own
+  //    definition is shadowed but A's wire path still includes the shared
+  //    winner) — the other known agent is recorded so B's picker keeps the
+  //    row too; B simply has nothing shadowed here.
+  // Per-agent filtered reads (the wire paths) skip this entirely — their
+  // consumers never see cross-agent rows.
+  const sharedWithByName = new Map<string, Set<McpAgentAffinity>>()
+  if (agentAffinity === undefined) {
+    const KNOWN_AFFINITIES: readonly McpAgentAffinity[] = ['claude-code', 'codex']
+    for (const [name, affinities] of affinitiesByName) {
+      const winner = affinityByName.get(name)
+      if (winner !== undefined) {
+        const others = new Set([...affinities].filter((a) => a !== winner))
+        if (sharedLayerNames.has(name)) {
+          for (const a of KNOWN_AFFINITIES) {
+            if (a !== winner && !affinities.has(a)) others.add(a)
+          }
+        }
+        if (others.size > 0) sharedWithByName.set(name, others)
+      }
     }
   }
   const defs = readMcpServerDefinitions(
-    mergeMcpServerRawLayers(layers),
+    mergeMcpServerRawLayers(filtered),
     'global',
     onWarn,
     isDisabled,
   )
-  return defs.map((d) => ({
-    ...d,
-    source: sourceByName.get(d.name) ?? d.source,
-    ...(userLevelNames.has(d.name) ? { hasUserLevelDefinition: true } : {}),
-  }))
+  return defs.map((d) => {
+    // In the union view the winner's own affinity labels the definition; a
+    // shared-layer winner shadowed by a same-named agent layer (the other
+    // agent's view) keeps the affinity the per-agent read would attribute.
+    const affinity = affinityByName.get(d.name)
+    const sharedWith = sharedWithByName.get(d.name)
+    return {
+      ...d,
+      source: sourceByName.get(d.name) ?? d.source,
+      ...(affinity !== undefined ? { agentAffinity: affinity } : {}),
+      ...(sharedWith !== undefined ? { sharedWith: [...sharedWith] } : {}),
+      ...(userLevelNames.has(d.name) ? { hasUserLevelDefinition: true } : {}),
+    }
+  })
 }
 
 /**
@@ -237,6 +326,13 @@ export interface McpServerDefinition {
   readonly disabled: boolean
   readonly source: McpServerSource
   /**
+   * Present when `source` is `agent-user` / `agent-project`. Identifies which
+   * agent family the definition belongs to; the UI shows a per-agent badge and
+   * the pool filter drops definitions whose affinity does not match the active
+   * agent.
+   */
+  readonly agentAffinity?: McpAgentAffinity
+  /**
    * True when the winning definition lives in the workspace `.mcp.json` file
    * (set by the session service when it merges the pool). Surfaced as the
    * source badge in the picker; the default switch is editable for these
@@ -245,14 +341,27 @@ export interface McpServerDefinition {
   readonly fromMcpJson?: boolean
   /**
    * True when a user-level layer (extension contribution, VSCodeUser, User,
-   * Memory — anything but the workspace `project` layers) defines this name.
-   * Drives the visibility of the user-level default toggle: workspace-only
-   * names get just the workspace switch, while names that also exist at user
-   * level offer both (workspace wins). Absent (undefined) means false; set by
-   * `readMcpServerDefinitionsLayered`, and propagated to `.mcp.json` winners
-   * by the session service at merge time.
+   * Memory, or an agent-user layer — anything but the workspace `project`
+   * layers) defines this name. Drives the visibility of the user-level default
+   * toggle: workspace-only names get just the workspace switch, while names
+   * that also exist at user level offer both (workspace wins). Absent
+   * (undefined) means false; set by `readMcpServerDefinitionsLayered`, and
+   * propagated to `.mcp.json` winners by the session service at merge time.
+   * In the union view (no affinity filter) the flag is true when ANY layer —
+   * including a mismatched-affinity one — defines the name at user level, so a
+   * shadowed same-named entry still offers the user-level default toggle.
    */
   readonly hasUserLevelDefinition?: boolean
+  /**
+   * Union-view only: other agents that also define this name, besides the
+   * agent whose layer owns the row's `agentAffinity`. The union shows one row
+   * per name, so a same-named definition from a second agent would otherwise
+   * be invisible in that agent's picker even though its own layers do wire
+   * the server; `filterPoolForSession` keeps a row when the session's agent
+   * appears here, and the picker's hint explains the contents come from a
+   * shared higher-priority layer.
+   */
+  readonly sharedWith?: readonly McpAgentAffinity[]
 }
 
 /**

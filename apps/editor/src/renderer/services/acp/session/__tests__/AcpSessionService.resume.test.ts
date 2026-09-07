@@ -80,6 +80,7 @@ import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
 import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
+import { StubAgentMcpConfigService } from './stubAgentMcpConfig.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
@@ -482,6 +483,8 @@ function buildService(
     new StubFileService(),
     new StubExtensionMcpServersService(),
     new StubMcpServerEnablementService(),
+
+    new StubAgentMcpConfigService(),
     stubWindowsService(),
     stubEnvSnapshotService(),
     candidates,
@@ -1409,6 +1412,8 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1540,6 +1545,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1610,6 +1617,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1678,6 +1687,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1748,6 +1759,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),

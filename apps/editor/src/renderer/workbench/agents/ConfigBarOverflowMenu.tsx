@@ -24,7 +24,7 @@ import {
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../services/acp/session/acpSessionService.js'
 import { categoryIcon, pickConfigValue, renderPopoverItems } from './ConfigOptionsBar.js'
-import { isMcpPickerHidden, McpPickerPanel } from './McpServerPicker.js'
+import { isMcpPickerHidden, filterPoolForSession, McpPickerPanel } from './McpServerPicker.js'
 import { SubagentModelPanel } from './SubagentModelPicker.js'
 import styles from './agents.module.css'
 
@@ -278,11 +278,15 @@ function McpOverflowRowInner({
   onToggle: () => void
   onRequestClose: () => void
 }) {
-  const pool = useObservable(service.mcpServerDefinitions)
+  const unionPool = useObservable(service.mcpServerDefinitions)
+  const pool = filterPoolForSession(unionPool, session.agentId)
   const selection = useObservable(session.mcpServerSelection)
-  // Same predicate as the inline picker's self-hide: a read-only session or an
-  // empty pool leaves no row (not just no value text) — no writable toggle.
-  if (isMcpPickerHidden(session, pool)) return null
+  // Same predicate as the inline picker's self-hide, against the same union
+  // pool: a read-only session or an empty union pool leaves no row (not just
+  // no value text) — no writable toggle. Using the filtered pool here would
+  // drop the row for a claude session that only has codex-only entries while
+  // the inline trigger still shows 0/0.
+  if (isMcpPickerHidden(session, unionPool)) return null
   const { enabledNames } = resolveMcpServerSelection(pool, selection)
   return (
     <OverflowRowLayout

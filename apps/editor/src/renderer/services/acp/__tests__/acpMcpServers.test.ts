@@ -486,6 +486,216 @@ describe('mergeMcpServerRawLayers / readMcpServerDefinitionsLayered', () => {
       { name: 'local', transport: 'stdio', disabled: false, source: 'project' },
     ])
   })
+
+  it('without an affinity filter keeps every layer and propagates agentAffinity (union view)', () => {
+    const defs = readMcpServerDefinitionsLayered(
+      [
+        { source: 'global', raw: { shared: { command: 'shared-srv' } } },
+        {
+          source: 'agent-user',
+          raw: { c: { command: 'claude-srv' } },
+          agentAffinity: 'claude-code',
+        },
+        { source: 'agent-user', raw: { x: { command: 'codex-srv' } }, agentAffinity: 'codex' },
+      ],
+      undefined,
+      undefined,
+      undefined,
+    )
+    expect(defs).toEqual([
+      {
+        name: 'shared',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'c',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'claude-code',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'x',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('an affinity filter drops layers owned by the other agent, keeping shared layers', () => {
+    const layers = [
+      { source: 'global', raw: { shared: { command: 'shared-srv' } } },
+      { source: 'agent-user', raw: { c: { command: 'claude-srv' } }, agentAffinity: 'claude-code' },
+      {
+        source: 'agent-project',
+        raw: { c2: { command: 'mcp-json-srv' } },
+        agentAffinity: 'claude-code',
+      },
+      { source: 'agent-user', raw: { x: { command: 'codex-srv' } }, agentAffinity: 'codex' },
+      {
+        source: 'agent-project',
+        raw: { x2: { command: 'codex-proj-srv' } },
+        agentAffinity: 'codex',
+      },
+    ] as const
+    const claudeDefs = readMcpServerDefinitionsLayered(
+      [...layers],
+      undefined,
+      undefined,
+      'claude-code',
+    )
+    expect(claudeDefs.map((d) => d.name)).toEqual(['shared', 'c', 'c2'])
+    const codexDefs = readMcpServerDefinitionsLayered([...layers], undefined, undefined, 'codex')
+    expect(codexDefs.map((d) => d.name)).toEqual(['shared', 'x', 'x2'])
+  })
+
+  it('a same-named entry in the other agent’s layer does not shadow under an affinity filter', () => {
+    const layers = [
+      { source: 'global', raw: { s: { command: 'shared-srv' } } },
+      {
+        source: 'agent-project',
+        raw: { s: { command: 'claude-override' } },
+        agentAffinity: 'claude-code',
+      },
+      { source: 'agent-user', raw: { s: { command: 'codex-override' } }, agentAffinity: 'codex' },
+    ] as const
+    // Claude's higher-priority layer must not shadow the shared entry for codex.
+    const codexDefs = readMcpServerDefinitionsLayered([...layers], undefined, undefined, 'codex')
+    expect(codexDefs).toEqual([
+      {
+        name: 's',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+        hasUserLevelDefinition: true,
+      },
+    ])
+    const claudeDefs = readMcpServerDefinitionsLayered(
+      [...layers],
+      undefined,
+      undefined,
+      'claude-code',
+    )
+    expect(claudeDefs).toEqual([
+      {
+        name: 's',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'claude-code',
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('agent-project entries are not user-level; agent-user entries are', () => {
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'agent-user', raw: { u: { command: 'u-srv' } }, agentAffinity: 'codex' },
+      { source: 'agent-project', raw: { p: { command: 'p-srv' } }, agentAffinity: 'codex' },
+    ])
+    expect(defs).toEqual([
+      {
+        name: 'u',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'p',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'codex',
+      },
+    ])
+  })
+
+  it('union view records sharedWith when both agents define the same name (winner labeled, loser visible)', () => {
+    // claude's agent-project layer outranks codex's agent-user layer for `s`.
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'agent-user', raw: { s: { command: 'codex-override' } }, agentAffinity: 'codex' },
+      {
+        source: 'agent-project',
+        raw: { s: { command: 'claude-override' } },
+        agentAffinity: 'claude-code',
+      },
+    ])
+    expect(defs).toEqual([
+      {
+        name: 's',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'claude-code',
+        sharedWith: ['codex'],
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('union view records sharedWith when an agent layer and a shared layer define the same name', () => {
+    // The settings (shared) layer wins for codex too — its picker must keep the
+    // row even though the merged row carries claude's affinity. (agent-user
+    // sits BELOW the settings layers in priority, so global wins here.)
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'agent-user', raw: { s: { command: 'claude-srv' } }, agentAffinity: 'claude-code' },
+      { source: 'global', raw: { s: { command: 'shared-srv' } } },
+    ])
+    expect(defs).toEqual([
+      {
+        name: 's',
+        transport: 'stdio',
+        disabled: false,
+        source: 'global',
+        agentAffinity: 'claude-code',
+        sharedWith: ['codex'],
+        hasUserLevelDefinition: true,
+      },
+    ])
+  })
+
+  it('no sharedWith is recorded when only one agent defines the name', () => {
+    const defs = readMcpServerDefinitionsLayered([
+      { source: 'agent-user', raw: { c: { command: 'claude-srv' } }, agentAffinity: 'claude-code' },
+    ])
+    expect(defs[0]).toEqual({
+      name: 'c',
+      transport: 'stdio',
+      disabled: false,
+      source: 'agent-user',
+      agentAffinity: 'claude-code',
+      hasUserLevelDefinition: true,
+    })
+    expect(defs[0]?.sharedWith).toBeUndefined()
+  })
+
+  it('sharedWith is dropped together with the other agent’s layers under an affinity filter', () => {
+    const layers = [
+      { source: 'agent-user', raw: { s: { command: 'codex-override' } }, agentAffinity: 'codex' },
+      {
+        source: 'agent-project',
+        raw: { s: { command: 'claude-override' } },
+        agentAffinity: 'claude-code',
+      },
+    ] as const
+    const claudeDefs = readMcpServerDefinitionsLayered(
+      [...layers],
+      undefined,
+      undefined,
+      'claude-code',
+    )
+    expect(claudeDefs[0]?.sharedWith).toBeUndefined()
+  })
 })
 
 describe('validateMcpServerEntry', () => {

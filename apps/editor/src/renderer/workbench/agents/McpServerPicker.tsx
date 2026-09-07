@@ -2,9 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  McpServerPicker — session-level MCP server toggle living in the prompt
  *  action row next to the config options. The trigger shows the effective
- *  "enabled / pool" count; the popover lists every definition from the merged
- *  pool (global `acp.mcpServers` + project `.mcp.json`) with a checkbox, the
- *  live connection status dot, and its source. Toggling converges the session
+ *  "enabled / pool" count; the popover lists the union pool (extension
+ *  contributions + `acp.mcpServers` settings + agent-owned config files —
+ *  `~/.claude.json` / `~/.claude/settings.json`, `~/.codex/config.toml` — +
+ *  project `.mcp.json` / `.codex/config.toml`) narrowed to the session's
+ *  agent, each row with a checkbox, the live connection status dot, and its
+ *  source. Toggling converges the session
  *  via IAcpSessionService.setSessionMcpServers (seamless reload) and affects
  *  only this session — the default set new sessions start with is governed by
  *  each entry's per-server default switch (`disabled` flag), editable inline
@@ -26,6 +29,7 @@ import {
   type IAcpSessionService as IAcpSessionServiceType,
 } from '../../services/acp/session/acpSessionService.js'
 import {
+  agentIdToMcpAffinity,
   resolveMcpServerSelection,
   type McpServerDefinition,
 } from '../../services/acp/acpMcpServers.js'
@@ -42,6 +46,30 @@ export function isMcpPickerHidden(
   pool: readonly McpServerDefinition[],
 ): boolean {
   return session.readOnly || pool.length === 0
+}
+
+/**
+ * Narrow the union pool mirror to what THIS session can actually wire: shared
+ * definitions plus the ones whose `agentAffinity` matches the session's agent
+ * (a definition without an affinity is shared). The mirror is the union across
+ * agents so the AI settings panel can badge every source; a claude-code
+ * session must neither display nor pin a codex-only entry — the wire filter
+ * would silently drop it and the pinned name could never come back.
+ * `sharedWith` rows stay visible for every agent that defines the name: the
+ * union shows one row per name, so without this a codex+claude shared name
+ * would vanish from the loser's picker even though its layers do wire it.
+ */
+export function filterPoolForSession(
+  pool: readonly McpServerDefinition[],
+  agentId: string | undefined,
+): readonly McpServerDefinition[] {
+  const affinity = agentIdToMcpAffinity(agentId)
+  return pool.filter(
+    (d) =>
+      d.agentAffinity === undefined ||
+      d.agentAffinity === affinity ||
+      (affinity !== undefined && d.sharedWith?.includes(affinity) === true),
+  )
 }
 
 export function McpServerPicker({
@@ -83,10 +111,11 @@ function McpServerPickerInner({
   onOpen: () => void
   onClose: () => void
 }) {
-  const pool = useObservable(service.mcpServerDefinitions)
+  const unionPool = useObservable(service.mcpServerDefinitions)
+  const pool = filterPoolForSession(unionPool, session.agentId)
   const selection = useObservable(session.mcpServerSelection)
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
-  if (isMcpPickerHidden(session, pool)) return null
+  if (isMcpPickerHidden(session, unionPool)) return null
   // `null` (inherit) resolves to every non-disabled pool entry — the same
   // default set a brand-new session starts with.
   const { enabledNames } = resolveMcpServerSelection(pool, selection)
@@ -182,7 +211,9 @@ function McpPickerPanelInner({
   service: IAcpSessionServiceType
   onRequestClose?: () => void
 }) {
-  const pool = useObservable(service.mcpServerDefinitions)
+  const unionPool = useObservable(service.mcpServerDefinitions)
+  const pool = filterPoolForSession(unionPool, session.agentId)
+  const sessionAffinity = agentIdToMcpAffinity(session.agentId)
   const selection = useObservable(session.mcpServerSelection)
   const liveServers = useObservable(session.mcpServers)
   const commands = useOptionalService(ICommandService)
@@ -239,14 +270,43 @@ function McpPickerPanelInner({
               {def.name}
             </span>
             <span className={styles['mcpPickMeta']}>
+              {def.agentAffinity !== undefined && (
+                <span
+                  className={styles['mcpAffinityBadge']}
+                  data-tooltip={
+                    def.agentAffinity === 'claude-code'
+                      ? localize('acp.mcp.picker.affinityClaude', 'Claude Code sessions only')
+                      : localize('acp.mcp.picker.affinityCodex', 'Codex sessions only')
+                  }
+                >
+                  {def.agentAffinity === 'claude-code' ? 'claude' : 'codex'}
+                </span>
+              )}
               {def.fromMcpJson
                 ? '.mcp.json'
                 : def.source === 'project'
                   ? localize('acp.mcp.picker.sourceProject', 'project')
                   : def.source === 'extension'
                     ? localize('acp.mcp.picker.sourceExtension', 'extension')
-                    : localize('acp.mcp.picker.sourceGlobal', 'global')}
+                    : def.source === 'agent-user'
+                      ? def.agentAffinity === 'codex'
+                        ? localize('acp.mcp.picker.sourceAgentUserCodex', 'codex user')
+                        : localize('acp.mcp.picker.sourceAgentUserClaude', 'claude user')
+                      : def.source === 'agent-project'
+                        ? localize('acp.mcp.picker.sourceAgentProjectCodex', 'codex project')
+                        : localize('acp.mcp.picker.sourceGlobal', 'global')}
             </span>
+            {sessionAffinity !== undefined && def.sharedWith?.includes(sessionAffinity) === true ? (
+              <span
+                className={styles['mcpSharedHint']}
+                data-tooltip={localize(
+                  'acp.mcp.picker.sharedHint',
+                  'Also defined for this agent — the entry shown comes from a higher-priority shared layer',
+                )}
+              >
+                {localize('acp.mcp.picker.sharedShort', 'shared')}
+              </span>
+            ) : null}
           </label>
           <McpEnablementToggles
             name={def.name}

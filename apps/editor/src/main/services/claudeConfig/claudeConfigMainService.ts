@@ -25,6 +25,7 @@ import {
 } from '@universe-editor/platform'
 import {
   ClaudeConfigStore,
+  ClaudeMcpConfigStore,
   defaultClaudeSettingsPath,
   probeGatewayConnectivity,
   type IRemoteAgentConfigService,
@@ -46,11 +47,15 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
 
   private readonly _logger: ILogger
   private readonly _local: ClaudeConfigStore
+  private readonly _localMcp: ClaudeMcpConfigStore
   private readonly _settingsPath: string
   private readonly _remoteConfigSubscribed = new Set<string>()
 
   private readonly _onDidChangeConfig = this._register(new Emitter<void>())
   readonly onDidChangeConfig: Event<void> = this._onDidChangeConfig.event
+
+  private readonly _onDidChangeMcpConfig = this._register(new Emitter<void>())
+  readonly onDidChangeMcpConfig: Event<void> = this._onDidChangeMcpConfig.event
 
   constructor(
     settingsPath: string = defaultClaudeSettingsPath(),
@@ -69,7 +74,14 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
       }),
     )
+    this._localMcp = this._register(
+      new ClaudeMcpConfigStore({
+        settingsPath: this._settingsPath,
+        ...(loggerService !== undefined ? { logger: loggerService } : {}),
+      }),
+    )
     this._register(this._local.onDidChangeConfig(() => this._onDidChangeConfig.fire()))
+    this._register(this._localMcp.onDidChange(() => this._onDidChangeMcpConfig.fire()))
   }
 
   async read(authority?: string): Promise<ClaudeSettings> {
@@ -115,6 +127,11 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     return reachable
   }
 
+  async readMcpServers(authority?: string): Promise<Record<string, unknown>> {
+    if (authority) return this._remoteService(authority).claudeReadMcpServers()
+    return this._localMcp.readMcpServers()
+  }
+
   private _remoteService(authority: string): IRemoteAgentConfigService {
     if (!this._connections) {
       throw new Error('claudeConfig: remote connection service not available')
@@ -126,6 +143,7 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
     if (!this._remoteConfigSubscribed.has(authority)) {
       this._remoteConfigSubscribed.add(authority)
       this._register(service.onDidChangeClaudeConfig(() => this._onDidChangeConfig.fire()))
+      this._register(service.onDidChangeClaudeMcpConfig(() => this._onDidChangeMcpConfig.fire()))
     }
     return service
   }

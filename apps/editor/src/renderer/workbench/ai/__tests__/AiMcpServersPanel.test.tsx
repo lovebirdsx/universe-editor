@@ -34,6 +34,13 @@ import type { IExtensionMcpServersService } from '../../../services/extensions/e
 import { IExtensionMcpServersService as IExtensionMcpServersServiceId } from '../../../services/extensions/extensionMcpServersService.js'
 import type { IMcpServerEnablementService } from '../../../services/acp/mcpServerEnablementService.js'
 import { IMcpServerEnablementService as IMcpServerEnablementServiceId } from '../../../services/acp/mcpServerEnablementService.js'
+import type { IAgentMcpConfigService } from '../../../services/acp/agentMcpConfigService.js'
+import { IAgentMcpConfigService as IAgentMcpConfigServiceId } from '../../../services/acp/agentMcpConfigService.js'
+import type { IClaudeConfigService } from '../../../../shared/ipc/claudeConfigService.js'
+import { IClaudeConfigService as IClaudeConfigServiceId } from '../../../../shared/ipc/claudeConfigService.js'
+import type { ICodexConfigService } from '../../../../shared/ipc/codexConfigService.js'
+import { ICodexConfigService as ICodexConfigServiceId } from '../../../../shared/ipc/codexConfigService.js'
+import type { McpAgentAffinity } from '../../../services/acp/acpMcpServers.js'
 import { AiMcpServersPanel } from '../AiMcpServersPanel.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -103,6 +110,26 @@ function makeSessionService(mcpJson: Record<string, unknown>, activeSession?: IA
   } as unknown as IAcpSessionService
 }
 
+/** Stub routing service: fixed per-agent raw records, Event.None change. */
+function makeAgentMcpConfigService(layers: {
+  claudeUser?: Record<string, unknown>
+  codexUser?: Record<string, unknown>
+  codexProject?: Record<string, unknown>
+}) {
+  return {
+    onDidChange: Event.None as Event<{ readonly agentAffinity: McpAgentAffinity }>,
+    readAgentMcpLayers: vi.fn(async (agentId: string) => ({
+      userLayers:
+        agentId === 'claude-code'
+          ? [{ raw: layers.claudeUser ?? {} }]
+          : agentId === 'codex'
+            ? [{ raw: layers.codexUser ?? {} }]
+            : [],
+      projectLayers: agentId === 'codex' ? [{ raw: layers.codexProject ?? {} }] : [],
+    })),
+  } as unknown as IAgentMcpConfigService
+}
+
 function renderPanel({
   config,
   withSessionService = true,
@@ -111,6 +138,11 @@ function renderPanel({
   confirmResult = { confirmed: true },
   workspaceOpen = true,
   extensionRecord,
+  agentLayers,
+  withClaudeConfig = false,
+  withCodexConfig = false,
+  claudeConfigPath = '/home/testuser/.claude.json',
+  codexConfigPath = '/home/testuser/.codex/config.toml',
 }: {
   config: FakeConfigurationService
   withSessionService?: boolean
@@ -119,6 +151,11 @@ function renderPanel({
   confirmResult?: { confirmed: boolean }
   workspaceOpen?: boolean
   extensionRecord?: Record<string, unknown>
+  agentLayers?: Parameters<typeof makeAgentMcpConfigService>[0]
+  withClaudeConfig?: boolean
+  withCodexConfig?: boolean
+  claudeConfigPath?: string
+  codexConfigPath?: string
 }) {
   const services = new ServiceCollection()
   services.set(IConfigurationService, config as unknown as IConfigurationService)
@@ -147,6 +184,19 @@ function renderPanel({
       onDidChange: Event.None,
       setContributions: () => {},
     } as unknown as IExtensionMcpServersService)
+  }
+  if (agentLayers) {
+    services.set(IAgentMcpConfigServiceId, makeAgentMcpConfigService(agentLayers))
+  }
+  if (withClaudeConfig) {
+    services.set(IClaudeConfigServiceId, {
+      configPath: vi.fn(async () => claudeConfigPath),
+    } as unknown as IClaudeConfigService)
+  }
+  if (withCodexConfig) {
+    services.set(ICodexConfigServiceId, {
+      configPath: vi.fn(async () => codexConfigPath),
+    } as unknown as ICodexConfigService)
   }
   const inst = new InstantiationService(services)
   const utils = render(<AiMcpServersPanel />, {
@@ -289,6 +339,104 @@ describe('AiMcpServersPanel', () => {
       expect.objectContaining({ path: expect.stringContaining('.mcp.json') }),
       expect.anything(),
     )
+  })
+
+  it('renders agent source badges with affinity tooltips and the agent shadow order', async () => {
+    const config = new FakeConfigurationService()
+    // 'shared' is defined by the extension, claude user, and the VSCode user
+    // layers: extension < claudeUser < vscodeUser, so the vscode user layer
+    // wins and both agent/extension badges are shadowed.
+    config.seed(ConfigurationTarget.VSCodeUser, { shared: { command: 'node' } })
+    renderPanel({
+      config,
+      extensionRecord: { shared: { command: 'ext-bin' } },
+      agentLayers: {
+        claudeUser: { shared: { command: 'claude-bin' }, claudeOnly: { command: 'c1' } },
+        codexUser: { codexOnly: { command: 'x1' } },
+        codexProject: { projOnly: { command: 'p1' } },
+      },
+    })
+    await flushEffects()
+    await flushEffects()
+
+    // New badge captions appear on their rows.
+    expect(badgeOf(rowOf('claudeOnly'), 'claudeUser').textContent).toBe('claude')
+    expect(badgeOf(rowOf('codexOnly'), 'codexUser').textContent).toBe('codex')
+    expect(badgeOf(rowOf('projOnly'), 'codexProject').textContent).toBe('codex-proj')
+    // Affinity notes in the badge tooltips.
+    expect(badgeOf(rowOf('claudeOnly'), 'claudeUser').getAttribute('data-tooltip')).toContain(
+      'Claude Code sessions only',
+    )
+    expect(badgeOf(rowOf('codexOnly'), 'codexUser').getAttribute('data-tooltip')).toContain(
+      'Codex sessions only',
+    )
+    // Shadow order: extension < claudeUser < vscodeUser (winner).
+    const shared = rowOf('shared')
+    expect(badgeOf(shared, 'vscodeUser').getAttribute('data-shadowed')).toBeNull()
+    expect(badgeOf(shared, 'claudeUser').getAttribute('data-shadowed')).toBe('true')
+    expect(badgeOf(shared, 'extension').getAttribute('data-shadowed')).toBe('true')
+    // claudeUser is shadowed by the vscode user layer specifically.
+    expect(badgeOf(shared, 'claudeUser').getAttribute('data-tooltip')).toContain('overridden by')
+    // Agent-user definitions count as user-level for the user toggle.
+    expect(within(rowOf('claudeOnly')).getByTestId('mcp-ena-user-toggle')).toBeTruthy()
+    // …but the codex project layer is not user-level.
+    expect(within(rowOf('projOnly')).queryByTestId('mcp-ena-user-toggle')).toBeNull()
+  })
+
+  it('clicking an agent badge opens its backing config file read-only', async () => {
+    const config = new FakeConfigurationService()
+    const { editorResolver } = renderPanel({
+      config,
+      agentLayers: {
+        claudeUser: { claudeOnly: { command: 'c1' } },
+        codexUser: { codexOnly: { command: 'x1' } },
+        codexProject: { projOnly: { command: 'p1' } },
+      },
+      withClaudeConfig: true,
+      withCodexConfig: true,
+      claudeConfigPath: '/home/testuser/.claude.json',
+      codexConfigPath: '/home/testuser/.codex/config.toml',
+    })
+    await flushEffects()
+    await flushEffects()
+
+    // Agent user files resolve through the config services' absolute paths.
+    fireEvent.click(badgeOf(rowOf('claudeOnly'), 'claudeUser'))
+    await flushEffects()
+    expect(editorResolver.openEditor).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/home/testuser/.claude.json' }),
+      expect.anything(),
+    )
+    fireEvent.click(badgeOf(rowOf('codexOnly'), 'codexUser'))
+    await flushEffects()
+    expect(editorResolver.openEditor).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/home/testuser/.codex/config.toml' }),
+      expect.anything(),
+    )
+    // The codex project badge opens <workspace>/.codex/config.toml.
+    fireEvent.click(badgeOf(rowOf('projOnly'), 'codexProject'))
+    await flushEffects()
+    expect(editorResolver.openEditor).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('.codex/config.toml') }),
+      expect.anything(),
+    )
+    // Read-only sources never open the edit dialog.
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('agent rows have enablement switches but no edit/remove actions', async () => {
+    const config = new FakeConfigurationService()
+    renderPanel({
+      config,
+      agentLayers: { claudeUser: { claudeOnly: { command: 'c1' } } },
+    })
+    await flushEffects()
+    await flushEffects()
+
+    const row = rowOf('claudeOnly')
+    expect(within(row).getByTestId('mcp-ena-ws-toggle')).toBeTruthy()
+    expect(within(row).queryByRole('button', { name: /Edit .* definition/ })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Remove' })).toBeNull()
   })
 
   it('the extension badge is inert (no edit affordance)', async () => {

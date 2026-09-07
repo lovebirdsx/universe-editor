@@ -71,7 +71,15 @@ import { AcpSessionService } from '../acpSessionService.js'
 // agent presets, the coordinator owns timing) can enumerate that set. The
 // facade injects it only to hand getScopes() to the coordinator, mirroring
 // IWindowsService above.
-const MAX_INJECTED = 22
+// +1 IAgentMcpConfigService (per-agent MCP config import): the agent-owned
+// config files (`~/.claude.json`, `~/.claude/settings.json`,
+// `~/.codex/config.toml`, `<cwd>/.codex/config.toml`) are read-only external
+// sources keyed by agent affinity — they live outside every settings layer,
+// so IConfigurationService cannot surface them, and no other collaborator
+// owns the claude/codex config channels. The facade needs the routed layers
+// (merge input) + onDidChange (pool refresh); per-agent filtering happens in
+// `_mcpLayers` via the service's `readAgentMcpLayers`.
+const MAX_INJECTED = 23
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

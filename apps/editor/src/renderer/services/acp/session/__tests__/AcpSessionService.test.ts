@@ -88,6 +88,7 @@ import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubExtensionMcpServersService } from './stubExtensionMcpServers.js'
 import { StubMcpServerEnablementService } from './stubMcpServerEnablement.js'
+import { StubAgentMcpConfigService } from './stubAgentMcpConfig.js'
 import { StubFileService } from './stubFileService.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
@@ -582,6 +583,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -679,6 +682,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -810,6 +815,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1071,6 +1078,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1135,6 +1144,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1191,6 +1202,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1263,6 +1276,8 @@ describe('AcpSessionService', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -1428,6 +1443,8 @@ describe('AcpSessionService', () => {
         new StubFileService(),
         new StubExtensionMcpServersService(),
         new StubMcpServerEnablementService(),
+
+        new StubAgentMcpConfigService(),
         stubWindowsService(),
         stubEnvSnapshotService(),
         stubAcpModelCandidateService(),
@@ -1748,6 +1765,8 @@ describe('AcpSessionService — rewind / fork', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -2633,6 +2652,8 @@ describe('AcpSessionService — startup timeout', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -2687,6 +2708,8 @@ describe('AcpSessionService — startup timeout', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -2718,6 +2741,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     compactionStats: AcpCompactionStatsService = makeCompactionStats(),
     extensionMcp: StubExtensionMcpServersService = new StubExtensionMcpServersService(),
     enablement: StubMcpServerEnablementService = new StubMcpServerEnablementService(),
+    agentMcpConfig: StubAgentMcpConfigService = new StubAgentMcpConfigService(),
   ) {
     const notification = new StubNotificationService()
     const telemetry = new NoopTelemetryService()
@@ -2749,6 +2773,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new StubFileService(),
       extensionMcp,
       enablement,
+      agentMcpConfig,
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -2807,6 +2832,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       },
     })
     const svc = makeService(client, config)
+    // The mirror refresh is async (agent MCP layers) — wait for the initial pass.
+    await svc.refreshMcpServerDefinitions()
     // User-only entry survives alongside the workspace override; attribution
     // follows the winning layer.
     expect(svc.mcpServerDefinitions.get()).toEqual([
@@ -2846,6 +2873,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       },
     })
     const svc = makeService(client, new ConfigurationService(), makeCompactionStats(), extensionMcp)
+    await svc.refreshMcpServerDefinitions()
     expect(svc.mcpServerDefinitions.get()).toEqual([
       {
         name: 'universe-editor',
@@ -2878,6 +2906,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       'acp.mcpServers': { bridge: { command: 'node', args: ['user.js'] } },
     })
     const svc = makeService(client, config, makeCompactionStats(), extensionMcp)
+    await svc.refreshMcpServerDefinitions()
     expect(svc.mcpServerDefinitions.get()).toEqual([
       {
         name: 'bridge',
@@ -3416,6 +3445,201 @@ describe('AcpSessionService — mcpServers capability gating', () => {
   })
 })
 
+describe('AcpSessionService — agent MCP config isolation', () => {
+  function makeService(
+    client: FakeAcpClientService,
+    config: ConfigurationService,
+    agentMcpConfig: StubAgentMcpConfigService,
+    enablement: StubMcpServerEnablementService = new StubMcpServerEnablementService(),
+  ) {
+    const notification = new StubNotificationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notification,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notification, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      enablement,
+      agentMcpConfig,
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+    )
+  }
+
+  it('a claude-code session wires shared + claude layers, never codex ones', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { shared: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { claudeUser: { command: 'claude-user-srv' } })
+    agentMcpConfig.setUserRecord('codex', { codexUser: { command: 'codex-user-srv' } })
+    agentMcpConfig.setProjectRecord('codex', { codexProj: { command: 'codex-proj-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+    const s = await svc.createSession('claude-code')
+    await s.whenConnected()
+    const names = client.connected[0]!.agent.newSessionCalls[0]!.mcpServers.map((m) => m.name)
+    expect(names).toEqual(['claudeUser', 'shared'])
+    svc.dispose()
+  })
+
+  it('a codex session wires shared + codex layers, never claude ones', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { shared: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { claudeUser: { command: 'claude-user-srv' } })
+    agentMcpConfig.setUserRecord('codex', { codexUser: { command: 'codex-user-srv' } })
+    agentMcpConfig.setProjectRecord('codex', { codexProj: { command: 'codex-proj-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+    const s = await svc.createSession('codex')
+    await s.whenConnected()
+    const names = client.connected[0]!.agent.newSessionCalls[0]!.mcpServers.map((m) => m.name)
+    expect(names).toEqual(['codexUser', 'shared', 'codexProj'])
+    svc.dispose()
+  })
+
+  it('the workspace .mcp.json feeds only claude-code sessions, never codex', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    const svc = makeService(client, config, agentMcpConfig)
+    // readProjectMcpJson reads the workspace-root file via IFileService; with no
+    // workspace open there is nothing to read, so seed the layer through the
+    // stubbed agent config instead and rely on refreshMcpServerDefinitions'
+    // own .mcp.json merge for the claude-only assertion below.
+    const readSpy = vi
+      .spyOn(svc, 'readProjectMcpJson')
+      .mockResolvedValue({ mcpJsonSrv: { command: 'mcp-json-srv' } })
+
+    const claude = await svc.createSession('claude-code')
+    await claude.whenConnected()
+    const claudeNames = client.connected[0]!.agent.newSessionCalls[0]!.mcpServers.map((m) => m.name)
+    expect(claudeNames).toEqual(['mcpJsonSrv'])
+    svc.dispose()
+
+    const client2 = new FakeAcpClientService()
+    const svc2 = makeService(client2, new ConfigurationService(), new StubAgentMcpConfigService())
+    vi.spyOn(svc2, 'readProjectMcpJson').mockResolvedValue({
+      mcpJsonSrv: { command: 'mcp-json-srv' },
+    })
+    const codex = await svc2.createSession('codex')
+    await codex.whenConnected()
+    const codexNames = client2.connected[0]!.agent.newSessionCalls[0]!.mcpServers.map((m) => m.name)
+    expect(codexNames).toEqual([])
+    expect(readSpy).toHaveBeenCalled()
+    svc2.dispose()
+  })
+
+  it('the pool mirror (no agentId) is the union across agents, each entry badged', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { shared: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { claudeUser: { command: 'claude-user-srv' } })
+    agentMcpConfig.setUserRecord('codex', { codexUser: { command: 'codex-user-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+    vi.spyOn(svc, 'readProjectMcpJson').mockResolvedValue({
+      mcpJsonSrv: { command: 'mcp-json-srv' },
+    })
+    await svc.refreshMcpServerDefinitions()
+    const pool = svc.mcpServerDefinitions.get()
+    const byName = new Map(pool.map((d) => [d.name, d]))
+    expect([...byName.keys()].sort()).toEqual(['claudeUser', 'codexUser', 'mcpJsonSrv', 'shared'])
+    // Shared settings entries carry no affinity; agent-owned ones are badged.
+    expect(byName.get('shared')?.agentAffinity).toBeUndefined()
+    expect(byName.get('claudeUser')?.agentAffinity).toBe('claude-code')
+    expect(byName.get('codexUser')?.agentAffinity).toBe('codex')
+    expect(byName.get('mcpJsonSrv')?.agentAffinity).toBe('claude-code')
+    expect(byName.get('mcpJsonSrv')?.fromMcpJson).toBe(true)
+    svc.dispose()
+  })
+
+  it('refreshMcpServerDefinitions(agentId) narrows the pool to that agent', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { shared: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { claudeUser: { command: 'claude-user-srv' } })
+    agentMcpConfig.setUserRecord('codex', { codexUser: { command: 'codex-user-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+
+    await svc.refreshMcpServerDefinitions('codex')
+    expect(svc.mcpServerDefinitions.get().map((d) => d.name)).toEqual(['codexUser', 'shared'])
+
+    await svc.refreshMcpServerDefinitions('claude-code')
+    expect(svc.mcpServerDefinitions.get().map((d) => d.name)).toEqual(['claudeUser', 'shared'])
+    svc.dispose()
+  })
+
+  it('the union pool labels a shared-winner name with sharedWith for both shadowed agents', async () => {
+    // Both agents define `s`; the shared settings layer outranks both agent-user
+    // layers. The union shows ONE row per name — cross-agent visibility is
+    // carried by `sharedWith` so each agent's picker still shows the row (its
+    // wire path includes the shared winner), with a hint that the contents
+    // come from the shared layer.
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { s: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { s: { command: 'claude-srv' } })
+    agentMcpConfig.setUserRecord('codex', { s: { command: 'codex-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+    await svc.refreshMcpServerDefinitions()
+    const rows = svc.mcpServerDefinitions.get().filter((d) => d.name === 's')
+    expect(rows).toHaveLength(1)
+    const row = rows[0]!
+    expect(row.source).toBe('global')
+    // The row is labeled with one agent's affinity (whichever layer merged
+    // last); the OTHER agent must be recorded in sharedWith so its picker
+    // keeps the row. Both agents appear across the two fields.
+    expect([row.agentAffinity, ...(row.sharedWith ?? [])].sort()).toEqual(['claude-code', 'codex'])
+    svc.dispose()
+  })
+
+  it('a codex session wires the shared winner even when the union pool labels the row claude-owned', async () => {
+    // Same shape as above, asserting the wire path: codex's session/new must
+    // include `s` (from the shared settings layer) — the union duplication is
+    // view-only and must not leak extra servers onto the wire.
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { s: { command: 'shared-srv' } })
+    const agentMcpConfig = new StubAgentMcpConfigService()
+    agentMcpConfig.setUserRecord('claude-code', { s: { command: 'claude-srv' } })
+    agentMcpConfig.setUserRecord('codex', { s: { command: 'codex-srv' } })
+    const svc = makeService(client, config, agentMcpConfig)
+    const s = await svc.createSession('codex')
+    await s.whenConnected()
+    const wire = client.connected[0]!.agent.newSessionCalls[0]!.mcpServers
+    expect(wire.map((m) => m.name)).toEqual(['s'])
+    expect(wire[0]).toMatchObject({ command: 'shared-srv' })
+    svc.dispose()
+  })
+})
+
 describe('AcpSessionService — session MCP selection', () => {
   afterEach(() => AcpPromptDraftCache._resetForTests())
 
@@ -3451,6 +3675,7 @@ describe('AcpSessionService — session MCP selection', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       enablement,
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -3844,6 +4069,8 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -4132,6 +4359,8 @@ describe('AcpSessionService — first-prompt-derived title protection', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -4344,6 +4573,8 @@ describe('AcpSessionService — first prompt history mirror', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -4465,6 +4696,8 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -4528,6 +4761,8 @@ describe('AcpSessionService — stall watchdog', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -5001,6 +5236,8 @@ describe('AcpSessionService — idle process reaper', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
@@ -5248,6 +5485,8 @@ describe('AcpSessionService builtin agent skills injection', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       envSnapshot,
       stubAcpModelCandidateService(),
@@ -5331,6 +5570,8 @@ describe('AcpSessionService extra model candidates injection', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       candidates,
@@ -5691,6 +5932,8 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
       new StubFileService(),
       new StubExtensionMcpServersService(),
       new StubMcpServerEnablementService(),
+
+      new StubAgentMcpConfigService(),
       stubWindowsService(),
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),

@@ -25,6 +25,7 @@ import {
 } from '@universe-editor/platform'
 import {
   CodexConfigStore,
+  CodexMcpConfigStore,
   defaultCodexConfigPath,
   probeGatewayConnectivity,
   type IRemoteAgentConfigService,
@@ -47,11 +48,15 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
 
   private readonly _logger: ILogger
   private readonly _local: CodexConfigStore
+  private readonly _localMcp: CodexMcpConfigStore
   private readonly _configPath: string
   private readonly _remoteAuthSubscribed = new Set<string>()
 
   private readonly _onDidChangeAuth = this._register(new Emitter<void>())
   readonly onDidChangeAuth: Event<void> = this._onDidChangeAuth.event
+
+  private readonly _onDidChangeMcpConfig = this._register(new Emitter<void>())
+  readonly onDidChangeMcpConfig: Event<void> = this._onDidChangeMcpConfig.event
 
   constructor(
     configPath: string = defaultCodexConfigPath(),
@@ -68,7 +73,14 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
       }),
     )
+    this._localMcp = this._register(
+      new CodexMcpConfigStore({
+        userConfigPath: this._configPath,
+        ...(loggerService !== undefined ? { logger: loggerService } : {}),
+      }),
+    )
     this._register(this._local.onDidChangeAuth(() => this._onDidChangeAuth.fire()))
+    this._register(this._localMcp.onDidChange(() => this._onDidChangeMcpConfig.fire()))
   }
 
   async read(authority?: string): Promise<CodexSettings> {
@@ -122,6 +134,16 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return reachable
   }
 
+  async readUserMcpServers(authority?: string): Promise<Record<string, unknown>> {
+    if (authority) return this._remoteService(authority).codexReadUserMcpServers()
+    return this._localMcp.readUserMcpServers()
+  }
+
+  async readProjectMcpServers(cwd: string, authority?: string): Promise<Record<string, unknown>> {
+    if (authority) return this._remoteService(authority).codexReadProjectMcpServers(cwd)
+    return this._localMcp.readProjectMcpServers(cwd)
+  }
+
   private _remoteService(authority: string): IRemoteAgentConfigService {
     if (!this._connections) {
       throw new Error('codexConfig: remote connection service not available')
@@ -133,6 +155,7 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     if (!this._remoteAuthSubscribed.has(authority)) {
       this._remoteAuthSubscribed.add(authority)
       this._register(service.onDidChangeCodexAuth(() => this._onDidChangeAuth.fire()))
+      this._register(service.onDidChangeCodexMcpConfig(() => this._onDidChangeMcpConfig.fire()))
     }
     return service
   }

@@ -91,6 +91,28 @@ export interface ICodexConfigService {
    * network (for gateways only reachable there); absent → the local host.
    */
   checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean>
+  /**
+   * Read `[mcp_servers]` from Codex's user-level `~/.codex/config.toml`.
+   * Read-only — the editor never writes this file from the MCP path; the CLI
+   * owns it. Returns `{}` when the file is absent or has no MCP table.
+   * `authority` selects a remote host.
+   */
+  readUserMcpServers(authority?: string): Promise<Record<string, unknown>>
+  /**
+   * Read `[mcp_servers]` from Codex's project-level `<cwd>/.codex/config.toml`.
+   * The `cwd` is passed explicitly because it is a renderer-side concept
+   * (workspace folder). Returns `{}` when absent/malformed.
+   */
+  readProjectMcpServers(cwd: string, authority?: string): Promise<Record<string, unknown>>
+  /**
+   * Fires when the user-level MCP config file changes on disk. Watch
+   * granularity: any write to `~/.codex/config.toml` fires this (no content
+   * diff — model/provider edits live in the same file), so MCP consumers may
+   * refresh more often than strictly needed. Distinct from
+   * `onDidChangeAuth`, which watches `auth.json` — an auth write does not
+   * touch this event.
+   */
+  readonly onDidChangeMcpConfig: Event<void>
 }
 
 export const ICodexConfigService = createDecorator<ICodexConfigService>('codexConfigService')

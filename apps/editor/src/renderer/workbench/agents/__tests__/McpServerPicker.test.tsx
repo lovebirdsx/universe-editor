@@ -326,6 +326,174 @@ describe('McpServerPicker', () => {
     expect(rowOf('docs').textContent).toContain('project')
   })
 
+  it('badges agent-owned sources and their affinity', () => {
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 'cu',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'claude-code',
+        hasUserLevelDefinition: true,
+      },
+      {
+        name: 'cx',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+      },
+      {
+        name: 'cp',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'claude-code',
+      },
+      {
+        name: 'mj',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'claude-code',
+        fromMcpJson: true,
+      },
+    ]
+    const claudeSession = { ...makeSession(), agentId: 'claude-code' }
+    renderPicker({ session: claudeSession, service: makeService(pool), open: true })
+    // Source captions per agent-owned source kind (codex's row is filtered out
+    // of a claude session, so its caption is covered by the panel tests).
+    expect(rowOf('cu').textContent).toContain('claude user')
+    expect(rowOf('cp').textContent).toContain('codex project')
+    // `.mcp.json` keeps its own caption even under the agent-project source.
+    expect(rowOf('mj').textContent).toContain('.mcp.json')
+    // Affinity badges: one per row, caption + tooltip scoped to the agent.
+    const cuBadge = rowOf('cu').querySelector('[class*="mcpAffinityBadge"]')
+    expect(cuBadge?.textContent).toBe('claude')
+    expect(cuBadge?.getAttribute('data-tooltip')).toContain('Claude Code sessions only')
+    // The codex-affinity badge renders in a codex session.
+    cleanup()
+    const codexSession = { ...makeSession(), agentId: 'codex' }
+    renderPicker({ session: codexSession, service: makeService(pool), open: true })
+    const cxBadge = rowOf('cx').querySelector('[class*="mcpAffinityBadge"]')
+    expect(cxBadge?.textContent).toBe('codex')
+    expect(cxBadge?.getAttribute('data-tooltip')).toContain('Codex sessions only')
+    expect(rowOf('cx').textContent).toContain('codex user')
+  })
+
+  it('shared rows carry no affinity badge', () => {
+    renderPicker({ service: makeService(POOL), open: true })
+    expect(rowOf('fs').querySelector('[class*="mcpAffinityBadge"]')).toBeNull()
+  })
+
+  it('narrows the union pool to the session agent — the other agent’s entries are hidden', () => {
+    const pool: readonly McpServerDefinition[] = [
+      { name: 'shared', transport: 'stdio', disabled: false, source: 'global' },
+      {
+        name: 'claudeOnly',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'claude-code',
+      },
+      {
+        name: 'codexOnly',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+      },
+    ]
+    const claudeSession = { ...makeSession(), agentId: 'claude-code' }
+    renderPicker({ session: claudeSession, service: makeService(pool), open: true })
+    expect(rowOf('shared')).toBeTruthy()
+    expect(rowOf('claudeOnly')).toBeTruthy()
+    expect(
+      screen
+        .getAllByTestId('acp-mcp-picker-row')
+        .some((r) => r.getAttribute('data-name') === 'codexOnly'),
+    ).toBe(false)
+    // The trigger counts only what this session can wire.
+    expect(screen.getByTestId('acp-mcp-picker-trigger').textContent).toContain('2/2')
+  })
+
+  it('a codex session sees codex entries, not claude ones', () => {
+    const pool: readonly McpServerDefinition[] = [
+      { name: 'shared', transport: 'stdio', disabled: false, source: 'global' },
+      {
+        name: 'claudeOnly',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'claude-code',
+      },
+      {
+        name: 'codexOnly',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+      },
+    ]
+    const codexSession = { ...makeSession(), agentId: 'codex' }
+    renderPicker({ session: codexSession, service: makeService(pool), open: true })
+    expect(rowOf('shared')).toBeTruthy()
+    expect(rowOf('codexOnly')).toBeTruthy()
+    expect(
+      screen
+        .getAllByTestId('acp-mcp-picker-row')
+        .some((r) => r.getAttribute('data-name') === 'claudeOnly'),
+    ).toBe(false)
+  })
+
+  it('a sharedWith row stays visible in the other agent’s picker and shows the shared hint', () => {
+    // The union row is owned by claude's layer, but codex defines the same name
+    // — codex's picker must keep the row (its layers do wire the server) and
+    // explain where the contents come from.
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 's',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-project',
+        agentAffinity: 'claude-code',
+        sharedWith: ['codex'],
+      },
+    ]
+    const codexSession = { ...makeSession(), agentId: 'codex' }
+    renderPicker({ session: codexSession, service: makeService(pool), open: true })
+    const row = rowOf('s')
+    expect(row).toBeTruthy()
+    const hint = row.querySelector('[class*="mcpSharedHint"]')
+    expect(hint?.textContent).toBe('shared')
+    expect(hint?.getAttribute('data-tooltip')).toContain('higher-priority shared layer')
+    // Claude's own picker shows the row without the hint (it owns the row).
+    cleanup()
+    const claudeSession = { ...makeSession(), agentId: 'claude-code' }
+    renderPicker({ session: claudeSession, service: makeService(pool), open: true })
+    expect(rowOf('s')).toBeTruthy()
+    expect(rowOf('s').querySelector('[class*="mcpSharedHint"]')).toBeNull()
+  })
+
+  it('the picker stays visible when the union pool is non-empty but nothing matches the session agent', () => {
+    // Trigger visibility keys off the union: with only codex entries around, a
+    // claude session still gets the trigger (the panel then shows an empty
+    // per-session list rather than the control silently vanishing).
+    const pool: readonly McpServerDefinition[] = [
+      {
+        name: 'codexOnly',
+        transport: 'stdio',
+        disabled: false,
+        source: 'agent-user',
+        agentAffinity: 'codex',
+      },
+    ]
+    const claudeSession = { ...makeSession(), agentId: 'claude-code' }
+    renderPicker({ session: claudeSession, service: makeService(pool) })
+    expect(screen.getByTestId('acp-mcp-picker-trigger')).toBeTruthy()
+    expect(screen.getByTestId('acp-mcp-picker-trigger').textContent).toContain('0/0')
+  })
+
   it('shows the user-level switch only for names with a user-level definition', () => {
     const pool: readonly McpServerDefinition[] = [
       {

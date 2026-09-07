@@ -170,6 +170,10 @@ import {
   McpServerEnablementService,
 } from './services/acp/mcpServerEnablementService.js'
 import {
+  AgentMcpConfigService,
+  IAgentMcpConfigService,
+} from './services/acp/agentMcpConfigService.js'
+import {
   AcpPromptHistoryService,
   IAcpPromptHistoryService,
 } from './services/acp/session/acpPromptHistoryService.js'
@@ -752,6 +756,13 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(McpServerEnablementService),
   )
   services.set(IMcpServerEnablementService, mcpServerEnablementService)
+  // Agent-owned MCP config imports (claude `~/.claude.json` + codex
+  // `config.toml`), per-agent layers of the MCP merge pipeline. Set before
+  // AcpSessionService, which injects it.
+  const agentMcpConfigService = workbenchStore.add(
+    instantiation.createInstance(AgentMcpConfigService),
+  )
+  services.set(IAgentMcpConfigService, agentMcpConfigService)
   // History + agent-defaults are registerSingleton services injected by
   // AcpSessionService (materialized here); AcpInitContribution drives their
   // initialize() on the lifecycle timeline.

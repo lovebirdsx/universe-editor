@@ -283,6 +283,8 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
       this.configSubscriptions++
       return this._configEmitter.event(listener, thisArgs, disposables)
     }
+    readonly onDidChangeClaudeMcpConfig: Event<void> = Event.None
+    readonly onDidChangeCodexMcpConfig: Event<void> = Event.None
     probeResult = true
     probeCalls = 0
 
@@ -297,6 +299,15 @@ describe('ClaudeConfigMainService — remote checkGatewayConnectivity', () => {
     }
     claudeReadAuthStatus(): Promise<ClaudeAuthStatus> {
       return Promise.resolve({ loggedIn: false, expired: false })
+    }
+    claudeReadMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
+    }
+    codexReadUserMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
+    }
+    codexReadProjectMcpServers(): Promise<Record<string, unknown>> {
+      return Promise.resolve({})
     }
     codexRead(): Promise<CodexSettings> {
       return Promise.resolve({})

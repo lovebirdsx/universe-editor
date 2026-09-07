@@ -87,6 +87,22 @@ export interface IClaudeConfigService {
    * network (for gateways only reachable there); absent → the local host.
    */
   checkGatewayConnectivity(baseUrl: string, authority?: string): Promise<boolean>
+  /**
+   * Read the merged `mcpServers` from Claude's own user-level config files
+   * (`~/.claude.json` + `~/.claude/settings.json`). Read-only — the editor
+   * never writes these files; the CLI owns them. Returns `{}` when neither
+   * file declares MCP servers. `authority` selects a remote host.
+   */
+  readMcpServers(authority?: string): Promise<Record<string, unknown>>
+  /**
+   * Fires when either MCP config file (`~/.claude.json` or
+   * `~/.claude/settings.json`) changes on disk. Watch granularity: any write
+   * to either file fires this (no content diff), so an unrelated edit in the
+   * same file also counts as an MCP change. Distinct from `onDidChangeConfig`,
+   * which watches model/env/credentials — MCP consumers subscribe to this one
+   * only, so a model/env change does not refresh the MCP pool.
+   */
+  readonly onDidChangeMcpConfig: Event<void>
 }
 
 export const IClaudeConfigService = createDecorator<IClaudeConfigService>('claudeConfigService')

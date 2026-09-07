@@ -45,8 +45,10 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * Bumped on any incompatible change to the framing, handshake or DTOs below.
  * v7 → v8: the agentConfig channel gains the claude `onDidChangeClaudeConfig`
  * event — clients on older protocol versions do not know the event name.
+ * v8 → v9: the agentConfig channel gains the `onDidChangeClaudeMcpConfig` /
+ * `onDidChangeCodexMcpConfig` events — same unknown-event-name reasoning.
  */
-export const REMOTE_PROTOCOL_VERSION = 8
+export const REMOTE_PROTOCOL_VERSION = 9
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

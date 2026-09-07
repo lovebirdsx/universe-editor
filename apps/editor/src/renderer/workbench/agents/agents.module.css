@@ -3348,6 +3348,26 @@
   color: var(--vscode-agent-messageRoleForeground, #888);
   font-size: calc(var(--agent-font-size, 12px) * 0.78);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mcpAffinityBadge {
+  padding: 0 4px;
+  border: 1px solid var(--vscode-workbench-border, #444);
+  border-radius: 3px;
+  font-size: 0.92em;
+  line-height: 1.5;
+}
+
+.mcpSharedHint {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+  line-height: 1.5;
+  color: var(--vscode-agent-messageRoleForeground, #888);
+  border: 1px dashed var(--vscode-workbench-border, #444);
 }
 
 .mcpPickDefault {

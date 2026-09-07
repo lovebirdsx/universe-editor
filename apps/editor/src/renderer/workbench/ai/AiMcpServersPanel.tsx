@@ -6,13 +6,17 @@
  *  defining it:
  *    • user            — <userData>/settings.json            (editable)
  *    • workspace       — .universe-editor/settings.json      (editable)
- *    • .mcp.json       — workspace root, Claude-Code format  (read-only file)
+ *    • .mcp.json       — workspace root, Claude-Code format  (read-only file, claude-code sessions only)
  *    • vscode layers   — .vscode/settings.json compat        (read-only files)
  *    • extension       — declarative contributes.mcpServers  (runtime only)
- *  Sources compose per server name (mcpJson > workspace > vscodeWorkspace >
- *  user > vscodeUser > extension): the winning badge renders normally,
- *  shadowed ones are dimmed and say so in their tooltip. Clicking a badge
- *  opens that source (edit dialog for writable ones, the file otherwise).
+ *    • claude          — ~/.claude.json + ~/.claude/settings.json (read-only, claude-code sessions only)
+ *    • codex           — ~/.codex/config.toml                (read-only, codex sessions only)
+ *    • codex project   — <workspace>/.codex/config.toml      (read-only, codex sessions only)
+ *  Sources compose per server name (mcpJson > codexProject > workspace >
+ *  vscodeWorkspace > user > vscodeUser > codexUser > claudeUser > extension):
+ *  the winning badge renders normally, shadowed ones are dimmed and say so in
+ *  their tooltip. Clicking a badge opens that source (edit dialog for
+ *  writable ones, the file otherwise).
  *  Edit/Remove act on the highest-priority writable definition
  *  (workspace > user) and say which in their tooltip.
  *
@@ -34,6 +38,7 @@ import {
   IEditorResolverService,
   IUserDataFilesService,
   IWorkspaceService,
+  REMOTE_SCHEME,
   StorageScope,
   UserDataFile,
   URI,
@@ -61,12 +66,24 @@ import { McpServerEditDialog, type McpServerScope } from './McpServerEditDialog.
 import { McpEnablementToggles } from '../agents/McpEnablementToggles.js'
 import { IExtensionMcpServersService } from '../../services/extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../../services/acp/mcpServerEnablementService.js'
+import { IAgentMcpConfigService } from '../../services/acp/agentMcpConfigService.js'
+import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
+import { ICodexConfigService } from '../../../shared/ipc/codexConfigService.js'
 import shellStyles from './AiSettingsEditor.module.css'
 import styles from './AiMcpServersPanel.module.css'
 
 const CONFIG_KEY = 'acp.mcpServers'
 
-type SourceId = 'user' | 'workspace' | 'vscodeWorkspace' | 'vscodeUser' | 'mcpJson' | 'extension'
+type SourceId =
+  | 'user'
+  | 'workspace'
+  | 'vscodeWorkspace'
+  | 'vscodeUser'
+  | 'mcpJson'
+  | 'extension'
+  | 'claudeUser'
+  | 'codexUser'
+  | 'codexProject'
 
 interface SourceDef {
   readonly id: SourceId
@@ -106,6 +123,9 @@ const SOURCE_DEFS: ReadonlyArray<SourceDef> = [
     file: UserDataFile.VSCodeUserSettings,
   },
   { id: 'extension', writable: false },
+  { id: 'claudeUser', writable: false },
+  { id: 'codexUser', writable: false },
+  { id: 'codexProject', writable: false },
 ]
 
 const SOURCE_LABELS: Record<SourceId, () => string> = {
@@ -115,6 +135,9 @@ const SOURCE_LABELS: Record<SourceId, () => string> = {
   vscodeWorkspace: () => localize('aiMcp.scope.vscodeWorkspace', 'VSCode workspace (read-only)'),
   vscodeUser: () => localize('aiMcp.scope.vscodeUser', 'VSCode user (read-only)'),
   extension: () => localize('aiMcp.scope.extension', 'Extensions (read-only)'),
+  claudeUser: () => localize('aiMcp.scope.claudeUser', 'Claude user config (read-only)'),
+  codexUser: () => localize('aiMcp.scope.codexUser', 'Codex user config (read-only)'),
+  codexProject: () => localize('aiMcp.scope.codexProject', 'Codex project config (read-only)'),
 }
 
 /** Short badge captions shown inline per source. */
@@ -125,26 +148,52 @@ const SOURCE_BADGE_LABELS: Record<SourceId, string> = {
   vscodeWorkspace: 'vscode-ws',
   vscodeUser: 'vscode-user',
   extension: 'ext',
+  claudeUser: 'claude',
+  codexUser: 'codex',
+  codexProject: 'codex-proj',
 }
 
 /** Shadow priority, lowest first — the last source defining a name wins it. */
 const SHADOW_ORDER: readonly SourceId[] = [
   'extension',
+  'claudeUser',
+  'codexUser',
   'vscodeUser',
   'user',
   'vscodeWorkspace',
   'workspace',
+  'codexProject',
   'mcpJson',
 ]
 
 /** Sources that count as "user-level" for the user-level enablement toggle. */
-const USER_LEVEL_SOURCES: ReadonlySet<SourceId> = new Set(['user', 'vscodeUser', 'extension'])
+const USER_LEVEL_SOURCES: ReadonlySet<SourceId> = new Set([
+  'user',
+  'vscodeUser',
+  'extension',
+  'claudeUser',
+  'codexUser',
+])
+
+/** Agent affinity each agent-owned source is isolated to (drives the badge note). */
+const SOURCE_AGENT_AFFINITY: Partial<Record<SourceId, 'claude-code' | 'codex'>> = {
+  mcpJson: 'claude-code',
+  claudeUser: 'claude-code',
+  codexUser: 'codex',
+  codexProject: 'codex',
+}
 
 interface SourcePresence {
   readonly id: SourceId
   readonly raw: unknown
   readonly validation: McpServerEntryValidation
   readonly isWinner: boolean
+}
+
+/** Tooltip note for badges of sources owned by one agent CLI. */
+const AGENT_BADGE_NOTES: Record<'claude-code' | 'codex', () => string> = {
+  'claude-code': () => localize('aiMcp.row.affinityClaude', 'Applies to Claude Code sessions only'),
+  codex: () => localize('aiMcp.row.affinityCodex', 'Applies to Codex sessions only'),
 }
 
 interface MergedRow {
@@ -182,9 +231,17 @@ function AiMcpServersPanelInner({
   const dialog = useService(IDialogService)
   const extensionMcp = useOptionalService(IExtensionMcpServersService)
   const enablement = useService(IMcpServerEnablementService)
+  const agentMcpConfig = useOptionalService(IAgentMcpConfigService)
+  const claudeConfig = useOptionalService(IClaudeConfigService)
+  const codexConfig = useOptionalService(ICodexConfigService)
 
   const [version, setVersion] = useState(0)
   const [mcpJsonRaw, setMcpJsonRaw] = useState<Record<string, unknown>>({})
+  const [agentRaw, setAgentRaw] = useState<{
+    readonly claudeUser: Record<string, unknown>
+    readonly codexUser: Record<string, unknown>
+    readonly codexProject: Record<string, unknown>
+  }>({ claudeUser: {}, codexUser: {}, codexProject: {} })
   const [configMenuAnchor, setConfigMenuAnchor] = useState<{ x: number; y: number } | null>(null)
   const [editTarget, setEditTarget] = useState<{
     readonly mode: 'add' | 'edit'
@@ -195,6 +252,8 @@ function AiMcpServersPanelInner({
   } | null>(null)
 
   const workspaceFolder = workspace.current?.folder
+  const workspaceAuthority =
+    workspaceFolder?.scheme === REMOTE_SCHEME ? workspaceFolder.authority || undefined : undefined
 
   useEventSubscription(
     () => [
@@ -204,8 +263,9 @@ function AiMcpServersPanelInner({
       workspace.onDidChangeWorkspace(() => setVersion((v) => v + 1)),
       enablement.onDidChange(() => setVersion((v) => v + 1)),
       ...(extensionMcp ? [extensionMcp.onDidChange(() => setVersion((v) => v + 1))] : []),
+      ...(agentMcpConfig ? [agentMcpConfig.onDidChange(() => setVersion((v) => v + 1))] : []),
     ],
-    [config, workspace, enablement, extensionMcp],
+    [config, workspace, enablement, extensionMcp, agentMcpConfig],
   )
 
   // `.mcp.json` has no file watcher (same as the session picker) — re-read it
@@ -225,6 +285,32 @@ function AiMcpServersPanelInner({
     }
   }, [sessionService, workspaceFolder, version])
 
+  // Agent-owned config files (read-only). User files are watched and fire
+  // onDidChange (→ version bump → this effect re-runs); codex's project file
+  // is re-read here per refresh, mirroring how `.mcp.json` is handled above.
+  useEffect(() => {
+    let active = true
+    if (!agentMcpConfig) {
+      setAgentRaw({ claudeUser: {}, codexUser: {}, codexProject: {} })
+      return
+    }
+    const cwd = workspaceFolder?.fsPath
+    void Promise.all([
+      agentMcpConfig.readAgentMcpLayers('claude-code', cwd, workspaceAuthority),
+      agentMcpConfig.readAgentMcpLayers('codex', cwd, workspaceAuthority),
+    ]).then(([claude, codex]) => {
+      if (!active) return
+      setAgentRaw({
+        claudeUser: { ...((claude.userLayers[0]?.raw ?? {}) as Record<string, unknown>) },
+        codexUser: { ...((codex.userLayers[0]?.raw ?? {}) as Record<string, unknown>) },
+        codexProject: { ...((codex.projectLayers[0]?.raw ?? {}) as Record<string, unknown>) },
+      })
+    })
+    return () => {
+      active = false
+    }
+  }, [agentMcpConfig, workspaceFolder, workspaceAuthority, version])
+
   const rows = useMemo((): readonly MergedRow[] => {
     void version // recompute on config / workspace / enablement changes
     const rawBySource = new Map<SourceId, Record<string, unknown>>()
@@ -238,6 +324,9 @@ function AiMcpServersPanelInner({
     }
     rawBySource.set('mcpJson', mcpServerRawToRecord(mcpJsonRaw))
     rawBySource.set('extension', { ...(extensionMcp?.rawRecord ?? {}) })
+    rawBySource.set('claudeUser', mcpServerRawToRecord(agentRaw.claudeUser))
+    rawBySource.set('codexUser', mcpServerRawToRecord(agentRaw.codexUser))
+    rawBySource.set('codexProject', mcpServerRawToRecord(agentRaw.codexProject))
 
     const winnerByName = new Map<string, SourceId>()
     for (const id of SHADOW_ORDER) {
@@ -269,7 +358,7 @@ function AiMcpServersPanelInner({
     }
     out.sort((a, b) => a.name.localeCompare(b.name))
     return out
-  }, [config, enablement, extensionMcp, mcpJsonRaw, version])
+  }, [config, enablement, extensionMcp, mcpJsonRaw, agentRaw, version])
 
   const writeEntry = useCallback(
     (target: ConfigurationTarget, name: string, entry: unknown | undefined) => {
@@ -320,9 +409,43 @@ function AiMcpServersPanelInner({
         await editorResolver.openEditor(URI.joinPath(workspaceFolder, '.mcp.json'), {
           pinned: true,
         })
+        return
+      }
+      if (id === 'codexProject' && workspaceFolder) {
+        await editorResolver.openEditor(URI.joinPath(workspaceFolder, '.codex/config.toml'), {
+          pinned: true,
+        })
+        return
+      }
+      // Agent-owned user files are absolute OS paths outside the workspace; on
+      // a remote workspace they resolve to that host's files via `authority`.
+      if (id === 'claudeUser' && claudeConfig) {
+        await editorResolver.openEditor(
+          URI.file(await claudeConfig.configPath(workspaceAuthority)),
+          {
+            pinned: true,
+          },
+        )
+        return
+      }
+      if (id === 'codexUser' && codexConfig) {
+        await editorResolver.openEditor(
+          URI.file(await codexConfig.configPath(workspaceAuthority)),
+          {
+            pinned: true,
+          },
+        )
       }
     },
-    [commands, editorResolver, userData, workspaceFolder],
+    [
+      commands,
+      editorResolver,
+      userData,
+      workspaceFolder,
+      workspaceAuthority,
+      claudeConfig,
+      codexConfig,
+    ],
   )
 
   const onSourceBadgeClick = useCallback(
@@ -408,7 +531,10 @@ function AiMcpServersPanelInner({
         id: 'mcpJson',
         icon: <FileJson size={14} strokeWidth={1.75} />,
         label: '.mcp.json',
-        detail: localize('aiMcp.openJson.mcpJson.detail', 'Workspace root, Claude Code format'),
+        detail: localize(
+          'aiMcp.openJson.mcpJson.detail',
+          'Workspace root, Claude Code sessions only',
+        ),
       })
     }
     if (layerNonEmpty(ConfigurationTarget.VSCodeUser)) {
@@ -427,8 +553,38 @@ function AiMcpServersPanelInner({
         detail: localize('aiMcp.openJson.readonly', 'Read-only import'),
       })
     }
+    if (claudeConfig) {
+      items.push({
+        id: 'claudeUser',
+        icon: <User size={14} strokeWidth={1.75} />,
+        label: localize('aiMcp.openJson.claudeUser.label', 'Claude settings.json'),
+        detail: localize(
+          'aiMcp.openJson.claudeUser.detail',
+          'Claude Code sessions only, read-only import',
+        ),
+      })
+    }
+    if (codexConfig) {
+      items.push({
+        id: 'codexUser',
+        icon: <User size={14} strokeWidth={1.75} />,
+        label: localize('aiMcp.openJson.codexUser.label', 'Codex config.toml'),
+        detail: localize(
+          'aiMcp.openJson.codexUser.detail',
+          'Codex sessions only, read-only import',
+        ),
+      })
+    }
+    if (workspaceAvailable && codexConfig) {
+      items.push({
+        id: 'codexProject',
+        icon: <FolderOpen size={14} strokeWidth={1.75} />,
+        label: localize('aiMcp.openJson.codexProject.label', 'Codex project config.toml'),
+        detail: '.codex/config.toml',
+      })
+    }
     return items
-  }, [workspaceAvailable, hasMcpJson, layerNonEmpty])
+  }, [workspaceAvailable, hasMcpJson, layerNonEmpty, claudeConfig, codexConfig])
 
   return (
     <div className={shellStyles['panel']} data-testid="ai-mcp-panel">
@@ -641,9 +797,22 @@ function SourceBadge({
   readonly onClick: () => void
 }) {
   const label = SOURCE_LABELS[presence.id]()
+  const affinity = SOURCE_AGENT_AFFINITY[presence.id]
+  const labelWithAffinity =
+    affinity !== undefined ? `${label} — ${AGENT_BADGE_NOTES[affinity]()}` : label
+  // The Claude user badge opens `~/.claude/settings.json` (the CLI's canonical
+  // path), but the row merges both user files — say so instead of implying a
+  // 1:1 file mapping.
+  const labelWithOrigin =
+    presence.id === 'claudeUser'
+      ? `${labelWithAffinity} — ${localize(
+          'aiMcp.row.claudeUserMerge',
+          'merged from ~/.claude.json and ~/.claude/settings.json',
+        )}`
+      : labelWithAffinity
   const title = presence.isWinner
-    ? label
-    : `${label} — ${localize('aiMcp.row.shadowed', 'overridden by {scope}', {
+    ? labelWithOrigin
+    : `${labelWithOrigin} — ${localize('aiMcp.row.shadowed', 'overridden by {scope}', {
         scope: winnerLabel,
       })}${presence.validation.valid ? '' : ` — ${presence.validation.reason}`}`
   return (

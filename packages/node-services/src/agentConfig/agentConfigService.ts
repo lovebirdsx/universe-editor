@@ -31,11 +31,26 @@ export interface IRemoteAgentConfigService {
   /** Fires when the remote claude `settings.json` or `.credentials.json` changes on disk. */
   readonly onDidChangeClaudeConfig: Event<void>
 
+  /**
+   * Fires when a remote claude MCP config file (`~/.claude.json` or
+   * `~/.claude/settings.json`) changes on disk — any write to those files
+   * fires this (no content diff), same granularity as the local MCP stores.
+   */
+  readonly onDidChangeClaudeMcpConfig: Event<void>
+
+  /** Fires when the remote codex `~/.codex/config.toml` changes on disk (any write). */
+  readonly onDidChangeCodexMcpConfig: Event<void>
+
   // -- Claude (`~/.claude/settings.json`) --
   claudeRead(): Promise<ClaudeSettings>
   claudePatch(patch: ClaudeSettingsPatch): Promise<void>
   claudeConfigPath(): Promise<string>
   claudeReadAuthStatus(): Promise<ClaudeAuthStatus>
+  /**
+   * Merged `mcpServers` from the remote host's Claude user-level config files
+   * (`~/.claude.json` + `~/.claude/settings.json`). Read-only.
+   */
+  claudeReadMcpServers(): Promise<Record<string, unknown>>
 
   // -- Codex (`~/.codex/config.toml` + `auth.json`) --
   codexRead(): Promise<CodexSettings>
@@ -43,6 +58,10 @@ export interface IRemoteAgentConfigService {
   codexApplyCredential(intent: CodexCredentialIntent): Promise<CodexAuthStatus>
   codexConfigPath(): Promise<string>
   codexReadAuthStatus(): Promise<CodexAuthStatus>
+  /** `[mcp_servers]` from the remote host's user-level `~/.codex/config.toml`. */
+  codexReadUserMcpServers(): Promise<Record<string, unknown>>
+  /** `[mcp_servers]` from `<cwd>/.codex/config.toml` on the remote host. */
+  codexReadProjectMcpServers(cwd: string): Promise<Record<string, unknown>>
 
   /**
    * Probe `baseUrl` over HTTP from the remote host. Same semantics as the local
