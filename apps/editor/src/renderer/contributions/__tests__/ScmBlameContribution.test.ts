@@ -18,6 +18,7 @@ import {
   ILoggerService,
   IStatusBarService,
   IStorageService,
+  IWorkspaceService,
   InstantiationService,
   LogLevel,
   ServiceCollection,
@@ -183,6 +184,20 @@ function setup(
     set: async (key: string, value: unknown) => {
       store.set(key, value)
     },
+  } as never)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+    get recent() {
+      return []
+    },
+    onDidChangeRecent: Event.None,
+    whenReady: Promise.resolve(),
+    async openFolder() {},
+    async closeFolder() {},
+    async clearRecent() {},
+    async removeRecent() {},
   } as never)
 
   const statusBar = services.get(IStatusBarService) as StatusBarService

@@ -13,6 +13,7 @@
 import {
   Disposable,
   IStorageService,
+  IWorkspaceService,
   StorageScope,
   autorun,
   type IWorkbenchContribution,
@@ -20,8 +21,28 @@ import {
 import { SELECTED_REPO_STORAGE_KEY, scmViewState } from '../workbench/scm/scmViewState.js'
 
 export class ScmSelectedRepoContribution extends Disposable implements IWorkbenchContribution {
-  constructor(@IStorageService private readonly _storage: IStorageService) {
+  private _lastFolderKey: string | undefined
+
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IWorkspaceService workspaceService: IWorkspaceService,
+  ) {
     super()
+    this._lastFolderKey = workspaceService.current?.folder.toString()
+    // The persisted selection is per workspace, so the in-memory value must not
+    // survive a workspace switch: a stale root from the previous workspace would
+    // otherwise be persisted into the NEW workspace's storage and mislead the
+    // Git Graph's SCM-mirror effect. The write-back autorun skips `undefined`,
+    // so clearing never clobbers the new workspace's own stored selection.
+    this._register(
+      workspaceService.onDidChangeWorkspace((workspace) => {
+        const key = workspace?.folder.toString()
+        if (this._lastFolderKey !== undefined && key !== this._lastFolderKey) {
+          scmViewState.setSelectedRepo(undefined)
+        }
+        this._lastFolderKey = key
+      }),
+    )
     void this._hydrate()
   }
 

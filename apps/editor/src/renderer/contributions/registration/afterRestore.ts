@@ -19,6 +19,7 @@ import { FocusScopeStatusContribution } from '../FocusScopeStatusContribution.js
 import { ScmBlameContribution } from '../ScmBlameContribution.js'
 import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
 import { CommitChangesViewResetContribution } from '../CommitChangesViewResetContribution.js'
+import { GitGraphViewResetContribution } from '../GitGraphViewResetContribution.js'
 import { MergeConflictContribution } from '../MergeConflictContribution.js'
 import { DirtyDiffContribution } from '../DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
@@ -182,6 +183,17 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.commitChangesViewReset',
   CommitChangesViewResetContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Clear the Git Graph editor's module-level state when the workspace root
+// changes (switch / close folder). Without this the previous workspace's repo
+// root is re-asserted onto the freshly restarted git extension via
+// `git-graph.setRepo`, silently pointing graph mutations (e.g. Reset current
+// branch) at the OLD workspace's checkout.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.gitGraphViewReset',
+  GitGraphViewResetContribution,
   WorkbenchPhase.AfterRestore,
 )
 

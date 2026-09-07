@@ -68,6 +68,9 @@ export interface GitGraphViewState {
   repos: GitGraphRepoDto[]
   /** Root of the currently targeted repository, or null for the default. */
   selectedRepo: string | null
+  /** Test-only hook: restore every field to its initial value so specs that
+   *  touch this module-level singleton do not leak state into each other. */
+  _resetForTests(): void
 }
 
 /** Page size for the initial load and each "Load more". */
@@ -96,4 +99,21 @@ export const gitGraphViewState: GitGraphViewState = {
   },
   repos: [],
   selectedRepo: null,
+  _resetForTests(): void {
+    this.focusSearch = null
+    this.focusRows = null
+    this.toggleRemoteBranches = null
+    this.refresh = null
+    this.revealCommit = null
+    this.pendingReveal.set(null, undefined)
+    this.result = null
+    this.selection = []
+    this.scrollTop = 0
+    this.searchQuery = ''
+    this.settings = { order: 'date', includeRemotes: true, onlyFollowFirstParent: false }
+    this.limit = GIT_GRAPH_PAGE_SIZE
+    this.columnWidths = { author: 140, date: 160 }
+    this.repos = []
+    this.selectedRepo = null
+  },
 }

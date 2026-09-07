@@ -8,11 +8,55 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { IStorageService, InstantiationService, ServiceCollection } from '@universe-editor/platform'
+import {
+  Emitter,
+  IStorageService,
+  IWorkspaceService,
+  InstantiationService,
+  ServiceCollection,
+  URI,
+  type IRecentWorkspace,
+  type IWorkspace,
+  type IWorkspaceService as IWorkspaceServiceType,
+} from '@universe-editor/platform'
 import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import { ScmSelectedRepoContribution } from '../ScmSelectedRepoContribution.js'
 
-function setup(stored?: string) {
+function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceServiceType & {
+  fireWorkspaceChange(workspace: IWorkspace | null): void
+} {
+  const wsEmitter = new Emitter<IWorkspace | null>()
+  const recentEmitter = new Emitter<readonly IRecentWorkspace[]>()
+  let current = initial
+  return {
+    _serviceBrand: undefined,
+    get current() {
+      return current
+    },
+    onDidChangeWorkspace: wsEmitter.event,
+    get recent() {
+      return []
+    },
+    onDidChangeRecent: recentEmitter.event,
+    whenReady: Promise.resolve(),
+    async openFolder() {},
+    async closeFolder() {
+      current = null
+    },
+    async clearRecent() {},
+    async removeRecent() {},
+    fireWorkspaceChange(workspace: IWorkspace | null) {
+      current = workspace
+      wsEmitter.fire(workspace)
+    },
+  }
+}
+
+function workspace(folder: string): IWorkspace {
+  return { folder: URI.file(folder), name: folder }
+}
+
+function setup(stored?: string, initial: IWorkspace | null = null) {
   const store = new Map<string, unknown>()
   if (stored !== undefined) store.set('scm.selectedRepo', stored)
   const storage = {
@@ -23,10 +67,12 @@ function setup(stored?: string) {
     },
   } as unknown as IStorageService
 
+  const workspaceStub = makeWorkspaceStub(initial)
   const services = new ServiceCollection()
   services.set(IStorageService, storage)
+  services.set(IWorkspaceService, workspaceStub)
   const inst = new InstantiationService(services)
-  return { inst, store }
+  return { inst, store, workspaceStub }
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -74,5 +120,38 @@ describe('ScmSelectedRepoContribution', () => {
     await flushMicrotasks()
     expect(scmViewState.selectedRepo.get()).toBe('/other')
     expect(store.get('scm.selectedRepo')).toBe('/other')
+  })
+
+  it('clears the in-memory selection when the workspace root changes', async () => {
+    const { inst, workspaceStub } = setup(undefined, workspace('/ws/a'))
+    inst.createInstance(ScmSelectedRepoContribution)
+    await flushMicrotasks()
+
+    scmViewState.setSelectedRepo('/ws/a/repo')
+    workspaceStub.fireWorkspaceChange(workspace('/ws/b'))
+
+    expect(scmViewState.selectedRepo.get()).toBeUndefined()
+  })
+
+  it('does not clear on the first observed workspace (startup hydration)', async () => {
+    const { inst, workspaceStub } = setup(undefined, null)
+    inst.createInstance(ScmSelectedRepoContribution)
+    await flushMicrotasks()
+
+    scmViewState.setSelectedRepo('/ws/a/repo')
+    workspaceStub.fireWorkspaceChange(workspace('/ws/a'))
+
+    expect(scmViewState.selectedRepo.get()).toBe('/ws/a/repo')
+  })
+
+  it('does not clear when the event carries the same root again', async () => {
+    const { inst, workspaceStub } = setup(undefined, workspace('/ws/a'))
+    inst.createInstance(ScmSelectedRepoContribution)
+    await flushMicrotasks()
+
+    scmViewState.setSelectedRepo('/ws/a/repo')
+    workspaceStub.fireWorkspaceChange(workspace('/ws/a'))
+
+    expect(scmViewState.selectedRepo.get()).toBe('/ws/a/repo')
   })
 })
