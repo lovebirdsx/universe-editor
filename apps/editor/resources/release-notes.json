@@ -1,5 +1,35 @@
 [
   {
+    "version": "0.13.7",
+    "date": "2026-09-07",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "所有view补全键盘操作",
+          "所有右键菜单，都加入图标表达",
+          "session支持context或shift+f10弹出右键菜单",
+          "会话列表右键菜单支持键盘操作并统一样式",
+          "支持SWARM CHANGES 子视图，并优化键盘化操作",
+          "Sub Agent 模型 picker 支持官方模型",
+          "标题栏添加创建session入口，ai快速设定入口移到状态栏",
+          "p4加入reconcile排除目录功能"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修正kimi的会话开销计算错误",
+          "搜索视图在切换工作区后自动重新执行查询",
+          "Explorer 右键目录 P4 Revert 静默无效果的 bug",
+          "搜索结果无法定位到列位置的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.6",
     "date": "2026-09-03",
     "groups": [
