@@ -20,6 +20,7 @@ import {
   observableValue,
   Severity,
   StorageScope,
+  URI,
   UriIdentityService,
 } from '@universe-editor/platform'
 import type {
@@ -104,6 +105,7 @@ import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
+import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import type { IEnvironmentSnapshotService } from '../../../../../shared/ipc/environmentSnapshotService.js'
@@ -143,7 +145,7 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
 
 class FakeWorkspaceService implements IWorkspaceService {
   declare readonly _serviceBrand: undefined
-  readonly current: IWorkspace | null = null
+  current: IWorkspace | null = null
   private readonly _onDidChangeWorkspace = new Emitter<IWorkspace | null>()
   readonly onDidChangeWorkspace = this._onDidChangeWorkspace.event
   readonly recent: readonly never[] = []
@@ -154,6 +156,14 @@ class FakeWorkspaceService implements IWorkspaceService {
   async closeFolder() {}
   async clearRecent() {}
   async removeRecent() {}
+}
+
+/** Workspace rooted at a local folder — `_currentCwd()` resolves to `folder.fsPath`. */
+class FolderWorkspaceService extends FakeWorkspaceService {
+  constructor(folderPath: string) {
+    super()
+    this.current = { folder: URI.file(folderPath), name: folderPath }
+  }
 }
 
 class StubNotificationService implements INotificationService {
@@ -589,6 +599,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   })
 
@@ -614,6 +625,141 @@ describe('AcpSessionService', () => {
     const session = await svc.createSession(undefined, { cwd: '/tmp/deep-link-cwd' })
     await session.whenConnected()
     expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/tmp/deep-link-cwd')
+  })
+
+  it('createSession without options reuses the cwd remembered from the previous create', async () => {
+    const lastSessionCwd = stubLastSessionCwdServiceForTest()
+    const folderSvc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FolderWorkspaceService('/ws'),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      permission,
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      new StubAgentMcpConfigService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+      lastSessionCwd,
+    )
+
+    // Explicit scope pick → remembered.
+    const explicit = await folderSvc.createSession(undefined, { cwd: '/ws/sub' })
+    await explicit.whenConnected()
+    expect(lastSessionCwd.lastCwd()).toEqual({ cwd: '/ws/sub' })
+
+    // Plain create → defaults to the remembered directory, not the workspace root.
+    const plain = await folderSvc.createSession()
+    await plain.whenConnected()
+    expect(client.connected[1]!.agent.newSessionCalls[0]!.cwd).toBe('/ws/sub')
+    folderSvc.dispose()
+  })
+
+  it('createSession ignores a remembered cwd outside the workspace (foreign)', async () => {
+    const lastSessionCwd = stubLastSessionCwdServiceForTest()
+    lastSessionCwd.remember('/elsewhere/src', undefined)
+    const folderSvc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FolderWorkspaceService('/ws'),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      permission,
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      new StubAgentMcpConfigService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+      lastSessionCwd,
+    )
+
+    const session = await folderSvc.createSession()
+    await session.whenConnected()
+    // Falls back to the workspace root.
+    expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/ws')
+    folderSvc.dispose()
+  })
+
+  it('createSession ignores a remembered cwd from a different authority', async () => {
+    const lastSessionCwd = stubLastSessionCwdServiceForTest()
+    lastSessionCwd.remember('/ws/sub', 'ssh-remote+box')
+    const folderSvc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FolderWorkspaceService('/ws'),
+      config,
+      notifications,
+      new NoopTelemetryService(),
+      permission,
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      new AcpSessionFactory(
+        new NoopTelemetryService(),
+        makeHistory(),
+        makeAgentDefaults(),
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      new StubAgentMcpConfigService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+      lastSessionCwd,
+    )
+
+    const session = await folderSvc.createSession()
+    await session.whenConnected()
+    expect(client.connected[0]!.agent.newSessionCalls[0]!.cwd).toBe('/ws')
+    folderSvc.dispose()
   })
 
   it('registers createSession sessions so they dispose with the service (no leak)', async () => {
@@ -688,6 +834,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await slowSvc.createSession()
     await s.whenConnected()
@@ -821,6 +968,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1084,6 +1232,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1150,6 +1299,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1208,6 +1358,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1282,6 +1433,7 @@ describe('AcpSessionService', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -1449,6 +1601,7 @@ describe('AcpSessionService', () => {
         stubEnvSnapshotService(),
         stubAcpModelCandidateService(),
         stubSubProjectService(),
+        stubLastSessionCwdServiceForTest(),
       )
     }
 
@@ -1771,6 +1924,7 @@ describe('AcpSessionService — rewind / fork', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history }
   }
@@ -2658,6 +2812,7 @@ describe('AcpSessionService — startup timeout', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -2714,6 +2869,7 @@ describe('AcpSessionService — startup timeout', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -2778,6 +2934,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -3487,6 +3644,7 @@ describe('AcpSessionService — agent MCP config isolation', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -3680,6 +3838,7 @@ describe('AcpSessionService — session MCP selection', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history, agentDefaults, enablement }
   }
@@ -4075,6 +4234,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history }
   }
@@ -4365,6 +4525,7 @@ describe('AcpSessionService — first-prompt-derived title protection', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history }
   }
@@ -4579,6 +4740,7 @@ describe('AcpSessionService — first prompt history mirror', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history }
   }
@@ -4702,6 +4864,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     return { svc, history }
   }
@@ -4767,6 +4930,7 @@ describe('AcpSessionService — stall watchdog', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -5242,6 +5406,7 @@ describe('AcpSessionService — idle process reaper', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -5491,6 +5656,7 @@ describe('AcpSessionService builtin agent skills injection', () => {
       envSnapshot,
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -5576,6 +5742,7 @@ describe('AcpSessionService extra model candidates injection', () => {
       stubEnvSnapshotService(),
       candidates,
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 
@@ -5938,6 +6105,7 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
   }
 

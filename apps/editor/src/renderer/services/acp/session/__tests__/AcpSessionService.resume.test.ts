@@ -87,6 +87,7 @@ import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
+import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
@@ -489,6 +490,7 @@ function buildService(
     stubEnvSnapshotService(),
     candidates,
     stubSubProjectService(),
+    stubLastSessionCwdServiceForTest(),
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -1418,6 +1420,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1551,6 +1554,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1623,6 +1627,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1693,6 +1698,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1765,6 +1771,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       stubEnvSnapshotService(),
       stubAcpModelCandidateService(),
       stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

@@ -22,6 +22,7 @@ import {
   KeybindingsRegistry,
   KeybindingWeight,
   NullLogger,
+  REMOTE_SCHEME,
   ServiceCollection,
   UriIdentityService,
   URI,
@@ -76,6 +77,7 @@ import {
 } from '../../services/acp/session/acpSubProjectService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
+import { IAcpLastSessionCwdService } from '../../services/acp/session/acpLastSessionCwdService.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { EditorService } from '../../services/editor/EditorService.js'
 import { Event } from '@universe-editor/platform'
@@ -952,12 +954,19 @@ describe('NewAgentSessionWithScopeAction', () => {
     return { cwd: '/ws', source: 'workspace', label: 'Workspace', ...over }
   }
 
-  function build(opts: { scopes: SubProjectScope[]; picked: IQuickPickItem | undefined }) {
+  function build(opts: {
+    scopes: SubProjectScope[]
+    picked: IQuickPickItem | undefined
+    lastCwd?: { cwd: string; authority?: string } | undefined
+    workspaceFolder?: URI
+  }) {
     const createSession = vi.fn(async () => fakeSession('sess-1'))
     const defaultAgentId = vi.fn(() => 'claude-code')
     const getScopes = vi.fn(async () => opts.scopes)
     const pick = vi.fn(async () => opts.picked)
-    const showOpenDialog = vi.fn(async (): Promise<URI[] | undefined> => undefined)
+    const showOpenDialog = vi.fn(
+      async (_options: { defaultUri?: URI }): Promise<URI[] | undefined> => undefined,
+    )
     const openEditor = vi.fn()
     const notify = vi.fn()
 
@@ -1015,6 +1024,20 @@ describe('NewAgentSessionWithScopeAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
+    services.set(IAcpLastSessionCwdService, {
+      _serviceBrand: undefined,
+      lastCwd: () => opts.lastCwd,
+    } as unknown as IAcpLastSessionCwdService)
+    if (opts.workspaceFolder !== undefined) {
+      services.set(IWorkspaceService, {
+        _serviceBrand: undefined,
+        current: { folder: opts.workspaceFolder, name: 'ws' },
+        onDidChangeWorkspace: Event.None,
+      } as unknown as IWorkspaceService)
+      services.set(IUriIdentityService, new UriIdentityService('linux'))
+    } else {
+      registerWorkspaceServices(services)
+    }
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
     return { inst, createSession, getScopes, pick, showOpenDialog, openEditor, notify }
@@ -1048,6 +1071,52 @@ describe('NewAgentSessionWithScopeAction', () => {
     await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
     expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
     expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: pickedFolder.fsPath })
+  })
+
+  it('seeds the folder dialog defaultUri from the remembered local cwd', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      lastCwd: { cwd: '/ws/src' },
+      workspaceFolder: URI.file('/ws'),
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
+    const options = b.showOpenDialog.mock.calls[0]![0]
+    expect(options.defaultUri?.toString()).toBe(URI.file('/ws/src').toString())
+  })
+
+  it('seeds the folder dialog defaultUri from a remote memory on the same host', async () => {
+    const remoteFolder = URI.from({
+      scheme: REMOTE_SCHEME,
+      authority: 'ssh-remote+box',
+      path: '/ws',
+    })
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      lastCwd: { cwd: '/ws/src', authority: 'ssh-remote+box' },
+      workspaceFolder: remoteFolder,
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
+    const options = b.showOpenDialog.mock.calls[0]![0]
+    expect(options.defaultUri?.scheme).toBe(REMOTE_SCHEME)
+    expect(options.defaultUri?.authority).toBe('ssh-remote+box')
+    expect(options.defaultUri?.path).toBe('/ws/src')
+  })
+
+  it('omits defaultUri when the remembered cwd is foreign to the window', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      lastCwd: { cwd: '/elsewhere/src' },
+      workspaceFolder: URI.file('/ws'),
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+    expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
+    const options = b.showOpenDialog.mock.calls[0]![0]
+    expect(options.defaultUri).toBeUndefined()
   })
 
   it('creates nothing when the picker is dismissed', async () => {

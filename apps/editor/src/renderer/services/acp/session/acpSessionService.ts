@@ -104,6 +104,7 @@ import {
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
 import { ISubProjectService } from './acpSubProjectService.js'
+import { IAcpLastSessionCwdService, rememberedCwdForWindow } from './acpLastSessionCwdService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
@@ -627,6 +628,7 @@ export class AcpSessionService
     @IAcpModelCandidateService
     private readonly _modelCandidates: IAcpModelCandidateService,
     @ISubProjectService private readonly _subProjectService: ISubProjectService,
+    @IAcpLastSessionCwdService private readonly _lastSessionCwd: IAcpLastSessionCwdService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -734,6 +736,22 @@ export class AcpSessionService
     return this._workspace.current?.folder.fsPath
   }
 
+  /**
+   * Default cwd for sessions created without an explicit one: the directory
+   * the most recent session was created with, when it still belongs to this
+   * window — same host (authority) and inside the open folder. Stale
+   * directories are weeded out asynchronously by the service itself; this
+   * read must stay synchronous so `createSession` keeps its sync-publish
+   * shape.
+   */
+  private _rememberedCwd(): string | undefined {
+    return rememberedCwdForWindow(
+      this._lastSessionCwd.lastCwd(),
+      this._workspace.current?.folder,
+      this._uriIdentity,
+    )
+  }
+
   private _currentAuthority(): string | undefined {
     const folder = this._workspace.current?.folder
     if (!folder || folder.scheme !== REMOTE_SCHEME) return undefined
@@ -807,8 +825,11 @@ export class AcpSessionService
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
       (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
-    const cwd = options?.cwd ?? this._currentCwd()
+    const cwd = options?.cwd ?? this._rememberedCwd() ?? this._currentCwd()
     const authority = options?.authority ?? this._currentAuthority()
+    if (cwd !== undefined) {
+      this._lastSessionCwd.remember(cwd, authority)
+    }
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')

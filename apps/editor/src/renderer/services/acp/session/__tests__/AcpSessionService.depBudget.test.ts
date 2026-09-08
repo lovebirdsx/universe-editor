@@ -79,7 +79,13 @@ import { AcpSessionService } from '../acpSessionService.js'
 // owns the claude/codex config channels. The facade needs the routed layers
 // (merge input) + onDidChange (pool refresh); per-agent filtering happens in
 // `_mcpLayers` via the service's `readAgentMcpLayers`.
-const MAX_INJECTED = 23
+// +1 IAcpLastSessionCwdService (default cwd for new sessions): the remembered
+// directory is a PersistedStateBase storage domain of its own (workspace-first
+// + global fallback, stale-directory background probe) — no existing
+// collaborator (history owns per-session entries, agentDefaults owns
+// configOption values) holds a single last-wins cwd, and the facade's
+// synchronous `createSession` default-cwd gate must read it without IO.
+const MAX_INJECTED = 24
 
 describe('AcpSessionService dependency budget', () => {
   it('does not exceed the injected-dependency ceiling', () => {

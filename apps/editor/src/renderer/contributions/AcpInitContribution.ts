@@ -20,6 +20,7 @@ import { IAcpCompactionStatsService } from '../services/acp/session/acpCompactio
 import { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
 import { IAcpSessionFilterService } from '../services/acp/session/acpSessionFilterService.js'
 import { ISessionBookmarkService } from '../services/acp/session/sessionBookmarkService.js'
+import { IAcpLastSessionCwdService } from '../services/acp/session/acpLastSessionCwdService.js'
 
 export class AcpInitContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -31,6 +32,7 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     @ISessionChangeTrackerService changeTracker: ISessionChangeTrackerService,
     @IAcpSessionFilterService sessionFilter: IAcpSessionFilterService,
     @ISessionBookmarkService sessionBookmarks: ISessionBookmarkService,
+    @IAcpLastSessionCwdService lastSessionCwd: IAcpLastSessionCwdService,
   ) {
     super()
     void history.initialize()
@@ -41,5 +43,6 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     void changeTracker.initialize()
     void sessionFilter.initialize()
     void sessionBookmarks.initialize()
+    void lastSessionCwd.initialize()
   }
 }

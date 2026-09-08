@@ -66,6 +66,7 @@ import type { IAcpModelCandidateService } from '../../acpModelCandidateService.j
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
+import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 const FAKE_URI_IDENTITY = new UriIdentityService('linux')
@@ -430,6 +431,7 @@ function makeService(
     stubEnvSnapshotService(),
     candidates,
     stubSubProjectService(),
+    stubLastSessionCwdServiceForTest(),
   )
 }
 

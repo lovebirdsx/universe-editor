@@ -84,6 +84,7 @@ import { createInMemoryAcpPair } from '../../testing/inMemoryAcpPair.js'
 import { stubEnvSnapshotService } from './stubEnvSnapshotService.js'
 import { stubAcpModelCandidateService } from './stubAcpModelCandidateService.js'
 import { stubSubProjectService } from './stubSubProjectService.js'
+import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
@@ -506,6 +507,7 @@ function buildService(
     stubEnvSnapshotService(),
     stubAcpModelCandidateService(),
     stubSubProjectService(),
+    stubLastSessionCwdServiceForTest(),
   )
   return { svc, client, history, agentDefaults, configOptionsCache }
 }

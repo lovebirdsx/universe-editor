@@ -171,6 +171,8 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 
 `AcpAgentDefaults`（`key='acp.agentDefaults'`）同样的双桶策略——workspace-A 选过的 `MODEL=opus` 不会污染 workspace-B 的新会话默认值。
 
+`AcpLastSessionCwd`（`session/acpLastSessionCwdService.ts`，`key='acp.lastSessionCwd'`，单值 last-wins `{cwd, authority?}`）也走双桶——`createSession` 生效的 cwd 都记，无 options 的新建默认沿用；同步读（`lastCwd()` 无 IO），失效目录由 `remember` 触发的防抖后台 `IFileService.exists` probe 静默清掉。facade 侧 `_rememberedCwd()` 门控：authority 不匹配或为 foreign（落在 workspace 外）时回退 workspace 根。
+
 ```
 { schemaVersion: 1, entries: [{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }] }
 ```

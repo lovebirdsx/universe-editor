@@ -55,6 +55,12 @@ import {
   ISubProjectService,
   type SubProjectScope,
 } from '../services/acp/session/acpSubProjectService.js'
+import {
+  authorityForFolder,
+  IAcpLastSessionCwdService,
+  rememberedCwdForWindow,
+  rememberedCwdUri,
+} from '../services/acp/session/acpLastSessionCwdService.js'
 import { ACP_SCOPED_KEY_WEIGHT, CATEGORY, resolveNavWidget } from './_agentShared.js'
 import { findSessionEditor } from './_agentChatTarget.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
@@ -268,6 +274,9 @@ export class NewAgentSessionWithScopeAction extends Action2 {
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
     const notification = accessor.get(INotificationService)
+    const lastSessionCwd = accessor.get(IAcpLastSessionCwdService)
+    const workspace = accessor.get(IWorkspaceService)
+    const uriIdentity = accessor.get(IUriIdentityService)
 
     try {
       const scopes = await subProjects.getScopes()
@@ -293,6 +302,7 @@ export class NewAgentSessionWithScopeAction extends Action2 {
 
       let target: { cwd: string; authority?: string }
       if (picked.id === CHOOSE_FOLDER_PICK_ID) {
+        const defaultUri = rememberedSessionCwdUri(lastSessionCwd, workspace, uriIdentity)
         const folder = (
           await fileDialog.showOpenDialog({
             title: localize(
@@ -302,6 +312,7 @@ export class NewAgentSessionWithScopeAction extends Action2 {
             canSelectFiles: false,
             canSelectFolders: true,
             canSelectMany: false,
+            ...(defaultUri !== undefined ? { defaultUri } : {}),
           })
         )?.[0]
         if (!folder) return
@@ -973,6 +984,24 @@ function sessionIdFromResource(resource: unknown): string | undefined {
   if (typeof path !== 'string') return undefined
   const m = /^\/acp\/session\/(.+)$/.exec(path)
   return m ? m[1] : undefined
+}
+
+/** Start the folder picker at the remembered session cwd when it still
+ *  belongs to this window (same host + inside the open folder). Delegates the
+ *  gate to the shared `rememberedCwdForWindow` so it cannot drift from the
+ *  facade's default-cwd decision. */
+function rememberedSessionCwdUri(
+  lastSessionCwd: IAcpLastSessionCwdService,
+  workspace: IWorkspaceService,
+  uriIdentity: IUriIdentityService,
+): URI | undefined {
+  const cwd = rememberedCwdForWindow(
+    lastSessionCwd.lastCwd(),
+    workspace.current?.folder,
+    uriIdentity,
+  )
+  if (cwd === undefined) return undefined
+  return rememberedCwdUri(cwd, authorityForFolder(workspace.current?.folder))
 }
 
 function resolveSessionTargetId(
