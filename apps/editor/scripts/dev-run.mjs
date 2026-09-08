@@ -32,6 +32,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { loadEnv } from '../../../scripts/lib/env.mjs'
+import { inputDirsFor } from '../../../scripts/lib/editorBundlePackages.mjs'
 import { collectConfigurationDefaults } from '../../../scripts/lib/productDefaults.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
@@ -69,7 +70,7 @@ const electronArgs = args.filter((a) => a !== '--force')
 
 // 读 .env* 让 dev:run 与 pnpm dev 拿到同一套内置配置默认值（scripts/lib/productDefaults.mjs）。
 // 放在 build-child 早退之后：子进程只跑 vite build，不需要也不该重复打 [env] 日志。
-loadEnv({ cwd: REPO_ROOT })
+const { mode } = loadEnv({ cwd: REPO_ROOT })
 const configurationDefaults = collectConfigurationDefaults()
 
 const vendor = spawnSync(
@@ -100,12 +101,16 @@ const remoteServerBundle = spawnSync(
 if (remoteServerBundle.status !== 0) process.exit(remoteServerBundle.status ?? 1)
 
 // ---------------------------------------------------------------------------
-// 按端输入指纹。GLOBAL_INPUTS 是三端公共输入（config / 插件 / 共享源码 / 依赖清单），
-// 任一变化三端全建；各端 inputs 只列独有目录。清单须跟 electron.vite.config.ts 对齐：
-//  - main 把 platform（alias → src）与另外 4 个 workspace 包（node 解析 → dist）打进
-//    bundle（externalizeDeps.exclude），故 main 吃 platform/src + 其余包的 dist
-//  - renderer 的 alias 全指向各包 src；preload 无 alias，只吃自身 + shared
+// 按端输入指纹。GLOBAL_INPUTS 是三端公共输入（config / 表模块 / 共享源码 / .env* /
+// 依赖清单），任一变化三端全建；各端 inputs 只列独有目录。workspace 包目录清单从
+// scripts/lib/editorBundlePackages.mjs 单一数据源生成（与 electron.vite.config.ts 的
+// alias / externalizeDeps.exclude 同源，改表即各处同步）：main 吃 alias→src 包的 src
+// 与 dist 解析包的 dist，renderer 同理由表按端生成。ENV_INPUTS 列出全部候选 .env
+// 路径（含当前不存在的——collectEntries 的 |missing 语义让「新建 .env」也触发重建）。
+// preload 无 alias，只吃自身 + shared。
 // 宁可多列（多触发一次重建）不可漏列（stale 产物比慢更糟）。
+
+const ENV_INPUTS = ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]
 
 const GLOBAL_INPUTS = [
   'apps/editor/scripts/dev-run.mjs',
@@ -116,20 +121,15 @@ const GLOBAL_INPUTS = [
   'apps/editor/tsconfig.node.json',
   'apps/editor/tsconfig.web.json',
   'apps/editor/src/shared',
+  'scripts/lib/editorBundlePackages.mjs',
+  ...ENV_INPUTS,
   'pnpm-lock.yaml',
 ]
 
 const TARGETS = {
   main: {
     entry: 'out-dev/main/index.js',
-    inputs: [
-      'apps/editor/src/main',
-      'packages/platform/src',
-      'packages/extensions-common/dist',
-      'packages/extension-api/dist',
-      'packages/extension-gallery/dist',
-      'packages/extension-packaging/dist',
-    ],
+    inputs: ['apps/editor/src/main', ...inputDirsFor('main')],
   },
   preload: {
     entry: 'out-dev/preload/index.cjs',
@@ -137,13 +137,7 @@ const TARGETS = {
   },
   renderer: {
     entry: 'out-dev/renderer/index.html',
-    inputs: [
-      'apps/editor/src/renderer',
-      'apps/editor/public',
-      'packages/platform/src',
-      'packages/workbench-ui/src',
-      'packages/extensions-common/src',
-    ],
+    inputs: ['apps/editor/src/renderer', 'apps/editor/public', ...inputDirsFor('renderer')],
   },
 }
 

@@ -11,11 +11,15 @@ import {
   NLS_FILE_SUFFIX,
   patchNlsSource,
 } from './src/renderer/workbench/editor/monaco/monacoNlsPatch'
+import {
+  aliasMapFor,
+  externExcludesFor,
+  optimizeExcludesFor,
+  tokensCssFile,
+} from '../../scripts/lib/editorBundlePackages.mjs'
 
-const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
-const nodeServicesSrc = resolve(__dirname, '../../packages/node-services/src/index.ts')
-const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index.ts')
-const extensionsCommonSrc = resolve(__dirname, '../../packages/extensions-common/src/index.ts')
+// 打进各端 bundle 的 workspace 包（alias / externalizeDeps.exclude / optimizeDeps.exclude）
+// 全部由 scripts/lib/editorBundlePackages.mjs 单一数据源表生成，此处不再手写包清单。
 const REPO_ROOT = resolve(__dirname, '../..')
 
 // `electron-vite build` hard-sets NODE_ENV=production before loading this config,
@@ -72,10 +76,7 @@ export default defineConfig({
       devRuntimeWatchPlugin({ repoRoot: REPO_ROOT }),
     ],
     resolve: {
-      alias: {
-        '@universe-editor/platform': platformSrc,
-        '@universe-editor/node-services': nodeServicesSrc,
-      },
+      alias: aliasMapFor('main'),
     },
     build: {
       outDir: resolve(outBase, 'main'),
@@ -83,14 +84,7 @@ export default defineConfig({
       // production and inflates Defender's first-run scan.
       sourcemap: process.env['NODE_ENV'] !== 'production',
       externalizeDeps: {
-        exclude: [
-          '@universe-editor/platform',
-          '@universe-editor/node-services',
-          '@universe-editor/extensions-common',
-          '@universe-editor/extension-api',
-          '@universe-editor/extension-gallery',
-          '@universe-editor/extension-packaging',
-        ],
+        exclude: [...externExcludesFor('main')],
       },
       rollupOptions: {
         input: {
@@ -123,21 +117,14 @@ export default defineConfig({
     plugins: [monacoNlsPlugin(), monacoUnicodeHighlighterPlugin(), react(), jsToTsResolvePlugin()],
     resolve: {
       alias: {
-        '@universe-editor/platform': platformSrc,
-        '@universe-editor/workbench-ui/tokens.css': resolve(
-          __dirname,
-          '../../packages/workbench-ui/src/theme/tokens.css',
-        ),
-        '@universe-editor/workbench-ui': workbenchUiSrc,
-        '@universe-editor/extensions-common': extensionsCommonSrc,
+        // 文件粒度 alias 必须排在包级 prefix alias 之前：`@universe-editor/workbench-ui`
+        // 会前缀命中 `@universe-editor/workbench-ui/tokens.css`，先到先得。
+        '@universe-editor/workbench-ui/tokens.css': tokensCssFile(),
+        ...aliasMapFor('renderer'),
       },
     },
     optimizeDeps: {
-      exclude: [
-        '@universe-editor/platform',
-        '@universe-editor/workbench-ui',
-        '@universe-editor/extensions-common',
-      ],
+      exclude: [...optimizeExcludesFor('renderer')],
       include: [
         'monaco-editor',
         // Deep `monaco-editor/esm/...` imports (textMateService, monacoSemanticThemeBridge,

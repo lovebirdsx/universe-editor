@@ -13,9 +13,9 @@
  *    args    = ["-y", "@modelcontextprotocol/server-filesystem", "."]
  *    env     = { FOO = "bar" }
  *
- *  Remote (http-like) MCP servers are not currently part of Codex's on-disk
- *  schema — anything without a `command` is surfaced as-is and normalized
- *  downstream.
+ *  Remote (streamable-http) entries use Codex's own shape (`url` /
+ *  `http_headers` / `bearer_token_env_var`, no `type` field) and are
+ *  translated into the editor shape on read — see translateCodexMcpServers.
  *
  *  The editor never writes these files from this store; reads tolerate
  *  missing/malformed files (return `{}`); a watcher fires `onDidChange` so
@@ -47,6 +47,84 @@ export function defaultCodexMcpUserConfigPath(): string {
 /** Project-level Codex config is `<cwd>/.codex/config.toml`. */
 export function codexMcpProjectConfigPath(cwd: string): string {
   return join(cwd, '.codex', 'config.toml')
+}
+
+/**
+ * Translate codex-native `[mcp_servers]` entries into the editor's internal
+ * shape on read:
+ *  - stdio entries (`command` / `args` / `env`) pass through untouched;
+ *  - http entries (`url` / `http_headers` / `env_http_headers` /
+ *    `bearer_token_env_var`, no `type` field) become
+ *    `{ type: 'http', url, headers }`. Headers merge in this order, later
+ *    sources win on name clashes: the editor-style `headers` field, the
+ *    static `http_headers`, then `env_http_headers` (value names an env var
+ *    to read; unset vars skip). `bearer_token_env_var` is resolved against
+ *    `env` as `Authorization: Bearer <token>` unless a static Authorization
+ *    header (any casing) already exists.
+ *  - entries already carrying a `type` field pass through untouched.
+ *
+ * `env` must be the environment of the host that will actually run the agent —
+ * the local main reads its own env, the remote server its own (each side owns
+ * its store instance); never cache it here. Resolved secrets ride the read
+ * result across IPC into the renderer pool, same as settings-layer and claude
+ * config headers already do; the MCP UI never renders header values.
+ *
+ * Codex-only fields are dropped on purpose: `enabled` (the pool has its own
+ * enablement mechanism), `oauth_*` (no wire channel), `http_headers_helper`
+ * (a local-only shell command — reads must not execute commands).
+ * Unrecognizable entries pass through so the downstream `buildServer` keeps
+ * its existing skip-with-warning behavior.
+ */
+export function translateCodexMcpServers(
+  servers: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [name, entry] of Object.entries(servers)) {
+    if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) {
+      out[name] = entry
+      continue
+    }
+    const o = entry as Record<string, unknown>
+    if ('type' in o) {
+      out[name] = entry
+      continue
+    }
+    if (typeof o.command === 'string' && o.command) {
+      out[name] = entry
+      continue
+    }
+    if (typeof o.url === 'string' && o.url) {
+      const headers: Record<string, string> = {}
+      for (const src of [o.headers, o.http_headers]) {
+        if (src != null && typeof src === 'object' && !Array.isArray(src)) {
+          for (const [key, value] of Object.entries(src as Record<string, unknown>)) {
+            if (typeof value === 'string') headers[key] = value
+          }
+        }
+      }
+      const envHeaders = o.env_http_headers
+      if (envHeaders != null && typeof envHeaders === 'object' && !Array.isArray(envHeaders)) {
+        for (const [key, value] of Object.entries(envHeaders as Record<string, unknown>)) {
+          if (typeof value !== 'string') continue
+          const resolved = env[value]
+          if (typeof resolved === 'string' && resolved) headers[key] = resolved
+        }
+      }
+      const bearerEnv = o.bearer_token_env_var
+      if (typeof bearerEnv === 'string' && bearerEnv) {
+        const token = env[bearerEnv]
+        const hasStaticAuth = Object.keys(headers).some((key) => /^authorization$/i.test(key))
+        if (typeof token === 'string' && token && !hasStaticAuth) {
+          headers['Authorization'] = `Bearer ${token}`
+        }
+      }
+      out[name] = { type: 'http', url: o.url, headers }
+      continue
+    }
+    out[name] = entry
+  }
+  return out
 }
 
 export interface CodexMcpConfigStoreOptions {
@@ -147,7 +225,7 @@ export class CodexMcpConfigStore extends Disposable {
       if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
       const inner = (parsed as Record<string, unknown>)['mcp_servers']
       if (inner == null || typeof inner !== 'object' || Array.isArray(inner)) return {}
-      return inner as Record<string, unknown>
+      return translateCodexMcpServers(inner as Record<string, unknown>)
     } catch {
       this._logger.warn(`${path} is not valid TOML`)
       return {}

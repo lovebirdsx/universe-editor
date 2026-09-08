@@ -49,6 +49,8 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { distDirFor, packagesRequiringDist, pkgDirFor } from '../lib/editorBundlePackages.mjs'
+
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 
@@ -204,27 +206,17 @@ function readPkg(dir) {
   }
 }
 
-// Mirrors `main.build.externalizeDeps.exclude` in apps/editor/electron.vite.config.ts.
-// Keep in sync: any package inlined into the main bundle needs its dist entry here so
-// a clean checkout builds it before the first `electron-vite` run.
-const BUNDLED_PACKAGES = [
-  'platform',
-  'extensions-common',
-  'extension-api',
-  'extension-gallery',
-  'extension-packaging',
-]
-
 // Each expected artifact: { label, entry (abs path that must exist), buildInfo (abs
 // tsconfig.tsbuildinfo to clear so a stale incremental build re-emits, or undefined) }.
+// 清单从 scripts/lib/editorBundlePackages.mjs 单一数据源生成（packagesRequiringDist =
+// 打进 editor 构建产物的包中干净 checkout 需预建 dist 的子集）。
 const expected = []
 
-for (const name of BUNDLED_PACKAGES) {
-  const pkgDir = resolve(repoRoot, 'packages', name)
+for (const entry of packagesRequiringDist()) {
   expected.push({
-    label: `@universe-editor/${name}`,
-    entry: resolve(pkgDir, 'dist/index.js'),
-    buildInfo: resolve(pkgDir, 'tsconfig.tsbuildinfo'),
+    label: entry.pkg,
+    entry: resolve(distDirFor(entry), 'index.js'),
+    buildInfo: resolve(pkgDirFor(entry), 'tsconfig.tsbuildinfo'),
   })
 }
 
