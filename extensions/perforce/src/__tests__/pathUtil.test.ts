@@ -157,7 +157,10 @@ describe('respellUnderRoot', () => {
   const ROOT = 'E:/p4ws/main'
 
   it('respells the root segment to the canonical client-root spelling', () => {
-    expect(respellUnderRoot('e:/P4WS/Main/src/a.txt', ROOT)).toBe('E:/p4ws/main/src/a.txt')
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(respellUnderRoot('e:/P4WS/Main/src/a.txt', ROOT)).toBe(
+      insensitive ? 'E:/p4ws/main/src/a.txt' : 'e:/P4WS/Main/src/a.txt',
+    )
   })
 
   it('keeps an already-canonical path untouched', () => {
@@ -165,12 +168,16 @@ describe('respellUnderRoot', () => {
   })
 
   it('respells the root itself (no suffix)', () => {
-    expect(respellUnderRoot('e:/P4WS/MAIN', ROOT)).toBe('E:/p4ws/main')
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(respellUnderRoot('e:/P4WS/MAIN', ROOT)).toBe(
+      insensitive ? 'E:/p4ws/main' : 'e:/P4WS/MAIN',
+    )
   })
 
   it('respells across slash style and a trailing slash on root', () => {
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
     expect(respellUnderRoot('e:\\P4WS\\Main\\src\\a.txt', 'E:/p4ws/main/')).toBe(
-      'E:/p4ws/main/src/a.txt',
+      insensitive ? 'E:/p4ws/main/src/a.txt' : 'e:\\P4WS\\Main\\src\\a.txt',
     )
   })
 

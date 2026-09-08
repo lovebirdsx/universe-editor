@@ -125,10 +125,12 @@ describe('classifyRevertTargets', () => {
   it('an opened file is still matched when only the root-segment case differs', () => {
     const driftPath = 'e:/P4WS/Main/src/a.txt'
     const keyed = 'e:/p4ws/main/src/a.txt'
-    expect(classifyRevertTargets([driftPath], openState([[keyed, 'default']]))).toEqual({
-      opened: [{ path: driftPath, changelist: 'default' }],
-      unopened: [],
-    })
+    const insensitive = process.platform === 'win32' || process.platform === 'darwin'
+    expect(classifyRevertTargets([driftPath], openState([[keyed, 'default']]))).toEqual(
+      insensitive
+        ? { opened: [{ path: driftPath, changelist: 'default' }], unopened: [] }
+        : { opened: [], unopened: [driftPath] },
+    )
   })
 })
 
