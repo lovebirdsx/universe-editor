@@ -129,10 +129,12 @@ test('tokensCssFile 指向 workbench-ui 的 tokens.css 且文件存在', () => {
 
 test('反漂移守卫：config 与 dev-run 不再手写清单', () => {
   const config = readFileSync(resolve(REPO_ROOT, 'apps/editor/electron.vite.config.ts'), 'utf8')
-  const occurrences = config.match(/@universe-editor\//g) ?? []
+  // 剥掉行注释：注释里允许提及 @universe-editor/ 包名（如本 config 解释 tokens.css 排序），不计入手写清单。
+  const code = config.replace(/^\s*\/\/.*$/gm, '')
+  const occurrences = code.match(/@universe-editor\//g) ?? []
   assert.equal(occurrences.length, 1, 'config 里 @universe-editor/ 应只剩 tokens.css 文件粒度 alias 一处')
   assert.ok(
-    config.includes("@universe-editor/workbench-ui/tokens.css"),
+    code.includes("@universe-editor/workbench-ui/tokens.css"),
     '唯一保留的字面量应是 workbench-ui/tokens.css',
   )
   const devRun = readFileSync(resolve(REPO_ROOT, 'apps/editor/scripts/dev-run.mjs'), 'utf8')
