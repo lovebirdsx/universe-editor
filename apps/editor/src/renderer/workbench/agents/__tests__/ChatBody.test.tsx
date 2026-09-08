@@ -411,6 +411,45 @@ describe('ChatBody — click to focus a timeline item', () => {
     }
   })
 
+  it('pulls DOM focus into the scroll container on keyboard navigation', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = container.querySelector<HTMLElement>(
+      '[data-testid="acp-timeline"]',
+    )!.parentElement!
+    // Focus elsewhere (the real-world case: the prompt Monaco owns focus).
+    const outside = container.ownerDocument.createElement('button')
+    container.ownerDocument.body.appendChild(outside)
+    outside.focus()
+    expect(container.ownerDocument.activeElement).toBe(outside)
+    try {
+      act(() => {
+        widgetRef.current!.moveTimeline('next')
+      })
+      expect(container.ownerDocument.activeElement).toBe(scroll)
+      expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it('opens the menu via the ContextMenu key right after keyboard navigation moved focus', () => {
+    const disposable = registerAction2(CaptureChatContextArgAction)
+    try {
+      const { container, getByRole, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+      act(() => {
+        widgetRef.current!.moveTimeline('next')
+      })
+      const scroll = container.querySelector<HTMLElement>(
+        '[data-testid="acp-timeline"]',
+      )!.parentElement!
+      fireEvent.keyDown(scroll, { key: 'ContextMenu' })
+      const menu = getByRole('menu')
+      expect(menu.querySelector('[data-active]')).not.toBeNull()
+    } finally {
+      disposable.dispose()
+    }
+  })
+
   it('keeps exactly one menu when Chromium re-dispatches contextmenu on keyup', () => {
     const disposable = registerAction2(CaptureChatContextArgAction)
     try {

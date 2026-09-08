@@ -1260,6 +1260,16 @@ function ChatScroll({
 
   useEffect(() => {
     const handle = handleRef.current
+    // Keyboard navigation moves DOM focus onto the scroll container alongside
+    // the focused-key highlight: without it focus stays in the prompt Monaco and
+    // Shift+F10 / ContextMenu never reaches this container's handler. popoverHide
+    // dismisses any prompt suggestion popup left open (it ignores blur), so the
+    // stale acpPromptPopupVisible key can't keep capturing arrows/Enter — a no-op
+    // when no popup is open.
+    const focusContainer = (): void => {
+      containerRef.current?.focus({ preventScroll: true })
+      handle.popoverHide()
+    }
     // Shared tail of every focus move: set the key, reveal it, persist. Prefers
     // the live DOM node (also covers sub-agent items inside their parent's
     // virtual row); falls back to the virtualizer for unmounted top-level rows
@@ -1267,6 +1277,7 @@ function ChatScroll({
     const focusAndReveal = (key: string): void => {
       setFocusedKey(key)
       focusedKeyRef.current = key
+      focusContainer()
       const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(key)}"], [data-sticky-key="${cssEscape(key)}"]`,
@@ -1339,6 +1350,7 @@ function ChatScroll({
       if (displayIndex === -1 || (topLevel && direction === 'first')) {
         setFocusedKey(nextKey)
         focusedKeyRef.current = nextKey
+        focusContainer()
         if (container) container.scrollTop = 0
         persist()
         return
@@ -1346,6 +1358,7 @@ function ChatScroll({
       if (topLevel && direction === 'last') {
         setFocusedKey(nextKey)
         focusedKeyRef.current = nextKey
+        focusContainer()
         scrollToBottomStable()
         persist()
         return
@@ -1438,6 +1451,7 @@ function ChatScroll({
         stickRef.current = false
         setFocusedKey(PLAN_SLOT_KEY)
         focusedKeyRef.current = PLAN_SLOT_KEY
+        focusContainer()
         const container = containerRef.current
         if (container) container.scrollTop = 0
         persist()
@@ -1462,6 +1476,7 @@ function ChatScroll({
       stickRef.current = false
       setFocusedKey(nextKey)
       focusedKeyRef.current = nextKey
+      focusContainer()
       const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
