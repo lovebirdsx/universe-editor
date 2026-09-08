@@ -107,6 +107,29 @@ describe('classifyRevertTargets', () => {
       unopened: [],
     })
   })
+
+  it('looks up open state across root-segment case drift (p4-reported vs opened-folder spelling)', () => {
+    // The drift rows carry the spelling the watcher reported (user-opened
+    // folder), while `p4 opened` answers in clientRoot spelling. On Windows the
+    // two can differ in case beyond the drive letter (`e:/P4WS/Main` vs
+    // `e:/p4ws/main`). They name the same file — an unopened drift file must not
+    // be misclassified as opened (that routes `p4 revert`, a silent no-op on
+    // unopened files, instead of `p4 clean`).
+    const driftPath = 'e:/P4WS/Main/src/a.txt'
+    expect(classifyRevertTargets([driftPath], new Map())).toEqual({
+      opened: [],
+      unopened: [driftPath],
+    })
+  })
+
+  it('an opened file is still matched when only the root-segment case differs', () => {
+    const driftPath = 'e:/P4WS/Main/src/a.txt'
+    const keyed = 'e:/p4ws/main/src/a.txt'
+    expect(classifyRevertTargets([driftPath], openState([[keyed, 'default']]))).toEqual({
+      opened: [{ path: driftPath, changelist: 'default' }],
+      unopened: [],
+    })
+  })
 })
 
 describe('knownChangelist', () => {

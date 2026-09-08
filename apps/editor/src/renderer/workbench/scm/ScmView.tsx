@@ -152,12 +152,22 @@ function basename(path: string): string {
   return i === -1 ? path : path.slice(i + 1)
 }
 
-/** Path relative to the provider root, with forward slashes. */
+/** Path relative to the provider root, with forward slashes. The prefix match
+ *  is case-insensitive like {@link scmProviderPathKey}: the root and each
+ *  resourceUri come from different sources (the provider's rootUri vs. e.g. a
+ *  watcher-reported path) whose case can drift on Windows, and a failed strip
+ *  would render the raw absolute path as the row label. Display-only — the
+ *  resourceUri itself is never rewritten; on mismatch the absolute path is
+ *  returned as-is. */
 function relativePath(root: string | undefined, abs: string): string {
   const a = abs.replace(/\\/g, '/')
   if (!root) return a
   const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
-  return a.startsWith(`${r}/`) ? a.slice(r.length + 1) : a
+  if (r === '') return a
+  if (a.length > r.length && a.toLowerCase().startsWith(`${r.toLowerCase()}/`)) {
+    return a.slice(r.length + 1)
+  }
+  return a
 }
 
 function dirname(rel: string): string {

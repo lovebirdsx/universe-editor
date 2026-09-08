@@ -9,7 +9,7 @@
  */
 import { localize } from './nls.js'
 import { buildScopeFilespec } from './p4Filespec.js'
-import { norm } from './pathUtil.js'
+import { scopeKey } from './pathUtil.js'
 
 export type OpenedTarget = {
   path: string
@@ -87,10 +87,17 @@ export function classifyRevertTargets(
 ): RevertPlan {
   const opened: OpenedTarget[] = []
   const unopened: string[] = []
+  // `openState` is keyed by the producer (`openedStateAmong` / tests) with
+  // `scopeKey`: the two sides come from different sources (p4-reported vs
+  // watcher-reported spelling), so on Windows they can differ in case beyond
+  // the drive letter. Keying the lookup with `norm` would miss those and
+  // misclassify an unopened drift file as opened — routing `p4 revert` (a
+  // silent no-op on unopened files) where `p4 clean` was meant.
+  const keyed = new Map([...openState].map(([k, v]) => [scopeKey(k), v] as const))
   for (const path of paths) {
-    const key = norm(path)
-    if (openState.has(key)) {
-      const changelist = knownChangelist(openState.get(key))
+    const key = scopeKey(path)
+    if (keyed.has(key)) {
+      const changelist = knownChangelist(keyed.get(key))
       opened.push(changelist === undefined ? { path } : { path, changelist })
     } else {
       unopened.push(path)

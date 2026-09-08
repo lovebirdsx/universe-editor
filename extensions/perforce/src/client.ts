@@ -78,7 +78,14 @@ import {
 } from './reconcileScanBudget.js'
 import { buildScopeFilespec } from './p4Filespec.js'
 import { carveReconcileFilespecs } from './reconcileCarve.js'
-import { norm, isUnderAny, containsAny, scopeKey, collapseScopeDirs } from './pathUtil.js'
+import {
+  norm,
+  isUnderAny,
+  containsAny,
+  scopeKey,
+  collapseScopeDirs,
+  respellUnderRoot,
+} from './pathUtil.js'
 import { type OpenedTarget } from './revertPlan.js'
 import {
   classifySyncLine,
@@ -1890,7 +1897,16 @@ export class PerforceClient {
       const files = [...kept]
       for (const path of covered) {
         const row = drift.get(scopeKey(path))
-        if (row !== undefined) files.push(row)
+        if (row === undefined) continue
+        // Persist the row in the client-root spelling: it may still carry the
+        // caller's (opened-folder) echo spelling, and a checkpoint written in
+        // that spelling would replay the drift row — and the silent-Revert
+        // misroute it causes — into the next session.
+        files.push(
+          row.clientFile === undefined
+            ? row
+            : { ...row, clientFile: respellUnderRoot(row.clientFile, this.root) },
+        )
       }
       // The patch is authoritative for every covered path — whether or not this
       // checkpoint changed. Skipping the rewrite for a quiet save is a disk-cost
@@ -2079,8 +2095,16 @@ export class PerforceClient {
 
   /** The changelist a currently-opened local path belongs to ('default' or a
    *  numbered id), from the last refresh, or undefined if the path isn't open. */
+  /** The changelist a currently-opened local path belongs to ('default' or a
+   *  numbered id), from the last refresh, or undefined if the path isn't open.
+   *  Lookup keys on `scopeKey`: callers pass drift-row paths (opened-folder
+   *  spelling) while the map is built from p4-reported spelling. */
   changelistOf(localPath: string): string | undefined {
-    return this._changelistByPath.get(norm(localPath))
+    const key = scopeKey(localPath)
+    for (const [p, cl] of this._changelistByPath) {
+      if (scopeKey(p) === key) return cl
+    }
+    return undefined
   }
 
   /**
@@ -2099,11 +2123,19 @@ export class PerforceClient {
   ): Promise<ReadonlyMap<string, string | undefined>> {
     const out = new Map<string, string | undefined>()
     if (paths.length === 0) return out
+    // The returned map is keyed by `scopeKey(path)`: its consumer
+    // (`classifyRevertTargets`) compares with `scopeKey`, and `paths` may be
+    // spelled the way the user opened the folder (watcher/drift rows) while the
+    // cache and `p4 opened` answer in clientRoot spelling — on Windows the two
+    // differ in case beyond the drive letter, which `norm` alone would miss.
+    const cacheByScope = new Map(
+      [...this._changelistByPath].map(([p, cl]) => [scopeKey(p), cl] as const),
+    )
     for (const p of paths) {
-      const n = norm(p)
-      if (this._changelistByPath.has(n)) out.set(n, this._changelistByPath.get(n))
+      const n = scopeKey(p)
+      if (cacheByScope.has(n)) out.set(n, cacheByScope.get(n))
     }
-    const missed = paths.filter((p) => !out.has(norm(p)))
+    const missed = paths.filter((p) => !out.has(scopeKey(p)))
     if (missed.length === 0) return out
     const res = await this._p4
       .execRecords(['opened', ...missed], INTERACTIVE_EXEC)
@@ -2112,16 +2144,16 @@ export class PerforceClient {
         return undefined
       })
     if (!res || this._disposed || res.result.exitCode !== 0) {
-      for (const p of missed) out.set(norm(p), undefined)
+      for (const p of missed) out.set(scopeKey(p), undefined)
       return out
     }
     const live = new Map<string, string>()
     for (const f of parseOpened(res.records, this.root)) {
       if (!f.clientFile) continue
-      live.set(norm(f.clientFile), f.changelist)
+      live.set(scopeKey(f.clientFile), f.changelist)
     }
     for (const p of missed) {
-      const n = norm(p)
+      const n = scopeKey(p)
       const cl = live.get(n)
       if (cl !== undefined) out.set(n, cl)
     }
@@ -3707,7 +3739,20 @@ export class PerforceClient {
         this._driftWatchedKeys.delete(key)
         continue
       }
-      this._driftFiles.set(key, row)
+      // The row was echoed back in the caller's (opened-folder) spelling by
+      // `_queryWorkingTreeRows`. `_driftFiles` feeds both the SCM group's
+      // `resourceStates.resourceUri` and the mutation arguments, and the p4
+      // Revert precheck matches `p4 opened <filespec>` case-sensitively — so a
+      // row that lands here in the opened-folder spelling (differing from the
+      // p4-reported client root only by case on Windows) shows as a raw
+      // absolute path and makes directory Revert a silent no-op. Respell the
+      // root segment to the client-root spelling before it lands; the hint
+      // channel keeps the echo for its own renderer cache keying.
+      const respelled =
+        row.clientFile === undefined
+          ? row
+          : { ...row, clientFile: respellUnderRoot(row.clientFile, this.root) }
+      this._driftFiles.set(key, respelled)
       this._driftWatchedKeys.add(key)
     }
     this._scheduleDriftApply()

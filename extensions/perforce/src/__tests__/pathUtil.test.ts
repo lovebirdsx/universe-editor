@@ -6,6 +6,7 @@ import {
   containsAny,
   isUnderAny,
   norm,
+  respellUnderRoot,
   scopeKey,
   uriToFsPath,
 } from '../pathUtil.js'
@@ -149,6 +150,43 @@ describe('clientToLocalPath', () => {
 
   it('returns the input unchanged for a degenerate client-only spec', () => {
     expect(clientToLocalPath('//ws', 'G:/root')).toBe('//ws')
+  })
+})
+
+describe('respellUnderRoot', () => {
+  const ROOT = 'E:/p4ws/main'
+
+  it('respells the root segment to the canonical client-root spelling', () => {
+    expect(respellUnderRoot('e:/P4WS/Main/src/a.txt', ROOT)).toBe('E:/p4ws/main/src/a.txt')
+  })
+
+  it('keeps an already-canonical path untouched', () => {
+    expect(respellUnderRoot('E:/p4ws/main/src/a.txt', ROOT)).toBe('E:/p4ws/main/src/a.txt')
+  })
+
+  it('respells the root itself (no suffix)', () => {
+    expect(respellUnderRoot('e:/P4WS/MAIN', ROOT)).toBe('E:/p4ws/main')
+  })
+
+  it('respells across slash style and a trailing slash on root', () => {
+    expect(respellUnderRoot('e:\\P4WS\\Main\\src\\a.txt', 'E:/p4ws/main/')).toBe(
+      'E:/p4ws/main/src/a.txt',
+    )
+  })
+
+  it('does not match a sibling that merely shares a string prefix', () => {
+    expect(respellUnderRoot('e:/p4ws/main-other/a.txt', ROOT)).toBe('e:/p4ws/main-other/a.txt')
+  })
+
+  it('leaves a path outside the root unchanged', () => {
+    expect(respellUnderRoot('D:/other/a.txt', ROOT)).toBe('D:/other/a.txt')
+  })
+
+  it('keeps the suffix spelling on a case-sensitive host', () => {
+    // On linux scopeKey does not fold case, so `SRC` ≠ `src`: the path is not
+    // under the root and is returned verbatim rather than respelled.
+    if (process.platform === 'win32' || process.platform === 'darwin') return
+    expect(respellUnderRoot('/ws/SRC/a.txt', '/ws/src')).toBe('/ws/SRC/a.txt')
   })
 })
 

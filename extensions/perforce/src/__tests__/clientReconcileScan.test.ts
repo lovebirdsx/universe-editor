@@ -2219,6 +2219,42 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(patched.completedAt).toBe(firstCompletedAt)
   })
 
+  it('folds a watcher-reported path into the clientRoot spelling before it lands', async () => {
+    // The watcher's flush echoes rows back in the spelling the caller asked
+    // with — the opened folder's (`x:/P4WS/main/...`), while the drift group's
+    // resourceUris and mutation arguments must be the p4-reported clientRoot
+    // spelling (`X:/p4ws/main/...`). On Windows the two differ only by case, so
+    // the folded row must be respelled before it lands in `_driftFiles` / the
+    // checkpoint: a resourceUri the case-sensitive `p4 opened <filespec>`
+    // cannot match is what made SCM-directory Revert a silent no-op.
+    if (process.platform !== 'win32') return
+    const disk = fakeDisk()
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      { reconcile: () => [{ rel: 'a.txt', action: 'edit' }] },
+      disk,
+      fakeClock(),
+      {
+        createFileSystemWatcher: () => wt.watcher,
+        watchRoot: ROOT,
+        externalChangeDebounceMs: 0,
+      },
+    )
+    client.setReconcileScope([LOCAL])
+    client.scheduleReconcileScan()
+    await client.whenReconcileScanSettled()
+
+    wt.fire('change', 'x:/P4WS/main/a.txt')
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+
+    expect(driftFiles(client)).toEqual([`${LOCAL}/a.txt`])
+    const entry = [...disk.store.entries()].find(([k]) => k.endsWith(LOCAL))
+    expect(entry).toBeDefined()
+    const patched = JSON.parse(entry![1]) as { files: readonly { clientFile?: string }[] }
+    expect(patched.files.map((f) => f.clientFile)).toEqual([`${LOCAL}/a.txt`])
+  })
+
   it('coalesces a bulk external change into one batched narrow query', async () => {
     const wt = makeFakeWatcher()
     const client = await makeClient({ reconcile: () => [] }, fakeDisk(), fakeClock(), {

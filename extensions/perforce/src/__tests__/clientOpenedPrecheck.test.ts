@@ -185,6 +185,33 @@ describe('PerforceClient.openedStateAmong / openedInTree', () => {
     client.dispose()
   })
 
+  it('matches opened files when only the root-segment case differs (watcher spelling)', async () => {
+    // Drift rows carry the opened-folder spelling (`x:/P4WS/main/...`) while
+    // `p4 opened` answers in clientRoot spelling (`X:/p4ws/main`). The precheck
+    // must still classify the file as opened — misreading it as unopened routes
+    // `p4 clean` where `p4 revert` was meant; the reverse misread (unopened as
+    // opened) routes `p4 revert` as a silent no-op.
+    if (process.platform !== 'win32') return
+    const client = await makeClient({
+      openedLive: () => [{ rel: 'src/a.txt', change: '123' }],
+    })
+    calls.length = 0
+    const state = await client.openedStateAmong(['x:/P4WS/main/src/a.txt'])
+    expect(state.get('x:/p4ws/main/src/a.txt')).toBe('123')
+    client.dispose()
+  })
+
+  it('cache hit across root-segment case drift does not spawn a live query', async () => {
+    if (process.platform !== 'win32') return
+    const client = await makeClient({ opened: () => [{ rel: 'a.txt', change: 'default' }] })
+    await client.refresh()
+    calls.length = 0
+    const state = await client.openedStateAmong(['x:/P4WS/main/a.txt'])
+    expect(state.get('x:/p4ws/main/a.txt')).toBe('default')
+    expect(openedCalls()).toHaveLength(0)
+    client.dispose()
+  })
+
   it('live failure fail-opens the miss as opened with unknown CL', async () => {
     const client = await makeClient({ openedLive: 'fail' })
     calls.length = 0

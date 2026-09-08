@@ -123,6 +123,40 @@ export function commonAncestorDir(paths: readonly string[]): string {
 }
 
 /**
+ * Respell `path`'s root segment with the canonical `root` spelling when the two
+ * name the same root.
+ *
+ * One side of the comparison is spelled by the user / OS watcher (the opened
+ * folder), the other is what `p4 info` reports as the client root — on Windows /
+ * macOS they can differ in case while naming the same directory. A value that
+ * will be rendered (SCM `resourceUri`) or fed back to p4 as a filespec must
+ * carry the client-root spelling: the renderer strips the root prefix
+ * case-insensitively for display, but `p4 opened <filespec>` matches the
+ * client-syntax path case-sensitively, so a row left in the opened-folder
+ * spelling both shows as a raw absolute path and misroutes the Revert precheck.
+ *
+ * Identity uses {@link scopeKey} (the two sides come from different sources) and
+ * the match is directory-boundary aware (`path` must equal `root` or start with
+ * `root + '/'`), so `main-other` never matches `main`. The suffix keeps its
+ * own spelling. Returns the input unchanged when it is not under `root` (never
+ * invent a respelling for a path we cannot place). The root spelling is the
+ * input `root` with forward slashes and no trailing slash — the drive letter is
+ * kept as given, because {@link norm} folds it and would lose the canonical case.
+ */
+export function respellUnderRoot(path: string, root: string): string {
+  const rootSpelled = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (rootSpelled === '') return path
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const key = scopeKey(normalized)
+  const rk = scopeKey(rootSpelled)
+  if (key === rk) return rootSpelled
+  if (key.length > rk.length && key.startsWith(`${rk}/`)) {
+    return `${rootSpelled}${normalized.slice(rootSpelled.length)}`
+  }
+  return path
+}
+
+/**
  * Dedupe and collapse a list of directory paths to their shallowest entries:
  * same-scope duplicates keep one entry, and a directory nested under another
  * collapses to its ancestor (both `A` and `A/B` yield just `A`).

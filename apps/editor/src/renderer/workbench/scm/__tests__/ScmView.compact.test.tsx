@@ -93,6 +93,50 @@ describe('ScmView — compact folders (tree mode)', () => {
   })
 })
 
+describe('ScmView — root-segment case drift (tree/list labels)', () => {
+  // The provider's rootUri comes from `p4 info` while a resourceUri can carry
+  // the watcher-reported spelling of the opened folder — on Windows the two
+  // can differ only by case. The root-prefix strip must tolerate that
+  // (scmProviderPathKey-style case-insensitive compare) or the row label
+  // renders as a raw absolute path.
+  const ROOT_A = 'D:/repo/Main'
+
+  it('tree mode: strips the root prefix case-insensitively, keeping suffix case', () => {
+    const snap = buildSnapshot(
+      [group('changes', 1, [{ resourceUri: 'd:/Repo/main/Src/Sub/file.txt', contextValue: 'M' }])],
+      ROOT_A,
+      'tree',
+    )
+    const top = folders(snap.childrenMap, 'group:changes')
+    expect(top.map((f) => f.name)).toEqual(['Src/Sub'])
+    const files = (snap.childrenMap.get(top[0]!.id) ?? []).filter((n) => n.kind === 'file')
+    expect(files).toHaveLength(1)
+  })
+
+  it('list mode: dir label is the root-relative dirname, not the absolute path', () => {
+    const snap = buildSnapshot(
+      [group('changes', 1, [{ resourceUri: 'd:/Repo/main/src/file.txt', contextValue: 'M' }])],
+      ROOT_A,
+      'list',
+    )
+    const children = snap.childrenMap.get('group:changes') ?? []
+    const file = children.find((n) => n.kind === 'file')
+    expect(file && 'dir' in file ? file.dir : undefined).toBe('src')
+  })
+
+  it('still falls back to the absolute path when the root truly does not prefix it', () => {
+    const elsewhere = 'E:/other/src/file.txt'
+    const snap = buildSnapshot(
+      [group('changes', 1, [{ resourceUri: elsewhere, contextValue: 'M' }])],
+      ROOT_A,
+      'list',
+    )
+    const children = snap.childrenMap.get('group:changes') ?? []
+    const file = children.find((n) => n.kind === 'file')
+    expect(file && 'dir' in file ? file.dir : undefined).toBe('E:/other/src')
+  })
+})
+
 describe('ScmView — nested groups (parentId)', () => {
   it('nests a child group under its parent group node instead of at top level', () => {
     const snap = buildSnapshot(
