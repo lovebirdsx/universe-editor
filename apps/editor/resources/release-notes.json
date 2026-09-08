@@ -1,5 +1,32 @@
 [
   {
+    "version": "0.13.8",
+    "date": "2026-09-08",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "session消息卡片选中时，自动获得焦点，从而可以响应相关操作，譬如右键菜单",
+          "p4 changes条目支持相关右键菜单",
+          "mcp支持claude和codex原生配置",
+          "inline completion分成editor和session两个开关"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复markdown预览的outline对应位置乱跳的bug",
+          "修复p4 CHANGES中revert操作无效的bug",
+          "focusFolder修改后，p4 reconcile预热重跑",
+          "生成提交信息前自动显示源代码管理面板",
+          "修复切换git worktree时，git graph的状态残留导致reset异常问题"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.13.7",
     "date": "2026-09-07",
     "groups": [
